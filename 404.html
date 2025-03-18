@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Redirecting...</title>
+  <script>
+    // Get the current path and redirect to the root with it as a parameter
+    const segment = window.location.pathname.split('/').pop();
+    const url = window.location.origin + '?route=' + (segment || '');
+    window.location.replace(url);
+  </script>
+</head>
+<body>
+  <p>Redirecting...</p>
+</body>
+</html>
