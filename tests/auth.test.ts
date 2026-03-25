@@ -130,6 +130,14 @@ describe("auth", () => {
     expect(createSupabaseServiceClient).not.toHaveBeenCalled();
   });
 
+  it("requireOwner throws 403 when user has null email", async () => {
+    vi.mocked(createSupabaseServerClient).mockResolvedValue(
+      mockSupabase({ id: "u-no-email", email: undefined }) as never
+    );
+    await expect(requireOwner("biz-1")).rejects.toMatchObject({ status: 403 });
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
   it("requireOwner throws 403 for non-owner", async () => {
     vi.mocked(createSupabaseServerClient).mockResolvedValue(
       mockSupabase({ id: "u-1", email: "notowner@test.com" }) as never
