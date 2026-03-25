@@ -1,0 +1,97 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { createSubscription, getSubscription, updateSubscription } from "@/lib/db/subscriptions";
+
+vi.mock("@/lib/supabase/server", () => ({
+  createSupabaseServiceClient: vi.fn()
+}));
+
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
+
+const MOCK_SUB = {
+  id: "sub-uuid-1",
+  business_id: "biz-uuid-1",
+  stripe_customer_id: "cus_mock",
+  stripe_subscription_id: "sub_mock",
+  tier: "starter",
+  status: "active",
+  created_at: "2026-01-01T00:00:00Z"
+};
+
+function mockDb(overrides: Record<string, unknown> = {}) {
+  return {
+    from: vi.fn().mockReturnThis(),
+    insert: vi.fn().mockReturnThis(),
+    select: vi.fn().mockReturnThis(),
+    update: vi.fn().mockReturnThis(),
+    eq: vi.fn().mockReturnThis(),
+    order: vi.fn().mockReturnThis(),
+    limit: vi.fn().mockReturnThis(),
+    single: vi.fn().mockResolvedValue({ data: MOCK_SUB, error: null }),
+    ...overrides
+  };
+}
+
+describe("db/subscriptions", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("createSubscription inserts and returns row", async () => {
+    const db = mockDb();
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const result = await createSubscription({
+      id: "sub-uuid-1",
+      business_id: "biz-uuid-1",
+      stripe_customer_id: null,
+      stripe_subscription_id: null,
+      tier: "starter",
+      status: "pending"
+    });
+    expect(result.tier).toBe("starter");
+  });
+
+  it("createSubscription throws on error", async () => {
+    const db = mockDb({ single: vi.fn().mockResolvedValue({ data: null, error: { message: "dup" } }) });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(createSubscription({
+      id: "x",
+      business_id: "y",
+      stripe_customer_id: null,
+      stripe_subscription_id: null,
+      tier: "starter",
+      status: "pending"
+    })).rejects.toThrow("createSubscription");
+  });
+
+  it("getSubscription returns subscription", async () => {
+    const db = mockDb({ single: vi.fn().mockResolvedValue({ data: MOCK_SUB, error: null }) });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const result = await getSubscription("biz-uuid-1");
+    expect(result?.status).toBe("active");
+  });
+
+  it("getSubscription returns null on error", async () => {
+    const db = mockDb({ single: vi.fn().mockResolvedValue({ data: null, error: { message: "nf" } }) });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const result = await getSubscription("bad");
+    expect(result).toBeNull();
+  });
+
+  it("updateSubscription calls update with patch", async () => {
+    const eqFn = vi.fn().mockResolvedValue({ error: null });
+    const db = { ...mockDb(), eq: eqFn };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await updateSubscription("sub-uuid-1", { status: "canceled" });
+    expect(db.update).toHaveBeenCalledWith({ status: "canceled" });
+  });
+
+  it("updateSubscription throws on error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(updateSubscription("sub-uuid-1", { status: "active" })).rejects.toThrow("updateSubscription");
+  });
+});
