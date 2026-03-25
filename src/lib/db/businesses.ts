@@ -14,7 +14,19 @@ export type BusinessRow = {
 };
 
 export async function createBusiness(
-  data: { id: string; name: string; ownerEmail: string; tier: Business["tier"] },
+  data: {
+    id: string;
+    name: string;
+    ownerEmail: string;
+    tier: Business["tier"];
+    businessType?: string;
+    ownerName?: string;
+    phone?: string;
+    serviceArea?: string;
+    typicalInquiry?: string;
+    teamSize?: number;
+    crmUsed?: string;
+  },
   client?: SupabaseClient
 ): Promise<BusinessRow> {
   const db = client ?? (await createSupabaseServiceClient());
@@ -25,7 +37,14 @@ export async function createBusiness(
       name: data.name,
       owner_email: data.ownerEmail,
       tier: data.tier,
-      status: "offline"
+      status: "offline",
+      business_type: data.businessType ?? null,
+      owner_name: data.ownerName ?? null,
+      phone: data.phone ?? null,
+      service_area: data.serviceArea ?? null,
+      typical_inquiry: data.typicalInquiry ?? null,
+      team_size: data.teamSize ?? null,
+      crm_used: data.crmUsed ?? null
     })
     .select()
     .single();

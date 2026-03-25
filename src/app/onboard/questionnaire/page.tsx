@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
@@ -32,6 +32,14 @@ const EMPTY_FORM: FormData = {
 };
 
 export default function QuestionnairePage() {
+  return (
+    <Suspense>
+      <QuestionnaireForm />
+    </Suspense>
+  );
+}
+
+function QuestionnaireForm() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const tier = (searchParams.get("tier") ?? "starter") as "starter" | "standard";
@@ -54,7 +62,18 @@ export default function QuestionnairePage() {
       const createRes = await fetch("/api/business/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ businessId, name: form.businessName, tier })
+        body: JSON.stringify({
+          businessId,
+          name: form.businessName,
+          tier,
+          businessType: form.businessType,
+          ownerName: form.ownerName,
+          phone: form.phone,
+          serviceArea: form.serviceArea,
+          typicalInquiry: form.typicalInquiry,
+          teamSize: form.teamSize,
+          crmUsed: form.crmUsed
+        })
       });
       if (!createRes.ok) throw new Error("Failed to create business");
 

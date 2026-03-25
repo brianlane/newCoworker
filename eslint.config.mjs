@@ -1,3 +1,8 @@
 import nextVitals from "eslint-config-next/core-web-vitals";
 
-export default [...nextVitals];
+const config = [
+  { ignores: ["coverage/**", ".next/**", "node_modules/**"] },
+  ...nextVitals,
+];
+
+export default config;

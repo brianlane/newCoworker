@@ -1,12 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { Card } from "@/components/ui/Card";
 import { StatusDot } from "@/components/ui/StatusDot";
 
 export default function OnboardSuccessPage() {
+  return (
+    <Suspense>
+      <OnboardSuccessContent />
+    </Suspense>
+  );
+}
+
+function OnboardSuccessContent() {
   const searchParams = useSearchParams();
   const sessionId = searchParams.get("session_id");
   const [status, setStatus] = useState<"provisioning" | "online" | "error">("provisioning");

@@ -28,7 +28,7 @@ export async function POST(request: Request) {
     return successResponse(result);
   } catch (err) {
     if (err instanceof z.ZodError) {
-      return errorResponse("VALIDATION_ERROR", err.errors[0].message);
+      return errorResponse("VALIDATION_ERROR", err.issues[0].message);
     }
     return handleRouteError(err);
   }

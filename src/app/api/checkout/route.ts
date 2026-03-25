@@ -18,14 +18,6 @@ export async function POST(request: Request) {
 
     const priceId = resolvePriceId(body.tier);
 
-    const session = await createCheckoutSession({
-      priceId,
-      successUrl: `${appUrl}/onboard/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancelUrl: `${appUrl}/onboard`,
-      customerEmail: user.email ?? undefined,
-      metadata: { businessId: body.businessId, tier: body.tier, userId: user.userId }
-    });
-
     await createSubscription({
       id: randomUUID(),
       business_id: body.businessId,
@@ -35,10 +27,18 @@ export async function POST(request: Request) {
       status: "pending"
     });
 
+    const session = await createCheckoutSession({
+      priceId,
+      successUrl: `${appUrl}/onboard/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancelUrl: `${appUrl}/onboard`,
+      customerEmail: user.email ?? undefined,
+      metadata: { businessId: body.businessId, tier: body.tier, userId: user.userId }
+    });
+
     return successResponse({ checkoutUrl: session.url });
   } catch (err) {
     if (err instanceof z.ZodError) {
-      return errorResponse("VALIDATION_ERROR", err.errors[0].message);
+      return errorResponse("VALIDATION_ERROR", err.issues[0].message);
     }
     return handleRouteError(err);
   }

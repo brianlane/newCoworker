@@ -3,7 +3,7 @@ import Stripe from "stripe";
 export function getStripe(secretKey?: string): Stripe {
   const key = secretKey ?? process.env.STRIPE_SECRET_KEY;
   if (!key) throw new Error("STRIPE_SECRET_KEY is not configured");
-  return new Stripe(key, { apiVersion: "2025-05-28.basil" });
+  return new Stripe(key, { apiVersion: "2026-02-25.clover" });
 }
 
 export function verifyWebhook(payload: string, signature: string, secret?: string): Stripe.Event {

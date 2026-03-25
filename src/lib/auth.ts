@@ -53,7 +53,11 @@ export async function requireOwner(businessId: string): Promise<AuthUser> {
   const user = await requireAuth();
   if (user.isAdmin) return user;
 
-  // Service-level check: owner must have matching business
+  if (!user.email) {
+    const err = Object.assign(new Error("Forbidden"), { status: 403 });
+    throw err;
+  }
+
   const { createSupabaseServiceClient } = await import("@/lib/supabase/server");
   const supabase = await createSupabaseServiceClient();
   const { data } = await supabase

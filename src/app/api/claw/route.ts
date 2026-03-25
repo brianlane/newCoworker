@@ -6,13 +6,15 @@ import { sendOwnerSms, readTwilioConfig } from "@/lib/twilio/client";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
-import { randomUUID } from "crypto";
+import { randomUUID, timingSafeEqual } from "crypto";
 
 function verifyClawToken(request: Request): boolean {
   const auth = request.headers.get("authorization") ?? "";
   const token = auth.replace(/^Bearer\s+/i, "").trim();
   const expected = process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
-  return expected !== "" && token === expected;
+  if (expected === "" || token.length !== expected.length) return false;
+
+  return timingSafeEqual(Buffer.from(token), Buffer.from(expected));
 }
 
 export async function POST(request: Request) {
