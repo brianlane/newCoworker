@@ -1,0 +1,35 @@
+name: Dependency Audit
+
+on:
+  push:
+    branches:
+      - main
+      - init
+  pull_request:
+  schedule:
+    - cron: "18 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "20"
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: npm audit (prod only)
+        run: npm audit --omit=dev --audit-level=high

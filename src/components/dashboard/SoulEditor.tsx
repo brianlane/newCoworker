@@ -25,8 +25,7 @@ export function SoulEditor({ businessId, initialSoul, initialIdentity }: SoulEdi
         body: JSON.stringify({
           businessId,
           soulMd: soul,
-          identityMd: identity,
-          memoryMd: ""
+          identityMd: identity
         })
       });
       if (!res.ok) throw new Error("Save failed");

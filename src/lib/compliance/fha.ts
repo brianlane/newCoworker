@@ -1,6 +1,8 @@
 const FORBIDDEN_TERMS = [
   "race",
+  "color",
   "religion",
+  "sex",
   "familial status",
   "disability",
   "national origin"

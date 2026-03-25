@@ -6,8 +6,10 @@ function validateTwilioSignature(request: Request, body: string): boolean {
   const accountSid = process.env.TWILIO_ACCOUNT_SID ?? "";
   const authToken = process.env.TWILIO_AUTH_TOKEN ?? "";
 
-  // In production Twilio sends X-Twilio-Signature; skip validation if tokens are mocks
-  if (!accountSid || !authToken || authToken === "mock_twilio_auth_token") return true;
+  if (!accountSid || !authToken) {
+    if (process.env.NODE_ENV === "development" || process.env.CI === "true") return true;
+    return false;
+  }
 
   const signature = request.headers.get("x-twilio-signature") ?? "";
   const url = request.url;

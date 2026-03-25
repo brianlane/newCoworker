@@ -7,7 +7,7 @@ const schema = z.object({
   businessId: z.string().uuid(),
   soulMd: z.string().min(1),
   identityMd: z.string().min(1),
-  memoryMd: z.string()
+  memoryMd: z.string().optional()
 });
 
 export async function POST(request: Request) {
@@ -29,11 +29,14 @@ export async function POST(request: Request) {
       return errorResponse("FORBIDDEN", "Not authorized for this business");
     }
 
+    const { getBusinessConfig } = await import("@/lib/db/configs");
+    const existing = await getBusinessConfig(body.businessId);
+
     await upsertBusinessConfig({
       business_id: body.businessId,
       soul_md: body.soulMd,
       identity_md: body.identityMd,
-      memory_md: body.memoryMd
+      memory_md: body.memoryMd ?? existing?.memory_md ?? ""
     });
 
     return successResponse({ updated: true });

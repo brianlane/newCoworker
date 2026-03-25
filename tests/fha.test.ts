@@ -4,6 +4,8 @@ import { buildComplianceSystemPrompt, hasFhaRisk } from "@/lib/compliance/fha";
 describe("fha compliance", () => {
   it("detects risky protected-class terms", () => {
     expect(hasFhaRisk("We should target by race")).toBe(true);
+    expect(hasFhaRisk("Discriminate based on color")).toBe(true);
+    expect(hasFhaRisk("No one of that sex allowed")).toBe(true);
   });
 
   it("allows neutral language", () => {

@@ -21,7 +21,7 @@ export async function POST(request: Request) {
     const session = await createCheckoutSession({
       priceId,
       successUrl: `${appUrl}/onboard/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancelUrl: `${appUrl}/onboard/payment`,
+      cancelUrl: `${appUrl}/onboard`,
       customerEmail: user.email ?? undefined,
       metadata: { businessId: body.businessId, tier: body.tier, userId: user.userId }
     });
