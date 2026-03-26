@@ -40,7 +40,7 @@ export async function POST(request: Request) {
     // Fire notifications for urgent events
     if (urgency.shouldNotify) {
       const business = await getBusiness(log.businessId);
-      const ownerEmail = business?.owner_email ?? process.env.OWNER_ALERT_EMAIL;
+      const ownerEmail = business?.owner_email ?? process.env.ADMIN_EMAIL;
       const ownerPhone = process.env.TWILIO_OWNER_PHONE;
       const dashboardUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/dashboard`;
 

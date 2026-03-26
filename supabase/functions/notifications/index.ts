@@ -10,7 +10,7 @@
 //   TWILIO_MESSAGING_SERVICE_SID
 //   TWILIO_OWNER_PHONE
 //   RESEND_API_KEY
-//   OWNER_ALERT_EMAIL
+//   ADMIN_EMAIL
 //   NEXT_PUBLIC_APP_URL
 //   NOTIFICATIONS_WEBHOOK_TOKEN (optional; for heartbeat script calls)
 
@@ -121,7 +121,7 @@ serve(async (req: Request) => {
 
   // Send email via Resend
   const resendKey = Deno.env.get("RESEND_API_KEY");
-  const ownerEmail = Deno.env.get("OWNER_ALERT_EMAIL");
+  const ownerEmail = Deno.env.get("ADMIN_EMAIL");
 
   if (resendKey && ownerEmail) {
     const emailRes = await fetch("https://api.resend.com/emails", {
@@ -131,7 +131,7 @@ serve(async (req: Request) => {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        from: "New Coworker <alerts@newcoworker.com>",
+        from: "New Coworker <newcoworkerteam@gmail.com>",
         to: ownerEmail,
         subject: `Urgent: ${summary}`,
         text: `Your AI Coworker flagged an urgent event.\n\nSummary: ${summary}\nBusiness ID: ${record.business_id}\n\nView details: ${dashboardUrl}`

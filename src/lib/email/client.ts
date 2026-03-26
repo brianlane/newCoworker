@@ -5,7 +5,7 @@ export async function sendOwnerEmail(
   to: string,
   subject: string,
   text: string,
-  from = process.env.EMAIL_FROM ?? "New Coworker <alerts@newcoworker.com>",
+  from = process.env.CONTACT_EMAIL ?? "New Coworker <newcoworkerteam@gmail.com>",
   resendCtor: typeof Resend = Resend
 ): Promise<string | null> {
   const resend = new resendCtor(apiKey);
