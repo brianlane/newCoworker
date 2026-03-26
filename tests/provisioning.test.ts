@@ -316,10 +316,10 @@ describe("provisioning/orchestrate", () => {
   });
 
   it("throws for enterprise tier with CONTACT_EMAIL from env", async () => {
-    process.env.CONTACT_EMAIL = "newcoworkerteam@gmail.com";
+    process.env.CONTACT_EMAIL = "custom@example.com";
     await expect(
       orchestrateProvisioning({ businessId: "biz-enterprise-2", tier: "enterprise" })
-    ).rejects.toThrow("newcoworkerteam@gmail.com");
+    ).rejects.toThrow("custom@example.com");
   });
 
   it("throws for enterprise tier using fallback email when CONTACT_EMAIL unset", async () => {

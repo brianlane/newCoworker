@@ -11,9 +11,6 @@ export async function GET(request: NextRequest) {
     await supabase.auth.exchangeCodeForSession(code);
   }
 
-  const redirectUrl = request.nextUrl.clone();
-  redirectUrl.pathname = redirectTo;
-  redirectUrl.searchParams.delete("code");
-  redirectUrl.searchParams.delete("redirectTo");
-  return NextResponse.redirect(redirectUrl);
+  const target = new URL(redirectTo, request.nextUrl.origin);
+  return NextResponse.redirect(target);
 }
