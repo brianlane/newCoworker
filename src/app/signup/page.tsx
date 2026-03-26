@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { Suspense, useState, type FormEvent } from "react";
 import { createClient } from "@supabase/supabase-js";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -16,12 +16,24 @@ function getSupabaseBrowserClient() {
 }
 
 export default function SignupPage() {
+  return (
+    <Suspense>
+      <SignupForm />
+    </Suspense>
+  );
+}
+
+function SignupForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirectTo = searchParams.get("redirectTo") ?? "/onboard";
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [businessName, setBusinessName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [confirmationPending, setConfirmationPending] = useState(false);
 
   async function handleSignup(e: FormEvent) {
     e.preventDefault();
@@ -33,12 +45,13 @@ export default function SignupPage() {
     setError(null);
 
     const supabase = getSupabaseBrowserClient();
-    const { error: signUpError } = await supabase.auth.signUp({
+    const encodedRedirect = encodeURIComponent(redirectTo);
+    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
       options: {
         data: { business_name: businessName },
-        emailRedirectTo: `${window.location.origin}/api/auth/callback?redirectTo=/onboard`
+        emailRedirectTo: `${window.location.origin}/api/auth/callback?redirectTo=${encodedRedirect}`
       }
     });
 
@@ -48,7 +61,40 @@ export default function SignupPage() {
       return;
     }
 
-    router.push("/onboard");
+    if (signUpData.session) {
+      router.push(redirectTo);
+    } else {
+      setConfirmationPending(true);
+    }
+  }
+
+  if (confirmationPending) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-deep-ink px-4">
+        <div className="w-full max-w-sm space-y-6 text-center">
+          <div className="flex flex-col items-center gap-3">
+            <Image src="/logo.png" alt="New Coworker" width={56} height={56} className="rounded-full" />
+            <h1 className="text-2xl font-bold text-parchment">Check your email</h1>
+            <p className="text-sm text-parchment/50 max-w-xs">
+              We sent a confirmation link to <span className="text-parchment font-medium">{email}</span>.
+              Click the link to activate your account and get started.
+            </p>
+          </div>
+          <Card>
+            <p className="text-xs text-parchment/40 text-center">
+              Didn&apos;t receive it? Check your spam folder or{" "}
+              <button
+                type="button"
+                onClick={() => setConfirmationPending(false)}
+                className="text-signal-teal hover:underline"
+              >
+                try again
+              </button>.
+            </p>
+          </Card>
+        </div>
+      </div>
+    );
   }
 
   return (

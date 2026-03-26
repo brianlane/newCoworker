@@ -1,8 +1,5 @@
-"use client";
-
 import Image from "next/image";
 import { Card } from "@/components/ui/Card";
-import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 
 const tiers = [
@@ -14,11 +11,11 @@ const tiers = [
     features: [
       "AI voice coworker",
       "Twilio phone number",
-      "Basic memory (soul.md)",
+      "Basic memory",
+      "Browser accessibility",
       "Dashboard access",
-      "Community support"
     ],
-    cta: "Start for $199/mo",
+    cta: "Choose Starter",
     highlight: false
   },
   {
@@ -29,12 +26,13 @@ const tiers = [
     features: [
       "Everything in Starter",
       "Full Lossless Claw memory",
-      "Swarm reasoning (Qwen + Llama)",
+      "Swarm reasoning",
       "Custom soul injection",
       "Priority support & maintenance",
-      "Lightpanda browser skills"
+      "Lightpanda browser skills",
+      "Chat integration"
     ],
-    cta: "Get Standard",
+    cta: "Choose Standard",
     highlight: true
   },
   {
@@ -48,7 +46,8 @@ const tiers = [
       "White-label dashboard",
       "SLA + dedicated support",
       "Custom compliance modules",
-      "Quarterly strategy reviews"
+      "Quarterly strategy reviews",
+      "Analytics and reporting"
     ],
     cta: "Contact Sales",
     highlight: false
@@ -69,7 +68,7 @@ export default function OnboardPage() {
           />
           <h1 className="text-3xl font-bold text-parchment">Choose your plan</h1>
           <p className="text-parchment/50 max-w-md mx-auto">
-            Your AI coworker handles calls, qualifies leads, and updates your CRM — so you can focus on closing deals.
+            Your new coworker will handle calls, texts, emails, and more, so you can focus on your business.
           </p>
         </div>
 
@@ -104,7 +103,7 @@ export default function OnboardPage() {
               <div className="mt-6">
                 {tier.id === "enterprise" ? (
                   <a
-                    href="mailto:sales@newcoworker.com"
+                    href={`mailto:${process.env.CONTACT_EMAIL ?? "newcoworkerteam@gmail.com"}`}
                     className="block w-full text-center rounded-lg border border-parchment/20 text-parchment px-4 py-2.5 text-sm font-semibold hover:bg-parchment/10 transition-colors"
                   >
                     {tier.cta}

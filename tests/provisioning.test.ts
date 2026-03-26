@@ -309,6 +309,26 @@ describe("provisioning/orchestrate", () => {
     expect(mockExec.mock.calls[0][1]).toContain("NOTIFICATIONS_WEBHOOK_TOKEN=service-key-fallback");
   });
 
+  it("throws for enterprise tier — requires custom engagement", async () => {
+    await expect(
+      orchestrateProvisioning({ businessId: "biz-enterprise", tier: "enterprise" })
+    ).rejects.toThrow("Enterprise provisioning requires a custom engagement");
+  });
+
+  it("throws for enterprise tier with CONTACT_EMAIL from env", async () => {
+    process.env.CONTACT_EMAIL = "custom@example.com";
+    await expect(
+      orchestrateProvisioning({ businessId: "biz-enterprise-2", tier: "enterprise" })
+    ).rejects.toThrow("custom@example.com");
+  });
+
+  it("throws for enterprise tier using fallback email when CONTACT_EMAIL unset", async () => {
+    delete process.env.CONTACT_EMAIL;
+    await expect(
+      orchestrateProvisioning({ businessId: "biz-enterprise-3", tier: "enterprise" })
+    ).rejects.toThrow("newcoworkerteam@gmail.com");
+  });
+
   it("loads default soul/identity templates when readFileSync throws (covers catch blocks)", async () => {
     vi.mocked(fs.readFileSync).mockImplementationOnce(() => {
       throw new Error("ENOENT: no such file");

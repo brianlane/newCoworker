@@ -10,7 +10,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 const MOCK_LOG = {
   id: "log-uuid-1",
   business_id: "biz-uuid-1",
-  task_type: "voice_call",
+  task_type: "call",
   status: "success",
   log_payload: { caller: "+15550001111" },
   created_at: "2026-01-01T00:00:00Z"
@@ -39,11 +39,11 @@ describe("db/logs", () => {
     const result = await insertCoworkerLog({
       id: "log-uuid-1",
       business_id: "biz-uuid-1",
-      task_type: "voice_call",
+      task_type: "call",
       status: "success",
       log_payload: { caller: "+15550001111" }
     });
-    expect(result.task_type).toBe("voice_call");
+    expect(result.task_type).toBe("call");
   });
 
   it("insertCoworkerLog throws on error", async () => {
@@ -53,7 +53,7 @@ describe("db/logs", () => {
     await expect(insertCoworkerLog({
       id: "x",
       business_id: "y",
-      task_type: "voice_call",
+      task_type: "call",
       status: "error",
       log_payload: {}
     })).rejects.toThrow("insertCoworkerLog");
@@ -83,10 +83,10 @@ describe("db/logs", () => {
   it("insertCoworkerLog uses provided client", async () => {
     const db = mockDb();
     const result = await insertCoworkerLog(
-      { id: "x", business_id: "y", task_type: "voice_call", status: "success", log_payload: {} },
+      { id: "x", business_id: "y", task_type: "call", status: "success", log_payload: {} },
       db as never
     );
-    expect(result.task_type).toBe("voice_call");
+    expect(result.task_type).toBe("call");
     expect(createSupabaseServiceClient).not.toHaveBeenCalled();
   });
 });

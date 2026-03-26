@@ -19,6 +19,12 @@ import { createSupabaseServerClient, createSupabaseServiceClient } from "@/lib/s
 import { createServerClient } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 
+type DeprecatedCookieMethods = {
+  get?: (name: string) => string | null | undefined;
+  set?: (name: string, value: string, options: Record<string, unknown>) => void;
+  remove?: (name: string, options: Record<string, unknown>) => void;
+};
+
 describe("supabase/server", () => {
   const OLD_ENV = process.env;
 
@@ -72,10 +78,11 @@ describe("supabase/server", () => {
     let removeCalledWith: string | undefined;
 
     vi.mocked(createServerClient).mockImplementation((_url, _key, options) => {
-      if (options?.cookies) {
-        getCalledWith = options.cookies.get?.("auth-token");
-        options.cookies.set?.("auth-token", "abc", { path: "/" });
-        options.cookies.remove?.("auth-token", { path: "/" });
+      const cookies = options?.cookies as DeprecatedCookieMethods | undefined;
+      if (cookies) {
+        getCalledWith = cookies.get?.("auth-token") ?? undefined;
+        cookies.set?.("auth-token", "abc", { path: "/" });
+        cookies.remove?.("auth-token", { path: "/" });
       }
       return { auth: { getUser: vi.fn() } } as never;
     });

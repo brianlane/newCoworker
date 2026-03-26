@@ -37,7 +37,6 @@
   ],
   "exclude": [
     "node_modules",
-    "supabase/functions",
-    "tests"
+    "supabase/functions"
   ]
 }

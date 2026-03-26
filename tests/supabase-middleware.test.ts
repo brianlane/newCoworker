@@ -18,15 +18,21 @@ import { createServerClient } from "@supabase/ssr";
 import { rateLimit } from "@/lib/rate-limit";
 import { proxy } from "../src/proxy";
 
+type DeprecatedCookieMethods = {
+  get?: (name: string) => string | null | undefined;
+  set?: (name: string, value: string, options: Record<string, unknown>) => void;
+  remove?: (name: string, options: Record<string, unknown>) => void;
+};
+
 function makeRequest(
   pathname: string,
   options?: { method?: string; headers?: Record<string, string>; cookies?: Record<string, string> },
 ): NextRequest {
   const url = `http://localhost:3000${pathname}`;
-  const init: RequestInit & { headers?: Record<string, string> } = {};
-  if (options?.method) init.method = options.method;
-  if (options?.headers) init.headers = options.headers;
-  const req = new NextRequest(url, init);
+  const req = new NextRequest(url, {
+    method: options?.method,
+    headers: options?.headers,
+  });
   if (options?.cookies) {
     for (const [name, value] of Object.entries(options.cookies)) {
       req.cookies.set(name, value);
@@ -42,8 +48,9 @@ function mockSupabaseWithUser(user: Record<string, unknown> | null) {
     }
   };
   vi.mocked(createServerClient).mockImplementation((_url, _key, options) => {
-    if (options?.cookies) {
-      options.cookies.get?.("test-cookie");
+    const cookies = options?.cookies as DeprecatedCookieMethods | undefined;
+    if (cookies) {
+      cookies.get?.("test-cookie");
     }
     return client as never;
   });
@@ -207,6 +214,16 @@ describe("proxy", () => {
     expect(decodeURIComponent(location)).toContain("redirectTo=/dashboard");
   });
 
+  it("redirects unauthenticated user from questionnaire to /signup", async () => {
+    mockSupabaseWithUser(null);
+    const req = makeRequest("/onboard/questionnaire?tier=starter");
+    const res = await proxy(req);
+    expect(res.status).toBe(307);
+    const location = res.headers.get("location") ?? "";
+    expect(location).toContain("/signup");
+    expect(decodeURIComponent(location)).toContain("redirectTo=/onboard");
+  });
+
   it("redirects unauthenticated user from /admin to /admin/login", async () => {
     mockSupabaseWithUser(null);
     const req = makeRequest("/admin");
@@ -272,8 +289,9 @@ describe("proxy", () => {
   it("invokes cookie set handler", async () => {
     let setCalled = false;
     vi.mocked(createServerClient).mockImplementation((_url, _key, options) => {
-      if (options?.cookies?.set) {
-        options.cookies.set("sb-token", "val", {});
+      const cookies = options?.cookies as DeprecatedCookieMethods | undefined;
+      if (cookies?.set) {
+        cookies.set("sb-token", "val", {});
         setCalled = true;
       }
       return {
@@ -289,8 +307,9 @@ describe("proxy", () => {
   it("invokes cookie remove handler", async () => {
     let removeCalled = false;
     vi.mocked(createServerClient).mockImplementation((_url, _key, options) => {
-      if (options?.cookies?.remove) {
-        options.cookies.remove("sb-token", {});
+      const cookies = options?.cookies as DeprecatedCookieMethods | undefined;
+      if (cookies?.remove) {
+        cookies.remove("sb-token", {});
         removeCalled = true;
       }
       return {

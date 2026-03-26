@@ -27,10 +27,15 @@ type VpsProvisioningPlan = {
 };
 
 function resolveProvisioningPlan(tier: ProvisioningInput["tier"]): VpsProvisioningPlan {
-  const plans: Record<ProvisioningInput["tier"], VpsProvisioningPlan> = {
+  if (tier === "enterprise") {
+    const contact = process.env.CONTACT_EMAIL ?? "newcoworkerteam@gmail.com";
+    throw new Error(
+      `Enterprise provisioning requires a custom engagement. Please contact ${contact} to discuss your needs.`
+    );
+  }
+  const plans: Record<"starter" | "standard", VpsProvisioningPlan> = {
     starter: { hostingerPlan: "kvm8", snapshotId: "gold-image-v1" },
     standard: { hostingerPlan: "kvm8", snapshotId: "gold-image-v2" },
-    enterprise: { hostingerPlan: "kvm16", snapshotId: "platinum-image-v1" }
   };
   return plans[tier];
 }
