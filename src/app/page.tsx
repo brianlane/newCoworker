@@ -44,7 +44,6 @@ const features: FeatureItem[] = [
 ];
 
 export const metadata: Metadata = {
-  title: "New Coworker",
   description: "New Coworker gives your business a 24/7 AI employee to answer calls, handle messages, and keep operations moving.",
   alternates: {
     canonical: "/"
