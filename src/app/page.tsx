@@ -12,7 +12,7 @@ type FeatureItem = {
 const features: FeatureItem[] = [
   {
     title: "AI Voice Coworker",
-    description: "Answers calls, texts, emails, and more — 24/7 with human-level conversation.",
+    description: "Acts on your behalf as your virtual assistant 24/7 with human-level conversation.",
     Icon: Phone,
   },
   {
@@ -71,7 +71,7 @@ export default function HomePage() {
           <span className="text-claw-green"> never sleeps</span>
         </h1>
         <p className="mt-6 text-lg text-parchment/60 max-w-2xl mx-auto leading-relaxed">
-          New Coworker answers calls, qualifies leads, and updates your CRM around the clock.
+          New Coworker answers calls, texts, emails, and more around the clock.
           Built for all <b>businesses</b>.
         </p>
         <div className="mt-10">
@@ -108,9 +108,9 @@ export default function HomePage() {
       {/* CTA */}
       <section className="max-w-3xl mx-auto px-6 pb-24 text-center">
         <div className="rounded-2xl border border-claw-green/20 bg-claw-green/5 p-10">
-          <h2 className="text-2xl font-bold mb-3">Ready to hire your AI coworker?</h2>
+          <h2 className="text-2xl font-bold mb-3">Ready to hire your New Coworker?</h2>
           <p className="text-parchment/50 mb-8">
-            No long-term contracts. Cancel anytime. Your coworker starts learning from day one.
+            No long-term contracts. Cancel anytime. New coworker starts learning from day one.
           </p>
           <Link
             href="/onboard"
