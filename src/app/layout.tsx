@@ -16,9 +16,6 @@ export const metadata: Metadata = {
     "business automation",
     "virtual assistant for business"
   ],
-  alternates: {
-    canonical: "/"
-  },
   icons: {
     icon: [
       { url: "/logo.png", type: "image/png", sizes: "32x32" },
@@ -30,7 +27,6 @@ export const metadata: Metadata = {
   },
   openGraph: {
     type: "website",
-    url: "/",
     title: "New Coworker",
     description: "Your AI employee that never sleeps.",
     siteName: "New Coworker",
