@@ -10,6 +10,8 @@
 //   TWILIO_MESSAGING_SERVICE_SID
 //   TWILIO_OWNER_PHONE
 //   RESEND_API_KEY
+//   MAILER_EMAIL
+//   CONTACT_EMAIL (optional; reply-to address)
 //   ADMIN_EMAIL
 //   NEXT_PUBLIC_APP_URL
 //   NOTIFICATIONS_WEBHOOK_TOKEN (optional; for heartbeat script calls)
@@ -131,8 +133,9 @@ serve(async (req: Request) => {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        from: "New Coworker <newcoworkerteam@gmail.com>",
+        from: Deno.env.get("MAILER_EMAIL") ?? "New Coworker <contact@newcoworker.com>",
         to: ownerEmail,
+        reply_to: Deno.env.get("CONTACT_EMAIL") ?? undefined,
         subject: `Urgent: ${summary}`,
         text: `Your AI Coworker flagged an urgent event.\n\nSummary: ${summary}\nBusiness ID: ${record.business_id}\n\nView details: ${dashboardUrl}`
       })
