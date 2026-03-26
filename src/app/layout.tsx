@@ -21,7 +21,7 @@ export const metadata: Metadata = {
       { url: "/transparentIcon-light.png", media: "(prefers-color-scheme: light)", type: "image/png" },
       { url: "/transparentIcon.png", media: "(prefers-color-scheme: dark)", type: "image/png" }
     ],
-    shortcut: ["/transparentIcon.png"],
+    shortcut: ["/logo.png"],
     apple: [{ url: "/logo.png", type: "image/png", sizes: "180x180" }]
   },
   openGraph: {
