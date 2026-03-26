@@ -7,7 +7,7 @@ type AuthUser = {
   email: string | null;
 };
 
-const protectedPrefixes = ["/dashboard"];
+const protectedPrefixes = ["/dashboard", "/onboard/questionnaire"];
 
 function isProtectedRoute(pathname: string) {
   return protectedPrefixes.some((p) => pathname.startsWith(p));
@@ -192,8 +192,13 @@ export async function proxy(request: NextRequest) {
   // --- Protected route gate (owner dashboard) ---
   if (isProtectedRoute(pathname) && !user) {
     const redirectUrl = request.nextUrl.clone();
-    redirectUrl.pathname = "/login";
-    redirectUrl.searchParams.set("redirectTo", pathname);
+    if (pathname.startsWith("/onboard/questionnaire")) {
+      redirectUrl.pathname = "/signup";
+      redirectUrl.searchParams.set("redirectTo", "/onboard");
+    } else {
+      redirectUrl.pathname = "/login";
+      redirectUrl.searchParams.set("redirectTo", pathname);
+    }
     return redirectWithCookies(response, redirectUrl);
   }
 
