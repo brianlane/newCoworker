@@ -15,7 +15,7 @@ export async function sendOwnerEmail(
     to,
     subject,
     text,
-    ...(replyTo && { reply_to: replyTo })
+    ...(replyTo && { replyTo })
   });
 
   return result.data?.id ?? null;
