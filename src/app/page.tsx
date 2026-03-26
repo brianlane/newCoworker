@@ -1,5 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
+import type { Metadata } from "next";
 import { Phone, Brain, Zap, ShieldCheck, LayoutDashboard, Rocket } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
 
@@ -41,6 +42,26 @@ const features: FeatureItem[] = [
     Icon: Rocket,
   },
 ];
+
+export const metadata: Metadata = {
+  title: "AI Employee for Calls, Texts, and Email",
+  description: "New Coworker gives your business a 24/7 AI employee to answer calls, handle messages, and keep operations moving.",
+  alternates: {
+    canonical: "/"
+  },
+  openGraph: {
+    title: "Your AI employee that never sleeps",
+    description: "Answer calls, texts, and emails around the clock with New Coworker.",
+    url: "/",
+    images: ["/opengraph-image"]
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Your AI employee that never sleeps",
+    description: "Answer calls, texts, and emails around the clock with New Coworker.",
+    images: ["/twitter-image"]
+  }
+};
 
 export default function HomePage() {
   return (

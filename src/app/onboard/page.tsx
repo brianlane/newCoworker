@@ -1,4 +1,5 @@
 import Image from "next/image";
+import type { Metadata } from "next";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 
@@ -53,6 +54,26 @@ const tiers = [
     highlight: false
   }
 ];
+
+export const metadata: Metadata = {
+  title: "Pricing and Plans",
+  description: "Compare Starter, Standard, and Enterprise plans to choose the right AI coworker setup for your business.",
+  alternates: {
+    canonical: "/onboard"
+  },
+  openGraph: {
+    title: "New Coworker Pricing Plans",
+    description: "Choose the plan that fits your business and launch your AI coworker quickly.",
+    url: "/onboard",
+    images: ["/opengraph-image"]
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "New Coworker Pricing Plans",
+    description: "Choose the plan that fits your business and launch your AI coworker quickly.",
+    images: ["/twitter-image"]
+  }
+};
 
 export default function OnboardPage() {
   return (
