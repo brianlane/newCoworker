@@ -66,9 +66,6 @@ export default function HomePage() {
 
       {/* Hero */}
       <section className="max-w-4xl mx-auto px-6 pt-20 pb-24 text-center">
-        <div className="inline-block rounded-full bg-claw-green/10 border border-claw-green/20 px-4 py-1.5 text-xs font-medium text-claw-green mb-6">
-          Now accepting early customers
-        </div>
         <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold leading-tight tracking-tight">
           Your AI employee that
           <span className="text-claw-green"> never sleeps</span>
