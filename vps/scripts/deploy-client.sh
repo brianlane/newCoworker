@@ -7,7 +7,8 @@
 #   SUPABASE_URL        — Supabase project URL
 #   SUPABASE_SERVICE_KEY — Service role key (write config back)
 #   CLOUDFLARE_TUNNEL_TOKEN — cloudflared tunnel token
-#   OPENCLAW_GATEWAY_TOKEN — shared bearer token
+#   OPENCLAW_GATEWAY_TOKEN — shared bearer token for OpenClaw gateway auth
+#   NOTIFICATIONS_WEBHOOK_TOKEN — token for Supabase Edge Function auth
 #   ELEVENLABS_AGENT_ID — agent ID for voice routing
 
 set -euo pipefail
@@ -63,7 +64,7 @@ cat > /opt/openclaw/config/openclaw.json <<OPENCLAW_EOF
     "endpoint": "${LIGHTPANDA_WSS_URL:-wss://cdn.lightpanda.io/ws}"
   },
   "notification_webhook": "${SUPABASE_URL}/functions/v1/notifications",
-  "notification_webhook_token": "${OPENCLAW_GATEWAY_TOKEN}",
+  "notification_webhook_token": "${NOTIFICATIONS_WEBHOOK_TOKEN:-${SUPABASE_SERVICE_ROLE_KEY}}",
   "compliance": {
     "fha_guardrails": true,
     "forbidden_topics": ["race", "religion", "national_origin", "familial_status", "disability", "sex", "color"]

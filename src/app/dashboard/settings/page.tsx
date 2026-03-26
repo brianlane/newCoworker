@@ -10,6 +10,7 @@ export const dynamic = "force-dynamic";
 export default async function SettingsPage() {
   const user = await getAuthUser();
   if (!user) redirect("/login");
+  if (!user.email) redirect("/login");
 
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db

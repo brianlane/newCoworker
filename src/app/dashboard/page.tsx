@@ -12,8 +12,8 @@ export const dynamic = "force-dynamic";
 export default async function DashboardPage() {
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard");
+  if (!user.email) redirect("/login?redirectTo=/dashboard");
 
-  // Fetch this owner's businesses
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
