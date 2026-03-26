@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { Suspense, useState, type FormEvent } from "react";
 import { createClient } from "@supabase/supabase-js";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -16,7 +16,18 @@ function getSupabaseBrowserClient() {
 }
 
 export default function SignupPage() {
+  return (
+    <Suspense>
+      <SignupForm />
+    </Suspense>
+  );
+}
+
+function SignupForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirectTo = searchParams.get("redirectTo") ?? "/onboard";
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [businessName, setBusinessName] = useState("");
@@ -33,12 +44,13 @@ export default function SignupPage() {
     setError(null);
 
     const supabase = getSupabaseBrowserClient();
+    const encodedRedirect = encodeURIComponent(redirectTo);
     const { error: signUpError } = await supabase.auth.signUp({
       email,
       password,
       options: {
         data: { business_name: businessName },
-        emailRedirectTo: `${window.location.origin}/api/auth/callback?redirectTo=/onboard`
+        emailRedirectTo: `${window.location.origin}/api/auth/callback?redirectTo=${encodedRedirect}`
       }
     });
 
@@ -48,7 +60,7 @@ export default function SignupPage() {
       return;
     }
 
-    router.push("/onboard");
+    router.push(redirectTo);
   }
 
   return (

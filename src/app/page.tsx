@@ -1,36 +1,44 @@
 import Image from "next/image";
 import Link from "next/link";
+import { Phone, Brain, Zap, ShieldCheck, LayoutDashboard, Rocket } from "lucide-react";
+import type { ComponentType, SVGProps } from "react";
 
-const features = [
+type FeatureItem = {
+  title: string;
+  description: string;
+  Icon: ComponentType<SVGProps<SVGSVGElement>>;
+};
+
+const features: FeatureItem[] = [
   {
     title: "AI Voice Coworker",
     description: "Answers calls, qualifies leads, books showings — 24/7 with human-level conversation.",
-    icon: "🗣️",
+    Icon: Phone,
   },
   {
     title: "Permanent Memory",
-    description: "Lossless Claw memory learns your business over time — every interaction builds context.",
-    icon: "🧠",
+    description: "Lossless Claw memory learns your business over time so every interaction builds context.",
+    Icon: Brain,
   },
   {
     title: "Multi-Model Reasoning",
     description: "Qwen + Llama swarm reasoning handles complex questions other bots can't.",
-    icon: "⚡",
+    Icon: Zap,
   },
   {
-    title: "FHA Compliant",
-    description: "Built-in Fair Housing Act guardrails protect your business from costly violations.",
-    icon: "🛡️",
+    title: "Compliance Guardrails",
+    description: "Built-in compliance guardrails protect your business from costly violations.",
+    Icon: ShieldCheck,
   },
   {
     title: "Your Dashboard",
     description: "Monitor activity, review memory, manage notifications — all in one place.",
-    icon: "📊",
+    Icon: LayoutDashboard,
   },
   {
     title: "Deploy in Minutes",
-    description: "One-click provisioning: VPS, voice agent, phone number — handled automatically.",
-    icon: "🚀",
+    description: "One-click provisioning: VPS, voice agent, phone number all handled automatically.",
+    Icon: Rocket,
   },
 ];
 
@@ -67,20 +75,14 @@ export default function HomePage() {
         </h1>
         <p className="mt-6 text-lg text-parchment/60 max-w-2xl mx-auto leading-relaxed">
           New Coworker answers calls, qualifies leads, and updates your CRM around the clock.
-          Built for real estate, dental, HVAC, and service businesses.
+          Built for all <b>businesses</b>.
         </p>
-        <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
+        <div className="mt-10">
           <Link
-            href="/onboard"
-            className="rounded-lg bg-claw-green text-deep-ink px-8 py-3.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
+            href="/signup"
+            className="inline-block rounded-lg bg-claw-green text-deep-ink px-8 py-3.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
           >
             Start for $199/mo
-          </Link>
-          <Link
-            href="/login"
-            className="rounded-lg border border-parchment/20 px-8 py-3.5 text-sm font-semibold text-parchment hover:bg-parchment/5 transition-colors"
-          >
-            Sign in to dashboard
           </Link>
         </div>
       </section>
@@ -96,7 +98,7 @@ export default function HomePage() {
               key={f.title}
               className="rounded-xl border border-parchment/10 bg-parchment/[0.02] p-6 hover:border-signal-teal/30 transition-colors"
             >
-              <div className="text-2xl mb-3">{f.icon}</div>
+              <f.Icon className="w-6 h-6 text-claw-green mb-3" />
               <h3 className="font-semibold text-parchment mb-1">{f.title}</h3>
               <p className="text-sm text-parchment/50 leading-relaxed">{f.description}</p>
             </div>
@@ -125,7 +127,7 @@ export default function HomePage() {
         <div className="max-w-6xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
           <p className="text-xs text-parchment/30">&copy; {new Date().getFullYear()} New Coworker. All rights reserved.</p>
           <div className="flex gap-6 text-xs text-parchment/30">
-            <a href="mailto:sales@newcoworker.com" className="hover:text-parchment/60 transition-colors">Contact</a>
+            <a href={`mailto:${process.env.CONTACT_EMAIL ?? "newcoworkerteam@gmail.com"}`} className="hover:text-parchment/60 transition-colors">Contact</a>
             <Link href="/onboard" className="hover:text-parchment/60 transition-colors">Pricing</Link>
             <Link href="/login" className="hover:text-parchment/60 transition-colors">Sign in</Link>
           </div>

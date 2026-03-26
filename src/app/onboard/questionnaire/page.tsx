@@ -1,7 +1,8 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
+import { createClient } from "@supabase/supabase-js";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
@@ -47,6 +48,21 @@ function QuestionnaireForm() {
   const [form, setForm] = useState<FormData>(EMPTY_FORM);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  useEffect(() => {
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    );
+    supabase.auth.getUser().then(({ data }) => {
+      if (!data.user) {
+        window.location.href = `/signup?redirectTo=/onboard/questionnaire?tier=${tier}`;
+      } else {
+        setAuthChecked(true);
+      }
+    });
+  }, [tier]);
 
   function update(field: keyof FormData, value: string) {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -90,6 +106,14 @@ function QuestionnaireForm() {
       setError(err instanceof Error ? err.message : "Something went wrong");
       setLoading(false);
     }
+  }
+
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen bg-deep-ink flex items-center justify-center">
+        <p className="text-parchment/50 text-sm">Loading...</p>
+      </div>
+    );
   }
 
   return (
