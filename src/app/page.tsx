@@ -12,7 +12,7 @@ type FeatureItem = {
 const features: FeatureItem[] = [
   {
     title: "AI Voice Coworker",
-    description: "Answers calls, qualifies leads, books showings — 24/7 with human-level conversation.",
+    description: "Answers calls, texts, emails, and more — 24/7 with human-level conversation.",
     Icon: Phone,
   },
   {
@@ -95,8 +95,10 @@ export default function HomePage() {
               key={f.title}
               className="rounded-xl border border-parchment/10 bg-parchment/[0.02] p-6 hover:border-signal-teal/30 transition-colors"
             >
-              <f.Icon className="w-6 h-6 text-claw-green mb-3" />
-              <h3 className="font-semibold text-parchment mb-1">{f.title}</h3>
+              <div className="flex items-center gap-2 mb-2">
+                <f.Icon className="w-5 h-5 text-claw-green shrink-0" />
+                <h3 className="font-semibold text-parchment">{f.title}</h3>
+              </div>
               <p className="text-sm text-parchment/50 leading-relaxed">{f.description}</p>
             </div>
           ))}
