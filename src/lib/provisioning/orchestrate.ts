@@ -21,6 +21,20 @@ type ProvisioningResult = {
   tunnelUrl: string;
 };
 
+type VpsProvisioningPlan = {
+  hostingerPlan: string;
+  snapshotId: string;
+};
+
+function resolveProvisioningPlan(tier: ProvisioningInput["tier"]): VpsProvisioningPlan {
+  const plans: Record<ProvisioningInput["tier"], VpsProvisioningPlan> = {
+    starter: { hostingerPlan: "kvm8", snapshotId: "gold-image-v1" },
+    standard: { hostingerPlan: "kvm8", snapshotId: "gold-image-v2" },
+    enterprise: { hostingerPlan: "kvm16", snapshotId: "platinum-image-v1" }
+  };
+  return plans[tier];
+}
+
 function loadSoulTemplate(): string {
   try {
     return readFileSync(join(process.cwd(), "vps/templates/soul.md"), "utf-8");
@@ -44,9 +58,10 @@ export async function orchestrateProvisioning(
     elevenlabs?: ElevenLabsClient;
   }
 ): Promise<ProvisioningResult> {
-  const { businessId, ownerEmail, ownerPhone } = input;
+  const { businessId, ownerEmail, ownerPhone, tier } = input;
+  const plan = resolveProvisioningPlan(tier);
 
-  logger.info("Starting provisioning", { businessId });
+  logger.info("Starting provisioning", { businessId, tier, plan });
 
   // 1. Provision VPS via Hostinger API
   const hostinger =
@@ -56,7 +71,7 @@ export async function orchestrateProvisioning(
       process.env.HOSTINGER_API_TOKEN ?? ""
     );
 
-  const { vpsId } = await hostinger.provisionVps("kvm8", "gold-image-v1");
+  const { vpsId } = await hostinger.provisionVps(plan.hostingerPlan, plan.snapshotId);
   logger.info("VPS provisioned", { businessId, vpsId });
 
   // 2. Store VPS ID and mark offline while setting up

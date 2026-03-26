@@ -46,14 +46,33 @@ export async function POST(request: Request) {
             });
           }
 
-          // Trigger provisioning asynchronously
-          const { orchestrateProvisioning } = await import("@/lib/provisioning/orchestrate");
-          orchestrateProvisioning({ businessId, tier }).catch((err) => {
-            logger.error("Provisioning failed after checkout", {
+          // Idempotency guard: Stripe may deliver the same event multiple times.
+          // Skip provisioning if we've already provisioned this business or already
+          // marked this subscription active with the same Stripe subscription id.
+          const { getBusiness } = await import("@/lib/db/businesses");
+          const business = await getBusiness(businessId);
+          const alreadyOnline = business?.status === "online";
+          const alreadyActivated =
+            existing?.status === "active" &&
+            !!subscriptionId &&
+            existing.stripe_subscription_id === subscriptionId;
+
+          if (alreadyOnline || alreadyActivated) {
+            logger.info("Skipping duplicate provisioning trigger", {
               businessId,
-              error: err instanceof Error ? err.message : String(err)
+              eventId: event.id,
+              alreadyOnline,
+              alreadyActivated
             });
-          });
+          } else {
+            const { orchestrateProvisioning } = await import("@/lib/provisioning/orchestrate");
+            orchestrateProvisioning({ businessId, tier }).catch((err) => {
+              logger.error("Provisioning failed after checkout", {
+                businessId,
+                error: err instanceof Error ? err.message : String(err)
+              });
+            });
+          }
         }
         break;
       }

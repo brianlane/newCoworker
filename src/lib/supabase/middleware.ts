@@ -32,22 +32,40 @@ export async function updateSession(request: NextRequest): Promise<NextResponse>
   const { data: { user } } = await supabase.auth.getUser();
 
   const pathname = request.nextUrl.pathname;
-  const protectedPaths = ["/dashboard", "/admin"];
-  const isProtected = protectedPaths.some((p) => pathname.startsWith(p));
+  const isAdminLogin = pathname.startsWith("/admin/login");
+  const isAdminRoute = pathname.startsWith("/admin");
+  const protectedPaths = ["/dashboard"];
+  const isProtected = protectedPaths.some((p) => pathname.startsWith(p)) || (isAdminRoute && !isAdminLogin);
 
   if (isProtected && !user) {
-    const loginUrl = request.nextUrl.clone();
-    loginUrl.pathname = "/login";
-    loginUrl.searchParams.set("redirectTo", pathname);
-    return NextResponse.redirect(loginUrl);
+    const redirectUrl = request.nextUrl.clone();
+    if (isAdminRoute && !isAdminLogin) {
+      redirectUrl.pathname = "/admin/login";
+      redirectUrl.searchParams.set("next", pathname);
+    } else {
+      redirectUrl.pathname = "/login";
+      redirectUrl.searchParams.set("redirectTo", pathname);
+    }
+    return NextResponse.redirect(redirectUrl);
   }
 
   // Gate /admin to ADMIN_EMAIL only
-  if (pathname.startsWith("/admin")) {
+  if (isAdminRoute && !isAdminLogin) {
     const adminEmail = process.env.ADMIN_EMAIL;
     if (!adminEmail || user?.email?.toLowerCase() !== adminEmail.toLowerCase()) {
       const url = request.nextUrl.clone();
-      url.pathname = "/dashboard";
+      url.pathname = "/admin/login";
+      url.searchParams.set("next", pathname);
+      return NextResponse.redirect(url);
+    }
+  }
+
+  // Mirror reality behavior: authenticated admin should not stay on admin login page.
+  if (isAdminLogin) {
+    const adminEmail = process.env.ADMIN_EMAIL;
+    if (adminEmail && user?.email?.toLowerCase() === adminEmail.toLowerCase()) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/admin";
       return NextResponse.redirect(url);
     }
   }

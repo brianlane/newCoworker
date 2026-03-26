@@ -56,7 +56,7 @@ create policy "Owner reads own logs"
 -- Service role inserts logs (OpenClaw via service key)
 create policy "Service inserts logs"
   on coworker_logs for insert
-  with check (true);
+  with check (auth.role() = 'service_role');
 
 -- Sessions: owner reads own
 create policy "Owner reads own sessions"

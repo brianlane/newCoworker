@@ -75,12 +75,12 @@ describe("supabase/middleware", () => {
     expect(decodeURIComponent(location)).toContain("redirectTo=/dashboard");
   });
 
-  it("redirects unauthenticated user from /admin to /login", async () => {
+  it("redirects unauthenticated user from /admin to /admin/login", async () => {
     mockSupabaseWithUser(null);
     const req = makeRequest("/admin");
     const res = await updateSession(req);
     expect(res.status).toBe(307);
-    expect(res.headers.get("location")).toContain("/login");
+    expect(res.headers.get("location")).toContain("/admin/login");
   });
 
   it("allows authenticated user to access /dashboard", async () => {
@@ -90,12 +90,12 @@ describe("supabase/middleware", () => {
     expect(res.status).toBe(200);
   });
 
-  it("redirects non-admin from /admin to /dashboard", async () => {
+  it("redirects non-admin from /admin to /admin/login", async () => {
     mockSupabaseWithUser({ id: "u-1", email: "notadmin@test.com" });
     const req = makeRequest("/admin");
     const res = await updateSession(req);
     expect(res.status).toBe(307);
-    expect(res.headers.get("location")).toContain("/dashboard");
+    expect(res.headers.get("location")).toContain("/admin/login");
   });
 
   it("allows admin to access /admin", async () => {
@@ -111,7 +111,22 @@ describe("supabase/middleware", () => {
     const req = makeRequest("/admin");
     const res = await updateSession(req);
     expect(res.status).toBe(307);
-    expect(res.headers.get("location")).toContain("/dashboard");
+    expect(res.headers.get("location")).toContain("/admin/login");
+  });
+
+  it("allows unauthenticated access to /admin/login", async () => {
+    mockSupabaseWithUser(null);
+    const req = makeRequest("/admin/login");
+    const res = await updateSession(req);
+    expect(res.status).toBe(200);
+  });
+
+  it("redirects authenticated admin away from /admin/login to /admin", async () => {
+    mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com" });
+    const req = makeRequest("/admin/login");
+    const res = await updateSession(req);
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/admin");
   });
 
   it("invokes cookie set in middleware via cookie update", async () => {

@@ -29,7 +29,20 @@ interface WebhookPayload {
   };
 }
 
-function verifyRequest(req: Request): boolean {
+async function sha256(input: string): Promise<Uint8Array> {
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input)));
+}
+
+function constantTimeEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    diff |= a[i] ^ b[i];
+  }
+  return diff === 0;
+}
+
+async function verifyRequest(req: Request): Promise<boolean> {
   const authHeader = req.headers.get("authorization") ?? "";
   const token = authHeader.replace(/^Bearer\s+/i, "").trim();
   if (!token) return false;
@@ -37,8 +50,18 @@ function verifyRequest(req: Request): boolean {
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   const webhookToken = Deno.env.get("NOTIFICATIONS_WEBHOOK_TOKEN") ?? "";
 
-  if (serviceKey && token === serviceKey) return true;
-  if (webhookToken && token === webhookToken) return true;
+  const tokenHash = await sha256(token);
+
+  if (serviceKey) {
+    const serviceHash = await sha256(serviceKey);
+    if (constantTimeEqual(tokenHash, serviceHash)) return true;
+  }
+
+  if (webhookToken) {
+    const webhookHash = await sha256(webhookToken);
+    if (constantTimeEqual(tokenHash, webhookHash)) return true;
+  }
+
   return false;
 }
 
@@ -47,7 +70,7 @@ serve(async (req: Request) => {
     return new Response("Method not allowed", { status: 405 });
   }
 
-  if (!verifyRequest(req)) {
+  if (!(await verifyRequest(req))) {
     return new Response("Unauthorized", { status: 401 });
   }
 

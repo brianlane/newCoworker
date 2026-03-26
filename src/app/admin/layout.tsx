@@ -12,8 +12,8 @@ const adminNavItems = [
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const user = await getAuthUser();
-  if (!user) redirect("/login?redirectTo=/admin");
-  if (!user.isAdmin) redirect("/dashboard");
+  if (!user) redirect("/admin/login?next=/admin");
+  if (!user.isAdmin) redirect("/admin/login?next=/admin");
 
   return (
     <div className="flex h-screen bg-deep-ink">

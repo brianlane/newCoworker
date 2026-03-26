@@ -13,7 +13,7 @@ export default async function AdminPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-parchment">Agency Admin</h1>
+          <h1 className="text-2xl font-bold text-parchment">Admin Overview</h1>
           <p className="text-sm text-parchment/50 mt-1">
             {businesses.length} active client{businesses.length !== 1 ? "s" : ""}
           </p>
