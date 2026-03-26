@@ -1,0 +1,11 @@
+# New Coworker VPS Scheduled Tasks
+# Install: crontab /opt/openclaw/crontab
+
+# Heartbeat check every 2 minutes
+*/2 * * * * /opt/newcoworker/scripts/heartbeat.sh >> /var/log/heartbeat.log 2>&1
+
+# Rotate openclaw logs daily at midnight
+0 0 * * * docker exec openclaw-agent /usr/local/bin/rotate-logs.sh >> /var/log/openclaw-rotate.log 2>&1
+
+# Reboot weekly on Sunday 3am (maintenance window)
+0 3 * * 0 /sbin/reboot

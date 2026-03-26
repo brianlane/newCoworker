@@ -1,0 +1,20 @@
+version: "3.9"
+services:
+  openclaw-agent:
+    image: ghcr.io/newcoworker/openclaw-agent:mock
+    container_name: openclaw-agent
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-mock_openclaw_gateway_token}
+      OLLAMA_HOST: http://ollama:11434
+    ports:
+      - "18789:18789"
+    volumes:
+      - /home/agency/clients:/clients
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    environment:
+      OLLAMA_NUM_PARALLEL: 3
+    ports:
+      - "11434:11434"

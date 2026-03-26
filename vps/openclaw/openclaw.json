@@ -1,0 +1,64 @@
+{
+  "version": "1",
+  "_comment": "Base OpenClaw config template. deploy-client.sh writes the live version with real values.",
+  "gateway_token": "{{OPENCLAW_GATEWAY_TOKEN}}",
+  "features": {
+    "chatCompletions": true,
+    "losslessClaw": true,
+    "browserSkills": true
+  },
+  "models": {
+    "fast": "qwen3.5:4b",
+    "balanced": "qwen3.5:7b",
+    "deep": "llama4:9b"
+  },
+  "llm_router": "http://127.0.0.1:8080",
+  "soul_path": "/etc/openclaw/soul.md",
+  "identity_path": "/etc/openclaw/identity.md",
+  "memory": {
+    "provider": "lossless_claw",
+    "path": "/var/openclaw/memory",
+    "max_tokens": 8192
+  },
+  "browser": {
+    "provider": "lightpanda",
+    "endpoint": "wss://cdn.lightpanda.io/ws"
+  },
+  "notification_webhook": "{{SUPABASE_URL}}/functions/v1/notifications",
+  "notification_webhook_token": "{{OPENCLAW_GATEWAY_TOKEN}}",
+  "compliance": {
+    "fha_guardrails": true,
+    "forbidden_topics": [
+      "race",
+      "religion",
+      "national_origin",
+      "familial_status",
+      "disability",
+      "sex",
+      "color"
+    ]
+  },
+  "skills": [
+    {
+      "id": "browser_search",
+      "enabled": true,
+      "description": "Headless browser automation via Lightpanda Cloud"
+    },
+    {
+      "id": "lossless_memory",
+      "enabled": true,
+      "description": "Permanent DAG memory via Lossless Claw"
+    },
+    {
+      "id": "crm_update",
+      "enabled": true,
+      "description": "Writes structured data back to webhook"
+    },
+    {
+      "id": "appointment_book",
+      "enabled": true,
+      "description": "Calendar scheduling via webhook"
+    }
+  ],
+  "elevenlabs_agent_id": "{{ELEVENLABS_AGENT_ID}}"
+}

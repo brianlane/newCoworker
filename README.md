@@ -1,13 +1,42 @@
-# React + Vite
+# New Coworker (Reconstruction)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This repository has been reconstructed into a full-system monorepo:
 
-Currently, two official plugins are available:
+- Next.js dashboard app (owner + admin views)
+- Supabase SQL migrations and edge-function scaffolding
+- VPS gold-image scripts and OpenClaw/Bifrost config templates
+- Twilio + ElevenLabs + OpenClaw integration clients
+- Compliance, monitoring, logging, and tier pricing logic
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Tier Pricing
 
-## Expanding the ESLint configuration
+- Starter: **$199/month**, $0 setup
+- Standard: $299/month, $499 setup
+- Enterprise: custom pricing
 
-If you are developing a production application, we recommend using TypeScript and enable type-aware lint rules. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
-# newCoworker
+## ElevenLabs + OpenClaw Voice Link
+
+Integration guidance source:
+[Call Your OpenClaw over the phone using ElevenLabs Agents](https://vibecodecamp.blog/blog/call-your-openclaw-over-the-phone-using-elevenlabs-agents)
+
+Implemented approach in this repo:
+
+1. Enable OpenClaw `chatCompletions` endpoint in `vps/openclaw/openclaw.json`.
+2. Expose gateway through secure tunnel.
+3. Create ElevenLabs secret and agent pointing to `/v1/chat/completions`.
+4. Attach Twilio phone number to the ElevenLabs agent.
+
+## Security and Secrets
+
+- This repo uses **mock** values in `.env` and `.env.example`.
+- Replace values with real credentials only in secure deployment environments.
+
+## Testing
+
+Run:
+
+```bash
+npm test
+```
+
+Coverage is configured for 100% on core library modules in `src/lib`.
