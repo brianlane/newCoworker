@@ -214,14 +214,21 @@ describe("proxy", () => {
     expect(decodeURIComponent(location)).toContain("redirectTo=/dashboard");
   });
 
-  it("redirects unauthenticated user from questionnaire to /signup", async () => {
+  it("allows unauthenticated user to access questionnaire", async () => {
     mockSupabaseWithUser(null);
     const req = makeRequest("/onboard/questionnaire?tier=starter");
+    const res = await proxy(req);
+    expect(res.status).toBe(200);
+  });
+
+  it("redirects unauthenticated user from /onboard/checkout to /signup", async () => {
+    mockSupabaseWithUser(null);
+    const req = makeRequest("/onboard/checkout");
     const res = await proxy(req);
     expect(res.status).toBe(307);
     const location = res.headers.get("location") ?? "";
     expect(location).toContain("/signup");
-    expect(decodeURIComponent(location)).toContain("redirectTo=/onboard");
+    expect(decodeURIComponent(location)).toContain("redirectTo=/onboard/checkout");
   });
 
   it("redirects unauthenticated user from /admin to /admin/login", async () => {

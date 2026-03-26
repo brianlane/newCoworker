@@ -26,7 +26,8 @@ export default function SignupPage() {
 function SignupForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirectTo = searchParams.get("redirectTo") ?? "/onboard";
+  const redirectTo = searchParams.get("redirectTo") ?? "/onboard/checkout";
+  const tier = searchParams.get("tier");
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -63,9 +64,16 @@ function SignupForm() {
 
     if (signUpData.session) {
       router.push(redirectTo);
-    } else {
-      setConfirmationPending(true);
+      return;
     }
+
+    const identities = signUpData.user?.identities ?? [];
+    if (identities.length === 0) {
+      setError("An account with this email already exists. Please sign in instead.");
+      return;
+    }
+
+    setConfirmationPending(true);
   }
 
   if (confirmationPending) {
@@ -103,7 +111,9 @@ function SignupForm() {
         <div className="flex flex-col items-center gap-3">
           <Image src="/logo.png" alt="New Coworker" width={56} height={56} className="rounded-full" />
           <h1 className="text-2xl font-bold text-parchment">Create your account</h1>
-          <p className="text-sm text-parchment/50">Your AI coworker starts here</p>
+          <p className="text-sm text-parchment/50">
+            {tier ? `${tier.charAt(0).toUpperCase() + tier.slice(1)} plan selected — almost there!` : "Your AI coworker starts here"}
+          </p>
         </div>
 
         <Card>
