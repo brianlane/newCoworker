@@ -108,6 +108,13 @@ describe("proxy", () => {
     expect(res.status).not.toBe(403);
   });
 
+  it("allows POST to /api/claw without origin (token-authed external route)", async () => {
+    mockSupabaseWithUser(null);
+    const req = makeRequest("/api/claw", { method: "POST" });
+    const res = await proxy(req);
+    expect(res.status).not.toBe(403);
+  });
+
   it("allows GET to /api without origin (CSRF only for state-changing)", async () => {
     mockSupabaseWithUser(null);
     const req = makeRequest("/api/business/status");

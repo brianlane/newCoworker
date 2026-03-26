@@ -52,6 +52,7 @@ export async function proxy(request: NextRequest) {
   if (
     pathname.startsWith("/api/") &&
     !pathname.startsWith("/api/webhooks/") &&
+    !pathname.startsWith("/api/claw") &&
     ["POST", "PUT", "DELETE", "PATCH"].includes(method)
   ) {
     const origin = request.headers.get("origin");
