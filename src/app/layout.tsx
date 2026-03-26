@@ -18,7 +18,7 @@ export const metadata: Metadata = {
   ],
   icons: {
     icon: [
-      { url: "/transparentIcon-dark.png", media: "(prefers-color-scheme: light)", type: "image/png" },
+      { url: "/transparentIcon-light.png", media: "(prefers-color-scheme: light)", type: "image/png" },
       { url: "/transparentIcon.png", media: "(prefers-color-scheme: dark)", type: "image/png" }
     ],
     shortcut: ["/transparentIcon.png"],
