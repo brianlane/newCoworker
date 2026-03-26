@@ -28,3 +28,8 @@ body {
   color: var(--parchment);
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
 }
+
+/* Global cursor pointer for clickable elements */
+a, button, [role="button"], input[type="button"], input[type="submit"], input[type="reset"], select, label {
+  cursor: pointer;
+}
