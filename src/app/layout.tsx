@@ -18,12 +18,11 @@ export const metadata: Metadata = {
   ],
   icons: {
     icon: [
-      { url: "/transparentIcon.png", type: "image/png", sizes: "32x32" },
-      { url: "/transparentIcon.png", type: "image/png", sizes: "192x192" },
-      { url: "/transparentIcon.png", type: "image/png", sizes: "512x512" }
+      { url: "/transparentIcon-light.png", media: "(prefers-color-scheme: light)", type: "image/png" },
+      { url: "/transparentIcon.png", media: "(prefers-color-scheme: dark)", type: "image/png" }
     ],
-    shortcut: [{ url: "/transparentIcon.png", type: "image/png" }],
-    apple: [{ url: "/transparentIcon.png", type: "image/png", sizes: "180x180" }]
+    shortcut: ["/logo.png"],
+    apple: [{ url: "/logo.png", type: "image/png", sizes: "180x180" }]
   },
   openGraph: {
     type: "website",
