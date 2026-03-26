@@ -5,15 +5,17 @@ export async function sendOwnerEmail(
   to: string,
   subject: string,
   text: string,
-  from = process.env.CONTACT_EMAIL ?? "New Coworker <newcoworkerteam@gmail.com>",
+  from = process.env.MAILER_EMAIL ?? "New Coworker <contact@newcoworker.com>",
   resendCtor: typeof Resend = Resend
 ): Promise<string | null> {
   const resend = new resendCtor(apiKey);
+  const replyTo = process.env.CONTACT_EMAIL;
   const result = await resend.emails.send({
     from,
     to,
     subject,
-    text
+    text,
+    ...(replyTo && { replyTo })
   });
 
   return result.data?.id ?? null;
