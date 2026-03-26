@@ -59,9 +59,15 @@ else
   if (( FAILURES >= MAX_FAILURES )); then
     log "CRITICAL: $FAILURES consecutive failures. Escalating via notification webhook."
     WEBHOOK_URL="${SUPABASE_URL:-}/functions/v1/notifications"
+    WEBHOOK_TOKEN="${NOTIFICATIONS_WEBHOOK_TOKEN:-${SUPABASE_SERVICE_ROLE_KEY:-}}"
+    if [[ -z "$WEBHOOK_TOKEN" ]]; then
+      log "CRITICAL: Missing NOTIFICATIONS_WEBHOOK_TOKEN/SUPABASE_SERVICE_ROLE_KEY. Skipping escalation."
+      echo "0" > "$FAILURE_COUNT_FILE"
+      exit 0
+    fi
     curl -sf -X POST \
       -H "Content-Type: application/json" \
-      -H "Authorization: Bearer ${OPENCLAW_GATEWAY_TOKEN:-}" \
+      -H "Authorization: Bearer ${WEBHOOK_TOKEN}" \
       -d "{\"type\":\"INSERT\",\"table\":\"coworker_logs\",\"record\":{\"id\":\"$(uuidgen)\",\"business_id\":\"${BUSINESS_ID:-unknown}\",\"task_type\":\"heartbeat\",\"status\":\"urgent_alert\",\"log_payload\":{\"failures\":${FAILURES}},\"created_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}" \
       "$WEBHOOK_URL" > /dev/null 2>&1 || true
     echo "0" > "$FAILURE_COUNT_FILE"

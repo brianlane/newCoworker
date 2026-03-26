@@ -12,6 +12,7 @@
 //   RESEND_API_KEY
 //   OWNER_ALERT_EMAIL
 //   NEXT_PUBLIC_APP_URL
+//   NOTIFICATIONS_WEBHOOK_TOKEN (optional; for heartbeat script calls)
 
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 
@@ -30,9 +31,15 @@ interface WebhookPayload {
 
 function verifyRequest(req: Request): boolean {
   const authHeader = req.headers.get("authorization") ?? "";
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+  if (!token) return false;
+
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-  if (!serviceKey) return false;
-  return authHeader === `Bearer ${serviceKey}`;
+  const webhookToken = Deno.env.get("NOTIFICATIONS_WEBHOOK_TOKEN") ?? "";
+
+  if (serviceKey && token === serviceKey) return true;
+  if (webhookToken && token === webhookToken) return true;
+  return false;
 }
 
 serve(async (req: Request) => {

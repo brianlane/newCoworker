@@ -59,9 +59,12 @@ function LoginForm() {
     setLoading(true);
     setError(null);
     const supabase = getSupabaseBrowserClient();
+    const encodedRedirect = encodeURIComponent(redirectTo);
     const { error: magicError } = await supabase.auth.signInWithOtp({
       email,
-      options: { emailRedirectTo: `${window.location.origin}/api/auth/callback?redirectTo=${redirectTo}` }
+      options: {
+        emailRedirectTo: `${window.location.origin}/api/auth/callback?redirectTo=${encodedRedirect}`
+      }
     });
     setLoading(false);
     if (magicError) {
