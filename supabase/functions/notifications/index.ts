@@ -28,9 +28,20 @@ interface WebhookPayload {
   };
 }
 
+function verifyRequest(req: Request): boolean {
+  const authHeader = req.headers.get("authorization") ?? "";
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  if (!serviceKey) return false;
+  return authHeader === `Bearer ${serviceKey}`;
+}
+
 serve(async (req: Request) => {
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
+  }
+
+  if (!verifyRequest(req)) {
+    return new Response("Unauthorized", { status: 401 });
   }
 
   let payload: WebhookPayload;

@@ -65,12 +65,18 @@ export async function POST(request: Request) {
           const { getSubscription } = await import("@/lib/db/subscriptions");
           const existing = await getSubscription(businessId);
           if (existing) {
-            const status =
-              sub.status === "active"
-                ? "active"
-                : sub.status === "past_due"
-                  ? "past_due"
-                  : "canceled";
+            type DbStatus = "active" | "past_due" | "canceled" | "pending";
+            const statusMap: Record<string, DbStatus> = {
+              active: "active",
+              trialing: "active",
+              past_due: "past_due",
+              unpaid: "past_due",
+              canceled: "canceled",
+              incomplete_expired: "canceled",
+              incomplete: "pending",
+              paused: "past_due"
+            };
+            const status: DbStatus = statusMap[sub.status] ?? "pending";
             await updateSubscription(existing.id, { status });
           }
         }

@@ -27,5 +27,8 @@ pnpm-debug.log*
 *.sln
 *.sw?
 
+# Private planning docs
+PRDs/geminiChat.md
+
 # Misc
 *.tsbuildinfo

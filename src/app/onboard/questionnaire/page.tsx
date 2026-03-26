@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
@@ -41,7 +41,6 @@ export default function QuestionnairePage() {
 
 function QuestionnaireForm() {
   const searchParams = useSearchParams();
-  const router = useRouter();
   const tier = (searchParams.get("tier") ?? "starter") as "starter" | "standard";
 
   const [step, setStep] = useState<Step>(1);
@@ -86,7 +85,7 @@ function QuestionnaireForm() {
       const checkoutJson = await checkoutRes.json();
       if (!checkoutRes.ok) throw new Error(checkoutJson.error?.message ?? "Checkout failed");
 
-      router.push(checkoutJson.data.checkoutUrl);
+      window.location.href = checkoutJson.data.checkoutUrl;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
       setLoading(false);
