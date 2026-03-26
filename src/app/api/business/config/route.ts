@@ -15,15 +15,20 @@ export async function POST(request: Request) {
     const user = await requireAuth();
     const body = schema.parse(await request.json());
 
-    // Verify ownership
+    if (!user.email && !user.isAdmin) {
+      return errorResponse("FORBIDDEN", "Account has no email address");
+    }
+
     const { createSupabaseServiceClient } = await import("@/lib/supabase/server");
     const db = await createSupabaseServiceClient();
-    const { data } = await db
-      .from("businesses")
-      .select("id")
-      .eq("id", body.businessId)
-      .eq("owner_email", user.email)
-      .single();
+    const { data } = user.email
+      ? await db
+          .from("businesses")
+          .select("id")
+          .eq("id", body.businessId)
+          .eq("owner_email", user.email)
+          .single()
+      : { data: null };
 
     if (!data && !user.isAdmin) {
       return errorResponse("FORBIDDEN", "Not authorized for this business");

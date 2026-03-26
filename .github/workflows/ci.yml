@@ -49,6 +49,10 @@ jobs:
     name: Typecheck
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://mock.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: mock_anon_key
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -61,6 +65,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Generate Next.js route types
+        run: npx next typegen
 
       - name: Typecheck
         run: npx tsc --noEmit

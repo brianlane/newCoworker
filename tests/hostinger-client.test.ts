@@ -27,4 +27,21 @@ describe("hostinger client", () => {
     const client = new HostingerClient("https://mock.hostinger", "token", fetchMock as any);
     await expect(client.getMetrics("vps_123")).rejects.toThrow("Hostinger API error: 500");
   });
+
+  it("gets VPS IP address", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ip: "192.168.1.100" })));
+    const client = new HostingerClient("https://mock.hostinger", "token", fetchMock as any);
+    await expect(client.getVpsIp("vps_123")).resolves.toBe("192.168.1.100");
+  });
+
+  it("executes command on VPS", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ exitCode: 0, output: "done" })));
+    const client = new HostingerClient("https://mock.hostinger", "token", fetchMock as any);
+    const result = await client.executeCommand("vps_123", "deploy-client.sh");
+    expect(result).toEqual({ exitCode: 0, output: "done" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://mock.hostinger/v1/vps/vps_123/exec",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
 });

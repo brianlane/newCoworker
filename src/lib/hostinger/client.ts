@@ -37,6 +37,24 @@ export class HostingerClient {
     return this.parseJson(response);
   }
 
+  async getVpsIp(vpsId: string): Promise<string> {
+    const response = await this.fetchImpl(`${this.baseUrl}/v1/vps/${vpsId}`, {
+      method: "GET",
+      headers: this.headers()
+    });
+    const data = await this.parseJson(response);
+    return data.ip;
+  }
+
+  async executeCommand(vpsId: string, command: string): Promise<{ exitCode: number; output: string }> {
+    const response = await this.fetchImpl(`${this.baseUrl}/v1/vps/${vpsId}/exec`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ command })
+    });
+    return this.parseJson(response);
+  }
+
   private headers() {
     return {
       Authorization: `Bearer ${this.token}`,

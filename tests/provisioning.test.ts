@@ -15,6 +15,7 @@ import * as fs from "fs";
 vi.mock("@/lib/hostinger/client", () => {
   class HostingerClient {
     provisionVps = vi.fn().mockResolvedValue({ vpsId: "vps-mock-123" });
+    executeCommand = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
   }
   return { HostingerClient };
 });
@@ -196,6 +197,116 @@ describe("provisioning/orchestrate", () => {
       ownerPhone: "+15550001111"
     });
     expect(result.agentId).toBeTruthy();
+  });
+
+  it("calls executeCommand on VPS after provisioning", async () => {
+    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
+    const mockHostinger = {
+      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-exec-123" }),
+      executeCommand: mockExec,
+    };
+    const mockElevenlabs = {
+      createSecret: vi.fn().mockResolvedValue({ secret_id: "s" }),
+      createAgent: vi.fn().mockResolvedValue({ agent_id: "el-exec" }),
+    };
+
+    await orchestrateProvisioning(
+      { businessId: "biz-exec", tier: "starter" },
+      { hostinger: mockHostinger as never, elevenlabs: mockElevenlabs as never }
+    );
+    expect(mockExec).toHaveBeenCalledTimes(1);
+    expect(mockExec.mock.calls[0][0]).toBe("vps-exec-123");
+    expect(mockExec.mock.calls[0][1]).toContain("BUSINESS_ID=biz-exec");
+  });
+
+  it("continues when executeCommand returns non-zero exit", async () => {
+    const mockHostinger = {
+      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-nz" }),
+      executeCommand: vi.fn().mockResolvedValue({ exitCode: 1, output: "deploy failed" }),
+    };
+    const mockElevenlabs = {
+      createSecret: vi.fn().mockResolvedValue({ secret_id: "s" }),
+      createAgent: vi.fn().mockResolvedValue({ agent_id: "el-nz" }),
+    };
+
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-fail-exec", tier: "starter" },
+      { hostinger: mockHostinger as never, elevenlabs: mockElevenlabs as never }
+    );
+    expect(result.vpsId).toBe("vps-nz");
+  });
+
+  it("continues when executeCommand throws (covers non-Error branch)", async () => {
+    const mockHostinger = {
+      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-throw" }),
+      executeCommand: vi.fn().mockRejectedValue("network error"),
+    };
+    const mockElevenlabs = {
+      createSecret: vi.fn().mockResolvedValue({ secret_id: "s" }),
+      createAgent: vi.fn().mockResolvedValue({ agent_id: "el-throw" }),
+    };
+
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-throw-exec", tier: "starter" },
+      { hostinger: mockHostinger as never, elevenlabs: mockElevenlabs as never }
+    );
+    expect(result.vpsId).toBe("vps-throw");
+  });
+
+  it("continues when executeCommand throws an Error instance", async () => {
+    const mockHostinger = {
+      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-err" }),
+      executeCommand: vi.fn().mockRejectedValue(new Error("SSH timeout")),
+    };
+    const mockElevenlabs = {
+      createSecret: vi.fn().mockResolvedValue({ secret_id: "s" }),
+      createAgent: vi.fn().mockResolvedValue({ agent_id: "el-err" }),
+    };
+
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-err-exec", tier: "starter" },
+      { hostinger: mockHostinger as never, elevenlabs: mockElevenlabs as never }
+    );
+    expect(result.vpsId).toBe("vps-err");
+  });
+
+  it("passes NOTIFICATIONS_WEBHOOK_TOKEN env to deploy command", async () => {
+    process.env.NOTIFICATIONS_WEBHOOK_TOKEN = "webhook-test-token";
+    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
+    const mockHostinger = {
+      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-tok" }),
+      executeCommand: mockExec,
+    };
+    const mockElevenlabs = {
+      createSecret: vi.fn().mockResolvedValue({ secret_id: "s" }),
+      createAgent: vi.fn().mockResolvedValue({ agent_id: "el-tok" }),
+    };
+
+    await orchestrateProvisioning(
+      { businessId: "biz-token-test", tier: "starter" },
+      { hostinger: mockHostinger as never, elevenlabs: mockElevenlabs as never }
+    );
+    expect(mockExec.mock.calls[0][1]).toContain("NOTIFICATIONS_WEBHOOK_TOKEN=webhook-test-token");
+  });
+
+  it("falls back NOTIFICATIONS_WEBHOOK_TOKEN to SUPABASE_SERVICE_ROLE_KEY", async () => {
+    delete process.env.NOTIFICATIONS_WEBHOOK_TOKEN;
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-key-fallback";
+    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
+    const mockHostinger = {
+      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-fb" }),
+      executeCommand: mockExec,
+    };
+    const mockElevenlabs = {
+      createSecret: vi.fn().mockResolvedValue({ secret_id: "s" }),
+      createAgent: vi.fn().mockResolvedValue({ agent_id: "el-fb" }),
+    };
+
+    await orchestrateProvisioning(
+      { businessId: "biz-fallback", tier: "starter" },
+      { hostinger: mockHostinger as never, elevenlabs: mockElevenlabs as never }
+    );
+    expect(mockExec.mock.calls[0][1]).toContain("NOTIFICATIONS_WEBHOOK_TOKEN=service-key-fallback");
   });
 
   it("loads default soul/identity templates when readFileSync throws (covers catch blocks)", async () => {

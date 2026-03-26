@@ -111,11 +111,38 @@ export async function orchestrateProvisioning(
     elevenlabs_agent_id: agentId
   });
 
-  // 6. Mark business as online
+  // 6. Execute deploy-client.sh on the VPS
+  const deployEnv = [
+    `BUSINESS_ID=${businessId}`,
+    `SUPABASE_URL=${process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""}`,
+    `SUPABASE_SERVICE_KEY=${process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""}`,
+    `OPENCLAW_GATEWAY_TOKEN=${gatewayToken}`,
+    `NOTIFICATIONS_WEBHOOK_TOKEN=${process.env.NOTIFICATIONS_WEBHOOK_TOKEN ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""}`,
+    `ELEVENLABS_AGENT_ID=${agentId}`,
+    `CLOUDFLARE_TUNNEL_TOKEN=${process.env.CLOUDFLARE_TUNNEL_TOKEN ?? ""}`,
+    `LIGHTPANDA_WSS_URL=${process.env.LIGHTPANDA_WSS_URL ?? "wss://cdn.lightpanda.io/ws"}`,
+  ].join(" ");
+
+  try {
+    const { exitCode, output } = await hostinger.executeCommand(
+      vpsId,
+      `${deployEnv} /opt/deploy-client.sh`
+    );
+    if (exitCode !== 0) {
+      logger.error("deploy-client.sh failed", { businessId, vpsId, exitCode, output });
+    }
+  } catch (err) {
+    logger.error("Remote deploy execution failed — VPS may need manual setup", {
+      businessId, vpsId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // 7. Mark business as online
   await updateBusinessStatus(businessId, "online", vpsId);
   logger.info("Business provisioned and online", { businessId, agentId });
 
-  // 7. Notify owner
+  // 8. Notify owner
   const notifyEmail = ownerEmail ?? process.env.OWNER_ALERT_EMAIL;
   const notifyPhone = ownerPhone ?? process.env.TWILIO_OWNER_PHONE;
   const dashboardUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/dashboard`;
