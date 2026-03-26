@@ -57,7 +57,7 @@ function QuestionnaireForm() {
     );
     supabase.auth.getUser().then(({ data }) => {
       if (!data.user) {
-        window.location.href = `/signup?redirectTo=/onboard/questionnaire?tier=${tier}`;
+        window.location.href = `/signup?redirectTo=${encodeURIComponent(`/onboard/questionnaire?tier=${tier}`)}`;
       } else {
         setAuthChecked(true);
       }

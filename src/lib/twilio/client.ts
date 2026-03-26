@@ -6,7 +6,7 @@ export type TwilioConfig = {
   messagingServiceSid: string;
 };
 
-export function readTwilioConfig(env: NodeJS.ProcessEnv = process.env): TwilioConfig {
+export function readTwilioConfig(env: Record<string, string | undefined> = process.env): TwilioConfig {
   const accountSid = env.TWILIO_ACCOUNT_SID;
   const authToken = env.TWILIO_AUTH_TOKEN;
   const messagingServiceSid = env.TWILIO_MESSAGING_SERVICE_SID;

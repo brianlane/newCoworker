@@ -1,8 +1,5 @@
-"use client";
-
 import Image from "next/image";
 import { Card } from "@/components/ui/Card";
-import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 
 const tiers = [
