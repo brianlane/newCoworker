@@ -1,12 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { createClient } from "@supabase/supabase-js";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
-import { ONBOARD_STORAGE_KEY } from "@/app/onboard/questionnaire/page";
+import { ONBOARD_STORAGE_KEY, type OnboardingData } from "@/lib/onboarding/storage";
 
 function getSupabaseBrowserClient() {
   return createClient(
@@ -15,47 +14,42 @@ function getSupabaseBrowserClient() {
   );
 }
 
-interface OnboardData {
-  tier: "starter" | "standard";
-  businessName: string;
-  businessType: string;
-  ownerName: string;
-  phone: string;
-  serviceArea: string;
-  typicalInquiry: string;
-  teamSize: string;
-  crmUsed: string;
-}
-
 export default function CheckoutPage() {
-  const router = useRouter();
-  const [data, setData] = useState<OnboardData | null>(null);
+  const [data, setData] = useState<OnboardingData | null>(null);
+  const [loadingData, setLoadingData] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     async function loadData() {
-      const supabase = getSupabaseBrowserClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      let foundData = null;
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        let foundData: OnboardingData | null = null;
 
-      if (user?.user_metadata?.onboarding_data) {
-        foundData = user.user_metadata.onboarding_data;
-      }
-
-      if (!foundData) {
-        try {
-          const stored = localStorage.getItem(ONBOARD_STORAGE_KEY);
-          if (stored) {
-            foundData = JSON.parse(stored);
+        if (user?.user_metadata?.onboarding_data) {
+          foundData = user.user_metadata.onboarding_data as OnboardingData;
+          if (user.user_metadata.business_name && typeof user.user_metadata.business_name === "string") {
+            foundData = { ...foundData, businessName: user.user_metadata.business_name };
           }
-        } catch {
-          /* localStorage unavailable */
         }
-      }
 
-      if (foundData) {
-        setData(foundData);
+        if (!foundData) {
+          try {
+            const stored = localStorage.getItem(ONBOARD_STORAGE_KEY);
+            if (stored) {
+              foundData = JSON.parse(stored) as OnboardingData;
+            }
+          } catch {
+            /* localStorage unavailable */
+          }
+        }
+
+        if (foundData) {
+          setData(foundData);
+        }
+      } finally {
+        setLoadingData(false);
       }
     }
     loadData();
@@ -100,6 +94,18 @@ export default function CheckoutPage() {
       setError(err instanceof Error ? err.message : "Something went wrong");
       setLoading(false);
     }
+  }
+
+  if (loadingData) {
+    return (
+      <div className="min-h-screen bg-deep-ink flex items-center justify-center px-4">
+        <div className="max-w-sm w-full text-center space-y-4">
+          <Image src="/logo.png" alt="New Coworker" width={56} height={56} className="rounded-full mx-auto" />
+          <h1 className="text-2xl font-bold text-parchment">Loading your plan...</h1>
+          <p className="text-sm text-parchment/50">Please wait while we prepare your checkout details.</p>
+        </div>
+      </div>
+    );
   }
 
   if (!data) {

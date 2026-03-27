@@ -1,18 +1,34 @@
 "use client";
 
-import { Suspense, useState, useEffect, type FormEvent } from "react";
+import { Suspense, useState, type FormEvent } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card } from "@/components/ui/Card";
+import { ONBOARD_STORAGE_KEY } from "@/lib/onboarding/storage";
 
 function getSupabaseBrowserClient() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
+}
+
+type StoredOnboardingData = {
+  businessName?: string;
+  [key: string]: unknown;
+};
+
+function readStoredOnboardingData(): StoredOnboardingData | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const stored = localStorage.getItem(ONBOARD_STORAGE_KEY);
+    return stored ? (JSON.parse(stored) as StoredOnboardingData) : null;
+  } catch {
+    return null;
+  }
 }
 
 export default function SignupPage() {
@@ -32,22 +48,13 @@ function SignupForm() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [businessName, setBusinessName] = useState("");
+  const [businessName, setBusinessName] = useState(() => {
+    const onboarding = readStoredOnboardingData();
+    return typeof onboarding?.businessName === "string" ? onboarding.businessName : "";
+  });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [confirmationPending, setConfirmationPending] = useState(false);
-
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem("newcoworker_onboard");
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.businessName) {
-          setBusinessName(parsed.businessName);
-        }
-      }
-    } catch {}
-  }, []);
 
   async function handleSignup(e: FormEvent) {
     e.preventDefault();
@@ -58,13 +65,10 @@ function SignupForm() {
     setLoading(true);
     setError(null);
 
-    let onboardingData = null;
-    try {
-      const stored = localStorage.getItem("newcoworker_onboard");
-      if (stored) {
-        onboardingData = JSON.parse(stored);
-      }
-    } catch {}
+    const onboardingData = readStoredOnboardingData();
+    const onboardingDataWithLatestBusinessName = onboardingData
+      ? { ...onboardingData, businessName }
+      : null;
 
     const supabase = getSupabaseBrowserClient();
     const encodedRedirect = encodeURIComponent(redirectTo);
@@ -74,7 +78,7 @@ function SignupForm() {
       options: {
         data: { 
           business_name: businessName,
-          onboarding_data: onboardingData
+          onboarding_data: onboardingDataWithLatestBusinessName
         },
         emailRedirectTo: `${window.location.origin}/api/auth/callback?redirectTo=${encodedRedirect}`
       }

@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { Button } from "@/components/ui/Button";
+import { ONBOARD_STORAGE_KEY } from "@/lib/onboarding/storage";
 
 type Step = 1 | 2 | 3;
 
@@ -30,8 +31,6 @@ const EMPTY_FORM: FormData = {
   teamSize: "1",
   crmUsed: ""
 };
-
-export const ONBOARD_STORAGE_KEY = "newcoworker_onboard";
 
 export default function QuestionnairePage() {
   return (
