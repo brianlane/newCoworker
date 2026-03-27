@@ -1,18 +1,27 @@
 "use client";
 
 import { Suspense, useState, type FormEvent } from "react";
-import { createClient } from "@supabase/supabase-js";
 import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card } from "@/components/ui/Card";
+import { ONBOARD_STORAGE_KEY } from "@/lib/onboarding/storage";
+import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
-function getSupabaseBrowserClient() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
+type StoredOnboardingData = {
+  businessName?: string;
+  [key: string]: unknown;
+};
+
+function readStoredOnboardingData(): StoredOnboardingData | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const stored = localStorage.getItem(ONBOARD_STORAGE_KEY);
+    return stored ? (JSON.parse(stored) as StoredOnboardingData) : null;
+  } catch {
+    return null;
+  }
 }
 
 export default function SignupPage() {
@@ -27,10 +36,15 @@ function SignupForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirectTo = searchParams.get("redirectTo") ?? "/onboard";
+  const tier = searchParams.get("tier");
+  const loginHref = `/login?redirectTo=${encodeURIComponent(redirectTo)}${tier ? `&tier=${encodeURIComponent(tier)}` : ""}`;
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [businessName, setBusinessName] = useState("");
+  const [businessName, setBusinessName] = useState(() => {
+    const onboarding = readStoredOnboardingData();
+    return typeof onboarding?.businessName === "string" ? onboarding.businessName : "";
+  });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [confirmationPending, setConfirmationPending] = useState(false);
@@ -44,13 +58,21 @@ function SignupForm() {
     setLoading(true);
     setError(null);
 
+    const onboardingData = readStoredOnboardingData();
+    const onboardingDataWithLatestBusinessName = onboardingData
+      ? { ...onboardingData, businessName }
+      : null;
+
     const supabase = getSupabaseBrowserClient();
     const encodedRedirect = encodeURIComponent(redirectTo);
     const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        data: { business_name: businessName },
+        data: { 
+          business_name: businessName,
+          onboarding_data: onboardingDataWithLatestBusinessName
+        },
         emailRedirectTo: `${window.location.origin}/api/auth/callback?redirectTo=${encodedRedirect}`
       }
     });
@@ -63,9 +85,16 @@ function SignupForm() {
 
     if (signUpData.session) {
       router.push(redirectTo);
-    } else {
-      setConfirmationPending(true);
+      return;
     }
+
+    const identities = signUpData.user?.identities ?? [];
+    if (identities.length === 0) {
+      setError("An account with this email already exists. Please sign in instead.");
+      return;
+    }
+
+    setConfirmationPending(true);
   }
 
   if (confirmationPending) {
@@ -103,7 +132,9 @@ function SignupForm() {
         <div className="flex flex-col items-center gap-3">
           <Image src="/logo.png" alt="New Coworker" width={56} height={56} className="rounded-full" />
           <h1 className="text-2xl font-bold text-parchment">Create your account</h1>
-          <p className="text-sm text-parchment/50">Your AI coworker starts here</p>
+          <p className="text-sm text-parchment/50">
+            {tier ? `${tier.charAt(0).toUpperCase() + tier.slice(1)} plan selected — almost there!` : "Your AI coworker starts here"}
+          </p>
         </div>
 
         <Card>
@@ -145,7 +176,7 @@ function SignupForm() {
 
         <p className="text-center text-sm text-parchment/40">
           Already have an account?{" "}
-          <a href="/login" className="text-signal-teal hover:underline">
+          <a href={loginHref} className="text-signal-teal hover:underline">
             Sign in
           </a>
         </p>

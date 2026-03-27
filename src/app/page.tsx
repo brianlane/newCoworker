@@ -76,7 +76,7 @@ export default function HomePage() {
             Sign in
           </Link>
           <Link
-            href="/signup"
+            href="/onboard"
             className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-opacity-90 transition-colors"
           >
             Get Started
@@ -96,7 +96,7 @@ export default function HomePage() {
         </p>
         <div className="mt-10">
           <Link
-            href="/signup"
+            href="/onboard"
             className="inline-block rounded-lg bg-claw-green text-deep-ink px-8 py-3.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
           >
             Start for $199/mo

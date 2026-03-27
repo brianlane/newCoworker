@@ -1,11 +1,12 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { Button } from "@/components/ui/Button";
+import { ONBOARD_STORAGE_KEY } from "@/lib/onboarding/storage";
 
 type Step = 1 | 2 | 3;
 
@@ -40,55 +41,28 @@ export default function QuestionnairePage() {
 }
 
 function QuestionnaireForm() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const tier = (searchParams.get("tier") ?? "starter") as "starter" | "standard";
 
   const [step, setStep] = useState<Step>(1);
   const [form, setForm] = useState<FormData>(EMPTY_FORM);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function update(field: keyof FormData, value: string) {
     setForm((prev) => ({ ...prev, [field]: value }));
   }
 
-  async function handleSubmit() {
-    setLoading(true);
+  function handleSubmit() {
     setError(null);
     try {
-      // Create the business record
-      const businessId = crypto.randomUUID();
-      const createRes = await fetch("/api/business/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          businessId,
-          name: form.businessName,
-          tier,
-          businessType: form.businessType,
-          ownerName: form.ownerName,
-          phone: form.phone,
-          serviceArea: form.serviceArea,
-          typicalInquiry: form.typicalInquiry,
-          teamSize: form.teamSize,
-          crmUsed: form.crmUsed
-        })
-      });
-      if (!createRes.ok) throw new Error("Failed to create business");
-
-      // Create Stripe checkout
-      const checkoutRes = await fetch("/api/checkout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tier, businessId })
-      });
-      const checkoutJson = await checkoutRes.json();
-      if (!checkoutRes.ok) throw new Error(checkoutJson.error?.message ?? "Checkout failed");
-
-      window.location.href = checkoutJson.data.checkoutUrl;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
-      setLoading(false);
+      localStorage.setItem(
+        ONBOARD_STORAGE_KEY,
+        JSON.stringify({ tier, ...form })
+      );
+      router.push(`/signup?tier=${encodeURIComponent(tier)}&redirectTo=/onboard/checkout`);
+    } catch {
+      setError("Could not save your details. Please try again.");
     }
   }
 
@@ -112,7 +86,7 @@ function QuestionnaireForm() {
               ? "Tell us about your business"
               : step === 2
                 ? "Communication style"
-                : "Review & proceed to payment"}
+                : "Review & create account"}
           </h1>
           <p className="text-sm text-parchment/50 mt-1">Step {step} of 3</p>
         </div>
@@ -232,8 +206,8 @@ function QuestionnaireForm() {
               Continue →
             </Button>
           ) : (
-            <Button className="flex-1" onClick={handleSubmit} loading={loading}>
-              Proceed to Payment
+            <Button className="flex-1" onClick={handleSubmit}>
+              Create Account →
             </Button>
           )}
         </div>
