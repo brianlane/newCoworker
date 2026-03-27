@@ -1,20 +1,42 @@
 version: "3.9"
 services:
-  openclaw-agent:
-    image: ghcr.io/newcoworker/openclaw-agent:mock
-    container_name: openclaw-agent
+  rowboat:
+    image: ghcr.io/rowboatlabs/rowboat:latest
+    container_name: rowboat
     environment:
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-mock_openclaw_gateway_token}
-      OLLAMA_HOST: http://ollama:11434
+      ROWBOAT_GATEWAY_TOKEN: ${ROWBOAT_GATEWAY_TOKEN:-mock_rowboat_gateway_token}
+      PROVIDER_BASE_URL: http://ollama:11434
+      PROVIDER_API_KEY: ollama
+      PROVIDER_DEFAULT_MODEL: ${OLLAMA_MODEL:-phi4-mini:3.8b}
     ports:
-      - "18789:18789"
+      - "127.0.0.1:3000:3000"
     volumes:
-      - /home/agency/clients:/clients
+      - /opt/rowboat/vault:/vault:ro
+      - /opt/rowboat/memory:/memory
+    depends_on:
+      - mongo
+      - redis
+
+  mongo:
+    image: mongo:7
+    container_name: rowboat-mongo
+    volumes:
+      - rowboat_mongo:/data/db
+
+  redis:
+    image: redis:7-alpine
+    container_name: rowboat-redis
 
   ollama:
     image: ollama/ollama:latest
     container_name: ollama
     environment:
-      OLLAMA_NUM_PARALLEL: 3
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-1}
     ports:
       - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+
+volumes:
+  rowboat_mongo:
+  ollama_models:

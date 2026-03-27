@@ -8,17 +8,17 @@ import { successResponse, errorResponse, handleRouteError } from "@/lib/api-resp
 import { logger } from "@/lib/logger";
 import { randomUUID, timingSafeEqual } from "crypto";
 
-function verifyClawToken(request: Request): boolean {
+function verifyRowboatToken(request: Request): boolean {
   const auth = request.headers.get("authorization") ?? "";
   const token = auth.replace(/^Bearer\s+/i, "").trim();
-  const expected = process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
+  const expected = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
   if (expected === "" || token.length !== expected.length) return false;
 
   return timingSafeEqual(Buffer.from(token), Buffer.from(expected));
 }
 
 export async function POST(request: Request) {
-  if (!verifyClawToken(request)) {
+  if (!verifyRowboatToken(request)) {
     return errorResponse("UNAUTHORIZED", "Invalid gateway token", 401);
   }
 

@@ -1,4 +1,5 @@
 import Stripe from "stripe";
+import type { BillingPeriod } from "@/lib/plans/tier";
 
 export function getStripe(secretKey?: string): Stripe {
   const key = secretKey ?? process.env.STRIPE_SECRET_KEY;
@@ -44,12 +45,21 @@ export async function createCheckoutSession(params: CheckoutParams): Promise<{
   return { id: session.id, url: session.url };
 }
 
-export function resolvePriceId(tier: "starter" | "standard"): string {
-  const map: Record<string, string | undefined> = {
-    starter: process.env.STRIPE_STARTER_PRICE_ID,
-    standard: process.env.STRIPE_STANDARD_PRICE_ID
-  };
-  const priceId = map[tier];
-  if (!priceId) throw new Error(`Stripe Price ID not configured for tier: ${tier}`);
+export function resolvePriceId(
+  tier: "starter" | "standard",
+  period: BillingPeriod = "biennial"
+): string {
+  const envKey = `STRIPE_${tier.toUpperCase()}_${periodToEnvSuffix(period)}_PRICE_ID`;
+  const priceId = process.env[envKey];
+  if (!priceId) throw new Error(`Stripe Price ID not configured for tier: ${tier}, period: ${period} (env: ${envKey})`);
   return priceId;
+}
+
+function periodToEnvSuffix(period: BillingPeriod): string {
+  const map: Record<BillingPeriod, string> = {
+    biennial: "24MO",
+    annual: "12MO",
+    monthly: "1MO"
+  };
+  return map[period];
 }

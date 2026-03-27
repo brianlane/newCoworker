@@ -76,7 +76,11 @@ export default function CheckoutPage() {
       const checkoutRes = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tier: data.tier, businessId })
+        body: JSON.stringify({
+          tier: data.tier,
+          businessId,
+          billingPeriod: data.billingPeriod ?? "biennial"
+        })
       });
       const checkoutJson = await checkoutRes.json();
       if (!checkoutRes.ok) throw new Error(checkoutJson.error?.message ?? "Checkout failed");
@@ -142,20 +146,53 @@ export default function CheckoutPage() {
                 <span className="capitalize">{data.tier}</span>
               </div>
               <div className="flex justify-between text-parchment/70">
+                <span>Billing period</span>
+                <span>
+                  {(data.billingPeriod ?? "biennial") === "biennial"
+                    ? "24 months"
+                    : (data.billingPeriod ?? "biennial") === "annual"
+                      ? "12 months"
+                      : "1 month"}
+                </span>
+              </div>
+              <div className="flex justify-between text-parchment/70">
                 <span>Business</span>
                 <span>{data.businessName || "—"}</span>
               </div>
               <div className="flex justify-between text-parchment/70">
-                <span>Monthly</span>
-                <span>{data.tier === "starter" ? "$199/mo" : "$299/mo"}</span>
+                <span>Monthly rate</span>
+                <span>
+                  {data.tier === "starter"
+                    ? (data.billingPeriod ?? "biennial") === "biennial" ? "$9.99/mo"
+                      : (data.billingPeriod ?? "biennial") === "annual" ? "$10.99/mo" : "$15.99/mo"
+                    : (data.billingPeriod ?? "biennial") === "biennial" ? "$99/mo"
+                      : (data.billingPeriod ?? "biennial") === "annual" ? "$109/mo" : "$195/mo"}
+                </span>
               </div>
-              {data.tier === "standard" && (
-                <div className="flex justify-between text-parchment/70">
-                  <span>Setup fee</span>
-                  <span>$499 (one-time)</span>
-                </div>
-              )}
+              <div className="flex justify-between text-parchment/40 text-xs">
+                <span>Renewal rate</span>
+                <span>
+                  {data.tier === "starter"
+                    ? (data.billingPeriod ?? "biennial") === "biennial" ? "$16.99/mo"
+                      : (data.billingPeriod ?? "biennial") === "annual" ? "$18.99/mo" : "$26.99/mo"
+                    : (data.billingPeriod ?? "biennial") === "biennial" ? "$189/mo"
+                      : (data.billingPeriod ?? "biennial") === "annual" ? "$209/mo" : "$279/mo"}
+                </span>
+              </div>
+              <div className="flex justify-between text-parchment/40 text-xs pt-1 border-t border-parchment/10">
+                <span>Commitment total</span>
+                <span>
+                  {data.tier === "starter"
+                    ? (data.billingPeriod ?? "biennial") === "biennial" ? "$239.76"
+                      : (data.billingPeriod ?? "biennial") === "annual" ? "$131.88" : "$15.99"
+                    : (data.billingPeriod ?? "biennial") === "biennial" ? "$2,376"
+                      : (data.billingPeriod ?? "biennial") === "annual" ? "$1,308" : "$195"}
+                </span>
+              </div>
             </div>
+            <p className="text-xs text-parchment/30 text-center">
+              30-day money-back guarantee · Cancel within 30 days for a full refund
+            </p>
           </div>
         </Card>
 

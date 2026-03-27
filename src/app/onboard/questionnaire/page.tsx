@@ -44,6 +44,7 @@ function QuestionnaireForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const tier = (searchParams.get("tier") ?? "starter") as "starter" | "standard";
+  const period = (searchParams.get("period") ?? "biennial") as "monthly" | "annual" | "biennial";
 
   const [step, setStep] = useState<Step>(1);
   const [form, setForm] = useState<FormData>(EMPTY_FORM);
@@ -58,9 +59,9 @@ function QuestionnaireForm() {
     try {
       localStorage.setItem(
         ONBOARD_STORAGE_KEY,
-        JSON.stringify({ tier, ...form })
+        JSON.stringify({ tier, billingPeriod: period, ...form })
       );
-      router.push(`/signup?tier=${encodeURIComponent(tier)}&redirectTo=/onboard/checkout`);
+      router.push(`/signup?tier=${encodeURIComponent(tier)}&period=${encodeURIComponent(period)}&redirectTo=/onboard/checkout`);
     } catch {
       setError("Could not save your details. Please try again.");
     }
@@ -172,19 +173,23 @@ function QuestionnaireForm() {
                   <span className="capitalize">{tier}</span>
                 </div>
                 <div className="flex justify-between text-parchment/70">
+                  <span>Billing period</span>
+                  <span className="capitalize">
+                    {period === "biennial" ? "24 months" : period === "annual" ? "12 months" : "1 month"}
+                  </span>
+                </div>
+                <div className="flex justify-between text-parchment/70">
                   <span>Business</span>
                   <span>{form.businessName || "—"}</span>
                 </div>
                 <div className="flex justify-between text-parchment/70">
-                  <span>Monthly</span>
-                  <span>{tier === "starter" ? "$199/mo" : "$299/mo"}</span>
+                  <span>Monthly rate</span>
+                  <span>
+                    {tier === "starter"
+                      ? period === "biennial" ? "$9.99/mo" : period === "annual" ? "$10.99/mo" : "$15.99/mo"
+                      : period === "biennial" ? "$99/mo" : period === "annual" ? "$109/mo" : "$195/mo"}
+                  </span>
                 </div>
-                {tier === "standard" && (
-                  <div className="flex justify-between text-parchment/70">
-                    <span>Setup fee</span>
-                    <span>$499 (one-time)</span>
-                  </div>
-                )}
               </div>
               {error && <p className="text-spark-orange text-xs">{error}</p>}
             </div>

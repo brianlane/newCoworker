@@ -1,5 +1,5 @@
 import { HostingerClient } from "@/lib/hostinger/client";
-import { ElevenLabsClient } from "@/lib/elevenlabs/client";
+import { InworldClient } from "@/lib/inworld/client";
 import { sendOwnerSms, readTwilioConfig } from "@/lib/twilio/client";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { updateBusinessStatus } from "@/lib/db/businesses";
@@ -34,8 +34,8 @@ function resolveProvisioningPlan(tier: ProvisioningInput["tier"]): VpsProvisioni
     );
   }
   const plans: Record<"starter" | "standard", VpsProvisioningPlan> = {
-    starter: { hostingerPlan: "kvm8", snapshotId: "gold-image-v1" },
-    standard: { hostingerPlan: "kvm8", snapshotId: "gold-image-v2" },
+    starter: { hostingerPlan: "kvm2", snapshotId: "gold-image-starter-v1" },
+    standard: { hostingerPlan: "kvm8", snapshotId: "gold-image-standard-v1" }
   };
   return plans[tier];
 }
@@ -60,7 +60,7 @@ export async function orchestrateProvisioning(
   input: ProvisioningInput,
   deps?: {
     hostinger?: HostingerClient;
-    elevenlabs?: ElevenLabsClient;
+    inworld?: InworldClient;
   }
 ): Promise<ProvisioningResult> {
   const { businessId, ownerEmail, ownerPhone, tier } = input;
@@ -89,44 +89,47 @@ export async function orchestrateProvisioning(
     soul_md: existingConfig?.soul_md ?? loadSoulTemplate(),
     identity_md: existingConfig?.identity_md ?? loadIdentityTemplate(),
     memory_md: existingConfig?.memory_md ?? "# memory.md\nLossless memory DAG initialized.",
-    elevenlabs_agent_id: existingConfig?.elevenlabs_agent_id ?? null
+    inworld_agent_id: existingConfig?.inworld_agent_id ?? null
   });
 
-  // 4. Create ElevenLabs secret + agent
+  // 4. Create inworld.ai voice agent (all tiers use inworld-tts-1.5-mini)
   const tunnelUrl = `https://${businessId}.tunnel.newcoworker.com`;
   const customLlmUrl = `${tunnelUrl}/v1/chat/completions`;
 
-  const elevenlabs =
-    deps?.elevenlabs ??
-    new ElevenLabsClient(process.env.ELEVENLABS_API_KEY ?? "");
+  const inworld =
+    deps?.inworld ??
+    new InworldClient(process.env.INWORLD_API_KEY ?? "");
 
-  const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
-  const { secret_id: secretId } = await elevenlabs.createSecret(
-    `openclaw_gateway_token_${businessId.slice(0, 8)}`,
-    gatewayToken
+  const { agent_id: agentId } = await inworld.createVoiceAgent(
+    `rowboat_agent_${businessId.slice(0, 8)}`,
+    undefined
   );
-  const { agent_id: agentId } = await elevenlabs.createAgent(customLlmUrl, secretId);
 
-  // 5. Store agent ID
+  // 5. Store inworld agent ID
   await upsertBusinessConfig({
     business_id: businessId,
     soul_md: existingConfig?.soul_md ?? loadSoulTemplate(),
     identity_md: existingConfig?.identity_md ?? loadIdentityTemplate(),
     memory_md: existingConfig?.memory_md ?? "# memory.md\nLossless memory DAG initialized.",
-    elevenlabs_agent_id: agentId
+    inworld_agent_id: agentId
   });
 
   // 6. Execute deploy-client.sh on the VPS
+  const gatewayToken = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
   const deployEnv = [
     `BUSINESS_ID=${businessId}`,
+    `TIER=${tier}`,
     `SUPABASE_URL=${process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""}`,
     `SUPABASE_SERVICE_KEY=${process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""}`,
-    `OPENCLAW_GATEWAY_TOKEN=${gatewayToken}`,
+    `ROWBOAT_GATEWAY_TOKEN=${gatewayToken}`,
     `NOTIFICATIONS_WEBHOOK_TOKEN=${process.env.NOTIFICATIONS_WEBHOOK_TOKEN ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""}`,
-    `ELEVENLABS_AGENT_ID=${agentId}`,
+    `INWORLD_AGENT_ID=${agentId}`,
+    `INWORLD_API_KEY=${process.env.INWORLD_API_KEY ?? ""}`,
     `CLOUDFLARE_TUNNEL_TOKEN=${process.env.CLOUDFLARE_TUNNEL_TOKEN ?? ""}`,
-    `LIGHTPANDA_WSS_URL=${process.env.LIGHTPANDA_WSS_URL ?? "wss://cdn.lightpanda.io/ws"}`,
+    `LIGHTPANDA_WSS_URL=${process.env.LIGHTPANDA_WSS_URL ?? "wss://cdn.lightpanda.io/ws"}`
   ].join(" ");
+
+  void customLlmUrl; // referenced in future Rowboat config injection
 
   try {
     const { exitCode, output } = await hostinger.executeCommand(
@@ -139,7 +142,7 @@ export async function orchestrateProvisioning(
   } catch (err) {
     logger.error("Remote deploy execution failed — VPS may need manual setup", {
       businessId, vpsId,
-      error: err instanceof Error ? err.message : String(err),
+      error: err instanceof Error ? err.message : String(err)
     });
   }
 

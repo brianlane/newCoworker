@@ -3,24 +3,28 @@
 # Called from the orchestration API after bootstrap.sh has run.
 #
 # Environment variables expected:
-#   BUSINESS_ID         — UUID from Supabase
-#   SUPABASE_URL        — Supabase project URL
-#   SUPABASE_SERVICE_KEY — Service role key (write config back)
-#   CLOUDFLARE_TUNNEL_TOKEN — cloudflared tunnel token
-#   OPENCLAW_GATEWAY_TOKEN — shared bearer token for OpenClaw gateway auth
+#   BUSINESS_ID              — UUID from Supabase
+#   TIER                     — starter | standard
+#   SUPABASE_URL             — Supabase project URL
+#   SUPABASE_SERVICE_KEY     — Service role key (write config back)
+#   CLOUDFLARE_TUNNEL_TOKEN  — cloudflared tunnel token
+#   ROWBOAT_GATEWAY_TOKEN    — shared bearer token for Rowboat gateway auth
 #   NOTIFICATIONS_WEBHOOK_TOKEN — token for Supabase Edge Function auth
-#   ELEVENLABS_AGENT_ID — agent ID for voice routing
+#   INWORLD_AGENT_ID         — inworld.ai agent ID for voice routing
+#   INWORLD_API_KEY          — inworld.ai API key
+#   LIGHTPANDA_WSS_URL       — Lightpanda browser endpoint
 
 set -euo pipefail
 
+TIER="${TIER:-standard}"
 LOG="/var/log/deploy-client-${BUSINESS_ID:-unknown}.log"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG"; }
 
-log "=== Deploying client: ${BUSINESS_ID} ==="
+log "=== Deploying client: ${BUSINESS_ID} (TIER=${TIER}) ==="
 
 # ------------------------------------------------------------------
-# 1. Write OpenClaw config from Supabase
+# 1. Fetch business config from Supabase and write Rowboat vault
 # ------------------------------------------------------------------
 log "Fetching business config from Supabase..."
 CONFIG_JSON=$(curl -sf \
@@ -32,57 +36,67 @@ CONFIG_JSON=$(curl -sf \
 SOUL_MD=$(echo "$CONFIG_JSON" | jq -r '.soul_md // empty')
 IDENTITY_MD=$(echo "$CONFIG_JSON" | jq -r '.identity_md // empty')
 
-mkdir -p /opt/openclaw/config /opt/openclaw/memory
+mkdir -p /opt/rowboat/vault /opt/rowboat/memory
 
-echo "$SOUL_MD" > /opt/openclaw/config/soul.md
-echo "$IDENTITY_MD" > /opt/openclaw/config/identity.md
-
-cat > /opt/openclaw/config/openclaw.json <<OPENCLAW_EOF
-{
-  "version": "1",
-  "gateway_token": "${OPENCLAW_GATEWAY_TOKEN}",
-  "features": {
-    "chatCompletions": true,
-    "losslessClaw": true,
-    "browserSkills": true
-  },
-  "models": {
-    "fast": "qwen3.5:4b",
-    "balanced": "qwen3.5:7b",
-    "deep": "llama4:9b"
-  },
-  "llm_router": "http://127.0.0.1:8080",
-  "soul_path": "/etc/openclaw/soul.md",
-  "identity_path": "/etc/openclaw/identity.md",
-  "memory": {
-    "provider": "lossless_claw",
-    "path": "/var/openclaw/memory",
-    "max_tokens": 8192
-  },
-  "browser": {
-    "provider": "lightpanda",
-    "endpoint": "${LIGHTPANDA_WSS_URL:-wss://cdn.lightpanda.io/ws}"
-  },
-  "notification_webhook": "${SUPABASE_URL}/functions/v1/notifications",
-  "notification_webhook_token": "${NOTIFICATIONS_WEBHOOK_TOKEN:-${SUPABASE_SERVICE_ROLE_KEY}}",
-  "compliance": {
-    "fha_guardrails": true,
-    "forbidden_topics": ["race", "religion", "national_origin", "familial_status", "disability", "sex", "color"]
-  },
-  "elevenlabs_agent_id": "${ELEVENLABS_AGENT_ID:-}"
-}
-OPENCLAW_EOF
-
-log "OpenClaw config written."
+echo "$SOUL_MD"     > /opt/rowboat/vault/soul.md
+echo "$IDENTITY_MD" > /opt/rowboat/vault/identity.md
 
 # ------------------------------------------------------------------
-# 2. Restart OpenClaw with new config
+# 2. Write Rowboat .env with client-specific values
 # ------------------------------------------------------------------
-docker compose -f /opt/openclaw/docker-compose.yml restart openclaw-agent
-log "OpenClaw restarted."
+log "Writing Rowboat .env..."
+
+# Tier-aware model selection
+if [[ "$TIER" == "starter" ]]; then
+  OLLAMA_MODEL="phi4-mini:3.8b"
+else
+  OLLAMA_MODEL="qwen3.5:7b"
+fi
+
+cat > /opt/rowboat/.env <<RENV_EOF
+# Rowboat runtime configuration for business: ${BUSINESS_ID}
+ROWBOAT_GATEWAY_TOKEN=${ROWBOAT_GATEWAY_TOKEN}
+BUSINESS_ID=${BUSINESS_ID}
+TIER=${TIER}
+
+# Ollama / LLM
+PROVIDER_BASE_URL=http://localhost:11434
+PROVIDER_API_KEY=ollama
+PROVIDER_DEFAULT_MODEL=${OLLAMA_MODEL}
+PROVIDER_COPILOT_MODEL=${OLLAMA_MODEL}
+
+# inworld.ai voice (all tiers use mini)
+INWORLD_API_KEY=${INWORLD_API_KEY:-}
+INWORLD_AGENT_ID=${INWORLD_AGENT_ID:-}
+INWORLD_TTS_MODEL=inworld-tts-1.5-mini
+
+# Twilio
+TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID:-}
+TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-}
+TWILIO_MESSAGING_SERVICE_SID=${TWILIO_MESSAGING_SERVICE_SID:-}
+
+# Supabase notifications
+NOTIFICATION_WEBHOOK=${SUPABASE_URL}/functions/v1/notifications
+NOTIFICATION_WEBHOOK_TOKEN=${NOTIFICATIONS_WEBHOOK_TOKEN:-${SUPABASE_SERVICE_KEY}}
+
+# Browser skills
+LIGHTPANDA_WSS_URL=${LIGHTPANDA_WSS_URL:-wss://cdn.lightpanda.io/ws}
+
+# Knowledge vault paths
+ROWBOAT_VAULT_PATH=/opt/rowboat/vault
+ROWBOAT_MEMORY_PATH=/opt/rowboat/memory
+RENV_EOF
+
+log "Rowboat .env written."
 
 # ------------------------------------------------------------------
-# 3. Set up cloudflared tunnel
+# 3. Restart Rowboat with new config
+# ------------------------------------------------------------------
+docker compose -f /opt/rowboat/docker-compose.yml restart rowboat || true
+log "Rowboat restarted."
+
+# ------------------------------------------------------------------
+# 4. Set up cloudflared tunnel
 # ------------------------------------------------------------------
 if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
   log "Configuring cloudflared tunnel..."
@@ -95,7 +109,7 @@ else
 fi
 
 # ------------------------------------------------------------------
-# 4. Register VPS as online in Supabase
+# 5. Register VPS as online in Supabase
 # ------------------------------------------------------------------
 log "Updating business status in Supabase..."
 curl -sf -X PATCH \

@@ -26,8 +26,12 @@ describe("stripe/client", () => {
       ...OLD_ENV,
       STRIPE_SECRET_KEY: "sk_test_mock",
       STRIPE_WEBHOOK_SECRET: "whsec_mock",
-      STRIPE_STARTER_PRICE_ID: "price_mock_starter",
-      STRIPE_STANDARD_PRICE_ID: "price_mock_standard"
+      STRIPE_STARTER_24MO_PRICE_ID: "price_starter_24mo",
+      STRIPE_STARTER_12MO_PRICE_ID: "price_starter_12mo",
+      STRIPE_STARTER_1MO_PRICE_ID: "price_starter_1mo",
+      STRIPE_STANDARD_24MO_PRICE_ID: "price_standard_24mo",
+      STRIPE_STANDARD_12MO_PRICE_ID: "price_standard_12mo",
+      STRIPE_STANDARD_1MO_PRICE_ID: "price_standard_1mo"
     };
     mockConstructEvent.mockReturnValue({ id: "evt_mock", type: "checkout.session.completed" });
     mockSessionCreate.mockResolvedValue({ id: "cs_mock_session", url: "https://checkout.stripe.com/mock" });
@@ -86,17 +90,37 @@ describe("stripe/client", () => {
     expect(result.id).toBeDefined();
   });
 
-  it("resolvePriceId returns starter price", () => {
-    expect(resolvePriceId("starter")).toBe("price_mock_starter");
+  it("resolvePriceId defaults to biennial when no period given", () => {
+    expect(resolvePriceId("starter")).toBe("price_starter_24mo");
   });
 
-  it("resolvePriceId returns standard price", () => {
-    expect(resolvePriceId("standard")).toBe("price_mock_standard");
+  it("resolvePriceId returns starter biennial price", () => {
+    expect(resolvePriceId("starter", "biennial")).toBe("price_starter_24mo");
+  });
+
+  it("resolvePriceId returns starter annual price", () => {
+    expect(resolvePriceId("starter", "annual")).toBe("price_starter_12mo");
+  });
+
+  it("resolvePriceId returns starter monthly price", () => {
+    expect(resolvePriceId("starter", "monthly")).toBe("price_starter_1mo");
+  });
+
+  it("resolvePriceId returns standard biennial price", () => {
+    expect(resolvePriceId("standard", "biennial")).toBe("price_standard_24mo");
+  });
+
+  it("resolvePriceId returns standard annual price", () => {
+    expect(resolvePriceId("standard", "annual")).toBe("price_standard_12mo");
+  });
+
+  it("resolvePriceId returns standard monthly price", () => {
+    expect(resolvePriceId("standard", "monthly")).toBe("price_standard_1mo");
   });
 
   it("resolvePriceId throws when env var missing", () => {
-    delete process.env.STRIPE_STARTER_PRICE_ID;
-    expect(() => resolvePriceId("starter")).toThrow("not configured");
+    delete process.env.STRIPE_STARTER_24MO_PRICE_ID;
+    expect(() => resolvePriceId("starter", "biennial")).toThrow("not configured");
   });
 
   it("verifyWebhook wraps Error instance in message", () => {

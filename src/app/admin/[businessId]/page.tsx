@@ -50,8 +50,8 @@ export default async function BusinessDetailPage({
             <dd className="text-parchment font-mono">{business.hostinger_vps_id ?? "—"}</dd>
           </div>
           <div>
-            <dt className="text-parchment/40 text-xs">ElevenLabs Agent</dt>
-            <dd className="text-parchment font-mono">{config?.elevenlabs_agent_id ?? "—"}</dd>
+            <dt className="text-parchment/40 text-xs">inworld.ai Agent</dt>
+            <dd className="text-parchment font-mono">{config?.inworld_agent_id ?? "—"}</dd>
           </div>
         </dl>
       </Card>
