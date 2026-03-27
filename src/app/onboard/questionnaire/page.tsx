@@ -54,6 +54,7 @@ function QuestionnaireForm() {
   }
 
   function handleSubmit() {
+    setError(null);
     try {
       localStorage.setItem(
         ONBOARD_STORAGE_KEY,
