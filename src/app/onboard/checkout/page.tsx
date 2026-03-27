@@ -2,17 +2,10 @@
 
 import { useEffect, useState } from "react";
 import Image from "next/image";
-import { createClient } from "@supabase/supabase-js";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { ONBOARD_STORAGE_KEY, type OnboardingData } from "@/lib/onboarding/storage";
-
-function getSupabaseBrowserClient() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
-}
+import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 export default function CheckoutPage() {
   const [data, setData] = useState<OnboardingData | null>(null);
