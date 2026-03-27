@@ -21,3 +21,7 @@ export function getSupabaseBrowserClient() {
   cachedClient = createClient(url, anonKey);
   return cachedClient;
 }
+
+export function resetSupabaseBrowserClientCache(): void {
+  cachedClient = null;
+}

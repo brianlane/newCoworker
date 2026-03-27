@@ -1,11 +1,12 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { getSupabaseBrowserClient, resetSupabaseBrowserClientCache } from "@/lib/supabase/browser";
 
 describe("getSupabaseBrowserClient", () => {
   const originalUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const originalKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   beforeEach(() => {
+    resetSupabaseBrowserClientCache();
     process.env.NEXT_PUBLIC_SUPABASE_URL = "https://test.supabase.co";
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-anon-key";
   });
@@ -21,19 +22,24 @@ describe("getSupabaseBrowserClient", () => {
     expect(client.auth).toBeDefined();
   });
 
-  it("uses the provided environment variables", () => {
-    const client = getSupabaseBrowserClient();
-    expect(client).toBeDefined();
+  it("returns the same instance on subsequent calls (caching)", () => {
+    const client1 = getSupabaseBrowserClient();
+    const client2 = getSupabaseBrowserClient();
+    expect(client1).toBe(client2);
   });
 
   it("throws when URL is empty string", () => {
+    resetSupabaseBrowserClientCache();
     process.env.NEXT_PUBLIC_SUPABASE_URL = "";
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-key";
     expect(() => getSupabaseBrowserClient()).toThrow(
       "Missing Supabase URL environment variable"
     );
   });
 
   it("throws when anon key is empty string", () => {
+    resetSupabaseBrowserClientCache();
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://test.supabase.co";
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "";
     expect(() => getSupabaseBrowserClient()).toThrow(
       "Missing Supabase anon key environment variable"
@@ -41,6 +47,7 @@ describe("getSupabaseBrowserClient", () => {
   });
 
   it("throws when both are empty strings", () => {
+    resetSupabaseBrowserClientCache();
     process.env.NEXT_PUBLIC_SUPABASE_URL = "";
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "";
     expect(() => getSupabaseBrowserClient()).toThrow(
