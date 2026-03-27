@@ -81,8 +81,11 @@ export default function CheckoutPage() {
       const checkoutJson = await checkoutRes.json();
       if (!checkoutRes.ok) throw new Error(checkoutJson.error?.message ?? "Checkout failed");
 
+      const { checkoutUrl } = checkoutJson.data ?? {};
+      if (!checkoutUrl) throw new Error("Invalid checkout response");
+
       localStorage.removeItem(ONBOARD_STORAGE_KEY);
-      window.location.href = checkoutJson.data.checkoutUrl;
+      window.location.href = checkoutUrl;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
       setLoading(false);
