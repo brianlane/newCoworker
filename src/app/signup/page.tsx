@@ -26,8 +26,9 @@ export default function SignupPage() {
 function SignupForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirectTo = searchParams.get("redirectTo") ?? "/onboard/checkout";
+  const redirectTo = searchParams.get("redirectTo") ?? "/onboard";
   const tier = searchParams.get("tier");
+  const loginHref = `/login?redirectTo=${encodeURIComponent(redirectTo)}${tier ? `&tier=${encodeURIComponent(tier)}` : ""}`;
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -155,7 +156,7 @@ function SignupForm() {
 
         <p className="text-center text-sm text-parchment/40">
           Already have an account?{" "}
-          <a href="/login" className="text-signal-teal hover:underline">
+          <a href={loginHref} className="text-signal-teal hover:underline">
             Sign in
           </a>
         </p>

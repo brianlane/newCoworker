@@ -27,6 +27,8 @@ function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirectTo = searchParams.get("redirectTo") ?? "/dashboard";
+  const tier = searchParams.get("tier");
+  const signupHref = `/signup?redirectTo=${encodeURIComponent(redirectTo)}${tier ? `&tier=${encodeURIComponent(tier)}` : ""}`;
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -137,7 +139,7 @@ function LoginForm() {
 
         <p className="text-center text-sm text-parchment/40">
           No account?{" "}
-          <a href="/signup" className="text-signal-teal hover:underline">
+          <a href={signupHref} className="text-signal-teal hover:underline">
             Get started
           </a>
         </p>
