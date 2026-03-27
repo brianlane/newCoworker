@@ -192,7 +192,7 @@ export async function proxy(request: NextRequest) {
   // --- Protected route gate (owner dashboard) ---
   if (isProtectedRoute(pathname) && !user) {
     const redirectUrl = request.nextUrl.clone();
-    if (pathname.startsWith("/onboard/")) {
+    if (pathname === "/onboard/checkout") {
       redirectUrl.pathname = "/signup";
       redirectUrl.searchParams.set("redirectTo", pathname);
     } else {

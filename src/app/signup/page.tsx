@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, type FormEvent } from "react";
+import { Suspense, useState, useEffect, type FormEvent } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
@@ -37,6 +37,18 @@ function SignupForm() {
   const [loading, setLoading] = useState(false);
   const [confirmationPending, setConfirmationPending] = useState(false);
 
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("newcoworker_onboard");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed.businessName) {
+          setBusinessName(parsed.businessName);
+        }
+      }
+    } catch {}
+  }, []);
+
   async function handleSignup(e: FormEvent) {
     e.preventDefault();
     if (password.length < 8) {
@@ -46,13 +58,24 @@ function SignupForm() {
     setLoading(true);
     setError(null);
 
+    let onboardingData = null;
+    try {
+      const stored = localStorage.getItem("newcoworker_onboard");
+      if (stored) {
+        onboardingData = JSON.parse(stored);
+      }
+    } catch {}
+
     const supabase = getSupabaseBrowserClient();
     const encodedRedirect = encodeURIComponent(redirectTo);
     const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        data: { business_name: businessName },
+        data: { 
+          business_name: businessName,
+          onboarding_data: onboardingData
+        },
         emailRedirectTo: `${window.location.origin}/api/auth/callback?redirectTo=${encodedRedirect}`
       }
     });

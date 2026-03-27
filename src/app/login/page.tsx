@@ -27,8 +27,7 @@ function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirectTo = searchParams.get("redirectTo") ?? "/dashboard";
-  const tier = searchParams.get("tier");
-  const signupHref = `/signup?redirectTo=${encodeURIComponent(redirectTo)}${tier ? `&tier=${encodeURIComponent(tier)}` : ""}`;
+  const signupHref = "/onboard";
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

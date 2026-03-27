@@ -60,7 +60,7 @@ function QuestionnaireForm() {
         ONBOARD_STORAGE_KEY,
         JSON.stringify({ tier, ...form })
       );
-      router.push(`/signup?tier=${tier}&redirectTo=/onboard/checkout`);
+      router.push(`/signup?tier=${encodeURIComponent(tier)}&redirectTo=/onboard/checkout`);
     } catch {
       setError("Could not save your details. Please try again.");
     }

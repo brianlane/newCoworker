@@ -3,9 +3,17 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
+import { createClient } from "@supabase/supabase-js";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { ONBOARD_STORAGE_KEY } from "@/app/onboard/questionnaire/page";
+
+function getSupabaseBrowserClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  );
+}
 
 interface OnboardData {
   tier: "starter" | "standard";
@@ -26,14 +34,31 @@ export default function CheckoutPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(ONBOARD_STORAGE_KEY);
-      if (stored) {
-        setData(JSON.parse(stored));
+    async function loadData() {
+      const supabase = getSupabaseBrowserClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      let foundData = null;
+
+      if (user?.user_metadata?.onboarding_data) {
+        foundData = user.user_metadata.onboarding_data;
       }
-    } catch {
-      /* localStorage unavailable */
+
+      if (!foundData) {
+        try {
+          const stored = localStorage.getItem(ONBOARD_STORAGE_KEY);
+          if (stored) {
+            foundData = JSON.parse(stored);
+          }
+        } catch {
+          /* localStorage unavailable */
+        }
+      }
+
+      if (foundData) {
+        setData(foundData);
+      }
     }
+    loadData();
   }, []);
 
   async function handleCheckout() {
