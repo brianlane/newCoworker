@@ -4,6 +4,7 @@ import {
   getPeriodPricing,
   getCommitmentMonths,
   isPaidTier,
+  calculateSavingsPercentage,
   type BillingPeriod,
   type PlanTier
 } from "@/lib/plans/tier";
@@ -127,6 +128,37 @@ describe("tier pricing", () => {
 
     it("marks standard as paid", () => {
       expect(isPaidTier("standard")).toBe(true);
+    });
+  });
+
+  describe("calculateSavingsPercentage", () => {
+    it("starter biennial saves 38% vs monthly", () => {
+      // (1599 - 999) / 1599 = 37.52% -> rounds to 38%
+      expect(calculateSavingsPercentage("starter", "biennial")).toBe(38);
+    });
+
+    it("standard biennial saves 49% vs monthly", () => {
+      // (19500 - 9900) / 19500 = 49.23% -> rounds to 49%
+      expect(calculateSavingsPercentage("standard", "biennial")).toBe(49);
+    });
+
+    it("starter annual saves 35% vs monthly", () => {
+      // (1599 - 1099) / 1599 = 31.33% -> rounds to 31%
+      expect(calculateSavingsPercentage("starter", "annual")).toBe(31);
+    });
+
+    it("standard annual saves 44% vs monthly", () => {
+      // (19500 - 10900) / 19500 = 44.10% -> rounds to 44%
+      expect(calculateSavingsPercentage("standard", "annual")).toBe(44);
+    });
+
+    it("monthly returns 0% savings", () => {
+      expect(calculateSavingsPercentage("starter", "monthly")).toBe(0);
+      expect(calculateSavingsPercentage("standard", "monthly")).toBe(0);
+    });
+
+    it("enterprise returns 0% savings (custom pricing)", () => {
+      expect(calculateSavingsPercentage("enterprise", "biennial")).toBe(0);
     });
   });
 

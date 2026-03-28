@@ -66,3 +66,11 @@ export function getCommitmentMonths(period: BillingPeriod): number {
 export function isPaidTier(tier: PlanTier): boolean {
   return tier !== "enterprise";
 }
+
+export function calculateSavingsPercentage(tier: PlanTier, period: BillingPeriod): number {
+  const pricing = PRICING[tier].periods[period];
+  const monthlyPricing = PRICING[tier].periods.monthly;
+  if (monthlyPricing.monthlyCents === 0) return 0;
+  const savings = ((monthlyPricing.monthlyCents - pricing.monthlyCents) / monthlyPricing.monthlyCents) * 100;
+  return Math.round(savings);
+}

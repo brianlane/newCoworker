@@ -6,7 +6,7 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import type { BillingPeriod } from "@/lib/plans/tier";
 import { formatPriceCents, formatPricePerMonth } from "@/lib/pricing";
-import { getPeriodPricing, getCommitmentMonths, PlanTier } from "@/lib/plans/tier";
+import { getPeriodPricing, getCommitmentMonths, PlanTier, calculateSavingsPercentage } from "@/lib/plans/tier";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +43,7 @@ export default function OnboardPage() {
 
   const starterPrice = getTierPricingDisplay("starter", period);
   const standardPrice = getTierPricingDisplay("standard", period);
+  const biennialSavings = period === "biennial" ? calculateSavingsPercentage("starter", "biennial") : 0;
 
   const tiers = [
     {
@@ -148,7 +149,7 @@ export default function OnboardPage() {
                 {opt.label}
                 {opt.id === "biennial" && (
                   <span className="ml-1.5 text-xs bg-signal-teal/20 text-signal-teal rounded px-1">
-                    Save 38%
+                    Save {biennialSavings}%
                   </span>
                 )}
               </button>
