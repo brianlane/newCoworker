@@ -94,7 +94,6 @@ export async function orchestrateProvisioning(
 
   // 4. Create inworld.ai voice agent (all tiers use inworld-tts-1.5-mini)
   const tunnelUrl = `https://${businessId}.tunnel.newcoworker.com`;
-  const customLlmUrl = `${tunnelUrl}/v1/chat/completions`;
 
   const inworld =
     deps?.inworld ??
@@ -128,8 +127,6 @@ export async function orchestrateProvisioning(
     `CLOUDFLARE_TUNNEL_TOKEN=${process.env.CLOUDFLARE_TUNNEL_TOKEN ?? ""}`,
     `LIGHTPANDA_WSS_URL=${process.env.LIGHTPANDA_WSS_URL ?? "wss://cdn.lightpanda.io/ws"}`
   ].join(" ");
-
-  void customLlmUrl; // referenced in future Rowboat config injection
 
   try {
     const { exitCode, output } = await hostinger.executeCommand(

@@ -20,7 +20,7 @@ begin
     case when p_field = 'voice_minutes_used'     then p_amount else 0 end,
     case when p_field = 'sms_sent'               then p_amount else 0 end,
     case when p_field = 'calls_made'             then p_amount else 0 end,
-    case when p_field = 'peak_concurrent_calls'  then GREATEST(peak_concurrent_calls, p_amount) else 0 end,
+    case when p_field = 'peak_concurrent_calls'  then p_amount else 0 end,
     now()
   )
   on conflict (business_id, usage_date) do update set
