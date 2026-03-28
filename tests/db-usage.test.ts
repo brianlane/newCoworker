@@ -58,6 +58,7 @@ function mockDb(overrides: Record<string, unknown> = {}) {
     insert: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     single: vi.fn().mockResolvedValue({ data: MOCK_USAGE, error: null }),
+    rpc: vi.fn().mockResolvedValue({ error: null }),
     ...overrides
   };
   return base;
@@ -98,105 +99,61 @@ describe("db/usage", () => {
   });
 
   describe("incrementUsage", () => {
-    it("updates existing row", async () => {
-      const secondEqFn = vi.fn().mockResolvedValue({ error: null });
-      const firstEqFn = vi.fn().mockReturnValue({ eq: secondEqFn });
-      const updateFn = vi.fn().mockReturnValue({ eq: firstEqFn });
-      const db = {
-        from: vi.fn().mockReturnThis(),
-        select: vi.fn().mockReturnThis(),
-        update: updateFn,
-        insert: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        single: vi.fn().mockResolvedValue({
-          data: { id: "u1", sms_sent: 10 },
-          error: null
-        })
-      };
+    it("calls rpc with correct arguments", async () => {
+      const rpcFn = vi.fn().mockResolvedValue({ error: null });
+      const db = mockDb({ rpc: rpcFn });
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
       await incrementUsage("biz-uuid-1", "sms_sent", 5);
-      expect(updateFn).toHaveBeenCalledWith(
-        expect.objectContaining({ sms_sent: 15 })
-      );
+      expect(rpcFn).toHaveBeenCalledWith("increment_usage", {
+        p_business_id: "biz-uuid-1",
+        p_field: "sms_sent",
+        p_amount: 5
+      });
     });
 
-    it("treats null field value as 0 when updating (nullish coalescing branch)", async () => {
-      const secondEqFn = vi.fn().mockResolvedValue({ error: null });
-      const firstEqFn = vi.fn().mockReturnValue({ eq: secondEqFn });
-      const updateFn = vi.fn().mockReturnValue({ eq: firstEqFn });
-      const db = {
-        from: vi.fn().mockReturnThis(),
-        select: vi.fn().mockReturnThis(),
-        update: updateFn,
-        insert: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        single: vi.fn().mockResolvedValue({
-          data: { id: "u1", sms_sent: null },
-          error: null
-        })
-      };
+    it("uses provided client and skips createSupabaseServiceClient", async () => {
+      const rpcFn = vi.fn().mockResolvedValue({ error: null });
+      const db = mockDb({ rpc: rpcFn });
+
+      await incrementUsage("biz-uuid-1", "calls_made", 1, db as never);
+      expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+      expect(rpcFn).toHaveBeenCalledOnce();
+    });
+
+    it("calls rpc for voice_minutes_used", async () => {
+      const rpcFn = vi.fn().mockResolvedValue({ error: null });
+      const db = mockDb({ rpc: rpcFn });
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
-      await incrementUsage("biz-uuid-1", "sms_sent", 3);
-      expect(updateFn).toHaveBeenCalledWith(
-        expect.objectContaining({ sms_sent: 3 })
-      );
+      await incrementUsage("biz-uuid-1", "voice_minutes_used", 10);
+      expect(rpcFn).toHaveBeenCalledWith("increment_usage", {
+        p_business_id: "biz-uuid-1",
+        p_field: "voice_minutes_used",
+        p_amount: 10
+      });
     });
 
-    it("inserts new row when no existing usage", async () => {
-      const insertFn = vi.fn().mockResolvedValue({ error: null });
-      const db = {
-        from: vi.fn().mockReturnThis(),
-        select: vi.fn().mockReturnThis(),
-        update: vi.fn().mockReturnThis(),
-        insert: insertFn,
-        eq: vi.fn().mockReturnThis(),
-        single: vi.fn().mockResolvedValue({ data: null, error: { message: "no rows" } })
-      };
-      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-
-      await incrementUsage("biz-uuid-1", "calls_made", 1);
-      expect(insertFn).toHaveBeenCalledWith(
-        expect.objectContaining({ calls_made: 1, business_id: "biz-uuid-1" })
-      );
-    });
-
-    it("throws when update fails", async () => {
-      const secondEqFn = vi.fn().mockResolvedValue({ error: { message: "db fail" } });
-      const firstEqFn = vi.fn().mockReturnValue({ eq: secondEqFn });
-      const db = {
-        from: vi.fn().mockReturnThis(),
-        select: vi.fn().mockReturnThis(),
-        update: vi.fn().mockReturnValue({ eq: firstEqFn }),
-        insert: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        single: vi.fn().mockResolvedValue({
-          data: { id: "u1", voice_minutes_used: 20 },
-          error: null
-        })
-      };
+    it("throws when rpc returns an error", async () => {
+      const db = mockDb({
+        rpc: vi.fn().mockResolvedValue({ error: { message: "rpc fail" } })
+      });
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
       await expect(
         incrementUsage("biz-uuid-1", "voice_minutes_used", 10)
-      ).rejects.toThrow("incrementUsage update");
+      ).rejects.toThrow("incrementUsage: rpc fail");
     });
 
-    it("throws when insert fails", async () => {
-      const db = {
-        from: vi.fn().mockReturnThis(),
-        select: vi.fn().mockReturnThis(),
-        update: vi.fn().mockReturnThis(),
-        insert: vi.fn().mockResolvedValue({ error: { message: "insert fail" } }),
-        eq: vi.fn().mockReturnThis(),
-        single: vi.fn().mockResolvedValue({ data: null, error: { message: "no rows" } })
-      };
+    it("throws when rpc returns a different field error", async () => {
+      const db = mockDb({
+        rpc: vi.fn().mockResolvedValue({ error: { message: "insert fail" } })
+      });
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
       await expect(
         incrementUsage("biz-uuid-1", "sms_sent", 1)
-      ).rejects.toThrow("incrementUsage insert");
+      ).rejects.toThrow("incrementUsage: insert fail");
     });
   });
 
