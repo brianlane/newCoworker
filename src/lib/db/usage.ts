@@ -49,39 +49,14 @@ export async function incrementUsage(
   client?: SupabaseClient
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
-  const today = new Date().toISOString().slice(0, 10);
 
-  // Upsert: insert with initial value or increment existing
-  const { data: existing } = await db
-    .from("daily_usage")
-    .select("id," + field)
-    .eq("business_id", businessId)
-    .eq("usage_date", today)
-    .single();
+  const { error } = await db.rpc("increment_usage", {
+    p_business_id: businessId,
+    p_field: field,
+    p_amount: amount
+  });
 
-  if (existing) {
-    const currentVal = (existing as Record<string, unknown>)[field] as number ?? 0;
-    const { error } = await db
-      .from("daily_usage")
-      .update({
-        [field]: currentVal + amount,
-        updated_at: new Date().toISOString()
-      })
-      .eq("business_id", businessId)
-      .eq("usage_date", today);
-
-    if (error) throw new Error(`incrementUsage update: ${error.message}`);
-  } else {
-    const { error } = await db
-      .from("daily_usage")
-      .insert({
-        business_id: businessId,
-        usage_date: today,
-        [field]: amount
-      });
-
-    if (error) throw new Error(`incrementUsage insert: ${error.message}`);
-  }
+  if (error) throw new Error(`incrementUsage: ${error.message}`);
 }
 
 export async function checkLimitReached(

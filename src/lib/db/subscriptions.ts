@@ -1,8 +1,9 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import type { BillingPeriod } from "@/lib/plans/tier";
+
+export type { BillingPeriod };
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
-
-export type BillingPeriod = "monthly" | "annual" | "biennial";
 
 export type SubscriptionRow = {
   id: string;

@@ -12,7 +12,7 @@ describe("inworld client", () => {
   });
 
   it("createVoiceAgent sends correct model and default voice", async () => {
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
       new Response(JSON.stringify({ agent_id: "ag_2" }))
     );
     const client = new InworldClient("api-key", fetchMock as any);
@@ -26,7 +26,7 @@ describe("inworld client", () => {
   });
 
   it("createVoiceAgent uses provided voiceId", async () => {
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
       new Response(JSON.stringify({ agent_id: "ag_3" }))
     );
     const client = new InworldClient("api-key", fetchMock as any);
@@ -54,7 +54,7 @@ describe("inworld client", () => {
 
   it("synthesize uses default model when not provided", async () => {
     const buffer = new ArrayBuffer(4);
-    const fetchMock = vi.fn(async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
       const response = new Response(buffer);
       Object.defineProperty(response, "ok", { value: true });
       Object.defineProperty(response, "arrayBuffer", {
@@ -72,7 +72,7 @@ describe("inworld client", () => {
 
   it("synthesize uses custom model when provided", async () => {
     const buffer = new ArrayBuffer(4);
-    const fetchMock = vi.fn(async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
       const response = new Response(buffer);
       Object.defineProperty(response, "ok", { value: true });
       Object.defineProperty(response, "arrayBuffer", {
@@ -128,7 +128,7 @@ describe("inworld client", () => {
   });
 
   it("sends Authorization header with api key", async () => {
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
       new Response(JSON.stringify({ agent_id: "ag_auth" }))
     );
     const client = new InworldClient("my-secret-key", fetchMock as any);

@@ -20,8 +20,13 @@ export async function POST(request: Request) {
 
     const priceId = resolvePriceId(body.tier, body.billingPeriod);
     const commitmentMonths = getCommitmentMonths(body.billingPeriod);
-    const renewalAt = new Date();
+    const now = new Date();
+    const originalDay = now.getDate();
+    const renewalAt = new Date(now);
+    renewalAt.setDate(1);
     renewalAt.setMonth(renewalAt.getMonth() + commitmentMonths);
+    const daysInTargetMonth = new Date(renewalAt.getFullYear(), renewalAt.getMonth() + 1, 0).getDate();
+    renewalAt.setDate(Math.min(originalDay, daysInTargetMonth));
 
     await createSubscription({
       id: randomUUID(),
