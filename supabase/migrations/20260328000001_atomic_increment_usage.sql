@@ -27,7 +27,7 @@ begin
     voice_minutes_used    = daily_usage.voice_minutes_used    + case when p_field = 'voice_minutes_used'    then p_amount else 0 end,
     sms_sent              = daily_usage.sms_sent              + case when p_field = 'sms_sent'              then p_amount else 0 end,
     calls_made            = daily_usage.calls_made            + case when p_field = 'calls_made'            then p_amount else 0 end,
-    peak_concurrent_calls = GREATEST(daily_usage.peak_concurrent_calls, p_amount),
+    peak_concurrent_calls = CASE WHEN p_field = 'peak_concurrent_calls' THEN GREATEST(daily_usage.peak_concurrent_calls, p_amount) ELSE daily_usage.peak_concurrent_calls END,
     updated_at            = now();
 end;
 $$;
