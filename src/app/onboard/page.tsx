@@ -5,6 +5,8 @@ import { useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import type { BillingPeriod } from "@/lib/plans/tier";
+import { formatPriceCents, formatPricePerMonth } from "@/lib/pricing";
+import { getPeriodPricing, getCommitmentMonths, PlanTier } from "@/lib/plans/tier";
 
 export const dynamic = "force-dynamic";
 
@@ -20,35 +22,27 @@ const PERIOD_OPTIONS: PeriodOption[] = [
   { id: "monthly", label: "1 month", months: 1 }
 ];
 
-type TierPrices = {
-  biennial: { monthly: string; renewal: string; total: string };
-  annual: { monthly: string; renewal: string; total: string };
-  monthly: { monthly: string; renewal: string; total: string };
-};
-
-const STARTER_PRICES: TierPrices = {
-  biennial: { monthly: "$9.99/mo", renewal: "$16.99/mo", total: "$239.76" },
-  annual: { monthly: "$10.99/mo", renewal: "$18.99/mo", total: "$131.88" },
-  monthly: { monthly: "$15.99/mo", renewal: "$26.99/mo", total: "$15.99" }
-};
-
-const STANDARD_PRICES: TierPrices = {
-  biennial: { monthly: "$99/mo", renewal: "$189/mo", total: "$2,376" },
-  annual: { monthly: "$109/mo", renewal: "$209/mo", total: "$1,308" },
-  monthly: { monthly: "$195/mo", renewal: "$279/mo", total: "$195" }
-};
-
 const PERIOD_LABEL: Record<BillingPeriod, string> = {
   biennial: "24-month plan",
   annual: "12-month plan",
   monthly: "1-month plan"
 };
 
+function getTierPricingDisplay(tier: PlanTier, period: BillingPeriod) {
+  const pricing = getPeriodPricing(tier, period);
+  const months = getCommitmentMonths(period);
+  return {
+    monthly: formatPricePerMonth(pricing.monthlyCents),
+    renewal: formatPricePerMonth(pricing.renewalMonthlyCents),
+    total: formatPriceCents(pricing.monthlyCents * months)
+  };
+}
+
 export default function OnboardPage() {
   const [period, setPeriod] = useState<BillingPeriod>("biennial");
 
-  const starterPrice = STARTER_PRICES[period];
-  const standardPrice = STANDARD_PRICES[period];
+  const starterPrice = getTierPricingDisplay("starter", period);
+  const standardPrice = getTierPricingDisplay("standard", period);
 
   const tiers = [
     {

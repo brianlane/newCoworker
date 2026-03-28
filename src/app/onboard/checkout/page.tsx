@@ -6,6 +6,11 @@ import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { ONBOARD_STORAGE_KEY, type OnboardingData } from "@/lib/onboarding/storage";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
+import {
+  getMonthlyRateDisplay,
+  getRenewalRateDisplay,
+  formatCommitmentTotal
+} from "@/lib/pricing";
 
 export default function CheckoutPage() {
   const [data, setData] = useState<OnboardingData | null>(null);
@@ -161,33 +166,15 @@ export default function CheckoutPage() {
               </div>
               <div className="flex justify-between text-parchment/70">
                 <span>Monthly rate</span>
-                <span>
-                  {data.tier === "starter"
-                    ? (data.billingPeriod ?? "biennial") === "biennial" ? "$9.99/mo"
-                      : (data.billingPeriod ?? "biennial") === "annual" ? "$10.99/mo" : "$15.99/mo"
-                    : (data.billingPeriod ?? "biennial") === "biennial" ? "$99/mo"
-                      : (data.billingPeriod ?? "biennial") === "annual" ? "$109/mo" : "$195/mo"}
-                </span>
+                <span>{getMonthlyRateDisplay(data.tier, data.billingPeriod ?? "biennial")}</span>
               </div>
               <div className="flex justify-between text-parchment/40 text-xs">
                 <span>Renewal rate</span>
-                <span>
-                  {data.tier === "starter"
-                    ? (data.billingPeriod ?? "biennial") === "biennial" ? "$16.99/mo"
-                      : (data.billingPeriod ?? "biennial") === "annual" ? "$18.99/mo" : "$26.99/mo"
-                    : (data.billingPeriod ?? "biennial") === "biennial" ? "$189/mo"
-                      : (data.billingPeriod ?? "biennial") === "annual" ? "$209/mo" : "$279/mo"}
-                </span>
+                <span>{getRenewalRateDisplay(data.tier, data.billingPeriod ?? "biennial")}</span>
               </div>
               <div className="flex justify-between text-parchment/40 text-xs pt-1 border-t border-parchment/10">
                 <span>Commitment total</span>
-                <span>
-                  {data.tier === "starter"
-                    ? (data.billingPeriod ?? "biennial") === "biennial" ? "$239.76"
-                      : (data.billingPeriod ?? "biennial") === "annual" ? "$131.88" : "$15.99"
-                    : (data.billingPeriod ?? "biennial") === "biennial" ? "$2,376"
-                      : (data.billingPeriod ?? "biennial") === "annual" ? "$1,308" : "$195"}
-                </span>
+                <span>{formatCommitmentTotal(data.tier, data.billingPeriod ?? "biennial")}</span>
               </div>
             </div>
             <p className="text-xs text-parchment/30 text-center">

@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { Button } from "@/components/ui/Button";
 import { ONBOARD_STORAGE_KEY } from "@/lib/onboarding/storage";
+import { getMonthlyRateDisplay } from "@/lib/pricing";
 
 type Step = 1 | 2 | 3;
 
@@ -184,11 +185,7 @@ function QuestionnaireForm() {
                 </div>
                 <div className="flex justify-between text-parchment/70">
                   <span>Monthly rate</span>
-                  <span>
-                    {tier === "starter"
-                      ? period === "biennial" ? "$9.99/mo" : period === "annual" ? "$10.99/mo" : "$15.99/mo"
-                      : period === "biennial" ? "$99/mo" : period === "annual" ? "$109/mo" : "$195/mo"}
-                  </span>
+                  <span>{getMonthlyRateDisplay(tier, period)}</span>
                 </div>
               </div>
               {error && <p className="text-spark-orange text-xs">{error}</p>}

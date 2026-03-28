@@ -20,14 +20,14 @@ begin
     case when p_field = 'voice_minutes_used'     then p_amount else 0 end,
     case when p_field = 'sms_sent'               then p_amount else 0 end,
     case when p_field = 'calls_made'             then p_amount else 0 end,
-    case when p_field = 'peak_concurrent_calls'  then p_amount else 0 end,
+    case when p_field = 'peak_concurrent_calls'  then GREATEST(peak_concurrent_calls, p_amount) else 0 end,
     now()
   )
   on conflict (business_id, usage_date) do update set
     voice_minutes_used    = daily_usage.voice_minutes_used    + case when p_field = 'voice_minutes_used'    then p_amount else 0 end,
     sms_sent              = daily_usage.sms_sent              + case when p_field = 'sms_sent'              then p_amount else 0 end,
     calls_made            = daily_usage.calls_made            + case when p_field = 'calls_made'            then p_amount else 0 end,
-    peak_concurrent_calls = daily_usage.peak_concurrent_calls + case when p_field = 'peak_concurrent_calls' then p_amount else 0 end,
+    peak_concurrent_calls = GREATEST(daily_usage.peak_concurrent_calls, p_amount),
     updated_at            = now();
 end;
 $$;
