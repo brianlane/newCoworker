@@ -130,7 +130,7 @@ export default function HomePage() {
         <div className="rounded-2xl border border-claw-green/20 bg-claw-green/5 p-10">
           <h2 className="text-2xl font-bold mb-3">Ready to hire your New Coworker?</h2>
           <p className="text-parchment/50 mb-8">
-            No long-term contracts. Cancel anytime. New coworker starts learning from day one.
+            New coworker starts learning from day one.
           </p>
           <Link
             href="/onboard"
