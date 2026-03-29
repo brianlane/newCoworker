@@ -43,7 +43,7 @@ export default function OnboardPage() {
 
   const starterPrice = getTierPricingDisplay("starter", period);
   const standardPrice = getTierPricingDisplay("standard", period);
-  const biennialSavings = period === "biennial" ? calculateSavingsPercentage("starter", "biennial") : 0;
+  const biennialSavings = calculateSavingsPercentage("starter", "biennial");
 
   const tiers = [
     {
