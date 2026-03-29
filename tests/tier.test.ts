@@ -132,24 +132,24 @@ describe("tier pricing", () => {
   });
 
   describe("calculateSavingsPercentage", () => {
-    it("starter biennial saves 38% vs monthly", () => {
-      // (1599 - 999) / 1599 = 37.52% -> rounds to 38%
-      expect(calculateSavingsPercentage("starter", "biennial")).toBe(38);
+    it("starter biennial saves 63% vs regular monthly", () => {
+      // (2699 - 999) / 2699 = 62.99% -> rounds to 63%
+      expect(calculateSavingsPercentage("starter", "biennial")).toBe(63);
     });
 
-    it("standard biennial saves 49% vs monthly", () => {
-      // (19500 - 9900) / 19500 = 49.23% -> rounds to 49%
-      expect(calculateSavingsPercentage("standard", "biennial")).toBe(49);
+    it("standard biennial saves 65% vs regular monthly", () => {
+      // (27900 - 9900) / 27900 = 64.52% -> rounds to 65%
+      expect(calculateSavingsPercentage("standard", "biennial")).toBe(65);
     });
 
-    it("starter annual saves 35% vs monthly", () => {
-      // (1599 - 1099) / 1599 = 31.33% -> rounds to 31%
-      expect(calculateSavingsPercentage("starter", "annual")).toBe(31);
+    it("starter annual saves 59% vs regular monthly", () => {
+      // (2699 - 1099) / 2699 = 59.28% -> rounds to 59%
+      expect(calculateSavingsPercentage("starter", "annual")).toBe(59);
     });
 
-    it("standard annual saves 44% vs monthly", () => {
-      // (19500 - 10900) / 19500 = 44.10% -> rounds to 44%
-      expect(calculateSavingsPercentage("standard", "annual")).toBe(44);
+    it("standard annual saves 61% vs regular monthly", () => {
+      // (27900 - 10900) / 27900 = 60.93% -> rounds to 61%
+      expect(calculateSavingsPercentage("standard", "annual")).toBe(61);
     });
 
     it("monthly returns 0% savings", () => {
