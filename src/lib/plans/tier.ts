@@ -68,9 +68,13 @@ export function isPaidTier(tier: PlanTier): boolean {
 }
 
 export function calculateSavingsPercentage(tier: PlanTier, period: BillingPeriod): number {
+  if (period === "monthly") return 0;
+
   const pricing = PRICING[tier].periods[period];
   const monthlyPricing = PRICING[tier].periods.monthly;
-  if (monthlyPricing.monthlyCents === 0) return 0;
-  const savings = ((monthlyPricing.monthlyCents - pricing.monthlyCents) / monthlyPricing.monthlyCents) * 100;
+  if (monthlyPricing.renewalMonthlyCents === 0) return 0;
+
+  const savings =
+    ((monthlyPricing.renewalMonthlyCents - pricing.monthlyCents) / monthlyPricing.renewalMonthlyCents) * 100;
   return Math.round(savings);
 }

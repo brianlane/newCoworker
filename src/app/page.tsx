@@ -99,7 +99,7 @@ export default function HomePage() {
             href="/onboard"
             className="inline-block rounded-lg bg-claw-green text-deep-ink px-8 py-3.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
           >
-            Start for $199/mo
+            Start for $9.99/mo
           </Link>
         </div>
       </section>
@@ -130,7 +130,7 @@ export default function HomePage() {
         <div className="rounded-2xl border border-claw-green/20 bg-claw-green/5 p-10">
           <h2 className="text-2xl font-bold mb-3">Ready to hire your New Coworker?</h2>
           <p className="text-parchment/50 mb-8">
-            No long-term contracts. Cancel anytime. New coworker starts learning from day one.
+            New coworker starts learning from day one.
           </p>
           <Link
             href="/onboard"

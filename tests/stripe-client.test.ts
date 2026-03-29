@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getStripe, verifyWebhook, createCheckoutSession, resolvePriceId } from "@/lib/stripe/client";
+import {
+  getStripe,
+  verifyWebhook,
+  createCheckoutSession,
+  resolveIntroDiscountCouponId,
+  resolvePriceId
+} from "@/lib/stripe/client";
 
 const mockConstructEvent = vi.fn();
 const mockSessionCreate = vi.fn();
@@ -29,9 +35,11 @@ describe("stripe/client", () => {
       STRIPE_STARTER_24MO_PRICE_ID: "price_starter_24mo",
       STRIPE_STARTER_12MO_PRICE_ID: "price_starter_12mo",
       STRIPE_STARTER_1MO_PRICE_ID: "price_starter_1mo",
+      STRIPE_STARTER_1MO_INTRO_COUPON_ID: "coupon_starter_1mo_intro",
       STRIPE_STANDARD_24MO_PRICE_ID: "price_standard_24mo",
       STRIPE_STANDARD_12MO_PRICE_ID: "price_standard_12mo",
-      STRIPE_STANDARD_1MO_PRICE_ID: "price_standard_1mo"
+      STRIPE_STANDARD_1MO_PRICE_ID: "price_standard_1mo",
+      STRIPE_STANDARD_1MO_INTRO_COUPON_ID: "coupon_standard_1mo_intro"
     };
     mockConstructEvent.mockReturnValue({ id: "evt_mock", type: "checkout.session.completed" });
     mockSessionCreate.mockResolvedValue({ id: "cs_mock_session", url: "https://checkout.stripe.com/mock" });
@@ -75,10 +83,16 @@ describe("stripe/client", () => {
       successUrl: "https://example.com/success",
       cancelUrl: "https://example.com/cancel",
       customerEmail: "test@test.com",
-      metadata: { businessId: "uuid-123" }
+      metadata: { businessId: "uuid-123" },
+      discountCouponId: "coupon_intro"
     });
     expect(result.id).toBe("cs_mock_session");
     expect(result.url).toContain("stripe.com");
+    expect(mockSessionCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        discounts: [{ coupon: "coupon_intro" }]
+      })
+    );
   });
 
   it("createCheckoutSession works without optional fields", async () => {
@@ -116,6 +130,19 @@ describe("stripe/client", () => {
 
   it("resolvePriceId returns standard monthly price", () => {
     expect(resolvePriceId("standard", "monthly")).toBe("price_standard_1mo");
+  });
+
+  it("resolveIntroDiscountCouponId returns monthly starter coupon", () => {
+    expect(resolveIntroDiscountCouponId("starter", "monthly")).toBe("coupon_starter_1mo_intro");
+  });
+
+  it("resolveIntroDiscountCouponId returns undefined for non-monthly periods", () => {
+    expect(resolveIntroDiscountCouponId("starter", "annual")).toBeUndefined();
+  });
+
+  it("resolveIntroDiscountCouponId throws when monthly coupon env var missing", () => {
+    delete process.env.STRIPE_STARTER_1MO_INTRO_COUPON_ID;
+    expect(() => resolveIntroDiscountCouponId("starter", "monthly")).toThrow("not configured");
   });
 
   it("resolvePriceId throws when env var missing", () => {
