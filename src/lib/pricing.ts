@@ -1,5 +1,7 @@
 import { getPeriodPricing, PlanTier, BillingPeriod, getCommitmentMonths } from "./plans/tier";
 
+const PRICE_LOCALE = "en-US";
+
 /**
  * Formats price in cents to USD string (e.g., 999 -> "$9.99")
  * Omits .00 suffix when cents are zero (e.g., "$195" not "$195.00")
@@ -10,12 +12,12 @@ export function formatPriceCents(cents: number): string {
   const decimalPart = dollars - integerPart;
 
   if (decimalPart === 0) {
-    return `$${integerPart.toLocaleString()}`;
+    return `$${integerPart.toLocaleString(PRICE_LOCALE)}`;
   }
 
   // Add thousands separator and format cents
   const [integer, decimal] = dollars.toFixed(2).split(".");
-  return `$${parseInt(integer).toLocaleString()}.${decimal}`;
+  return `$${parseInt(integer, 10).toLocaleString(PRICE_LOCALE)}.${decimal}`;
 }
 
 /**

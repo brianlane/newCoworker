@@ -18,6 +18,8 @@ describe("pricing", () => {
       expect(formatPriceCents(9900)).toBe("$99");
       expect(formatPriceCents(19500)).toBe("$195");
       expect(formatPriceCents(23976)).toBe("$239.76");
+      expect(formatPriceCents(237600)).toBe("$2,376");
+      expect(formatPriceCents(237699)).toBe("$2,376.99");
     });
   });
 
