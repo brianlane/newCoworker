@@ -11,19 +11,33 @@ import { getPeriodPricing, getCommitmentMonths, PlanTier, calculateSavingsPercen
 type PeriodOption = {
   id: BillingPeriod;
   label: string;
-  months: number;
 };
 
 const PERIOD_OPTIONS: PeriodOption[] = [
-  { id: "biennial", label: "24 months", months: 24 },
-  { id: "annual", label: "12 months", months: 12 },
-  { id: "monthly", label: "1 month", months: 1 }
+  { id: "biennial", label: "24 months" },
+  { id: "annual", label: "12 months" },
+  { id: "monthly", label: "1 month" }
 ];
 
 const PERIOD_LABEL: Record<BillingPeriod, string> = {
   biennial: "24-month plan",
   annual: "12-month plan",
   monthly: "1-month plan"
+};
+
+const PERIOD_SUMMARY: Record<BillingPeriod, { title: string; description: string }> = {
+  biennial: {
+    title: "Lock in the strongest rate for 24 months",
+    description: "Best if you want the lowest monthly cost and the highest long-term discount."
+  },
+  annual: {
+    title: "Commit for 12 months and still save materially",
+    description: "A balanced option if you want annual billing without the full 24-month commitment."
+  },
+  monthly: {
+    title: "Stay flexible with month-to-month billing",
+    description: "No long commitment, but this option does not include a prepaid term discount."
+  }
 };
 
 function getTierPricingDisplay(tier: PlanTier, period: BillingPeriod) {
@@ -41,7 +55,14 @@ export default function OnboardPage() {
 
   const starterPrice = getTierPricingDisplay("starter", period);
   const standardPrice = getTierPricingDisplay("standard", period);
-  const biennialSavings = calculateSavingsPercentage("starter", "biennial");
+  const starterSavings: Record<"biennial" | "annual", number> = {
+    biennial: calculateSavingsPercentage("starter", "biennial"),
+    annual: calculateSavingsPercentage("starter", "annual")
+  };
+  const standardSavings: Record<"biennial" | "annual", number> = {
+    biennial: calculateSavingsPercentage("standard", "biennial"),
+    annual: calculateSavingsPercentage("standard", "annual")
+  };
 
   const tiers = [
     {
@@ -55,13 +76,13 @@ export default function OnboardPage() {
           : undefined,
       setup: "No setup fee · 30-day money-back guarantee",
       features: [
-        "AI voice coworker (inworld.ai)",
+        "AI voice coworker",
         "Twilio phone number",
-        "Lossless memory",
+        "Lossless memory and expansive knowledge base",
+        "Unlimted emails and appointment booking",
         "1 hour voice / day",
-        "100 SMS / day · 10 calls / day",
+        "100 SMS / day",
         "1 concurrent call",
-        "Browser accessibility",
         "Dashboard access"
       ],
       cta: "Choose Starter",
@@ -82,10 +103,14 @@ export default function OnboardPage() {
         "Everything in Starter, plus:",
         "Unlimited voice, SMS, and calls",
         "3 concurrent calls",
-        "Full Swarm reasoning + deep reasoning (35B-A3B)",
-        "Custom soul injection",
+        "Send texts during calls",
+        "Warm handoff call transfers",
+        "Full Swarm reasoning + deep reasoning",
+        "Chat access to your coworker",
+        "Voice Clone generation available",
+        "Configuration and training updates",
         "Priority support & maintenance",
-        "Lightpanda browser skills"
+        "Full browser skills"
       ],
       cta: "Choose Standard",
       highlight: true,
@@ -105,7 +130,13 @@ export default function OnboardPage() {
         "SLA + dedicated support",
         "Custom compliance modules",
         "Quarterly strategy reviews",
-        "Analytics and reporting"
+        "Analytics and reporting",
+        "Designated reasoning models",
+        "Priority access to new features",
+        "Custom call customization",
+        "Independent hardware deployment",
+        "Professional voice cloning available",
+        "Granular access control"
       ],
       cta: "Contact Sales",
       highlight: false,
@@ -131,27 +162,69 @@ export default function OnboardPage() {
         </div>
 
         {/* Billing period selector */}
-        <div className="flex justify-center">
-          <div className="inline-flex rounded-lg border border-parchment/20 p-1 gap-1">
+        <div className="space-y-4">
+          <div className="flex justify-center">
+            <div className="inline-flex rounded-2xl border border-parchment/15 bg-parchment/5 p-1.5 gap-1 shadow-[0_12px_32px_rgba(0,0,0,0.18)]">
             {PERIOD_OPTIONS.map((opt) => (
               <button
                 key={opt.id}
                 onClick={() => setPeriod(opt.id)}
                 className={[
-                  "px-4 py-2 rounded-md text-sm font-medium transition-colors",
+                  "rounded-xl px-5 py-3 text-sm font-semibold transition-all duration-200",
                   period === opt.id
-                    ? "bg-claw-green text-deep-ink"
-                    : "text-parchment/60 hover:text-parchment"
+                    ? "bg-claw-green text-deep-ink shadow-[0_8px_24px_rgba(27,217,106,0.28)]"
+                    : "text-parchment/72 hover:bg-parchment/8 hover:text-parchment"
                 ].join(" ")}
               >
-                {opt.label}
-                {opt.id === "biennial" && (
-                  <span className="ml-1.5 text-xs bg-signal-teal/20 text-signal-teal rounded px-1">
-                    Save {biennialSavings}%
+                <span>{opt.label}</span>
+                {opt.id !== "monthly" && (
+                  <span
+                    className={[
+                      "ml-2 rounded-full px-2 py-0.5 text-[11px] font-bold transition-colors duration-200",
+                      period === opt.id
+                        ? "bg-deep-ink/14 text-deep-ink"
+                        : "bg-signal-teal/18 text-signal-teal"
+                    ].join(" ")}
+                  >
+                    Save up to {Math.max(starterSavings[opt.id], standardSavings[opt.id])}%
                   </span>
                 )}
               </button>
             ))}
+            </div>
+          </div>
+
+          <div
+            key={period}
+            className="animate-fade-slide-up rounded-2xl border border-signal-teal/22 bg-parchment/4 px-5 py-4"
+          >
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-parchment">{PERIOD_SUMMARY[period].title}</p>
+                <p className="mt-1 text-sm text-parchment/68">{PERIOD_SUMMARY[period].description}</p>
+              </div>
+
+              {period === "monthly" ? (
+                <div className="rounded-xl bg-deep-ink/45 px-4 py-3 text-sm text-parchment/72">
+                  Monthly billing keeps the commitment light, with no discounted prepaid term.
+                </div>
+              ) : (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-xl bg-deep-ink/45 px-4 py-3">
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-parchment/45">Starter savings</p>
+                    <p className="mt-1 text-lg font-bold text-claw-green">
+                      {starterSavings[period as "biennial" | "annual"]}% less than monthly
+                    </p>
+                  </div>
+                  <div className="rounded-xl bg-deep-ink/45 px-4 py-3">
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-parchment/45">Standard savings</p>
+                    <p className="mt-1 text-lg font-bold text-claw-green">
+                      {standardSavings[period as "biennial" | "annual"]}% less than monthly
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -173,13 +246,24 @@ export default function OnboardPage() {
               <h2 className="text-lg font-bold text-parchment">{tier.name}</h2>
               <p className="text-3xl font-bold text-claw-green mt-1">{tier.price}</p>
 
-              {tier.renewal && (
-                <p className="text-xs text-parchment/40 mt-0.5">{tier.renewal}</p>
-              )}
-              {tier.total && (
-                <p className="text-xs text-parchment/30 mt-0.5">{tier.total}</p>
-              )}
-              <p className="text-xs text-parchment/40 mt-0.5">{tier.setup}</p>
+              <div key={`${tier.id}-${period}`} className="animate-fade-slide-up mt-1 space-y-1.5">
+                {tier.id !== "enterprise" && period !== "monthly" && (
+                  <div className="inline-flex items-center rounded-full border border-claw-green/25 bg-claw-green/10 px-2.5 py-1 text-[11px] font-semibold text-claw-green">
+                    Save{" "}
+                    {tier.id === "starter"
+                      ? starterSavings[period as "biennial" | "annual"]
+                      : standardSavings[period as "biennial" | "annual"]}
+                    % versus monthly
+                  </div>
+                )}
+                {tier.renewal && (
+                  <p className="text-xs text-parchment/58">{tier.renewal}</p>
+                )}
+                {tier.total && (
+                  <p className="text-xs font-medium text-parchment/80">{tier.total}</p>
+                )}
+                <p className="text-xs text-parchment/52">{tier.setup}</p>
+              </div>
 
               <ul className="mt-5 space-y-2 flex-1">
                 {tier.features.map((f) => (

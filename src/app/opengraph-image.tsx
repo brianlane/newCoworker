@@ -24,7 +24,7 @@ export default function OpenGraphImage() {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 20, marginBottom: 30 }}>
-          <img src="https://newcoworker.com/logo.png" width="72" height="72" alt="New Coworker logo" />
+          <img src="https://newcoworker.com/logo.png" width={72} height={72} alt="New Coworker logo" />
           <div style={{ fontSize: 40, fontWeight: 700 }}>New Coworker</div>
         </div>
         <div style={{ fontSize: 76, fontWeight: 800, lineHeight: 1.1, maxWidth: "90%" }}>

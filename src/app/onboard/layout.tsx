@@ -14,3 +14,11 @@ export const metadata: Metadata = {
     description: "Choose the perfect plan for your AI voice coworker. Handle calls, texts, emails, and more so you can focus on your business.",
   },
 };
+
+export default function OnboardLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return <>{children}</>;
+}
