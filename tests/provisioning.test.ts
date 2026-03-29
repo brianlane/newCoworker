@@ -136,7 +136,7 @@ describe("provisioning/orchestrate", () => {
     );
 
     const deployCmd = mockExec.mock.calls[0][1] as string;
-    expect(deployCmd).toContain("INWORLD_AGENT_ID=inworld-agent-mock");
+    expect(deployCmd).toContain("INWORLD_AGENT_ID='inworld-agent-mock'");
     expect(deployCmd).not.toContain("ELEVENLABS_AGENT_ID");
   });
 
@@ -153,7 +153,7 @@ describe("provisioning/orchestrate", () => {
     );
 
     const deployCmd = mockExec.mock.calls[0][1] as string;
-    expect(deployCmd).toContain("ROWBOAT_GATEWAY_TOKEN=mock_gateway_token");
+    expect(deployCmd).toContain("ROWBOAT_GATEWAY_TOKEN='mock_gateway_token'");
     expect(deployCmd).not.toContain("OPENCLAW_GATEWAY_TOKEN");
   });
 
@@ -169,7 +169,7 @@ describe("provisioning/orchestrate", () => {
       { hostinger: mockHostinger as never }
     );
 
-    expect(mockExec.mock.calls[0][1]).toContain("TIER=starter");
+    expect(mockExec.mock.calls[0][1]).toContain("TIER='starter'");
   });
 
   it("continues even when email notification fails", async () => {
@@ -278,7 +278,7 @@ describe("provisioning/orchestrate", () => {
     );
     expect(mockExec).toHaveBeenCalledTimes(1);
     expect(mockExec.mock.calls[0][0]).toBe("vps-exec-123");
-    expect(mockExec.mock.calls[0][1]).toContain("BUSINESS_ID=biz-exec");
+    expect(mockExec.mock.calls[0][1]).toContain("BUSINESS_ID='biz-exec'");
   });
 
   it("continues when executeCommand returns non-zero exit", async () => {
@@ -332,7 +332,7 @@ describe("provisioning/orchestrate", () => {
       { businessId: "biz-token-test", tier: "starter" },
       { hostinger: mockHostinger as never }
     );
-    expect(mockExec.mock.calls[0][1]).toContain("NOTIFICATIONS_WEBHOOK_TOKEN=webhook-test-token");
+    expect(mockExec.mock.calls[0][1]).toContain("NOTIFICATIONS_WEBHOOK_TOKEN='webhook-test-token'");
   });
 
   it("falls back NOTIFICATIONS_WEBHOOK_TOKEN to SUPABASE_SERVICE_ROLE_KEY", async () => {
@@ -348,7 +348,7 @@ describe("provisioning/orchestrate", () => {
       { businessId: "biz-fallback", tier: "starter" },
       { hostinger: mockHostinger as never }
     );
-    expect(mockExec.mock.calls[0][1]).toContain("NOTIFICATIONS_WEBHOOK_TOKEN=service-key-fallback");
+    expect(mockExec.mock.calls[0][1]).toContain("NOTIFICATIONS_WEBHOOK_TOKEN='service-key-fallback'");
   });
 
   it("throws for enterprise tier — requires custom engagement", async () => {

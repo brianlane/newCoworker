@@ -115,23 +115,31 @@ export async function orchestrateProvisioning(
 
   // 6. Execute deploy-client.sh on the VPS
   const gatewayToken = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
-  const deployEnv = [
-    `BUSINESS_ID=${businessId}`,
-    `TIER=${tier}`,
-    `SUPABASE_URL=${process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""}`,
-    `SUPABASE_SERVICE_KEY=${process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""}`,
-    `ROWBOAT_GATEWAY_TOKEN=${gatewayToken}`,
-    `NOTIFICATIONS_WEBHOOK_TOKEN=${process.env.NOTIFICATIONS_WEBHOOK_TOKEN ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""}`,
-    `INWORLD_AGENT_ID=${agentId}`,
-    `INWORLD_API_KEY=${process.env.INWORLD_API_KEY ?? ""}`,
-    `CLOUDFLARE_TUNNEL_TOKEN=${process.env.CLOUDFLARE_TUNNEL_TOKEN ?? ""}`,
-    `LIGHTPANDA_WSS_URL=${process.env.LIGHTPANDA_WSS_URL ?? "wss://cdn.lightpanda.io/ws"}`
-  ].join(" ");
+
+  // Build environment safely using printf %q for shell escaping
+  // Each var=printf '%s=%q\n' prevents injection via shell metacharacters
+  const escapeShellArg = (str: string): string => {
+    // Use bash %q escaping: single-quote special chars, escape single quotes
+    return str.replace(/'/g, "'\\''");
+  };
+
+  const envVars = [
+    ["BUSINESS_ID", businessId],
+    ["TIER", tier],
+    ["SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""],
+    ["SUPABASE_SERVICE_KEY", process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""],
+    ["ROWBOAT_GATEWAY_TOKEN", gatewayToken],
+    ["NOTIFICATIONS_WEBHOOK_TOKEN", process.env.NOTIFICATIONS_WEBHOOK_TOKEN ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""],
+    ["INWORLD_AGENT_ID", agentId],
+    ["INWORLD_API_KEY", process.env.INWORLD_API_KEY ?? ""],
+    ["CLOUDFLARE_TUNNEL_TOKEN", process.env.CLOUDFLARE_TUNNEL_TOKEN ?? ""],
+    ["LIGHTPANDA_WSS_URL", process.env.LIGHTPANDA_WSS_URL ?? "wss://cdn.lightpanda.io/ws"]
+  ].map(([key, value]) => `${key}='${escapeShellArg(value)}'`).join(" ");
 
   try {
     const { exitCode, output } = await hostinger.executeCommand(
       vpsId,
-      `${deployEnv} /opt/deploy-client.sh`
+      `${envVars} /opt/deploy-client.sh`
     );
     if (exitCode !== 0) {
       logger.error("deploy-client.sh failed", { businessId, vpsId, exitCode, output });

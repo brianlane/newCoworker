@@ -8,8 +8,6 @@ import type { BillingPeriod } from "@/lib/plans/tier";
 import { formatPriceCents, formatPricePerMonth } from "@/lib/pricing";
 import { getPeriodPricing, getCommitmentMonths, PlanTier, calculateSavingsPercentage } from "@/lib/plans/tier";
 
-export const dynamic = "force-dynamic";
-
 type PeriodOption = {
   id: BillingPeriod;
   label: string;
