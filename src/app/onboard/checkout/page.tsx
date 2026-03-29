@@ -9,7 +9,9 @@ import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 import {
   getMonthlyRateDisplay,
   getRenewalRateDisplay,
-  formatCommitmentTotal
+  formatCommitmentTotal,
+  getFirstCycleDiscountDisplay,
+  hasFirstCycleDiscount
 } from "@/lib/pricing";
 
 export default function CheckoutPage() {
@@ -133,6 +135,12 @@ export default function CheckoutPage() {
     );
   }
 
+  const billingPeriod = data.billingPeriod ?? "biennial";
+  const hasIntroDiscount = hasFirstCycleDiscount(data.tier, billingPeriod);
+  const firstCyclePrice = getMonthlyRateDisplay(data.tier, billingPeriod);
+  const renewalPrice = getRenewalRateDisplay(data.tier, billingPeriod);
+  const firstCycleDiscount = getFirstCycleDiscountDisplay(data.tier, billingPeriod);
+
   return (
     <div className="min-h-screen bg-deep-ink flex items-center justify-center px-4 py-12">
       <div className="w-full max-w-md space-y-6">
@@ -153,9 +161,9 @@ export default function CheckoutPage() {
               <div className="flex justify-between text-parchment/70">
                 <span>Billing period</span>
                 <span>
-                  {(data.billingPeriod ?? "biennial") === "biennial"
+                  {billingPeriod === "biennial"
                     ? "24 months"
-                    : (data.billingPeriod ?? "biennial") === "annual"
+                    : billingPeriod === "annual"
                       ? "12 months"
                       : "1 month"}
                 </span>
@@ -165,16 +173,27 @@ export default function CheckoutPage() {
                 <span>{data.businessName || "—"}</span>
               </div>
               <div className="flex justify-between text-parchment/70">
-                <span>Monthly rate</span>
-                <span>{getMonthlyRateDisplay(data.tier, data.billingPeriod ?? "biennial")}</span>
+                <span>{hasIntroDiscount ? "First month" : "Monthly rate"}</span>
+                <span className="flex items-center gap-2">
+                  {hasIntroDiscount && (
+                    <span className="text-parchment/35 line-through">{renewalPrice}</span>
+                  )}
+                  <span>{firstCyclePrice}</span>
+                </span>
               </div>
+              {hasIntroDiscount && (
+                <div className="flex justify-between text-spark-orange text-xs">
+                  <span>Intro discount</span>
+                  <span>-{firstCycleDiscount}</span>
+                </div>
+              )}
               <div className="flex justify-between text-parchment/40 text-xs">
                 <span>Renewal rate</span>
-                <span>{getRenewalRateDisplay(data.tier, data.billingPeriod ?? "biennial")}</span>
+                <span>{renewalPrice}</span>
               </div>
               <div className="flex justify-between text-parchment/40 text-xs pt-1 border-t border-parchment/10">
                 <span>Commitment total</span>
-                <span>{formatCommitmentTotal(data.tier, data.billingPeriod ?? "biennial")}</span>
+                <span>{formatCommitmentTotal(data.tier, billingPeriod)}</span>
               </div>
             </div>
             <p className="text-xs text-parchment/30 text-center">

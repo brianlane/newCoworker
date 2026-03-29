@@ -5,7 +5,12 @@ import { useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import type { BillingPeriod } from "@/lib/plans/tier";
-import { formatPriceCents, formatPricePerMonth } from "@/lib/pricing";
+import {
+  formatPriceCents,
+  formatPricePerMonth,
+  getFirstCycleDiscountDisplay,
+  hasFirstCycleDiscount
+} from "@/lib/pricing";
 import { getPeriodPricing, getCommitmentMonths, PlanTier, calculateSavingsPercentage } from "@/lib/plans/tier";
 
 type PeriodOption = {
@@ -45,8 +50,11 @@ function getTierPricingDisplay(tier: PlanTier, period: BillingPeriod) {
   const months = getCommitmentMonths(period);
   return {
     monthly: formatPricePerMonth(pricing.monthlyCents),
+    renewalMonthly: formatPricePerMonth(pricing.renewalMonthlyCents),
     renewal: formatPricePerMonth(pricing.renewalMonthlyCents),
-    total: formatPriceCents(pricing.monthlyCents * months)
+    total: formatPriceCents(pricing.monthlyCents * months),
+    hasIntroDiscount: hasFirstCycleDiscount(tier, period),
+    firstCycleDiscount: getFirstCycleDiscountDisplay(tier, period)
   };
 }
 
@@ -69,10 +77,15 @@ export default function OnboardPage() {
       id: "starter" as const,
       name: "Starter",
       price: starterPrice.monthly,
+      originalPrice: starterPrice.hasIntroDiscount ? starterPrice.renewalMonthly : undefined,
       renewal: `Renews at ${starterPrice.renewal}`,
       total:
         period !== "monthly"
           ? `${starterPrice.total} total for ${PERIOD_LABEL[period]}`
+          : undefined,
+      introOffer:
+        period === "monthly" && starterPrice.hasIntroDiscount
+          ? `First month discount saves ${starterPrice.firstCycleDiscount}`
           : undefined,
       setup: "No setup fee · 30-day money-back guarantee",
       features: [
@@ -93,10 +106,15 @@ export default function OnboardPage() {
       id: "standard" as const,
       name: "Standard",
       price: standardPrice.monthly,
+      originalPrice: standardPrice.hasIntroDiscount ? standardPrice.renewalMonthly : undefined,
       renewal: `Renews at ${standardPrice.renewal}`,
       total:
         period !== "monthly"
           ? `${standardPrice.total} total for ${PERIOD_LABEL[period]}`
+          : undefined,
+      introOffer:
+        period === "monthly" && standardPrice.hasIntroDiscount
+          ? `First month discount saves ${standardPrice.firstCycleDiscount}`
           : undefined,
       setup: "No setup fee · 30-day money-back guarantee",
       features: [
@@ -206,7 +224,7 @@ export default function OnboardPage() {
 
               {period === "monthly" ? (
                 <div className="rounded-xl bg-deep-ink/45 px-4 py-3 text-sm text-parchment/72">
-                  Monthly billing keeps the commitment light, with no discounted prepaid term.
+                  Monthly billing keeps the commitment light while still applying a first-month intro discount.
                 </div>
               ) : (
                 <div className="grid gap-2 sm:grid-cols-2">
@@ -244,9 +262,19 @@ export default function OnboardPage() {
               )}
 
               <h2 className="text-lg font-bold text-parchment">{tier.name}</h2>
-              <p className="text-3xl font-bold text-claw-green mt-1">{tier.price}</p>
+              <div className="mt-1 flex items-end gap-3">
+                <p className="text-3xl font-bold text-claw-green">{tier.price}</p>
+                {tier.originalPrice && (
+                  <p className="pb-1 text-sm font-semibold text-parchment/35 line-through">{tier.originalPrice}</p>
+                )}
+              </div>
 
               <div key={`${tier.id}-${period}`} className="animate-fade-slide-up mt-1 space-y-1.5">
+                {"introOffer" in tier && tier.introOffer && (
+                  <div className="inline-flex items-center rounded-full border border-spark-orange/25 bg-spark-orange/10 px-2.5 py-1 text-[11px] font-semibold text-spark-orange">
+                    {tier.introOffer}
+                  </div>
+                )}
                 {tier.id !== "enterprise" && period !== "monthly" && (
                   <div className="inline-flex items-center rounded-full border border-claw-green/25 bg-claw-green/10 px-2.5 py-1 text-[11px] font-semibold text-claw-green">
                     Save{" "}

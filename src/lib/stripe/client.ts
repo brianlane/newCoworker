@@ -24,6 +24,7 @@ export type CheckoutParams = {
   cancelUrl: string;
   customerEmail?: string;
   metadata?: Record<string, string>;
+  discountCouponId?: string;
 };
 
 export async function createCheckoutSession(params: CheckoutParams): Promise<{
@@ -37,6 +38,7 @@ export async function createCheckoutSession(params: CheckoutParams): Promise<{
     success_url: params.successUrl,
     cancel_url: params.cancelUrl,
     customer_email: params.customerEmail,
+    discounts: params.discountCouponId ? [{ coupon: params.discountCouponId }] : undefined,
     metadata: params.metadata ?? {},
     subscription_data: { metadata: params.metadata ?? {} }
   });
@@ -53,6 +55,22 @@ export function resolvePriceId(
   const priceId = process.env[envKey];
   if (!priceId) throw new Error(`Stripe Price ID not configured for tier: ${tier}, period: ${period} (env: ${envKey})`);
   return priceId;
+}
+
+export function resolveIntroDiscountCouponId(
+  tier: "starter" | "standard",
+  period: BillingPeriod
+): string | undefined {
+  if (period !== "monthly") return undefined;
+
+  const envKey = `STRIPE_${tier.toUpperCase()}_${periodToEnvSuffix(period)}_INTRO_COUPON_ID`;
+  const couponId = process.env[envKey];
+  if (!couponId) {
+    throw new Error(
+      `Stripe intro coupon not configured for tier: ${tier}, period: ${period} (env: ${envKey})`
+    );
+  }
+  return couponId;
 }
 
 function periodToEnvSuffix(period: BillingPeriod): string {

@@ -1,5 +1,5 @@
 import { requireAuth } from "@/lib/auth";
-import { createCheckoutSession, resolvePriceId } from "@/lib/stripe/client";
+import { createCheckoutSession, resolveIntroDiscountCouponId, resolvePriceId } from "@/lib/stripe/client";
 import { createSubscription } from "@/lib/db/subscriptions";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { z } from "zod";
@@ -19,6 +19,7 @@ export async function POST(request: Request) {
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 
     const priceId = resolvePriceId(body.tier, body.billingPeriod);
+    const discountCouponId = resolveIntroDiscountCouponId(body.tier, body.billingPeriod);
     const commitmentMonths = getCommitmentMonths(body.billingPeriod);
     const now = new Date();
     const originalDay = now.getDate();
@@ -45,6 +46,7 @@ export async function POST(request: Request) {
       successUrl: `${appUrl}/onboard/success?session_id={CHECKOUT_SESSION_ID}`,
       cancelUrl: `${appUrl}/onboard`,
       customerEmail: user.email ?? undefined,
+      discountCouponId,
       metadata: {
         businessId: body.businessId,
         tier: body.tier,
