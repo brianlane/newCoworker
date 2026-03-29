@@ -6,6 +6,11 @@ import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { ONBOARD_STORAGE_KEY, type OnboardingData } from "@/lib/onboarding/storage";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
+import {
+  getMonthlyRateDisplay,
+  getRenewalRateDisplay,
+  formatCommitmentTotal
+} from "@/lib/pricing";
 
 export default function CheckoutPage() {
   const [data, setData] = useState<OnboardingData | null>(null);
@@ -76,7 +81,11 @@ export default function CheckoutPage() {
       const checkoutRes = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tier: data.tier, businessId })
+        body: JSON.stringify({
+          tier: data.tier,
+          businessId,
+          billingPeriod: data.billingPeriod ?? "biennial"
+        })
       });
       const checkoutJson = await checkoutRes.json();
       if (!checkoutRes.ok) throw new Error(checkoutJson.error?.message ?? "Checkout failed");
@@ -142,20 +151,35 @@ export default function CheckoutPage() {
                 <span className="capitalize">{data.tier}</span>
               </div>
               <div className="flex justify-between text-parchment/70">
+                <span>Billing period</span>
+                <span>
+                  {(data.billingPeriod ?? "biennial") === "biennial"
+                    ? "24 months"
+                    : (data.billingPeriod ?? "biennial") === "annual"
+                      ? "12 months"
+                      : "1 month"}
+                </span>
+              </div>
+              <div className="flex justify-between text-parchment/70">
                 <span>Business</span>
                 <span>{data.businessName || "—"}</span>
               </div>
               <div className="flex justify-between text-parchment/70">
-                <span>Monthly</span>
-                <span>{data.tier === "starter" ? "$199/mo" : "$299/mo"}</span>
+                <span>Monthly rate</span>
+                <span>{getMonthlyRateDisplay(data.tier, data.billingPeriod ?? "biennial")}</span>
               </div>
-              {data.tier === "standard" && (
-                <div className="flex justify-between text-parchment/70">
-                  <span>Setup fee</span>
-                  <span>$499 (one-time)</span>
-                </div>
-              )}
+              <div className="flex justify-between text-parchment/40 text-xs">
+                <span>Renewal rate</span>
+                <span>{getRenewalRateDisplay(data.tier, data.billingPeriod ?? "biennial")}</span>
+              </div>
+              <div className="flex justify-between text-parchment/40 text-xs pt-1 border-t border-parchment/10">
+                <span>Commitment total</span>
+                <span>{formatCommitmentTotal(data.tier, data.billingPeriod ?? "biennial")}</span>
+              </div>
             </div>
+            <p className="text-xs text-parchment/30 text-center">
+              30-day money-back guarantee · Cancel within 30 days for a full refund
+            </p>
           </div>
         </Card>
 

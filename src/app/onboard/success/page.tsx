@@ -67,10 +67,10 @@ function OnboardSuccessContent() {
         {status !== "online" && (
           <Card className="text-left space-y-3">
             {[
-              "Provisioning Hostinger KVM 8 VPS",
+              "Provisioning Hostinger VPS",
               "Installing Ollama + Bifrost router",
-              "Configuring OpenClaw agent",
-              "Creating ElevenLabs voice agent",
+              "Configuring Rowboat agent",
+              "Creating inworld.ai voice agent",
               "Attaching Twilio phone number",
               "Injecting soul.md + identity.md"
             ].map((step, i) => (

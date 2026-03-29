@@ -115,9 +115,9 @@ describe("proxy", () => {
     expect(res.status).not.toBe(403);
   });
 
-  it("allows POST to /api/claw without origin (token-authed external route)", async () => {
+  it("allows POST to /api/rowboat without origin (token-authed external route)", async () => {
     mockSupabaseWithUser(null);
-    const req = makeRequest("/api/claw", { method: "POST" });
+    const req = makeRequest("/api/rowboat", { method: "POST" });
     const res = await proxy(req);
     expect(res.status).not.toBe(403);
   });

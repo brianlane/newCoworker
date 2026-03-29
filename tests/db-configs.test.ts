@@ -12,7 +12,8 @@ const MOCK_CONFIG = {
   soul_md: "# soul",
   identity_md: "# identity",
   memory_md: "# memory",
-  elevenlabs_agent_id: "el-agent-1",
+  inworld_agent_id: "inworld-agent-1",
+  rowboat_project_id: "proj-uuid-1",
   updated_at: "2026-01-01T00:00:00Z"
 };
 
@@ -55,12 +56,13 @@ describe("db/configs", () => {
     })).rejects.toThrow("upsertBusinessConfig");
   });
 
-  it("getBusinessConfig returns config", async () => {
+  it("getBusinessConfig returns config with inworld_agent_id", async () => {
     const db = mockDb();
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     const result = await getBusinessConfig("biz-uuid-1");
-    expect(result?.elevenlabs_agent_id).toBe("el-agent-1");
+    expect(result?.inworld_agent_id).toBe("inworld-agent-1");
+    expect(result?.rowboat_project_id).toBe("proj-uuid-1");
   });
 
   it("getBusinessConfig returns null on error", async () => {

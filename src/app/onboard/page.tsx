@@ -1,81 +1,149 @@
+"use client";
+
 import Image from "next/image";
-import type { Metadata } from "next";
+import { useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import type { BillingPeriod } from "@/lib/plans/tier";
+import { formatPriceCents, formatPricePerMonth } from "@/lib/pricing";
+import { getPeriodPricing, getCommitmentMonths, PlanTier, calculateSavingsPercentage } from "@/lib/plans/tier";
 
-const tiers = [
-  {
-    id: "starter" as const,
-    name: "Starter",
-    price: "$199/mo",
-    setup: "No setup fee",
-    features: [
-      "AI voice coworker",
-      "Twilio phone number",
-      "Basic memory",
-      "Browser accessibility",
-      "Dashboard access",
-    ],
-    cta: "Choose Starter",
-    highlight: false
-  },
-  {
-    id: "standard" as const,
-    name: "Standard",
-    price: "$299/mo",
-    setup: "$499 one-time setup",
-    features: [
-      "Everything in Starter",
-      "Full Lossless Claw memory",
-      "Swarm reasoning",
-      "Custom soul injection",
-      "Priority support & maintenance",
-      "Lightpanda browser skills",
-      "Chat integration"
-    ],
-    cta: "Choose Standard",
-    highlight: true
-  },
-  {
-    id: "enterprise" as const,
-    name: "Enterprise",
-    price: "Custom",
-    setup: "Contact us",
-    features: [
-      "Everything in Standard",
-      "Multi-tenant agency setup",
-      "White-label dashboard",
-      "SLA + dedicated support",
-      "Custom compliance modules",
-      "Quarterly strategy reviews",
-      "Analytics and reporting"
-    ],
-    cta: "Contact Sales",
-    highlight: false
-  }
+type PeriodOption = {
+  id: BillingPeriod;
+  label: string;
+};
+
+const PERIOD_OPTIONS: PeriodOption[] = [
+  { id: "biennial", label: "24 months" },
+  { id: "annual", label: "12 months" },
+  { id: "monthly", label: "1 month" }
 ];
 
-export const metadata: Metadata = {
-  title: "Pricing and Plans",
-  description: "Compare Starter, Standard, and Enterprise plans to choose the right AI coworker setup for your business.",
-  alternates: {
-    canonical: "/onboard"
+const PERIOD_LABEL: Record<BillingPeriod, string> = {
+  biennial: "24-month plan",
+  annual: "12-month plan",
+  monthly: "1-month plan"
+};
+
+const PERIOD_SUMMARY: Record<BillingPeriod, { title: string; description: string }> = {
+  biennial: {
+    title: "Lock in the strongest rate for 24 months",
+    description: "Best if you want the lowest monthly cost and the highest long-term discount."
   },
-  openGraph: {
-    title: "New Coworker Pricing Plans",
-    description: "Choose the plan that fits your business and launch your AI coworker quickly.",
-    url: "/onboard",
-    images: ["/opengraph-image"]
+  annual: {
+    title: "Commit for 12 months and still save materially",
+    description: "A balanced option if you want annual billing without the full 24-month commitment."
   },
-  twitter: {
-    card: "summary_large_image",
-    title: "New Coworker Pricing Plans",
-    description: "Choose the plan that fits your business and launch your AI coworker quickly.",
-    images: ["/twitter-image"]
+  monthly: {
+    title: "Stay flexible with month-to-month billing",
+    description: "No long commitment, but this option does not include a prepaid term discount."
   }
 };
 
+function getTierPricingDisplay(tier: PlanTier, period: BillingPeriod) {
+  const pricing = getPeriodPricing(tier, period);
+  const months = getCommitmentMonths(period);
+  return {
+    monthly: formatPricePerMonth(pricing.monthlyCents),
+    renewal: formatPricePerMonth(pricing.renewalMonthlyCents),
+    total: formatPriceCents(pricing.monthlyCents * months)
+  };
+}
+
 export default function OnboardPage() {
+  const [period, setPeriod] = useState<BillingPeriod>("biennial");
+
+  const starterPrice = getTierPricingDisplay("starter", period);
+  const standardPrice = getTierPricingDisplay("standard", period);
+  const starterSavings: Record<"biennial" | "annual", number> = {
+    biennial: calculateSavingsPercentage("starter", "biennial"),
+    annual: calculateSavingsPercentage("starter", "annual")
+  };
+  const standardSavings: Record<"biennial" | "annual", number> = {
+    biennial: calculateSavingsPercentage("standard", "biennial"),
+    annual: calculateSavingsPercentage("standard", "annual")
+  };
+
+  const tiers = [
+    {
+      id: "starter" as const,
+      name: "Starter",
+      price: starterPrice.monthly,
+      renewal: `Renews at ${starterPrice.renewal}`,
+      total:
+        period !== "monthly"
+          ? `${starterPrice.total} total for ${PERIOD_LABEL[period]}`
+          : undefined,
+      setup: "No setup fee · 30-day money-back guarantee",
+      features: [
+        "AI voice coworker",
+        "Twilio phone number",
+        "Lossless memory and expansive knowledge base",
+        "Unlimted emails and appointment booking",
+        "1 hour voice / day",
+        "100 SMS / day",
+        "1 concurrent call",
+        "Dashboard access"
+      ],
+      cta: "Choose Starter",
+      highlight: false,
+      badge: period === "biennial" ? "Best Value" : undefined
+    },
+    {
+      id: "standard" as const,
+      name: "Standard",
+      price: standardPrice.monthly,
+      renewal: `Renews at ${standardPrice.renewal}`,
+      total:
+        period !== "monthly"
+          ? `${standardPrice.total} total for ${PERIOD_LABEL[period]}`
+          : undefined,
+      setup: "No setup fee · 30-day money-back guarantee",
+      features: [
+        "Everything in Starter, plus:",
+        "Unlimited voice, SMS, and calls",
+        "3 concurrent calls",
+        "Send texts during calls",
+        "Warm handoff call transfers",
+        "Full Swarm reasoning + deep reasoning",
+        "Chat access to your coworker",
+        "Voice Clone generation available",
+        "Configuration and training updates",
+        "Priority support & maintenance",
+        "Full browser skills"
+      ],
+      cta: "Choose Standard",
+      highlight: true,
+      badge: "Most Popular"
+    },
+    {
+      id: "enterprise" as const,
+      name: "Enterprise",
+      price: "Custom",
+      renewal: undefined,
+      total: undefined,
+      setup: "Contact us for pricing",
+      features: [
+        "Everything in Standard",
+        "Multi-tenant agency setup",
+        "White-label dashboard",
+        "SLA + dedicated support",
+        "Custom compliance modules",
+        "Quarterly strategy reviews",
+        "Analytics and reporting",
+        "Designated reasoning models",
+        "Priority access to new features",
+        "Custom call customization",
+        "Independent hardware deployment",
+        "Professional voice cloning available",
+        "Granular access control"
+      ],
+      cta: "Contact Sales",
+      highlight: false,
+      badge: undefined
+    }
+  ];
+
   return (
     <div className="min-h-screen bg-deep-ink px-4 py-12">
       <div className="max-w-5xl mx-auto space-y-10">
@@ -93,6 +161,73 @@ export default function OnboardPage() {
           </p>
         </div>
 
+        {/* Billing period selector */}
+        <div className="space-y-4">
+          <div className="flex justify-center">
+            <div className="inline-flex rounded-2xl border border-parchment/15 bg-parchment/5 p-1.5 gap-1 shadow-[0_12px_32px_rgba(0,0,0,0.18)]">
+            {PERIOD_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                onClick={() => setPeriod(opt.id)}
+                className={[
+                  "rounded-xl px-5 py-3 text-sm font-semibold transition-all duration-200",
+                  period === opt.id
+                    ? "bg-claw-green text-deep-ink shadow-[0_8px_24px_rgba(27,217,106,0.28)]"
+                    : "text-parchment/72 hover:bg-parchment/8 hover:text-parchment"
+                ].join(" ")}
+              >
+                <span>{opt.label}</span>
+                {opt.id !== "monthly" && (
+                  <span
+                    className={[
+                      "ml-2 rounded-full px-2 py-0.5 text-[11px] font-bold transition-colors duration-200",
+                      period === opt.id
+                        ? "bg-deep-ink/14 text-deep-ink"
+                        : "bg-signal-teal/18 text-signal-teal"
+                    ].join(" ")}
+                  >
+                    Save up to {Math.max(starterSavings[opt.id], standardSavings[opt.id])}%
+                  </span>
+                )}
+              </button>
+            ))}
+            </div>
+          </div>
+
+          <div
+            key={period}
+            className="animate-fade-slide-up rounded-2xl border border-signal-teal/22 bg-parchment/4 px-5 py-4"
+          >
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-parchment">{PERIOD_SUMMARY[period].title}</p>
+                <p className="mt-1 text-sm text-parchment/68">{PERIOD_SUMMARY[period].description}</p>
+              </div>
+
+              {period === "monthly" ? (
+                <div className="rounded-xl bg-deep-ink/45 px-4 py-3 text-sm text-parchment/72">
+                  Monthly billing keeps the commitment light, with no discounted prepaid term.
+                </div>
+              ) : (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-xl bg-deep-ink/45 px-4 py-3">
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-parchment/45">Starter savings</p>
+                    <p className="mt-1 text-lg font-bold text-claw-green">
+                      {starterSavings[period as "biennial" | "annual"]}% less than monthly
+                    </p>
+                  </div>
+                  <div className="rounded-xl bg-deep-ink/45 px-4 py-3">
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-parchment/45">Standard savings</p>
+                    <p className="mt-1 text-lg font-bold text-claw-green">
+                      {standardSavings[period as "biennial" | "annual"]}% less than monthly
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {tiers.map((tier) => (
             <Card
@@ -102,15 +237,33 @@ export default function OnboardPage() {
                 tier.highlight ? "border-signal-teal/50 ring-1 ring-signal-teal/30" : ""
               ].join(" ")}
             >
-              {tier.highlight && (
+              {tier.badge && (
                 <div className="mb-3">
-                  <Badge variant="pending">Most Popular</Badge>
+                  <Badge variant="pending">{tier.badge}</Badge>
                 </div>
               )}
 
               <h2 className="text-lg font-bold text-parchment">{tier.name}</h2>
               <p className="text-3xl font-bold text-claw-green mt-1">{tier.price}</p>
-              <p className="text-xs text-parchment/40 mt-0.5">{tier.setup}</p>
+
+              <div key={`${tier.id}-${period}`} className="animate-fade-slide-up mt-1 space-y-1.5">
+                {tier.id !== "enterprise" && period !== "monthly" && (
+                  <div className="inline-flex items-center rounded-full border border-claw-green/25 bg-claw-green/10 px-2.5 py-1 text-[11px] font-semibold text-claw-green">
+                    Save{" "}
+                    {tier.id === "starter"
+                      ? starterSavings[period as "biennial" | "annual"]
+                      : standardSavings[period as "biennial" | "annual"]}
+                    % versus monthly
+                  </div>
+                )}
+                {tier.renewal && (
+                  <p className="text-xs text-parchment/58">{tier.renewal}</p>
+                )}
+                {tier.total && (
+                  <p className="text-xs font-medium text-parchment/80">{tier.total}</p>
+                )}
+                <p className="text-xs text-parchment/52">{tier.setup}</p>
+              </div>
 
               <ul className="mt-5 space-y-2 flex-1">
                 {tier.features.map((f) => (
@@ -124,14 +277,14 @@ export default function OnboardPage() {
               <div className="mt-6">
                 {tier.id === "enterprise" ? (
                   <a
-                    href={`mailto:${process.env.CONTACT_EMAIL ?? "newcoworkerteam@gmail.com"}`}
+                    href="mailto:newcoworkerteam@gmail.com"
                     className="block w-full text-center rounded-lg border border-parchment/20 text-parchment px-4 py-2.5 text-sm font-semibold hover:bg-parchment/10 transition-colors"
                   >
                     {tier.cta}
                   </a>
                 ) : (
                   <a
-                    href={`/onboard/questionnaire?tier=${tier.id}`}
+                    href={`/onboard/questionnaire?tier=${tier.id}&period=${period}`}
                     className={[
                       "block w-full text-center rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors",
                       tier.highlight

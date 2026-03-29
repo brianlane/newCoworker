@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# heartbeat.sh — Monitor OpenClaw + Ollama + Bifrost, auto-restart on failure
+# heartbeat.sh — Monitor Rowboat + Ollama + Bifrost, auto-restart on failure
 # Runs every 2 minutes via cron.
 
 set -euo pipefail
@@ -13,7 +13,7 @@ FAILURES=$(cat "$FAILURE_COUNT_FILE" 2>/dev/null || echo "0")
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] HEARTBEAT: $*"; }
 
-check_openclaw() {
+check_rowboat() {
   curl -sf --max-time 5 http://127.0.0.1:3000/health > /dev/null 2>&1
 }
 
@@ -27,10 +27,10 @@ check_bifrost() {
 
 ALL_OK=true
 
-# Check OpenClaw
-if ! check_openclaw; then
-  log "OpenClaw unhealthy. Restarting..."
-  docker compose -f /opt/openclaw/docker-compose.yml restart openclaw-agent 2>&1 | tee -a "$FAIL_LOG"
+# Check Rowboat
+if ! check_rowboat; then
+  log "Rowboat unhealthy. Restarting..."
+  docker compose -f /opt/rowboat/docker-compose.yml restart rowboat 2>&1 | tee -a "$FAIL_LOG"
   ALL_OK=false
 fi
 

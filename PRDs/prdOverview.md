@@ -1,52 +1,42 @@
 ### 📄 prd-overview.md
 
-**Product Name:** New Coworker(v1.0)
+**Product Name:** New Coworker (v2.0)
 **Core Mission:** Empower small businesses with privacy-first, autonomous "Digital Employees" that operate within their own dedicated, secure, local infrastructure.
-**Strategic Vision:** Moving beyond the "chatbot" paradigm, our agents utilize deep reasoning, permanent file-based memory (Lossless Claw), and local inference to act as a genuine extension of the business owner’s intent. We solve the primary pain point of small business owners: the lack of time to manage the "chaos of the gap" between contract signing and deal closure. By automating the cognitive load—lead qualification, transaction coordination, and market analysis—our agents do not just respond; they act, update CRMs, and communicate across channels.
+**Strategic Vision:** Moving beyond the "chatbot" paradigm, our agents utilize deep reasoning, permanent file-based memory (Lossless), and local inference to act as a genuine extension of the business owner's intent. We solve the primary pain point of small business owners: the lack of time to manage the "chaos of the gap" between contract signing and deal closure. By automating the cognitive load—lead qualification, transaction coordination, and market analysis—our agents do not just respond; they act, update CRMs, and communicate across channels.
 **Target Market:** Small businesses, starting with Real Estate agents.
-**Core Differentiators:** 1. **Local-First Fortress:** Zero data egress for inference; full compliance with data privacy and HIPAA.
-2\. **Permanent Memory (DAG):** Agents build a hierarchical DAG of business facts, preventing the "forgetfulness" of standard LLMs.
-3\. **No-OpenRouter Dependency:** Full local operation prevents "ambiguous costs" and supply chain attacks.
+**Core Differentiators:**
+1. **Local-First Fortress:** Zero data egress for inference; full compliance with data privacy and HIPAA.
+2. **Permanent Memory (DAG):** Agents build a hierarchical DAG of business facts, preventing the "forgetfulness" of standard LLMs.
+3. **No-OpenRouter Dependency:** Full local operation prevents "ambiguous costs" and supply chain attacks.
 
 -----
 
 ### 📄 prd-mvp-implementation.md
 
-**Goal:** Deliver the first "Coworker" VPS instance for real estate business executive.
+**Goal:** Deliver the first "Coworker" VPS instance for a real estate business executive.
+**Gold Images:** Two separate images — one for Starter (KVM 2) and one for Standard (KVM 8).
 **Phases:**
 
-1.  **Infrastructure Foundation:** Deploy Hostinger KVM 8 instance. Configure Ubuntu 24.04, harden SSH, and install Docker/Ollama.
-2.  **Agent Provisioning:** Use the "Gold Image" (OpenClaw + Bifrost) to spin up the agent environments.
-3.  **Soul Injection:** Upon account creation, use a simple question bot configured with our open router account to gather information for md files. Then inject `soul.md`, `identity.md`, and `memory.md` into business account’s instance.
-4.  **Integration Layer:** Link Twilio and ElevenLabs keys. Establish Cloudflare Tunnels to our Next.js dashboard.
-5.  **Memory Initialization:** Load initial the business's account data into LanceDB.
-6.  **Beta Testing:** "Human-in-the-loop" phase where agents draft responses for manual owner approval. Using safe-mode: communication with account owner and not the clients of the business account
+1. **Infrastructure Foundation:** Deploy Hostinger KVM 2 (Starter) or KVM 8 (Standard). Configure Ubuntu 24.04, harden SSH, and install Docker/Ollama.
+2. **Agent Provisioning:** Use the tier-specific Gold Image (Rowboat + Bifrost) to spin up the agent environments. KVM 2 uses ZRAM for compressed swap.
+3. **Soul Injection:** Upon account creation, gather information via the onboarding questionnaire, then inject `soul.md`, `identity.md`, and `memory.md` into the business account's Rowboat vault.
+4. **Integration Layer:** Link Twilio and inworld.ai keys. Establish Cloudflare Tunnels to our Next.js dashboard.
+5. **Memory Initialization:** Load initial business data into Rowboat's lossless memory system.
+6. **Beta Testing:** "Human-in-the-loop" phase where agents draft responses for manual owner approval.
 
 *Account creation for a business should be 100% automated*
+
 -----
 
 ### 📄 prd-account-experience.md
 
 **Account Onboarding Flow:**
 
-1.  **Discovery:** New Business account fills out a Next.js-based "Business Questionnaire/Account creation details then chats with our new coworker creation bot."
-        Some cause and effect instances to show how a direction of a chat may need to flow if they say they are a real estate agent:
-            Cause: Real estate agents texting regarding if their offer is getting accepted. Once my seller‘s offer has been accepted by my seller, other buyer’s agents keep it inquiring if it’s still available. 
-            Effect: I’m sorry the home is under contract. We will hang onto your offer for backup purposes. 
-            Cause: Leads come in from various sources 
-            Effect: Ask when do they want to see the property on (address). Give my bio info. Then route lead to team member based on memory on team member.
-            Cause: Multiple offers received on a listing
-            Effect: (address) multiple offers received, offers will be reviewed on later date (date)
-            Cause: Listing shown as seen on Aligned showings
-            Effect: Showing agent for feedback: Re: (address) Do you have any feedback from your showing? Are you interested in making an offer? Are there any objections we need to overcome to be at the top of your list? Can we expect an offer? Let’s make a deal! I’m flexible & excellent to work with and you’ll have a seamless transaction! 
-            Cause: Showing booked on Aligned showings
-            Effect: (address) is available. Please use Aligned Showings to schedule your appointment. Please make an offer! I’m excellent to work with; flexible with extensions & deadlines & encourage all repairs on BINSR (unless it’s a Shortsale). I’m a total dealmaker & you’d have a seamless transaction! Please be sure to enter through the ARMLS lockbox even if the homeowner is home. 
-            Cause: Greeting or Ending conversation with real estate client
-            Effect: Use text signature = Thanks, Amy Laidlaw ~ HomeSmart 😊 
-            
-2.  **Auto-Provisioning:** Upon payment, the system triggers the Hostinger API to purchase/provision the KVM 8 instance.
-3.  **Dashboard Activation:** The new user is provided a secure dashboard link and can access their dashboard anytime with their login creds. They see their Coworker "Status" (Online/Offline), "Recent Tasks", "Sessions", "Agent Chat", "Usage", "Memory", plus anything else you deem used from their fascade view.
-4.  **Management:** Owners can click "View Memory" to see a human-readable list of what the Coworker has learned about their business. They can "Revoke/Edit" memories, creating a feedback loop of trust.
+1. **Discovery:** New Business account fills out a Next.js-based "Business Questionnaire/Account creation" form.
+2. **Plan Selection:** Owner chooses Starter or Standard, plus billing period (24-month, 12-month, or 1-month). 24-month shows the lowest monthly rate with a 30-day money-back window.
+3. **Auto-Provisioning:** Upon payment, the system triggers the Hostinger API to purchase/provision the VPS instance (KVM 2 for Starter, KVM 8 for Standard).
+4. **Dashboard Activation:** The new user is provided a secure dashboard link and can access their dashboard anytime with their login credentials. They see their Coworker "Status" (Online/Offline), "Recent Tasks", "Sessions", "Agent Chat", "Usage", "Memory", and more.
+5. **Management:** Owners can view usage statistics, monitor daily limits (Starter tier), and manage their agent's soul/identity configuration.
 
 -----
 
@@ -54,69 +44,94 @@
 
 **The Stack:**
 
-  * **Routing:** Bifrost (Go-based) handles traffic; no dependencies on external middleware (Do not use LiteLLM).
-  * **Model Orchestration:** Ollama serves all inference.
-  * **Reasoning Swarm:** \* *Drafting:* Qwen 3.5 7B.
-      * *Verification:* Llama 4 Scout 9B.
-  * **Storage:** PostgreSQL (Supabase) for logs/metadata; LanceDB for vector memory.
-  * **Browsing:** Lightpanda Cloud WSS (Zig-based, low RAM overhead).
+- **Agent Runtime:** Rowboat (open-source, multi-agent framework). Supports Conversational, Task, and Pipeline agent types. Markdown knowledge vault (soul.md / identity.md / memory.md).
+- **Routing:** Bifrost (Go-based) handles LLM traffic; no dependencies on external middleware. Tier-aware routing.
+- **Model Orchestration:** Ollama serves all inference locally.
+- **Starter Tier (KVM 2) — Phi-4 Mini 3.8B:**
+  - Single model, no warm-swapping.
+  - Microsoft Flash-Reasoning variant: 10x throughput on 2 vCPU.
+  - ZRAM (4GB lz4): expands effective RAM from 8GB to ~11GB.
+  - `OLLAMA_NUM_PARALLEL=1`, `OLLAMA_MAX_LOADED_MODELS=1`, `OMP_NUM_THREADS=2`.
+- **Standard Tier (KVM 8) — Full reasoning stack:**
+  - Qwen 3.5 4B/7B/35B-A3B + Llama 4 9B.
+  - Multi-route Bifrost: fast / balanced / deep / verify.
+- **Voice:** inworld.ai TTS-1.5 Mini — all tiers. Sub-130ms P90 latency, $5/1M chars. WebSocket streaming for lowest latency voice with Twilio.
+- **Inference Optimizations (both tiers):**
+  - TurboQuant KV cache compression — **ACTIVE** via `OLLAMA_KV_CACHE_TYPE=q4_0`. Reduces active KV cache memory per conversation by ~75%. Critical for KVM 2: without it, a long conversation would push Ollama past the 3.5GB allocation. With it, many simultaneous conversations can be held in the same footprint.
+  - Flash Attention — **ACTIVE** via `OLLAMA_FLASH_ATTENTION=1`. Memory-efficient attention computation; prerequisite for Dynamic VRAM / Weight Streaming on the llama.cpp backend.
+  - ComfyUI Dynamic VRAM + Weight Streaming: just-in-time NVMe weight loading. Enabled at the llama.cpp layer via Flash Attention. Bifrost `config-kvm2.yaml` documents the integration boundary.
+- **Storage:** PostgreSQL (Supabase) for logs/metadata, subscriptions, daily usage tracking; Rowboat internal MongoDB for agent state.
+- **Browsing:** Lightpanda Cloud WSS (Zig-based, low RAM overhead).
 
 **Performance Targets:**
 
-  * TTFT: \<800ms for voice-critical models.
-  * Latency: \<1.5s end-to-end (Twilio -\> LLM -\> ElevenLabs).
+- SMS/Chat: Instant (60% idle capacity on KVM 2).
+- Voice (inworld.ai offload): ~1.2s-1.8s end-to-end on KVM 2 (acceptable for Starter tier).
+- Standard tier: <800ms TTFT for voice-critical models.
 
 -----
 
 ### 📄 prd-non-functional-requirements.md
 
-  * **Security:** All VPS instances must have firewall rules allowing traffic *only* to verified Twilio/ElevenLabs/Supabase endpoints.
-  * **Compliance:** System prompts must strictly include Fair Housing Act (FHA) compliance guardrails for all real estate agents. Compliance needs to be able to expand to other job fields.
-  * **Data Sovereignty:** All conversation transcripts are stored locally on the client's VPS. Only "Log metadata" (not raw sensitive text) is sent to the Vercel dashboard.
-  * **Resiliency:** Automated heartbeat check every 60 seconds; if an agent is unresponsive for 3 failed heartbeats then automate restart if still failing contact admin 
+- **Security:** All VPS instances must have firewall rules allowing traffic only to verified Twilio/inworld.ai/Supabase endpoints.
+- **Compliance:** System prompts must strictly include Fair Housing Act (FHA) compliance guardrails for all real estate agents. Compliance needs to be able to expand to other job fields.
+- **Data Sovereignty:** All conversation transcripts are stored locally on the client's VPS. Only "Log metadata" (not raw sensitive text) is sent to the Vercel dashboard.
+- **Resiliency:** Automated heartbeat check every 2 minutes; if an agent is unresponsive for 3 failed heartbeats then automate restart; if still failing, contact admin via webhook.
 
 -----
 
 ### 📄 prd-functional-requirements.md
 
-1.  **Voice Gateway:** Bi-directional handling of calls via Twilio.
-2.  **Smart Lead Triage:** Analyze inquiry intent within 3 seconds of connection.
-3.  **Task Delegation:** Automated updating of local spreadsheets (Google Sheets/Excel) and CRM entries (e.g., Follow Up Boss).
-4.  **Swarm Reasoning:** Ability to run multi-model checks for high-value deal amendments.
-5.  **Notification Engine:** Trigger SMS/Email to business owner for task-completion updates.
+1. **Voice Gateway:** Bi-directional handling of calls via Twilio + inworld.ai Mini TTS.
+2. **Smart Lead Triage:** Analyze inquiry intent within 3 seconds of connection.
+3. **Task Delegation:** Automated updating of local spreadsheets (Google Sheets/Excel) and CRM entries (e.g., Follow Up Boss).
+4. **Swarm Reasoning:** Ability to run multi-model checks for high-value deal amendments (Standard/Enterprise only).
+5. **Notification Engine:** Trigger SMS/Email to business owner for task-completion updates.
+6. **Usage Enforcement:** Starter tier enforces daily limits via `daily_usage` table: 60 min voice, 100 SMS, 10 calls. Standard/Enterprise are unlimited.
 
 -----
 
 ### 📄 cash-flow-management-prd.md
 
-  * **Revenue:** $499 setup fee (provisioning) + $299/mo (VPS hosting, maintenance, memory updates).
-  * **Expenses:** \* VPS (Hostinger): $25/mo/client.
-      * Twilio/ElevenLabs: $40-$80/mo (usage-dependent).
-      * Dashboard (Vercel/Supabase): Free Tier (Scalable).
-  * **Net Margin Target:** \~65% per client.
+**Pricing (Starter tier — loss leader):**
+- 24-month: $9.99/mo (renews $16.99/mo). KVM 2 cost: $8.99/mo. Operating at a loss to attract customers.
+- 12-month: $10.99/mo (renews $18.99/mo).
+- 1-month: $15.99/mo (renews $26.99/mo).
 
-*Establish 3 tiers with the info above being the standard tier*
-*Starter tier will be no setup fee but no maintenance or updates*
-*Third tier will be for enterprise, it will include much more and contact for price*
+**Pricing (Standard tier):**
+- 24-month: $99/mo (renews $189/mo). KVM 8 cost: ~$25.99/mo. ~73% margin.
+- 12-month: $109/mo (renews $209/mo).
+- 1-month: $195/mo (renews $279/mo).
+
+**Expenses per client:**
+- VPS (Hostinger): $8.99/mo (KVM 2) or $25.99/mo (KVM 8).
+- Twilio/inworld.ai: ~$5-20/mo (usage-dependent; inworld.ai Mini at $5/1M chars).
+- Dashboard (Vercel/Supabase): Free Tier (Scalable).
+
+**Commitment policy:** 30-day cancel window from initial purchase date for all plans.
+
+*Enterprise tier: contact for custom pricing*
 
 -----
 
 ### 📄 getting-started-checklist.md
 
-  - [ ] Sign up for Hostinger API Access.
-  - [ ] Create Supabase project (DB + Auth + Edge Functions).
-  - [ ] Build Docker "Gold Image" (Ubuntu + Ollama + Bifrost + OpenClaw).
-  - [ ] Verify Lightpanda WSS connectivity.
-  - [ ] Setup Cloudflare Tunnel for secure remote management.
-  - [ ] Create the first `soul.md` for a Real Estate client.
+- [ ] Sign up for Hostinger API Access.
+- [ ] Create Supabase project (DB + Auth + Edge Functions).
+- [ ] Build Docker Gold Images (Ubuntu + Ollama + Bifrost + Rowboat). Two images: KVM 2 (Starter) + KVM 8 (Standard).
+- [ ] Configure inworld.ai API key and create default voice agent.
+- [ ] Verify Lightpanda WSS connectivity.
+- [ ] Setup Cloudflare Tunnel for secure remote management.
+- [ ] Create 6 Stripe Price IDs (2 tiers × 3 periods).
+- [ ] Create the first `soul.md` for a Real Estate client.
 
 -----
 
-### 📄 enhanced\_competitive\_analysis.md
+### 📄 enhanced_competitive_analysis.md
 
-  * **Legacy Agency:** Human-only, high cost, inconsistent reply times.
-  * **ChatGPT/Claude Bots:** No persistent business memory, prone to data leakage, "generic" personality.
-  * **Our "Local Fortress" Advantage:** Total data privacy, "Human-level" context maintenance (DAG memory), and local speed that beats any API-based bot.
+- **Legacy Agency:** Human-only, high cost, inconsistent reply times.
+- **ChatGPT/Claude Bots:** No persistent business memory, prone to data leakage, "generic" personality.
+- **Our "Local Fortress" Advantage:** Total data privacy, "Human-level" context maintenance (DAG memory), and local speed that beats any API-based bot. Two-tier entry (loss-leader Starter at $9.99/mo) creates a wide funnel.
 
 -----
 
@@ -125,56 +140,11 @@
 ```text
 /agency-dashboard (Next.js/Vercel)
 /client-provisioning (Supabase Edge Functions)
-/vps-master-image (Hostinger)
+/vps-gold-image-starter (Hostinger KVM 2 — Rowboat + Phi-4 Mini)
+/vps-gold-image-standard (Hostinger KVM 8 — Rowboat + full model set)
     /ollama_models/
-    /bifrost_router/
-    /openclaw_gateway/
-    /data/
-        /clients/
-            /[uuid]/
-                /soul.md
-                /identity.md
-                /memory.md (LanceDB)
-                /learning.md (Swarm logs)
+    /rowboat/
+        /vault/ (soul.md, identity.md, memory.md)
+        /memory/
+    /bifrost/
 ```
-
------
-
-### 📄 feature-requirements-prd.md
-
-1.  **Identity Injection:** Ability to swap business identity without redeploying the Docker container.
-2.  **Emergency Escalation:** Logic to detect "irate caller" and immediately route the call to the business owner’s mobile number.
-3.  **Browser Skills:** Integration with Lightpanda to verify MLS listing data before responding.
-
------
-
-### 📄 go-to-market-prd.md
-
-  * **Phase 1 (Validation):** Onboard 3 Real Estate users in your local area. Document performance metrics (TTFT, lead qualification rate, ROI).
-  * **Phase 2 (Automation):** Launch the "New Coworker" dashboard for owners.
-  * **Phase 3 (Scaling):** Target Dental and HVAC niches, using the real estate case studies to prove ROI.
-
------
-
-### 📄 operational-plan-prd.md
-
-  * **Monitoring:** Next.js dashboard polls Supabase for agent "Status."
-  * **Support:** Ticket management linked to the `coworker_logs` table.
-  * **Updates:** Automated pull requests to the VPS "Gold Image" and rolling redeployments across the agency.
-
------
-
-### 📄 technical-debt-management-prd.md
-
-  * **Immediate:** Document every `soul.md` modification for reproducibility.
-  * **Ongoing:** Automated log pruning in `memory.md` every 30 days to keep the LanceDB lightweight.
-  * **Versioning:** Pin all software versions (Ollama, OpenClaw, Docker images) in the deployment script to prevent unexpected breaking changes.
-
------
-
-### 📄 prd-business-creation.md
-
-  * **Entity:** Register as a Managed IT/Automation Agency.
-  * **Legal:** Require all new users to sign a "Data Usage & AI Liability Waiver" (Standard for brokers).
-  * **Partnership:** Establish a recurring credit-loading system for Twilio/ElevenLabs to ensure the "New Coworker" never runs out of "voice budget."
-

@@ -1,4 +1,7 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import type { BillingPeriod } from "@/lib/plans/tier";
+
+export type { BillingPeriod };
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -9,11 +12,18 @@ export type SubscriptionRow = {
   stripe_subscription_id: string | null;
   tier: "starter" | "standard" | "enterprise";
   status: "active" | "past_due" | "canceled" | "pending";
+  billing_period: BillingPeriod | null;
+  renewal_at: string | null;
+  commitment_months: number | null;
   created_at: string;
 };
 
 export async function createSubscription(
-  data: Omit<SubscriptionRow, "created_at">,
+  data: Omit<SubscriptionRow, "created_at" | "billing_period" | "renewal_at" | "commitment_months"> & {
+    billing_period?: BillingPeriod | null;
+    renewal_at?: string | null;
+    commitment_months?: number | null;
+  },
   client?: SupabaseClient
 ): Promise<SubscriptionRow> {
   const db = client ?? (await createSupabaseServiceClient());

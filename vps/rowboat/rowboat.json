@@ -1,0 +1,63 @@
+{
+  "_comment": "Base Rowboat config template. deploy-client.sh writes the live .env with real values.",
+  "version": "1",
+  "gateway_token": "{{ROWBOAT_GATEWAY_TOKEN}}",
+  "agents": [
+    {
+      "id": "dispatcher",
+      "type": "conversational",
+      "description": "Primary agent for inbound calls and SMS. Handles greetings, FAQs, and lead qualification.",
+      "model": "{{OLLAMA_MODEL}}",
+      "knowledge_vault": {
+        "soul_md": "/opt/rowboat/vault/soul.md",
+        "identity_md": "/opt/rowboat/vault/identity.md",
+        "memory_md": "/opt/rowboat/vault/memory.md"
+      }
+    },
+    {
+      "id": "task_router",
+      "type": "task",
+      "description": "Handles complex tasks: CRM updates, appointment booking, data delegation.",
+      "model": "{{OLLAMA_MODEL}}",
+      "tools": ["crm_update", "appointment_book", "browser_search"]
+    }
+  ],
+  "llm_router": {
+    "provider": "ollama",
+    "base_url": "http://127.0.0.1:11434",
+    "bifrost_url": "http://127.0.0.1:8080"
+  },
+  "memory": {
+    "provider": "lossless",
+    "path": "/opt/rowboat/memory",
+    "max_tokens": 8192
+  },
+  "voice": {
+    "provider": "inworld",
+    "model": "inworld-tts-1.5-mini",
+    "inworld_agent_id": "{{INWORLD_AGENT_ID}}"
+  },
+  "twilio": {
+    "account_sid": "{{TWILIO_ACCOUNT_SID}}",
+    "auth_token": "{{TWILIO_AUTH_TOKEN}}",
+    "messaging_service_sid": "{{TWILIO_MESSAGING_SERVICE_SID}}"
+  },
+  "browser": {
+    "provider": "lightpanda",
+    "endpoint": "{{LIGHTPANDA_WSS_URL}}"
+  },
+  "notification_webhook": "{{SUPABASE_URL}}/functions/v1/notifications",
+  "notification_webhook_token": "{{NOTIFICATIONS_WEBHOOK_TOKEN}}",
+  "compliance": {
+    "fha_guardrails": true,
+    "forbidden_topics": [
+      "race",
+      "religion",
+      "national_origin",
+      "familial_status",
+      "disability",
+      "sex",
+      "color"
+    ]
+  }
+}

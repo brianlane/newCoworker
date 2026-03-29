@@ -4,10 +4,12 @@ import { createSubscription } from "@/lib/db/subscriptions";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { z } from "zod";
 import { randomUUID } from "crypto";
+import { getCommitmentMonths } from "@/lib/plans/tier";
 
 const schema = z.object({
   tier: z.enum(["starter", "standard"]),
-  businessId: z.string().uuid()
+  businessId: z.string().uuid(),
+  billingPeriod: z.enum(["monthly", "annual", "biennial"]).default("biennial")
 });
 
 export async function POST(request: Request) {
@@ -16,7 +18,15 @@ export async function POST(request: Request) {
     const body = schema.parse(await request.json());
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 
-    const priceId = resolvePriceId(body.tier);
+    const priceId = resolvePriceId(body.tier, body.billingPeriod);
+    const commitmentMonths = getCommitmentMonths(body.billingPeriod);
+    const now = new Date();
+    const originalDay = now.getDate();
+    const renewalAt = new Date(now);
+    renewalAt.setDate(1);
+    renewalAt.setMonth(renewalAt.getMonth() + commitmentMonths);
+    const daysInTargetMonth = new Date(renewalAt.getFullYear(), renewalAt.getMonth() + 1, 0).getDate();
+    renewalAt.setDate(Math.min(originalDay, daysInTargetMonth));
 
     await createSubscription({
       id: randomUUID(),
@@ -24,7 +34,10 @@ export async function POST(request: Request) {
       stripe_customer_id: null,
       stripe_subscription_id: null,
       tier: body.tier,
-      status: "pending"
+      status: "pending",
+      billing_period: body.billingPeriod,
+      renewal_at: renewalAt.toISOString(),
+      commitment_months: commitmentMonths
     });
 
     const session = await createCheckoutSession({
@@ -32,7 +45,12 @@ export async function POST(request: Request) {
       successUrl: `${appUrl}/onboard/success?session_id={CHECKOUT_SESSION_ID}`,
       cancelUrl: `${appUrl}/onboard`,
       customerEmail: user.email ?? undefined,
-      metadata: { businessId: body.businessId, tier: body.tier, userId: user.userId }
+      metadata: {
+        businessId: body.businessId,
+        tier: body.tier,
+        billingPeriod: body.billingPeriod,
+        userId: user.userId
+      }
     });
 
     return successResponse({ checkoutUrl: session.url });
