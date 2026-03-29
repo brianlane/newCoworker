@@ -5,7 +5,10 @@ import {
   calculateCommitmentTotal,
   formatCommitmentTotal,
   getMonthlyRateDisplay,
-  getRenewalRateDisplay
+  getRenewalRateDisplay,
+  getFirstCycleDiscountCents,
+  hasFirstCycleDiscount,
+  getFirstCycleDiscountDisplay
 } from "@/lib/pricing";
 import { getPeriodPricing, PlanTier, BillingPeriod } from "@/lib/plans/tier";
 
@@ -139,6 +142,33 @@ describe("pricing", () => {
 
     it("returns renewal rate for standard monthly", () => {
       expect(getRenewalRateDisplay("standard", "monthly")).toBe("$279.00/mo");
+    });
+  });
+
+  describe("first-cycle discount helpers", () => {
+    it("returns the monthly intro discount amount in cents", () => {
+      expect(getFirstCycleDiscountCents("starter", "monthly")).toBe(1100);
+      expect(getFirstCycleDiscountCents("standard", "monthly")).toBe(8400);
+    });
+
+    it("returns zero when the selected period has no intro discount", () => {
+      expect(getFirstCycleDiscountCents("starter", "annual")).toBe(0);
+      expect(getFirstCycleDiscountCents("starter", "biennial")).toBe(0);
+      expect(getFirstCycleDiscountCents("enterprise", "monthly")).toBe(0);
+    });
+
+    it("detects whether a first-cycle discount exists", () => {
+      expect(hasFirstCycleDiscount("starter", "monthly")).toBe(true);
+      expect(hasFirstCycleDiscount("starter", "annual")).toBe(false);
+      expect(hasFirstCycleDiscount("starter", "biennial")).toBe(false);
+      expect(hasFirstCycleDiscount("enterprise", "monthly")).toBe(false);
+    });
+
+    it("formats the first-cycle discount for display", () => {
+      expect(getFirstCycleDiscountDisplay("starter", "monthly")).toBe("$11");
+      expect(getFirstCycleDiscountDisplay("standard", "monthly")).toBe("$84");
+      expect(getFirstCycleDiscountDisplay("starter", "annual")).toBe("$0");
+      expect(getFirstCycleDiscountDisplay("enterprise", "monthly")).toBe("$0");
     });
   });
 

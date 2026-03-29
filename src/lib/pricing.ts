@@ -65,6 +65,8 @@ export function getRenewalRateDisplay(tier: PlanTier, period: BillingPeriod): st
  * Only the monthly plan uses an intro price today.
  */
 export function getFirstCycleDiscountCents(tier: PlanTier, period: BillingPeriod): number {
+  if (period !== "monthly") return 0;
+
   const pricing = getPeriodPricing(tier, period);
   return Math.max(pricing.renewalMonthlyCents - pricing.monthlyCents, 0);
 }

@@ -50,8 +50,7 @@ function getTierPricingDisplay(tier: PlanTier, period: BillingPeriod) {
   const months = getCommitmentMonths(period);
   return {
     monthly: formatPricePerMonth(pricing.monthlyCents),
-    renewalMonthly: formatPricePerMonth(pricing.renewalMonthlyCents),
-    renewal: formatPricePerMonth(pricing.renewalMonthlyCents),
+    renewalRate: formatPricePerMonth(pricing.renewalMonthlyCents),
     total: formatPriceCents(pricing.monthlyCents * months),
     hasIntroDiscount: hasFirstCycleDiscount(tier, period),
     firstCycleDiscount: getFirstCycleDiscountDisplay(tier, period)
@@ -77,8 +76,8 @@ export default function OnboardPage() {
       id: "starter" as const,
       name: "Starter",
       price: starterPrice.monthly,
-      originalPrice: starterPrice.hasIntroDiscount ? starterPrice.renewalMonthly : undefined,
-      renewal: `Renews at ${starterPrice.renewal}`,
+      originalPrice: starterPrice.hasIntroDiscount ? starterPrice.renewalRate : undefined,
+      renewal: `Renews at ${starterPrice.renewalRate}`,
       total:
         period !== "monthly"
           ? `${starterPrice.total} total for ${PERIOD_LABEL[period]}`
@@ -106,8 +105,8 @@ export default function OnboardPage() {
       id: "standard" as const,
       name: "Standard",
       price: standardPrice.monthly,
-      originalPrice: standardPrice.hasIntroDiscount ? standardPrice.renewalMonthly : undefined,
-      renewal: `Renews at ${standardPrice.renewal}`,
+      originalPrice: standardPrice.hasIntroDiscount ? standardPrice.renewalRate : undefined,
+      renewal: `Renews at ${standardPrice.renewalRate}`,
       total:
         period !== "monthly"
           ? `${standardPrice.total} total for ${PERIOD_LABEL[period]}`
