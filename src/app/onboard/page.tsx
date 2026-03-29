@@ -41,7 +41,7 @@ const PERIOD_SUMMARY: Record<BillingPeriod, { title: string; description: string
   },
   monthly: {
     title: "Stay flexible with month-to-month billing",
-    description: "No long commitment, but this option does not include a prepaid term discount."
+    description: "No long commitment, with a first-month intro discount before the regular monthly rate renews."
   }
 };
 
