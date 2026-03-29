@@ -99,7 +99,7 @@ export default function HomePage() {
             href="/onboard"
             className="inline-block rounded-lg bg-claw-green text-deep-ink px-8 py-3.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
           >
-            Start for $199/mo
+            Start for $9.99/mo
           </Link>
         </div>
       </section>
