@@ -245,12 +245,12 @@ export default function OnboardPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
           {tiers.map((tier) => (
             <Card
               key={tier.id}
               className={[
-                "flex flex-col",
+                "min-w-0 flex flex-col",
                 tier.highlight ? "border-signal-teal/50 ring-1 ring-signal-teal/30" : ""
               ].join(" ")}
             >
@@ -261,21 +261,23 @@ export default function OnboardPage() {
               )}
 
               <h2 className="text-lg font-bold text-parchment">{tier.name}</h2>
-              <div className="mt-1 flex items-end gap-3">
-                <p className="text-3xl font-bold text-claw-green">{tier.price}</p>
+              <div className="mt-1 flex min-w-0 flex-wrap items-end gap-x-3 gap-y-1">
+                <p className="min-w-0 text-2xl font-bold text-claw-green sm:text-3xl">{tier.price}</p>
                 {tier.originalPrice && (
-                  <p className="pb-1 text-sm font-semibold text-parchment/35 line-through">{tier.originalPrice}</p>
+                  <p className="pb-1 text-sm font-semibold text-parchment/35 line-through break-words">
+                    {tier.originalPrice}
+                  </p>
                 )}
               </div>
 
-              <div key={`${tier.id}-${period}`} className="animate-fade-slide-up mt-1 space-y-1.5">
+              <div key={`${tier.id}-${period}`} className="animate-fade-slide-up mt-1 min-w-0 space-y-1.5">
                 {"introOffer" in tier && tier.introOffer && (
-                  <div className="inline-flex items-center rounded-full border border-spark-orange/25 bg-spark-orange/10 px-2.5 py-1 text-[11px] font-semibold text-spark-orange">
+                  <div className="inline-flex max-w-full items-center rounded-full border border-spark-orange/25 bg-spark-orange/10 px-2.5 py-1 text-center text-[11px] font-semibold leading-snug text-spark-orange">
                     {tier.introOffer}
                   </div>
                 )}
                 {tier.id !== "enterprise" && period !== "monthly" && (
-                  <div className="inline-flex items-center rounded-full border border-claw-green/25 bg-claw-green/10 px-2.5 py-1 text-[11px] font-semibold text-claw-green">
+                  <div className="inline-flex max-w-full items-center rounded-full border border-claw-green/25 bg-claw-green/10 px-2.5 py-1 text-center text-[11px] font-semibold leading-snug text-claw-green">
                     Save{" "}
                     {tier.id === "starter"
                       ? starterSavings[period as "biennial" | "annual"]
