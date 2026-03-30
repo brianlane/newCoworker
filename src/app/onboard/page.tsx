@@ -193,7 +193,7 @@ export default function OnboardPage() {
                     : "text-parchment/72 hover:bg-parchment/8 hover:text-parchment"
                 ].join(" ")}
               >
-                <span className="block leading-tight">{opt.label}</span>
+                <span className="block leading-tight md:inline">{opt.label}</span>
                 {opt.id !== "monthly" && (
                   <span
                     className={[
