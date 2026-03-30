@@ -181,23 +181,23 @@ export default function OnboardPage() {
         {/* Billing period selector */}
         <div className="space-y-4">
           <div className="flex justify-center">
-            <div className="inline-flex rounded-2xl border border-parchment/15 bg-parchment/5 p-1.5 gap-1 shadow-[0_12px_32px_rgba(0,0,0,0.18)]">
+            <div className="grid w-full max-w-3xl grid-cols-3 rounded-2xl border border-parchment/15 bg-parchment/5 p-1.5 gap-1 shadow-[0_12px_32px_rgba(0,0,0,0.18)] md:inline-flex md:w-auto">
             {PERIOD_OPTIONS.map((opt) => (
               <button
                 key={opt.id}
                 onClick={() => setPeriod(opt.id)}
                 className={[
-                  "rounded-xl px-5 py-3 text-sm font-semibold transition-all duration-200",
+                  "min-w-0 rounded-xl px-2 py-3 text-center text-sm font-semibold transition-all duration-200 sm:px-4 md:px-5",
                   period === opt.id
                     ? "bg-claw-green text-deep-ink shadow-[0_8px_24px_rgba(27,217,106,0.28)]"
                     : "text-parchment/72 hover:bg-parchment/8 hover:text-parchment"
                 ].join(" ")}
               >
-                <span>{opt.label}</span>
+                <span className="block leading-tight">{opt.label}</span>
                 {opt.id !== "monthly" && (
                   <span
                     className={[
-                      "ml-2 rounded-full px-2 py-0.5 text-[11px] font-bold transition-colors duration-200",
+                      "mt-1 inline-flex max-w-full items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-tight transition-colors duration-200 sm:px-2 sm:text-[11px] md:ml-2 md:mt-0",
                       period === opt.id
                         ? "bg-deep-ink/14 text-deep-ink"
                         : "bg-signal-teal/18 text-signal-teal"
@@ -213,29 +213,29 @@ export default function OnboardPage() {
 
           <div
             key={period}
-            className="animate-fade-slide-up rounded-2xl border border-signal-teal/22 bg-parchment/4 px-5 py-4"
+            className="animate-fade-slide-up rounded-2xl border border-signal-teal/22 bg-parchment/4 px-4 py-4 sm:px-5"
           >
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div>
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div className="min-w-0">
                 <p className="text-sm font-semibold text-parchment">{PERIOD_SUMMARY[period].title}</p>
                 <p className="mt-1 text-sm text-parchment/68">{PERIOD_SUMMARY[period].description}</p>
               </div>
 
               {period === "monthly" ? (
-                <div className="rounded-xl bg-deep-ink/45 px-4 py-3 text-sm text-parchment/72">
+                <div className="rounded-xl bg-deep-ink/45 px-4 py-3 text-sm text-parchment/72 md:max-w-xs">
                   Monthly billing keeps the commitment light while still applying a first-month intro discount.
                 </div>
               ) : (
-                <div className="grid gap-2 sm:grid-cols-2">
+                <div className="grid gap-2 md:grid-cols-2 md:min-w-[320px]">
                   <div className="rounded-xl bg-deep-ink/45 px-4 py-3">
                     <p className="text-[11px] uppercase tracking-[0.18em] text-parchment/45">Starter savings</p>
-                    <p className="mt-1 text-lg font-bold text-claw-green">
+                    <p className="mt-1 text-base font-bold text-claw-green sm:text-lg">
                       {starterSavings[period as "biennial" | "annual"]}% less than monthly
                     </p>
                   </div>
                   <div className="rounded-xl bg-deep-ink/45 px-4 py-3">
                     <p className="text-[11px] uppercase tracking-[0.18em] text-parchment/45">Standard savings</p>
-                    <p className="mt-1 text-lg font-bold text-claw-green">
+                    <p className="mt-1 text-base font-bold text-claw-green sm:text-lg">
                       {standardSavings[period as "biennial" | "annual"]}% less than monthly
                     </p>
                   </div>
