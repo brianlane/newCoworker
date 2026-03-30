@@ -91,7 +91,7 @@ export default function OnboardPage() {
         "AI voice coworker",
         "Twilio phone number",
         "Lossless memory and expansive knowledge base",
-        "Unlimted emails and appointment booking",
+        "Unlimited emails and appointment booking",
         "1 hour voice / day",
         "100 SMS / day",
         "1 concurrent call",
