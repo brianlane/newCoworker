@@ -228,15 +228,15 @@ export default function OnboardPage() {
               ) : (
                 <div className="grid gap-2 md:grid-cols-2 md:min-w-[320px]">
                   <div className="rounded-xl bg-deep-ink/45 px-4 py-3">
-                    <p className="text-[11px] uppercase tracking-[0.18em] text-parchment/45">Starter savings</p>
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-parchment/45">Standard savings</p>
                     <p className="mt-1 text-base font-bold text-claw-green sm:text-lg">
-                      {starterSavings[period as "biennial" | "annual"]}% less than monthly
+                      {standardSavings[period as "biennial" | "annual"]}% savings
                     </p>
                   </div>
                   <div className="rounded-xl bg-deep-ink/45 px-4 py-3">
-                    <p className="text-[11px] uppercase tracking-[0.18em] text-parchment/45">Standard savings</p>
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-parchment/45">Starter savings</p>
                     <p className="mt-1 text-base font-bold text-claw-green sm:text-lg">
-                      {standardSavings[period as "biennial" | "annual"]}% less than monthly
+                      {starterSavings[period as "biennial" | "annual"]}% savings
                     </p>
                   </div>
                 </div>
