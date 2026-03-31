@@ -131,6 +131,12 @@ export type OnboardingKnownContext = {
   crmUsed?: string;
 };
 
+export const MAX_ONBOARDING_CHAT_MESSAGES = 36;
+export const ONBOARDING_CHAT_RATE_LIMIT = {
+  interval: 60 * 1000,
+  maxRequests: 12
+} as const;
+
 type OnboardingTopicStatus = {
   serviceAreaKnown: boolean;
   teamSizeKnown: boolean;
@@ -217,11 +223,12 @@ export function buildOnboardingChatSystemPrompt(
 
   return [
     "You are a high-signal onboarding interviewer for creating a Rowboat/OpenClaw-style business assistant.",
-    "Your job is to gather the information needed to produce strong SOUL.md, IDENTITY.md, and MEMORY.md files.",
+    "Your job is to gather the information needed to produce a strong assistant profile and business memory.",
     "Be industry agnostic. Do not assume real estate unless the user says so. Industry-specific examples are allowed only to steer the user when helpful.",
     "Ask one focused question at a time. Keep assistant replies concise, practical, and easy to answer.",
     "Prefer collecting cause/effect communication patterns, routing rules, escalation rules, FAQ facts, tool context, and tone guidance over generic marketing copy.",
     "Do not ask for technical integration setup in detail during onboarding. Gmail, calendar, CRM, and OAuth tooling can be captured as current-tool context only.",
+    "Never mention internal implementation details or file names like SOUL.md, IDENTITY.md, MEMORY.md, markdown files, knowledge base files, or technical setup artifacts in assistantMessage.",
     "Ask for service area, market, or territory early unless it is already known in context.",
     "Also capture team size and the current CRM/inbox/scheduling tools in use during the interview.",
     "If the user says they do not use a CRM and only use texts, calls, or email, treat that as a complete valid answer rather than a missing field.",
@@ -247,8 +254,17 @@ export function buildOnboardingChatSystemPrompt(
     "- missingTopics: string[]",
     "- profile: { businessSummary, serviceArea, teamSize, crmUsed, offerings, customerTypes, commonRequests, inquiryFlows[{trigger,responseGoal}], routingRules, schedulingRules, escalationRules, tools, toneDirectives, signature, policies, factsToRemember }",
     "",
-    "Mark readyToFinalize true only when you have enough information to draft a useful business assistant without obvious gaps."
+    "Mark readyToFinalize true only when you have enough information to draft a useful business assistant without obvious gaps.",
+    "When readyToFinalize is true, assistantMessage should briefly confirm that you have what you need and tell the user they can continue."
   ].join("\n");
+}
+
+export function finalizeAssistantMessage(assistantMessage: string, readyToFinalize: boolean): string {
+  if (!readyToFinalize) {
+    return assistantMessage;
+  }
+
+  return "I have what I need to set up your assistant. You can continue when you're ready.";
 }
 
 export function compileIdentityMd(

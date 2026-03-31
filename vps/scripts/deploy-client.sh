@@ -50,14 +50,29 @@ echo "$IDENTITY_MD" > /opt/rowboat/vault/identity.md
 echo "$MEMORY_MD"   > /opt/rowboat/vault/memory.md
 
 mkdir -p /opt/rowboat/memory/Organizations /opt/rowboat/memory/People /opt/rowboat/memory/Topics /opt/rowboat/memory/Projects
+mkdir -p /opt/rowboat/memory/.newcoworker-seeds
 
 BUSINESS_NAME=$(echo "$IDENTITY_MD" | awk -F': ' '/^Business Name:/ {print $2; exit}')
 OWNER_NAME=$(echo "$IDENTITY_MD" | awk -F': ' '/^Owner \/ Primary Contact:/ {print $2; exit}')
 
 BUSINESS_SLUG=$(slugify "${BUSINESS_NAME:-business}")
 OWNER_SLUG=$(slugify "${OWNER_NAME:-primary-contact}")
+SEED_MANIFEST="/opt/rowboat/memory/.newcoworker-seeds/${BUSINESS_ID}.list"
 
-cat > "/opt/rowboat/memory/Organizations/${BUSINESS_SLUG}.md" <<EOF
+if [[ -f "$SEED_MANIFEST" ]]; then
+  while IFS= read -r seeded_path; do
+    [[ -n "$seeded_path" ]] || continue
+    rm -f "$seeded_path"
+  done < "$SEED_MANIFEST"
+fi
+
+ORGANIZATION_NOTE="/opt/rowboat/memory/Organizations/${BUSINESS_SLUG}.md"
+OWNER_NOTE="/opt/rowboat/memory/People/${OWNER_SLUG}.md"
+RULES_NOTE="/opt/rowboat/memory/Topics/assistant-operating-rules.md"
+PLAYBOOK_NOTE="/opt/rowboat/memory/Topics/conversation-playbook.md"
+BOOTSTRAP_NOTE="/opt/rowboat/memory/Projects/onboarding-bootstrap.md"
+
+cat > "$ORGANIZATION_NOTE" <<EOF
 # ${BUSINESS_NAME:-Business}
 
 Seeded during New Coworker onboarding.
@@ -66,7 +81,7 @@ Seeded during New Coworker onboarding.
 $(printf '%s\n' "$IDENTITY_MD")
 EOF
 
-cat > "/opt/rowboat/memory/People/${OWNER_SLUG}.md" <<EOF
+cat > "$OWNER_NOTE" <<EOF
 # ${OWNER_NAME:-Primary Contact}
 
 ## Relationship
@@ -76,25 +91,33 @@ cat > "/opt/rowboat/memory/People/${OWNER_SLUG}.md" <<EOF
 - Seeded during New Coworker onboarding.
 EOF
 
-cat > /opt/rowboat/memory/Topics/assistant-operating-rules.md <<EOF
+cat > "$RULES_NOTE" <<EOF
 # Assistant Operating Rules
 
 $(printf '%s\n' "$SOUL_MD")
 EOF
 
-cat > /opt/rowboat/memory/Topics/conversation-playbook.md <<EOF
+cat > "$PLAYBOOK_NOTE" <<EOF
 # Conversation Playbook
 
 $(printf '%s\n' "$MEMORY_MD")
 EOF
 
-cat > /opt/rowboat/memory/Projects/onboarding-bootstrap.md <<EOF
+cat > "$BOOTSTRAP_NOTE" <<EOF
 # Onboarding Bootstrap
 
 - Business: ${BUSINESS_NAME:-Business}
 - Seeded At: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
 - Source: New Coworker onboarding chat
 - Vault Files: soul.md, identity.md, memory.md
+EOF
+
+cat > "$SEED_MANIFEST" <<EOF
+$ORGANIZATION_NOTE
+$OWNER_NOTE
+$RULES_NOTE
+$PLAYBOOK_NOTE
+$BOOTSTRAP_NOTE
 EOF
 
 # ------------------------------------------------------------------

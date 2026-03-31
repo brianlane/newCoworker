@@ -1,11 +1,15 @@
 import { z } from "zod";
 import { errorResponse, successResponse, handleRouteError } from "@/lib/api-response";
+import { rateLimit } from "@/lib/rate-limit";
 import {
   buildOnboardingChatSystemPrompt,
   compileRowboatMarkdownDrafts,
+  finalizeAssistantMessage,
+  MAX_ONBOARDING_CHAT_MESSAGES,
   onboardingAssistantProfileSchema,
   onboardingChatMessageSchema,
   onboardingChatModelResponseSchema,
+  ONBOARDING_CHAT_RATE_LIMIT,
   summarizeOnboardingTopicStatus
 } from "@/lib/onboarding/chat";
 
@@ -61,6 +65,13 @@ function parseJsonPayload(content: string): unknown {
   }
 }
 
+function getRequestIdentifier(request: Request): string {
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  if (forwardedFor) return forwardedFor.split(",")[0]?.trim() || "unknown";
+
+  return request.headers.get("x-real-ip") || request.headers.get("cf-connecting-ip") || "unknown";
+}
+
 function isRepeatedToolsQuestion(message: string): boolean {
   return /what tools do you currently use|what tools you currently use|manage leads, schedule calls, and handle messages|specific crm|gmail, calendly|phone\/text/i
     .test(message.toLowerCase());
@@ -114,6 +125,14 @@ function createFallbackAssistantQuestion(
 export async function POST(request: Request) {
   try {
     const body = requestSchema.parse(await request.json());
+    const limiter = rateLimit(`onboard-chat:${getRequestIdentifier(request)}`, ONBOARDING_CHAT_RATE_LIMIT);
+    if (!limiter.success) {
+      return errorResponse("INTERNAL_SERVER_ERROR", "Too many chat messages right now. Please wait a minute and try again.", 429);
+    }
+
+    if (body.messages.length >= MAX_ONBOARDING_CHAT_MESSAGES) {
+      return errorResponse("VALIDATION_ERROR", "This interview has reached its message limit. Continue to the next step to save tokens.");
+    }
 
     const apiKey = process.env.ORkey ?? process.env.OPENROUTER_API_KEY;
     if (!apiKey) {
@@ -173,9 +192,8 @@ export async function POST(request: Request) {
         return errorResponse("INTERNAL_SERVER_ERROR", `OpenRouter request failed: ${responseText.slice(0, 300)}`);
       }
 
-      json = JSON.parse(responseText);
-
       try {
+        json = JSON.parse(responseText);
         const content = extractTextContent(json?.choices?.[0]?.message?.content);
         if (!content) {
           const finishReason = json?.choices?.[0]?.finish_reason;
@@ -211,6 +229,10 @@ export async function POST(request: Request) {
         assistantMessage: createFallbackAssistantQuestion(body, parsed.profile)
       };
     }
+    parsed = {
+      ...parsed,
+      assistantMessage: finalizeAssistantMessage(parsed.assistantMessage, parsed.readyToFinalize)
+    };
     const drafts = compileRowboatMarkdownDrafts(knownContext, parsed.profile);
 
     return successResponse({

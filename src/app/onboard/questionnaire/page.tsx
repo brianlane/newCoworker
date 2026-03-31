@@ -12,6 +12,7 @@ import {
   type OnboardingAssistantChatState
 } from "@/lib/onboarding/storage";
 import {
+  MAX_ONBOARDING_CHAT_MESSAGES,
   createEmptyAssistantProfile,
   type OnboardingChatMessage
 } from "@/lib/onboarding/chat";
@@ -128,21 +129,6 @@ const EMPTY_FORM: FormData = {
   assistantChat: null
 };
 
-function createEmptyChatState(): OnboardingAssistantChatDraftState {
-  return {
-    messages: [],
-    readyToFinalize: false,
-    completionPercent: 0,
-    missingTopics: [],
-    profile: createEmptyAssistantProfile(),
-    drafts: {
-      identityMd: "",
-      soulMd: "",
-      memoryMd: ""
-    }
-  };
-}
-
 export default function QuestionnairePage() {
   return (
     <Suspense>
@@ -165,7 +151,12 @@ function QuestionnaireForm() {
   const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const [pendingUserMessage, setPendingUserMessage] = useState<PendingUserMessage | null>(null);
+  const [retryableUserMessage, setRetryableUserMessage] = useState<PendingUserMessage | null>(null);
   const chatViewportRef = useRef<HTMLDivElement>(null);
+  const assistantDone = form.assistantChat?.readyToFinalize ?? false;
+  const chatMessageCount = (form.assistantChat?.messages.length ?? 0) + (pendingUserMessage ? 1 : 0);
+  const chatLimitReached = chatMessageCount >= MAX_ONBOARDING_CHAT_MESSAGES;
+  const chatClosed = assistantDone || chatLimitReached;
 
   useEffect(() => {
     try {
@@ -263,10 +254,21 @@ function QuestionnaireForm() {
   });
 
   async function retryAssistantInterview() {
-    if (chatLoading) return;
+    if (chatLoading || chatClosed) return;
 
-    if ((form.assistantChat?.messages.length ?? 0) > 0) {
-      await runAssistant(form.assistantChat?.messages ?? [], true);
+    const retryMessages = retryableUserMessage
+      ? [...(form.assistantChat?.messages ?? []), { role: "user" as const, ...retryableUserMessage }]
+      : form.assistantChat?.messages ?? [];
+
+    if (retryMessages.length > 0) {
+      setPendingUserMessage(retryableUserMessage);
+      const ok = await runAssistant(retryMessages, true);
+      if (ok) {
+        setPendingUserMessage(null);
+        setRetryableUserMessage(null);
+      } else {
+        setPendingUserMessage(null);
+      }
       return;
     }
 
@@ -278,10 +280,11 @@ function QuestionnaireForm() {
 
   async function sendChatMessage() {
     const trimmed = chatInput.trim();
-    if (!trimmed || chatLoading) return;
+    if (!trimmed || chatLoading || chatClosed) return;
 
     const timestamp = createMessageTimestamp();
     setPendingUserMessage({ content: trimmed, timestamp });
+    setRetryableUserMessage(null);
     setChatInput("");
 
     const nextMessages: OnboardingChatMessage[] = [
@@ -292,8 +295,10 @@ function QuestionnaireForm() {
     const ok = await runAssistant(nextMessages);
     if (ok) {
       setPendingUserMessage(null);
+      setRetryableUserMessage(null);
     } else {
       setChatInput(trimmed);
+      setRetryableUserMessage({ content: trimmed, timestamp });
       setPendingUserMessage(null);
     }
   }
@@ -420,10 +425,8 @@ function QuestionnaireForm() {
                     </div>
                     <div>
                       <p className="text-sm font-semibold text-parchment">Onboarding Assistant</p>
+                      <p className="text-xs text-parchment/50">Answer naturally. The assistant will guide the interview.</p>
                     </div>
-                  </div>
-                  <div className="rounded-full border border-parchment/10 bg-deep-ink/50 px-3 py-1 text-xs text-parchment/65">
-                    {form.assistantChat?.completionPercent ?? 0}% ready
                   </div>
                 </div>
 
@@ -480,19 +483,30 @@ function QuestionnaireForm() {
                   )}
                 </div>
 
-                <div className="flex gap-2">
-                  <textarea
-                    value={chatInput}
-                    onChange={(event) => setChatInput(event.target.value)}
-                    onKeyDown={handleChatKeyDown}
-                    rows={3}
-                    placeholder="Type your answer. Press Enter to send, Shift+Enter for a new line."
-                    className="min-h-[88px] flex-1 rounded-lg border border-parchment/20 bg-deep-ink/50 px-3 py-2 text-sm text-parchment placeholder-parchment/30 focus:outline-none focus:ring-2 focus:ring-signal-teal"
-                  />
-                  <Button className="self-end" onClick={sendChatMessage} loading={chatLoading} disabled={!chatInput.trim()}>
-                    Send
-                  </Button>
-                </div>
+                {chatClosed ? (
+                  <div className="rounded-xl border border-claw-green/20 bg-claw-green/10 px-4 py-3 text-sm text-parchment/85">
+                    {assistantDone
+                      ? "The interview is complete. Continue when you're ready."
+                      : "This interview has reached its message limit. Continue to the next step to save tokens."}
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <textarea
+                      value={chatInput}
+                      onChange={(event) => {
+                        setChatInput(event.target.value);
+                        setRetryableUserMessage(null);
+                      }}
+                      onKeyDown={handleChatKeyDown}
+                      rows={3}
+                      placeholder="Type your answer. Press Enter to send, Shift+Enter for a new line."
+                      className="min-h-[88px] flex-1 rounded-lg border border-parchment/20 bg-deep-ink/50 px-3 py-2 text-sm text-parchment placeholder-parchment/30 focus:outline-none focus:ring-2 focus:ring-signal-teal"
+                    />
+                    <Button className="self-end" onClick={sendChatMessage} loading={chatLoading} disabled={!chatInput.trim()}>
+                      Send
+                    </Button>
+                  </div>
+                )}
                 {chatError && (
                   <div className="flex items-center justify-between gap-3 rounded-lg border border-spark-orange/20 bg-spark-orange/10 px-3 py-2 text-xs text-spark-orange">
                     <span>{chatError}</span>
@@ -500,6 +514,7 @@ function QuestionnaireForm() {
                       type="button"
                       onClick={() => void retryAssistantInterview()}
                       className="font-semibold text-parchment"
+                      disabled={chatClosed}
                     >
                       Retry
                     </button>

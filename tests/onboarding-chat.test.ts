@@ -6,9 +6,12 @@ import {
   compileSoulMd,
   compileRowboatMarkdownDrafts,
   createEmptyAssistantProfile,
+  finalizeAssistantMessage,
+  MAX_ONBOARDING_CHAT_MESSAGES,
   onboardingChatMessageSchema,
   onboardingChatModelResponseSchema,
   onboardingInquiryFlowSchema,
+  ONBOARDING_CHAT_RATE_LIMIT,
   onboardingAssistantProfileSchema,
   summarizeOnboardingTopicStatus
 } from "@/lib/onboarding/chat";
@@ -21,9 +24,8 @@ describe("onboarding chat helpers", () => {
     });
 
     expect(prompt).toContain("industry agnostic");
-    expect(prompt).toContain("SOUL.md");
-    expect(prompt).toContain("IDENTITY.md");
-    expect(prompt).toContain("MEMORY.md");
+    expect(prompt).toContain("assistant profile");
+    expect(prompt).toContain("Never mention internal implementation details or file names");
     expect(prompt).toContain("Ask one focused question at a time");
     expect(prompt).toContain("do not use a CRM");
     expect(prompt).toContain("texts, calls, or email");
@@ -52,6 +54,14 @@ describe("onboarding chat helpers", () => {
     expect(profile.offerings).toEqual([]);
     expect(profile.inquiryFlows).toEqual([]);
     expect(profile.signature).toBe("");
+  });
+
+  it("exports onboarding chat usage caps", () => {
+    expect(MAX_ONBOARDING_CHAT_MESSAGES).toBe(36);
+    expect(ONBOARDING_CHAT_RATE_LIMIT).toEqual({
+      interval: 60_000,
+      maxRequests: 12
+    });
   });
 
   it("compiles rowboat markdown drafts from known context and profile", () => {
@@ -119,6 +129,13 @@ describe("onboarding chat helpers", () => {
     expect(memoryMd).toContain("No customer types captured yet.");
     expect(memoryMd).toContain("No concrete inquiry flows captured yet.");
     expect(memoryMd).toContain("No tools captured yet.");
+  });
+
+  it("uses a generic close-out message once the interview is complete", () => {
+    expect(finalizeAssistantMessage("Internal draft text", true)).toBe(
+      "I have what I need to set up your assistant. You can continue when you're ready."
+    );
+    expect(finalizeAssistantMessage("One more question", false)).toBe("One more question");
   });
 
   it("normalizes loose model profile output into the expected shape", () => {
