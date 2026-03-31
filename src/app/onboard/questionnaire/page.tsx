@@ -4,9 +4,11 @@ import { Suspense, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
+import { RichSelect } from "@/components/ui/RichSelect";
 import { Textarea } from "@/components/ui/Textarea";
 import { Button } from "@/components/ui/Button";
 import { ONBOARD_STORAGE_KEY } from "@/lib/onboarding/storage";
+import { BUSINESS_TYPE_OPTIONS, DEFAULT_BUSINESS_TYPE } from "@/lib/onboarding/businessTypes";
 import { getMonthlyRateDisplay } from "@/lib/pricing";
 
 type Step = 1 | 2 | 3;
@@ -24,7 +26,7 @@ interface FormData {
 
 const EMPTY_FORM: FormData = {
   businessName: "",
-  businessType: "real_estate",
+  businessType: DEFAULT_BUSINESS_TYPE,
   ownerName: "",
   phone: "",
   serviceArea: "",
@@ -103,24 +105,18 @@ function QuestionnaireForm() {
                 placeholder="Sunrise Realty"
                 required
               />
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-parchment/80">Business Type</label>
-                <select
-                  value={form.businessType}
-                  onChange={(e) => update("businessType", e.target.value)}
-                  className="rounded-lg border border-parchment/20 bg-deep-ink/50 px-3 py-2 text-sm text-parchment focus:outline-none focus:ring-2 focus:ring-signal-teal"
-                >
-                  <option value="real_estate">Real Estate</option>
-                  <option value="dental">Dental Office</option>
-                  <option value="hvac">HVAC</option>
-                  <option value="other">Other</option>
-                </select>
-              </div>
+              <RichSelect
+                label="Business Type"
+                value={form.businessType}
+                onChange={(nextValue) => update("businessType", nextValue)}
+                options={BUSINESS_TYPE_OPTIONS}
+                placeholder="Select your industry"
+              />
               <Input
                 label="Your Name"
                 value={form.ownerName}
                 onChange={(e) => update("ownerName", e.target.value)}
-                placeholder="Amy Laidlaw"
+                placeholder="Jane Doe"
                 required
               />
               <Input
@@ -134,7 +130,7 @@ function QuestionnaireForm() {
                 label="Service Area / Market"
                 value={form.serviceArea}
                 onChange={(e) => update("serviceArea", e.target.value)}
-                placeholder="Phoenix Metro, AZ"
+                placeholder="Phoenix, AZ or Completely Virtual"
               />
             </div>
           )}
