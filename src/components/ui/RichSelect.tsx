@@ -18,19 +18,26 @@ type RichSelectProps = {
 export function RichSelect({ label, value, options, placeholder = "Select an option", onChange }: RichSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [openAbove, setOpenAbove] = useState(false);
+  const [query, setQuery] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const listboxId = useId();
 
   const selectedOption = options.find((option) => option.value === value);
   const displayText = selectedOption?.label ?? placeholder;
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredOptions = normalizedQuery
+    ? options.filter((option) => option.label.toLowerCase().includes(normalizedQuery))
+    : options;
 
   function toggleOpen() {
     if (!isOpen && buttonRef.current) {
       const buttonRect = buttonRef.current.getBoundingClientRect();
-      const estimatedMenuHeight = Math.min(options.length * 40, 256);
+      const estimatedMenuHeight = Math.min((filteredOptions.length + 1) * 40, 256);
       const spaceBelow = window.innerHeight - buttonRect.bottom;
       setOpenAbove(spaceBelow < estimatedMenuHeight && buttonRect.top > estimatedMenuHeight && window.innerWidth > 640);
+    } else if (isOpen) {
+      setQuery("");
     }
 
     setIsOpen((current) => !current);
@@ -42,12 +49,14 @@ export function RichSelect({ label, value, options, placeholder = "Select an opt
     function handlePointerDown(event: MouseEvent | TouchEvent) {
       if (!containerRef.current?.contains(event.target as Node)) {
         setIsOpen(false);
+        setQuery("");
       }
     }
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setIsOpen(false);
+        setQuery("");
       }
     }
 
@@ -103,7 +112,23 @@ export function RichSelect({ label, value, options, placeholder = "Select an opt
               openAbove ? "bottom-full mb-1" : "top-full mt-1"
             ].join(" ")}
           >
-            {options.map((option) => {
+            <div className="sticky top-0 border-b border-parchment/10 bg-deep-ink p-2">
+              <input
+                type="text"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Filter industries..."
+                className="w-full rounded-md border border-parchment/15 bg-deep-ink/70 px-3 py-2 text-sm text-parchment placeholder-parchment/30 focus:outline-none focus:ring-2 focus:ring-signal-teal"
+              />
+            </div>
+
+            {filteredOptions.length === 0 && (
+              <div className="px-3 py-3 text-sm text-parchment/50">
+                No industries match that search.
+              </div>
+            )}
+
+            {filteredOptions.map((option) => {
               const isSelected = option.value === value;
 
               return (
@@ -115,6 +140,7 @@ export function RichSelect({ label, value, options, placeholder = "Select an opt
                   onClick={() => {
                     onChange(option.value);
                     setIsOpen(false);
+                    setQuery("");
                   }}
                   className={[
                     "flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors",
