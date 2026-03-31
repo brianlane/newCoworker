@@ -35,11 +35,67 @@ CONFIG_JSON=$(curl -sf \
 
 SOUL_MD=$(echo "$CONFIG_JSON" | jq -r '.soul_md // empty')
 IDENTITY_MD=$(echo "$CONFIG_JSON" | jq -r '.identity_md // empty')
+MEMORY_MD=$(echo "$CONFIG_JSON" | jq -r '.memory_md // empty')
+
+slugify() {
+  echo "$1" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'
+}
 
 mkdir -p /opt/rowboat/vault /opt/rowboat/memory
 
 echo "$SOUL_MD"     > /opt/rowboat/vault/soul.md
 echo "$IDENTITY_MD" > /opt/rowboat/vault/identity.md
+echo "$MEMORY_MD"   > /opt/rowboat/vault/memory.md
+
+mkdir -p /opt/rowboat/memory/Organizations /opt/rowboat/memory/People /opt/rowboat/memory/Topics /opt/rowboat/memory/Projects
+
+BUSINESS_NAME=$(echo "$IDENTITY_MD" | awk -F': ' '/^Business Name:/ {print $2; exit}')
+OWNER_NAME=$(echo "$IDENTITY_MD" | awk -F': ' '/^Owner \/ Primary Contact:/ {print $2; exit}')
+
+BUSINESS_SLUG=$(slugify "${BUSINESS_NAME:-business}")
+OWNER_SLUG=$(slugify "${OWNER_NAME:-primary-contact}")
+
+cat > "/opt/rowboat/memory/Organizations/${BUSINESS_SLUG}.md" <<EOF
+# ${BUSINESS_NAME:-Business}
+
+Seeded during New Coworker onboarding.
+
+## Identity
+$(printf '%s\n' "$IDENTITY_MD")
+EOF
+
+cat > "/opt/rowboat/memory/People/${OWNER_SLUG}.md" <<EOF
+# ${OWNER_NAME:-Primary Contact}
+
+## Relationship
+- Primary contact for ${BUSINESS_NAME:-the business}
+
+## Notes
+- Seeded during New Coworker onboarding.
+EOF
+
+cat > /opt/rowboat/memory/Topics/assistant-operating-rules.md <<EOF
+# Assistant Operating Rules
+
+$(printf '%s\n' "$SOUL_MD")
+EOF
+
+cat > /opt/rowboat/memory/Topics/conversation-playbook.md <<EOF
+# Conversation Playbook
+
+$(printf '%s\n' "$MEMORY_MD")
+EOF
+
+cat > /opt/rowboat/memory/Projects/onboarding-bootstrap.md <<EOF
+# Onboarding Bootstrap
+
+- Business: ${BUSINESS_NAME:-Business}
+- Seeded At: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
+- Source: New Coworker onboarding chat
+- Vault Files: soul.md, identity.md, memory.md
+EOF
 
 # ------------------------------------------------------------------
 # 2. Write Rowboat .env with client-specific values

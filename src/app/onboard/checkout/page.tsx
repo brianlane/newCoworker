@@ -80,6 +80,21 @@ export default function CheckoutPage() {
       });
       if (!createRes.ok) throw new Error("Failed to create business");
 
+      if (data.assistantChat?.drafts) {
+        const configRes = await fetch("/api/business/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            businessId,
+            soulMd: data.assistantChat.drafts.soulMd,
+            identityMd: data.assistantChat.drafts.identityMd,
+            memoryMd: data.assistantChat.drafts.memoryMd
+          })
+        });
+
+        if (!configRes.ok) throw new Error("Failed to save assistant profile");
+      }
+
       const checkoutRes = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
