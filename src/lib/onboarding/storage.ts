@@ -7,11 +7,18 @@ import type {
 
 export const ONBOARD_STORAGE_KEY = "newcoworker_onboard";
 
-export type OnboardingAssistantChatState = {
+export type OnboardingAssistantChatDraftState = {
   messages: OnboardingChatMessage[];
   readyToFinalize: boolean;
   completionPercent: number;
   missingTopics: string[];
+  profile: OnboardingAssistantProfile;
+  drafts: RowboatMarkdownDrafts;
+};
+
+export type OnboardingAssistantChatState = {
+  readyToFinalize: boolean;
+  completionPercent: number;
   profile: OnboardingAssistantProfile;
   drafts: RowboatMarkdownDrafts;
 };

@@ -8,15 +8,33 @@ import { RichSelect } from "@/components/ui/RichSelect";
 import { Button } from "@/components/ui/Button";
 import {
   ONBOARD_STORAGE_KEY,
+  type OnboardingAssistantChatDraftState,
   type OnboardingAssistantChatState
 } from "@/lib/onboarding/storage";
-const DRAFT_STORAGE_KEY = "newcoworker_onboard_draft";
 import {
   createEmptyAssistantProfile,
   type OnboardingChatMessage
 } from "@/lib/onboarding/chat";
 import { BUSINESS_TYPE_OPTIONS, DEFAULT_BUSINESS_TYPE } from "@/lib/onboarding/businessTypes";
 import { getMonthlyRateDisplay } from "@/lib/pricing";
+
+const DRAFT_STORAGE_KEY = "newcoworker_onboard_draft";
+
+function createMessageTimestamp(): string {
+  return new Date().toISOString();
+}
+
+function formatMessageTimestamp(timestamp?: string): string {
+  if (!timestamp) return "";
+
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) return "";
+
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(parsed);
+}
 
 
 function ChatMarkdown({ text }: { text: string }) {
@@ -84,6 +102,7 @@ function InlineMarkdown({ text }: { text: string }) {
 }
 
 type Step = 1 | 2 | 3;
+type PendingUserMessage = { content: string; timestamp: string };
 
 interface FormData {
   businessName: string;
@@ -94,7 +113,7 @@ interface FormData {
   typicalInquiry: string;
   teamSize: string;
   crmUsed: string;
-  assistantChat: OnboardingAssistantChatState | null;
+  assistantChat: OnboardingAssistantChatDraftState | null;
 }
 
 const EMPTY_FORM: FormData = {
@@ -104,12 +123,12 @@ const EMPTY_FORM: FormData = {
   phone: "",
   serviceArea: "",
   typicalInquiry: "",
-  teamSize: "1",
+  teamSize: "",
   crmUsed: "",
   assistantChat: null
 };
 
-function createEmptyChatState(): OnboardingAssistantChatState {
+function createEmptyChatState(): OnboardingAssistantChatDraftState {
   return {
     messages: [],
     readyToFinalize: false,
@@ -145,6 +164,7 @@ function QuestionnaireForm() {
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
+  const [pendingUserMessage, setPendingUserMessage] = useState<PendingUserMessage | null>(null);
   const chatViewportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -163,11 +183,11 @@ function QuestionnaireForm() {
     } catch { /* quota exceeded — non-critical */ }
   }, [step, form, hydrated]);
 
-  function update(field: keyof FormData, value: string | OnboardingAssistantChatState | null) {
+  function update(field: keyof FormData, value: string | OnboardingAssistantChatDraftState | null) {
     setForm((prev) => ({ ...prev, [field]: value }));
   }
 
-  function updateAssistantChat(nextState: OnboardingAssistantChatState) {
+  function updateAssistantChat(nextState: OnboardingAssistantChatDraftState) {
     const inquirySummary = nextState.profile.inquiryFlows.length > 0
       ? nextState.profile.inquiryFlows
           .map((flow) => `Cause: ${flow.trigger}\nEffect: ${flow.responseGoal}`)
@@ -177,11 +197,14 @@ function QuestionnaireForm() {
     setForm((prev) => ({
       ...prev,
       typicalInquiry: inquirySummary,
+      serviceArea: nextState.profile.serviceArea || prev.serviceArea,
+      teamSize: nextState.profile.teamSize || prev.teamSize,
+      crmUsed: nextState.profile.crmUsed.length > 0 ? nextState.profile.crmUsed.join(", ") : prev.crmUsed,
       assistantChat: nextState
     }));
   }
 
-  async function runAssistant(messages: OnboardingChatMessage[], keepUserMessages = true) {
+  async function runAssistant(messages: OnboardingChatMessage[], keepUserMessages = true): Promise<boolean> {
     setChatLoading(true);
     setChatError(null);
 
@@ -209,7 +232,8 @@ function QuestionnaireForm() {
 
       const assistantMessage: OnboardingChatMessage = {
         role: "assistant",
-        content: json.data.assistantMessage
+        content: json.data.assistantMessage,
+        timestamp: createMessageTimestamp()
       };
 
       updateAssistantChat({
@@ -220,8 +244,10 @@ function QuestionnaireForm() {
         profile: json.data.profile,
         drafts: json.data.drafts
       });
+      return true;
     } catch (err) {
       setChatError(err instanceof Error ? err.message : "Could not continue the onboarding chat");
+      return false;
     } finally {
       setChatLoading(false);
     }
@@ -231,7 +257,7 @@ function QuestionnaireForm() {
     if (chatLoading || form.assistantChat?.messages.length) return;
 
     await runAssistant(
-      [{ role: "user", content: "Start the onboarding interview. Ask your first focused question." }],
+      [{ role: "user", content: "Start the onboarding interview. Ask your first focused question.", timestamp: createMessageTimestamp() }],
       false
     );
   });
@@ -239,8 +265,13 @@ function QuestionnaireForm() {
   async function retryAssistantInterview() {
     if (chatLoading) return;
 
+    if ((form.assistantChat?.messages.length ?? 0) > 0) {
+      await runAssistant(form.assistantChat?.messages ?? [], true);
+      return;
+    }
+
     await runAssistant(
-      [{ role: "user", content: "Start the onboarding interview. Ask your first focused question." }],
+      [{ role: "user", content: "Start the onboarding interview. Ask your first focused question.", timestamp: createMessageTimestamp() }],
       false
     );
   }
@@ -249,13 +280,22 @@ function QuestionnaireForm() {
     const trimmed = chatInput.trim();
     if (!trimmed || chatLoading) return;
 
+    const timestamp = createMessageTimestamp();
+    setPendingUserMessage({ content: trimmed, timestamp });
+    setChatInput("");
+
     const nextMessages: OnboardingChatMessage[] = [
       ...(form.assistantChat?.messages ?? []),
-      { role: "user", content: trimmed }
+      { role: "user", content: trimmed, timestamp }
     ];
 
-    setChatInput("");
-    await runAssistant(nextMessages);
+    const ok = await runAssistant(nextMessages);
+    if (ok) {
+      setPendingUserMessage(null);
+    } else {
+      setChatInput(trimmed);
+      setPendingUserMessage(null);
+    }
   }
 
   function handleChatKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -275,18 +315,29 @@ function QuestionnaireForm() {
     const viewport = chatViewportRef.current;
     if (!viewport) return;
     viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
-  }, [form.assistantChat?.messages.length, chatLoading]);
+  }, [form.assistantChat?.messages.length, chatLoading, pendingUserMessage]);
 
   function handleSubmit() {
     setError(null);
     try {
+      const storedAssistantChat: OnboardingAssistantChatState = {
+        readyToFinalize: form.assistantChat?.readyToFinalize ?? false,
+        completionPercent: form.assistantChat?.completionPercent ?? 0,
+        profile: form.assistantChat?.profile ?? createEmptyAssistantProfile(),
+        drafts: form.assistantChat?.drafts ?? {
+          identityMd: "",
+          soulMd: "",
+          memoryMd: ""
+        }
+      };
+
       localStorage.setItem(
         ONBOARD_STORAGE_KEY,
         JSON.stringify({
           tier,
           billingPeriod: period,
           ...form,
-          assistantChat: form.assistantChat ?? createEmptyChatState()
+          assistantChat: storedAssistantChat
         })
       );
       localStorage.removeItem(DRAFT_STORAGE_KEY);
@@ -302,7 +353,7 @@ function QuestionnaireForm() {
 
   return (
     <div className="min-h-screen bg-deep-ink flex items-center justify-center px-4 py-12">
-      <div className="w-full max-w-2xl space-y-6">
+      <div className={`w-full space-y-6 ${step === 2 ? "max-w-3xl" : "max-w-2xl"}`}>
         <div>
           <div className="flex gap-2 mb-4">
             {([1, 2, 3] as Step[]).map((s) => (
@@ -361,7 +412,7 @@ function QuestionnaireForm() {
 
           {step === 2 && (
             <div className="space-y-4">
-              <div className="rounded-2xl border border-parchment/10 bg-parchment/4 p-4 space-y-4">
+              <div className="space-y-4">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
                     <div className="flex h-10 w-10 items-center justify-center rounded-full bg-signal-teal/15 text-signal-teal">
@@ -378,7 +429,7 @@ function QuestionnaireForm() {
 
                 <div
                   ref={chatViewportRef}
-                  className="max-h-[30rem] min-h-[18rem] space-y-3 overflow-y-auto rounded-xl border border-parchment/8 bg-deep-ink/25 p-3"
+                  className="max-h-[36rem] min-h-[24rem] space-y-3 overflow-y-auto rounded-2xl border border-parchment/8 bg-deep-ink/25 p-4"
                 >
                   {!form.assistantChat?.messages.length && !chatLoading && !chatError && (
                     <div className="flex h-full min-h-[12rem] items-center justify-center text-center text-sm text-parchment/45">
@@ -395,15 +446,33 @@ function QuestionnaireForm() {
                           : "ml-12 border border-claw-green/12 bg-claw-green/10 text-parchment/90"
                       ].join(" ")}
                     >
-                      <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-parchment/45">
-                        {message.role === "assistant" ? "Assistant" : "You"}
-                      </p>
+                      <div className="mb-1 flex items-center justify-between gap-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-parchment/45">
+                          {message.role === "assistant" ? "Assistant" : "You"}
+                        </p>
+                        <span className="text-[11px] text-parchment/35">
+                          {formatMessageTimestamp(message.timestamp)}
+                        </span>
+                      </div>
                       {message.role === "assistant"
                         ? <ChatMarkdown text={message.content} />
                         : <p>{message.content}</p>
                       }
                     </div>
                   ))}
+                  {pendingUserMessage && (
+                    <div className="ml-12 rounded-2xl border border-claw-green/12 bg-claw-green/10 px-4 py-3 text-sm leading-relaxed text-parchment/90 shadow-[0_10px_30px_rgba(0,0,0,0.14)]">
+                      <div className="mb-1 flex items-center justify-between gap-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-parchment/45">
+                          You
+                        </p>
+                        <span className="text-[11px] text-parchment/35">
+                          {formatMessageTimestamp(pendingUserMessage.timestamp)}
+                        </span>
+                      </div>
+                      <p>{pendingUserMessage.content}</p>
+                    </div>
+                  )}
                   {chatLoading && (
                     <div className="mr-12 rounded-2xl border border-signal-teal/12 bg-signal-teal/10 px-4 py-3 text-sm text-parchment/70">
                       Thinking...

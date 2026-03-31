@@ -4,6 +4,10 @@ function normalizeString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+function normalizeNonEmptyString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 function normalizeStringArray(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value.filter((item): item is string => typeof item === "string");
@@ -12,6 +16,38 @@ function normalizeStringArray(value: unknown): string[] {
     return [value.trim()];
   }
   return [];
+}
+
+function normalizeCountString(value: unknown): string {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) {
+    return String(value);
+  }
+  if (typeof value !== "string") return "";
+
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) return trimmed;
+  return "";
+}
+
+function normalizeBoolean(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const trimmed = value.trim().toLowerCase();
+    return ["true", "yes", "y", "1"].includes(trimmed);
+  }
+  return false;
+}
+
+function normalizeCompletionPercent(value: unknown): number {
+  const raw = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim()
+      ? Number(value)
+      : Number.NaN;
+
+  if (!Number.isFinite(raw)) return 0;
+  return Math.min(100, Math.max(0, raw));
 }
 
 function normalizeInquiryFlows(value: unknown): { trigger: string; responseGoal: string }[] {
@@ -27,7 +63,8 @@ function normalizeInquiryFlows(value: unknown): { trigger: string; responseGoal:
 
 export const onboardingChatMessageSchema = z.object({
   role: z.enum(["assistant", "user"]),
-  content: z.string().min(1)
+  content: z.string().min(1),
+  timestamp: z.string().datetime().optional()
 });
 
 export const onboardingInquiryFlowSchema = z.preprocess(
@@ -46,6 +83,9 @@ export const onboardingInquiryFlowSchema = z.preprocess(
 
 export const onboardingAssistantProfileSchema = z.object({
   businessSummary: z.preprocess(normalizeString, z.string()),
+  serviceArea: z.preprocess(normalizeString, z.string()),
+  teamSize: z.preprocess(normalizeCountString, z.string()),
+  crmUsed: z.preprocess(normalizeStringArray, z.array(z.string())),
   offerings: z.preprocess(normalizeStringArray, z.array(z.string())),
   customerTypes: z.preprocess(normalizeStringArray, z.array(z.string())),
   commonRequests: z.preprocess(normalizeStringArray, z.array(z.string())),
@@ -61,11 +101,14 @@ export const onboardingAssistantProfileSchema = z.object({
 });
 
 export const onboardingChatModelResponseSchema = z.object({
-  assistantMessage: z.string().min(1),
-  readyToFinalize: z.boolean(),
-  completionPercent: z.number().min(0).max(100),
-  missingTopics: z.array(z.string()),
-  profile: onboardingAssistantProfileSchema
+  assistantMessage: z.preprocess(normalizeNonEmptyString, z.string().min(1)),
+  readyToFinalize: z.preprocess(normalizeBoolean, z.boolean()),
+  completionPercent: z.preprocess(normalizeCompletionPercent, z.number().min(0).max(100)),
+  missingTopics: z.preprocess(normalizeStringArray, z.array(z.string())),
+  profile: z.preprocess(
+    (value) => (value && typeof value === "object" ? value : {}),
+    onboardingAssistantProfileSchema
+  )
 });
 
 export type OnboardingChatMessage = z.infer<typeof onboardingChatMessageSchema>;
@@ -88,9 +131,51 @@ export type OnboardingKnownContext = {
   crmUsed?: string;
 };
 
+type OnboardingTopicStatus = {
+  serviceAreaKnown: boolean;
+  teamSizeKnown: boolean;
+  toolsKnown: boolean;
+  customerTypesKnown: boolean;
+  commonRequestsKnown: boolean;
+  inquiryFlowsKnown: boolean;
+  routingRulesKnown: boolean;
+  toneKnown: boolean;
+};
+
+const TOOL_SIGNAL_PATTERN =
+  /\b(text|texts|sms|call|calls|phone|phones|gmail|email|emails|calendar|calendly|crm|hubspot|pipeline|imessage)\b/i;
+
+function hasUserTranscriptSignal(messages: OnboardingChatMessage[], pattern: RegExp): boolean {
+  return messages.some((message) => message.role === "user" && pattern.test(message.content));
+}
+
+export function summarizeOnboardingTopicStatus(
+  knownContext: OnboardingKnownContext,
+  profile: OnboardingAssistantProfile,
+  messages: OnboardingChatMessage[]
+): OnboardingTopicStatus {
+  return {
+    serviceAreaKnown: Boolean((knownContext.serviceArea || profile.serviceArea).trim()),
+    teamSizeKnown: Boolean((knownContext.teamSize || profile.teamSize).trim()),
+    toolsKnown:
+      Boolean(knownContext.crmUsed?.trim()) ||
+      profile.crmUsed.length > 0 ||
+      profile.tools.length > 0 ||
+      hasUserTranscriptSignal(messages, TOOL_SIGNAL_PATTERN),
+    customerTypesKnown: profile.customerTypes.length > 0,
+    commonRequestsKnown: profile.commonRequests.length > 0,
+    inquiryFlowsKnown: profile.inquiryFlows.length > 0,
+    routingRulesKnown: profile.routingRules.length > 0 || profile.escalationRules.length > 0,
+    toneKnown: profile.toneDirectives.length > 0 || Boolean(profile.signature.trim())
+  };
+}
+
 export function createEmptyAssistantProfile(): OnboardingAssistantProfile {
   return {
     businessSummary: "",
+    serviceArea: "",
+    teamSize: "",
+    crmUsed: [],
     offerings: [],
     customerTypes: [],
     commonRequests: [],
@@ -124,9 +209,11 @@ function humanizeSlug(value: string): string {
 
 export function buildOnboardingChatSystemPrompt(
   knownContext: OnboardingKnownContext,
-  existingProfile?: OnboardingAssistantProfile | null
+  existingProfile?: OnboardingAssistantProfile | null,
+  messages: OnboardingChatMessage[] = []
 ): string {
   const profile = existingProfile ?? createEmptyAssistantProfile();
+  const topicStatus = summarizeOnboardingTopicStatus(knownContext, profile, messages);
 
   return [
     "You are a high-signal onboarding interviewer for creating a Rowboat/OpenClaw-style business assistant.",
@@ -136,7 +223,11 @@ export function buildOnboardingChatSystemPrompt(
     "Prefer collecting cause/effect communication patterns, routing rules, escalation rules, FAQ facts, tool context, and tone guidance over generic marketing copy.",
     "Do not ask for technical integration setup in detail during onboarding. Gmail, calendar, CRM, and OAuth tooling can be captured as current-tool context only.",
     "Ask for service area, market, or territory early unless it is already known in context.",
+    "Also capture team size and the current CRM/inbox/scheduling tools in use during the interview.",
+    "If the user says they do not use a CRM and only use texts, calls, or email, treat that as a complete valid answer rather than a missing field.",
+    "When the user has no formal CRM, keep crmUsed empty or minimal and capture the real operating tools under tools and factsToRemember instead, such as SMS, phone calls, iMessage, or Gmail.",
     "If the user gives vague answers, ask for one or two concrete examples.",
+    "Never ask for information that is already known in the existing profile, known context, or transcript. If a topic is already answered, move to the next missing topic instead of re-asking it.",
     "Update the profile using the conversation and the known context below. Preserve useful prior details; do not erase good data.",
     "Return JSON only.",
     "",
@@ -146,12 +237,15 @@ export function buildOnboardingChatSystemPrompt(
     "Existing profile:",
     JSON.stringify(profile),
     "",
+    "Answered topic status:",
+    JSON.stringify(topicStatus),
+    "",
     "Return an object with exactly these keys:",
     "- assistantMessage: string",
     "- readyToFinalize: boolean",
     "- completionPercent: number 0-100",
     "- missingTopics: string[]",
-    "- profile: { businessSummary, offerings, customerTypes, commonRequests, inquiryFlows[{trigger,responseGoal}], routingRules, schedulingRules, escalationRules, tools, toneDirectives, signature, policies, factsToRemember }",
+    "- profile: { businessSummary, serviceArea, teamSize, crmUsed, offerings, customerTypes, commonRequests, inquiryFlows[{trigger,responseGoal}], routingRules, schedulingRules, escalationRules, tools, toneDirectives, signature, policies, factsToRemember }",
     "",
     "Mark readyToFinalize true only when you have enough information to draft a useful business assistant without obvious gaps."
   ].join("\n");
@@ -165,8 +259,8 @@ export function compileIdentityMd(
   const businessType = trimLine(knownContext.businessType ? humanizeSlug(knownContext.businessType) : "unspecified");
   const ownerName = trimLine(knownContext.ownerName || "unspecified");
   const phone = trimLine(knownContext.phone || "unspecified");
-  const serviceArea = trimLine(knownContext.serviceArea || "unspecified");
-  const teamSize = trimLine(knownContext.teamSize || "unspecified");
+  const serviceArea = trimLine(knownContext.serviceArea || profile.serviceArea || "unspecified");
+  const teamSize = trimLine(knownContext.teamSize || profile.teamSize || "unspecified");
 
   return [
     "# identity.md",
@@ -235,7 +329,10 @@ export function compileMemoryMd(
     listOrFallback(profile.factsToRemember, "No durable facts captured yet."),
     "",
     "## Tools In Use",
-    listOrFallback(profile.tools, "No tools captured yet."),
+    listOrFallback(
+      [...profile.crmUsed, ...profile.tools].filter((value, index, all) => all.indexOf(value) === index),
+      "No tools captured yet."
+    ),
     "",
     "## Scheduling Rules",
     listOrFallback(profile.schedulingRules, "No scheduling rules captured yet."),
