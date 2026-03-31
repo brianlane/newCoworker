@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createSubscription, getSubscription, updateSubscription } from "@/lib/db/subscriptions";
+import {
+  createSubscription,
+  getSubscription,
+  getSubscriptionByStripeSubscriptionId,
+  updateSubscription
+} from "@/lib/db/subscriptions";
 
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
@@ -77,6 +82,14 @@ describe("db/subscriptions", () => {
 
     const result = await getSubscription("bad");
     expect(result).toBeNull();
+  });
+
+  it("getSubscriptionByStripeSubscriptionId returns subscription", async () => {
+    const db = mockDb({ single: vi.fn().mockResolvedValue({ data: MOCK_SUB, error: null }) });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const result = await getSubscriptionByStripeSubscriptionId("sub_mock");
+    expect(result?.stripe_subscription_id).toBe("sub_mock");
   });
 
   it("updateSubscription calls update with patch", async () => {

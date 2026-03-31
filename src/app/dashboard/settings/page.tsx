@@ -53,6 +53,16 @@ export default async function SettingsPage() {
             </dd>
           </div>
         </dl>
+        {subscription?.stripe_customer_id && (
+          <form action="/api/billing/portal" method="POST" className="mt-4">
+            <button
+              type="submit"
+              className="text-sm text-claw-green hover:underline"
+            >
+              Manage billing and payment methods
+            </button>
+          </form>
+        )}
       </Card>
 
       <Card>

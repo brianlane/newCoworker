@@ -186,7 +186,7 @@ export async function POST(request: Request) {
 
       if (!response.ok) {
         lastErrorText = responseText;
-        if (response.status === 429 && model !== models[models.length - 1]) {
+        if (model !== models[models.length - 1]) {
           continue;
         }
         return errorResponse("INTERNAL_SERVER_ERROR", `OpenRouter request failed: ${responseText.slice(0, 300)}`);

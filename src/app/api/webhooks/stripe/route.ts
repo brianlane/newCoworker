@@ -1,5 +1,5 @@
-import { verifyWebhook } from "@/lib/stripe/client";
-import { updateSubscription } from "@/lib/db/subscriptions";
+import { ensureCommitmentSchedule, verifyWebhook } from "@/lib/stripe/client";
+import { getSubscription, getSubscriptionByStripeSubscriptionId, updateSubscription } from "@/lib/db/subscriptions";
 import { successResponse, errorResponse } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
 import type Stripe from "stripe";
@@ -22,56 +22,20 @@ export async function POST(request: Request) {
 
   try {
     switch (event.type) {
-      case "checkout.session.completed": {
+      case "checkout.session.completed":
+      case "checkout.session.async_payment_succeeded": {
+        const session = event.data.object as Stripe.Checkout.Session;
+        await activateCheckoutSession(session, event.id);
+        break;
+      }
+
+      case "checkout.session.async_payment_failed": {
         const session = event.data.object as Stripe.Checkout.Session;
         const businessId = session.metadata?.businessId;
-        const tier = (session.metadata?.tier ?? "starter") as "starter" | "standard" | "enterprise";
-
         if (businessId) {
-          const customerId =
-            typeof session.customer === "string" ? session.customer : session.customer?.id ?? null;
-          const subscriptionId =
-            typeof session.subscription === "string"
-              ? session.subscription
-              : session.subscription?.id ?? null;
-
-          // Update subscription to active
-          const { getSubscription } = await import("@/lib/db/subscriptions");
           const existing = await getSubscription(businessId);
           if (existing) {
-            await updateSubscription(existing.id, {
-              status: "active",
-              stripe_customer_id: customerId,
-              stripe_subscription_id: subscriptionId
-            });
-          }
-
-          // Idempotency guard: Stripe may deliver the same event multiple times.
-          // Skip provisioning if we've already provisioned this business or already
-          // marked this subscription active with the same Stripe subscription id.
-          const { getBusiness } = await import("@/lib/db/businesses");
-          const business = await getBusiness(businessId);
-          const alreadyOnline = business?.status === "online";
-          const alreadyActivated =
-            existing?.status === "active" &&
-            !!subscriptionId &&
-            existing.stripe_subscription_id === subscriptionId;
-
-          if (alreadyOnline || alreadyActivated) {
-            logger.info("Skipping duplicate provisioning trigger", {
-              businessId,
-              eventId: event.id,
-              alreadyOnline,
-              alreadyActivated
-            });
-          } else {
-            const { orchestrateProvisioning } = await import("@/lib/provisioning/orchestrate");
-            orchestrateProvisioning({ businessId, tier }).catch((err) => {
-              logger.error("Provisioning failed after checkout", {
-                businessId,
-                error: err instanceof Error ? err.message : String(err)
-              });
-            });
+            await updateSubscription(existing.id, { status: "past_due" });
           }
         }
         break;
@@ -81,7 +45,6 @@ export async function POST(request: Request) {
         const sub = event.data.object as Stripe.Subscription;
         const businessId = sub.metadata?.businessId;
         if (businessId) {
-          const { getSubscription } = await import("@/lib/db/subscriptions");
           const existing = await getSubscription(businessId);
           if (existing) {
             type DbStatus = "active" | "past_due" | "canceled" | "pending";
@@ -106,10 +69,35 @@ export async function POST(request: Request) {
         const sub = event.data.object as Stripe.Subscription;
         const businessId = sub.metadata?.businessId;
         if (businessId) {
-          const { getSubscription } = await import("@/lib/db/subscriptions");
           const existing = await getSubscription(businessId);
           if (existing) {
             await updateSubscription(existing.id, { status: "canceled" });
+          }
+        }
+        break;
+      }
+
+      case "invoice.paid": {
+        const invoice = event.data.object as Stripe.Invoice;
+        const subscriptionId = getInvoiceSubscriptionId(invoice);
+
+        if (subscriptionId) {
+          const existing = await getSubscriptionByStripeSubscriptionId(subscriptionId);
+          if (existing) {
+            await updateSubscription(existing.id, { status: "active" });
+          }
+        }
+        break;
+      }
+
+      case "invoice.payment_failed": {
+        const invoice = event.data.object as Stripe.Invoice;
+        const subscriptionId = getInvoiceSubscriptionId(invoice);
+
+        if (subscriptionId) {
+          const existing = await getSubscriptionByStripeSubscriptionId(subscriptionId);
+          if (existing) {
+            await updateSubscription(existing.id, { status: "past_due" });
           }
         }
         break;
@@ -127,4 +115,68 @@ export async function POST(request: Request) {
   }
 
   return successResponse({ received: true, eventId: event.id });
+}
+
+async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId: string) {
+  const businessId = session.metadata?.businessId;
+  const tier = (session.metadata?.tier ?? "starter") as "starter" | "standard" | "enterprise";
+  const billingPeriod = session.metadata?.billingPeriod as "monthly" | "annual" | "biennial" | undefined;
+
+  if (!businessId) return;
+
+  const customerId =
+    typeof session.customer === "string" ? session.customer : session.customer?.id ?? null;
+  const subscriptionId =
+    typeof session.subscription === "string"
+      ? session.subscription
+      : session.subscription?.id ?? null;
+
+  const existing = await getSubscription(businessId);
+  if (existing) {
+    await updateSubscription(existing.id, {
+      status: "active",
+      stripe_customer_id: customerId,
+      stripe_subscription_id: subscriptionId
+    });
+  }
+
+  if (subscriptionId && billingPeriod && tier !== "enterprise") {
+    await ensureCommitmentSchedule({
+      subscriptionId,
+      tier,
+      billingPeriod
+    });
+  }
+
+  const { getBusiness } = await import("@/lib/db/businesses");
+  const business = await getBusiness(businessId);
+  const alreadyOnline = business?.status === "online";
+  const alreadyActivated =
+    existing?.status === "active" &&
+    !!subscriptionId &&
+    existing.stripe_subscription_id === subscriptionId;
+
+  if (alreadyOnline || alreadyActivated) {
+    logger.info("Skipping duplicate provisioning trigger", {
+      businessId,
+      eventId,
+      alreadyOnline,
+      alreadyActivated
+    });
+    return;
+  }
+
+  const { orchestrateProvisioning } = await import("@/lib/provisioning/orchestrate");
+  orchestrateProvisioning({ businessId, tier }).catch((err) => {
+    logger.error("Provisioning failed after checkout", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  });
+}
+
+function getInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
+  const subscription = invoice.parent?.subscription_details?.subscription;
+  if (!subscription) return null;
+  return typeof subscription === "string" ? subscription : subscription.id;
 }

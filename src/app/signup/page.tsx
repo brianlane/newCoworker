@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card } from "@/components/ui/Card";
 import { ONBOARD_STORAGE_KEY } from "@/lib/onboarding/storage";
+import { getPasswordValidationError, PASSWORD_RULES } from "@/lib/password";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 type StoredOnboardingData = {
@@ -33,14 +34,18 @@ export default function SignupPage() {
 }
 
 function SignupForm() {
+  const passwordRules = PASSWORD_RULES;
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirectTo = searchParams.get("redirectTo") ?? "/onboard";
   const tier = searchParams.get("tier");
+  const period = searchParams.get("period");
   const loginHref = `/login?redirectTo=${encodeURIComponent(redirectTo)}${tier ? `&tier=${encodeURIComponent(tier)}` : ""}`;
+  const questionnaireHref = `/onboard/questionnaire?tier=${encodeURIComponent(tier ?? "starter")}&period=${encodeURIComponent(period ?? "biennial")}`;
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [businessName, setBusinessName] = useState(() => {
     const onboarding = readStoredOnboardingData();
     return typeof onboarding?.businessName === "string" ? onboarding.businessName : "";
@@ -51,8 +56,13 @@ function SignupForm() {
 
   async function handleSignup(e: FormEvent) {
     e.preventDefault();
-    if (password.length < 8) {
-      setError("Password must be at least 8 characters");
+    const passwordError = getPasswordValidationError(password);
+    if (passwordError) {
+      setError(passwordError);
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError("Passwords do not match");
       return;
     }
     setLoading(true);
@@ -135,6 +145,9 @@ function SignupForm() {
           <p className="text-sm text-parchment/50">
             {tier ? `${tier.charAt(0).toUpperCase() + tier.slice(1)} plan selected — almost there!` : "Your AI coworker starts here"}
           </p>
+          <a href={questionnaireHref} className="text-sm text-signal-teal hover:underline">
+            ← Back to onboarding
+          </a>
         </div>
 
         <Card>
@@ -161,10 +174,27 @@ function SignupForm() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Min 8 characters"
+              placeholder="8+ chars, 1 uppercase, 1 number"
               autoComplete="new-password"
               required
             />
+            <Input
+              label="Confirm Password"
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="Re-enter your password"
+              autoComplete="new-password"
+              required
+            />
+            <div className="rounded-lg border border-parchment/10 bg-parchment/5 px-3 py-2 text-xs text-parchment/65">
+              <p className="font-medium text-parchment/75">Password rules</p>
+              <ul className="mt-1 list-disc pl-4 space-y-1">
+                {passwordRules.map((rule) => (
+                  <li key={rule}>{rule}</li>
+                ))}
+              </ul>
+            </div>
 
             {error && <p className="text-xs text-spark-orange">{error}</p>}
 

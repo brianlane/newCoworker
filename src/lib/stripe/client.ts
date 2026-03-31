@@ -7,6 +7,12 @@ export function getStripe(secretKey?: string): Stripe {
   return new Stripe(key, { apiVersion: "2026-02-25.clover" });
 }
 
+export function resolveStripePublishableKey(): string {
+  const key = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? process.env.STRIPE_PUBLISHABLE_KEY;
+  if (!key) throw new Error("Stripe publishable key is not configured");
+  return key;
+}
+
 export function verifyWebhook(payload: string, signature: string, secret?: string): Stripe.Event {
   const webhookSecret = secret ?? process.env.STRIPE_WEBHOOK_SECRET;
   if (!webhookSecret) throw new Error("STRIPE_WEBHOOK_SECRET is not configured");
@@ -38,6 +44,7 @@ export async function createCheckoutSession(params: CheckoutParams): Promise<{
     success_url: params.successUrl,
     cancel_url: params.cancelUrl,
     customer_email: params.customerEmail,
+    billing_address_collection: "auto",
     discounts: params.discountCouponId ? [{ coupon: params.discountCouponId }] : undefined,
     metadata: params.metadata ?? {},
     subscription_data: { metadata: params.metadata ?? {} }
@@ -45,6 +52,77 @@ export async function createCheckoutSession(params: CheckoutParams): Promise<{
 
   if (!session.url) throw new Error("Stripe checkout session URL is null");
   return { id: session.id, url: session.url };
+}
+
+export async function ensureCommitmentSchedule(params: {
+  subscriptionId: string;
+  tier: "starter" | "standard";
+  billingPeriod: BillingPeriod;
+}): Promise<string | null> {
+  if (params.billingPeriod === "monthly") return null;
+
+  const stripe = getStripe();
+  const renewalPriceId = resolveRenewalPriceId(params.tier, params.billingPeriod);
+  const subscription = await stripe.subscriptions.retrieve(params.subscriptionId);
+  const existingScheduleId =
+    typeof subscription.schedule === "string"
+      ? subscription.schedule
+      : subscription.schedule?.id ?? null;
+  const currentItem = subscription.items.data[0];
+
+  if (!currentItem) {
+    throw new Error(`Subscription ${params.subscriptionId} has no items to schedule`);
+  }
+
+  let schedule: Stripe.SubscriptionSchedule;
+  if (existingScheduleId) {
+    schedule = await stripe.subscriptionSchedules.retrieve(existingScheduleId);
+    const futurePhase = schedule.phases[1];
+    const futurePrice = futurePhase?.items[0]?.price;
+    const futurePriceId = typeof futurePrice === "string" ? futurePrice : futurePrice?.id;
+    if (futurePriceId === renewalPriceId) {
+      return schedule.id;
+    }
+  } else {
+    schedule = await stripe.subscriptionSchedules.create({
+      from_subscription: params.subscriptionId
+    });
+  }
+
+  const currentPhase = schedule.current_phase;
+  if (!currentPhase) {
+    throw new Error(`Subscription schedule ${schedule.id} has no current phase`);
+  }
+
+  await stripe.subscriptionSchedules.update(schedule.id, {
+    end_behavior: "release",
+    proration_behavior: "none",
+    phases: [
+      {
+        start_date: currentPhase.start_date,
+        end_date: currentPhase.end_date,
+        items: [{ price: currentItem.price.id, quantity: currentItem.quantity ?? 1 }]
+      },
+      {
+        start_date: currentPhase.end_date,
+        items: [{ price: renewalPriceId, quantity: currentItem.quantity ?? 1 }]
+      }
+    ]
+  });
+
+  return schedule.id;
+}
+
+export async function createCustomerPortalSession(params: {
+  customerId: string;
+  returnUrl: string;
+}): Promise<{ url: string }> {
+  const stripe = getStripe();
+  const session = await stripe.billingPortal.sessions.create({
+    customer: params.customerId,
+    return_url: params.returnUrl
+  });
+  return { url: session.url };
 }
 
 export function resolvePriceId(
@@ -71,6 +149,20 @@ export function resolveIntroDiscountCouponId(
     );
   }
   return couponId;
+}
+
+export function resolveRenewalPriceId(
+  tier: "starter" | "standard",
+  period: Exclude<BillingPeriod, "monthly">
+): string {
+  const envKey = `STRIPE_${tier.toUpperCase()}_${periodToEnvSuffix(period)}_RENEWAL_PRICE_ID`;
+  const priceId = process.env[envKey];
+  if (!priceId) {
+    throw new Error(
+      `Stripe renewal Price ID not configured for tier: ${tier}, period: ${period} (env: ${envKey})`
+    );
+  }
+  return priceId;
 }
 
 function periodToEnvSuffix(period: BillingPeriod): string {

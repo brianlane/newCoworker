@@ -24,6 +24,7 @@ export type OnboardingAssistantChatState = {
 };
 
 export type OnboardingData = {
+  businessId?: string;
   tier: "starter" | "standard";
   billingPeriod: BillingPeriod;
   businessName: string;

@@ -1,13 +1,15 @@
 "use client";
 
-import { Suspense, useEffect, useEffectEvent, useRef, useState, type KeyboardEvent } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { Suspense, useEffect, useEffectEvent, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useSearchParams } from "next/navigation";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { RichSelect } from "@/components/ui/RichSelect";
 import { Button } from "@/components/ui/Button";
+import { OrderSummaryCard } from "@/components/OrderSummaryCard";
 import {
   ONBOARD_STORAGE_KEY,
+  type OnboardingData,
   type OnboardingAssistantChatDraftState,
   type OnboardingAssistantChatState
 } from "@/lib/onboarding/storage";
@@ -17,7 +19,8 @@ import {
   type OnboardingChatMessage
 } from "@/lib/onboarding/chat";
 import { BUSINESS_TYPE_OPTIONS, DEFAULT_BUSINESS_TYPE } from "@/lib/onboarding/businessTypes";
-import { getMonthlyRateDisplay } from "@/lib/pricing";
+import { getPasswordValidationError, PASSWORD_RULES } from "@/lib/password";
+import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 const DRAFT_STORAGE_KEY = "newcoworker_onboard_draft";
 
@@ -129,6 +132,33 @@ const EMPTY_FORM: FormData = {
   assistantChat: null
 };
 
+function toDraftChatState(chat: OnboardingAssistantChatState | undefined): OnboardingAssistantChatDraftState | null {
+  if (!chat) return null;
+
+  return {
+    messages: [],
+    readyToFinalize: chat.readyToFinalize,
+    completionPercent: chat.completionPercent,
+    missingTopics: [],
+    profile: chat.profile,
+    drafts: chat.drafts
+  };
+}
+
+function toFormData(data: Partial<OnboardingData>): Partial<FormData> {
+  return {
+    businessName: typeof data.businessName === "string" ? data.businessName : EMPTY_FORM.businessName,
+    businessType: typeof data.businessType === "string" ? data.businessType : EMPTY_FORM.businessType,
+    ownerName: typeof data.ownerName === "string" ? data.ownerName : EMPTY_FORM.ownerName,
+    phone: typeof data.phone === "string" ? data.phone : EMPTY_FORM.phone,
+    serviceArea: typeof data.serviceArea === "string" ? data.serviceArea : EMPTY_FORM.serviceArea,
+    typicalInquiry: typeof data.typicalInquiry === "string" ? data.typicalInquiry : EMPTY_FORM.typicalInquiry,
+    teamSize: typeof data.teamSize === "string" ? data.teamSize : EMPTY_FORM.teamSize,
+    crmUsed: typeof data.crmUsed === "string" ? data.crmUsed : EMPTY_FORM.crmUsed,
+    assistantChat: toDraftChatState(data.assistantChat)
+  };
+}
+
 export default function QuestionnairePage() {
   return (
     <Suspense>
@@ -138,7 +168,6 @@ export default function QuestionnairePage() {
 }
 
 function QuestionnaireForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const tier = (searchParams.get("tier") ?? "starter") as "starter" | "standard";
   const period = (searchParams.get("period") ?? "biennial") as "monthly" | "annual" | "biennial";
@@ -147,6 +176,10 @@ function QuestionnaireForm() {
   const [form, setForm] = useState<FormData>(EMPTY_FORM);
   const [hydrated, setHydrated] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [signupEmail, setSignupEmail] = useState("");
+  const [signupPassword, setSignupPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [signupLoading, setSignupLoading] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
@@ -154,15 +187,29 @@ function QuestionnaireForm() {
   const [retryableUserMessage, setRetryableUserMessage] = useState<PendingUserMessage | null>(null);
   const chatViewportRef = useRef<HTMLDivElement>(null);
   const assistantDone = form.assistantChat?.readyToFinalize ?? false;
-  const chatMessageCount = (form.assistantChat?.messages.length ?? 0) + (pendingUserMessage ? 1 : 0);
-  const chatLimitReached = chatMessageCount >= MAX_ONBOARDING_CHAT_MESSAGES;
+  const storedChatMessageCount = form.assistantChat?.messages.length ?? 0;
+  const chatMessageCount = storedChatMessageCount + (pendingUserMessage ? 1 : 0);
+  const chatLimitReached = storedChatMessageCount >= MAX_ONBOARDING_CHAT_MESSAGES - 1;
   const chatClosed = assistantDone || chatLimitReached;
 
   useEffect(() => {
     try {
       const draft = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) ?? "null");
-      if (draft?.step && [1, 2, 3].includes(draft.step)) setStep(draft.step as Step);
-      if (draft?.form) setForm((prev) => ({ ...prev, ...draft.form }));
+      if (draft?.step && [1, 2, 3].includes(draft.step)) {
+        setStep(draft.step as Step);
+      } else {
+        const storedOnboarding = JSON.parse(localStorage.getItem(ONBOARD_STORAGE_KEY) ?? "null") as OnboardingData | null;
+        if (storedOnboarding) setStep(3);
+      }
+
+      if (draft?.form) {
+        setForm((prev) => ({ ...prev, ...draft.form }));
+      } else {
+        const storedOnboarding = JSON.parse(localStorage.getItem(ONBOARD_STORAGE_KEY) ?? "null") as OnboardingData | null;
+        if (storedOnboarding) {
+          setForm((prev) => ({ ...prev, ...toFormData(storedOnboarding) }));
+        }
+      }
     } catch { /* ignore corrupt data */ }
     setHydrated(true);
   }, []);
@@ -322,39 +369,161 @@ function QuestionnaireForm() {
     viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
   }, [form.assistantChat?.messages.length, chatLoading, pendingUserMessage]);
 
-  function handleSubmit() {
-    setError(null);
-    try {
-      const storedAssistantChat: OnboardingAssistantChatState = {
-        readyToFinalize: form.assistantChat?.readyToFinalize ?? false,
-        completionPercent: form.assistantChat?.completionPercent ?? 0,
-        profile: form.assistantChat?.profile ?? createEmptyAssistantProfile(),
-        drafts: form.assistantChat?.drafts ?? {
-          identityMd: "",
-          soulMd: "",
-          memoryMd: ""
-        }
-      };
+  function buildStoredOnboardingData(businessId?: string): OnboardingData {
+    const storedAssistantChat: OnboardingAssistantChatState = {
+      readyToFinalize: form.assistantChat?.readyToFinalize ?? false,
+      completionPercent: form.assistantChat?.completionPercent ?? 0,
+      profile: form.assistantChat?.profile ?? createEmptyAssistantProfile(),
+      drafts: form.assistantChat?.drafts ?? {
+        identityMd: "",
+        soulMd: "",
+        memoryMd: ""
+      }
+    };
 
-      localStorage.setItem(
-        ONBOARD_STORAGE_KEY,
-        JSON.stringify({
-          tier,
-          billingPeriod: period,
-          ...form,
-          assistantChat: storedAssistantChat
+    return {
+      businessId,
+      tier,
+      billingPeriod: period,
+      ...form,
+      assistantChat: storedAssistantChat
+    };
+  }
+
+  async function saveAssistantConfig(businessId: string, signupUserId?: string) {
+    if (form.assistantChat?.drafts) {
+      const configRes = await fetch("/api/business/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId,
+          ownerEmail: signupEmail || undefined,
+          signupUserId,
+          soulMd: form.assistantChat.drafts.soulMd,
+          identityMd: form.assistantChat.drafts.identityMd,
+          memoryMd: form.assistantChat.drafts.memoryMd
         })
-      );
+      });
+
+      if (!configRes.ok) throw new Error("Failed to save assistant profile");
+    }
+  }
+
+  async function createBusinessAndConfig(businessId: string, shouldCreateBusiness: boolean, signupUserId?: string) {
+    if (shouldCreateBusiness) {
+      const createRes = await fetch("/api/business/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId,
+          ownerEmail: signupEmail || undefined,
+          signupUserId,
+          name: form.businessName,
+          tier,
+          businessType: form.businessType,
+          ownerName: form.ownerName,
+          phone: form.phone,
+          serviceArea: form.serviceArea,
+          typicalInquiry: form.typicalInquiry,
+          teamSize: form.teamSize,
+          crmUsed: form.crmUsed
+        })
+      });
+      if (!createRes.ok) throw new Error("Failed to create business");
+    }
+
+    await saveAssistantConfig(businessId, signupUserId);
+  }
+
+  async function createCheckout(businessId: string, signupUserId?: string) {
+    const checkoutRes = await fetch("/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier,
+        businessId,
+        billingPeriod: period,
+        ownerEmail: signupEmail || undefined,
+        signupUserId
+      })
+    });
+    const checkoutJson = await checkoutRes.json();
+    if (!checkoutRes.ok) throw new Error(checkoutJson.error?.message ?? "Checkout failed");
+    const { checkoutUrl } = checkoutJson.data ?? {};
+    if (!checkoutUrl) throw new Error("Invalid checkout response");
+    return checkoutUrl;
+  }
+
+  async function handleCreateAccount(event: FormEvent) {
+    event.preventDefault();
+    if (signupLoading) return;
+
+    setError(null);
+    const passwordError = getPasswordValidationError(signupPassword);
+    if (passwordError) {
+      setError(passwordError);
+      return;
+    }
+    if (signupPassword !== confirmPassword) {
+      setError("Passwords do not match");
+      return;
+    }
+
+    try {
+      const existingOnboardingRaw = localStorage.getItem(ONBOARD_STORAGE_KEY);
+      const existingOnboarding = existingOnboardingRaw ? JSON.parse(existingOnboardingRaw) as OnboardingData : null;
+      setSignupLoading(true);
+
+      const supabase = getSupabaseBrowserClient();
+      const onboardingData = buildStoredOnboardingData(existingOnboarding?.businessId);
+      localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(onboardingData));
+
+      const encodedRedirect = encodeURIComponent("/onboard/checkout");
+      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+        email: signupEmail,
+        password: signupPassword,
+        options: {
+          data: {
+            business_name: form.businessName,
+            onboarding_data: onboardingData
+          },
+          emailRedirectTo: `${window.location.origin}/api/auth/callback?redirectTo=${encodedRedirect}`
+        }
+      });
+
+      if (signUpError) {
+        setError(signUpError.message);
+        return;
+      }
+
+      const identities = signUpData.user?.identities ?? [];
+      if (identities.length === 0) {
+        setError("An account with this email already exists. Please sign in instead.");
+        return;
+      }
+      const signupUserId = signUpData.user?.id;
+      if (!signUpData.session && !signupUserId) {
+        setError("Could not complete signup. Please try again.");
+        return;
+      }
+
+      const businessId = existingOnboarding?.businessId ?? crypto.randomUUID();
+      const checkoutSignupUserId = signUpData.session ? undefined : signupUserId;
+      await createBusinessAndConfig(businessId, !existingOnboarding?.businessId, checkoutSignupUserId);
+      const checkoutUrl = await createCheckout(businessId, checkoutSignupUserId);
+      localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(buildStoredOnboardingData(businessId)));
       localStorage.removeItem(DRAFT_STORAGE_KEY);
-      router.push(`/signup?tier=${encodeURIComponent(tier)}&period=${encodeURIComponent(period)}&redirectTo=/onboard/checkout`);
-    } catch {
-      setError("Could not save your details. Please try again.");
+      window.location.href = checkoutUrl;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create your account");
+    } finally {
+      setSignupLoading(false);
     }
   }
 
   const canContinueFromChat = chatLoading
     ? false
-    : (form.assistantChat?.readyToFinalize ?? false) || (form.assistantChat?.completionPercent ?? 0) >= 60;
+    : chatClosed || (form.assistantChat?.readyToFinalize ?? false) || (form.assistantChat?.completionPercent ?? 0) >= 60;
 
   return (
     <div className="min-h-screen bg-deep-ink flex items-center justify-center px-4 py-12">
@@ -525,33 +694,61 @@ function QuestionnaireForm() {
           )}
 
           {step === 3 && (
-            <div className="space-y-3 text-sm">
-              <div className="bg-parchment/5 rounded-lg p-4 space-y-2">
-                <h3 className="font-semibold text-parchment">Order Summary</h3>
-                <div className="flex justify-between text-parchment/70">
-                  <span>Plan</span>
-                  <span className="capitalize">{tier}</span>
-                </div>
-                <div className="flex justify-between text-parchment/70">
-                  <span>Billing period</span>
-                  <span className="capitalize">
-                    {period === "biennial" ? "24 months" : period === "annual" ? "12 months" : "1 month"}
-                  </span>
-                </div>
-                <div className="flex justify-between text-parchment/70">
-                  <span>Business</span>
-                  <span>{form.businessName || "—"}</span>
-                </div>
-                <div className="flex justify-between text-parchment/70">
-                  <span>Assistant brief</span>
-                  <span>{form.assistantChat?.completionPercent ?? 0}% captured</span>
-                </div>
-                <div className="flex justify-between text-parchment/70">
-                  <span>Monthly rate</span>
-                  <span>{getMonthlyRateDisplay(tier, period)}</span>
-                </div>
-              </div>
-              {error && <p className="text-spark-orange text-xs">{error}</p>}
+            <div className="space-y-4 text-sm">
+              <form onSubmit={handleCreateAccount} className="space-y-4">
+                  <OrderSummaryCard
+                    tier={tier}
+                    period={period}
+                    businessName={form.businessName}
+                    assistantBriefPercent={form.assistantChat?.completionPercent ?? 0}
+                  />
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <Input
+                      label="Email"
+                      type="email"
+                      value={signupEmail}
+                      onChange={(e) => setSignupEmail(e.target.value)}
+                      placeholder="you@business.com"
+                      autoComplete="email"
+                      required
+                    />
+                    <div />
+                    <Input
+                      label="Password"
+                      type="password"
+                      value={signupPassword}
+                      onChange={(e) => setSignupPassword(e.target.value)}
+                      placeholder="8+ chars, 1 uppercase, 1 number"
+                      autoComplete="new-password"
+                      required
+                    />
+                    <Input
+                      label="Confirm Password"
+                      type="password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder="Re-enter your password"
+                      autoComplete="new-password"
+                      required
+                    />
+                  </div>
+
+                  <div className="rounded-lg border border-parchment/10 bg-parchment/5 px-3 py-2 text-xs text-parchment/65">
+                    <p className="font-medium text-parchment/75">Password rules</p>
+                    <ul className="mt-1 list-disc pl-4 space-y-1">
+                      {PASSWORD_RULES.map((rule) => (
+                        <li key={rule}>{rule}</li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  {error && <p className="text-spark-orange text-xs">{error}</p>}
+
+                  <Button type="submit" className="w-full" loading={signupLoading}>
+                    Create Account & Continue to Payment →
+                  </Button>
+              </form>
             </div>
           )}
         </Card>
@@ -570,11 +767,7 @@ function QuestionnaireForm() {
             >
               Continue →
             </Button>
-          ) : (
-            <Button className="flex-1" onClick={handleSubmit}>
-              Create Account →
-            </Button>
-          )}
+          ) : null}
         </div>
       </div>
     </div>
