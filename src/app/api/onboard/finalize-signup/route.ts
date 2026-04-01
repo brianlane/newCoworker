@@ -1,5 +1,5 @@
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
-import { updateBusinessOwnerEmail } from "@/lib/db/businesses";
+import { updateBusinessOwnerEmailIfPending } from "@/lib/db/businesses";
 import { getStripe } from "@/lib/stripe/client";
 import { z } from "zod";
 
@@ -28,7 +28,11 @@ export async function POST(request: Request) {
       return errorResponse("FORBIDDEN", "Checkout session is missing verified customer details", 403);
     }
 
-    await updateBusinessOwnerEmail(businessId, ownerEmail);
+    const updated = await updateBusinessOwnerEmailIfPending(businessId, ownerEmail);
+
+    if (!updated) {
+      return errorResponse("FORBIDDEN", "Onboarding session is no longer valid", 403);
+    }
 
     return successResponse({
       businessId,

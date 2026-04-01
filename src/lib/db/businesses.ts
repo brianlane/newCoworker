@@ -1,5 +1,6 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { Business } from "@/lib/db/schema";
+import { createPendingOwnerEmail } from "@/lib/onboarding/token";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -98,4 +99,19 @@ export async function updateBusinessOwnerEmail(
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db.from("businesses").update({ owner_email: ownerEmail }).eq("id", id);
   if (error) throw new Error(`updateBusinessOwnerEmail: ${error.message}`);
+}
+
+export async function updateBusinessOwnerEmailIfPending(
+  id: string,
+  ownerEmail: string,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const business = await getBusiness(id, client);
+
+  if (!business || business.owner_email !== createPendingOwnerEmail(id)) {
+    return false;
+  }
+
+  await updateBusinessOwnerEmail(id, ownerEmail, client);
+  return true;
 }

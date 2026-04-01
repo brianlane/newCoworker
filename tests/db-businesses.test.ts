@@ -4,8 +4,10 @@ import {
   getBusiness,
   listBusinesses,
   updateBusinessOwnerEmail,
+  updateBusinessOwnerEmailIfPending,
   updateBusinessStatus
 } from "@/lib/db/businesses";
+import { createPendingOwnerEmail } from "@/lib/onboarding/token";
 
 // Mock the Supabase service client
 vi.mock("@/lib/supabase/server", () => ({
@@ -149,6 +151,41 @@ describe("db/businesses", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     await expect(updateBusinessOwnerEmail("uuid-biz-1", "paid@test.com")).rejects.toThrow("updateBusinessOwnerEmail");
+  });
+
+  it("updateBusinessOwnerEmailIfPending updates when the business is still pending", async () => {
+    const readQuery = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({
+        data: { ...MOCK_BUSINESS, owner_email: createPendingOwnerEmail("uuid-biz-1") },
+        error: null
+      })
+    };
+    const updateQuery = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockResolvedValue({ error: null })
+    };
+    const db = {
+      from: vi.fn()
+        .mockReturnValueOnce(readQuery)
+        .mockReturnValueOnce(updateQuery)
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(updateBusinessOwnerEmailIfPending("uuid-biz-1", "paid@test.com")).resolves.toBe(true);
+    expect(updateQuery.update).toHaveBeenCalledWith({ owner_email: "paid@test.com" });
+  });
+
+  it("updateBusinessOwnerEmailIfPending does not update when the business already has a real owner", async () => {
+    const db = {
+      ...mockDb(),
+      single: vi.fn().mockResolvedValue({ data: MOCK_BUSINESS, error: null })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(updateBusinessOwnerEmailIfPending("uuid-biz-1", "paid@test.com")).resolves.toBe(false);
+    expect(db.update).not.toHaveBeenCalled();
   });
 
   it("createBusiness uses provided client", async () => {

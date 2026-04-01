@@ -104,6 +104,7 @@ function InlineMarkdown({ text }: { text: string }) {
 
 type Step = 1 | 2 | 3;
 type PendingUserMessage = { content: string; timestamp: string };
+const QUESTIONNAIRE_PROGRESS_STEPS = [1, 2, 3, 4] as const;
 
 interface FormData {
   businessName: string;
@@ -438,7 +439,7 @@ function QuestionnaireForm() {
       <div className={`w-full space-y-6 ${step === 2 ? "max-w-3xl" : "max-w-2xl"}`}>
         <div>
           <div className="flex gap-2 mb-4">
-            {([1, 2, 3] as Step[]).map((s) => (
+            {QUESTIONNAIRE_PROGRESS_STEPS.map((s) => (
               <div
                 key={s}
                 className={[
