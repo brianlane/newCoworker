@@ -106,20 +106,28 @@ export async function updateBusinessOwnerEmailIfPending(
   ownerEmail: string,
   client?: SupabaseClient
 ): Promise<boolean> {
-  const business = await getBusiness(id, client);
+  const db = client ?? (await createSupabaseServiceClient());
+  const pendingOwnerEmail = createPendingOwnerEmail(id);
+  const { data, error } = await db
+    .from("businesses")
+    .update({ owner_email: ownerEmail })
+    .eq("id", id)
+    .eq("owner_email", pendingOwnerEmail)
+    .select("id");
+
+  if (error) {
+    throw new Error(`updateBusinessOwnerEmailIfPending: ${error.message}`);
+  }
+
+  if ((data ?? []).length > 0) {
+    return true;
+  }
+
+  const business = await getBusiness(id, db);
 
   if (!business) {
     return false;
   }
 
-  if (business.owner_email === ownerEmail) {
-    return true;
-  }
-
-  if (business.owner_email !== createPendingOwnerEmail(id)) {
-    return false;
-  }
-
-  await updateBusinessOwnerEmail(id, ownerEmail, client);
-  return true;
+  return business.owner_email === ownerEmail;
 }

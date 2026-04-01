@@ -154,63 +154,127 @@ describe("db/businesses", () => {
   });
 
   it("updateBusinessOwnerEmailIfPending updates when the business is still pending", async () => {
-    const readQuery = {
-      select: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockReturnThis(),
-      single: vi.fn().mockResolvedValue({
-        data: { ...MOCK_BUSINESS, owner_email: createPendingOwnerEmail("uuid-biz-1") },
-        error: null
-      })
-    };
     const updateQuery = {
       update: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockResolvedValue({ error: null })
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: [{ id: "uuid-biz-1" }], error: null })
     };
     const db = {
-      from: vi.fn()
-        .mockReturnValueOnce(readQuery)
-        .mockReturnValueOnce(updateQuery)
+      from: vi.fn().mockReturnValue(updateQuery)
     };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     await expect(updateBusinessOwnerEmailIfPending("uuid-biz-1", "paid@test.com")).resolves.toBe(true);
     expect(updateQuery.update).toHaveBeenCalledWith({ owner_email: "paid@test.com" });
+    expect(updateQuery.eq).toHaveBeenNthCalledWith(1, "id", "uuid-biz-1");
+    expect(updateQuery.eq).toHaveBeenNthCalledWith(2, "owner_email", createPendingOwnerEmail("uuid-biz-1"));
   });
 
   it("updateBusinessOwnerEmailIfPending does not update when the business already has a real owner", async () => {
+    const updateQuery = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: [], error: null })
+    };
     const db = {
       ...mockDb(),
+      from: vi.fn()
+        .mockReturnValueOnce(updateQuery)
+        .mockReturnValueOnce({
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          single: vi.fn().mockResolvedValue({ data: MOCK_BUSINESS, error: null })
+        }),
       single: vi.fn().mockResolvedValue({ data: MOCK_BUSINESS, error: null })
     };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     await expect(updateBusinessOwnerEmailIfPending("uuid-biz-1", "paid@test.com")).resolves.toBe(false);
-    expect(db.update).not.toHaveBeenCalled();
+    expect(updateQuery.update).toHaveBeenCalled();
   });
 
   it("updateBusinessOwnerEmailIfPending is idempotent when the owner email is already finalized", async () => {
+    const updateQuery = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: [], error: null })
+    };
     const db = {
-      ...mockDb(),
-      single: vi.fn().mockResolvedValue({
-        data: { ...MOCK_BUSINESS, owner_email: "paid@test.com" },
-        error: null
-      })
+      from: vi.fn()
+        .mockReturnValueOnce(updateQuery)
+        .mockReturnValueOnce({
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          single: vi.fn().mockResolvedValue({
+            data: { ...MOCK_BUSINESS, owner_email: "paid@test.com" },
+            error: null
+          })
+        })
     };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     await expect(updateBusinessOwnerEmailIfPending("uuid-biz-1", "paid@test.com")).resolves.toBe(true);
-    expect(db.update).not.toHaveBeenCalled();
+    expect(updateQuery.update).toHaveBeenCalled();
   });
 
   it("updateBusinessOwnerEmailIfPending returns false when the business cannot be found", async () => {
+    const updateQuery = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: [], error: null })
+    };
     const db = {
-      ...mockDb(),
-      single: vi.fn().mockResolvedValue({ data: null, error: { message: "not found" } })
+      from: vi.fn()
+        .mockReturnValueOnce(updateQuery)
+        .mockReturnValueOnce({
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          single: vi.fn().mockResolvedValue({ data: null, error: { message: "not found" } })
+        })
     };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     await expect(updateBusinessOwnerEmailIfPending("uuid-biz-1", "paid@test.com")).resolves.toBe(false);
-    expect(db.update).not.toHaveBeenCalled();
+    expect(updateQuery.update).toHaveBeenCalled();
+  });
+
+  it("updateBusinessOwnerEmailIfPending throws when the conditional update fails", async () => {
+    const updateQuery = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: null, error: { message: "fail" } })
+    };
+    const db = {
+      from: vi.fn().mockReturnValue(updateQuery)
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(updateBusinessOwnerEmailIfPending("uuid-biz-1", "paid@test.com")).rejects.toThrow(
+      "updateBusinessOwnerEmailIfPending"
+    );
+  });
+
+  it("updateBusinessOwnerEmailIfPending handles a null conditional-update result without treating it as success", async () => {
+    const updateQuery = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: null, error: null })
+    };
+    const db = {
+      from: vi.fn()
+        .mockReturnValueOnce(updateQuery)
+        .mockReturnValueOnce({
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          single: vi.fn().mockResolvedValue({
+            data: { ...MOCK_BUSINESS, owner_email: "paid@test.com" },
+            error: null
+          })
+        })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(updateBusinessOwnerEmailIfPending("uuid-biz-1", "paid@test.com")).resolves.toBe(true);
   });
 
   it("createBusiness uses provided client", async () => {
