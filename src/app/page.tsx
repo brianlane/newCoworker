@@ -23,7 +23,7 @@ const features: FeatureItem[] = [
   },
   {
     title: "Multi-Model Reasoning",
-    description: "Qwen + Llama swarm reasoning handles complex questions other bots can't.",
+    description: "Multi-model swarm reasoning handles complex questions other bots can't.",
     Icon: Zap,
   },
   {
