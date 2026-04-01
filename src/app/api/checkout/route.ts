@@ -26,15 +26,19 @@ export async function POST(request: Request) {
       customerEmail = user.email ?? undefined;
       metadataUserId = user.userId;
     } else {
-      if (!body.ownerEmail || !body.signupUserId) {
+      if (!body.ownerEmail) {
         return errorResponse("FORBIDDEN", "Authentication required");
       }
-      const isValidSignupIdentity = await verifySignupIdentity(body.signupUserId, body.ownerEmail);
-      if (!isValidSignupIdentity) {
-        return errorResponse("FORBIDDEN", "Not authorized for checkout");
+      if (body.signupUserId) {
+        const isValidSignupIdentity = await verifySignupIdentity(body.signupUserId, body.ownerEmail);
+        if (!isValidSignupIdentity) {
+          return errorResponse("FORBIDDEN", "Not authorized for checkout");
+        }
+        metadataUserId = body.signupUserId;
+      } else {
+        metadataUserId = body.ownerEmail;
       }
       customerEmail = body.ownerEmail;
-      metadataUserId = body.signupUserId;
     }
 
     const priceId = resolvePriceId(body.tier, body.billingPeriod);

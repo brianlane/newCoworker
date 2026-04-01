@@ -28,12 +28,14 @@ export async function POST(request: Request) {
         return errorResponse("FORBIDDEN", "Account has no email address");
       }
     } else {
-      if (!body.ownerEmail || !body.signupUserId) {
+      if (!body.ownerEmail) {
         return errorResponse("FORBIDDEN", "Authentication required");
       }
-      const isValidSignupIdentity = await verifySignupIdentity(body.signupUserId, body.ownerEmail);
-      if (!isValidSignupIdentity) {
-        return errorResponse("FORBIDDEN", "Not authorized for this business");
+      if (body.signupUserId) {
+        const isValidSignupIdentity = await verifySignupIdentity(body.signupUserId, body.ownerEmail);
+        if (!isValidSignupIdentity) {
+          return errorResponse("FORBIDDEN", "Not authorized for this business");
+        }
       }
       ownerEmail = body.ownerEmail;
     }

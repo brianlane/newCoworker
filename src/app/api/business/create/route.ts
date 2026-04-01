@@ -27,12 +27,14 @@ export async function POST(request: Request) {
     if (user?.email) {
       ownerEmail = user.email;
     } else {
-      if (!body.ownerEmail || !body.signupUserId) {
+      if (!body.ownerEmail) {
         return errorResponse("FORBIDDEN", "Authentication required");
       }
-      const isValidSignupIdentity = await verifySignupIdentity(body.signupUserId, body.ownerEmail);
-      if (!isValidSignupIdentity) {
-        return errorResponse("FORBIDDEN", "Not authorized to create business");
+      if (body.signupUserId) {
+        const isValidSignupIdentity = await verifySignupIdentity(body.signupUserId, body.ownerEmail);
+        if (!isValidSignupIdentity) {
+          return errorResponse("FORBIDDEN", "Not authorized to create business");
+        }
       }
       ownerEmail = body.ownerEmail;
     }
