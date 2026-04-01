@@ -2,6 +2,7 @@ import { getAuthUser, verifySignupIdentity } from "@/lib/auth";
 import { createCheckoutSession, resolveIntroDiscountCouponId, resolvePriceId } from "@/lib/stripe/client";
 import { createSubscription } from "@/lib/db/subscriptions";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
+import { verifyOnboardingToken } from "@/lib/onboarding/token";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import { getCommitmentMonths } from "@/lib/plans/tier";
@@ -11,6 +12,7 @@ const schema = z.object({
   businessId: z.string().uuid(),
   billingPeriod: z.enum(["monthly", "annual", "biennial"]).default("biennial"),
   ownerEmail: z.string().email().optional(),
+  onboardingToken: z.string().min(1).optional(),
   signupUserId: z.string().uuid().optional()
 });
 
@@ -26,19 +28,19 @@ export async function POST(request: Request) {
       customerEmail = user.email ?? undefined;
       metadataUserId = user.userId;
     } else {
-      if (!body.ownerEmail) {
-        return errorResponse("FORBIDDEN", "Authentication required");
-      }
-      if (body.signupUserId) {
+      if (body.ownerEmail && body.signupUserId) {
         const isValidSignupIdentity = await verifySignupIdentity(body.signupUserId, body.ownerEmail);
         if (!isValidSignupIdentity) {
           return errorResponse("FORBIDDEN", "Not authorized for checkout");
         }
         metadataUserId = body.signupUserId;
+        customerEmail = body.ownerEmail;
+      } else if (body.ownerEmail && body.onboardingToken && verifyOnboardingToken(body.onboardingToken, { businessId: body.businessId })) {
+        metadataUserId = body.businessId;
+        customerEmail = body.ownerEmail;
       } else {
-        metadataUserId = body.ownerEmail;
+        return errorResponse("FORBIDDEN", "Authentication required");
       }
-      customerEmail = body.ownerEmail;
     }
 
     const priceId = resolvePriceId(body.tier, body.billingPeriod);

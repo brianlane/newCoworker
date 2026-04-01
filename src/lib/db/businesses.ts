@@ -89,3 +89,13 @@ export async function updateBusinessStatus(
   const { error } = await db.from("businesses").update(update).eq("id", id);
   if (error) throw new Error(`updateBusinessStatus: ${error.message}`);
 }
+
+export async function updateBusinessOwnerEmail(
+  id: string,
+  ownerEmail: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("businesses").update({ owner_email: ownerEmail }).eq("id", id);
+  if (error) throw new Error(`updateBusinessOwnerEmail: ${error.message}`);
+}

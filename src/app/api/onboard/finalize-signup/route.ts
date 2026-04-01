@@ -1,4 +1,5 @@
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
+import { updateBusinessOwnerEmail } from "@/lib/db/businesses";
 import { getStripe } from "@/lib/stripe/client";
 import { z } from "zod";
 
@@ -20,8 +21,18 @@ export async function POST(request: Request) {
       return errorResponse("FORBIDDEN", "Payment has not succeeded", 403);
     }
 
+    const businessId = session.metadata?.businessId ?? null;
+    const ownerEmail = session.customer_details?.email ?? session.customer_email ?? null;
+
+    if (!businessId || !ownerEmail) {
+      return errorResponse("FORBIDDEN", "Checkout session is missing verified customer details", 403);
+    }
+
+    await updateBusinessOwnerEmail(businessId, ownerEmail);
+
     return successResponse({
-      businessId: session.metadata?.businessId ?? null
+      businessId,
+      ownerEmail
     });
   } catch (err) {
     if (err instanceof z.ZodError) {

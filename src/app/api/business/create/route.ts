@@ -1,6 +1,7 @@
 import { getAuthUser, verifySignupIdentity } from "@/lib/auth";
 import { createBusiness } from "@/lib/db/businesses";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
+import { createOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
 import { z } from "zod";
 
 const schema = z.object({
@@ -23,20 +24,23 @@ export async function POST(request: Request) {
     const user = await getAuthUser();
     const body = schema.parse(await request.json());
     let ownerEmail: string;
+    let onboardingToken: string | null = null;
 
     if (user?.email) {
       ownerEmail = user.email;
     } else {
-      if (!body.ownerEmail) {
-        return errorResponse("FORBIDDEN", "Authentication required");
-      }
-      if (body.signupUserId) {
+      if (body.ownerEmail && body.signupUserId) {
         const isValidSignupIdentity = await verifySignupIdentity(body.signupUserId, body.ownerEmail);
         if (!isValidSignupIdentity) {
           return errorResponse("FORBIDDEN", "Not authorized to create business");
         }
+        ownerEmail = body.ownerEmail;
+      } else if (body.signupUserId) {
+        return errorResponse("FORBIDDEN", "Authentication required");
+      } else {
+        ownerEmail = createPendingOwnerEmail(body.businessId);
+        onboardingToken = createOnboardingToken({ businessId: body.businessId });
       }
-      ownerEmail = body.ownerEmail;
     }
 
     const business = await createBusiness({
@@ -53,7 +57,7 @@ export async function POST(request: Request) {
       crmUsed: body.crmUsed
     });
 
-    return successResponse({ businessId: business.id });
+    return successResponse({ businessId: business.id, onboardingToken });
   } catch (err) {
     if (err instanceof z.ZodError) return errorResponse("VALIDATION_ERROR", err.issues[0].message);
     return handleRouteError(err);

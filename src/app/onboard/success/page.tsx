@@ -14,7 +14,6 @@ import { getPasswordValidationError, PASSWORD_RULES } from "@/lib/password";
 type SuccessStatus =
   | "verifying_payment"
   | "needs_password"
-  | "creating_account"
   | "provisioning"
   | "online"
   | "awaiting_confirmation"
@@ -47,45 +46,9 @@ function OnboardSuccessContent() {
   }, []);
 
   useEffect(() => {
-    let canceled = false;
-    let interval: ReturnType<typeof setInterval> | null = null;
-
-    async function startPolling() {
-      if (canceled) return;
-
-      let attempts = 0;
-      interval = setInterval(async () => {
-        attempts++;
-
-        try {
-          const res = await fetch("/api/business/status");
-          if (res.status === 401) {
-            setStatus("awaiting_confirmation");
-            if (interval) clearInterval(interval);
-            return;
-          }
-
-          const json = await res.json();
-          if (json.data?.status === "online") {
-            setStatus("online");
-            if (interval) clearInterval(interval);
-            return;
-          }
-
-          setStatus("provisioning");
-        } catch {
-          // ignore transient polling failures
-        }
-
-        if (attempts >= 24 && interval) {
-          clearInterval(interval);
-        }
-      }, 5000);
-    }
-
     async function resolvePostPaymentState() {
       if (!sessionId) {
-        await startPolling();
+        setStatus("provisioning");
         return;
       }
 
@@ -102,6 +65,22 @@ function OnboardSuccessContent() {
           throw new Error(verifyJson?.error?.message ?? "Could not verify your payment.");
         }
 
+        const verifyJson = await verifyRes.json();
+        const ownerEmail = verifyJson.data?.ownerEmail;
+        if (typeof ownerEmail !== "string" || !ownerEmail) {
+          throw new Error("Could not determine the paid account email.");
+        }
+
+        setSignupEmail(ownerEmail);
+        const rawOnboarding = localStorage.getItem(ONBOARD_STORAGE_KEY);
+        if (rawOnboarding) {
+          const onboardingData = JSON.parse(rawOnboarding) as OnboardingData;
+          localStorage.setItem(
+            ONBOARD_STORAGE_KEY,
+            JSON.stringify({ ...onboardingData, ownerEmail })
+          );
+        }
+
         setStatus("needs_password");
       } catch (err) {
         setStatus("error");
@@ -110,19 +89,16 @@ function OnboardSuccessContent() {
     }
 
     void resolvePostPaymentState();
-
-    return () => {
-      canceled = true;
-      if (interval) clearInterval(interval);
-    };
   }, [sessionId]);
 
   useEffect(() => {
     if (status !== "provisioning") return;
 
     let interval: ReturnType<typeof setInterval> | null = null;
+    let attempts = 0;
 
     interval = setInterval(async () => {
+      attempts++;
       try {
         const res = await fetch("/api/business/status");
         if (res.status === 401) {
@@ -138,6 +114,10 @@ function OnboardSuccessContent() {
         }
       } catch {
         // ignore transient polling failures
+      }
+
+      if (attempts >= 24 && interval) {
+        clearInterval(interval);
       }
     }, 5000);
 
@@ -170,8 +150,6 @@ function OnboardSuccessContent() {
 
     try {
       setSubmitting(true);
-      setStatus("creating_account");
-
       const rawOnboarding = localStorage.getItem(ONBOARD_STORAGE_KEY);
       const onboardingData = rawOnboarding ? JSON.parse(rawOnboarding) as OnboardingData : null;
       const supabase = getSupabaseBrowserClient();
@@ -248,9 +226,7 @@ function OnboardSuccessContent() {
           <h1 className="text-2xl font-bold text-parchment mt-2">
             {status === "needs_password"
               ? "Create your password"
-              : status === "creating_account"
-                ? "Creating your account"
-                : status === "provisioning"
+              : status === "provisioning"
                   ? "Setting things up…"
                   : status === "online"
                     ? "Your Coworker is Live!"
@@ -263,9 +239,7 @@ function OnboardSuccessContent() {
           <p className="text-sm text-parchment/50 mt-2">
             {status === "needs_password"
               ? "Payment succeeded. Create your password to finish account setup."
-              : status === "creating_account"
-                ? "Finalizing your account."
-                : status === "provisioning"
+              : status === "provisioning"
                   ? "We're provisioning your VPS and configuring your AI coworker. This takes 2–5 minutes."
                   : status === "online"
                     ? "Everything is ready. Head to your dashboard."
@@ -290,9 +264,9 @@ function OnboardSuccessContent() {
                 label="Email"
                 type="email"
                 value={signupEmail}
-                onChange={(event) => setSignupEmail(event.target.value)}
                 placeholder="you@business.com"
                 autoComplete="email"
+                readOnly
                 required
               />
               <Input

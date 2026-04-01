@@ -75,7 +75,9 @@ export default function CheckoutPage() {
             crmUsed: data.crmUsed
           })
         });
-        if (!createRes.ok) throw new Error("Failed to create business");
+        const createJson = await createRes.json();
+        if (!createRes.ok) throw new Error(createJson.error?.message ?? "Failed to create business");
+        data.onboardingToken = createJson.data?.onboardingToken ?? undefined;
       }
 
       if (data.assistantChat?.drafts) {
@@ -85,6 +87,7 @@ export default function CheckoutPage() {
           body: JSON.stringify({
             businessId,
             ownerEmail: data.ownerEmail,
+            onboardingToken: data.onboardingToken,
             signupUserId: data.signupUserId,
             soulMd: data.assistantChat.drafts.soulMd,
             identityMd: data.assistantChat.drafts.identityMd,
@@ -103,6 +106,7 @@ export default function CheckoutPage() {
           businessId,
           billingPeriod: data.billingPeriod ?? "biennial",
           ownerEmail: data.ownerEmail,
+          onboardingToken: data.onboardingToken,
           signupUserId: data.signupUserId
         })
       });
