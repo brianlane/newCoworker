@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { getLogBadgeVariant, getMonthLabel } from "@/lib/admin/dashboard";
+import { formatAdminLabel, getLogBadgeVariant, getMonthLabel } from "@/lib/admin/dashboard";
 
 describe("admin dashboard month labels", () => {
   it("pins the date to the first day before subtracting months", () => {
@@ -15,5 +15,10 @@ describe("admin dashboard month labels", () => {
     expect(getLogBadgeVariant("error")).toBe("error");
     expect(getLogBadgeVariant("success")).toBe("success");
     expect(getLogBadgeVariant("queued")).toBe("pending");
+  });
+
+  it("replaces every underscore when formatting admin labels", () => {
+    expect(formatAdminLabel("data_flow_check")).toBe("data flow check");
+    expect(formatAdminLabel("urgent_alert")).toBe("urgent alert");
   });
 });

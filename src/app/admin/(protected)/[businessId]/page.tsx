@@ -3,6 +3,7 @@ import { getBusiness } from "@/lib/db/businesses";
 import { getRecentLogs } from "@/lib/db/logs";
 import { getBusinessConfig } from "@/lib/db/configs";
 import { getSubscription } from "@/lib/db/subscriptions";
+import { formatAdminLabel, getLogBadgeVariant } from "@/lib/admin/dashboard";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
@@ -69,7 +70,7 @@ export default async function BusinessDetailPage({
                             : "pending"
                       }
                     >
-                      {subscription.status}
+                      {formatAdminLabel(subscription.status)}
                     </Badge>
                   </dd>
                 </div>
@@ -146,21 +147,15 @@ export default async function BusinessDetailPage({
             {logs.map((log) => (
               <li key={log.id} className="flex justify-between items-center py-3">
                 <div>
-                  <p className="text-sm text-parchment capitalize">{log.task_type.replace("_", " ")}</p>
+                  <p className="text-sm text-parchment capitalize">{formatAdminLabel(log.task_type)}</p>
                   <p className="text-xs text-parchment/30">
                     {new Date(log.created_at).toLocaleString()}
                   </p>
                 </div>
                 <Badge
-                  variant={
-                    log.status === "urgent_alert" || log.status === "error"
-                      ? "error"
-                      : log.status === "success"
-                        ? "success"
-                        : "pending"
-                  }
+                  variant={getLogBadgeVariant(log.status)}
                 >
-                  {log.status.replace("_", " ")}
+                  {formatAdminLabel(log.status)}
                 </Badge>
               </li>
             ))}

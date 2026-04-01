@@ -3,7 +3,7 @@ import { listSubscriptionsByBusinessIds } from "@/lib/db/subscriptions";
 import { getRecentAlertsAll, getRecentLogsAll } from "@/lib/db/logs";
 import { getPeriodPricing } from "@/lib/plans/tier";
 import type { BillingPeriod } from "@/lib/plans/tier";
-import { getLogBadgeVariant, getMonthLabel } from "@/lib/admin/dashboard";
+import { formatAdminLabel, getLogBadgeVariant, getMonthLabel } from "@/lib/admin/dashboard";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
@@ -198,7 +198,7 @@ export default async function AdminDashboardPage() {
                           : "pending"
                     }
                   >
-                    {status.replace("_", " ")}
+                      {formatAdminLabel(status)}
                   </Badge>
                   <span className="text-parchment/60 font-medium">{count}</span>
                 </div>
@@ -231,7 +231,7 @@ export default async function AdminDashboardPage() {
                       href={`/admin/${log.business_id}`}
                       className="text-xs text-parchment capitalize hover:text-signal-teal truncate block"
                     >
-                      {log.task_type.replace("_", " ")}
+                      {formatAdminLabel(log.task_type)}
                     </a>
                     <p className="text-xs text-parchment/30 font-mono truncate">
                       {log.business_id.slice(0, 8)}…
@@ -239,7 +239,7 @@ export default async function AdminDashboardPage() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <Badge variant={getLogBadgeVariant(log.status)}>
-                      {log.status.replace("_", " ")}
+                      {formatAdminLabel(log.status)}
                     </Badge>
                     <span className="text-xs text-parchment/30">{timeAgo(log.created_at)}</span>
                   </div>
@@ -267,7 +267,7 @@ export default async function AdminDashboardPage() {
                       href={`/admin/${log.business_id}`}
                       className="text-xs text-parchment capitalize hover:text-signal-teal truncate block"
                     >
-                      {log.task_type.replace("_", " ")}
+                      {formatAdminLabel(log.task_type)}
                     </a>
                     <p className="text-xs text-parchment/30 font-mono truncate">
                       {log.business_id.slice(0, 8)}…
@@ -275,7 +275,7 @@ export default async function AdminDashboardPage() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <Badge variant={getLogBadgeVariant(log.status)}>
-                      {log.status.replace("_", " ")}
+                      {formatAdminLabel(log.status)}
                     </Badge>
                     <span className="text-xs text-parchment/30">{timeAgo(log.created_at)}</span>
                   </div>
