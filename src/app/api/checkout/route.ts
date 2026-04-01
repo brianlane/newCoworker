@@ -2,7 +2,8 @@ import { getAuthUser, verifySignupIdentity } from "@/lib/auth";
 import { createCheckoutSession, resolveIntroDiscountCouponId, resolvePriceId } from "@/lib/stripe/client";
 import { createSubscription } from "@/lib/db/subscriptions";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
-import { verifyOnboardingToken } from "@/lib/onboarding/token";
+import { verifyOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
+import { getBusiness } from "@/lib/db/businesses";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import { getCommitmentMonths } from "@/lib/plans/tier";
@@ -36,6 +37,10 @@ export async function POST(request: Request) {
         metadataUserId = body.signupUserId;
         customerEmail = body.ownerEmail;
       } else if (body.ownerEmail && body.onboardingToken && verifyOnboardingToken(body.onboardingToken, { businessId: body.businessId })) {
+        const business = await getBusiness(body.businessId);
+        if (!business || business.owner_email !== createPendingOwnerEmail(body.businessId)) {
+          return errorResponse("FORBIDDEN", "Onboarding token is no longer valid");
+        }
         metadataUserId = body.businessId;
         customerEmail = body.ownerEmail;
       } else {

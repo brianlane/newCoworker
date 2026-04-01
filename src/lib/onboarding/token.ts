@@ -31,7 +31,10 @@ export function createOnboardingToken(payload: { businessId: string }): string {
 }
 
 export function verifyOnboardingToken(token: string, expected: { businessId: string }): boolean {
-  const [encodedPayload, signature] = token.split(".");
+  const parts = token.split(".");
+  if (parts.length !== 2) return false;
+
+  const [encodedPayload, signature] = parts;
   if (!encodedPayload || !signature) return false;
 
   const expectedSignature = signPayload(encodedPayload);

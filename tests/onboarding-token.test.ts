@@ -26,6 +26,7 @@ describe("onboarding token", () => {
 
     expect(verifyOnboardingToken("not-a-token", { businessId: "biz_123" })).toBe(false);
     expect(verifyOnboardingToken("abc.def.ghi", { businessId: "biz_123" })).toBe(false);
+    expect(verifyOnboardingToken("abc.", { businessId: "biz_123" })).toBe(false);
   });
 
   it("rejects malformed multi-byte signatures without throwing", async () => {
@@ -34,6 +35,13 @@ describe("onboarding token", () => {
     const [encodedPayload] = token.split(".");
 
     expect(verifyOnboardingToken(`${encodedPayload}.${"é".repeat(43)}`, { businessId: "biz_123" })).toBe(false);
+  });
+
+  it("rejects tokens with extra dot-delimited segments even when the base token is valid", async () => {
+    const { createOnboardingToken, verifyOnboardingToken } = await import("@/lib/onboarding/token");
+    const token = createOnboardingToken({ businessId: "biz_123" });
+
+    expect(verifyOnboardingToken(`${token}.garbage`, { businessId: "biz_123" })).toBe(false);
   });
 
   it("rejects tokens with a valid signature but invalid payload json", async () => {

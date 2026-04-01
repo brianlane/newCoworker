@@ -15,10 +15,21 @@ vi.mock("@/lib/db/subscriptions", () => ({
   createSubscription: vi.fn()
 }));
 
+vi.mock("@/lib/db/businesses", () => ({
+  getBusiness: vi.fn()
+}));
+
+vi.mock("@/lib/onboarding/token", () => ({
+  verifyOnboardingToken: vi.fn(),
+  createPendingOwnerEmail: vi.fn((businessId: string) => `pending+${businessId}@onboarding.local`)
+}));
+
 import { POST } from "@/app/api/checkout/route";
 import { getAuthUser, verifySignupIdentity } from "@/lib/auth";
 import { createCheckoutSession, resolveIntroDiscountCouponId, resolvePriceId } from "@/lib/stripe/client";
 import { createSubscription } from "@/lib/db/subscriptions";
+import { getBusiness } from "@/lib/db/businesses";
+import { verifyOnboardingToken } from "@/lib/onboarding/token";
 
 describe("api/checkout route", () => {
   const OLD_ENV = process.env;
@@ -31,6 +42,11 @@ describe("api/checkout route", () => {
     vi.mocked(resolvePriceId).mockReturnValue("price_test");
     vi.mocked(resolveIntroDiscountCouponId).mockReturnValue(undefined);
     vi.mocked(createSubscription).mockResolvedValue({} as never);
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: businessId,
+      owner_email: `pending+${businessId}@onboarding.local`
+    } as never);
+    vi.mocked(verifyOnboardingToken).mockReturnValue(false);
     vi.mocked(createCheckoutSession).mockResolvedValue({
       id: "cs_test_123",
       url: "https://checkout.stripe.test/session"
@@ -117,6 +133,69 @@ describe("api/checkout route", () => {
     expect(response.status).toBe(403);
     expect(body.ok).toBe(false);
     expect(body.error.message).toBe("Not authorized for checkout");
+    expect(createCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it("allows onboarding-token checkout when the business is still pending", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    vi.mocked(verifyOnboardingToken).mockReturnValue(true);
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "starter",
+        businessId,
+        billingPeriod: "annual",
+        ownerEmail: "owner@example.com",
+        onboardingToken: "token"
+      })
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(getBusiness).toHaveBeenCalledWith(businessId);
+    expect(createSubscription).toHaveBeenCalled();
+    expect(createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customerEmail: "owner@example.com",
+        metadata: expect.objectContaining({
+          userId: businessId
+        })
+      })
+    );
+  });
+
+  it("rejects onboarding-token checkout when the business is no longer pending", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    vi.mocked(verifyOnboardingToken).mockReturnValue(true);
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: businessId,
+      owner_email: "owner@example.com"
+    } as never);
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "starter",
+        businessId,
+        billingPeriod: "annual",
+        ownerEmail: "owner@example.com",
+        onboardingToken: "token"
+      })
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.ok).toBe(false);
+    expect(body.error.message).toBe("Onboarding token is no longer valid");
+    expect(createSubscription).not.toHaveBeenCalled();
     expect(createCheckoutSession).not.toHaveBeenCalled();
   });
 });
