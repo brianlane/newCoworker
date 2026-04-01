@@ -62,6 +62,8 @@ export default function CheckoutPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             businessId,
+            ownerEmail: data.ownerEmail,
+            signupUserId: data.signupUserId,
             name: data.businessName,
             tier: data.tier,
             businessType: data.businessType,
@@ -82,6 +84,8 @@ export default function CheckoutPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             businessId,
+            ownerEmail: data.ownerEmail,
+            signupUserId: data.signupUserId,
             soulMd: data.assistantChat.drafts.soulMd,
             identityMd: data.assistantChat.drafts.identityMd,
             memoryMd: data.assistantChat.drafts.memoryMd
@@ -97,7 +101,9 @@ export default function CheckoutPage() {
         body: JSON.stringify({
           tier: data.tier,
           businessId,
-          billingPeriod: data.billingPeriod ?? "biennial"
+          billingPeriod: data.billingPeriod ?? "biennial",
+          ownerEmail: data.ownerEmail,
+          signupUserId: data.signupUserId
         })
       });
       const checkoutJson = await checkoutRes.json();

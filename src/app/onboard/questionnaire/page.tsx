@@ -368,7 +368,11 @@ function QuestionnaireForm() {
     viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
   }, [form.assistantChat?.messages.length, chatLoading, pendingUserMessage]);
 
-  function buildStoredOnboardingData(businessId?: string): OnboardingData {
+  function buildStoredOnboardingData(
+    businessId?: string,
+    ownerEmail?: string,
+    signupUserId?: string
+  ): OnboardingData {
     const storedAssistantChat: OnboardingAssistantChatState = {
       readyToFinalize: form.assistantChat?.readyToFinalize ?? false,
       completionPercent: form.assistantChat?.completionPercent ?? 0,
@@ -382,6 +386,8 @@ function QuestionnaireForm() {
 
     return {
       businessId,
+      ownerEmail,
+      signupUserId,
       tier,
       billingPeriod: period,
       ...form,
@@ -474,7 +480,11 @@ function QuestionnaireForm() {
       setSignupLoading(true);
 
       const supabase = getSupabaseBrowserClient();
-      const onboardingData = buildStoredOnboardingData(existingOnboarding?.businessId);
+      const onboardingData = buildStoredOnboardingData(
+        existingOnboarding?.businessId,
+        signupEmail || existingOnboarding?.ownerEmail,
+        existingOnboarding?.signupUserId
+      );
       localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(onboardingData));
 
       const encodedRedirect = encodeURIComponent("/onboard/checkout");
@@ -510,7 +520,10 @@ function QuestionnaireForm() {
       const checkoutSignupUserId = signUpData.session ? undefined : signupUserId;
       await createBusinessAndConfig(businessId, !existingOnboarding?.businessId, checkoutSignupUserId);
       const checkoutUrl = await createCheckout(businessId, checkoutSignupUserId);
-      localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(buildStoredOnboardingData(businessId)));
+      localStorage.setItem(
+        ONBOARD_STORAGE_KEY,
+        JSON.stringify(buildStoredOnboardingData(businessId, signupEmail, checkoutSignupUserId))
+      );
       localStorage.removeItem(DRAFT_STORAGE_KEY);
       window.location.href = checkoutUrl;
     } catch (err) {
