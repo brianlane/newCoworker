@@ -141,11 +141,20 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
   }
 
   if (subscriptionId && billingPeriod && tier !== "enterprise") {
-    await ensureCommitmentSchedule({
-      subscriptionId,
-      tier,
-      billingPeriod
-    });
+    try {
+      await ensureCommitmentSchedule({
+        subscriptionId,
+        tier,
+        billingPeriod
+      });
+    } catch (err) {
+      logger.error("Stripe commitment schedule setup failed", {
+        businessId,
+        subscriptionId,
+        billingPeriod,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
   }
 
   const { getBusiness } = await import("@/lib/db/businesses");

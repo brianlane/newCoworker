@@ -36,6 +36,7 @@ import {
 } from "@/lib/db/subscriptions";
 import { getBusiness } from "@/lib/db/businesses";
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
+import { logger } from "@/lib/logger";
 
 describe("stripe webhook route", () => {
   beforeEach(() => {
@@ -145,5 +146,54 @@ describe("stripe webhook route", () => {
 
     expect(response.status).toBe(200);
     expect(updateSubscription).toHaveBeenCalledWith("local_sub_3", { status: "active" });
+  });
+
+  it("still provisions when commitment schedule setup fails", async () => {
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_4",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          metadata: {
+            businessId: "biz_4",
+            tier: "standard",
+            billingPeriod: "biennial"
+          },
+          customer: "cus_4",
+          subscription: "sub_4"
+        }
+      }
+    } as never);
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "local_sub_4",
+      status: "pending",
+      stripe_subscription_id: null
+    } as never);
+    vi.mocked(ensureCommitmentSchedule).mockRejectedValueOnce(new Error("schedule api unavailable"));
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(updateSubscription).toHaveBeenCalledWith("local_sub_4", {
+      status: "active",
+      stripe_customer_id: "cus_4",
+      stripe_subscription_id: "sub_4"
+    });
+    expect(logger.error).toHaveBeenCalledWith(
+      "Stripe commitment schedule setup failed",
+      expect.objectContaining({
+        businessId: "biz_4",
+        subscriptionId: "sub_4",
+        billingPeriod: "biennial",
+        error: "schedule api unavailable"
+      })
+    );
+    expect(orchestrateProvisioning).toHaveBeenCalledWith({ businessId: "biz_4", tier: "standard" });
   });
 });
