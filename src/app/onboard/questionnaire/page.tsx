@@ -372,7 +372,8 @@ function QuestionnaireForm() {
   function buildStoredOnboardingData(
     businessId?: string,
     ownerEmail?: string,
-    signupUserId?: string
+    signupUserId?: string,
+    onboardingToken?: string
   ): OnboardingData {
     const storedAssistantChat: OnboardingAssistantChatState = {
       readyToFinalize: form.assistantChat?.readyToFinalize ?? false,
@@ -389,6 +390,7 @@ function QuestionnaireForm() {
       businessId,
       ownerEmail,
       signupUserId,
+      onboardingToken,
       tier,
       billingPeriod: period,
       ...form,
@@ -414,7 +416,8 @@ function QuestionnaireForm() {
       const onboardingData = buildStoredOnboardingData(
         existingOnboarding?.businessId,
         signupEmail || existingOnboarding?.ownerEmail,
-        undefined
+        undefined,
+        existingOnboarding?.onboardingToken
       );
       localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(onboardingData));
       localStorage.removeItem(DRAFT_STORAGE_KEY);

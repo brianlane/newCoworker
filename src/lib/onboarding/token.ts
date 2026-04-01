@@ -1,7 +1,10 @@
 import { createHmac, timingSafeEqual } from "crypto";
 
+const TOKEN_TTL_MS = 72 * 60 * 60 * 1000; // 72 hours
+
 type OnboardingTokenPayload = {
   businessId: string;
+  issuedAt: number;
 };
 
 function getOnboardingTokenSecret(): string {
@@ -20,26 +23,32 @@ function signPayload(encodedPayload: string): string {
   return createHmac("sha256", getOnboardingTokenSecret()).update(encodedPayload).digest("base64url");
 }
 
-export function createOnboardingToken(payload: OnboardingTokenPayload): string {
-  const encodedPayload = encodePayload(payload);
+export function createOnboardingToken(payload: { businessId: string }): string {
+  const fullPayload: OnboardingTokenPayload = { businessId: payload.businessId, issuedAt: Date.now() };
+  const encodedPayload = encodePayload(fullPayload);
   const signature = signPayload(encodedPayload);
   return `${encodedPayload}.${signature}`;
 }
 
-export function verifyOnboardingToken(token: string, expected: OnboardingTokenPayload): boolean {
+export function verifyOnboardingToken(token: string, expected: { businessId: string }): boolean {
   const [encodedPayload, signature] = token.split(".");
   if (!encodedPayload || !signature) return false;
 
   const expectedSignature = signPayload(encodedPayload);
+  const signatureBuffer = Buffer.from(signature, "utf8");
+  const expectedSignatureBuffer = Buffer.from(expectedSignature, "utf8");
   const signatureMatches =
-    signature.length === expectedSignature.length &&
-    timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature));
+    signatureBuffer.length === expectedSignatureBuffer.length &&
+    timingSafeEqual(signatureBuffer, expectedSignatureBuffer);
 
   if (!signatureMatches) return false;
 
   try {
     const payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as OnboardingTokenPayload;
-    return payload.businessId === expected.businessId;
+    if (payload.businessId !== expected.businessId) return false;
+    if (typeof payload.issuedAt !== "number") return false;
+    if (Date.now() - payload.issuedAt > TOKEN_TTL_MS) return false;
+    return true;
   } catch {
     return false;
   }

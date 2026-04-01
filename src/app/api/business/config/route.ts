@@ -1,7 +1,7 @@
 import { getAuthUser, verifySignupIdentity } from "@/lib/auth";
 import { upsertBusinessConfig } from "@/lib/db/configs";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
-import { verifyOnboardingToken } from "@/lib/onboarding/token";
+import { verifyOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
 import { z } from "zod";
 
 const schema = z.object({
@@ -37,6 +37,14 @@ export async function POST(request: Request) {
         }
         ownerEmail = body.ownerEmail;
       } else if (body.onboardingToken && verifyOnboardingToken(body.onboardingToken, { businessId: body.businessId })) {
+        const { data: business } = await db
+          .from("businesses")
+          .select("owner_email")
+          .eq("id", body.businessId)
+          .single();
+        if (!business || business.owner_email !== createPendingOwnerEmail(body.businessId)) {
+          return errorResponse("FORBIDDEN", "Onboarding token is no longer valid");
+        }
         ownerEmail = null;
       } else {
         return errorResponse("FORBIDDEN", "Authentication required");

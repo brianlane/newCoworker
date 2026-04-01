@@ -1,10 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 
 describe("onboarding token", () => {
   beforeEach(() => {
     vi.resetModules();
+    vi.useRealTimers();
     process.env.ONBOARDING_TOKEN_SECRET = "test-onboarding-secret";
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("creates and verifies a token for the expected business id", async () => {
@@ -23,10 +28,41 @@ describe("onboarding token", () => {
     expect(verifyOnboardingToken("abc.def.ghi", { businessId: "biz_123" })).toBe(false);
   });
 
+  it("rejects malformed multi-byte signatures without throwing", async () => {
+    const { createOnboardingToken, verifyOnboardingToken } = await import("@/lib/onboarding/token");
+    const token = createOnboardingToken({ businessId: "biz_123" });
+    const [encodedPayload] = token.split(".");
+
+    expect(verifyOnboardingToken(`${encodedPayload}.${"é".repeat(43)}`, { businessId: "biz_123" })).toBe(false);
+  });
+
   it("rejects tokens with a valid signature but invalid payload json", async () => {
     const crypto = await import("crypto");
     const encodedPayload = Buffer.from("{bad json", "utf8").toString("base64url");
     const signature = crypto.createHmac("sha256", process.env.ONBOARDING_TOKEN_SECRET!).update(encodedPayload).digest("base64url");
+    const { verifyOnboardingToken } = await import("@/lib/onboarding/token");
+
+    expect(verifyOnboardingToken(`${encodedPayload}.${signature}`, { businessId: "biz_123" })).toBe(false);
+  });
+
+  it("rejects expired tokens (issued more than 72 hours ago)", async () => {
+    vi.useFakeTimers();
+    const { createOnboardingToken, verifyOnboardingToken } = await import("@/lib/onboarding/token");
+
+    const token = createOnboardingToken({ businessId: "biz_123" });
+    expect(verifyOnboardingToken(token, { businessId: "biz_123" })).toBe(true);
+
+    vi.advanceTimersByTime(73 * 60 * 60 * 1000);
+    expect(verifyOnboardingToken(token, { businessId: "biz_123" })).toBe(false);
+  });
+
+  it("rejects legacy tokens without issuedAt even if signature is valid", async () => {
+    const crypto = await import("crypto");
+    const encodedPayload = Buffer.from(JSON.stringify({ businessId: "biz_123" }), "utf8").toString("base64url");
+    const signature = crypto
+      .createHmac("sha256", process.env.ONBOARDING_TOKEN_SECRET!)
+      .update(encodedPayload)
+      .digest("base64url");
     const { verifyOnboardingToken } = await import("@/lib/onboarding/token");
 
     expect(verifyOnboardingToken(`${encodedPayload}.${signature}`, { businessId: "biz_123" })).toBe(false);
