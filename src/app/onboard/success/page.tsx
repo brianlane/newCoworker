@@ -215,7 +215,11 @@ function OnboardSuccessContent() {
                 key={item}
                 className={[
                   "h-1 flex-1 rounded-full transition-colors",
-                  item < 4 || status === "awaiting_confirmation" || status === "provisioning" || status === "online"
+                  item < 4
+                    || status === "needs_password"
+                    || status === "awaiting_confirmation"
+                    || status === "provisioning"
+                    || status === "online"
                     ? "bg-claw-green"
                     : "bg-parchment/10"
                 ].join(" ")}
