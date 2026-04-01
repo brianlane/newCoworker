@@ -19,7 +19,7 @@ const variantClasses: Record<Variant, string> = {
   offline: "bg-parchment/10 text-parchment/50 border-parchment/20",
   high_load: "bg-spark-orange/20 text-spark-orange border-spark-orange/30",
   success: "bg-claw-green/20 text-claw-green border-claw-green/30",
-  error: "bg-parchment/10 text-parchment/75 border-parchment/20",
+  error: "bg-spark-orange/20 text-spark-orange border-spark-orange/30",
   urgent: "bg-spark-orange text-deep-ink border-spark-orange/80",
   pending: "bg-signal-teal/20 text-signal-teal border-signal-teal/30",
   neutral: "bg-soft-stone/20 text-soft-stone border-soft-stone/30"
