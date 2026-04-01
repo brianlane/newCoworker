@@ -535,7 +535,7 @@ function QuestionnaireForm() {
 
   const canContinueFromChat = chatLoading
     ? false
-    : chatClosed || (form.assistantChat?.readyToFinalize ?? false) || (form.assistantChat?.completionPercent ?? 0) >= 60;
+    : form.assistantChat?.readyToFinalize ?? false;
 
   return (
     <div className="min-h-screen bg-deep-ink flex items-center justify-center px-4 py-12">
