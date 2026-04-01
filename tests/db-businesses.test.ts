@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createBusiness, getBusiness, listBusinesses, updateBusinessStatus } from "@/lib/db/businesses";
+import {
+  createBusiness,
+  getBusiness,
+  listBusinesses,
+  updateBusinessOwnerEmail,
+  updateBusinessStatus
+} from "@/lib/db/businesses";
 
 // Mock the Supabase service client
 vi.mock("@/lib/supabase/server", () => ({
@@ -128,6 +134,21 @@ describe("db/businesses", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     await expect(updateBusinessStatus("x", "online")).rejects.toThrow("updateBusinessStatus");
+  });
+
+  it("updateBusinessOwnerEmail updates owner email", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await updateBusinessOwnerEmail("uuid-biz-1", "paid@test.com");
+    expect(db.update).toHaveBeenCalledWith({ owner_email: "paid@test.com" });
+  });
+
+  it("updateBusinessOwnerEmail throws on error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(updateBusinessOwnerEmail("uuid-biz-1", "paid@test.com")).rejects.toThrow("updateBusinessOwnerEmail");
   });
 
   it("createBusiness uses provided client", async () => {
