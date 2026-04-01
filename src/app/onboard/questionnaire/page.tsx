@@ -188,7 +188,6 @@ function QuestionnaireForm() {
   const chatViewportRef = useRef<HTMLDivElement>(null);
   const assistantDone = form.assistantChat?.readyToFinalize ?? false;
   const storedChatMessageCount = form.assistantChat?.messages.length ?? 0;
-  const chatMessageCount = storedChatMessageCount + (pendingUserMessage ? 1 : 0);
   const chatLimitReached = storedChatMessageCount >= MAX_ONBOARDING_CHAT_MESSAGES - 1;
   const chatClosed = assistantDone || chatLimitReached;
 

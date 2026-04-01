@@ -148,7 +148,7 @@ type OnboardingTopicStatus = {
   toneKnown: boolean;
 };
 
-const TOOL_SIGNAL_PATTERN =
+export const TOOL_SIGNAL_PATTERN =
   /\b(text|texts|sms|call|calls|phone|phones|gmail|email|emails|calendar|calendly|crm|hubspot|pipeline|imessage)\b/i;
 
 function hasUserTranscriptSignal(messages: OnboardingChatMessage[], pattern: RegExp): boolean {

@@ -30,7 +30,7 @@ describe("api/checkout route", () => {
     process.env = { ...OLD_ENV, NEXT_PUBLIC_APP_URL: "http://localhost:3000" };
     vi.mocked(resolvePriceId).mockReturnValue("price_test");
     vi.mocked(resolveIntroDiscountCouponId).mockReturnValue(undefined);
-    vi.mocked(createSubscription).mockResolvedValue(undefined);
+    vi.mocked(createSubscription).mockResolvedValue({} as never);
     vi.mocked(createCheckoutSession).mockResolvedValue({
       id: "cs_test_123",
       url: "https://checkout.stripe.test/session"

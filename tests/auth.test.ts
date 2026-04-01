@@ -6,7 +6,7 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import { createSupabaseServerClient, createSupabaseServiceClient } from "@/lib/supabase/server";
-import { getAuthUser, requireAuth, requireAdmin, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireAuth, requireAdmin, requireOwner, verifySignupIdentity } from "@/lib/auth";
 
 function mockSupabase(user: Record<string, unknown> | null, error: unknown = null) {
   return {
@@ -173,5 +173,40 @@ describe("auth", () => {
     vi.mocked(createSupabaseServerClient).mockRejectedValue(new Error("env missing"));
     const result = await getAuthUser();
     expect(result).toBeNull();
+  });
+
+  it("verifySignupIdentity returns true when service user email matches case-insensitively", async () => {
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+      auth: {
+        admin: {
+          getUserById: vi.fn().mockResolvedValue({
+            data: { user: { email: "Owner@Test.com" } },
+            error: null
+          })
+        }
+      }
+    } as never);
+
+    await expect(verifySignupIdentity("user-1", "owner@test.com")).resolves.toBe(true);
+  });
+
+  it("verifySignupIdentity returns false when admin lookup has no email", async () => {
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+      auth: {
+        admin: {
+          getUserById: vi.fn().mockResolvedValue({
+            data: { user: { email: null } },
+            error: null
+          })
+        }
+      }
+    } as never);
+
+    await expect(verifySignupIdentity("user-1", "owner@test.com")).resolves.toBe(false);
+  });
+
+  it("verifySignupIdentity returns false when service client lookup throws", async () => {
+    vi.mocked(createSupabaseServiceClient).mockRejectedValue(new Error("service unavailable"));
+    await expect(verifySignupIdentity("user-1", "owner@test.com")).resolves.toBe(false);
   });
 });

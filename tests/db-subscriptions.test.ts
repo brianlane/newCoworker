@@ -92,6 +92,14 @@ describe("db/subscriptions", () => {
     expect(result?.stripe_subscription_id).toBe("sub_mock");
   });
 
+  it("getSubscriptionByStripeSubscriptionId returns null on error", async () => {
+    const db = mockDb({ single: vi.fn().mockResolvedValue({ data: null, error: { message: "nf" } }) });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const result = await getSubscriptionByStripeSubscriptionId("bad_sub");
+    expect(result).toBeNull();
+  });
+
   it("updateSubscription calls update with patch", async () => {
     const eqFn = vi.fn().mockResolvedValue({ error: null });
     const db = { ...mockDb(), eq: eqFn };

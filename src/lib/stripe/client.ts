@@ -7,12 +7,6 @@ export function getStripe(secretKey?: string): Stripe {
   return new Stripe(key, { apiVersion: "2026-02-25.clover" });
 }
 
-export function resolveStripePublishableKey(): string {
-  const key = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? process.env.STRIPE_PUBLISHABLE_KEY;
-  if (!key) throw new Error("Stripe publishable key is not configured");
-  return key;
-}
-
 export function verifyWebhook(payload: string, signature: string, secret?: string): Stripe.Event {
   const webhookSecret = secret ?? process.env.STRIPE_WEBHOOK_SECRET;
   if (!webhookSecret) throw new Error("STRIPE_WEBHOOK_SECRET is not configured");

@@ -10,7 +10,8 @@ import {
   onboardingChatMessageSchema,
   onboardingChatModelResponseSchema,
   ONBOARDING_CHAT_RATE_LIMIT,
-  summarizeOnboardingTopicStatus
+  summarizeOnboardingTopicStatus,
+  TOOL_SIGNAL_PATTERN
 } from "@/lib/onboarding/chat";
 
 function resolveOnboardingModels(): string[] {
@@ -76,9 +77,6 @@ function isRepeatedToolsQuestion(message: string): boolean {
   return /what tools do you currently use|what tools you currently use|manage leads, schedule calls, and handle messages|specific crm|gmail, calendly|phone\/text/i
     .test(message.toLowerCase());
 }
-
-const TOOL_SIGNAL_PATTERN =
-  /\b(text|texts|sms|call|calls|phone|phones|gmail|email|emails|calendar|calendly|crm|hubspot|pipeline|imessage)\b/i;
 
 function countToolSignalUserMessages(messages: z.infer<typeof onboardingChatMessageSchema>[]): number {
   return messages.filter((message) => message.role === "user" && TOOL_SIGNAL_PATTERN.test(message.content)).length;
