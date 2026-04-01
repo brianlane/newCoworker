@@ -17,6 +17,7 @@ describe("api-response", () => {
 
   it("errorResponse maps known codes to correct status", async () => {
     const cases: [Parameters<typeof errorResponse>[0], number][] = [
+      ["DB_ERROR", 500],
       ["UNAUTHORIZED", 401],
       ["FORBIDDEN", 403],
       ["NOT_FOUND", 404],

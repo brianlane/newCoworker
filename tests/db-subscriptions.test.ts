@@ -3,6 +3,7 @@ import {
   createSubscription,
   getSubscription,
   getSubscriptionByStripeSubscriptionId,
+  listSubscriptionsByBusinessIds,
   updateSubscription
 } from "@/lib/db/subscriptions";
 
@@ -114,5 +115,56 @@ describe("db/subscriptions", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     await expect(updateSubscription("sub-uuid-1", { status: "active" })).rejects.toThrow("updateSubscription");
+  });
+
+  it("listSubscriptionsByBusinessIds returns an empty map for empty input", async () => {
+    const result = await listSubscriptionsByBusinessIds([]);
+    expect(result.size).toBe(0);
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  it("listSubscriptionsByBusinessIds keeps the newest row per business", async () => {
+    const db = {
+      ...mockDb(),
+      in: vi.fn().mockReturnThis(),
+      order: vi.fn().mockResolvedValue({
+        data: [
+          { ...MOCK_SUB, id: "sub-new", business_id: "biz-uuid-1" },
+          { ...MOCK_SUB, id: "sub-old", business_id: "biz-uuid-1" },
+          { ...MOCK_SUB, id: "sub-2", business_id: "biz-uuid-2" }
+        ],
+        error: null
+      })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const result = await listSubscriptionsByBusinessIds(["biz-uuid-1", "biz-uuid-2"]);
+    expect(result.get("biz-uuid-1")?.id).toBe("sub-new");
+    expect(result.get("biz-uuid-2")?.id).toBe("sub-2");
+  });
+
+  it("listSubscriptionsByBusinessIds throws on query error", async () => {
+    const db = {
+      ...mockDb(),
+      in: vi.fn().mockReturnThis(),
+      order: vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(listSubscriptionsByBusinessIds(["biz-uuid-1"])).rejects.toThrow(
+      "listSubscriptionsByBusinessIds"
+    );
+  });
+
+  it("listSubscriptionsByBusinessIds returns an empty map when data is null", async () => {
+    const db = {
+      ...mockDb(),
+      in: vi.fn().mockReturnThis(),
+      order: vi.fn().mockResolvedValue({ data: null, error: null })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const result = await listSubscriptionsByBusinessIds(["biz-uuid-1"]);
+    expect(result.size).toBe(0);
   });
 });

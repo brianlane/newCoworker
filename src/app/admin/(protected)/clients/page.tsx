@@ -1,13 +1,16 @@
 import { listBusinesses } from "@/lib/db/businesses";
+import { listSubscriptionsByBusinessIds } from "@/lib/db/subscriptions";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { DeployButton } from "@/components/dashboard/DeployButton";
+import { CreateClientModal } from "@/components/admin/CreateClientModal";
 
 export const dynamic = "force-dynamic";
 
-export default async function AdminPage() {
+export default async function AdminClientsPage() {
   const businesses = await listBusinesses();
+  const subscriptionMap = await listSubscriptionsByBusinessIds(businesses.map((b) => b.id));
 
   return (
     <div className="space-y-6">
@@ -18,12 +21,7 @@ export default async function AdminPage() {
             {businesses.length} active client{businesses.length !== 1 ? "s" : ""}
           </p>
         </div>
-        <a
-          href="/onboard"
-          className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-opacity-90 transition-colors"
-        >
-          + New Client
-        </a>
+        <CreateClientModal />
       </div>
 
       {businesses.length === 0 ? (
@@ -40,6 +38,7 @@ export default async function AdminPage() {
                 <th className="text-left py-3 px-4 text-parchment/40 font-medium">Business</th>
                 <th className="text-left py-3 px-4 text-parchment/40 font-medium">Owner</th>
                 <th className="text-left py-3 px-4 text-parchment/40 font-medium">Plan</th>
+                <th className="text-left py-3 px-4 text-parchment/40 font-medium">Payment</th>
                 <th className="text-left py-3 px-4 text-parchment/40 font-medium">Status</th>
                 <th className="text-left py-3 px-4 text-parchment/40 font-medium">Actions</th>
               </tr>
@@ -60,6 +59,25 @@ export default async function AdminPage() {
                     <Badge variant={b.tier === "standard" ? "online" : "neutral"}>
                       {b.tier}
                     </Badge>
+                  </td>
+                  <td className="py-3 px-4">
+                    {(() => {
+                      const sub = subscriptionMap.get(b.id);
+                      if (!sub) return <Badge variant="neutral">no subscription</Badge>;
+                      return (
+                        <Badge
+                          variant={
+                            sub.status === "active"
+                              ? "success"
+                              : sub.status === "past_due"
+                                ? "error"
+                                : "pending"
+                          }
+                        >
+                          {sub.status}
+                        </Badge>
+                      );
+                    })()}
                   </td>
                   <td className="py-3 px-4">
                     <StatusDot

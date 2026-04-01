@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { insertCoworkerLog, getRecentLogs } from "@/lib/db/logs";
+import { insertCoworkerLog, getRecentAlertsAll, getRecentLogs, getRecentLogsAll } from "@/lib/db/logs";
 
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
@@ -21,6 +21,7 @@ function mockDb(overrides: Record<string, unknown> = {}) {
     from: vi.fn().mockReturnThis(),
     insert: vi.fn().mockReturnThis(),
     select: vi.fn().mockReturnThis(),
+    in: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockReturnThis(),
@@ -88,5 +89,47 @@ describe("db/logs", () => {
     );
     expect(result.task_type).toBe("call");
     expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  it("getRecentAlertsAll returns alerts", async () => {
+    const db = { ...mockDb(), limit: vi.fn().mockResolvedValue({ data: [MOCK_LOG], error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const result = await getRecentAlertsAll(5);
+    expect(result).toEqual([MOCK_LOG]);
+  });
+
+  it("getRecentAlertsAll throws on error", async () => {
+    const db = { ...mockDb(), limit: vi.fn().mockResolvedValue({ data: null, error: { message: "err" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(getRecentAlertsAll()).rejects.toThrow("getRecentAlertsAll");
+  });
+
+  it("getRecentAlertsAll returns empty array when data is null with no error", async () => {
+    const db = { ...mockDb(), limit: vi.fn().mockResolvedValue({ data: null, error: null }) };
+
+    await expect(getRecentAlertsAll(5, db as never)).resolves.toEqual([]);
+  });
+
+  it("getRecentLogsAll returns logs", async () => {
+    const db = { ...mockDb(), limit: vi.fn().mockResolvedValue({ data: [MOCK_LOG], error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const result = await getRecentLogsAll(5);
+    expect(result).toEqual([MOCK_LOG]);
+  });
+
+  it("getRecentLogsAll throws on error", async () => {
+    const db = { ...mockDb(), limit: vi.fn().mockResolvedValue({ data: null, error: { message: "err" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(getRecentLogsAll()).rejects.toThrow("getRecentLogsAll");
+  });
+
+  it("getRecentLogsAll returns empty array when data is null with no error", async () => {
+    const db = { ...mockDb(), limit: vi.fn().mockResolvedValue({ data: null, error: null }) };
+
+    await expect(getRecentLogsAll(5, db as never)).resolves.toEqual([]);
   });
 });
