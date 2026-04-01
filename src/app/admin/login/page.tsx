@@ -12,7 +12,7 @@ type AdminLoginPageProps = {
 export default async function AdminLoginPage({ searchParams }: AdminLoginPageProps) {
   const user = await getAuthUser();
   const { next } = await searchParams;
-  const nextPath = next && next.startsWith("/") ? next : "/admin";
+  const nextPath = next && next.startsWith("/") ? next : "/admin/dashboard";
 
   // Already an admin — redirect straight in
   if (user?.isAdmin) {
@@ -27,9 +27,6 @@ export default async function AdminLoginPage({ searchParams }: AdminLoginPagePro
       <div className="w-full max-w-md space-y-6">
         <div className="text-center">
           <h1 className="text-2xl font-bold text-parchment">Admin Sign In</h1>
-          <p className="mt-2 text-sm text-parchment/50">
-            Use the admin credentials configured in your environment.
-          </p>
         </div>
 
         <Suspense>

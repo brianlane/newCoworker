@@ -1,12 +1,6 @@
-import { createClient } from "@supabase/supabase-js";
-
-let cachedClient: ReturnType<typeof createClient> | null = null;
+import { createBrowserClient } from "@supabase/ssr";
 
 export function getSupabaseBrowserClient() {
-  if (cachedClient) {
-    return cachedClient;
-  }
-
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -18,10 +12,9 @@ export function getSupabaseBrowserClient() {
     throw new Error("Missing Supabase anon key environment variable");
   }
 
-  cachedClient = createClient(url, anonKey);
-  return cachedClient;
+  return createBrowserClient(url, anonKey);
 }
 
 export function resetSupabaseBrowserClientCache(): void {
-  cachedClient = null;
+  // no-op: createBrowserClient handles its own singleton internally
 }

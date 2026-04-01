@@ -33,6 +33,37 @@ export async function insertCoworkerLog(
   return row as LogRow;
 }
 
+export async function getRecentAlertsAll(
+  limit = 20,
+  client?: SupabaseClient
+): Promise<LogRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("coworker_logs")
+    .select()
+    .in("status", ["urgent_alert", "error"])
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) throw new Error(`getRecentAlertsAll: ${error.message}`);
+  return (data ?? []) as LogRow[];
+}
+
+export async function getRecentLogsAll(
+  limit = 20,
+  client?: SupabaseClient
+): Promise<LogRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("coworker_logs")
+    .select()
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) throw new Error(`getRecentLogsAll: ${error.message}`);
+  return (data ?? []) as LogRow[];
+}
+
 export async function getRecentLogs(
   businessId: string,
   limit = 20,

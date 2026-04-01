@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { SoulEditor } from "@/components/dashboard/SoulEditor";
 import { SkipPaymentButton } from "@/components/admin/SkipPaymentButton";
+import { DeleteClientButton } from "@/components/admin/DeleteClientButton";
 
 export const dynamic = "force-dynamic";
 
@@ -30,18 +31,21 @@ export default async function BusinessDetailPage({
 
   return (
     <div className="space-y-6 max-w-4xl">
-      <div className="flex items-center gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-parchment">{business.name}</h1>
-          <p className="text-sm text-parchment/50">{business.owner_email}</p>
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-parchment">{business.name}</h1>
+            <p className="text-sm text-parchment/50">{business.owner_email}</p>
+          </div>
+          <StatusDot
+            status={business.status as "online" | "offline" | "high_load"}
+            showLabel
+          />
+          <Badge variant={business.tier === "standard" ? "online" : "neutral"}>
+            {business.tier}
+          </Badge>
         </div>
-        <StatusDot
-          status={business.status as "online" | "offline" | "high_load"}
-          showLabel
-        />
-        <Badge variant={business.tier === "standard" ? "online" : "neutral"}>
-          {business.tier}
-        </Badge>
+        <DeleteClientButton businessId={businessId} businessName={business.name} />
       </div>
 
       {/* Subscription */}

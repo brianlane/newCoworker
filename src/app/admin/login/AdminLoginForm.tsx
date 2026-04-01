@@ -40,9 +40,9 @@ export default function AdminLoginForm({
   }, [forceSignOut]);
 
   function getSafeNext(): string {
-    const next = searchParams.get("next") ?? "/admin";
+    const next = searchParams.get("next") ?? "/admin/dashboard";
     if (!next.startsWith("/") || next.startsWith("//")) {
-      return "/admin";
+      return "/admin/dashboard";
     }
     return next;
   }
@@ -90,7 +90,7 @@ export default function AdminLoginForm({
           label="Email"
           id="email"
           type="email"
-          autoComplete="email"
+          autoComplete="off"
           required
           value={email}
           onChange={(e) => setEmail(e.target.value)}
@@ -101,7 +101,7 @@ export default function AdminLoginForm({
           label="Password"
           id="password"
           type="password"
-          autoComplete="current-password"
+          autoComplete="off"
           required
           value={password}
           onChange={(e) => setPassword(e.target.value)}

@@ -173,7 +173,7 @@ export async function proxy(request: NextRequest) {
     const adminEmail = process.env.ADMIN_EMAIL;
     if (adminEmail && user.email?.toLowerCase() === adminEmail.toLowerCase()) {
       const redirectUrl = request.nextUrl.clone();
-      redirectUrl.pathname = "/admin";
+      redirectUrl.pathname = "/admin/dashboard";
       return redirectWithCookies(response, redirectUrl);
     }
   }
@@ -187,7 +187,7 @@ export async function proxy(request: NextRequest) {
         : false;
     if (isAdmin) {
       const redirectUrl = request.nextUrl.clone();
-      redirectUrl.pathname = "/admin";
+      redirectUrl.pathname = "/admin/dashboard";
       return redirectWithCookies(response, redirectUrl);
     }
   }

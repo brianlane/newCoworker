@@ -18,6 +18,9 @@ interface SidebarProps {
 
 export function Sidebar({ items, userEmail }: SidebarProps) {
   const pathname = usePathname();
+  const activeItem = [...items]
+    .sort((a, b) => b.href.length - a.href.length)
+    .find((item) => pathname === item.href || pathname.startsWith(item.href + "/"));
 
   return (
     <aside className="flex h-screen w-60 flex-col border-r border-parchment/10 bg-deep-ink">
@@ -29,7 +32,7 @@ export function Sidebar({ items, userEmail }: SidebarProps) {
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
         {items.map((item) => {
           const Icon = item.icon;
-          const active = pathname === item.href || pathname.startsWith(item.href + "/");
+          const active = activeItem?.href === item.href;
           return (
             <Link
               key={item.href}
@@ -49,12 +52,12 @@ export function Sidebar({ items, userEmail }: SidebarProps) {
       </nav>
 
       {userEmail && (
-        <div className="border-t border-parchment/10 px-4 py-4">
+        <div className="border-t border-parchment/10 px-4 pt-3 pb-6">
           <p className="text-xs text-parchment/40 truncate mb-2">{userEmail}</p>
           <form action="/api/auth/signout" method="POST">
             <button
               type="submit"
-              className="w-full rounded-lg px-3 py-2 text-xs text-parchment/50 hover:bg-parchment/10 hover:text-parchment transition-colors text-left"
+              className="w-full rounded-lg px-3 py-2 text-xs font-medium text-parchment/60 bg-parchment/5 hover:bg-parchment/10 hover:text-parchment transition-colors text-left border border-parchment/10"
             >
               Sign out
             </button>
