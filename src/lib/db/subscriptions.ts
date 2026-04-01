@@ -71,6 +71,29 @@ export async function getSubscriptionByStripeSubscriptionId(
   return data as SubscriptionRow;
 }
 
+export async function listSubscriptionsByBusinessIds(
+  businessIds: string[],
+  client?: SupabaseClient
+): Promise<Map<string, SubscriptionRow>> {
+  if (businessIds.length === 0) return new Map();
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("subscriptions")
+    .select()
+    .in("business_id", businessIds)
+    .order("created_at", { ascending: false });
+
+  if (error) throw new Error(`listSubscriptionsByBusinessIds: ${error.message}`);
+
+  const map = new Map<string, SubscriptionRow>();
+  for (const row of (data ?? []) as SubscriptionRow[]) {
+    if (!map.has(row.business_id)) {
+      map.set(row.business_id, row);
+    }
+  }
+  return map;
+}
+
 export async function updateSubscription(
   id: string,
   update: Partial<Pick<SubscriptionRow, "status" | "stripe_subscription_id" | "stripe_customer_id">>,
