@@ -1,10 +1,12 @@
-import { requireAuth } from "@/lib/auth";
+import { getAuthUser, verifySignupIdentity } from "@/lib/auth";
 import { upsertBusinessConfig } from "@/lib/db/configs";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { z } from "zod";
 
 const schema = z.object({
   businessId: z.string().uuid(),
+  ownerEmail: z.string().email().optional(),
+  signupUserId: z.string().uuid().optional(),
   soulMd: z.string().min(1),
   identityMd: z.string().min(1),
   memoryMd: z.string().optional()
@@ -12,27 +14,40 @@ const schema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const user = await requireAuth();
+    const user = await getAuthUser();
     const body = schema.parse(await request.json());
-
-    if (!user.email && !user.isAdmin) {
-      return errorResponse("FORBIDDEN", "Account has no email address");
-    }
-
     const { createSupabaseServiceClient } = await import("@/lib/supabase/server");
     const db = await createSupabaseServiceClient();
-    const { data } = user.email
+    let ownerEmail: string | null = null;
+    let isAdmin = false;
+
+    if (user) {
+      ownerEmail = user.email;
+      isAdmin = user.isAdmin;
+      if (!ownerEmail && !isAdmin) {
+        return errorResponse("FORBIDDEN", "Account has no email address");
+      }
+    } else {
+      if (!body.ownerEmail || !body.signupUserId) {
+        return errorResponse("FORBIDDEN", "Authentication required");
+      }
+      const isValidSignupIdentity = await verifySignupIdentity(body.signupUserId, body.ownerEmail);
+      if (!isValidSignupIdentity) {
+        return errorResponse("FORBIDDEN", "Not authorized for this business");
+      }
+      ownerEmail = body.ownerEmail;
+    }
+
+    const { data } = ownerEmail
       ? await db
           .from("businesses")
           .select("id")
           .eq("id", body.businessId)
-          .eq("owner_email", user.email)
+          .eq("owner_email", ownerEmail)
           .single()
       : { data: null };
 
-    if (!data && !user.isAdmin) {
-      return errorResponse("FORBIDDEN", "Not authorized for this business");
-    }
+    if (!data && !isAdmin) return errorResponse("FORBIDDEN", "Not authorized for this business");
 
     const { getBusinessConfig } = await import("@/lib/db/configs");
     const existing = await getBusinessConfig(body.businessId);

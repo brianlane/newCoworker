@@ -74,3 +74,16 @@ export async function requireOwner(businessId: string): Promise<AuthUser> {
 
   return user;
 }
+
+export async function verifySignupIdentity(userId: string, email: string): Promise<boolean> {
+  try {
+    const { createSupabaseServiceClient } = await import("@/lib/supabase/server");
+    const db = await createSupabaseServiceClient();
+    const { data, error } = await db.auth.admin.getUserById(userId);
+
+    if (error || !data?.user?.email) return false;
+    return data.user.email.toLowerCase() === email.toLowerCase();
+  } catch {
+    return false;
+  }
+}

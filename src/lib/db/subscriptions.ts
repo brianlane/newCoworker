@@ -54,6 +54,23 @@ export async function getSubscription(
   return data as SubscriptionRow;
 }
 
+export async function getSubscriptionByStripeSubscriptionId(
+  stripeSubscriptionId: string,
+  client?: SupabaseClient
+): Promise<SubscriptionRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("subscriptions")
+    .select()
+    .eq("stripe_subscription_id", stripeSubscriptionId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  if (error) return null;
+  return data as SubscriptionRow;
+}
+
 export async function updateSubscription(
   id: string,
   update: Partial<Pick<SubscriptionRow, "status" | "stripe_subscription_id" | "stripe_customer_id">>,

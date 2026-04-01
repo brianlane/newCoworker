@@ -67,6 +67,9 @@ export async function proxy(request: NextRequest) {
       if (!originValid && vercelUrl) {
         originValid = originsMatch(checkSource, vercelUrl);
       }
+      if (!originValid && process.env.NODE_ENV === "development") {
+        originValid = originsMatch(checkSource, "http://localhost:3000");
+      }
     }
 
     if (!originValid) {

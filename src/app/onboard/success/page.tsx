@@ -17,7 +17,7 @@ export default function OnboardSuccessPage() {
 function OnboardSuccessContent() {
   const searchParams = useSearchParams();
   const sessionId = searchParams.get("session_id");
-  const [status, setStatus] = useState<"provisioning" | "online" | "error">("provisioning");
+  const [status, setStatus] = useState<"provisioning" | "online" | "awaiting_confirmation" | "error">("provisioning");
 
   useEffect(() => {
     // Poll dashboard for status every 5 seconds up to 2 minutes
@@ -26,6 +26,11 @@ function OnboardSuccessContent() {
       attempts++;
       try {
         const res = await fetch("/api/business/status");
+        if (res.status === 401) {
+          setStatus("awaiting_confirmation");
+          clearInterval(interval);
+          return;
+        }
         const json = await res.json();
         if (json.data?.status === "online") {
           setStatus("online");
@@ -55,16 +60,22 @@ function OnboardSuccessContent() {
 
         <div>
           <h1 className="text-2xl font-bold text-parchment">
-            {status === "online" ? "Your Coworker is Live!" : "Setting things up…"}
+            {status === "online"
+              ? "Your Coworker is Live!"
+              : status === "awaiting_confirmation"
+                ? "Payment received"
+                : "Setting things up…"}
           </h1>
           <p className="text-sm text-parchment/50 mt-2">
             {status === "online"
               ? "Everything is ready. Head to your dashboard."
-              : "We're provisioning your VPS and configuring your AI coworker. This takes 2–5 minutes."}
+              : status === "awaiting_confirmation"
+                ? "Confirm your email to finish activating your account and access your dashboard."
+                : "We're provisioning your VPS and configuring your AI coworker. This takes 2–5 minutes."}
           </p>
         </div>
 
-        {status !== "online" && (
+        {status === "provisioning" && (
           <Card className="text-left space-y-3">
             {[
               "Provisioning Hostinger VPS",
@@ -89,6 +100,12 @@ function OnboardSuccessContent() {
           >
             Go to Dashboard →
           </a>
+        )}
+
+        {status === "awaiting_confirmation" && (
+          <p className="text-xs text-parchment/40">
+            Check your inbox for the confirmation link, then sign in to continue.
+          </p>
         )}
       </div>
     </div>

@@ -1,4 +1,4 @@
-import { requireAuth } from "@/lib/auth";
+import { getAuthUser, verifySignupIdentity } from "@/lib/auth";
 import { createBusiness } from "@/lib/db/businesses";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { z } from "zod";
@@ -7,6 +7,8 @@ const schema = z.object({
   businessId: z.string().uuid(),
   name: z.string().min(1),
   tier: z.enum(["starter", "standard", "enterprise"]),
+  ownerEmail: z.string().email().optional(),
+  signupUserId: z.string().uuid().optional(),
   businessType: z.string().optional(),
   ownerName: z.string().optional(),
   phone: z.string().optional(),
@@ -18,13 +20,27 @@ const schema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const user = await requireAuth();
+    const user = await getAuthUser();
     const body = schema.parse(await request.json());
+    let ownerEmail: string;
+
+    if (user?.email) {
+      ownerEmail = user.email;
+    } else {
+      if (!body.ownerEmail || !body.signupUserId) {
+        return errorResponse("FORBIDDEN", "Authentication required");
+      }
+      const isValidSignupIdentity = await verifySignupIdentity(body.signupUserId, body.ownerEmail);
+      if (!isValidSignupIdentity) {
+        return errorResponse("FORBIDDEN", "Not authorized to create business");
+      }
+      ownerEmail = body.ownerEmail;
+    }
 
     const business = await createBusiness({
       id: body.businessId,
       name: body.name,
-      ownerEmail: user.email ?? "",
+      ownerEmail,
       tier: body.tier,
       businessType: body.businessType,
       ownerName: body.ownerName,

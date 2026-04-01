@@ -3,12 +3,20 @@ import {
   getStripe,
   verifyWebhook,
   createCheckoutSession,
+  createCustomerPortalSession,
+  ensureCommitmentSchedule,
   resolveIntroDiscountCouponId,
-  resolvePriceId
+  resolvePriceId,
+  resolveRenewalPriceId
 } from "@/lib/stripe/client";
 
 const mockConstructEvent = vi.fn();
 const mockSessionCreate = vi.fn();
+const mockPortalSessionCreate = vi.fn();
+const mockSubscriptionRetrieve = vi.fn();
+const mockScheduleCreate = vi.fn();
+const mockScheduleRetrieve = vi.fn();
+const mockScheduleUpdate = vi.fn();
 
 vi.mock("stripe", () => {
   class MockStripe {
@@ -16,6 +24,19 @@ vi.mock("stripe", () => {
       sessions: {
         create: mockSessionCreate
       }
+    };
+    billingPortal = {
+      sessions: {
+        create: mockPortalSessionCreate
+      }
+    };
+    subscriptions = {
+      retrieve: mockSubscriptionRetrieve
+    };
+    subscriptionSchedules = {
+      create: mockScheduleCreate,
+      retrieve: mockScheduleRetrieve,
+      update: mockScheduleUpdate
     };
     webhooks = {
       constructEvent: mockConstructEvent
@@ -31,18 +52,52 @@ describe("stripe/client", () => {
     process.env = {
       ...OLD_ENV,
       STRIPE_SECRET_KEY: "sk_test_mock",
+      STRIPE_PUBLISHABLE_KEY: "pk_test_mock",
       STRIPE_WEBHOOK_SECRET: "whsec_mock",
       STRIPE_STARTER_24MO_PRICE_ID: "price_starter_24mo",
+      STRIPE_STARTER_24MO_RENEWAL_PRICE_ID: "price_starter_24mo_renewal",
       STRIPE_STARTER_12MO_PRICE_ID: "price_starter_12mo",
+      STRIPE_STARTER_12MO_RENEWAL_PRICE_ID: "price_starter_12mo_renewal",
       STRIPE_STARTER_1MO_PRICE_ID: "price_starter_1mo",
       STRIPE_STARTER_1MO_INTRO_COUPON_ID: "coupon_starter_1mo_intro",
       STRIPE_STANDARD_24MO_PRICE_ID: "price_standard_24mo",
+      STRIPE_STANDARD_24MO_RENEWAL_PRICE_ID: "price_standard_24mo_renewal",
       STRIPE_STANDARD_12MO_PRICE_ID: "price_standard_12mo",
+      STRIPE_STANDARD_12MO_RENEWAL_PRICE_ID: "price_standard_12mo_renewal",
       STRIPE_STANDARD_1MO_PRICE_ID: "price_standard_1mo",
       STRIPE_STANDARD_1MO_INTRO_COUPON_ID: "coupon_standard_1mo_intro"
     };
     mockConstructEvent.mockReturnValue({ id: "evt_mock", type: "checkout.session.completed" });
     mockSessionCreate.mockResolvedValue({ id: "cs_mock_session", url: "https://checkout.stripe.com/mock" });
+    mockPortalSessionCreate.mockResolvedValue({ url: "https://billing.stripe.com/session/mock" });
+    mockSubscriptionRetrieve.mockResolvedValue({
+      schedule: null,
+      items: {
+        data: [
+          {
+            price: { id: "price_starter_24mo" },
+            quantity: 1
+          }
+        ]
+      }
+    });
+    mockScheduleCreate.mockResolvedValue({
+      id: "sub_sched_123",
+      current_phase: {
+        start_date: 1700000000,
+        end_date: 1702592000
+      },
+      phases: []
+    });
+    mockScheduleRetrieve.mockResolvedValue({
+      id: "sub_sched_existing",
+      current_phase: {
+        start_date: 1700000000,
+        end_date: 1702592000
+      },
+      phases: []
+    });
+    mockScheduleUpdate.mockResolvedValue({ id: "sub_sched_123" });
   });
 
   afterEach(() => {
@@ -63,6 +118,18 @@ describe("stripe/client", () => {
   it("getStripe accepts explicit secretKey", () => {
     const stripe = getStripe("sk_test_explicit");
     expect(stripe).toBeDefined();
+  });
+
+  it("createCustomerPortalSession returns portal url", async () => {
+    const result = await createCustomerPortalSession({
+      customerId: "cus_123",
+      returnUrl: "https://example.com/dashboard/settings"
+    });
+    expect(result.url).toContain("billing.stripe.com");
+    expect(mockPortalSessionCreate).toHaveBeenCalledWith({
+      customer: "cus_123",
+      return_url: "https://example.com/dashboard/settings"
+    });
   });
 
   it("verifyWebhook returns event on valid signature", () => {
@@ -90,6 +157,7 @@ describe("stripe/client", () => {
     expect(result.url).toContain("stripe.com");
     expect(mockSessionCreate).toHaveBeenCalledWith(
       expect.objectContaining({
+        billing_address_collection: "auto",
         discounts: [{ coupon: "coupon_intro" }]
       })
     );
@@ -140,6 +208,10 @@ describe("stripe/client", () => {
     expect(resolveIntroDiscountCouponId("starter", "annual")).toBeUndefined();
   });
 
+  it("resolveRenewalPriceId returns starter biennial renewal price", () => {
+    expect(resolveRenewalPriceId("starter", "biennial")).toBe("price_starter_24mo_renewal");
+  });
+
   it("resolveIntroDiscountCouponId throws when monthly coupon env var missing", () => {
     delete process.env.STRIPE_STARTER_1MO_INTRO_COUPON_ID;
     expect(() => resolveIntroDiscountCouponId("starter", "monthly")).toThrow("not configured");
@@ -171,5 +243,161 @@ describe("stripe/client", () => {
       successUrl: "https://example.com/ok",
       cancelUrl: "https://example.com/cancel"
     })).rejects.toThrow("Stripe checkout session URL is null");
+  });
+
+  it("ensureCommitmentSchedule creates and updates a schedule for annual commitments", async () => {
+    const scheduleId = await ensureCommitmentSchedule({
+      subscriptionId: "sub_123",
+      tier: "starter",
+      billingPeriod: "annual"
+    });
+
+    expect(scheduleId).toBe("sub_sched_123");
+    expect(mockScheduleCreate).toHaveBeenCalledWith({ from_subscription: "sub_123" });
+    expect(mockScheduleUpdate).toHaveBeenCalledWith(
+      "sub_sched_123",
+      expect.objectContaining({
+        end_behavior: "release",
+        proration_behavior: "none",
+        phases: [
+          expect.objectContaining({
+            start_date: 1700000000,
+            end_date: 1702592000,
+            items: [{ price: "price_starter_24mo", quantity: 1 }]
+          }),
+          expect.objectContaining({
+            start_date: 1702592000,
+            items: [{ price: "price_starter_12mo_renewal", quantity: 1 }]
+          })
+        ]
+      })
+    );
+  });
+
+  it("ensureCommitmentSchedule skips monthly plans", async () => {
+    const result = await ensureCommitmentSchedule({
+      subscriptionId: "sub_123",
+      tier: "starter",
+      billingPeriod: "monthly"
+    });
+
+    expect(result).toBeNull();
+    expect(mockScheduleCreate).not.toHaveBeenCalled();
+  });
+
+  it("ensureCommitmentSchedule returns existing schedule when renewal phase already matches", async () => {
+    mockSubscriptionRetrieve.mockResolvedValueOnce({
+      schedule: "sub_sched_existing",
+      items: {
+        data: [
+          {
+            price: { id: "price_standard_24mo" },
+            quantity: 1
+          }
+        ]
+      }
+    });
+    mockScheduleRetrieve.mockResolvedValueOnce({
+      id: "sub_sched_existing",
+      current_phase: {
+        start_date: 1700000000,
+        end_date: 1702592000
+      },
+      phases: [
+        {},
+        {
+          items: [{ price: { id: "price_standard_24mo_renewal" } }]
+        }
+      ]
+    });
+
+    const result = await ensureCommitmentSchedule({
+      subscriptionId: "sub_123",
+      tier: "standard",
+      billingPeriod: "biennial"
+    });
+
+    expect(result).toBe("sub_sched_existing");
+    expect(mockScheduleUpdate).not.toHaveBeenCalled();
+  });
+
+  it("ensureCommitmentSchedule updates an existing schedule when future price is a different string id", async () => {
+    mockSubscriptionRetrieve.mockResolvedValueOnce({
+      schedule: "sub_sched_existing",
+      items: {
+        data: [
+          {
+            price: { id: "price_standard_24mo" },
+            quantity: undefined
+          }
+        ]
+      }
+    });
+    mockScheduleRetrieve.mockResolvedValueOnce({
+      id: "sub_sched_existing",
+      current_phase: {
+        start_date: 1700000000,
+        end_date: 1702592000
+      },
+      phases: [
+        {},
+        {
+          items: [{ price: "price_other_renewal" }]
+        }
+      ]
+    });
+
+    const result = await ensureCommitmentSchedule({
+      subscriptionId: "sub_123",
+      tier: "standard",
+      billingPeriod: "biennial"
+    });
+
+    expect(result).toBe("sub_sched_existing");
+    expect(mockScheduleUpdate).toHaveBeenCalledWith(
+      "sub_sched_existing",
+      expect.objectContaining({
+        phases: [
+          expect.objectContaining({
+            items: [{ price: "price_standard_24mo", quantity: 1 }]
+          }),
+          expect.objectContaining({
+            items: [{ price: "price_standard_24mo_renewal", quantity: 1 }]
+          })
+        ]
+      })
+    );
+  });
+
+  it("ensureCommitmentSchedule throws when the subscription has no items", async () => {
+    mockSubscriptionRetrieve.mockResolvedValueOnce({
+      schedule: null,
+      items: { data: [] }
+    });
+
+    await expect(ensureCommitmentSchedule({
+      subscriptionId: "sub_123",
+      tier: "starter",
+      billingPeriod: "annual"
+    })).rejects.toThrow("Subscription sub_123 has no items to schedule");
+  });
+
+  it("ensureCommitmentSchedule throws when the schedule has no current phase", async () => {
+    mockScheduleCreate.mockResolvedValueOnce({
+      id: "sub_sched_456",
+      current_phase: null,
+      phases: []
+    });
+
+    await expect(ensureCommitmentSchedule({
+      subscriptionId: "sub_123",
+      tier: "starter",
+      billingPeriod: "annual"
+    })).rejects.toThrow("Subscription schedule sub_sched_456 has no current phase");
+  });
+
+  it("resolveRenewalPriceId throws when renewal env var is missing", () => {
+    delete process.env.STRIPE_STARTER_12MO_RENEWAL_PRICE_ID;
+    expect(() => resolveRenewalPriceId("starter", "annual")).toThrow("not configured");
   });
 });
