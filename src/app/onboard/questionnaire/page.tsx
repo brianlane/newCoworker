@@ -535,7 +535,7 @@ function QuestionnaireForm() {
 
   const canContinueFromChat = chatLoading
     ? false
-    : form.assistantChat?.readyToFinalize ?? false;
+    : assistantDone || chatLimitReached;
 
   return (
     <div className="min-h-screen bg-deep-ink flex items-center justify-center px-4 py-12">
@@ -668,7 +668,7 @@ function QuestionnaireForm() {
                   <div className="rounded-xl border border-claw-green/20 bg-claw-green/10 px-4 py-3 text-sm text-parchment/85">
                     {assistantDone
                       ? "The interview is complete. Continue when you're ready."
-                      : "This interview has reached its message limit. Continue to the next step to save tokens."}
+                      : "This interview has reached its message limit. Continue to the next step with the current draft."}
                   </div>
                 ) : (
                   <div className="flex gap-2">
