@@ -56,6 +56,8 @@ export default function CheckoutPage() {
 
     try {
       const businessId = data.businessId ?? crypto.randomUUID();
+      let onboardingData: OnboardingData = data;
+
       if (!data.businessId) {
         const createRes = await fetch("/api/business/create", {
           method: "POST",
@@ -75,20 +77,27 @@ export default function CheckoutPage() {
             crmUsed: data.crmUsed
           })
         });
-        if (!createRes.ok) throw new Error("Failed to create business");
+        const createJson = await createRes.json();
+        if (!createRes.ok) throw new Error(createJson.error?.message ?? "Failed to create business");
+        onboardingData = {
+          ...data,
+          businessId,
+          onboardingToken: createJson.data?.onboardingToken ?? undefined
+        };
       }
 
-      if (data.assistantChat?.drafts) {
+      if (onboardingData.assistantChat?.drafts) {
         const configRes = await fetch("/api/business/config", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             businessId,
-            ownerEmail: data.ownerEmail,
-            signupUserId: data.signupUserId,
-            soulMd: data.assistantChat.drafts.soulMd,
-            identityMd: data.assistantChat.drafts.identityMd,
-            memoryMd: data.assistantChat.drafts.memoryMd
+            ownerEmail: onboardingData.ownerEmail,
+            onboardingToken: onboardingData.onboardingToken,
+            signupUserId: onboardingData.signupUserId,
+            soulMd: onboardingData.assistantChat.drafts.soulMd,
+            identityMd: onboardingData.assistantChat.drafts.identityMd,
+            memoryMd: onboardingData.assistantChat.drafts.memoryMd
           })
         });
 
@@ -99,11 +108,12 @@ export default function CheckoutPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          tier: data.tier,
+          tier: onboardingData.tier,
           businessId,
-          billingPeriod: data.billingPeriod ?? "biennial",
-          ownerEmail: data.ownerEmail,
-          signupUserId: data.signupUserId
+          billingPeriod: onboardingData.billingPeriod ?? "biennial",
+          ownerEmail: onboardingData.ownerEmail,
+          onboardingToken: onboardingData.onboardingToken,
+          signupUserId: onboardingData.signupUserId
         })
       });
       const checkoutJson = await checkoutRes.json();
@@ -112,7 +122,7 @@ export default function CheckoutPage() {
       const { checkoutUrl } = checkoutJson.data ?? {};
       if (!checkoutUrl) throw new Error("Invalid checkout response");
 
-      localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify({ ...data, businessId }));
+      localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify({ ...onboardingData, businessId }));
       window.location.href = checkoutUrl;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");

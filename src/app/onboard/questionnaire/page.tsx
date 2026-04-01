@@ -19,9 +19,6 @@ import {
   type OnboardingChatMessage
 } from "@/lib/onboarding/chat";
 import { BUSINESS_TYPE_OPTIONS, DEFAULT_BUSINESS_TYPE } from "@/lib/onboarding/businessTypes";
-import { getPasswordValidationError, PASSWORD_RULES } from "@/lib/password";
-import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
-
 const DRAFT_STORAGE_KEY = "newcoworker_onboard_draft";
 
 function createMessageTimestamp(): string {
@@ -107,6 +104,7 @@ function InlineMarkdown({ text }: { text: string }) {
 
 type Step = 1 | 2 | 3;
 type PendingUserMessage = { content: string; timestamp: string };
+const QUESTIONNAIRE_PROGRESS_STEPS = [1, 2, 3, 4] as const;
 
 interface FormData {
   businessName: string;
@@ -177,8 +175,6 @@ function QuestionnaireForm() {
   const [hydrated, setHydrated] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [signupEmail, setSignupEmail] = useState("");
-  const [signupPassword, setSignupPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
   const [signupLoading, setSignupLoading] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
@@ -203,10 +199,16 @@ function QuestionnaireForm() {
 
       if (draft?.form) {
         setForm((prev) => ({ ...prev, ...draft.form }));
+        if (typeof draft.signupEmail === "string") {
+          setSignupEmail(draft.signupEmail);
+        }
       } else {
         const storedOnboarding = JSON.parse(localStorage.getItem(ONBOARD_STORAGE_KEY) ?? "null") as OnboardingData | null;
         if (storedOnboarding) {
           setForm((prev) => ({ ...prev, ...toFormData(storedOnboarding) }));
+          if (typeof storedOnboarding.ownerEmail === "string") {
+            setSignupEmail(storedOnboarding.ownerEmail);
+          }
         }
       }
     } catch { /* ignore corrupt data */ }
@@ -216,9 +218,9 @@ function QuestionnaireForm() {
   useEffect(() => {
     if (!hydrated) return;
     try {
-      localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ step, form }));
+      localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ step, form, signupEmail }));
     } catch { /* quota exceeded — non-critical */ }
-  }, [step, form, hydrated]);
+  }, [step, form, signupEmail, hydrated]);
 
   function update(field: keyof FormData, value: string | OnboardingAssistantChatDraftState | null) {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -371,7 +373,8 @@ function QuestionnaireForm() {
   function buildStoredOnboardingData(
     businessId?: string,
     ownerEmail?: string,
-    signupUserId?: string
+    signupUserId?: string,
+    onboardingToken?: string
   ): OnboardingData {
     const storedAssistantChat: OnboardingAssistantChatState = {
       readyToFinalize: form.assistantChat?.readyToFinalize ?? false,
@@ -388,6 +391,7 @@ function QuestionnaireForm() {
       businessId,
       ownerEmail,
       signupUserId,
+      onboardingToken,
       tier,
       billingPeriod: period,
       ...form,
@@ -395,82 +399,13 @@ function QuestionnaireForm() {
     };
   }
 
-  async function saveAssistantConfig(businessId: string, signupUserId?: string) {
-    if (form.assistantChat?.drafts) {
-      const configRes = await fetch("/api/business/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          businessId,
-          ownerEmail: signupEmail || undefined,
-          signupUserId,
-          soulMd: form.assistantChat.drafts.soulMd,
-          identityMd: form.assistantChat.drafts.identityMd,
-          memoryMd: form.assistantChat.drafts.memoryMd
-        })
-      });
-
-      if (!configRes.ok) throw new Error("Failed to save assistant profile");
-    }
-  }
-
-  async function createBusinessAndConfig(businessId: string, shouldCreateBusiness: boolean, signupUserId?: string) {
-    if (shouldCreateBusiness) {
-      const createRes = await fetch("/api/business/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          businessId,
-          ownerEmail: signupEmail || undefined,
-          signupUserId,
-          name: form.businessName,
-          tier,
-          businessType: form.businessType,
-          ownerName: form.ownerName,
-          phone: form.phone,
-          serviceArea: form.serviceArea,
-          typicalInquiry: form.typicalInquiry,
-          teamSize: form.teamSize,
-          crmUsed: form.crmUsed
-        })
-      });
-      if (!createRes.ok) throw new Error("Failed to create business");
-    }
-
-    await saveAssistantConfig(businessId, signupUserId);
-  }
-
-  async function createCheckout(businessId: string, signupUserId?: string) {
-    const checkoutRes = await fetch("/api/checkout", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        tier,
-        businessId,
-        billingPeriod: period,
-        ownerEmail: signupEmail || undefined,
-        signupUserId
-      })
-    });
-    const checkoutJson = await checkoutRes.json();
-    if (!checkoutRes.ok) throw new Error(checkoutJson.error?.message ?? "Checkout failed");
-    const { checkoutUrl } = checkoutJson.data ?? {};
-    if (!checkoutUrl) throw new Error("Invalid checkout response");
-    return checkoutUrl;
-  }
-
-  async function handleCreateAccount(event: FormEvent) {
+  async function handleContinueToCheckout(event: FormEvent) {
     event.preventDefault();
     if (signupLoading) return;
 
     setError(null);
-    const passwordError = getPasswordValidationError(signupPassword);
-    if (passwordError) {
-      setError(passwordError);
-      return;
-    }
-    if (signupPassword !== confirmPassword) {
-      setError("Passwords do not match");
+    if (!signupEmail.trim()) {
+      setError("Email is required");
       return;
     }
 
@@ -479,55 +414,17 @@ function QuestionnaireForm() {
       const existingOnboarding = existingOnboardingRaw ? JSON.parse(existingOnboardingRaw) as OnboardingData : null;
       setSignupLoading(true);
 
-      const supabase = getSupabaseBrowserClient();
       const onboardingData = buildStoredOnboardingData(
         existingOnboarding?.businessId,
         signupEmail || existingOnboarding?.ownerEmail,
-        existingOnboarding?.signupUserId
+        undefined,
+        existingOnboarding?.onboardingToken
       );
       localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(onboardingData));
-
-      const encodedRedirect = encodeURIComponent("/onboard/checkout");
-      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-        email: signupEmail,
-        password: signupPassword,
-        options: {
-          data: {
-            business_name: form.businessName,
-            onboarding_data: onboardingData
-          },
-          emailRedirectTo: `${window.location.origin}/api/auth/callback?redirectTo=${encodedRedirect}`
-        }
-      });
-
-      if (signUpError) {
-        setError(signUpError.message);
-        return;
-      }
-
-      const identities = signUpData.user?.identities ?? [];
-      if (identities.length === 0) {
-        setError("An account with this email already exists. Please sign in instead.");
-        return;
-      }
-      const signupUserId = signUpData.user?.id;
-      if (!signUpData.session && !signupUserId) {
-        setError("Could not complete signup. Please try again.");
-        return;
-      }
-
-      const businessId = existingOnboarding?.businessId ?? crypto.randomUUID();
-      const checkoutSignupUserId = signUpData.session ? undefined : signupUserId;
-      await createBusinessAndConfig(businessId, !existingOnboarding?.businessId, checkoutSignupUserId);
-      const checkoutUrl = await createCheckout(businessId, checkoutSignupUserId);
-      localStorage.setItem(
-        ONBOARD_STORAGE_KEY,
-        JSON.stringify(buildStoredOnboardingData(businessId, signupEmail, checkoutSignupUserId))
-      );
       localStorage.removeItem(DRAFT_STORAGE_KEY);
-      window.location.href = checkoutUrl;
+      window.location.href = "/onboard/checkout";
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not create your account");
+      setError(err instanceof Error ? err.message : "Could not continue to checkout");
     } finally {
       setSignupLoading(false);
     }
@@ -542,7 +439,7 @@ function QuestionnaireForm() {
       <div className={`w-full space-y-6 ${step === 2 ? "max-w-3xl" : "max-w-2xl"}`}>
         <div>
           <div className="flex gap-2 mb-4">
-            {([1, 2, 3] as Step[]).map((s) => (
+            {QUESTIONNAIRE_PROGRESS_STEPS.map((s) => (
               <div
                 key={s}
                 className={[
@@ -557,9 +454,9 @@ function QuestionnaireForm() {
               ? "Tell us about your business"
               : step === 2
                 ? "Assistant interview"
-                : "Review & create account"}
+                : "Review & payment"}
           </h1>
-          <p className="text-sm text-parchment/50 mt-1">Step {step} of 3</p>
+          <p className="text-sm text-parchment/50 mt-1">Step {step} of 4</p>
         </div>
 
         <Card>
@@ -592,6 +489,15 @@ function QuestionnaireForm() {
                 value={form.phone}
                 onChange={(e) => update("phone", e.target.value)}
                 placeholder="+1 (555) 000-0000"
+              />
+              <Input
+                label="Email"
+                type="email"
+                value={signupEmail}
+                onChange={(e) => setSignupEmail(e.target.value)}
+                placeholder="you@business.com"
+                autoComplete="email"
+                required
               />
             </div>
           )}
@@ -707,7 +613,7 @@ function QuestionnaireForm() {
 
           {step === 3 && (
             <div className="space-y-4 text-sm">
-              <form onSubmit={handleCreateAccount} className="space-y-4">
+              <form onSubmit={handleContinueToCheckout} className="space-y-4">
                   <OrderSummaryCard
                     tier={tier}
                     period={period}
@@ -715,50 +621,14 @@ function QuestionnaireForm() {
                     assistantBriefPercent={form.assistantChat?.completionPercent ?? 0}
                   />
 
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <Input
-                      label="Email"
-                      type="email"
-                      value={signupEmail}
-                      onChange={(e) => setSignupEmail(e.target.value)}
-                      placeholder="you@business.com"
-                      autoComplete="email"
-                      required
-                    />
-                    <div />
-                    <Input
-                      label="Password"
-                      type="password"
-                      value={signupPassword}
-                      onChange={(e) => setSignupPassword(e.target.value)}
-                      placeholder="8+ chars, 1 uppercase, 1 number"
-                      autoComplete="new-password"
-                      required
-                    />
-                    <Input
-                      label="Confirm Password"
-                      type="password"
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      placeholder="Re-enter your password"
-                      autoComplete="new-password"
-                      required
-                    />
-                  </div>
-
                   <div className="rounded-lg border border-parchment/10 bg-parchment/5 px-3 py-2 text-xs text-parchment/65">
-                    <p className="font-medium text-parchment/75">Password rules</p>
-                    <ul className="mt-1 list-disc pl-4 space-y-1">
-                      {PASSWORD_RULES.map((rule) => (
-                        <li key={rule}>{rule}</li>
-                      ))}
-                    </ul>
+                    After payment, you&apos;ll complete Step 4 by creating your password and confirming your email.
                   </div>
 
                   {error && <p className="text-spark-orange text-xs">{error}</p>}
 
                   <Button type="submit" className="w-full" loading={signupLoading}>
-                    Create Account & Continue to Payment →
+                    Continue to Payment →
                   </Button>
               </form>
             </div>
@@ -775,7 +645,7 @@ function QuestionnaireForm() {
             <Button
               className="flex-1"
               onClick={() => setStep((s) => (s + 1) as Step)}
-              disabled={(step === 1 && !form.businessName) || (step === 2 && !canContinueFromChat)}
+              disabled={(step === 1 && (!form.businessName || !signupEmail)) || (step === 2 && !canContinueFromChat)}
             >
               Continue →
             </Button>

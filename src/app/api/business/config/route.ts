@@ -1,11 +1,13 @@
 import { getAuthUser, verifySignupIdentity } from "@/lib/auth";
 import { upsertBusinessConfig } from "@/lib/db/configs";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
+import { verifyOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
 import { z } from "zod";
 
 const schema = z.object({
   businessId: z.string().uuid(),
   ownerEmail: z.string().email().optional(),
+  onboardingToken: z.string().min(1).optional(),
   signupUserId: z.string().uuid().optional(),
   soulMd: z.string().min(1),
   identityMd: z.string().min(1),
@@ -28,14 +30,25 @@ export async function POST(request: Request) {
         return errorResponse("FORBIDDEN", "Account has no email address");
       }
     } else {
-      if (!body.ownerEmail || !body.signupUserId) {
+      if (body.ownerEmail && body.signupUserId) {
+        const isValidSignupIdentity = await verifySignupIdentity(body.signupUserId, body.ownerEmail);
+        if (!isValidSignupIdentity) {
+          return errorResponse("FORBIDDEN", "Not authorized for this business");
+        }
+        ownerEmail = body.ownerEmail;
+      } else if (body.onboardingToken && verifyOnboardingToken(body.onboardingToken, { businessId: body.businessId })) {
+        const { data: business } = await db
+          .from("businesses")
+          .select("owner_email")
+          .eq("id", body.businessId)
+          .single();
+        if (!business || business.owner_email !== createPendingOwnerEmail(body.businessId)) {
+          return errorResponse("FORBIDDEN", "Onboarding token is no longer valid");
+        }
+        ownerEmail = null;
+      } else {
         return errorResponse("FORBIDDEN", "Authentication required");
       }
-      const isValidSignupIdentity = await verifySignupIdentity(body.signupUserId, body.ownerEmail);
-      if (!isValidSignupIdentity) {
-        return errorResponse("FORBIDDEN", "Not authorized for this business");
-      }
-      ownerEmail = body.ownerEmail;
     }
 
     const { data } = ownerEmail
@@ -45,7 +58,11 @@ export async function POST(request: Request) {
           .eq("id", body.businessId)
           .eq("owner_email", ownerEmail)
           .single()
-      : { data: null };
+      : await db
+          .from("businesses")
+          .select("id")
+          .eq("id", body.businessId)
+          .single();
 
     if (!data && !isAdmin) return errorResponse("FORBIDDEN", "Not authorized for this business");
 
