@@ -3,7 +3,7 @@ import { listSubscriptionsByBusinessIds } from "@/lib/db/subscriptions";
 import { getRecentAlertsAll, getRecentLogsAll } from "@/lib/db/logs";
 import { getPeriodPricing } from "@/lib/plans/tier";
 import type { BillingPeriod } from "@/lib/plans/tier";
-import { getMonthLabel } from "@/lib/admin/dashboard";
+import { getLogBadgeVariant, getMonthLabel } from "@/lib/admin/dashboard";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
@@ -238,7 +238,7 @@ export default async function AdminDashboardPage() {
                     </p>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <Badge variant={log.status === "urgent_alert" ? "error" : "error"}>
+                    <Badge variant={getLogBadgeVariant(log.status)}>
                       {log.status.replace("_", " ")}
                     </Badge>
                     <span className="text-xs text-parchment/30">{timeAgo(log.created_at)}</span>
@@ -274,15 +274,7 @@ export default async function AdminDashboardPage() {
                     </p>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <Badge
-                      variant={
-                        log.status === "urgent_alert" || log.status === "error"
-                          ? "error"
-                          : log.status === "success"
-                            ? "success"
-                            : "pending"
-                      }
-                    >
+                    <Badge variant={getLogBadgeVariant(log.status)}>
                       {log.status.replace("_", " ")}
                     </Badge>
                     <span className="text-xs text-parchment/30">{timeAgo(log.created_at)}</span>
