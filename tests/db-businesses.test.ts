@@ -188,6 +188,31 @@ describe("db/businesses", () => {
     expect(db.update).not.toHaveBeenCalled();
   });
 
+  it("updateBusinessOwnerEmailIfPending is idempotent when the owner email is already finalized", async () => {
+    const db = {
+      ...mockDb(),
+      single: vi.fn().mockResolvedValue({
+        data: { ...MOCK_BUSINESS, owner_email: "paid@test.com" },
+        error: null
+      })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(updateBusinessOwnerEmailIfPending("uuid-biz-1", "paid@test.com")).resolves.toBe(true);
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it("updateBusinessOwnerEmailIfPending returns false when the business cannot be found", async () => {
+    const db = {
+      ...mockDb(),
+      single: vi.fn().mockResolvedValue({ data: null, error: { message: "not found" } })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(updateBusinessOwnerEmailIfPending("uuid-biz-1", "paid@test.com")).resolves.toBe(false);
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
   it("createBusiness uses provided client", async () => {
     const db = mockDb({ single: vi.fn().mockResolvedValue({ data: MOCK_BUSINESS, error: null }) });
     const result = await createBusiness(

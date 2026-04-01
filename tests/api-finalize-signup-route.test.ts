@@ -68,4 +68,21 @@ describe("api/onboard/finalize-signup route", () => {
     expect(body.ok).toBe(false);
     expect(body.error.message).toBe("Onboarding session is no longer valid");
   });
+
+  it("treats a repeat finalize-signup call as success when the owner email is already finalized", async () => {
+    vi.mocked(updateBusinessOwnerEmailIfPending).mockResolvedValue(true);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/onboard/finalize-signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: "cs_test_repeat" })
+      })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.data.ownerEmail).toBe("paid@example.com");
+  });
 });

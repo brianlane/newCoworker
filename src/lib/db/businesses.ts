@@ -108,7 +108,15 @@ export async function updateBusinessOwnerEmailIfPending(
 ): Promise<boolean> {
   const business = await getBusiness(id, client);
 
-  if (!business || business.owner_email !== createPendingOwnerEmail(id)) {
+  if (!business) {
+    return false;
+  }
+
+  if (business.owner_email === ownerEmail) {
+    return true;
+  }
+
+  if (business.owner_email !== createPendingOwnerEmail(id)) {
     return false;
   }
 
