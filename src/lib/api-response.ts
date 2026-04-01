@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 type ErrorCode =
+  | "DB_ERROR"
   | "VALIDATION_ERROR"
   | "UNAUTHORIZED"
   | "FORBIDDEN"
@@ -9,6 +10,7 @@ type ErrorCode =
   | "INTERNAL_SERVER_ERROR";
 
 const STATUS_MAP: Record<ErrorCode, number> = {
+  DB_ERROR: 500,
   VALIDATION_ERROR: 400,
   UNAUTHORIZED: 401,
   FORBIDDEN: 403,

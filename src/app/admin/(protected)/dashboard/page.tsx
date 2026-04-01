@@ -3,6 +3,7 @@ import { listSubscriptionsByBusinessIds } from "@/lib/db/subscriptions";
 import { getRecentAlertsAll, getRecentLogsAll } from "@/lib/db/logs";
 import { getPeriodPricing } from "@/lib/plans/tier";
 import type { BillingPeriod } from "@/lib/plans/tier";
+import { getMonthLabel } from "@/lib/admin/dashboard";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
@@ -22,12 +23,6 @@ function timeAgo(dateStr: string): string {
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
-}
-
-function getMonthLabel(monthsBack: number): string {
-  const d = new Date();
-  d.setMonth(d.getMonth() - monthsBack);
-  return d.toLocaleString("default", { month: "short" });
 }
 
 export default async function AdminDashboardPage() {
@@ -57,8 +52,8 @@ export default async function AdminDashboardPage() {
     }, 0);
 
   // ── Signup sparkline (last 6 months) ──────────────────────────────────────
-  const signupsByMonth: number[] = Array(6).fill(0);
   const now = new Date();
+  const signupsByMonth: number[] = Array(6).fill(0);
   for (const b of businesses) {
     const created = new Date(b.created_at);
     const monthsBack =
@@ -82,7 +77,7 @@ export default async function AdminDashboardPage() {
   };
 
   // ── Recent signups (last 7 days) ─────────────────────────────────────────
-  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const sevenDaysAgo = now.getTime() - 7 * 24 * 60 * 60 * 1000;
   const recentSignups = businesses
     .filter((b) => new Date(b.created_at).getTime() > sevenDaysAgo)
     .slice(0, 5);

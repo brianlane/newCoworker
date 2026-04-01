@@ -1,4 +1,5 @@
 import { listBusinesses } from "@/lib/db/businesses";
+import { checkEnv, getEnvDisplayValue } from "@/lib/admin/system";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 
@@ -66,18 +67,6 @@ const ENV_GROUPS: EnvGroup[] = [
   }
 ];
 
-function checkEnv(key: string): boolean {
-  const val = process.env[key];
-  return !!val && val.trim().length > 0;
-}
-
-function maskValue(key: string): string {
-  const val = process.env[key];
-  if (!val) return "—";
-  if (val.length <= 8) return "••••••••";
-  return val.slice(0, 4) + "••••" + val.slice(-4);
-}
-
 export default async function SystemPage() {
   const businesses = await listBusinesses();
 
@@ -138,7 +127,7 @@ export default async function SystemPage() {
                       </div>
                       <div className="flex items-center gap-3">
                         <span className="font-mono text-xs text-parchment/30">
-                          {configured ? maskValue(v.key) : "not set"}
+                          {getEnvDisplayValue(configured)}
                         </span>
                         <Badge variant={configured ? "success" : "error"}>
                           {configured ? "✓" : "✗"}
