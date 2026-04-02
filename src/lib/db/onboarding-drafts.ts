@@ -2,6 +2,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { OnboardingData } from "@/lib/onboarding/storage";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
+type SupabaseError = { code?: string; message: string };
 
 export type OnboardingDraftRow = {
   business_id: string;
@@ -10,6 +11,10 @@ export type OnboardingDraftRow = {
   created_at: string;
   updated_at: string;
 };
+
+function isSupabaseNotFoundError(error: SupabaseError | null): boolean {
+  return error?.code === "PGRST116";
+}
 
 export async function upsertOnboardingDraft(
   data: {
@@ -55,6 +60,11 @@ export async function getOnboardingDraft(
   }
 
   const { data, error } = await query.single();
-  if (error) return null;
+  if (error) {
+    if (isSupabaseNotFoundError(error as SupabaseError)) {
+      return null;
+    }
+    throw new Error(`getOnboardingDraft: ${error.message}`);
+  }
   return data as OnboardingDraftRow;
 }

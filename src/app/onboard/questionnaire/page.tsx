@@ -691,7 +691,10 @@ function QuestionnaireForm() {
 
         <div className="flex gap-3">
           {step > 1 && (
-            <Button variant="ghost" onClick={() => setStep((s) => (s - 1) as Step)}>
+            <Button variant="ghost" onClick={() => {
+              setError(null);
+              setStep((s) => (s - 1) as Step);
+            }}>
               Back
             </Button>
           )}

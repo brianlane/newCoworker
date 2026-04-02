@@ -92,6 +92,27 @@ describe("api/onboard/draft route", () => {
     expect(body.data.onboardingData.businessName).toBe("Test Biz");
   });
 
+  it("returns 500 when the existing draft lookup errors during save", async () => {
+    vi.mocked(getOnboardingDraft).mockRejectedValue(new Error("getOnboardingDraft: db down"));
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/onboard/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId: MOCK_DRAFT.business_id,
+          draftToken: MOCK_DRAFT.draft_token,
+          onboardingData: MOCK_DRAFT.payload
+        })
+      })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body.ok).toBe(false);
+    expect(upsertOnboardingDraft).not.toHaveBeenCalled();
+  });
+
   it("returns 404 when draft does not exist", async () => {
     vi.mocked(getOnboardingDraft).mockResolvedValue(null);
 

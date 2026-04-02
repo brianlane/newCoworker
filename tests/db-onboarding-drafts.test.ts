@@ -68,12 +68,23 @@ describe("db/onboarding-drafts", () => {
 
   it("returns null when draft lookup fails", async () => {
     const db = mockDb({
-      single: vi.fn().mockResolvedValue({ data: null, error: { message: "not found" } })
+      single: vi.fn().mockResolvedValue({ data: null, error: { code: "PGRST116", message: "not found" } })
     });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     const row = await getOnboardingDraft(MOCK_ROW.business_id, MOCK_ROW.draft_token);
     expect(row).toBeNull();
+  });
+
+  it("throws when onboarding draft lookup hits a database error", async () => {
+    const db = mockDb({
+      single: vi.fn().mockResolvedValue({ data: null, error: { code: "XX000", message: "db down" } })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(
+      getOnboardingDraft(MOCK_ROW.business_id, MOCK_ROW.draft_token)
+    ).rejects.toThrow("getOnboardingDraft: db down");
   });
 
   it("throws when upsert onboarding draft fails", async () => {
