@@ -92,4 +92,23 @@ describe("api/onboard/finalize-signup route", () => {
     expect(body.ok).toBe(true);
     expect(body.data.ownerEmail).toBe("paid@example.com");
   });
+
+  it("still succeeds when onboarding draft recovery fails", async () => {
+    vi.mocked(getOnboardingDraft).mockRejectedValue(new Error("getOnboardingDraft: db down"));
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/onboard/finalize-signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: "cs_test_draft_fail" })
+      })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.data.businessId).toBe("11111111-1111-4111-8111-111111111111");
+    expect(body.data.ownerEmail).toBe("paid@example.com");
+    expect(body.data.onboardingData).toBeNull();
+  });
 });

@@ -35,7 +35,14 @@ export async function POST(request: Request) {
       return errorResponse("FORBIDDEN", "Onboarding session is no longer valid", 403);
     }
 
-    const draft = await getOnboardingDraft(businessId);
+    let draft = null;
+    try {
+      draft = await getOnboardingDraft(businessId);
+    } catch {
+      // Draft recovery is best-effort. A lookup failure should not block
+      // successful payment finalization or strand the customer post-checkout.
+      draft = null;
+    }
 
     return successResponse({
       businessId,
