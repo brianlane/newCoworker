@@ -7,6 +7,7 @@ type LegalPageProps = {
   title: string;
   summary: string;
   effectiveDate: string;
+  contactEmail: string;
   children: ReactNode;
 };
 
@@ -15,10 +16,9 @@ export function LegalPage({
   title,
   summary,
   effectiveDate,
+  contactEmail,
   children
 }: LegalPageProps) {
-  const contactEmail = process.env.CONTACT_EMAIL ?? "newcoworkerteam@gmail.com";
-
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
       <nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">

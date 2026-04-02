@@ -20,6 +20,7 @@ export default function TermsPage() {
       title="Terms of Service"
       summary="These Terms of Service govern access to and use of the New Coworker website, software, AI communications tools, dashboard, and related services. By using the service, you agree to these terms."
       effectiveDate={EFFECTIVE_DATE}
+      contactEmail={contactEmail}
     >
       <LegalSection title="1. Agreement and Eligibility">
         <p>

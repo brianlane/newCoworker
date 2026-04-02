@@ -20,6 +20,7 @@ export default function PrivacyPolicyPage() {
       title="Privacy Policy"
       summary="This Privacy Policy explains how New Coworker collects, uses, discloses, and safeguards information when businesses and their personnel use our website, onboarding flow, dashboard, messaging features, and AI-powered communication services."
       effectiveDate={EFFECTIVE_DATE}
+      contactEmail={contactEmail}
     >
       <LegalSection title="1. Scope">
         <p>
