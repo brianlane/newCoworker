@@ -1,5 +1,6 @@
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { getOnboardingDraft, upsertOnboardingDraft } from "@/lib/db/onboarding-drafts";
+import { onboardingAssistantProfileSchema } from "@/lib/onboarding/chat";
 import { z } from "zod";
 
 const onboardingDraftPayloadSchema = z.object({
@@ -22,7 +23,7 @@ const onboardingDraftPayloadSchema = z.object({
   assistantChat: z.object({
     readyToFinalize: z.boolean(),
     completionPercent: z.number(),
-    profile: z.record(z.string(), z.unknown()),
+    profile: onboardingAssistantProfileSchema,
     drafts: z.object({
       soulMd: z.string(),
       identityMd: z.string(),

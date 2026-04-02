@@ -9,6 +9,16 @@ describe("buildSignupAuthMetadata", () => {
     });
   });
 
+  it("returns only business name when onboarding data is incomplete", () => {
+    expect(
+      buildSignupAuthMetadata("Test Biz", {
+        businessName: "Test Biz"
+      })
+    ).toEqual({
+      business_name: "Test Biz"
+    });
+  });
+
   it("drops large assistant chat and inquiry fields from auth metadata", () => {
     const onboardingData: OnboardingData = {
       tier: "standard",

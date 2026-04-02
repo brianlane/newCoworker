@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Image from "next/image";
 import { useSearchParams } from "next/navigation";
 import { OrderSummaryCard } from "@/components/OrderSummaryCard";
@@ -9,6 +9,14 @@ import { Button } from "@/components/ui/Button";
 import { ONBOARD_STORAGE_KEY, type OnboardingData } from "@/lib/onboarding/storage";
 
 export default function CheckoutPage() {
+  return (
+    <Suspense>
+      <CheckoutContent />
+    </Suspense>
+  );
+}
+
+function CheckoutContent() {
   const searchParams = useSearchParams();
   const [data, setData] = useState<OnboardingData | null>(null);
   const [loadingData, setLoadingData] = useState(true);
@@ -21,6 +29,16 @@ export default function CheckoutPage() {
         let foundData: OnboardingData | null = null;
         const businessId = searchParams.get("businessId");
         const draftToken = searchParams.get("draftToken");
+        let storedData: OnboardingData | null = null;
+
+        try {
+          const stored = localStorage.getItem(ONBOARD_STORAGE_KEY);
+          if (stored) {
+            storedData = JSON.parse(stored) as OnboardingData;
+          }
+        } catch {
+          /* localStorage unavailable */
+        }
 
         if (businessId && draftToken) {
           const draftRes = await fetch(
@@ -32,15 +50,23 @@ export default function CheckoutPage() {
           }
         }
 
-        if (!foundData) {
-          try {
-            const stored = localStorage.getItem(ONBOARD_STORAGE_KEY);
-            if (stored) {
-              foundData = JSON.parse(stored) as OnboardingData;
-            }
-          } catch {
-            /* localStorage unavailable */
-          }
+        const storedMatchesRequestedDraft =
+          storedData &&
+          storedData.businessId === businessId &&
+          storedData.draftToken === draftToken;
+
+        // Prefer the local copy when it is for the same draft and has already
+        // advanced beyond the server snapshot, such as after business creation.
+        if (
+          storedMatchesRequestedDraft &&
+          storedData?.persistedToDatabase &&
+          !foundData?.persistedToDatabase
+        ) {
+          foundData = storedData;
+        }
+
+        if (!foundData && storedData) {
+          foundData = storedData;
         }
 
         if (foundData) {
@@ -112,7 +138,7 @@ export default function CheckoutPage() {
       }
 
       if (onboardingData.businessId && onboardingData.draftToken) {
-        await fetch("/api/onboard/draft", {
+        const draftRes = await fetch("/api/onboard/draft", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -121,6 +147,11 @@ export default function CheckoutPage() {
             onboardingData
           })
         });
+
+        const draftJson = await draftRes.json().catch(() => null);
+        if (!draftRes.ok) {
+          throw new Error(draftJson?.error?.message ?? "Failed to sync onboarding draft");
+        }
       }
 
       const checkoutRes = await fetch("/api/checkout", {

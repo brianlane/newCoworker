@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getOnboardingDraft, upsertOnboardingDraft } from "@/lib/db/onboarding-drafts";
+import type { OnboardingData } from "@/lib/onboarding/storage";
 
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
@@ -7,22 +8,24 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
+const MOCK_PAYLOAD: OnboardingData = {
+  tier: "standard",
+  billingPeriod: "biennial",
+  businessName: "Test Biz",
+  businessType: "real_estate",
+  ownerName: "Brian Lane",
+  ownerEmail: "owner@example.com",
+  phone: "16026866672",
+  serviceArea: "Phoenix",
+  typicalInquiry: "Test inquiry",
+  teamSize: "1",
+  crmUsed: ""
+};
+
 const MOCK_ROW = {
   business_id: "11111111-1111-4111-8111-111111111111",
   draft_token: "22222222-2222-4222-8222-222222222222",
-  payload: {
-    tier: "standard",
-    billingPeriod: "biennial",
-    businessName: "Test Biz",
-    businessType: "real_estate",
-    ownerName: "Brian Lane",
-    ownerEmail: "owner@example.com",
-    phone: "16026866672",
-    serviceArea: "Phoenix",
-    typicalInquiry: "Test inquiry",
-    teamSize: "1",
-    crmUsed: ""
-  },
+  payload: MOCK_PAYLOAD,
   created_at: "2026-04-02T00:00:00Z",
   updated_at: "2026-04-02T00:00:00Z"
 };
