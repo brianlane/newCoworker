@@ -29,6 +29,7 @@ function CheckoutContent() {
         let foundData: OnboardingData | null = null;
         const businessId = searchParams.get("businessId");
         const draftToken = searchParams.get("draftToken");
+        const requestedDraft = Boolean(businessId && draftToken);
         let storedData: OnboardingData | null = null;
 
         try {
@@ -65,13 +66,15 @@ function CheckoutContent() {
           foundData = storedData;
         }
 
-        if (!foundData && storedData) {
+        if (!foundData && storedData && (!requestedDraft || storedMatchesRequestedDraft)) {
           foundData = storedData;
         }
 
         if (foundData) {
           localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(foundData));
           setData(foundData);
+        } else if (requestedDraft) {
+          setError("We could not load that checkout draft. Please return to onboarding and continue again.");
         }
       } finally {
         setLoadingData(false);
@@ -201,7 +204,7 @@ function CheckoutContent() {
           <Image src="/logo.png" alt="New Coworker" width={56} height={56} className="rounded-full mx-auto" />
           <h1 className="text-2xl font-bold text-parchment">No plan selected</h1>
           <p className="text-sm text-parchment/50">
-            It looks like you haven&apos;t completed the onboarding questionnaire yet.
+            {error ?? "It looks like you haven&apos;t completed the onboarding questionnaire yet."}
           </p>
           <a
             href="/onboard"
