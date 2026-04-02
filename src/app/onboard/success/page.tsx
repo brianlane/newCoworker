@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/Card";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { buildSignupAuthMetadata } from "@/lib/onboarding/auth-metadata";
 import { ONBOARD_STORAGE_KEY, type OnboardingData } from "@/lib/onboarding/storage";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 import { getPasswordValidationError, PASSWORD_RULES } from "@/lib/password";
@@ -36,6 +37,7 @@ function OnboardSuccessContent() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [showRecoveryNotice, setShowRecoveryNotice] = useState(false);
 
   useEffect(() => {
     const rawOnboarding = localStorage.getItem(ONBOARD_STORAGE_KEY);
@@ -67,19 +69,25 @@ function OnboardSuccessContent() {
 
         const verifyJson = await verifyRes.json();
         const ownerEmail = verifyJson.data?.ownerEmail;
+        const businessId = verifyJson.data?.businessId;
+        const recoveredOnboardingData = verifyJson.data?.onboardingData as OnboardingData | null | undefined;
+        const onboardingDraftRecovered = verifyJson.data?.onboardingDraftRecovered === true;
         if (typeof ownerEmail !== "string" || !ownerEmail) {
           throw new Error("Could not determine the paid account email.");
         }
 
         setSignupEmail(ownerEmail);
         const rawOnboarding = localStorage.getItem(ONBOARD_STORAGE_KEY);
-        if (rawOnboarding) {
-          const onboardingData = JSON.parse(rawOnboarding) as OnboardingData;
-          localStorage.setItem(
-            ONBOARD_STORAGE_KEY,
-            JSON.stringify({ ...onboardingData, ownerEmail })
-          );
+        const onboardingData = rawOnboarding ? JSON.parse(rawOnboarding) as OnboardingData : null;
+        const nextOnboardingData = recoveredOnboardingData
+          ? { ...recoveredOnboardingData, businessId, ownerEmail, persistedToDatabase: true }
+          : onboardingData
+            ? { ...onboardingData, businessId, ownerEmail, persistedToDatabase: true }
+            : null;
+        if (nextOnboardingData) {
+          localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(nextOnboardingData));
         }
+        setShowRecoveryNotice(!onboardingDraftRecovered && !nextOnboardingData);
 
         setStatus("needs_password");
       } catch (err) {
@@ -158,10 +166,10 @@ function OnboardSuccessContent() {
         email: signupEmail,
         password,
         options: {
-          data: {
-            business_name: onboardingData?.businessName,
-            onboarding_data: onboardingData ? { ...onboardingData, ownerEmail: signupEmail } : undefined
-          },
+          data: buildSignupAuthMetadata(
+            onboardingData?.businessName ?? "",
+            onboardingData ? { ...onboardingData, ownerEmail: signupEmail } : null
+          ),
           emailRedirectTo: `${window.location.origin}/api/auth/callback?redirectTo=${encodedRedirect}`
         }
       });
@@ -258,6 +266,15 @@ function OnboardSuccessContent() {
         {status === "verifying_payment" && (
           <Card>
             <p className="text-sm text-parchment/70 text-center">Checking your payment status…</p>
+          </Card>
+        )}
+
+        {showRecoveryNotice && status === "needs_password" && (
+          <Card>
+            <p className="text-xs text-parchment/70 text-center">
+              We couldn&apos;t restore your onboarding details automatically. You can still finish account creation now,
+              then review and re-enter any missing business configuration from your dashboard after login.
+            </p>
           </Card>
         )}
 

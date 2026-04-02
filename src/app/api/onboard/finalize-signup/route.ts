@@ -1,4 +1,5 @@
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
+import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { updateBusinessOwnerEmailIfPending } from "@/lib/db/businesses";
 import { getStripe } from "@/lib/stripe/client";
 import { z } from "zod";
@@ -34,9 +35,23 @@ export async function POST(request: Request) {
       return errorResponse("FORBIDDEN", "Onboarding session is no longer valid", 403);
     }
 
+    let draft = null;
+    let onboardingDraftRecovered = false;
+    try {
+      draft = await getOnboardingDraft(businessId);
+      onboardingDraftRecovered = Boolean(draft);
+    } catch {
+      // Draft recovery is best-effort. A lookup failure should not block
+      // successful payment finalization or strand the customer post-checkout.
+      draft = null;
+      onboardingDraftRecovered = false;
+    }
+
     return successResponse({
       businessId,
-      ownerEmail
+      ownerEmail,
+      onboardingData: draft?.payload,
+      onboardingDraftRecovered
     });
   } catch (err) {
     if (err instanceof z.ZodError) {

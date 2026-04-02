@@ -6,6 +6,7 @@ import Image from "next/image";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card } from "@/components/ui/Card";
+import { buildSignupAuthMetadata } from "@/lib/onboarding/auth-metadata";
 import { ONBOARD_STORAGE_KEY } from "@/lib/onboarding/storage";
 import { getPasswordValidationError, PASSWORD_RULES } from "@/lib/password";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
@@ -79,10 +80,7 @@ function SignupForm() {
       email,
       password,
       options: {
-        data: { 
-          business_name: businessName,
-          onboarding_data: onboardingDataWithLatestBusinessName
-        },
+        data: buildSignupAuthMetadata(businessName, onboardingDataWithLatestBusinessName),
         emailRedirectTo: `${window.location.origin}/api/auth/callback?redirectTo=${encodedRedirect}`
       }
     });

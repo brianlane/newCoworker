@@ -8,8 +8,13 @@ vi.mock("@/lib/db/businesses", () => ({
   updateBusinessOwnerEmailIfPending: vi.fn()
 }));
 
+vi.mock("@/lib/db/onboarding-drafts", () => ({
+  getOnboardingDraft: vi.fn()
+}));
+
 import { POST } from "@/app/api/onboard/finalize-signup/route";
 import { updateBusinessOwnerEmailIfPending } from "@/lib/db/businesses";
+import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { getStripe } from "@/lib/stripe/client";
 
 describe("api/onboard/finalize-signup route", () => {
@@ -32,6 +37,7 @@ describe("api/onboard/finalize-signup route", () => {
       }
     } as never);
     vi.mocked(updateBusinessOwnerEmailIfPending).mockResolvedValue(true);
+    vi.mocked(getOnboardingDraft).mockResolvedValue(null);
   });
 
   it("updates the pending owner email after a completed paid session", async () => {
@@ -50,6 +56,8 @@ describe("api/onboard/finalize-signup route", () => {
       "11111111-1111-4111-8111-111111111111",
       "paid@example.com"
     );
+    expect(body.data.businessId).toBe("11111111-1111-4111-8111-111111111111");
+    expect(body.data.onboardingDraftRecovered).toBe(false);
   });
 
   it("rejects finalize-signup when the business is no longer pending", async () => {
@@ -84,5 +92,26 @@ describe("api/onboard/finalize-signup route", () => {
     expect(response.status).toBe(200);
     expect(body.ok).toBe(true);
     expect(body.data.ownerEmail).toBe("paid@example.com");
+    expect(body.data.onboardingDraftRecovered).toBe(false);
+  });
+
+  it("still succeeds when onboarding draft recovery fails", async () => {
+    vi.mocked(getOnboardingDraft).mockRejectedValue(new Error("getOnboardingDraft: db down"));
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/onboard/finalize-signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: "cs_test_draft_fail" })
+      })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.data.businessId).toBe("11111111-1111-4111-8111-111111111111");
+    expect(body.data.ownerEmail).toBe("paid@example.com");
+    expect(body.data.onboardingData).toBeUndefined();
+    expect(body.data.onboardingDraftRecovered).toBe(false);
   });
 });

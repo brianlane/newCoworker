@@ -21,6 +21,10 @@ import {
 import { BUSINESS_TYPE_OPTIONS, DEFAULT_BUSINESS_TYPE } from "@/lib/onboarding/businessTypes";
 const DRAFT_STORAGE_KEY = "newcoworker_onboard_draft";
 
+function isValidEmailAddress(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
 function createMessageTimestamp(): string {
   return new Date().toISOString();
 }
@@ -176,6 +180,7 @@ function QuestionnaireForm() {
   const [error, setError] = useState<string | null>(null);
   const [signupEmail, setSignupEmail] = useState("");
   const [signupLoading, setSignupLoading] = useState(false);
+  const [draftSaving, setDraftSaving] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
@@ -372,9 +377,11 @@ function QuestionnaireForm() {
 
   function buildStoredOnboardingData(
     businessId?: string,
+    draftToken?: string,
     ownerEmail?: string,
     signupUserId?: string,
-    onboardingToken?: string
+    onboardingToken?: string,
+    persistedToDatabase = false
   ): OnboardingData {
     const storedAssistantChat: OnboardingAssistantChatState = {
       readyToFinalize: form.assistantChat?.readyToFinalize ?? false,
@@ -389,14 +396,49 @@ function QuestionnaireForm() {
 
     return {
       businessId,
+      draftToken,
       ownerEmail,
       signupUserId,
       onboardingToken,
+      persistedToDatabase,
       tier,
       billingPeriod: period,
       ...form,
       assistantChat: storedAssistantChat
     };
+  }
+
+  async function persistOnboardingDraft(): Promise<OnboardingData> {
+    const existingOnboardingRaw = localStorage.getItem(ONBOARD_STORAGE_KEY);
+    const existingOnboarding = existingOnboardingRaw ? JSON.parse(existingOnboardingRaw) as OnboardingData : null;
+    const businessId = existingOnboarding?.businessId ?? crypto.randomUUID();
+    const draftToken = existingOnboarding?.draftToken ?? crypto.randomUUID();
+    const onboardingData = buildStoredOnboardingData(
+      businessId,
+      draftToken,
+      signupEmail || existingOnboarding?.ownerEmail,
+      existingOnboarding?.signupUserId,
+      existingOnboarding?.onboardingToken,
+      existingOnboarding?.persistedToDatabase ?? false
+    );
+
+    const response = await fetch("/api/onboard/draft", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        businessId,
+        draftToken,
+        onboardingData
+      })
+    });
+
+    const json = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(json?.error?.message ?? "Could not save onboarding draft");
+    }
+
+    localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(onboardingData));
+    return onboardingData;
   }
 
   async function handleContinueToCheckout(event: FormEvent) {
@@ -410,23 +452,46 @@ function QuestionnaireForm() {
     }
 
     try {
-      const existingOnboardingRaw = localStorage.getItem(ONBOARD_STORAGE_KEY);
-      const existingOnboarding = existingOnboardingRaw ? JSON.parse(existingOnboardingRaw) as OnboardingData : null;
       setSignupLoading(true);
-
-      const onboardingData = buildStoredOnboardingData(
-        existingOnboarding?.businessId,
-        signupEmail || existingOnboarding?.ownerEmail,
-        undefined,
-        existingOnboarding?.onboardingToken
-      );
-      localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(onboardingData));
+      const onboardingData = await persistOnboardingDraft();
       localStorage.removeItem(DRAFT_STORAGE_KEY);
-      window.location.href = "/onboard/checkout";
+      const checkoutUrl = new URL("/onboard/checkout", window.location.origin);
+      checkoutUrl.searchParams.set("businessId", onboardingData.businessId ?? "");
+      checkoutUrl.searchParams.set("draftToken", onboardingData.draftToken ?? "");
+      window.location.href = checkoutUrl.toString();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not continue to checkout");
     } finally {
       setSignupLoading(false);
+    }
+  }
+
+  async function handleAdvanceStep() {
+    if (step === 1) {
+      if (!signupEmail.trim()) {
+        setError("Email is required");
+        return;
+      }
+      if (!isValidEmailAddress(signupEmail)) {
+        setError("Please enter a valid email address");
+        return;
+      }
+      setError(null);
+      setStep(2);
+      return;
+    }
+
+    if (step !== 2) return;
+
+    try {
+      setDraftSaving(true);
+      setError(null);
+      await persistOnboardingDraft();
+      setStep((currentStep) => currentStep === 2 ? 3 : currentStep);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save onboarding draft");
+    } finally {
+      setDraftSaving(false);
     }
   }
 
@@ -625,29 +690,38 @@ function QuestionnaireForm() {
                     After payment, you&apos;ll complete Step 4 by creating your password and confirming your email.
                   </div>
 
-                  {error && <p className="text-spark-orange text-xs">{error}</p>}
-
                   <Button type="submit" className="w-full" loading={signupLoading}>
                     Continue to Payment →
                   </Button>
               </form>
             </div>
           )}
+
+          {error && (
+            <p className="text-spark-orange text-xs">{error}</p>
+          )}
         </Card>
 
         <div className="flex gap-3">
           {step > 1 && (
-            <Button variant="ghost" onClick={() => setStep((s) => (s - 1) as Step)}>
+            <Button variant="ghost" onClick={() => {
+              setError(null);
+              setStep((s) => (s - 1) as Step);
+            }} disabled={draftSaving}>
               Back
             </Button>
           )}
           {step < 3 ? (
             <Button
               className="flex-1"
-              onClick={() => setStep((s) => (s + 1) as Step)}
-              disabled={(step === 1 && (!form.businessName || !signupEmail)) || (step === 2 && !canContinueFromChat)}
+              onClick={() => void handleAdvanceStep()}
+              disabled={
+                draftSaving ||
+                (step === 1 && (!form.businessName || !signupEmail.trim())) ||
+                (step === 2 && !canContinueFromChat)
+              }
             >
-              Continue →
+              {step === 2 && draftSaving ? "Saving..." : "Continue →"}
             </Button>
           ) : null}
         </div>

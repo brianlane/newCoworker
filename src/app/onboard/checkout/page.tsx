@@ -1,14 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Image from "next/image";
+import { useSearchParams } from "next/navigation";
 import { OrderSummaryCard } from "@/components/OrderSummaryCard";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { ONBOARD_STORAGE_KEY, type OnboardingData } from "@/lib/onboarding/storage";
-import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 export default function CheckoutPage() {
+  return (
+    <Suspense>
+      <CheckoutContent />
+    </Suspense>
+  );
+}
+
+function CheckoutContent() {
+  const searchParams = useSearchParams();
   const [data, setData] = useState<OnboardingData | null>(null);
   const [loadingData, setLoadingData] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -17,37 +26,62 @@ export default function CheckoutPage() {
   useEffect(() => {
     async function loadData() {
       try {
-        const supabase = getSupabaseBrowserClient();
-        const { data: { user } } = await supabase.auth.getUser();
         let foundData: OnboardingData | null = null;
+        const businessId = searchParams.get("businessId");
+        const draftToken = searchParams.get("draftToken");
+        const requestedDraft = Boolean(businessId && draftToken);
+        let storedData: OnboardingData | null = null;
 
-        if (user?.user_metadata?.onboarding_data) {
-          foundData = user.user_metadata.onboarding_data as OnboardingData;
-          if (user.user_metadata.business_name && typeof user.user_metadata.business_name === "string") {
-            foundData = { ...foundData, businessName: user.user_metadata.business_name };
+        try {
+          const stored = localStorage.getItem(ONBOARD_STORAGE_KEY);
+          if (stored) {
+            storedData = JSON.parse(stored) as OnboardingData;
+          }
+        } catch {
+          /* localStorage unavailable */
+        }
+
+        if (businessId && draftToken) {
+          const draftRes = await fetch(
+            `/api/onboard/draft?businessId=${encodeURIComponent(businessId)}&draftToken=${encodeURIComponent(draftToken)}`
+          );
+          if (draftRes.ok) {
+            const draftJson = await draftRes.json();
+            foundData = draftJson.data?.onboardingData as OnboardingData;
           }
         }
 
-        if (!foundData) {
-          try {
-            const stored = localStorage.getItem(ONBOARD_STORAGE_KEY);
-            if (stored) {
-              foundData = JSON.parse(stored) as OnboardingData;
-            }
-          } catch {
-            /* localStorage unavailable */
-          }
+        const storedMatchesRequestedDraft =
+          storedData &&
+          storedData.businessId === businessId &&
+          storedData.draftToken === draftToken;
+
+        // Prefer the local copy when it is for the same draft and has already
+        // advanced beyond the server snapshot, such as after business creation.
+        if (
+          storedMatchesRequestedDraft &&
+          storedData?.persistedToDatabase &&
+          !foundData?.persistedToDatabase
+        ) {
+          foundData = storedData;
+        }
+
+        if (!foundData && storedData && (!requestedDraft || storedMatchesRequestedDraft)) {
+          foundData = storedData;
         }
 
         if (foundData) {
+          localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(foundData));
           setData(foundData);
+        } else if (requestedDraft) {
+          setError("We could not load that checkout draft. Please return to onboarding and continue again.");
         }
       } finally {
         setLoadingData(false);
       }
     }
-    loadData();
-  }, []);
+    void loadData();
+  }, [searchParams]);
 
   async function handleCheckout() {
     if (!data) return;
@@ -57,8 +91,10 @@ export default function CheckoutPage() {
     try {
       const businessId = data.businessId ?? crypto.randomUUID();
       let onboardingData: OnboardingData = data;
+      const businessAlreadyPersisted =
+        data.persistedToDatabase === true || (data.persistedToDatabase === undefined && Boolean(data.businessId) && !data.draftToken);
 
-      if (!data.businessId) {
+      if (!businessAlreadyPersisted) {
         const createRes = await fetch("/api/business/create", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -82,8 +118,11 @@ export default function CheckoutPage() {
         onboardingData = {
           ...data,
           businessId,
-          onboardingToken: createJson.data?.onboardingToken ?? undefined
+          onboardingToken: createJson.data?.onboardingToken ?? undefined,
+          persistedToDatabase: true
         };
+        localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(onboardingData));
+        setData(onboardingData);
       }
 
       if (onboardingData.assistantChat?.drafts) {
@@ -104,6 +143,23 @@ export default function CheckoutPage() {
         if (!configRes.ok) throw new Error("Failed to save assistant profile");
       }
 
+      if (onboardingData.businessId && onboardingData.draftToken) {
+        const draftRes = await fetch("/api/onboard/draft", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            businessId: onboardingData.businessId,
+            draftToken: onboardingData.draftToken,
+            onboardingData
+          })
+        });
+
+        const draftJson = await draftRes.json().catch(() => null);
+        if (!draftRes.ok) {
+          throw new Error(draftJson?.error?.message ?? "Failed to sync onboarding draft");
+        }
+      }
+
       const checkoutRes = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -113,7 +169,8 @@ export default function CheckoutPage() {
           billingPeriod: onboardingData.billingPeriod ?? "biennial",
           ownerEmail: onboardingData.ownerEmail,
           onboardingToken: onboardingData.onboardingToken,
-          signupUserId: onboardingData.signupUserId
+          signupUserId: onboardingData.signupUserId,
+          draftToken: onboardingData.draftToken
         })
       });
       const checkoutJson = await checkoutRes.json();
@@ -149,7 +206,7 @@ export default function CheckoutPage() {
           <Image src="/logo.png" alt="New Coworker" width={56} height={56} className="rounded-full mx-auto" />
           <h1 className="text-2xl font-bold text-parchment">No plan selected</h1>
           <p className="text-sm text-parchment/50">
-            It looks like you haven&apos;t completed the onboarding questionnaire yet.
+            {error ?? "It looks like you haven't completed the onboarding questionnaire yet."}
           </p>
           <a
             href="/onboard"
