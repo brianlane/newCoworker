@@ -677,13 +677,15 @@ function QuestionnaireForm() {
                     After payment, you&apos;ll complete Step 4 by creating your password and confirming your email.
                   </div>
 
-                  {error && <p className="text-spark-orange text-xs">{error}</p>}
-
                   <Button type="submit" className="w-full" loading={signupLoading}>
                     Continue to Payment →
                   </Button>
               </form>
             </div>
+          )}
+
+          {error && step !== 1 && (
+            <p className="text-spark-orange text-xs">{error}</p>
           )}
         </Card>
 
