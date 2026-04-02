@@ -57,7 +57,7 @@ export function MemoryEditor({
 
       <Card>
         <h3 className="text-sm font-semibold text-parchment mb-3 flex items-center gap-2">
-          <span className="inline-block w-2 h-2 rounded-full bg-signal-teal" />
+          <span className="inline-block w-2 h-2 rounded-full bg-claw-green" />
           Identity (Business Facts)
         </h3>
         <Textarea
@@ -70,9 +70,8 @@ export function MemoryEditor({
 
       <Card>
         <h3 className="text-sm font-semibold text-parchment mb-3 flex items-center gap-2">
-          <span className="inline-block w-2 h-2 rounded-full bg-spark-orange" />
+          <span className="inline-block w-2 h-2 rounded-full bg-claw-green" />
           Memory (Learned Facts)
-          <span className="ml-auto text-xs text-parchment/40">Managed by Lossless Claw</span>
         </h3>
         <Textarea
           value={memory}

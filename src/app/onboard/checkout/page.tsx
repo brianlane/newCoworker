@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from "react";
 import Image from "next/image";
+import { useSearchParams } from "next/navigation";
 import { OrderSummaryCard } from "@/components/OrderSummaryCard";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { ONBOARD_STORAGE_KEY, type OnboardingData } from "@/lib/onboarding/storage";
-import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 export default function CheckoutPage() {
+  const searchParams = useSearchParams();
   const [data, setData] = useState<OnboardingData | null>(null);
   const [loadingData, setLoadingData] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -17,14 +18,17 @@ export default function CheckoutPage() {
   useEffect(() => {
     async function loadData() {
       try {
-        const supabase = getSupabaseBrowserClient();
-        const { data: { user } } = await supabase.auth.getUser();
         let foundData: OnboardingData | null = null;
+        const businessId = searchParams.get("businessId");
+        const draftToken = searchParams.get("draftToken");
 
-        if (user?.user_metadata?.onboarding_data) {
-          foundData = user.user_metadata.onboarding_data as OnboardingData;
-          if (user.user_metadata.business_name && typeof user.user_metadata.business_name === "string") {
-            foundData = { ...foundData, businessName: user.user_metadata.business_name };
+        if (businessId && draftToken) {
+          const draftRes = await fetch(
+            `/api/onboard/draft?businessId=${encodeURIComponent(businessId)}&draftToken=${encodeURIComponent(draftToken)}`
+          );
+          if (draftRes.ok) {
+            const draftJson = await draftRes.json();
+            foundData = draftJson.data?.onboardingData as OnboardingData;
           }
         }
 
@@ -40,14 +44,15 @@ export default function CheckoutPage() {
         }
 
         if (foundData) {
+          localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(foundData));
           setData(foundData);
         }
       } finally {
         setLoadingData(false);
       }
     }
-    loadData();
-  }, []);
+    void loadData();
+  }, [searchParams]);
 
   async function handleCheckout() {
     if (!data) return;
@@ -58,7 +63,7 @@ export default function CheckoutPage() {
       const businessId = data.businessId ?? crypto.randomUUID();
       let onboardingData: OnboardingData = data;
 
-      if (!data.businessId) {
+      if (!data.persistedToDatabase) {
         const createRes = await fetch("/api/business/create", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -82,8 +87,10 @@ export default function CheckoutPage() {
         onboardingData = {
           ...data,
           businessId,
-          onboardingToken: createJson.data?.onboardingToken ?? undefined
+          onboardingToken: createJson.data?.onboardingToken ?? undefined,
+          persistedToDatabase: true
         };
+        localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(onboardingData));
       }
 
       if (onboardingData.assistantChat?.drafts) {
@@ -104,6 +111,18 @@ export default function CheckoutPage() {
         if (!configRes.ok) throw new Error("Failed to save assistant profile");
       }
 
+      if (onboardingData.businessId && onboardingData.draftToken) {
+        await fetch("/api/onboard/draft", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            businessId: onboardingData.businessId,
+            draftToken: onboardingData.draftToken,
+            onboardingData
+          })
+        });
+      }
+
       const checkoutRes = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -113,7 +132,8 @@ export default function CheckoutPage() {
           billingPeriod: onboardingData.billingPeriod ?? "biennial",
           ownerEmail: onboardingData.ownerEmail,
           onboardingToken: onboardingData.onboardingToken,
-          signupUserId: onboardingData.signupUserId
+          signupUserId: onboardingData.signupUserId,
+          draftToken: onboardingData.draftToken
         })
       });
       const checkoutJson = await checkoutRes.json();

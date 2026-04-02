@@ -65,7 +65,8 @@ describe("api/checkout route", () => {
         businessId,
         billingPeriod: "biennial",
         ownerEmail: "owner@example.com",
-        signupUserId
+        signupUserId,
+        draftToken: "33333333-3333-4333-8333-333333333333"
       })
     });
 
@@ -78,6 +79,7 @@ describe("api/checkout route", () => {
     expect(verifySignupIdentity).toHaveBeenCalledWith(signupUserId, "owner@example.com");
     expect(createCheckoutSession).toHaveBeenCalledWith(
       expect.objectContaining({
+        cancelUrl: `http://localhost:3000/onboard/checkout?businessId=${encodeURIComponent(businessId)}&draftToken=33333333-3333-4333-8333-333333333333`,
         customerEmail: "owner@example.com",
         metadata: expect.objectContaining({
           userId: signupUserId,

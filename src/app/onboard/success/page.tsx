@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/Card";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { buildSignupAuthMetadata } from "@/lib/onboarding/auth-metadata";
 import { ONBOARD_STORAGE_KEY, type OnboardingData } from "@/lib/onboarding/storage";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 import { getPasswordValidationError, PASSWORD_RULES } from "@/lib/password";
@@ -67,18 +68,22 @@ function OnboardSuccessContent() {
 
         const verifyJson = await verifyRes.json();
         const ownerEmail = verifyJson.data?.ownerEmail;
+        const businessId = verifyJson.data?.businessId;
+        const recoveredOnboardingData = verifyJson.data?.onboardingData as OnboardingData | null | undefined;
         if (typeof ownerEmail !== "string" || !ownerEmail) {
           throw new Error("Could not determine the paid account email.");
         }
 
         setSignupEmail(ownerEmail);
         const rawOnboarding = localStorage.getItem(ONBOARD_STORAGE_KEY);
-        if (rawOnboarding) {
-          const onboardingData = JSON.parse(rawOnboarding) as OnboardingData;
-          localStorage.setItem(
-            ONBOARD_STORAGE_KEY,
-            JSON.stringify({ ...onboardingData, ownerEmail })
-          );
+        const onboardingData = rawOnboarding ? JSON.parse(rawOnboarding) as OnboardingData : null;
+        const nextOnboardingData = recoveredOnboardingData
+          ? { ...recoveredOnboardingData, businessId, ownerEmail, persistedToDatabase: true }
+          : onboardingData
+            ? { ...onboardingData, businessId, ownerEmail, persistedToDatabase: true }
+            : null;
+        if (nextOnboardingData) {
+          localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(nextOnboardingData));
         }
 
         setStatus("needs_password");
@@ -158,10 +163,10 @@ function OnboardSuccessContent() {
         email: signupEmail,
         password,
         options: {
-          data: {
-            business_name: onboardingData?.businessName,
-            onboarding_data: onboardingData ? { ...onboardingData, ownerEmail: signupEmail } : undefined
-          },
+          data: buildSignupAuthMetadata(
+            onboardingData?.businessName ?? "",
+            onboardingData ? { ...onboardingData, ownerEmail: signupEmail } : null
+          ),
           emailRedirectTo: `${window.location.origin}/api/auth/callback?redirectTo=${encodedRedirect}`
         }
       });

@@ -8,8 +8,13 @@ vi.mock("@/lib/db/businesses", () => ({
   updateBusinessOwnerEmailIfPending: vi.fn()
 }));
 
+vi.mock("@/lib/db/onboarding-drafts", () => ({
+  getOnboardingDraft: vi.fn()
+}));
+
 import { POST } from "@/app/api/onboard/finalize-signup/route";
 import { updateBusinessOwnerEmailIfPending } from "@/lib/db/businesses";
+import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { getStripe } from "@/lib/stripe/client";
 
 describe("api/onboard/finalize-signup route", () => {
@@ -32,6 +37,7 @@ describe("api/onboard/finalize-signup route", () => {
       }
     } as never);
     vi.mocked(updateBusinessOwnerEmailIfPending).mockResolvedValue(true);
+    vi.mocked(getOnboardingDraft).mockResolvedValue(null);
   });
 
   it("updates the pending owner email after a completed paid session", async () => {
@@ -50,6 +56,7 @@ describe("api/onboard/finalize-signup route", () => {
       "11111111-1111-4111-8111-111111111111",
       "paid@example.com"
     );
+    expect(body.data.businessId).toBe("11111111-1111-4111-8111-111111111111");
   });
 
   it("rejects finalize-signup when the business is no longer pending", async () => {

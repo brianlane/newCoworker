@@ -1,4 +1,5 @@
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
+import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { updateBusinessOwnerEmailIfPending } from "@/lib/db/businesses";
 import { getStripe } from "@/lib/stripe/client";
 import { z } from "zod";
@@ -34,9 +35,12 @@ export async function POST(request: Request) {
       return errorResponse("FORBIDDEN", "Onboarding session is no longer valid", 403);
     }
 
+    const draft = await getOnboardingDraft(businessId);
+
     return successResponse({
       businessId,
-      ownerEmail
+      ownerEmail,
+      onboardingData: draft?.payload ?? null
     });
   } catch (err) {
     if (err instanceof z.ZodError) {

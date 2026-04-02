@@ -14,7 +14,8 @@ const schema = z.object({
   billingPeriod: z.enum(["monthly", "annual", "biennial"]).default("biennial"),
   ownerEmail: z.string().email().optional(),
   onboardingToken: z.string().min(1).optional(),
-  signupUserId: z.string().uuid().optional()
+  signupUserId: z.string().uuid().optional(),
+  draftToken: z.string().uuid().optional()
 });
 
 export async function POST(request: Request) {
@@ -74,7 +75,9 @@ export async function POST(request: Request) {
     const session = await createCheckoutSession({
       priceId,
       successUrl: `${appUrl}/onboard/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancelUrl: `${appUrl}/onboard`,
+      cancelUrl: body.draftToken
+        ? `${appUrl}/onboard/checkout?businessId=${encodeURIComponent(body.businessId)}&draftToken=${encodeURIComponent(body.draftToken)}`
+        : `${appUrl}/onboard`,
       customerEmail,
       discountCouponId,
       metadata: {
