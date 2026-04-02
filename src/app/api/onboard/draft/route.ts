@@ -46,6 +46,12 @@ const getSchema = z.object({
 export async function POST(request: Request) {
   try {
     const body = postSchema.parse(await request.json());
+    const existing = await getOnboardingDraft(body.businessId);
+
+    if (existing && existing.draft_token !== body.draftToken) {
+      return errorResponse("FORBIDDEN", "Onboarding draft token mismatch", 403);
+    }
+
     const row = await upsertOnboardingDraft({
       businessId: body.businessId,
       draftToken: body.draftToken,

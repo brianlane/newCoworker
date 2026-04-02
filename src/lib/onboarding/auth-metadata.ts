@@ -1,6 +1,6 @@
 import type { OnboardingData } from "@/lib/onboarding/storage";
 
-export type AuthOnboardingSnapshot = Pick<
+type AuthOnboardingSnapshot = Pick<
   OnboardingData,
   | "tier"
   | "billingPeriod"

@@ -57,6 +57,28 @@ describe("api/onboard/draft route", () => {
     expect(upsertOnboardingDraft).toHaveBeenCalled();
   });
 
+  it("rejects saving a draft when the token does not match the existing record", async () => {
+    vi.mocked(getOnboardingDraft).mockResolvedValue(MOCK_DRAFT as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/onboard/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId: MOCK_DRAFT.business_id,
+          draftToken: "33333333-3333-4333-8333-333333333333",
+          onboardingData: MOCK_DRAFT.payload
+        })
+      })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.ok).toBe(false);
+    expect(body.error.message).toBe("Onboarding draft token mismatch");
+    expect(upsertOnboardingDraft).not.toHaveBeenCalled();
+  });
+
   it("loads a draft", async () => {
     const response = await GET(
       new Request(
