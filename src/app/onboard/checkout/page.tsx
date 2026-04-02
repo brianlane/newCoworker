@@ -91,8 +91,10 @@ function CheckoutContent() {
     try {
       const businessId = data.businessId ?? crypto.randomUUID();
       let onboardingData: OnboardingData = data;
+      const businessAlreadyPersisted =
+        data.persistedToDatabase === true || (data.persistedToDatabase === undefined && Boolean(data.businessId) && !data.draftToken);
 
-      if (!data.persistedToDatabase) {
+      if (!businessAlreadyPersisted) {
         const createRes = await fetch("/api/business/create", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -204,7 +206,7 @@ function CheckoutContent() {
           <Image src="/logo.png" alt="New Coworker" width={56} height={56} className="rounded-full mx-auto" />
           <h1 className="text-2xl font-bold text-parchment">No plan selected</h1>
           <p className="text-sm text-parchment/50">
-            {error ?? "It looks like you haven&apos;t completed the onboarding questionnaire yet."}
+            {error ?? "It looks like you haven't completed the onboarding questionnaire yet."}
           </p>
           <a
             href="/onboard"
