@@ -697,7 +697,7 @@ function QuestionnaireForm() {
             </div>
           )}
 
-          {error && step !== 1 && (
+          {error && (
             <p className="text-spark-orange text-xs">{error}</p>
           )}
         </Card>
