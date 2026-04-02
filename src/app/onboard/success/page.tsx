@@ -269,7 +269,7 @@ function OnboardSuccessContent() {
           </Card>
         )}
 
-        {showRecoveryNotice && (
+        {showRecoveryNotice && status === "needs_password" && (
           <Card>
             <p className="text-xs text-parchment/70 text-center">
               We couldn&apos;t restore your onboarding details automatically. You can still finish account creation now,

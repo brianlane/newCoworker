@@ -21,6 +21,10 @@ import {
 import { BUSINESS_TYPE_OPTIONS, DEFAULT_BUSINESS_TYPE } from "@/lib/onboarding/businessTypes";
 const DRAFT_STORAGE_KEY = "newcoworker_onboard_draft";
 
+function isValidEmailAddress(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
 function createMessageTimestamp(): string {
   return new Date().toISOString();
 }
@@ -464,6 +468,15 @@ function QuestionnaireForm() {
 
   async function handleAdvanceStep() {
     if (step === 1) {
+      if (!signupEmail.trim()) {
+        setError("Email is required");
+        return;
+      }
+      if (!isValidEmailAddress(signupEmail)) {
+        setError("Please enter a valid email address");
+        return;
+      }
+      setError(null);
       setStep(2);
       return;
     }
@@ -702,7 +715,11 @@ function QuestionnaireForm() {
             <Button
               className="flex-1"
               onClick={() => void handleAdvanceStep()}
-              disabled={draftSaving || (step === 1 && (!form.businessName || !signupEmail)) || (step === 2 && !canContinueFromChat)}
+              disabled={
+                draftSaving ||
+                (step === 1 && (!form.businessName || !signupEmail.trim())) ||
+                (step === 2 && !canContinueFromChat)
+              }
             >
               {step === 2 && draftSaving ? "Saving..." : "Continue →"}
             </Button>
