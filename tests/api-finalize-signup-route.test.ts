@@ -57,6 +57,7 @@ describe("api/onboard/finalize-signup route", () => {
       "paid@example.com"
     );
     expect(body.data.businessId).toBe("11111111-1111-4111-8111-111111111111");
+    expect(body.data.onboardingDraftRecovered).toBe(false);
   });
 
   it("rejects finalize-signup when the business is no longer pending", async () => {
@@ -91,6 +92,7 @@ describe("api/onboard/finalize-signup route", () => {
     expect(response.status).toBe(200);
     expect(body.ok).toBe(true);
     expect(body.data.ownerEmail).toBe("paid@example.com");
+    expect(body.data.onboardingDraftRecovered).toBe(false);
   });
 
   it("still succeeds when onboarding draft recovery fails", async () => {
@@ -109,6 +111,7 @@ describe("api/onboard/finalize-signup route", () => {
     expect(body.ok).toBe(true);
     expect(body.data.businessId).toBe("11111111-1111-4111-8111-111111111111");
     expect(body.data.ownerEmail).toBe("paid@example.com");
-    expect(body.data.onboardingData).toBeNull();
+    expect(body.data.onboardingData).toBeUndefined();
+    expect(body.data.onboardingDraftRecovered).toBe(false);
   });
 });

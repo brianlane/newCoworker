@@ -37,6 +37,7 @@ function OnboardSuccessContent() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [showRecoveryNotice, setShowRecoveryNotice] = useState(false);
 
   useEffect(() => {
     const rawOnboarding = localStorage.getItem(ONBOARD_STORAGE_KEY);
@@ -70,6 +71,7 @@ function OnboardSuccessContent() {
         const ownerEmail = verifyJson.data?.ownerEmail;
         const businessId = verifyJson.data?.businessId;
         const recoveredOnboardingData = verifyJson.data?.onboardingData as OnboardingData | null | undefined;
+        const onboardingDraftRecovered = verifyJson.data?.onboardingDraftRecovered === true;
         if (typeof ownerEmail !== "string" || !ownerEmail) {
           throw new Error("Could not determine the paid account email.");
         }
@@ -85,6 +87,7 @@ function OnboardSuccessContent() {
         if (nextOnboardingData) {
           localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(nextOnboardingData));
         }
+        setShowRecoveryNotice(!onboardingDraftRecovered && !nextOnboardingData);
 
         setStatus("needs_password");
       } catch (err) {
@@ -263,6 +266,15 @@ function OnboardSuccessContent() {
         {status === "verifying_payment" && (
           <Card>
             <p className="text-sm text-parchment/70 text-center">Checking your payment status…</p>
+          </Card>
+        )}
+
+        {showRecoveryNotice && (
+          <Card>
+            <p className="text-xs text-parchment/70 text-center">
+              We couldn&apos;t restore your onboarding details automatically. You can still finish account creation now,
+              then review and re-enter any missing business configuration from your dashboard after login.
+            </p>
           </Card>
         )}
 

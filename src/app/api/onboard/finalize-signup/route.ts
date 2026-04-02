@@ -36,18 +36,22 @@ export async function POST(request: Request) {
     }
 
     let draft = null;
+    let onboardingDraftRecovered = false;
     try {
       draft = await getOnboardingDraft(businessId);
+      onboardingDraftRecovered = Boolean(draft);
     } catch {
       // Draft recovery is best-effort. A lookup failure should not block
       // successful payment finalization or strand the customer post-checkout.
       draft = null;
+      onboardingDraftRecovered = false;
     }
 
     return successResponse({
       businessId,
       ownerEmail,
-      onboardingData: draft?.payload ?? null
+      onboardingData: draft?.payload,
+      onboardingDraftRecovered
     });
   } catch (err) {
     if (err instanceof z.ZodError) {

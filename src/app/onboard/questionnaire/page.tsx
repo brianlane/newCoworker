@@ -474,7 +474,7 @@ function QuestionnaireForm() {
       setDraftSaving(true);
       setError(null);
       await persistOnboardingDraft();
-      setStep(3);
+      setStep((currentStep) => currentStep === 2 ? 3 : currentStep);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save onboarding draft");
     } finally {
@@ -694,7 +694,7 @@ function QuestionnaireForm() {
             <Button variant="ghost" onClick={() => {
               setError(null);
               setStep((s) => (s - 1) as Step);
-            }}>
+            }} disabled={draftSaving}>
               Back
             </Button>
           )}
@@ -702,9 +702,9 @@ function QuestionnaireForm() {
             <Button
               className="flex-1"
               onClick={() => void handleAdvanceStep()}
-              disabled={(step === 1 && (!form.businessName || !signupEmail)) || (step === 2 && (!canContinueFromChat || draftSaving))}
+              disabled={draftSaving || (step === 1 && (!form.businessName || !signupEmail)) || (step === 2 && !canContinueFromChat)}
             >
-              {draftSaving ? "Saving..." : "Continue →"}
+              {step === 2 && draftSaving ? "Saving..." : "Continue →"}
             </Button>
           ) : null}
         </div>
