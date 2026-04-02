@@ -23,10 +23,11 @@ export default function PrivacyPolicyPage() {
     >
       <LegalSection title="1. Scope">
         <p>
-          This Privacy Policy applies to information we collect through `newcoworker.com`, the New Coworker
-          application, customer onboarding, account management, support interactions, and related services
-          that help businesses deploy AI tools for calls, text messaging, email handling, workflow execution,
-          and business memory.
+          This Privacy Policy applies to information we collect through{" "}
+          <code className="rounded bg-parchment/10 px-1 py-0.5 text-[0.95em] text-parchment">newcoworker.com</code>,
+          {" "}the New Coworker application, customer onboarding, account management, support interactions,
+          and related services that help businesses deploy AI tools for calls, text messaging, email handling,
+          workflow execution, and business memory.
         </p>
         <p>
           If you provide our services to your own customers, leads, tenants, patients, clients, or other end
@@ -111,8 +112,12 @@ export default function PrivacyPolicyPage() {
           and marketing laws. Message frequency varies. Message and data rates may apply based on the recipient’s carrier plan.
         </p>
         <p>
-          Recipients may reply `STOP` to opt out of SMS alerts and `START` to re-subscribe where supported.
-          Reply `HELP` for assistance. Carriers are not liable for delayed or undelivered messages.
+          Recipients may reply <code className="rounded bg-parchment/10 px-1 py-0.5 text-[0.95em] text-parchment">STOP</code>
+          {" "}to opt out of SMS alerts and{" "}
+          <code className="rounded bg-parchment/10 px-1 py-0.5 text-[0.95em] text-parchment">START</code>
+          {" "}to re-subscribe where supported. Reply{" "}
+          <code className="rounded bg-parchment/10 px-1 py-0.5 text-[0.95em] text-parchment">HELP</code>
+          {" "}for assistance. Carriers are not liable for delayed or undelivered messages.
         </p>
       </LegalSection>
 
