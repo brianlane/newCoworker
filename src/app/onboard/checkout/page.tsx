@@ -117,6 +117,7 @@ function CheckoutContent() {
           persistedToDatabase: true
         };
         localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(onboardingData));
+        setData(onboardingData);
       }
 
       if (onboardingData.assistantChat?.drafts) {
