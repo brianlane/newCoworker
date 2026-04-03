@@ -109,7 +109,14 @@ describe("db/integrations", () => {
   });
 
   it("upsertIntegration upserts and returns row", async () => {
-    const db = mockDb();
+    const encryptedRow = {
+      ...MOCK_ROW,
+      access_token: encryptIntegrationSecret("x"),
+      refresh_token: encryptIntegrationSecret("y")
+    };
+    const db = mockDb({
+      single: vi.fn().mockResolvedValue({ data: encryptedRow, error: null })
+    });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     const row = await upsertIntegration({
@@ -121,6 +128,8 @@ describe("db/integrations", () => {
       refreshToken: "y"
     });
     expect(row.provider).toBe("google");
+    expect(row.access_token).toBe("x");
+    expect(row.refresh_token).toBe("y");
     expect(db.upsert).toHaveBeenCalled();
     const payload = db.upsert.mock.calls[0][0] as Record<string, string | null>;
     expect(payload.access_token).toMatch(/^enc:v1:/);

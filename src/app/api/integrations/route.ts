@@ -1,5 +1,5 @@
 import { getAuthUser, requireOwner } from "@/lib/auth";
-import { deleteIntegration, getIntegrations } from "@/lib/db/integrations";
+import { deleteIntegration, getIntegrations, INTEGRATION_PROVIDERS } from "@/lib/db/integrations";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { z } from "zod";
 
@@ -7,7 +7,7 @@ const businessIdSchema = z.string().uuid();
 
 const deleteSchema = z.object({
   businessId: z.string().uuid(),
-  provider: z.string().min(1)
+  provider: z.enum(INTEGRATION_PROVIDERS)
 });
 
 export async function GET(request: Request) {

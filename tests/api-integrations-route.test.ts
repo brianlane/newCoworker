@@ -6,6 +6,17 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 vi.mock("@/lib/db/integrations", () => ({
+  INTEGRATION_PROVIDERS: [
+    "google",
+    "outlook",
+    "slack",
+    "zoom",
+    "hubspot",
+    "salesforce",
+    "custom_crm",
+    "twilio",
+    "custom_tool"
+  ],
   getIntegrations: vi.fn(),
   deleteIntegration: vi.fn()
 }));

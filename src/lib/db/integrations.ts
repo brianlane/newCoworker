@@ -18,10 +18,22 @@ export type IntegrationAuthType = "oauth" | "api_key";
 
 export type IntegrationStatus = "connected" | "disconnected" | "expired" | "error";
 
+export const INTEGRATION_PROVIDERS = [
+  "google",
+  "outlook",
+  "slack",
+  "zoom",
+  "hubspot",
+  "salesforce",
+  "custom_crm",
+  "twilio",
+  "custom_tool"
+] as const satisfies readonly IntegrationProvider[];
+
 export type IntegrationRow = {
   id: string;
   business_id: string;
-  provider: string;
+  provider: IntegrationProvider;
   auth_type: IntegrationAuthType;
   status: IntegrationStatus;
   access_token: string | null;
@@ -45,6 +57,14 @@ export function toPublicIntegrationRow(row: IntegrationRow | PublicIntegrationRo
   return rest;
 }
 
+function toDecryptedIntegrationRow(row: IntegrationRow): IntegrationRow {
+  return {
+    ...row,
+    access_token: decryptIntegrationSecret(row.access_token),
+    refresh_token: decryptIntegrationSecret(row.refresh_token)
+  };
+}
+
 export async function getIntegrations(
   businessId: string,
   client?: SupabaseClient
@@ -64,7 +84,7 @@ export async function getIntegrations(
 
 export async function getIntegration(
   businessId: string,
-  provider: string,
+  provider: IntegrationProvider,
   client?: SupabaseClient
 ): Promise<IntegrationRow | null> {
   const db = client ?? (await createSupabaseServiceClient());
@@ -77,18 +97,12 @@ export async function getIntegration(
 
   if (error) throw new Error(`getIntegration: ${error.message}`);
   if (!data) return null;
-
-  const row = data as IntegrationRow;
-  return {
-    ...row,
-    access_token: decryptIntegrationSecret(row.access_token),
-    refresh_token: decryptIntegrationSecret(row.refresh_token)
-  };
+  return toDecryptedIntegrationRow(data as IntegrationRow);
 }
 
 export type UpsertIntegrationInput = {
   businessId: string;
-  provider: string;
+  provider: IntegrationProvider;
   authType: IntegrationAuthType;
   status: IntegrationStatus;
   accessToken?: string | null;
@@ -126,12 +140,12 @@ export async function upsertIntegration(
     .single();
 
   if (error) throw new Error(`upsertIntegration: ${error.message}`);
-  return data as IntegrationRow;
+  return toDecryptedIntegrationRow(data as IntegrationRow);
 }
 
 export async function deleteIntegration(
   businessId: string,
-  provider: string,
+  provider: IntegrationProvider,
   client?: SupabaseClient
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
