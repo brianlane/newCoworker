@@ -73,4 +73,29 @@ describe("api/notifications/preferences route", () => {
     expect(body.ok).toBe(false);
     expect(body.error.code).toBe("VALIDATION_ERROR");
   });
+
+  it("normalizes empty phone_number and alert_email to null", async () => {
+    const response = await POST(
+      new Request("http://localhost/api/notifications/preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId: PREFS.business_id,
+          phone_number: "   ",
+          alert_email: ""
+        })
+      })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(updateNotificationPreferences).toHaveBeenCalledWith(
+      PREFS.business_id,
+      expect.objectContaining({
+        phone_number: null,
+        alert_email: null
+      })
+    );
+  });
 });

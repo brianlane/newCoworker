@@ -49,11 +49,14 @@ export async function POST(request: Request) {
     const body = patchSchema.parse(await request.json());
     await requireOwner(body.businessId);
 
-    const { businessId, alert_email, ...rest } = body;
+    const { businessId, alert_email, phone_number, ...rest } = body;
     const patch = {
       ...rest,
+      ...(phone_number !== undefined
+        ? { phone_number: phone_number?.trim() ? phone_number.trim() : null }
+        : {}),
       ...(alert_email !== undefined
-        ? { alert_email: alert_email === "" ? null : alert_email }
+        ? { alert_email: alert_email?.trim() ? alert_email.trim() : null }
         : {})
     };
     const prefs = await updateNotificationPreferences(businessId, patch);
