@@ -37,11 +37,13 @@ export async function GET(request: Request) {
     const complete =
       business != null &&
       !shouldShowProvisioningProgress(business.status, latest);
+    const failed = latest?.logStatus === "error";
 
     return successResponse({
       percent,
       updatedAt,
-      complete
+      complete,
+      failed
     });
   } catch (e) {
     return handleRouteError(e);

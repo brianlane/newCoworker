@@ -4,6 +4,7 @@ import {
   getLatestProvisioningStatus,
   getProvisioningLogs,
   shouldShowProvisioningProgress,
+  shouldMountProvisioningWidget,
   isBusinessRunningStatus
 } from "@/lib/provisioning/progress";
 import { insertCoworkerLog } from "@/lib/db/logs";
@@ -112,7 +113,8 @@ describe("provisioning/progress", () => {
       shouldShowProvisioningProgress("online", {
         percent: 100,
         updatedAt: "x",
-        phase: "done"
+        phase: "done",
+        logStatus: "success"
       })
     ).toBe(false);
   });
@@ -122,9 +124,32 @@ describe("provisioning/progress", () => {
       shouldShowProvisioningProgress("high_load", {
         percent: 100,
         updatedAt: "x",
-        phase: "done"
+        phase: "done",
+        logStatus: "success"
       })
     ).toBe(false);
+  });
+
+  it("shouldShowProvisioningProgress hides when online at partial percent but log status is error", () => {
+    expect(
+      shouldShowProvisioningProgress("online", {
+        percent: 95,
+        updatedAt: "x",
+        phase: "deploy_failed",
+        logStatus: "error"
+      })
+    ).toBe(false);
+  });
+
+  it("shouldMountProvisioningWidget stays true for terminal error so owner sees failure UI", () => {
+    const latest = {
+      percent: 95,
+      updatedAt: "x",
+      phase: "deploy_failed",
+      logStatus: "error" as const
+    };
+    expect(shouldShowProvisioningProgress("online", latest)).toBe(false);
+    expect(shouldMountProvisioningWidget("online", latest)).toBe(true);
   });
 
   it("shouldShowProvisioningProgress shows when offline", () => {
@@ -136,7 +161,8 @@ describe("provisioning/progress", () => {
       shouldShowProvisioningProgress("online", {
         percent: 50,
         updatedAt: "x",
-        phase: "x"
+        phase: "x",
+        logStatus: "thinking"
       })
     ).toBe(true);
   });
@@ -146,7 +172,8 @@ describe("provisioning/progress", () => {
       shouldShowProvisioningProgress("high_load", {
         percent: 50,
         updatedAt: "x",
-        phase: "x"
+        phase: "x",
+        logStatus: "thinking"
       })
     ).toBe(true);
   });
@@ -204,7 +231,8 @@ describe("provisioning/progress", () => {
             message: "m",
             source: "vps"
           },
-          created_at: "2026-01-01T00:00:00Z"
+          created_at: "2026-01-01T00:00:00Z",
+          status: "thinking"
         },
         error: null
       })
@@ -214,6 +242,7 @@ describe("provisioning/progress", () => {
     const s = await getLatestProvisioningStatus("00000000-0000-4000-8000-000000000001");
     expect(s?.percent).toBe(0);
     expect(s?.phase).toBe("");
+    expect(s?.logStatus).toBe("thinking");
   });
 
   it("getLatestProvisioningStatus maps payload", async () => {
@@ -231,7 +260,8 @@ describe("provisioning/progress", () => {
             message: "m",
             source: "vps"
           },
-          created_at: "2026-06-01T12:00:00Z"
+          created_at: "2026-06-01T12:00:00Z",
+          status: "success"
         },
         error: null
       })
@@ -242,8 +272,37 @@ describe("provisioning/progress", () => {
     expect(s).toEqual({
       percent: 42,
       updatedAt: "2026-06-01T12:00:00Z",
-      phase: "p"
+      phase: "p",
+      logStatus: "success"
     });
+  });
+
+  it("getLatestProvisioningStatus maps error row status", async () => {
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: {
+          log_payload: {
+            phase: "deploy_failed",
+            percent: 95,
+            message: "x",
+            source: "orchestrator"
+          },
+          created_at: "2026-06-01T12:00:00Z",
+          status: "error"
+        },
+        error: null
+      })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const s = await getLatestProvisioningStatus("00000000-0000-4000-8000-000000000001");
+    expect(s?.logStatus).toBe("error");
+    expect(s?.percent).toBe(95);
   });
 
   it("getProvisioningLogs returns rows", async () => {

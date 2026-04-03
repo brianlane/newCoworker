@@ -9,16 +9,26 @@ type StatusPayload = {
     percent: number;
     updatedAt: string | null;
     complete: boolean;
+    failed?: boolean;
   };
+};
+
+export type ProvisioningInitialSnapshot = {
+  percent: number;
+  complete: boolean;
+  failed: boolean;
 };
 
 type Props = {
   businessId: string;
+  /** From server render: skip polling when already terminal (success or failure). */
+  initialSnapshot?: ProvisioningInitialSnapshot;
 };
 
-export function CoworkerProvisioningProgress({ businessId }: Props) {
-  const [percent, setPercent] = useState(0);
-  const [hidden, setHidden] = useState(false);
+export function CoworkerProvisioningProgress({ businessId, initialSnapshot }: Props) {
+  const [done, setDone] = useState(() => initialSnapshot?.complete ?? false);
+  const [failed, setFailed] = useState(() => initialSnapshot?.failed ?? false);
+  const [percent, setPercent] = useState(() => initialSnapshot?.percent ?? 0);
 
   const poll = useCallback(async () => {
     const res = await fetch(`/api/provisioning/status?businessId=${encodeURIComponent(businessId)}`, {
@@ -28,20 +38,34 @@ export function CoworkerProvisioningProgress({ businessId }: Props) {
     if (!json.ok || !json.data) return;
     setPercent(Math.max(0, Math.min(100, json.data.percent)));
     if (json.data.complete) {
-      setHidden(true);
+      setDone(true);
+      setFailed(!!json.data.failed);
     }
   }, [businessId]);
 
   useEffect(() => {
+    if (done) return;
     const initial = setTimeout(() => void poll(), 0);
     const id = setInterval(() => void poll(), 3000);
     return () => {
       clearTimeout(initial);
       clearInterval(id);
     };
-  }, [poll]);
+  }, [poll, done]);
 
-  if (hidden) return null;
+  if (done && !failed) return null;
+
+  if (done && failed) {
+    return (
+      <Card className="border-spark-orange/40 bg-spark-orange/10">
+        <p className="text-sm font-semibold text-spark-orange">Provisioning did not finish cleanly</p>
+        <p className="text-xs text-parchment/60 mt-2">
+          Last step reported an error at {percent}% (deploy script or remote setup). Your business may still be
+          starting — check the dashboard or contact support if something looks wrong.
+        </p>
+      </Card>
+    );
+  }
 
   return (
     <Card className="overflow-hidden border-signal-teal/30">

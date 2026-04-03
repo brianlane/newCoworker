@@ -5,6 +5,7 @@ import { listBusinesses } from "@/lib/db/businesses";
 import { getRecentLogs } from "@/lib/db/logs";
 import {
   getLatestProvisioningStatus,
+  shouldMountProvisioningWidget,
   shouldShowProvisioningProgress
 } from "@/lib/provisioning/progress";
 import { CoworkerProvisioningProgress } from "@/components/dashboard/CoworkerProvisioningProgress";
@@ -38,8 +39,17 @@ export default async function DashboardPage() {
     ]);
   }
 
-  const showProvisioningProgress =
-    business !== null && shouldShowProvisioningProgress(business.status, latestProvisioning);
+  const showProvisioningWidget =
+    business !== null && shouldMountProvisioningWidget(business.status, latestProvisioning);
+
+  const provisioningInitialSnapshot =
+    business !== null && latestProvisioning !== null
+      ? {
+          percent: latestProvisioning.percent,
+          complete: !shouldShowProvisioningProgress(business.status, latestProvisioning),
+          failed: latestProvisioning.logStatus === "error"
+        }
+      : undefined;
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -71,8 +81,11 @@ export default async function DashboardPage() {
             </Card>
           )}
 
-          {showProvisioningProgress && (
-            <CoworkerProvisioningProgress businessId={business.id} />
+          {showProvisioningWidget && (
+            <CoworkerProvisioningProgress
+              businessId={business.id}
+              initialSnapshot={provisioningInitialSnapshot}
+            />
           )}
 
           <KillSwitch businessId={business.id} initiallyPaused={!!business.is_paused} />

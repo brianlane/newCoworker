@@ -59,7 +59,8 @@ describe("GET /api/provisioning/status", () => {
     vi.mocked(getLatestProvisioningStatus).mockResolvedValue({
       percent: 100,
       updatedAt: "2026-01-01T00:00:00Z",
-      phase: "done"
+      phase: "done",
+      logStatus: "success"
     });
 
     const res = await GET(
@@ -74,13 +75,32 @@ describe("GET /api/provisioning/status", () => {
     vi.mocked(getLatestProvisioningStatus).mockResolvedValue({
       percent: 40,
       updatedAt: "2026-01-01T00:00:00Z",
-      phase: "deploy"
+      phase: "deploy",
+      logStatus: "thinking"
     });
 
     const res = await GET(
       new Request(`http://localhost/api/provisioning/status?businessId=${BID}`)
     );
-    const json = (await res.json()) as { ok: boolean; data: { complete: boolean } };
+    const json = (await res.json()) as { ok: boolean; data: { complete: boolean; failed: boolean } };
     expect(json.data.complete).toBe(false);
+    expect(json.data.failed).toBe(false);
+  });
+
+  it("sets complete and failed when latest provisioning row is error (e.g. deploy-client.sh failed)", async () => {
+    vi.mocked(getBusiness).mockResolvedValue(mockBusiness("online"));
+    vi.mocked(getLatestProvisioningStatus).mockResolvedValue({
+      percent: 95,
+      updatedAt: "2026-01-01T00:00:00Z",
+      phase: "deploy_failed",
+      logStatus: "error"
+    });
+
+    const res = await GET(
+      new Request(`http://localhost/api/provisioning/status?businessId=${BID}`)
+    );
+    const json = (await res.json()) as { ok: boolean; data: { complete: boolean; failed: boolean } };
+    expect(json.data.complete).toBe(true);
+    expect(json.data.failed).toBe(true);
   });
 });
