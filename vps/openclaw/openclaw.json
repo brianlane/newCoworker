@@ -9,7 +9,7 @@
   },
   "models": {
     "fast": "qwen3.5:4b",
-    "balanced": "qwen3.5:7b",
+    "balanced": "qwen3.5:9b",
     "deep": "llama4:9b"
   },
   "llm_router": "http://127.0.0.1:8080",

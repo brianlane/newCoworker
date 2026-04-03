@@ -8,7 +8,12 @@
     "start": "next start",
     "lint": "eslint .",
     "test": "vitest run --coverage",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "integration:up-kvm2": "docker compose -f vps/integration/real/docker-compose.kvm2.yml up -d --wait",
+    "integration:down-kvm2": "docker compose -f vps/integration/real/docker-compose.kvm2.yml down -v",
+    "integration:up-kvm8": "docker compose -f vps/integration/real/docker-compose.kvm8.yml up -d --wait",
+    "integration:down-kvm8": "docker compose -f vps/integration/real/docker-compose.kvm8.yml down -v"
   },
   "repository": {
     "type": "git",

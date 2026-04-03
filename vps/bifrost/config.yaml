@@ -4,7 +4,7 @@ routes:
     model: qwen3.5:4b
   - name: conversation
     when: task == "voice_conversation"
-    model: qwen3.5:7b
+    model: qwen3.5:9b
   - name: deep_reasoning
     when: task == "reasoning"
     model: qwen3.5:35b-a3b
@@ -13,4 +13,4 @@ routes:
     model: llama4:9b
 
 fallback:
-  ifBusy: qwen3.5:7b
+  ifBusy: qwen3.5:9b

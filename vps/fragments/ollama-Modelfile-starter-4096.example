@@ -1,0 +1,5 @@
+# Example: create a named model with strict context for KVM2 TTFT.
+# ollama create nc-starter-phi4 -f ollama-Modelfile-starter-4096.example
+#
+FROM phi4-mini:3.8b
+PARAMETER num_ctx 4096

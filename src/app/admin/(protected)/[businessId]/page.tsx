@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { getBusiness } from "@/lib/db/businesses";
 import { getRecentLogs } from "@/lib/db/logs";
+import { getProvisioningLogs, type ProvisioningLogPayload } from "@/lib/provisioning/progress";
 import { getBusinessConfig } from "@/lib/db/configs";
 import { getSubscription } from "@/lib/db/subscriptions";
 import { formatAdminLabel, getLogBadgeVariant } from "@/lib/admin/dashboard";
@@ -20,9 +21,10 @@ export default async function BusinessDetailPage({
   params: Promise<{ businessId: string }>;
 }) {
   const { businessId } = await params;
-  const [business, logs, config, subscription] = await Promise.all([
+  const [business, logs, provisioningLogs, config, subscription] = await Promise.all([
     getBusiness(businessId),
-    getRecentLogs(businessId, 20),
+    getRecentLogs(businessId, 20, undefined, { excludeProvisioning: true }),
+    getProvisioningLogs(businessId, 50),
     getBusinessConfig(businessId),
     getSubscription(businessId)
   ]);
@@ -139,6 +141,47 @@ export default async function BusinessDetailPage({
             initialSoul={config.soul_md}
             initialIdentity={config.identity_md}
           />
+        </Card>
+      )}
+
+      {/* Provisioning / deploy pipeline (admin-only detail) */}
+      {provisioningLogs.length > 0 && (
+        <Card>
+          <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+            Provisioning / deploy logs
+          </h2>
+          <ul className="divide-y divide-parchment/10 space-y-0">
+            {provisioningLogs.map((log) => {
+              const p = log.log_payload as ProvisioningLogPayload;
+              const src = typeof p.source === "string" ? p.source : "";
+              return (
+                <li key={log.id} className="py-3 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs text-parchment/45 font-mono">
+                      {new Date(log.created_at).toLocaleString()}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="neutral" className="text-[10px] uppercase">
+                        {src}
+                      </Badge>
+                      <span className="text-xs text-signal-teal font-medium">{p.percent ?? "—"}%</span>
+                      <Badge variant={getLogBadgeVariant(log.status)}>{formatAdminLabel(log.status)}</Badge>
+                    </div>
+                  </div>
+                  <p className="text-sm text-parchment font-medium">{p.phase ?? log.task_type}</p>
+                  <p className="text-xs text-parchment/55 whitespace-pre-wrap break-words">{p.message}</p>
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-parchment/35 hover:text-parchment/50">
+                      Raw payload
+                    </summary>
+                    <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-deep-ink/80 p-2 text-parchment/70 font-mono text-[10px]">
+                      {JSON.stringify(log.log_payload, null, 2)}
+                    </pre>
+                  </details>
+                </li>
+              );
+            })}
+          </ul>
         </Card>
       )}
 

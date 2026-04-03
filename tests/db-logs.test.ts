@@ -68,6 +68,22 @@ describe("db/logs", () => {
     expect(result).toHaveLength(1);
   });
 
+  it("getRecentLogs excludes provisioning when requested", async () => {
+    const neq = vi.fn().mockReturnThis();
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      neq,
+      order: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockResolvedValue({ data: [MOCK_LOG], error: null })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await getRecentLogs("biz-uuid-1", 10, undefined, { excludeProvisioning: true });
+    expect(neq).toHaveBeenCalledWith("task_type", "provisioning");
+  });
+
   it("getRecentLogs throws on error", async () => {
     const db = { ...mockDb(), limit: vi.fn().mockResolvedValue({ data: null, error: { message: "err" } }) };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);

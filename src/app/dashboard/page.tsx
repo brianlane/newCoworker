@@ -3,6 +3,11 @@ import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { listBusinesses } from "@/lib/db/businesses";
 import { getRecentLogs } from "@/lib/db/logs";
+import {
+  getLatestProvisioningStatus,
+  shouldShowProvisioningProgress
+} from "@/lib/provisioning/progress";
+import { CoworkerProvisioningProgress } from "@/components/dashboard/CoworkerProvisioningProgress";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
@@ -25,9 +30,16 @@ export default async function DashboardPage() {
   const business = businesses?.[0] ?? null;
 
   let recentLogs: Awaited<ReturnType<typeof getRecentLogs>> = [];
+  let latestProvisioning = null;
   if (business) {
-    recentLogs = await getRecentLogs(business.id, 10);
+    [recentLogs, latestProvisioning] = await Promise.all([
+      getRecentLogs(business.id, 10, undefined, { excludeProvisioning: true }),
+      getLatestProvisioningStatus(business.id)
+    ]);
   }
+
+  const showProvisioningProgress =
+    business !== null && shouldShowProvisioningProgress(business.status, latestProvisioning);
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -57,6 +69,10 @@ export default async function DashboardPage() {
                 Automation is stopped. Use Resume below when you want your AI coworker active again.
               </p>
             </Card>
+          )}
+
+          {showProvisioningProgress && (
+            <CoworkerProvisioningProgress businessId={business.id} />
           )}
 
           <KillSwitch businessId={business.id} initiallyPaused={!!business.is_paused} />

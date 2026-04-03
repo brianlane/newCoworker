@@ -7,6 +7,7 @@ import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { recordProvisioningProgress } from "@/lib/provisioning/progress";
 
 type ProvisioningInput = {
   businessId: string;
@@ -68,6 +69,14 @@ export async function orchestrateProvisioning(
 
   logger.info("Starting provisioning", { businessId, tier, plan });
 
+  await recordProvisioningProgress({
+    businessId,
+    phase: "started",
+    percent: 5,
+    message: "Provisioning started",
+    source: "orchestrator"
+  });
+
   // 1. Provision VPS via Hostinger API
   const hostinger =
     deps?.hostinger ??
@@ -78,6 +87,14 @@ export async function orchestrateProvisioning(
 
   const { vpsId } = await hostinger.provisionVps(plan.hostingerPlan, plan.snapshotId);
   logger.info("VPS provisioned", { businessId, vpsId });
+
+  await recordProvisioningProgress({
+    businessId,
+    phase: "vps_provisioned",
+    percent: 15,
+    message: `VPS provisioned (${vpsId})`,
+    source: "orchestrator"
+  });
 
   // 2. Store VPS ID and mark offline while setting up
   await updateBusinessStatus(businessId, "offline", vpsId);
@@ -90,6 +107,14 @@ export async function orchestrateProvisioning(
     identity_md: existingConfig?.identity_md ?? loadIdentityTemplate(),
     memory_md: existingConfig?.memory_md ?? "# memory.md\nLossless memory DAG initialized.",
     inworld_agent_id: existingConfig?.inworld_agent_id ?? null
+  });
+
+  await recordProvisioningProgress({
+    businessId,
+    phase: "config_upserted",
+    percent: 25,
+    message: "Business config written to Supabase",
+    source: "orchestrator"
   });
 
   // 4. Create inworld.ai voice agent (all tiers use inworld-tts-1.5-mini)
@@ -113,6 +138,14 @@ export async function orchestrateProvisioning(
     inworld_agent_id: agentId
   });
 
+  await recordProvisioningProgress({
+    businessId,
+    phase: "inworld_agent_ready",
+    percent: 35,
+    message: `Inworld voice agent created (${agentId})`,
+    source: "orchestrator"
+  });
+
   // 6. Execute deploy-client.sh on the VPS
   const gatewayToken = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
 
@@ -122,6 +155,10 @@ export async function orchestrateProvisioning(
     // Use bash %q escaping: single-quote special chars, escape single quotes
     return str.replace(/'/g, "'\\''");
   };
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const progressUrl = `${appUrl.replace(/\/$/, "")}/api/provisioning/progress`;
+  const progressToken = process.env.PROVISIONING_PROGRESS_TOKEN ?? process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
 
   const envVars = [
     ["BUSINESS_ID", businessId],
@@ -133,9 +170,20 @@ export async function orchestrateProvisioning(
     ["INWORLD_AGENT_ID", agentId],
     ["INWORLD_API_KEY", process.env.INWORLD_API_KEY ?? ""],
     ["CLOUDFLARE_TUNNEL_TOKEN", process.env.CLOUDFLARE_TUNNEL_TOKEN ?? ""],
-    ["LIGHTPANDA_WSS_URL", process.env.LIGHTPANDA_WSS_URL ?? "wss://cdn.lightpanda.io/ws"]
+    ["LIGHTPANDA_WSS_URL", process.env.LIGHTPANDA_WSS_URL ?? "wss://cdn.lightpanda.io/ws"],
+    ["PROVISIONING_PROGRESS_URL", progressUrl],
+    ["PROVISIONING_PROGRESS_TOKEN", progressToken]
   ].map(([key, value]) => `${key}='${escapeShellArg(value)}'`).join(" ");
 
+  await recordProvisioningProgress({
+    businessId,
+    phase: "remote_deploy_starting",
+    percent: 40,
+    message: "Running deploy-client.sh on VPS",
+    source: "orchestrator"
+  });
+
+  let deploySucceeded = false;
   try {
     const { exitCode, output } = await hostinger.executeCommand(
       vpsId,
@@ -143,16 +191,45 @@ export async function orchestrateProvisioning(
     );
     if (exitCode !== 0) {
       logger.error("deploy-client.sh failed", { businessId, vpsId, exitCode, output });
+      await recordProvisioningProgress({
+        businessId,
+        phase: "deploy_failed",
+        percent: 95,
+        message: `deploy-client.sh exit ${exitCode}: ${(output ?? "").slice(0, 2000)}`,
+        source: "orchestrator",
+        status: "error"
+      });
+    } else {
+      deploySucceeded = true;
     }
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
     logger.error("Remote deploy execution failed — VPS may need manual setup", {
       businessId, vpsId,
-      error: err instanceof Error ? err.message : String(err)
+      error: msg
+    });
+    await recordProvisioningProgress({
+      businessId,
+      phase: "deploy_exception",
+      percent: 95,
+      message: msg,
+      source: "orchestrator",
+      status: "error"
     });
   }
 
-  // 7. Mark business as online
+  // 7. Mark business as online (preserves prior behavior: status online even if deploy script failed)
   await updateBusinessStatus(businessId, "online", vpsId);
+  if (deploySucceeded) {
+    await recordProvisioningProgress({
+      businessId,
+      phase: "complete",
+      percent: 100,
+      message: "Coworker provisioning complete (orchestrator)",
+      source: "orchestrator",
+      status: "success"
+    });
+  }
   logger.info("Business provisioned and online", { businessId, agentId });
 
   // 8. Notify owner

@@ -1,4 +1,7 @@
-# Bifrost config for KVM 2 (Starter tier)
+# Bifrost — KVM 2 (starter) routing intent (reference only).
+# Production gateway: Docker image maximhq/bifrost — configure via Web UI / JSON per
+# https://github.com/maximhq/bifrost and https://docs.getbifrost.ai (see vps/bifrost/README.md).
+#
 # Single model: Phi-4 Mini 3.8B — no warm-swapping to stay within 8GB RAM budget
 # Flash-Reasoning variant: tuned for 10x throughput on 2 vCPU
 #

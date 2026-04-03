@@ -8,6 +8,16 @@ vi.mock("fs", async (importOriginal) => {
   };
 });
 
+vi.mock("@/lib/provisioning/progress", () => ({
+  recordProvisioningProgress: vi.fn().mockResolvedValue({
+    id: "00000000-0000-4000-8000-000000000099",
+    business_id: "00000000-0000-4000-8000-000000000001",
+    task_type: "provisioning",
+    status: "thinking",
+    log_payload: {}
+  })
+}));
+
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
 import * as fs from "fs";
 
@@ -62,7 +72,8 @@ describe("provisioning/orchestrate", () => {
       INWORLD_API_KEY: "mock_inworld_key",
       ROWBOAT_GATEWAY_TOKEN: "mock_gateway_token",
       RESEND_API_KEY: "mock_resend_key",
-      NEXT_PUBLIC_APP_URL: "http://localhost:3000"
+      NEXT_PUBLIC_APP_URL: "http://localhost:3000",
+      NEXT_PUBLIC_SUPABASE_URL: "https://mock.supabase.co"
     };
     vi.clearAllMocks();
   });
@@ -295,6 +306,10 @@ describe("provisioning/orchestrate", () => {
     expect(mockExec).toHaveBeenCalledTimes(1);
     expect(mockExec.mock.calls[0][0]).toBe("vps-exec-123");
     expect(mockExec.mock.calls[0][1]).toContain("BUSINESS_ID='biz-exec'");
+    expect(mockExec.mock.calls[0][1]).toContain(
+      "PROVISIONING_PROGRESS_URL='http://localhost:3000/api/provisioning/progress'"
+    );
+    expect(mockExec.mock.calls[0][1]).toContain("PROVISIONING_PROGRESS_TOKEN='mock_gateway_token'");
   });
 
   it("continues when executeCommand returns non-zero exit", async () => {
@@ -308,6 +323,18 @@ describe("provisioning/orchestrate", () => {
       { hostinger: mockHostinger as never }
     );
     expect(result.vpsId).toBe("vps-nz");
+  });
+
+  it("records deploy failure when executeCommand returns non-zero with undefined output", async () => {
+    const mockHostinger = {
+      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-out" }),
+      executeCommand: vi.fn().mockResolvedValue({ exitCode: 1, output: undefined })
+    };
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-undef-out", tier: "starter" },
+      { hostinger: mockHostinger as never }
+    );
+    expect(result.vpsId).toBe("vps-out");
   });
 
   it("continues when executeCommand throws", async () => {
