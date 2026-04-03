@@ -90,17 +90,22 @@ export async function GET(request: NextRequest) {
     return fail("forbidden");
   }
 
-  await upsertIntegration({
-    businessId: payload.businessId,
-    provider: "google",
-    authType: "oauth",
-    status: "connected",
-    accessToken: tokens.access_token,
-    refreshToken: tokens.refresh_token ?? null,
-    tokenExpiresAt: expiresAt,
-    scopes,
-    metadata: { connected_via: "dashboard_oauth" }
-  });
+  try {
+    await upsertIntegration({
+      businessId: payload.businessId,
+      provider: "google",
+      authType: "oauth",
+      status: "connected",
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token ?? null,
+      tokenExpiresAt: expiresAt,
+      scopes,
+      metadata: { connected_via: "dashboard_oauth" }
+    });
+  } catch (error) {
+    console.error("Google integration storage failed:", error);
+    return fail("integration_store_failed");
+  }
 
   return NextResponse.redirect(new URL("/dashboard/integrations?google=connected", url.origin));
 }

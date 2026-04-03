@@ -30,7 +30,7 @@ export const INTEGRATION_PROVIDERS = [
   "custom_tool"
 ] as const satisfies readonly IntegrationProvider[];
 
-export type IntegrationRow = {
+type StoredIntegrationRow = {
   id: string;
   business_id: string;
   provider: IntegrationProvider;
@@ -46,22 +46,28 @@ export type IntegrationRow = {
   updated_at: string;
 };
 
+export type IntegrationRow = Omit<StoredIntegrationRow, "api_key_encrypted"> & {
+  api_key: string | null;
+};
+
 export type PublicIntegrationRow = Omit<
   IntegrationRow,
-  "access_token" | "refresh_token" | "api_key_encrypted"
+  "access_token" | "refresh_token" | "api_key"
 >;
 
 export function toPublicIntegrationRow(row: IntegrationRow | PublicIntegrationRow): PublicIntegrationRow {
-  const { access_token: _accessToken, refresh_token: _refreshToken, api_key_encrypted: _apiKey, ...rest } =
+  const { access_token: _accessToken, refresh_token: _refreshToken, api_key: _apiKey, ...rest } =
     row as IntegrationRow;
   return rest;
 }
 
-function toDecryptedIntegrationRow(row: IntegrationRow): IntegrationRow {
+function toDecryptedIntegrationRow(row: StoredIntegrationRow): IntegrationRow {
+  const { api_key_encrypted: encryptedApiKey, ...rest } = row;
   return {
-    ...row,
+    ...rest,
     access_token: decryptIntegrationSecret(row.access_token),
-    refresh_token: decryptIntegrationSecret(row.refresh_token)
+    refresh_token: decryptIntegrationSecret(row.refresh_token),
+    api_key: decryptIntegrationSecret(encryptedApiKey)
   };
 }
 
@@ -97,7 +103,7 @@ export async function getIntegration(
 
   if (error) throw new Error(`getIntegration: ${error.message}`);
   if (!data) return null;
-  return toDecryptedIntegrationRow(data as IntegrationRow);
+  return toDecryptedIntegrationRow(data as StoredIntegrationRow);
 }
 
 export type UpsertIntegrationInput = {
@@ -108,7 +114,7 @@ export type UpsertIntegrationInput = {
   accessToken?: string | null;
   refreshToken?: string | null;
   tokenExpiresAt?: string | null;
-  apiKeyEncrypted?: string | null;
+  apiKey?: string | null;
   scopes?: string[] | null;
   metadata?: Record<string, unknown>;
 };
@@ -127,7 +133,7 @@ export async function upsertIntegration(
     access_token: encryptIntegrationSecret(input.accessToken ?? null),
     refresh_token: encryptIntegrationSecret(input.refreshToken ?? null),
     token_expires_at: input.tokenExpiresAt ?? null,
-    api_key_encrypted: input.apiKeyEncrypted ?? null,
+    api_key_encrypted: encryptIntegrationSecret(input.apiKey ?? null),
     scopes: input.scopes ?? null,
     metadata: input.metadata ?? {},
     updated_at: now
@@ -140,7 +146,7 @@ export async function upsertIntegration(
     .single();
 
   if (error) throw new Error(`upsertIntegration: ${error.message}`);
-  return toDecryptedIntegrationRow(data as IntegrationRow);
+  return toDecryptedIntegrationRow(data as StoredIntegrationRow);
 }
 
 export async function deleteIntegration(

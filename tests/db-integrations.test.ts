@@ -77,7 +77,8 @@ describe("db/integrations", () => {
     const encryptedRow = {
       ...MOCK_ROW,
       access_token: encryptIntegrationSecret("at"),
-      refresh_token: encryptIntegrationSecret("rt")
+      refresh_token: encryptIntegrationSecret("rt"),
+      api_key_encrypted: encryptIntegrationSecret("crm-key")
     };
     const db = mockDb({
       maybeSingle: vi.fn().mockResolvedValue({ data: encryptedRow, error: null })
@@ -88,6 +89,7 @@ describe("db/integrations", () => {
     expect(row?.status).toBe("connected");
     expect(row?.access_token).toBe("at");
     expect(row?.refresh_token).toBe("rt");
+    expect(row?.api_key).toBe("crm-key");
   });
 
   it("getIntegration returns null when missing", async () => {
@@ -112,7 +114,8 @@ describe("db/integrations", () => {
     const encryptedRow = {
       ...MOCK_ROW,
       access_token: encryptIntegrationSecret("x"),
-      refresh_token: encryptIntegrationSecret("y")
+      refresh_token: encryptIntegrationSecret("y"),
+      api_key_encrypted: encryptIntegrationSecret("secret-api-key")
     };
     const db = mockDb({
       single: vi.fn().mockResolvedValue({ data: encryptedRow, error: null })
@@ -125,15 +128,18 @@ describe("db/integrations", () => {
       authType: "oauth",
       status: "connected",
       accessToken: "x",
-      refreshToken: "y"
+      refreshToken: "y",
+      apiKey: "secret-api-key"
     });
     expect(row.provider).toBe("google");
     expect(row.access_token).toBe("x");
     expect(row.refresh_token).toBe("y");
+    expect(row.api_key).toBe("secret-api-key");
     expect(db.upsert).toHaveBeenCalled();
     const payload = db.upsert.mock.calls[0][0] as Record<string, string | null>;
     expect(payload.access_token).toMatch(/^enc:v1:/);
     expect(payload.refresh_token).toMatch(/^enc:v1:/);
+    expect(payload.api_key_encrypted).toMatch(/^enc:v1:/);
   });
 
   it("upsertIntegration throws on error", async () => {
