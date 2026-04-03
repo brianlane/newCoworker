@@ -137,4 +137,22 @@ describe("api/integrations route", () => {
     expect(body.ok).toBe(false);
     expect(body.error.code).toBe("UNAUTHORIZED");
   });
+
+  it("returns 400 for invalid DELETE payloads", async () => {
+    const response = await DELETE(
+      new Request("http://localhost/api/integrations", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId: "not-a-uuid",
+          provider: "google"
+        })
+      })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
 });
