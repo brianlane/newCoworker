@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { requireOwner } from "@/lib/auth";
-import { getLatestProvisioningStatus } from "@/lib/provisioning/progress";
+import {
+  getLatestProvisioningStatus,
+  shouldShowProvisioningProgress
+} from "@/lib/provisioning/progress";
 import { getBusiness } from "@/lib/db/businesses";
 
 export const dynamic = "force-dynamic";
@@ -31,8 +34,9 @@ export async function GET(request: Request) {
 
     const percent = latest?.percent ?? 0;
     const updatedAt = latest?.updatedAt ?? null;
-    const infraOnline = business?.status === "online";
-    const complete = infraOnline && percent >= 100;
+    const complete =
+      business != null &&
+      !shouldShowProvisioningProgress(business.status, latest);
 
     return successResponse({
       percent,

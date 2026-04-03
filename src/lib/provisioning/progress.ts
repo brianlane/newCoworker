@@ -61,13 +61,22 @@ export type LatestProvisioningStatus = {
   phase: string;
 } | null;
 
-/** Whether to show the owner-only provisioning progress UI (no labels). */
+/** `online` and `high_load` are both live/running infra states (see businesses.status). */
+export function isBusinessRunningStatus(status: string): boolean {
+  return status === "online" || status === "high_load";
+}
+
+/**
+ * Whether to show the owner-only provisioning progress UI (no labels).
+ * Hide when the business is already running (online or high_load) and provisioning is done or never recorded.
+ */
 export function shouldShowProvisioningProgress(
   businessStatus: string,
   latest: LatestProvisioningStatus | null
 ): boolean {
-  if (businessStatus === "online" && latest === null) return false;
-  if (businessStatus === "online" && (latest?.percent ?? 0) >= 100) return false;
+  if (!isBusinessRunningStatus(businessStatus)) return true;
+  if (latest === null) return false;
+  if ((latest.percent ?? 0) >= 100) return false;
   return true;
 }
 

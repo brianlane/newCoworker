@@ -3,7 +3,8 @@ import {
   recordProvisioningProgress,
   getLatestProvisioningStatus,
   getProvisioningLogs,
-  shouldShowProvisioningProgress
+  shouldShowProvisioningProgress,
+  isBusinessRunningStatus
 } from "@/lib/provisioning/progress";
 import { insertCoworkerLog } from "@/lib/db/logs";
 
@@ -92,13 +93,33 @@ describe("provisioning/progress", () => {
     );
   });
 
+  it("isBusinessRunningStatus is true for online and high_load only", () => {
+    expect(isBusinessRunningStatus("online")).toBe(true);
+    expect(isBusinessRunningStatus("high_load")).toBe(true);
+    expect(isBusinessRunningStatus("offline")).toBe(false);
+  });
+
   it("shouldShowProvisioningProgress hides when online with no logs", () => {
     expect(shouldShowProvisioningProgress("online", null)).toBe(false);
+  });
+
+  it("shouldShowProvisioningProgress hides when high_load with no logs", () => {
+    expect(shouldShowProvisioningProgress("high_load", null)).toBe(false);
   });
 
   it("shouldShowProvisioningProgress hides when online and percent complete", () => {
     expect(
       shouldShowProvisioningProgress("online", {
+        percent: 100,
+        updatedAt: "x",
+        phase: "done"
+      })
+    ).toBe(false);
+  });
+
+  it("shouldShowProvisioningProgress hides when high_load and percent complete", () => {
+    expect(
+      shouldShowProvisioningProgress("high_load", {
         percent: 100,
         updatedAt: "x",
         phase: "done"
@@ -113,6 +134,16 @@ describe("provisioning/progress", () => {
   it("shouldShowProvisioningProgress shows when online but not complete", () => {
     expect(
       shouldShowProvisioningProgress("online", {
+        percent: 50,
+        updatedAt: "x",
+        phase: "x"
+      })
+    ).toBe(true);
+  });
+
+  it("shouldShowProvisioningProgress shows when high_load but not complete", () => {
+    expect(
+      shouldShowProvisioningProgress("high_load", {
         percent: 50,
         updatedAt: "x",
         phase: "x"

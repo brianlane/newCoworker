@@ -33,9 +33,12 @@ export function CoworkerProvisioningProgress({ businessId }: Props) {
   }, [businessId]);
 
   useEffect(() => {
-    void poll();
+    const initial = setTimeout(() => void poll(), 0);
     const id = setInterval(() => void poll(), 3000);
-    return () => clearInterval(id);
+    return () => {
+      clearTimeout(initial);
+      clearInterval(id);
+    };
   }, [poll]);
 
   if (hidden) return null;
