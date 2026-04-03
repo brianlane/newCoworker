@@ -152,6 +152,27 @@ describe("provisioning/progress", () => {
     expect(shouldMountProvisioningWidget("online", latest)).toBe(true);
   });
 
+  it("shouldMountProvisioningWidget delegates to shouldShowProvisioningProgress when latest is not error", () => {
+    expect(shouldMountProvisioningWidget("online", null)).toBe(false);
+    expect(
+      shouldMountProvisioningWidget("online", {
+        percent: 50,
+        updatedAt: "x",
+        phase: "x",
+        logStatus: "thinking"
+      })
+    ).toBe(true);
+    expect(
+      shouldMountProvisioningWidget("online", {
+        percent: 100,
+        updatedAt: "x",
+        phase: "done",
+        logStatus: "success"
+      })
+    ).toBe(false);
+    expect(shouldMountProvisioningWidget("offline", null)).toBe(true);
+  });
+
   it("shouldShowProvisioningProgress shows when offline", () => {
     expect(shouldShowProvisioningProgress("offline", null)).toBe(true);
   });
@@ -303,6 +324,86 @@ describe("provisioning/progress", () => {
     const s = await getLatestProvisioningStatus("00000000-0000-4000-8000-000000000001");
     expect(s?.logStatus).toBe("error");
     expect(s?.percent).toBe(95);
+  });
+
+  it("getLatestProvisioningStatus maps urgent_alert row status", async () => {
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: {
+          log_payload: {
+            phase: "p",
+            percent: 10,
+            message: "m",
+            source: "vps"
+          },
+          created_at: "2026-06-01T12:00:00Z",
+          status: "urgent_alert"
+        },
+        error: null
+      })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const s = await getLatestProvisioningStatus("00000000-0000-4000-8000-000000000001");
+    expect(s?.logStatus).toBe("urgent_alert");
+  });
+
+  it("getLatestProvisioningStatus normalizes unknown row status to thinking", async () => {
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: {
+          log_payload: {
+            phase: "p",
+            percent: 1,
+            message: "m",
+            source: "vps"
+          },
+          created_at: "2026-01-01T00:00:00Z",
+          status: "unexpected_value"
+        },
+        error: null
+      })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const s = await getLatestProvisioningStatus("00000000-0000-4000-8000-000000000001");
+    expect(s?.logStatus).toBe("thinking");
+  });
+
+  it("getLatestProvisioningStatus treats omitted status as thinking", async () => {
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: {
+          log_payload: {
+            phase: "p",
+            percent: 2,
+            message: "m",
+            source: "vps"
+          },
+          created_at: "2026-01-01T00:00:00Z"
+        },
+        error: null
+      })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const s = await getLatestProvisioningStatus("00000000-0000-4000-8000-000000000001");
+    expect(s?.logStatus).toBe("thinking");
   });
 
   it("getProvisioningLogs returns rows", async () => {
