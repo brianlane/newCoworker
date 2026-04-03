@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   getNotificationPreferences,
   getOrCreateNotificationPreferences,
+  isUniqueViolation,
   updateNotificationPreferences
 } from "@/lib/db/notification-preferences";
 
@@ -24,6 +25,13 @@ const PREFS = {
 
 describe("db/notification-preferences", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("isUniqueViolation handles null and unique-constraint messages", () => {
+    expect(isUniqueViolation(null)).toBe(false);
+    expect(isUniqueViolation({ message: "duplicate key value violates unique constraint" })).toBe(
+      true
+    );
+  });
 
   it("getNotificationPreferences returns row", async () => {
     const chain = {
@@ -109,6 +117,70 @@ describe("db/notification-preferences", () => {
     };
     const db = {
       from: vi.fn().mockReturnValueOnce(selectChain).mockReturnValueOnce(insertChain)
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(getOrCreateNotificationPreferences("biz-1")).rejects.toThrow(
+      "getOrCreateNotificationPreferences"
+    );
+  });
+
+  it("getOrCreateNotificationPreferences returns existing row after insert conflict", async () => {
+    const selectMissingChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValueOnce({ data: null, error: null })
+    };
+    const insertChain = {
+      insert: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({
+        data: null,
+        error: { code: "23505", message: "duplicate key value violates unique constraint" }
+      })
+    };
+    const selectExistingChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValueOnce({ data: PREFS, error: null })
+    };
+    const db = {
+      from: vi
+        .fn()
+        .mockReturnValueOnce(selectMissingChain)
+        .mockReturnValueOnce(insertChain)
+        .mockReturnValueOnce(selectExistingChain)
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(getOrCreateNotificationPreferences("biz-1")).resolves.toEqual(PREFS);
+  });
+
+  it("getOrCreateNotificationPreferences throws when insert conflict retry still finds no row", async () => {
+    const selectMissingChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValueOnce({ data: null, error: null })
+    };
+    const insertChain = {
+      insert: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({
+        data: null,
+        error: { code: "23505", message: "duplicate key value violates unique constraint" }
+      })
+    };
+    const selectMissingAgainChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValueOnce({ data: null, error: null })
+    };
+    const db = {
+      from: vi
+        .fn()
+        .mockReturnValueOnce(selectMissingChain)
+        .mockReturnValueOnce(insertChain)
+        .mockReturnValueOnce(selectMissingAgainChain)
     };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 

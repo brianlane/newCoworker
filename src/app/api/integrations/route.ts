@@ -1,5 +1,5 @@
 import { getAuthUser, requireOwner } from "@/lib/auth";
-import { deleteIntegration, getIntegrations, toPublicIntegrationRow } from "@/lib/db/integrations";
+import { deleteIntegration, getIntegrations } from "@/lib/db/integrations";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { z } from "zod";
 
@@ -26,7 +26,7 @@ export async function GET(request: Request) {
 
     await requireOwner(parsed.data);
     const integrations = await getIntegrations(parsed.data);
-    return successResponse(integrations.map(toPublicIntegrationRow));
+    return successResponse(integrations);
   } catch (err) {
     return handleRouteError(err);
   }

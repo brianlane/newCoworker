@@ -7,14 +7,7 @@ vi.mock("@/lib/auth", () => ({
 
 vi.mock("@/lib/db/integrations", () => ({
   getIntegrations: vi.fn(),
-  deleteIntegration: vi.fn(),
-  toPublicIntegrationRow: vi.fn((row) => {
-    const { access_token, refresh_token, api_key_encrypted, ...rest } = row;
-    void access_token;
-    void refresh_token;
-    void api_key_encrypted;
-    return rest;
-  })
+  deleteIntegration: vi.fn()
 }));
 
 import { DELETE, GET } from "@/app/api/integrations/route";
@@ -39,10 +32,7 @@ describe("api/integrations route", () => {
         provider: "google",
         auth_type: "oauth",
         status: "connected",
-        access_token: "at",
-        refresh_token: "rt",
         token_expires_at: "2026-01-01T00:00:00Z",
-        api_key_encrypted: null,
         scopes: ["a"],
         metadata: {},
         created_at: "2026-01-01T00:00:00Z",

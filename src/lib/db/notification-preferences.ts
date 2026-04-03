@@ -34,6 +34,15 @@ const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> =
   alert_email: null
 };
 
+export function isUniqueViolation(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  return (
+    error.code === "23505" ||
+    error.message?.toLowerCase().includes("duplicate key") === true ||
+    error.message?.toLowerCase().includes("unique constraint") === true
+  );
+}
+
 export async function getNotificationPreferences(
   businessId: string,
   client?: SupabaseClient
@@ -68,7 +77,13 @@ export async function getOrCreateNotificationPreferences(
     .select()
     .single();
 
-  if (error) throw new Error(`getOrCreateNotificationPreferences: ${error.message}`);
+  if (error) {
+    if (isUniqueViolation(error)) {
+      const concurrent = await getNotificationPreferences(businessId, db);
+      if (concurrent) return concurrent;
+    }
+    throw new Error(`getOrCreateNotificationPreferences: ${error.message}`);
+  }
   return data as NotificationPreferencesRow;
 }
 

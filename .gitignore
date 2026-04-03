@@ -19,6 +19,7 @@ pnpm-debug.log*
 # OS and editor files
 .DS_Store
 .idea/
+.cursor/
 .vscode/*
 !.vscode/extensions.json
 *.suo
