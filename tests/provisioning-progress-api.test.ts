@@ -32,6 +32,27 @@ describe("POST /api/provisioning/progress", () => {
     expect(res.status).toBe(401);
   });
 
+  it("returns 401 (not 500) when bearer and secret share JS length but differ in UTF-8 bytes", async () => {
+    process.env.PROVISIONING_PROGRESS_TOKEN = "é";
+    process.env.ROWBOAT_GATEWAY_TOKEN = "é";
+    const res = await POST(
+      new Request("http://localhost/api/provisioning/progress", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer a",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          businessId: "00000000-0000-4000-8000-000000000001",
+          percent: 1,
+          phase: "x",
+          message: ""
+        })
+      })
+    );
+    expect(res.status).toBe(401);
+  });
+
   it("records progress from VPS payload", async () => {
     const res = await POST(
       new Request("http://localhost/api/provisioning/progress", {

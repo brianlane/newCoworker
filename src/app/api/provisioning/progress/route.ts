@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { timingSafeEqual } from "crypto";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
+import { timingSafeEqualUtf8 } from "@/lib/timing-safe-utf8";
 import { recordProvisioningProgress } from "@/lib/provisioning/progress";
 
 export const dynamic = "force-dynamic";
@@ -17,8 +17,8 @@ function verifyProgressToken(request: Request): boolean {
   const token = auth.replace(/^Bearer\s+/i, "").trim();
   const expected =
     process.env.PROVISIONING_PROGRESS_TOKEN ?? process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
-  if (expected === "" || token.length !== expected.length) return false;
-  return timingSafeEqual(Buffer.from(token), Buffer.from(expected));
+  if (expected === "") return false;
+  return timingSafeEqualUtf8(token, expected);
 }
 
 export async function POST(request: Request) {
