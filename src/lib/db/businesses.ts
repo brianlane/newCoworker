@@ -12,6 +12,7 @@ export type BusinessRow = {
   status: "online" | "offline" | "high_load";
   hostinger_vps_id: string | null;
   created_at: string;
+  is_paused?: boolean;
 };
 
 export async function createBusiness(
@@ -89,6 +90,16 @@ export async function updateBusinessStatus(
 
   const { error } = await db.from("businesses").update(update).eq("id", id);
   if (error) throw new Error(`updateBusinessStatus: ${error.message}`);
+}
+
+export async function setBusinessPaused(
+  id: string,
+  paused: boolean,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("businesses").update({ is_paused: paused }).eq("id", id);
+  if (error) throw new Error(`setBusinessPaused: ${error.message}`);
 }
 
 export async function updateBusinessOwnerEmail(
