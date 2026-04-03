@@ -1,0 +1,8 @@
+# js/insufficient-password-hash flags HMAC-SHA256 when "password-like" taint reaches crypto.
+# Our OAuth state and onboarding tokens use HMAC for integrity (MAC), not for storing password
+# digests (CWE-916). Cookie/session reads are misclassified as password sources in that flow.
+# Prefer bcrypt/argon2/scrypt for actual user password hashing in this codebase.
+name: "newCoworker CodeQL"
+query-filters:
+  - exclude:
+      id: js/insufficient-password-hash

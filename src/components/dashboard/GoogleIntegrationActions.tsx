@@ -15,8 +15,8 @@ export function GoogleIntegrationActions({ businessId, initiallyConnected }: Pro
   async function disconnect() {
     setLoading(true);
     try {
-      const res = await fetch("/api/integrations/disconnect", {
-        method: "POST",
+      const res = await fetch("/api/integrations", {
+        method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ businessId, provider: "google" })
       });

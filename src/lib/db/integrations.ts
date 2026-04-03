@@ -33,19 +33,32 @@ export type IntegrationRow = {
   updated_at: string;
 };
 
+export type PublicIntegrationRow = Omit<
+  IntegrationRow,
+  "access_token" | "refresh_token" | "api_key_encrypted"
+>;
+
+export function toPublicIntegrationRow(row: IntegrationRow | PublicIntegrationRow): PublicIntegrationRow {
+  const { access_token: _accessToken, refresh_token: _refreshToken, api_key_encrypted: _apiKey, ...rest } =
+    row as IntegrationRow;
+  return rest;
+}
+
 export async function getIntegrations(
   businessId: string,
   client?: SupabaseClient
-): Promise<IntegrationRow[]> {
+): Promise<PublicIntegrationRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("integrations")
-    .select()
+    .select(
+      "id,business_id,provider,auth_type,status,token_expires_at,scopes,metadata,created_at,updated_at"
+    )
     .eq("business_id", businessId)
     .order("provider");
 
   if (error) throw new Error(`getIntegrations: ${error.message}`);
-  return (data ?? []) as IntegrationRow[];
+  return ((data ?? []) as PublicIntegrationRow[]).map(toPublicIntegrationRow);
 }
 
 export async function getIntegration(

@@ -7,7 +7,14 @@ vi.mock("@/lib/auth", () => ({
 
 vi.mock("@/lib/db/integrations", () => ({
   getIntegrations: vi.fn(),
-  deleteIntegration: vi.fn()
+  deleteIntegration: vi.fn(),
+  toPublicIntegrationRow: vi.fn((row) => {
+    const { access_token, refresh_token, api_key_encrypted, ...rest } = row;
+    void access_token;
+    void refresh_token;
+    void api_key_encrypted;
+    return rest;
+  })
 }));
 
 import { DELETE, GET } from "@/app/api/integrations/route";
@@ -55,6 +62,9 @@ describe("api/integrations route", () => {
     expect(response.status).toBe(200);
     expect(body.ok).toBe(true);
     expect(body.data).toHaveLength(1);
+    expect(body.data[0]).not.toHaveProperty("access_token");
+    expect(body.data[0]).not.toHaveProperty("refresh_token");
+    expect(body.data[0]).not.toHaveProperty("api_key_encrypted");
     expect(requireOwner).toHaveBeenCalledWith(businessId);
     expect(getIntegrations).toHaveBeenCalledWith(businessId);
   });
