@@ -1,4 +1,5 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { decryptIntegrationSecret, encryptIntegrationSecret } from "@/lib/integrations/secrets";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -75,7 +76,14 @@ export async function getIntegration(
     .maybeSingle();
 
   if (error) throw new Error(`getIntegration: ${error.message}`);
-  return (data as IntegrationRow) ?? null;
+  if (!data) return null;
+
+  const row = data as IntegrationRow;
+  return {
+    ...row,
+    access_token: decryptIntegrationSecret(row.access_token),
+    refresh_token: decryptIntegrationSecret(row.refresh_token)
+  };
 }
 
 export type UpsertIntegrationInput = {
@@ -102,8 +110,8 @@ export async function upsertIntegration(
     provider: input.provider,
     auth_type: input.authType,
     status: input.status,
-    access_token: input.accessToken ?? null,
-    refresh_token: input.refreshToken ?? null,
+    access_token: encryptIntegrationSecret(input.accessToken ?? null),
+    refresh_token: encryptIntegrationSecret(input.refreshToken ?? null),
     token_expires_at: input.tokenExpiresAt ?? null,
     api_key_encrypted: input.apiKeyEncrypted ?? null,
     scopes: input.scopes ?? null,

@@ -5,6 +5,7 @@ import {
   upsertIntegration,
   deleteIntegration
 } from "@/lib/db/integrations";
+import { encryptIntegrationSecret } from "@/lib/integrations/secrets";
 
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
@@ -44,7 +45,10 @@ function mockDb(overrides: Record<string, unknown> = {}) {
 }
 
 describe("db/integrations", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.INTEGRATIONS_ENCRYPTION_KEY = "integration-secret-for-tests";
+  });
 
   it("getIntegrations returns rows", async () => {
     const db = { ...mockDb(), order: vi.fn().mockResolvedValue({ data: [MOCK_ROW], error: null }) };
@@ -70,13 +74,20 @@ describe("db/integrations", () => {
   });
 
   it("getIntegration returns row", async () => {
+    const encryptedRow = {
+      ...MOCK_ROW,
+      access_token: encryptIntegrationSecret("at"),
+      refresh_token: encryptIntegrationSecret("rt")
+    };
     const db = mockDb({
-      maybeSingle: vi.fn().mockResolvedValue({ data: MOCK_ROW, error: null })
+      maybeSingle: vi.fn().mockResolvedValue({ data: encryptedRow, error: null })
     });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     const row = await getIntegration("biz-1", "google");
     expect(row?.status).toBe("connected");
+    expect(row?.access_token).toBe("at");
+    expect(row?.refresh_token).toBe("rt");
   });
 
   it("getIntegration returns null when missing", async () => {
@@ -111,6 +122,9 @@ describe("db/integrations", () => {
     });
     expect(row.provider).toBe("google");
     expect(db.upsert).toHaveBeenCalled();
+    const payload = db.upsert.mock.calls[0][0] as Record<string, string | null>;
+    expect(payload.access_token).toMatch(/^enc:v1:/);
+    expect(payload.refresh_token).toMatch(/^enc:v1:/);
   });
 
   it("upsertIntegration throws on error", async () => {
