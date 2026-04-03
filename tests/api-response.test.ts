@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
+import { z } from "zod";
 
 describe("api-response", () => {
   it("successResponse returns ok:true with data and default 200", async () => {
@@ -60,6 +61,24 @@ describe("api-response", () => {
   it("handleRouteError returns 500 for unknown errors", async () => {
     const res = handleRouteError(new Error("boom"));
     expect(res.status).toBe(500);
+  });
+
+  it("handleRouteError maps ZodError to 400", async () => {
+    const schema = z.object({ businessId: z.string().uuid() });
+    const result = schema.safeParse({ businessId: "bad" });
+    if (result.success) {
+      throw new Error("expected validation to fail");
+    }
+
+    const res = handleRouteError(result.error);
+    expect(res.status).toBe(400);
+  });
+
+  it("handleRouteError uses fallback message for empty ZodError issues", async () => {
+    const res = handleRouteError(new z.ZodError([]));
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error.message).toBe("Invalid request");
   });
 
   it("handleRouteError handles non-Error values", async () => {

@@ -241,6 +241,22 @@ describe("provisioning/orchestrate", () => {
     expect(result.agentId).toBeTruthy();
   });
 
+  it("falls back SUPABASE_URL to empty string in deploy command when unset", async () => {
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
+    const mockHostinger = {
+      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-no-supabase-url" }),
+      executeCommand: mockExec
+    };
+
+    await orchestrateProvisioning(
+      { businessId: "biz-no-supabase-url", tier: "starter" },
+      { hostinger: mockHostinger as never }
+    );
+
+    expect(mockExec.mock.calls[0][1]).toContain("SUPABASE_URL=''");
+  });
+
   it("covers non-Error thrown from email notification", async () => {
     const { sendOwnerEmail } = await import("@/lib/email/client");
     vi.mocked(sendOwnerEmail).mockRejectedValueOnce("non-error-string");

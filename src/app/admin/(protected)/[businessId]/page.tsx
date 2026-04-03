@@ -10,6 +10,7 @@ import { StatusDot } from "@/components/ui/StatusDot";
 import { SoulEditor } from "@/components/dashboard/SoulEditor";
 import { SkipPaymentButton } from "@/components/admin/SkipPaymentButton";
 import { DeleteClientButton } from "@/components/admin/DeleteClientButton";
+import { KillSwitch } from "@/components/dashboard/KillSwitch";
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +49,12 @@ export default async function BusinessDetailPage({
         </div>
         <DeleteClientButton businessId={businessId} businessName={business.name} />
       </div>
+
+      <KillSwitch
+        businessId={businessId}
+        initiallyPaused={!!business.is_paused}
+        compact
+      />
 
       {/* Subscription */}
       <Card>

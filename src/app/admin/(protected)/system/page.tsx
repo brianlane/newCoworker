@@ -64,6 +64,27 @@ const ENV_GROUPS: EnvGroup[] = [
       { name: "Admin Email", description: "Admin account email", key: "ADMIN_EMAIL" },
       { name: "OpenAI API Key", description: "LLM key for onboarding chat", key: "OPENAI_API_KEY" }
     ]
+  },
+  {
+    label: "Google OAuth",
+    vars: [
+      { name: "Client ID", description: "Google OAuth client (workspace integrations)", key: "GOOGLE_CLIENT_ID" },
+      { name: "Client Secret", description: "Google OAuth secret", key: "GOOGLE_CLIENT_SECRET" }
+    ]
+  },
+  {
+    label: "Microsoft (stubbed)",
+    vars: [
+      { name: "Client ID", description: "Azure / Entra app client", key: "MICROSOFT_CLIENT_ID" },
+      { name: "Client Secret", description: "Azure / Entra secret", key: "MICROSOFT_CLIENT_SECRET" }
+    ]
+  },
+  {
+    label: "Slack (stubbed)",
+    vars: [
+      { name: "Client ID", description: "Slack app client", key: "SLACK_CLIENT_ID" },
+      { name: "Client Secret", description: "Slack app secret", key: "SLACK_CLIENT_SECRET" }
+    ]
   }
 ];
 

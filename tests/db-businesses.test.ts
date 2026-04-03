@@ -3,6 +3,7 @@ import {
   createBusiness,
   getBusiness,
   listBusinesses,
+  setBusinessPaused,
   updateBusinessOwnerEmail,
   updateBusinessOwnerEmailIfPending,
   updateBusinessStatus
@@ -136,6 +137,21 @@ describe("db/businesses", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     await expect(updateBusinessStatus("x", "online")).rejects.toThrow("updateBusinessStatus");
+  });
+
+  it("setBusinessPaused updates is_paused", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await setBusinessPaused("uuid-biz-1", true);
+    expect(db.update).toHaveBeenCalledWith({ is_paused: true });
+  });
+
+  it("setBusinessPaused throws on error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(setBusinessPaused("uuid-biz-1", false)).rejects.toThrow("setBusinessPaused");
   });
 
   it("updateBusinessOwnerEmail updates owner email", async () => {

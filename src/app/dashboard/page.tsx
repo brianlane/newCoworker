@@ -6,6 +6,7 @@ import { getRecentLogs } from "@/lib/db/logs";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
+import { KillSwitch } from "@/components/dashboard/KillSwitch";
 
 export const dynamic = "force-dynamic";
 
@@ -49,13 +50,35 @@ export default async function DashboardPage() {
         </Card>
       ) : (
         <>
+          {business.is_paused && (
+            <Card className="border-spark-orange/50 bg-spark-orange/10">
+              <p className="text-sm font-semibold text-spark-orange">Coworker is paused</p>
+              <p className="text-xs text-parchment/60 mt-1">
+                Automation is stopped. Use Resume below when you want your AI coworker active again.
+              </p>
+            </Card>
+          )}
+
+          <KillSwitch businessId={business.id} initiallyPaused={!!business.is_paused} />
+
           {/* Status Card */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card>
               <p className="text-xs text-parchment/40 uppercase tracking-wider mb-2">Coworker Status</p>
-              <div className="flex items-center gap-2">
-                <StatusDot status={business.status as "online" | "offline" | "high_load"} />
-                <span className="font-semibold capitalize">{business.status.replace("_", " ")}</span>
+              <div className="flex flex-col gap-1">
+                {business.is_paused ? (
+                  <div className="flex items-center gap-2">
+                    <Badge variant="error">Paused</Badge>
+                    <span className="text-xs text-parchment/45 capitalize">
+                      Infra: {business.status.replace("_", " ")}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <StatusDot status={business.status as "online" | "offline" | "high_load"} />
+                    <span className="font-semibold capitalize">{business.status.replace("_", " ")}</span>
+                  </div>
+                )}
               </div>
             </Card>
             <Card>
@@ -107,17 +130,29 @@ export default async function DashboardPage() {
           </Card>
 
           {/* Quick Links */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <a href="/dashboard/memory" className="block">
               <Card className="hover:border-signal-teal/40 transition-colors cursor-pointer">
                 <p className="font-semibold text-signal-teal text-sm">View Memory →</p>
                 <p className="text-xs text-parchment/40 mt-1">Review what your coworker has learned</p>
               </Card>
             </a>
+            <a href="/dashboard/integrations" className="block">
+              <Card className="hover:border-signal-teal/40 transition-colors cursor-pointer">
+                <p className="font-semibold text-signal-teal text-sm">Integrations →</p>
+                <p className="text-xs text-parchment/40 mt-1">Google, Outlook, Slack, and API keys</p>
+              </Card>
+            </a>
+            <a href="/dashboard/notifications" className="block">
+              <Card className="hover:border-signal-teal/40 transition-colors cursor-pointer">
+                <p className="font-semibold text-signal-teal text-sm">Notifications →</p>
+                <p className="text-xs text-parchment/40 mt-1">Configure SMS and email alerts</p>
+              </Card>
+            </a>
             <a href="/dashboard/settings" className="block">
               <Card className="hover:border-signal-teal/40 transition-colors cursor-pointer">
-                <p className="font-semibold text-signal-teal text-sm">Notification Settings →</p>
-                <p className="text-xs text-parchment/40 mt-1">Configure SMS and email alerts</p>
+                <p className="font-semibold text-signal-teal text-sm">Account Settings →</p>
+                <p className="text-xs text-parchment/40 mt-1">Billing and account</p>
               </Card>
             </a>
           </div>

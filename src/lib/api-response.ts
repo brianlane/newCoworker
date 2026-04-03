@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { ZodError } from "zod";
 
 type ErrorCode =
   | "DB_ERROR"
@@ -35,6 +36,9 @@ export function errorResponse(
 }
 
 export function handleRouteError(error: unknown): NextResponse {
+  if (error instanceof ZodError) {
+    return errorResponse("VALIDATION_ERROR", error.issues[0]?.message ?? "Invalid request");
+  }
   if (error instanceof Error) {
     const status = (error as Error & { status?: number }).status;
     if (status === 401) return errorResponse("UNAUTHORIZED", error.message);
