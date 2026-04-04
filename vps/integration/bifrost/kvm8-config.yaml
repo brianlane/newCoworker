@@ -1,0 +1,20 @@
+# Reference routing intent (legacy YAML shape). Production: maximhq/bifrost — see vps/bifrost/README.md.
+
+providers:
+  - id: ollama
+    base_url: http://ollama:11434
+    type: ollama
+    fallback_models:
+      - qwen3.5:4b
+      - qwen3.5:9b
+      - llama4:9b
+
+routing:
+  fast: qwen3.5:4b
+  balanced: qwen3.5:9b
+  deep: qwen3.5:35b-a3b
+  verify: llama4:9b
+
+server:
+  port: 8080
+  host: 0.0.0.0

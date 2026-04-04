@@ -14,7 +14,8 @@ FAILURES=$(cat "$FAILURE_COUNT_FILE" 2>/dev/null || echo "0")
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] HEARTBEAT: $*"; }
 
 check_rowboat() {
-  curl -sf --max-time 5 http://127.0.0.1:3000/health > /dev/null 2>&1
+  curl -sf --max-time 5 http://127.0.0.1:3000/health > /dev/null 2>&1 \
+    || curl -sf --max-time 5 http://127.0.0.1:3000/ > /dev/null 2>&1
 }
 
 check_ollama() {
@@ -41,10 +42,10 @@ if ! check_ollama; then
   ALL_OK=false
 fi
 
-# Check Bifrost
+# Check Bifrost (maximhq/bifrost Docker container)
 if ! check_bifrost; then
   log "Bifrost unhealthy. Restarting..."
-  systemctl restart bifrost || true
+  docker restart bifrost 2>&1 | tee -a "$FAIL_LOG" || true
   ALL_OK=false
 fi
 

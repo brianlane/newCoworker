@@ -6,15 +6,15 @@ import { sendOwnerSms, readTwilioConfig } from "@/lib/twilio/client";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
-import { randomUUID, timingSafeEqual } from "crypto";
+import { randomUUID } from "crypto";
+import { timingSafeEqualUtf8 } from "@/lib/timing-safe-utf8";
 
 function verifyRowboatToken(request: Request): boolean {
   const auth = request.headers.get("authorization") ?? "";
   const token = auth.replace(/^Bearer\s+/i, "").trim();
   const expected = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
-  if (expected === "" || token.length !== expected.length) return false;
-
-  return timingSafeEqual(Buffer.from(token), Buffer.from(expected));
+  if (expected === "") return false;
+  return timingSafeEqualUtf8(token, expected);
 }
 
 export async function POST(request: Request) {

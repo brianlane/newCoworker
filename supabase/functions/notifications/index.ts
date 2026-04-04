@@ -84,6 +84,10 @@ serve(async (req: Request) => {
   }
 
   const { record } = payload;
+  // Provisioning progress rows use thinking/success; never notify from these.
+  if (record.task_type === "provisioning") {
+    return new Response(JSON.stringify({ skipped: true, reason: "provisioning" }), { status: 200 });
+  }
   if (record.status !== "urgent_alert") {
     return new Response(JSON.stringify({ skipped: true }), { status: 200 });
   }

@@ -6,7 +6,6 @@
 set -euo pipefail
 
 TIER="${TIER:-standard}"
-BIFROST_VERSION="v0.6.0"
 CLOUDFLARED_VERSION="2025.4.0"
 LOG_FILE="/var/log/newcoworker-bootstrap.log"
 
@@ -110,6 +109,7 @@ Environment="OLLAMA_KV_CACHE_TYPE=q4_0"
 # (prerequisite for Dynamic VRAM / Weight Streaming on llama.cpp backend).
 Environment="OLLAMA_FLASH_ATTENTION=1"
 EOF
+# Copyable env list for Compose / docs: vps/fragments/starter-ollama-container.env
 else
   # KVM 8 (8 vCPU, 32GB RAM) — full model set, higher parallelism
   cat > /etc/systemd/system/ollama.service.d/override.conf <<'EOF'
@@ -144,7 +144,7 @@ else
   (
     sleep 10
     ollama pull qwen3.5:4b  || true
-    ollama pull qwen3.5:7b  || true
+    ollama pull qwen3.5:9b  || true
     ollama pull llama4:9b   || true
     ollama pull qwen3.5:35b-a3b || true
     log "KVM 8 models pre-pulled."
@@ -152,18 +152,30 @@ else
 fi
 
 # ------------------------------------------------------------------
-# 5. Bifrost (local LLM router)
+# 5. Bifrost (maximhq/bifrost AI gateway — Docker; see vps/bifrost/README.md)
 # ------------------------------------------------------------------
-log "Installing Bifrost..."
-mkdir -p /opt/bifrost
-BIFROST_URL="https://github.com/maximhq/bifrost/releases/download/${BIFROST_VERSION}/bifrost-linux-amd64"
-wget -q "$BIFROST_URL" -O /opt/bifrost/bifrost
-chmod +x /opt/bifrost/bifrost
+log "Installing Bifrost (Docker image maximhq/bifrost)..."
+mkdir -p /opt/bifrost/data
 
-# Tier-aware Bifrost config
+# Tier-aware routing intent — reference YAML on disk (mirror in Web UI / exported JSON).
+# The gateway image persists live config under /app/data; this file is not auto-loaded
+# unless you import it per current Bifrost docs — keep in sync with vps/bifrost/config-kvm2.yaml
+# and vps/bifrost/config-kvm8.yaml in the repo.
 if [[ "$TIER" == "starter" ]]; then
-  # KVM 2: single model, no warm-swapping
-  cat > /opt/bifrost/config.yaml <<'EOF'
+  cat > /opt/bifrost/routing-intent.yaml <<'BIFROST_KVM2_EOF'
+# Bifrost — KVM 2 (starter) routing intent (reference only).
+# Production gateway: Docker image maximhq/bifrost — configure via Web UI / JSON per
+# https://github.com/maximhq/bifrost and https://docs.getbifrost.ai (see vps/bifrost/README.md).
+#
+# Single model: Phi-4 Mini 3.8B — no warm-swapping to stay within 8GB RAM budget
+# Flash-Reasoning variant: tuned for 10x throughput on 2 vCPU
+#
+# TurboQuant (OLLAMA_KV_CACHE_TYPE=q4_0) and Flash Attention (OLLAMA_FLASH_ATTENTION=1)
+# are ACTIVE at the Ollama layer — set in /etc/systemd/system/ollama.service.d/override.conf
+# by bootstrap.sh. These reduce KV cache memory ~75% and enable weight streaming.
+# Bifrost is the LLM router and does not implement these directly — they are enforced
+# by the Ollama inference backend below.
+
 providers:
   - id: ollama
     base_url: http://127.0.0.1:11434
@@ -179,52 +191,65 @@ routes:
 fallback:
   ifBusy: phi4-mini:3.8b
 
+# Inference optimization hooks (enabled when upstream support merges)
+# optimization:
+#   turbo_quant:
+#     enabled: true
+#     kv_cache_compression: q4_0
+#     target_memory_reduction: 0.75
+#   dynamic_vram:
+#     enabled: true
+#     weight_streaming: true
+#     nvme_offload_path: /var/lib/ollama/weights
+
 server:
   port: 8080
   host: 127.0.0.1
-EOF
+BIFROST_KVM2_EOF
 else
-  # KVM 8: full multi-route config with deep reasoning model
-  cat > /opt/bifrost/config.yaml <<'EOF'
+  cat > /opt/bifrost/routing-intent.yaml <<'BIFROST_KVM8_EOF'
+# Bifrost — KVM 8 (standard) routing intent (reference only).
+# Production gateway: Docker image maximhq/bifrost — configure via Web UI / JSON per
+# https://github.com/maximhq/bifrost and https://docs.getbifrost.ai (see vps/bifrost/README.md).
+#
+# Multi-route stack for larger VPS; Ollama on same host as gateway.
+
 providers:
   - id: ollama
     base_url: http://127.0.0.1:11434
     type: ollama
     fallback_models:
       - qwen3.5:4b
-      - qwen3.5:7b
+      - qwen3.5:9b
       - llama4:9b
 
 routing:
   fast: qwen3.5:4b
-  balanced: qwen3.5:7b
+  balanced: qwen3.5:9b
   deep: qwen3.5:35b-a3b
   verify: llama4:9b
 
 server:
   port: 8080
   host: 127.0.0.1
-EOF
+BIFROST_KVM8_EOF
 fi
+log "Bifrost tier routing intent written: /opt/bifrost/routing-intent.yaml (TIER=${TIER})"
 
-cat > /etc/systemd/system/bifrost.service <<'EOF'
-[Unit]
-Description=Bifrost LLM Router
-After=network.target ollama.service
-
-[Service]
-ExecStart=/opt/bifrost/bifrost --config /opt/bifrost/config.yaml
-Restart=always
-RestartSec=5
-User=ubuntu
-
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl daemon-reload
-systemctl enable bifrost
-systemctl start bifrost
-log "Bifrost installed and running."
+# Remove legacy systemd + binary install if re-running bootstrap
+systemctl disable --now bifrost 2>/dev/null || true
+rm -f /etc/systemd/system/bifrost.service
+systemctl daemon-reload 2>/dev/null || true
+docker rm -f bifrost 2>/dev/null || true
+docker pull maximhq/bifrost:latest
+docker run -d \
+  --name bifrost \
+  --restart unless-stopped \
+  --network host \
+  -v /opt/bifrost/data:/app/data \
+  maximhq/bifrost:latest
+log "Bifrost gateway running on port 8080 (host network). Web UI: http://127.0.0.1:8080"
+log "Configure the Ollama provider at http://127.0.0.1:11434 — mirror /opt/bifrost/routing-intent.yaml in the UI where applicable; see https://docs.getbifrost.ai"
 
 # ------------------------------------------------------------------
 # 6. Rowboat (agent runtime — replaces OpenClaw)
@@ -252,12 +277,14 @@ services:
     container_name: rowboat
     restart: always
     env_file: /opt/rowboat/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
       - /opt/rowboat/vault:/vault:ro
       - /opt/rowboat/memory:/memory
-    mem_limit: 700m
+    mem_limit: 1536m
 
   mongo:
     image: mongo:7
@@ -273,20 +300,10 @@ services:
     restart: always
     mem_limit: 100m
 
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    restart: always
-    environment:
-      OLLAMA_NUM_PARALLEL: "1"
-      OLLAMA_MAX_LOADED_MODELS: "1"
-    network_mode: host
-    volumes:
-      - ollama_models:/root/.ollama
+# Ollama: host systemd only (§4). Rowboat reaches it via PROVIDER_BASE_URL=http://host.docker.internal:11434
 
 volumes:
   rowboat_mongo:
-  ollama_models:
 REOF
 else
   # KVM 8: full stack with qdrant for RAG
@@ -299,6 +316,8 @@ services:
     container_name: rowboat
     restart: always
     env_file: /opt/rowboat/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
@@ -311,6 +330,8 @@ services:
     container_name: rowboat-jobs
     restart: always
     env_file: /opt/rowboat/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: worker
 
   mongo:
@@ -332,25 +353,15 @@ services:
     volumes:
       - rowboat_qdrant:/qdrant/storage
 
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    restart: always
-    environment:
-      OLLAMA_NUM_PARALLEL: "3"
-      OLLAMA_MAX_LOADED_MODELS: "2"
-    network_mode: host
-    volumes:
-      - ollama_models:/root/.ollama
+# Ollama: host systemd only (§4). Rowboat / jobs-worker use host.docker.internal:11434
 
 volumes:
   rowboat_mongo:
   rowboat_qdrant:
-  ollama_models:
 REOF
 fi
 
-docker compose -f /opt/rowboat/docker-compose.yml up --build -d || true
+docker compose -f /opt/rowboat/docker-compose.yml up --build -d --remove-orphans || true
 log "Rowboat stack deployed."
 
 # ------------------------------------------------------------------

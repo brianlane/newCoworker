@@ -13,6 +13,8 @@
 #   INWORLD_AGENT_ID         — inworld.ai agent ID for voice routing
 #   INWORLD_API_KEY          — inworld.ai API key
 #   LIGHTPANDA_WSS_URL       — Lightpanda browser endpoint
+#   PROVISIONING_PROGRESS_URL — optional; POST JSON progress to app (see report_progress)
+#   PROVISIONING_PROGRESS_TOKEN — Bearer token for progress API
 
 set -euo pipefail
 
@@ -20,6 +22,24 @@ TIER="${TIER:-standard}"
 LOG="/var/log/deploy-client-${BUSINESS_ID:-unknown}.log"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG"; }
+
+report_progress() {
+  local pct="$1" phase="$2" msg="$3"
+  if [[ -z "${PROVISIONING_PROGRESS_URL:-}" || -z "${PROVISIONING_PROGRESS_TOKEN:-}" ]]; then
+    return 0
+  fi
+  local json
+  json=$(jq -nc \
+    --arg id "${BUSINESS_ID}" \
+    --argjson pct "$pct" \
+    --arg ph "$phase" \
+    --arg msg "$msg" \
+    '{businessId:$id, percent:$pct, phase:$ph, message:$msg}')
+  curl -sf -X POST "${PROVISIONING_PROGRESS_URL}" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${PROVISIONING_PROGRESS_TOKEN}" \
+    -d "$json" || true
+}
 
 log "=== Deploying client: ${BUSINESS_ID} (TIER=${TIER}) ==="
 
@@ -120,6 +140,8 @@ $PLAYBOOK_NOTE
 $BOOTSTRAP_NOTE
 EOF
 
+report_progress 42 "vault_seeded" "Vault and memory seeds written"
+
 # ------------------------------------------------------------------
 # 2. Write Rowboat .env with client-specific values
 # ------------------------------------------------------------------
@@ -129,8 +151,9 @@ log "Writing Rowboat .env..."
 if [[ "$TIER" == "starter" ]]; then
   OLLAMA_MODEL="phi4-mini:3.8b"
 else
-  OLLAMA_MODEL="qwen3.5:7b"
+  OLLAMA_MODEL="qwen3.5:9b"
 fi
+# Optional: cap num_ctx for starter TTFT — see vps/fragments/ollama-Modelfile-starter-4096.example
 
 cat > /opt/rowboat/.env <<RENV_EOF
 # Rowboat runtime configuration for business: ${BUSINESS_ID}
@@ -138,8 +161,8 @@ ROWBOAT_GATEWAY_TOKEN=${ROWBOAT_GATEWAY_TOKEN}
 BUSINESS_ID=${BUSINESS_ID}
 TIER=${TIER}
 
-# Ollama / LLM
-PROVIDER_BASE_URL=http://localhost:11434
+# Ollama / LLM (host systemd — reachable from Rowboat container via Docker host-gateway)
+PROVIDER_BASE_URL=http://host.docker.internal:11434
 PROVIDER_API_KEY=ollama
 PROVIDER_DEFAULT_MODEL=${OLLAMA_MODEL}
 PROVIDER_COPILOT_MODEL=${OLLAMA_MODEL}
@@ -161,18 +184,22 @@ NOTIFICATION_WEBHOOK_TOKEN=${NOTIFICATIONS_WEBHOOK_TOKEN:-${SUPABASE_SERVICE_KEY
 # Browser skills
 LIGHTPANDA_WSS_URL=${LIGHTPANDA_WSS_URL:-wss://cdn.lightpanda.io/ws}
 
-# Knowledge vault paths
-ROWBOAT_VAULT_PATH=/opt/rowboat/vault
-ROWBOAT_MEMORY_PATH=/opt/rowboat/memory
+# Paths inside the Rowboat container (see bootstrap docker-compose volume mounts)
+ROWBOAT_VAULT_PATH=/vault
+ROWBOAT_MEMORY_PATH=/memory
 RENV_EOF
 
 log "Rowboat .env written."
 
+report_progress 55 "env_written" "Rowboat .env written"
+
 # ------------------------------------------------------------------
-# 3. Restart Rowboat with new config
+# 3. Apply Rowboat stack (recreate if compose changed; drop orphan ollama from older layouts)
 # ------------------------------------------------------------------
-docker compose -f /opt/rowboat/docker-compose.yml restart rowboat || true
-log "Rowboat restarted."
+docker compose -f /opt/rowboat/docker-compose.yml up -d --remove-orphans || true
+log "Rowboat stack updated."
+
+report_progress 72 "rowboat_stack" "Docker Compose stack updated"
 
 # ------------------------------------------------------------------
 # 4. Set up cloudflared tunnel
@@ -187,6 +214,8 @@ else
   log "WARN: No CLOUDFLARE_TUNNEL_TOKEN provided. Tunnel not configured."
 fi
 
+report_progress 85 "cloudflared" "Tunnel step finished (configured or skipped)"
+
 # ------------------------------------------------------------------
 # 5. Register VPS as online in Supabase
 # ------------------------------------------------------------------
@@ -198,5 +227,7 @@ curl -sf -X PATCH \
   -d '{"status": "online"}' \
   "${SUPABASE_URL}/rest/v1/businesses?id=eq.${BUSINESS_ID}" \
   > /dev/null
+
+report_progress 95 "business_online_patch" "Business status set to online in Supabase"
 
 log "=== Client deployment complete: ${BUSINESS_ID} ==="

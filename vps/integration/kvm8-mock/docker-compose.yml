@@ -1,0 +1,43 @@
+# Exactly one container: KVM 8 (standard) — 8 CPU / 32 GiB total (Hostinger KVM 8 SKU).
+# Same layout as kvm2-mock; Ollama env matches bootstrap.sh §4 standard tier.
+
+name: kvm8-mock
+
+services:
+  kvm8:
+    build:
+      context: ../kvm-mock/image
+      dockerfile: Dockerfile
+    image: newcoworker-kvm-mock:local
+    environment:
+      OLLAMA_NUM_PARALLEL: "3"
+      OLLAMA_MAX_LOADED_MODELS: "2"
+      OMP_NUM_THREADS: "8"
+      OLLAMA_KV_CACHE_TYPE: q4_0
+      OLLAMA_FLASH_ATTENTION: "1"
+    ports:
+      - "127.0.0.1:23000:3000"
+      - "127.0.0.1:28080:8080"
+      - "127.0.0.1:21134:11434"
+    volumes:
+      - kvm8_ollama:/root/.ollama
+    deploy:
+      resources:
+        limits:
+          cpus: "8.0"
+          memory: 32G
+        reservations:
+          cpus: "1.0"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -sf http://127.0.0.1:3000/health && curl -sf http://127.0.0.1:8080/health && curl -sf http://127.0.0.1:11434/api/tags"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 45s
+
+volumes:
+  kvm8_ollama:

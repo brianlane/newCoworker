@@ -1,3 +1,5 @@
+# Dev/reference: Ollama runs in Compose. Production (bootstrap) uses systemd Ollama on the host and
+# Rowboat with extra_hosts host.docker.internal:host-gateway + PROVIDER_BASE_URL=http://host.docker.internal:11434
 version: "3.9"
 services:
   rowboat:

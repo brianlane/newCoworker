@@ -67,13 +67,15 @@ export async function getRecentLogsAll(
 export async function getRecentLogs(
   businessId: string,
   limit = 20,
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  options?: { excludeProvisioning?: boolean }
 ): Promise<LogRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { data, error } = await db
-    .from("coworker_logs")
-    .select()
-    .eq("business_id", businessId)
+  let q = db.from("coworker_logs").select().eq("business_id", businessId);
+  if (options?.excludeProvisioning) {
+    q = q.neq("task_type", "provisioning");
+  }
+  const { data, error } = await q
     .order("created_at", { ascending: false })
     .limit(limit);
 

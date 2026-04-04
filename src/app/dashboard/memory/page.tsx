@@ -15,11 +15,12 @@ export default async function MemoryPage() {
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
-    .select("id")
+    .select("id, tier")
     .eq("owner_email", user.email)
     .limit(1);
 
   const businessId = businesses?.[0]?.id ?? null;
+  const tier = businesses?.[0]?.tier ?? null;
   const config = businessId ? await getBusinessConfig(businessId) : null;
 
   return (
@@ -38,6 +39,7 @@ export default async function MemoryPage() {
       ) : (
         <MemoryEditor
           businessId={businessId!}
+          tier={tier ?? undefined}
           initialSoul={config.soul_md}
           initialIdentity={config.identity_md}
           initialMemory={config.memory_md}
