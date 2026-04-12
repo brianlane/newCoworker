@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Nango from "@nangohq/frontend";
 import { Button } from "@/components/ui/Button";
 
@@ -9,6 +9,7 @@ export type WorkspaceConnectionClient = {
   providerConfigKey: string;
   connectionId: string;
   createdAt: string;
+  metadata: Record<string, unknown>;
 };
 
 type Props = {
@@ -18,10 +19,57 @@ type Props = {
 
 const defaultApiHost = "https://api.nango.dev";
 
+const PROVIDER_LABELS: Record<string, string> = {
+  gmail: "Gmail",
+  "google-mail": "Gmail",
+  google: "Google",
+  "google-calendar": "Google Calendar",
+  outlook: "Microsoft Outlook",
+  "outlook-calendar": "Outlook Calendar",
+  onedrive: "OneDrive"
+};
+
+function providerLabel(providerConfigKey: string): string {
+  const k = providerConfigKey.toLowerCase();
+  if (PROVIDER_LABELS[k]) return PROVIDER_LABELS[k];
+  return providerConfigKey
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function connectionPrimaryLabel(
+  c: WorkspaceConnectionClient,
+  sameProviderCount: number
+): string {
+  const m = c.metadata ?? {};
+  const email = m.end_user_email;
+  const displayName = m.end_user_display_name;
+  if (typeof email === "string" && email.length > 0) return email;
+  if (typeof displayName === "string" && displayName.length > 0) return displayName;
+
+  const label = providerLabel(c.providerConfigKey);
+  if (sameProviderCount > 1) {
+    const tail =
+      c.connectionId.length > 10 ? `…${c.connectionId.slice(-6)}` : c.connectionId;
+    return `${label} (${tail})`;
+  }
+  return label;
+}
+
 export function NangoEmailIntegrationActions({ businessId, connections }: Props) {
   const [loadingConnect, setLoadingConnect] = useState(false);
   const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
+
+  const countsByProvider = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const c of connections) {
+      m.set(c.providerConfigKey, (m.get(c.providerConfigKey) ?? 0) + 1);
+    }
+    return m;
+  }, [connections]);
 
   async function disconnectOne(id: string) {
     setBanner(null);
@@ -107,28 +155,32 @@ export function NangoEmailIntegrationActions({ businessId, connections }: Props)
 
       {connections.length > 0 ? (
         <ul className="space-y-2 text-sm text-parchment/80">
-          {connections.map((c, i) => (
-            <li
-              key={c.id}
-              className="flex flex-wrap items-center justify-between gap-2 py-1 border-b border-parchment/10 last:border-0"
-            >
-              <span className="text-parchment/70">
-                Account {i + 1}
-                <span className="text-parchment/40 text-xs block sm:inline sm:ml-1">
-                  · {new Date(c.createdAt).toLocaleDateString()}
-                </span>
-              </span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => disconnectOne(c.id)}
-                loading={disconnectingId === c.id}
+          {connections.map((c) => {
+            const sameN = countsByProvider.get(c.providerConfigKey) ?? 1;
+            const primary = connectionPrimaryLabel(c, sameN);
+            return (
+              <li
+                key={c.id}
+                className="flex flex-wrap items-center justify-between gap-2 py-1 border-b border-parchment/10 last:border-0"
               >
-                Remove
-              </Button>
-            </li>
-          ))}
+                <span className="text-parchment/70">
+                  <span className="text-parchment/90">{primary}</span>
+                  <span className="text-parchment/40 text-xs block sm:inline sm:ml-1">
+                    · {new Date(c.createdAt).toLocaleDateString()}
+                  </span>
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => disconnectOne(c.id)}
+                  loading={disconnectingId === c.id}
+                >
+                  Remove
+                </Button>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
 

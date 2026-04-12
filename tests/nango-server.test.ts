@@ -13,7 +13,8 @@ vi.mock("@nangohq/node", () => ({
 
 import {
   getNangoClient,
-  readConnectionEndUserId
+  readConnectionEndUserId,
+  workspaceConnectionMetadataFromNangoConnection
 } from "@/lib/nango/server";
 
 describe("lib/nango/server", () => {
@@ -68,6 +69,66 @@ describe("lib/nango/server", () => {
       expect(readConnectionEndUserId({})).toBeUndefined();
       expect(readConnectionEndUserId({ end_user: {} })).toBeUndefined();
       expect(readConnectionEndUserId({ end_user: { id: 1 } })).toBeUndefined();
+    });
+  });
+
+  describe("workspaceConnectionMetadataFromNangoConnection", () => {
+    it("returns only connected_via when payload missing", () => {
+      expect(workspaceConnectionMetadataFromNangoConnection(null)).toEqual({
+        connected_via: "connect_ui"
+      });
+    });
+
+    it("reads snake_case end_user email and display name", () => {
+      expect(
+        workspaceConnectionMetadataFromNangoConnection({
+          end_user: { id: "x", email: "  a@b.co  ", display_name: " Pat " }
+        })
+      ).toEqual({
+        connected_via: "connect_ui",
+        end_user_email: "a@b.co",
+        end_user_display_name: "Pat"
+      });
+    });
+
+    it("reads camelCase endUser", () => {
+      expect(
+        workspaceConnectionMetadataFromNangoConnection({
+          endUser: { id: "x", email: "x@y.z", displayName: "X" }
+        })
+      ).toEqual({
+        connected_via: "connect_ui",
+        end_user_email: "x@y.z",
+        end_user_display_name: "X"
+      });
+    });
+
+    it("returns base when end_user is missing or not an object", () => {
+      expect(workspaceConnectionMetadataFromNangoConnection({})).toEqual({
+        connected_via: "connect_ui"
+      });
+      expect(workspaceConnectionMetadataFromNangoConnection({ end_user: null })).toEqual({
+        connected_via: "connect_ui"
+      });
+    });
+
+    it("omits email and display name when blank after trim", () => {
+      expect(
+        workspaceConnectionMetadataFromNangoConnection({
+          end_user: { id: "x", email: "   ", display_name: "" }
+        })
+      ).toEqual({ connected_via: "connect_ui" });
+    });
+
+    it("stores only email when display name absent", () => {
+      expect(
+        workspaceConnectionMetadataFromNangoConnection({
+          end_user: { id: "x", email: "only@email.test" }
+        })
+      ).toEqual({
+        connected_via: "connect_ui",
+        end_user_email: "only@email.test"
+      });
     });
   });
 });

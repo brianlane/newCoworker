@@ -36,7 +36,8 @@ export async function GET(request: Request) {
         id: r.id,
         providerConfigKey: r.provider_config_key,
         connectionId: r.connection_id,
-        createdAt: r.created_at
+        createdAt: r.created_at,
+        metadata: r.metadata
       }))
     );
   } catch (err) {
