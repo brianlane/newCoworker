@@ -5,7 +5,7 @@ import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connecti
 import { Card } from "@/components/ui/Card";
 import { IntegrationCard } from "@/components/dashboard/IntegrationCard";
 import { NangoEmailIntegrationActions } from "@/components/dashboard/NangoEmailIntegrationActions";
-import { Inbox, MessageSquare, Video, Phone, Wrench } from "lucide-react";
+import { Inbox, Phone, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 
 export const dynamic = "force-dynamic";
@@ -75,10 +75,10 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
             <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
               OAuth connections
             </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 max-w-xl">
               <IntegrationCard
                 title="Workspace"
-                description="Gmail, Google Calendar, Drive, Microsoft 365, and more all in one place using Nango."
+                description="Gmail, Google Calendar, Drive, Microsoft 365, Slack, Zoom, and more — add each integration simply with Nango."
                 icon={Inbox}
                 status={workspaceConnected ? "connected" : "disconnected"}
               >
@@ -92,28 +92,6 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
                     metadata: r.metadata
                   }))}
                 />
-              </IntegrationCard>
-
-              <IntegrationCard
-                title="Slack"
-                description="Workspace messages and alerts (narrow scopes)."
-                icon={MessageSquare}
-                status="coming_soon"
-              >
-                <Button type="button" variant="ghost" size="sm" disabled>
-                  Connect Slack
-                </Button>
-              </IntegrationCard>
-
-              <IntegrationCard
-                title="Zoom"
-                description="Meeting metadata and scheduling helpers."
-                icon={Video}
-                status="coming_soon"
-              >
-                <Button type="button" variant="ghost" size="sm" disabled>
-                  Connect Zoom
-                </Button>
               </IntegrationCard>
             </div>
           </section>

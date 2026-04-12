@@ -169,7 +169,7 @@ export default async function DashboardPage() {
             <a href="/dashboard/integrations" className="block">
               <Card className="hover:border-signal-teal/40 transition-colors cursor-pointer">
                 <p className="font-semibold text-signal-teal text-sm">Integrations →</p>
-                <p className="text-xs text-parchment/40 mt-1">Workspace, Slack, and API keys</p>
+                <p className="text-xs text-parchment/40 mt-1">Nango connections and platform settings</p>
               </Card>
             </a>
             <a href="/dashboard/notifications" className="block">
