@@ -16,7 +16,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 const MOCK_ROW = {
   id: "int-1",
   business_id: "biz-1",
-  provider: "google",
+  provider: "slack",
   auth_type: "oauth",
   status: "connected",
   access_token: "at",
@@ -56,7 +56,7 @@ describe("db/integrations", () => {
 
     const rows = await getIntegrations("biz-1");
     expect(rows).toHaveLength(1);
-    expect(rows[0].provider).toBe("google");
+    expect(rows[0].provider).toBe("slack");
   });
 
   it("getIntegrations throws on error", async () => {
@@ -85,7 +85,7 @@ describe("db/integrations", () => {
     });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
-    const row = await getIntegration("biz-1", "google");
+    const row = await getIntegration("biz-1", "slack");
     expect(row?.status).toBe("connected");
     expect(row?.access_token).toBe("at");
     expect(row?.refresh_token).toBe("rt");
@@ -107,7 +107,7 @@ describe("db/integrations", () => {
     });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
-    await expect(getIntegration("biz-1", "google")).rejects.toThrow("getIntegration");
+    await expect(getIntegration("biz-1", "slack")).rejects.toThrow("getIntegration");
   });
 
   it("upsertIntegration upserts and returns row", async () => {
@@ -124,14 +124,14 @@ describe("db/integrations", () => {
 
     const row = await upsertIntegration({
       businessId: "biz-1",
-      provider: "google",
+      provider: "slack",
       authType: "oauth",
       status: "connected",
       accessToken: "x",
       refreshToken: "y",
       apiKey: "secret-api-key"
     });
-    expect(row.provider).toBe("google");
+    expect(row.provider).toBe("slack");
     expect(row.access_token).toBe("x");
     expect(row.refresh_token).toBe("y");
     expect(row.api_key).toBe("secret-api-key");
@@ -151,7 +151,7 @@ describe("db/integrations", () => {
     await expect(
       upsertIntegration({
         businessId: "biz-1",
-        provider: "google",
+        provider: "slack",
         authType: "oauth",
         status: "connected"
       })
@@ -170,7 +170,7 @@ describe("db/integrations", () => {
     };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(finalDb as never);
 
-    await deleteIntegration("biz-1", "google");
+    await deleteIntegration("biz-1", "slack");
     expect(finalDb.from).toHaveBeenCalledWith("integrations");
   });
 
@@ -186,7 +186,7 @@ describe("db/integrations", () => {
     };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(finalDb as never);
 
-    await expect(deleteIntegration("biz-1", "google")).rejects.toThrow("deleteIntegration");
+    await expect(deleteIntegration("biz-1", "slack")).rejects.toThrow("deleteIntegration");
   });
 
   it("getIntegrations uses injected client", async () => {

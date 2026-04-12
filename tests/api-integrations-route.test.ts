@@ -7,7 +7,6 @@ vi.mock("@/lib/auth", () => ({
 
 vi.mock("@/lib/db/integrations", () => ({
   INTEGRATION_PROVIDERS: [
-    "google",
     "outlook",
     "slack",
     "zoom",
@@ -40,7 +39,7 @@ describe("api/integrations route", () => {
       {
         id: "int-1",
         business_id: "11111111-1111-4111-8111-111111111111",
-        provider: "google",
+        provider: "slack",
         auth_type: "oauth",
         status: "connected",
         token_expires_at: "2026-01-01T00:00:00Z",
@@ -85,7 +84,7 @@ describe("api/integrations route", () => {
       new Request("http://localhost/api/integrations", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ businessId, provider: "google" })
+        body: JSON.stringify({ businessId, provider: "slack" })
       })
     );
     const body = await response.json();
@@ -93,7 +92,7 @@ describe("api/integrations route", () => {
     expect(response.status).toBe(200);
     expect(body.ok).toBe(true);
     expect(requireOwner).toHaveBeenCalledWith(businessId);
-    expect(deleteIntegration).toHaveBeenCalledWith(businessId, "google");
+    expect(deleteIntegration).toHaveBeenCalledWith(businessId, "slack");
   });
 
   it("allows admins to delete without owner check", async () => {
@@ -109,7 +108,7 @@ describe("api/integrations route", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           businessId: "11111111-1111-4111-8111-111111111111",
-          provider: "google"
+          provider: "slack"
         })
       })
     );
@@ -127,7 +126,7 @@ describe("api/integrations route", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           businessId: "11111111-1111-4111-8111-111111111111",
-          provider: "google"
+          provider: "slack"
         })
       })
     );
@@ -145,7 +144,7 @@ describe("api/integrations route", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           businessId: "not-a-uuid",
-          provider: "google"
+          provider: "slack"
         })
       })
     );

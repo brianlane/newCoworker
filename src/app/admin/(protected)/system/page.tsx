@@ -66,10 +66,11 @@ const ENV_GROUPS: EnvGroup[] = [
     ]
   },
   {
-    label: "Google OAuth",
+    label: "Workspace OAuth",
     vars: [
-      { name: "Client ID", description: "Google OAuth client (workspace integrations)", key: "GOOGLE_CLIENT_ID" },
-      { name: "Client Secret", description: "Google OAuth secret", key: "GOOGLE_CLIENT_SECRET" }
+      { name: "Secret key", description: "Backend secret for workspace (email/calendar) connections", key: "NANGO_SECRET_KEY" },
+      { name: "API host", description: "Optional integration API host override", key: "NANGO_HOST" },
+      { name: "Public API host", description: "Browser connect flow API URL", key: "NEXT_PUBLIC_NANGO_API_HOST" }
     ]
   },
   {
