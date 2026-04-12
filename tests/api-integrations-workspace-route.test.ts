@@ -64,6 +64,7 @@ describe("api/integrations/workspace", () => {
     expect(res.status).toBe(200);
     expect(json.data).toHaveLength(1);
     expect(json.data[0].connectionId).toBe("c1");
+    expect(json.data[0].metadata).toEqual({});
   });
 
   it("DELETE revokes and removes row", async () => {

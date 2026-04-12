@@ -18,3 +18,23 @@ export function readConnectionEndUserId(connection: unknown): string | undefined
   const id = (eu as Record<string, unknown>).id;
   return typeof id === "string" ? id : undefined;
 }
+
+/** Stored on `workspace_oauth_connections.metadata` after Connect UI completes. */
+export function workspaceConnectionMetadataFromNangoConnection(
+  connection: unknown
+): Record<string, unknown> {
+  const meta: Record<string, unknown> = { connected_via: "connect_ui" };
+  if (!connection || typeof connection !== "object") return meta;
+  const o = connection as Record<string, unknown>;
+  const endUser = (o.end_user ?? o.endUser) as Record<string, unknown> | undefined;
+  if (!endUser || typeof endUser !== "object") return meta;
+  const email = endUser.email;
+  const displayName = endUser.display_name ?? endUser.displayName;
+  if (typeof email === "string" && email.trim().length > 0) {
+    meta.end_user_email = email.trim();
+  }
+  if (typeof displayName === "string" && displayName.trim().length > 0) {
+    meta.end_user_display_name = displayName.trim();
+  }
+  return meta;
+}

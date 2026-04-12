@@ -5,15 +5,7 @@ import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connecti
 import { Card } from "@/components/ui/Card";
 import { IntegrationCard } from "@/components/dashboard/IntegrationCard";
 import { NangoEmailIntegrationActions } from "@/components/dashboard/NangoEmailIntegrationActions";
-import { CrmApiKeyStub } from "@/components/dashboard/CrmApiKeyStub";
-import {
-  Inbox,
-  MessageSquare,
-  Video,
-  Building2,
-  Phone,
-  Wrench
-} from "lucide-react";
+import { Inbox, MessageSquare, Video, Phone, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 
 export const dynamic = "force-dynamic";
@@ -46,7 +38,8 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
       <div>
         <h1 className="text-2xl font-bold text-parchment">Integrations</h1>
         <p className="text-sm text-parchment/50 mt-1">
-          Connect OAuth accounts and manage API credentials for your AI coworker
+          Connect workspace accounts for email, calendar, and files; add other credentials in Nango as
+          needed.
         </p>
       </div>
 
@@ -85,7 +78,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <IntegrationCard
                 title="Workspace"
-                description="Gmail, Google Calendar, Drive, Microsoft 365, and more — connect several accounts if you need them."
+                description="Gmail, Google Calendar, Drive, Microsoft 365, and more all in one place using Nango."
                 icon={Inbox}
                 status={workspaceConnected ? "connected" : "disconnected"}
               >
@@ -95,7 +88,8 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
                     id: r.id,
                     providerConfigKey: r.provider_config_key,
                     connectionId: r.connection_id,
-                    createdAt: r.created_at
+                    createdAt: r.created_at,
+                    metadata: r.metadata
                   }))}
                 />
               </IntegrationCard>
@@ -126,19 +120,9 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
 
           <section className="space-y-4">
             <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
-              API key vault
+              Platform &amp; custom tools
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <IntegrationCard
-                title="CRM API key"
-                description="Salesforce, HubSpot, or custom CRM — encrypted at rest, pushed to your VPS."
-                icon={Building2}
-                status="coming_soon"
-                statusLabel="Vault (stub)"
-              >
-                <CrmApiKeyStub />
-              </IntegrationCard>
-
               <IntegrationCard
                 title="Twilio (platform)"
                 description="SMS alerts use your workspace&apos;s Twilio configuration."
@@ -153,7 +137,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
 
               <IntegrationCard
                 title="Custom tool"
-                description="Industry-specific APIs without OAuth — stored in the vault."
+                description="Industry-specific APIs without OAuth — connect via Nango or environment when available."
                 icon={Wrench}
                 status="coming_soon"
               >

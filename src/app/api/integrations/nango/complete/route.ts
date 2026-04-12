@@ -1,7 +1,11 @@
 import { getAuthUser, requireOwner } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { upsertWorkspaceOAuthConnection } from "@/lib/db/workspace-oauth-connections";
-import { getNangoClient, readConnectionEndUserId } from "@/lib/nango/server";
+import {
+  getNangoClient,
+  readConnectionEndUserId,
+  workspaceConnectionMetadataFromNangoConnection
+} from "@/lib/nango/server";
 import { z } from "zod";
 
 const bodySchema = z.object({
@@ -40,7 +44,7 @@ export async function POST(request: Request) {
       businessId: parsed.businessId,
       providerConfigKey: parsed.providerConfigKey,
       connectionId: parsed.connectionId,
-      metadata: { connected_via: "connect_ui" }
+      metadata: workspaceConnectionMetadataFromNangoConnection(connection)
     });
 
     return successResponse({ connected: true });
