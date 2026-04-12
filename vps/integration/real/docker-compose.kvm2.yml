@@ -1,6 +1,6 @@
 # Real stack for integration tests — starter (KVM 2) resource profile.
 # Rowboat: build from public GitHub at ref pinned in rowboat-git-ref (not floating main).
-# + maximhq/bifrost + Ollama + Mongo + Redis (same logical probes as heartbeat.sh).
+# + Ollama + Mongo + Redis (same logical probes as heartbeat.sh).
 
 name: kvm2-int
 
@@ -35,26 +35,6 @@ services:
       retries: 25
       start_period: 60s
 
-  bifrost:
-    image: maximhq/bifrost:latest
-    restart: "no"
-    networks: [integration]
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      ollama:
-        condition: service_healthy
-    ports:
-      - "127.0.0.1:18080:8080"
-    volumes:
-      - bifrost_data:/app/data
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health >/dev/null"]
-      interval: 5s
-      timeout: 5s
-      retries: 40
-      start_period: 45s
-
   mongo:
     image: mongo:7
     restart: "no"
@@ -79,8 +59,8 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       ROWBOAT_GATEWAY_TOKEN: ${ROWBOAT_GATEWAY_TOKEN:-integration_test_token}
-      PROVIDER_DEFAULT_MODEL: ${OLLAMA_MODEL:-phi4-mini:3.8b}
-      PROVIDER_COPILOT_MODEL: ${OLLAMA_MODEL:-phi4-mini:3.8b}
+      PROVIDER_DEFAULT_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      PROVIDER_COPILOT_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
     ports:
       - "127.0.0.1:13000:3000"
     volumes:
@@ -96,7 +76,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1536m
+          # Agent + Next need headroom above slim defaults; integration runs real inference.
+          memory: 3072m
     healthcheck:
       test:
         [
@@ -112,5 +93,4 @@ volumes:
   mongo_data:
   redis_data:
   ollama_data:
-  bifrost_data:
   rowboat_memory:

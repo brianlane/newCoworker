@@ -10,10 +10,17 @@
     "test": "vitest run --coverage",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:integration:correctness": "INTEGRATION_KEEP_VOLUMES=1 INTEGRATION_SKIP_KVM2=1 vitest run --config vitest.integration.correctness.config.ts",
+    "test:integration:correctness:kvm2-llama32-compare": "INTEGRATION_KEEP_VOLUMES=1 INTEGRATION_SKIP_KVM8=1 INTEGRATION_CORRECTNESS_MODEL_SEQUENCE=llama3.2:3b,llama3.2:3b-instruct-q2_K vitest run --config vitest.integration.correctness.config.ts",
+    "test:integration:kvm2": "INTEGRATION_SKIP_KVM8=1 vitest run --config vitest.integration.config.ts",
+    "test:integration:kvm8": "INTEGRATION_SKIP_KVM2=1 vitest run --config vitest.integration.config.ts",
+    "test:integration:persist": "INTEGRATION_KEEP_VOLUMES=1 vitest run --config vitest.integration.config.ts",
     "integration:up-kvm2": "docker compose -f vps/integration/real/docker-compose.kvm2.yml up -d --wait",
     "integration:down-kvm2": "docker compose -f vps/integration/real/docker-compose.kvm2.yml down -v",
+    "integration:down-kvm2:keep": "docker compose -f vps/integration/real/docker-compose.kvm2.yml down",
     "integration:up-kvm8": "docker compose -f vps/integration/real/docker-compose.kvm8.yml up -d --wait",
-    "integration:down-kvm8": "docker compose -f vps/integration/real/docker-compose.kvm8.yml down -v"
+    "integration:down-kvm8": "docker compose -f vps/integration/real/docker-compose.kvm8.yml down -v",
+    "integration:down-kvm8:keep": "docker compose -f vps/integration/real/docker-compose.kvm8.yml down"
   },
   "repository": {
     "type": "git",
@@ -52,6 +59,7 @@
     "eslint-config-next": "^16.2.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
+    "undici": "^7.24.7",
     "vitest": "^4.1.1"
   }
 }

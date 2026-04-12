@@ -1,4 +1,8 @@
-/** Rough token estimate for English-ish markdown (~4 characters per token). */
+/**
+ * Rough token estimate for English-ish markdown (~4 characters per token).
+ * The ~2k combined vault target below matches KVM2-style integration expectations
+ * (`npm run test:integration`, optional Rowboat bot) — large vaults increase prefill / TTFT risk on starter VPS.
+ */
 export function estimateTokenCountRough(text: string): number {
   if (!text) return 0;
   return Math.ceil(text.length / 4);

@@ -1,5 +1,5 @@
 # Dev/reference: Ollama runs in Compose. Production (bootstrap) uses systemd Ollama on the host and
-# Rowboat with extra_hosts host.docker.internal:host-gateway + PROVIDER_BASE_URL=http://host.docker.internal:11434
+# Rowboat with extra_hosts host.docker.internal:host-gateway + PROVIDER_BASE_URL=http://host.docker.internal:11434/v1
 version: "3.9"
 services:
   rowboat:
@@ -7,9 +7,10 @@ services:
     container_name: rowboat
     environment:
       ROWBOAT_GATEWAY_TOKEN: ${ROWBOAT_GATEWAY_TOKEN:-mock_rowboat_gateway_token}
-      PROVIDER_BASE_URL: http://ollama:11434
+      PROVIDER_BASE_URL: http://ollama:11434/v1
       PROVIDER_API_KEY: ollama
-      PROVIDER_DEFAULT_MODEL: ${OLLAMA_MODEL:-phi4-mini:3.8b}
+      # Override OLLAMA_MODEL for local experiments (KVM8 standard uses qwen3:4b-instruct in production).
+      PROVIDER_DEFAULT_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
     ports:
       - "127.0.0.1:3000:3000"
     volumes:

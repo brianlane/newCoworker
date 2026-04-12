@@ -8,15 +8,14 @@ Environment variables for the **Ollama** process in **starter** tier: mirrors bo
 
 ## [`ollama-Modelfile-starter-4096.example`](ollama-Modelfile-starter-4096.example)
 
-Example `Modelfile` to cap **`num_ctx` at 4096** for the default starter model (`phi4-mini:3.8b`). Apply on the VPS with `ollama create` / `ollama run` after pulling the base model; **not** wired automatically in `bootstrap.sh` until you standardize on this model definition.
+Example `Modelfile` to cap **`num_ctx` at 4096** for the default starter model (`llama3.2:3b`). Apply on the VPS with `ollama create` / `ollama run` after pulling the base model; **not** wired automatically in `bootstrap.sh` until you standardize on this model definition.
 
 ## 2026 model stack (Mercury / Qwen Omni / greeting swap)
 
 Switching to alternate models requires coordinated updates to:
 
 - `bootstrap.sh` (model pulls),
-- `vps/bifrost/config-kvm2.yaml` and `vps/integration/bifrost/kvm2-config.yaml` (routing intent; production gateway is [`maximhq/bifrost`](https://github.com/maximhq/bifrost) — see [`vps/bifrost/README.md`](../bifrost/README.md)),
-- `deploy-client.sh` (`PROVIDER_DEFAULT_MODEL`),
+- `deploy-client.sh` (`PROVIDER_DEFAULT_MODEL` / `PROVIDER_BASE_URL` if the backend changes),
 - Rowboat runtime (routing / voice).
 
-Track in product planning; fragments above are the **current** Phi-4 baseline.
+Track in product planning; starter baseline is **Llama 3.2 3B**; standard (KVM8) remains **Qwen3 4B Instruct**.

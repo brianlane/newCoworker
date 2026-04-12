@@ -328,7 +328,7 @@ function OnboardSuccessContent() {
           <Card className="text-left space-y-3">
             {[
               "Provisioning Hostinger VPS",
-              "Installing Ollama + Bifrost router",
+              "Installing Ollama",
               "Configuring Rowboat agent",
               "Creating inworld.ai voice agent",
               "Attaching Twilio phone number",

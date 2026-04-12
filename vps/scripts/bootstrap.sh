@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# bootstrap.sh — Full server hardening + Ollama + Bifrost + Rowboat + cloudflared
+# bootstrap.sh — Full server hardening + Ollama + Rowboat + cloudflared
 # Run as root on a fresh Ubuntu 24.04 KVM VPS
 # Usage: TIER=starter ./bootstrap.sh   (or TIER=standard)
 
@@ -92,7 +92,7 @@ mkdir -p /etc/systemd/system/ollama.service.d
 
 if [[ "$TIER" == "starter" ]]; then
   # KVM 2 (2 vCPU, 8GB RAM) — Resource-First config
-  # Phi-4 Mini (3.8B Q4_K_M) uses ~3.5GB; strict single-model enforcement
+  # Llama 3.2 3B (~2 GiB typical in Ollama); strict single-model enforcement
   # TurboQuant KV cache compression: reduces active memory per conversation ~75%
   # Dynamic VRAM / Weight Streaming: loads weights just-in-time from NVMe
   cat > /etc/systemd/system/ollama.service.d/override.conf <<'EOF'
@@ -132,124 +132,32 @@ systemctl start ollama
 # Tier-aware model pulls
 log "Pre-pulling AI models for TIER=${TIER} (background)..."
 if [[ "$TIER" == "starter" ]]; then
-  # KVM 2: single model — Phi-4 Mini 3.8B (Flash-Reasoning, Q4_K_M)
-  # Superior logic-to-size ratio (85% math benchmarks), tuned for 2-core throughput
+  # KVM 2: single model — Llama 3.2 3B (standard tier KVM8 uses qwen3:4b-instruct)
   (
     sleep 10
-    ollama pull phi4-mini:3.8b || true
-    log "KVM 2 model ready: phi4-mini:3.8b"
+    ollama pull llama3.2:3b || true
+    log "KVM 2 model ready: llama3.2:3b"
   ) &
 else
-  # KVM 8: full reasoning stack
+  # KVM 8 (CPU): primary **`qwen3:4b-instruct`** for Rowboat → Ollama; optional larger tags for experiments / GPU.
   (
     sleep 10
-    ollama pull qwen3.5:4b  || true
-    ollama pull qwen3.5:9b  || true
+    ollama pull qwen3:4b-instruct || true
     ollama pull llama4:9b   || true
     ollama pull qwen3.5:35b-a3b || true
-    log "KVM 8 models pre-pulled."
+    log "KVM 8 models pre-pulled (primary: qwen3:4b-instruct)."
   ) &
 fi
 
 # ------------------------------------------------------------------
-# 5. Bifrost (maximhq/bifrost AI gateway — Docker; see vps/bifrost/README.md)
+# 5. LLM path: Rowboat → Ollama only (no Bifrost). Remove legacy Bifrost container if present.
 # ------------------------------------------------------------------
-log "Installing Bifrost (Docker image maximhq/bifrost)..."
-mkdir -p /opt/bifrost/data
-
-# Tier-aware routing intent — reference YAML on disk (mirror in Web UI / exported JSON).
-# The gateway image persists live config under /app/data; this file is not auto-loaded
-# unless you import it per current Bifrost docs — keep in sync with vps/bifrost/config-kvm2.yaml
-# and vps/bifrost/config-kvm8.yaml in the repo.
-if [[ "$TIER" == "starter" ]]; then
-  cat > /opt/bifrost/routing-intent.yaml <<'BIFROST_KVM2_EOF'
-# Bifrost — KVM 2 (starter) routing intent (reference only).
-# Production gateway: Docker image maximhq/bifrost — configure via Web UI / JSON per
-# https://github.com/maximhq/bifrost and https://docs.getbifrost.ai (see vps/bifrost/README.md).
-#
-# Single model: Phi-4 Mini 3.8B — no warm-swapping to stay within 8GB RAM budget
-# Flash-Reasoning variant: tuned for 10x throughput on 2 vCPU
-#
-# TurboQuant (OLLAMA_KV_CACHE_TYPE=q4_0) and Flash Attention (OLLAMA_FLASH_ATTENTION=1)
-# are ACTIVE at the Ollama layer — set in /etc/systemd/system/ollama.service.d/override.conf
-# by bootstrap.sh. These reduce KV cache memory ~75% and enable weight streaming.
-# Bifrost is the LLM router and does not implement these directly — they are enforced
-# by the Ollama inference backend below.
-
-providers:
-  - id: ollama
-    base_url: http://127.0.0.1:11434
-    type: ollama
-    fallback_models:
-      - phi4-mini:3.8b
-
-routes:
-  - name: all_tasks
-    when: true
-    model: phi4-mini:3.8b
-
-fallback:
-  ifBusy: phi4-mini:3.8b
-
-# Inference optimization hooks (enabled when upstream support merges)
-# optimization:
-#   turbo_quant:
-#     enabled: true
-#     kv_cache_compression: q4_0
-#     target_memory_reduction: 0.75
-#   dynamic_vram:
-#     enabled: true
-#     weight_streaming: true
-#     nvme_offload_path: /var/lib/ollama/weights
-
-server:
-  port: 8080
-  host: 127.0.0.1
-BIFROST_KVM2_EOF
-else
-  cat > /opt/bifrost/routing-intent.yaml <<'BIFROST_KVM8_EOF'
-# Bifrost — KVM 8 (standard) routing intent (reference only).
-# Production gateway: Docker image maximhq/bifrost — configure via Web UI / JSON per
-# https://github.com/maximhq/bifrost and https://docs.getbifrost.ai (see vps/bifrost/README.md).
-#
-# Multi-route stack for larger VPS; Ollama on same host as gateway.
-
-providers:
-  - id: ollama
-    base_url: http://127.0.0.1:11434
-    type: ollama
-    fallback_models:
-      - qwen3.5:4b
-      - qwen3.5:9b
-      - llama4:9b
-
-routing:
-  fast: qwen3.5:4b
-  balanced: qwen3.5:9b
-  deep: qwen3.5:35b-a3b
-  verify: llama4:9b
-
-server:
-  port: 8080
-  host: 127.0.0.1
-BIFROST_KVM8_EOF
-fi
-log "Bifrost tier routing intent written: /opt/bifrost/routing-intent.yaml (TIER=${TIER})"
-
-# Remove legacy systemd + binary install if re-running bootstrap
 systemctl disable --now bifrost 2>/dev/null || true
 rm -f /etc/systemd/system/bifrost.service
 systemctl daemon-reload 2>/dev/null || true
 docker rm -f bifrost 2>/dev/null || true
-docker pull maximhq/bifrost:latest
-docker run -d \
-  --name bifrost \
-  --restart unless-stopped \
-  --network host \
-  -v /opt/bifrost/data:/app/data \
-  maximhq/bifrost:latest
-log "Bifrost gateway running on port 8080 (host network). Web UI: http://127.0.0.1:8080"
-log "Configure the Ollama provider at http://127.0.0.1:11434 — mirror /opt/bifrost/routing-intent.yaml in the UI where applicable; see https://docs.getbifrost.ai"
+rm -rf /opt/bifrost 2>/dev/null || true
+log "LLM traffic: Rowboat uses PROVIDER_BASE_URL → host Ollama OpenAI API (http://127.0.0.1:11434/v1)."
 
 # ------------------------------------------------------------------
 # 6. Rowboat (agent runtime — replaces OpenClaw)
@@ -300,7 +208,7 @@ services:
     restart: always
     mem_limit: 100m
 
-# Ollama: host systemd only (§4). Rowboat reaches it via PROVIDER_BASE_URL=http://host.docker.internal:11434
+# Ollama: host systemd only (§4). Rowboat reaches it via PROVIDER_BASE_URL=http://host.docker.internal:11434/v1 (OpenAI-compatible path)
 
 volumes:
   rowboat_mongo:
@@ -353,7 +261,7 @@ services:
     volumes:
       - rowboat_qdrant:/qdrant/storage
 
-# Ollama: host systemd only (§4). Rowboat / jobs-worker use host.docker.internal:11434
+# Ollama: host systemd only (§4). Rowboat / jobs-worker use host.docker.internal:11434/v1 for OpenAI-compatible calls
 
 volumes:
   rowboat_mongo:

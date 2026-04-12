@@ -1,5 +1,6 @@
-# Example: create a named model with strict context for KVM2 TTFT.
-# ollama create nc-starter-phi4 -f ollama-Modelfile-starter-4096.example
-#
-FROM phi4-mini:3.8b
+# Example: cap context at 4096 for the starter-tier base model.
+# ollama create nc-starter-qwen4 -f ollama-Modelfile-starter-4096.example
+
+FROM llama3.2:3b
+
 PARAMETER num_ctx 4096

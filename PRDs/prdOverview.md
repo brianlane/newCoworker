@@ -18,7 +18,7 @@
 **Phases:**
 
 1. **Infrastructure Foundation:** Deploy Hostinger KVM 2 (Starter) or KVM 8 (Standard). Configure Ubuntu 24.04, harden SSH, and install Docker/Ollama.
-2. **Agent Provisioning:** Use the tier-specific Gold Image (Rowboat + Bifrost) to spin up the agent environments. KVM 2 uses ZRAM for compressed swap.
+2. **Agent Provisioning:** Use the tier-specific Gold Image (Rowboat + Ollama on the host) to spin up the agent environments. KVM 2 uses ZRAM for compressed swap.
 3. **Soul Injection:** Upon account creation, gather information via the onboarding questionnaire, then inject `soul.md`, `identity.md`, and `memory.md` into the business account's Rowboat vault.
 4. **Integration Layer:** Link Twilio and inworld.ai keys. Establish Cloudflare Tunnels to our Next.js dashboard.
 5. **Memory Initialization:** Load initial business data into Rowboat's lossless memory system.
@@ -45,21 +45,21 @@
 **The Stack:**
 
 - **Agent Runtime:** Rowboat (open-source, multi-agent framework). Supports Conversational, Task, and Pipeline agent types. Markdown knowledge vault (soul.md / identity.md / memory.md).
-- **Routing:** Bifrost (Go-based) handles LLM traffic; no dependencies on external middleware. Tier-aware routing.
+- **Routing:** Rowboat uses Ollama’s OpenAI-compatible API on the host (`/v1`); no separate LLM gateway in the default stack.
 - **Model Orchestration:** Ollama serves all inference locally.
-- **Starter Tier (KVM 2) — Phi-4 Mini 3.8B:**
-  - Single model, no warm-swapping.
-  - Microsoft Flash-Reasoning variant: 10x throughput on 2 vCPU.
+- **Starter Tier (KVM 2) — Llama 3.2 3B:**
+  - Single model (**`llama3.2:3b`**); standard KVM8 uses **`qwen3:4b-instruct`**.
   - ZRAM (4GB lz4): expands effective RAM from 8GB to ~11GB.
   - `OLLAMA_NUM_PARALLEL=1`, `OLLAMA_MAX_LOADED_MODELS=1`, `OMP_NUM_THREADS=2`.
-- **Standard Tier (KVM 8) — Full reasoning stack:**
-  - Qwen 3.5 4B/7B/35B-A3B + Llama 4 9B.
-  - Multi-route Bifrost: fast / balanced / deep / verify.
+- **Standard Tier (KVM 8) — CPU product default (single model):**
+  - **Sole inference tag:** **`qwen3:4b-instruct`** for Rowboat → Ollama.
+  - **Background pulls:** **`qwen3:4b-instruct`** (required), Llama 4 / Qwen 3.5 35B-A3B optional per `bootstrap.sh` (experiments).
+  - **Model choice:** integration correctness runs selected `qwen3:4b-instruct` for kvm8 and `llama3.2:3b` for kvm2.
 - **Voice:** inworld.ai TTS-1.5 Mini — all tiers. Sub-130ms P90 latency, $5/1M chars. WebSocket streaming for lowest latency voice with Twilio.
 - **Inference Optimizations (both tiers):**
-  - TurboQuant KV cache compression — **ACTIVE** via `OLLAMA_KV_CACHE_TYPE=q4_0`. Reduces active KV cache memory per conversation by ~75%. Critical for KVM 2: without it, a long conversation would push Ollama past the 3.5GB allocation. With it, many simultaneous conversations can be held in the same footprint.
+  - TurboQuant KV cache compression — **ACTIVE** via `OLLAMA_KV_CACHE_TYPE=q4_0`. Reduces active KV cache memory per conversation by ~75%. Critical for KVM 2: without it, long conversations contend harder with the 8 GiB host budget. With it, many simultaneous conversations can be held in the same footprint.
   - Flash Attention — **ACTIVE** via `OLLAMA_FLASH_ATTENTION=1`. Memory-efficient attention computation; prerequisite for Dynamic VRAM / Weight Streaming on the llama.cpp backend.
-  - ComfyUI Dynamic VRAM + Weight Streaming: just-in-time NVMe weight loading. Enabled at the llama.cpp layer via Flash Attention. Bifrost `config-kvm2.yaml` documents the integration boundary.
+  - ComfyUI Dynamic VRAM + Weight Streaming: just-in-time NVMe weight loading. Enabled at the llama.cpp layer via Flash Attention.
 - **Storage:** PostgreSQL (Supabase) for logs/metadata, subscriptions, daily usage tracking; Rowboat internal MongoDB for agent state.
 - **Browsing:** Lightpanda Cloud WSS (Zig-based, low RAM overhead).
 
@@ -118,7 +118,7 @@
 
 - [ ] Sign up for Hostinger API Access.
 - [ ] Create Supabase project (DB + Auth + Edge Functions).
-- [ ] Build Docker Gold Images (Ubuntu + Ollama + Bifrost + Rowboat). Two images: KVM 2 (Starter) + KVM 8 (Standard).
+- [ ] Build Docker Gold Images (Ubuntu + Ollama + Rowboat). Two images: KVM 2 (Starter) + KVM 8 (Standard).
 - [ ] Configure inworld.ai API key and create default voice agent.
 - [ ] Verify Lightpanda WSS connectivity.
 - [ ] Setup Cloudflare Tunnel for secure remote management.
@@ -140,11 +140,10 @@
 ```text
 /agency-dashboard (Next.js/Vercel)
 /client-provisioning (Supabase Edge Functions)
-/vps-gold-image-starter (Hostinger KVM 2 — Rowboat + Phi-4 Mini)
+/vps-gold-image-starter (Hostinger KVM 2 — Rowboat + Llama 3.2 3B)
 /vps-gold-image-standard (Hostinger KVM 8 — Rowboat + full model set)
     /ollama_models/
     /rowboat/
         /vault/ (soul.md, identity.md, memory.md)
         /memory/
-    /bifrost/
 ```

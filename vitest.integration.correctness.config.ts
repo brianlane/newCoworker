@@ -25,6 +25,7 @@ if (existsSync(integrationEnvLocal)) {
   }
 }
 
+/** Runs only the correctness integration path. */
 export default defineConfig({
   resolve: {
     alias: {
@@ -33,7 +34,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["tests/integration/**/*.test.ts"],
+    include: ["tests/integration/kvm-rowboat-correctness.test.ts"],
     fileParallelism: false,
     testTimeout: 3_600_000,
     hookTimeout: 3_600_000,
