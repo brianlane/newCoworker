@@ -87,7 +87,7 @@ export async function upsertWorkspaceOAuthConnection(
 
   const { data, error } = await db
     .from("workspace_oauth_connections")
-    .upsert(row, { onConflict: "business_id,connection_id" })
+    .upsert(row, { onConflict: "business_id,provider_config_key,connection_id" })
     .select()
     .single();
 

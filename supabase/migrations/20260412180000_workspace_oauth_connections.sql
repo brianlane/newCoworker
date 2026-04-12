@@ -7,7 +7,8 @@ create table if not exists workspace_oauth_connections (
   metadata jsonb not null default '{}',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (business_id, connection_id)
+  constraint workspace_oauth_connections_business_provider_connection_key
+    unique (business_id, provider_config_key, connection_id)
 );
 
 create index if not exists workspace_oauth_connections_business_id_idx

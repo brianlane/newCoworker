@@ -150,7 +150,14 @@ describe("db/workspace-oauth-connections", () => {
       connectionId: "conn-1"
     });
     expect(row.id).toBe("woc-1");
-    expect(db.upsert).toHaveBeenCalled();
+    expect(db.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        business_id: "biz-1",
+        provider_config_key: "gmail",
+        connection_id: "conn-1"
+      }),
+      { onConflict: "business_id,provider_config_key,connection_id" }
+    );
   });
 
   it("upsertWorkspaceOAuthConnection throws on error", async () => {
