@@ -4,6 +4,10 @@ import { loadavg } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { Agent, fetch as undiciFetch, type Response as UndiciResponse } from "undici";
+import {
+  INTEGRATION_REQUEST_TIMEOUT_SLACK_MS,
+  INTEGRATION_TEST_TIMEOUT_MS
+} from "../../vitest.integration.constants";
 
 export const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -67,11 +71,27 @@ export function integrationKeepVolumes(): boolean {
 }
 
 export function dockerCompose(composeFile: string, args: string[], ollamaModel: string) {
-  execFileSync("docker", ["compose", "-f", composeFile, ...args], {
-    stdio: "inherit",
-    cwd: repoRoot,
-    env: { ...process.env, OLLAMA_MODEL: ollamaModel }
-  });
+  const cmd = ["compose", "-f", composeFile, ...args];
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      execFileSync("docker", cmd, {
+        stdio: "inherit",
+        cwd: repoRoot,
+        env: { ...process.env, OLLAMA_MODEL: ollamaModel }
+      });
+      return;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const transientNoSuchContainer =
+        args.includes("up") && /No such container:/i.test(msg);
+      if (!transientNoSuchContainer || attempt === 2) {
+        throw err;
+      }
+      console.warn(
+        `[integration] docker compose transient failure on ${composeFile} (${msg.slice(0, 220)}); retrying ${attempt + 2}/3`
+      );
+    }
+  }
 }
 
 export function dockerComposeDown(composeFile: string, ollamaModel: string) {
@@ -109,7 +129,10 @@ export const OLLAMA_CHAT_TIMEOUT_SEC = Math.min(
   )
 );
 
-export const CHAT_FETCH_MS = OLLAMA_CHAT_TIMEOUT_SEC * 1000 + 120_000;
+export const CHAT_FETCH_MS = Math.min(
+  OLLAMA_CHAT_TIMEOUT_SEC * 1000 + 120_000,
+  INTEGRATION_TEST_TIMEOUT_MS - INTEGRATION_REQUEST_TIMEOUT_SLACK_MS
+);
 
 export function ollamaOpenAiModelName(modelTag: string): string {
   return modelTag.includes(":") ? modelTag : `${modelTag}:latest`;
@@ -283,13 +306,24 @@ export async function waitForRowboatHttpOk(rowboatPort: number, timeoutMs = 180_
 export async function waitForOllamaHostOk(ollamaHostPort: number, timeoutMs = 180_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    const remainingMs = deadline - Date.now();
+    const requestTimeoutMs = Math.max(1, Math.min(5_000, remainingMs));
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), requestTimeoutMs);
     try {
-      const res = await fetch(`http://127.0.0.1:${ollamaHostPort}/api/tags`);
+      const res = await fetch(`http://127.0.0.1:${ollamaHostPort}/api/tags`, {
+        signal: ac.signal
+      });
       if (res.ok) return;
     } catch {
       /* still starting */
+    } finally {
+      clearTimeout(timer);
     }
-    await new Promise((r) => setTimeout(r, 2000));
+    const sleepMs = Math.max(0, Math.min(2_000, deadline - Date.now()));
+    if (sleepMs > 0) {
+      await new Promise((r) => setTimeout(r, sleepMs));
+    }
   }
   throw new Error(`Ollama not healthy on 127.0.0.1:${ollamaHostPort} within ${timeoutMs}ms`);
 }

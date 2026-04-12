@@ -19,7 +19,6 @@ function buildRowboatWorkflow(ollamaModelTag: string) {
           "When a buyer asks if a listing is still available after the seller accepted another offer, explain the home may be under contract and backup offers may be considered.\n" +
           "When someone asks to schedule a showing, acknowledge and ask for preferred times.\n" +
           "Fair Housing Act: never steer or filter by protected classes; use objective property criteria only; offer equal professional service.",
-        model: ollamaModelTag,
         outputVisibility: "user_facing",
         controlType: "retain",
         ragK: 3,
@@ -35,7 +34,10 @@ function buildRowboatWorkflow(ollamaModelTag: string) {
     ],
     tools: [] as unknown[],
     startAgent: "IntegrationAssistant",
-    lastUpdatedAt
+    lastUpdatedAt,
+    metadata: {
+      integrationOllamaModelTag: ollamaModelTag
+    }
   };
 }
 
