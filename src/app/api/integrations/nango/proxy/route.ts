@@ -11,7 +11,7 @@ const bodySchema = z.object({
   endpoint: z.string().min(1),
   method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).default("GET"),
   data: z.unknown().optional(),
-  headers: z.record(z.string()).optional()
+  headers: z.record(z.string(), z.string()).optional()
 });
 
 export async function POST(request: Request) {
