@@ -8,6 +8,7 @@ import {
 
 loadIntegrationEnvLocal(import.meta.url);
 
+/** Runs only the correctness integration path. */
 export default defineConfig({
   resolve: {
     alias: {
@@ -16,7 +17,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["tests/integration/**/*.test.ts"],
+    include: ["tests/integration/kvm-rowboat-correctness.test.ts"],
     fileParallelism: false,
     testTimeout: INTEGRATION_TEST_TIMEOUT_MS,
     hookTimeout: INTEGRATION_HOOK_TIMEOUT_MS,

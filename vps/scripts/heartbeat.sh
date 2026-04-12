@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# heartbeat.sh — Monitor Rowboat + Ollama + Bifrost, auto-restart on failure
+# heartbeat.sh — Monitor Rowboat + Ollama, auto-restart on failure
 # Runs every 2 minutes via cron.
 
 set -euo pipefail
@@ -22,10 +22,6 @@ check_ollama() {
   curl -sf --max-time 5 http://127.0.0.1:11434/api/tags > /dev/null 2>&1
 }
 
-check_bifrost() {
-  curl -sf --max-time 5 http://127.0.0.1:8080/health > /dev/null 2>&1
-}
-
 ALL_OK=true
 
 # Check Rowboat
@@ -39,13 +35,6 @@ fi
 if ! check_ollama; then
   log "Ollama unhealthy. Restarting..."
   systemctl restart ollama || true
-  ALL_OK=false
-fi
-
-# Check Bifrost (maximhq/bifrost Docker container)
-if ! check_bifrost; then
-  log "Bifrost unhealthy. Restarting..."
-  docker restart bifrost 2>&1 | tee -a "$FAIL_LOG" || true
   ALL_OK=false
 fi
 

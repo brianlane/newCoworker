@@ -8,11 +8,11 @@
     "browserSkills": true
   },
   "models": {
-    "fast": "qwen3.5:4b",
-    "balanced": "qwen3.5:9b",
+    "fast": "llama3.2:3b",
+    "balanced": "llama3.2:3b",
     "deep": "llama4:9b"
   },
-  "llm_router": "http://127.0.0.1:8080",
+  "llm_router": "http://127.0.0.1:11434/v1",
   "soul_path": "/etc/openclaw/soul.md",
   "identity_path": "/etc/openclaw/identity.md",
   "memory": {

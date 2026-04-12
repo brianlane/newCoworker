@@ -148,10 +148,11 @@ report_progress 42 "vault_seeded" "Vault and memory seeds written"
 log "Writing Rowboat .env..."
 
 # Tier-aware model selection
-if [[ "$TIER" == "starter" ]]; then
-  OLLAMA_MODEL="phi4-mini:3.8b"
+# Starter (KVM2): **`llama3.2:3b`**. Standard (KVM8 CPU): **`qwen3:4b-instruct`**. Dual fast/balanced tags are for GPU hosts only.
+if [[ "${TIER}" == "starter" ]]; then
+  OLLAMA_MODEL="llama3.2:3b"
 else
-  OLLAMA_MODEL="qwen3.5:9b"
+  OLLAMA_MODEL="qwen3:4b-instruct"
 fi
 # Optional: cap num_ctx for starter TTFT — see vps/fragments/ollama-Modelfile-starter-4096.example
 
@@ -162,7 +163,7 @@ BUSINESS_ID=${BUSINESS_ID}
 TIER=${TIER}
 
 # Ollama / LLM (host systemd — reachable from Rowboat container via Docker host-gateway)
-PROVIDER_BASE_URL=http://host.docker.internal:11434
+PROVIDER_BASE_URL=http://host.docker.internal:11434/v1
 PROVIDER_API_KEY=ollama
 PROVIDER_DEFAULT_MODEL=${OLLAMA_MODEL}
 PROVIDER_COPILOT_MODEL=${OLLAMA_MODEL}
@@ -199,7 +200,14 @@ report_progress 55 "env_written" "Rowboat .env written"
 docker compose -f /opt/rowboat/docker-compose.yml up -d --remove-orphans || true
 log "Rowboat stack updated."
 
-report_progress 72 "rowboat_stack" "Docker Compose stack updated"
+# Bands align with integration ordering: stack up → HTTP readiness → tunnel → Supabase patch (see vps/integration/README.md).
+report_progress 68 "rowboat_stack" "Docker Compose stack updated"
+
+if curl -sf --max-time 15 http://127.0.0.1:3000/health >/dev/null 2>&1 || curl -sf --max-time 15 http://127.0.0.1:3000/ >/dev/null 2>&1; then
+  report_progress 78 "rowboat_http" "Rowboat HTTP endpoint reachable"
+else
+  log "WARN: Rowboat /health HTTP check failed (containers may still be warming)"
+fi
 
 # ------------------------------------------------------------------
 # 4. Set up cloudflared tunnel
