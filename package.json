@@ -35,6 +35,8 @@
   },
   "homepage": "https://github.com/brianlane/newCoworker#readme",
   "dependencies": {
+    "@nangohq/frontend": "^0.69.48",
+    "@nangohq/node": "^0.69.48",
     "@supabase/ssr": "^0.9.0",
     "@supabase/supabase-js": "^2.100.0",
     "@tailwindcss/postcss": "^4.2.2",

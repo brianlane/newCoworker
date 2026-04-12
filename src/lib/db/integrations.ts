@@ -4,7 +4,6 @@ import { decryptIntegrationSecret, encryptIntegrationSecret } from "@/lib/integr
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 export type IntegrationProvider =
-  | "google"
   | "outlook"
   | "slack"
   | "zoom"
@@ -19,7 +18,6 @@ export type IntegrationAuthType = "oauth" | "api_key";
 export type IntegrationStatus = "connected" | "disconnected" | "expired" | "error";
 
 export const INTEGRATION_PROVIDERS = [
-  "google",
   "outlook",
   "slack",
   "zoom",

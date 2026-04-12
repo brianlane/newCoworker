@@ -1,14 +1,13 @@
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { getIntegration } from "@/lib/db/integrations";
+import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
 import { Card } from "@/components/ui/Card";
 import { IntegrationCard } from "@/components/dashboard/IntegrationCard";
-import { GoogleIntegrationActions } from "@/components/dashboard/GoogleIntegrationActions";
+import { NangoEmailIntegrationActions } from "@/components/dashboard/NangoEmailIntegrationActions";
 import { CrmApiKeyStub } from "@/components/dashboard/CrmApiKeyStub";
 import {
-  Mail,
-  Calendar,
+  Inbox,
   MessageSquare,
   Video,
   Building2,
@@ -19,7 +18,7 @@ import { Button } from "@/components/ui/Button";
 
 export const dynamic = "force-dynamic";
 
-type SearchParams = Promise<{ error?: string; google?: string }>;
+type SearchParams = Promise<{ error?: string; workspace?: string }>;
 
 export default async function IntegrationsPage({ searchParams }: { searchParams: SearchParams }) {
   const user = await getAuthUser();
@@ -37,11 +36,9 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
 
   const businessId = businesses?.[0]?.id ?? null;
 
-  const googleIntegration =
-    businessId ? await getIntegration(businessId, "google") : null;
-  const googleConnected =
-    googleIntegration?.status === "connected" && !!googleIntegration?.access_token;
-
+  const workspaceConnections =
+    businessId ? await listWorkspaceOAuthConnections(businessId) : [];
+  const workspaceConnected = workspaceConnections.length > 0;
   const twilioConfigured = !!process.env.TWILIO_ACCOUNT_SID && !!process.env.TWILIO_AUTH_TOKEN;
 
   return (
@@ -56,14 +53,14 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
       {q.error && (
         <Card className="border-spark-orange/40 bg-spark-orange/5">
           <p className="text-sm text-spark-orange">
-            Google connection failed: {decodeURIComponent(q.error).replace(/\+/g, " ")}
+            Connection failed: {decodeURIComponent(q.error).replace(/\+/g, " ")}
           </p>
         </Card>
       )}
 
-      {q.google === "connected" && (
+      {q.workspace === "connected" && (
         <Card className="border-claw-green/40 bg-claw-green/5">
-          <p className="text-sm text-claw-green">Google Workspace connected successfully.</p>
+          <p className="text-sm text-claw-green">Connected successfully.</p>
         </Card>
       )}
 
@@ -87,26 +84,20 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <IntegrationCard
-                title="Google Workspace"
-                description="Gmail, Google Calendar, and Drive (read-only) for your coworker."
-                icon={Mail}
-                status={googleConnected ? "connected" : "disconnected"}
+                title="Workspace"
+                description="Gmail, Google Calendar, Drive, Microsoft 365, and more — connect several accounts if you need them."
+                icon={Inbox}
+                status={workspaceConnected ? "connected" : "disconnected"}
               >
-                <GoogleIntegrationActions
+                <NangoEmailIntegrationActions
                   businessId={businessId}
-                  initiallyConnected={googleConnected}
+                  connections={workspaceConnections.map((r) => ({
+                    id: r.id,
+                    providerConfigKey: r.provider_config_key,
+                    connectionId: r.connection_id,
+                    createdAt: r.created_at
+                  }))}
                 />
-              </IntegrationCard>
-
-              <IntegrationCard
-                title="Microsoft Outlook"
-                description="Email and calendar via Microsoft Entra ID — same pattern as Google."
-                icon={Calendar}
-                status="coming_soon"
-              >
-                <Button type="button" variant="ghost" size="sm" disabled>
-                  Connect Outlook
-                </Button>
               </IntegrationCard>
 
               <IntegrationCard

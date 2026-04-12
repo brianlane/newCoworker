@@ -7,18 +7,10 @@ import { sendOwnerEmail } from "@/lib/email/client";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
 import { randomUUID } from "crypto";
-import { timingSafeEqualUtf8 } from "@/lib/timing-safe-utf8";
-
-function verifyRowboatToken(request: Request): boolean {
-  const auth = request.headers.get("authorization") ?? "";
-  const token = auth.replace(/^Bearer\s+/i, "").trim();
-  const expected = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
-  if (expected === "") return false;
-  return timingSafeEqualUtf8(token, expected);
-}
+import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
 
 export async function POST(request: Request) {
-  if (!verifyRowboatToken(request)) {
+  if (!verifyRowboatGatewayToken(request)) {
     return errorResponse("UNAUTHORIZED", "Invalid gateway token", 401);
   }
 
