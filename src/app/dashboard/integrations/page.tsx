@@ -38,7 +38,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
       <div>
         <h1 className="text-2xl font-bold text-parchment">Integrations</h1>
         <p className="text-sm text-parchment/50 mt-1">
-          Connect workspace accounts for email, calendar, and files; add other credentials in Nango as
+          Connect workspace accounts for email, calendar, and files; add other credentials as
           needed.
         </p>
       </div>
@@ -115,7 +115,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
 
               <IntegrationCard
                 title="Custom tool"
-                description="Industry-specific APIs without OAuth — connect via Nango or environment when available."
+                description="Industry-specific APIs without OAuth — connect when available."
                 icon={Wrench}
                 status="coming_soon"
               >
