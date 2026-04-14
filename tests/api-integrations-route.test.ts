@@ -13,7 +13,7 @@ vi.mock("@/lib/db/integrations", () => ({
     "hubspot",
     "salesforce",
     "custom_crm",
-    "twilio",
+    "telnyx",
     "custom_tool"
   ],
   getIntegrations: vi.fn(),

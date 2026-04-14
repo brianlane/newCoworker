@@ -21,20 +21,12 @@ vi.mock("@/lib/provisioning/progress", () => ({
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
 import * as fs from "fs";
 
-// Mock all external dependencies
 vi.mock("@/lib/hostinger/client", () => {
   class HostingerClient {
     provisionVps = vi.fn().mockResolvedValue({ vpsId: "vps-mock-123" });
     executeCommand = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
   }
   return { HostingerClient };
-});
-
-vi.mock("@/lib/inworld/client", () => {
-  class InworldClient {
-    createVoiceAgent = vi.fn().mockResolvedValue({ agent_id: "inworld-agent-mock" });
-  }
-  return { InworldClient };
 });
 
 vi.mock("@/lib/db/businesses", () => ({
@@ -46,13 +38,12 @@ vi.mock("@/lib/db/configs", () => ({
   getBusinessConfig: vi.fn().mockResolvedValue(null)
 }));
 
-vi.mock("@/lib/twilio/client", () => ({
-  readTwilioConfig: vi.fn().mockReturnValue({
-    accountSid: "AC_mock",
-    authToken: "mock_token",
-    messagingServiceSid: "MG_mock"
+vi.mock("@/lib/telnyx/messaging", () => ({
+  readTelnyxMessagingConfig: vi.fn().mockReturnValue({
+    apiKey: "mock_telnyx_key",
+    messagingProfileId: "mock_prof"
   }),
-  sendOwnerSms: vi.fn().mockResolvedValue({ sid: "SM_mock" })
+  sendTelnyxSms: vi.fn().mockResolvedValue("telnyx-msg-mock")
 }));
 
 vi.mock("@/lib/email/client", () => ({
@@ -69,11 +60,13 @@ describe("provisioning/orchestrate", () => {
     process.env = {
       ...OLD_ENV,
       HOSTINGER_API_TOKEN: "mock_hostinger_token",
-      INWORLD_API_KEY: "mock_inworld_key",
       ROWBOAT_GATEWAY_TOKEN: "mock_gateway_token",
       RESEND_API_KEY: "mock_resend_key",
       NEXT_PUBLIC_APP_URL: "http://localhost:3000",
-      NEXT_PUBLIC_SUPABASE_URL: "https://mock.supabase.co"
+      NEXT_PUBLIC_SUPABASE_URL: "https://mock.supabase.co",
+      SUPABASE_SERVICE_ROLE_KEY: "mock_service_role",
+      TELNYX_API_KEY: "mock_telnyx",
+      TELNYX_MESSAGING_PROFILE_ID: "mock_prof"
     };
     vi.clearAllMocks();
   });
@@ -82,7 +75,7 @@ describe("provisioning/orchestrate", () => {
     process.env = OLD_ENV;
   });
 
-  it("orchestrateProvisioning returns vpsId, agentId, tunnelUrl", async () => {
+  it("orchestrateProvisioning returns vpsId and tunnelUrl", async () => {
     const result = await orchestrateProvisioning({
       businessId: "biz-uuid-1",
       tier: "starter",
@@ -90,7 +83,6 @@ describe("provisioning/orchestrate", () => {
     });
 
     expect(result.vpsId).toBe("vps-mock-123");
-    expect(result.agentId).toBe("inworld-agent-mock");
     expect(result.tunnelUrl).toContain("tunnel.newcoworker.com");
   });
 
@@ -127,14 +119,39 @@ describe("provisioning/orchestrate", () => {
     expect(updateBusinessStatus).toHaveBeenNthCalledWith(2, "biz-uuid-1", "online", "vps-mock-123");
   });
 
-  it("calls upsertBusinessConfig twice (before and after inworld.ai agent)", async () => {
+  it("calls upsertBusinessConfig once with inworld_agent_id cleared", async () => {
     await orchestrateProvisioning({ businessId: "biz-uuid-1", tier: "standard" });
-    expect(upsertBusinessConfig).toHaveBeenCalledTimes(2);
-    const secondCall = vi.mocked(upsertBusinessConfig).mock.calls[1][0];
-    expect(secondCall.inworld_agent_id).toBe("inworld-agent-mock");
+    expect(upsertBusinessConfig).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(upsertBusinessConfig).mock.calls[0][0];
+    expect(call.inworld_agent_id).toBeNull();
   });
 
-  it("deploy command includes INWORLD_AGENT_ID (not ELEVENLABS_AGENT_ID)", async () => {
+  it("deploy command allows empty optional Telnyx and Supabase keys", async () => {
+    delete process.env.TELNYX_API_KEY;
+    delete process.env.TELNYX_MESSAGING_PROFILE_ID;
+    delete process.env.TELNYX_SMS_FROM_E164;
+    delete process.env.STREAM_URL_SIGNING_SECRET;
+    delete process.env.BRIDGE_MEDIA_WSS_ORIGIN;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
+    const mockHostinger = {
+      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-empty" }),
+      executeCommand: mockExec
+    };
+    await orchestrateProvisioning(
+      { businessId: "biz-empty-env", tier: "starter" },
+      { hostinger: mockHostinger as never }
+    );
+    const cmd = mockExec.mock.calls[0][1] as string;
+    expect(cmd).toContain("TELNYX_API_KEY=''");
+    expect(cmd).toContain("TELNYX_MESSAGING_PROFILE_ID=''");
+    expect(cmd).toContain("TELNYX_SMS_FROM_E164=''");
+    expect(cmd).toContain("STREAM_URL_SIGNING_SECRET=''");
+    expect(cmd).toContain("BRIDGE_MEDIA_WSS_ORIGIN=''");
+    expect(cmd).toContain("SUPABASE_SERVICE_KEY=''");
+  });
+
+  it("deploy command includes Telnyx env vars (not INWORLD)", async () => {
     const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
     const mockHostinger = {
       provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-env" }),
@@ -147,8 +164,9 @@ describe("provisioning/orchestrate", () => {
     );
 
     const deployCmd = mockExec.mock.calls[0][1] as string;
-    expect(deployCmd).toContain("INWORLD_AGENT_ID='inworld-agent-mock'");
-    expect(deployCmd).not.toContain("ELEVENLABS_AGENT_ID");
+    expect(deployCmd).toContain("TELNYX_API_KEY='mock_telnyx'");
+    expect(deployCmd).toContain("TELNYX_MESSAGING_PROFILE_ID='mock_prof'");
+    expect(deployCmd).not.toContain("INWORLD_AGENT_ID");
   });
 
   it("deploy command includes ROWBOAT_GATEWAY_TOKEN (not OPENCLAW)", async () => {
@@ -196,32 +214,32 @@ describe("provisioning/orchestrate", () => {
   });
 
   it("continues even when SMS notification fails", async () => {
-    const { sendOwnerSms } = await import("@/lib/twilio/client");
-    vi.mocked(sendOwnerSms).mockRejectedValueOnce(new Error("Twilio error"));
+    const { sendTelnyxSms } = await import("@/lib/telnyx/messaging");
+    vi.mocked(sendTelnyxSms).mockRejectedValueOnce(new Error("Telnyx error"));
 
     const result = await orchestrateProvisioning({
       businessId: "biz-uuid-1",
       tier: "starter",
       ownerPhone: "+15550001111"
     });
-    expect(result.agentId).toBe("inworld-agent-mock");
+    expect(result.vpsId).toBe("vps-mock-123");
   });
 
-  it("accepts injected deps", async () => {
-    const mockHostinger = { provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-injected" }) };
-    const mockInworld = { createVoiceAgent: vi.fn().mockResolvedValue({ agent_id: "inworld-injected" }) };
+  it("accepts injected hostinger", async () => {
+    const mockHostinger = {
+      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-injected" }),
+      executeCommand: vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" })
+    };
 
     const result = await orchestrateProvisioning(
       { businessId: "biz-2", tier: "starter" },
-      { hostinger: mockHostinger as never, inworld: mockInworld as never }
+      { hostinger: mockHostinger as never }
     );
     expect(result.vpsId).toBe("vps-injected");
-    expect(result.agentId).toBe("inworld-injected");
   });
 
-  it("uses fallback empty strings when HOSTINGER_API_TOKEN and INWORLD_API_KEY not set", async () => {
+  it("uses fallback empty strings when HOSTINGER_API_TOKEN not set", async () => {
     delete process.env.HOSTINGER_API_TOKEN;
-    delete process.env.INWORLD_API_KEY;
 
     const result = await orchestrateProvisioning({
       businessId: "biz-env-test",
@@ -238,7 +256,7 @@ describe("provisioning/orchestrate", () => {
       tier: "starter",
       ownerEmail: "direct@test.com"
     });
-    expect(result.agentId).toBeTruthy();
+    expect(result.tunnelUrl).toBeTruthy();
   });
 
   it("hits ROWBOAT_GATEWAY_TOKEN ?? '' and NEXT_PUBLIC_APP_URL ?? fallback branches", async () => {
@@ -249,7 +267,7 @@ describe("provisioning/orchestrate", () => {
       businessId: "biz-uuid-1",
       tier: "starter"
     });
-    expect(result.agentId).toBeTruthy();
+    expect(result.tunnelUrl).toBeTruthy();
   });
 
   it("falls back SUPABASE_URL to empty string in deploy command when unset", async () => {
@@ -277,19 +295,19 @@ describe("provisioning/orchestrate", () => {
       tier: "starter",
       ownerEmail: "owner@test.com"
     });
-    expect(result.agentId).toBeTruthy();
+    expect(result.tunnelUrl).toBeTruthy();
   });
 
   it("covers non-Error thrown from SMS notification", async () => {
-    const { sendOwnerSms } = await import("@/lib/twilio/client");
-    vi.mocked(sendOwnerSms).mockRejectedValueOnce("non-error-sms");
+    const { sendTelnyxSms } = await import("@/lib/telnyx/messaging");
+    vi.mocked(sendTelnyxSms).mockRejectedValueOnce("non-error-sms");
 
     const result = await orchestrateProvisioning({
       businessId: "biz-uuid-1",
       tier: "starter",
       ownerPhone: "+15550001111"
     });
-    expect(result.agentId).toBeTruthy();
+    expect(result.tunnelUrl).toBeTruthy();
   });
 
   it("calls executeCommand on VPS after provisioning", async () => {
@@ -416,13 +434,17 @@ describe("provisioning/orchestrate", () => {
 
   it("loads default soul/identity templates when readFileSync throws", async () => {
     vi.mocked(fs.readFileSync)
-      .mockImplementationOnce(() => { throw new Error("ENOENT: no such file"); })
-      .mockImplementationOnce(() => { throw new Error("ENOENT: no such file"); });
+      .mockImplementationOnce(() => {
+        throw new Error("ENOENT: no such file");
+      })
+      .mockImplementationOnce(() => {
+        throw new Error("ENOENT: no such file");
+      });
 
     const result = await orchestrateProvisioning({
       businessId: "biz-uuid-fallback",
       tier: "starter"
     });
-    expect(result.agentId).toBeTruthy();
+    expect(result.tunnelUrl).toBeTruthy();
   });
 });

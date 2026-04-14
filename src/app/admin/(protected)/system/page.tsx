@@ -35,18 +35,14 @@ const ENV_GROUPS: EnvGroup[] = [
     ]
   },
   {
-    label: "Inworld",
+    label: "Telnyx",
     vars: [
-      { name: "API Key", description: "Agent platform key", key: "INWORLD_API_KEY" },
-      { name: "Workspace", description: "Inworld workspace ID", key: "INWORLD_WORKSPACE" }
-    ]
-  },
-  {
-    label: "Twilio",
-    vars: [
-      { name: "Account SID", description: "Account identifier", key: "TWILIO_ACCOUNT_SID" },
-      { name: "Auth Token", description: "Auth token", key: "TWILIO_AUTH_TOKEN" },
-      { name: "Phone Number", description: "Outbound number", key: "TWILIO_PHONE_NUMBER" }
+      { name: "API Key", description: "REST + Call Control", key: "TELNYX_API_KEY" },
+      { name: "Public key", description: "Webhook signature verification (Mission Control)", key: "TELNYX_PUBLIC_KEY" },
+      { name: "Messaging profile", description: "SMS profile id", key: "TELNYX_MESSAGING_PROFILE_ID" },
+      { name: "SMS from", description: "Optional E.164 from-number", key: "TELNYX_SMS_FROM_E164" },
+      { name: "Stream MAC secret", description: "HMAC for media stream URLs (Edge + bridge)", key: "STREAM_URL_SIGNING_SECRET" },
+      { name: "Bridge WSS origin", description: "Public WebSocket origin for media bridge", key: "BRIDGE_MEDIA_WSS_ORIGIN" }
     ]
   },
   {

@@ -1,15 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/stripe/client", () => ({
-  ensureCommitmentSchedule: vi.fn(),
-  verifyWebhook: vi.fn()
+const { mockStripeRetrieve } = vi.hoisted(() => ({
+  mockStripeRetrieve: vi.fn().mockResolvedValue({
+    current_period_start: 1700000000,
+    current_period_end: 1702678400
+  })
 }));
 
-vi.mock("@/lib/db/subscriptions", () => ({
-  getSubscription: vi.fn(),
-  getSubscriptionByStripeSubscriptionId: vi.fn(),
-  updateSubscription: vi.fn()
+vi.mock("@/lib/stripe/client", () => ({
+  ensureCommitmentSchedule: vi.fn(),
+  verifyWebhook: vi.fn(),
+  getStripe: vi.fn(() => ({
+    subscriptions: { retrieve: mockStripeRetrieve }
+  }))
 }));
+
+vi.mock("@/lib/db/subscriptions", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/db/subscriptions")>();
+  return {
+    ...actual,
+    getSubscription: vi.fn(),
+    getSubscriptionByStripeSubscriptionId: vi.fn(),
+    updateSubscription: vi.fn()
+  };
+});
 
 vi.mock("@/lib/db/businesses", () => ({
   getBusiness: vi.fn()
@@ -41,6 +55,11 @@ import { logger } from "@/lib/logger";
 describe("stripe webhook route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockStripeRetrieve.mockClear();
+    mockStripeRetrieve.mockResolvedValue({
+      current_period_start: 1700000000,
+      current_period_end: 1702678400
+    });
     vi.mocked(getBusiness).mockResolvedValue({ status: "pending" } as never);
     vi.mocked(ensureCommitmentSchedule).mockResolvedValue("sub_sched_123");
   });
@@ -76,11 +95,17 @@ describe("stripe webhook route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(updateSubscription).toHaveBeenCalledWith("local_sub_1", {
-      status: "active",
-      stripe_customer_id: "cus_1",
-      stripe_subscription_id: "sub_1"
-    });
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "local_sub_1",
+      expect.objectContaining({
+        status: "active",
+        stripe_customer_id: "cus_1",
+        stripe_subscription_id: "sub_1",
+        stripe_current_period_start: expect.any(String),
+        stripe_current_period_end: expect.any(String),
+        stripe_subscription_cached_at: expect.any(String)
+      })
+    );
     expect(ensureCommitmentSchedule).toHaveBeenCalledWith({
       subscriptionId: "sub_1",
       tier: "starter",
@@ -180,11 +205,15 @@ describe("stripe webhook route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(updateSubscription).toHaveBeenCalledWith("local_sub_4", {
-      status: "active",
-      stripe_customer_id: "cus_4",
-      stripe_subscription_id: "sub_4"
-    });
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "local_sub_4",
+      expect.objectContaining({
+        status: "active",
+        stripe_customer_id: "cus_4",
+        stripe_subscription_id: "sub_4",
+        stripe_current_period_start: expect.any(String)
+      })
+    );
     expect(logger.error).toHaveBeenCalledWith(
       "Stripe commitment schedule setup failed",
       expect.objectContaining({

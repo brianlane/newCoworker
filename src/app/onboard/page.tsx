@@ -89,7 +89,7 @@ export default function OnboardPage() {
       setup: "No setup fee · 30-day money-back guarantee",
       features: [
         "AI voice coworker",
-        "Twilio phone number",
+        "Telnyx phone number",
         "Lossless memory and expansive knowledge base",
         "Unlimited emails and appointment booking",
         "1 hour voice / day",

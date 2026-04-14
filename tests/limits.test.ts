@@ -12,6 +12,10 @@ describe("tier limits", () => {
       expect(TIER_LIMITS.starter.voiceMinutesPerDay).toBe(60);
     });
 
+    it("starter has 600 included voice seconds per Stripe period", () => {
+      expect(TIER_LIMITS.starter.voiceIncludedSecondsPerStripePeriod).toBe(600);
+    });
+
     it("starter has 100 SMS per day", () => {
       expect(TIER_LIMITS.starter.smsPerDay).toBe(100);
     });
@@ -36,6 +40,10 @@ describe("tier limits", () => {
   describe("standard limits", () => {
     it("standard has unlimited voice minutes", () => {
       expect(TIER_LIMITS.standard.voiceMinutesPerDay).toBe(Infinity);
+    });
+
+    it("standard has 15000 included voice seconds per Stripe period", () => {
+      expect(TIER_LIMITS.standard.voiceIncludedSecondsPerStripePeriod).toBe(15000);
     });
 
     it("standard has unlimited SMS", () => {

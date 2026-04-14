@@ -9,6 +9,7 @@ vi.mock("@/lib/plans/limits", () => ({
   TIER_LIMITS: {
     starter: {
       voiceMinutesPerDay: 60,
+      voiceIncludedSecondsPerStripePeriod: 600,
       smsPerDay: 100,
       callsPerDay: 10,
       maxConcurrentCalls: 1,
@@ -17,6 +18,7 @@ vi.mock("@/lib/plans/limits", () => ({
     },
     standard: {
       voiceMinutesPerDay: Infinity,
+      voiceIncludedSecondsPerStripePeriod: 15000,
       smsPerDay: Infinity,
       callsPerDay: Infinity,
       maxConcurrentCalls: 3,
@@ -25,6 +27,7 @@ vi.mock("@/lib/plans/limits", () => ({
     },
     enterprise: {
       voiceMinutesPerDay: Infinity,
+      voiceIncludedSecondsPerStripePeriod: 150000,
       smsPerDay: Infinity,
       callsPerDay: Infinity,
       maxConcurrentCalls: 10,

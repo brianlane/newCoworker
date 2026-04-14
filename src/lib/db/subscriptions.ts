@@ -15,21 +15,63 @@ export type SubscriptionRow = {
   billing_period: BillingPeriod | null;
   renewal_at: string | null;
   commitment_months: number | null;
+  /** Stripe subscription.current_period_start (UTC), for voice ledger §4 */
+  stripe_current_period_start: string | null;
+  stripe_current_period_end: string | null;
+  stripe_subscription_cached_at: string | null;
   created_at: string;
 };
 
+/** Map Stripe Subscription billing period fields into our cache columns (voice §4.2). */
+export function subscriptionPeriodCacheFromStripe(sub: {
+  current_period_start: number;
+  current_period_end: number;
+}): Pick<
+  SubscriptionRow,
+  "stripe_current_period_start" | "stripe_current_period_end" | "stripe_subscription_cached_at"
+> {
+  return {
+    stripe_current_period_start: new Date(sub.current_period_start * 1000).toISOString(),
+    stripe_current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
+    stripe_subscription_cached_at: new Date().toISOString()
+  };
+}
+
 export async function createSubscription(
-  data: Omit<SubscriptionRow, "created_at" | "billing_period" | "renewal_at" | "commitment_months"> & {
+  data: Omit<
+    SubscriptionRow,
+    | "created_at"
+    | "billing_period"
+    | "renewal_at"
+    | "commitment_months"
+    | "stripe_current_period_start"
+    | "stripe_current_period_end"
+    | "stripe_subscription_cached_at"
+  > & {
     billing_period?: BillingPeriod | null;
     renewal_at?: string | null;
     commitment_months?: number | null;
+    stripe_current_period_start?: string | null;
+    stripe_current_period_end?: string | null;
+    stripe_subscription_cached_at?: string | null;
   },
   client?: SupabaseClient
 ): Promise<SubscriptionRow> {
   const db = client ?? (await createSupabaseServiceClient());
+  const {
+    stripe_current_period_start = null,
+    stripe_current_period_end = null,
+    stripe_subscription_cached_at = null,
+    ...rest
+  } = data;
   const { data: row, error } = await db
     .from("subscriptions")
-    .insert(data)
+    .insert({
+      ...rest,
+      stripe_current_period_start,
+      stripe_current_period_end,
+      stripe_subscription_cached_at
+    })
     .select()
     .single();
 
@@ -96,7 +138,17 @@ export async function listSubscriptionsByBusinessIds(
 
 export async function updateSubscription(
   id: string,
-  update: Partial<Pick<SubscriptionRow, "status" | "stripe_subscription_id" | "stripe_customer_id">>,
+  update: Partial<
+    Pick<
+      SubscriptionRow,
+      | "status"
+      | "stripe_subscription_id"
+      | "stripe_customer_id"
+      | "stripe_current_period_start"
+      | "stripe_current_period_end"
+      | "stripe_subscription_cached_at"
+    >
+  >,
   client?: SupabaseClient
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());

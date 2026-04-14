@@ -2,6 +2,8 @@ import type { PlanTier } from "@/lib/plans/tier";
 
 export type TierLimits = {
   voiceMinutesPerDay: number;
+  /** Included voice seconds per Stripe billing period (Telnyx + Gemini path). */
+  voiceIncludedSecondsPerStripePeriod: number;
   smsPerDay: number;
   callsPerDay: number;
   maxConcurrentCalls: number;
@@ -12,6 +14,7 @@ export type TierLimits = {
 export const TIER_LIMITS: Record<PlanTier, TierLimits> = {
   starter: {
     voiceMinutesPerDay: 60,
+    voiceIncludedSecondsPerStripePeriod: 600,
     smsPerDay: 100,
     callsPerDay: 10,
     maxConcurrentCalls: 1,
@@ -20,6 +23,7 @@ export const TIER_LIMITS: Record<PlanTier, TierLimits> = {
   },
   standard: {
     voiceMinutesPerDay: Infinity,
+    voiceIncludedSecondsPerStripePeriod: 15000,
     smsPerDay: Infinity,
     callsPerDay: Infinity,
     maxConcurrentCalls: 3,
@@ -28,6 +32,7 @@ export const TIER_LIMITS: Record<PlanTier, TierLimits> = {
   },
   enterprise: {
     voiceMinutesPerDay: Infinity,
+    voiceIncludedSecondsPerStripePeriod: 150000,
     smsPerDay: Infinity,
     callsPerDay: Infinity,
     maxConcurrentCalls: 10,

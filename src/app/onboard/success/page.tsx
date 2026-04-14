@@ -330,8 +330,8 @@ function OnboardSuccessContent() {
               "Provisioning Hostinger VPS",
               "Installing Ollama",
               "Configuring Rowboat agent",
-              "Creating inworld.ai voice agent",
-              "Attaching Twilio phone number",
+              "Configuring Telnyx voice + SMS routing",
+              "Linking VPS media bridge",
               "Injecting soul.md + identity.md"
             ].map((step, i) => (
               <div key={step} className="flex items-center gap-3 text-sm">

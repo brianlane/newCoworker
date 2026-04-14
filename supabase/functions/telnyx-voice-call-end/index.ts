@@ -1,0 +1,124 @@
+/**
+ * Telnyx call hangup / end → record telnyx_ended_at for §9.1 settlement (signal1 of 2).
+ */
+import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { header, verifyTelnyxWebhook } from "../_shared/telnyx_webhook.ts";
+
+const MAX_BODY = 256 * 1024;
+
+const END_EVENTS = new Set([
+  "call.hangup",
+  "call.ended",
+  "call.cost"
+]);
+
+serve(async (req: Request) => {
+  if (req.method !== "POST") {
+    return new Response("Method not allowed", { status: 405 });
+  }
+
+  const publicKey = Deno.env.get("TELNYX_PUBLIC_KEY") ?? "";
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  if (!publicKey || !supabaseUrl || !serviceKey) {
+    return new Response("Server misconfigured", { status: 500 });
+  }
+
+  const rawBody = await req.text();
+  if (rawBody.length > MAX_BODY) {
+    return new Response("Payload too large", { status: 413 });
+  }
+
+  const v = await verifyTelnyxWebhook(
+    rawBody,
+    header(req, "telnyx-signature-ed25519"),
+    header(req, "telnyx-timestamp"),
+    publicKey
+  );
+  if (!v.ok) {
+    return new Response("Forbidden", { status: 403 });
+  }
+
+  let envelope: { data?: { id?: string; event_type?: string; payload?: Record<string, unknown> } };
+  try {
+    envelope = JSON.parse(rawBody);
+  } catch {
+    return new Response("Bad JSON", { status: 400 });
+  }
+
+  const data = envelope.data;
+  const eventId = data?.id;
+  const eventType = data?.event_type ?? "";
+  if (!eventId) {
+    return new Response("Missing event id", { status: 400 });
+  }
+
+  const supabase = createClient(supabaseUrl, serviceKey);
+  const { data: isNew } = await supabase.rpc("telnyx_webhook_try_dedupe", {
+    p_event_id: eventId,
+    p_event_type: eventType
+  });
+  if (isNew === false) {
+    return new Response(JSON.stringify({ ok: true, duplicate: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  if (!END_EVENTS.has(eventType)) {
+    return new Response(JSON.stringify({ ok: true, skipped: eventType }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  const payload = data?.payload ?? {};
+  const callControlId = String(payload["call_control_id"] ?? "");
+  if (!callControlId) {
+    return new Response(JSON.stringify({ ok: true, skip: "no_call_control_id" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  const { data: resv } = await supabase
+    .from("voice_reservations")
+    .select("business_id, id")
+    .eq("call_control_id", callControlId)
+    .maybeSingle();
+
+  const businessId = resv?.business_id as string | undefined;
+  if (!businessId) {
+    return new Response(JSON.stringify({ ok: true, skip: "unknown_call" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  const nowIso = new Date().toISOString();
+  const { data: existing } = await supabase
+    .from("voice_settlements")
+    .select("call_control_id, first_signal_at")
+    .eq("call_control_id", callControlId)
+    .maybeSingle();
+
+  const firstAt =
+    (existing as { first_signal_at?: string } | null)?.first_signal_at ?? nowIso;
+
+  await supabase.from("voice_settlements").upsert(
+    {
+      call_control_id: callControlId,
+      business_id: businessId,
+      reservation_id: resv?.id ?? null,
+      telnyx_ended_at: nowIso,
+      first_signal_at: firstAt
+    },
+    { onConflict: "call_control_id" }
+  );
+
+  return new Response(JSON.stringify({ ok: true, call_control_id: callControlId }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" }
+  });
+});

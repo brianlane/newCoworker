@@ -1,5 +1,10 @@
-import { ensureCommitmentSchedule, verifyWebhook } from "@/lib/stripe/client";
-import { getSubscription, getSubscriptionByStripeSubscriptionId, updateSubscription } from "@/lib/db/subscriptions";
+import { ensureCommitmentSchedule, getStripe, verifyWebhook } from "@/lib/stripe/client";
+import {
+  getSubscription,
+  getSubscriptionByStripeSubscriptionId,
+  subscriptionPeriodCacheFromStripe,
+  updateSubscription
+} from "@/lib/db/subscriptions";
 import { successResponse, errorResponse } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
 import type Stripe from "stripe";
@@ -59,7 +64,10 @@ export async function POST(request: Request) {
               paused: "past_due"
             };
             const status: DbStatus = statusMap[sub.status] ?? "pending";
-            await updateSubscription(existing.id, { status });
+            await updateSubscription(existing.id, {
+              status,
+              ...stripeSubscriptionPeriodCache(sub)
+            });
           }
         }
         break;
@@ -132,11 +140,26 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
       : session.subscription?.id ?? null;
 
   const existing = await getSubscription(businessId);
+  let periodCache: ReturnType<typeof subscriptionPeriodCacheFromStripe> | Record<string, never> = {};
+  if (subscriptionId) {
+    try {
+      const stripeSub = await getStripe().subscriptions.retrieve(subscriptionId);
+      periodCache = stripeSubscriptionPeriodCache(stripeSub);
+    } catch (err) {
+      logger.error("Stripe subscription retrieve failed after checkout", {
+        businessId,
+        subscriptionId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+
   if (existing) {
     await updateSubscription(existing.id, {
       status: "active",
       stripe_customer_id: customerId,
-      stripe_subscription_id: subscriptionId
+      stripe_subscription_id: subscriptionId,
+      ...periodCache
     });
   }
 
@@ -188,4 +211,18 @@ function getInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
   const subscription = invoice.parent?.subscription_details?.subscription;
   if (!subscription) return null;
   return typeof subscription === "string" ? subscription : subscription.id;
+}
+
+/** Stripe SDK typings omit period fields on some `Subscription` shapes; narrow at runtime. */
+function stripeSubscriptionPeriodCache(
+  sub: unknown
+): ReturnType<typeof subscriptionPeriodCacheFromStripe> | Record<string, never> {
+  const s = sub as { current_period_start?: unknown; current_period_end?: unknown };
+  if (typeof s.current_period_start !== "number" || typeof s.current_period_end !== "number") {
+    return {};
+  }
+  return subscriptionPeriodCacheFromStripe({
+    current_period_start: s.current_period_start,
+    current_period_end: s.current_period_end
+  });
 }

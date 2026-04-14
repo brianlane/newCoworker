@@ -1,13 +1,13 @@
 # New Coworker
 
-AI Coworker platform: local-first autonomous agents for small businesses, built on Rowboat + Ollama + inworld.ai.
+AI Coworker platform: local-first autonomous agents for small businesses, built on Rowboat + Ollama + Telnyx + Gemini Live.
 
 This repository includes:
 
 - Next.js dashboard app
 - Supabase migrations and edge-function scaffolding
 - VPS bootstrap and deployment scripts
-- Rowboat, Twilio, and inworld.ai integration code
+- Rowboat, Telnyx (voice/SMS), and Supabase Edge integration code
 - Local Docker integration fixtures for model validation
 
 ## Pricing
@@ -24,7 +24,7 @@ See `src/lib/plans/tier.ts` for pricing logic.
 
 - Agent runtime: Rowboat
 - Local inference: Ollama
-- Voice: inworld.ai
+- Voice: Telnyx Call Control + VPS media bridge (Gemini Live)
 - Starter default model: `llama3.2:3b`
 - Standard default model: `qwen3:4b-instruct`
 

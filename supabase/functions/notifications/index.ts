@@ -5,10 +5,10 @@
 // Required Edge Function Secrets:
 //   SUPABASE_URL              (auto-injected)
 //   SUPABASE_SERVICE_ROLE_KEY (auto-injected)
-//   TWILIO_ACCOUNT_SID
-//   TWILIO_AUTH_TOKEN
-//   TWILIO_MESSAGING_SERVICE_SID
-//   TWILIO_OWNER_PHONE
+//   TELNYX_API_KEY
+//   TELNYX_MESSAGING_PROFILE_ID
+//   TELNYX_SMS_FROM_E164 (optional if profile has default from)
+//   TELNYX_OWNER_PHONE
 //   RESEND_API_KEY
 //   MAILER_EMAIL
 //   CONTACT_EMAIL (optional; reply-to address)
@@ -98,30 +98,26 @@ serve(async (req: Request) => {
 
   const errors: string[] = [];
 
-  // Send SMS via Twilio
-  const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID");
-  const authToken = Deno.env.get("TWILIO_AUTH_TOKEN");
-  const messagingSid = Deno.env.get("TWILIO_MESSAGING_SERVICE_SID");
-  const ownerPhone = Deno.env.get("TWILIO_OWNER_PHONE");
+  const telnyxKey = Deno.env.get("TELNYX_API_KEY");
+  const telnyxProfile = Deno.env.get("TELNYX_MESSAGING_PROFILE_ID");
+  const telnyxFrom = Deno.env.get("TELNYX_SMS_FROM_E164");
+  const ownerPhone = Deno.env.get("TELNYX_OWNER_PHONE") ?? Deno.env.get("TWILIO_OWNER_PHONE");
 
-  if (accountSid && authToken && messagingSid && ownerPhone) {
-    const smsBody = new URLSearchParams({
-      MessagingServiceSid: messagingSid,
-      To: ownerPhone,
-      Body: `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`
+  if (telnyxKey && telnyxProfile && ownerPhone) {
+    const body: Record<string, string> = {
+      to: ownerPhone,
+      text: `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`,
+      messaging_profile_id: telnyxProfile
+    };
+    if (telnyxFrom) body.from = telnyxFrom;
+    const smsRes = await fetch("https://api.telnyx.com/v2/messages", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${telnyxKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
     });
-
-    const smsRes = await fetch(
-      `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Authorization: `Basic ${btoa(`${accountSid}:${authToken}`)}`
-        },
-        body: smsBody.toString()
-      }
-    );
     if (!smsRes.ok) errors.push(`SMS failed: ${smsRes.status}`);
   }
 
