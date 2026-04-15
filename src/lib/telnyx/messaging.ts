@@ -1,6 +1,4 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { checkLimitReached, incrementUsage } from "@/lib/db/usage";
-import type { PlanTier } from "@/lib/plans/tier";
 
 export type TelnyxMessagingConfig = {
   apiKey: string;
@@ -53,12 +51,24 @@ export type SendTelnyxSmsOptions = {
   /** Telnyx supports Idempotency-Key for at-most-once sends (§10). */
   idempotencyKey?: string;
   /**
-   * When set, checks monthly SMS quota for this business before send and increments `daily_usage.sms_sent` after success.
+   * When set, atomically reserves one outbound SMS against the monthly cap (Postgres row lock + pre-increment)
+   * before calling Telnyx. If the HTTP request fails, the slot is released so quota is not consumed.
    */
   meterBusinessId?: string;
 };
 
 type TelnyxMessageResponse = { data?: { id?: string } };
+
+type ReserveSlotResult = { ok?: boolean; reason?: string };
+
+/** Maps try_reserve_sms_outbound_slot JSON to a user-facing error (tests assert stable reasons). */
+export function reserveSlotFailureMessage(result: ReserveSlotResult | null): string {
+  const r = result?.reason;
+  if (r === "monthly_sms_limit") return "Monthly SMS limit reached";
+  if (r === "no_business") return "Business not found";
+  if (r && r.length > 0) return `SMS quota blocked: ${r}`;
+  return "SMS quota blocked";
+}
 
 /**
  * Send SMS via Telnyx Messaging API v2.
@@ -72,63 +82,73 @@ export async function sendTelnyxSms(
 ): Promise<string> {
   const fetchImpl = options?.fetchImpl ?? fetch;
   let meterClient: Awaited<ReturnType<typeof createSupabaseServiceClient>> | undefined;
+  let reservedSlot = false;
+  const businessId = options?.meterBusinessId;
 
-  if (options?.meterBusinessId) {
+  if (businessId) {
     meterClient = await createSupabaseServiceClient();
-    const { data: biz, error: bizErr } = await meterClient
-      .from("businesses")
-      .select("tier, enterprise_limits")
-      .eq("id", options.meterBusinessId)
-      .single();
-    if (bizErr || !biz) {
-      throw new Error(`sendTelnyxSms: business not found (${bizErr?.message ?? "unknown"})`);
+    const { data: res, error } = await meterClient.rpc("try_reserve_sms_outbound_slot", {
+      p_business_id: businessId
+    });
+    if (error) {
+      throw new Error(`sendTelnyxSms: quota reserve failed: ${error.message}`);
     }
-    const tier = (String(biz.tier ?? "starter") || "starter") as PlanTier;
-    const entRaw = tier === "enterprise" ? biz.enterprise_limits : undefined;
-    const gate = await checkLimitReached(options.meterBusinessId, tier, meterClient, entRaw);
-    if (!gate.allowed) {
-      throw new Error(gate.reason ?? "Monthly SMS limit reached");
+    const gate = res as ReserveSlotResult | null;
+    if (!gate?.ok) {
+      throw new Error(reserveSlotFailureMessage(gate));
     }
+    reservedSlot = true;
   }
 
-  const body: Record<string, string> = {
-    to: toE164,
-    text,
-    messaging_profile_id: config.messagingProfileId
+  const releaseIfNeeded = async (): Promise<void> => {
+    if (!reservedSlot || !businessId || !meterClient) return;
+    const { error: relErr } = await meterClient.rpc("release_sms_outbound_slot", {
+      p_business_id: businessId
+    });
+    if (relErr) {
+      console.error("sendTelnyxSms: release_sms_outbound_slot failed", relErr.message);
+    }
+    reservedSlot = false;
   };
-  if (config.fromE164) {
-    body.from = config.fromE164;
+
+  try {
+    const body: Record<string, string> = {
+      to: toE164,
+      text,
+      messaging_profile_id: config.messagingProfileId
+    };
+    if (config.fromE164) {
+      body.from = config.fromE164;
+    }
+
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${config.apiKey}`,
+      "Content-Type": "application/json"
+    };
+    if (options?.idempotencyKey) {
+      headers["Idempotency-Key"] = options.idempotencyKey;
+    }
+
+    const res = await fetchImpl("https://api.telnyx.com/v2/messages", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body)
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Telnyx SMS error: ${res.status} ${errText.slice(0, 500)}`);
+    }
+
+    const json = (await res.json()) as TelnyxMessageResponse;
+    const id = json.data?.id;
+    if (!id) {
+      throw new Error("Telnyx SMS: missing message id in response");
+    }
+
+    return id;
+  } catch (err) {
+    await releaseIfNeeded();
+    throw err;
   }
-
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${config.apiKey}`,
-    "Content-Type": "application/json"
-  };
-  if (options?.idempotencyKey) {
-    headers["Idempotency-Key"] = options.idempotencyKey;
-  }
-
-  const res = await fetchImpl("https://api.telnyx.com/v2/messages", {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body)
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Telnyx SMS error: ${res.status} ${errText.slice(0, 500)}`);
-  }
-
-  const json = (await res.json()) as TelnyxMessageResponse;
-  const id = json.data?.id;
-  if (!id) {
-    throw new Error("Telnyx SMS: missing message id in response");
-  }
-
-  if (options?.meterBusinessId) {
-    const db = meterClient ?? (await createSupabaseServiceClient());
-    await incrementUsage(options.meterBusinessId, "sms_sent", 1, db);
-  }
-
-  return id;
 }

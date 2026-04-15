@@ -645,6 +645,131 @@ as $$
   end;
 $$;
 
+-- Resolved monthly SMS cap: null means unlimited (enterprise default or no numeric override).
+create or replace function public.monthly_sms_cap_for_business(p_tier text, p_ent jsonb)
+returns bigint
+language plpgsql
+immutable
+parallel safe
+as $$
+declare
+  v_limit bigint;
+  v_day numeric;
+  v_month numeric;
+begin
+  if p_tier = 'enterprise' then
+    v_limit := null;
+    if p_ent is not null then
+      if p_ent ? 'smsPerMonth' and jsonb_typeof(p_ent->'smsPerMonth') = 'number' then
+        v_month := (p_ent->>'smsPerMonth')::numeric;
+        if v_month > 0 and v_month < 1e15 then
+          v_limit := floor(v_month)::bigint;
+        end if;
+      elsif p_ent ? 'smsPerDay' and jsonb_typeof(p_ent->'smsPerDay') = 'number' then
+        v_day := (p_ent->>'smsPerDay')::numeric;
+        if v_day > 0 and v_day < 1e15 then
+          v_limit := greatest(1::bigint, round(v_day * 30)::bigint);
+        end if;
+      end if;
+    end if;
+    return v_limit;
+  end if;
+
+  if p_tier in ('starter', 'standard') then
+    return public.nonenterprise_monthly_sms_cap(p_tier);
+  end if;
+
+  return public.nonenterprise_monthly_sms_cap('starter');
+end;
+$$;
+
+-- Under row lock on businesses: enforce monthly cap and pre-increment sms_sent before outbound Telnyx send (app + notifications).
+-- If Telnyx fails, call release_sms_outbound_slot. Pair with complete_sms_inbound_job (done only) on workers that reserve first (future).
+create or replace function public.try_reserve_sms_outbound_slot(p_business_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_tier text;
+  v_ent jsonb;
+  v_limit bigint;
+  v_used bigint;
+  v_month_start date;
+begin
+  select b.tier, b.enterprise_limits
+  into v_tier, v_ent
+  from public.businesses b
+  where b.id = p_business_id
+  for update;
+
+  if v_tier is null then
+    return jsonb_build_object('ok', false, 'reason', 'no_business');
+  end if;
+
+  v_limit := public.monthly_sms_cap_for_business(v_tier, v_ent);
+
+  if v_limit is not null then
+    v_month_start := (date_trunc('month', (now() at time zone 'utc'))::date);
+
+    select coalesce(sum(du.sms_sent), 0)::bigint
+    into v_used
+    from public.daily_usage du
+    where du.business_id = p_business_id
+      and du.usage_date >= v_month_start;
+
+    if v_used >= v_limit then
+      return jsonb_build_object('ok', false, 'reason', 'monthly_sms_limit');
+    end if;
+  end if;
+
+  insert into public.daily_usage (
+    business_id,
+    usage_date,
+    voice_minutes_used,
+    sms_sent,
+    calls_made,
+    peak_concurrent_calls,
+    updated_at
+  )
+  values (
+    p_business_id,
+    current_date,
+    0,
+    1,
+    0,
+    0,
+    now()
+  )
+  on conflict (business_id, usage_date) do update set
+    sms_sent = public.daily_usage.sms_sent + 1,
+    updated_at = now();
+
+  return jsonb_build_object('ok', true);
+end;
+$$;
+
+-- Undo try_reserve_sms_outbound_slot when Telnyx send fails after a successful reserve.
+create or replace function public.release_sms_outbound_slot(p_business_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.daily_usage du
+  set
+    sms_sent = greatest(0, du.sms_sent - 1),
+    updated_at = now()
+  where du.business_id = p_business_id
+    and du.usage_date = current_date;
+end;
+$$;
+
+grant execute on function public.try_reserve_sms_outbound_slot(uuid) to service_role;
+grant execute on function public.release_sms_outbound_slot(uuid) to service_role;
+
 -- Atomically mark job done and increment sms_sent (same transaction). Call only after Telnyx send succeeds.
 create or replace function public.complete_sms_inbound_job_done_meter_sms(
   p_job_id uuid,
@@ -715,8 +840,6 @@ declare
   v_limit bigint;
   v_used bigint;
   v_month_start date;
-  v_day numeric;
-  v_month numeric;
 begin
   select b.tier, b.enterprise_limits
   into v_tier, v_ent
@@ -727,26 +850,7 @@ begin
     return jsonb_build_object('allowed', false, 'reason', 'no_business');
   end if;
 
-  if v_tier = 'enterprise' then
-    v_limit := null;
-    if v_ent is not null then
-      if v_ent ? 'smsPerMonth' and jsonb_typeof(v_ent->'smsPerMonth') = 'number' then
-        v_month := (v_ent->>'smsPerMonth')::numeric;
-        if v_month > 0 and v_month < 1e15 then
-          v_limit := floor(v_month)::bigint;
-        end if;
-      elsif v_ent ? 'smsPerDay' and jsonb_typeof(v_ent->'smsPerDay') = 'number' then
-        v_day := (v_ent->>'smsPerDay')::numeric;
-        if v_day > 0 and v_day < 1e15 then
-          v_limit := greatest(1::bigint, round(v_day * 30)::bigint);
-        end if;
-      end if;
-    end if;
-  elsif v_tier in ('starter', 'standard') then
-    v_limit := public.nonenterprise_monthly_sms_cap(v_tier);
-  else
-    v_limit := public.nonenterprise_monthly_sms_cap('starter');
-  end if;
+  v_limit := public.monthly_sms_cap_for_business(v_tier, v_ent);
 
   if v_limit is null then
     return jsonb_build_object('allowed', true);

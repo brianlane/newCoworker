@@ -1,41 +1,46 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { checkLimitReached, incrementUsage, createSupabaseServiceClient } = vi.hoisted(() => {
-  return {
-    checkLimitReached: vi.fn(),
-    incrementUsage: vi.fn(),
-    createSupabaseServiceClient: vi.fn()
-  };
-});
-
-vi.mock("@/lib/db/usage", () => ({
-  checkLimitReached,
-  incrementUsage
-}));
+const createSupabaseServiceClient = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient
 }));
 
-import { sendTelnyxSms } from "@/lib/telnyx/messaging";
+import { sendTelnyxSms, reserveSlotFailureMessage } from "@/lib/telnyx/messaging";
 
-describe("sendTelnyxSms meterBusinessId", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    checkLimitReached.mockResolvedValue({ allowed: true });
-    incrementUsage.mockResolvedValue(undefined);
-    createSupabaseServiceClient.mockResolvedValue({
-      from: vi.fn().mockReturnThis(),
-      select: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockReturnThis(),
-      single: vi.fn().mockResolvedValue({
-        data: { tier: "starter", enterprise_limits: null },
-        error: null
-      })
-    } as never);
+describe("reserveSlotFailureMessage", () => {
+  it("maps known reasons", () => {
+    expect(reserveSlotFailureMessage({ ok: false, reason: "monthly_sms_limit" })).toBe(
+      "Monthly SMS limit reached"
+    );
+    expect(reserveSlotFailureMessage({ ok: false, reason: "no_business" })).toBe("Business not found");
   });
 
-  it("checks limit and increments after successful send", async () => {
+  it("falls back for unknown reason and empty", () => {
+    expect(reserveSlotFailureMessage({ ok: false, reason: "other" })).toBe("SMS quota blocked: other");
+    expect(reserveSlotFailureMessage(null)).toBe("SMS quota blocked");
+    expect(reserveSlotFailureMessage({ ok: false })).toBe("SMS quota blocked");
+  });
+});
+
+describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
+  const rpc = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rpc.mockImplementation((name: string) => {
+      if (name === "try_reserve_sms_outbound_slot") {
+        return Promise.resolve({ data: { ok: true }, error: null });
+      }
+      if (name === "release_sms_outbound_slot") {
+        return Promise.resolve({ error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    createSupabaseServiceClient.mockResolvedValue({ rpc } as never);
+  });
+
+  it("reserves slot via RPC then sends; does not increment twice or release on success", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ data: { id: "m1" } })
@@ -47,12 +52,36 @@ describe("sendTelnyxSms meterBusinessId", () => {
       { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
     );
     expect(id).toBe("m1");
-    expect(checkLimitReached).toHaveBeenCalled();
-    expect(incrementUsage).toHaveBeenCalledWith("biz-1", "sms_sent", 1, expect.anything());
+    expect(rpc).toHaveBeenCalledWith("try_reserve_sms_outbound_slot", { p_business_id: "biz-1" });
+    expect(rpc).not.toHaveBeenCalledWith("release_sms_outbound_slot", expect.anything());
   });
 
-  it("throws when monthly cap blocks send", async () => {
-    checkLimitReached.mockResolvedValue({ allowed: false, reason: "Monthly SMS limit reached (750 SMS/month)" });
+  it("throws when reserve returns ok false without calling Telnyx", async () => {
+    rpc.mockImplementation((name: string) => {
+      if (name === "try_reserve_sms_outbound_slot") {
+        return Promise.resolve({ data: { ok: false, reason: "monthly_sms_limit" }, error: null });
+      }
+      return Promise.resolve({ error: null });
+    });
+    const fetchMock = vi.fn();
+    await expect(
+      sendTelnyxSms(
+        { apiKey: "k", messagingProfileId: "p" },
+        "+15550001111",
+        "Hi",
+        { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
+      )
+    ).rejects.toThrow("Monthly SMS limit reached");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("throws when reserve RPC errors", async () => {
+    rpc.mockImplementation((name: string) => {
+      if (name === "try_reserve_sms_outbound_slot") {
+        return Promise.resolve({ data: null, error: { message: "db down" } });
+      }
+      return Promise.resolve({ error: null });
+    });
     await expect(
       sendTelnyxSms(
         { apiKey: "k", messagingProfileId: "p" },
@@ -60,7 +89,107 @@ describe("sendTelnyxSms meterBusinessId", () => {
         "Hi",
         { meterBusinessId: "biz-1" }
       )
-    ).rejects.toThrow("Monthly SMS limit reached");
-    expect(incrementUsage).not.toHaveBeenCalled();
+    ).rejects.toThrow("quota reserve failed: db down");
+  });
+
+  it("releases slot when Telnyx returns non-OK", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      text: () => Promise.resolve("err")
+    });
+    await expect(
+      sendTelnyxSms(
+        { apiKey: "k", messagingProfileId: "p" },
+        "+15550001111",
+        "Hi",
+        { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
+      )
+    ).rejects.toThrow("Telnyx SMS error");
+    expect(rpc).toHaveBeenCalledWith("release_sms_outbound_slot", { p_business_id: "biz-1" });
+  });
+
+  it("releases slot when response has no message id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: {} })
+    });
+    await expect(
+      sendTelnyxSms(
+        { apiKey: "k", messagingProfileId: "p" },
+        "+15550001111",
+        "Hi",
+        { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
+      )
+    ).rejects.toThrow("missing message id");
+    expect(rpc).toHaveBeenCalledWith("release_sms_outbound_slot", { p_business_id: "biz-1" });
+  });
+
+  it("releases slot when fetch throws", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error("network"));
+    await expect(
+      sendTelnyxSms(
+        { apiKey: "k", messagingProfileId: "p" },
+        "+15550001111",
+        "Hi",
+        { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
+      )
+    ).rejects.toThrow("network");
+    expect(rpc).toHaveBeenCalledWith("release_sms_outbound_slot", { p_business_id: "biz-1" });
+  });
+
+  it("logs when release_sms_outbound_slot returns an error", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    rpc.mockImplementation((name: string) => {
+      if (name === "try_reserve_sms_outbound_slot") {
+        return Promise.resolve({ data: { ok: true }, error: null });
+      }
+      if (name === "release_sms_outbound_slot") {
+        return Promise.resolve({ error: { message: "db write failed" } });
+      }
+      return Promise.resolve({ error: null });
+    });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      text: () => Promise.resolve("")
+    });
+    await expect(
+      sendTelnyxSms(
+        { apiKey: "k", messagingProfileId: "p" },
+        "+15550001111",
+        "Hi",
+        { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
+      )
+    ).rejects.toThrow("Telnyx SMS error");
+    expect(errSpy).toHaveBeenCalledWith(
+      "sendTelnyxSms: release_sms_outbound_slot failed",
+      "db write failed"
+    );
+    errSpy.mockRestore();
+  });
+
+  it("includes Idempotency-Key and from when metering", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: "mid" } })
+    });
+    await sendTelnyxSms(
+      {
+        apiKey: "k",
+        messagingProfileId: "p",
+        fromE164: "+15550009999"
+      },
+      "+15550001111",
+      "Hi",
+      {
+        fetchImpl: fetchMock as typeof fetch,
+        meterBusinessId: "biz-1",
+        idempotencyKey: "idem-z"
+      }
+    );
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    const h = init.headers as Record<string, string>;
+    expect(h["Idempotency-Key"]).toBe("idem-z");
+    const body = JSON.parse(init.body as string);
+    expect(body.from).toBe("+15550009999");
   });
 });
