@@ -15,17 +15,10 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { telnyxMessagingPhoneString } from "../_shared/telnyx_messaging_payload.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
+import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 
 const MAX_ATTEMPTS = 8;
-
-function assertCronAuth(req: Request): boolean {
-  const secret =
-    Deno.env.get("INTERNAL_CRON_SECRET") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-  if (!secret) return false;
-  const auth = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim() ?? "";
-  return auth.length > 0 && auth === secret;
-}
 
 type JobRow = {
   id: string;

@@ -4,15 +4,8 @@
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
-
-function assertCronAuth(req: Request): boolean {
-  const secret =
-    Deno.env.get("INTERNAL_CRON_SECRET") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-  if (!secret) return false;
-  const auth = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim() ?? "";
-  return auth.length > 0 && auth === secret;
-}
 
 serve(async (req: Request) => {
   if (req.method !== "POST") {
