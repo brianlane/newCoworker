@@ -20,6 +20,13 @@ const ED25519_SPKI_PREFIX = new Uint8Array([
   0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00
 ]);
 
+/** Copy bytes into a standalone `ArrayBuffer` for `crypto.subtle` (TS DOM `BufferSource` / SAB quirks). */
+function u8ToArrayBuffer(u: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(u.length);
+  copy.set(u);
+  return copy.buffer;
+}
+
 async function importPublicKey(publicKeyB64: string): Promise<CryptoKey> {
   const raw = decodeBase64(publicKeyB64);
   let der: Uint8Array;
@@ -28,7 +35,7 @@ async function importPublicKey(publicKeyB64: string): Promise<CryptoKey> {
   } else {
     der = raw;
   }
-  return crypto.subtle.importKey("spki", der, { name: "Ed25519" }, false, ["verify"]);
+  return crypto.subtle.importKey("spki", u8ToArrayBuffer(der), { name: "Ed25519" }, false, ["verify"]);
 }
 
 export type TelnyxVerifyResult =
@@ -70,7 +77,12 @@ export async function verifyTelnyxWebhook(
   const msg = new TextEncoder().encode(`${timestampHeader}|${rawBody}`);
   let valid: boolean;
   try {
-    valid = await crypto.subtle.verify({ name: "Ed25519" }, key, sig, msg);
+    valid = await crypto.subtle.verify(
+      { name: "Ed25519" },
+      key,
+      u8ToArrayBuffer(sig),
+      u8ToArrayBuffer(msg)
+    );
   } catch {
     return { ok: false, reason: "malformed" };
   }

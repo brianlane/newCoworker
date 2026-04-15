@@ -237,6 +237,8 @@ serve(async (req: Request) => {
     .from("subscriptions")
     .select("stripe_current_period_start")
     .eq("business_id", businessId)
+    .order("created_at", { ascending: false })
+    .limit(1)
     .maybeSingle();
 
   if (subErr) {
