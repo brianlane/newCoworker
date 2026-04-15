@@ -55,10 +55,14 @@ serve(async (req: Request) => {
   }
 
   const supabase = createClient(supabaseUrl, serviceKey);
-  const { data: isNew } = await supabase.rpc("telnyx_webhook_try_dedupe", {
+  const { data: isNew, error: dedupeErr } = await supabase.rpc("telnyx_webhook_try_dedupe", {
     p_event_id: eventId,
     p_event_type: eventType
   });
+  if (dedupeErr) {
+    console.error("dedupe", dedupeErr);
+    return new Response("Dedupe error", { status: 500 });
+  }
   if (isNew === false) {
     return new Response(JSON.stringify({ ok: true, duplicate: true }), {
       status: 200,
@@ -82,11 +86,16 @@ serve(async (req: Request) => {
     });
   }
 
-  const { data: resv } = await supabase
+  const { data: resv, error: resvErr } = await supabase
     .from("voice_reservations")
     .select("business_id, id")
     .eq("call_control_id", callControlId)
     .maybeSingle();
+
+  if (resvErr) {
+    console.error("voice_reservations", resvErr);
+    return new Response("DB error", { status: 500 });
+  }
 
   const businessId = resv?.business_id as string | undefined;
   if (!businessId) {
@@ -97,16 +106,21 @@ serve(async (req: Request) => {
   }
 
   const nowIso = new Date().toISOString();
-  const { data: existing } = await supabase
+  const { data: existing, error: existingErr } = await supabase
     .from("voice_settlements")
     .select("call_control_id, first_signal_at")
     .eq("call_control_id", callControlId)
     .maybeSingle();
 
+  if (existingErr) {
+    console.error("voice_settlements select", existingErr);
+    return new Response("DB error", { status: 500 });
+  }
+
   const firstAt =
     (existing as { first_signal_at?: string } | null)?.first_signal_at ?? nowIso;
 
-  await supabase.from("voice_settlements").upsert(
+  const { error: upsertErr } = await supabase.from("voice_settlements").upsert(
     {
       call_control_id: callControlId,
       business_id: businessId,
@@ -116,6 +130,11 @@ serve(async (req: Request) => {
     },
     { onConflict: "call_control_id" }
   );
+
+  if (upsertErr) {
+    console.error("voice_settlements upsert", upsertErr);
+    return new Response("Settlement write failed", { status: 500 });
+  }
 
   return new Response(JSON.stringify({ ok: true, call_control_id: callControlId }), {
     status: 200,
