@@ -9,24 +9,29 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { header, verifyTelnyxWebhook } from "../_shared/telnyx_webhook.ts";
 import { signStreamUrlMac, type StreamPayloadV1 } from "../_shared/stream_url.ts";
+import { resolveEnterpriseVoiceReservation } from "../_shared/enterprise_limits.ts";
+import {
+  VOICE_MSG_BRIDGE_DEGRADED,
+  VOICE_MSG_QUOTA_EXHAUSTED,
+  VOICE_MSG_SYSTEM_ERROR,
+  VOICE_MSG_UNCONFIGURED_NUMBER
+} from "../_shared/voice_messages.ts";
 
 const MAX_BODY = 256 * 1024;
 const HANDLER_MS = 8000;
 
-const MSG_UNCONFIGURED =
-  "This number is not configured for assistant service. Goodbye.";
-const MSG_QUOTA =
-  "Sorry, included voice time for this billing period is used up. Goodbye.";
-const MSG_BRIDGE = "Our voice assistant is temporarily unavailable. Goodbye.";
-const MSG_ERROR = "We could not connect your call. Goodbye.";
-
-function tierCapSeconds(tier: string): number {
-  if (tier === "standard" || tier === "enterprise") return 15000;
+function tierCapSeconds(tier: string, enterpriseLimitsRaw: unknown): number {
+  if (tier === "enterprise") {
+    return resolveEnterpriseVoiceReservation(enterpriseLimitsRaw).tierCapSeconds;
+  }
+  if (tier === "standard") return 15000;
   return 600;
 }
 
-function maxConcurrent(tier: string): number {
-  if (tier === "enterprise") return 10;
+function maxConcurrent(tier: string, enterpriseLimitsRaw: unknown): number {
+  if (tier === "enterprise") {
+    return resolveEnterpriseVoiceReservation(enterpriseLimitsRaw).maxConcurrent;
+  }
   if (tier === "standard") return 3;
   return 1;
 }
@@ -188,7 +193,7 @@ serve(async (req: Request) => {
   }
 
   if (!routeRow?.business_id) {
-    await answerThenSpeak(apiKey, callControlId, MSG_UNCONFIGURED);
+    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_UNCONFIGURED_NUMBER);
     return new Response(JSON.stringify({ ok: true, path: "unconfigured" }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
@@ -199,12 +204,12 @@ serve(async (req: Request) => {
 
   const { data: biz, error: bizErr } = await supabase
     .from("businesses")
-    .select("tier")
+    .select("tier, enterprise_limits")
     .eq("id", businessId)
     .single();
   if (bizErr || !biz) {
     console.error("business", bizErr);
-    await answerThenSpeak(apiKey, callControlId, MSG_ERROR);
+    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SYSTEM_ERROR);
     return new Response(JSON.stringify({ ok: true, path: "no_business" }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
@@ -212,8 +217,9 @@ serve(async (req: Request) => {
   }
 
   const tier = String(biz.tier ?? "starter");
-  const cap = tierCapSeconds(tier);
-  const concurrent = maxConcurrent(tier);
+  const entRaw = tier === "enterprise" ? biz.enterprise_limits : null;
+  const cap = tierCapSeconds(tier, entRaw);
+  const concurrent = maxConcurrent(tier, entRaw);
 
   const { data: sub, error: subErr } = await supabase
     .from("subscriptions")
@@ -223,7 +229,7 @@ serve(async (req: Request) => {
 
   if (subErr) {
     console.error("subscription", subErr);
-    await answerThenSpeak(apiKey, callControlId, MSG_ERROR);
+    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SYSTEM_ERROR);
     return new Response(JSON.stringify({ ok: true, path: "sub_db_error" }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
@@ -247,7 +253,7 @@ serve(async (req: Request) => {
 
   if (resErr) {
     console.error("reserve", resErr);
-    await answerThenSpeak(apiKey, callControlId, MSG_ERROR);
+    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SYSTEM_ERROR);
     return new Response(JSON.stringify({ ok: true, path: "reserve_error" }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
@@ -263,9 +269,9 @@ serve(async (req: Request) => {
 
   if (!res?.ok) {
     if (res?.reason === "concurrent_limit") {
-      await answerThenSpeak(apiKey, callControlId, MSG_BRIDGE);
+      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_BRIDGE_DEGRADED);
     } else {
-      await answerThenSpeak(apiKey, callControlId, MSG_QUOTA);
+      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_QUOTA_EXHAUSTED);
     }
     return new Response(JSON.stringify({ ok: true, path: res?.reason ?? "blocked" }), {
       status: 200,
@@ -284,7 +290,7 @@ serve(async (req: Request) => {
     ? new Date(settings.bridge_last_heartbeat_at as string).getTime()
     : 0;
   if (!hb || Date.now() - hb > heartbeatTtlSec * 1000) {
-    await answerThenSpeak(apiKey, callControlId, MSG_BRIDGE);
+    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_BRIDGE_DEGRADED);
     await supabase.rpc("voice_release_reservation_on_answer_fail", {
       p_call_control_id: callControlId
     });
@@ -304,7 +310,7 @@ serve(async (req: Request) => {
     "/voice/stream";
 
   if (!origin) {
-    await answerThenSpeak(apiKey, callControlId, MSG_BRIDGE);
+    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_BRIDGE_DEGRADED);
     await supabase.rpc("voice_release_reservation_on_answer_fail", {
       p_call_control_id: callControlId
     });
@@ -333,7 +339,7 @@ serve(async (req: Request) => {
   });
   if (nonceErr) {
     console.error("nonce", nonceErr);
-    await answerThenSpeak(apiKey, callControlId, MSG_ERROR);
+    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SYSTEM_ERROR);
     await supabase.rpc("voice_release_reservation_on_answer_fail", {
       p_call_control_id: callControlId
     });

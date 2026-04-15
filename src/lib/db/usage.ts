@@ -1,6 +1,6 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { PlanTier } from "@/lib/plans/tier";
-import { TIER_LIMITS } from "@/lib/plans/limits";
+import { getTierLimits } from "@/lib/plans/limits";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -62,9 +62,10 @@ export async function incrementUsage(
 export async function checkLimitReached(
   businessId: string,
   tier: PlanTier,
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  enterpriseLimitsOverride?: unknown
 ): Promise<LimitCheckResult> {
-  const limits = TIER_LIMITS[tier];
+  const limits = getTierLimits(tier, enterpriseLimitsOverride);
 
   // Enterprise and standard have no daily caps (Infinity)
   if (

@@ -1,4 +1,5 @@
 import type { PlanTier } from "@/lib/plans/tier";
+import { applyEnterpriseLimitsPatch } from "@/lib/plans/enterprise-limits";
 
 export type TierLimits = {
   voiceMinutesPerDay: number;
@@ -41,14 +42,15 @@ export const TIER_LIMITS: Record<PlanTier, TierLimits> = {
   }
 };
 
-export function getTierLimits(tier: PlanTier): TierLimits {
-  return TIER_LIMITS[tier];
+export function getTierLimits(tier: PlanTier, enterpriseLimitsOverride?: unknown): TierLimits {
+  if (tier !== "enterprise") return TIER_LIMITS[tier];
+  return applyEnterpriseLimitsPatch(TIER_LIMITS.enterprise, enterpriseLimitsOverride);
 }
 
-export function hasVoiceLimit(tier: PlanTier): boolean {
-  return TIER_LIMITS[tier].voiceMinutesPerDay !== Infinity;
+export function hasVoiceLimit(tier: PlanTier, enterpriseLimitsOverride?: unknown): boolean {
+  return getTierLimits(tier, enterpriseLimitsOverride).voiceMinutesPerDay !== Infinity;
 }
 
-export function hasSmsThrottle(tier: PlanTier): boolean {
-  return TIER_LIMITS[tier].smsThrottled;
+export function hasSmsThrottle(tier: PlanTier, enterpriseLimitsOverride?: unknown): boolean {
+  return getTierLimits(tier, enterpriseLimitsOverride).smsThrottled;
 }

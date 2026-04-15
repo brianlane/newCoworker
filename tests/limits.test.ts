@@ -72,6 +72,10 @@ describe("tier limits", () => {
       expect(TIER_LIMITS.enterprise.voiceMinutesPerDay).toBe(Infinity);
     });
 
+    it("enterprise has 150000 included voice seconds per Stripe period", () => {
+      expect(TIER_LIMITS.enterprise.voiceIncludedSecondsPerStripePeriod).toBe(150000);
+    });
+
     it("enterprise has unlimited SMS", () => {
       expect(TIER_LIMITS.enterprise.smsPerDay).toBe(Infinity);
     });
@@ -103,6 +107,16 @@ describe("tier limits", () => {
     it("returns correct limits for enterprise", () => {
       const limits = getTierLimits("enterprise");
       expect(limits).toEqual(TIER_LIMITS.enterprise);
+    });
+
+    it("merges enterprise overrides for voice pool and concurrency", () => {
+      const limits = getTierLimits("enterprise", {
+        voiceIncludedSecondsPerStripePeriod: 500_000,
+        maxConcurrentCalls: 25
+      });
+      expect(limits.voiceIncludedSecondsPerStripePeriod).toBe(500_000);
+      expect(limits.maxConcurrentCalls).toBe(25);
+      expect(limits.smsPerDay).toBe(Infinity);
     });
   });
 

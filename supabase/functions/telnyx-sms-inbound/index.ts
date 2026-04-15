@@ -4,6 +4,7 @@
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { header, verifyTelnyxWebhook } from "../_shared/telnyx_webhook.ts";
+import { telnyxMessagingPhoneString } from "../_shared/telnyx_messaging_payload.ts";
 
 const MAX_BODY = 256 * 1024;
 
@@ -76,11 +77,8 @@ serve(async (req: Request) => {
     });
   }
 
-  const payload = data?.payload ?? {};
-  const to = normalizeE164(
-    (payload["to"] as string | undefined) ??
-      ((payload["to"] as { phone_number?: string }[])?.[0]?.phone_number)
-  );
+  const payload = (data?.payload ?? {}) as Record<string, unknown>;
+  const to = normalizeE164(telnyxMessagingPhoneString(payload, "to"));
 
   if (!to) {
     return new Response(JSON.stringify({ ok: true, skip: "no_to" }), {

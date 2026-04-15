@@ -5,38 +5,6 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
 }));
 
-vi.mock("@/lib/plans/limits", () => ({
-  TIER_LIMITS: {
-    starter: {
-      voiceMinutesPerDay: 60,
-      voiceIncludedSecondsPerStripePeriod: 600,
-      smsPerDay: 100,
-      callsPerDay: 10,
-      maxConcurrentCalls: 1,
-      smsThrottled: true,
-      memoryType: "lossless"
-    },
-    standard: {
-      voiceMinutesPerDay: Infinity,
-      voiceIncludedSecondsPerStripePeriod: 15000,
-      smsPerDay: Infinity,
-      callsPerDay: Infinity,
-      maxConcurrentCalls: 3,
-      smsThrottled: false,
-      memoryType: "lossless"
-    },
-    enterprise: {
-      voiceMinutesPerDay: Infinity,
-      voiceIncludedSecondsPerStripePeriod: 150000,
-      smsPerDay: Infinity,
-      callsPerDay: Infinity,
-      maxConcurrentCalls: 10,
-      smsThrottled: false,
-      memoryType: "lossless"
-    }
-  }
-}));
-
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 const TODAY = new Date().toISOString().slice(0, 10);
@@ -175,6 +143,22 @@ describe("db/usage", () => {
 
       const result = await checkLimitReached("biz-uuid-1", "enterprise");
       expect(result.allowed).toBe(true);
+    });
+
+    it("applies enterprise admin override for daily voice cap", async () => {
+      const db = mockDb({
+        single: vi.fn().mockResolvedValue({
+          data: { ...MOCK_USAGE, voice_minutes_used: 100, sms_sent: 0, calls_made: 0 },
+          error: null
+        })
+      });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+      const result = await checkLimitReached("biz-uuid-1", "enterprise", undefined, {
+        voiceMinutesPerDay: 100
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.field).toBe("voice_minutes_used");
     });
 
     it("allows starter tier when under all limits", async () => {

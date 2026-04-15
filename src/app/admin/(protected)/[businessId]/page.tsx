@@ -12,6 +12,9 @@ import { SoulEditor } from "@/components/dashboard/SoulEditor";
 import { SkipPaymentButton } from "@/components/admin/SkipPaymentButton";
 import { DeleteClientButton } from "@/components/admin/DeleteClientButton";
 import { KillSwitch } from "@/components/dashboard/KillSwitch";
+import { getTierLimits } from "@/lib/plans/limits";
+import { parseEnterpriseLimitsOverride } from "@/lib/plans/enterprise-limits";
+import { EnterpriseLimitsEditor } from "@/components/admin/EnterpriseLimitsEditor";
 
 export const dynamic = "force-dynamic";
 
@@ -57,6 +60,19 @@ export default async function BusinessDetailPage({
         initiallyPaused={!!business.is_paused}
         compact
       />
+
+      {business.tier === "enterprise" && (
+        <Card>
+          <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+            Enterprise limits
+          </h2>
+          <EnterpriseLimitsEditor
+            businessId={businessId}
+            effectiveLimits={getTierLimits("enterprise", business.enterprise_limits)}
+            initialOverride={parseEnterpriseLimitsOverride(business.enterprise_limits)}
+          />
+        </Card>
+      )}
 
       {/* Subscription */}
       <Card>
