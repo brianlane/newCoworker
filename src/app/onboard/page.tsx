@@ -118,7 +118,7 @@ export default function OnboardPage() {
       setup: "No setup fee · 30-day money-back guarantee",
       features: [
         "Everything in Starter, plus:",
-        "250 minutes voice minutes",
+        "250 voice minutes",
         "Unlimited SMS",
         "3 concurrent calls",
         "Send texts during calls",
