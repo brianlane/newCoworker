@@ -10,6 +10,24 @@ import { successResponse, errorResponse } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
 import type Stripe from "stripe";
 
+async function fetchSubscriptionPeriodCacheOrEmpty(
+  subscriptionId: string,
+  logMessage: string,
+  logFields?: Record<string, unknown>
+): Promise<SubscriptionPeriodStripeCache | Record<string, never>> {
+  try {
+    const stripeSub = await getStripe().subscriptions.retrieve(subscriptionId);
+    return stripeSubscriptionPeriodCache(stripeSub);
+  } catch (err) {
+    logger.error(logMessage, {
+      subscriptionId,
+      ...logFields,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return {};
+  }
+}
+
 export async function POST(request: Request) {
   const signature = request.headers.get("stripe-signature");
   if (!signature) return errorResponse("VALIDATION_ERROR", "Missing stripe-signature", 400);
@@ -93,16 +111,10 @@ export async function POST(request: Request) {
         if (subscriptionId) {
           const existing = await getSubscriptionByStripeSubscriptionId(subscriptionId);
           if (existing) {
-            let periodCache: SubscriptionPeriodStripeCache | Record<string, never> = {};
-            try {
-              const stripeSub = await getStripe().subscriptions.retrieve(subscriptionId);
-              periodCache = stripeSubscriptionPeriodCache(stripeSub);
-            } catch (err) {
-              logger.error("Stripe subscription retrieve failed on invoice.paid", {
-                subscriptionId,
-                error: err instanceof Error ? err.message : String(err)
-              });
-            }
+            const periodCache = await fetchSubscriptionPeriodCacheOrEmpty(
+              subscriptionId,
+              "Stripe subscription retrieve failed on invoice.paid"
+            );
             await updateSubscription(existing.id, { status: "active", ...periodCache });
           }
         }
@@ -116,16 +128,10 @@ export async function POST(request: Request) {
         if (subscriptionId) {
           const existing = await getSubscriptionByStripeSubscriptionId(subscriptionId);
           if (existing) {
-            let periodCache: SubscriptionPeriodStripeCache | Record<string, never> = {};
-            try {
-              const stripeSub = await getStripe().subscriptions.retrieve(subscriptionId);
-              periodCache = stripeSubscriptionPeriodCache(stripeSub);
-            } catch (err) {
-              logger.error("Stripe subscription retrieve failed on invoice.payment_failed", {
-                subscriptionId,
-                error: err instanceof Error ? err.message : String(err)
-              });
-            }
+            const periodCache = await fetchSubscriptionPeriodCacheOrEmpty(
+              subscriptionId,
+              "Stripe subscription retrieve failed on invoice.payment_failed"
+            );
             await updateSubscription(existing.id, { status: "past_due", ...periodCache });
           }
         }
@@ -161,19 +167,13 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
       : session.subscription?.id ?? null;
 
   const existing = await getSubscription(businessId);
-  let periodCache: SubscriptionPeriodStripeCache | Record<string, never> = {};
-  if (subscriptionId) {
-    try {
-      const stripeSub = await getStripe().subscriptions.retrieve(subscriptionId);
-      periodCache = stripeSubscriptionPeriodCache(stripeSub);
-    } catch (err) {
-      logger.error("Stripe subscription retrieve failed after checkout", {
-        businessId,
+  const periodCache = subscriptionId
+    ? await fetchSubscriptionPeriodCacheOrEmpty(
         subscriptionId,
-        error: err instanceof Error ? err.message : String(err)
-      });
-    }
-  }
+        "Stripe subscription retrieve failed after checkout",
+        { businessId }
+      )
+    : {};
 
   if (existing) {
     await updateSubscription(existing.id, {

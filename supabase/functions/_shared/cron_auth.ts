@@ -20,9 +20,19 @@ export async function sha256Utf8(value: string): Promise<Uint8Array> {
   return new Uint8Array(digest);
 }
 
+type DenoEnv = { env: { get: (key: string) => string | undefined } };
+
+function cronAuthSecretFromEnv(): string {
+  const deno = (globalThis as unknown as { Deno?: DenoEnv }).Deno;
+  return (
+    deno?.env?.get("INTERNAL_CRON_SECRET") ??
+    deno?.env?.get("SUPABASE_SERVICE_ROLE_KEY") ??
+    ""
+  );
+}
+
 export async function assertCronAuth(req: Request): Promise<boolean> {
-  const secret =
-    Deno.env.get("INTERNAL_CRON_SECRET") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  const secret = cronAuthSecretFromEnv();
   if (!secret) return false;
   const auth = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim() ?? "";
   const [digestAuth, digestSecret] = await Promise.all([sha256Utf8(auth), sha256Utf8(secret)]);

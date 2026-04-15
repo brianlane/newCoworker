@@ -3,7 +3,7 @@ import {
   assertCronAuth,
   sha256Utf8,
   timingSafeEqualBytes
-} from "../supabase/functions/_shared/cron_auth.ts";
+} from "../supabase/functions/_shared/cron_auth";
 
 describe("timingSafeEqualBytes", () => {
   it("returns false when lengths differ", () => {
@@ -52,8 +52,8 @@ describe("assertCronAuth", () => {
   });
 
   function req(authHeader: string | null): Request {
-    const headers = authHeader != null ? { Authorization: authHeader } : {};
-    return new Request("http://localhost/", { headers });
+    if (authHeader == null) return new Request("http://localhost/");
+    return new Request("http://localhost/", { headers: { Authorization: authHeader } });
   }
 
   it("returns false when no secret is configured", async () => {
