@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  TIER_LIMITS,
-  getTierLimits,
-  hasDailyVoiceMinutesCap,
-  hasIncludedTelnyxVoicePool,
-  hasVoiceLimit,
-  hasSmsThrottle
-} from "@/lib/plans/limits";
+import { TIER_LIMITS, getTierLimits, hasSmsThrottle } from "@/lib/plans/limits";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 
 describe("tier limits", () => {
@@ -132,36 +125,18 @@ describe("tier limits", () => {
     });
   });
 
-  describe("hasDailyVoiceMinutesCap / hasVoiceLimit", () => {
-    it("starter has no legacy daily voice cap (Telnyx pool is separate)", () => {
-      expect(hasDailyVoiceMinutesCap("starter")).toBe(false);
-      expect(hasVoiceLimit("starter")).toBe(false);
+  describe("voiceMinutesPerDay (legacy daily_usage cap)", () => {
+    it("starter and standard use Infinity (Telnyx pool is separate)", () => {
+      expect(getTierLimits("starter").voiceMinutesPerDay).toBe(Infinity);
+      expect(getTierLimits("standard").voiceMinutesPerDay).toBe(Infinity);
     });
 
-    it("standard has no daily voice cap", () => {
-      expect(hasDailyVoiceMinutesCap("standard")).toBe(false);
-      expect(hasVoiceLimit("standard")).toBe(false);
+    it("enterprise default has no daily voice cap", () => {
+      expect(getTierLimits("enterprise").voiceMinutesPerDay).toBe(Infinity);
     });
 
-    it("enterprise has no daily voice cap by default", () => {
-      expect(hasDailyVoiceMinutesCap("enterprise")).toBe(false);
-      expect(hasVoiceLimit("enterprise")).toBe(false);
-    });
-
-    it("enterprise with daily voice cap override is limited on daily_usage", () => {
-      expect(hasDailyVoiceMinutesCap("enterprise", { voiceMinutesPerDay: 50 })).toBe(true);
-      expect(hasVoiceLimit("enterprise", { voiceMinutesPerDay: 50 })).toBe(true);
-    });
-  });
-
-  describe("hasIncludedTelnyxVoicePool", () => {
-    it("starter has a finite included pool per Stripe period", () => {
-      expect(hasIncludedTelnyxVoicePool("starter")).toBe(true);
-    });
-
-    it("standard and enterprise default tiers have a finite pool", () => {
-      expect(hasIncludedTelnyxVoicePool("standard")).toBe(true);
-      expect(hasIncludedTelnyxVoicePool("enterprise")).toBe(true);
+    it("enterprise override can set a finite daily cap for checkLimitReached", () => {
+      expect(getTierLimits("enterprise", { voiceMinutesPerDay: 50 }).voiceMinutesPerDay).toBe(50);
     });
   });
 
