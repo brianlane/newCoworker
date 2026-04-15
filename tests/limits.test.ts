@@ -8,8 +8,8 @@ import {
 
 describe("tier limits", () => {
   describe("starter limits", () => {
-    it("starter has 60 voice minutes per day", () => {
-      expect(TIER_LIMITS.starter.voiceMinutesPerDay).toBe(60);
+    it("starter has no legacy daily voice cap (Telnyx uses per–Stripe-period pool)", () => {
+      expect(TIER_LIMITS.starter.voiceMinutesPerDay).toBe(Infinity);
     });
 
     it("starter has 600 included voice seconds per Stripe period", () => {
@@ -131,6 +131,10 @@ describe("tier limits", () => {
 
     it("enterprise does not have a voice limit", () => {
       expect(hasVoiceLimit("enterprise")).toBe(false);
+    });
+
+    it("enterprise with daily voice cap override is limited", () => {
+      expect(hasVoiceLimit("enterprise", { voiceMinutesPerDay: 50 })).toBe(true);
     });
   });
 

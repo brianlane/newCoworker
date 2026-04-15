@@ -6,6 +6,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { header, verifyTelnyxWebhook } from "../_shared/telnyx_webhook.ts";
 import { telnyxMessagingPhoneString } from "../_shared/telnyx_messaging_payload.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
+import { telemetryRecord } from "../_shared/telemetry.ts";
 
 const MAX_BODY = 256 * 1024;
 
@@ -33,7 +34,10 @@ serve(async (req: Request) => {
     publicKey
   );
   if (!v.ok) {
-    return new Response("Forbidden", { status: 403 });
+    return new Response(JSON.stringify({ ok: false, error: "bad_signature" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
   }
 
   let envelope: { data?: { id?: string; event_type?: string; payload?: Record<string, unknown> } };
@@ -51,10 +55,14 @@ serve(async (req: Request) => {
   }
 
   const supabase = createClient(supabaseUrl, serviceKey);
-  const { data: isNew } = await supabase.rpc("telnyx_webhook_try_dedupe", {
+  const { data: isNew, error: dedupeErr } = await supabase.rpc("telnyx_webhook_try_dedupe", {
     p_event_id: eventId,
     p_event_type: eventType
   });
+  if (dedupeErr) {
+    console.error("dedupe", dedupeErr);
+    return new Response("Dedupe error", { status: 500 });
+  }
   if (isNew === false) {
     return new Response(JSON.stringify({ ok: true, duplicate: true }), {
       status: 200,
@@ -105,6 +113,8 @@ serve(async (req: Request) => {
     console.error("sms queue insert", error);
     return new Response("Queue error", { status: 500 });
   }
+
+  await telemetryRecord(supabase, "sms_inbound_enqueued", { business_id: businessId, event_id: eventId });
 
   return new Response(JSON.stringify({ ok: true, enqueued: true }), {
     status: 200,

@@ -4,14 +4,12 @@
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { header, verifyTelnyxWebhook } from "../_shared/telnyx_webhook.ts";
+import { telemetryRecord } from "../_shared/telemetry.ts";
 
 const MAX_BODY = 256 * 1024;
 
-const END_EVENTS = new Set([
-  "call.hangup",
-  "call.ended",
-  "call.cost"
-]);
+/** Hangup / ended only — avoid `call.cost` (may fire multiple times or off teardown timing). */
+const END_EVENTS = new Set(["call.hangup", "call.ended"]);
 
 serve(async (req: Request) => {
   if (req.method !== "POST") {
@@ -37,7 +35,10 @@ serve(async (req: Request) => {
     publicKey
   );
   if (!v.ok) {
-    return new Response("Forbidden", { status: 403 });
+    return new Response(JSON.stringify({ ok: false, error: "bad_signature" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
   }
 
   let envelope: { data?: { id?: string; event_type?: string; payload?: Record<string, unknown> } };
@@ -136,7 +137,23 @@ serve(async (req: Request) => {
     return new Response("Settlement write failed", { status: 500 });
   }
 
-  return new Response(JSON.stringify({ ok: true, call_control_id: callControlId }), {
+  const { error: finErr, data: fin } = await supabase.rpc("voice_try_finalize_settlement", {
+    p_call_control_id: callControlId,
+    p_allow_one_sided: false
+  });
+  if (finErr) {
+    console.error("voice_try_finalize_settlement", finErr);
+    return new Response("Finalize RPC failed", { status: 500 });
+  }
+  const finJson = fin as { ok?: boolean; billable_seconds?: number } | null;
+  if (finJson?.ok === true && typeof finJson.billable_seconds === "number") {
+    await telemetryRecord(supabase, "voice_call_settlement_finalized", {
+      call_control_id: callControlId,
+      billable_seconds: finJson.billable_seconds
+    });
+  }
+
+  return new Response(JSON.stringify({ ok: true, call_control_id: callControlId, finalize: finJson }), {
     status: 200,
     headers: { "Content-Type": "application/json" }
   });

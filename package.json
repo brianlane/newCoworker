@@ -62,6 +62,13 @@
     "undici": "^7.24.7",
     "vitest": "^4.1.1"
   },
+  "optionalDependencies": {
+    "@emnapi/core": "^1.9.2",
+    "@emnapi/runtime": "^1.9.2",
+    "@emnapi/wasi-threads": "^1.2.1",
+    "@napi-rs/wasm-runtime": "^0.2.12",
+    "@tybys/wasm-util": "^0.10.1"
+  },
   "overrides": {
     "axios": "^1.15.0"
   }

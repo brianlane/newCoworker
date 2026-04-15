@@ -75,7 +75,8 @@ function main(): void {
   server.on("upgrade", (req, socket, head) => {
     const host = req.headers.host ?? "localhost";
     const url = new URL(req.url ?? "/", `http://${host}`);
-    if (!url.pathname.endsWith("/voice/stream") && url.pathname !== "/voice/stream") {
+    const path = url.pathname.replace(/\/+$/, "") || "/";
+    if (path !== "/voice/stream" && !path.endsWith("/voice/stream")) {
       socket.destroy();
       return;
     }
@@ -169,10 +170,19 @@ function main(): void {
 
       ws.on("close", () => {
         clearInterval(hb);
-        void supabase
-          .from("voice_active_sessions")
-          .update({ ended_at: new Date().toISOString() })
-          .eq("call_control_id", callControlId);
+        const endedAt = new Date().toISOString();
+        void (async () => {
+          await supabase
+            .from("voice_active_sessions")
+            .update({ ended_at: endedAt })
+            .eq("call_control_id", callControlId);
+          const { error: settleErr } = await supabase.rpc("voice_record_bridge_media_end", {
+            p_call_control_id: callControlId
+          });
+          if (settleErr) {
+            console.error("voice_record_bridge_media_end", callControlId, settleErr.message);
+          }
+        })();
       });
     });
   });

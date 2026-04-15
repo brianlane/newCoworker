@@ -28,7 +28,7 @@ describe("telnyx messaging", () => {
       { apiKey: "KEY", messagingProfileId: "prof", fromE164: "+15550009999" },
       "+15550001111",
       "Hello",
-      fetchMock as typeof fetch
+      { fetchImpl: fetchMock as typeof fetch }
     );
     expect(id).toBe("msg_abc");
     expect(fetchMock).toHaveBeenCalledWith(
@@ -37,5 +37,35 @@ describe("telnyx messaging", () => {
     );
     const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
     expect(body.from).toBe("+15550009999");
+  });
+
+  it("sendTelnyxSms uses global fetch when options omitted", async () => {
+    const g = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: "msg_global_fetch" } })
+    } as Response);
+    const id = await sendTelnyxSms(
+      { apiKey: "KEY", messagingProfileId: "prof" },
+      "+15550001111",
+      "Hello"
+    );
+    expect(id).toBe("msg_global_fetch");
+    g.mockRestore();
+  });
+
+  it("sendTelnyxSms sends Idempotency-Key when provided", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: "msg_x" } })
+    });
+    await sendTelnyxSms(
+      { apiKey: "KEY", messagingProfileId: "prof" },
+      "+15550001111",
+      "Hi",
+      { fetchImpl: fetchMock as typeof fetch, idempotencyKey: "idem-uuid-1" }
+    );
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    const h = init.headers as Record<string, string>;
+    expect(h["Idempotency-Key"]).toBe("idem-uuid-1");
   });
 });

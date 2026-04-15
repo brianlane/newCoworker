@@ -149,7 +149,7 @@ describe("telnyx messaging errors", () => {
         { apiKey: "k", messagingProfileId: "p" },
         "+15550001111",
         "Hi",
-        fetchMock as typeof fetch
+        { fetchImpl: fetchMock as typeof fetch }
       )
     ).rejects.toThrow("Telnyx SMS error");
   });
@@ -165,7 +165,7 @@ describe("telnyx messaging errors", () => {
         { apiKey: "k", messagingProfileId: "p" },
         "+15550001111",
         "Hi",
-        fetchMock as typeof fetch
+        { fetchImpl: fetchMock as typeof fetch }
       )
     ).rejects.toThrow("missing message id");
   });

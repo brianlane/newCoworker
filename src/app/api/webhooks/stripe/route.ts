@@ -93,7 +93,17 @@ export async function POST(request: Request) {
         if (subscriptionId) {
           const existing = await getSubscriptionByStripeSubscriptionId(subscriptionId);
           if (existing) {
-            await updateSubscription(existing.id, { status: "active" });
+            let periodCache: SubscriptionPeriodStripeCache | Record<string, never> = {};
+            try {
+              const stripeSub = await getStripe().subscriptions.retrieve(subscriptionId);
+              periodCache = stripeSubscriptionPeriodCache(stripeSub);
+            } catch (err) {
+              logger.error("Stripe subscription retrieve failed on invoice.paid", {
+                subscriptionId,
+                error: err instanceof Error ? err.message : String(err)
+              });
+            }
+            await updateSubscription(existing.id, { status: "active", ...periodCache });
           }
         }
         break;
@@ -106,7 +116,17 @@ export async function POST(request: Request) {
         if (subscriptionId) {
           const existing = await getSubscriptionByStripeSubscriptionId(subscriptionId);
           if (existing) {
-            await updateSubscription(existing.id, { status: "past_due" });
+            let periodCache: SubscriptionPeriodStripeCache | Record<string, never> = {};
+            try {
+              const stripeSub = await getStripe().subscriptions.retrieve(subscriptionId);
+              periodCache = stripeSubscriptionPeriodCache(stripeSub);
+            } catch (err) {
+              logger.error("Stripe subscription retrieve failed on invoice.payment_failed", {
+                subscriptionId,
+                error: err instanceof Error ? err.message : String(err)
+              });
+            }
+            await updateSubscription(existing.id, { status: "past_due", ...periodCache });
           }
         }
         break;

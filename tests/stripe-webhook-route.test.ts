@@ -170,7 +170,15 @@ describe("stripe webhook route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(updateSubscription).toHaveBeenCalledWith("local_sub_3", { status: "active" });
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "local_sub_3",
+      expect.objectContaining({
+        status: "active",
+        stripe_current_period_start: expect.any(String),
+        stripe_current_period_end: expect.any(String),
+        stripe_subscription_cached_at: expect.any(String)
+      })
+    );
   });
 
   it("still provisions when commitment schedule setup fails", async () => {

@@ -67,7 +67,6 @@ export async function checkLimitReached(
 ): Promise<LimitCheckResult> {
   const limits = getTierLimits(tier, enterpriseLimitsOverride);
 
-  // Enterprise and standard have no daily caps (Infinity)
   if (
     limits.voiceMinutesPerDay === Infinity &&
     limits.smsPerDay === Infinity &&
@@ -82,7 +81,10 @@ export async function checkLimitReached(
     return { allowed: true };
   }
 
-  if (usage.voice_minutes_used >= limits.voiceMinutesPerDay) {
+  if (
+    limits.voiceMinutesPerDay !== Infinity &&
+    usage.voice_minutes_used >= limits.voiceMinutesPerDay
+  ) {
     return {
       allowed: false,
       reason: `Daily voice limit reached (${limits.voiceMinutesPerDay} minutes/day)`,

@@ -1,11 +1,12 @@
 import { HostingerClient } from "@/lib/hostinger/client";
-import { sendTelnyxSms, readTelnyxMessagingConfig } from "@/lib/telnyx/messaging";
+import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { updateBusinessStatus } from "@/lib/db/businesses";
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { spawnSync } from "child_process";
 import { recordProvisioningProgress } from "@/lib/provisioning/progress";
 
 type ProvisioningInput = {
@@ -55,10 +56,25 @@ function loadIdentityTemplate(): string {
   }
 }
 
+/** Bash `printf %q` when available; safe single-quote fallback (testable via `child_process` mock). */
+export function quoteShellEnvValue(value: string): string {
+  try {
+    const r = spawnSync("bash", ["-c", 'printf %q "$1"', "_", value], { encoding: "utf8" });
+    if (r.status === 0 && typeof r.stdout === "string" && r.stdout.length > 0) {
+      return r.stdout.trimEnd();
+    }
+  } catch {
+    /* e.g. Windows dev without bash */
+  }
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 export async function orchestrateProvisioning(
   input: ProvisioningInput,
   deps?: {
     hostinger?: HostingerClient;
+    /** Override env value quoting (defaults to {@link quoteShellEnvValue}). */
+    quoteEnv?: (value: string) => string;
   }
 ): Promise<ProvisioningResult> {
   const { businessId, ownerEmail, ownerPhone, tier } = input;
@@ -123,7 +139,7 @@ export async function orchestrateProvisioning(
 
   const gatewayToken = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
 
-  const escapeShellArg = (str: string): string => str.replace(/'/g, "'\\''");
+  const bashQuote = deps?.quoteEnv ?? quoteShellEnvValue;
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const progressUrl = `${appUrl.replace(/\/$/, "")}/api/provisioning/progress`;
@@ -145,7 +161,7 @@ export async function orchestrateProvisioning(
     ["LIGHTPANDA_WSS_URL", process.env.LIGHTPANDA_WSS_URL ?? "wss://cdn.lightpanda.io/ws"],
     ["PROVISIONING_PROGRESS_URL", progressUrl],
     ["PROVISIONING_PROGRESS_TOKEN", progressToken]
-  ].map(([key, value]) => `${key}='${escapeShellArg(value)}'`).join(" ");
+  ].map(([key, value]) => `${key}=${bashQuote(value)}`).join(" ");
 
   await recordProvisioningProgress({
     businessId,
@@ -225,7 +241,7 @@ export async function orchestrateProvisioning(
 
   if (notifyPhone) {
     try {
-      const cfg = readTelnyxMessagingConfig();
+      const cfg = await getTelnyxMessagingForBusiness(businessId);
       await sendTelnyxSms(cfg, notifyPhone, `Your New Coworker is live! Dashboard: ${dashboardUrl}`);
     } catch (err) {
       logger.warn("Failed to send provisioning SMS", {

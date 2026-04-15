@@ -15,7 +15,8 @@ export type TierLimits = {
 
 export const TIER_LIMITS: Record<PlanTier, TierLimits> = {
   starter: {
-    voiceMinutesPerDay: 60,
+    /** Legacy daily_usage voice cap disabled; Telnyx quota uses `voiceIncludedSecondsPerStripePeriod` per Stripe period. */
+    voiceMinutesPerDay: Infinity,
     voiceIncludedSecondsPerStripePeriod: VOICE_RES_LIMITS.starter.voiceIncludedSecondsPerStripePeriod,
     smsPerDay: 100,
     callsPerDay: 10,
@@ -49,7 +50,10 @@ export function getTierLimits(tier: PlanTier, enterpriseLimitsOverride?: unknown
 }
 
 export function hasVoiceLimit(tier: PlanTier, enterpriseLimitsOverride?: unknown): boolean {
-  return getTierLimits(tier, enterpriseLimitsOverride).voiceMinutesPerDay !== Infinity;
+  const limits = getTierLimits(tier, enterpriseLimitsOverride);
+  if (limits.voiceMinutesPerDay !== Infinity) return true;
+  /** Starter is capped on the Telnyx / Stripe-period pool, not on `daily_usage.voice_minutes_used`. */
+  return tier === "starter";
 }
 
 export function hasSmsThrottle(tier: PlanTier, enterpriseLimitsOverride?: unknown): boolean {

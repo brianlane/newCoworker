@@ -4,6 +4,7 @@
  * Secrets: TELNYX_API_KEY, TELNYX_PUBLIC_KEY, STREAM_URL_SIGNING_SECRET,
  *          SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
  *          BRIDGE_MEDIA_WSS_ORIGIN (optional fallback when route has no origin)
+ * Optional: STRIPE_SECRET_KEY — JIT refresh of subscription period cache (§4.2) when TTL/rollover requires it.
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
@@ -18,9 +19,81 @@ import {
   VOICE_MSG_UNCONFIGURED_NUMBER
 } from "../_shared/voice_messages.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
+import { telemetryRecord } from "../_shared/telemetry.ts";
 
 const MAX_BODY = 256 * 1024;
 const HANDLER_MS = 8000;
+/** Refresh Stripe period cache when older than this (voice §4.2). */
+const STRIPE_PERIOD_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+/** After period end, allow this slack before treating cache as invalid if not refreshed. */
+const STRIPE_PERIOD_ROLLOVER_GRACE_MS = 120_000;
+
+type SubscriptionPeriodRow = {
+  id: string;
+  stripe_subscription_id: string | null;
+  stripe_current_period_start: string | null;
+  stripe_current_period_end: string | null;
+  stripe_subscription_cached_at: string | null;
+};
+
+function subscriptionPeriodNeedsRefresh(row: SubscriptionPeriodRow, stripeSecret: string): boolean {
+  if (!stripeSecret || !row.stripe_subscription_id) return false;
+  const now = Date.now();
+  if (!row.stripe_current_period_start || !row.stripe_current_period_end) return true;
+  if (row.stripe_subscription_cached_at) {
+    const age = now - new Date(row.stripe_subscription_cached_at as string).getTime();
+    if (age > STRIPE_PERIOD_CACHE_TTL_MS) return true;
+  } else {
+    return true;
+  }
+  const endMs = new Date(row.stripe_current_period_end as string).getTime();
+  if (now > endMs + STRIPE_PERIOD_ROLLOVER_GRACE_MS) return true;
+  return false;
+}
+
+async function fetchStripeSubscriptionPeriods(
+  stripeSecret: string,
+  stripeSubscriptionId: string
+): Promise<{ start: string; end: string } | null> {
+  const res = await fetch(
+    `https://api.stripe.com/v1/subscriptions/${encodeURIComponent(stripeSubscriptionId)}`,
+    { headers: { Authorization: `Bearer ${stripeSecret}` } }
+  );
+  if (!res.ok) {
+    console.error("Stripe subscription HTTP", res.status, (await res.text()).slice(0, 500));
+    return null;
+  }
+  const j = (await res.json()) as { current_period_start?: unknown; current_period_end?: unknown };
+  if (typeof j.current_period_start !== "number" || typeof j.current_period_end !== "number") {
+    return null;
+  }
+  return {
+    start: new Date(j.current_period_start * 1000).toISOString(),
+    end: new Date(j.current_period_end * 1000).toISOString()
+  };
+}
+
+async function persistSubscriptionPeriodCache(
+  supabase: ReturnType<typeof createClient>,
+  row: SubscriptionPeriodRow,
+  start: string,
+  end: string
+): Promise<boolean> {
+  const stripe_subscription_cached_at = new Date().toISOString();
+  const { error } = await supabase
+    .from("subscriptions")
+    .update({
+      stripe_current_period_start: start,
+      stripe_current_period_end: end,
+      stripe_subscription_cached_at
+    })
+    .eq("id", row.id);
+  if (error) {
+    console.error("subscriptions period cache update", error);
+    return false;
+  }
+  return true;
+}
 
 function tierCapSeconds(tier: string, enterpriseLimitsRaw: unknown): number {
   if (tier === "enterprise") {
@@ -144,7 +217,10 @@ serve(async (req: Request) => {
   const ts = header(req, "telnyx-timestamp");
   const v = await verifyTelnyxWebhook(rawBody, sig, ts, publicKey);
   if (!v.ok) {
-    return new Response("Forbidden", { status: 403 });
+    return new Response(JSON.stringify({ ok: false, error: "bad_signature" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
   }
 
   let envelope: {
@@ -195,7 +271,10 @@ serve(async (req: Request) => {
   const toRaw = (payload["to"] ?? payload["To"]) as string | undefined;
   const toE164 = normalizeE164(toRaw);
   if (!callControlId || !toE164) {
-    return new Response("Missing call fields", { status: 200 });
+    return new Response(JSON.stringify({ ok: false, error: "missing_call_fields" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
   }
 
   const { data: routeRow, error: routeErr } = await supabase
@@ -240,7 +319,9 @@ serve(async (req: Request) => {
 
   const { data: sub, error: subErr } = await supabase
     .from("subscriptions")
-    .select("stripe_current_period_start")
+    .select(
+      "id, stripe_subscription_id, stripe_current_period_start, stripe_current_period_end, stripe_subscription_cached_at"
+    )
     .eq("business_id", businessId)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -255,8 +336,50 @@ serve(async (req: Request) => {
     });
   }
 
-  const periodStart = sub?.stripe_current_period_start
-    ? new Date(sub.stripe_current_period_start as string).toISOString()
+  const stripeSecret = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
+
+  let periodRow: SubscriptionPeriodRow | null = sub
+    ? {
+        id: sub.id as string,
+        stripe_subscription_id: (sub.stripe_subscription_id as string | null) ?? null,
+        stripe_current_period_start: (sub.stripe_current_period_start as string | null) ?? null,
+        stripe_current_period_end: (sub.stripe_current_period_end as string | null) ?? null,
+        stripe_subscription_cached_at: (sub.stripe_subscription_cached_at as string | null) ?? null
+      }
+    : null;
+
+  if (periodRow && subscriptionPeriodNeedsRefresh(periodRow, stripeSecret)) {
+    const sid = periodRow.stripe_subscription_id;
+    if (sid) {
+      const fetched = await fetchStripeSubscriptionPeriods(stripeSecret, sid);
+      if (fetched) {
+        const ok = await persistSubscriptionPeriodCache(supabase, periodRow, fetched.start, fetched.end);
+        if (ok) {
+          periodRow = {
+            ...periodRow,
+            stripe_current_period_start: fetched.start,
+            stripe_current_period_end: fetched.end,
+            stripe_subscription_cached_at: new Date().toISOString()
+          };
+        }
+      }
+    }
+  }
+
+  const pastEnd =
+    !!periodRow?.stripe_current_period_end &&
+    Date.now() >
+      new Date(periodRow.stripe_current_period_end as string).getTime() + STRIPE_PERIOD_ROLLOVER_GRACE_MS;
+  if (pastEnd) {
+    console.error("voice inbound: stripe period cache past period_end", { businessId });
+    return new Response(JSON.stringify({ ok: false, path: "period_cache_stale" }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  const periodStart = periodRow?.stripe_current_period_start
+    ? new Date(periodRow.stripe_current_period_start as string).toISOString()
     : new Date().toISOString().slice(0, 10) + "T00:00:00.000Z";
 
   const { data: reserveResult, error: resErr } = await supabase.rpc("voice_reserve_for_call", {
@@ -288,6 +411,7 @@ serve(async (req: Request) => {
 
   if (!res?.ok) {
     if (res?.reason === "concurrent_limit") {
+      // Intentional: busy/reject (USER_BUSY), not a quota spoken message or upsell path.
       await rejectIncomingCall(apiKey, callControlId, "USER_BUSY");
     } else {
       await answerThenSpeak(apiKey, callControlId, VOICE_MSG_QUOTA_EXHAUSTED);
@@ -323,10 +447,12 @@ serve(async (req: Request) => {
     (routeRow.media_wss_origin as string | null) ??
     (settings?.bridge_media_wss_origin as string | null) ??
     defaultBridgeOrigin;
-  const path =
+  const pathRaw =
     (routeRow.media_path as string | null) ??
     (settings?.bridge_media_path as string | null) ??
     "/voice/stream";
+  const pathTrimmed = pathRaw.trim().replace(/\/+$/, "") || "/voice/stream";
+  const path = pathTrimmed.startsWith("/") ? pathTrimmed : `/${pathTrimmed}`;
 
   if (!origin) {
     await answerThenSpeak(apiKey, callControlId, VOICE_MSG_BRIDGE_DEGRADED);
@@ -369,7 +495,7 @@ serve(async (req: Request) => {
   }
 
   const base = origin.replace(/\/$/, "");
-  const pth = path.startsWith("/") ? path : `/${path}`;
+  const pth = path;
   const qs = new URLSearchParams({
     v: "1",
     call_control_id: callControlId,
@@ -395,6 +521,10 @@ serve(async (req: Request) => {
   }
 
   await supabase.rpc("voice_mark_answer_issued", { p_call_control_id: callControlId });
+  await telemetryRecord(supabase, "voice_inbound_stream_answered", {
+    business_id: businessId,
+    call_control_id: callControlId
+  });
 
   if (Date.now() > deadline) {
     return new Response(JSON.stringify({ ok: true, slow: true }), {

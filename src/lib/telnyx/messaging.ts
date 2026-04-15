@@ -1,3 +1,5 @@
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
+
 export type TelnyxMessagingConfig = {
   apiKey: string;
   messagingProfileId: string;
@@ -19,6 +21,37 @@ export function readTelnyxMessagingConfig(
   };
 }
 
+/**
+ * Merge platform Telnyx credentials with per-business messaging profile / from-number when set (§1).
+ */
+export async function getTelnyxMessagingForBusiness(
+  businessId: string | null | undefined,
+  client?: Awaited<ReturnType<typeof createSupabaseServiceClient>>
+): Promise<TelnyxMessagingConfig> {
+  const base = readTelnyxMessagingConfig();
+  if (!businessId) return base;
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data } = await db
+    .from("business_telnyx_settings")
+    .select("telnyx_messaging_profile_id, telnyx_sms_from_e164")
+    .eq("business_id", businessId)
+    .maybeSingle();
+  if (!data) return base;
+  const profile = data.telnyx_messaging_profile_id as string | null | undefined;
+  const from = data.telnyx_sms_from_e164 as string | null | undefined;
+  return {
+    apiKey: base.apiKey,
+    messagingProfileId: profile && profile.length > 0 ? profile : base.messagingProfileId,
+    fromE164: from && from.length > 0 ? from : base.fromE164
+  };
+}
+
+export type SendTelnyxSmsOptions = {
+  fetchImpl?: typeof fetch;
+  /** Telnyx supports Idempotency-Key for at-most-once sends (§10). */
+  idempotencyKey?: string;
+};
+
 type TelnyxMessageResponse = { data?: { id?: string } };
 
 /**
@@ -29,8 +62,9 @@ export async function sendTelnyxSms(
   config: TelnyxMessagingConfig,
   toE164: string,
   text: string,
-  fetchImpl: typeof fetch = fetch
+  options?: SendTelnyxSmsOptions
 ): Promise<string> {
+  const fetchImpl = options?.fetchImpl ?? fetch;
   const body: Record<string, string> = {
     to: toE164,
     text,
@@ -40,12 +74,17 @@ export async function sendTelnyxSms(
     body.from = config.fromE164;
   }
 
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${config.apiKey}`,
+    "Content-Type": "application/json"
+  };
+  if (options?.idempotencyKey) {
+    headers["Idempotency-Key"] = options.idempotencyKey;
+  }
+
   const res = await fetchImpl("https://api.telnyx.com/v2/messages", {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      "Content-Type": "application/json"
-    },
+    headers,
     body: JSON.stringify(body)
   });
 

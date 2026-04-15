@@ -39,7 +39,7 @@ vi.mock("@/lib/db/configs", () => ({
 }));
 
 vi.mock("@/lib/telnyx/messaging", () => ({
-  readTelnyxMessagingConfig: vi.fn().mockReturnValue({
+  getTelnyxMessagingForBusiness: vi.fn().mockResolvedValue({
     apiKey: "mock_telnyx_key",
     messagingProfileId: "mock_prof"
   }),
@@ -52,6 +52,19 @@ vi.mock("@/lib/email/client", () => ({
 
 import { updateBusinessStatus } from "@/lib/db/businesses";
 import { upsertBusinessConfig } from "@/lib/db/configs";
+
+/** Accepts bash `printf %q` (often unquoted for safe tokens) or legacy `KEY='…'` quoting. */
+function expectDeployHasEnv(cmd: string, key: string, value: string): void {
+  if (value === "") {
+    expect(cmd).toContain(`${key}=''`);
+    return;
+  }
+  const singleQuoted = `'${value.replace(/'/g, "'\\''")}'`;
+  expect(
+    cmd.includes(`${key}=${singleQuoted}`) || cmd.includes(`${key}=${value}`),
+    `expected ${key}=… in command`
+  ).toBe(true);
+}
 
 describe("provisioning/orchestrate", () => {
   const OLD_ENV = process.env;
@@ -126,6 +139,23 @@ describe("provisioning/orchestrate", () => {
     expect(call.inworld_agent_id).toBeNull();
   });
 
+  it("uses quoteEnv override for deploy command when injected", async () => {
+    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
+    const mockHostinger = {
+      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-quote-inject" }),
+      executeCommand: mockExec
+    };
+    await orchestrateProvisioning(
+      { businessId: "biz-quote-inject", tier: "starter" },
+      {
+        hostinger: mockHostinger as never,
+        quoteEnv: (v) => `<<${v}>>`
+      }
+    );
+    const cmd = mockExec.mock.calls[0][1] as string;
+    expect(cmd).toContain("BUSINESS_ID=<<biz-quote-inject>>");
+  });
+
   it("deploy command allows empty optional Telnyx and Supabase keys", async () => {
     delete process.env.TELNYX_API_KEY;
     delete process.env.TELNYX_MESSAGING_PROFILE_ID;
@@ -164,8 +194,8 @@ describe("provisioning/orchestrate", () => {
     );
 
     const deployCmd = mockExec.mock.calls[0][1] as string;
-    expect(deployCmd).toContain("TELNYX_API_KEY='mock_telnyx'");
-    expect(deployCmd).toContain("TELNYX_MESSAGING_PROFILE_ID='mock_prof'");
+    expectDeployHasEnv(deployCmd, "TELNYX_API_KEY", "mock_telnyx");
+    expectDeployHasEnv(deployCmd, "TELNYX_MESSAGING_PROFILE_ID", "mock_prof");
     expect(deployCmd).not.toContain("INWORLD_AGENT_ID");
   });
 
@@ -182,7 +212,7 @@ describe("provisioning/orchestrate", () => {
     );
 
     const deployCmd = mockExec.mock.calls[0][1] as string;
-    expect(deployCmd).toContain("ROWBOAT_GATEWAY_TOKEN='mock_gateway_token'");
+    expectDeployHasEnv(deployCmd, "ROWBOAT_GATEWAY_TOKEN", "mock_gateway_token");
     expect(deployCmd).not.toContain("OPENCLAW_GATEWAY_TOKEN");
   });
 
@@ -198,7 +228,7 @@ describe("provisioning/orchestrate", () => {
       { hostinger: mockHostinger as never }
     );
 
-    expect(mockExec.mock.calls[0][1]).toContain("TIER='starter'");
+    expectDeployHasEnv(mockExec.mock.calls[0][1] as string, "TIER", "starter");
   });
 
   it("continues even when email notification fails", async () => {
@@ -323,11 +353,14 @@ describe("provisioning/orchestrate", () => {
     );
     expect(mockExec).toHaveBeenCalledTimes(1);
     expect(mockExec.mock.calls[0][0]).toBe("vps-exec-123");
-    expect(mockExec.mock.calls[0][1]).toContain("BUSINESS_ID='biz-exec'");
-    expect(mockExec.mock.calls[0][1]).toContain(
-      "PROVISIONING_PROGRESS_URL='http://localhost:3000/api/provisioning/progress'"
+    const execCmd = mockExec.mock.calls[0][1] as string;
+    expectDeployHasEnv(execCmd, "BUSINESS_ID", "biz-exec");
+    expectDeployHasEnv(
+      execCmd,
+      "PROVISIONING_PROGRESS_URL",
+      "http://localhost:3000/api/provisioning/progress"
     );
-    expect(mockExec.mock.calls[0][1]).toContain("PROVISIONING_PROGRESS_TOKEN='mock_gateway_token'");
+    expectDeployHasEnv(execCmd, "PROVISIONING_PROGRESS_TOKEN", "mock_gateway_token");
   });
 
   it("continues when executeCommand returns non-zero exit", async () => {
@@ -393,7 +426,7 @@ describe("provisioning/orchestrate", () => {
       { businessId: "biz-token-test", tier: "starter" },
       { hostinger: mockHostinger as never }
     );
-    expect(mockExec.mock.calls[0][1]).toContain("NOTIFICATIONS_WEBHOOK_TOKEN='webhook-test-token'");
+    expectDeployHasEnv(mockExec.mock.calls[0][1] as string, "NOTIFICATIONS_WEBHOOK_TOKEN", "webhook-test-token");
   });
 
   it("falls back NOTIFICATIONS_WEBHOOK_TOKEN to SUPABASE_SERVICE_ROLE_KEY", async () => {
@@ -409,7 +442,11 @@ describe("provisioning/orchestrate", () => {
       { businessId: "biz-fallback", tier: "starter" },
       { hostinger: mockHostinger as never }
     );
-    expect(mockExec.mock.calls[0][1]).toContain("NOTIFICATIONS_WEBHOOK_TOKEN='service-key-fallback'");
+    expectDeployHasEnv(
+      mockExec.mock.calls[0][1] as string,
+      "NOTIFICATIONS_WEBHOOK_TOKEN",
+      "service-key-fallback"
+    );
   });
 
   it("throws for enterprise tier — requires custom engagement", async () => {

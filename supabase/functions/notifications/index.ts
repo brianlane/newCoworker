@@ -17,6 +17,7 @@
 //   NOTIFICATIONS_WEBHOOK_TOKEN (optional; for heartbeat script calls)
 
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 
 interface WebhookPayload {
   type: "INSERT" | "UPDATE" | "DELETE";
@@ -99,9 +100,26 @@ serve(async (req: Request) => {
   const errors: string[] = [];
 
   const telnyxKey = Deno.env.get("TELNYX_API_KEY");
-  const telnyxProfile = Deno.env.get("TELNYX_MESSAGING_PROFILE_ID");
-  const telnyxFrom = Deno.env.get("TELNYX_SMS_FROM_E164");
+  let telnyxProfile = Deno.env.get("TELNYX_MESSAGING_PROFILE_ID") ?? "";
+  let telnyxFrom = Deno.env.get("TELNYX_SMS_FROM_E164") ?? "";
   const ownerPhone = Deno.env.get("TELNYX_OWNER_PHONE") ?? Deno.env.get("TWILIO_OWNER_PHONE");
+
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  if (supabaseUrl && serviceKey && record.business_id) {
+    const supa = createClient(supabaseUrl, serviceKey);
+    const { data: trow } = await supa
+      .from("business_telnyx_settings")
+      .select("telnyx_messaging_profile_id, telnyx_sms_from_e164")
+      .eq("business_id", record.business_id)
+      .maybeSingle();
+    if (trow?.telnyx_messaging_profile_id) {
+      telnyxProfile = String(trow.telnyx_messaging_profile_id);
+    }
+    if (trow?.telnyx_sms_from_e164) {
+      telnyxFrom = String(trow.telnyx_sms_from_e164);
+    }
+  }
 
   if (telnyxKey && telnyxProfile && ownerPhone) {
     const body: Record<string, string> = {

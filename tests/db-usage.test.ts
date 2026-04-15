@@ -174,7 +174,7 @@ describe("db/usage", () => {
       expect(result.allowed).toBe(true);
     });
 
-    it("blocks starter when voice limit reached", async () => {
+    it("does not block starter on legacy daily voice minutes (voice quota is Stripe-period Telnyx pool)", async () => {
       const db = mockDb({
         single: vi.fn().mockResolvedValue({
           data: { ...MOCK_USAGE, voice_minutes_used: 60 },
@@ -184,9 +184,7 @@ describe("db/usage", () => {
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
       const result = await checkLimitReached("biz-uuid-1", "starter");
-      expect(result.allowed).toBe(false);
-      expect(result.field).toBe("voice_minutes_used");
-      expect(result.reason).toContain("60 minutes");
+      expect(result.allowed).toBe(true);
     });
 
     it("blocks starter when SMS limit reached", async () => {

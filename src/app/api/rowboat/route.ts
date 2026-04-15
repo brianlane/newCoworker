@@ -2,7 +2,7 @@ import { parseClawLog, evaluateUrgency } from "@/lib/claw/logs";
 import { insertCoworkerLog } from "@/lib/db/logs";
 import { insertNotification } from "@/lib/db/notifications";
 import { getBusiness } from "@/lib/db/businesses";
-import { sendTelnyxSms, readTelnyxMessagingConfig } from "@/lib/telnyx/messaging";
+import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
@@ -66,7 +66,7 @@ export async function POST(request: Request) {
 
       if (ownerPhone) {
         try {
-          const config = readTelnyxMessagingConfig();
+          const config = await getTelnyxMessagingForBusiness(log.businessId);
           await sendTelnyxSms(config, ownerPhone, `Urgent from New Coworker: ${urgency.summary}`);
           await insertNotification({
             id: randomUUID(),
