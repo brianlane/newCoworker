@@ -14,7 +14,7 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "html"],
-      include: ["src/lib/**/*.ts"],
+      include: ["src/lib/**/*.ts", "supabase/functions/_shared/**/*.ts"],
       thresholds: {
         lines: 100,
         functions: 100,

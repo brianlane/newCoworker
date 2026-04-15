@@ -16,6 +16,7 @@ import {
   VOICE_MSG_SYSTEM_ERROR,
   VOICE_MSG_UNCONFIGURED_NUMBER
 } from "../_shared/voice_messages.ts";
+import { normalizeE164 } from "../_shared/normalize_e164.ts";
 
 const MAX_BODY = 256 * 1024;
 const HANDLER_MS = 8000;
@@ -34,15 +35,6 @@ function maxConcurrent(tier: string, enterpriseLimitsRaw: unknown): number {
   }
   if (tier === "standard") return 3;
   return 1;
-}
-
-function normalizeE164(raw: string | undefined): string | null {
-  if (!raw) return null;
-  const d = raw.replace(/[^\d+]/g, "");
-  if (d.startsWith("+")) return d;
-  if (d.length === 10) return `+1${d}`;
-  if (d.length === 11 && d.startsWith("1")) return `+${d}`;
-  return `+${d}`;
 }
 
 async function telnyxAnswerPlain(apiKey: string, callControlId: string): Promise<Response> {
@@ -74,6 +66,26 @@ async function answerThenSpeak(apiKey: string, callControlId: string, text: stri
   });
   if (!sp.ok) {
     console.error("speak failed", callControlId, sp.status, await sp.text());
+  }
+}
+
+/** Reject without answering so carrier/PBX can apply busy treatment (e.g. voicemail). */
+async function rejectIncomingCall(
+  apiKey: string,
+  callControlId: string,
+  cause: "USER_BUSY" | "CALL_REJECTED" = "USER_BUSY"
+): Promise<void> {
+  const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/reject`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ cause })
+  });
+  if (!res.ok) {
+    console.error("reject failed", callControlId, res.status, await res.text());
   }
 }
 
@@ -269,7 +281,7 @@ serve(async (req: Request) => {
 
   if (!res?.ok) {
     if (res?.reason === "concurrent_limit") {
-      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_BRIDGE_DEGRADED);
+      await rejectIncomingCall(apiKey, callControlId, "USER_BUSY");
     } else {
       await answerThenSpeak(apiKey, callControlId, VOICE_MSG_QUOTA_EXHAUSTED);
     }

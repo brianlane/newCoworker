@@ -5,17 +5,9 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { header, verifyTelnyxWebhook } from "../_shared/telnyx_webhook.ts";
 import { telnyxMessagingPhoneString } from "../_shared/telnyx_messaging_payload.ts";
+import { normalizeE164 } from "../_shared/normalize_e164.ts";
 
 const MAX_BODY = 256 * 1024;
-
-function normalizeE164(raw: string | undefined): string | null {
-  if (!raw) return null;
-  const d = raw.replace(/[^\d+]/g, "");
-  if (d.startsWith("+")) return d;
-  if (d.length === 10) return `+1${d}`;
-  if (d.length === 11 && d.startsWith("1")) return `+${d}`;
-  return `+${d}`;
-}
 
 serve(async (req: Request) => {
   if (req.method !== "POST") {

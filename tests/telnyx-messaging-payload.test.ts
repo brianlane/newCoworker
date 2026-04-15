@@ -30,4 +30,19 @@ describe("telnyxMessagingPhoneString", () => {
     expect(Array.isArray(payload.to)).toBe(true);
     expect(telnyxMessagingPhoneString(payload, "to")).toBe("+15550001001");
   });
+
+  it("reads from field", () => {
+    expect(telnyxMessagingPhoneString({ from: "+15550002002" }, "from")).toBe("+15550002002");
+  });
+
+  it("returns undefined when object phone_number is not a string", () => {
+    expect(telnyxMessagingPhoneString({ to: { phone_number: 555 } }, "to")).toBeUndefined();
+    expect(telnyxMessagingPhoneString({ to: { foo: "bar" } }, "to")).toBeUndefined();
+  });
+
+  it("returns undefined when array first element lacks string phone_number", () => {
+    expect(telnyxMessagingPhoneString({ to: [{ phone_number: null }] }, "to")).toBeUndefined();
+    expect(telnyxMessagingPhoneString({ to: [{}] }, "to")).toBeUndefined();
+    expect(telnyxMessagingPhoneString({ to: ["+15551234567"] }, "to")).toBeUndefined();
+  });
 });

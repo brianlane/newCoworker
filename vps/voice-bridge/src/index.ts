@@ -13,6 +13,10 @@ const STREAM_SECRET = process.env.STREAM_URL_SIGNING_SECRET ?? "";
 const SUPABASE_URL = process.env.SUPABASE_URL ?? "";
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
 const BUSINESS_ID = process.env.BUSINESS_ID ?? "";
+/** Min ms between `voice_active_sessions.last_seen_at` writes per call (audio ~50/s otherwise). */
+const _lastSeenMs = Number(process.env.VOICE_SESSION_LAST_SEEN_INTERVAL_MS ?? "15000");
+const LAST_SEEN_UPDATE_INTERVAL_MS =
+  Number.isFinite(_lastSeenMs) && _lastSeenMs >= 1000 ? _lastSeenMs : 15_000;
 
 function b64url(buf: Buffer): string {
   return buf
@@ -152,7 +156,11 @@ function main(): void {
         void heartbeat(supabase, businessId);
       }, 30_000);
 
+      let lastLastSeenWriteMs = Date.now();
       ws.on("message", (_data: RawData) => {
+        const now = Date.now();
+        if (now - lastLastSeenWriteMs < LAST_SEEN_UPDATE_INTERVAL_MS) return;
+        lastLastSeenWriteMs = now;
         void supabase
           .from("voice_active_sessions")
           .update({ last_seen_at: new Date().toISOString() })
