@@ -25,4 +25,14 @@ describe("enterprise limits overrides", () => {
     expect(parseEnterpriseLimitsOverride({ voiceIncludedSecondsPerStripePeriod: 30 })).toBe(null);
     expect(parseEnterpriseLimitsOverride({ maxConcurrentCalls: 0 })).toBe(null);
   });
+
+  it("strips legacy memoryType and still applies known keys", () => {
+    const base = TIER_LIMITS.enterprise;
+    const merged = applyEnterpriseLimitsPatch(base, {
+      memoryType: "lossless",
+      maxConcurrentCalls: 7
+    });
+    expect(merged.maxConcurrentCalls).toBe(7);
+    expect(merged.memoryType).toBe("lossless");
+  });
 });

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { TierLimits } from "./limits";
 
-/** Serializable subset of TierLimits for admin/API (omit key to use enterprise default). */
+/** Serializable subset of TierLimits for admin/API (omit key to use enterprise default). Unknown keys are stripped (e.g. legacy `memoryType`). */
 export const enterpriseLimitsOverrideSchema = z
   .object({
     voiceMinutesPerDay: z.number().positive().finite(),
@@ -9,10 +9,8 @@ export const enterpriseLimitsOverrideSchema = z
     smsPerDay: z.number().positive().finite(),
     callsPerDay: z.number().positive().finite(),
     maxConcurrentCalls: z.number().int().min(1).max(1000),
-    smsThrottled: z.boolean(),
-    memoryType: z.literal("lossless")
+    smsThrottled: z.boolean()
   })
-  .strict()
   .partial();
 
 export type EnterpriseLimitsOverride = z.infer<typeof enterpriseLimitsOverrideSchema>;

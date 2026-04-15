@@ -13,7 +13,6 @@ function str(n: number | undefined): string {
 }
 
 type ThrottleChoice = "inherit" | "true" | "false";
-type MemoryChoice = "inherit" | "lossless";
 
 export function EnterpriseLimitsEditor({
   businessId,
@@ -36,9 +35,6 @@ export function EnterpriseLimitsEditor({
   const [callsDay, setCallsDay] = useState(str(initialOverride?.callsPerDay));
   const [throttle, setThrottle] = useState<ThrottleChoice>(
     initialOverride?.smsThrottled === true ? "true" : initialOverride?.smsThrottled === false ? "false" : "inherit"
-  );
-  const [memory, setMemory] = useState<MemoryChoice>(
-    initialOverride?.memoryType === "lossless" ? "lossless" : "inherit"
   );
 
   const built = useMemo((): EnterpriseLimitsOverride | null => {
@@ -65,9 +61,8 @@ export function EnterpriseLimitsEditor({
     }
     if (throttle === "true") o.smsThrottled = true;
     if (throttle === "false") o.smsThrottled = false;
-    if (memory === "lossless") o.memoryType = "lossless";
     return Object.keys(o).length ? o : null;
-  }, [voiceInc, maxConc, voiceDay, smsDay, callsDay, throttle, memory]);
+  }, [voiceInc, maxConc, voiceDay, smsDay, callsDay, throttle]);
 
   async function save() {
     setLoading(true);
@@ -113,7 +108,6 @@ export function EnterpriseLimitsEditor({
         setSmsDay("");
         setCallsDay("");
         setThrottle("inherit");
-        setMemory("inherit");
         setSaved(true);
         router.refresh();
       }
@@ -195,17 +189,6 @@ export function EnterpriseLimitsEditor({
             <option value="inherit">Platform default (off)</option>
             <option value="true">On</option>
             <option value="false">Off</option>
-          </select>
-        </label>
-        <label className="space-y-1 sm:col-span-2">
-          <span className="text-xs text-parchment/40">Memory mode</span>
-          <select
-            className="w-full rounded-md bg-deep-ink border border-parchment/15 px-3 py-2 text-parchment"
-            value={memory}
-            onChange={(e) => setMemory(e.target.value as MemoryChoice)}
-          >
-            <option value="inherit">Platform default (lossless)</option>
-            <option value="lossless">Lossless</option>
           </select>
         </label>
       </div>
