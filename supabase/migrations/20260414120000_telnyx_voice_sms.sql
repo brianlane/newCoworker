@@ -176,11 +176,16 @@ create table if not exists voice_settlements (
   telnyx_ended_at timestamptz,
   bridge_media_ended_at timestamptz,
   first_signal_at timestamptz,
+  /* Telnyx call.hangup / call.ended payload call_duration (seconds); caps billable at finalize. */
+  telnyx_reported_duration_seconds integer,
   billable_seconds integer,
   finalized_at timestamptz,
   settlement_idempotency_key text unique,
   created_at timestamptz not null default now()
 );
+
+comment on column voice_settlements.telnyx_reported_duration_seconds is
+  'When set, billable_seconds caps at least(wall-clock billable, this value) at finalize.';
 
 alter table voice_settlements enable row level security;
 
@@ -230,6 +235,11 @@ create table if not exists sms_inbound_jobs (
   outbound_idempotency_key uuid,
   processing_started_at timestamptz,
   attempt_count integer not null default 0,
+  telnyx_outbound_message_id text,
+  rowboat_conversation_id text,
+  /* Cached assistant reply when Rowboat succeeded but Telnyx send must retry (avoid duplicate /chat). */
+  rowboat_reply_cached text,
+  last_error text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

@@ -24,7 +24,3 @@ create policy "Owner reads own sms_rowboat_threads"
       select id from businesses where owner_email = auth.email()
     )
   );
-
--- When Rowboat succeeds but Telnyx send fails, retry must not re-post the same user turn to Rowboat.
-alter table sms_inbound_jobs
-  add column if not exists rowboat_reply_cached text;

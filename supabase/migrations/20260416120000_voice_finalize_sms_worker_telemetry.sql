@@ -1,6 +1,5 @@
 -- §9.1 dual-signal finalize, §4 bonus pool (reserve + commit, FIFO grants + allocations),
 -- §10 SMS job claim, §11 sweep, §14 telemetry (+ retention RPC).
--- Telnyx: voice_settlements.telnyx_reported_duration_seconds caps billable at finalize.
 
 -- ---------------------------------------------------------------------------
 -- Telemetry (§14) — lightweight event sink for Edge/app counters
@@ -51,15 +50,6 @@ grant execute on function telemetry_prune_events(interval) to service_role;
 
 comment on function telemetry_prune_events(interval) is
   'Deletes telemetry_events older than p_max_age. Run periodically in production.';
-
--- ---------------------------------------------------------------------------
--- Carrier-reported duration (Telnyx call.hangup payload.call_duration seconds)
--- ---------------------------------------------------------------------------
-alter table voice_settlements
-  add column if not exists telnyx_reported_duration_seconds integer;
-
-comment on column voice_settlements.telnyx_reported_duration_seconds is
-  'When set, billable_seconds caps at least(wall-clock billable, this value) at finalize.';
 
 -- ---------------------------------------------------------------------------
 -- Bonus consumption (actual charge at finalize)
@@ -578,11 +568,6 @@ grant execute on function voice_sweep_stale_settlements(text) to service_role;
 -- ---------------------------------------------------------------------------
 -- SMS inbound job claim (§10)
 -- ---------------------------------------------------------------------------
-alter table sms_inbound_jobs
-  add column if not exists telnyx_outbound_message_id text,
-  add column if not exists rowboat_conversation_id text,
-  add column if not exists last_error text;
-
 create or replace function claim_sms_inbound_jobs(p_limit integer default 5)
 returns setof sms_inbound_jobs
 language plpgsql
