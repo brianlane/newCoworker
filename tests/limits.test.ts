@@ -5,6 +5,7 @@ import {
   hasVoiceLimit,
   hasSmsThrottle
 } from "@/lib/plans/limits";
+import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 
 describe("tier limits", () => {
   describe("starter limits", () => {
@@ -16,12 +17,8 @@ describe("tier limits", () => {
       expect(TIER_LIMITS.starter.voiceIncludedSecondsPerStripePeriod).toBe(600);
     });
 
-    it("starter has 100 SMS per day", () => {
-      expect(TIER_LIMITS.starter.smsPerDay).toBe(100);
-    });
-
-    it("starter has 10 calls per day", () => {
-      expect(TIER_LIMITS.starter.callsPerDay).toBe(10);
+    it("starter has strict monthly SMS cap (UTC month)", () => {
+      expect(TIER_LIMITS.starter.smsPerMonth).toBe(750);
     });
 
     it("starter has 1 concurrent call max", () => {
@@ -38,7 +35,7 @@ describe("tier limits", () => {
   });
 
   describe("standard limits", () => {
-    it("standard has unlimited voice minutes", () => {
+    it("standard has unlimited voice minutes (daily_usage)", () => {
       expect(TIER_LIMITS.standard.voiceMinutesPerDay).toBe(Infinity);
     });
 
@@ -46,12 +43,8 @@ describe("tier limits", () => {
       expect(TIER_LIMITS.standard.voiceIncludedSecondsPerStripePeriod).toBe(15000);
     });
 
-    it("standard has unlimited SMS", () => {
-      expect(TIER_LIMITS.standard.smsPerDay).toBe(Infinity);
-    });
-
-    it("standard has unlimited calls", () => {
-      expect(TIER_LIMITS.standard.callsPerDay).toBe(Infinity);
+    it("standard has strict monthly SMS cap", () => {
+      expect(TIER_LIMITS.standard.smsPerMonth).toBe(3000);
     });
 
     it("standard has 3 concurrent calls max", () => {
@@ -68,7 +61,7 @@ describe("tier limits", () => {
   });
 
   describe("enterprise limits", () => {
-    it("enterprise has unlimited voice minutes", () => {
+    it("enterprise has unlimited voice minutes (daily_usage)", () => {
       expect(TIER_LIMITS.enterprise.voiceMinutesPerDay).toBe(Infinity);
     });
 
@@ -76,8 +69,8 @@ describe("tier limits", () => {
       expect(TIER_LIMITS.enterprise.voiceIncludedSecondsPerStripePeriod).toBe(150000);
     });
 
-    it("enterprise has unlimited SMS", () => {
-      expect(TIER_LIMITS.enterprise.smsPerDay).toBe(Infinity);
+    it("enterprise has unlimited SMS by default", () => {
+      expect(TIER_LIMITS.enterprise.smsPerMonth).toBe(Infinity);
     });
 
     it("enterprise has 10 concurrent calls max", () => {
@@ -90,6 +83,23 @@ describe("tier limits", () => {
 
     it("enterprise memory is lossless", () => {
       expect(TIER_LIMITS.enterprise.memoryType).toBe("lossless");
+    });
+  });
+
+  describe("usage copy helpers", () => {
+    it("voice and SMS lines match tier defaults", () => {
+      expect(voiceMinutesLine("starter")).toBe("10 voice minutes");
+      expect(smsMonthlyLine("starter")).toBe("750 SMS / month");
+      expect(voiceMinutesLine("standard")).toBe("250 voice minutes");
+      expect(smsMonthlyLine("standard")).toBe("3000 SMS / month");
+      expect(smsMonthlyLine("enterprise")).toBe("Unlimited SMS / month");
+    });
+
+    it("respects enterprise overrides in copy helpers", () => {
+      expect(smsMonthlyLine("enterprise", { smsPerMonth: 999 })).toBe("999 SMS / month");
+      expect(voiceMinutesLine("enterprise", { voiceIncludedSecondsPerStripePeriod: 120 })).toBe(
+        "2 voice minutes"
+      );
     });
   });
 
@@ -116,7 +126,7 @@ describe("tier limits", () => {
       });
       expect(limits.voiceIncludedSecondsPerStripePeriod).toBe(500_000);
       expect(limits.maxConcurrentCalls).toBe(25);
-      expect(limits.smsPerDay).toBe(Infinity);
+      expect(limits.smsPerMonth).toBe(Infinity);
     });
   });
 

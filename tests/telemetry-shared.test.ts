@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { telemetryRecord } from "../supabase/functions/_shared/telemetry.ts";
+import { telemetryRecord } from "../supabase/functions/_shared/telemetry";
 
 describe("telemetryRecord (Edge shared)", () => {
   it("invokes telemetry_record RPC", async () => {

@@ -20,6 +20,11 @@ import {
 } from "../_shared/voice_messages.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
+import {
+  answerThenSpeak,
+  rejectIncomingCall,
+  telnyxAnswerWithStream
+} from "../_shared/telnyx_call_actions.ts";
 
 const MAX_BODY = 256 * 1024;
 const HANDLER_MS = 8000;
@@ -113,76 +118,6 @@ function maxConcurrent(tier: string, enterpriseLimitsRaw: unknown): number {
     return VOICE_RES_LIMITS.standard.maxConcurrentCalls;
   }
   return VOICE_RES_LIMITS.starter.maxConcurrentCalls;
-}
-
-async function telnyxAnswerPlain(apiKey: string, callControlId: string): Promise<Response> {
-  const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/answer`;
-  return fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({})
-  });
-}
-
-async function answerThenSpeak(apiKey: string, callControlId: string, text: string): Promise<void> {
-  const ans = await telnyxAnswerPlain(apiKey, callControlId);
-  if (!ans.ok) {
-    console.error("answer plain failed", callControlId, ans.status, await ans.text());
-    return;
-  }
-  const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/speak`;
-  const sp = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ payload: text, voice: "female", language: "en-US" })
-  });
-  if (!sp.ok) {
-    console.error("speak failed", callControlId, sp.status, await sp.text());
-  }
-}
-
-/** Reject without answering so carrier/PBX can apply busy treatment (e.g. voicemail). */
-async function rejectIncomingCall(
-  apiKey: string,
-  callControlId: string,
-  cause: "USER_BUSY" | "CALL_REJECTED" = "USER_BUSY"
-): Promise<void> {
-  const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/reject`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ cause })
-  });
-  if (!res.ok) {
-    console.error("reject failed", callControlId, res.status, await res.text());
-  }
-}
-
-async function telnyxAnswerStream(apiKey: string, callControlId: string, streamUrl: string): Promise<Response> {
-  const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/answer`;
-  return fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      stream_url: streamUrl,
-      stream_track: "both_tracks",
-      stream_bidirectional_mode: "rtp",
-      stream_bidirectional_codec: "L16",
-      stream_sampling_rate: 16000
-    })
-  });
 }
 
 serve(async (req: Request) => {
@@ -372,8 +307,9 @@ serve(async (req: Request) => {
       new Date(periodRow.stripe_current_period_end as string).getTime() + STRIPE_PERIOD_ROLLOVER_GRACE_MS;
   if (pastEnd) {
     console.error("voice inbound: stripe period cache past period_end", { businessId });
-    return new Response(JSON.stringify({ ok: false, path: "period_cache_stale" }), {
-      status: 500,
+    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SYSTEM_ERROR);
+    return new Response(JSON.stringify({ ok: true, path: "period_cache_stale" }), {
+      status: 200,
       headers: { "Content-Type": "application/json" }
     });
   }
@@ -507,7 +443,7 @@ serve(async (req: Request) => {
   });
   const streamUrl = `${base}${pth}?${qs.toString()}`.replace(/^http:/i, "ws:").replace(/^https:/i, "wss:");
 
-  const answerRes = await telnyxAnswerStream(apiKey, callControlId, streamUrl);
+  const answerRes = await telnyxAnswerWithStream(apiKey, callControlId, { streamUrl });
   if (!answerRes.ok) {
     const errText = await answerRes.text();
     console.error("answer failed", answerRes.status, errText.slice(0, 500));

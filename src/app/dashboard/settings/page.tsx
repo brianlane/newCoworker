@@ -4,6 +4,8 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getSubscription } from "@/lib/db/subscriptions";
+import type { PlanTier } from "@/lib/plans/tier";
+import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +17,7 @@ export default async function SettingsPage() {
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
-    .select("id, tier")
+    .select("id, tier, enterprise_limits")
     .eq("owner_email", user.email)
     .limit(1);
 
@@ -44,6 +46,22 @@ export default async function SettingsPage() {
               </Badge>
             </dd>
           </div>
+          {business?.tier && (
+            <div className="pt-2 border-t border-parchment/10">
+              <dt className="text-parchment/50 text-xs mb-1">Included usage</dt>
+              <dd className="text-xs text-parchment/60 leading-relaxed">
+                {voiceMinutesLine(
+                  business.tier as PlanTier,
+                  business.tier === "enterprise" ? business.enterprise_limits : undefined
+                )}
+                <br />
+                {smsMonthlyLine(
+                  business.tier as PlanTier,
+                  business.tier === "enterprise" ? business.enterprise_limits : undefined
+                )}
+              </dd>
+            </div>
+          )}
           <div className="flex justify-between">
             <dt className="text-parchment/50">Subscription status</dt>
             <dd>

@@ -2,7 +2,13 @@ import { generateKeyPairSync, sign } from "node:crypto";
 import { describe, it, expect, vi } from "vitest";
 import { verifyTelnyxWebhookSignature } from "@/lib/telnyx/webhook-verify";
 import { signStreamUrlPayload, verifyStreamUrlPayload, newStreamNonce } from "@/lib/telnyx/stream-url";
-import { telnyxAnswerWithStream, telnyxSpeak } from "@/lib/telnyx/call-control";
+import {
+  answerThenSpeak,
+  rejectIncomingCall,
+  telnyxAnswerPlain,
+  telnyxAnswerWithStream,
+  telnyxSpeak
+} from "../supabase/functions/_shared/telnyx_call_actions";
 import * as voiceMessages from "@/lib/telnyx/voice-messages";
 
 describe("telnyx webhook-verify", () => {
@@ -124,6 +130,90 @@ describe("telnyx call-control", () => {
       "https://api.telnyx.com/v2/calls/cc2/actions/speak",
       expect.anything()
     );
+  });
+
+  it("telnyxAnswerPlain posts empty answer body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    await telnyxAnswerPlain("key", "cc-plain", fetchMock as typeof fetch);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.telnyx.com/v2/calls/cc-plain/actions/answer",
+      expect.objectContaining({
+        method: "POST",
+        body: "{}"
+      })
+    );
+  });
+
+  it("answerThenSpeak returns early when answer fails", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      text: () => Promise.resolve("bad")
+    });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    await answerThenSpeak("k", "cc", "hi", fetchMock as typeof fetch);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
+  });
+
+  it("answerThenSpeak logs when speak fails", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, text: () => Promise.resolve("") })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        text: () => Promise.resolve("nope")
+      });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    await answerThenSpeak("k", "cc", "hi", fetchMock as typeof fetch);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
+  });
+
+  it("answerThenSpeak completes when answer and speak succeed", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, text: () => Promise.resolve("") });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    await answerThenSpeak("k", "cc", "hi", fetchMock as typeof fetch);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(err).not.toHaveBeenCalled();
+    err.mockRestore();
+  });
+
+  it("rejectIncomingCall logs when Telnyx returns error", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      text: () => Promise.resolve("err")
+    });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    await rejectIncomingCall("k", "cc", "USER_BUSY", fetchMock as typeof fetch);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.telnyx.com/v2/calls/cc/actions/reject",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ cause: "USER_BUSY" })
+      })
+    );
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
+  });
+
+  it("rejectIncomingCall succeeds when Telnyx returns ok", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve("")
+    });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    await rejectIncomingCall("k", "cc", "CALL_REJECTED", fetchMock as typeof fetch);
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({
+      cause: "CALL_REJECTED"
+    });
+    expect(err).not.toHaveBeenCalled();
+    err.mockRestore();
   });
 });
 

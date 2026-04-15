@@ -6,8 +6,10 @@ export type TierLimits = {
   voiceMinutesPerDay: number;
   /** Included voice seconds per Stripe billing period (Telnyx + Gemini path). */
   voiceIncludedSecondsPerStripePeriod: number;
-  smsPerDay: number;
-  callsPerDay: number;
+  /**
+   * SMS quota per calendar month (UTC): sum of `daily_usage.sms_sent` for the month must stay below this.
+   */
+  smsPerMonth: number;
   maxConcurrentCalls: number;
   smsThrottled: boolean;
   memoryType: "lossless";
@@ -18,8 +20,7 @@ export const TIER_LIMITS: Record<PlanTier, TierLimits> = {
     /** Legacy daily_usage voice cap disabled; Telnyx quota uses `voiceIncludedSecondsPerStripePeriod` per Stripe period. */
     voiceMinutesPerDay: Infinity,
     voiceIncludedSecondsPerStripePeriod: VOICE_RES_LIMITS.starter.voiceIncludedSecondsPerStripePeriod,
-    smsPerDay: 100,
-    callsPerDay: 10,
+    smsPerMonth: 750,
     maxConcurrentCalls: VOICE_RES_LIMITS.starter.maxConcurrentCalls,
     smsThrottled: true,
     memoryType: "lossless"
@@ -27,8 +28,7 @@ export const TIER_LIMITS: Record<PlanTier, TierLimits> = {
   standard: {
     voiceMinutesPerDay: Infinity,
     voiceIncludedSecondsPerStripePeriod: VOICE_RES_LIMITS.standard.voiceIncludedSecondsPerStripePeriod,
-    smsPerDay: Infinity,
-    callsPerDay: Infinity,
+    smsPerMonth: 3000,
     maxConcurrentCalls: VOICE_RES_LIMITS.standard.maxConcurrentCalls,
     smsThrottled: false,
     memoryType: "lossless"
@@ -36,8 +36,7 @@ export const TIER_LIMITS: Record<PlanTier, TierLimits> = {
   enterprise: {
     voiceMinutesPerDay: Infinity,
     voiceIncludedSecondsPerStripePeriod: VOICE_RES_LIMITS.enterprise.voiceIncludedSecondsPerStripePeriod,
-    smsPerDay: Infinity,
-    callsPerDay: Infinity,
+    smsPerMonth: Infinity,
     maxConcurrentCalls: VOICE_RES_LIMITS.enterprise.maxConcurrentCalls,
     smsThrottled: false,
     memoryType: "lossless"

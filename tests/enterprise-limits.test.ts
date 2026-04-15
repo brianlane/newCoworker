@@ -10,6 +10,10 @@ describe("enterprise limits overrides", () => {
     expect(applyEnterpriseLimitsPatch(base, { notAField: 1 })).toEqual(base);
   });
 
+  it("parseEnterpriseLimitsOverride rejects non-object raw like arrays", () => {
+    expect(parseEnterpriseLimitsOverride([1, 2])).toBe(null);
+  });
+
   it("parses and applies a partial patch", () => {
     const base = TIER_LIMITS.enterprise;
     const merged = applyEnterpriseLimitsPatch(base, {
@@ -34,5 +38,23 @@ describe("enterprise limits overrides", () => {
     });
     expect(merged.maxConcurrentCalls).toBe(7);
     expect(merged.memoryType).toBe("lossless");
+  });
+
+  it("maps legacy smsPerDay to monthly cap (×30)", () => {
+    const base = TIER_LIMITS.enterprise;
+    const merged = applyEnterpriseLimitsPatch(base, { smsPerDay: 25 });
+    expect(merged.smsPerMonth).toBe(750);
+  });
+
+  it("preserves explicit smsPerMonth", () => {
+    const base = TIER_LIMITS.enterprise;
+    const merged = applyEnterpriseLimitsPatch(base, { smsPerMonth: 12_000 });
+    expect(merged.smsPerMonth).toBe(12_000);
+  });
+
+  it("applies enterprise smsPerMonth override", () => {
+    const base = TIER_LIMITS.enterprise;
+    const merged = applyEnterpriseLimitsPatch(base, { smsPerMonth: 50_000 });
+    expect(merged.smsPerMonth).toBe(50_000);
   });
 });

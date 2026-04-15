@@ -31,8 +31,7 @@ export function EnterpriseLimitsEditor({
   const [voiceInc, setVoiceInc] = useState(str(initialOverride?.voiceIncludedSecondsPerStripePeriod));
   const [maxConc, setMaxConc] = useState(str(initialOverride?.maxConcurrentCalls));
   const [voiceDay, setVoiceDay] = useState(str(initialOverride?.voiceMinutesPerDay));
-  const [smsDay, setSmsDay] = useState(str(initialOverride?.smsPerDay));
-  const [callsDay, setCallsDay] = useState(str(initialOverride?.callsPerDay));
+  const [smsMonth, setSmsMonth] = useState(str(initialOverride?.smsPerMonth));
   const [throttle, setThrottle] = useState<ThrottleChoice>(
     initialOverride?.smsThrottled === true ? "true" : initialOverride?.smsThrottled === false ? "false" : "inherit"
   );
@@ -51,18 +50,14 @@ export function EnterpriseLimitsEditor({
       const n = Number(voiceDay);
       if (Number.isFinite(n) && n > 0) o.voiceMinutesPerDay = n;
     }
-    if (smsDay.trim()) {
-      const n = Number(smsDay);
-      if (Number.isFinite(n) && n > 0) o.smsPerDay = n;
-    }
-    if (callsDay.trim()) {
-      const n = Number(callsDay);
-      if (Number.isFinite(n) && n > 0) o.callsPerDay = n;
+    if (smsMonth.trim()) {
+      const n = Number(smsMonth);
+      if (Number.isFinite(n) && n > 0) o.smsPerMonth = n;
     }
     if (throttle === "true") o.smsThrottled = true;
     if (throttle === "false") o.smsThrottled = false;
     return Object.keys(o).length ? o : null;
-  }, [voiceInc, maxConc, voiceDay, smsDay, callsDay, throttle]);
+  }, [voiceInc, maxConc, voiceDay, smsMonth, throttle]);
 
   async function save() {
     setLoading(true);
@@ -105,8 +100,7 @@ export function EnterpriseLimitsEditor({
         setVoiceInc("");
         setMaxConc("");
         setVoiceDay("");
-        setSmsDay("");
-        setCallsDay("");
+        setSmsMonth("");
         setThrottle("inherit");
         setSaved(true);
         router.refresh();
@@ -127,6 +121,9 @@ export function EnterpriseLimitsEditor({
         {effectiveLimits.voiceMinutesPerDay === Infinity
           ? " · daily voice: unlimited"
           : ` · daily voice: ${effectiveLimits.voiceMinutesPerDay} min`}
+        {effectiveLimits.smsPerMonth === Infinity
+          ? " · SMS: unlimited / month"
+          : ` · SMS: ${effectiveLimits.smsPerMonth}/month`}
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="space-y-1">
@@ -160,21 +157,11 @@ export function EnterpriseLimitsEditor({
           />
         </label>
         <label className="space-y-1">
-          <span className="text-xs text-parchment/40">SMS / day (cap)</span>
+          <span className="text-xs text-parchment/40">SMS / month</span>
           <input
             className="w-full rounded-md bg-deep-ink border border-parchment/15 px-3 py-2 text-parchment"
-            value={smsDay}
-            onChange={(e) => setSmsDay(e.target.value)}
-            inputMode="numeric"
-            placeholder="empty = unlimited"
-          />
-        </label>
-        <label className="space-y-1">
-          <span className="text-xs text-parchment/40">Calls / day (cap)</span>
-          <input
-            className="w-full rounded-md bg-deep-ink border border-parchment/15 px-3 py-2 text-parchment"
-            value={callsDay}
-            onChange={(e) => setCallsDay(e.target.value)}
+            value={smsMonth}
+            onChange={(e) => setSmsMonth(e.target.value)}
             inputMode="numeric"
             placeholder="empty = unlimited"
           />
