@@ -1,4 +1,6 @@
--- §9.1 dual-signal finalize, §4 bonus pool (reserve + commit), §10 SMS job claim, §11 sweep, §14 telemetry.
+-- §9.1 dual-signal finalize, §4 bonus pool (reserve + commit, FIFO grants + allocations),
+-- §10 SMS job claim, §11 sweep, §14 telemetry (+ retention RPC).
+-- Telnyx: voice_settlements.telnyx_reported_duration_seconds caps billable at finalize.
 
 -- ---------------------------------------------------------------------------
 -- Telemetry (§14) — lightweight event sink for Edge/app counters
@@ -30,6 +32,35 @@ $$;
 
 grant execute on function telemetry_record(text, jsonb) to service_role;
 
+create or replace function telemetry_prune_events(p_max_age interval default interval '90 days')
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  n int;
+begin
+  delete from telemetry_events where created_at < now() - p_max_age;
+  get diagnostics n = row_count;
+  return n;
+end;
+$$;
+
+grant execute on function telemetry_prune_events(interval) to service_role;
+
+comment on function telemetry_prune_events(interval) is
+  'Deletes telemetry_events older than p_max_age. Run periodically in production.';
+
+-- ---------------------------------------------------------------------------
+-- Carrier-reported duration (Telnyx call.hangup payload.call_duration seconds)
+-- ---------------------------------------------------------------------------
+alter table voice_settlements
+  add column if not exists telnyx_reported_duration_seconds integer;
+
+comment on column voice_settlements.telnyx_reported_duration_seconds is
+  'When set, billable_seconds caps at least(wall-clock billable, this value) at finalize.';
+
 -- ---------------------------------------------------------------------------
 -- Bonus consumption (actual charge at finalize)
 -- ---------------------------------------------------------------------------
@@ -55,7 +86,7 @@ begin
       and voided_at is null
       and expires_at > now()
       and seconds_remaining > 0
-    order by purchased_at
+    order by expires_at asc, purchased_at asc
     for update
   loop
     exit when remaining <= 0;
@@ -71,6 +102,77 @@ end;
 $$;
 
 grant execute on function consume_voice_bonus_seconds(uuid, integer) to service_role;
+
+-- Debit bonus using explicit per-grant chunks from reserve (FIFO order in JSON array).
+create or replace function consume_voice_bonus_from_allocations(
+  p_business_id uuid,
+  p_allocations jsonb,
+  p_take integer
+)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  remaining int := greatest(0, p_take);
+  took int := 0;
+  i int;
+  n int;
+  elem jsonb;
+  gid uuid;
+  allot int;
+  cap int;
+  chunk int;
+  sv int;
+begin
+  if remaining <= 0 or p_allocations is null or jsonb_typeof(p_allocations) <> 'array' then
+    return 0;
+  end if;
+  n := jsonb_array_length(p_allocations);
+  if n is null or n <= 0 then
+    return 0;
+  end if;
+  for i in 0 .. n - 1 loop
+    exit when remaining <= 0;
+    elem := p_allocations->i;
+    if elem is null or jsonb_typeof(elem) <> 'object' then
+      continue;
+    end if;
+    begin
+      gid := (elem->>'grant_id')::uuid;
+    exception
+      when invalid_text_representation then continue;
+    end;
+    if gid is null then
+      continue;
+    end if;
+    allot := greatest(0, coalesce((elem->>'seconds')::int, 0));
+    cap := least(remaining, allot);
+    if cap <= 0 then
+      continue;
+    end if;
+    select seconds_remaining into sv
+    from voice_bonus_grants
+    where id = gid and business_id = p_business_id
+      and voided_at is null
+      and expires_at > now()
+    for update;
+    if not found or sv <= 0 then
+      continue;
+    end if;
+    chunk := least(cap, sv);
+    update voice_bonus_grants
+    set seconds_remaining = seconds_remaining - chunk
+    where id = gid;
+    took := took + chunk;
+    remaining := remaining - chunk;
+  end loop;
+  return took;
+end;
+$$;
+
+grant execute on function consume_voice_bonus_from_allocations(uuid, jsonb, integer) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- Replace reservation RPC: included + optional bonus (grants charged at finalize)
@@ -102,6 +204,12 @@ declare
   v_bonus_inflight int;
   v_need int;
   v_row voice_reservations%rowtype;
+  v_alloc jsonb := '[]'::jsonb;
+  v_left int;
+  gr record;
+  v_inflight_gr int;
+  v_eff int;
+  chunk int;
 begin
   insert into business_voice_quota_lock (business_id) values (p_business_id)
   on conflict (business_id) do nothing;
@@ -175,6 +283,49 @@ begin
     );
   end if;
 
+  v_left := v_from_bon;
+  if v_left > 0 then
+    for gr in
+      select id, seconds_remaining
+      from voice_bonus_grants
+      where business_id = p_business_id
+        and voided_at is null
+        and expires_at > now()
+        and seconds_remaining > 0
+      order by expires_at asc, purchased_at asc
+      for update
+    loop
+      exit when v_left <= 0;
+      select coalesce(sum((je.chunk->>'seconds')::int), 0) into v_inflight_gr
+      from voice_reservations vr
+      cross join lateral jsonb_array_elements(vr.bonus_grant_allocations) as je(chunk)
+      where vr.business_id = p_business_id
+        and vr.state in ('pending_answer', 'active')
+        and vr.bonus_grant_allocations is not null
+        and jsonb_typeof(vr.bonus_grant_allocations) = 'array'
+        and (je.chunk->>'grant_id')::uuid = gr.id;
+
+      v_eff := gr.seconds_remaining - v_inflight_gr;
+      if v_eff <= 0 then
+        continue;
+      end if;
+      chunk := least(v_left, v_eff);
+      v_alloc := v_alloc || jsonb_build_array(
+        jsonb_build_object('grant_id', gr.id, 'seconds', chunk)
+      );
+      v_left := v_left - chunk;
+    end loop;
+  end if;
+
+  if v_from_bon > 0 and v_left > 0 then
+    return jsonb_build_object(
+      'ok', false,
+      'reason', 'quota_exhausted',
+      'remaining_seconds', v_remaining,
+      'bonus_seconds_available', v_bonus_pool
+    );
+  end if;
+
   insert into voice_reservations (
     business_id,
     call_control_id,
@@ -182,7 +333,8 @@ begin
     reserved_total_seconds,
     stripe_period_start_key,
     reserved_included_seconds,
-    reserved_bonus_seconds
+    reserved_bonus_seconds,
+    bonus_grant_allocations
   ) values (
     p_business_id,
     p_call_control_id,
@@ -190,7 +342,8 @@ begin
     v_grant,
     p_stripe_period_start,
     v_from_inc,
-    v_from_bon
+    v_from_bon,
+    case when v_from_bon > 0 then v_alloc else null end
   )
   returning * into v_row;
 
@@ -235,10 +388,14 @@ declare
   v_end timestamptz;
   elapsed numeric;
   billable int;
+  wall_cap int;
+  carrier_cap int;
   commit_inc int;
   commit_bon int;
   t_tel timestamptz;
   t_br timestamptz;
+  v_bon_took int;
+  v_bon_rest int;
 begin
   select * into s from voice_settlements where call_control_id = p_call_control_id for update;
   if not found then
@@ -283,7 +440,18 @@ begin
     elapsed := 0;
   end if;
 
-  billable := floor(elapsed)::int;
+  wall_cap := floor(elapsed)::int;
+  if wall_cap > r.reserved_total_seconds then
+    wall_cap := r.reserved_total_seconds;
+  end if;
+
+  carrier_cap := s.telnyx_reported_duration_seconds;
+  if carrier_cap is not null and carrier_cap >= 0 then
+    billable := least(wall_cap, carrier_cap);
+  else
+    billable := wall_cap;
+  end if;
+
   if billable > r.reserved_total_seconds then
     billable := r.reserved_total_seconds;
   end if;
@@ -292,7 +460,20 @@ begin
   commit_bon := least(billable - commit_inc, r.reserved_bonus_seconds);
 
   if commit_bon > 0 then
-    perform consume_voice_bonus_seconds(r.business_id, commit_bon);
+    if r.bonus_grant_allocations is not null and jsonb_typeof(r.bonus_grant_allocations) = 'array'
+       and jsonb_array_length(r.bonus_grant_allocations) > 0 then
+      v_bon_took := consume_voice_bonus_from_allocations(
+        r.business_id,
+        r.bonus_grant_allocations,
+        commit_bon
+      );
+      v_bon_rest := commit_bon - v_bon_took;
+      if v_bon_rest > 0 then
+        perform consume_voice_bonus_seconds(r.business_id, v_bon_rest);
+      end if;
+    else
+      perform consume_voice_bonus_seconds(r.business_id, commit_bon);
+    end if;
   end if;
 
   update voice_billing_period_usage

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   TIER_LIMITS,
   getTierLimits,
+  hasDailyVoiceMinutesCap,
+  hasIncludedTelnyxVoicePool,
   hasVoiceLimit,
   hasSmsThrottle
 } from "@/lib/plans/limits";
@@ -130,21 +132,36 @@ describe("tier limits", () => {
     });
   });
 
-  describe("hasVoiceLimit", () => {
-    it("starter has a voice limit", () => {
-      expect(hasVoiceLimit("starter")).toBe(true);
+  describe("hasDailyVoiceMinutesCap / hasVoiceLimit", () => {
+    it("starter has no legacy daily voice cap (Telnyx pool is separate)", () => {
+      expect(hasDailyVoiceMinutesCap("starter")).toBe(false);
+      expect(hasVoiceLimit("starter")).toBe(false);
     });
 
-    it("standard does not have a voice limit", () => {
+    it("standard has no daily voice cap", () => {
+      expect(hasDailyVoiceMinutesCap("standard")).toBe(false);
       expect(hasVoiceLimit("standard")).toBe(false);
     });
 
-    it("enterprise does not have a voice limit", () => {
+    it("enterprise has no daily voice cap by default", () => {
+      expect(hasDailyVoiceMinutesCap("enterprise")).toBe(false);
       expect(hasVoiceLimit("enterprise")).toBe(false);
     });
 
-    it("enterprise with daily voice cap override is limited", () => {
+    it("enterprise with daily voice cap override is limited on daily_usage", () => {
+      expect(hasDailyVoiceMinutesCap("enterprise", { voiceMinutesPerDay: 50 })).toBe(true);
       expect(hasVoiceLimit("enterprise", { voiceMinutesPerDay: 50 })).toBe(true);
+    });
+  });
+
+  describe("hasIncludedTelnyxVoicePool", () => {
+    it("starter has a finite included pool per Stripe period", () => {
+      expect(hasIncludedTelnyxVoicePool("starter")).toBe(true);
+    });
+
+    it("standard and enterprise default tiers have a finite pool", () => {
+      expect(hasIncludedTelnyxVoicePool("standard")).toBe(true);
+      expect(hasIncludedTelnyxVoicePool("enterprise")).toBe(true);
     });
   });
 

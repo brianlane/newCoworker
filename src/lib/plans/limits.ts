@@ -48,11 +48,31 @@ export function getTierLimits(tier: PlanTier, enterpriseLimitsOverride?: unknown
   return applyEnterpriseLimitsPatch(TIER_LIMITS.enterprise, enterpriseLimitsOverride);
 }
 
+/**
+ * True when legacy `daily_usage` / `checkLimitReached` may enforce a **daily** voice cap.
+ * Starter/standard Telnyx quota uses `voiceIncludedSecondsPerStripePeriod` instead — use
+ * `hasIncludedTelnyxVoicePool` + `voiceMinutesLine` for UI copy.
+ */
+export function hasDailyVoiceMinutesCap(
+  tier: PlanTier,
+  enterpriseLimitsOverride?: unknown
+): boolean {
+  return getTierLimits(tier, enterpriseLimitsOverride).voiceMinutesPerDay !== Infinity;
+}
+
+/** @deprecated Use `hasDailyVoiceMinutesCap` (same behavior; name reflects daily_usage only). */
 export function hasVoiceLimit(tier: PlanTier, enterpriseLimitsOverride?: unknown): boolean {
-  const limits = getTierLimits(tier, enterpriseLimitsOverride);
-  if (limits.voiceMinutesPerDay !== Infinity) return true;
-  /** Starter is capped on the Telnyx / Stripe-period pool, not on `daily_usage.voice_minutes_used`. */
-  return tier === "starter";
+  return hasDailyVoiceMinutesCap(tier, enterpriseLimitsOverride);
+}
+
+/** Included Telnyx voice pool per Stripe period (finite for all default tiers). */
+export function hasIncludedTelnyxVoicePool(
+  tier: PlanTier,
+  enterpriseLimitsOverride?: unknown
+): boolean {
+  return (
+    getTierLimits(tier, enterpriseLimitsOverride).voiceIncludedSecondsPerStripePeriod !== Infinity
+  );
 }
 
 export function hasSmsThrottle(tier: PlanTier, enterpriseLimitsOverride?: unknown): boolean {

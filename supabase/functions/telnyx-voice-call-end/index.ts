@@ -11,6 +11,18 @@ const MAX_BODY = 256 * 1024;
 /** Hangup / ended only — avoid `call.cost` (may fire multiple times or off teardown timing). */
 const END_EVENTS = new Set(["call.hangup", "call.ended"]);
 
+function parseCallDurationSeconds(payload: Record<string, unknown>): number | null {
+  const v = payload["call_duration"];
+  if (typeof v === "number" && Number.isFinite(v) && v >= 0) {
+    return Math.floor(v);
+  }
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(v);
+    if (Number.isFinite(n) && n >= 0) return Math.floor(n);
+  }
+  return null;
+}
+
 serve(async (req: Request) => {
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
@@ -107,9 +119,10 @@ serve(async (req: Request) => {
   }
 
   const nowIso = new Date().toISOString();
+  const reportedDurationSec = parseCallDurationSeconds(payload);
   const { data: existing, error: existingErr } = await supabase
     .from("voice_settlements")
-    .select("call_control_id, first_signal_at")
+    .select("call_control_id, first_signal_at, telnyx_reported_duration_seconds")
     .eq("call_control_id", callControlId)
     .maybeSingle();
 
@@ -118,19 +131,37 @@ serve(async (req: Request) => {
     return new Response("DB error", { status: 500 });
   }
 
-  const firstAt =
-    (existing as { first_signal_at?: string } | null)?.first_signal_at ?? nowIso;
+  const existingRow = existing as {
+    first_signal_at?: string;
+    telnyx_reported_duration_seconds?: number | null;
+  } | null;
 
-  const { error: upsertErr } = await supabase.from("voice_settlements").upsert(
-    {
-      call_control_id: callControlId,
-      business_id: businessId,
-      reservation_id: resv?.id ?? null,
-      telnyx_ended_at: nowIso,
-      first_signal_at: firstAt
-    },
-    { onConflict: "call_control_id" }
-  );
+  const firstAt = existingRow?.first_signal_at ?? nowIso;
+
+  let mergedReported: number | undefined;
+  if (reportedDurationSec != null) {
+    const prev = existingRow?.telnyx_reported_duration_seconds;
+    if (typeof prev === "number" && Number.isFinite(prev) && prev >= 0) {
+      mergedReported = Math.min(prev, reportedDurationSec);
+    } else {
+      mergedReported = reportedDurationSec;
+    }
+  }
+
+  const settlementRow: Record<string, unknown> = {
+    call_control_id: callControlId,
+    business_id: businessId,
+    reservation_id: resv?.id ?? null,
+    telnyx_ended_at: nowIso,
+    first_signal_at: firstAt
+  };
+  if (mergedReported != null) {
+    settlementRow.telnyx_reported_duration_seconds = mergedReported;
+  }
+
+  const { error: upsertErr } = await supabase.from("voice_settlements").upsert(settlementRow, {
+    onConflict: "call_control_id"
+  });
 
   if (upsertErr) {
     console.error("voice_settlements upsert", upsertErr);
