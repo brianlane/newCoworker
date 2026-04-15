@@ -1,8 +1,8 @@
-/**
- * Voice reservation params for enterprise tier. Defaults MUST match * src/lib/plans/limits.ts → TIER_LIMITS.enterprise (voice pool + concurrency).
- */
-const ENTERPRISE_VOICE_CAP_SECONDS_DEFAULT = 150_000;
-const ENTERPRISE_MAX_CONCURRENT_DEFAULT = 10;
+import { VOICE_RES_LIMITS } from "./voice_reservation_limits";
+
+const ENTERPRISE_VOICE_CAP_SECONDS_DEFAULT =
+  VOICE_RES_LIMITS.enterprise.voiceIncludedSecondsPerStripePeriod;
+const ENTERPRISE_MAX_CONCURRENT_DEFAULT = VOICE_RES_LIMITS.enterprise.maxConcurrentCalls;
 
 function num(
   v: unknown,

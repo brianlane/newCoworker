@@ -92,7 +92,7 @@ export default function OnboardPage() {
         "Telnyx phone number",
         "Lossless memory and expansive knowledge base",
         "Unlimited emails and appointment booking",
-        "1 hour voice / day",
+        "10 voice minutes",
         "100 SMS / day",
         "1 concurrent call",
         "Dashboard access"
@@ -118,7 +118,8 @@ export default function OnboardPage() {
       setup: "No setup fee · 30-day money-back guarantee",
       features: [
         "Everything in Starter, plus:",
-        "Unlimited voice, SMS, and calls",
+        "250 minutes voice minutes",
+        "Unlimited SMS",
         "3 concurrent calls",
         "Send texts during calls",
         "Warm handoff call transfers",

@@ -10,6 +10,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { header, verifyTelnyxWebhook } from "../_shared/telnyx_webhook.ts";
 import { signStreamUrlMac, type StreamPayloadV1 } from "../_shared/stream_url.ts";
 import { resolveEnterpriseVoiceReservation } from "../_shared/enterprise_limits.ts";
+import { VOICE_RES_LIMITS } from "../_shared/voice_reservation_limits.ts";
 import {
   VOICE_MSG_BRIDGE_DEGRADED,
   VOICE_MSG_QUOTA_EXHAUSTED,
@@ -25,16 +26,20 @@ function tierCapSeconds(tier: string, enterpriseLimitsRaw: unknown): number {
   if (tier === "enterprise") {
     return resolveEnterpriseVoiceReservation(enterpriseLimitsRaw).tierCapSeconds;
   }
-  if (tier === "standard") return 15000;
-  return 600;
+  if (tier === "standard") {
+    return VOICE_RES_LIMITS.standard.voiceIncludedSecondsPerStripePeriod;
+  }
+  return VOICE_RES_LIMITS.starter.voiceIncludedSecondsPerStripePeriod;
 }
 
 function maxConcurrent(tier: string, enterpriseLimitsRaw: unknown): number {
   if (tier === "enterprise") {
     return resolveEnterpriseVoiceReservation(enterpriseLimitsRaw).maxConcurrent;
   }
-  if (tier === "standard") return 3;
-  return 1;
+  if (tier === "standard") {
+    return VOICE_RES_LIMITS.standard.maxConcurrentCalls;
+  }
+  return VOICE_RES_LIMITS.starter.maxConcurrentCalls;
 }
 
 async function telnyxAnswerPlain(apiKey: string, callControlId: string): Promise<Response> {

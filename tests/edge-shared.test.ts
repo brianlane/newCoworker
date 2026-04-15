@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync, sign } from "node:crypto";
+import { TIER_LIMITS } from "@/lib/plans/limits";
 import { signStreamUrlPayload } from "@/lib/telnyx/stream-url";
 import { signStreamUrlMac } from "../supabase/functions/_shared/stream_url";
 import { normalizeE164 } from "../supabase/functions/_shared/normalize_e164";
@@ -11,6 +12,18 @@ import {
   VOICE_MSG_UNCONFIGURED_NUMBER
 } from "../supabase/functions/_shared/voice_messages";
 import { verifyTelnyxWebhook, header } from "../supabase/functions/_shared/telnyx_webhook";
+import { VOICE_RES_LIMITS } from "../supabase/functions/_shared/voice_reservation_limits";
+
+describe("_shared/voice_reservation_limits matches TIER_LIMITS voice pool fields", () => {
+  (["starter", "standard", "enterprise"] as const).forEach((tier) => {
+    it(`${tier} voice cap and concurrency`, () => {
+      expect(TIER_LIMITS[tier].voiceIncludedSecondsPerStripePeriod).toBe(
+        VOICE_RES_LIMITS[tier].voiceIncludedSecondsPerStripePeriod
+      );
+      expect(TIER_LIMITS[tier].maxConcurrentCalls).toBe(VOICE_RES_LIMITS[tier].maxConcurrentCalls);
+    });
+  });
+});
 
 describe("_shared/normalize_e164", () => {
   it("returns null for missing or empty", () => {

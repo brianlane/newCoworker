@@ -1,5 +1,6 @@
 import type { PlanTier } from "@/lib/plans/tier";
 import { applyEnterpriseLimitsPatch } from "@/lib/plans/enterprise-limits";
+import { VOICE_RES_LIMITS } from "../../../supabase/functions/_shared/voice_reservation_limits";
 
 export type TierLimits = {
   voiceMinutesPerDay: number;
@@ -15,28 +16,28 @@ export type TierLimits = {
 export const TIER_LIMITS: Record<PlanTier, TierLimits> = {
   starter: {
     voiceMinutesPerDay: 60,
-    voiceIncludedSecondsPerStripePeriod: 600,
+    voiceIncludedSecondsPerStripePeriod: VOICE_RES_LIMITS.starter.voiceIncludedSecondsPerStripePeriod,
     smsPerDay: 100,
     callsPerDay: 10,
-    maxConcurrentCalls: 1,
+    maxConcurrentCalls: VOICE_RES_LIMITS.starter.maxConcurrentCalls,
     smsThrottled: true,
     memoryType: "lossless"
   },
   standard: {
     voiceMinutesPerDay: Infinity,
-    voiceIncludedSecondsPerStripePeriod: 15000,
+    voiceIncludedSecondsPerStripePeriod: VOICE_RES_LIMITS.standard.voiceIncludedSecondsPerStripePeriod,
     smsPerDay: Infinity,
     callsPerDay: Infinity,
-    maxConcurrentCalls: 3,
+    maxConcurrentCalls: VOICE_RES_LIMITS.standard.maxConcurrentCalls,
     smsThrottled: false,
     memoryType: "lossless"
   },
   enterprise: {
     voiceMinutesPerDay: Infinity,
-    voiceIncludedSecondsPerStripePeriod: 150000,
+    voiceIncludedSecondsPerStripePeriod: VOICE_RES_LIMITS.enterprise.voiceIncludedSecondsPerStripePeriod,
     smsPerDay: Infinity,
     callsPerDay: Infinity,
-    maxConcurrentCalls: 10,
+    maxConcurrentCalls: VOICE_RES_LIMITS.enterprise.maxConcurrentCalls,
     smsThrottled: false,
     memoryType: "lossless"
   }
