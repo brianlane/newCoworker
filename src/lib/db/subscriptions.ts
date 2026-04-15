@@ -37,6 +37,27 @@ export function subscriptionPeriodCacheFromStripe(sub: {
   };
 }
 
+export type SubscriptionPeriodStripeCache = ReturnType<typeof subscriptionPeriodCacheFromStripe>;
+
+/**
+ * Stripe SDK typings omit period fields on some Subscription shapes; narrow at runtime.
+ */
+export function stripeSubscriptionPeriodCache(
+  sub: unknown
+): SubscriptionPeriodStripeCache | Record<string, never> {
+  if (sub == null || typeof sub !== "object") {
+    return {};
+  }
+  const s = sub as { current_period_start?: unknown; current_period_end?: unknown };
+  if (typeof s.current_period_start !== "number" || typeof s.current_period_end !== "number") {
+    return {};
+  }
+  return subscriptionPeriodCacheFromStripe({
+    current_period_start: s.current_period_start,
+    current_period_end: s.current_period_end
+  });
+}
+
 export async function createSubscription(
   data: Omit<
     SubscriptionRow,

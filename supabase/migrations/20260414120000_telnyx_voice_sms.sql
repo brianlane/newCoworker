@@ -207,10 +207,10 @@ create policy "Service role manages stream_url_nonces"
   using (auth.role() = 'service_role');
 
 -- ---------------------------------------------------------------------------
--- Webhook + SMS queue
+-- Webhook + SMS queue (event_id is Telnyx opaque string, e.g. evt_..., not UUID)
 -- ---------------------------------------------------------------------------
 create table if not exists telnyx_webhook_events (
-  event_id uuid primary key,
+  event_id text primary key,
   event_type text,
   received_at timestamptz not null default now()
 );
@@ -245,7 +245,7 @@ create policy "Service role manages sms_inbound_jobs"
 -- ---------------------------------------------------------------------------
 -- RPC: idempotent webhook insert — returns true if this is the first time
 -- ---------------------------------------------------------------------------
-create or replace function telnyx_webhook_try_dedupe(p_event_id uuid, p_event_type text)
+create or replace function telnyx_webhook_try_dedupe(p_event_id text, p_event_type text)
 returns boolean
 language plpgsql
 security definer
@@ -261,7 +261,7 @@ exception
 end;
 $$;
 
-grant execute on function telnyx_webhook_try_dedupe(uuid, text) to service_role;
+grant execute on function telnyx_webhook_try_dedupe(text, text) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- RPC: reserve seconds + enforce concurrency (§4) — included pool only v1

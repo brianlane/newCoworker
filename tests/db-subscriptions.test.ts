@@ -4,6 +4,8 @@ import {
   getSubscription,
   getSubscriptionByStripeSubscriptionId,
   listSubscriptionsByBusinessIds,
+  stripeSubscriptionPeriodCache,
+  subscriptionPeriodCacheFromStripe,
   updateSubscription
 } from "@/lib/db/subscriptions";
 
@@ -39,6 +41,33 @@ function mockDb(overrides: Record<string, unknown> = {}) {
 
 describe("db/subscriptions", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("subscriptionPeriodCacheFromStripe maps Stripe epoch seconds to ISO cache fields", () => {
+    const row = subscriptionPeriodCacheFromStripe({
+      current_period_start: 1700000000,
+      current_period_end: 1702678400
+    });
+    expect(row.stripe_current_period_start).toBe(new Date(1700000000 * 1000).toISOString());
+    expect(row.stripe_current_period_end).toBe(new Date(1702678400 * 1000).toISOString());
+    expect(row.stripe_subscription_cached_at).toMatch(/^\d{4}-/);
+  });
+
+  it("stripeSubscriptionPeriodCache returns {} when period fields are missing or wrong type", () => {
+    expect(stripeSubscriptionPeriodCache({})).toEqual({});
+    expect(stripeSubscriptionPeriodCache({ current_period_start: "x", current_period_end: 1 })).toEqual({});
+    expect(stripeSubscriptionPeriodCache(null)).toEqual({});
+  });
+
+  it("stripeSubscriptionPeriodCache delegates when both periods are numbers", () => {
+    expect(
+      stripeSubscriptionPeriodCache({ current_period_start: 1700000000, current_period_end: 1702678400 })
+    ).toEqual(
+      subscriptionPeriodCacheFromStripe({
+        current_period_start: 1700000000,
+        current_period_end: 1702678400
+      })
+    );
+  });
 
   it("createSubscription inserts and returns row", async () => {
     const db = mockDb();

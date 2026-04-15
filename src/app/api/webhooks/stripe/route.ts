@@ -2,8 +2,9 @@ import { ensureCommitmentSchedule, getStripe, verifyWebhook } from "@/lib/stripe
 import {
   getSubscription,
   getSubscriptionByStripeSubscriptionId,
-  subscriptionPeriodCacheFromStripe,
-  updateSubscription
+  stripeSubscriptionPeriodCache,
+  updateSubscription,
+  type SubscriptionPeriodStripeCache
 } from "@/lib/db/subscriptions";
 import { successResponse, errorResponse } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
@@ -140,7 +141,7 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
       : session.subscription?.id ?? null;
 
   const existing = await getSubscription(businessId);
-  let periodCache: ReturnType<typeof subscriptionPeriodCacheFromStripe> | Record<string, never> = {};
+  let periodCache: SubscriptionPeriodStripeCache | Record<string, never> = {};
   if (subscriptionId) {
     try {
       const stripeSub = await getStripe().subscriptions.retrieve(subscriptionId);
@@ -211,18 +212,4 @@ function getInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
   const subscription = invoice.parent?.subscription_details?.subscription;
   if (!subscription) return null;
   return typeof subscription === "string" ? subscription : subscription.id;
-}
-
-/** Stripe SDK typings omit period fields on some `Subscription` shapes; narrow at runtime. */
-function stripeSubscriptionPeriodCache(
-  sub: unknown
-): ReturnType<typeof subscriptionPeriodCacheFromStripe> | Record<string, never> {
-  const s = sub as { current_period_start?: unknown; current_period_end?: unknown };
-  if (typeof s.current_period_start !== "number" || typeof s.current_period_end !== "number") {
-    return {};
-  }
-  return subscriptionPeriodCacheFromStripe({
-    current_period_start: s.current_period_start,
-    current_period_end: s.current_period_end
-  });
 }
