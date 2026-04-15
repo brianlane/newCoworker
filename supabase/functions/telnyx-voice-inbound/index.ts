@@ -153,7 +153,7 @@ serve(async (req: Request) => {
   const v = await verifyTelnyxWebhook(rawBody, sig, ts, publicKey);
   if (!v.ok) {
     return new Response(JSON.stringify({ ok: false, error: "bad_signature" }), {
-      status: 200,
+      status: 403,
       headers: { "Content-Type": "application/json" }
     });
   }
@@ -271,19 +271,29 @@ serve(async (req: Request) => {
     });
   }
 
+  if (!sub?.id) {
+    console.error(
+      "voice inbound: no subscription row (ops: ensure subscriptions row exists for business or use comp flow with period cache)",
+      { businessId }
+    );
+    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SYSTEM_ERROR);
+    return new Response(JSON.stringify({ ok: true, path: "no_subscription" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
   const stripeSecret = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
 
-  let periodRow: SubscriptionPeriodRow | null = sub
-    ? {
-        id: sub.id as string,
-        stripe_subscription_id: (sub.stripe_subscription_id as string | null) ?? null,
-        stripe_current_period_start: (sub.stripe_current_period_start as string | null) ?? null,
-        stripe_current_period_end: (sub.stripe_current_period_end as string | null) ?? null,
-        stripe_subscription_cached_at: (sub.stripe_subscription_cached_at as string | null) ?? null
-      }
-    : null;
+  let periodRow: SubscriptionPeriodRow = {
+    id: sub.id as string,
+    stripe_subscription_id: (sub.stripe_subscription_id as string | null) ?? null,
+    stripe_current_period_start: (sub.stripe_current_period_start as string | null) ?? null,
+    stripe_current_period_end: (sub.stripe_current_period_end as string | null) ?? null,
+    stripe_subscription_cached_at: (sub.stripe_subscription_cached_at as string | null) ?? null
+  };
 
-  if (periodRow && subscriptionPeriodNeedsRefresh(periodRow, stripeSecret)) {
+  if (subscriptionPeriodNeedsRefresh(periodRow, stripeSecret)) {
     const sid = periodRow.stripe_subscription_id;
     if (sid) {
       const fetched = await fetchStripeSubscriptionPeriods(stripeSecret, sid);
@@ -302,7 +312,7 @@ serve(async (req: Request) => {
   }
 
   const pastEnd =
-    !!periodRow?.stripe_current_period_end &&
+    !!periodRow.stripe_current_period_end &&
     Date.now() >
       new Date(periodRow.stripe_current_period_end as string).getTime() + STRIPE_PERIOD_ROLLOVER_GRACE_MS;
   if (pastEnd) {
@@ -314,9 +324,19 @@ serve(async (req: Request) => {
     });
   }
 
-  const periodStart = periodRow?.stripe_current_period_start
-    ? new Date(periodRow.stripe_current_period_start as string).toISOString()
-    : new Date().toISOString().slice(0, 10) + "T00:00:00.000Z";
+  if (!periodRow.stripe_current_period_start || !periodRow.stripe_current_period_end) {
+    console.error(
+      "voice inbound: missing cached Stripe billing period bounds (ops: comp/manual accounts need stripe_current_period_* set, e.g. Stripe sync or admin backfill)",
+      { businessId }
+    );
+    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SYSTEM_ERROR);
+    return new Response(JSON.stringify({ ok: true, path: "no_period_bounds" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  const periodStart = new Date(periodRow.stripe_current_period_start as string).toISOString();
 
   const { data: reserveResult, error: resErr } = await supabase.rpc("voice_reserve_for_call", {
     p_business_id: businessId,

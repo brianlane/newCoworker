@@ -45,6 +45,26 @@ function constantTimeEqual(a: Uint8Array, b: Uint8Array): boolean {
   return diff === 0;
 }
 
+async function incrementSmsSentWithRetry(
+  supa: ReturnType<typeof createClient>,
+  businessId: string,
+  maxAttempts = 5
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  let last = "unknown";
+  for (let i = 0; i < maxAttempts; i += 1) {
+    const { error } = await supa.rpc("increment_usage", {
+      p_business_id: businessId,
+      p_field: "sms_sent",
+      p_amount: 1
+    });
+    if (!error) return { ok: true };
+    last = error.message;
+    await new Promise((r) => setTimeout(r, 120 * (i + 1)));
+  }
+  console.error("notifications: increment_usage sms_sent failed after retries", { businessId, last });
+  return { ok: false, message: last };
+}
+
 async function verifyRequest(req: Request): Promise<boolean> {
   const authHeader = req.headers.get("authorization") ?? "";
   const token = authHeader.replace(/^Bearer\s+/i, "").trim();
@@ -106,8 +126,12 @@ serve(async (req: Request) => {
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-  if (supabaseUrl && serviceKey && record.business_id) {
-    const supa = createClient(supabaseUrl, serviceKey);
+  const supa =
+    supabaseUrl && serviceKey && record.business_id
+      ? createClient(supabaseUrl, serviceKey)
+      : null;
+
+  if (supa) {
     const { data: trow } = await supa
       .from("business_telnyx_settings")
       .select("telnyx_messaging_profile_id, telnyx_sms_from_e164")
@@ -122,21 +146,44 @@ serve(async (req: Request) => {
   }
 
   if (telnyxKey && telnyxProfile && ownerPhone) {
-    const body: Record<string, string> = {
-      to: ownerPhone,
-      text: `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`,
-      messaging_profile_id: telnyxProfile
-    };
-    if (telnyxFrom) body.from = telnyxFrom;
-    const smsRes = await fetch("https://api.telnyx.com/v2/messages", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${telnyxKey}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(body)
-    });
-    if (!smsRes.ok) errors.push(`SMS failed: ${smsRes.status}`);
+    if (!supa) {
+      errors.push("SMS skipped: Supabase not configured for quota enforcement");
+    } else {
+      const { data: limRaw, error: limErr } = await supa.rpc("check_sms_monthly_limit", {
+        p_business_id: record.business_id
+      });
+      if (limErr) {
+        errors.push(`SMS limit check failed: ${limErr.message}`);
+      } else {
+        const lim = limRaw as { allowed?: boolean } | null;
+        if (lim?.allowed === false) {
+          errors.push("SMS monthly quota exceeded");
+        } else {
+          const body: Record<string, string> = {
+            to: ownerPhone,
+            text: `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`,
+            messaging_profile_id: telnyxProfile
+          };
+          if (telnyxFrom) body.from = telnyxFrom;
+          const smsRes = await fetch("https://api.telnyx.com/v2/messages", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${telnyxKey}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(body)
+          });
+          if (!smsRes.ok) {
+            errors.push(`SMS failed: ${smsRes.status}`);
+          } else {
+            const inc = await incrementSmsSentWithRetry(supa, record.business_id);
+            if (!inc.ok) {
+              errors.push(`SMS meter failed after retries: ${inc.message}`);
+            }
+          }
+        }
+      }
+    }
   }
 
   // Send email via Resend

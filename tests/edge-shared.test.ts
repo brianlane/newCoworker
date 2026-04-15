@@ -13,6 +13,17 @@ import {
 } from "../supabase/functions/_shared/voice_messages";
 import { verifyTelnyxWebhook, header } from "../supabase/functions/_shared/telnyx_webhook";
 import { VOICE_RES_LIMITS } from "../supabase/functions/_shared/voice_reservation_limits";
+import {
+  SMS_MONTHLY_CAP_STARTER,
+  SMS_MONTHLY_CAP_STANDARD
+} from "../supabase/functions/_shared/sms_monthly_limits";
+
+describe("_shared/sms_monthly_limits matches TIER_LIMITS SMS caps", () => {
+  it("starter and standard monthly SMS", () => {
+    expect(TIER_LIMITS.starter.smsPerMonth).toBe(SMS_MONTHLY_CAP_STARTER);
+    expect(TIER_LIMITS.standard.smsPerMonth).toBe(SMS_MONTHLY_CAP_STANDARD);
+  });
+});
 
 describe("_shared/voice_reservation_limits matches TIER_LIMITS voice pool fields", () => {
   (["starter", "standard", "enterprise"] as const).forEach((tier) => {

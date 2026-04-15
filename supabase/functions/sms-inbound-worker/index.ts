@@ -6,6 +6,8 @@
  * (business_id, customer_e164). Each job sends only the new user line; continuing threads pass
  * `conversationId` / `state` per Rowboat’s contract. `rowboat_reply_cached` avoids double /chat
  * when Rowboat succeeded but Telnyx send is retried.
+ * Failed Rowboat or Telnyx sends reset the job to `pending` for bounded retries (`attempt_count` / MAX_ATTEMPTS);
+ * `complete_sms_inbound_job(..., 'pending')` exists for the same pattern (see migration comment on that RPC).
  *
  * Secrets: SUPABASE_*, ROWBOAT_VPS_CHAT_BEARER (or ROWBOAT_GATEWAY_TOKEN), ROWBOAT_CHAT_URL_TEMPLATE,
  *          TELNYX_API_KEY, TELNYX_MESSAGING_PROFILE_ID, TELNYX_SMS_FROM_E164,
@@ -185,7 +187,7 @@ serve(async (req: Request) => {
           messages: [{ role: "user", content: `[SMS] ${userText}` }],
           stream: false
         };
-               const existingConv = thread?.rowboat_conversation_id?.trim();
+        const existingConv = thread?.rowboat_conversation_id?.trim();
         if (existingConv) {
           chatBody.conversationId = existingConv;
           if (thread != null && thread.rowboat_state != null) {
@@ -305,6 +307,37 @@ serve(async (req: Request) => {
       continue;
     }
 
+    const { data: limRaw, error: limErr } = await supabase.rpc("check_sms_monthly_limit", {
+      p_business_id: job.business_id
+    });
+    if (limErr) {
+      console.error("check_sms_monthly_limit", limErr);
+      await supabase.rpc("complete_sms_inbound_job", {
+        p_job_id: job.id,
+        p_status: "dead_letter",
+        p_telnyx_outbound_message_id: null,
+        p_rowboat_conversation_id: convId ?? null,
+        p_last_error: `sms_limit_check:${limErr.message}`.slice(0, 2000)
+      });
+      await clearJobReplyCache(supabase, job.id);
+      processed += 1;
+      continue;
+    }
+    const lim = limRaw as { allowed?: boolean; reason?: string } | null;
+    if (lim?.allowed === false) {
+      // Strict cap: no auto-reply here (customer sees silence). Product follow-up: optional one-shot "quota exceeded" SMS.
+      await supabase.rpc("complete_sms_inbound_job", {
+        p_job_id: job.id,
+        p_status: "dead_letter",
+        p_telnyx_outbound_message_id: null,
+        p_rowboat_conversation_id: convId ?? null,
+        p_last_error: lim.reason ?? "monthly_sms_limit"
+      });
+      await clearJobReplyCache(supabase, job.id);
+      processed += 1;
+      continue;
+    }
+
     const msgBody: Record<string, string> = {
       to: fromE164,
       text: reply.slice(0, 1600),
@@ -330,13 +363,15 @@ serve(async (req: Request) => {
       }
       const smsJson = (await smsRes.json()) as { data?: { id?: string } };
       const mid = smsJson.data?.id ?? "";
-      await supabase.rpc("complete_sms_inbound_job", {
+      const { error: doneMeterErr } = await supabase.rpc("complete_sms_inbound_job_done_meter_sms", {
         p_job_id: job.id,
-        p_status: "done",
+        p_business_id: job.business_id,
         p_telnyx_outbound_message_id: mid || null,
-        p_rowboat_conversation_id: convId ?? null,
-        p_last_error: null
+        p_rowboat_conversation_id: convId ?? null
       });
+      if (doneMeterErr) {
+        throw new Error(`done_meter_sms:${doneMeterErr.message}`);
+      }
       await clearJobReplyCache(supabase, job.id);
       await telemetryRecord(supabase, "sms_inbound_worker_sent", {
         job_id: job.id,

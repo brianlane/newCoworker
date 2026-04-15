@@ -35,7 +35,7 @@ serve(async (req: Request) => {
   );
   if (!v.ok) {
     return new Response(JSON.stringify({ ok: false, error: "bad_signature" }), {
-      status: 200,
+      status: 403,
       headers: { "Content-Type": "application/json" }
     });
   }

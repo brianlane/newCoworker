@@ -242,7 +242,9 @@ export async function orchestrateProvisioning(
   if (notifyPhone) {
     try {
       const cfg = await getTelnyxMessagingForBusiness(businessId);
-      await sendTelnyxSms(cfg, notifyPhone, `Your New Coworker is live! Dashboard: ${dashboardUrl}`);
+      await sendTelnyxSms(cfg, notifyPhone, `Your New Coworker is live! Dashboard: ${dashboardUrl}`, {
+        meterBusinessId: businessId
+      });
     } catch (err) {
       logger.warn("Failed to send provisioning SMS", {
         error: err instanceof Error ? err.message : String(err)

@@ -626,3 +626,146 @@ end;
 $$;
 
 grant execute on function complete_sms_inbound_job(uuid, text, text, text, text) to service_role;
+
+comment on function public.complete_sms_inbound_job(uuid, text, text, text, text) is
+  'Marks an inbound SMS job done, dead_letter, or pending. Status pending is intentional: the worker resets failed Telnyx sends to pending for bounded retries (see sms-inbound-worker).';
+
+-- Single SQL source for Starter/Standard monthly SMS caps (starter = non-standard tier).
+-- Must match supabase/functions/_shared/sms_monthly_limits.ts and src/lib/plans/limits.ts.
+
+create or replace function public.nonenterprise_monthly_sms_cap(p_tier text)
+returns bigint
+language sql
+immutable
+parallel safe
+as $$
+  select case p_tier
+    when 'standard' then 3000::bigint
+    else 750::bigint
+  end;
+$$;
+
+-- Atomically mark job done and increment sms_sent (same transaction). Call only after Telnyx send succeeds.
+create or replace function public.complete_sms_inbound_job_done_meter_sms(
+  p_job_id uuid,
+  p_business_id uuid,
+  p_telnyx_outbound_message_id text,
+  p_rowboat_conversation_id text default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_updated int;
+begin
+  update public.sms_inbound_jobs j
+  set
+    status = 'done',
+    telnyx_outbound_message_id = coalesce(nullif(trim(p_telnyx_outbound_message_id), ''), j.telnyx_outbound_message_id),
+    rowboat_conversation_id = coalesce(p_rowboat_conversation_id, j.rowboat_conversation_id),
+    last_error = null,
+    updated_at = now()
+  where j.id = p_job_id
+    and j.business_id = p_business_id;
+
+  get diagnostics v_updated = ROW_COUNT;
+  if v_updated <> 1 then
+    raise exception 'complete_sms_inbound_job_done_meter_sms: job % not found or business mismatch', p_job_id;
+  end if;
+
+  insert into public.daily_usage (
+    business_id,
+    usage_date,
+    voice_minutes_used,
+    sms_sent,
+    calls_made,
+    peak_concurrent_calls,
+    updated_at
+  )
+  values (
+    p_business_id,
+    current_date,
+    0,
+    1,
+    0,
+    0,
+    now()
+  )
+  on conflict (business_id, usage_date) do update set
+    sms_sent = public.daily_usage.sms_sent + 1,
+    updated_at = now();
+end;
+$$;
+
+grant execute on function public.complete_sms_inbound_job_done_meter_sms(uuid, uuid, text, text) to service_role;
+
+-- Monthly SMS quota check for Edge workers (mirrors app getTierLimits + getCalendarMonthUsageTotals).
+
+create or replace function public.check_sms_monthly_limit(p_business_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_tier text;
+  v_ent jsonb;
+  v_limit bigint;
+  v_used bigint;
+  v_month_start date;
+  v_day numeric;
+  v_month numeric;
+begin
+  select b.tier, b.enterprise_limits
+  into v_tier, v_ent
+  from public.businesses b
+  where b.id = p_business_id;
+
+  if v_tier is null then
+    return jsonb_build_object('allowed', false, 'reason', 'no_business');
+  end if;
+
+  if v_tier = 'enterprise' then
+    v_limit := null;
+    if v_ent is not null then
+      if v_ent ? 'smsPerMonth' and jsonb_typeof(v_ent->'smsPerMonth') = 'number' then
+        v_month := (v_ent->>'smsPerMonth')::numeric;
+        if v_month > 0 and v_month < 1e15 then
+          v_limit := floor(v_month)::bigint;
+        end if;
+      elsif v_ent ? 'smsPerDay' and jsonb_typeof(v_ent->'smsPerDay') = 'number' then
+        v_day := (v_ent->>'smsPerDay')::numeric;
+        if v_day > 0 and v_day < 1e15 then
+          v_limit := greatest(1::bigint, round(v_day * 30)::bigint);
+        end if;
+      end if;
+    end if;
+  elsif v_tier in ('starter', 'standard') then
+    v_limit := public.nonenterprise_monthly_sms_cap(v_tier);
+  else
+    v_limit := public.nonenterprise_monthly_sms_cap('starter');
+  end if;
+
+  if v_limit is null then
+    return jsonb_build_object('allowed', true);
+  end if;
+
+  v_month_start := (date_trunc('month', (now() at time zone 'utc'))::date);
+
+  select coalesce(sum(du.sms_sent), 0)::bigint
+  into v_used
+  from public.daily_usage du
+  where du.business_id = p_business_id
+    and du.usage_date >= v_month_start;
+
+  if v_used >= v_limit then
+    return jsonb_build_object('allowed', false, 'reason', 'monthly_sms_limit');
+  end if;
+
+  return jsonb_build_object('allowed', true);
+end;
+$$;
+
+grant execute on function public.check_sms_monthly_limit(uuid) to service_role;

@@ -48,7 +48,7 @@ serve(async (req: Request) => {
   );
   if (!v.ok) {
     return new Response(JSON.stringify({ ok: false, error: "bad_signature" }), {
-      status: 200,
+      status: 403,
       headers: { "Content-Type": "application/json" }
     });
   }
@@ -142,6 +142,7 @@ serve(async (req: Request) => {
   if (reportedDurationSec != null) {
     const prev = existingRow?.telnyx_reported_duration_seconds;
     if (typeof prev === "number" && Number.isFinite(prev) && prev >= 0) {
+      // Telnyx may emit multiple hangup/end events; take the minimum reported duration (conservative for metering).
       mergedReported = Math.min(prev, reportedDurationSec);
     } else {
       mergedReported = reportedDurationSec;

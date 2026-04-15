@@ -67,7 +67,9 @@ export async function POST(request: Request) {
       if (ownerPhone) {
         try {
           const config = await getTelnyxMessagingForBusiness(log.businessId);
-          await sendTelnyxSms(config, ownerPhone, `Urgent from New Coworker: ${urgency.summary}`);
+          await sendTelnyxSms(config, ownerPhone, `Urgent from New Coworker: ${urgency.summary}`, {
+            meterBusinessId: log.businessId
+          });
           await insertNotification({
             id: randomUUID(),
             business_id: log.businessId,

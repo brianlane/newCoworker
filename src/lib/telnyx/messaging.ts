@@ -1,4 +1,6 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { checkLimitReached, incrementUsage } from "@/lib/db/usage";
+import type { PlanTier } from "@/lib/plans/tier";
 
 export type TelnyxMessagingConfig = {
   apiKey: string;
@@ -50,6 +52,10 @@ export type SendTelnyxSmsOptions = {
   fetchImpl?: typeof fetch;
   /** Telnyx supports Idempotency-Key for at-most-once sends (§10). */
   idempotencyKey?: string;
+  /**
+   * When set, checks monthly SMS quota for this business before send and increments `daily_usage.sms_sent` after success.
+   */
+  meterBusinessId?: string;
 };
 
 type TelnyxMessageResponse = { data?: { id?: string } };
@@ -65,6 +71,26 @@ export async function sendTelnyxSms(
   options?: SendTelnyxSmsOptions
 ): Promise<string> {
   const fetchImpl = options?.fetchImpl ?? fetch;
+  let meterClient: Awaited<ReturnType<typeof createSupabaseServiceClient>> | undefined;
+
+  if (options?.meterBusinessId) {
+    meterClient = await createSupabaseServiceClient();
+    const { data: biz, error: bizErr } = await meterClient
+      .from("businesses")
+      .select("tier, enterprise_limits")
+      .eq("id", options.meterBusinessId)
+      .single();
+    if (bizErr || !biz) {
+      throw new Error(`sendTelnyxSms: business not found (${bizErr?.message ?? "unknown"})`);
+    }
+    const tier = (String(biz.tier ?? "starter") || "starter") as PlanTier;
+    const entRaw = tier === "enterprise" ? biz.enterprise_limits : undefined;
+    const gate = await checkLimitReached(options.meterBusinessId, tier, meterClient, entRaw);
+    if (!gate.allowed) {
+      throw new Error(gate.reason ?? "Monthly SMS limit reached");
+    }
+  }
+
   const body: Record<string, string> = {
     to: toE164,
     text,
@@ -98,5 +124,11 @@ export async function sendTelnyxSms(
   if (!id) {
     throw new Error("Telnyx SMS: missing message id in response");
   }
+
+  if (options?.meterBusinessId) {
+    const db = meterClient ?? (await createSupabaseServiceClient());
+    await incrementUsage(options.meterBusinessId, "sms_sent", 1, db);
+  }
+
   return id;
 }
