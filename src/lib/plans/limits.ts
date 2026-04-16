@@ -51,7 +51,3 @@ export function getTierLimits(tier: PlanTier, enterpriseLimitsOverride?: unknown
   if (tier !== "enterprise") return TIER_LIMITS[tier];
   return applyEnterpriseLimitsPatch(TIER_LIMITS.enterprise, enterpriseLimitsOverride);
 }
-
-export function hasSmsThrottle(tier: PlanTier, enterpriseLimitsOverride?: unknown): boolean {
-  return getTierLimits(tier, enterpriseLimitsOverride).smsThrottled;
-}

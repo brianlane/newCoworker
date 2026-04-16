@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TIER_LIMITS, getTierLimits, hasSmsThrottle } from "@/lib/plans/limits";
+import { TIER_LIMITS, getTierLimits } from "@/lib/plans/limits";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 
 describe("tier limits", () => {
@@ -137,20 +137,6 @@ describe("tier limits", () => {
 
     it("enterprise override can set a finite daily cap for checkLimitReached", () => {
       expect(getTierLimits("enterprise", { voiceMinutesPerDay: 50 }).voiceMinutesPerDay).toBe(50);
-    });
-  });
-
-  describe("hasSmsThrottle", () => {
-    it("starter SMS is throttled", () => {
-      expect(hasSmsThrottle("starter")).toBe(true);
-    });
-
-    it("standard SMS is not throttled", () => {
-      expect(hasSmsThrottle("standard")).toBe(false);
-    });
-
-    it("enterprise SMS is not throttled", () => {
-      expect(hasSmsThrottle("enterprise")).toBe(false);
     });
   });
 
