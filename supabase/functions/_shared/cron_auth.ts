@@ -34,7 +34,13 @@ function cronAuthSecretFromEnv(): string {
 export async function assertCronAuth(req: Request): Promise<boolean> {
   const secret = cronAuthSecretFromEnv();
   if (!secret) return false;
-  const auth = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim() ?? "";
-  const [digestAuth, digestSecret] = await Promise.all([sha256Utf8(auth), sha256Utf8(secret)]);
+
+  const raw = req.headers.get("authorization");
+  if (raw == null || raw === "") return false;
+
+  const token = raw.replace(/^Bearer\s+/i, "").trim();
+  if (token.length === 0) return false;
+
+  const [digestAuth, digestSecret] = await Promise.all([sha256Utf8(token), sha256Utf8(secret)]);
   return timingSafeEqualBytes(digestAuth, digestSecret);
 }

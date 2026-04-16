@@ -7,7 +7,6 @@ export type ConfigRow = {
   soul_md: string;
   identity_md: string;
   memory_md: string;
-  inworld_agent_id?: string | null;
   rowboat_project_id?: string | null;
   updated_at: string;
 };

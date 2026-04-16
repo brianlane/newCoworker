@@ -104,6 +104,22 @@ describe("assertCronAuth", () => {
     expect(await assertCronAuth(req(null))).toBe(false);
   });
 
+  it("returns false when Authorization is empty", async () => {
+    envGet.mockImplementation((key: string) =>
+      key === "INTERNAL_CRON_SECRET" ? "sec" : undefined
+    );
+    expect(await assertCronAuth(req(""))).toBe(false);
+  });
+
+  it("returns false when Bearer token is empty after trim", async () => {
+    envGet.mockImplementation((key: string) =>
+      key === "INTERNAL_CRON_SECRET" ? "sec" : undefined
+    );
+    expect(await assertCronAuth(req("Bearer "))).toBe(false);
+    expect(await assertCronAuth(req("Bearer    "))).toBe(false);
+    expect(await assertCronAuth(req("bearer \t "))).toBe(false);
+  });
+
   it("falls back to SUPABASE_SERVICE_ROLE_KEY when INTERNAL_CRON_SECRET is unset", async () => {
     envGet.mockImplementation((key: string) => {
       if (key === "INTERNAL_CRON_SECRET") return undefined;

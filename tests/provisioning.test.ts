@@ -132,11 +132,11 @@ describe("provisioning/orchestrate", () => {
     expect(updateBusinessStatus).toHaveBeenNthCalledWith(2, "biz-uuid-1", "online", "vps-mock-123");
   });
 
-  it("calls upsertBusinessConfig once with inworld_agent_id cleared", async () => {
+  it("calls upsertBusinessConfig without removed Inworld columns", async () => {
     await orchestrateProvisioning({ businessId: "biz-uuid-1", tier: "standard" });
     expect(upsertBusinessConfig).toHaveBeenCalledTimes(1);
     const call = vi.mocked(upsertBusinessConfig).mock.calls[0][0];
-    expect(call.inworld_agent_id).toBeNull();
+    expect(call).not.toHaveProperty("inworld_agent_id");
   });
 
   it("uses quoteEnv override for deploy command when injected", async () => {

@@ -139,10 +139,6 @@ export default async function BusinessDetailPage({
             <dt className="text-parchment/40 text-xs">VPS ID</dt>
             <dd className="text-parchment font-mono">{business.hostinger_vps_id ?? "—"}</dd>
           </div>
-          <div>
-            <dt className="text-parchment/40 text-xs">Legacy voice agent id</dt>
-            <dd className="text-parchment font-mono">{config?.inworld_agent_id ?? "—"}</dd>
-          </div>
         </dl>
       </Card>
 

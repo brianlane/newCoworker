@@ -115,8 +115,7 @@ export async function orchestrateProvisioning(
     business_id: businessId,
     soul_md: existingConfig?.soul_md ?? loadSoulTemplate(),
     identity_md: existingConfig?.identity_md ?? loadIdentityTemplate(),
-    memory_md: existingConfig?.memory_md ?? "# memory.md\nLossless memory DAG initialized.",
-    inworld_agent_id: null
+    memory_md: existingConfig?.memory_md ?? "# memory.md\nLossless memory DAG initialized."
   });
 
   await recordProvisioningProgress({
