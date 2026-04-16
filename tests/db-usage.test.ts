@@ -40,13 +40,20 @@ function mockDb(overrides: Record<string, unknown> = {}) {
 function mockLimitClient(opts: {
   today?: typeof MOCK_USAGE | null;
   monthRows?: Array<{ sms_sent?: number; calls_made?: number }>;
+  monthError?: { message: string };
 }) {
   const today = opts.today !== undefined ? opts.today : MOCK_USAGE;
   const monthRows = opts.monthRows ?? [];
 
-  const monthThenable: PromiseLike<{ data: typeof monthRows; error: null }> = {
+  const monthThenable: PromiseLike<{
+    data: typeof monthRows | null;
+    error: { message: string } | null;
+  }> = {
     then(onFulfilled, onRejected) {
-      return Promise.resolve({ data: monthRows, error: null }).then(onFulfilled, onRejected);
+      const payload = opts.monthError
+        ? { data: null, error: opts.monthError }
+        : { data: monthRows, error: null };
+      return Promise.resolve(payload).then(onFulfilled, onRejected);
     }
   };
 
@@ -92,7 +99,7 @@ describe("db/usage", () => {
       expect(result).toBeNull();
     });
 
-       it("uses provided client", async () => {
+    it("uses provided client", async () => {
       const db = mockDb();
       const result = await getTodayUsage("biz-uuid-1", db as never);
       expect(result?.business_id).toBe("biz-uuid-1");
@@ -101,7 +108,7 @@ describe("db/usage", () => {
   });
 
   describe("getCalendarMonthUsageTotals", () => {
-    it("returns zeros when the query returns an error", async () => {
+    it("throws when the query returns an error", async () => {
       const monthThenable: PromiseLike<{ data: null; error: { message: string } }> = {
         then(onFulfilled, onRejected) {
           return Promise.resolve({ data: null, error: { message: "db" } }).then(onFulfilled, onRejected);
@@ -114,8 +121,9 @@ describe("db/usage", () => {
       chain.gte = vi.fn(() => monthThenable);
       const err = vi.spyOn(console, "error").mockImplementation(() => {});
 
-      const result = await getCalendarMonthUsageTotals("biz-uuid-1", chain as never);
-      expect(result).toEqual({ sms_sent: 0, calls_made: 0 });
+      await expect(getCalendarMonthUsageTotals("biz-uuid-1", chain as never)).rejects.toThrow(
+        "getCalendarMonthUsageTotals: db"
+      );
       expect(err).toHaveBeenCalled();
 
       err.mockRestore();
@@ -325,6 +333,20 @@ describe("db/usage", () => {
 
       const result = await checkLimitReached("biz-uuid-1", "starter");
       expect(result.allowed).toBe(true);
+    });
+
+    it("blocks SMS when monthly usage query fails (fail closed)", async () => {
+      const db = mockLimitClient({ monthError: { message: "timeout" } });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      const log = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const result = await checkLimitReached("biz-uuid-1", "starter");
+      expect(result.allowed).toBe(false);
+      expect(result.field).toBe("sms_sent");
+      expect(result.reason).toContain("Cannot verify monthly SMS usage");
+      expect(log).toHaveBeenCalled();
+
+      log.mockRestore();
     });
   });
 });

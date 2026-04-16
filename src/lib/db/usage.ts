@@ -64,7 +64,7 @@ export async function getCalendarMonthUsageTotals(
 
   if (error) {
     console.error("getCalendarMonthUsageTotals", error);
-    return { sms_sent: 0, calls_made: 0 };
+    throw new Error(`getCalendarMonthUsageTotals: ${error.message}`);
   }
 
   let sms = 0;
@@ -119,7 +119,17 @@ export async function checkLimitReached(
   }
 
   if (limits.smsPerMonth !== Infinity) {
-    const month = await getCalendarMonthUsageTotals(businessId, client);
+    let month: { sms_sent: number; calls_made: number };
+    try {
+      month = await getCalendarMonthUsageTotals(businessId, client);
+    } catch (e) {
+      console.error("checkLimitReached: monthly usage unavailable", e);
+      return {
+        allowed: false,
+        reason: "Cannot verify monthly SMS usage. Please try again shortly.",
+        field: "sms_sent"
+      };
+    }
     if (month.sms_sent >= limits.smsPerMonth) {
       return {
         allowed: false,

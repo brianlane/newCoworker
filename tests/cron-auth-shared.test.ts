@@ -120,6 +120,24 @@ describe("assertCronAuth", () => {
     expect(await assertCronAuth(req("bearer \t "))).toBe(false);
   });
 
+  it("returns false when header has no Bearer prefix and trims to empty", async () => {
+    envGet.mockImplementation((key: string) =>
+      key === "INTERNAL_CRON_SECRET" ? "sec" : undefined
+    );
+    expect(await assertCronAuth(req("   "))).toBe(false);
+    expect(await assertCronAuth(req("\t\n"))).toBe(false);
+  });
+
+  it("returns false when parsed token is empty (mock Request avoids header normalization)", async () => {
+    envGet.mockImplementation((key: string) =>
+      key === "INTERNAL_CRON_SECRET" ? "sec" : undefined
+    );
+    const fake = {
+      headers: { get: (name: string) => (name.toLowerCase() === "authorization" ? "Bearer \t" : null) }
+    } as unknown as Request;
+    expect(await assertCronAuth(fake)).toBe(false);
+  });
+
   it("falls back to SUPABASE_SERVICE_ROLE_KEY when INTERNAL_CRON_SECRET is unset", async () => {
     envGet.mockImplementation((key: string) => {
       if (key === "INTERNAL_CRON_SECRET") return undefined;
@@ -137,5 +155,18 @@ describe("assertCronAuth", () => {
     });
     expect(await assertCronAuth(req("Bearer primary"))).toBe(true);
     expect(await assertCronAuth(req("Bearer fallback"))).toBe(false);
+  });
+
+  it("returns false when global Deno is undefined", async () => {
+    vi.unstubAllGlobals();
+    Reflect.deleteProperty(globalThis, "Deno");
+    expect(await assertCronAuth(req("Bearer any"))).toBe(false);
+    vi.stubGlobal("Deno", { env: { get: envGet } });
+  });
+
+  it("returns false when Deno.env is missing", async () => {
+    vi.stubGlobal("Deno", {} as { env?: { get: typeof envGet } });
+    expect(await assertCronAuth(req("Bearer any"))).toBe(false);
+    vi.stubGlobal("Deno", { env: { get: envGet } });
   });
 });

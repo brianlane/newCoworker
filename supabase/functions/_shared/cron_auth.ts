@@ -39,7 +39,7 @@ export async function assertCronAuth(req: Request): Promise<boolean> {
   if (raw == null || raw === "") return false;
 
   const token = raw.replace(/^Bearer\s+/i, "").trim();
-  if (token.length === 0) return false;
+  if (token === "") return false;
 
   const [digestAuth, digestSecret] = await Promise.all([sha256Utf8(token), sha256Utf8(secret)]);
   return timingSafeEqualBytes(digestAuth, digestSecret);
