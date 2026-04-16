@@ -1,3 +1,12 @@
+/**
+ * `daily_usage` helpers and soft limit checks for the Next.js app.
+ *
+ * **Enforcement** for billable SMS/voice is RPC- and Edge-first (e.g. `try_reserve_sms_outbound_slot`,
+ * `check_sms_monthly_limit`, `voice_reserve_for_call`). Call those paths (or `sendTelnyxSms` with
+ * `meterBusinessId`) for anything that must not bypass caps. Use `checkLimitReached` only for optional
+ * preflight UX; `incrementUsage` is a thin wrapper over the `increment_usage` RPC if you need to
+ * mutate counters from Node (most metering is handled inside Supabase functions / Telnyx webhooks).
+ */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { PlanTier } from "@/lib/plans/tier";
 import { getTierLimits } from "@/lib/plans/limits";

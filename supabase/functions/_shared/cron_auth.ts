@@ -1,6 +1,11 @@
 /**
  * Shared auth for scheduled Edge endpoints (cron): `Authorization: Bearer <secret>`.
- * Prefer `INTERNAL_CRON_SECRET`; falls back to `SUPABASE_SERVICE_ROLE_KEY` only when set (dev convenience).
+ *
+ * Production: set `INTERNAL_CRON_SECRET` to a dedicated random secret. The bearer must match it.
+ * The Supabase service role must **not** be accepted as the cron bearer (same privilege as DB admin).
+ *
+ * Local / staging convenience: set `CRON_ALLOW_SERVICE_ROLE_BEARER=true` to allow the bearer to match
+ * `SUPABASE_SERVICE_ROLE_KEY` when `INTERNAL_CRON_SECRET` is unset. Omit this flag in production.
  *
  * Compares SHA-256(secret) to SHA-256(token) with a constant-time byte comparison so callers cannot
  * incrementally guess the secret via string `===` short-circuit timing.
@@ -24,11 +29,20 @@ type DenoEnv = { env: { get: (key: string) => string | undefined } };
 
 function cronAuthSecretFromEnv(): string {
   const deno = (globalThis as unknown as { Deno?: DenoEnv }).Deno;
-  return (
-    deno?.env?.get("INTERNAL_CRON_SECRET") ??
-    deno?.env?.get("SUPABASE_SERVICE_ROLE_KEY") ??
-    ""
-  );
+  const env = deno?.env;
+  if (!env) return "";
+
+  const internalRaw = env.get("INTERNAL_CRON_SECRET");
+  const internal = (internalRaw === undefined ? "" : internalRaw).trim();
+  if (internal !== "") return internal;
+
+  const flagRaw = env.get("CRON_ALLOW_SERVICE_ROLE_BEARER");
+  const allowServiceRole = (flagRaw === undefined ? "" : flagRaw).trim().toLowerCase() === "true";
+  if (!allowServiceRole) return "";
+
+  const serviceRaw = env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (serviceRaw == null) return "";
+  return serviceRaw.trim();
 }
 
 export async function assertCronAuth(req: Request): Promise<boolean> {

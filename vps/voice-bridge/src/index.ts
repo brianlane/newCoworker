@@ -1,12 +1,16 @@
 /**
- * Minimal Telnyx media WebSocket bridge: validates signed stream URL (v1), marks nonce consumed,
- * upserts voice_active_sessions, heartbeats bridge health to Supabase.
- * Gemini Live PCM handling is intentionally stubbed — extend with @google/genai or equivalent.
+ * Telnyx media WebSocket bridge: validates signed stream URL (v1), marks nonce consumed,
+ * upserts voice_active_sessions, heartbeats bridge health to Supabase, and pipes audio
+ * between Telnyx (L16 @ 16 kHz JSON `media` frames) and Gemini Live when `GOOGLE_API_KEY` is set.
  */
 import { createServer } from "node:http";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData } from "ws";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { loadEnv } from "./load-env.js";
+import { createGeminiTelnyxBridge } from "./gemini-telnyx-bridge.js";
+
+loadEnv();
 
 const PORT = Number(process.env.VOICE_BRIDGE_PORT ?? "8090");
 const STREAM_SECRET = process.env.STREAM_URL_SIGNING_SECRET ?? "";
@@ -17,6 +21,18 @@ const BUSINESS_ID = process.env.BUSINESS_ID ?? "";
 const _lastSeenMs = Number(process.env.VOICE_SESSION_LAST_SEEN_INTERVAL_MS ?? "15000");
 const LAST_SEEN_UPDATE_INTERVAL_MS =
   Number.isFinite(_lastSeenMs) && _lastSeenMs >= 1000 ? _lastSeenMs : 15_000;
+
+function readPositiveMs(envKey: string, fallback: number): number {
+  const v = Number(process.env[envKey]);
+  return Number.isFinite(v) && v > 0 ? v : fallback;
+}
+
+function rawDataToUtf8(data: RawData): string {
+  if (typeof data === "string") return data;
+  if (Buffer.isBuffer(data)) return data.toString("utf8");
+  if (Array.isArray(data)) return Buffer.concat(data).toString("utf8");
+  return Buffer.from(data as ArrayBuffer).toString("utf8");
+}
 
 function b64url(buf: Buffer): string {
   return buf
@@ -45,7 +61,7 @@ function signMac(payload: {
   return b64url(createHmac("sha256", STREAM_SECRET).update(canonical).digest());
 }
 
-async function heartbeat(supabase: ReturnType<typeof createClient>, businessId: string): Promise<void> {
+async function heartbeat(supabase: SupabaseClient, businessId: string): Promise<void> {
   await supabase
     .from("business_telnyx_settings")
     .upsert(
@@ -64,7 +80,7 @@ function main(): void {
     process.exit(1);
   }
 
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  const supabase: SupabaseClient = createClient<any>(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   const server = createServer((_req, res) => {
     res.writeHead(200, { "Content-Type": "text/plain" });
     res.end("voice-bridge ok\n");
@@ -157,8 +173,47 @@ function main(): void {
         void heartbeat(supabase, businessId);
       }, 30_000);
 
+      let geminiTeardown: (() => Promise<void>) | undefined;
+      let onTelnyxGemini: ((rawUtf8: string) => void) | undefined;
+
+      const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
+      if (apiKey) {
+        try {
+          const { data: biz } = await supabase
+            .from("businesses")
+            .select("name")
+            .eq("id", businessId)
+            .maybeSingle();
+          const businessName = typeof biz?.name === "string" && biz.name.length > 0 ? biz.name : "your business";
+          const sessionMaxMs = readPositiveMs("GEMINI_LIVE_SESSION_MAX_MS", 14 * 60 * 1000);
+          const warnBeforeMs = readPositiveMs("GEMINI_LIVE_SESSION_WARN_BEFORE_MS", 60 * 1000);
+          const finalNudgeBeforeMs = readPositiveMs("GEMINI_LIVE_SESSION_FINAL_NUDGE_MS", 15 * 1000);
+          const model = process.env.GEMINI_LIVE_MODEL ?? "gemini-live-2.5-flash-preview";
+          const bridge = await createGeminiTelnyxBridge({
+            ws,
+            businessId,
+            callControlId,
+            apiKey,
+            model,
+            sessionMaxMs,
+            warnBeforeMs,
+            finalNudgeBeforeMs,
+            businessName
+          });
+          onTelnyxGemini = bridge.onTelnyxMessage;
+          geminiTeardown = bridge.teardown;
+        } catch (e) {
+          console.error("voice-bridge: Gemini Live unavailable (continuing without AI audio)", e);
+        }
+      } else {
+        console.warn("voice-bridge: GOOGLE_API_KEY or GEMINI_API_KEY unset; AI audio pipe disabled");
+      }
+
       let lastLastSeenWriteMs = Date.now();
-      ws.on("message", (_data: RawData) => {
+      ws.on("message", (data: RawData) => {
+        const rawUtf8 = rawDataToUtf8(data);
+        onTelnyxGemini?.(rawUtf8);
+
         const now = Date.now();
         if (now - lastLastSeenWriteMs < LAST_SEEN_UPDATE_INTERVAL_MS) return;
         lastLastSeenWriteMs = now;
@@ -170,6 +225,7 @@ function main(): void {
 
       ws.on("close", () => {
         clearInterval(hb);
+        void geminiTeardown?.();
         const endedAt = new Date().toISOString();
         void (async () => {
           await supabase

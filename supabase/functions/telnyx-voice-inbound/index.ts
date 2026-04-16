@@ -1,10 +1,14 @@
 /**
- * Telnyx Programmable Voice: call.initiated → verify, dedupe, reserve, answer with Gemini bridge stream URL.
+ * Telnyx Programmable Voice: call.initiated → verify, dedupe, reserve, answer with signed media stream URL (customer VPS bridge runs Gemini Live when `GOOGLE_API_KEY` is set there).
  *
  * Secrets: TELNYX_API_KEY, TELNYX_PUBLIC_KEY, STREAM_URL_SIGNING_SECRET,
  *          SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
  *          BRIDGE_MEDIA_WSS_ORIGIN (optional fallback when route has no origin)
  * Optional: STRIPE_SECRET_KEY — JIT refresh of subscription period cache (§4.2) when TTL/rollover requires it.
+ *
+ * HTTP semantics: many logical errors (missing call fields, subscription/period issues) respond with **200**
+ * and a Telnyx command to reject/hang up so Telnyx treats the webhook as delivered and does not retry.
+ * Some paths after answer may return **5xx**; use logs/telemetry to distinguish.
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";

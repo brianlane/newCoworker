@@ -1,6 +1,6 @@
 # New Coworker
 
-AI Coworker platform: local-first autonomous agents for small businesses, built on Rowboat + Ollama + Telnyx + Gemini Live.
+AI Coworker platform: local-first autonomous agents for small businesses, built on Rowboat + Ollama + Telnyx, with a VPS media bridge that pipes calls to **Gemini Live** when `GOOGLE_API_KEY` is configured on the bridge host (see `vps/voice-bridge/`).
 
 This repository includes:
 
@@ -24,7 +24,7 @@ See `src/lib/plans/tier.ts` for pricing logic.
 
 - Agent runtime: Rowboat
 - Local inference: Ollama
-- Voice: Telnyx Call Control + VPS media bridge (Gemini Live)
+- Voice: Telnyx Call Control + VPS media bridge (Gemini Live real-time audio when the bridge has `GOOGLE_API_KEY`)
 - Starter default model: `llama3.2:3b`
 - Standard default model: `qwen3:4b-instruct`
 
@@ -55,3 +55,12 @@ npm run test:integration:correctness:kvm2-llama32-compare
 ```
 
 The integration path uses real Rowboat + Ollama stacks and writes assistant outputs to `test-results/integration-correctness-responses.json`.
+
+## Production checklist (high level)
+
+- Set **`INTERNAL_CRON_SECRET`** for scheduled invocations of Edge functions that use `assertCronAuth` (e.g. `sms-inbound-worker`, `voice-settlement-sweep`). Do **not** set **`CRON_ALLOW_SERVICE_ROLE_BEARER`** in production — that flag exists only so local dev can reuse the service role as the bearer when no dedicated cron secret is configured.
+- **`stream_url_nonces`** (and similar) are not pruned in-repo yet; plan retention or a periodic cleanup if nonce volume matters.
+
+## Telnyx voice inbound (ops note)
+
+The `telnyx-voice-inbound` function may return **HTTP 200** with a Telnyx `hangup`/`reject` action for logical failures (missing fields, subscription/period gating) so Telnyx does not retry the webhook as a transport error. Hard failures after answer may still surface as **5xx**; rely on logs and telemetry for diagnosis.
