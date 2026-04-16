@@ -242,9 +242,8 @@ export async function orchestrateProvisioning(
   if (notifyPhone) {
     try {
       const cfg = await getTelnyxMessagingForBusiness(businessId);
-      await sendTelnyxSms(cfg, notifyPhone, `Your New Coworker is live! Dashboard: ${dashboardUrl}`, {
-        meterBusinessId: businessId
-      });
+      // Provisioning ping to owner: platform-operational; not metered against the business SMS quota.
+      await sendTelnyxSms(cfg, notifyPhone, `Your New Coworker is live! Dashboard: ${dashboardUrl}`);
     } catch (err) {
       logger.warn("Failed to send provisioning SMS", {
         error: err instanceof Error ? err.message : String(err)

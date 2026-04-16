@@ -51,8 +51,9 @@ export type SendTelnyxSmsOptions = {
   /** Telnyx supports Idempotency-Key for at-most-once sends (§10). */
   idempotencyKey?: string;
   /**
-   * When set, atomically reserves one outbound SMS against the monthly cap (Postgres row lock + pre-increment)
-   * before calling Telnyx. If the HTTP request fails, the slot is released so quota is not consumed.
+   * When set, atomically reserves one outbound SMS against this business's monthly cap (Postgres row lock + pre-increment)
+   * before calling Telnyx. Omit for platform-operational messages (e.g. owner alerts) so they do not consume the customer's pool.
+   * If the HTTP request fails after a reserve, the slot is released so quota is not consumed.
    */
   meterBusinessId?: string;
 };

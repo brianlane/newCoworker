@@ -125,56 +125,26 @@ serve(async (req: Request) => {
     }
   }
 
+  // Platform-initiated owner alert (same class as /api/rowboat urgent SMS): not metered against the business monthly pool.
   if (telnyxKey && telnyxProfile && ownerPhone) {
-    if (!supa) {
-      errors.push("SMS skipped: Supabase not configured for quota enforcement");
-    } else {
-      const { data: resRaw, error: resErr } = await supa.rpc("try_reserve_sms_outbound_slot", {
-        p_business_id: record.business_id
+    try {
+      const body: Record<string, string> = {
+        to: ownerPhone,
+        text: `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`,
+        messaging_profile_id: telnyxProfile
+      };
+      if (telnyxFrom) body.from = telnyxFrom;
+      const smsRes = await fetch("https://api.telnyx.com/v2/messages", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${telnyxKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(body)
       });
-      if (resErr) {
-        errors.push(`SMS quota reserve failed: ${resErr.message}`);
-      } else {
-        const res = resRaw as { ok?: boolean } | null;
-        if (res?.ok !== true) {
-          errors.push("SMS monthly quota exceeded");
-        } else {
-          let released = false;
-          const release = async (): Promise<void> => {
-            if (released) return;
-            released = true;
-            const { error: relErr } = await supa.rpc("release_sms_outbound_slot", {
-              p_business_id: record.business_id
-            });
-            if (relErr) {
-              console.error("notifications: release_sms_outbound_slot failed", relErr.message);
-            }
-          };
-          try {
-            const body: Record<string, string> = {
-              to: ownerPhone,
-              text: `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`,
-              messaging_profile_id: telnyxProfile
-            };
-            if (telnyxFrom) body.from = telnyxFrom;
-            const smsRes = await fetch("https://api.telnyx.com/v2/messages", {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${telnyxKey}`,
-                "Content-Type": "application/json"
-              },
-              body: JSON.stringify(body)
-            });
-            if (!smsRes.ok) {
-              await release();
-              errors.push(`SMS failed: ${smsRes.status}`);
-            }
-          } catch (e) {
-            await release();
-            errors.push(`SMS error: ${e instanceof Error ? e.message : String(e)}`);
-          }
-        }
-      }
+      if (!smsRes.ok) errors.push(`SMS failed: ${smsRes.status}`);
+    } catch (e) {
+      errors.push(`SMS error: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 

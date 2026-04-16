@@ -67,9 +67,8 @@ export async function POST(request: Request) {
       if (ownerPhone) {
         try {
           const config = await getTelnyxMessagingForBusiness(log.businessId);
-          await sendTelnyxSms(config, ownerPhone, `Urgent from New Coworker: ${urgency.summary}`, {
-            meterBusinessId: log.businessId
-          });
+          // Platform-initiated owner alert: do not consume the business monthly SMS pool (cf. customer-initiated / AI replies).
+          await sendTelnyxSms(config, ownerPhone, `Urgent from New Coworker: ${urgency.summary}`);
           await insertNotification({
             id: randomUUID(),
             business_id: log.businessId,
