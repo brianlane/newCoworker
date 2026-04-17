@@ -220,7 +220,7 @@ export async function orchestrateProvisioning(
   logger.info("Business provisioned and online", { businessId, vpsId });
 
   const notifyEmail = ownerEmail ?? process.env.ADMIN_EMAIL;
-  const notifyPhone = ownerPhone ?? process.env.TELNYX_OWNER_PHONE ?? process.env.TWILIO_OWNER_PHONE;
+  const notifyPhone = ownerPhone ?? process.env.TELNYX_OWNER_PHONE;
   const dashboardUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/dashboard`;
 
   if (notifyEmail) {

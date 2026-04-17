@@ -32,10 +32,12 @@ describe("voice SQL migrations (contract)", () => {
     expect(voicePlatformMigration).toMatch(/claim_until = null/);
   });
 
-  it("maintenance sweeps: zombies, stale reservations, SMS reclaim, bundled RPC", () => {
+  it("maintenance sweeps: zombies, stale reservations, SMS reclaim, nonce prune, bundled RPC", () => {
     expect(voicePlatformMigration).toMatch(/voice_sweep_zombie_active_sessions/);
     expect(voicePlatformMigration).toMatch(/voice_sweep_stale_reservations/);
     expect(voicePlatformMigration).toMatch(/sms_reclaim_stale_processing_jobs/);
+    expect(voicePlatformMigration).toMatch(/stream_url_nonces_prune_expired/);
+    expect(voicePlatformMigration).toMatch(/stream_url_nonces_pruned/);
     expect(voicePlatformMigration).toMatch(/voice_run_maintenance_sweeps/);
   });
 

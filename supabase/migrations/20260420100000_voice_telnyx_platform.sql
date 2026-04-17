@@ -1711,6 +1711,25 @@ $$;
 
 grant execute on function sms_reclaim_stale_processing_jobs(interval) to service_role;
 
+-- Stream URL nonces (plan §2): prune expired rows during maintenance sweeps.
+create or replace function stream_url_nonces_prune_expired()
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  n int;
+begin
+  delete from stream_url_nonces
+  where expires_at < now();
+  get diagnostics n = row_count;
+  return n;
+end;
+$$;
+
+grant execute on function stream_url_nonces_prune_expired() to service_role;
+
 create or replace function voice_run_maintenance_sweeps(
   p_settlement_min_age text default '15 minutes',
   p_session_stale text default '15 minutes',
@@ -1728,6 +1747,7 @@ declare
   v_sessions int;
   v_res int;
   v_sms int;
+  v_nonces int;
   v_sess interval := cast(p_session_stale as interval);
   v_ua interval := cast(p_res_unanswered as interval);
   v_nows interval := cast(p_res_no_ws as interval);
@@ -1737,11 +1757,13 @@ begin
   v_sessions := voice_sweep_zombie_active_sessions(v_sess);
   v_res := voice_sweep_stale_reservations(v_ua, v_nows);
   v_sms := sms_reclaim_stale_processing_jobs(v_sms_iv);
+  v_nonces := stream_url_nonces_prune_expired();
   return jsonb_build_object(
     'stale_settlements_finalized', v_settlements,
     'zombie_sessions_swept', v_sessions,
     'stale_reservations_released', v_res,
-    'sms_jobs_reclaimed', v_sms
+    'sms_jobs_reclaimed', v_sms,
+    'stream_url_nonces_pruned', v_nonces
   );
 end;
 $$;

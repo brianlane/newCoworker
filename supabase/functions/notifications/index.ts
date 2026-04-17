@@ -102,7 +102,7 @@ serve(async (req: Request) => {
   const telnyxKey = Deno.env.get("TELNYX_API_KEY");
   let telnyxProfile = Deno.env.get("TELNYX_MESSAGING_PROFILE_ID") ?? "";
   let telnyxFrom = Deno.env.get("TELNYX_SMS_FROM_E164") ?? "";
-  const ownerPhone = Deno.env.get("TELNYX_OWNER_PHONE") ?? Deno.env.get("TWILIO_OWNER_PHONE");
+  const ownerPhone = Deno.env.get("TELNYX_OWNER_PHONE");
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";

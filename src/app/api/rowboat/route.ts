@@ -33,7 +33,7 @@ export async function POST(request: Request) {
     if (urgency.shouldNotify) {
       const business = await getBusiness(log.businessId);
       const ownerEmail = business?.owner_email ?? process.env.ADMIN_EMAIL;
-      const ownerPhone = process.env.TELNYX_OWNER_PHONE ?? process.env.TWILIO_OWNER_PHONE;
+      const ownerPhone = process.env.TELNYX_OWNER_PHONE;
       const dashboardUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/dashboard`;
 
       await insertNotification({
