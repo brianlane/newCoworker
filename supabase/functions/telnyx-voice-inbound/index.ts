@@ -29,45 +29,32 @@ import {
   rejectIncomingCall,
   telnyxAnswerWithStream
 } from "../_shared/telnyx_call_actions.ts";
+import {
+  cacheLooksValidForQuotaAfterJitFailure,
+  STRIPE_PERIOD_ROLLOVER_GRACE_MS,
+  subscriptionPeriodNeedsRefresh,
+  type SubscriptionPeriodRow
+} from "../_shared/stripe_voice_period.ts";
+import {
+  readTelnyxWebhookRateLimits,
+  telnyxWebhookClientIp,
+  telnyxWebhookRateAllow
+} from "../_shared/telnyx_edge_guard.ts";
 
 const MAX_BODY = 256 * 1024;
 const HANDLER_MS = 8000;
-/** Refresh Stripe period cache when older than this (voice §4.2). */
-const STRIPE_PERIOD_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-/** After period end, allow this slack before treating cache as invalid if not refreshed. */
-const STRIPE_PERIOD_ROLLOVER_GRACE_MS = 120_000;
-
-type SubscriptionPeriodRow = {
-  id: string;
-  stripe_subscription_id: string | null;
-  stripe_current_period_start: string | null;
-  stripe_current_period_end: string | null;
-  stripe_subscription_cached_at: string | null;
-};
-
-function subscriptionPeriodNeedsRefresh(row: SubscriptionPeriodRow, stripeSecret: string): boolean {
-  if (!stripeSecret || !row.stripe_subscription_id) return false;
-  const now = Date.now();
-  if (!row.stripe_current_period_start || !row.stripe_current_period_end) return true;
-  if (row.stripe_subscription_cached_at) {
-    const age = now - new Date(row.stripe_subscription_cached_at as string).getTime();
-    if (age > STRIPE_PERIOD_CACHE_TTL_MS) return true;
-  } else {
-    return true;
-  }
-  const endMs = new Date(row.stripe_current_period_end as string).getTime();
-  if (now > endMs + STRIPE_PERIOD_ROLLOVER_GRACE_MS) return true;
-  return false;
-}
+const STRIPE_JIT_FETCH_MS = 4500;
 
 async function fetchStripeSubscriptionPeriods(
   stripeSecret: string,
   stripeSubscriptionId: string
 ): Promise<{ start: string; end: string } | null> {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), STRIPE_JIT_FETCH_MS);
   const res = await fetch(
     `https://api.stripe.com/v1/subscriptions/${encodeURIComponent(stripeSubscriptionId)}`,
-    { headers: { Authorization: `Bearer ${stripeSecret}` } }
-  );
+    { headers: { Authorization: `Bearer ${stripeSecret}` }, signal: ac.signal }
+  ).finally(() => clearTimeout(t));
   if (!res.ok) {
     console.error("Stripe subscription HTTP", res.status, (await res.text()).slice(0, 500));
     return null;
@@ -142,20 +129,53 @@ serve(async (req: Request) => {
     return new Response("Server misconfigured", { status: 500 });
   }
 
+  const supabase = createClient(supabaseUrl, serviceKey);
+
   const len = Number(req.headers.get("content-length") ?? "0");
   if (len > MAX_BODY) {
+    await telemetryRecord(supabase, "edge_webhook_rejected", {
+      reason: "size",
+      route: "telnyx_voice_inbound"
+    });
     return new Response("Payload too large", { status: 413 });
   }
 
   const rawBody = await req.text();
   if (rawBody.length > MAX_BODY) {
+    await telemetryRecord(supabase, "edge_webhook_rejected", {
+      reason: "size",
+      route: "telnyx_voice_inbound"
+    });
     return new Response("Payload too large", { status: 413 });
+  }
+
+  const clientIp = telnyxWebhookClientIp(req);
+  const rate = await telnyxWebhookRateAllow(
+    supabase,
+    clientIp,
+    "telnyx_voice_inbound",
+    readTelnyxWebhookRateLimits((k) => Deno.env.get(k))
+  );
+  if (!rate.ok) {
+    await telemetryRecord(supabase, "edge_webhook_rejected", {
+      reason: "rate",
+      route: "telnyx_voice_inbound",
+      detail: rate.raw
+    });
+    return new Response(JSON.stringify({ ok: false, error: "rate_limited" }), {
+      status: 429,
+      headers: { "Content-Type": "application/json" }
+    });
   }
 
   const sig = header(req, "telnyx-signature-ed25519");
   const ts = header(req, "telnyx-timestamp");
   const v = await verifyTelnyxWebhook(rawBody, sig, ts, publicKey);
   if (!v.ok) {
+    await telemetryRecord(supabase, "telnyx_webhook_signature_reject", {
+      class: v.reason,
+      route: "telnyx_voice_inbound"
+    });
     return new Response(JSON.stringify({ ok: false, error: "bad_signature" }), {
       status: 403,
       headers: { "Content-Type": "application/json" }
@@ -182,22 +202,38 @@ serve(async (req: Request) => {
     return new Response("Missing event id", { status: 400 });
   }
 
-  const supabase = createClient(supabaseUrl, serviceKey);
-  const { data: isNew, error: dedupeErr } = await supabase.rpc("telnyx_webhook_try_dedupe", {
+  const { data: beginRaw, error: beginErr } = await supabase.rpc("telnyx_webhook_try_begin", {
     p_event_id: eventId,
     p_event_type: eventType
   });
-  if (dedupeErr) {
-    console.error("dedupe", dedupeErr);
-    return new Response("Dedupe error", { status: 500 });
+  if (beginErr) {
+    console.error("telnyx_webhook_try_begin", beginErr);
+    return new Response("Webhook begin error", { status: 500 });
   }
-  if (isNew === false) {
-    return new Response(JSON.stringify({ ok: true, duplicate: true }), {
-      status: 200,
+  const begin = beginRaw as { status?: string } | null;
+  if (begin?.status === "done") {
+    return new Response(
+      JSON.stringify({ ok: true, duplicate: true, webhook_complete: true }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  }
+  if (begin?.status === "busy") {
+    await telemetryRecord(supabase, "edge_webhook_rejected", {
+      reason: "concurrent_claim",
+      route: "telnyx_voice_inbound",
+      event_id: eventId
+    });
+    return new Response(JSON.stringify({ ok: false, error: "event_in_flight" }), {
+      status: 503,
       headers: { "Content-Type": "application/json" }
     });
   }
+  if (begin?.status !== "work") {
+    console.error("telnyx_webhook_try_begin unexpected", beginRaw);
+    return new Response("Webhook begin state error", { status: 500 });
+  }
 
+  const response = await (async (): Promise<Response> => {
   if (eventType !== "call.initiated") {
     return new Response(JSON.stringify({ ok: true, skipped: eventType }), {
       status: 200,
@@ -297,21 +333,51 @@ serve(async (req: Request) => {
     stripe_subscription_cached_at: (sub.stripe_subscription_cached_at as string | null) ?? null
   };
 
-  if (subscriptionPeriodNeedsRefresh(periodRow, stripeSecret)) {
+  const needsJit = subscriptionPeriodNeedsRefresh(periodRow, stripeSecret);
+  let jitFailed = false;
+  if (needsJit) {
     const sid = periodRow.stripe_subscription_id;
     if (sid) {
       const fetched = await fetchStripeSubscriptionPeriods(stripeSecret, sid);
       if (fetched) {
+        periodRow = {
+          ...periodRow,
+          stripe_current_period_start: fetched.start,
+          stripe_current_period_end: fetched.end,
+          stripe_subscription_cached_at: new Date().toISOString()
+        };
         const ok = await persistSubscriptionPeriodCache(supabase, periodRow, fetched.start, fetched.end);
-        if (ok) {
-          periodRow = {
-            ...periodRow,
-            stripe_current_period_start: fetched.start,
-            stripe_current_period_end: fetched.end,
-            stripe_subscription_cached_at: new Date().toISOString()
-          };
+        if (!ok) {
+          console.error(
+            "voice inbound: Stripe period refreshed in-process but DB cache write failed",
+            { businessId }
+          );
         }
+      } else {
+        jitFailed = true;
+        console.error("voice inbound: JIT Stripe subscription fetch failed (§4.2)", { businessId });
       }
+    } else {
+      jitFailed = true;
+      console.error("voice inbound: period cache refresh required but no stripe_subscription_id", {
+        businessId
+      });
+    }
+  }
+
+  if (jitFailed && needsJit) {
+    const nowMs = Date.now();
+    if (cacheLooksValidForQuotaAfterJitFailure(periodRow, nowMs)) {
+      console.warn("voice inbound: jit_stripe_fail_proceed_cached", { businessId });
+      await telemetryRecord(supabase, "jit_stripe_fail_proceed_cached", { business_id: businessId });
+    } else {
+      console.error("voice inbound: jit_stripe_fail_block", { businessId });
+      await telemetryRecord(supabase, "jit_stripe_fail_block", { business_id: businessId });
+      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SYSTEM_ERROR);
+      return new Response(JSON.stringify({ ok: true, path: "jit_stripe_fail_block" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
     }
   }
 
@@ -377,6 +443,18 @@ serve(async (req: Request) => {
       await answerThenSpeak(apiKey, callControlId, VOICE_MSG_QUOTA_EXHAUSTED);
     }
     return new Response(JSON.stringify({ ok: true, path: res?.reason ?? "blocked" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  const { data: issuedRow } = await supabase
+    .from("voice_reservations")
+    .select("answer_issued_at")
+    .eq("call_control_id", callControlId)
+    .maybeSingle();
+  if (issuedRow?.answer_issued_at) {
+    return new Response(JSON.stringify({ ok: true, path: "already_answered" }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
     });
@@ -471,6 +549,11 @@ serve(async (req: Request) => {
   if (!answerRes.ok) {
     const errText = await answerRes.text();
     console.error("answer failed", answerRes.status, errText.slice(0, 500));
+    await telemetryRecord(supabase, "voice_answer_fail", {
+      call_control_id: callControlId,
+      business_id: businessId,
+      http_status: answerRes.status
+    });
     await supabase.rpc("voice_release_reservation_on_answer_fail", {
       p_call_control_id: callControlId
     });
@@ -497,4 +580,11 @@ serve(async (req: Request) => {
     status: 200,
     headers: { "Content-Type": "application/json" }
   });
+  })();
+
+  if (response.ok) {
+    const { error: mErr } = await supabase.rpc("telnyx_webhook_mark_complete", { p_event_id: eventId });
+    if (mErr) console.error("telnyx_webhook_mark_complete", mErr);
+  }
+  return response;
 });

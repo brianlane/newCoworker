@@ -5,6 +5,11 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { header, verifyTelnyxWebhook } from "../_shared/telnyx_webhook.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
+import {
+  readTelnyxWebhookRateLimits,
+  telnyxWebhookClientIp,
+  telnyxWebhookRateAllow
+} from "../_shared/telnyx_edge_guard.ts";
 
 const MAX_BODY = 256 * 1024;
 
@@ -35,9 +40,43 @@ serve(async (req: Request) => {
     return new Response("Server misconfigured", { status: 500 });
   }
 
+  const supabase = createClient(supabaseUrl, serviceKey);
+
+  const len = Number(req.headers.get("content-length") ?? "0");
+  if (len > MAX_BODY) {
+    await telemetryRecord(supabase, "edge_webhook_rejected", {
+      reason: "size",
+      route: "telnyx_voice_call_end"
+    });
+    return new Response("Payload too large", { status: 413 });
+  }
+
   const rawBody = await req.text();
   if (rawBody.length > MAX_BODY) {
+    await telemetryRecord(supabase, "edge_webhook_rejected", {
+      reason: "size",
+      route: "telnyx_voice_call_end"
+    });
     return new Response("Payload too large", { status: 413 });
+  }
+
+  const clientIp = telnyxWebhookClientIp(req);
+  const rate = await telnyxWebhookRateAllow(
+    supabase,
+    clientIp,
+    "telnyx_voice_call_end",
+    readTelnyxWebhookRateLimits((k) => Deno.env.get(k))
+  );
+  if (!rate.ok) {
+    await telemetryRecord(supabase, "edge_webhook_rejected", {
+      reason: "rate",
+      route: "telnyx_voice_call_end",
+      detail: rate.raw
+    });
+    return new Response(JSON.stringify({ ok: false, error: "rate_limited" }), {
+      status: 429,
+      headers: { "Content-Type": "application/json" }
+    });
   }
 
   const v = await verifyTelnyxWebhook(
@@ -47,6 +86,10 @@ serve(async (req: Request) => {
     publicKey
   );
   if (!v.ok) {
+    await telemetryRecord(supabase, "telnyx_webhook_signature_reject", {
+      class: v.reason,
+      route: "telnyx_voice_call_end"
+    });
     return new Response(JSON.stringify({ ok: false, error: "bad_signature" }), {
       status: 403,
       headers: { "Content-Type": "application/json" }
@@ -67,22 +110,38 @@ serve(async (req: Request) => {
     return new Response("Missing event id", { status: 400 });
   }
 
-  const supabase = createClient(supabaseUrl, serviceKey);
-  const { data: isNew, error: dedupeErr } = await supabase.rpc("telnyx_webhook_try_dedupe", {
+  const { data: beginRaw, error: beginErr } = await supabase.rpc("telnyx_webhook_try_begin", {
     p_event_id: eventId,
     p_event_type: eventType
   });
-  if (dedupeErr) {
-    console.error("dedupe", dedupeErr);
-    return new Response("Dedupe error", { status: 500 });
+  if (beginErr) {
+    console.error("telnyx_webhook_try_begin", beginErr);
+    return new Response("Webhook begin error", { status: 500 });
   }
-  if (isNew === false) {
-    return new Response(JSON.stringify({ ok: true, duplicate: true }), {
-      status: 200,
+  const begin = beginRaw as { status?: string } | null;
+  if (begin?.status === "done") {
+    return new Response(
+      JSON.stringify({ ok: true, duplicate: true, webhook_complete: true }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  }
+  if (begin?.status === "busy") {
+    await telemetryRecord(supabase, "edge_webhook_rejected", {
+      reason: "concurrent_claim",
+      route: "telnyx_voice_call_end",
+      event_id: eventId
+    });
+    return new Response(JSON.stringify({ ok: false, error: "event_in_flight" }), {
+      status: 503,
       headers: { "Content-Type": "application/json" }
     });
   }
+  if (begin?.status !== "work") {
+    console.error("telnyx_webhook_try_begin unexpected", beginRaw);
+    return new Response("Webhook begin state error", { status: 500 });
+  }
 
+  const response = await (async (): Promise<Response> => {
   if (!END_EVENTS.has(eventType)) {
     return new Response(JSON.stringify({ ok: true, skipped: eventType }), {
       status: 200,
@@ -189,4 +248,11 @@ serve(async (req: Request) => {
     status: 200,
     headers: { "Content-Type": "application/json" }
   });
+  })();
+
+  if (response.ok) {
+    const { error: mErr } = await supabase.rpc("telnyx_webhook_mark_complete", { p_event_id: eventId });
+    if (mErr) console.error("telnyx_webhook_mark_complete", mErr);
+  }
+  return response;
 });

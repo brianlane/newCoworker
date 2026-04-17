@@ -17,6 +17,18 @@ import {
   SMS_MONTHLY_CAP_STARTER,
   SMS_MONTHLY_CAP_STANDARD
 } from "../supabase/functions/_shared/sms_monthly_limits";
+import {
+  inboundSmsBody,
+  isHelpKeyword,
+  isStartKeyword,
+  isStopKeyword,
+  telnyxSendSms
+} from "../supabase/functions/_shared/telnyx_sms_compliance";
+import {
+  readTelnyxWebhookRateLimits,
+  telnyxWebhookClientIp,
+  telnyxWebhookRateAllow
+} from "../supabase/functions/_shared/telnyx_edge_guard";
 
 describe("_shared/sms_monthly_limits matches TIER_LIMITS SMS caps", () => {
   it("starter and standard monthly SMS", () => {
@@ -113,6 +125,178 @@ describe("_shared/stream_url", () => {
     };
     const secret = "test-secret";
     expect(await signStreamUrlMac(payload, secret)).toBe(signStreamUrlPayload(payload, secret));
+  });
+});
+
+describe("_shared/telnyx_sms_compliance", () => {
+  it("reads text or body from payload", () => {
+    expect(inboundSmsBody({ text: "hi" })).toBe("hi");
+    expect(inboundSmsBody({ body: "there" })).toBe("there");
+    expect(inboundSmsBody({})).toBe("");
+  });
+
+  it("detects STOP variants (uppercase input)", () => {
+    expect(isStopKeyword("STOP")).toBe(true);
+    expect(isStopKeyword("UNSUBSCRIBE")).toBe(true);
+    expect(isStopKeyword("HELP")).toBe(false);
+    expect(isStopKeyword("STOPP")).toBe(false);
+  });
+
+  it("detects HELP", () => {
+    expect(isHelpKeyword("HELP")).toBe(true);
+    expect(isHelpKeyword("help")).toBe(false);
+  });
+
+  it("detects START / YES / UNSTOP", () => {
+    expect(isStartKeyword("START")).toBe(true);
+    expect(isStartKeyword("YES")).toBe(true);
+    expect(isStartKeyword("UNSTOP")).toBe(true);
+    expect(isStartKeyword("STOP")).toBe(false);
+  });
+
+  it("telnyxSendSms posts Messages API and returns status", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => '{"data":{}}'
+    });
+    const r = await telnyxSendSms({
+      apiKey: "KEY",
+      messagingProfileId: "mp",
+      fromE164: "+15550001111",
+      toE164: "+15550002222",
+      text: "hi",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe(200);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://api.telnyx.com/v2/messages",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer KEY" })
+      })
+    );
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      to: "+15550002222",
+      from: "+15550001111",
+      text: "hi",
+      messaging_profile_id: "mp"
+    });
+  });
+
+  it("telnyxSendSms uses global fetch when fetchImpl omitted", async () => {
+    const g = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      text: async () => "err"
+    });
+    vi.stubGlobal("fetch", g);
+    try {
+      const r = await telnyxSendSms({
+        apiKey: "K",
+        messagingProfileId: "m",
+        fromE164: "+1",
+        toE164: "+2",
+        text: "x"
+      });
+      expect(r.ok).toBe(false);
+      expect(r.status).toBe(422);
+      expect(r.body).toBe("err");
+      expect(g).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("_shared/telnyx_edge_guard", () => {
+  it("telnyxWebhookClientIp prefers cf-connecting-ip then x-forwarded-for", () => {
+    const a = new Request("http://x/", { headers: { "cf-connecting-ip": "203.0.113.1" } });
+    expect(telnyxWebhookClientIp(a)).toBe("203.0.113.1");
+    const b = new Request("http://x/", { headers: { "x-forwarded-for": "198.51.100.2, 10.0.0.1" } });
+    expect(telnyxWebhookClientIp(b)).toBe("198.51.100.2");
+    const c = new Request("http://x/");
+    expect(telnyxWebhookClientIp(c)).toBe("unknown");
+  });
+
+  it("telnyxWebhookClientIp falls back to x-real-ip when XFF first hop empty", () => {
+    const req = new Request("http://x/", {
+      headers: { "x-forwarded-for": "   , ", "x-real-ip": "192.0.2.1" }
+    });
+    expect(telnyxWebhookClientIp(req)).toBe("192.0.2.1");
+  });
+
+  it("readTelnyxWebhookRateLimits parses env", () => {
+    const lim = readTelnyxWebhookRateLimits((k) =>
+      k === "TELNYX_WEBHOOK_RATE_MAX_PER_MINUTE" ? "100" : k === "TELNYX_WEBHOOK_RATE_WINDOW_SEC" ? "30" : undefined
+    );
+    expect(lim).toEqual({ maxPerWindow: 100, windowSeconds: 30 });
+    expect(readTelnyxWebhookRateLimits(() => undefined)).toEqual({
+      maxPerWindow: 240,
+      windowSeconds: 60
+    });
+    expect(
+      readTelnyxWebhookRateLimits((k) =>
+        k === "TELNYX_WEBHOOK_RATE_MAX_PER_MINUTE"
+          ? "0"
+          : k === "TELNYX_WEBHOOK_RATE_WINDOW_SEC"
+            ? "nope"
+            : undefined
+      )
+    ).toEqual({ maxPerWindow: 240, windowSeconds: 60 });
+  });
+
+  it("telnyxWebhookRateAllow passes when RPC ok", async () => {
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({ data: { ok: true, hits: 3 }, error: null })
+    };
+    const r = await telnyxWebhookRateAllow(supabase as never, "1.2.3.4", "r1", {
+      maxPerWindow: 100,
+      windowSeconds: 60
+    });
+    expect(r.ok).toBe(true);
+    expect(supabase.rpc).toHaveBeenCalledWith("telnyx_webhook_rate_check", {
+      p_ip: "1.2.3.4",
+      p_route: "r1",
+      p_max_per_window: 100,
+      p_window_seconds: 60
+    });
+  });
+
+  it("telnyxWebhookRateAllow allows traffic when RPC errors (fail open)", async () => {
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({ data: null, error: { message: "x" } })
+    };
+    const r = await telnyxWebhookRateAllow(supabase as never, "1.1.1.1", "r2", {
+      maxPerWindow: 10,
+      windowSeconds: 30
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it("telnyxWebhookRateAllow blocks when RPC returns ok false", async () => {
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({ data: { ok: false, hits: 999 }, error: null })
+    };
+    const r = await telnyxWebhookRateAllow(supabase as never, "9.9.9.9", "r3", {
+      maxPerWindow: 5,
+      windowSeconds: 60
+    });
+    expect(r.ok).toBe(false);
+    expect(r.raw).toEqual({ ok: false, hits: 999 });
+  });
+
+  it("telnyxWebhookRateAllow allows when data null but no error", async () => {
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({ data: null, error: null })
+    };
+    const r = await telnyxWebhookRateAllow(supabase as never, "8.8.8.8", "r4", {
+      maxPerWindow: 1,
+      windowSeconds: 60
+    });
+    expect(r.ok).toBe(true);
   });
 });
 
