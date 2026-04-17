@@ -470,7 +470,11 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
     });
     expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
       "void_voice_bonus_grant_by_checkout_session",
-      { p_checkout_session_id: "cs_test_bonus_for_refund", p_reason: "dispute" }
+      {
+        p_checkout_session_id: "cs_test_bonus_for_refund",
+        p_reason: "dispute",
+        p_clawback_seconds: null
+      }
     );
   });
 
@@ -491,7 +495,12 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
     expect(res.status).toBe(200);
     expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
       "void_voice_bonus_grant_by_checkout_session",
-      { p_checkout_session_id: "cs_test_bonus_for_refund", p_reason: "refund" }
+      // No `amount` on the charge object → can't prorate → full void (p_clawback_seconds: null).
+      {
+        p_checkout_session_id: "cs_test_bonus_for_refund",
+        p_reason: "refund",
+        p_clawback_seconds: null
+      }
     );
   });
 
@@ -608,7 +617,11 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
     );
     expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
       "void_voice_bonus_grant_by_checkout_session",
-      { p_checkout_session_id: "cs_ok", p_reason: "refund" }
+      {
+        p_checkout_session_id: "cs_ok",
+        p_reason: "refund",
+        p_clawback_seconds: null
+      }
     );
   });
 
@@ -635,6 +648,87 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
     expect(mockVoiceBonusRpc).not.toHaveBeenCalledWith(
       "void_voice_bonus_grant_by_checkout_session",
       expect.anything()
+    );
+  });
+
+  it("prorates clawback seconds on a partial refund when charge amount and seconds metadata are present", async () => {
+    mockCheckoutSessionsList.mockResolvedValueOnce({
+      data: [
+        {
+          id: "cs_partial",
+          amount_total: 2000,
+          metadata: {
+            checkoutKind: "voice_bonus_seconds",
+            businessId: "biz_partial",
+            voiceSeconds: "1200"
+          }
+        }
+      ]
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_partial_refund",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_partial",
+          amount: 2000,
+          amount_captured: 2000,
+          amount_refunded: 500,
+          payment_intent: "pi_partial"
+        }
+      }
+    } as never);
+
+    const res = await postEvent();
+    expect(res.status).toBe(200);
+    // 25% refunded → 300 of 1200 seconds clawed back (partial, grant not fully voided).
+    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      {
+        p_checkout_session_id: "cs_partial",
+        p_reason: "refund",
+        p_clawback_seconds: 300
+      }
+    );
+  });
+
+  it("passes null clawback (full void) when the refund covers the full captured amount", async () => {
+    mockCheckoutSessionsList.mockResolvedValueOnce({
+      data: [
+        {
+          id: "cs_full",
+          amount_total: 2000,
+          metadata: {
+            checkoutKind: "voice_bonus_seconds",
+            businessId: "biz_full",
+            voiceSeconds: "1200"
+          }
+        }
+      ]
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_full_refund",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_full",
+          amount: 2000,
+          amount_captured: 2000,
+          amount_refunded: 2000,
+          payment_intent: "pi_full"
+        }
+      }
+    } as never);
+
+    const res = await postEvent();
+    expect(res.status).toBe(200);
+    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      {
+        p_checkout_session_id: "cs_full",
+        p_reason: "refund",
+        p_clawback_seconds: null
+      }
     );
   });
 });

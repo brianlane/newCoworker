@@ -140,7 +140,12 @@ export async function sendTelnyxSms(
       p_business_id: businessId
     });
     if (relErr) {
-      console.error("sendTelnyxSms: release_sms_outbound_slot failed", relErr.message);
+      // Leave reservedSlot=true so any retry on this path (or an upstream wrapper calling
+      // releaseIfNeeded again) re-attempts the release. Silently flipping it to false on
+      // error would strand the monthly-quota slot on the `businesses` row in the DB with
+      // no client-side retry path — a long-lived quota leak until manual reconciliation.
+      console.error("sendTelnyxSms: release_sms_outbound_slot failed (will keep slot flagged)", relErr.message);
+      return;
     }
     reservedSlot = false;
   };

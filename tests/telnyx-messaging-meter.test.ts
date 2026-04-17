@@ -164,7 +164,7 @@ describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
       )
     ).rejects.toThrow("Telnyx SMS error");
     expect(errSpy).toHaveBeenCalledWith(
-      "sendTelnyxSms: release_sms_outbound_slot failed",
+      "sendTelnyxSms: release_sms_outbound_slot failed (will keep slot flagged)",
       "db write failed"
     );
     errSpy.mockRestore();

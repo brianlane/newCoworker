@@ -513,46 +513,11 @@ comment on column telnyx_webhook_events.completed_at is
 -- retries. If operators need to mark a specific legacy event as complete, run a targeted
 -- UPDATE keyed by (event_id, event_type, received_at) — not a blanket WHERE completed_at IS NULL.
 
-create or replace function telnyx_webhook_try_begin(p_event_id text, p_event_type text)
-returns jsonb
-language plpgsql
-security definer
-set search_path = pg_catalog, public
-as $$
-declare
-  v_done timestamptz;
-begin
-  begin
-    insert into telnyx_webhook_events (event_id, event_type)
-    values (p_event_id, p_event_type);
-    return jsonb_build_object('status', 'new');
-  exception
-    when unique_violation then
-      null;
-  end;
-
-  select completed_at into v_done from telnyx_webhook_events where event_id = p_event_id;
-  if v_done is null then
-    return jsonb_build_object('status', 'retry');
-  end if;
-  return jsonb_build_object('status', 'done');
-end;
-$$;
-
-grant execute on function telnyx_webhook_try_begin(text, text) to service_role;
-
-create or replace function telnyx_webhook_mark_complete(p_event_id text)
-returns void
-language sql
-security definer
-set search_path = pg_catalog, public
-as $$
-  update telnyx_webhook_events
-  set completed_at = coalesce(completed_at, now())
-  where event_id = p_event_id and completed_at is null;
-$$;
-
-grant execute on function telnyx_webhook_mark_complete(text) to service_role;
+-- `telnyx_webhook_try_begin` and `telnyx_webhook_mark_complete` are defined further down
+-- (the claim-token variant that returns status ∈ {new, work, busy, done, error}). The
+-- earlier duplicate used a simpler {new, retry, done} protocol that conflicts with the
+-- Edge callers and was always overwritten by the later definition via CREATE OR REPLACE;
+-- keeping only the latter avoids two sources of truth in the same migration.
 
 create unique index if not exists idx_sms_inbound_jobs_telnyx_event_id_unique
   on sms_inbound_jobs (telnyx_event_id)
@@ -1787,6 +1752,112 @@ $$;
 grant execute on function voice_mark_low_balance_alerts_sent(uuid, timestamptz) to service_role;
 
 -- ---------------------------------------------------------------------------
+-- §4.1 Atomic claim (disarm + return) for low-balance alert targets.
+-- ---------------------------------------------------------------------------
+-- Previously the Edge function called voice_list_low_balance_alert_targets
+-- (read-only), sent the email via Resend, then called voice_mark_low_balance_
+-- alerts_sent to disarm. That pattern has two race conditions:
+--
+--   1. If two cron invocations overlap (operator-triggered retry, scheduler
+--      overlap, cold-start stacking), both reads see the same armed rows and
+--      both send the email, so the owner gets a duplicate message.
+--   2. If Resend succeeds but the follow-up mark-sent RPC fails (network blip,
+--      DB hiccup), the next cron run re-sends the same email.
+--
+-- This RPC folds the read + disarm into a single UPDATE … RETURNING so each
+-- armed (business_id, stripe_period_start) pair can be claimed by at most one
+-- caller. A `FOR UPDATE SKIP LOCKED` subselect lets concurrent crons claim
+-- disjoint subsets without blocking on each other. Callers re-arm the row via
+-- voice_rearm_low_balance_alert_target if the email send fails so the next
+-- run retries that owner without re-sending to already-notified ones.
+create or replace function voice_claim_low_balance_alert_targets(p_threshold_seconds integer default 300)
+returns table (
+  business_id uuid,
+  owner_email text,
+  stripe_period_start timestamptz,
+  included_headroom_seconds integer
+)
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+declare
+  v_thr int := greatest(0, p_threshold_seconds);
+begin
+  return query
+  with candidates as (
+    select u.business_id, u.stripe_period_start
+    from voice_billing_period_usage u
+    join businesses b on b.id = u.business_id
+    where u.low_balance_alert_armed
+      and b.owner_email is not null
+      and length(trim(b.owner_email::text)) > 0
+      and (
+        u.tier_cap_seconds
+        - u.committed_included_seconds
+        - coalesce((
+            select sum(r.reserved_included_seconds)::int
+            from voice_reservations r
+            where r.business_id = u.business_id
+              and r.stripe_period_start_key = u.stripe_period_start
+              and r.state in ('pending_answer', 'active')
+          ), 0)
+      ) < v_thr
+    for update of u skip locked
+  ),
+  claimed as (
+    update voice_billing_period_usage u
+    set low_balance_alert_armed = false,
+        updated_at = now()
+    from candidates c
+    where u.business_id = c.business_id
+      and u.stripe_period_start = c.stripe_period_start
+    returning u.business_id, u.stripe_period_start, u.tier_cap_seconds, u.committed_included_seconds
+  )
+  select
+    c.business_id,
+    b.owner_email::text,
+    c.stripe_period_start,
+    (
+      c.tier_cap_seconds
+      - c.committed_included_seconds
+      - coalesce((
+          select sum(r.reserved_included_seconds)::int
+          from voice_reservations r
+          where r.business_id = c.business_id
+            and r.stripe_period_start_key = c.stripe_period_start
+            and r.state in ('pending_answer', 'active')
+        ), 0)
+    )::integer as included_headroom_seconds
+  from claimed c
+  join businesses b on b.id = c.business_id;
+end;
+$$;
+
+grant execute on function voice_claim_low_balance_alert_targets(integer) to service_role;
+
+-- Re-arm a single (business_id, stripe_period_start) pair after a failed email send
+-- so the next cron retries that owner. Scoped to one row so a failure on one owner
+-- cannot re-arm unrelated owners that were successfully notified in the same batch.
+create or replace function voice_rearm_low_balance_alert_target(
+  p_business_id uuid,
+  p_stripe_period_start timestamptz
+)
+returns void
+language sql
+security definer
+set search_path = pg_catalog, public
+as $$
+  update voice_billing_period_usage
+  set low_balance_alert_armed = true,
+      updated_at = now()
+  where business_id = p_business_id
+    and stripe_period_start = p_stripe_period_start;
+$$;
+
+grant execute on function voice_rearm_low_balance_alert_target(uuid, timestamptz) to service_role;
+
+-- ---------------------------------------------------------------------------
 -- §4.1 Re-arm low_balance_alert_armed when included headroom rises above threshold
 -- ---------------------------------------------------------------------------
 create or replace function voice_sync_low_balance_alert_armed(p_threshold_seconds integer default 300)
@@ -2192,9 +2263,23 @@ grant execute on function public.sms_is_opted_out(uuid, text) to service_role;
 -- Voids a bonus grant by Stripe checkout session id. Idempotent: already-voided grants
 -- return ok=true, already_voided=true. Returns seconds_remaining at the moment of void
 -- (what the customer still had) for telemetry/refund proration.
+-- Earlier signature (text, text) is replaced by (text, text, integer). Drop explicitly
+-- since CREATE OR REPLACE FUNCTION cannot change the parameter list.
+drop function if exists public.void_voice_bonus_grant_by_checkout_session(text, text);
+
+-- `p_clawback_seconds`:
+--   - NULL (default) → full void: set voided_at=now(), seconds_remaining=0. Use this for
+--     dispute-lost events (full chargeback) and for any caller that can't compute a
+--     partial clawback amount safely.
+--   - 0              → no-op (refund with zero amount shouldn't reach here; included for
+--     defense-in-depth so the RPC never mutates state on a zero clawback).
+--   - N > 0          → partial clawback: reduce seconds_remaining by min(N, remaining).
+--     Only sets voided_at when the clawback fully drains the grant; otherwise the grant
+--     stays usable for its remaining balance.
 create or replace function public.void_voice_bonus_grant_by_checkout_session(
   p_checkout_session_id text,
-  p_reason text default 'refund'
+  p_reason text default 'refund',
+  p_clawback_seconds integer default null
 )
 returns jsonb
 language plpgsql
@@ -2203,6 +2288,9 @@ set search_path = pg_catalog, public
 as $$
 declare
   r public.voice_bonus_grants%rowtype;
+  v_claw integer;
+  v_new_remaining integer;
+  v_full boolean;
 begin
   if p_checkout_session_id is null or length(trim(p_checkout_session_id)) = 0 then
     return jsonb_build_object('ok', false, 'reason', 'missing_session_id');
@@ -2226,10 +2314,32 @@ begin
     );
   end if;
 
+  if p_clawback_seconds is not null and p_clawback_seconds <= 0 then
+    return jsonb_build_object(
+      'ok', true,
+      'already_voided', false,
+      'no_op', true,
+      'grant_id', r.id,
+      'business_id', r.business_id,
+      'seconds_remaining_at_void', r.seconds_remaining,
+      'reason', coalesce(nullif(trim(p_reason), ''), 'refund')
+    );
+  end if;
+
+  if p_clawback_seconds is null or p_clawback_seconds >= r.seconds_remaining then
+    v_claw := r.seconds_remaining;
+    v_new_remaining := 0;
+    v_full := true;
+  else
+    v_claw := p_clawback_seconds;
+    v_new_remaining := r.seconds_remaining - p_clawback_seconds;
+    v_full := false;
+  end if;
+
   update public.voice_bonus_grants
   set
-    voided_at = now(),
-    seconds_remaining = 0
+    seconds_remaining = v_new_remaining,
+    voided_at = case when v_full then now() else voided_at end
   where id = r.id;
 
   return jsonb_build_object(
@@ -2238,13 +2348,16 @@ begin
     'grant_id', r.id,
     'business_id', r.business_id,
     'seconds_remaining_at_void', r.seconds_remaining,
+    'seconds_clawed_back', v_claw,
+    'seconds_remaining_after', v_new_remaining,
+    'partial', not v_full,
     'reason', coalesce(nullif(trim(p_reason), ''), 'refund')
   );
 end;
 $$;
 
-revoke execute on function public.void_voice_bonus_grant_by_checkout_session(text, text) from public;
-grant execute on function public.void_voice_bonus_grant_by_checkout_session(text, text) to service_role;
+revoke execute on function public.void_voice_bonus_grant_by_checkout_session(text, text, integer) from public;
+grant execute on function public.void_voice_bonus_grant_by_checkout_session(text, text, integer) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- §4.1 Re-arm low_balance_alert_armed for a SPECIFIC business (scoped).
@@ -2413,3 +2526,65 @@ $$;
 
 revoke execute on function public.sms_outbound_rate_check(uuid, int, int) from public;
 grant execute on function public.sms_outbound_rate_check(uuid, int, int) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Harden every SECURITY DEFINER RPC defined above that only had a `grant execute
+-- … to service_role` without a matching `revoke execute … from public`. Postgres
+-- grants EXECUTE to PUBLIC by default on new functions, so omitting the revoke
+-- means anon / authenticated roles reaching the DB could call these
+-- privilege-elevating helpers directly, bypassing the service-role boundary.
+-- The loop is idempotent and skips missing functions so the migration stays
+-- safe on partial environments / reruns. Functions already revoked inline
+-- (e.g. void_voice_bonus_grant_by_checkout_session, sms_outbound_rate_check,
+-- sms_set_opt_out/clear_opt_out/is_opted_out, voice_sync_low_balance_alert_
+-- armed_for_business, voice_claim_failover_transfer) are intentionally omitted.
+-- ---------------------------------------------------------------------------
+do $tighten$
+declare
+  sig text;
+  fn_signatures text[] := array[
+    'public.telemetry_record(text, jsonb)',
+    'public.telemetry_prune_events(interval)',
+    'public.consume_voice_bonus_seconds(uuid, integer)',
+    'public.consume_voice_bonus_from_allocations(uuid, jsonb, integer)',
+    'public.telnyx_webhook_try_begin(text, text)',
+    'public.telnyx_webhook_mark_complete(text)',
+    'public.voice_reserve_for_call(uuid, text, text, integer, timestamptz, integer, integer, integer)',
+    'public.voice_mark_answer_issued(text)',
+    'public.voice_bridge_attach_ws(text, timestamptz)',
+    'public.voice_release_reservation_on_answer_fail(text)',
+    'public.voice_try_finalize_settlement(text, boolean)',
+    'public.telnyx_webhook_rate_check(text, text, integer, integer)',
+    'public.voice_record_bridge_media_end(text)',
+    'public.voice_sweep_stale_settlements(text)',
+    'public.claim_sms_inbound_jobs(integer)',
+    'public.complete_sms_inbound_job(uuid, text, text, text, text)',
+    'public.complete_sms_inbound_job_done_meter_sms(uuid, uuid, text, text)',
+    'public.complete_sms_inbound_job_done(uuid, uuid, text, text)',
+    'public.check_sms_monthly_limit(uuid)',
+    'public.apply_voice_bonus_grant_from_checkout(uuid, text, integer, timestamptz)',
+    'public.voice_list_low_balance_alert_targets(integer)',
+    'public.voice_mark_low_balance_alerts_sent(uuid, timestamptz)',
+    'public.voice_claim_low_balance_alert_targets(integer)',
+    'public.voice_rearm_low_balance_alert_target(uuid, timestamptz)',
+    'public.voice_sync_low_balance_alert_armed(integer)',
+    'public.voice_claim_failover_maintenance_speak(text)',
+    'public.voice_sweep_zombie_active_sessions(interval)',
+    'public.voice_sweep_stale_reservations(interval, interval)',
+    'public.sms_reclaim_stale_processing_jobs(interval)',
+    'public.stream_url_nonces_prune_expired()',
+    'public.voice_run_maintenance_sweeps(text, text, text, text, text)'
+  ];
+begin
+  foreach sig in array fn_signatures loop
+    if exists (
+      select 1 from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname || '.' || p.proname = split_part(sig, '(', 1)
+    ) then
+      execute format('revoke execute on function %s from public', sig);
+      execute format('grant execute on function %s to service_role', sig);
+    end if;
+  end loop;
+end;
+$tighten$;

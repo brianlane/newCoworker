@@ -75,31 +75,39 @@ serve(async (req: Request) => {
     // transfer causes the caller to be bounced/dropped. We reuse voice_failover_
     // maintenance_at as the "failover action taken" watermark for this leg; the
     // speak path uses the same column, so speak+transfer also can't both fire.
+    //
+    // Fail-closed: refuse to transfer without a working claim path. The prior behavior
+    // logged a warning and proceeded, which meant a concurrent caller or upstream
+    // retry could transfer the same leg twice and bounce the caller.
     const supabaseUrlT = Deno.env.get("SUPABASE_URL") ?? "";
     const serviceKeyT = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-    if (supabaseUrlT && serviceKeyT) {
-      const supabaseT = createClient(supabaseUrlT, serviceKeyT);
-      const { data: claimRawT, error: claimErrT } = await supabaseT.rpc(
-        "voice_claim_failover_transfer",
-        { p_call_control_id: callId }
+    if (!supabaseUrlT || !serviceKeyT) {
+      console.error("telnyx-voice-failover: transfer mode requires SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY");
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY required for transfer mode"
+        }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
       );
-      if (claimErrT) {
-        console.error("voice_claim_failover_transfer", claimErrT);
-        return new Response(JSON.stringify({ ok: false, error: "claim_failed" }), {
-          status: 500,
-          headers: { "Content-Type": "application/json" }
-        });
-      }
-      const claimT = claimRawT as { ok?: boolean; transfer?: boolean; reason?: string } | null;
-      if (claimT?.transfer === false) {
-        return new Response(
-          JSON.stringify({ ok: true, skipped: true, reason: claimT?.reason ?? "already_claimed" }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        );
-      }
-    } else {
-      console.warn(
-        "telnyx-voice-failover: transfer mode without SUPABASE env — skipping idempotency claim (allowing single-shot transfer)"
+    }
+    const supabaseT = createClient(supabaseUrlT, serviceKeyT);
+    const { data: claimRawT, error: claimErrT } = await supabaseT.rpc(
+      "voice_claim_failover_transfer",
+      { p_call_control_id: callId }
+    );
+    if (claimErrT) {
+      console.error("voice_claim_failover_transfer", claimErrT);
+      return new Response(JSON.stringify({ ok: false, error: "claim_failed" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    const claimT = claimRawT as { ok?: boolean; transfer?: boolean; reason?: string } | null;
+    if (claimT?.transfer === false) {
+      return new Response(
+        JSON.stringify({ ok: true, skipped: true, reason: claimT?.reason ?? "already_claimed" }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
       );
     }
 

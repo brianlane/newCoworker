@@ -171,6 +171,18 @@ serve(async (req: Request) => {
       .maybeSingle();
     const businessId = (route?.business_id as string | undefined) ?? null;
 
+    // Compliance auto-reply retry semantics:
+    //   - If the opt-out/opt-in persist RPC fails, or the outbound auto-reply fails,
+    //     return 503 so Telnyx retries the webhook. The inbound-event dedupe RPC keeps
+    //     the outer handler idempotent (mark_complete is skipped on non-2xx response
+    //     below), and `Idempotency-Key` on the Telnyx send dedupes the reply on Telnyx
+    //     side if the webhook is retried after a successful send but a later failure.
+    //   - Silently returning 200 on send failure would drop STOP/HELP/START confirmations
+    //     without any retry — a carrier-compliance miss.
+    const stopReplyIdem = `${eventId}:compliance-stop`;
+    const helpReplyIdem = `${eventId}:compliance-help`;
+    const startReplyIdem = `${eventId}:compliance-start`;
+
     if (isStopKeyword(bodyNorm)) {
       // CTIA / A2P 10DLC: STOP must suppress further messages until START. Persist the
       // opt-out BEFORE sending the confirmation reply so a crash between reply+persist
@@ -184,6 +196,16 @@ serve(async (req: Request) => {
         });
         if (optErr) {
           console.error("sms_set_opt_out", optErr);
+          await telemetryRecord(supabase, "sms_compliance_persist_failed", {
+            keyword: "stop",
+            event_id: eventId,
+            business_id: businessId,
+            error: optErr.message
+          });
+          return new Response(JSON.stringify({ ok: false, error: "opt_out_persist_failed" }), {
+            status: 503,
+            headers: { "Content-Type": "application/json" }
+          });
         }
       }
       if (canAutoReply) {
@@ -192,10 +214,20 @@ serve(async (req: Request) => {
           messagingProfileId,
           fromE164: smsFromE164,
           toE164: from!,
-          text: STOP_REPLY_TEXT
+          text: STOP_REPLY_TEXT,
+          idempotencyKey: stopReplyIdem
         });
         if (!send.ok) {
           console.error("compliance STOP reply", send.status, send.body.slice(0, 300));
+          await telemetryRecord(supabase, "sms_compliance_reply_failed", {
+            keyword: "stop",
+            event_id: eventId,
+            status: send.status
+          });
+          return new Response(JSON.stringify({ ok: false, error: "compliance_reply_failed" }), {
+            status: 503,
+            headers: { "Content-Type": "application/json" }
+          });
         }
       } else {
         console.warn("telnyx-sms-inbound: STOP without TELNYX_API_KEY/Messaging env; no auto-reply");
@@ -219,10 +251,20 @@ serve(async (req: Request) => {
           messagingProfileId,
           fromE164: smsFromE164,
           toE164: from!,
-          text: HELP_REPLY_TEXT
+          text: HELP_REPLY_TEXT,
+          idempotencyKey: helpReplyIdem
         });
         if (!send.ok) {
           console.error("compliance HELP reply", send.status, send.body.slice(0, 300));
+          await telemetryRecord(supabase, "sms_compliance_reply_failed", {
+            keyword: "help",
+            event_id: eventId,
+            status: send.status
+          });
+          return new Response(JSON.stringify({ ok: false, error: "compliance_reply_failed" }), {
+            status: 503,
+            headers: { "Content-Type": "application/json" }
+          });
         }
       } else {
         console.warn("telnyx-sms-inbound: HELP without TELNYX_API_KEY/Messaging env; no auto-reply");
@@ -242,6 +284,16 @@ serve(async (req: Request) => {
         });
         if (clrErr) {
           console.error("sms_clear_opt_out", clrErr);
+          await telemetryRecord(supabase, "sms_compliance_persist_failed", {
+            keyword: "start",
+            event_id: eventId,
+            business_id: businessId,
+            error: clrErr.message
+          });
+          return new Response(JSON.stringify({ ok: false, error: "opt_in_persist_failed" }), {
+            status: 503,
+            headers: { "Content-Type": "application/json" }
+          });
         }
       }
       if (canAutoReply) {
@@ -250,10 +302,20 @@ serve(async (req: Request) => {
           messagingProfileId,
           fromE164: smsFromE164,
           toE164: from!,
-          text: START_REPLY_TEXT
+          text: START_REPLY_TEXT,
+          idempotencyKey: startReplyIdem
         });
         if (!send.ok) {
           console.error("compliance START reply", send.status, send.body.slice(0, 300));
+          await telemetryRecord(supabase, "sms_compliance_reply_failed", {
+            keyword: "start",
+            event_id: eventId,
+            status: send.status
+          });
+          return new Response(JSON.stringify({ ok: false, error: "compliance_reply_failed" }), {
+            status: 503,
+            headers: { "Content-Type": "application/json" }
+          });
         }
       } else {
         console.warn("telnyx-sms-inbound: START without TELNYX_API_KEY/Messaging env; no auto-reply");

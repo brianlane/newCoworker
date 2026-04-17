@@ -23,6 +23,10 @@ import { telemetryRecord } from "../_shared/telemetry.ts";
 
 const MAX_ATTEMPTS = 8;
 const NCW_IDEM_TAG_PREFIX = "ncw_idem:";
+// Hard ceiling on a single Rowboat /chat call. A hung business VPS would otherwise
+// keep the worker blocked for the full platform invocation timeout (and stall every
+// other claimed job in the batch). Retries are handled by bounded `attempt_count`.
+const ROWBOAT_CHAT_TIMEOUT_MS = 20_000;
 
 /** Best-effort: Telnyx list-messages filter may vary by API version — safe to return null. */
 async function telnyxTryRecoverOutboundMessageId(apiKey: string, idem: string): Promise<string | null> {
@@ -210,14 +214,27 @@ serve(async (req: Request) => {
           }
         }
 
-        const chatRes = await fetch(chatUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${bearer}`
-          },
-          body: JSON.stringify(chatBody)
-        });
+        const chatAbort = new AbortController();
+        const chatTimer = setTimeout(() => chatAbort.abort(), ROWBOAT_CHAT_TIMEOUT_MS);
+        let chatRes: Response;
+        try {
+          chatRes = await fetch(chatUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${bearer}`
+            },
+            body: JSON.stringify(chatBody),
+            signal: chatAbort.signal
+          });
+        } catch (fetchErr) {
+          if (chatAbort.signal.aborted) {
+            throw new Error("rowboat_timeout");
+          }
+          throw fetchErr;
+        } finally {
+          clearTimeout(chatTimer);
+        }
         if (!chatRes.ok) {
           throw new Error(`rowboat_http_${chatRes.status}`);
         }

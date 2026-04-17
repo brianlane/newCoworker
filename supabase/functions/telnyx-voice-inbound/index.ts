@@ -135,6 +135,11 @@ serve(async (req: Request) => {
 
   const supabase = createClient(supabaseUrl, serviceKey);
 
+  // Cap on the number of bytes we will pull into memory for the webhook body. The
+  // Content-Length check is a fast-fail for honest senders, but chunked uploads can
+  // omit Content-Length or lie about it, so we also enforce the limit during the read
+  // and abort as soon as we cross it rather than letting an arbitrarily large body
+  // accumulate before a post-read size check.
   const len = Number(req.headers.get("content-length") ?? "0");
   if (len > MAX_BODY) {
     await telemetryRecord(supabase, "edge_webhook_rejected", {
@@ -144,8 +149,32 @@ serve(async (req: Request) => {
     return new Response("Payload too large", { status: 413 });
   }
 
-  const rawBody = await req.text();
-  if (rawBody.length > MAX_BODY) {
+  const rawBody = await (async (): Promise<string | null> => {
+    const reader = req.body?.getReader();
+    if (!reader) return "";
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > MAX_BODY) {
+        try { await reader.cancel(); } catch { /* best-effort */ }
+        return null;
+      }
+      chunks.push(value);
+    }
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) {
+      out.set(c, offset);
+      offset += c.byteLength;
+    }
+    return new TextDecoder().decode(out);
+  })();
+
+  if (rawBody === null) {
     await telemetryRecord(supabase, "edge_webhook_rejected", {
       reason: "size",
       route: "telnyx_voice_inbound"

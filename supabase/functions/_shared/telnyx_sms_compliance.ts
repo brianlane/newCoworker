@@ -32,14 +32,24 @@ export async function telnyxSendSms(params: {
   toE164: string;
   text: string;
   fetchImpl?: typeof fetch;
+  /**
+   * Optional Telnyx `Idempotency-Key`. Set this on compliance auto-replies (STOP/HELP/START)
+   * so that if the inbound webhook is retried by Telnyx, Telnyx itself will de-duplicate the
+   * resulting outbound message instead of sending it twice.
+   */
+  idempotencyKey?: string;
 }): Promise<{ ok: boolean; status: number; body: string }> {
   const fetchImpl = params.fetchImpl ?? fetch;
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${params.apiKey}`,
+    "Content-Type": "application/json"
+  };
+  if (params.idempotencyKey) {
+    headers["Idempotency-Key"] = params.idempotencyKey;
+  }
   const res = await fetchImpl("https://api.telnyx.com/v2/messages", {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${params.apiKey}`,
-      "Content-Type": "application/json"
-    },
+    headers,
     body: JSON.stringify({
       to: params.toE164,
       from: params.fromE164,

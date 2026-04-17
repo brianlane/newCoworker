@@ -214,6 +214,46 @@ describe("_shared/telnyx_sms_compliance", () => {
     });
   });
 
+  it("telnyxSendSms includes Idempotency-Key header when idempotencyKey is provided", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "{}"
+    });
+    await telnyxSendSms({
+      apiKey: "KEY",
+      messagingProfileId: "mp",
+      fromE164: "+15550001111",
+      toE164: "+15550002222",
+      text: "hi",
+      idempotencyKey: "evt_idem_123",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(init.headers).toMatchObject({
+      Authorization: "Bearer KEY",
+      "Idempotency-Key": "evt_idem_123"
+    });
+  });
+
+  it("telnyxSendSms omits Idempotency-Key header when idempotencyKey is absent", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "{}"
+    });
+    await telnyxSendSms({
+      apiKey: "KEY",
+      messagingProfileId: "mp",
+      fromE164: "+15550001111",
+      toE164: "+15550002222",
+      text: "hi",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(init.headers).not.toHaveProperty("Idempotency-Key");
+  });
+
   it("telnyxSendSms uses global fetch when fetchImpl omitted", async () => {
     const g = vi.fn().mockResolvedValue({
       ok: false,

@@ -139,8 +139,14 @@ function main(): void {
       return;
     }
 
-    wss.handleUpgrade(req, socket, head, async (ws) => {
-      const { data: consumed } = await supabase
+    // Consume the single-use nonce BEFORE completing the WebSocket handshake. Prior
+    // to this, `wss.handleUpgrade` ran first and we relied on `ws.close(4401)` to
+    // reject a reused nonce, which meant a replayed URL got an HTTP 101 upgrade and
+    // then an immediate close rather than being rejected at the HTTP layer. Doing
+    // the nonce UPDATE here (with the `is("consumed_at", null)` predicate) ensures a
+    // reused/invalid nonce never sees an accepted WebSocket.
+    void (async (): Promise<void> => {
+      const { data: consumed, error: nonceErr } = await supabase
         .from("stream_url_nonces")
         .update({ consumed_at: new Date().toISOString() })
         .eq("nonce", nonce)
@@ -148,11 +154,13 @@ function main(): void {
         .select("nonce")
         .maybeSingle();
 
-      if (!consumed?.nonce) {
-        ws.close(4401, "nonce");
+      if (nonceErr || !consumed?.nonce) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+        socket.destroy();
         return;
       }
 
+      wss.handleUpgrade(req, socket, head, async (ws) => {
       await supabase.from("voice_active_sessions").upsert(
         {
           call_control_id: callControlId,
@@ -260,11 +268,61 @@ function main(): void {
         })();
       });
     });
+    })();
   });
 
   server.listen(PORT, () => {
     console.log(`voice-bridge listening :${PORT} (HTTP + WS /voice/stream)`);
   });
+
+  // Graceful shutdown: drain active WebSockets and stop accepting new upgrades so
+  // SIGTERM from `docker stop` / orchestrator rollouts doesn't sever live calls with
+  // no chance to settle. We close the HTTP server first (stops new connections), then
+  // send a 1012 "Service Restart" close frame to each live WS so Telnyx hangs up
+  // cleanly; the `ws.on("close", ...)` handler runs per-socket and flushes
+  // voice_record_bridge_media_end. If clients don't close within the timeout we
+  // force-terminate them to avoid an unbounded shutdown.
+  let shuttingDown = false;
+  const shutdown = (signal: NodeJS.Signals): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`voice-bridge: ${signal} received; draining WebSockets…`);
+
+    server.close(() => {
+      console.log("voice-bridge: HTTP server closed");
+    });
+
+    for (const client of wss.clients) {
+      try {
+        client.close(1012, "server_shutdown");
+      } catch (err) {
+        console.warn("voice-bridge: error closing client", err);
+      }
+    }
+
+    const forceExitMs = 10_000;
+    const forceTimer = setTimeout(() => {
+      console.warn("voice-bridge: forcing exit after drain timeout");
+      for (const client of wss.clients) {
+        try {
+          client.terminate();
+        } catch {
+          /* ignore */
+        }
+      }
+      process.exit(0);
+    }, forceExitMs);
+    forceTimer.unref?.();
+
+    wss.close(() => {
+      clearTimeout(forceTimer);
+      console.log("voice-bridge: WebSocket server closed");
+      process.exit(0);
+    });
+  };
+
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
 main();

@@ -401,9 +401,41 @@ async function applyVoiceBonusGrantFromCheckout(session: Stripe.Checkout.Session
 }
 
 /**
- * §4.1 clawback: when a bonus-seconds Checkout is refunded or disputed, void the
- * corresponding voice_bonus_grants row so remaining seconds cannot be consumed.
- * Looks up the Checkout Session via the payment intent on the charge. Idempotent.
+ * Computes how many voice-bonus seconds should be clawed back from a Checkout Session's
+ * grant given a Stripe refund/dispute amount.
+ *
+ * - `refundedAmount` / `originalAmount` are both in the smallest currency unit (cents).
+ * - When we can't compute a ratio (missing/zero original amount), return `null` so the
+ *   caller falls back to a full void — safer than miscomputing a partial clawback.
+ * - Ratio is applied to `session.amount_total` if present (falls back to the grant's
+ *   `seconds_purchased` in the RPC via `p_clawback_seconds=null` when both inputs are
+ *   unavailable). Rounded to the nearest second; a full refund (amount_refunded ===
+ *   original_amount) returns `null` to signal full void and avoid float rounding errors.
+ */
+export function computeVoiceBonusClawbackSeconds(
+  originalAmount: number | null | undefined,
+  refundedAmount: number | null | undefined,
+  secondsPurchased: number | null | undefined
+): number | null {
+  if (!Number.isFinite(originalAmount) || !originalAmount || originalAmount <= 0) return null;
+  if (!Number.isFinite(refundedAmount) || !refundedAmount || refundedAmount <= 0) return 0;
+  if (!Number.isFinite(secondsPurchased) || !secondsPurchased || (secondsPurchased as number) <= 0) {
+    return null;
+  }
+  const origAmt = originalAmount as number;
+  const refAmt = refundedAmount as number;
+  if (refAmt >= origAmt) return null;
+  const ratio = refAmt / origAmt;
+  const claw = Math.round((secondsPurchased as number) * ratio);
+  if (!Number.isFinite(claw) || claw <= 0) return 0;
+  return Math.min(claw, secondsPurchased as number);
+}
+
+/**
+ * §4.1 clawback: when a bonus-seconds Checkout is refunded or disputed, reduce (or
+ * void) the corresponding voice_bonus_grants row so remaining seconds cannot be
+ * consumed. Looks up the Checkout Session via the payment intent on the charge.
+ * Idempotent.
  *
  * Dispute semantics (important): `charge.dispute.closed` fires for ALL terminal dispute
  * statuses per Stripe — `lost`, `won`, and `warning_closed`. Only `lost` actually moves
@@ -411,6 +443,12 @@ async function applyVoiceBonusGrantFromCheckout(session: Stripe.Checkout.Session
  * dispute and keeps the money, and `warning_closed` means an early warning resolved
  * without a chargeback. Voiding the grant for `won` / `warning_closed` would revoke
  * paid voice credits from a customer whose dispute the merchant just defended.
+ *
+ * Partial refunds (§4.1 follow-up): for `charge.refunded` we now pass a prorated
+ * `p_clawback_seconds` to the RPC so a partial refund reduces the grant proportionally
+ * instead of voiding it fully. `charge.dispute.closed` with status=lost still passes
+ * `null` (full void) because Stripe disputes can reverse the full captured amount
+ * regardless of `dispute.amount`, and the partial-dispute case is rare + ambiguous.
  */
 async function handleVoiceBonusRefund(event: Stripe.Event): Promise<void> {
   const obj = event.data.object as Stripe.Charge | Stripe.Dispute;
@@ -427,6 +465,8 @@ async function handleVoiceBonusRefund(event: Stripe.Event): Promise<void> {
     }
   }
 
+  let refundedAmount: number | null = null;
+  let originalAmount: number | null = null;
   if (event.type === "charge.refunded") {
     const charge = obj as Stripe.Charge;
     // Defensive: `charge.refunded` should always carry amount_refunded > 0, but a
@@ -439,6 +479,11 @@ async function handleVoiceBonusRefund(event: Stripe.Event): Promise<void> {
       });
       return;
     }
+    refundedAmount = charge.amount_refunded ?? null;
+    originalAmount =
+      (typeof charge.amount_captured === "number" && charge.amount_captured > 0
+        ? charge.amount_captured
+        : null) ?? (typeof charge.amount === "number" && charge.amount > 0 ? charge.amount : null);
   }
 
   const paymentIntentId =
@@ -487,9 +532,23 @@ async function handleVoiceBonusRefund(event: Stripe.Event): Promise<void> {
   const reason = event.type === "charge.dispute.closed" ? "dispute" : "refund";
 
   for (const session of voiceBonusSessions) {
+    // Compute prorated clawback only for refunds: disputes still pass null (full void).
+    let clawbackSeconds: number | null = null;
+    if (event.type === "charge.refunded") {
+      const secondsPurchased = parseVoiceBonusSecondsFromMetadata(
+        session.metadata?.voiceSeconds ?? session.metadata?.voice_seconds ?? null
+      );
+      clawbackSeconds = computeVoiceBonusClawbackSeconds(
+        originalAmount,
+        refundedAmount,
+        secondsPurchased
+      );
+    }
+
     const { data, error } = await db.rpc("void_voice_bonus_grant_by_checkout_session", {
       p_checkout_session_id: session.id,
-      p_reason: reason
+      p_reason: reason,
+      p_clawback_seconds: clawbackSeconds
     });
     if (error) {
       logger.error("void_voice_bonus_grant_by_checkout_session failed", {
@@ -503,6 +562,7 @@ async function handleVoiceBonusRefund(event: Stripe.Event): Promise<void> {
       eventId: event.id,
       sessionId: session.id,
       reason,
+      clawbackSeconds,
       result: data
     });
   }
