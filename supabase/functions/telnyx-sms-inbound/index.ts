@@ -160,7 +160,32 @@ serve(async (req: Request) => {
     const bodyNorm = inboundSmsBody(payload).trim().toUpperCase();
     const canAutoReply = Boolean(telnyxApiKey && messagingProfileId && smsFromE164 && from);
 
+    // Route lookup: compliance keyword handling must persist opt-out/in state keyed by
+    // business + sender, so resolve the business here before the keyword branches. If
+    // the DID isn't routed, we still auto-reply (carrier compliance applies per-DID),
+    // just without DB persistence.
+    const { data: route } = await supabase
+      .from("telnyx_voice_routes")
+      .select("business_id")
+      .eq("to_e164", to)
+      .maybeSingle();
+    const businessId = (route?.business_id as string | undefined) ?? null;
+
     if (isStopKeyword(bodyNorm)) {
+      // CTIA / A2P 10DLC: STOP must suppress further messages until START. Persist the
+      // opt-out BEFORE sending the confirmation reply so a crash between reply+persist
+      // never re-messages an opted-out sender. The confirmation reply itself is allowed
+      // under carrier rules even though downstream traffic is suppressed.
+      if (businessId && from) {
+        const { error: optErr } = await supabase.rpc("sms_set_opt_out", {
+          p_business_id: businessId,
+          p_sender_e164: from,
+          p_kind: "stop"
+        });
+        if (optErr) {
+          console.error("sms_set_opt_out", optErr);
+        }
+      }
       if (canAutoReply) {
         const send = await telnyxSendSms({
           apiKey: telnyxApiKey,
@@ -175,7 +200,12 @@ serve(async (req: Request) => {
       } else {
         console.warn("telnyx-sms-inbound: STOP without TELNYX_API_KEY/Messaging env; no auto-reply");
       }
-      await telemetryRecord(supabase, "sms_inbound_stop_keyword", { to, event_id: eventId });
+      await telemetryRecord(supabase, "sms_inbound_stop_keyword", {
+        to,
+        event_id: eventId,
+        business_id: businessId,
+        persisted: Boolean(businessId && from)
+      });
       return new Response(JSON.stringify({ ok: true, compliance: "stop" }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
@@ -205,6 +235,15 @@ serve(async (req: Request) => {
     }
 
     if (isStartKeyword(bodyNorm)) {
+      if (businessId && from) {
+        const { error: clrErr } = await supabase.rpc("sms_clear_opt_out", {
+          p_business_id: businessId,
+          p_sender_e164: from
+        });
+        if (clrErr) {
+          console.error("sms_clear_opt_out", clrErr);
+        }
+      }
       if (canAutoReply) {
         const send = await telnyxSendSms({
           apiKey: telnyxApiKey,
@@ -219,25 +258,45 @@ serve(async (req: Request) => {
       } else {
         console.warn("telnyx-sms-inbound: START without TELNYX_API_KEY/Messaging env; no auto-reply");
       }
-      await telemetryRecord(supabase, "sms_inbound_start_keyword", { to, event_id: eventId });
+      await telemetryRecord(supabase, "sms_inbound_start_keyword", {
+        to,
+        event_id: eventId,
+        business_id: businessId,
+        cleared: Boolean(businessId && from)
+      });
       return new Response(JSON.stringify({ ok: true, compliance: "start" }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
       });
     }
 
-    const { data: route } = await supabase
-      .from("telnyx_voice_routes")
-      .select("business_id")
-      .eq("to_e164", to)
-      .maybeSingle();
-
-    const businessId = route?.business_id as string | undefined;
     if (!businessId) {
       return new Response(JSON.stringify({ ok: true, skip: "unrouted" }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
       });
+    }
+
+    // CTIA compliance gate: refuse to enqueue (and therefore refuse to auto-reply via
+    // Rowboat) for senders who have already sent STOP. This is a hard-stop; no job row
+    // is created so the worker never attempts an outbound reply.
+    if (from) {
+      const { data: optedRaw, error: optLookErr } = await supabase.rpc("sms_is_opted_out", {
+        p_business_id: businessId,
+        p_sender_e164: from
+      });
+      if (optLookErr) {
+        console.error("sms_is_opted_out", optLookErr);
+      } else if (optedRaw === true) {
+        await telemetryRecord(supabase, "sms_inbound_suppressed_opt_out", {
+          business_id: businessId,
+          event_id: eventId
+        });
+        return new Response(JSON.stringify({ ok: true, skip: "opted_out" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
     }
 
     const { error } = await supabase.from("sms_inbound_jobs").insert({

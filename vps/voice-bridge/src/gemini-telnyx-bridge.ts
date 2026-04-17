@@ -6,6 +6,15 @@ import { telnyxMediaMessageFromPcmBase64, tryParseTelnyxMediaPayloadBase64 } fro
 const TELNYX_PCM_RATE = 16000;
 const GEMINI_OUTPUT_DEFAULT_RATE = 24000;
 
+/**
+ * WebSocket downlink backpressure threshold (bytes buffered in the send queue before we
+ * start dropping Gemini-generated PCM frames). Telnyx media frames at 16 kHz PCM16 mono
+ * average ~640 bytes per 20 ms JSON frame; 256 KiB corresponds to ~8 seconds of audio
+ * backlog, well past the point where the caller hears old audio. Dropping frames here
+ * bounds memory on a slow network and keeps playback close to real-time.
+ */
+const DOWNLINK_BACKPRESSURE_HIGH_WATERMARK_BYTES = 256 * 1024;
+
 export type GeminiBridgeOptions = {
   ws: WebSocket;
   businessId: string;
@@ -46,8 +55,30 @@ function extractModelAudioParts(message: LiveServerMessage): Array<{ dataB64: st
   return out;
 }
 
-function sendPcmToTelnyx(ws: WebSocket, pcm16le: Int16Array): void {
+type DownlinkTelemetry = {
+  droppedFrames: number;
+  lastDropWarnAtMs: number;
+};
+
+function sendPcmToTelnyx(ws: WebSocket, pcm16le: Int16Array, telemetry: DownlinkTelemetry): void {
   if (ws.readyState !== WebSocket.OPEN) return;
+  // Backpressure guard: drop frames once the socket's buffered-but-unsent bytes exceed
+  // the high watermark. Without this, a slow or stalled Telnyx socket lets every Gemini
+  // PCM frame accumulate in Node's send queue, growing RSS unboundedly and making the
+  // caller hear stale audio once the socket drains. Dropping the newest frame is the
+  // right call for real-time voice — retries cannot help (the moment has passed).
+  if (ws.bufferedAmount > DOWNLINK_BACKPRESSURE_HIGH_WATERMARK_BYTES) {
+    telemetry.droppedFrames += 1;
+    const now = Date.now();
+    if (now - telemetry.lastDropWarnAtMs > 5_000) {
+      telemetry.lastDropWarnAtMs = now;
+      console.warn(
+        "gemini-bridge: downlink backpressure — dropping frames",
+        { bufferedAmount: ws.bufferedAmount, droppedFrames: telemetry.droppedFrames }
+      );
+    }
+    return;
+  }
   const buf = Buffer.from(pcm16le.buffer, pcm16le.byteOffset, pcm16le.byteLength);
   ws.send(telnyxMediaMessageFromPcmBase64(buf.toString("base64")));
 }
@@ -62,6 +93,10 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   const ai = new GoogleGenAI({ apiKey: opts.apiKey });
   let ended = false;
   const timers: ReturnType<typeof setTimeout>[] = [];
+  const downlinkTelemetry: DownlinkTelemetry = {
+    droppedFrames: 0,
+    lastDropWarnAtMs: 0
+  };
 
   const clearTimers = () => {
     for (const t of timers) clearTimeout(t);
@@ -103,7 +138,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             const inSamples = new Int16Array(raw.buffer, raw.byteOffset, raw.length / 2);
             const inRate = parsePcmRateFromMime(chunk.mimeType, GEMINI_OUTPUT_DEFAULT_RATE);
             const outSamples = resamplePCM16Mono(inSamples, inRate, TELNYX_PCM_RATE);
-            sendPcmToTelnyx(opts.ws, outSamples);
+            sendPcmToTelnyx(opts.ws, outSamples, downlinkTelemetry);
           } catch (e) {
             console.error("gemini-bridge: downlink chunk", e);
           }

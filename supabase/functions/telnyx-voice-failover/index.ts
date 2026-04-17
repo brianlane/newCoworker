@@ -70,6 +70,39 @@ serve(async (req: Request) => {
       );
     }
 
+    // Transfer idempotency (§8): retries of this endpoint (cron, manual ops, Telnyx
+    // upstream retry on timeout) must not transfer the same leg twice — a double
+    // transfer causes the caller to be bounced/dropped. We reuse voice_failover_
+    // maintenance_at as the "failover action taken" watermark for this leg; the
+    // speak path uses the same column, so speak+transfer also can't both fire.
+    const supabaseUrlT = Deno.env.get("SUPABASE_URL") ?? "";
+    const serviceKeyT = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    if (supabaseUrlT && serviceKeyT) {
+      const supabaseT = createClient(supabaseUrlT, serviceKeyT);
+      const { data: claimRawT, error: claimErrT } = await supabaseT.rpc(
+        "voice_claim_failover_transfer",
+        { p_call_control_id: callId }
+      );
+      if (claimErrT) {
+        console.error("voice_claim_failover_transfer", claimErrT);
+        return new Response(JSON.stringify({ ok: false, error: "claim_failed" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      const claimT = claimRawT as { ok?: boolean; transfer?: boolean; reason?: string } | null;
+      if (claimT?.transfer === false) {
+        return new Response(
+          JSON.stringify({ ok: true, skipped: true, reason: claimT?.reason ?? "already_claimed" }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+    } else {
+      console.warn(
+        "telnyx-voice-failover: transfer mode without SUPABASE env — skipping idempotency claim (allowing single-shot transfer)"
+      );
+    }
+
     const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callId)}/actions/transfer`;
     const res = await fetch(url, {
       method: "POST",

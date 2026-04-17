@@ -65,6 +65,7 @@ export async function POST(request: Request) {
         break;
       }
 
+      case "customer.subscription.created":
       case "customer.subscription.updated": {
         const sub = event.data.object as Stripe.Subscription;
         const businessId = sub.metadata?.businessId;
@@ -85,6 +86,7 @@ export async function POST(request: Request) {
             const status: DbStatus = statusMap[sub.status] ?? "pending";
             await updateSubscription(existing.id, {
               status,
+              stripe_subscription_id: sub.id,
               ...stripeSubscriptionPeriodCache(sub)
             });
           }
@@ -98,9 +100,25 @@ export async function POST(request: Request) {
         if (businessId) {
           const existing = await getSubscription(businessId);
           if (existing) {
-            await updateSubscription(existing.id, { status: "canceled" });
+            // Clear cached Stripe billing-period bounds on cancel so the Edge voice
+            // inbound cannot keep reserving minutes against a stale period after the
+            // subscription is gone. Without this, `stripe_current_period_*` would
+            // remain pointing at the final paid period indefinitely (cache looks valid
+            // to `cacheLooksValidForQuotaAfterJitFailure` until `period_end` passes).
+            await updateSubscription(existing.id, {
+              status: "canceled",
+              stripe_current_period_start: null,
+              stripe_current_period_end: null,
+              stripe_subscription_cached_at: new Date().toISOString()
+            });
           }
         }
+        break;
+      }
+
+      case "charge.refunded":
+      case "charge.dispute.closed": {
+        await handleVoiceBonusRefund(event);
         break;
       }
 
@@ -236,18 +254,38 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
   });
 }
 
+/**
+ * Strict voice-seconds parser for Stripe metadata. Only accepts positive integer strings,
+ * enforces an upper bound (~one year of call minutes), and refuses scientific notation,
+ * floats, and leading-zero/negative/hex strings — all of which `Number.parseInt` silently
+ * truncates or mis-parses, and which would otherwise mint a bogus bonus grant.
+ */
+export function parseVoiceBonusSecondsFromMetadata(raw: unknown): number | null {
+  if (raw === undefined || raw === null) return null;
+  const str = String(raw).trim();
+  if (!/^\d+$/.test(str)) return null;
+  if (str.length > 9) return null;
+  const n = Number(str);
+  if (!Number.isFinite(n) || !Number.isInteger(n)) return null;
+  if (n <= 0) return null;
+  const HARD_MAX_SECONDS = 60 * 60 * 24 * 365;
+  if (n > HARD_MAX_SECONDS) return null;
+  return n;
+}
+
 /** A la carte voice seconds: Checkout Session payment mode + metadata (see .env.example). §4.1 */
 async function applyVoiceBonusGrantFromCheckout(session: Stripe.Checkout.Session, eventId: string) {
   const businessId = session.metadata?.businessId?.trim();
   const rawSeconds =
-    session.metadata?.voiceSeconds ?? session.metadata?.voice_seconds ?? "";
-  const seconds = Number.parseInt(String(rawSeconds), 10);
+    session.metadata?.voiceSeconds ?? session.metadata?.voice_seconds ?? null;
+  const seconds = parseVoiceBonusSecondsFromMetadata(rawSeconds);
 
-  if (!businessId || !Number.isFinite(seconds) || seconds <= 0) {
+  if (!businessId || seconds == null) {
     logger.warn("voice_bonus_seconds checkout missing businessId or voiceSeconds", {
       eventId,
       sessionId: session.id,
-      businessId: businessId ?? null
+      businessId: businessId ?? null,
+      rawVoiceSeconds: rawSeconds ?? null
     });
     return;
   }
@@ -345,15 +383,94 @@ async function applyVoiceBonusGrantFromCheckout(session: Stripe.Checkout.Session
   logger.info("Voice bonus grant recorded", { eventId, sessionId: session.id, businessId, result: data });
 
   if (payload?.ok === true) {
-    const { error: armErr } = await db.rpc("voice_sync_low_balance_alert_armed", {
+    // Scoped re-arm: only flip low_balance_alert_armed back on for THIS business.
+    // The unscoped voice_sync_low_balance_alert_armed re-arms every row in the table,
+    // which could unintentionally re-email other tenants who crossed the threshold and
+    // whose included pool is still below it.
+    const { error: armErr } = await db.rpc("voice_sync_low_balance_alert_armed_for_business", {
+      p_business_id: businessId,
       p_threshold_seconds: 300
     });
     if (armErr) {
-      logger.warn("voice_sync_low_balance_alert_armed after bonus failed", {
+      logger.warn("voice_sync_low_balance_alert_armed_for_business after bonus failed", {
         businessId,
         error: armErr.message
       });
     }
+  }
+}
+
+/**
+ * §4.1 clawback: when a bonus-seconds Checkout is refunded or disputed, void the
+ * corresponding voice_bonus_grants row so remaining seconds cannot be consumed.
+ * Looks up the Checkout Session via the payment intent on the charge. Idempotent.
+ */
+async function handleVoiceBonusRefund(event: Stripe.Event): Promise<void> {
+  const obj = event.data.object as Stripe.Charge | Stripe.Dispute;
+  const paymentIntentId =
+    typeof (obj as Stripe.Charge).payment_intent === "string"
+      ? ((obj as Stripe.Charge).payment_intent as string)
+      : (obj as Stripe.Dispute).payment_intent && typeof (obj as Stripe.Dispute).payment_intent === "string"
+        ? ((obj as Stripe.Dispute).payment_intent as string)
+        : null;
+
+  if (!paymentIntentId) {
+    logger.debug("Stripe refund/dispute event without payment_intent; ignoring", {
+      type: event.type,
+      eventId: event.id
+    });
+    return;
+  }
+
+  let sessions: Stripe.ApiList<Stripe.Checkout.Session>;
+  try {
+    sessions = await getStripe().checkout.sessions.list({
+      payment_intent: paymentIntentId,
+      limit: 5
+    });
+  } catch (err) {
+    logger.error("Stripe checkout sessions list failed during refund handling", {
+      eventId: event.id,
+      paymentIntentId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return;
+  }
+
+  const voiceBonusSessions = sessions.data.filter(
+    (s) => s.metadata?.checkoutKind === "voice_bonus_seconds"
+  );
+  if (voiceBonusSessions.length === 0) {
+    logger.debug("Refund not associated with a voice_bonus_seconds Checkout; ignoring", {
+      eventId: event.id,
+      paymentIntentId
+    });
+    return;
+  }
+
+  const { createSupabaseServiceClient } = await import("@/lib/supabase/server");
+  const db = await createSupabaseServiceClient();
+  const reason = event.type === "charge.dispute.closed" ? "dispute" : "refund";
+
+  for (const session of voiceBonusSessions) {
+    const { data, error } = await db.rpc("void_voice_bonus_grant_by_checkout_session", {
+      p_checkout_session_id: session.id,
+      p_reason: reason
+    });
+    if (error) {
+      logger.error("void_voice_bonus_grant_by_checkout_session failed", {
+        eventId: event.id,
+        sessionId: session.id,
+        error: error.message
+      });
+      continue;
+    }
+    logger.info("Voice bonus grant voided", {
+      eventId: event.id,
+      sessionId: session.id,
+      reason,
+      result: data
+    });
   }
 }
 

@@ -322,36 +322,73 @@ serve(async (req: Request) => {
       continue;
     }
 
-    const { data: limRaw, error: limErr } = await supabase.rpc("check_sms_monthly_limit", {
-      p_business_id: job.business_id
+    // CTIA opt-out gate at send time (defense in depth: enqueue path also gates, but if
+    // an opt-out lands after enqueue we must still suppress the outbound reply here).
+    const { data: optedRaw, error: optLookErr } = await supabase.rpc("sms_is_opted_out", {
+      p_business_id: job.business_id,
+      p_sender_e164: fromE164
     });
-    if (limErr) {
-      console.error("check_sms_monthly_limit", limErr);
+    if (optLookErr) {
+      console.error("sms_is_opted_out", optLookErr);
+    } else if (optedRaw === true) {
+      await supabase.rpc("complete_sms_inbound_job", {
+        p_job_id: job.id,
+        p_status: "done",
+        p_telnyx_outbound_message_id: null,
+        p_rowboat_conversation_id: convId ?? null,
+        p_last_error: "suppressed_opt_out"
+      });
+      await clearJobReplyCache(supabase, job.id);
+      await telemetryRecord(supabase, "sms_worker_suppressed_opt_out", {
+        job_id: job.id,
+        business_id: job.business_id
+      });
+      processed += 1;
+      continue;
+    }
+
+    // Atomically reserve one outbound slot (row-locked monthly cap + pre-increment).
+    // This replaces the previous check_sms_monthly_limit → send → meter pattern, which
+    // was TOCTOU: two workers could each see "allowed" simultaneously and both blow
+    // through the cap. try_reserve_sms_outbound_slot holds a row lock on businesses.
+    const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
+      "try_reserve_sms_outbound_slot",
+      { p_business_id: job.business_id }
+    );
+    if (reserveErr) {
+      console.error("try_reserve_sms_outbound_slot", reserveErr);
       await supabase.rpc("complete_sms_inbound_job", {
         p_job_id: job.id,
         p_status: "dead_letter",
         p_telnyx_outbound_message_id: null,
         p_rowboat_conversation_id: convId ?? null,
-        p_last_error: `sms_limit_check:${limErr.message}`.slice(0, 2000)
+        p_last_error: `sms_reserve:${reserveErr.message}`.slice(0, 2000)
       });
       await clearJobReplyCache(supabase, job.id);
       processed += 1;
       continue;
     }
-    const lim = limRaw as { allowed?: boolean; reason?: string } | null;
-    if (lim?.allowed === false) {
+    const reserve = reserveRaw as { ok?: boolean; reason?: string } | null;
+    if (!reserve?.ok) {
       // Strict cap: no auto-reply here (customer sees silence). Product follow-up: optional one-shot "quota exceeded" SMS.
       await supabase.rpc("complete_sms_inbound_job", {
         p_job_id: job.id,
         p_status: "dead_letter",
         p_telnyx_outbound_message_id: null,
         p_rowboat_conversation_id: convId ?? null,
-        p_last_error: lim.reason ?? "monthly_sms_limit"
+        p_last_error: reserve?.reason ?? "monthly_sms_limit"
       });
       await clearJobReplyCache(supabase, job.id);
       processed += 1;
       continue;
     }
+
+    const releaseReservedSlot = async (): Promise<void> => {
+      const { error: relErr } = await supabase.rpc("release_sms_outbound_slot", {
+        p_business_id: job.business_id
+      });
+      if (relErr) console.error("release_sms_outbound_slot", relErr);
+    };
 
     const msgBody: Record<string, unknown> = {
       to: fromE164,
@@ -381,14 +418,16 @@ serve(async (req: Request) => {
       }
       const smsJson = (await smsRes.json()) as { data?: { id?: string } };
       const mid = smsJson.data?.id ?? "";
-      const { error: doneMeterErr } = await supabase.rpc("complete_sms_inbound_job_done_meter_sms", {
+      // Slot was already metered during try_reserve_sms_outbound_slot, so call the
+      // no-metering completion RPC to avoid double-counting the outbound.
+      const { error: doneErr } = await supabase.rpc("complete_sms_inbound_job_done", {
         p_job_id: job.id,
         p_business_id: job.business_id,
         p_telnyx_outbound_message_id: mid || null,
         p_rowboat_conversation_id: convId ?? null
       });
-      if (doneMeterErr) {
-        throw new Error(`done_meter_sms:${doneMeterErr.message}`);
+      if (doneErr) {
+        throw new Error(`done:${doneErr.message}`);
       }
       await clearJobReplyCache(supabase, job.id);
       await telemetryRecord(supabase, "sms_inbound_worker_sent", {
@@ -403,20 +442,24 @@ serve(async (req: Request) => {
             job_id: job.id,
             business_id: job.business_id
           });
-          const { error: recErr } = await supabase.rpc("complete_sms_inbound_job_done_meter_sms", {
+          const { error: recErr } = await supabase.rpc("complete_sms_inbound_job_done", {
             p_job_id: job.id,
             p_business_id: job.business_id,
             p_telnyx_outbound_message_id: recovered,
             p_rowboat_conversation_id: convId ?? null
           });
           if (!recErr) {
+            // Reconciled: the outbound DID go out, so keep the metered slot.
             await clearJobReplyCache(supabase, job.id);
             processed += 1;
             continue;
           }
-          console.error("complete_sms_inbound_job_done_meter_sms after reconcile", recErr);
+          console.error("complete_sms_inbound_job_done after reconcile", recErr);
         }
       }
+      // Release the pre-incremented slot so a failed (and non-reconciled) send does not
+      // consume monthly quota. Done BEFORE status update so a retry can re-reserve cleanly.
+      await releaseReservedSlot();
       const msg = e instanceof Error ? e.message : String(e);
       if (job.attempt_count >= MAX_ATTEMPTS) {
         await supabase.rpc("complete_sms_inbound_job", {

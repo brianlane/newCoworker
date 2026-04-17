@@ -104,10 +104,29 @@ serve(async (req: Request) => {
       continue;
     }
 
-    await supabase.rpc("voice_mark_low_balance_alerts_sent", {
+    const { error: markErr } = await supabase.rpc("voice_mark_low_balance_alerts_sent", {
       p_business_id: t.business_id,
       p_stripe_period_start: t.stripe_period_start
     });
+    if (markErr) {
+      // Critical: if we can't flip low_balance_alert_armed off after a successful send,
+      // the next cron run will re-send the same email. Surface this so the next send is
+      // skipped rather than counted: re-run of the cron will try the mark again, and the
+      // email has already been delivered, so we'd rather silently skip + telemetry than
+      // spam the owner.
+      console.error(
+        "voice_mark_low_balance_alerts_sent failed after email delivery",
+        t.business_id,
+        markErr
+      );
+      await telemetryRecord(supabase, "voice_low_balance_mark_failed", {
+        business_id: t.business_id,
+        stripe_period_start: t.stripe_period_start,
+        error: markErr.message
+      });
+      skipped += 1;
+      continue;
+    }
     sent += 1;
   }
 

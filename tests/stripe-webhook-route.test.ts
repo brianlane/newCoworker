@@ -203,8 +203,8 @@ describe("stripe webhook route", () => {
       })
     );
     expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
-      "voice_sync_low_balance_alert_armed",
-      expect.objectContaining({ p_threshold_seconds: 300 })
+      "voice_sync_low_balance_alert_armed_for_business",
+      expect.objectContaining({ p_business_id: bid, p_threshold_seconds: 300 })
     );
     expect(orchestrateProvisioning).not.toHaveBeenCalled();
     expect(updateSubscription).not.toHaveBeenCalled();

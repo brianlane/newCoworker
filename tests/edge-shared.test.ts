@@ -52,9 +52,10 @@ describe("_shared/normalize_e164", () => {
   it("returns null for missing or empty", () => {
     expect(normalizeE164(undefined)).toBeNull();
     expect(normalizeE164("")).toBeNull();
+    expect(normalizeE164("   ")).toBeNull();
   });
 
-  it("passes through + prefix", () => {
+  it("passes through + prefix with formatting", () => {
     expect(normalizeE164("+44 20 7946 0958")).toBe("+442079460958");
   });
 
@@ -66,8 +67,22 @@ describe("_shared/normalize_e164", () => {
     expect(normalizeE164("15551234567")).toBe("+15551234567");
   });
 
-  it("prefixes other digit runs with +", () => {
-    expect(normalizeE164("442079460958")).toBe("+442079460958");
+  it("refuses to invent a country code for bare non-NANP digit runs", () => {
+    // Previous behavior was to blindly return `+${digits}` which mis-routed webhook
+    // inputs. Strict E.164: if there's no '+' and it's not a 10/11-digit NANP pattern,
+    // we don't guess.
+    expect(normalizeE164("442079460958")).toBeNull();
+    expect(normalizeE164("123456")).toBeNull();
+  });
+
+  it("enforces E.164 length bounds", () => {
+    expect(normalizeE164("+0555")).toBeNull();
+    expect(normalizeE164("+1234567890123456")).toBeNull();
+    expect(normalizeE164("+")).toBeNull();
+  });
+
+  it("enforces leading non-zero country code digit", () => {
+    expect(normalizeE164("+01234567890")).toBeNull();
   });
 });
 
@@ -232,10 +247,11 @@ describe("_shared/telnyx_edge_guard", () => {
     const lim = readTelnyxWebhookRateLimits((k) =>
       k === "TELNYX_WEBHOOK_RATE_MAX_PER_MINUTE" ? "100" : k === "TELNYX_WEBHOOK_RATE_WINDOW_SEC" ? "30" : undefined
     );
-    expect(lim).toEqual({ maxPerWindow: 100, windowSeconds: 30 });
+    expect(lim).toEqual({ maxPerWindow: 100, windowSeconds: 30, failOpen: false });
     expect(readTelnyxWebhookRateLimits(() => undefined)).toEqual({
       maxPerWindow: 240,
-      windowSeconds: 60
+      windowSeconds: 60,
+      failOpen: false
     });
     expect(
       readTelnyxWebhookRateLimits((k) =>
@@ -245,7 +261,12 @@ describe("_shared/telnyx_edge_guard", () => {
             ? "nope"
             : undefined
       )
-    ).toEqual({ maxPerWindow: 240, windowSeconds: 60 });
+    ).toEqual({ maxPerWindow: 240, windowSeconds: 60, failOpen: false });
+    expect(
+      readTelnyxWebhookRateLimits((k) =>
+        k === "TELNYX_WEBHOOK_RATE_FAIL_OPEN" ? "true" : undefined
+      )
+    ).toEqual({ maxPerWindow: 240, windowSeconds: 60, failOpen: true });
   });
 
   it("telnyxWebhookRateAllow passes when RPC ok", async () => {
@@ -265,13 +286,26 @@ describe("_shared/telnyx_edge_guard", () => {
     });
   });
 
-  it("telnyxWebhookRateAllow allows traffic when RPC errors (fail open)", async () => {
+  it("telnyxWebhookRateAllow fails closed by default when RPC errors", async () => {
     const supabase = {
       rpc: vi.fn().mockResolvedValue({ data: null, error: { message: "x" } })
     };
     const r = await telnyxWebhookRateAllow(supabase as never, "1.1.1.1", "r2", {
       maxPerWindow: 10,
       windowSeconds: 30
+    });
+    expect(r.ok).toBe(false);
+    expect(r.failClosed).toBe(true);
+  });
+
+  it("telnyxWebhookRateAllow allows traffic when RPC errors if failOpen=true", async () => {
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({ data: null, error: { message: "x" } })
+    };
+    const r = await telnyxWebhookRateAllow(supabase as never, "1.1.1.1", "r2", {
+      maxPerWindow: 10,
+      windowSeconds: 30,
+      failOpen: true
     });
     expect(r.ok).toBe(true);
   });

@@ -56,17 +56,27 @@ export type SendTelnyxSmsOptions = {
    * If the HTTP request fails after a reserve, the slot is released so quota is not consumed.
    */
   meterBusinessId?: string;
+  /**
+   * Per-business outbound throttle (application-level MPS cap, §16). Call sms_outbound_
+   * rate_check before the send. Defaults to 10 messages / second per business (aligns
+   * with Telnyx long-code throughput). Set to 0 to disable. Only consulted when
+   * meterBusinessId is set (platform-operational messages bypass throttling).
+   */
+  throttleMaxPerSecond?: number;
 };
 
 type TelnyxMessageResponse = { data?: { id?: string } };
 
 type ReserveSlotResult = { ok?: boolean; reason?: string };
 
+const DEFAULT_THROTTLE_MAX_PER_SECOND = 10;
+
 /** Maps try_reserve_sms_outbound_slot JSON to a user-facing error (tests assert stable reasons). */
 export function reserveSlotFailureMessage(result: ReserveSlotResult | null): string {
   const r = result?.reason;
   if (r === "monthly_sms_limit") return "Monthly SMS limit reached";
   if (r === "no_business") return "Business not found";
+  if (r === "throttled") return "SMS throughput throttled (please retry in a moment)";
   if (r && r.length > 0) return `SMS quota blocked: ${r}`;
   return "SMS quota blocked";
 }
@@ -88,6 +98,29 @@ export async function sendTelnyxSms(
 
   if (businessId) {
     meterClient = await createSupabaseServiceClient();
+
+    // Throughput throttle first: refuses fast when a runaway notification loop would
+    // otherwise burn through the monthly reserve before we learn anything is wrong.
+    const throttleMax = options?.throttleMaxPerSecond ?? DEFAULT_THROTTLE_MAX_PER_SECOND;
+    if (throttleMax > 0) {
+      const { data: tRaw, error: tErr } = await meterClient.rpc("sms_outbound_rate_check", {
+        p_business_id: businessId,
+        p_max_per_window: throttleMax,
+        p_window_seconds: 1
+      });
+      if (tErr) {
+        // Fail open on throttle-check DB errors: quota reservation below still enforces
+        // the monthly cap, and a throttle outage is strictly preferable to dropping
+        // legitimate customer traffic. Surface in logs for operators.
+        console.warn("sendTelnyxSms: sms_outbound_rate_check failed (fail-open)", tErr.message);
+      } else {
+        const tRes = tRaw as ReserveSlotResult | null;
+        if (tRes && tRes.ok === false) {
+          throw new Error(reserveSlotFailureMessage(tRes));
+        }
+      }
+    }
+
     const { data: res, error } = await meterClient.rpc("try_reserve_sms_outbound_slot", {
       p_business_id: businessId
     });
