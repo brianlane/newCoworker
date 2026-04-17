@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { TIER_LIMITS, getTierLimits } from "@/lib/plans/limits";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as limitsModule from "@/lib/plans/limits";
+
+const { TIER_LIMITS, getTierLimits } = limitsModule;
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 
 describe("tier limits", () => {
@@ -82,19 +84,59 @@ describe("tier limits", () => {
   });
 
   describe("usage copy helpers", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
     it("voice and SMS lines match tier defaults", () => {
-      expect(voiceMinutesLine("starter")).toBe("10 voice minutes");
+      expect(voiceMinutesLine("starter")).toBe("10 voice minutes / billing period");
       expect(smsMonthlyLine("starter")).toBe("750 SMS / month");
-      expect(voiceMinutesLine("standard")).toBe("250 voice minutes");
+      expect(voiceMinutesLine("standard")).toBe("250 voice minutes / billing period");
       expect(smsMonthlyLine("standard")).toBe("3000 SMS / month");
+      expect(voiceMinutesLine("enterprise")).toBe("2,500 voice minutes / billing period");
       expect(smsMonthlyLine("enterprise")).toBe("Unlimited SMS / month");
     });
 
     it("respects enterprise overrides in copy helpers", () => {
       expect(smsMonthlyLine("enterprise", { smsPerMonth: 999 })).toBe("999 SMS / month");
       expect(voiceMinutesLine("enterprise", { voiceIncludedSecondsPerStripePeriod: 120 })).toBe(
-        "2 voice minutes"
+        "2 voice minutes / billing period"
       );
+    });
+
+    it("voiceMinutesLine handles non-finite and very large pools like smsMonthlyLine handles Infinity", () => {
+      vi.spyOn(limitsModule, "getTierLimits").mockReturnValueOnce({
+        ...TIER_LIMITS.enterprise,
+        voiceIncludedSecondsPerStripePeriod: Infinity
+      });
+      expect(voiceMinutesLine("enterprise")).toBe("Unlimited voice / billing period");
+
+      vi.spyOn(limitsModule, "getTierLimits").mockReturnValueOnce({
+        ...TIER_LIMITS.enterprise,
+        voiceIncludedSecondsPerStripePeriod: Number.NaN
+      });
+      expect(voiceMinutesLine("enterprise")).toBe("Unlimited voice / billing period");
+
+      vi.spyOn(limitsModule, "getTierLimits").mockReturnValueOnce({
+        ...TIER_LIMITS.enterprise,
+        voiceIncludedSecondsPerStripePeriod: 15_000_000
+      });
+      expect(voiceMinutesLine("enterprise")).toBe("Custom included voice / billing period");
+    });
+
+    it("voiceMinutesLine handles zero and sub-minute pools", () => {
+      const spy = vi.spyOn(limitsModule, "getTierLimits");
+      spy
+        .mockReturnValueOnce({
+          ...TIER_LIMITS.starter,
+          voiceIncludedSecondsPerStripePeriod: 0
+        })
+        .mockReturnValueOnce({
+          ...TIER_LIMITS.starter,
+          voiceIncludedSecondsPerStripePeriod: 30
+        });
+      expect(voiceMinutesLine("starter")).toBe("No included voice / billing period");
+      expect(voiceMinutesLine("starter")).toBe("Under 1 voice minute / billing period");
     });
   });
 

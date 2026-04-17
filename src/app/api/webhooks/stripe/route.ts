@@ -293,15 +293,18 @@ async function applyVoiceBonusGrantFromCheckout(session: Stripe.Checkout.Session
     return;
   }
 
-  if (typeof stripeSub.current_period_end !== "number") {
-    logger.warn("voice_bonus_seconds: missing current_period_end; grant blocked", {
+  const periodCache = stripeSubscriptionPeriodCache(stripeSub);
+  const endIso =
+    "stripe_current_period_end" in periodCache ? periodCache.stripe_current_period_end : undefined;
+  if (!endIso) {
+    logger.warn("voice_bonus_seconds: missing billing period end from Stripe subscription; grant blocked", {
       eventId,
       businessId
     });
     return;
   }
 
-  const periodEnd = new Date(stripeSub.current_period_end * 1000);
+  const periodEnd = new Date(endIso);
   const createdSec =
     typeof session.created === "number" && Number.isFinite(session.created)
       ? session.created
