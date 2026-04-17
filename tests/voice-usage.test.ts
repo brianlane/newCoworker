@@ -83,7 +83,7 @@ function mockClient(
       if (!h) throw new Error(`unexpected table ${name}`);
       return h;
     }
-  } as Parameters<typeof getVoiceBillingSnapshotForBusiness>[1];
+  } as unknown as Parameters<typeof getVoiceBillingSnapshotForBusiness>[1];
 }
 
 describe("getVoiceBillingSnapshotForBusiness", () => {
@@ -191,7 +191,7 @@ describe("getVoiceBillingSnapshotForBusiness", () => {
         }
         throw new Error(name);
       }
-    } as Parameters<typeof getVoiceBillingSnapshotForBusiness>[1];
+    } as unknown as Parameters<typeof getVoiceBillingSnapshotForBusiness>[1];
     const snap = await getVoiceBillingSnapshotForBusiness("b1", client);
     expect(snap?.reservedIncludedInflight).toBe(0);
     expect(snap?.bonusSecondsAvailable).toBe(0);
