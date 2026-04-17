@@ -153,6 +153,14 @@ export async function POST(request: Request) {
 }
 
 async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId: string) {
+  if (
+    session.mode === "payment" &&
+    session.metadata?.checkoutKind === "voice_bonus_seconds"
+  ) {
+    await applyVoiceBonusGrantFromCheckout(session, eventId);
+    return;
+  }
+
   const businessId = session.metadata?.businessId;
   const tier = (session.metadata?.tier ?? "starter") as "starter" | "standard" | "enterprise";
   const billingPeriod = session.metadata?.billingPeriod as "monthly" | "annual" | "biennial" | undefined;
@@ -226,6 +234,112 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
       error: err instanceof Error ? err.message : String(err)
     });
   });
+}
+
+/** A la carte voice seconds: Checkout Session payment mode + metadata (see .env.example). §4.1 */
+async function applyVoiceBonusGrantFromCheckout(session: Stripe.Checkout.Session, eventId: string) {
+  const businessId = session.metadata?.businessId?.trim();
+  const rawSeconds =
+    session.metadata?.voiceSeconds ?? session.metadata?.voice_seconds ?? "";
+  const seconds = Number.parseInt(String(rawSeconds), 10);
+
+  if (!businessId || !Number.isFinite(seconds) || seconds <= 0) {
+    logger.warn("voice_bonus_seconds checkout missing businessId or voiceSeconds", {
+      eventId,
+      sessionId: session.id,
+      businessId: businessId ?? null
+    });
+    return;
+  }
+
+  const subRow = await getSubscription(businessId);
+  if (!subRow?.stripe_subscription_id) {
+    logger.warn("voice_bonus_seconds: no subscription or stripe_subscription_id; grant blocked", {
+      eventId,
+      businessId,
+      sessionId: session.id
+    });
+    return;
+  }
+  if (subRow.status !== "active") {
+    logger.warn("voice_bonus_seconds: DB subscription not active; grant blocked", {
+      eventId,
+      businessId,
+      status: subRow.status
+    });
+    return;
+  }
+
+  let stripeSub: Stripe.Subscription;
+  try {
+    stripeSub = await getStripe().subscriptions.retrieve(subRow.stripe_subscription_id);
+  } catch (err) {
+    logger.error("voice_bonus_seconds: Stripe subscription retrieve failed", {
+      eventId,
+      businessId,
+      subscriptionId: subRow.stripe_subscription_id,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return;
+  }
+
+  const stripeStatus = stripeSub.status;
+  if (stripeStatus !== "active" && stripeStatus !== "trialing") {
+    logger.warn("voice_bonus_seconds: Stripe subscription not entitled; grant blocked", {
+      eventId,
+      businessId,
+      stripeStatus
+    });
+    return;
+  }
+
+  if (typeof stripeSub.current_period_end !== "number") {
+    logger.warn("voice_bonus_seconds: missing current_period_end; grant blocked", {
+      eventId,
+      businessId
+    });
+    return;
+  }
+
+  const periodEnd = new Date(stripeSub.current_period_end * 1000);
+  const createdSec =
+    typeof session.created === "number" && Number.isFinite(session.created)
+      ? session.created
+      : Math.floor(Date.now() / 1000);
+  const purchasedAt = new Date(createdSec * 1000);
+  const plus30Ms = purchasedAt.getTime() + 30 * 24 * 60 * 60 * 1000;
+  const expiresAt = periodEnd.getTime() >= plus30Ms ? periodEnd : new Date(plus30Ms);
+
+  const { createSupabaseServiceClient } = await import("@/lib/supabase/server");
+  const db = await createSupabaseServiceClient();
+  const { data, error } = await db.rpc("apply_voice_bonus_grant_from_checkout", {
+    p_business_id: businessId,
+    p_checkout_session_id: session.id,
+    p_seconds_purchased: seconds,
+    p_expires_at: expiresAt.toISOString()
+  });
+
+  if (error) {
+    logger.error("apply_voice_bonus_grant_from_checkout failed", {
+      eventId,
+      sessionId: session.id,
+      businessId,
+      error: error.message
+    });
+    return;
+  }
+
+  const payload = data as { ok?: boolean; reason?: string } | null;
+  if (payload && payload.ok === false && payload.reason === "no_active_subscription") {
+    logger.warn("voice_bonus_seconds: RPC rejected grant (subscription)", {
+      eventId,
+      sessionId: session.id,
+      businessId
+    });
+    return;
+  }
+
+  logger.info("Voice bonus grant recorded", { eventId, sessionId: session.id, businessId, result: data });
 }
 
 function getInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {

@@ -5,34 +5,51 @@ import { describe, expect, it } from "vitest";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..");
-const webhookMigration = readFileSync(
-  join(repoRoot, "supabase/migrations/20260419103000_webhook_reconcile_voice_pool_compliance.sql"),
-  "utf8"
-);
-const edgeHardeningMigration = readFileSync(
-  join(repoRoot, "supabase/migrations/20260419120000_telnyx_webhook_claim_rate.sql"),
+const voicePlatformMigration = readFileSync(
+  join(repoRoot, "supabase/migrations/20260420100000_voice_telnyx_platform.sql"),
   "utf8"
 );
 
 describe("voice SQL migrations (contract)", () => {
   it("voice_reserve_for_call: included headroom sums reserved_included_seconds only", () => {
-    expect(webhookMigration).toMatch(/coalesce\(sum\(reserved_included_seconds\), 0\)\s+into v_reserved_sum/s);
-    expect(webhookMigration).not.toMatch(
+    expect(voicePlatformMigration).toMatch(/coalesce\(sum\(reserved_included_seconds\), 0\)\s+into v_reserved_sum/s);
+    expect(voicePlatformMigration).not.toMatch(
       /coalesce\(sum\(reserved_total_seconds\), 0\)\s+into v_reserved_sum/s
     );
   });
 
   it("voice_try_finalize_settlement: allocation path uses snapshot consumer; guard rejects partial debit", () => {
-    expect(webhookMigration).toMatch(/consume_voice_bonus_from_allocations/s);
-    expect(webhookMigration).toMatch(/perform consume_voice_bonus_seconds\(r\.business_id, commit_bon\)/s);
-    expect(webhookMigration).toMatch(/if v_bon_took <> commit_bon then/s);
-    expect(webhookMigration).not.toMatch(/commit_bon := v_bon_took/s);
+    expect(voicePlatformMigration).toMatch(/consume_voice_bonus_from_allocations/s);
+    expect(voicePlatformMigration).toMatch(/perform consume_voice_bonus_seconds\(r\.business_id, commit_bon\)/s);
+    expect(voicePlatformMigration).toMatch(/if v_bon_took <> commit_bon then/s);
+    expect(voicePlatformMigration).not.toMatch(/commit_bon := v_bon_took/s);
   });
 
-  it("20260419120000: claim lease + rate check + mark_complete clears claim", () => {
-    expect(edgeHardeningMigration).toMatch(/claim_until/);
-    expect(edgeHardeningMigration).toMatch(/'status', 'busy'/);
-    expect(edgeHardeningMigration).toMatch(/telnyx_webhook_rate_check/);
-    expect(edgeHardeningMigration).toMatch(/claim_until = null/);
+  it("telnyx webhook: claim lease + rate check + mark_complete clears claim", () => {
+    expect(voicePlatformMigration).toMatch(/claim_until/);
+    expect(voicePlatformMigration).toMatch(/'status', 'busy'/);
+    expect(voicePlatformMigration).toMatch(/telnyx_webhook_rate_check/);
+    expect(voicePlatformMigration).toMatch(/claim_until = null/);
+  });
+
+  it("maintenance sweeps: zombies, stale reservations, SMS reclaim, bundled RPC", () => {
+    expect(voicePlatformMigration).toMatch(/voice_sweep_zombie_active_sessions/);
+    expect(voicePlatformMigration).toMatch(/voice_sweep_stale_reservations/);
+    expect(voicePlatformMigration).toMatch(/sms_reclaim_stale_processing_jobs/);
+    expect(voicePlatformMigration).toMatch(/voice_run_maintenance_sweeps/);
+  });
+
+  it("bonus checkout + low-balance alert RPCs exist", () => {
+    expect(voicePlatformMigration).toMatch(/apply_voice_bonus_grant_from_checkout/);
+    expect(voicePlatformMigration).toMatch(/voice_list_low_balance_alert_targets/);
+    expect(voicePlatformMigration).toMatch(/voice_mark_low_balance_alerts_sent/);
+  });
+
+  it("re-arm low balance, bonus subscription guard, zombie finalize, failover claim (same migration)", () => {
+    expect(voicePlatformMigration).toMatch(/voice_sync_low_balance_alert_armed/);
+    expect(voicePlatformMigration).toMatch(/no_active_subscription/);
+    expect(voicePlatformMigration).toMatch(/voice_try_finalize_settlement\(rec\.call_control_id, true\)/);
+    expect(voicePlatformMigration).toMatch(/voice_claim_failover_maintenance_speak/);
+    expect(voicePlatformMigration).toMatch(/zombie_sessions_swept/);
   });
 });

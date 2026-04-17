@@ -1,6 +1,6 @@
 /**
- * §11 sweep: finalize voice_settlements stuck waiting for a second signal.
- * Invoke on a schedule (e.g. Supabase cron) with Authorization: Bearer INTERNAL_CRON_SECRET.
+ * §11 maintenance: stale settlements, zombie voice_active_sessions, stale reservations,
+ * SMS jobs stuck in processing. Invoke on a schedule with Authorization: Bearer INTERNAL_CRON_SECRET.
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
@@ -25,19 +25,23 @@ serve(async (req: Request) => {
   }
 
   const supabase = createClient(supabaseUrl, serviceKey);
-  const { data: n, error } = await supabase.rpc("voice_sweep_stale_settlements", {
-    p_min_age: "15 minutes"
+  const { data, error } = await supabase.rpc("voice_run_maintenance_sweeps", {
+    p_settlement_min_age: "15 minutes",
+    p_session_stale: "15 minutes",
+    p_res_unanswered: "3 minutes",
+    p_res_no_ws: "10 minutes",
+    p_sms_stale: "15 minutes"
   });
 
   if (error) {
-    console.error("voice_sweep_stale_settlements", error);
+    console.error("voice_run_maintenance_sweeps", error);
     return new Response("Sweep failed", { status: 500 });
   }
 
-  const count = typeof n === "number" ? n : 0;
-  await telemetryRecord(supabase, "voice_settlement_sweep", { finalized: count });
+  const summary = (data ?? {}) as Record<string, unknown>;
+  await telemetryRecord(supabase, "voice_maintenance_sweep", summary);
 
-  return new Response(JSON.stringify({ ok: true, finalized: count }), {
+  return new Response(JSON.stringify({ ok: true, ...summary }), {
     status: 200,
     headers: { "Content-Type": "application/json" }
   });
