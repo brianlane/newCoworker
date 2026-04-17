@@ -6,6 +6,9 @@
  * `meterBusinessId`) for anything that must not bypass caps. Use `checkLimitReached` only for optional
  * preflight UX; `incrementUsage` is a thin wrapper over the `increment_usage` RPC if you need to
  * mutate counters from Node (most metering is handled inside Supabase functions / Telnyx webhooks).
+ *
+ * For **Stripe-period included voice + bonus** display logic, see `getVoiceBillingSnapshotForBusiness` in
+ * `voice-usage.ts` (read-only; caps in `getTierLimits` / `VOICE_RES_LIMITS`).
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { PlanTier } from "@/lib/plans/tier";

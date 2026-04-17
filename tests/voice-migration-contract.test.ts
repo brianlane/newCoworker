@@ -41,6 +41,24 @@ describe("voice SQL migrations (contract)", () => {
     expect(voicePlatformMigration).toMatch(/voice_run_maintenance_sweeps/);
   });
 
+  it("answer lifecycle RPCs exist (Edge telnyx-voice-inbound)", () => {
+    expect(voicePlatformMigration).toMatch(
+      /create or replace function voice_mark_answer_issued\(p_call_control_id text\)\s+returns jsonb/s
+    );
+    expect(voicePlatformMigration).toMatch(/'reason', 'not_eligible'/);
+    expect(voicePlatformMigration).toMatch(
+      /create or replace function voice_release_reservation_on_answer_fail\(p_call_control_id text\)\s+returns jsonb/s
+    );
+    expect(voicePlatformMigration).toMatch(/'released_rows', n/);
+  });
+
+  it("SMS claim sets outbound idempotency at claim time; TCR columns on telnyx settings", () => {
+    expect(voicePlatformMigration).toMatch(
+      /outbound_idempotency_key = coalesce\(j\.outbound_idempotency_key, gen_random_uuid\(\)\)/
+    );
+    expect(voicePlatformMigration).toMatch(/telnyx_tcr_campaign_id/);
+  });
+
   it("bonus checkout + low-balance alert RPCs exist", () => {
     expect(voicePlatformMigration).toMatch(/apply_voice_bonus_grant_from_checkout/);
     expect(voicePlatformMigration).toMatch(/voice_list_low_balance_alert_targets/);

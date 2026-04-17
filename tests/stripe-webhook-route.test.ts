@@ -30,7 +30,15 @@ vi.mock("@/lib/db/businesses", () => ({
 }));
 
 const mockVoiceBonusRpc = vi.hoisted(() =>
-  vi.fn().mockResolvedValue({ data: { ok: true, duplicate: false }, error: null })
+  vi.fn().mockImplementation((name: string) => {
+    if (name === "apply_voice_bonus_grant_from_checkout") {
+      return Promise.resolve({ data: { ok: true, duplicate: false }, error: null });
+    }
+    if (name === "voice_sync_low_balance_alert_armed") {
+      return Promise.resolve({ data: 0, error: null });
+    }
+    return Promise.resolve({ data: null, error: null });
+  })
 );
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -68,7 +76,15 @@ describe("stripe webhook route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockVoiceBonusRpc.mockClear();
-    mockVoiceBonusRpc.mockResolvedValue({ data: { ok: true, duplicate: false }, error: null });
+    mockVoiceBonusRpc.mockImplementation((name: string) => {
+      if (name === "apply_voice_bonus_grant_from_checkout") {
+        return Promise.resolve({ data: { ok: true, duplicate: false }, error: null });
+      }
+      if (name === "voice_sync_low_balance_alert_armed") {
+        return Promise.resolve({ data: 0, error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
     mockStripeRetrieve.mockClear();
     mockStripeRetrieve.mockResolvedValue({
       current_period_start: 1700000000,
@@ -185,6 +201,10 @@ describe("stripe webhook route", () => {
         p_seconds_purchased: 600,
         p_expires_at: expectedExpires
       })
+    );
+    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+      "voice_sync_low_balance_alert_armed",
+      expect.objectContaining({ p_threshold_seconds: 300 })
     );
     expect(orchestrateProvisioning).not.toHaveBeenCalled();
     expect(updateSubscription).not.toHaveBeenCalled();

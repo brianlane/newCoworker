@@ -5,6 +5,7 @@
  *          SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
  *          BRIDGE_MEDIA_WSS_ORIGIN (optional fallback when route has no origin)
  * Optional: STRIPE_SECRET_KEY — JIT refresh of subscription period cache (§4.2) when TTL/rollover requires it.
+ * Optional: VOICE_AI_STREAM_ENABLED — set to `false` for rollout guard: answer+speak only (no media stream).
  *
  * HTTP semantics: many logical errors (missing call fields, subscription/period issues) respond with **200**
  * and a Telnyx command to reject/hang up so Telnyx treats the webhook as delivered and does not retry.
@@ -18,17 +19,15 @@ import { resolveEnterpriseVoiceReservation } from "../_shared/enterprise_limits.
 import { VOICE_RES_LIMITS } from "../_shared/voice_reservation_limits.ts";
 import {
   VOICE_MSG_BRIDGE_DEGRADED,
+  VOICE_MSG_CONCURRENT_LIMIT,
   VOICE_MSG_QUOTA_EXHAUSTED,
+  VOICE_MSG_STREAM_ROLLOUT_DISABLED,
   VOICE_MSG_SYSTEM_ERROR,
   VOICE_MSG_UNCONFIGURED_NUMBER
 } from "../_shared/voice_messages.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
-import {
-  answerThenSpeak,
-  rejectIncomingCall,
-  telnyxAnswerWithStream
-} from "../_shared/telnyx_call_actions.ts";
+import { answerThenSpeak, telnyxAnswerWithStream } from "../_shared/telnyx_call_actions.ts";
 import {
   cacheLooksValidForQuotaAfterJitFailure,
   STRIPE_PERIOD_ROLLOVER_GRACE_MS,
@@ -109,6 +108,11 @@ function maxConcurrent(tier: string, enterpriseLimitsRaw: unknown): number {
     return VOICE_RES_LIMITS.standard.maxConcurrentCalls;
   }
   return VOICE_RES_LIMITS.starter.maxConcurrentCalls;
+}
+
+function envVoiceAiStreamEnabled(): boolean {
+  const v = (Deno.env.get("VOICE_AI_STREAM_ENABLED") ?? "true").trim().toLowerCase();
+  return v !== "false" && v !== "0" && v !== "no";
 }
 
 serve(async (req: Request) => {
@@ -437,8 +441,11 @@ serve(async (req: Request) => {
 
   if (!res?.ok) {
     if (res?.reason === "concurrent_limit") {
-      // Intentional: busy/reject (USER_BUSY), not a quota spoken message or upsell path.
-      await rejectIncomingCall(apiKey, callControlId, "USER_BUSY");
+      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_CONCURRENT_LIMIT);
+      await telemetryRecord(supabase, "voice_concurrent_limit_spoken", {
+        business_id: businessId,
+        call_control_id: callControlId
+      });
     } else {
       await answerThenSpeak(apiKey, callControlId, VOICE_MSG_QUOTA_EXHAUSTED);
     }
@@ -472,9 +479,10 @@ serve(async (req: Request) => {
     : 0;
   if (!hb || Date.now() - hb > heartbeatTtlSec * 1000) {
     await answerThenSpeak(apiKey, callControlId, VOICE_MSG_BRIDGE_DEGRADED);
-    await supabase.rpc("voice_release_reservation_on_answer_fail", {
+    const { error: relErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
       p_call_control_id: callControlId
     });
+    if (relErr) console.error("voice_release_reservation_on_answer_fail", relErr);
     return new Response(JSON.stringify({ ok: true, path: "bridge_down" }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
@@ -494,10 +502,27 @@ serve(async (req: Request) => {
 
   if (!origin) {
     await answerThenSpeak(apiKey, callControlId, VOICE_MSG_BRIDGE_DEGRADED);
-    await supabase.rpc("voice_release_reservation_on_answer_fail", {
+    const { error: relErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
       p_call_control_id: callControlId
     });
+    if (relErr) console.error("voice_release_reservation_on_answer_fail", relErr);
     return new Response(JSON.stringify({ ok: true, path: "no_bridge_origin" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  if (!envVoiceAiStreamEnabled()) {
+    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_STREAM_ROLLOUT_DISABLED);
+    const { error: relRollErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
+      p_call_control_id: callControlId
+    });
+    if (relRollErr) console.error("voice_release_reservation_on_answer_fail", relRollErr);
+    await telemetryRecord(supabase, "voice_rollout_stream_disabled", {
+      business_id: businessId,
+      call_control_id: callControlId
+    });
+    return new Response(JSON.stringify({ ok: true, path: "stream_rollout_disabled" }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
     });
@@ -523,9 +548,10 @@ serve(async (req: Request) => {
   if (nonceErr) {
     console.error("nonce", nonceErr);
     await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SYSTEM_ERROR);
-    await supabase.rpc("voice_release_reservation_on_answer_fail", {
+    const { error: relErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
       p_call_control_id: callControlId
     });
+    if (relErr) console.error("voice_release_reservation_on_answer_fail", relErr);
     return new Response(JSON.stringify({ ok: true, path: "nonce_error" }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
@@ -554,16 +580,50 @@ serve(async (req: Request) => {
       business_id: businessId,
       http_status: answerRes.status
     });
-    await supabase.rpc("voice_release_reservation_on_answer_fail", {
+    const { error: relAnsErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
       p_call_control_id: callControlId
     });
+    if (relAnsErr) console.error("voice_release_reservation_on_answer_fail", relAnsErr);
     if (Date.now() > deadline) {
       return new Response("Timeout", { status: 500 });
     }
     return new Response("Answer failed", { status: 500 });
   }
 
-  await supabase.rpc("voice_mark_answer_issued", { p_call_control_id: callControlId });
+  const { error: markErr, data: markData } = await supabase.rpc("voice_mark_answer_issued", {
+    p_call_control_id: callControlId
+  });
+  if (markErr) {
+    console.error("voice_mark_answer_issued", markErr);
+    await telemetryRecord(supabase, "voice_mark_answer_issued_fail", {
+      business_id: businessId,
+      call_control_id: callControlId,
+      transport: "rpc_error"
+    });
+    if (Date.now() > deadline) {
+      return new Response("Timeout", { status: 500 });
+    }
+    return new Response(JSON.stringify({ ok: false, error: "mark_answer_issued" }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  const mark = markData as { ok?: boolean; reason?: string } | null;
+  if (!mark || mark.ok !== true) {
+    console.error("voice_mark_answer_issued not ok", markData);
+    await telemetryRecord(supabase, "voice_mark_answer_issued_fail", {
+      business_id: businessId,
+      call_control_id: callControlId,
+      reason: mark?.reason ?? "not_ok"
+    });
+    if (Date.now() > deadline) {
+      return new Response("Timeout", { status: 500 });
+    }
+    return new Response(JSON.stringify({ ok: false, error: "mark_answer_issued", detail: mark?.reason }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
   await telemetryRecord(supabase, "voice_inbound_stream_answered", {
     business_id: businessId,
     call_control_id: callControlId

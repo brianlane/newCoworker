@@ -1,0 +1,10 @@
+# Optional: run the media bridge beside Rowboat on the customer VPS.
+# Copy `.env` with STREAM_URL_SIGNING_SECRET, SUPABASE_*, GOOGLE_API_KEY, BUSINESS_ID (optional), BRIDGE_MEDIA_WSS_ORIGIN host must match Telnyx stream URL.
+services:
+  voice-bridge:
+    build: .
+    ports:
+      - "${VOICE_BRIDGE_PUBLISH_PORT:-8090}:8090"
+    env_file:
+      - .env
+    restart: unless-stopped

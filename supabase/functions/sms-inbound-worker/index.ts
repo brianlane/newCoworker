@@ -1,6 +1,7 @@
 /**
  * Claims sms_inbound_jobs (§10), calls Rowboat /chat on the business VPS, sends outbound SMS
- * with Telnyx Idempotency-Key = outbound_idempotency_key.
+ * with Telnyx `Idempotency-Key` = `outbound_idempotency_key` (set at job insert + backfilled on claim).
+ * Message `tags` include `ncw_idem:<uuid>` for optional GET reconciliation after ambiguous fetch errors (§10).
  *
  * Multi-turn SMS: `sms_rowboat_threads` stores Rowboat `conversationId` + optional `state` per
  * (business_id, customer_e164). Each job sends only the new user line; continuing threads pass
@@ -21,6 +22,20 @@ import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 
 const MAX_ATTEMPTS = 8;
+const NCW_IDEM_TAG_PREFIX = "ncw_idem:";
+
+/** Best-effort: Telnyx list-messages filter may vary by API version — safe to return null. */
+async function telnyxTryRecoverOutboundMessageId(apiKey: string, idem: string): Promise<string | null> {
+  const tag = `${NCW_IDEM_TAG_PREFIX}${idem}`;
+  const url = new URL("https://api.telnyx.com/v2/messages");
+  url.searchParams.set("page[size]", "5");
+  url.searchParams.set("filter[tags][in]", tag);
+  const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!res.ok) return null;
+  const j = (await res.json()) as { data?: Array<{ id?: string }> };
+  const id = j.data?.[0]?.id;
+  return typeof id === "string" && id.length > 0 ? id : null;
+}
 
 type JobRow = {
   id: string;
@@ -338,18 +353,21 @@ serve(async (req: Request) => {
       continue;
     }
 
-    const msgBody: Record<string, string> = {
+    const msgBody: Record<string, unknown> = {
       to: fromE164,
       text: reply.slice(0, 1600),
       messaging_profile_id: messagingProfileId
     };
     if (platformFrom) msgBody.from = platformFrom;
+    const idem = job.outbound_idempotency_key;
+    if (idem) {
+      msgBody.tags = [`${NCW_IDEM_TAG_PREFIX}${idem}`];
+    }
 
     const headers: Record<string, string> = {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json"
     };
-    const idem = job.outbound_idempotency_key;
     if (idem) headers["Idempotency-Key"] = idem;
 
     try {
@@ -378,6 +396,27 @@ serve(async (req: Request) => {
         business_id: job.business_id
       });
     } catch (e) {
+      if (idem) {
+        const recovered = await telnyxTryRecoverOutboundMessageId(apiKey, idem);
+        if (recovered) {
+          await telemetryRecord(supabase, "sms_outbound_reconciled_after_error", {
+            job_id: job.id,
+            business_id: job.business_id
+          });
+          const { error: recErr } = await supabase.rpc("complete_sms_inbound_job_done_meter_sms", {
+            p_job_id: job.id,
+            p_business_id: job.business_id,
+            p_telnyx_outbound_message_id: recovered,
+            p_rowboat_conversation_id: convId ?? null
+          });
+          if (!recErr) {
+            await clearJobReplyCache(supabase, job.id);
+            processed += 1;
+            continue;
+          }
+          console.error("complete_sms_inbound_job_done_meter_sms after reconcile", recErr);
+        }
+      }
       const msg = e instanceof Error ? e.message : String(e);
       if (job.attempt_count >= MAX_ATTEMPTS) {
         await supabase.rpc("complete_sms_inbound_job", {

@@ -1,6 +1,10 @@
 /**
  * Telnyx Call Control API helpers (Programmable Voice).
  * Shared by Edge functions; Vitest imports this module directly (see `tests/telnyx-lib.test.ts`).
+ *
+ * §5.1 idempotency: Telnyx Programmable Voice /answer does not document a request idempotency key
+ * comparable to Messaging. Correctness relies on DB state (`answer_issued_at`, reservation lifecycle)
+ * + webhook `telnyx_webhook_try_begin` single-flight per `event_id`.
  */
 
 export type TelnyxAnswerStreamOptions = {

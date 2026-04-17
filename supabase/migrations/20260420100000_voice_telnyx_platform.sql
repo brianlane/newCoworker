@@ -47,6 +47,16 @@ create policy "Owner reads own telnyx settings"
     )
   );
 
+-- §1 / §16: optional US SMS campaign registration references (nullable)
+alter table business_telnyx_settings
+  add column if not exists telnyx_tcr_brand_id text,
+  add column if not exists telnyx_tcr_campaign_id text;
+
+comment on column business_telnyx_settings.telnyx_tcr_brand_id is
+  'Optional TCR /10DLC brand id for production SMS deliverability (Telnyx Mission Control).';
+comment on column business_telnyx_settings.telnyx_tcr_campaign_id is
+  'Optional TCR /10DLC campaign id for production SMS deliverability.';
+
 -- DID → business + media path (Edge traffic cop §1)
 create table if not exists telnyx_voice_routes (
   to_e164 text primary key,
@@ -714,6 +724,77 @@ $$;
 grant execute on function voice_reserve_for_call(uuid, text, text, integer, timestamptz, integer, integer, integer)
   to service_role;
 
+-- After Telnyx `answer` (stream URL) succeeds: persist answer time + pending_answer → active (§4 / §5.1).
+-- Returns jsonb so Edge can treat `ok: false` without a Postgres exception.
+drop function if exists voice_mark_answer_issued(text);
+create or replace function voice_mark_answer_issued(p_call_control_id text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  n int;
+begin
+  if p_call_control_id is null or length(trim(p_call_control_id)) = 0 then
+    return jsonb_build_object('ok', false, 'reason', 'missing_call_control_id');
+  end if;
+
+  update voice_reservations
+  set
+    answer_issued_at = now(),
+    state = 'active',
+    updated_at = now()
+  where call_control_id = p_call_control_id
+    and state = 'pending_answer'
+    and answer_issued_at is null;
+  get diagnostics n = row_count;
+
+  if n > 0 then
+    return jsonb_build_object('ok', true);
+  end if;
+
+  if exists (
+    select 1 from voice_reservations
+    where call_control_id = p_call_control_id
+      and answer_issued_at is not null
+  ) then
+    return jsonb_build_object('ok', true, 'duplicate', true);
+  end if;
+
+  return jsonb_build_object('ok', false, 'reason', 'not_eligible');
+end;
+$$;
+
+grant execute on function voice_mark_answer_issued(text) to service_role;
+
+-- Release quota when Edge answers with speak-only / errors before a successful stream answer (§6).
+drop function if exists voice_release_reservation_on_answer_fail(text);
+create or replace function voice_release_reservation_on_answer_fail(p_call_control_id text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  n int;
+begin
+  if p_call_control_id is null or length(trim(p_call_control_id)) = 0 then
+    return jsonb_build_object('ok', false, 'reason', 'missing_call_control_id');
+  end if;
+
+  update voice_reservations
+  set state = 'released', updated_at = now()
+  where call_control_id = p_call_control_id
+    and state = 'pending_answer';
+  get diagnostics n = row_count;
+
+  return jsonb_build_object('ok', true, 'released_rows', n);
+end;
+$$;
+
+grant execute on function voice_release_reservation_on_answer_fail(text) to service_role;
+
 create or replace function voice_try_finalize_settlement(
   p_call_control_id text,
   p_allow_one_sided boolean default false
@@ -1073,6 +1154,7 @@ begin
     status = 'processing',
     processing_started_at = now(),
     attempt_count = j.attempt_count + 1,
+    outbound_idempotency_key = coalesce(j.outbound_idempotency_key, gen_random_uuid()),
     updated_at = now()
   from cte
   where j.id = cte.id

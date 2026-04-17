@@ -238,4 +238,28 @@ curl -sf -X PATCH \
 
 report_progress 95 "business_online_patch" "Business status set to online in Supabase"
 
+# ------------------------------------------------------------------
+# 6. Voice bridge (optional): gold image may ship /opt/voice-bridge with docker-compose.yml
+# ------------------------------------------------------------------
+if [[ -f /opt/voice-bridge/docker-compose.yml ]]; then
+  log "Starting voice-bridge from /opt/voice-bridge..."
+  (
+    cd /opt/voice-bridge
+    if [[ ! -f .env ]]; then
+      cat > .env <<VBENV_EOF
+STREAM_URL_SIGNING_SECRET=${STREAM_URL_SIGNING_SECRET:-}
+SUPABASE_URL=${SUPABASE_URL:-}
+SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_KEY:-}
+BUSINESS_ID=${BUSINESS_ID:-}
+BRIDGE_MEDIA_WSS_ORIGIN=${BRIDGE_MEDIA_WSS_ORIGIN:-}
+GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+GEMINI_LIVE_MODEL=${GEMINI_LIVE_MODEL:-gemini-3.1-flash-live-preview}
+VBENV_EOF
+    fi
+    docker compose up -d --build || log "WARN: voice-bridge compose failed"
+  )
+else
+  log "No /opt/voice-bridge/docker-compose.yml — skipping voice bridge container"
+fi
+
 log "=== Client deployment complete: ${BUSINESS_ID} ==="

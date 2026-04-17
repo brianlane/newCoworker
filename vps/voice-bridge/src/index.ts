@@ -176,8 +176,11 @@ function main(): void {
       let geminiTeardown: (() => Promise<void>) | undefined;
       let onTelnyxGemini: ((rawUtf8: string) => void) | undefined;
 
+      const geminiLiveEnabled =
+        (process.env.GEMINI_LIVE_ENABLED ?? "true").trim().toLowerCase() !== "false" &&
+        (process.env.GEMINI_LIVE_ENABLED ?? "true").trim().toLowerCase() !== "0";
       const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
-      if (apiKey) {
+      if (geminiLiveEnabled && apiKey) {
         try {
           const { data: biz } = await supabase
             .from("businesses")
@@ -205,6 +208,8 @@ function main(): void {
         } catch (e) {
           console.error("voice-bridge: Gemini Live unavailable (continuing without AI audio)", e);
         }
+      } else if (!geminiLiveEnabled) {
+        console.warn("voice-bridge: GEMINI_LIVE_ENABLED=false; AI audio pipe disabled (media stream still accepted)");
       } else {
         console.warn("voice-bridge: GOOGLE_API_KEY or GEMINI_API_KEY unset; AI audio pipe disabled");
       }

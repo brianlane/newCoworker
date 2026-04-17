@@ -343,6 +343,18 @@ async function applyVoiceBonusGrantFromCheckout(session: Stripe.Checkout.Session
   }
 
   logger.info("Voice bonus grant recorded", { eventId, sessionId: session.id, businessId, result: data });
+
+  if (payload?.ok === true) {
+    const { error: armErr } = await db.rpc("voice_sync_low_balance_alert_armed", {
+      p_threshold_seconds: 300
+    });
+    if (armErr) {
+      logger.warn("voice_sync_low_balance_alert_armed after bonus failed", {
+        businessId,
+        error: armErr.message
+      });
+    }
+  }
 }
 
 function getInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
