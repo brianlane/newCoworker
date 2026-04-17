@@ -18,11 +18,38 @@ describe("voice SQL migrations (contract)", () => {
     );
   });
 
-  it("voice_try_finalize_settlement: allocation path uses snapshot consumer; guard rejects partial debit", () => {
+  it("voice_try_finalize_settlement: snapshot first, FIFO fallback, reduces billable on shortfall", () => {
     expect(voicePlatformMigration).toMatch(/consume_voice_bonus_from_allocations/s);
-    expect(voicePlatformMigration).toMatch(/perform consume_voice_bonus_seconds\(r\.business_id, commit_bon\)/s);
-    expect(voicePlatformMigration).toMatch(/if v_bon_took <> commit_bon then/s);
-    expect(voicePlatformMigration).not.toMatch(/commit_bon := v_bon_took/s);
+    expect(voicePlatformMigration).toMatch(
+      /v_bon_took := consume_voice_bonus_seconds\(\s*r\.business_id,\s*commit_bon\s*\)/s
+    );
+    expect(voicePlatformMigration).toMatch(
+      /v_bon_took := v_bon_took \+ consume_voice_bonus_seconds\(\s*r\.business_id,\s*commit_bon - v_bon_took\s*\)/s
+    );
+    expect(voicePlatformMigration).toMatch(
+      /billable := billable - \(commit_bon - v_bon_took\);\s*commit_bon := v_bon_took;/s
+    );
+    expect(voicePlatformMigration).not.toMatch(/'bonus_allocation_shortfall'/);
+  });
+
+  it("voice_reserve_for_call: fills up to max grant from bonus when included partial", () => {
+    expect(voicePlatformMigration).toMatch(
+      /if v_from_inc < p_max_grant_seconds and v_bonus_pool > 0 then[\s\S]*?v_need := p_max_grant_seconds - v_from_inc;[\s\S]*?v_from_bon := least\(v_need, v_bonus_pool\);/s
+    );
+  });
+
+  it("voice_sweep_stale_reservations: skips reservations with active WS session", () => {
+    expect(voicePlatformMigration).toMatch(
+      /voice_sweep_stale_reservations[\s\S]*?not exists \(\s*select 1 from voice_active_sessions s\s*where s\.call_control_id = r\.call_control_id\s*and s\.ended_at is null\s*\)/s
+    );
+  });
+
+  it("voice_bridge_attach_ws: coalesces answer_issued_at and flips pending_answer -> active", () => {
+    expect(voicePlatformMigration).toMatch(
+      /create or replace function voice_bridge_attach_ws\(\s*p_call_control_id text,\s*p_now timestamptz/s
+    );
+    expect(voicePlatformMigration).toMatch(/answer_issued_at = coalesce\(answer_issued_at, p_now\)/);
+    expect(voicePlatformMigration).toMatch(/when state = 'pending_answer' then 'active'/);
   });
 
   it("telnyx webhook: claim lease + rate check + mark_complete clears claim", () => {

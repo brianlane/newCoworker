@@ -58,6 +58,10 @@ comment on column business_telnyx_settings.telnyx_tcr_campaign_id is
   'Optional TCR /10DLC campaign id for production SMS deliverability.';
 
 -- DID → business + media path (Edge traffic cop §1)
+-- Note: despite the name, this table is the single source of truth for `to_e164 → business_id`
+-- routing for BOTH voice and SMS inbound. `telnyx-sms-inbound` looks up the business by `to_e164`
+-- here as well, so renaming this table is a breaking cross-function change; add an
+-- `sms_enabled` column if per-number product separation is ever needed.
 create table if not exists telnyx_voice_routes (
   to_e164 text primary key,
   business_id uuid not null references businesses(id) on delete cascade,
@@ -65,6 +69,9 @@ create table if not exists telnyx_voice_routes (
   media_path text not null default '/voice/stream',
   created_at timestamptz not null default now()
 );
+
+comment on table telnyx_voice_routes is
+  'Per-DID routing: to_e164 → business_id. Used by telnyx-voice-inbound AND telnyx-sms-inbound; not voice-only despite the name.';
 
 create index if not exists idx_telnyx_voice_routes_business on telnyx_voice_routes (business_id);
 
@@ -473,8 +480,10 @@ alter table public.business_configs
   drop column if exists inworld_agent_id;
 -- §5–§6: Webhook at-least-once — allow Telnyx retries to re-drive work until marked complete.
 -- §4: Included-pool headroom uses reserved_included_seconds only (bonus does not shrink included).
--- §4.3: When bonus_grant_allocations is set, bonus debit follows the snapshot only (no FIFO fallback).
---        Partial debit vs commit_bon returns bonus_allocation_shortfall (no finalize).
+-- §4.3: When bonus_grant_allocations is set, bonus debit tries the snapshot first; if a grant
+--        was voided/refunded between reserve and finalize, it falls back to FIFO over any
+--        remaining live grants for the shortfall. If even FIFO cannot cover, `billable` is
+--        reduced by the unmetable delta so settlement never stalls and we never over-bill.
 -- SMS: idempotent job enqueue on telnyx_event_id for duplicate deliveries.
 
 alter table telnyx_webhook_events
@@ -623,9 +632,12 @@ begin
 
   v_bonus_pool := greatest(0, v_bonus_pool - v_bonus_inflight);
 
-  if v_from_inc < p_min_grant_seconds then
-    v_need := p_min_grant_seconds - v_from_inc;
-    v_from_bon := least(v_need, p_max_grant_seconds - v_from_inc, v_bonus_pool);
+  -- Plan §4: raw_grant = min(p_max_grant_seconds, included_remaining + bonus_remaining).
+  -- Debit included first, then bonus up to the max grant so callers with a partial included pool
+  -- still get a full 15 min ceiling when bonus is available.
+  if v_from_inc < p_max_grant_seconds and v_bonus_pool > 0 then
+    v_need := p_max_grant_seconds - v_from_inc;
+    v_from_bon := least(v_need, v_bonus_pool);
   end if;
 
   v_grant := v_from_inc + v_from_bon;
@@ -768,6 +780,49 @@ $$;
 
 grant execute on function voice_mark_answer_issued(text) to service_role;
 
+-- Bridge-side WS attach (plan §5): records ws_connected_at AND coalesces answer_issued_at / flips
+-- state so a crashed Edge handler between Telnyx answer and `voice_mark_answer_issued` cannot
+-- cause the 3-minute unanswered sweep to release a live reservation. The stream URL nonce has
+-- already been validated single-use server-side by the bridge before this RPC runs, so we trust
+-- the WS attach as proof of a successful answer.
+create or replace function voice_bridge_attach_ws(
+  p_call_control_id text,
+  p_now timestamptz default now()
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  n int;
+begin
+  if p_call_control_id is null or length(trim(p_call_control_id)) = 0 then
+    return jsonb_build_object('ok', false, 'reason', 'missing_call_control_id');
+  end if;
+
+  update voice_reservations
+  set
+    ws_connected_at = coalesce(ws_connected_at, p_now),
+    answer_issued_at = coalesce(answer_issued_at, p_now),
+    state = case
+      when state = 'pending_answer' then 'active'
+      else state
+    end,
+    updated_at = p_now
+  where call_control_id = p_call_control_id
+    and state in ('pending_answer', 'active');
+  get diagnostics n = row_count;
+
+  if n > 0 then
+    return jsonb_build_object('ok', true);
+  end if;
+  return jsonb_build_object('ok', false, 'reason', 'not_eligible');
+end;
+$$;
+
+grant execute on function voice_bridge_attach_ws(text, timestamptz) to service_role;
+
 -- Release quota when Edge answers with speak-only / errors before a successful stream answer (§6).
 drop function if exists voice_release_reservation_on_answer_fail(text);
 create or replace function voice_release_reservation_on_answer_fail(p_call_control_id text)
@@ -882,6 +937,10 @@ begin
   commit_inc := least(billable, r.reserved_included_seconds);
   commit_bon := least(billable - commit_inc, r.reserved_bonus_seconds);
 
+  -- Per-grant snapshot is the preferred debit path (§4.3). If a snapshotted grant was voided or
+  -- refunded between reserve and finalize, fall back to FIFO over any remaining live grants for
+  -- the shortfall. If bonus STILL can't be fully debited, reduce billable so we never over-bill —
+  -- better to under-bill a dispute-safe amount than to leave the settlement stuck forever.
   if commit_bon > 0 then
     if r.bonus_grant_allocations is not null and jsonb_typeof(r.bonus_grant_allocations) = 'array'
        and jsonb_array_length(r.bonus_grant_allocations) > 0 then
@@ -890,16 +949,19 @@ begin
         r.bonus_grant_allocations,
         commit_bon
       );
-      if v_bon_took <> commit_bon then
-        return jsonb_build_object(
-          'ok', false,
-          'reason', 'bonus_allocation_shortfall',
-          'commit_bon_expected', commit_bon,
-          'bonus_grants_debited_seconds', v_bon_took
+      if v_bon_took < commit_bon then
+        v_bon_took := v_bon_took + consume_voice_bonus_seconds(
+          r.business_id,
+          commit_bon - v_bon_took
         );
       end if;
     else
-      perform consume_voice_bonus_seconds(r.business_id, commit_bon);
+      v_bon_took := consume_voice_bonus_seconds(r.business_id, commit_bon);
+    end if;
+
+    if v_bon_took <> commit_bon then
+      billable := billable - (commit_bon - v_bon_took);
+      commit_bon := v_bon_took;
     end if;
   end if;
 
@@ -1748,19 +1810,32 @@ declare
   n1 int;
   n2 int;
 begin
-  update voice_reservations
+  -- Defensive guard against the answer-then-mark race (plan §5): if the bridge already attached
+  -- a WS session for this reservation, it has since coalesced answer_issued_at + ws_connected_at
+  -- on its own, and `answer_issued_at IS NULL` is a stale snapshot. Skip those rows here.
+  update voice_reservations r
   set state = 'released', updated_at = now()
-  where state = 'pending_answer'
-    and answer_issued_at is null
-    and created_at < now() - p_unanswered;
+  where r.state = 'pending_answer'
+    and r.answer_issued_at is null
+    and r.created_at < now() - p_unanswered
+    and not exists (
+      select 1 from voice_active_sessions s
+      where s.call_control_id = r.call_control_id
+        and s.ended_at is null
+    );
   get diagnostics n1 = row_count;
 
-  update voice_reservations
+  update voice_reservations r
   set state = 'released', updated_at = now()
-  where state in ('pending_answer', 'active')
-    and answer_issued_at is not null
-    and ws_connected_at is null
-    and answer_issued_at < now() - p_answer_no_ws;
+  where r.state in ('pending_answer', 'active')
+    and r.answer_issued_at is not null
+    and r.ws_connected_at is null
+    and r.answer_issued_at < now() - p_answer_no_ws
+    and not exists (
+      select 1 from voice_active_sessions s
+      where s.call_control_id = r.call_control_id
+        and s.ended_at is null
+    );
   get diagnostics n2 = row_count;
 
   return coalesce(n1, 0) + coalesce(n2, 0);

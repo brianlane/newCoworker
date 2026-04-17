@@ -163,10 +163,25 @@ function main(): void {
         { onConflict: "call_control_id" }
       );
 
-      await supabase
-        .from("voice_reservations")
-        .update({ ws_connected_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-        .eq("call_control_id", callControlId);
+      // Plan §5 (answer-then-mark race): if Edge crashed between a successful Telnyx answer and
+      // `voice_mark_answer_issued`, `answer_issued_at` would be NULL and the 3-min unanswered
+      // sweep would release a live reservation. Coalesce it here and flip pending_answer → active.
+      // The nonce check above already proves this stream URL was minted post-answer.
+      {
+        const nowIso = new Date().toISOString();
+        const { error: resErr } = await supabase.rpc("voice_bridge_attach_ws", {
+          p_call_control_id: callControlId,
+          p_now: nowIso
+        });
+        if (resErr) {
+          // Fallback: best-effort direct write if the RPC is not deployed yet.
+          console.warn("voice_bridge_attach_ws unavailable, falling back to direct update", resErr.message);
+          await supabase
+            .from("voice_reservations")
+            .update({ ws_connected_at: nowIso, updated_at: nowIso })
+            .eq("call_control_id", callControlId);
+        }
+      }
 
       void heartbeat(supabase, businessId);
       const hb = setInterval(() => {
@@ -176,9 +191,8 @@ function main(): void {
       let geminiTeardown: (() => Promise<void>) | undefined;
       let onTelnyxGemini: ((rawUtf8: string) => void) | undefined;
 
-      const geminiLiveEnabled =
-        (process.env.GEMINI_LIVE_ENABLED ?? "true").trim().toLowerCase() !== "false" &&
-        (process.env.GEMINI_LIVE_ENABLED ?? "true").trim().toLowerCase() !== "0";
+      const geminiFlag = (process.env.GEMINI_LIVE_ENABLED ?? "true").trim().toLowerCase();
+      const geminiLiveEnabled = geminiFlag !== "false" && geminiFlag !== "0";
       const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
       if (geminiLiveEnabled && apiKey) {
         try {

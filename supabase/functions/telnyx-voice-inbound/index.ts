@@ -473,7 +473,14 @@ serve(async (req: Request) => {
     .eq("business_id", businessId)
     .maybeSingle();
 
-  const heartbeatTtlSec = 120;
+  // Plan §5 health hysteresis: the bridge posts a heartbeat every 30s. A single missed write
+  // (e.g. transient DB hiccup or cold restart) should NOT flip inbound calls to the degraded
+  // path. Default TTL = 150s requires roughly 5 missed beats before we declare the bridge down,
+  // which is a hard-failure signal rather than flap. Operators can tune this via env.
+  const heartbeatTtlSec = (() => {
+    const raw = Number(Deno.env.get("BRIDGE_HEARTBEAT_TTL_SEC") ?? "150");
+    return Number.isFinite(raw) && raw >= 60 ? Math.floor(raw) : 150;
+  })();
   const hb = settings?.bridge_last_heartbeat_at
     ? new Date(settings.bridge_last_heartbeat_at as string).getTime()
     : 0;
