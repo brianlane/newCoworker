@@ -404,9 +404,43 @@ async function applyVoiceBonusGrantFromCheckout(session: Stripe.Checkout.Session
  * §4.1 clawback: when a bonus-seconds Checkout is refunded or disputed, void the
  * corresponding voice_bonus_grants row so remaining seconds cannot be consumed.
  * Looks up the Checkout Session via the payment intent on the charge. Idempotent.
+ *
+ * Dispute semantics (important): `charge.dispute.closed` fires for ALL terminal dispute
+ * statuses per Stripe — `lost`, `won`, and `warning_closed`. Only `lost` actually moves
+ * funds back to the cardholder; `won` means the merchant successfully defended the
+ * dispute and keeps the money, and `warning_closed` means an early warning resolved
+ * without a chargeback. Voiding the grant for `won` / `warning_closed` would revoke
+ * paid voice credits from a customer whose dispute the merchant just defended.
  */
 async function handleVoiceBonusRefund(event: Stripe.Event): Promise<void> {
   const obj = event.data.object as Stripe.Charge | Stripe.Dispute;
+
+  if (event.type === "charge.dispute.closed") {
+    const dispute = obj as Stripe.Dispute;
+    if (dispute.status !== "lost") {
+      logger.info("Stripe dispute closed without chargeback; not voiding bonus grant", {
+        eventId: event.id,
+        disputeId: dispute.id,
+        status: dispute.status
+      });
+      return;
+    }
+  }
+
+  if (event.type === "charge.refunded") {
+    const charge = obj as Stripe.Charge;
+    // Defensive: `charge.refunded` should always carry amount_refunded > 0, but a
+    // zero-amount refund event (e.g. replayed/malformed) must not clawback a grant.
+    if (!charge.amount_refunded || charge.amount_refunded <= 0) {
+      logger.info("Stripe charge.refunded with no amount refunded; not voiding bonus grant", {
+        eventId: event.id,
+        chargeId: charge.id,
+        amountRefunded: charge.amount_refunded ?? null
+      });
+      return;
+    }
+  }
+
   const paymentIntentId =
     typeof (obj as Stripe.Charge).payment_intent === "string"
       ? ((obj as Stripe.Charge).payment_intent as string)
