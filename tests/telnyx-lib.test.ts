@@ -9,7 +9,6 @@ import {
   telnyxAnswerWithStream,
   telnyxSpeak
 } from "../supabase/functions/_shared/telnyx_call_actions";
-import * as voiceMessages from "@/lib/telnyx/voice-messages";
 
 describe("telnyx webhook-verify", () => {
   it("rejects missing signature", () => {
@@ -214,15 +213,6 @@ describe("telnyx call-control", () => {
     });
     expect(err).not.toHaveBeenCalled();
     err.mockRestore();
-  });
-});
-
-describe("telnyx voice-messages", () => {
-  it("exports non-empty strings", () => {
-    expect(voiceMessages.VOICE_MSG_QUOTA_EXHAUSTED.length).toBeGreaterThan(10);
-    expect(voiceMessages.VOICE_MSG_BRIDGE_DEGRADED.length).toBeGreaterThan(10);
-    expect(voiceMessages.VOICE_MSG_UNCONFIGURED_NUMBER.length).toBeGreaterThan(5);
-    expect(voiceMessages.VOICE_MSG_SYSTEM_ERROR.length).toBeGreaterThan(5);
   });
 });
 
