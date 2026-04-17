@@ -14,6 +14,9 @@ describe("reserveSlotFailureMessage", () => {
       "Monthly SMS limit reached"
     );
     expect(reserveSlotFailureMessage({ ok: false, reason: "no_business" })).toBe("Business not found");
+    expect(reserveSlotFailureMessage({ ok: false, reason: "throttled" })).toBe(
+      "SMS throughput throttled (please retry in a moment)"
+    );
   });
 
   it("falls back for unknown reason and empty", () => {
@@ -165,6 +168,76 @@ describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
       "db write failed"
     );
     errSpy.mockRestore();
+  });
+
+  it("throws without calling Telnyx when throttle RPC returns ok:false", async () => {
+    rpc.mockImplementation((name: string) => {
+      if (name === "sms_outbound_rate_check") {
+        return Promise.resolve({ data: { ok: false, reason: "rate_limited" }, error: null });
+      }
+      return Promise.resolve({ error: null });
+    });
+    const fetchMock = vi.fn();
+    await expect(
+      sendTelnyxSms(
+        { apiKey: "k", messagingProfileId: "p" },
+        "+15550001111",
+        "Hi",
+        { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
+      )
+    ).rejects.toThrow("SMS quota blocked: rate_limited");
+    expect(fetchMock).not.toHaveBeenCalled();
+    // Should not have proceeded to reserve a slot once the throttle refuses.
+    expect(rpc).not.toHaveBeenCalledWith("try_reserve_sms_outbound_slot", expect.anything());
+  });
+
+  it("fails open (warns + continues) when throttle RPC errors", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    rpc.mockImplementation((name: string) => {
+      if (name === "sms_outbound_rate_check") {
+        return Promise.resolve({ data: null, error: { message: "db offline" } });
+      }
+      if (name === "try_reserve_sms_outbound_slot") {
+        return Promise.resolve({ data: { ok: true }, error: null });
+      }
+      return Promise.resolve({ error: null });
+    });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: "mFailOpen" } })
+    });
+    const id = await sendTelnyxSms(
+      { apiKey: "k", messagingProfileId: "p" },
+      "+15550001111",
+      "Hi",
+      { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
+    );
+    expect(id).toBe("mFailOpen");
+    expect(warnSpy).toHaveBeenCalledWith(
+      "sendTelnyxSms: sms_outbound_rate_check failed (fail-open)",
+      "db offline"
+    );
+    expect(rpc).toHaveBeenCalledWith("try_reserve_sms_outbound_slot", { p_business_id: "biz-1" });
+    warnSpy.mockRestore();
+  });
+
+  it("skips the throttle check entirely when throttleMaxPerSecond is 0", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: "mNoThrottle" } })
+    });
+    await sendTelnyxSms(
+      { apiKey: "k", messagingProfileId: "p" },
+      "+15550001111",
+      "Hi",
+      {
+        fetchImpl: fetchMock as typeof fetch,
+        meterBusinessId: "biz-1",
+        throttleMaxPerSecond: 0
+      }
+    );
+    expect(rpc).not.toHaveBeenCalledWith("sms_outbound_rate_check", expect.anything());
+    expect(rpc).toHaveBeenCalledWith("try_reserve_sms_outbound_slot", { p_business_id: "biz-1" });
   });
 
   it("includes Idempotency-Key and from when metering", async () => {
