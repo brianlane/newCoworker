@@ -31,7 +31,8 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
   const workspaceConnections =
     businessId ? await listWorkspaceOAuthConnections(businessId) : [];
   const workspaceConnected = workspaceConnections.length > 0;
-  const twilioConfigured = !!process.env.TWILIO_ACCOUNT_SID && !!process.env.TWILIO_AUTH_TOKEN;
+  const telnyxConfigured =
+    !!process.env.TELNYX_API_KEY && !!process.env.TELNYX_MESSAGING_PROFILE_ID;
 
   return (
     <div className="space-y-8 max-w-4xl">
@@ -102,11 +103,11 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <IntegrationCard
-                title="Twilio (platform)"
-                description="SMS alerts use your workspace&apos;s Twilio configuration."
+                title="Telnyx (platform)"
+                description="SMS and voice use Telnyx (messaging profile + Call Control). Configure keys in deployment."
                 icon={Phone}
-                status={twilioConfigured ? "platform" : "disconnected"}
-                statusLabel={twilioConfigured ? "Configured" : "Not configured"}
+                status={telnyxConfigured ? "platform" : "disconnected"}
+                statusLabel={telnyxConfigured ? "Configured" : "Not configured"}
               >
                 <p className="text-xs text-parchment/45">
                   Managed in environment / provisioning. Contact support to change numbers.

@@ -5,10 +5,10 @@
 // Required Edge Function Secrets:
 //   SUPABASE_URL              (auto-injected)
 //   SUPABASE_SERVICE_ROLE_KEY (auto-injected)
-//   TWILIO_ACCOUNT_SID
-//   TWILIO_AUTH_TOKEN
-//   TWILIO_MESSAGING_SERVICE_SID
-//   TWILIO_OWNER_PHONE
+//   TELNYX_API_KEY
+//   TELNYX_MESSAGING_PROFILE_ID
+//   TELNYX_SMS_FROM_E164 (optional if profile has default from)
+//   TELNYX_OWNER_PHONE
 //   RESEND_API_KEY
 //   MAILER_EMAIL
 //   CONTACT_EMAIL (optional; reply-to address)
@@ -17,6 +17,7 @@
 //   NOTIFICATIONS_WEBHOOK_TOKEN (optional; for heartbeat script calls)
 
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 
 interface WebhookPayload {
   type: "INSERT" | "UPDATE" | "DELETE";
@@ -98,31 +99,53 @@ serve(async (req: Request) => {
 
   const errors: string[] = [];
 
-  // Send SMS via Twilio
-  const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID");
-  const authToken = Deno.env.get("TWILIO_AUTH_TOKEN");
-  const messagingSid = Deno.env.get("TWILIO_MESSAGING_SERVICE_SID");
-  const ownerPhone = Deno.env.get("TWILIO_OWNER_PHONE");
+  const telnyxKey = Deno.env.get("TELNYX_API_KEY");
+  let telnyxProfile = Deno.env.get("TELNYX_MESSAGING_PROFILE_ID") ?? "";
+  let telnyxFrom = Deno.env.get("TELNYX_SMS_FROM_E164") ?? "";
+  const ownerPhone = Deno.env.get("TELNYX_OWNER_PHONE");
 
-  if (accountSid && authToken && messagingSid && ownerPhone) {
-    const smsBody = new URLSearchParams({
-      MessagingServiceSid: messagingSid,
-      To: ownerPhone,
-      Body: `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`
-    });
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  const supa =
+    supabaseUrl && serviceKey && record.business_id
+      ? createClient(supabaseUrl, serviceKey)
+      : null;
 
-    const smsRes = await fetch(
-      `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
-      {
+  if (supa) {
+    const { data: trow } = await supa
+      .from("business_telnyx_settings")
+      .select("telnyx_messaging_profile_id, telnyx_sms_from_e164")
+      .eq("business_id", record.business_id)
+      .maybeSingle();
+    if (trow?.telnyx_messaging_profile_id) {
+      telnyxProfile = String(trow.telnyx_messaging_profile_id);
+    }
+    if (trow?.telnyx_sms_from_e164) {
+      telnyxFrom = String(trow.telnyx_sms_from_e164);
+    }
+  }
+
+  // Platform-initiated owner alert (same class as /api/rowboat urgent SMS): not metered against the business monthly pool.
+  if (telnyxKey && telnyxProfile && ownerPhone) {
+    try {
+      const body: Record<string, string> = {
+        to: ownerPhone,
+        text: `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`,
+        messaging_profile_id: telnyxProfile
+      };
+      if (telnyxFrom) body.from = telnyxFrom;
+      const smsRes = await fetch("https://api.telnyx.com/v2/messages", {
         method: "POST",
         headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Authorization: `Basic ${btoa(`${accountSid}:${authToken}`)}`
+          Authorization: `Bearer ${telnyxKey}`,
+          "Content-Type": "application/json"
         },
-        body: smsBody.toString()
-      }
-    );
-    if (!smsRes.ok) errors.push(`SMS failed: ${smsRes.status}`);
+        body: JSON.stringify(body)
+      });
+      if (!smsRes.ok) errors.push(`SMS failed: ${smsRes.status}`);
+    } catch (e) {
+      errors.push(`SMS error: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   // Send email via Resend

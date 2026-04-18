@@ -1,5 +1,6 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { Business } from "@/lib/db/schema";
+import type { EnterpriseLimitsOverride } from "@/lib/plans/enterprise-limits";
 import { createPendingOwnerEmail } from "@/lib/onboarding/token";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -13,6 +14,8 @@ export type BusinessRow = {
   hostinger_vps_id: string | null;
   created_at: string;
   is_paused?: boolean;
+  /** Enterprise tier only: partial TierLimits JSON; merged with defaults in app + Edge. */
+  enterprise_limits?: Record<string, unknown> | null;
 };
 
 export async function createBusiness(
@@ -100,6 +103,16 @@ export async function setBusinessPaused(
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db.from("businesses").update({ is_paused: paused }).eq("id", id);
   if (error) throw new Error(`setBusinessPaused: ${error.message}`);
+}
+
+export async function updateEnterpriseLimits(
+  id: string,
+  limits: EnterpriseLimitsOverride | null,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("businesses").update({ enterprise_limits: limits }).eq("id", id);
+  if (error) throw new Error(`updateEnterpriseLimits: ${error.message}`);
 }
 
 export async function updateBusinessOwnerEmail(

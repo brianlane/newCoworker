@@ -10,7 +10,7 @@ export type IntegrationProvider =
   | "hubspot"
   | "salesforce"
   | "custom_crm"
-  | "twilio"
+  | "telnyx"
   | "custom_tool";
 
 export type IntegrationAuthType = "oauth" | "api_key";
@@ -24,7 +24,7 @@ export const INTEGRATION_PROVIDERS = [
   "hubspot",
   "salesforce",
   "custom_crm",
-  "twilio",
+  "telnyx",
   "custom_tool"
 ] as const satisfies readonly IntegrationProvider[];
 

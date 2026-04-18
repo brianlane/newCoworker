@@ -1,37 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { getTodayUsage, incrementUsage, checkLimitReached } from "@/lib/db/usage";
+import { getTodayUsage, getCalendarMonthUsageTotals, incrementUsage, checkLimitReached } from "@/lib/db/usage";
+import { TIER_LIMITS } from "@/lib/plans/limits";
 
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
-}));
-
-vi.mock("@/lib/plans/limits", () => ({
-  TIER_LIMITS: {
-    starter: {
-      voiceMinutesPerDay: 60,
-      smsPerDay: 100,
-      callsPerDay: 10,
-      maxConcurrentCalls: 1,
-      smsThrottled: true,
-      memoryType: "lossless"
-    },
-    standard: {
-      voiceMinutesPerDay: Infinity,
-      smsPerDay: Infinity,
-      callsPerDay: Infinity,
-      maxConcurrentCalls: 3,
-      smsThrottled: false,
-      memoryType: "lossless"
-    },
-    enterprise: {
-      voiceMinutesPerDay: Infinity,
-      smsPerDay: Infinity,
-      callsPerDay: Infinity,
-      maxConcurrentCalls: 10,
-      smsThrottled: false,
-      memoryType: "lossless"
-    }
-  }
 }));
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -62,6 +34,43 @@ function mockDb(overrides: Record<string, unknown> = {}) {
     ...overrides
   };
   return base;
+}
+
+/** Supports `getTodayUsage` (.single) and monthly totals (.gte → thenable). */
+function mockLimitClient(opts: {
+  today?: typeof MOCK_USAGE | null;
+  monthRows?: Array<{ sms_sent?: number; calls_made?: number }>;
+  monthError?: { message: string };
+}) {
+  const today = opts.today !== undefined ? opts.today : MOCK_USAGE;
+  const monthRows = opts.monthRows ?? [];
+
+  const monthThenable: PromiseLike<{
+    data: typeof monthRows | null;
+    error: { message: string } | null;
+  }> = {
+    then(onFulfilled, onRejected) {
+      const payload = opts.monthError
+        ? { data: null, error: opts.monthError }
+        : { data: monthRows, error: null };
+      return Promise.resolve(payload).then(onFulfilled, onRejected);
+    }
+  };
+
+  const chain: Record<string, unknown> = {};
+  chain.from = vi.fn(() => chain);
+  chain.select = vi.fn(() => chain);
+  chain.eq = vi.fn(() => chain);
+  chain.gte = vi.fn(() => monthThenable);
+  chain.single = vi.fn(() =>
+    Promise.resolve({
+      data: today,
+      error: today ? null : { message: "no rows" }
+    })
+  );
+  chain.rpc = vi.fn().mockResolvedValue({ error: null });
+
+  return chain;
 }
 
 describe("db/usage", () => {
@@ -95,6 +104,88 @@ describe("db/usage", () => {
       const result = await getTodayUsage("biz-uuid-1", db as never);
       expect(result?.business_id).toBe("biz-uuid-1");
       expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("getCalendarMonthUsageTotals", () => {
+    it("throws when the query returns an error", async () => {
+      const monthThenable: PromiseLike<{ data: null; error: { message: string } }> = {
+        then(onFulfilled, onRejected) {
+          return Promise.resolve({ data: null, error: { message: "db" } }).then(onFulfilled, onRejected);
+        }
+      };
+      const chain: Record<string, unknown> = {};
+      chain.from = vi.fn(() => chain);
+      chain.select = vi.fn(() => chain);
+      chain.eq = vi.fn(() => chain);
+      chain.gte = vi.fn(() => monthThenable);
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await expect(getCalendarMonthUsageTotals("biz-uuid-1", chain as never)).rejects.toThrow(
+        "getCalendarMonthUsageTotals: db"
+      );
+      expect(err).toHaveBeenCalled();
+
+      err.mockRestore();
+    });
+
+    it("sums rows for the month", async () => {
+      const monthThenable: PromiseLike<{
+        data: Array<{ sms_sent: number; calls_made: number }>;
+        error: null;
+      }> = {
+        then(onFulfilled, onRejected) {
+          return Promise.resolve({
+            data: [
+              { sms_sent: 3, calls_made: 1 },
+              { sms_sent: 2, calls_made: 4 }
+            ],
+            error: null
+          }).then(onFulfilled, onRejected);
+        }
+      };
+      const chain: Record<string, unknown> = {};
+      chain.from = vi.fn(() => chain);
+      chain.select = vi.fn(() => chain);
+      chain.eq = vi.fn(() => chain);
+      chain.gte = vi.fn(() => monthThenable);
+
+      const result = await getCalendarMonthUsageTotals("biz-uuid-1", chain as never);
+      expect(result).toEqual({ sms_sent: 5, calls_made: 5 });
+    });
+
+    it("treats null data as empty and null row fields as zero", async () => {
+      const monthThenable: PromiseLike<{
+        data: null;
+        error: null;
+      }> = {
+        then(onFulfilled, onRejected) {
+          return Promise.resolve({ data: null, error: null }).then(onFulfilled, onRejected);
+        }
+      };
+      const chain: Record<string, unknown> = {};
+      chain.from = vi.fn(() => chain);
+      chain.select = vi.fn(() => chain);
+      chain.eq = vi.fn(() => chain);
+      chain.gte = vi.fn(() => monthThenable);
+
+      const empty = await getCalendarMonthUsageTotals("biz-uuid-1", chain as never);
+      expect(empty).toEqual({ sms_sent: 0, calls_made: 0 });
+
+      const sparseThenable: PromiseLike<{
+        data: Array<{ sms_sent?: number | null; calls_made?: number | null }>;
+        error: null;
+      }> = {
+        then(onFulfilled, onRejected) {
+          return Promise.resolve({
+            data: [{ sms_sent: null }, { calls_made: null }],
+            error: null
+          }).then(onFulfilled, onRejected);
+        }
+      };
+      chain.gte = vi.fn(() => sparseThenable);
+      const sparse = await getCalendarMonthUsageTotals("biz-uuid-1", chain as never);
+      expect(sparse).toEqual({ sms_sent: 0, calls_made: 0 });
     });
   });
 
@@ -158,15 +249,16 @@ describe("db/usage", () => {
   });
 
   describe("checkLimitReached", () => {
-    it("allows standard tier (unlimited limits)", async () => {
-      const db = mockDb();
+    it("allows standard tier when under monthly SMS cap", async () => {
+      const cap = TIER_LIMITS.standard.smsPerMonth;
+      const db = mockLimitClient({ monthRows: [{ sms_sent: cap - 1, calls_made: 0 }] });
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
       const result = await checkLimitReached("biz-uuid-1", "standard");
       expect(result.allowed).toBe(true);
     });
 
-    it("allows enterprise tier (unlimited limits)", async () => {
+    it("allows enterprise tier (all caps unlimited)", async () => {
       const db = mockDb();
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
@@ -174,12 +266,36 @@ describe("db/usage", () => {
       expect(result.allowed).toBe(true);
     });
 
-    it("allows starter tier when under all limits", async () => {
-      const db = mockDb({
-        single: vi.fn().mockResolvedValue({
-          data: { ...MOCK_USAGE, voice_minutes_used: 30, sms_sent: 50, calls_made: 5 },
-          error: null
-        })
+    it("applies enterprise admin override for daily voice cap", async () => {
+      const db = mockLimitClient({
+        today: { ...MOCK_USAGE, voice_minutes_used: 100, sms_sent: 0, calls_made: 0 },
+        monthRows: []
+      });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+      const result = await checkLimitReached("biz-uuid-1", "enterprise", undefined, {
+        voiceMinutesPerDay: 100
+      });
+      expect(result.allowed).toBe(false);
+      expect(result.field).toBe("voice_minutes_used");
+    });
+
+    it("enterprise daily voice cap allows when there is no usage row for today", async () => {
+      const db = mockLimitClient({
+        today: null,
+        monthRows: []
+      });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+      const result = await checkLimitReached("biz-uuid-1", "enterprise", undefined, {
+        voiceMinutesPerDay: 100
+      });
+      expect(result.allowed).toBe(true);
+    });
+
+    it("allows starter tier when under all monthly limits", async () => {
+      const db = mockLimitClient({
+        monthRows: [{ sms_sent: 10, calls_made: 3 }]
       });
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
@@ -187,59 +303,50 @@ describe("db/usage", () => {
       expect(result.allowed).toBe(true);
     });
 
-    it("blocks starter when voice limit reached", async () => {
-      const db = mockDb({
-        single: vi.fn().mockResolvedValue({
-          data: { ...MOCK_USAGE, voice_minutes_used: 60 },
-          error: null
-        })
+    it("does not block starter on legacy daily_usage voice minutes (voice quota is Stripe-period Telnyx pool)", async () => {
+      const db = mockLimitClient({
+        monthRows: [{ sms_sent: 0, calls_made: 0 }]
       });
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
       const result = await checkLimitReached("biz-uuid-1", "starter");
-      expect(result.allowed).toBe(false);
-      expect(result.field).toBe("voice_minutes_used");
-      expect(result.reason).toContain("60 minutes");
+      expect(result.allowed).toBe(true);
     });
 
-    it("blocks starter when SMS limit reached", async () => {
-      const db = mockDb({
-        single: vi.fn().mockResolvedValue({
-          data: { ...MOCK_USAGE, voice_minutes_used: 0, sms_sent: 100 },
-          error: null
-        })
+    it("blocks starter when monthly SMS limit reached", async () => {
+      const cap = TIER_LIMITS.starter.smsPerMonth;
+      const db = mockLimitClient({
+        monthRows: [{ sms_sent: cap, calls_made: 0 }]
       });
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
       const result = await checkLimitReached("biz-uuid-1", "starter");
       expect(result.allowed).toBe(false);
       expect(result.field).toBe("sms_sent");
-      expect(result.reason).toContain("100 SMS");
+      expect(result.reason).toContain(String(cap));
+      expect(result.reason).toContain("SMS/month");
     });
 
-    it("blocks starter when call limit reached", async () => {
-      const db = mockDb({
-        single: vi.fn().mockResolvedValue({
-          data: { ...MOCK_USAGE, voice_minutes_used: 0, sms_sent: 0, calls_made: 10 },
-          error: null
-        })
-      });
-      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-
-      const result = await checkLimitReached("biz-uuid-1", "starter");
-      expect(result.allowed).toBe(false);
-      expect(result.field).toBe("calls_made");
-      expect(result.reason).toContain("10 calls");
-    });
-
-    it("allows starter when no usage row exists (first use of the day)", async () => {
-      const db = mockDb({
-        single: vi.fn().mockResolvedValue({ data: null, error: { message: "no rows" } })
-      });
+    it("allows starter when there is no usage yet this month", async () => {
+      const db = mockLimitClient({ monthRows: [] });
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
       const result = await checkLimitReached("biz-uuid-1", "starter");
       expect(result.allowed).toBe(true);
+    });
+
+    it("blocks SMS when monthly usage query fails (fail closed)", async () => {
+      const db = mockLimitClient({ monthError: { message: "timeout" } });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      const log = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const result = await checkLimitReached("biz-uuid-1", "starter");
+      expect(result.allowed).toBe(false);
+      expect(result.field).toBe("sms_sent");
+      expect(result.reason).toContain("Cannot verify monthly SMS usage");
+      expect(log).toHaveBeenCalled();
+
+      log.mockRestore();
     });
   });
 });

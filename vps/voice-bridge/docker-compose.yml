@@ -1,0 +1,27 @@
+# Optional: run the media bridge beside Rowboat on the customer VPS.
+# Copy `.env` with STREAM_URL_SIGNING_SECRET, SUPABASE_*, GOOGLE_API_KEY, BUSINESS_ID (optional), BRIDGE_MEDIA_WSS_ORIGIN host must match Telnyx stream URL.
+services:
+  voice-bridge:
+    build: .
+    ports:
+      - "${VOICE_BRIDGE_PUBLISH_PORT:-8090}:8090"
+    env_file:
+      - .env
+    restart: unless-stopped
+    # Container user is pinned to non-root in the Dockerfile; don't override here.
+    # read_only FS + tmpfs for any scratch writes keeps the blast radius tight if the
+    # process is compromised. tsx caches to node_modules/.tsx which is baked into the
+    # image, so no writable /app is needed at runtime.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8090/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

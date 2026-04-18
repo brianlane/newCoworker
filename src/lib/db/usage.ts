@@ -1,6 +1,18 @@
+/**
+ * `daily_usage` helpers and soft limit checks for the Next.js app.
+ *
+ * **Enforcement** for billable SMS/voice is RPC- and Edge-first (e.g. `try_reserve_sms_outbound_slot`,
+ * `check_sms_monthly_limit`, `voice_reserve_for_call`). Call those paths (or `sendTelnyxSms` with
+ * `meterBusinessId`) for anything that must not bypass caps. Use `checkLimitReached` only for optional
+ * preflight UX; `incrementUsage` is a thin wrapper over the `increment_usage` RPC if you need to
+ * mutate counters from Node (most metering is handled inside Supabase functions / Telnyx webhooks).
+ *
+ * For **Stripe-period included voice + bonus** display logic, see `getVoiceBillingSnapshotForBusiness` in
+ * `voice-usage.ts` (read-only; caps in `getTierLimits` / `VOICE_RES_LIMITS`).
+ */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { PlanTier } from "@/lib/plans/tier";
-import { TIER_LIMITS } from "@/lib/plans/limits";
+import { getTierLimits } from "@/lib/plans/limits";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -24,6 +36,13 @@ export type LimitCheckResult = {
   field?: UsageField;
 };
 
+function calendarMonthStartUtcYmd(): string {
+  const d = new Date();
+  const y = d.getUTCFullYear();
+  const m = d.getUTCMonth() + 1;
+  return `${y}-${String(m).padStart(2, "0")}-01`;
+}
+
 export async function getTodayUsage(
   businessId: string,
   client?: SupabaseClient
@@ -40,6 +59,34 @@ export async function getTodayUsage(
 
   if (error) return null;
   return data as DailyUsageRow;
+}
+
+/** Sum SMS and outbound calls for the current UTC calendar month from `daily_usage`. */
+export async function getCalendarMonthUsageTotals(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<{ sms_sent: number; calls_made: number }> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const monthStart = calendarMonthStartUtcYmd();
+  const { data, error } = await db
+    .from("daily_usage")
+    .select("sms_sent, calls_made")
+    .eq("business_id", businessId)
+    .gte("usage_date", monthStart);
+
+  if (error) {
+    console.error("getCalendarMonthUsageTotals", error);
+    throw new Error(`getCalendarMonthUsageTotals: ${error.message}`);
+  }
+
+  let sms = 0;
+  let calls = 0;
+  for (const row of data ?? []) {
+    const r = row as { sms_sent?: number | null; calls_made?: number | null };
+    sms += Number(r.sms_sent ?? 0);
+    calls += Number(r.calls_made ?? 0);
+  }
+  return { sms_sent: sms, calls_made: calls };
 }
 
 export async function incrementUsage(
@@ -62,47 +109,46 @@ export async function incrementUsage(
 export async function checkLimitReached(
   businessId: string,
   tier: PlanTier,
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  enterpriseLimitsOverride?: unknown
 ): Promise<LimitCheckResult> {
-  const limits = TIER_LIMITS[tier];
+  const limits = getTierLimits(tier, enterpriseLimitsOverride);
 
-  // Enterprise and standard have no daily caps (Infinity)
-  if (
-    limits.voiceMinutesPerDay === Infinity &&
-    limits.smsPerDay === Infinity &&
-    limits.callsPerDay === Infinity
-  ) {
+  if (limits.voiceMinutesPerDay === Infinity && limits.smsPerMonth === Infinity) {
     return { allowed: true };
   }
 
-  const usage = await getTodayUsage(businessId, client);
-
-  if (!usage) {
-    return { allowed: true };
+  if (limits.voiceMinutesPerDay !== Infinity) {
+    const usage = await getTodayUsage(businessId, client);
+    const voiceUsed = usage?.voice_minutes_used ?? 0;
+    if (voiceUsed >= limits.voiceMinutesPerDay) {
+      return {
+        allowed: false,
+        reason: `Daily voice limit reached (${limits.voiceMinutesPerDay} minutes/day)`,
+        field: "voice_minutes_used"
+      };
+    }
   }
 
-  if (usage.voice_minutes_used >= limits.voiceMinutesPerDay) {
-    return {
-      allowed: false,
-      reason: `Daily voice limit reached (${limits.voiceMinutesPerDay} minutes/day)`,
-      field: "voice_minutes_used"
-    };
-  }
-
-  if (usage.sms_sent >= limits.smsPerDay) {
-    return {
-      allowed: false,
-      reason: `Daily SMS limit reached (${limits.smsPerDay} SMS/day)`,
-      field: "sms_sent"
-    };
-  }
-
-  if (usage.calls_made >= limits.callsPerDay) {
-    return {
-      allowed: false,
-      reason: `Daily call limit reached (${limits.callsPerDay} calls/day)`,
-      field: "calls_made"
-    };
+  if (limits.smsPerMonth !== Infinity) {
+    let month: { sms_sent: number; calls_made: number };
+    try {
+      month = await getCalendarMonthUsageTotals(businessId, client);
+    } catch (e) {
+      console.error("checkLimitReached: monthly usage unavailable", e);
+      return {
+        allowed: false,
+        reason: "Cannot verify monthly SMS usage. Please try again shortly.",
+        field: "sms_sent"
+      };
+    }
+    if (month.sms_sent >= limits.smsPerMonth) {
+      return {
+        allowed: false,
+        reason: `Monthly SMS limit reached (${limits.smsPerMonth} SMS/month)`,
+        field: "sms_sent"
+      };
+    }
   }
 
   return { allowed: true };

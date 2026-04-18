@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "_comment": "Base OpenClaw config template. deploy-client.sh writes the live version with real values.",
+  "_comment": "OpenClaw agent template. Use OPENCLAW_GATEWAY_TOKEN for this agent’s gateway auth (separate from Rowboat’s ROWBOAT_GATEWAY_TOKEN). Also substitute SUPABASE_URL, NOTIFICATIONS_WEBHOOK_TOKEN, Telnyx keys (same names as vps/scripts/deploy-client.sh where shared). Override browser.endpoint if LIGHTPANDA_WSS_URL differs from the default below.",
   "gateway_token": "{{OPENCLAW_GATEWAY_TOKEN}}",
   "features": {
     "chatCompletions": true,
@@ -25,7 +25,7 @@
     "endpoint": "wss://cdn.lightpanda.io/ws"
   },
   "notification_webhook": "{{SUPABASE_URL}}/functions/v1/notifications",
-  "notification_webhook_token": "{{OPENCLAW_GATEWAY_TOKEN}}",
+  "notification_webhook_token": "{{NOTIFICATIONS_WEBHOOK_TOKEN}}",
   "compliance": {
     "fha_guardrails": true,
     "forbidden_topics": [
@@ -60,5 +60,9 @@
       "description": "Calendar scheduling via webhook"
     }
   ],
-  "elevenlabs_agent_id": "{{ELEVENLABS_AGENT_ID}}"
+  "telnyx": {
+    "api_key": "{{TELNYX_API_KEY}}",
+    "messaging_profile_id": "{{TELNYX_MESSAGING_PROFILE_ID}}",
+    "sms_from_e164": "{{TELNYX_SMS_FROM_E164}}"
+  }
 }

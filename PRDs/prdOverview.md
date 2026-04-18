@@ -20,7 +20,7 @@
 1. **Infrastructure Foundation:** Deploy Hostinger KVM 2 (Starter) or KVM 8 (Standard). Configure Ubuntu 24.04, harden SSH, and install Docker/Ollama.
 2. **Agent Provisioning:** Use the tier-specific Gold Image (Rowboat + Ollama on the host) to spin up the agent environments. KVM 2 uses ZRAM for compressed swap.
 3. **Soul Injection:** Upon account creation, gather information via the onboarding questionnaire, then inject `soul.md`, `identity.md`, and `memory.md` into the business account's Rowboat vault.
-4. **Integration Layer:** Link Twilio and inworld.ai keys. Establish Cloudflare Tunnels to our Next.js dashboard.
+4. **Integration Layer:** Link **Telnyx** (Messaging + Programmable Voice), Edge webhooks, and the customer **VPS voice bridge** (signed media stream from Telnyx to the Coworker host). Establish Cloudflare Tunnels to our Next.js dashboard.
 5. **Memory Initialization:** Load initial business data into Rowboat's lossless memory system.
 6. **Beta Testing:** "Human-in-the-loop" phase where agents draft responses for manual owner approval.
 
@@ -55,7 +55,7 @@
   - **Sole inference tag:** **`qwen3:4b-instruct`** for Rowboat → Ollama.
   - **Background pulls:** **`qwen3:4b-instruct`** (required), Llama 4 / Qwen 3.5 35B-A3B optional per `bootstrap.sh` (experiments).
   - **Model choice:** integration correctness runs selected `qwen3:4b-instruct` for kvm8 and `llama3.2:3b` for kvm2.
-- **Voice:** inworld.ai TTS-1.5 Mini — all tiers. Sub-130ms P90 latency, $5/1M chars. WebSocket streaming for lowest latency voice with Twilio.
+- **Voice:** **Telnyx Programmable Voice** inbound PSTN → Supabase Edge (`call.initiated` / hangup / settlement) → **VPS bridge** (WebSocket media on the customer KVM). Real-time audio is handled on the business host (bridge + model path); the platform provisions stream signing, routes, and usage per Stripe billing period—not a third-party TTS SaaS on the dashboard.
 - **Inference Optimizations (both tiers):**
   - TurboQuant KV cache compression — **ACTIVE** via `OLLAMA_KV_CACHE_TYPE=q4_0`. Reduces active KV cache memory per conversation by ~75%. Critical for KVM 2: without it, long conversations contend harder with the 8 GiB host budget. With it, many simultaneous conversations can be held in the same footprint.
   - Flash Attention — **ACTIVE** via `OLLAMA_FLASH_ATTENTION=1`. Memory-efficient attention computation; prerequisite for Dynamic VRAM / Weight Streaming on the llama.cpp backend.
@@ -66,14 +66,14 @@
 **Performance Targets:**
 
 - SMS/Chat: Instant (60% idle capacity on KVM 2).
-- Voice (inworld.ai offload): ~1.2s-1.8s end-to-end on KVM 2 (acceptable for Starter tier).
-- Standard tier: <800ms TTFT for voice-critical models.
+- Voice (Telnyx → bridge on KVM): latency depends on carrier, bridge health, and host inference; Starter pool is sized for light inbound use; Standard allows higher concurrency and included seconds per period.
+- Standard tier: target low time-to-first-audio where the stack is warm; exact TTFT is workload-dependent.
 
 -----
 
 ### 📄 prd-non-functional-requirements.md
 
-- **Security:** All VPS instances must have firewall rules allowing traffic only to verified Twilio/inworld.ai/Supabase endpoints.
+- **Security:** All VPS instances must have firewall rules allowing traffic only to verified **Telnyx**, tunnel, and **Supabase** endpoints required for the bridge and agent stack.
 - **Compliance:** System prompts must strictly include Fair Housing Act (FHA) compliance guardrails for all real estate agents. Compliance needs to be able to expand to other job fields.
 - **Data Sovereignty:** All conversation transcripts are stored locally on the client's VPS. Only "Log metadata" (not raw sensitive text) is sent to the Vercel dashboard.
 - **Resiliency:** Automated heartbeat check every 2 minutes; if an agent is unresponsive for 3 failed heartbeats then automate restart; if still failing, contact admin via webhook.
@@ -82,12 +82,12 @@
 
 ### 📄 prd-functional-requirements.md
 
-1. **Voice Gateway:** Bi-directional handling of calls via Twilio + inworld.ai Mini TTS.
+1. **Voice Gateway:** Inbound PSTN via **Telnyx**; media streamed to the customer **VPS bridge**; platform Edge functions enforce webhooks, deduplication, voice reservation per Stripe period, and settlement telemetry.
 2. **Smart Lead Triage:** Analyze inquiry intent within 3 seconds of connection.
 3. **Task Delegation:** Automated updating of local spreadsheets (Google Sheets/Excel) and CRM entries (e.g., Follow Up Boss).
 4. **Swarm Reasoning:** Ability to run multi-model checks for high-value deal amendments (Standard/Enterprise only).
 5. **Notification Engine:** Trigger SMS/Email to business owner for task-completion updates.
-6. **Usage Enforcement:** Starter tier enforces daily limits via `daily_usage` table: 60 min voice, 100 SMS, 10 calls. Standard/Enterprise are unlimited.
+6. **Usage Enforcement:** Tier limits combine **monthly SMS** (UTC calendar month, `daily_usage`), **included voice seconds per Stripe billing period** (Telnyx path + reservations), and **concurrency caps**; enterprise may override via `enterprise_limits`. Exact numbers ship with plan definitions in app and terms.
 
 -----
 
@@ -105,7 +105,7 @@
 
 **Expenses per client:**
 - VPS (Hostinger): $8.99/mo (KVM 2) or $25.99/mo (KVM 8).
-- Twilio/inworld.ai: ~$5-20/mo (usage-dependent; inworld.ai Mini at $5/1M chars).
+- **Telnyx** (SMS + voice usage): usage-variable; no separate inworld/Twilio voice stack.
 - Dashboard (Vercel/Supabase): Free Tier (Scalable).
 
 **Commitment policy:** 30-day cancel window from initial purchase date for all plans.
@@ -119,7 +119,7 @@
 - [ ] Sign up for Hostinger API Access.
 - [ ] Create Supabase project (DB + Auth + Edge Functions).
 - [ ] Build Docker Gold Images (Ubuntu + Ollama + Rowboat). Two images: KVM 2 (Starter) + KVM 8 (Standard).
-- [ ] Configure inworld.ai API key and create default voice agent.
+- [ ] Configure **Telnyx** API key, messaging profile, public key for webhooks, and (per environment) voice routes + bridge secrets; validate VPS bridge heartbeat and stream URL signing.
 - [ ] Verify Lightpanda WSS connectivity.
 - [ ] Setup Cloudflare Tunnel for secure remote management.
 - [ ] Create 6 Stripe Price IDs (2 tiers × 3 periods).

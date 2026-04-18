@@ -12,6 +12,8 @@ import {
   hasFirstCycleDiscount
 } from "@/lib/pricing";
 import { getPeriodPricing, getCommitmentMonths, PlanTier, calculateSavingsPercentage } from "@/lib/plans/tier";
+import { TIER_LIMITS } from "@/lib/plans/limits";
+import { voiceMinutesLine } from "@/lib/plans/usage-copy";
 
 type PeriodOption = {
   id: BillingPeriod;
@@ -89,11 +91,11 @@ export default function OnboardPage() {
       setup: "No setup fee · 30-day money-back guarantee",
       features: [
         "AI voice coworker",
-        "Twilio phone number",
+        "Telnyx phone number",
         "Lossless memory and expansive knowledge base",
         "Unlimited emails and appointment booking",
-        "1 hour voice / day",
-        "100 SMS / day",
+        voiceMinutesLine("starter"),
+        `${TIER_LIMITS.starter.smsPerMonth} SMS`,
         "1 concurrent call",
         "Dashboard access"
       ],
@@ -118,7 +120,8 @@ export default function OnboardPage() {
       setup: "No setup fee · 30-day money-back guarantee",
       features: [
         "Everything in Starter, plus:",
-        "Unlimited voice, SMS, and calls",
+        voiceMinutesLine("standard"),
+        `${TIER_LIMITS.standard.smsPerMonth} SMS`,
         "3 concurrent calls",
         "Send texts during calls",
         "Warm handoff call transfers",

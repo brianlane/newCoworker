@@ -1,12 +1,12 @@
 import { HostingerClient } from "@/lib/hostinger/client";
-import { InworldClient } from "@/lib/inworld/client";
-import { sendOwnerSms, readTwilioConfig } from "@/lib/twilio/client";
+import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { updateBusinessStatus } from "@/lib/db/businesses";
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { spawnSync } from "child_process";
 import { recordProvisioningProgress } from "@/lib/provisioning/progress";
 
 type ProvisioningInput = {
@@ -16,9 +16,8 @@ type ProvisioningInput = {
   ownerPhone?: string;
 };
 
-type ProvisioningResult = {
+export type ProvisioningResult = {
   vpsId: string;
-  agentId: string;
   tunnelUrl: string;
 };
 
@@ -57,11 +56,25 @@ function loadIdentityTemplate(): string {
   }
 }
 
+/** Bash `printf %q` when available; safe single-quote fallback (testable via `child_process` mock). */
+export function quoteShellEnvValue(value: string): string {
+  try {
+    const r = spawnSync("bash", ["-c", 'printf %q "$1"', "_", value], { encoding: "utf8" });
+    if (r.status === 0 && typeof r.stdout === "string" && r.stdout.length > 0) {
+      return r.stdout.trimEnd();
+    }
+  } catch {
+    /* e.g. Windows dev without bash */
+  }
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 export async function orchestrateProvisioning(
   input: ProvisioningInput,
   deps?: {
     hostinger?: HostingerClient;
-    inworld?: InworldClient;
+    /** Override env value quoting (defaults to {@link quoteShellEnvValue}). */
+    quoteEnv?: (value: string) => string;
   }
 ): Promise<ProvisioningResult> {
   const { businessId, ownerEmail, ownerPhone, tier } = input;
@@ -77,7 +90,6 @@ export async function orchestrateProvisioning(
     source: "orchestrator"
   });
 
-  // 1. Provision VPS via Hostinger API
   const hostinger =
     deps?.hostinger ??
     new HostingerClient(
@@ -96,17 +108,14 @@ export async function orchestrateProvisioning(
     source: "orchestrator"
   });
 
-  // 2. Store VPS ID and mark offline while setting up
   await updateBusinessStatus(businessId, "offline", vpsId);
 
-  // 3. Upsert soul/identity config in Supabase
   const existingConfig = await getBusinessConfig(businessId);
   await upsertBusinessConfig({
     business_id: businessId,
     soul_md: existingConfig?.soul_md ?? loadSoulTemplate(),
     identity_md: existingConfig?.identity_md ?? loadIdentityTemplate(),
-    memory_md: existingConfig?.memory_md ?? "# memory.md\nLossless memory DAG initialized.",
-    inworld_agent_id: existingConfig?.inworld_agent_id ?? null
+    memory_md: existingConfig?.memory_md ?? "# memory.md\nLossless memory DAG initialized."
   });
 
   await recordProvisioningProgress({
@@ -117,44 +126,19 @@ export async function orchestrateProvisioning(
     source: "orchestrator"
   });
 
-  // 4. Create inworld.ai voice agent (all tiers use inworld-tts-1.5-mini)
-  const tunnelUrl = `https://${businessId}.tunnel.newcoworker.com`;
-
-  const inworld =
-    deps?.inworld ??
-    new InworldClient(process.env.INWORLD_API_KEY ?? "");
-
-  const { agent_id: agentId } = await inworld.createVoiceAgent(
-    `rowboat_agent_${businessId.slice(0, 8)}`,
-    undefined
-  );
-
-  // 5. Store inworld agent ID
-  await upsertBusinessConfig({
-    business_id: businessId,
-    soul_md: existingConfig?.soul_md ?? loadSoulTemplate(),
-    identity_md: existingConfig?.identity_md ?? loadIdentityTemplate(),
-    memory_md: existingConfig?.memory_md ?? "# memory.md\nLossless memory DAG initialized.",
-    inworld_agent_id: agentId
-  });
-
   await recordProvisioningProgress({
     businessId,
-    phase: "inworld_agent_ready",
-    percent: 35,
-    message: `Inworld voice agent created (${agentId})`,
+    phase: "telnyx_voice_ready",
+    percent: 32,
+    message: "Voice is Telnyx + VPS bridge (configure DIDs and Edge webhooks in Mission Control)",
     source: "orchestrator"
   });
 
-  // 6. Execute deploy-client.sh on the VPS
+  const tunnelUrl = `https://${businessId}.tunnel.newcoworker.com`;
+
   const gatewayToken = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
 
-  // Build environment safely using printf %q for shell escaping
-  // Each var=printf '%s=%q\n' prevents injection via shell metacharacters
-  const escapeShellArg = (str: string): string => {
-    // Use bash %q escaping: single-quote special chars, escape single quotes
-    return str.replace(/'/g, "'\\''");
-  };
+  const bashQuote = deps?.quoteEnv ?? quoteShellEnvValue;
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const progressUrl = `${appUrl.replace(/\/$/, "")}/api/provisioning/progress`;
@@ -167,13 +151,16 @@ export async function orchestrateProvisioning(
     ["SUPABASE_SERVICE_KEY", process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""],
     ["ROWBOAT_GATEWAY_TOKEN", gatewayToken],
     ["NOTIFICATIONS_WEBHOOK_TOKEN", process.env.NOTIFICATIONS_WEBHOOK_TOKEN ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""],
-    ["INWORLD_AGENT_ID", agentId],
-    ["INWORLD_API_KEY", process.env.INWORLD_API_KEY ?? ""],
+    ["TELNYX_API_KEY", process.env.TELNYX_API_KEY ?? ""],
+    ["TELNYX_MESSAGING_PROFILE_ID", process.env.TELNYX_MESSAGING_PROFILE_ID ?? ""],
+    ["TELNYX_SMS_FROM_E164", process.env.TELNYX_SMS_FROM_E164 ?? ""],
+    ["STREAM_URL_SIGNING_SECRET", process.env.STREAM_URL_SIGNING_SECRET ?? ""],
+    ["BRIDGE_MEDIA_WSS_ORIGIN", process.env.BRIDGE_MEDIA_WSS_ORIGIN ?? ""],
     ["CLOUDFLARE_TUNNEL_TOKEN", process.env.CLOUDFLARE_TUNNEL_TOKEN ?? ""],
     ["LIGHTPANDA_WSS_URL", process.env.LIGHTPANDA_WSS_URL ?? "wss://cdn.lightpanda.io/ws"],
     ["PROVISIONING_PROGRESS_URL", progressUrl],
     ["PROVISIONING_PROGRESS_TOKEN", progressToken]
-  ].map(([key, value]) => `${key}='${escapeShellArg(value)}'`).join(" ");
+  ].map(([key, value]) => `${key}=${bashQuote(value)}`).join(" ");
 
   await recordProvisioningProgress({
     businessId,
@@ -205,7 +192,8 @@ export async function orchestrateProvisioning(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error("Remote deploy execution failed — VPS may need manual setup", {
-      businessId, vpsId,
+      businessId,
+      vpsId,
       error: msg
     });
     await recordProvisioningProgress({
@@ -218,7 +206,6 @@ export async function orchestrateProvisioning(
     });
   }
 
-  // 7. Mark business as online (preserves prior behavior: status online even if deploy script failed)
   await updateBusinessStatus(businessId, "online", vpsId);
   if (deploySucceeded) {
     await recordProvisioningProgress({
@@ -230,11 +217,10 @@ export async function orchestrateProvisioning(
       status: "success"
     });
   }
-  logger.info("Business provisioned and online", { businessId, agentId });
+  logger.info("Business provisioned and online", { businessId, vpsId });
 
-  // 8. Notify owner
   const notifyEmail = ownerEmail ?? process.env.ADMIN_EMAIL;
-  const notifyPhone = ownerPhone ?? process.env.TWILIO_OWNER_PHONE;
+  const notifyPhone = ownerPhone ?? process.env.TELNYX_OWNER_PHONE;
   const dashboardUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/dashboard`;
 
   if (notifyEmail) {
@@ -254,12 +240,9 @@ export async function orchestrateProvisioning(
 
   if (notifyPhone) {
     try {
-      const twilioConfig = readTwilioConfig();
-      await sendOwnerSms(
-        twilioConfig,
-        notifyPhone,
-        `Your New Coworker is live! Dashboard: ${dashboardUrl}`
-      );
+      const cfg = await getTelnyxMessagingForBusiness(businessId);
+      // Provisioning ping to owner: platform-operational; not metered against the business SMS quota.
+      await sendTelnyxSms(cfg, notifyPhone, `Your New Coworker is live! Dashboard: ${dashboardUrl}`);
     } catch (err) {
       logger.warn("Failed to send provisioning SMS", {
         error: err instanceof Error ? err.message : String(err)
@@ -267,5 +250,5 @@ export async function orchestrateProvisioning(
     }
   }
 
-  return { vpsId, agentId, tunnelUrl };
+  return { vpsId, tunnelUrl };
 }

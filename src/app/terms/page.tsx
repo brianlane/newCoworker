@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
+import { TIER_LIMITS } from "@/lib/plans/limits";
 
 const EFFECTIVE_DATE = "April 2, 2026";
 
@@ -101,6 +102,12 @@ export default function TermsPage() {
           Unless otherwise stated in writing, subscriptions automatically renew at the end of the applicable
           billing period until canceled. Pricing, included usage, and plan features may vary by tier and may be
           updated prospectively.
+        </p>
+        <p>
+          Where your plan includes capped SMS, usage is enforced as a strict monthly limit (for
+          example, {TIER_LIMITS.starter.smsPerMonth} SMS on Starter and {TIER_LIMITS.standard.smsPerMonth} SMS on
+          Standard at the effective date above). Included voice is allocated per Stripe billing period as shown
+          when you subscribe. Enterprise and custom agreements may differ.
         </p>
       </LegalSection>
 

@@ -1,18 +1,55 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/stripe/client", () => ({
-  ensureCommitmentSchedule: vi.fn(),
-  verifyWebhook: vi.fn()
+const { mockStripeRetrieve } = vi.hoisted(() => ({
+  mockStripeRetrieve: vi.fn().mockResolvedValue({
+    current_period_start: 1700000000,
+    current_period_end: 1702678400
+  })
 }));
 
-vi.mock("@/lib/db/subscriptions", () => ({
-  getSubscription: vi.fn(),
-  getSubscriptionByStripeSubscriptionId: vi.fn(),
-  updateSubscription: vi.fn()
+const { mockCheckoutSessionsList } = vi.hoisted(() => ({
+  mockCheckoutSessionsList: vi.fn()
 }));
+
+vi.mock("@/lib/stripe/client", () => ({
+  ensureCommitmentSchedule: vi.fn(),
+  verifyWebhook: vi.fn(),
+  getStripe: vi.fn(() => ({
+    subscriptions: { retrieve: mockStripeRetrieve },
+    checkout: { sessions: { list: mockCheckoutSessionsList } }
+  }))
+}));
+
+vi.mock("@/lib/db/subscriptions", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/db/subscriptions")>();
+  return {
+    ...actual,
+    getSubscription: vi.fn(),
+    getSubscriptionByStripeSubscriptionId: vi.fn(),
+    updateSubscription: vi.fn()
+  };
+});
 
 vi.mock("@/lib/db/businesses", () => ({
   getBusiness: vi.fn()
+}));
+
+const mockVoiceBonusRpc = vi.hoisted(() =>
+  vi.fn().mockImplementation((name: string) => {
+    if (name === "apply_voice_bonus_grant_from_checkout") {
+      return Promise.resolve({ data: { ok: true, duplicate: false }, error: null });
+    }
+    if (name === "voice_sync_low_balance_alert_armed") {
+      return Promise.resolve({ data: 0, error: null });
+    }
+    return Promise.resolve({ data: null, error: null });
+  })
+);
+
+vi.mock("@/lib/supabase/server", () => ({
+  createSupabaseServiceClient: vi.fn().mockResolvedValue({
+    rpc: mockVoiceBonusRpc
+  })
 }));
 
 vi.mock("@/lib/provisioning/orchestrate", () => ({
@@ -22,6 +59,7 @@ vi.mock("@/lib/provisioning/orchestrate", () => ({
 vi.mock("@/lib/logger", () => ({
   logger: {
     error: vi.fn(),
+    warn: vi.fn(),
     info: vi.fn(),
     debug: vi.fn()
   }
@@ -35,12 +73,28 @@ import {
   updateSubscription
 } from "@/lib/db/subscriptions";
 import { getBusiness } from "@/lib/db/businesses";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
 import { logger } from "@/lib/logger";
 
 describe("stripe webhook route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockVoiceBonusRpc.mockClear();
+    mockVoiceBonusRpc.mockImplementation((name: string) => {
+      if (name === "apply_voice_bonus_grant_from_checkout") {
+        return Promise.resolve({ data: { ok: true, duplicate: false }, error: null });
+      }
+      if (name === "voice_sync_low_balance_alert_armed") {
+        return Promise.resolve({ data: 0, error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    mockStripeRetrieve.mockClear();
+    mockStripeRetrieve.mockResolvedValue({
+      current_period_start: 1700000000,
+      current_period_end: 1702678400
+    });
     vi.mocked(getBusiness).mockResolvedValue({ status: "pending" } as never);
     vi.mocked(ensureCommitmentSchedule).mockResolvedValue("sub_sched_123");
   });
@@ -76,17 +130,122 @@ describe("stripe webhook route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(updateSubscription).toHaveBeenCalledWith("local_sub_1", {
-      status: "active",
-      stripe_customer_id: "cus_1",
-      stripe_subscription_id: "sub_1"
-    });
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "local_sub_1",
+      expect.objectContaining({
+        status: "active",
+        stripe_customer_id: "cus_1",
+        stripe_subscription_id: "sub_1",
+        stripe_current_period_start: expect.any(String),
+        stripe_current_period_end: expect.any(String),
+        stripe_subscription_cached_at: expect.any(String)
+      })
+    );
     expect(ensureCommitmentSchedule).toHaveBeenCalledWith({
       subscriptionId: "sub_1",
       tier: "starter",
       billingPeriod: "annual"
     });
     expect(orchestrateProvisioning).toHaveBeenCalledWith({ businessId: "biz_1", tier: "starter" });
+  });
+
+  it("records voice bonus grant on payment checkout with voice_bonus_seconds metadata", async () => {
+    const bid = "00000000-0000-4000-8000-000000000001";
+    const periodEndSec = 1702678400;
+    const createdSec = 1700000000;
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "local_sub_bonus",
+      business_id: bid,
+      status: "active",
+      stripe_subscription_id: "sub_bonus_1"
+    } as never);
+    mockStripeRetrieve.mockResolvedValue({
+      status: "active",
+      current_period_start: 1700000000,
+      current_period_end: periodEndSec
+    } as never);
+
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_bonus",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_test_voice_bonus",
+          mode: "payment",
+          created: createdSec,
+          metadata: {
+            checkoutKind: "voice_bonus_seconds",
+            businessId: bid,
+            voiceSeconds: "600"
+          }
+        }
+      }
+    } as never);
+
+    const plus30Ms = createdSec * 1000 + 30 * 24 * 60 * 60 * 1000;
+    const expectedExpires =
+      periodEndSec * 1000 >= plus30Ms
+        ? new Date(periodEndSec * 1000).toISOString()
+        : new Date(plus30Ms).toISOString();
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+      "apply_voice_bonus_grant_from_checkout",
+      expect.objectContaining({
+        p_business_id: bid,
+        p_checkout_session_id: "cs_test_voice_bonus",
+        p_seconds_purchased: 600,
+        p_expires_at: expectedExpires
+      })
+    );
+    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+      "voice_sync_low_balance_alert_armed_for_business",
+      expect.objectContaining({ p_business_id: bid, p_threshold_seconds: 300 })
+    );
+    expect(orchestrateProvisioning).not.toHaveBeenCalled();
+    expect(updateSubscription).not.toHaveBeenCalled();
+  });
+
+  it("does not record voice bonus grant without an active subscription row", async () => {
+    const bid = "00000000-0000-4000-8000-000000000002";
+    vi.mocked(getSubscription).mockResolvedValue(null);
+
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_bonus_block",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_test_voice_bonus_block",
+          mode: "payment",
+          created: 1700000000,
+          metadata: {
+            checkoutKind: "voice_bonus_seconds",
+            businessId: bid,
+            voiceSeconds: "120"
+          }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockVoiceBonusRpc).not.toHaveBeenCalled();
   });
 
   it("marks subscription past_due on async payment failure", async () => {
@@ -145,7 +304,15 @@ describe("stripe webhook route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(updateSubscription).toHaveBeenCalledWith("local_sub_3", { status: "active" });
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "local_sub_3",
+      expect.objectContaining({
+        status: "active",
+        stripe_current_period_start: expect.any(String),
+        stripe_current_period_end: expect.any(String),
+        stripe_subscription_cached_at: expect.any(String)
+      })
+    );
   });
 
   it("still provisions when commitment schedule setup fails", async () => {
@@ -180,11 +347,15 @@ describe("stripe webhook route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(updateSubscription).toHaveBeenCalledWith("local_sub_4", {
-      status: "active",
-      stripe_customer_id: "cus_4",
-      stripe_subscription_id: "sub_4"
-    });
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "local_sub_4",
+      expect.objectContaining({
+        status: "active",
+        stripe_customer_id: "cus_4",
+        stripe_subscription_id: "sub_4",
+        stripe_current_period_start: expect.any(String)
+      })
+    );
     expect(logger.error).toHaveBeenCalledWith(
       "Stripe commitment schedule setup failed",
       expect.objectContaining({
@@ -195,5 +366,369 @@ describe("stripe webhook route", () => {
       })
     );
     expect(orchestrateProvisioning).toHaveBeenCalledWith({ businessId: "biz_4", tier: "standard" });
+  });
+});
+
+describe("stripe webhook route: voice bonus refund / dispute handling", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockVoiceBonusRpc.mockClear();
+    mockCheckoutSessionsList.mockReset();
+    // Default: one voice-bonus-seconds Checkout Session associated with the payment intent.
+    mockCheckoutSessionsList.mockResolvedValue({
+      data: [
+        {
+          id: "cs_test_bonus_for_refund",
+          metadata: { checkoutKind: "voice_bonus_seconds", businessId: "biz_ref_1" }
+        }
+      ]
+    } as never);
+    mockVoiceBonusRpc.mockImplementation((name: string) => {
+      if (name === "void_voice_bonus_grant_by_checkout_session") {
+        return Promise.resolve({ data: { ok: true, voided: 1 }, error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+  });
+
+  async function postEvent() {
+    return POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+  }
+
+  it("does NOT void when dispute closed with status=won (merchant defended successfully)", async () => {
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_dispute_won",
+      type: "charge.dispute.closed",
+      data: {
+        object: {
+          id: "dp_won_1",
+          status: "won",
+          payment_intent: "pi_won_1"
+        }
+      }
+    } as never);
+
+    const res = await postEvent();
+    expect(res.status).toBe(200);
+    expect(mockCheckoutSessionsList).not.toHaveBeenCalled();
+    expect(mockVoiceBonusRpc).not.toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      expect.anything()
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      "Stripe dispute closed without chargeback; not voiding bonus grant",
+      expect.objectContaining({ disputeId: "dp_won_1", status: "won" })
+    );
+  });
+
+  it("does NOT void when dispute closed with status=warning_closed (no chargeback)", async () => {
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_dispute_warn_closed",
+      type: "charge.dispute.closed",
+      data: {
+        object: {
+          id: "dp_warn_1",
+          status: "warning_closed",
+          payment_intent: "pi_warn_1"
+        }
+      }
+    } as never);
+
+    const res = await postEvent();
+    expect(res.status).toBe(200);
+    expect(mockCheckoutSessionsList).not.toHaveBeenCalled();
+    expect(mockVoiceBonusRpc).not.toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      expect.anything()
+    );
+  });
+
+  it("DOES void when dispute closed with status=lost (funds clawed back)", async () => {
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_dispute_lost",
+      type: "charge.dispute.closed",
+      data: {
+        object: {
+          id: "dp_lost_1",
+          status: "lost",
+          payment_intent: "pi_lost_1"
+        }
+      }
+    } as never);
+
+    const res = await postEvent();
+    expect(res.status).toBe(200);
+    expect(mockCheckoutSessionsList).toHaveBeenCalledWith({
+      payment_intent: "pi_lost_1",
+      limit: 5
+    });
+    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      {
+        p_checkout_session_id: "cs_test_bonus_for_refund",
+        p_reason: "dispute",
+        p_clawback_seconds: null
+      }
+    );
+  });
+
+  it("DOES void on charge.refunded with positive amount_refunded", async () => {
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_refund_1",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_refund_1",
+          amount_refunded: 500,
+          payment_intent: "pi_refund_1"
+        }
+      }
+    } as never);
+
+    const res = await postEvent();
+    expect(res.status).toBe(200);
+    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      // No `amount` on the charge object → can't prorate → full void (p_clawback_seconds: null).
+      {
+        p_checkout_session_id: "cs_test_bonus_for_refund",
+        p_reason: "refund",
+        p_clawback_seconds: null
+      }
+    );
+  });
+
+  it("does NOT void on charge.refunded with zero amount_refunded (defensive)", async () => {
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_refund_zero",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_refund_zero",
+          amount_refunded: 0,
+          payment_intent: "pi_refund_zero"
+        }
+      }
+    } as never);
+
+    const res = await postEvent();
+    expect(res.status).toBe(200);
+    expect(mockCheckoutSessionsList).not.toHaveBeenCalled();
+    expect(mockVoiceBonusRpc).not.toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      expect.anything()
+    );
+  });
+
+  it("ignores refund events without a payment_intent", async () => {
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_no_pi",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_no_pi",
+          amount_refunded: 100,
+          payment_intent: null
+        }
+      }
+    } as never);
+
+    const res = await postEvent();
+    expect(res.status).toBe(200);
+    expect(mockCheckoutSessionsList).not.toHaveBeenCalled();
+    expect(mockVoiceBonusRpc).not.toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      expect.anything()
+    );
+  });
+
+  it("ignores refund events whose Checkout Session is not a voice_bonus_seconds purchase", async () => {
+    mockCheckoutSessionsList.mockResolvedValueOnce({
+      data: [
+        {
+          id: "cs_subscription_not_bonus",
+          metadata: { checkoutKind: "subscription", businessId: "biz_sub" }
+        }
+      ]
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_refund_sub",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_sub",
+          amount_refunded: 9900,
+          payment_intent: "pi_sub_refund"
+        }
+      }
+    } as never);
+
+    const res = await postEvent();
+    expect(res.status).toBe(200);
+    expect(mockCheckoutSessionsList).toHaveBeenCalled();
+    expect(mockVoiceBonusRpc).not.toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      expect.anything()
+    );
+  });
+
+  it("logs and continues when the void RPC errors for one session", async () => {
+    mockCheckoutSessionsList.mockResolvedValueOnce({
+      data: [
+        {
+          id: "cs_err",
+          metadata: { checkoutKind: "voice_bonus_seconds", businessId: "biz_err" }
+        },
+        {
+          id: "cs_ok",
+          metadata: { checkoutKind: "voice_bonus_seconds", businessId: "biz_ok" }
+        }
+      ]
+    } as never);
+    mockVoiceBonusRpc.mockImplementation((_name: string, args: { p_checkout_session_id?: string }) => {
+      if (args?.p_checkout_session_id === "cs_err") {
+        return Promise.resolve({ data: null, error: { message: "boom" } });
+      }
+      return Promise.resolve({ data: { ok: true, voided: 1 }, error: null });
+    });
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_partial_err",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_err",
+          amount_refunded: 100,
+          payment_intent: "pi_err"
+        }
+      }
+    } as never);
+
+    const res = await postEvent();
+    expect(res.status).toBe(200);
+    expect(logger.error).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session failed",
+      expect.objectContaining({ sessionId: "cs_err", error: "boom" })
+    );
+    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      {
+        p_checkout_session_id: "cs_ok",
+        p_reason: "refund",
+        p_clawback_seconds: null
+      }
+    );
+  });
+
+  it("logs and returns 200 when the Checkout Sessions list call throws", async () => {
+    mockCheckoutSessionsList.mockRejectedValueOnce(new Error("rate limited"));
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_list_throw",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_list_throw",
+          amount_refunded: 200,
+          payment_intent: "pi_list_throw"
+        }
+      }
+    } as never);
+
+    const res = await postEvent();
+    expect(res.status).toBe(200);
+    expect(logger.error).toHaveBeenCalledWith(
+      "Stripe checkout sessions list failed during refund handling",
+      expect.objectContaining({ paymentIntentId: "pi_list_throw", error: "rate limited" })
+    );
+    expect(mockVoiceBonusRpc).not.toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      expect.anything()
+    );
+  });
+
+  it("prorates clawback seconds on a partial refund when charge amount and seconds metadata are present", async () => {
+    mockCheckoutSessionsList.mockResolvedValueOnce({
+      data: [
+        {
+          id: "cs_partial",
+          amount_total: 2000,
+          metadata: {
+            checkoutKind: "voice_bonus_seconds",
+            businessId: "biz_partial",
+            voiceSeconds: "1200"
+          }
+        }
+      ]
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_partial_refund",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_partial",
+          amount: 2000,
+          amount_captured: 2000,
+          amount_refunded: 500,
+          payment_intent: "pi_partial"
+        }
+      }
+    } as never);
+
+    const res = await postEvent();
+    expect(res.status).toBe(200);
+    // 25% refunded → 300 of 1200 seconds clawed back (partial, grant not fully voided).
+    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      {
+        p_checkout_session_id: "cs_partial",
+        p_reason: "refund",
+        p_clawback_seconds: 300
+      }
+    );
+  });
+
+  it("passes null clawback (full void) when the refund covers the full captured amount", async () => {
+    mockCheckoutSessionsList.mockResolvedValueOnce({
+      data: [
+        {
+          id: "cs_full",
+          amount_total: 2000,
+          metadata: {
+            checkoutKind: "voice_bonus_seconds",
+            businessId: "biz_full",
+            voiceSeconds: "1200"
+          }
+        }
+      ]
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_full_refund",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_full",
+          amount: 2000,
+          amount_captured: 2000,
+          amount_refunded: 2000,
+          payment_intent: "pi_full"
+        }
+      }
+    } as never);
+
+    const res = await postEvent();
+    expect(res.status).toBe(200);
+    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      {
+        p_checkout_session_id: "cs_full",
+        p_reason: "refund",
+        p_clawback_seconds: null
+      }
+    );
   });
 });

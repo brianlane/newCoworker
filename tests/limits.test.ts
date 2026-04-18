@@ -1,23 +1,21 @@
-import { describe, expect, it } from "vitest";
-import {
-  TIER_LIMITS,
-  getTierLimits,
-  hasVoiceLimit,
-  hasSmsThrottle
-} from "@/lib/plans/limits";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as limitsModule from "@/lib/plans/limits";
+
+const { TIER_LIMITS, getTierLimits } = limitsModule;
+import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 
 describe("tier limits", () => {
   describe("starter limits", () => {
-    it("starter has 60 voice minutes per day", () => {
-      expect(TIER_LIMITS.starter.voiceMinutesPerDay).toBe(60);
+    it("starter has no legacy daily voice cap (Telnyx uses per–Stripe-period pool)", () => {
+      expect(TIER_LIMITS.starter.voiceMinutesPerDay).toBe(Infinity);
     });
 
-    it("starter has 100 SMS per day", () => {
-      expect(TIER_LIMITS.starter.smsPerDay).toBe(100);
+    it("starter has 600 included voice seconds per Stripe period", () => {
+      expect(TIER_LIMITS.starter.voiceIncludedSecondsPerStripePeriod).toBe(600);
     });
 
-    it("starter has 10 calls per day", () => {
-      expect(TIER_LIMITS.starter.callsPerDay).toBe(10);
+    it("starter has strict monthly SMS cap (UTC month)", () => {
+      expect(TIER_LIMITS.starter.smsPerMonth).toBe(750);
     });
 
     it("starter has 1 concurrent call max", () => {
@@ -34,16 +32,16 @@ describe("tier limits", () => {
   });
 
   describe("standard limits", () => {
-    it("standard has unlimited voice minutes", () => {
+    it("standard has unlimited voice minutes (daily_usage)", () => {
       expect(TIER_LIMITS.standard.voiceMinutesPerDay).toBe(Infinity);
     });
 
-    it("standard has unlimited SMS", () => {
-      expect(TIER_LIMITS.standard.smsPerDay).toBe(Infinity);
+    it("standard has 15000 included voice seconds per Stripe period", () => {
+      expect(TIER_LIMITS.standard.voiceIncludedSecondsPerStripePeriod).toBe(15000);
     });
 
-    it("standard has unlimited calls", () => {
-      expect(TIER_LIMITS.standard.callsPerDay).toBe(Infinity);
+    it("standard has strict monthly SMS cap", () => {
+      expect(TIER_LIMITS.standard.smsPerMonth).toBe(3000);
     });
 
     it("standard has 3 concurrent calls max", () => {
@@ -60,12 +58,16 @@ describe("tier limits", () => {
   });
 
   describe("enterprise limits", () => {
-    it("enterprise has unlimited voice minutes", () => {
+    it("enterprise has unlimited voice minutes (daily_usage)", () => {
       expect(TIER_LIMITS.enterprise.voiceMinutesPerDay).toBe(Infinity);
     });
 
-    it("enterprise has unlimited SMS", () => {
-      expect(TIER_LIMITS.enterprise.smsPerDay).toBe(Infinity);
+    it("enterprise has 150000 included voice seconds per Stripe period", () => {
+      expect(TIER_LIMITS.enterprise.voiceIncludedSecondsPerStripePeriod).toBe(150000);
+    });
+
+    it("enterprise has unlimited SMS by default", () => {
+      expect(TIER_LIMITS.enterprise.smsPerMonth).toBe(Infinity);
     });
 
     it("enterprise has 10 concurrent calls max", () => {
@@ -78,6 +80,63 @@ describe("tier limits", () => {
 
     it("enterprise memory is lossless", () => {
       expect(TIER_LIMITS.enterprise.memoryType).toBe("lossless");
+    });
+  });
+
+  describe("usage copy helpers", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("voice and SMS lines match tier defaults", () => {
+      expect(voiceMinutesLine("starter")).toBe("10 voice minutes / billing period");
+      expect(smsMonthlyLine("starter")).toBe("750 SMS / month");
+      expect(voiceMinutesLine("standard")).toBe("250 voice minutes / billing period");
+      expect(smsMonthlyLine("standard")).toBe("3000 SMS / month");
+      expect(voiceMinutesLine("enterprise")).toBe("2,500 voice minutes / billing period");
+      expect(smsMonthlyLine("enterprise")).toBe("Unlimited SMS / month");
+    });
+
+    it("respects enterprise overrides in copy helpers", () => {
+      expect(smsMonthlyLine("enterprise", { smsPerMonth: 999 })).toBe("999 SMS / month");
+      expect(voiceMinutesLine("enterprise", { voiceIncludedSecondsPerStripePeriod: 120 })).toBe(
+        "2 voice minutes / billing period"
+      );
+    });
+
+    it("voiceMinutesLine handles non-finite and very large pools like smsMonthlyLine handles Infinity", () => {
+      vi.spyOn(limitsModule, "getTierLimits").mockReturnValueOnce({
+        ...TIER_LIMITS.enterprise,
+        voiceIncludedSecondsPerStripePeriod: Infinity
+      });
+      expect(voiceMinutesLine("enterprise")).toBe("Unlimited voice / billing period");
+
+      vi.spyOn(limitsModule, "getTierLimits").mockReturnValueOnce({
+        ...TIER_LIMITS.enterprise,
+        voiceIncludedSecondsPerStripePeriod: Number.NaN
+      });
+      expect(voiceMinutesLine("enterprise")).toBe("Unlimited voice / billing period");
+
+      vi.spyOn(limitsModule, "getTierLimits").mockReturnValueOnce({
+        ...TIER_LIMITS.enterprise,
+        voiceIncludedSecondsPerStripePeriod: 15_000_000
+      });
+      expect(voiceMinutesLine("enterprise")).toBe("Custom included voice / billing period");
+    });
+
+    it("voiceMinutesLine handles zero and sub-minute pools", () => {
+      const spy = vi.spyOn(limitsModule, "getTierLimits");
+      spy
+        .mockReturnValueOnce({
+          ...TIER_LIMITS.starter,
+          voiceIncludedSecondsPerStripePeriod: 0
+        })
+        .mockReturnValueOnce({
+          ...TIER_LIMITS.starter,
+          voiceIncludedSecondsPerStripePeriod: 30
+        });
+      expect(voiceMinutesLine("starter")).toBe("No included voice / billing period");
+      expect(voiceMinutesLine("starter")).toBe("Under 1 voice minute / billing period");
     });
   });
 
@@ -96,33 +155,30 @@ describe("tier limits", () => {
       const limits = getTierLimits("enterprise");
       expect(limits).toEqual(TIER_LIMITS.enterprise);
     });
-  });
 
-  describe("hasVoiceLimit", () => {
-    it("starter has a voice limit", () => {
-      expect(hasVoiceLimit("starter")).toBe(true);
-    });
-
-    it("standard does not have a voice limit", () => {
-      expect(hasVoiceLimit("standard")).toBe(false);
-    });
-
-    it("enterprise does not have a voice limit", () => {
-      expect(hasVoiceLimit("enterprise")).toBe(false);
+    it("merges enterprise overrides for voice pool and concurrency", () => {
+      const limits = getTierLimits("enterprise", {
+        voiceIncludedSecondsPerStripePeriod: 500_000,
+        maxConcurrentCalls: 25
+      });
+      expect(limits.voiceIncludedSecondsPerStripePeriod).toBe(500_000);
+      expect(limits.maxConcurrentCalls).toBe(25);
+      expect(limits.smsPerMonth).toBe(Infinity);
     });
   });
 
-  describe("hasSmsThrottle", () => {
-    it("starter SMS is throttled", () => {
-      expect(hasSmsThrottle("starter")).toBe(true);
+  describe("voiceMinutesPerDay (legacy daily_usage cap)", () => {
+    it("starter and standard use Infinity (Telnyx pool is separate)", () => {
+      expect(getTierLimits("starter").voiceMinutesPerDay).toBe(Infinity);
+      expect(getTierLimits("standard").voiceMinutesPerDay).toBe(Infinity);
     });
 
-    it("standard SMS is not throttled", () => {
-      expect(hasSmsThrottle("standard")).toBe(false);
+    it("enterprise default has no daily voice cap", () => {
+      expect(getTierLimits("enterprise").voiceMinutesPerDay).toBe(Infinity);
     });
 
-    it("enterprise SMS is not throttled", () => {
-      expect(hasSmsThrottle("enterprise")).toBe(false);
+    it("enterprise override can set a finite daily cap for checkLimitReached", () => {
+      expect(getTierLimits("enterprise", { voiceMinutesPerDay: 50 }).voiceMinutesPerDay).toBe(50);
     });
   });
 

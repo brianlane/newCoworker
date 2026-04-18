@@ -2,7 +2,7 @@ import { parseClawLog, evaluateUrgency } from "@/lib/claw/logs";
 import { insertCoworkerLog } from "@/lib/db/logs";
 import { insertNotification } from "@/lib/db/notifications";
 import { getBusiness } from "@/lib/db/businesses";
-import { sendOwnerSms, readTwilioConfig } from "@/lib/twilio/client";
+import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
@@ -33,7 +33,7 @@ export async function POST(request: Request) {
     if (urgency.shouldNotify) {
       const business = await getBusiness(log.businessId);
       const ownerEmail = business?.owner_email ?? process.env.ADMIN_EMAIL;
-      const ownerPhone = process.env.TWILIO_OWNER_PHONE;
+      const ownerPhone = process.env.TELNYX_OWNER_PHONE;
       const dashboardUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/dashboard`;
 
       await insertNotification({
@@ -66,8 +66,9 @@ export async function POST(request: Request) {
 
       if (ownerPhone) {
         try {
-          const config = readTwilioConfig();
-          await sendOwnerSms(config, ownerPhone, `Urgent from New Coworker: ${urgency.summary}`);
+          const config = await getTelnyxMessagingForBusiness(log.businessId);
+          // Platform-initiated owner alert: do not consume the business monthly SMS pool (cf. customer-initiated / AI replies).
+          await sendTelnyxSms(config, ownerPhone, `Urgent from New Coworker: ${urgency.summary}`);
           await insertNotification({
             id: randomUUID(),
             business_id: log.businessId,

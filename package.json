@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
+    "tsc": "tsc --noEmit",
     "test": "vitest run --coverage",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
@@ -48,14 +49,12 @@
     "resend": "^6.9.4",
     "stripe": "^20.4.1",
     "tailwindcss": "^4.2.2",
-    "twilio": "^5.13.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "@types/twilio": "^3.19.2",
     "@vitest/coverage-v8": "^4.1.1",
     "eslint": "^9.39.4",
     "eslint-config-next": "^16.2.1",
@@ -63,6 +62,13 @@
     "typescript": "^5.9.3",
     "undici": "^7.24.7",
     "vitest": "^4.1.1"
+  },
+  "optionalDependencies": {
+    "@emnapi/core": "^1.9.2",
+    "@emnapi/runtime": "^1.9.2",
+    "@emnapi/wasi-threads": "^1.2.1",
+    "@napi-rs/wasm-runtime": "^0.2.12",
+    "@tybys/wasm-util": "^0.10.1"
   },
   "overrides": {
     "axios": "^1.15.0"

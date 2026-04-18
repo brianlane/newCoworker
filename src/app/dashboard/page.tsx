@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { listBusinesses } from "@/lib/db/businesses";
 import { getRecentLogs } from "@/lib/db/logs";
 import {
   getLatestProvisioningStatus,
@@ -13,6 +12,8 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { KillSwitch } from "@/components/dashboard/KillSwitch";
+import type { PlanTier } from "@/lib/plans/tier";
+import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +25,7 @@ export default async function DashboardPage() {
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
-    .select()
+    .select("id, name, owner_email, status, tier, enterprise_limits, is_paused, created_at")
     .eq("owner_email", user.email)
     .order("created_at", { ascending: false });
 
@@ -115,6 +116,17 @@ export default async function DashboardPage() {
               <Badge variant={business.tier === "starter" ? "neutral" : "online"}>
                 {business.tier.charAt(0).toUpperCase() + business.tier.slice(1)}
               </Badge>
+              <p className="mt-2 text-xs text-parchment/50 leading-relaxed">
+                {voiceMinutesLine(
+                  business.tier as PlanTier,
+                  business.tier === "enterprise" ? business.enterprise_limits : undefined
+                )}
+                <br />
+                {smsMonthlyLine(
+                  business.tier as PlanTier,
+                  business.tier === "enterprise" ? business.enterprise_limits : undefined
+                )}
+              </p>
             </Card>
             <Card>
               <p className="text-xs text-parchment/40 uppercase tracking-wider mb-2">Business</p>

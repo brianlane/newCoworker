@@ -4,7 +4,10 @@ import {
   getSubscription,
   getSubscriptionByStripeSubscriptionId,
   listSubscriptionsByBusinessIds,
-  updateSubscription
+  stripeSubscriptionPeriodCache,
+  subscriptionPeriodCacheFromStripe,
+  updateSubscription,
+  type SubscriptionPeriodStripeCache
 } from "@/lib/db/subscriptions";
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -39,6 +42,34 @@ function mockDb(overrides: Record<string, unknown> = {}) {
 
 describe("db/subscriptions", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("subscriptionPeriodCacheFromStripe maps Stripe epoch seconds to ISO cache fields", () => {
+    const row = subscriptionPeriodCacheFromStripe({
+      current_period_start: 1700000000,
+      current_period_end: 1702678400
+    });
+    expect(row.stripe_current_period_start).toBe(new Date(1700000000 * 1000).toISOString());
+    expect(row.stripe_current_period_end).toBe(new Date(1702678400 * 1000).toISOString());
+    expect(row.stripe_subscription_cached_at).toMatch(/^\d{4}-/);
+  });
+
+  it("stripeSubscriptionPeriodCache returns {} when period fields are missing or wrong type", () => {
+    expect(stripeSubscriptionPeriodCache({})).toEqual({});
+    expect(stripeSubscriptionPeriodCache({ current_period_start: "x", current_period_end: 1 })).toEqual({});
+    expect(stripeSubscriptionPeriodCache(null)).toEqual({});
+  });
+
+  it("stripeSubscriptionPeriodCache delegates when both periods are numbers", () => {
+    const start = 1700000000;
+    const end = 1702678400;
+    const viaCache = stripeSubscriptionPeriodCache({ current_period_start: start, current_period_end: end });
+    expect(viaCache).toMatchObject({
+      stripe_current_period_start: new Date(start * 1000).toISOString(),
+      stripe_current_period_end: new Date(end * 1000).toISOString()
+    });
+    expect(viaCache).toHaveProperty("stripe_subscription_cached_at");
+    expect(typeof (viaCache as SubscriptionPeriodStripeCache).stripe_subscription_cached_at).toBe("string");
+  });
 
   it("createSubscription inserts and returns row", async () => {
     const db = mockDb();

@@ -100,8 +100,8 @@ export default function PrivacyPolicyPage() {
         </ul>
         <p>
           Based on the current product architecture, these providers may include Supabase for authentication and
-          database services, Stripe for billing, Twilio for messaging-related functionality, Resend for email
-          delivery, Hostinger for infrastructure provisioning, and Inworld or other AI-related vendors used to
+          database services, Stripe for billing, Telnyx for telephony (voice and SMS), Resend for email
+          delivery, Hostinger for infrastructure provisioning, and AI vendors (e.g. Google Gemini) used to
           power voice or model-based features.
         </p>
       </LegalSection>

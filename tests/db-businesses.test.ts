@@ -6,7 +6,8 @@ import {
   setBusinessPaused,
   updateBusinessOwnerEmail,
   updateBusinessOwnerEmailIfPending,
-  updateBusinessStatus
+  updateBusinessStatus,
+  updateEnterpriseLimits
 } from "@/lib/db/businesses";
 import { createPendingOwnerEmail } from "@/lib/onboarding/token";
 
@@ -152,6 +153,33 @@ describe("db/businesses", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     await expect(setBusinessPaused("uuid-biz-1", false)).rejects.toThrow("setBusinessPaused");
+  });
+
+  it("updateEnterpriseLimits writes enterprise_limits json", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await updateEnterpriseLimits("uuid-biz-1", { maxConcurrentCalls: 20 });
+    expect(db.update).toHaveBeenCalledWith({
+      enterprise_limits: { maxConcurrentCalls: 20 }
+    });
+  });
+
+  it("updateEnterpriseLimits clears overrides with null", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await updateEnterpriseLimits("uuid-biz-1", null);
+    expect(db.update).toHaveBeenCalledWith({ enterprise_limits: null });
+  });
+
+  it("updateEnterpriseLimits throws on error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(updateEnterpriseLimits("uuid-biz-1", { maxConcurrentCalls: 5 })).rejects.toThrow(
+      "updateEnterpriseLimits"
+    );
   });
 
   it("updateBusinessOwnerEmail updates owner email", async () => {

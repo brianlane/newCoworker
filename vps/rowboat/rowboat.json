@@ -32,14 +32,13 @@
     "max_tokens": 8192
   },
   "voice": {
-    "provider": "inworld",
-    "model": "inworld-tts-1.5-mini",
-    "inworld_agent_id": "{{INWORLD_AGENT_ID}}"
+    "provider": "telnyx_gemini_bridge",
+    "note": "Inbound PSTN voice is handled by Supabase Edge (Telnyx webhooks) and the VPS media bridge; Rowboat handles SMS via Ollama."
   },
-  "twilio": {
-    "account_sid": "{{TWILIO_ACCOUNT_SID}}",
-    "auth_token": "{{TWILIO_AUTH_TOKEN}}",
-    "messaging_service_sid": "{{TWILIO_MESSAGING_SERVICE_SID}}"
+  "telnyx": {
+    "api_key": "{{TELNYX_API_KEY}}",
+    "messaging_profile_id": "{{TELNYX_MESSAGING_PROFILE_ID}}",
+    "sms_from_e164": "{{TELNYX_SMS_FROM_E164}}"
   },
   "browser": {
     "provider": "lightpanda",

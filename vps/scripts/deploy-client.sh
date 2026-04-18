@@ -10,8 +10,11 @@
 #   CLOUDFLARE_TUNNEL_TOKEN  — cloudflared tunnel token
 #   ROWBOAT_GATEWAY_TOKEN    — shared bearer token for Rowboat gateway auth
 #   NOTIFICATIONS_WEBHOOK_TOKEN — token for Supabase Edge Function auth
-#   INWORLD_AGENT_ID         — inworld.ai agent ID for voice routing
-#   INWORLD_API_KEY          — inworld.ai API key
+#   TELNYX_API_KEY           — Telnyx API key (Messaging + Call Control)
+#   TELNYX_MESSAGING_PROFILE_ID — Telnyx messaging profile for SMS
+#   TELNYX_SMS_FROM_E164     — optional E.164 from-number
+#   STREAM_URL_SIGNING_SECRET — HMAC secret for media stream URLs (Edge + bridge)
+#   BRIDGE_MEDIA_WSS_ORIGIN  — public wss:// origin for the VPS voice bridge
 #   LIGHTPANDA_WSS_URL       — Lightpanda browser endpoint
 #   PROVISIONING_PROGRESS_URL — optional; POST JSON progress to app (see report_progress)
 #   PROVISIONING_PROGRESS_TOKEN — Bearer token for progress API
@@ -168,15 +171,12 @@ PROVIDER_API_KEY=ollama
 PROVIDER_DEFAULT_MODEL=${OLLAMA_MODEL}
 PROVIDER_COPILOT_MODEL=${OLLAMA_MODEL}
 
-# inworld.ai voice (all tiers use mini)
-INWORLD_API_KEY=${INWORLD_API_KEY:-}
-INWORLD_AGENT_ID=${INWORLD_AGENT_ID:-}
-INWORLD_TTS_MODEL=inworld-tts-1.5-mini
-
-# Twilio
-TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID:-}
-TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-}
-TWILIO_MESSAGING_SERVICE_SID=${TWILIO_MESSAGING_SERVICE_SID:-}
+# Telnyx (SMS + voice Call Control is on platform Edge; bridge uses stream signing secret)
+TELNYX_API_KEY=${TELNYX_API_KEY:-}
+TELNYX_MESSAGING_PROFILE_ID=${TELNYX_MESSAGING_PROFILE_ID:-}
+TELNYX_SMS_FROM_E164=${TELNYX_SMS_FROM_E164:-}
+STREAM_URL_SIGNING_SECRET=${STREAM_URL_SIGNING_SECRET:-}
+BRIDGE_MEDIA_WSS_ORIGIN=${BRIDGE_MEDIA_WSS_ORIGIN:-}
 
 # Supabase notifications
 NOTIFICATION_WEBHOOK=${SUPABASE_URL}/functions/v1/notifications
@@ -237,5 +237,29 @@ curl -sf -X PATCH \
   > /dev/null
 
 report_progress 95 "business_online_patch" "Business status set to online in Supabase"
+
+# ------------------------------------------------------------------
+# 6. Voice bridge (optional): gold image may ship /opt/voice-bridge with docker-compose.yml
+# ------------------------------------------------------------------
+if [[ -f /opt/voice-bridge/docker-compose.yml ]]; then
+  log "Starting voice-bridge from /opt/voice-bridge..."
+  (
+    cd /opt/voice-bridge
+    if [[ ! -f .env ]]; then
+      cat > .env <<VBENV_EOF
+STREAM_URL_SIGNING_SECRET=${STREAM_URL_SIGNING_SECRET:-}
+SUPABASE_URL=${SUPABASE_URL:-}
+SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_KEY:-}
+BUSINESS_ID=${BUSINESS_ID:-}
+BRIDGE_MEDIA_WSS_ORIGIN=${BRIDGE_MEDIA_WSS_ORIGIN:-}
+GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+GEMINI_LIVE_MODEL=${GEMINI_LIVE_MODEL:-gemini-3.1-flash-live-preview}
+VBENV_EOF
+    fi
+    docker compose up -d --build || log "WARN: voice-bridge compose failed"
+  )
+else
+  log "No /opt/voice-bridge/docker-compose.yml — skipping voice bridge container"
+fi
 
 log "=== Client deployment complete: ${BUSINESS_ID} ==="
