@@ -308,14 +308,18 @@ VBENV_EOF
         sleep 2
       done
       if [[ "$bridge_ok" == "1" ]]; then
-        report_progress 92 "voice_bridge_ready" "voice-bridge container healthy on :8090"
+        # Progress must stay above step 5's 95 (business_online_patch) to remain
+        # monotonic for Mission Control's progress bar. 100 is reserved by
+        # `orchestrate.ts` for the terminal success event, so cap bridge
+        # outcomes at <=98.
+        report_progress 98 "voice_bridge_ready" "voice-bridge container healthy on :8090"
       else
         log "WARN: voice-bridge container started but /healthz never returned 200 within 40s"
-        report_progress 92 "voice_bridge_unhealthy" "voice-bridge container started but never reached HTTP 200"
+        report_progress 97 "voice_bridge_unhealthy" "voice-bridge container started but never reached HTTP 200"
       fi
     else
       log "WARN: voice-bridge compose failed"
-      report_progress 92 "voice_bridge_compose_failed" "docker compose up failed"
+      report_progress 96 "voice_bridge_compose_failed" "docker compose up failed"
     fi
   )
 else

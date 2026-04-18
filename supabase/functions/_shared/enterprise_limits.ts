@@ -1,4 +1,4 @@
-import { VOICE_RES_LIMITS } from "./voice_reservation_limits";
+import { VOICE_RES_LIMITS } from "./voice_reservation_limits.ts";
 
 const ENTERPRISE_VOICE_CAP_SECONDS_DEFAULT =
   VOICE_RES_LIMITS.enterprise.voiceIncludedSecondsPerStripePeriod;

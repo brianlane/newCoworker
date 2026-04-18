@@ -144,12 +144,44 @@ async function main(): Promise<void> {
       continue;
     }
 
-    const rawStart = (sub as unknown as { current_period_start?: unknown }).current_period_start;
-    const rawEnd = (sub as unknown as { current_period_end?: unknown }).current_period_end;
+    // Stripe moved `current_period_start/end` from Subscription → SubscriptionItem
+    // in API version 2025-03-31.basil. Our pinned `2026-02-25.clover` is post-basil,
+    // so the authoritative period lives on `items.data[i]`. We derive the
+    // subscription-wide window as [min(start), max(end)] across items; for the
+    // single-item subs this project creates today that reduces to item[0]. The
+    // legacy top-level fallback is kept for older accounts still running a
+    // pre-basil API version on the Stripe side.
+    type ItemPeriod = { current_period_start?: unknown; current_period_end?: unknown };
+    const items = ((sub.items?.data ?? []) as Array<Stripe.SubscriptionItem & ItemPeriod>);
+    let itemStart: number | undefined;
+    let itemEnd: number | undefined;
+    for (const it of items) {
+      const s = it.current_period_start;
+      const e = it.current_period_end;
+      if (typeof s === "number" && Number.isFinite(s)) {
+        itemStart = itemStart == null ? s : Math.min(itemStart, s);
+      }
+      if (typeof e === "number" && Number.isFinite(e)) {
+        itemEnd = itemEnd == null ? e : Math.max(itemEnd, e);
+      }
+    }
+    const legacy = sub as unknown as { current_period_start?: unknown; current_period_end?: unknown };
+    const rawStart =
+      typeof itemStart === "number"
+        ? itemStart
+        : typeof legacy.current_period_start === "number"
+          ? legacy.current_period_start
+          : undefined;
+    const rawEnd =
+      typeof itemEnd === "number"
+        ? itemEnd
+        : typeof legacy.current_period_end === "number"
+          ? legacy.current_period_end
+          : undefined;
     if (typeof rawStart !== "number" || typeof rawEnd !== "number") {
       counts.skippedNoPeriods += 1;
       console.warn(
-        `[backfill] ${row.business_id} sub=${row.stripe_subscription_id} status=${sub.status} — no current_period_start/end on Stripe object; skipping`
+        `[backfill] ${row.business_id} sub=${row.stripe_subscription_id} status=${sub.status} — no current_period_start/end on Stripe subscription or its items; skipping (items=${items.length})`
       );
       continue;
     }
