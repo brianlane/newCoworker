@@ -18,9 +18,10 @@ const SUPABASE_URL = process.env.SUPABASE_URL ?? "";
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
 const BUSINESS_ID = process.env.BUSINESS_ID ?? "";
 /** Min ms between `voice_active_sessions.last_seen_at` writes per call (audio ~50/s otherwise). */
-const _lastSeenMs = Number(process.env.VOICE_SESSION_LAST_SEEN_INTERVAL_MS ?? "15000");
-const LAST_SEEN_UPDATE_INTERVAL_MS =
-  Number.isFinite(_lastSeenMs) && _lastSeenMs >= 1000 ? _lastSeenMs : 15_000;
+const LAST_SEEN_UPDATE_INTERVAL_MS = (() => {
+  const raw = Number(process.env.VOICE_SESSION_LAST_SEEN_INTERVAL_MS ?? "15000");
+  return Number.isFinite(raw) && raw >= 1000 ? raw : 15_000;
+})();
 
 function readPositiveMs(envKey: string, fallback: number): number {
   const v = Number(process.env[envKey]);
@@ -80,7 +81,7 @@ function main(): void {
     process.exit(1);
   }
 
-  const supabase: SupabaseClient = createClient<any>(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   const server = createServer((_req, res) => {
     res.writeHead(200, { "Content-Type": "text/plain" });
     res.end("voice-bridge ok\n");
