@@ -15,6 +15,13 @@
 #   TELNYX_SMS_FROM_E164     — optional E.164 from-number
 #   STREAM_URL_SIGNING_SECRET — HMAC secret for media stream URLs (Edge + bridge)
 #   BRIDGE_MEDIA_WSS_ORIGIN  — public wss:// origin for the VPS voice bridge
+#   GOOGLE_API_KEY           — Gemini API key; blank disables Live on the bridge
+#   GEMINI_LIVE_MODEL        — optional; default gemini-3.1-flash-live-preview
+#   VOICE_BRIDGE_SRC         — optional; path on VPS to copy bridge source from
+#                               (default: /opt/newcoworker-repo/vps/voice-bridge).
+#                               Operator is responsible for syncing the repo to
+#                               this path (e.g. via git clone in bootstrap.sh or
+#                               a rsync from the orchestrator).
 #   LIGHTPANDA_WSS_URL       — Lightpanda browser endpoint
 #   PROVISIONING_PROGRESS_URL — optional; POST JSON progress to app (see report_progress)
 #   PROVISIONING_PROGRESS_TOKEN — Bearer token for progress API
@@ -239,14 +246,47 @@ curl -sf -X PATCH \
 report_progress 95 "business_online_patch" "Business status set to online in Supabase"
 
 # ------------------------------------------------------------------
-# 6. Voice bridge (optional): gold image may ship /opt/voice-bridge with docker-compose.yml
+# 6. Voice bridge: sync source into /opt/voice-bridge and (re)start the container.
+#
+# Rollout rules:
+#   * Sync the bridge source from ${VOICE_BRIDGE_SRC} (default
+#     /opt/newcoworker-repo/vps/voice-bridge) so `docker compose build` picks
+#     up repo updates since the last deploy. If no source exists, we skip the
+#     bridge entirely — preserves the "optional sidecar" behavior for VPS
+#     hosts that have not yet been staged.
+#   * ALWAYS rewrite .env. The previous "if [[ ! -f .env ]]" guard meant
+#     STREAM_URL_SIGNING_SECRET / GOOGLE_API_KEY rotations would not reach
+#     the container on the next deploy.
+#   * Use --force-recreate so a changed .env actually restarts the service
+#     even when the image layer is cached.
+#   * Health-gate up to ~40s on http://127.0.0.1:8090/ — a failed bridge
+#     brings this whole phase down loudly instead of silently skipping.
 # ------------------------------------------------------------------
-if [[ -f /opt/voice-bridge/docker-compose.yml ]]; then
-  log "Starting voice-bridge from /opt/voice-bridge..."
+VOICE_BRIDGE_SRC="${VOICE_BRIDGE_SRC:-/opt/newcoworker-repo/vps/voice-bridge}"
+VOICE_BRIDGE_DEST="/opt/voice-bridge"
+
+if [[ -d "${VOICE_BRIDGE_SRC}" && -f "${VOICE_BRIDGE_SRC}/docker-compose.yml" ]]; then
+  log "Syncing voice-bridge source ${VOICE_BRIDGE_SRC} → ${VOICE_BRIDGE_DEST}..."
+  mkdir -p "${VOICE_BRIDGE_DEST}"
+  # --delete keeps the staging directory in lockstep with the repo; exclude
+  # runtime-only artifacts so `.env` and node_modules rebuilds survive.
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete \
+      --exclude ".env" \
+      --exclude "node_modules" \
+      --exclude "dist" \
+      "${VOICE_BRIDGE_SRC}/" "${VOICE_BRIDGE_DEST}/"
+  else
+    log "rsync not installed; falling back to cp -R (no --delete)"
+    cp -R "${VOICE_BRIDGE_SRC}/." "${VOICE_BRIDGE_DEST}/"
+  fi
+fi
+
+if [[ -f "${VOICE_BRIDGE_DEST}/docker-compose.yml" ]]; then
+  log "Starting voice-bridge from ${VOICE_BRIDGE_DEST}..."
   (
-    cd /opt/voice-bridge
-    if [[ ! -f .env ]]; then
-      cat > .env <<VBENV_EOF
+    cd "${VOICE_BRIDGE_DEST}"
+    cat > .env <<VBENV_EOF
 STREAM_URL_SIGNING_SECRET=${STREAM_URL_SIGNING_SECRET:-}
 SUPABASE_URL=${SUPABASE_URL:-}
 SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_KEY:-}
@@ -255,11 +295,31 @@ BRIDGE_MEDIA_WSS_ORIGIN=${BRIDGE_MEDIA_WSS_ORIGIN:-}
 GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
 GEMINI_LIVE_MODEL=${GEMINI_LIVE_MODEL:-gemini-3.1-flash-live-preview}
 VBENV_EOF
+    chmod 600 .env
+
+    if docker compose up -d --build --force-recreate; then
+      # Poll liveness endpoint. Dockerfile exposes GET / → 200 OK.
+      bridge_ok=0
+      for _ in $(seq 1 20); do
+        if curl -sf --max-time 3 http://127.0.0.1:8090/ >/dev/null 2>&1; then
+          bridge_ok=1
+          break
+        fi
+        sleep 2
+      done
+      if [[ "$bridge_ok" == "1" ]]; then
+        report_progress 92 "voice_bridge_ready" "voice-bridge container healthy on :8090"
+      else
+        log "WARN: voice-bridge container started but /healthz never returned 200 within 40s"
+        report_progress 92 "voice_bridge_unhealthy" "voice-bridge container started but never reached HTTP 200"
+      fi
+    else
+      log "WARN: voice-bridge compose failed"
+      report_progress 92 "voice_bridge_compose_failed" "docker compose up failed"
     fi
-    docker compose up -d --build || log "WARN: voice-bridge compose failed"
   )
 else
-  log "No /opt/voice-bridge/docker-compose.yml — skipping voice bridge container"
+  log "No ${VOICE_BRIDGE_DEST}/docker-compose.yml and no source at ${VOICE_BRIDGE_SRC} — skipping voice bridge container"
 fi
 
 log "=== Client deployment complete: ${BUSINESS_ID} ==="

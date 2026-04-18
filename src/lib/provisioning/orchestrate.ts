@@ -156,6 +156,11 @@ export async function orchestrateProvisioning(
     ["TELNYX_SMS_FROM_E164", process.env.TELNYX_SMS_FROM_E164 ?? ""],
     ["STREAM_URL_SIGNING_SECRET", process.env.STREAM_URL_SIGNING_SECRET ?? ""],
     ["BRIDGE_MEDIA_WSS_ORIGIN", process.env.BRIDGE_MEDIA_WSS_ORIGIN ?? ""],
+    // Voice bridge (Gemini Live): blank GOOGLE_API_KEY disables Live on the bridge
+    // (kill-switch path). VOICE_BRIDGE_SRC lets ops override the on-VPS sync path.
+    ["GOOGLE_API_KEY", process.env.GOOGLE_API_KEY ?? ""],
+    ["GEMINI_LIVE_MODEL", process.env.GEMINI_LIVE_MODEL ?? ""],
+    ["VOICE_BRIDGE_SRC", process.env.VOICE_BRIDGE_SRC ?? ""],
     ["CLOUDFLARE_TUNNEL_TOKEN", process.env.CLOUDFLARE_TUNNEL_TOKEN ?? ""],
     ["LIGHTPANDA_WSS_URL", process.env.LIGHTPANDA_WSS_URL ?? "wss://cdn.lightpanda.io/ws"],
     ["PROVISIONING_PROGRESS_URL", progressUrl],
