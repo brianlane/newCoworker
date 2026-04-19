@@ -162,6 +162,10 @@ describe("provisioning/orchestrate", () => {
     delete process.env.TELNYX_SMS_FROM_E164;
     delete process.env.STREAM_URL_SIGNING_SECRET;
     delete process.env.BRIDGE_MEDIA_WSS_ORIGIN;
+    delete process.env.GOOGLE_API_KEY;
+    delete process.env.GEMINI_LIVE_MODEL;
+    delete process.env.GEMINI_LIVE_ENABLED;
+    delete process.env.VOICE_BRIDGE_SRC;
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;
     const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
     const mockHostinger = {
@@ -178,7 +182,32 @@ describe("provisioning/orchestrate", () => {
     expect(cmd).toContain("TELNYX_SMS_FROM_E164=''");
     expect(cmd).toContain("STREAM_URL_SIGNING_SECRET=''");
     expect(cmd).toContain("BRIDGE_MEDIA_WSS_ORIGIN=''");
+    expect(cmd).toContain("GOOGLE_API_KEY=''");
+    expect(cmd).toContain("GEMINI_LIVE_MODEL=''");
+    expect(cmd).toContain("GEMINI_LIVE_ENABLED=''");
+    expect(cmd).toContain("VOICE_BRIDGE_SRC=''");
     expect(cmd).toContain("SUPABASE_SERVICE_KEY=''");
+  });
+
+  it("deploy command forwards voice-bridge env (GOOGLE_API_KEY / GEMINI_LIVE_MODEL / GEMINI_LIVE_ENABLED / VOICE_BRIDGE_SRC) when set", async () => {
+    process.env.GOOGLE_API_KEY = "sk-live-abc";
+    process.env.GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview";
+    process.env.GEMINI_LIVE_ENABLED = "false";
+    process.env.VOICE_BRIDGE_SRC = "/opt/newcoworker-repo/vps/voice-bridge";
+    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
+    const mockHostinger = {
+      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-bridge" }),
+      executeCommand: mockExec
+    };
+    await orchestrateProvisioning(
+      { businessId: "biz-bridge", tier: "standard" },
+      { hostinger: mockHostinger as never }
+    );
+    const cmd = mockExec.mock.calls[0][1] as string;
+    expectDeployHasEnv(cmd, "GOOGLE_API_KEY", "sk-live-abc");
+    expectDeployHasEnv(cmd, "GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview");
+    expectDeployHasEnv(cmd, "GEMINI_LIVE_ENABLED", "false");
+    expectDeployHasEnv(cmd, "VOICE_BRIDGE_SRC", "/opt/newcoworker-repo/vps/voice-bridge");
   });
 
   it("deploy command includes Telnyx env vars (not INWORLD)", async () => {

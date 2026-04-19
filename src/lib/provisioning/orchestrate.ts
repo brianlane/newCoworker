@@ -156,6 +156,16 @@ export async function orchestrateProvisioning(
     ["TELNYX_SMS_FROM_E164", process.env.TELNYX_SMS_FROM_E164 ?? ""],
     ["STREAM_URL_SIGNING_SECRET", process.env.STREAM_URL_SIGNING_SECRET ?? ""],
     ["BRIDGE_MEDIA_WSS_ORIGIN", process.env.BRIDGE_MEDIA_WSS_ORIGIN ?? ""],
+    // Voice bridge (Gemini Live): blank GOOGLE_API_KEY disables Live on the bridge
+    // (primary kill switch). GEMINI_LIVE_ENABLED is the secondary rollout flag
+    // (bridge keeps the media WS up but mutes AI audio when "false"). We forward
+    // it as-is; deploy-client.sh preserves any existing VPS-side value when this
+    // is empty, so orchestrator-level control and per-VPS overrides both work.
+    // VOICE_BRIDGE_SRC lets ops override the on-VPS sync path.
+    ["GOOGLE_API_KEY", process.env.GOOGLE_API_KEY ?? ""],
+    ["GEMINI_LIVE_MODEL", process.env.GEMINI_LIVE_MODEL ?? ""],
+    ["GEMINI_LIVE_ENABLED", process.env.GEMINI_LIVE_ENABLED ?? ""],
+    ["VOICE_BRIDGE_SRC", process.env.VOICE_BRIDGE_SRC ?? ""],
     ["CLOUDFLARE_TUNNEL_TOKEN", process.env.CLOUDFLARE_TUNNEL_TOKEN ?? ""],
     ["LIGHTPANDA_WSS_URL", process.env.LIGHTPANDA_WSS_URL ?? "wss://cdn.lightpanda.io/ws"],
     ["PROVISIONING_PROGRESS_URL", progressUrl],
