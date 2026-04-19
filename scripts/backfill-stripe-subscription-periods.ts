@@ -101,15 +101,33 @@ async function main(): Promise<void> {
     `[backfill] mode=${mode} onlyMissing=${args.onlyMissing} staleHours=${args.staleHours} rps=${args.rps}`
   );
 
-  const { data: rawRows, error } = await supabase
-    .from("subscriptions")
-    .select("id, business_id, stripe_subscription_id, stripe_current_period_end, stripe_subscription_cached_at, status")
-    .not("stripe_subscription_id", "is", null);
-  if (error) {
-    console.error("subscriptions select failed:", error.message);
-    process.exit(1);
+  // PostgREST caps any single response at its `max-rows` setting (default
+  // 1000 on hosted Supabase). A naive .select() would silently drop every
+  // subscription past row 1000, which for this script would mean voice
+  // quota gating stays broken for a random ~1/N of the fleet while the run
+  // reports success. Paginate with ordered `.range()` windows until a page
+  // returns fewer rows than requested.
+  const PAGE_SIZE = 500;
+  const rows: SubRow[] = [];
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const { data: pageRows, error: pageErr } = await supabase
+      .from("subscriptions")
+      .select(
+        "id, business_id, stripe_subscription_id, stripe_current_period_end, stripe_subscription_cached_at, status"
+      )
+      .not("stripe_subscription_id", "is", null)
+      // Deterministic ordering is required for range-based pagination — without
+      // it PostgREST may emit overlapping/missing rows across pages.
+      .order("id", { ascending: true })
+      .range(offset, offset + PAGE_SIZE - 1);
+    if (pageErr) {
+      console.error(`subscriptions select failed at offset ${offset}:`, pageErr.message);
+      process.exit(1);
+    }
+    const page = (pageRows ?? []) as SubRow[];
+    rows.push(...page);
+    if (page.length < PAGE_SIZE) break;
   }
-  const rows = (rawRows ?? []) as SubRow[];
 
   const targets = rows.filter((r) => {
     if (!r.stripe_subscription_id) return false;

@@ -314,7 +314,7 @@ VBENV_EOF
         # outcomes at <=98.
         report_progress 98 "voice_bridge_ready" "voice-bridge container healthy on :8090"
       else
-        log "WARN: voice-bridge container started but /healthz never returned 200 within 40s"
+        log "WARN: voice-bridge container started but GET http://127.0.0.1:8090/ never returned 200 within 40s"
         report_progress 97 "voice_bridge_unhealthy" "voice-bridge container started but never reached HTTP 200"
       fi
     else
