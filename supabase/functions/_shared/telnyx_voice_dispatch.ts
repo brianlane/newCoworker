@@ -25,8 +25,6 @@ export const TELNYX_VOICE_ROUTES: Readonly<Record<string, string>> = Object.free
   "call.ended": "telnyx-voice-call-end"
 });
 
-export type TelnyxVoiceRouteTarget = (typeof TELNYX_VOICE_ROUTES)[keyof typeof TELNYX_VOICE_ROUTES];
-
 export type DispatchDecision =
   | { kind: "route"; target: string; eventType: string }
   | { kind: "skip"; eventType: string }

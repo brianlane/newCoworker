@@ -17,6 +17,13 @@
 #   BRIDGE_MEDIA_WSS_ORIGIN  — public wss:// origin for the VPS voice bridge
 #   GOOGLE_API_KEY           — Gemini API key; blank disables Live on the bridge
 #   GEMINI_LIVE_MODEL        — optional; default gemini-3.1-flash-live-preview
+#   GEMINI_LIVE_ENABLED      — optional secondary rollout kill switch for the
+#                               bridge ("false" keeps media WS up but silences
+#                               AI audio). When unset the deploy preserves any
+#                               value already present in the VPS's existing
+#                               /opt/voice-bridge/.env, defaulting to "true".
+#                               This matches the bridge's own default in
+#                               vps/voice-bridge/src/index.ts.
 #   VOICE_BRIDGE_SRC         — optional; path on VPS to copy bridge source from
 #                               (default: /opt/newcoworker-repo/vps/voice-bridge).
 #                               Operator is responsible for syncing the repo to
@@ -286,6 +293,29 @@ if [[ -f "${VOICE_BRIDGE_DEST}/docker-compose.yml" ]]; then
   log "Starting voice-bridge from ${VOICE_BRIDGE_DEST}..."
   (
     cd "${VOICE_BRIDGE_DEST}"
+
+    # GEMINI_LIVE_ENABLED is the bridge's secondary fine-grained kill switch
+    # (primary being an empty GOOGLE_API_KEY). Because we now always rewrite
+    # .env on every deploy — necessary so secret rotations like
+    # STREAM_URL_SIGNING_SECRET reach the container — we have to explicitly
+    # preserve this flag or an operator who SSH'd in and set it to "false"
+    # would have Gemini Live silently re-enabled on the next deploy.
+    #
+    # Precedence:
+    #   1. Orchestrator-provided GEMINI_LIVE_ENABLED (centralized control)
+    #   2. Existing value in /opt/voice-bridge/.env (per-VPS override)
+    #   3. "true" (matches the bridge's in-code default)
+    prev_gemini_live_enabled=""
+    if [[ -f "${VOICE_BRIDGE_DEST}/.env" ]]; then
+      prev_gemini_live_enabled=$(
+        grep -E '^GEMINI_LIVE_ENABLED=' "${VOICE_BRIDGE_DEST}/.env" 2>/dev/null \
+          | tail -n 1 \
+          | cut -d= -f2- \
+          | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//"
+      ) || true
+    fi
+    effective_gemini_live_enabled="${GEMINI_LIVE_ENABLED:-${prev_gemini_live_enabled:-true}}"
+
     cat > .env <<VBENV_EOF
 STREAM_URL_SIGNING_SECRET=${STREAM_URL_SIGNING_SECRET:-}
 SUPABASE_URL=${SUPABASE_URL:-}
@@ -294,6 +324,7 @@ BUSINESS_ID=${BUSINESS_ID:-}
 BRIDGE_MEDIA_WSS_ORIGIN=${BRIDGE_MEDIA_WSS_ORIGIN:-}
 GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
 GEMINI_LIVE_MODEL=${GEMINI_LIVE_MODEL:-gemini-3.1-flash-live-preview}
+GEMINI_LIVE_ENABLED=${effective_gemini_live_enabled}
 VBENV_EOF
     chmod 600 .env
 

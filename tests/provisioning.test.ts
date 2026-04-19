@@ -164,6 +164,7 @@ describe("provisioning/orchestrate", () => {
     delete process.env.BRIDGE_MEDIA_WSS_ORIGIN;
     delete process.env.GOOGLE_API_KEY;
     delete process.env.GEMINI_LIVE_MODEL;
+    delete process.env.GEMINI_LIVE_ENABLED;
     delete process.env.VOICE_BRIDGE_SRC;
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;
     const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
@@ -183,13 +184,15 @@ describe("provisioning/orchestrate", () => {
     expect(cmd).toContain("BRIDGE_MEDIA_WSS_ORIGIN=''");
     expect(cmd).toContain("GOOGLE_API_KEY=''");
     expect(cmd).toContain("GEMINI_LIVE_MODEL=''");
+    expect(cmd).toContain("GEMINI_LIVE_ENABLED=''");
     expect(cmd).toContain("VOICE_BRIDGE_SRC=''");
     expect(cmd).toContain("SUPABASE_SERVICE_KEY=''");
   });
 
-  it("deploy command forwards voice-bridge env (GOOGLE_API_KEY / GEMINI_LIVE_MODEL / VOICE_BRIDGE_SRC) when set", async () => {
+  it("deploy command forwards voice-bridge env (GOOGLE_API_KEY / GEMINI_LIVE_MODEL / GEMINI_LIVE_ENABLED / VOICE_BRIDGE_SRC) when set", async () => {
     process.env.GOOGLE_API_KEY = "sk-live-abc";
     process.env.GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview";
+    process.env.GEMINI_LIVE_ENABLED = "false";
     process.env.VOICE_BRIDGE_SRC = "/opt/newcoworker-repo/vps/voice-bridge";
     const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
     const mockHostinger = {
@@ -203,6 +206,7 @@ describe("provisioning/orchestrate", () => {
     const cmd = mockExec.mock.calls[0][1] as string;
     expectDeployHasEnv(cmd, "GOOGLE_API_KEY", "sk-live-abc");
     expectDeployHasEnv(cmd, "GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview");
+    expectDeployHasEnv(cmd, "GEMINI_LIVE_ENABLED", "false");
     expectDeployHasEnv(cmd, "VOICE_BRIDGE_SRC", "/opt/newcoworker-repo/vps/voice-bridge");
   });
 
