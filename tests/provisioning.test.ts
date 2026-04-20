@@ -81,6 +81,16 @@ describe("provisioning/orchestrate", () => {
       TELNYX_API_KEY: "mock_telnyx",
       TELNYX_MESSAGING_PROFILE_ID: "mock_prof"
     };
+    // Scrub any CF creds that might have leaked in from the test runner's
+    // ambient environment so orchestrateProvisioning's default per-tenant
+    // tunnel path is skipped unless a test opts in via the `cloudflareTunnel`
+    // dep. Without this, a dev machine with .env exported could accidentally
+    // hit the real Cloudflare API during unit tests.
+    delete process.env.CLOUDFLARE_API_TOKEN;
+    delete process.env.CLOUDFLARE_ACCOUNT_ID;
+    delete process.env.CLOUDFLARE_TUNNEL_TOKEN;
+    delete process.env.CLOUDFLARE_TUNNEL_ZONE;
+    delete process.env.CLOUDFLARE_TUNNEL_SERVICE_URL;
     vi.clearAllMocks();
   });
 
@@ -496,6 +506,108 @@ describe("provisioning/orchestrate", () => {
     await expect(
       orchestrateProvisioning({ businessId: "biz-enterprise-3", tier: "enterprise" })
     ).rejects.toThrow("newcoworkerteam@gmail.com");
+  });
+
+  it("per-tenant tunnel: uses CF provisioner token + hostname when injected", async () => {
+    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
+    const mockHostinger = {
+      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-cf" }),
+      executeCommand: mockExec
+    };
+    const cfStub = vi.fn().mockResolvedValue({
+      tunnelId: "tun-42",
+      token: "PER_TENANT_TOKEN",
+      hostname: "biz-cf.tunnel.newcoworker.com"
+    });
+
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-cf", tier: "starter" },
+      { hostinger: mockHostinger as never, cloudflareTunnel: cfStub }
+    );
+
+    expect(cfStub).toHaveBeenCalledWith({ businessId: "biz-cf" });
+    expect(result.tunnelUrl).toBe("https://biz-cf.tunnel.newcoworker.com");
+    expectDeployHasEnv(
+      mockExec.mock.calls[0][1] as string,
+      "CLOUDFLARE_TUNNEL_TOKEN",
+      "PER_TENANT_TOKEN"
+    );
+  });
+
+  it("per-tenant tunnel: falls back to env CLOUDFLARE_TUNNEL_TOKEN when provisioner throws", async () => {
+    process.env.CLOUDFLARE_TUNNEL_TOKEN = "SHARED_ENV_TOKEN";
+    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
+    const mockHostinger = {
+      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-cf-fail" }),
+      executeCommand: mockExec
+    };
+    const cfStub = vi.fn().mockRejectedValue(new Error("Invalid API Token"));
+
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-cf-fail", tier: "starter" },
+      { hostinger: mockHostinger as never, cloudflareTunnel: cfStub }
+    );
+
+    // Hostname stays on the canonical default when provisioner fails
+    expect(result.tunnelUrl).toBe("https://biz-cf-fail.tunnel.newcoworker.com");
+    expectDeployHasEnv(
+      mockExec.mock.calls[0][1] as string,
+      "CLOUDFLARE_TUNNEL_TOKEN",
+      "SHARED_ENV_TOKEN"
+    );
+  });
+
+  it("per-tenant tunnel: stringifies non-Error rejections before logging", async () => {
+    // Defensive branch: if the CF provisioner rejects with something that
+    // isn't an `Error` (e.g. a raw string from a buggy mock or a downstream
+    // that `throw`s a plain object), the orchestrator must still fall
+    // through to the shared env token instead of crashing with
+    // `undefined.message`. Pins the `String(err)` side of the
+    // `err instanceof Error ? err.message : String(err)` guard.
+    process.env.CLOUDFLARE_TUNNEL_TOKEN = "SHARED_ENV_TOKEN_NONERR";
+    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
+    const mockHostinger = {
+      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-cf-nonerr" }),
+      executeCommand: mockExec
+    };
+    const cfStub = vi.fn().mockRejectedValue("cf-exploded-as-string");
+
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-cf-nonerr", tier: "starter" },
+      { hostinger: mockHostinger as never, cloudflareTunnel: cfStub }
+    );
+
+    expect(result.tunnelUrl).toBe("https://biz-cf-nonerr.tunnel.newcoworker.com");
+    expectDeployHasEnv(
+      mockExec.mock.calls[0][1] as string,
+      "CLOUDFLARE_TUNNEL_TOKEN",
+      "SHARED_ENV_TOKEN_NONERR"
+    );
+  });
+
+  it("per-tenant tunnel: disables provisioner via explicit null dep", async () => {
+    // Even if CF env creds were set we must not touch the network when the
+    // caller explicitly disables the provisioner.
+    process.env.CLOUDFLARE_API_TOKEN = "would-explode-if-used";
+    process.env.CLOUDFLARE_ACCOUNT_ID = "acct-id";
+    process.env.CLOUDFLARE_TUNNEL_TOKEN = "LEGACY_TOKEN";
+    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
+    const mockHostinger = {
+      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-cf-null" }),
+      executeCommand: mockExec
+    };
+
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-cf-null", tier: "starter" },
+      { hostinger: mockHostinger as never, cloudflareTunnel: null }
+    );
+
+    expect(result.tunnelUrl).toBe("https://biz-cf-null.tunnel.newcoworker.com");
+    expectDeployHasEnv(
+      mockExec.mock.calls[0][1] as string,
+      "CLOUDFLARE_TUNNEL_TOKEN",
+      "LEGACY_TOKEN"
+    );
   });
 
   it("loads default soul/identity templates when readFileSync throws", async () => {

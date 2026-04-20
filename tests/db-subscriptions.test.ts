@@ -71,6 +71,74 @@ describe("db/subscriptions", () => {
     expect(typeof (viaCache as SubscriptionPeriodStripeCache).stripe_subscription_cached_at).toBe("string");
   });
 
+  it("stripeSubscriptionPeriodCache falls back to items[].current_period (basil API)", () => {
+    // Stripe 2025-03-31.basil moved the period fields off the Subscription and
+    // onto each SubscriptionItem. Top-level fields are absent on these shapes.
+    const start = 1710000000;
+    const end = 1712678400;
+    const viaItems = stripeSubscriptionPeriodCache({
+      items: {
+        data: [
+          { current_period_start: start, current_period_end: end }
+        ]
+      }
+    });
+    expect(viaItems).toMatchObject({
+      stripe_current_period_start: new Date(start * 1000).toISOString(),
+      stripe_current_period_end: new Date(end * 1000).toISOString()
+    });
+  });
+
+  it("stripeSubscriptionPeriodCache spans min(start)..max(end) across multi-item subs", () => {
+    const viaItems = stripeSubscriptionPeriodCache({
+      items: {
+        data: [
+          { current_period_start: 1720000000, current_period_end: 1722678400 },
+          { current_period_start: 1710000000, current_period_end: 1712678400 },
+          { current_period_start: 1715000000, current_period_end: 1717678400 }
+        ]
+      }
+    });
+    expect(viaItems).toMatchObject({
+      stripe_current_period_start: new Date(1710000000 * 1000).toISOString(),
+      stripe_current_period_end: new Date(1722678400 * 1000).toISOString()
+    });
+  });
+
+  it("stripeSubscriptionPeriodCache prefers top-level fields when both shapes are present", () => {
+    // Legacy API pinning: keep existing behavior for subs that still return the
+    // top-level fields (and any items entries are only used as a fallback).
+    const viaBoth = stripeSubscriptionPeriodCache({
+      current_period_start: 1700000000,
+      current_period_end: 1702678400,
+      items: {
+        data: [{ current_period_start: 9999999999, current_period_end: 9999999999 }]
+      }
+    });
+    expect(viaBoth).toMatchObject({
+      stripe_current_period_start: new Date(1700000000 * 1000).toISOString(),
+      stripe_current_period_end: new Date(1702678400 * 1000).toISOString()
+    });
+  });
+
+  it("stripeSubscriptionPeriodCache returns {} when neither shape has integers", () => {
+    expect(stripeSubscriptionPeriodCache({ items: { data: [] } })).toEqual({});
+    expect(
+      stripeSubscriptionPeriodCache({
+        items: { data: [{ current_period_start: "x", current_period_end: 1 }] }
+      })
+    ).toEqual({});
+    // Mirror image of the previous case: a numeric `start` paired with a
+    // non-numeric `end` must also yield `{}`. This pins the false branch of
+    // the per-item end-type guard (the start-guard false branch is already
+    // covered above), so every item-level type check is exercised.
+    expect(
+      stripeSubscriptionPeriodCache({
+        items: { data: [{ current_period_start: 1, current_period_end: "x" }] }
+      })
+    ).toEqual({});
+  });
+
   it("createSubscription inserts and returns row", async () => {
     const db = mockDb();
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);

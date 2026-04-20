@@ -8,6 +8,10 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { spawnSync } from "child_process";
 import { recordProvisioningProgress } from "@/lib/provisioning/progress";
+import {
+  cloudflareTunnelProvisionerFromEnv,
+  type CloudflareTunnelProvisioner
+} from "@/lib/cloudflare/tunnel";
 
 type ProvisioningInput = {
   businessId: string;
@@ -75,6 +79,14 @@ export async function orchestrateProvisioning(
     hostinger?: HostingerClient;
     /** Override env value quoting (defaults to {@link quoteShellEnvValue}). */
     quoteEnv?: (value: string) => string;
+    /**
+     * Per-tenant Cloudflare Tunnel provisioner. When null the orchestrator
+     * falls back to the shared CLOUDFLARE_TUNNEL_TOKEN env var (legacy path).
+     * When undefined we resolve one from env (CLOUDFLARE_API_TOKEN +
+     * CLOUDFLARE_ACCOUNT_ID); this keeps tests hermetic and production
+     * feature-flagged purely by what secrets are present.
+     */
+    cloudflareTunnel?: CloudflareTunnelProvisioner | null;
   }
 ): Promise<ProvisioningResult> {
   const { businessId, ownerEmail, ownerPhone, tier } = input;
@@ -134,7 +146,46 @@ export async function orchestrateProvisioning(
     source: "orchestrator"
   });
 
-  const tunnelUrl = `https://${businessId}.tunnel.newcoworker.com`;
+  // Per-tenant Cloudflare Tunnel: resolve (or create) a dedicated tunnel for
+  // this business and use its install token + hostname. Falls back to the
+  // legacy shared CLOUDFLARE_TUNNEL_TOKEN env var when CF API creds aren't
+  // configured, preserving backward compatibility for dev/test environments.
+  const tunnelProvisioner =
+    deps?.cloudflareTunnel === undefined
+      ? cloudflareTunnelProvisionerFromEnv()
+      : deps.cloudflareTunnel;
+
+  let tunnelHostname = `${businessId}.tunnel.newcoworker.com`;
+  let cloudflareTunnelToken = process.env.CLOUDFLARE_TUNNEL_TOKEN ?? "";
+  if (tunnelProvisioner) {
+    try {
+      const provisioned = await tunnelProvisioner({ businessId });
+      tunnelHostname = provisioned.hostname;
+      cloudflareTunnelToken = provisioned.token;
+      await recordProvisioningProgress({
+        businessId,
+        phase: "cloudflare_tunnel_ready",
+        percent: 35,
+        message: `Per-tenant tunnel ready (${provisioned.tunnelId})`,
+        source: "orchestrator"
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error("Cloudflare tunnel provisioning failed", { businessId, error: msg });
+      await recordProvisioningProgress({
+        businessId,
+        phase: "cloudflare_tunnel_failed",
+        percent: 35,
+        message: `Cloudflare tunnel provisioning failed: ${msg}`,
+        source: "orchestrator",
+        status: "error"
+      });
+      // Fall through with the env-var token so a broken CF API doesn't wedge
+      // a deploy when the operator has a valid shared token available.
+    }
+  }
+
+  const tunnelUrl = `https://${tunnelHostname}`;
 
   const gatewayToken = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
 
@@ -166,7 +217,7 @@ export async function orchestrateProvisioning(
     ["GEMINI_LIVE_MODEL", process.env.GEMINI_LIVE_MODEL ?? ""],
     ["GEMINI_LIVE_ENABLED", process.env.GEMINI_LIVE_ENABLED ?? ""],
     ["VOICE_BRIDGE_SRC", process.env.VOICE_BRIDGE_SRC ?? ""],
-    ["CLOUDFLARE_TUNNEL_TOKEN", process.env.CLOUDFLARE_TUNNEL_TOKEN ?? ""],
+    ["CLOUDFLARE_TUNNEL_TOKEN", cloudflareTunnelToken],
     ["LIGHTPANDA_WSS_URL", process.env.LIGHTPANDA_WSS_URL ?? "wss://cdn.lightpanda.io/ws"],
     ["PROVISIONING_PROGRESS_URL", progressUrl],
     ["PROVISIONING_PROGRESS_TOKEN", progressToken]
