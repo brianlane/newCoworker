@@ -570,7 +570,6 @@ describe("provisioning/orchestrate", () => {
       provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-cf-nonerr" }),
       executeCommand: mockExec
     };
-    // eslint-disable-next-line @typescript-eslint/no-throw-literal
     const cfStub = vi.fn().mockRejectedValue("cf-exploded-as-string");
 
     const result = await orchestrateProvisioning(
