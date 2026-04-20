@@ -557,6 +557,35 @@ describe("provisioning/orchestrate", () => {
     );
   });
 
+  it("per-tenant tunnel: stringifies non-Error rejections before logging", async () => {
+    // Defensive branch: if the CF provisioner rejects with something that
+    // isn't an `Error` (e.g. a raw string from a buggy mock or a downstream
+    // that `throw`s a plain object), the orchestrator must still fall
+    // through to the shared env token instead of crashing with
+    // `undefined.message`. Pins the `String(err)` side of the
+    // `err instanceof Error ? err.message : String(err)` guard.
+    process.env.CLOUDFLARE_TUNNEL_TOKEN = "SHARED_ENV_TOKEN_NONERR";
+    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
+    const mockHostinger = {
+      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-cf-nonerr" }),
+      executeCommand: mockExec
+    };
+    // eslint-disable-next-line @typescript-eslint/no-throw-literal
+    const cfStub = vi.fn().mockRejectedValue("cf-exploded-as-string");
+
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-cf-nonerr", tier: "starter" },
+      { hostinger: mockHostinger as never, cloudflareTunnel: cfStub }
+    );
+
+    expect(result.tunnelUrl).toBe("https://biz-cf-nonerr.tunnel.newcoworker.com");
+    expectDeployHasEnv(
+      mockExec.mock.calls[0][1] as string,
+      "CLOUDFLARE_TUNNEL_TOKEN",
+      "SHARED_ENV_TOKEN_NONERR"
+    );
+  });
+
   it("per-tenant tunnel: disables provisioner via explicit null dep", async () => {
     // Even if CF env creds were set we must not touch the network when the
     // caller explicitly disables the provisioner.

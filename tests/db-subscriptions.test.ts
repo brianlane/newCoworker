@@ -128,6 +128,15 @@ describe("db/subscriptions", () => {
         items: { data: [{ current_period_start: "x", current_period_end: 1 }] }
       })
     ).toEqual({});
+    // Mirror image of the previous case: a numeric `start` paired with a
+    // non-numeric `end` must also yield `{}`. This pins the false branch of
+    // the per-item end-type guard (the start-guard false branch is already
+    // covered above), so every item-level type check is exercised.
+    expect(
+      stripeSubscriptionPeriodCache({
+        items: { data: [{ current_period_start: 1, current_period_end: "x" }] }
+      })
+    ).toEqual({});
   });
 
   it("createSubscription inserts and returns row", async () => {

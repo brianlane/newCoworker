@@ -327,6 +327,90 @@ describe("cloudflareTunnelProvisioner", () => {
     );
   });
 
+  it("treats a non-array tunnel-list result as no matches (defensive)", async () => {
+    // Cloudflare's envelope.result is *almost* always an array for list
+    // endpoints, but misbehaving proxies and schema drift can hand us back an
+    // object/null/string. The provisioner falls through to the "create" path
+    // in that case rather than crashing with `.filter is not a function` —
+    // this test exercises the `Array.isArray(existing) ? … : []` false branch.
+    const { fetchImpl, calls } = makeFetch([
+      {
+        match: (u) => u.startsWith(`${BASE}/accounts/${ACCOUNT}/cfd_tunnel?name=nc-biz-nonarr`),
+        body: ok(null as unknown)
+      },
+      {
+        match: (u, i) => i?.method === "POST" && u === `${BASE}/accounts/${ACCOUNT}/cfd_tunnel`,
+        body: ok({ id: "tun-na", name: "nc-biz-nonarr" })
+      },
+      { match: (u) => u.endsWith("/cfd_tunnel/tun-na/token"), body: ok("T") },
+      {
+        match: (u, i) => i?.method === "PUT" && u.endsWith("/configurations"),
+        body: ok({})
+      },
+      {
+        match: (u) => u === `${BASE}/zones?name=${encodeURIComponent(ZONE)}`,
+        body: ok([{ id: "zone-1", name: ZONE }])
+      },
+      {
+        match: (u) => u.startsWith(`${BASE}/zones/zone-1/dns_records?type=CNAME&name=`),
+        body: ok([])
+      },
+      {
+        match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/zone-1/dns_records`,
+        body: ok({ id: "rec-na" })
+      }
+    ]);
+
+    const provisioner = createCloudflareTunnelProvisioner(baseConfig(fetchImpl));
+    const result = await provisioner({ businessId: "biz-nonarr" });
+    expect(result.tunnelId).toBe("tun-na");
+    // Prove we took the *create* path, not the reuse path.
+    expect(
+      calls.some((c) => c.method === "POST" && c.url === `${BASE}/accounts/${ACCOUNT}/cfd_tunnel`)
+    ).toBe(true);
+  });
+
+  it("filters out soft-deleted tunnels and creates a fresh one", async () => {
+    // CF's list endpoint returns tombstoned tunnels with a non-null
+    // `deleted_at`; reusing one of those would wedge every subsequent call.
+    // This covers the truthy side of `!t.deleted_at` (filter out) alongside
+    // the falsy side already covered by the "cold start" test.
+    const { fetchImpl, calls } = makeFetch([
+      {
+        match: (u) => u.startsWith(`${BASE}/accounts/${ACCOUNT}/cfd_tunnel?name=nc-biz-tomb`),
+        body: ok([{ id: "tun-dead", name: "nc-biz-tomb", deleted_at: "2026-01-01T00:00:00Z" }])
+      },
+      {
+        match: (u, i) => i?.method === "POST" && u === `${BASE}/accounts/${ACCOUNT}/cfd_tunnel`,
+        body: ok({ id: "tun-fresh", name: "nc-biz-tomb" })
+      },
+      { match: (u) => u.endsWith("/cfd_tunnel/tun-fresh/token"), body: ok("T") },
+      {
+        match: (u, i) => i?.method === "PUT" && u.endsWith("/configurations"),
+        body: ok({})
+      },
+      {
+        match: (u) => u === `${BASE}/zones?name=${encodeURIComponent(ZONE)}`,
+        body: ok([{ id: "zone-1", name: ZONE }])
+      },
+      {
+        match: (u) => u.startsWith(`${BASE}/zones/zone-1/dns_records?type=CNAME&name=`),
+        body: ok([])
+      },
+      {
+        match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/zone-1/dns_records`,
+        body: ok({ id: "rec-fresh" })
+      }
+    ]);
+
+    const provisioner = createCloudflareTunnelProvisioner(baseConfig(fetchImpl));
+    const result = await provisioner({ businessId: "biz-tomb" });
+    expect(result.tunnelId).toBe("tun-fresh");
+    expect(
+      calls.some((c) => c.method === "POST" && c.url === `${BASE}/accounts/${ACCOUNT}/cfd_tunnel`)
+    ).toBe(true);
+  });
+
   it("surfaces Cloudflare API errors verbatim", async () => {
     const { fetchImpl } = makeFetch([
       {

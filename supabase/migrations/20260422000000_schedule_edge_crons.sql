@@ -79,7 +79,22 @@ as $$
     ''
   );
 $$;
+-- Lock the function down from every non-owner caller.
+--
+-- `revoke ... from public` only strips the PostgreSQL `public` pseudo-role's
+-- default EXECUTE grant. On Supabase, `alter default privileges` *also*
+-- grants EXECUTE on new `public.*` functions to the `anon`, `authenticated`,
+-- and `service_role` login roles — those grants survive a `from public`
+-- revoke and would expose this SECURITY DEFINER vault reader through the
+-- PostgREST RPC surface (`POST /rest/v1/rpc/_cron_vault_read`). Revoking
+-- from each named role closes that exfiltration path.
+--
+-- The function's owner (postgres, which is what pg_cron runs jobs as)
+-- keeps its implicit owner privilege, so the schedules below still work.
 revoke all on function public._cron_vault_read(text) from public;
+revoke all on function public._cron_vault_read(text) from anon;
+revoke all on function public._cron_vault_read(text) from authenticated;
+revoke all on function public._cron_vault_read(text) from service_role;
 
 -- ──────────────────────────────────────────────────────────
 -- Sanity-check Vault entries exist. Emits a WARNING — does not fail the
