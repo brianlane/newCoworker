@@ -580,6 +580,14 @@ describe("cloudflareTunnelProvisionerFromEnv", () => {
       fetchImpl
     });
     await expect(provisioner({ businessId: "biz-x" })).rejects.toThrow("custom.example.org");
-    expect(seen.some((u) => u.includes("custom.example.org"))).toBe(true);
+    expect(
+      seen.some((u) => {
+        try {
+          return new URL(u).hostname === "custom.example.org";
+        } catch {
+          return false;
+        }
+      })
+    ).toBe(true);
   });
 });
