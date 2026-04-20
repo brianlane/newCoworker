@@ -284,6 +284,43 @@ rm /tmp/cloudflared.deb
 log "cloudflared installed (tunnel credentials required via deploy-client.sh)."
 
 # ------------------------------------------------------------------
+# 7b. Stage newCoworker repo for voice-bridge source sync
+#
+# `deploy-client.sh` reads the voice-bridge source from
+# ${VOICE_BRIDGE_SRC:-/opt/newcoworker-repo/vps/voice-bridge} on every deploy
+# (see §6 of that script). Clone a shallow copy here so the first deploy for
+# this VPS has a source to rsync from. Operators can override the default
+# path by exporting VOICE_BRIDGE_SRC from the orchestrator, but the 90% case
+# is "public repo checked out at the canonical path" and we handle it here.
+#
+# Overridable via env for forks / private mirrors:
+#   NEWCOWORKER_REPO_URL    — git URL (default: public OSS repo)
+#   NEWCOWORKER_REPO_REF    — branch/tag/sha to check out (default: main)
+#   NEWCOWORKER_REPO_PATH   — filesystem destination (default: /opt/newcoworker-repo)
+# ------------------------------------------------------------------
+NEWCOWORKER_REPO_URL="${NEWCOWORKER_REPO_URL:-https://github.com/brianlane/newCoworker.git}"
+NEWCOWORKER_REPO_REF="${NEWCOWORKER_REPO_REF:-main}"
+NEWCOWORKER_REPO_PATH="${NEWCOWORKER_REPO_PATH:-/opt/newcoworker-repo}"
+
+log "Staging newCoworker repo at ${NEWCOWORKER_REPO_PATH} (ref=${NEWCOWORKER_REPO_REF})..."
+mkdir -p "$(dirname "${NEWCOWORKER_REPO_PATH}")"
+if [[ -d "${NEWCOWORKER_REPO_PATH}/.git" ]]; then
+  # Idempotent re-bootstrap: fast-forward the existing checkout instead of
+  # re-cloning. This keeps any local hooks and avoids re-downloading the pack.
+  git -C "${NEWCOWORKER_REPO_PATH}" fetch --depth=1 origin "${NEWCOWORKER_REPO_REF}" || true
+  git -C "${NEWCOWORKER_REPO_PATH}" checkout -B "${NEWCOWORKER_REPO_REF}" \
+      "origin/${NEWCOWORKER_REPO_REF}" || true
+else
+  # `--depth=1 --branch` is much faster and avoids ~100 MB of history we never
+  # need on a VPS. The repo is currently public; if it becomes private, replace
+  # the URL with an HTTPS+token or a deploy-key SSH variant via the env overrides
+  # above — no code changes required here.
+  git clone --depth=1 --branch "${NEWCOWORKER_REPO_REF}" \
+    "${NEWCOWORKER_REPO_URL}" "${NEWCOWORKER_REPO_PATH}" || \
+    log "WARN: git clone ${NEWCOWORKER_REPO_URL} failed; voice-bridge source will be missing until deploy-client.sh re-syncs."
+fi
+
+# ------------------------------------------------------------------
 # 8. Heartbeat cron
 # ------------------------------------------------------------------
 log "Setting up heartbeat cron..."

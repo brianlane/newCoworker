@@ -157,16 +157,24 @@ export async function orchestrateProvisioning(
 
   let tunnelHostname = `${businessId}.tunnel.newcoworker.com`;
   let cloudflareTunnelToken = process.env.CLOUDFLARE_TUNNEL_TOKEN ?? "";
+  // Voice bridge public origin. When the per-tenant CF tunnel succeeds we
+  // synthesize a deterministic `wss://voice-<biz>.<suffix>` so Telnyx gets a
+  // CF-issued TLS cert with zero per-VPS Caddy/Let's Encrypt work. When the
+  // tunnel is disabled or fails we fall back to the operator-provided env var
+  // (legacy single-bridge deployments, or a shared voice fleet fronted by
+  // something else).
+  let bridgeMediaWssOrigin = process.env.BRIDGE_MEDIA_WSS_ORIGIN ?? "";
   if (tunnelProvisioner) {
     try {
       const provisioned = await tunnelProvisioner({ businessId });
       tunnelHostname = provisioned.hostname;
       cloudflareTunnelToken = provisioned.token;
+      bridgeMediaWssOrigin = `wss://${provisioned.voiceHostname}`;
       await recordProvisioningProgress({
         businessId,
         phase: "cloudflare_tunnel_ready",
         percent: 35,
-        message: `Per-tenant tunnel ready (${provisioned.tunnelId})`,
+        message: `Per-tenant tunnel ready (${provisioned.tunnelId}); voice origin ${bridgeMediaWssOrigin}`,
         source: "orchestrator"
       });
     } catch (err) {
@@ -206,7 +214,7 @@ export async function orchestrateProvisioning(
     ["TELNYX_MESSAGING_PROFILE_ID", process.env.TELNYX_MESSAGING_PROFILE_ID ?? ""],
     ["TELNYX_SMS_FROM_E164", process.env.TELNYX_SMS_FROM_E164 ?? ""],
     ["STREAM_URL_SIGNING_SECRET", process.env.STREAM_URL_SIGNING_SECRET ?? ""],
-    ["BRIDGE_MEDIA_WSS_ORIGIN", process.env.BRIDGE_MEDIA_WSS_ORIGIN ?? ""],
+    ["BRIDGE_MEDIA_WSS_ORIGIN", bridgeMediaWssOrigin],
     // Voice bridge (Gemini Live): blank GOOGLE_API_KEY disables Live on the bridge
     // (primary kill switch). GEMINI_LIVE_ENABLED is the secondary rollout flag
     // (bridge keeps the media WS up but mutes AI audio when "false"). We forward

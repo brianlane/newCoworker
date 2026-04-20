@@ -16,6 +16,13 @@ type Handler = {
   match: (url: string, init?: RequestInit) => boolean;
   body: unknown;
   status?: number;
+  /**
+   * When true, the handler is NOT consumed after matching. Useful for the
+   * DNS-records list / POST / PATCH endpoints, which are now called twice
+   * per provisioning (once per public hostname — app + voice bridge). Keep
+   * unset/false for tests that want to assert a handler fires exactly once.
+   */
+  reuse?: boolean;
 };
 
 function makeFetch(handlers: Handler[]): {
@@ -34,7 +41,8 @@ function makeFetch(handlers: Handler[]): {
     calls.push({ url: urlStr, method, body: parsedBody });
     const idx = queue.findIndex((h) => h.match(urlStr, init));
     if (idx < 0) throw new Error(`unmatched fetch: ${method} ${urlStr}`);
-    const [handler] = queue.splice(idx, 1);
+    const handler = queue[idx];
+    if (!handler.reuse) queue.splice(idx, 1);
     return new Response(JSON.stringify(handler.body), {
       status: handler.status ?? 200,
       headers: { "Content-Type": "application/json" }
@@ -96,12 +104,14 @@ describe("cloudflareTunnelProvisioner", () => {
       {
         match: (u) =>
           u.startsWith(`${BASE}/zones/zone-1/dns_records?type=CNAME&name=`),
-        body: ok([])
+        body: ok([]),
+        reuse: true
       },
       {
         match: (u, i) =>
           i?.method === "POST" && u === `${BASE}/zones/zone-1/dns_records`,
-        body: ok({ id: "rec-1" })
+        body: ok({ id: "rec-1" }),
+        reuse: true
       }
     ]);
 
@@ -110,15 +120,33 @@ describe("cloudflareTunnelProvisioner", () => {
     expect(result).toEqual({
       tunnelId: "tun-1",
       token: "TUNNEL_INSTALL_TOKEN",
-      hostname: `biz-a.${ZONE}`
+      hostname: `biz-a.${ZONE}`,
+      voiceHostname: `voice-biz-a.${ZONE}`
     });
 
-    const dnsCreate = calls.find(
-      (c) => c.method === "POST" && c.url === `${BASE}/zones/zone-1/dns_records`
+    // Both public hostnames get a CNAME in the same zone, pointing at the same
+    // tunnel target — Cloudflare routes by Host header inside the tunnel.
+    const appDnsCreate = calls.find(
+      (c) =>
+        c.method === "POST" &&
+        c.url === `${BASE}/zones/zone-1/dns_records` &&
+        (c.body as { name?: string }).name === `biz-a.${ZONE}`
     );
-    expect(dnsCreate?.body).toMatchObject({
+    expect(appDnsCreate?.body).toMatchObject({
       type: "CNAME",
       name: `biz-a.${ZONE}`,
+      content: "tun-1.cfargotunnel.com",
+      proxied: true
+    });
+    const voiceDnsCreate = calls.find(
+      (c) =>
+        c.method === "POST" &&
+        c.url === `${BASE}/zones/zone-1/dns_records` &&
+        (c.body as { name?: string }).name === `voice-biz-a.${ZONE}`
+    );
+    expect(voiceDnsCreate?.body).toMatchObject({
+      type: "CNAME",
+      name: `voice-biz-a.${ZONE}`,
       content: "tun-1.cfargotunnel.com",
       proxied: true
     });
@@ -130,6 +158,7 @@ describe("cloudflareTunnelProvisioner", () => {
       config: {
         ingress: [
           { hostname: `biz-a.${ZONE}`, service: "http://localhost:3000" },
+          { hostname: `voice-biz-a.${ZONE}`, service: "http://127.0.0.1:8090" },
           { service: "http_status:404" }
         ]
       }
@@ -152,11 +181,13 @@ describe("cloudflareTunnelProvisioner", () => {
       { match: (u, i) => i?.method === "PUT" && u.endsWith("/configurations"), body: ok({}) },
       {
         match: (u) => u.startsWith(`${BASE}/zones/zone-apex/dns_records?type=CNAME&name=`),
-        body: ok([])
+        body: ok([]),
+        reuse: true
       },
       {
         match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/zone-apex/dns_records`,
-        body: ok({ id: "rec-h" })
+        body: ok({ id: "rec-h" }),
+        reuse: true
       }
     ]);
 
@@ -171,13 +202,29 @@ describe("cloudflareTunnelProvisioner", () => {
     });
     const result = await provisioner({ businessId: "biz-h" });
     expect(result.hostname).toBe("biz-h.tunnel.newcoworker.com");
+    expect(result.voiceHostname).toBe("voice-biz-h.tunnel.newcoworker.com");
 
-    const dnsCreate = calls.find(
-      (c) => c.method === "POST" && c.url === `${BASE}/zones/zone-apex/dns_records`
+    const appCreate = calls.find(
+      (c) =>
+        c.method === "POST" &&
+        c.url === `${BASE}/zones/zone-apex/dns_records` &&
+        (c.body as { name?: string }).name === "biz-h.tunnel.newcoworker.com"
     );
-    expect(dnsCreate?.body).toMatchObject({
+    expect(appCreate?.body).toMatchObject({
       type: "CNAME",
       name: "biz-h.tunnel.newcoworker.com",
+      content: "tun-h.cfargotunnel.com",
+      proxied: true
+    });
+    const voiceCreate = calls.find(
+      (c) =>
+        c.method === "POST" &&
+        c.url === `${BASE}/zones/zone-apex/dns_records` &&
+        (c.body as { name?: string }).name === "voice-biz-h.tunnel.newcoworker.com"
+    );
+    expect(voiceCreate?.body).toMatchObject({
+      type: "CNAME",
+      name: "voice-biz-h.tunnel.newcoworker.com",
       content: "tun-h.cfargotunnel.com",
       proxied: true
     });
@@ -189,6 +236,10 @@ describe("cloudflareTunnelProvisioner", () => {
       config: {
         ingress: [
           { hostname: "biz-h.tunnel.newcoworker.com", service: "http://localhost:3000" },
+          {
+            hostname: "voice-biz-h.tunnel.newcoworker.com",
+            service: "http://127.0.0.1:8090"
+          },
           { service: "http_status:404" }
         ]
       }
@@ -206,11 +257,13 @@ describe("cloudflareTunnelProvisioner", () => {
       { match: (u, i) => i?.method === "PUT" && u.endsWith("/configurations"), body: ok({}) },
       {
         match: (u) => u.startsWith(`${BASE}/zones/preset-zone/dns_records?type=CNAME&name=`),
-        body: ok([])
+        body: ok([]),
+        reuse: true
       },
       {
         match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/preset-zone/dns_records`,
-        body: ok({ id: "rec-z" })
+        body: ok({ id: "rec-z" }),
+        reuse: true
       }
     ]);
     const provisioner = createCloudflareTunnelProvisioner({
@@ -243,9 +296,20 @@ describe("cloudflareTunnelProvisioner", () => {
         body: ok([{ id: "zone-1", name: ZONE }])
       },
       {
-        match: (u) => u.startsWith(`${BASE}/zones/zone-1/dns_records?type=CNAME&name=`),
+        // App hostname: existing CNAME already matches current tunnel target.
+        match: (u) =>
+          u === `${BASE}/zones/zone-1/dns_records?type=CNAME&name=${encodeURIComponent(`biz-b.${ZONE}`)}`,
         body: ok([
           { id: "rec-1", content: "tun-existing.cfargotunnel.com", proxied: true }
+        ])
+      },
+      {
+        // Voice hostname: also already correctly wired — true idempotent
+        // rerun means both CNAMEs exist and point at the same tunnel.
+        match: (u) =>
+          u === `${BASE}/zones/zone-1/dns_records?type=CNAME&name=${encodeURIComponent(`voice-biz-b.${ZONE}`)}`,
+        body: ok([
+          { id: "rec-2", content: "tun-existing.cfargotunnel.com", proxied: true }
         ])
       }
     ]);
@@ -254,8 +318,9 @@ describe("cloudflareTunnelProvisioner", () => {
     const result = await provisioner({ businessId: "biz-b" });
     expect(result.tunnelId).toBe("tun-existing");
     expect(result.token).toBe("RE-FETCHED-TOKEN");
+    expect(result.voiceHostname).toBe(`voice-biz-b.${ZONE}`);
     // No POST to cfd_tunnel (creation) and no POST/PATCH to dns_records
-    // (the existing record already matches).
+    // (both existing records already match).
     expect(
       calls.find(
         (c) => c.method === "POST" && c.url === `${BASE}/accounts/${ACCOUNT}/cfd_tunnel`
@@ -263,6 +328,11 @@ describe("cloudflareTunnelProvisioner", () => {
     ).toBeUndefined();
     expect(
       calls.find((c) => c.method === "POST" && c.url === `${BASE}/zones/zone-1/dns_records`)
+    ).toBeUndefined();
+    expect(
+      calls.find(
+        (c) => c.method === "PATCH" && c.url.startsWith(`${BASE}/zones/zone-1/dns_records/`)
+      )
     ).toBeUndefined();
   });
 
@@ -285,22 +355,46 @@ describe("cloudflareTunnelProvisioner", () => {
         body: ok([{ id: "zone-1", name: ZONE }])
       },
       {
-        match: (u) => u.startsWith(`${BASE}/zones/zone-1/dns_records?type=CNAME&name=`),
-        body: ok([{ id: "rec-c", content: "tun-OLD.cfargotunnel.com", proxied: false }])
+        // App hostname record is stale (wrong target + not proxied) — PATCH it.
+        match: (u) =>
+          u === `${BASE}/zones/zone-1/dns_records?type=CNAME&name=${encodeURIComponent(`biz-c.${ZONE}`)}`,
+        body: ok([{ id: "rec-c-app", content: "tun-OLD.cfargotunnel.com", proxied: false }])
+      },
+      {
+        // Voice hostname has its own stale record — exercise both PATCH calls.
+        match: (u) =>
+          u === `${BASE}/zones/zone-1/dns_records?type=CNAME&name=${encodeURIComponent(`voice-biz-c.${ZONE}`)}`,
+        body: ok([{ id: "rec-c-voice", content: "tun-OLD.cfargotunnel.com", proxied: false }])
       },
       {
         match: (u, i) =>
-          i?.method === "PATCH" && u === `${BASE}/zones/zone-1/dns_records/rec-c`,
+          i?.method === "PATCH" && u === `${BASE}/zones/zone-1/dns_records/rec-c-app`,
+        body: ok({})
+      },
+      {
+        match: (u, i) =>
+          i?.method === "PATCH" && u === `${BASE}/zones/zone-1/dns_records/rec-c-voice`,
         body: ok({})
       }
     ]);
 
     const provisioner = createCloudflareTunnelProvisioner(baseConfig(fetchImpl));
     await provisioner({ businessId: "biz-c" });
-    const patch = calls.find((c) => c.method === "PATCH");
-    expect(patch?.body).toMatchObject({
+    const appPatch = calls.find(
+      (c) => c.method === "PATCH" && c.url === `${BASE}/zones/zone-1/dns_records/rec-c-app`
+    );
+    expect(appPatch?.body).toMatchObject({
       type: "CNAME",
       name: `biz-c.${ZONE}`,
+      content: "tun-c.cfargotunnel.com",
+      proxied: true
+    });
+    const voicePatch = calls.find(
+      (c) => c.method === "PATCH" && c.url === `${BASE}/zones/zone-1/dns_records/rec-c-voice`
+    );
+    expect(voicePatch?.body).toMatchObject({
+      type: "CNAME",
+      name: `voice-biz-c.${ZONE}`,
       content: "tun-c.cfargotunnel.com",
       proxied: true
     });
@@ -353,11 +447,13 @@ describe("cloudflareTunnelProvisioner", () => {
       },
       {
         match: (u) => u.startsWith(`${BASE}/zones/zone-1/dns_records?type=CNAME&name=`),
-        body: ok([])
+        body: ok([]),
+        reuse: true
       },
       {
         match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/zone-1/dns_records`,
-        body: ok({ id: "rec-na" })
+        body: ok({ id: "rec-na" }),
+        reuse: true
       }
     ]);
 
@@ -395,11 +491,13 @@ describe("cloudflareTunnelProvisioner", () => {
       },
       {
         match: (u) => u.startsWith(`${BASE}/zones/zone-1/dns_records?type=CNAME&name=`),
-        body: ok([])
+        body: ok([]),
+        reuse: true
       },
       {
         match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/zone-1/dns_records`,
-        body: ok({ id: "rec-fresh" })
+        body: ok({ id: "rec-fresh" }),
+        reuse: true
       }
     ]);
 
@@ -504,6 +602,57 @@ describe("cloudflareTunnelProvisioner", () => {
     const provisioner = createCloudflareTunnelProvisioner(baseConfig(fetchImpl));
     await expect(provisioner({ businessId: "biz-empty-err" })).rejects.toThrow("unknown error");
   });
+
+  it("honors voiceServiceUrl + voiceHostnamePrefix overrides end-to-end", async () => {
+    // Covers the "caller supplied a real value (non-empty after trim)" branch
+    // for both voice-bridge knobs — counterpart to the whitespace-only test
+    // above, which exercises the coercion fallback.
+    const { fetchImpl, calls } = makeFetch([
+      {
+        match: (u) => u.startsWith(`${BASE}/accounts/${ACCOUNT}/cfd_tunnel?name=nc-biz-v`),
+        body: ok([{ id: "tun-v" }])
+      },
+      { match: (u) => u.endsWith("/cfd_tunnel/tun-v/token"), body: ok("T") },
+      { match: (u, i) => i?.method === "PUT" && u.endsWith("/configurations"), body: ok({}) },
+      {
+        match: (u) => u.startsWith(`${BASE}/zones/zone-v/dns_records?type=CNAME&name=`),
+        body: ok([]),
+        reuse: true
+      },
+      {
+        match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/zone-v/dns_records`,
+        body: ok({ id: "rec-v" }),
+        reuse: true
+      }
+    ]);
+    const provisioner = createCloudflareTunnelProvisioner({
+      apiToken: TOKEN,
+      accountId: ACCOUNT,
+      zoneName: "tunnel.newcoworker.com",
+      zoneId: "zone-v",
+      serviceUrl: "http://localhost:3000",
+      voiceServiceUrl: "http://127.0.0.1:9090",
+      voiceHostnamePrefix: "vb-",
+      fetchImpl
+    });
+    const result = await provisioner({ businessId: "biz-v" });
+    expect(result.voiceHostname).toBe("vb-biz-v.tunnel.newcoworker.com");
+    const ingress = calls.find(
+      (c) => c.method === "PUT" && c.url.endsWith("/configurations")
+    );
+    expect(ingress?.body).toMatchObject({
+      config: {
+        ingress: [
+          { hostname: "biz-v.tunnel.newcoworker.com", service: "http://localhost:3000" },
+          {
+            hostname: "vb-biz-v.tunnel.newcoworker.com",
+            service: "http://127.0.0.1:9090"
+          },
+          { service: "http_status:404" }
+        ]
+      }
+    });
+  });
 });
 
 describe("cloudflareTunnelProvisionerFromEnv", () => {
@@ -563,7 +712,9 @@ describe("cloudflareTunnelProvisionerFromEnv", () => {
       CLOUDFLARE_TUNNEL_ZONE: "",
       CLOUDFLARE_TUNNEL_SERVICE_URL: "",
       CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX: "",
-      CLOUDFLARE_ZONE_ID: ""
+      CLOUDFLARE_ZONE_ID: "",
+      CLOUDFLARE_TUNNEL_VOICE_SERVICE_URL: "",
+      CLOUDFLARE_TUNNEL_VOICE_HOSTNAME_PREFIX: ""
     });
     expect(provisioner).not.toBeNull();
     // Inject the fetch seam via the internal factory. We re-use credentials from
@@ -574,16 +725,24 @@ describe("cloudflareTunnelProvisionerFromEnv", () => {
       zoneName: "tunnel.newcoworker.com",
       serviceUrl: "http://localhost:3000",
       hostnameSuffix: "",
+      voiceServiceUrl: "",
+      voiceHostnamePrefix: "",
       fetchImpl
     });
     await expect(provisionerWithFetch({ businessId: "biz-e" })).rejects.toThrow(
       'Cloudflare zone "tunnel.newcoworker.com" not found'
     );
-    // The ingress request must have received a valid hostname WITHOUT a trailing dot.
+    // The ingress request must have received valid hostnames WITHOUT a
+    // trailing dot — and the voice entry must have picked up the documented
+    // default service URL / prefix despite the empty env values.
     expect(lastIngress).toMatchObject({
       config: {
         ingress: [
           { hostname: "biz-e.tunnel.newcoworker.com", service: "http://localhost:3000" },
+          {
+            hostname: "voice-biz-e.tunnel.newcoworker.com",
+            service: "http://127.0.0.1:8090"
+          },
           { service: "http_status:404" }
         ]
       }
@@ -605,11 +764,13 @@ describe("cloudflareTunnelProvisionerFromEnv", () => {
       { match: (u, i) => i?.method === "PUT" && u.endsWith("/configurations"), body: ok({}) },
       {
         match: (u) => u.startsWith(`${BASE}/zones/zone-w/dns_records?type=CNAME&name=`),
-        body: ok([])
+        body: ok([]),
+        reuse: true
       },
       {
         match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/zone-w/dns_records`,
-        body: ok({ id: "rec-w" })
+        body: ok({ id: "rec-w" }),
+        reuse: true
       }
     ]);
     const provisioner = createCloudflareTunnelProvisioner({
@@ -618,16 +779,33 @@ describe("cloudflareTunnelProvisionerFromEnv", () => {
       zoneName: "tunnel.newcoworker.com",
       zoneId: "zone-w",
       hostnameSuffix: "   ",
+      // Also exercise the whitespace-coercion path for the new voice-bridge
+      // knobs: a padded prefix should trim to the documented default.
+      voiceServiceUrl: "   ",
+      voiceHostnamePrefix: "   ",
       serviceUrl: "http://localhost:3000",
       fetchImpl
     });
     const result = await provisioner({ businessId: "biz-ws" });
     expect(result.hostname).toBe("biz-ws.tunnel.newcoworker.com");
-    const dnsCreate = calls.find(
-      (c) => c.method === "POST" && c.url === `${BASE}/zones/zone-w/dns_records`
+    expect(result.voiceHostname).toBe("voice-biz-ws.tunnel.newcoworker.com");
+    const appCreate = calls.find(
+      (c) =>
+        c.method === "POST" &&
+        c.url === `${BASE}/zones/zone-w/dns_records` &&
+        (c.body as { name?: string }).name === "biz-ws.tunnel.newcoworker.com"
     );
-    expect(dnsCreate?.body).toMatchObject({
+    expect(appCreate?.body).toMatchObject({
       name: "biz-ws.tunnel.newcoworker.com"
+    });
+    const voiceCreate = calls.find(
+      (c) =>
+        c.method === "POST" &&
+        c.url === `${BASE}/zones/zone-w/dns_records` &&
+        (c.body as { name?: string }).name === "voice-biz-ws.tunnel.newcoworker.com"
+    );
+    expect(voiceCreate?.body).toMatchObject({
+      name: "voice-biz-ws.tunnel.newcoworker.com"
     });
   });
 

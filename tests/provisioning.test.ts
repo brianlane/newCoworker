@@ -91,6 +91,11 @@ describe("provisioning/orchestrate", () => {
     delete process.env.CLOUDFLARE_TUNNEL_TOKEN;
     delete process.env.CLOUDFLARE_TUNNEL_ZONE;
     delete process.env.CLOUDFLARE_TUNNEL_SERVICE_URL;
+    // Same reasoning as the CF creds: BRIDGE_MEDIA_WSS_ORIGIN can leak in
+    // from a dev `.env` and either silently populate the bridge envVar when
+    // a test didn't intend it, or mask the "env fallback" assertion in the
+    // CF-throw test if OLD_ENV carried a different value.
+    delete process.env.BRIDGE_MEDIA_WSS_ORIGIN;
     vi.clearAllMocks();
   });
 
@@ -517,7 +522,8 @@ describe("provisioning/orchestrate", () => {
     const cfStub = vi.fn().mockResolvedValue({
       tunnelId: "tun-42",
       token: "PER_TENANT_TOKEN",
-      hostname: "biz-cf.tunnel.newcoworker.com"
+      hostname: "biz-cf.tunnel.newcoworker.com",
+      voiceHostname: "voice-biz-cf.tunnel.newcoworker.com"
     });
 
     const result = await orchestrateProvisioning(
@@ -532,10 +538,23 @@ describe("provisioning/orchestrate", () => {
       "CLOUDFLARE_TUNNEL_TOKEN",
       "PER_TENANT_TOKEN"
     );
+    // The CF voice hostname becomes the automatic BRIDGE_MEDIA_WSS_ORIGIN.
+    // Operators no longer need to run Caddy / Let's Encrypt per VPS — CF
+    // terminates TLS on the voice-* CNAME and forwards to 127.0.0.1:8090.
+    expectDeployHasEnv(
+      mockExec.mock.calls[0][1] as string,
+      "BRIDGE_MEDIA_WSS_ORIGIN",
+      "wss://voice-biz-cf.tunnel.newcoworker.com"
+    );
   });
 
   it("per-tenant tunnel: falls back to env CLOUDFLARE_TUNNEL_TOKEN when provisioner throws", async () => {
     process.env.CLOUDFLARE_TUNNEL_TOKEN = "SHARED_ENV_TOKEN";
+    // The env-var BRIDGE_MEDIA_WSS_ORIGIN is the documented escape hatch for
+    // shared-fleet deployments; when the per-tenant CF tunnel fails we must
+    // fall through to it rather than silently stripping the origin (which
+    // would make the voice bridge refuse every Telnyx media connection).
+    process.env.BRIDGE_MEDIA_WSS_ORIGIN = "wss://shared-voice.example.com";
     const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
     const mockHostinger = {
       provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-cf-fail" }),
@@ -548,12 +567,16 @@ describe("provisioning/orchestrate", () => {
       { hostinger: mockHostinger as never, cloudflareTunnel: cfStub }
     );
 
-    // Hostname stays on the canonical default when provisioner fails
     expect(result.tunnelUrl).toBe("https://biz-cf-fail.tunnel.newcoworker.com");
     expectDeployHasEnv(
       mockExec.mock.calls[0][1] as string,
       "CLOUDFLARE_TUNNEL_TOKEN",
       "SHARED_ENV_TOKEN"
+    );
+    expectDeployHasEnv(
+      mockExec.mock.calls[0][1] as string,
+      "BRIDGE_MEDIA_WSS_ORIGIN",
+      "wss://shared-voice.example.com"
     );
   });
 
