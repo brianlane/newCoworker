@@ -22,7 +22,10 @@ import { logger } from "@/lib/logger";
 export type ProvisionedTunnel = {
   tunnelId: string;
   token: string;
+  /** Public hostname forwarding to `serviceUrl` (e.g. Rowboat on :3000). */
   hostname: string;
+  /** Public hostname forwarding to `voiceServiceUrl` (voice bridge on :8090). */
+  voiceHostname: string;
 };
 
 export type CloudflareTunnelProvisioner = (input: {
@@ -46,8 +49,23 @@ export type CloudflareTunnelConfig = {
    * "<businessId>.tunnel.newcoworker.com" inside the apex zone.
    */
   hostnameSuffix?: string;
-  /** Local service the tunnel forwards to on each VPS. */
+  /** Local service the tunnel forwards to on each VPS (Rowboat, default :3000). */
   serviceUrl: string;
+  /**
+   * Local voice-bridge service URL (default "http://127.0.0.1:8090"). The
+   * tunnel publishes this behind a separate public hostname so Telnyx can
+   * reach the media WebSocket with a CF-issued cert — no per-VPS Caddy/TLS
+   * work required.
+   */
+  voiceServiceUrl?: string;
+  /**
+   * Hostname prefix for the voice bridge public URL. The resulting public
+   * hostname is `${voiceHostnamePrefix}${businessId}.${hostnameSuffix}`
+   * (default "voice-"). Using a prefix — rather than a separate subdomain —
+   * keeps everything inside the existing delegated zone so only one CF API
+   * token is ever needed.
+   */
+  voiceHostnamePrefix?: string;
   /**
    * Pre-known zone id. When supplied we skip the `GET /zones?name=…` lookup,
    * which removes one round-trip and avoids relying on the API token having
@@ -88,6 +106,8 @@ export function createCloudflareTunnelProvisioner(
     // trailing-dot label), which Cloudflare rejects as an invalid DNS record.
     // Coerce below so `""` collapses to the documented `zoneName` fallback.
     hostnameSuffix: rawHostnameSuffix,
+    voiceServiceUrl: rawVoiceServiceUrl,
+    voiceHostnamePrefix: rawVoiceHostnamePrefix,
     tunnelNamePrefix = "nc",
     fetchImpl = fetch
   } = config;
@@ -101,6 +121,18 @@ export function createCloudflareTunnelProvisioner(
     typeof rawHostnameSuffix === "string" && rawHostnameSuffix.trim().length > 0
       ? rawHostnameSuffix.trim()
       : zoneName;
+  // Same empty-string coercion pattern as hostnameSuffix above — `.env`
+  // parsing can turn an unset key into "" instead of `undefined`, which would
+  // otherwise bypass the intended defaults and produce an invalid ingress
+  // service URL (`http://127.0.0.1:`) or a bare-dot hostname (`.<suffix>`).
+  const voiceServiceUrl =
+    typeof rawVoiceServiceUrl === "string" && rawVoiceServiceUrl.trim().length > 0
+      ? rawVoiceServiceUrl.trim()
+      : "http://127.0.0.1:8090";
+  const voiceHostnamePrefix =
+    typeof rawVoiceHostnamePrefix === "string" && rawVoiceHostnamePrefix.trim().length > 0
+      ? rawVoiceHostnamePrefix.trim()
+      : "voice-";
 
   async function api<T>(path: string, init?: RequestInit): Promise<T> {
     const res = await fetchImpl(`https://api.cloudflare.com/client/v4${path}`, {
@@ -123,10 +155,48 @@ export function createCloudflareTunnelProvisioner(
     return body.result;
   }
 
+  async function ensureCnameRecord(params: {
+    businessId: string;
+    zoneId: string;
+    hostname: string;
+    cnameTarget: string;
+    role: string;
+  }): Promise<void> {
+    const { businessId, zoneId, hostname, cnameTarget, role } = params;
+    const records = await api<Array<{ id: string; content: string; proxied: boolean }>>(
+      `/zones/${zoneId}/dns_records?type=CNAME&name=${encodeURIComponent(hostname)}`
+    );
+    if (!records || records.length === 0) {
+      await api(`/zones/${zoneId}/dns_records`, {
+        method: "POST",
+        body: JSON.stringify({
+          type: "CNAME",
+          name: hostname,
+          content: cnameTarget,
+          proxied: true,
+          comment: `newCoworker orchestrator: business ${businessId} (${role})`
+        })
+      });
+      logger.info("cloudflare DNS CNAME created", { businessId, role, hostname, cnameTarget });
+    } else if (records[0].content !== cnameTarget || records[0].proxied !== true) {
+      await api(`/zones/${zoneId}/dns_records/${records[0].id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          type: "CNAME",
+          name: hostname,
+          content: cnameTarget,
+          proxied: true
+        })
+      });
+      logger.info("cloudflare DNS CNAME updated", { businessId, role, hostname, cnameTarget });
+    }
+  }
+
   return async function provisionBusinessTunnel({ businessId }): Promise<ProvisionedTunnel> {
     if (!businessId) throw new Error("businessId required");
     const tunnelName = `${tunnelNamePrefix}-${businessId}`;
     const hostname = `${businessId}.${hostnameSuffix}`;
+    const voiceHostname = `${voiceHostnamePrefix}${businessId}.${hostnameSuffix}`;
 
     // 1. Reuse an existing tunnel by name, otherwise create one. CF accepts the
     //    "config_src=cloudflare" mode which lets us manage ingress via API
@@ -155,21 +225,26 @@ export function createCloudflareTunnelProvisioner(
       throw new Error(`Cloudflare returned empty tunnel token for ${tunnelId}`);
     }
 
-    // 3. Write the ingress rules. The catch-all 404 entry is required by CF —
-    //    ingress arrays must terminate with a rule that has no `hostname`.
+    // 3. Write the ingress rules. Two public hostnames on the same tunnel —
+    //    one for Rowboat (app surface), one for the voice bridge (Telnyx media
+    //    WebSocket). cloudflared on the VPS routes incoming requests to the
+    //    right loopback port based on the incoming Host header. The catch-all
+    //    404 entry is required by CF: ingress arrays must terminate with a
+    //    rule that has no `hostname`.
     await api(`/accounts/${accountId}/cfd_tunnel/${tunnelId}/configurations`, {
       method: "PUT",
       body: JSON.stringify({
         config: {
           ingress: [
             { hostname, service: serviceUrl },
+            { hostname: voiceHostname, service: voiceServiceUrl },
             { service: "http_status:404" }
           ]
         }
       })
     });
 
-    // 4. Ensure the public hostname CNAME exists in the delegated zone. We
+    // 4. Ensure both public hostname CNAMEs exist in the delegated zone. We
     //    support both "missing" (create) and "stale content" (update) paths so
     //    a re-provision heals drift without operator intervention. If the
     //    caller pre-configured a zoneId we skip the lookup to save a round-trip
@@ -188,36 +263,16 @@ export function createCloudflareTunnelProvisioner(
       zoneId = zones[0].id;
     }
     const cnameTarget = `${tunnelId}.cfargotunnel.com`;
+    await ensureCnameRecord({ businessId, zoneId, hostname, cnameTarget, role: "app" });
+    await ensureCnameRecord({
+      businessId,
+      zoneId,
+      hostname: voiceHostname,
+      cnameTarget,
+      role: "voice"
+    });
 
-    const records = await api<Array<{ id: string; content: string; proxied: boolean }>>(
-      `/zones/${zoneId}/dns_records?type=CNAME&name=${encodeURIComponent(hostname)}`
-    );
-    if (!records || records.length === 0) {
-      await api(`/zones/${zoneId}/dns_records`, {
-        method: "POST",
-        body: JSON.stringify({
-          type: "CNAME",
-          name: hostname,
-          content: cnameTarget,
-          proxied: true,
-          comment: `newCoworker orchestrator: business ${businessId}`
-        })
-      });
-      logger.info("cloudflare DNS CNAME created", { businessId, hostname, cnameTarget });
-    } else if (records[0].content !== cnameTarget || records[0].proxied !== true) {
-      await api(`/zones/${zoneId}/dns_records/${records[0].id}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          type: "CNAME",
-          name: hostname,
-          content: cnameTarget,
-          proxied: true
-        })
-      });
-      logger.info("cloudflare DNS CNAME updated", { businessId, hostname, cnameTarget });
-    }
-
-    return { tunnelId, token, hostname };
+    return { tunnelId, token, hostname, voiceHostname };
   };
 }
 
@@ -243,6 +298,8 @@ export function cloudflareTunnelProvisionerFromEnv(
     zoneName: blankToUndefined(env.CLOUDFLARE_TUNNEL_ZONE) ?? "tunnel.newcoworker.com",
     serviceUrl: blankToUndefined(env.CLOUDFLARE_TUNNEL_SERVICE_URL) ?? "http://localhost:3000",
     zoneId: blankToUndefined(env.CLOUDFLARE_ZONE_ID),
-    hostnameSuffix: blankToUndefined(env.CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX)
+    hostnameSuffix: blankToUndefined(env.CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX),
+    voiceServiceUrl: blankToUndefined(env.CLOUDFLARE_TUNNEL_VOICE_SERVICE_URL),
+    voiceHostnamePrefix: blankToUndefined(env.CLOUDFLARE_TUNNEL_VOICE_HOSTNAME_PREFIX)
   });
 }

@@ -271,6 +271,31 @@ report_progress 95 "business_online_patch" "Business status set to online in Sup
 # ------------------------------------------------------------------
 VOICE_BRIDGE_SRC="${VOICE_BRIDGE_SRC:-/opt/newcoworker-repo/vps/voice-bridge}"
 VOICE_BRIDGE_DEST="/opt/voice-bridge"
+NEWCOWORKER_REPO_URL="${NEWCOWORKER_REPO_URL:-https://github.com/brianlane/newCoworker.git}"
+NEWCOWORKER_REPO_REF="${NEWCOWORKER_REPO_REF:-main}"
+NEWCOWORKER_REPO_PATH="${NEWCOWORKER_REPO_PATH:-/opt/newcoworker-repo}"
+
+# Keep the staged repo in lockstep with `${NEWCOWORKER_REPO_REF}` on every
+# deploy so the voice-bridge rsync below always picks up the latest source.
+# bootstrap.sh does the initial clone; this block handles the ongoing pull
+# and tolerates the "staging skipped / overridden" case silently. If the
+# operator has pointed VOICE_BRIDGE_SRC at a custom path that isn't a git
+# checkout, we leave it alone — their sync discipline, their source of truth.
+if [[ "${VOICE_BRIDGE_SRC}" == "${NEWCOWORKER_REPO_PATH}/vps/voice-bridge" ]]; then
+  if [[ -d "${NEWCOWORKER_REPO_PATH}/.git" ]]; then
+    log "Refreshing repo at ${NEWCOWORKER_REPO_PATH} (ref=${NEWCOWORKER_REPO_REF})..."
+    git -C "${NEWCOWORKER_REPO_PATH}" fetch --depth=1 origin "${NEWCOWORKER_REPO_REF}" || \
+      log "WARN: git fetch failed; continuing with existing tree at ${NEWCOWORKER_REPO_PATH}"
+    git -C "${NEWCOWORKER_REPO_PATH}" checkout -B "${NEWCOWORKER_REPO_REF}" \
+        "origin/${NEWCOWORKER_REPO_REF}" || true
+  elif command -v git >/dev/null 2>&1; then
+    log "Repo missing at ${NEWCOWORKER_REPO_PATH}; cloning..."
+    mkdir -p "$(dirname "${NEWCOWORKER_REPO_PATH}")"
+    git clone --depth=1 --branch "${NEWCOWORKER_REPO_REF}" \
+      "${NEWCOWORKER_REPO_URL}" "${NEWCOWORKER_REPO_PATH}" || \
+      log "WARN: git clone failed; voice-bridge sync will be skipped"
+  fi
+fi
 
 if [[ -d "${VOICE_BRIDGE_SRC}" && -f "${VOICE_BRIDGE_SRC}/docker-compose.yml" ]]; then
   log "Syncing voice-bridge source ${VOICE_BRIDGE_SRC} → ${VOICE_BRIDGE_DEST}..."
@@ -327,6 +352,48 @@ GEMINI_LIVE_MODEL=${GEMINI_LIVE_MODEL:-gemini-3.1-flash-live-preview}
 GEMINI_LIVE_ENABLED=${effective_gemini_live_enabled}
 VBENV_EOF
     chmod 600 .env
+
+    # Post-write verification: every key below must be present AND non-empty,
+    # otherwise the bridge will silently fall into degraded states (no TLS
+    # origin → Telnyx 403; blank signing secret → every stream URL rejected;
+    # blank supabase creds → heartbeats fail). Emit a WARN-level progress
+    # event with the missing key list so Mission Control flags the deploy
+    # without SSH. The bridge itself enforces these at startup, but surfacing
+    # the list earlier avoids a container crash-loop diagnosis detour.
+    #
+    # Keep this list in sync with vps/voice-bridge/src/index.ts env reads.
+    bridge_required_keys=(
+      STREAM_URL_SIGNING_SECRET
+      SUPABASE_URL
+      SUPABASE_SERVICE_ROLE_KEY
+      BUSINESS_ID
+      BRIDGE_MEDIA_WSS_ORIGIN
+      GEMINI_LIVE_MODEL
+      GEMINI_LIVE_ENABLED
+    )
+    missing_keys=()
+    for key in "${bridge_required_keys[@]}"; do
+      # Match `KEY=<non-empty>` — a bare `KEY=` counts as missing. Restrict
+      # the regex to line-start so a commented `# KEY=foo` doesn't mask a
+      # blank real entry (belt-and-braces: we don't write comments above).
+      if ! grep -E "^${key}=.+" .env >/dev/null 2>&1; then
+        missing_keys+=("$key")
+      fi
+    done
+    if [[ ${#missing_keys[@]} -eq 0 ]]; then
+      log "voice-bridge .env: all required keys present"
+      # Use a distinct phase so the dashboard can treat this as informational
+      # (doesn't override the later ready/unhealthy events). Piggyback on the
+      # 96 band so it strictly precedes voice_bridge_ready (98).
+      report_progress 96 "voice_bridge_env_verified" \
+        "voice-bridge .env has ${#bridge_required_keys[@]} required keys"
+    else
+      # IFS-join without jq — keeps the message human-readable.
+      joined=$(IFS=,; echo "${missing_keys[*]}")
+      log "WARN: voice-bridge .env is missing required keys: ${joined}"
+      report_progress 96 "voice_bridge_env_incomplete" \
+        "voice-bridge .env missing required keys: ${joined}"
+    fi
 
     if docker compose up -d --build --force-recreate; then
       # Poll liveness endpoint. Dockerfile exposes GET / → 200 OK.
