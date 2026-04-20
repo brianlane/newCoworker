@@ -580,13 +580,25 @@ describe("cloudflareTunnelProvisionerFromEnv", () => {
       fetchImpl
     });
     await expect(provisioner({ businessId: "biz-x" })).rejects.toThrow("custom.example.org");
+    // The zone-name override flows through as the `name` query param on the
+    // zones lookup — `GET https://api.cloudflare.com/client/v4/zones?name=<zone>`.
+    // Parse each captured URL and assert the lookup actually carried our
+    // override as an exact-equality query value. Substring matching on the
+    // full URL string is a CodeQL false-positive magnet; hostname/path +
+    // `searchParams.get` gives us both a passing assertion and a safe pattern.
     expect(
       seen.some((u) => {
+        let parsed: URL;
         try {
-          return new URL(u).hostname === "custom.example.org";
+          parsed = new URL(u);
         } catch {
           return false;
         }
+        return (
+          parsed.hostname === "api.cloudflare.com" &&
+          parsed.pathname === "/client/v4/zones" &&
+          parsed.searchParams.get("name") === "custom.example.org"
+        );
       })
     ).toBe(true);
   });
