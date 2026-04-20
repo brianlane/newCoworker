@@ -438,6 +438,115 @@ describe("cloudflareTunnelProvisionerFromEnv", () => {
     expect(typeof provisioner).toBe("function");
   });
 
+  it("empty-string CLOUDFLARE_* overrides collapse to defaults (dotenv blank-line regression)", async () => {
+    // .env.example documents several CLOUDFLARE_* keys as optional. When the
+    // operator leaves them blank — the `.env` canonical form is `KEY=` — dotenv
+    // hands us `""`, which is NOT caught by `??` or destructuring defaults.
+    // Regression: an empty CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX used to produce
+    // hostname="<bid>." (trailing-dot label), creating an invalid CNAME record.
+    //
+    // This test drives the full provisioner with all optional keys set to ""
+    // and asserts the hostname / zone-lookup collapse to the documented
+    // defaults. We can't observe it from the returned provisioner directly, so
+    // we let it fail at the zone-lookup step and inspect the URL it queried —
+    // if coercion is missing, the URL would be the literal "zones?name=" with
+    // no zone, and the hostname argument passed down would be malformed.
+    const seen: string[] = [];
+    let lastIngress: unknown = null;
+    const fetchImpl = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      const u = String(url);
+      seen.push(u);
+      if (u.includes("cfd_tunnel?name=")) {
+        return new Response(JSON.stringify(ok([{ id: "tun-e" }])), { status: 200 });
+      }
+      if (u.endsWith("/token")) {
+        return new Response(JSON.stringify(ok("TOK")), { status: 200 });
+      }
+      if (u.includes("/configurations")) {
+        lastIngress = init?.body ? JSON.parse(String(init.body)) : null;
+        return new Response(JSON.stringify(ok({})), { status: 200 });
+      }
+      // Cause provisioning to fail here so we can assert on the zone lookup URL.
+      if (u.startsWith(`${BASE}/zones?name=`)) {
+        return new Response(JSON.stringify(ok([])), { status: 200 });
+      }
+      return new Response(JSON.stringify(ok({})), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const provisioner = cloudflareTunnelProvisionerFromEnv({
+      CLOUDFLARE_API_TOKEN: "t",
+      CLOUDFLARE_ACCOUNT_ID: "a",
+      CLOUDFLARE_TUNNEL_ZONE: "",
+      CLOUDFLARE_TUNNEL_SERVICE_URL: "",
+      CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX: "",
+      CLOUDFLARE_ZONE_ID: ""
+    });
+    expect(provisioner).not.toBeNull();
+    // Inject the fetch seam via the internal factory. We re-use credentials from
+    // the env to prove they survived coercion (apiToken="t", accountId="a").
+    const provisionerWithFetch = createCloudflareTunnelProvisioner({
+      apiToken: "t",
+      accountId: "a",
+      zoneName: "tunnel.newcoworker.com",
+      serviceUrl: "http://localhost:3000",
+      hostnameSuffix: "",
+      fetchImpl
+    });
+    await expect(provisionerWithFetch({ businessId: "biz-e" })).rejects.toThrow(
+      'Cloudflare zone "tunnel.newcoworker.com" not found'
+    );
+    // The ingress request must have received a valid hostname WITHOUT a trailing dot.
+    expect(lastIngress).toMatchObject({
+      config: {
+        ingress: [
+          { hostname: "biz-e.tunnel.newcoworker.com", service: "http://localhost:3000" },
+          { service: "http_status:404" }
+        ]
+      }
+    });
+    // And the zone lookup must use the default zone, not the empty string.
+    expect(
+      seen.some((u) => u === `${BASE}/zones?name=tunnel.newcoworker.com`)
+    ).toBe(true);
+  });
+
+  it("whitespace-only CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX also collapses to zoneName", async () => {
+    // Belt-and-braces: accidental "  " values must not leak into the hostname.
+    const { fetchImpl, calls } = makeFetch([
+      {
+        match: (u) => u.startsWith(`${BASE}/accounts/${ACCOUNT}/cfd_tunnel?name=nc-biz-ws`),
+        body: ok([{ id: "tun-ws" }])
+      },
+      { match: (u) => u.endsWith("/cfd_tunnel/tun-ws/token"), body: ok("T") },
+      { match: (u, i) => i?.method === "PUT" && u.endsWith("/configurations"), body: ok({}) },
+      {
+        match: (u) => u.startsWith(`${BASE}/zones/zone-w/dns_records?type=CNAME&name=`),
+        body: ok([])
+      },
+      {
+        match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/zone-w/dns_records`,
+        body: ok({ id: "rec-w" })
+      }
+    ]);
+    const provisioner = createCloudflareTunnelProvisioner({
+      apiToken: TOKEN,
+      accountId: ACCOUNT,
+      zoneName: "tunnel.newcoworker.com",
+      zoneId: "zone-w",
+      hostnameSuffix: "   ",
+      serviceUrl: "http://localhost:3000",
+      fetchImpl
+    });
+    const result = await provisioner({ businessId: "biz-ws" });
+    expect(result.hostname).toBe("biz-ws.tunnel.newcoworker.com");
+    const dnsCreate = calls.find(
+      (c) => c.method === "POST" && c.url === `${BASE}/zones/zone-w/dns_records`
+    );
+    expect(dnsCreate?.body).toMatchObject({
+      name: "biz-ws.tunnel.newcoworker.com"
+    });
+  });
+
   it("honors CLOUDFLARE_TUNNEL_ZONE / CLOUDFLARE_TUNNEL_SERVICE_URL overrides", async () => {
     // Capture the URL the provisioner queries for its first tunnel lookup — if
     // our overrides flow through, the downstream DNS zone lookup will include

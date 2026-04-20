@@ -404,31 +404,42 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
     );
   }
 
-  it("does void when dispute is created", async () => {
+  it("does NOT void on dispute.created (observational only; dispute outcome unknown)", async () => {
+    // A dispute opened is not a terminal outcome. Stripe disputes can close as
+    // `lost` / `won` / `warning_closed`; only `lost` reverses funds. Voiding at
+    // open would permanently revoke seconds from customers whose merchants
+    // successfully defend — the handler has no re-grant compensation path.
     vi.mocked(verifyWebhook).mockReturnValue({
       id: "evt_dispute_created",
       type: "charge.dispute.created",
       data: {
         object: {
           id: "dp_created_1",
-          payment_intent: "pi_created_1"
+          payment_intent: "pi_created_1",
+          charge: "ch_created_1",
+          reason: "fraudulent",
+          amount: 3000
         }
       }
     } as never);
 
     const res = await postEvent();
     expect(res.status).toBe(200);
-    expect(mockCheckoutSessionsList).toHaveBeenCalledWith({
-      payment_intent: "pi_created_1",
-      limit: 5
-    });
-    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+    // Must not even look up the Checkout Session.
+    expect(mockCheckoutSessionsList).not.toHaveBeenCalled();
+    expect(mockVoiceBonusRpc).not.toHaveBeenCalledWith(
       "void_voice_bonus_grant_by_checkout_session",
-      {
-        p_checkout_session_id: "cs_test_bonus_for_refund",
-        p_reason: "dispute",
-        p_clawback_seconds: null
-      }
+      expect.anything()
+    );
+    // But we should log the open for ops visibility.
+    expect(logger.info).toHaveBeenCalledWith(
+      "Stripe dispute created; deferring clawback to dispute.closed/lost",
+      expect.objectContaining({
+        disputeId: "dp_created_1",
+        chargeId: "ch_created_1",
+        reason: "fraudulent",
+        amount: 3000
+      })
     );
   });
 

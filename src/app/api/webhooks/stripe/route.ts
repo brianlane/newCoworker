@@ -117,9 +117,28 @@ export async function POST(request: Request) {
       }
 
       case "charge.refunded":
-      case "charge.dispute.created":
       case "charge.dispute.closed": {
         await handleVoiceBonusRefund(event);
+        break;
+      }
+
+      case "charge.dispute.created": {
+        // Observational only: do NOT clawback at dispute open. Stripe disputes
+        // take days-to-weeks to resolve and can terminate as `won` or
+        // `warning_closed`, both of which leave funds with the merchant. Since
+        // we have no re-grant path for a subsequently-defended dispute, voiding
+        // at open would permanently revoke paid voice seconds from customers
+        // whose merchants successfully defend. `charge.dispute.closed` + status
+        // == "lost" is the single authoritative clawback path; see
+        // `handleVoiceBonusRefund`.
+        const dispute = event.data.object as Stripe.Dispute;
+        logger.info("Stripe dispute created; deferring clawback to dispute.closed/lost", {
+          eventId: event.id,
+          disputeId: dispute.id,
+          chargeId: typeof dispute.charge === "string" ? dispute.charge : dispute.charge?.id,
+          reason: dispute.reason,
+          amount: dispute.amount
+        });
         break;
       }
 
@@ -438,21 +457,24 @@ export function computeVoiceBonusClawbackSeconds(
  * consumed. Looks up the Checkout Session via the payment intent on the charge.
  * Idempotent.
  *
- * Dispute semantics (important): `charge.dispute.created` gives the fastest clawback path
- * for the dashboard webhook configuration in v1, while `charge.dispute.closed` remains as
- * a backstop for existing endpoints that already emit it. `charge.dispute.closed` fires for
- * all terminal dispute statuses per Stripe — `lost`, `won`, and `warning_closed`. Only
- * `lost` actually moves funds back to the cardholder; `won` means the merchant
- * successfully defended the dispute and keeps the money, and `warning_closed` means an
- * early warning resolved without a chargeback. Voiding the grant for `won` /
- * `warning_closed` would revoke paid voice credits from a customer whose dispute the
- * merchant just defended.
+ * Dispute semantics (important): only `charge.dispute.closed` with status `lost`
+ * drives a clawback here. `charge.dispute.created` is observational (logged by the
+ * dispatcher) and explicitly not routed into this function, because the dispute
+ * outcome isn't known yet — Stripe disputes can close as `lost` (chargeback),
+ * `won` (merchant defended), or `warning_closed` (early warning, no chargeback).
+ * Only `lost` actually reverses funds; voiding grants on `created` and then
+ * relying on `closed` as a "second void" would permanently revoke paid voice
+ * credits from customers whose merchants successfully defended disputes, because
+ * this handler has no compensating re-grant path for non-lost outcomes. The
+ * merchant accepts the credit-exposure risk during the (typically 1–6 week)
+ * dispute window in exchange for correctness on defended disputes.
  *
- * Partial refunds (§4.1 follow-up): for `charge.refunded` we now pass a prorated
- * `p_clawback_seconds` to the RPC so a partial refund reduces the grant proportionally
- * instead of voiding it fully. Dispute events still pass `null` (full void) because
- * Stripe disputes can reverse the full captured amount regardless of `dispute.amount`,
- * and the partial-dispute case is rare + ambiguous.
+ * Partial refunds (§4.1 follow-up): for `charge.refunded` we pass a prorated
+ * `p_clawback_seconds` to the RPC so a partial refund reduces the grant
+ * proportionally instead of voiding it fully. `charge.dispute.closed`/lost
+ * passes `null` (full void) because Stripe disputes reverse the full captured
+ * amount regardless of `dispute.amount` in practice, and the partial-dispute
+ * case is rare and ambiguous.
  */
 async function handleVoiceBonusRefund(event: Stripe.Event): Promise<void> {
   const obj = event.data.object as Stripe.Charge | Stripe.Dispute;

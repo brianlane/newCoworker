@@ -81,7 +81,13 @@ export function createCloudflareTunnelProvisioner(
     zoneName,
     serviceUrl,
     zoneId: configuredZoneId,
-    hostnameSuffix = zoneName,
+    // Note: we do NOT use a destructuring default here. JS default initializers
+    // only fire for `undefined`, but `.env` parsing and `cloudflareTunnelProvisionerFromEnv`
+    // can both hand us an explicit empty string for an unset/blank key. An
+    // empty-string default would produce `hostname = "${businessId}."` (a
+    // trailing-dot label), which Cloudflare rejects as an invalid DNS record.
+    // Coerce below so `""` collapses to the documented `zoneName` fallback.
+    hostnameSuffix: rawHostnameSuffix,
     tunnelNamePrefix = "nc",
     fetchImpl = fetch
   } = config;
@@ -90,6 +96,11 @@ export function createCloudflareTunnelProvisioner(
   if (!accountId) throw new Error("CloudflareTunnelConfig.accountId is required");
   if (!zoneName) throw new Error("CloudflareTunnelConfig.zoneName is required");
   if (!serviceUrl) throw new Error("CloudflareTunnelConfig.serviceUrl is required");
+
+  const hostnameSuffix =
+    typeof rawHostnameSuffix === "string" && rawHostnameSuffix.trim().length > 0
+      ? rawHostnameSuffix.trim()
+      : zoneName;
 
   async function api<T>(path: string, init?: RequestInit): Promise<T> {
     const res = await fetchImpl(`https://api.cloudflare.com/client/v4${path}`, {
@@ -213,15 +224,25 @@ export function createCloudflareTunnelProvisioner(
 export function cloudflareTunnelProvisionerFromEnv(
   env: Record<string, string | undefined> = process.env
 ): CloudflareTunnelProvisioner | null {
-  const apiToken = env.CLOUDFLARE_API_TOKEN;
-  const accountId = env.CLOUDFLARE_ACCOUNT_ID;
+  // `dotenv` (and Vercel env pulls) returns the empty string "" for blank lines
+  // like `CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX=` — which is exactly how .env.example
+  // documents the optional keys. Coerce blank/whitespace strings to `undefined`
+  // so the downstream `??` fallbacks and destructuring defaults actually fire.
+  const blankToUndefined = (v: string | undefined): string | undefined => {
+    if (typeof v !== "string") return undefined;
+    const trimmed = v.trim();
+    return trimmed.length === 0 ? undefined : trimmed;
+  };
+
+  const apiToken = blankToUndefined(env.CLOUDFLARE_API_TOKEN);
+  const accountId = blankToUndefined(env.CLOUDFLARE_ACCOUNT_ID);
   if (!apiToken || !accountId) return null;
   return createCloudflareTunnelProvisioner({
     apiToken,
     accountId,
-    zoneName: env.CLOUDFLARE_TUNNEL_ZONE ?? "tunnel.newcoworker.com",
-    serviceUrl: env.CLOUDFLARE_TUNNEL_SERVICE_URL ?? "http://localhost:3000",
-    zoneId: env.CLOUDFLARE_ZONE_ID,
-    hostnameSuffix: env.CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX
+    zoneName: blankToUndefined(env.CLOUDFLARE_TUNNEL_ZONE) ?? "tunnel.newcoworker.com",
+    serviceUrl: blankToUndefined(env.CLOUDFLARE_TUNNEL_SERVICE_URL) ?? "http://localhost:3000",
+    zoneId: blankToUndefined(env.CLOUDFLARE_ZONE_ID),
+    hostnameSuffix: blankToUndefined(env.CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX)
   });
 }
