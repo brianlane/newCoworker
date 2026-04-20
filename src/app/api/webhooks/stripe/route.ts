@@ -117,6 +117,7 @@ export async function POST(request: Request) {
       }
 
       case "charge.refunded":
+      case "charge.dispute.created":
       case "charge.dispute.closed": {
         await handleVoiceBonusRefund(event);
         break;
@@ -437,18 +438,21 @@ export function computeVoiceBonusClawbackSeconds(
  * consumed. Looks up the Checkout Session via the payment intent on the charge.
  * Idempotent.
  *
- * Dispute semantics (important): `charge.dispute.closed` fires for ALL terminal dispute
- * statuses per Stripe — `lost`, `won`, and `warning_closed`. Only `lost` actually moves
- * funds back to the cardholder; `won` means the merchant successfully defended the
- * dispute and keeps the money, and `warning_closed` means an early warning resolved
- * without a chargeback. Voiding the grant for `won` / `warning_closed` would revoke
- * paid voice credits from a customer whose dispute the merchant just defended.
+ * Dispute semantics (important): `charge.dispute.created` gives the fastest clawback path
+ * for the dashboard webhook configuration in v1, while `charge.dispute.closed` remains as
+ * a backstop for existing endpoints that already emit it. `charge.dispute.closed` fires for
+ * all terminal dispute statuses per Stripe — `lost`, `won`, and `warning_closed`. Only
+ * `lost` actually moves funds back to the cardholder; `won` means the merchant
+ * successfully defended the dispute and keeps the money, and `warning_closed` means an
+ * early warning resolved without a chargeback. Voiding the grant for `won` /
+ * `warning_closed` would revoke paid voice credits from a customer whose dispute the
+ * merchant just defended.
  *
  * Partial refunds (§4.1 follow-up): for `charge.refunded` we now pass a prorated
  * `p_clawback_seconds` to the RPC so a partial refund reduces the grant proportionally
- * instead of voiding it fully. `charge.dispute.closed` with status=lost still passes
- * `null` (full void) because Stripe disputes can reverse the full captured amount
- * regardless of `dispute.amount`, and the partial-dispute case is rare + ambiguous.
+ * instead of voiding it fully. Dispute events still pass `null` (full void) because
+ * Stripe disputes can reverse the full captured amount regardless of `dispute.amount`,
+ * and the partial-dispute case is rare + ambiguous.
  */
 async function handleVoiceBonusRefund(event: Stripe.Event): Promise<void> {
   const obj = event.data.object as Stripe.Charge | Stripe.Dispute;
@@ -529,7 +533,7 @@ async function handleVoiceBonusRefund(event: Stripe.Event): Promise<void> {
 
   const { createSupabaseServiceClient } = await import("@/lib/supabase/server");
   const db = await createSupabaseServiceClient();
-  const reason = event.type === "charge.dispute.closed" ? "dispute" : "refund";
+  const reason = event.type.startsWith("charge.dispute.") ? "dispute" : "refund";
 
   for (const session of voiceBonusSessions) {
     // Compute prorated clawback only for refunds: disputes still pass null (full void).

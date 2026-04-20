@@ -38,3 +38,4 @@ supabase/.temp/
 *.tsbuildinfo
 .testconvo
 test-results/
+.vercel

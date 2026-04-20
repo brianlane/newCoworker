@@ -65,7 +65,11 @@ vi.mock("@/lib/logger", () => ({
   }
 }));
 
-import { POST } from "@/app/api/webhooks/stripe/route";
+import {
+  POST,
+  computeVoiceBonusClawbackSeconds,
+  parseVoiceBonusSecondsFromMetadata
+} from "@/app/api/webhooks/stripe/route";
 import { ensureCommitmentSchedule, verifyWebhook } from "@/lib/stripe/client";
 import {
   getSubscription,
@@ -374,7 +378,6 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
     vi.clearAllMocks();
     mockVoiceBonusRpc.mockClear();
     mockCheckoutSessionsList.mockReset();
-    // Default: one voice-bonus-seconds Checkout Session associated with the payment intent.
     mockCheckoutSessionsList.mockResolvedValue({
       data: [
         {
@@ -400,6 +403,34 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
       })
     );
   }
+
+  it("does void when dispute is created", async () => {
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_dispute_created",
+      type: "charge.dispute.created",
+      data: {
+        object: {
+          id: "dp_created_1",
+          payment_intent: "pi_created_1"
+        }
+      }
+    } as never);
+
+    const res = await postEvent();
+    expect(res.status).toBe(200);
+    expect(mockCheckoutSessionsList).toHaveBeenCalledWith({
+      payment_intent: "pi_created_1",
+      limit: 5
+    });
+    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      {
+        p_checkout_session_id: "cs_test_bonus_for_refund",
+        p_reason: "dispute",
+        p_clawback_seconds: null
+      }
+    );
+  });
 
   it("does NOT void when dispute closed with status=won (merchant defended successfully)", async () => {
     vi.mocked(verifyWebhook).mockReturnValue({
@@ -495,7 +526,6 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
     expect(res.status).toBe(200);
     expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
       "void_voice_bonus_grant_by_checkout_session",
-      // No `amount` on the charge object → can't prorate → full void (p_clawback_seconds: null).
       {
         p_checkout_session_id: "cs_test_bonus_for_refund",
         p_reason: "refund",
@@ -681,7 +711,6 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
 
     const res = await postEvent();
     expect(res.status).toBe(200);
-    // 25% refunded → 300 of 1200 seconds clawed back (partial, grant not fully voided).
     expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
       "void_voice_bonus_grant_by_checkout_session",
       {
@@ -730,5 +759,39 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
         p_clawback_seconds: null
       }
     );
+  });
+});
+
+describe("stripe webhook helpers", () => {
+  it("accepts positive integer strings within the hard max", () => {
+    expect(parseVoiceBonusSecondsFromMetadata("1800")).toBe(1800);
+    expect(parseVoiceBonusSecondsFromMetadata("31536000")).toBe(31536000);
+  });
+
+  it("rejects invalid metadata values", () => {
+    expect(parseVoiceBonusSecondsFromMetadata(null)).toBeNull();
+    expect(parseVoiceBonusSecondsFromMetadata(undefined)).toBeNull();
+    expect(parseVoiceBonusSecondsFromMetadata("0")).toBeNull();
+    expect(parseVoiceBonusSecondsFromMetadata("-1")).toBeNull();
+    expect(parseVoiceBonusSecondsFromMetadata("1.5")).toBeNull();
+    expect(parseVoiceBonusSecondsFromMetadata("1e3")).toBeNull();
+    expect(parseVoiceBonusSecondsFromMetadata("0x10")).toBeNull();
+    expect(parseVoiceBonusSecondsFromMetadata("31536001")).toBeNull();
+    expect(parseVoiceBonusSecondsFromMetadata("9999999999")).toBeNull();
+  });
+
+  it("returns null for full refunds so the caller does a full void", () => {
+    expect(computeVoiceBonusClawbackSeconds(50, 50, 600)).toBeNull();
+  });
+
+  it("returns a rounded proportional clawback for partial refunds", () => {
+    expect(computeVoiceBonusClawbackSeconds(100, 25, 1800)).toBe(450);
+    expect(computeVoiceBonusClawbackSeconds(50, 1, 300)).toBe(6);
+  });
+
+  it("returns zero for zero-amount clawbacks and null when inputs are unusable", () => {
+    expect(computeVoiceBonusClawbackSeconds(100, 0, 1800)).toBe(0);
+    expect(computeVoiceBonusClawbackSeconds(0, 10, 1800)).toBeNull();
+    expect(computeVoiceBonusClawbackSeconds(100, 10, 0)).toBeNull();
   });
 });
