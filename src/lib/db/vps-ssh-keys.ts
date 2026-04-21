@@ -10,7 +10,14 @@
  *  - Orchestrator writes once per VPS provision (via {@link insertVpsSshKey}).
  *  - Orchestrator reads to re-SSH for redeploys (via {@link getActiveVpsSshKey}).
  *  - Admin endpoint reads for break-glass console access.
- *  - Rotation inserts a new row and stamps `rotated_at` on the predecessor.
+ *
+ * Rotation (stamping `rotated_at` on a predecessor row after a replacement is
+ * provisioned) is a planned workflow but is NOT yet wired up. A previous
+ * `markVpsSshKeyRotated` helper lived here but was removed because it had no
+ * callers — shipping unused exports created a false impression that the
+ * rotation path existed. When rotation is implemented, reintroduce a helper
+ * alongside the orchestrator call that actually invokes it (and update the
+ * partial unique index reasoning in the migration).
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -110,17 +117,4 @@ export async function getActiveVpsSshKeyForBusiness(
 
   if (error) throw new Error(`getActiveVpsSshKeyForBusiness: ${error.message}`);
   return (data as VpsSshKeyRow | null) ?? null;
-}
-
-/** Mark a key as rotated; used after provisioning a replacement. */
-export async function markVpsSshKeyRotated(
-  id: string,
-  client?: SupabaseClient
-): Promise<void> {
-  const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db
-    .from("vps_ssh_keys")
-    .update({ rotated_at: new Date().toISOString() })
-    .eq("id", id);
-  if (error) throw new Error(`markVpsSshKeyRotated: ${error.message}`);
 }

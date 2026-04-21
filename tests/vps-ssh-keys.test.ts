@@ -8,8 +8,7 @@ vi.mock("@/lib/supabase/server", () => ({
 import {
   insertVpsSshKey,
   getActiveVpsSshKey,
-  getActiveVpsSshKeyForBusiness,
-  markVpsSshKeyRotated
+  getActiveVpsSshKeyForBusiness
 } from "@/lib/db/vps-ssh-keys";
 
 type MockQB = {
@@ -21,7 +20,6 @@ type MockQB = {
   limit: ReturnType<typeof vi.fn>;
   single: ReturnType<typeof vi.fn>;
   maybeSingle: ReturnType<typeof vi.fn>;
-  update: ReturnType<typeof vi.fn>;
 };
 
 function makeChain() {
@@ -33,8 +31,7 @@ function makeChain() {
     order: vi.fn(() => qb),
     limit: vi.fn(() => qb),
     single: vi.fn(),
-    maybeSingle: vi.fn(),
-    update: vi.fn(() => qb)
+    maybeSingle: vi.fn()
   };
   return qb;
 }
@@ -168,25 +165,6 @@ describe("vps_ssh_keys DB layer", () => {
     await expect(getActiveVpsSshKeyForBusiness("x", db as never)).rejects.toThrow(/db error/);
   });
 
-  it("markVpsSshKeyRotated stamps rotated_at", async () => {
-    const chain = makeChain();
-    // `update(...).eq(...)` resolves to `{ error: null }` on success.
-    chain.eq.mockReturnValue(Promise.resolve({ error: null }) as never);
-    const db = makeDb(chain);
-    await markVpsSshKeyRotated("row-uuid", db as never);
-    expect(chain.update).toHaveBeenCalledWith(
-      expect.objectContaining({ rotated_at: expect.any(String) })
-    );
-    expect(chain.eq).toHaveBeenCalledWith("id", "row-uuid");
-  });
-
-  it("markVpsSshKeyRotated throws on error", async () => {
-    const chain = makeChain();
-    chain.eq.mockReturnValue(Promise.resolve({ error: { message: "cannot update" } }) as never);
-    const db = makeDb(chain);
-    await expect(markVpsSshKeyRotated("row-uuid", db as never)).rejects.toThrow(/cannot update/);
-  });
-
   describe("fallback to createSupabaseServiceClient when no client is provided", () => {
     it("insertVpsSshKey uses the default service client", async () => {
       const chain = makeChain();
@@ -215,13 +193,6 @@ describe("vps_ssh_keys DB layer", () => {
       chain.maybeSingle.mockResolvedValue({ data: sample, error: null });
       defaultClientSpy.mockReturnValueOnce(makeDb(chain));
       await expect(getActiveVpsSshKeyForBusiness("biz-1")).resolves.toEqual(sample);
-    });
-
-    it("markVpsSshKeyRotated uses the default service client", async () => {
-      const chain = makeChain();
-      chain.eq.mockReturnValue(Promise.resolve({ error: null }) as never);
-      defaultClientSpy.mockReturnValueOnce(makeDb(chain));
-      await expect(markVpsSshKeyRotated("id")).resolves.toBeUndefined();
     });
   });
 });
