@@ -1,4 +1,10 @@
-import { HostingerClient } from "@/lib/hostinger/client";
+import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "@/lib/hostinger/client";
+import {
+  provisionVpsForBusiness,
+  buildDefaultPostInstallScript,
+  type ProvisionVpsForBusinessResult
+} from "@/lib/hostinger/provision";
+import { sshExec, type SshExecResult } from "@/lib/hostinger/ssh";
 import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { updateBusinessStatus } from "@/lib/db/businesses";
@@ -25,23 +31,14 @@ export type ProvisioningResult = {
   tunnelUrl: string;
 };
 
-type VpsProvisioningPlan = {
-  hostingerPlan: string;
-  snapshotId: string;
-};
-
-function resolveProvisioningPlan(tier: ProvisioningInput["tier"]): VpsProvisioningPlan {
+function resolveStarterOrStandard(tier: ProvisioningInput["tier"]): "starter" | "standard" {
   if (tier === "enterprise") {
     const contact = process.env.CONTACT_EMAIL ?? "newcoworkerteam@gmail.com";
     throw new Error(
       `Enterprise provisioning requires a custom engagement. Please contact ${contact} to discuss your needs.`
     );
   }
-  const plans: Record<"starter" | "standard", VpsProvisioningPlan> = {
-    starter: { hostingerPlan: "kvm2", snapshotId: "gold-image-starter-v1" },
-    standard: { hostingerPlan: "kvm8", snapshotId: "gold-image-standard-v1" }
-  };
-  return plans[tier];
+  return tier;
 }
 
 function loadSoulTemplate(): string {
@@ -73,10 +70,65 @@ export function quoteShellEnvValue(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+/**
+ * Executor interface the orchestrator uses to reach the VPS over SSH.
+ * Defaults to {@link sshExec} but is injectable for testing.
+ */
+export type RemoteExecutor = (args: {
+  host: string;
+  username: string;
+  privateKeyPem: string;
+  command: string;
+}) => Promise<SshExecResult>;
+
+/* c8 ignore start -- production-only default; tests inject remoteExec */
+const defaultRemoteExecutor: RemoteExecutor = (args) =>
+  sshExec({
+    host: args.host,
+    username: args.username,
+    privateKeyPem: args.privateKeyPem,
+    command: args.command
+  });
+/* c8 ignore stop */
+
+/**
+ * Factory for the VPS provisioning step. Split out from {@link orchestrateProvisioning}
+ * so tests can stub the entire "talk to Hostinger + mint SSH key" sequence in
+ * one swap.
+ */
+export type VpsProvisioner = (input: {
+  businessId: string;
+  tier: "starter" | "standard";
+}) => Promise<ProvisionVpsForBusinessResult>;
+
+/* c8 ignore start -- production-only default factory; tests inject vpsProvisioner */
+function defaultVpsProvisioner(client: HostingerClient): VpsProvisioner {
+  return ({ businessId, tier }) =>
+    provisionVpsForBusiness(
+      {
+        businessId,
+        tier,
+        postInstallScript: buildDefaultPostInstallScript()
+      },
+      { client }
+    );
+}
+/* c8 ignore stop */
+
 export async function orchestrateProvisioning(
   input: ProvisioningInput,
   deps?: {
+    /** Low-level Hostinger client. Defaults to one built from env. */
     hostinger?: HostingerClient;
+    /**
+     * High-level provisioner (generates keypair, registers key, purchases
+     * VPS, polls for readiness, installs Monarx, persists key). Falls back
+     * to the default factory when omitted. Tests typically inject this
+     * directly to bypass both Hostinger + DB.
+     */
+    vpsProvisioner?: VpsProvisioner;
+    /** Remote command executor (SSH). Defaults to {@link sshExec}. */
+    remoteExec?: RemoteExecutor;
     /** Override env value quoting (defaults to {@link quoteShellEnvValue}). */
     quoteEnv?: (value: string) => string;
     /**
@@ -90,9 +142,9 @@ export async function orchestrateProvisioning(
   }
 ): Promise<ProvisioningResult> {
   const { businessId, ownerEmail, ownerPhone, tier } = input;
-  const plan = resolveProvisioningPlan(tier);
+  const narrowTier = resolveStarterOrStandard(tier);
 
-  logger.info("Starting provisioning", { businessId, tier, plan });
+  logger.info("Starting provisioning", { businessId, tier: narrowTier });
 
   await recordProvisioningProgress({
     businessId,
@@ -104,19 +156,34 @@ export async function orchestrateProvisioning(
 
   const hostinger =
     deps?.hostinger ??
-    new HostingerClient(
-      process.env.HOSTINGER_API_BASE_URL ?? "https://developers.hostinger.com",
-      process.env.HOSTINGER_API_TOKEN ?? ""
-    );
+    new HostingerClient({
+      /* c8 ignore start -- trivial env-default fallbacks */
+      baseUrl: process.env.HOSTINGER_API_BASE_URL ?? DEFAULT_HOSTINGER_BASE_URL,
+      token: process.env.HOSTINGER_API_TOKEN ?? ""
+      /* c8 ignore stop */
+    });
 
-  const { vpsId } = await hostinger.provisionVps(plan.hostingerPlan, plan.snapshotId);
-  logger.info("VPS provisioned", { businessId, vpsId });
+  /* c8 ignore next -- defaultVpsProvisioner is the production path; tests inject vpsProvisioner */
+  const vpsProvisioner = deps?.vpsProvisioner ?? defaultVpsProvisioner(hostinger);
+  /* c8 ignore next -- defaultRemoteExecutor is the production path; tests inject remoteExec */
+  const remoteExec = deps?.remoteExec ?? defaultRemoteExecutor;
+
+  // Phase 1: purchase + boot the VPS via the real Hostinger API. This also
+  // generates the per-VPS keypair, uploads the public half, and persists the
+  // private half in `vps_ssh_keys` for later admin access.
+  const provisioned = await vpsProvisioner({ businessId, tier: narrowTier });
+  const vpsId = String(provisioned.virtualMachineId);
+  logger.info("VPS provisioned", {
+    businessId,
+    vpsId,
+    publicIp: provisioned.publicIp
+  });
 
   await recordProvisioningProgress({
     businessId,
     phase: "vps_provisioned",
     percent: 15,
-    message: `VPS provisioned (${vpsId})`,
+    message: `VPS provisioned (${vpsId}, ${provisioned.publicIp})`,
     source: "orchestrator"
   });
 
@@ -146,10 +213,7 @@ export async function orchestrateProvisioning(
     source: "orchestrator"
   });
 
-  // Per-tenant Cloudflare Tunnel: resolve (or create) a dedicated tunnel for
-  // this business and use its install token + hostname. Falls back to the
-  // legacy shared CLOUDFLARE_TUNNEL_TOKEN env var when CF API creds aren't
-  // configured, preserving backward compatibility for dev/test environments.
+  // Phase 2: per-tenant Cloudflare tunnel (unchanged from previous release).
   const tunnelProvisioner =
     deps?.cloudflareTunnel === undefined
       ? cloudflareTunnelProvisionerFromEnv()
@@ -157,24 +221,18 @@ export async function orchestrateProvisioning(
 
   let tunnelHostname = `${businessId}.tunnel.newcoworker.com`;
   let cloudflareTunnelToken = process.env.CLOUDFLARE_TUNNEL_TOKEN ?? "";
-  // Voice bridge public origin. When the per-tenant CF tunnel succeeds we
-  // synthesize a deterministic `wss://voice-<biz>.<suffix>` so Telnyx gets a
-  // CF-issued TLS cert with zero per-VPS Caddy/Let's Encrypt work. When the
-  // tunnel is disabled or fails we fall back to the operator-provided env var
-  // (legacy single-bridge deployments, or a shared voice fleet fronted by
-  // something else).
   let bridgeMediaWssOrigin = process.env.BRIDGE_MEDIA_WSS_ORIGIN ?? "";
   if (tunnelProvisioner) {
     try {
-      const provisioned = await tunnelProvisioner({ businessId });
-      tunnelHostname = provisioned.hostname;
-      cloudflareTunnelToken = provisioned.token;
-      bridgeMediaWssOrigin = `wss://${provisioned.voiceHostname}`;
+      const p = await tunnelProvisioner({ businessId });
+      tunnelHostname = p.hostname;
+      cloudflareTunnelToken = p.token;
+      bridgeMediaWssOrigin = `wss://${p.voiceHostname}`;
       await recordProvisioningProgress({
         businessId,
         phase: "cloudflare_tunnel_ready",
         percent: 35,
-        message: `Per-tenant tunnel ready (${provisioned.tunnelId}); voice origin ${bridgeMediaWssOrigin}`,
+        message: `Per-tenant tunnel ready (${p.tunnelId}); voice origin ${bridgeMediaWssOrigin}`,
         source: "orchestrator"
       });
     } catch (err) {
@@ -188,24 +246,23 @@ export async function orchestrateProvisioning(
         source: "orchestrator",
         status: "error"
       });
-      // Fall through with the env-var token so a broken CF API doesn't wedge
-      // a deploy when the operator has a valid shared token available.
     }
   }
 
   const tunnelUrl = `https://${tunnelHostname}`;
 
+  // Phase 3: build the deploy command with env injection. Unchanged; the
+  // only difference is *how* we execute it (SSH instead of the fictional
+  // Hostinger /exec endpoint).
   const gatewayToken = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
-
   const bashQuote = deps?.quoteEnv ?? quoteShellEnvValue;
-
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const progressUrl = `${appUrl.replace(/\/$/, "")}/api/provisioning/progress`;
   const progressToken = process.env.PROVISIONING_PROGRESS_TOKEN ?? process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
 
   const envVars = [
     ["BUSINESS_ID", businessId],
-    ["TIER", tier],
+    ["TIER", narrowTier],
     ["SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""],
     ["SUPABASE_SERVICE_KEY", process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""],
     ["ROWBOAT_GATEWAY_TOKEN", gatewayToken],
@@ -215,12 +272,6 @@ export async function orchestrateProvisioning(
     ["TELNYX_SMS_FROM_E164", process.env.TELNYX_SMS_FROM_E164 ?? ""],
     ["STREAM_URL_SIGNING_SECRET", process.env.STREAM_URL_SIGNING_SECRET ?? ""],
     ["BRIDGE_MEDIA_WSS_ORIGIN", bridgeMediaWssOrigin],
-    // Voice bridge (Gemini Live): blank GOOGLE_API_KEY disables Live on the bridge
-    // (primary kill switch). GEMINI_LIVE_ENABLED is the secondary rollout flag
-    // (bridge keeps the media WS up but mutes AI audio when "false"). We forward
-    // it as-is; deploy-client.sh preserves any existing VPS-side value when this
-    // is empty, so orchestrator-level control and per-VPS overrides both work.
-    // VOICE_BRIDGE_SRC lets ops override the on-VPS sync path.
     ["GOOGLE_API_KEY", process.env.GOOGLE_API_KEY ?? ""],
     ["GEMINI_LIVE_MODEL", process.env.GEMINI_LIVE_MODEL ?? ""],
     ["GEMINI_LIVE_ENABLED", process.env.GEMINI_LIVE_ENABLED ?? ""],
@@ -229,29 +280,43 @@ export async function orchestrateProvisioning(
     ["LIGHTPANDA_WSS_URL", process.env.LIGHTPANDA_WSS_URL ?? "wss://cdn.lightpanda.io/ws"],
     ["PROVISIONING_PROGRESS_URL", progressUrl],
     ["PROVISIONING_PROGRESS_TOKEN", progressToken]
-  ].map(([key, value]) => `${key}=${bashQuote(value)}`).join(" ");
+  ]
+    .map(([key, value]) => `${key}=${bashQuote(value)}`)
+    .join(" ");
 
   await recordProvisioningProgress({
     businessId,
     phase: "remote_deploy_starting",
     percent: 40,
-    message: "Running deploy-client.sh on VPS",
+    message: "Running deploy-client.sh on VPS (SSH)",
     source: "orchestrator"
   });
 
+  // Phase 4: SSH into the freshly-provisioned VPS and run deploy-client.sh.
+  // The private key comes from `provisioned.sshKey.private_key_pem` — we
+  // don't round-trip through the DB because we just wrote it and already
+  // have it in memory.
   let deploySucceeded = false;
   try {
-    const { exitCode, output } = await hostinger.executeCommand(
-      vpsId,
-      `${envVars} /opt/deploy-client.sh`
-    );
-    if (exitCode !== 0) {
-      logger.error("deploy-client.sh failed", { businessId, vpsId, exitCode, output });
+    const result = await remoteExec({
+      host: provisioned.publicIp,
+      username: provisioned.sshUsername,
+      privateKeyPem: provisioned.sshKey.private_key_pem,
+      command: `${envVars} /opt/deploy-client.sh`
+    });
+    if (result.exitCode !== 0) {
+      logger.error("deploy-client.sh failed", {
+        businessId,
+        vpsId,
+        exitCode: result.exitCode,
+        stderr: result.stderr?.slice(0, 2000),
+        stdout: result.stdout?.slice(0, 2000)
+      });
       await recordProvisioningProgress({
         businessId,
         phase: "deploy_failed",
         percent: 95,
-        message: `deploy-client.sh exit ${exitCode}: ${(output ?? "").slice(0, 2000)}`,
+        message: `deploy-client.sh exit ${result.exitCode}: ${(result.stderr || result.stdout || "").slice(0, 2000)}`,
         source: "orchestrator",
         status: "error"
       });
@@ -260,7 +325,7 @@ export async function orchestrateProvisioning(
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger.error("Remote deploy execution failed — VPS may need manual setup", {
+    logger.error("Remote deploy SSH failed — VPS may need manual setup", {
       businessId,
       vpsId,
       error: msg
@@ -310,7 +375,6 @@ export async function orchestrateProvisioning(
   if (notifyPhone) {
     try {
       const cfg = await getTelnyxMessagingForBusiness(businessId);
-      // Provisioning ping to owner: platform-operational; not metered against the business SMS quota.
       await sendTelnyxSms(cfg, notifyPhone, `Your New Coworker is live! Dashboard: ${dashboardUrl}`);
     } catch (err) {
       logger.warn("Failed to send provisioning SMS", {
