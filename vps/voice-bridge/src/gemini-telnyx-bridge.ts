@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { GoogleGenAI, Modality, type LiveServerMessage, type Session } from "@google/genai";
+import { GoogleGenAI, Modality, Type, type LiveServerMessage, type Session } from "@google/genai";
 import { parsePcmRateFromMime, resamplePCM16Mono } from "./audio-resample.js";
 import { telnyxMediaMessageFromPcmBase64, tryParseTelnyxMediaPayloadBase64 } from "./telnyx-media-json.js";
 
@@ -15,6 +15,13 @@ const GEMINI_OUTPUT_DEFAULT_RATE = 24000;
  */
 const DOWNLINK_BACKPRESSURE_HIGH_WATERMARK_BYTES = 256 * 1024;
 
+export type TransferCapability = {
+  /** E.164 destination (owner/staff cell). */
+  toE164: string;
+  /** Called when the model invokes the transfer tool. Resolved value is echoed back to the model. */
+  execute: (args: { reason?: string }) => Promise<{ ok: boolean; detail?: string }>;
+};
+
 export type GeminiBridgeOptions = {
   ws: WebSocket;
   businessId: string;
@@ -28,15 +35,27 @@ export type GeminiBridgeOptions = {
   /** Second, firmer coordinator prompt this many ms before `sessionMaxMs`. */
   finalNudgeBeforeMs: number;
   businessName: string;
+  /** When set, registers a `transfer_to_owner` function tool on the Live session. */
+  transfer?: TransferCapability;
 };
 
-function systemInstructionForBusiness(businessName: string): string {
-  return [
+function systemInstructionForBusiness(businessName: string, hasTransfer: boolean): string {
+  const base = [
     `You are the AI phone receptionist for ${businessName}.`,
     "You are on a live phone call with a human caller. Keep replies concise, natural, and spoken (not bulleted).",
     "Be warm and professional. If you don't know something specific to this business, say you'll have someone follow up.",
     "Do not mention APIs, models, tokens, or internal session limits to the caller unless a coordinator message explicitly tells you what to say."
-  ].join(" ");
+  ];
+  if (hasTransfer) {
+    base.push(
+      "If the caller explicitly asks to speak to a human, a manager, the owner, or indicates the matter is urgent/sensitive (emergencies, complaints, legal, medical), briefly acknowledge it, tell them you're connecting them now, then call the `transfer_to_owner` tool. Do not call the tool for routine questions you can answer yourself."
+    );
+  } else {
+    base.push(
+      "This account has not set up human transfer. If the caller asks for a human, take a clear callback message (name, number, best time, reason) and tell them someone will follow up soon."
+    );
+  }
+  return base.join(" ");
 }
 
 function extractModelAudioParts(message: LiveServerMessage): Array<{ dataB64: string; mimeType?: string }> {
@@ -122,15 +141,42 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     }
   };
 
+  const transferTool = opts.transfer
+    ? [
+        {
+          functionDeclarations: [
+            {
+              name: "transfer_to_owner",
+              description:
+                "Warm-transfer the live phone call to the business owner/staff. Call ONLY when the caller explicitly asks for a human, indicates urgency, or raises a matter you cannot handle. Before calling this tool, briefly reassure the caller you're connecting them now.",
+              parameters: {
+                type: Type.OBJECT,
+                properties: {
+                  reason: {
+                    type: Type.STRING,
+                    description:
+                      "One short sentence describing why a human is needed (e.g. 'caller asked for manager about billing dispute')."
+                  }
+                },
+                required: []
+              }
+            }
+          ]
+        }
+      ]
+    : undefined;
+
   session = await ai.live.connect({
     model: opts.model,
     config: {
       responseModalities: [Modality.AUDIO],
-      systemInstruction: systemInstructionForBusiness(opts.businessName)
+      systemInstruction: systemInstructionForBusiness(opts.businessName, Boolean(opts.transfer)),
+      tools: transferTool
     },
     callbacks: {
       onmessage: (message: LiveServerMessage) => {
         if (ended || opts.ws.readyState !== WebSocket.OPEN) return;
+        handleModelToolCalls(message);
         for (const chunk of extractModelAudioParts(message)) {
           try {
             const raw = Buffer.from(chunk.dataB64, "base64");
@@ -153,6 +199,57 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       }
     }
   });
+
+  /**
+   * Forward any `tool_call` frames the Live API emits to the bound capability
+   * (currently only `transfer_to_owner`). Telnyx's `/actions/transfer` is
+   * fire-and-forget for the bridge — once it returns 200 the carrier is the
+   * one deciding how to bridge the second leg, and our WS will get a `close`
+   * shortly after — so we just echo a terse status back to the model so it
+   * can close out its last turn gracefully if it is still speaking.
+   */
+  function handleModelToolCalls(message: LiveServerMessage): void {
+    const calls = message.toolCall?.functionCalls;
+    if (!calls || calls.length === 0) return;
+    for (const call of calls) {
+      if (call.name === "transfer_to_owner" && opts.transfer) {
+        const reason = typeof call.args?.reason === "string" ? (call.args.reason as string) : undefined;
+        void (async () => {
+          const result = await opts.transfer!.execute({ reason });
+          try {
+            session.sendToolResponse({
+              functionResponses: [
+                {
+                  id: call.id,
+                  name: "transfer_to_owner",
+                  response: {
+                    ok: result.ok,
+                    detail: result.detail ?? (result.ok ? "transfer initiated" : "transfer failed")
+                  }
+                }
+              ]
+            });
+          } catch (err) {
+            console.error("gemini-bridge: sendToolResponse failed", err);
+          }
+        })();
+      } else {
+        try {
+          session.sendToolResponse({
+            functionResponses: [
+              {
+                id: call.id,
+                name: call.name ?? "unknown",
+                response: { ok: false, detail: "tool not available" }
+              }
+            ]
+          });
+        } catch (err) {
+          console.error("gemini-bridge: sendToolResponse (unknown tool) failed", err);
+        }
+      }
+    }
+  }
 
   const { sessionMaxMs, warnBeforeMs, finalNudgeBeforeMs } = opts;
   const name = opts.businessName;

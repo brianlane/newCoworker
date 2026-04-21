@@ -6,6 +6,14 @@ import {
 } from "@/lib/hostinger/provision";
 import { sshExec, type SshExecResult } from "@/lib/hostinger/ssh";
 import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
+import { TelnyxNumbersClient } from "@/lib/telnyx/numbers";
+import {
+  orderAndAssignDidForBusiness,
+  OrderAndAssignError,
+  type PlatformTelnyxDefaults
+} from "@/lib/telnyx/assign-did";
+import { readPlatformTelnyxDefaults } from "@/lib/telnyx/platform-defaults";
+import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { updateBusinessStatus } from "@/lib/db/businesses";
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
@@ -101,6 +109,21 @@ export type VpsProvisioner = (input: {
   tier: "starter" | "standard";
 }) => Promise<ProvisionVpsForBusinessResult>;
 
+/**
+ * Provisioner for the per-tenant DID purchase + assignment step. Split out so
+ * tests can stub the Telnyx order-and-assign flow without touching the live
+ * Telnyx API.
+ *
+ * The flow is **opt-in**: it only runs when `process.env.TELNYX_AUTO_PURCHASE_DID`
+ * is truthy (or the caller injects a provisioner). This keeps the default
+ * behavior — "operator manually assigns a DID from the admin UI" — unchanged.
+ */
+export type DidProvisioner = (input: {
+  businessId: string;
+  platformDefaults: PlatformTelnyxDefaults;
+  search: { countryCode?: string; areaCode?: string; administrativeArea?: string };
+}) => Promise<{ toE164: string }>;
+
 /* c8 ignore start -- production-only default factory; tests inject vpsProvisioner */
 function defaultVpsProvisioner(client: HostingerClient): VpsProvisioner {
   return ({ businessId, tier }) =>
@@ -112,6 +135,21 @@ function defaultVpsProvisioner(client: HostingerClient): VpsProvisioner {
       },
       { client }
     );
+}
+/* c8 ignore stop */
+
+/* c8 ignore start -- production-only default factory; tests inject didProvisioner */
+function defaultDidProvisioner(): DidProvisioner {
+  return async ({ businessId, platformDefaults, search }) => {
+    const apiKey = process.env.TELNYX_API_KEY ?? "";
+    if (!apiKey) throw new Error("TELNYX_API_KEY missing — cannot auto-purchase DID");
+    const telnyxNumbers = new TelnyxNumbersClient({ apiKey });
+    const result = await orderAndAssignDidForBusiness(
+      { businessId, platformDefaults, search },
+      { telnyxNumbers }
+    );
+    return { toE164: result.route.to_e164 };
+  };
 }
 /* c8 ignore stop */
 
@@ -139,6 +177,14 @@ export async function orchestrateProvisioning(
      * feature-flagged purely by what secrets are present.
      */
     cloudflareTunnel?: CloudflareTunnelProvisioner | null;
+    /**
+     * DID (phone number) provisioner. When set, runs after Cloudflare tunnel
+     * provisioning and purchases/assigns a Telnyx DID for the tenant. When
+     * omitted, the step runs only if `TELNYX_AUTO_PURCHASE_DID=true` in env
+     * (production default: off, so operators assign DIDs manually from the
+     * admin UI). Pass `null` to force-skip during tests.
+     */
+    didProvisioner?: DidProvisioner | null;
   }
 ): Promise<ProvisioningResult> {
   const { businessId, ownerEmail, ownerPhone, tier } = input;
@@ -250,6 +296,65 @@ export async function orchestrateProvisioning(
   }
 
   const tunnelUrl = `https://${tunnelHostname}`;
+
+  // Phase 2b: per-tenant DID provisioning (opt-in). Runs after the tunnel so
+  // `bridgeMediaWssOrigin` is known and `assign-did` can persist it into
+  // `business_telnyx_settings` alongside the routing row. Any failure is
+  // recorded as an error log but does not abort the deploy — the operator can
+  // assign a DID manually from the admin UI afterwards.
+  const shouldAutoOrderDid =
+    deps?.didProvisioner === undefined
+      ? process.env.TELNYX_AUTO_PURCHASE_DID === "true"
+      : deps.didProvisioner !== null;
+  if (shouldAutoOrderDid) {
+    /* c8 ignore next -- tests always inject deps.didProvisioner when shouldAutoOrderDid is true */
+    const didProvisioner = deps?.didProvisioner ?? defaultDidProvisioner();
+    const existingRoute = await getTelnyxVoiceRouteForBusiness(businessId);
+    if (existingRoute) {
+      await recordProvisioningProgress({
+        businessId,
+        phase: "did_already_assigned",
+        percent: 37,
+        message: `DID already assigned (${existingRoute.to_e164}); skipping order`,
+        source: "orchestrator"
+      });
+    } else {
+      try {
+        const platformDefaults: PlatformTelnyxDefaults = {
+          ...readPlatformTelnyxDefaults(),
+          bridgeMediaWssOrigin
+        };
+        const { toE164 } = await didProvisioner({
+          businessId,
+          platformDefaults,
+          search: {
+            countryCode: process.env.TELNYX_DEFAULT_COUNTRY ?? "US",
+            areaCode: process.env.TELNYX_DEFAULT_AREA_CODE,
+            administrativeArea: process.env.TELNYX_DEFAULT_STATE
+          }
+        });
+        await recordProvisioningProgress({
+          businessId,
+          phase: "did_assigned",
+          percent: 38,
+          message: `Per-tenant DID assigned (${toE164})`,
+          source: "orchestrator"
+        });
+      } catch (err) {
+        const reason =
+          err instanceof OrderAndAssignError ? err.reason : err instanceof Error ? err.message : String(err);
+        logger.error("DID provisioning failed", { businessId, reason });
+        await recordProvisioningProgress({
+          businessId,
+          phase: "did_provisioning_failed",
+          percent: 38,
+          message: `DID provisioning failed: ${reason}. Assign manually from admin.`,
+          source: "orchestrator",
+          status: "error"
+        });
+      }
+    }
+  }
 
   // Phase 3: build the deploy command with env injection. Unchanged; the
   // only difference is *how* we execute it (SSH instead of the fictional

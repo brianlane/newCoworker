@@ -4,6 +4,10 @@ import { getRecentLogs } from "@/lib/db/logs";
 import { getProvisioningLogs, type ProvisioningLogPayload } from "@/lib/provisioning/progress";
 import { getBusinessConfig } from "@/lib/db/configs";
 import { getSubscription } from "@/lib/db/subscriptions";
+import {
+  getTelnyxVoiceRouteForBusiness,
+  getBusinessTelnyxSettings
+} from "@/lib/db/telnyx-routes";
 import { formatAdminLabel, getLogBadgeVariant } from "@/lib/admin/dashboard";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -11,6 +15,7 @@ import { StatusDot } from "@/components/ui/StatusDot";
 import { SoulEditor } from "@/components/dashboard/SoulEditor";
 import { SkipPaymentButton } from "@/components/admin/SkipPaymentButton";
 import { DeleteClientButton } from "@/components/admin/DeleteClientButton";
+import { AssignDidPanel } from "@/components/admin/AssignDidPanel";
 import { KillSwitch } from "@/components/dashboard/KillSwitch";
 import { getTierLimits } from "@/lib/plans/limits";
 import { parseEnterpriseLimitsOverride } from "@/lib/plans/enterprise-limits";
@@ -24,13 +29,16 @@ export default async function BusinessDetailPage({
   params: Promise<{ businessId: string }>;
 }) {
   const { businessId } = await params;
-  const [business, logs, provisioningLogs, config, subscription] = await Promise.all([
-    getBusiness(businessId),
-    getRecentLogs(businessId, 20, undefined, { excludeProvisioning: true }),
-    getProvisioningLogs(businessId, 50),
-    getBusinessConfig(businessId),
-    getSubscription(businessId)
-  ]);
+  const [business, logs, provisioningLogs, config, subscription, telnyxRoute, telnyxSettings] =
+    await Promise.all([
+      getBusiness(businessId),
+      getRecentLogs(businessId, 20, undefined, { excludeProvisioning: true }),
+      getProvisioningLogs(businessId, 50),
+      getBusinessConfig(businessId),
+      getSubscription(businessId),
+      getTelnyxVoiceRouteForBusiness(businessId),
+      getBusinessTelnyxSettings(businessId)
+    ]);
 
   if (!business) notFound();
 
@@ -140,6 +148,26 @@ export default async function BusinessDetailPage({
             <dd className="text-parchment font-mono">{business.hostinger_vps_id ?? "—"}</dd>
           </div>
         </dl>
+      </Card>
+
+      {/* Voice / SMS DID */}
+      <Card>
+        <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+          Voice &amp; SMS DID
+        </h2>
+        <AssignDidPanel
+          businessId={businessId}
+          currentE164={telnyxRoute?.to_e164 ?? null}
+          currentBridgeOrigin={
+            telnyxSettings?.bridge_media_wss_origin ?? telnyxRoute?.media_wss_origin ?? null
+          }
+          bridgeHeartbeatAt={telnyxSettings?.bridge_last_heartbeat_at ?? null}
+          forwardToE164={telnyxSettings?.forward_to_e164 ?? null}
+          transferEnabled={telnyxSettings?.transfer_enabled ?? true}
+          smsFallbackEnabled={telnyxSettings?.sms_fallback_enabled ?? true}
+          defaultAreaCode={process.env.TELNYX_DEFAULT_AREA_CODE ?? "602"}
+          defaultState={process.env.TELNYX_DEFAULT_STATE ?? "AZ"}
+        />
       </Card>
 
       {/* Soul / Identity editor */}

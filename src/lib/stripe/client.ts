@@ -107,6 +107,53 @@ export async function ensureCommitmentSchedule(params: {
   return schedule.id;
 }
 
+export type VoiceBonusCheckoutParams = {
+  priceId: string;
+  businessId: string;
+  voiceSeconds: number;
+  successUrl: string;
+  cancelUrl: string;
+  customerEmail?: string;
+  customerId?: string;
+  userId: string;
+};
+
+/**
+ * One-time Stripe Checkout Session for a voice-bonus pack (§4.1). Must be
+ * `mode=payment`; metadata shape is what the Stripe webhook handler expects so
+ * `apply_voice_bonus_grant_from_checkout` can record the grant. We pin the
+ * Stripe customer when available (otherwise `customer_creation: "always"`)
+ * so refunds/disputes on this charge can be traced back to the business.
+ */
+export async function createVoiceBonusCheckoutSession(
+  params: VoiceBonusCheckoutParams
+): Promise<{ id: string; url: string }> {
+  if (!Number.isInteger(params.voiceSeconds) || params.voiceSeconds <= 0) {
+    throw new Error("voiceSeconds must be a positive integer");
+  }
+  const stripe = getStripe();
+  const metadata: Record<string, string> = {
+    checkoutKind: "voice_bonus_seconds",
+    businessId: params.businessId,
+    voiceSeconds: String(params.voiceSeconds),
+    userId: params.userId
+  };
+  const session = await stripe.checkout.sessions.create({
+    mode: "payment",
+    line_items: [{ price: params.priceId, quantity: 1 }],
+    success_url: params.successUrl,
+    cancel_url: params.cancelUrl,
+    customer: params.customerId,
+    customer_email: params.customerId ? undefined : params.customerEmail,
+    customer_creation: params.customerId ? undefined : "always",
+    billing_address_collection: "auto",
+    metadata,
+    payment_intent_data: { metadata }
+  });
+  if (!session.url) throw new Error("Stripe checkout session URL is null");
+  return { id: session.id, url: session.url };
+}
+
 export async function createCustomerPortalSession(params: {
   customerId: string;
   returnUrl: string;

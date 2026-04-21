@@ -4,6 +4,7 @@ import {
   verifyWebhook,
   createCheckoutSession,
   createCustomerPortalSession,
+  createVoiceBonusCheckoutSession,
   ensureCommitmentSchedule,
   resolveIntroDiscountCouponId,
   resolvePriceId,
@@ -399,5 +400,102 @@ describe("stripe/client", () => {
   it("resolveRenewalPriceId throws when renewal env var is missing", () => {
     delete process.env.STRIPE_STARTER_12MO_RENEWAL_PRICE_ID;
     expect(() => resolveRenewalPriceId("starter", "annual")).toThrow("not configured");
+  });
+
+  describe("createVoiceBonusCheckoutSession", () => {
+    it("creates a payment-mode Checkout Session with voice_bonus metadata", async () => {
+      const result = await createVoiceBonusCheckoutSession({
+        priceId: "price_bonus_30",
+        businessId: "biz-1",
+        voiceSeconds: 1800,
+        successUrl: "https://example.com/ok",
+        cancelUrl: "https://example.com/cancel",
+        customerEmail: "owner@example.com",
+        userId: "user-1"
+      });
+
+      expect(result.id).toBe("cs_mock_session");
+      expect(result.url).toContain("stripe.com");
+      const call = mockSessionCreate.mock.calls[0]?.[0];
+      expect(call).toMatchObject({
+        mode: "payment",
+        line_items: [{ price: "price_bonus_30", quantity: 1 }],
+        success_url: "https://example.com/ok",
+        cancel_url: "https://example.com/cancel",
+        customer_email: "owner@example.com",
+        customer_creation: "always",
+        metadata: {
+          checkoutKind: "voice_bonus_seconds",
+          businessId: "biz-1",
+          voiceSeconds: "1800",
+          userId: "user-1"
+        },
+        payment_intent_data: {
+          metadata: {
+            checkoutKind: "voice_bonus_seconds",
+            businessId: "biz-1",
+            voiceSeconds: "1800",
+            userId: "user-1"
+          }
+        }
+      });
+      expect(call.customer).toBeUndefined();
+    });
+
+    it("pins the Stripe customer id and omits customer_email when provided", async () => {
+      await createVoiceBonusCheckoutSession({
+        priceId: "price_bonus_120",
+        businessId: "biz-2",
+        voiceSeconds: 7200,
+        successUrl: "https://example.com/ok",
+        cancelUrl: "https://example.com/cancel",
+        customerEmail: "owner@example.com",
+        customerId: "cus_abc",
+        userId: "user-2"
+      });
+
+      const call = mockSessionCreate.mock.calls[0]?.[0];
+      expect(call.customer).toBe("cus_abc");
+      expect(call.customer_email).toBeUndefined();
+      expect(call.customer_creation).toBeUndefined();
+    });
+
+    it("rejects non-positive voiceSeconds", async () => {
+      await expect(
+        createVoiceBonusCheckoutSession({
+          priceId: "price_bonus_30",
+          businessId: "biz-1",
+          voiceSeconds: 0,
+          successUrl: "https://example.com/ok",
+          cancelUrl: "https://example.com/cancel",
+          userId: "user-1"
+        })
+      ).rejects.toThrow("voiceSeconds must be a positive integer");
+
+      await expect(
+        createVoiceBonusCheckoutSession({
+          priceId: "price_bonus_30",
+          businessId: "biz-1",
+          voiceSeconds: 1.5,
+          successUrl: "https://example.com/ok",
+          cancelUrl: "https://example.com/cancel",
+          userId: "user-1"
+        })
+      ).rejects.toThrow("voiceSeconds must be a positive integer");
+    });
+
+    it("throws when Stripe returns a null session URL", async () => {
+      mockSessionCreate.mockResolvedValueOnce({ id: "cs_null", url: null });
+      await expect(
+        createVoiceBonusCheckoutSession({
+          priceId: "price_bonus_30",
+          businessId: "biz-1",
+          voiceSeconds: 1800,
+          successUrl: "https://example.com/ok",
+          cancelUrl: "https://example.com/cancel",
+          userId: "user-1"
+        })
+      ).rejects.toThrow("Stripe checkout session URL is null");
+    });
   });
 });

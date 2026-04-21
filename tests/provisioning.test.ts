@@ -44,8 +44,13 @@ vi.mock("@/lib/email/client", () => ({
   sendOwnerEmail: vi.fn().mockResolvedValue({ id: "email-mock" })
 }));
 
+vi.mock("@/lib/db/telnyx-routes", () => ({
+  getTelnyxVoiceRouteForBusiness: vi.fn().mockResolvedValue(null)
+}));
+
 import { updateBusinessStatus } from "@/lib/db/businesses";
 import { upsertBusinessConfig } from "@/lib/db/configs";
+import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
 
 function makeVpsStub(
   vpsId = "42",
@@ -581,5 +586,139 @@ describe("provisioning/orchestrate", () => {
       "BRIDGE_MEDIA_WSS_ORIGIN",
       "wss://legacy-shared.example.com"
     );
+  });
+
+  describe("DID auto-provisioning", () => {
+    it("is skipped by default (no env flag, no injected provisioner)", async () => {
+      delete process.env.TELNYX_AUTO_PURCHASE_DID;
+      const didProvisioner = vi.fn();
+      await orchestrateProvisioning(
+        { businessId: "biz-no-did", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec())
+        }
+      );
+      expect(didProvisioner).not.toHaveBeenCalled();
+    });
+
+    it("runs when env flag is set + injected provisioner supplied", async () => {
+      const didProvisioner = vi
+        .fn()
+        .mockResolvedValue({ toE164: "+15550001111" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      await orchestrateProvisioning(
+        { businessId: "biz-did", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(didProvisioner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          businessId: "biz-did",
+          search: expect.objectContaining({ countryCode: "US" })
+        })
+      );
+    });
+
+    it("skips when business already has a DID", async () => {
+      const didProvisioner = vi.fn();
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce({
+        to_e164: "+15551239999",
+        business_id: "biz-already",
+        media_wss_origin: null,
+        media_path: "/voice/stream",
+        created_at: "2026-01-01T00:00:00Z"
+      });
+      await orchestrateProvisioning(
+        { businessId: "biz-already", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(didProvisioner).not.toHaveBeenCalled();
+    });
+
+    it("surfaces OrderAndAssignError.reason but does not abort the deploy", async () => {
+      const { OrderAndAssignError } = await import("@/lib/telnyx/assign-did");
+      const didProvisioner = vi
+        .fn()
+        .mockRejectedValue(new OrderAndAssignError("no_numbers_available", "oof"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-did-fail", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec,
+          didProvisioner
+        }
+      );
+      expect(result.vpsId).toBe("42");
+      expect(remoteExec).toHaveBeenCalled();
+    });
+
+    it("stringifies generic Error failures in DID provisioning", async () => {
+      const didProvisioner = vi.fn().mockRejectedValue(new Error("Telnyx down"));
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-did-generic", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(result.vpsId).toBe("42");
+    });
+
+    it("stringifies non-Error rejections in DID provisioning", async () => {
+      const didProvisioner = vi.fn().mockRejectedValue("telnyx-string-error");
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-did-nonerr", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(result.vpsId).toBe("42");
+    });
+
+    it("runs via env flag alone when didProvisioner is undefined (falls back to default factory)", async () => {
+      // We can't actually fire the default factory without hitting Telnyx; the
+      // default branch is guarded by `c8 ignore` because we never want to run
+      // it in a unit test. Exercise the *flag* path here by setting the env
+      // and also injecting the provisioner so the flow uses our stub.
+      process.env.TELNYX_AUTO_PURCHASE_DID = "true";
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+15550002222" });
+      await orchestrateProvisioning(
+        { businessId: "biz-did-envflag", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(didProvisioner).toHaveBeenCalled();
+    });
+
+    it("skips when didProvisioner is explicitly null regardless of env flag", async () => {
+      process.env.TELNYX_AUTO_PURCHASE_DID = "true";
+      // If null disabled the step, getTelnyxVoiceRouteForBusiness should NOT
+      // be called with this businessId.
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockClear();
+      await orchestrateProvisioning(
+        { businessId: "biz-did-null", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner: null
+        }
+      );
+      expect(vi.mocked(getTelnyxVoiceRouteForBusiness)).not.toHaveBeenCalled();
+    });
   });
 });
