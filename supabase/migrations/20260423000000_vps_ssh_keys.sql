@@ -36,10 +36,7 @@ create table if not exists public.vps_ssh_keys (
   -- Username on the VPS where this key is authorized (root on fresh Hostinger VPS).
   ssh_username text not null default 'root',
   created_at timestamptz not null default now(),
-  rotated_at timestamptz,
-  -- One active keypair per VPS at any given time; rotations insert a new row
-  -- and leave the old one present (with `rotated_at` set) for audit trails.
-  constraint vps_ssh_keys_active_unique unique (hostinger_vps_id, rotated_at)
+  rotated_at timestamptz
 );
 
 create index if not exists idx_vps_ssh_keys_business_id
@@ -47,6 +44,16 @@ create index if not exists idx_vps_ssh_keys_business_id
 
 create index if not exists idx_vps_ssh_keys_hostinger_vps_id
   on public.vps_ssh_keys (hostinger_vps_id);
+
+-- One active keypair per VPS at any given time; rotations insert a new row
+-- and stamp `rotated_at` on the predecessor so the old row drops out of this
+-- partial index. A plain `unique (hostinger_vps_id, rotated_at)` constraint
+-- would NOT enforce this: Postgres treats NULLs as distinct in unique
+-- constraints, so two rows with `rotated_at IS NULL` would be allowed and
+-- silently break `getActiveVpsSshKey` (it uses `.maybeSingle()`).
+create unique index if not exists vps_ssh_keys_one_active_per_vps
+  on public.vps_ssh_keys (hostinger_vps_id)
+  where rotated_at is null;
 
 alter table public.vps_ssh_keys enable row level security;
 

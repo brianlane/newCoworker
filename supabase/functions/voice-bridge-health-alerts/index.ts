@@ -140,12 +140,21 @@ serve(async (req: Request) => {
     }
   }
 
+  // Keep webhook error details out of the HTTP response — they may contain
+  // upstream provider messages (Slack/Discord) or caught exception strings
+  // which CodeQL flags as potential information exposure. The full
+  // `webhookResult` (including `error`) is already captured server-side via
+  // the `voice_bridge_health_webhook_failed` telemetry event above.
+  const webhookResponse = webhookResult
+    ? { ok: webhookResult.ok, status: webhookResult.status }
+    : null;
+
   return new Response(
     JSON.stringify({
       ok: true,
       stale_bridges: staleBridges.length,
       stuck_settlements: stuckSettlements.length,
-      webhook: webhookResult,
+      webhook: webhookResponse,
       summary: formatAlertSummary(alert)
     }),
     { status: 200, headers: { "Content-Type": "application/json" } }

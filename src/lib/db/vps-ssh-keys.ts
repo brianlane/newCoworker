@@ -67,6 +67,14 @@ export async function insertVpsSshKey(
  * Load the currently-active (unrotated) keypair for a VPS. Returns null when
  * no key exists — callers must branch because we never want to return a stale
  * (rotated) key as "active".
+ *
+ * The migration enforces at-most-one active row per VPS via a partial unique
+ * index (`vps_ssh_keys_one_active_per_vps`). We still use `limit(1)` with
+ * `newest-first` ordering as belt-and-suspenders: if the invariant ever gets
+ * violated (e.g. by a manual insert that bypassed the index, or during a
+ * migration rollback window), callers get the freshest key instead of a
+ * PostgREST "multiple rows returned" error that would take the whole
+ * orchestrator path offline.
  */
 export async function getActiveVpsSshKey(
   hostingerVpsId: string,
@@ -78,6 +86,8 @@ export async function getActiveVpsSshKey(
     .select("*")
     .eq("hostinger_vps_id", hostingerVpsId)
     .is("rotated_at", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
     .maybeSingle();
 
   if (error) throw new Error(`getActiveVpsSshKey: ${error.message}`);
