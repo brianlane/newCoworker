@@ -238,6 +238,44 @@ describe("provisionVpsForBusiness", () => {
     ).rejects.toThrow(/state=error/);
   });
 
+  // Regression: the poll loop previously only checked state=error, so a VPS
+  // that landed in `stopped` (billing decline / manual hPanel stop) or
+  // `suspended` (account review) during provisioning would be polled for
+  // the full readyTimeout (default 15 min) before failing. Both are
+  // terminal from the orchestrator's perspective and must fail fast.
+  it.each(["stopped", "suspended"] as const)(
+    "bails when getVirtualMachine reports terminal state=%s",
+    async (terminalState) => {
+      const client = makeClientStub({
+        getVirtualMachine: vi
+          .fn()
+          .mockResolvedValueOnce({ id: 42, state: "installing", ipv4: [] })
+          .mockResolvedValueOnce({ id: 42, state: terminalState, ipv4: [] })
+      });
+      const sleep = vi.fn();
+      await expect(
+        provisionVpsForBusiness(
+          {
+            businessId: "biz-1",
+            tier: "starter",
+            postInstallScript: "",
+            pollIntervalMs: 1,
+            // Deliberately very long — the test asserts we bail on the
+            // terminal state *before* burning this window.
+            readyTimeoutMs: 15 * 60 * 1000
+          },
+          {
+            client: client as unknown as HostingerClient,
+            generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
+            sleep
+          }
+        )
+      ).rejects.toThrow(new RegExp(`state=${terminalState}`));
+      // Two polls: installing → terminal. We must NOT have kept polling.
+      expect(client.getVirtualMachine).toHaveBeenCalledTimes(2);
+    }
+  );
+
   it("bails on timeout when VPS never reports running", async () => {
     const client = makeClientStub({
       getVirtualMachine: vi

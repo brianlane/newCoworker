@@ -419,13 +419,23 @@ async function waitForVpsReady(
   opts: { pollInterval: number; readyTimeout: number; sleep: (ms: number) => Promise<void> }
 ): Promise<VirtualMachine> {
   const deadline = Date.now() + opts.readyTimeout;
-  // The VPS transitions through initial → installing → running. Error and
-  // stopped are terminal failures we bail on loudly.
+  // The happy path is initial → installing → running. Anything that lands
+  // in `error`, `stopped`, or `suspended` during first-boot is a terminal
+  // failure from the orchestrator's perspective:
+  //   - error:     Hostinger reports the provision itself failed.
+  //   - stopped:   the VPS reached a `stopped` state mid-provision (billing
+  //                decline, ToS hold, or the user shut it down through
+  //                hPanel). It won't transition to `running` without an
+  //                out-of-band action.
+  //   - suspended: Hostinger put the account into review. Same deal.
+  // Fail fast instead of burning the full `readyTimeout` window (default 15
+  // min) polling a VPS that will never become SSH-ready.
+  const terminalStates = new Set(["error", "stopped", "suspended"]);
   while (Date.now() < deadline) {
     const vm = await client.getVirtualMachine(virtualMachineId);
     if (vm.state === "running" && firstIpv4(vm)) return vm;
-    if (vm.state === "error") {
-      throw new Error(`VPS ${virtualMachineId} is in state=error`);
+    if (terminalStates.has(vm.state)) {
+      throw new Error(`VPS ${virtualMachineId} is in state=${vm.state}`);
     }
     await opts.sleep(opts.pollInterval);
   }
