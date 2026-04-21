@@ -483,6 +483,18 @@ describe("buildDefaultPostInstallScript", () => {
     expect(s).toContain("REPO_REF='release'");
   });
 
+  it("rejects empty or overly long repoRef values", () => {
+    // The length guard is a simple sanity check, not a security boundary
+    // (the regex already blocks metachars), but we cover both endpoints so
+    // future edits can't silently drop the bounds.
+    expect(() => buildDefaultPostInstallScript({ repoRef: "" })).toThrow(
+      /must be 1-255 chars/
+    );
+    expect(() =>
+      buildDefaultPostInstallScript({ repoRef: "a".repeat(256) })
+    ).toThrow(/must be 1-255 chars/);
+  });
+
   it("rejects repoRef values that would enable shell command injection", () => {
     // Bash `$(...)` command substitution inside a double-quoted string was
     // the original vulnerability this guard prevents. Even though the emitter

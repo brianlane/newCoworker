@@ -472,6 +472,3 @@ export function resolvePriceItemId(
   return price?.id ?? null;
 }
 
-// Re-export non-default helpers so the orchestrator doesn't need to import
-// from two files.
-export { insertVpsSshKey, getActiveVpsSshKey, getActiveVpsSshKeyForBusiness } from "@/lib/db/vps-ssh-keys";

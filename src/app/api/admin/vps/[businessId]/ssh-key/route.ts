@@ -21,7 +21,11 @@ import {
   getActiveVpsSshKeyForBusiness
 } from "@/lib/db/vps-ssh-keys";
 import { logger } from "@/lib/logger";
-import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
+// NOTE: we deliberately do NOT use `successResponse` here — this endpoint
+// must set `Cache-Control: no-store, private` on the success path to keep
+// the private key out of any intermediate cache, and the shared helper
+// doesn't expose a headers override. Manual `new Response(...)` below.
+import { errorResponse, handleRouteError } from "@/lib/api-response";
 import { z } from "zod";
 
 const paramsSchema = z.object({
