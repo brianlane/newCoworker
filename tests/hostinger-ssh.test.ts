@@ -181,6 +181,38 @@ describe("sshExec", () => {
     ).rejects.toThrow(/overall timeout/);
   });
 
+  // Pinning test for the `accept-any` default (also the default when
+  // `hostKeyPolicy` is omitted). ssh2 currently treats an omitted
+  // `hostVerifier` as "accept any host key" — see
+  // node_modules/ssh2/lib/protocol/kex.js ("Host accepted by default").
+  // If a future ssh2 major version flips that default to reject, this test
+  // will fail loudly and force us to wire `hostVerifier: () => true` in
+  // sshExec() before the breakage hits the orchestrator.
+  it.each([
+    ["default (policy omitted)", undefined as "accept-any" | undefined],
+    ["explicit accept-any", "accept-any" as const]
+  ])(
+    "accept-any policy [%s]: emits NO hostVerifier (relies on ssh2's accept-all default)",
+    async (_label, policy) => {
+      const client = new FakeClient({
+        onReady: (stream) => stream.emit("close", 0, null)
+      });
+      const res = await sshExec(
+        {
+          host: "h",
+          username: "u",
+          privateKeyPem: "P",
+          command: "x",
+          ...(policy ? { hostKeyPolicy: policy } : {})
+        },
+        { clientFactory: () => client }
+      );
+      expect(res.exitCode).toBe(0);
+      expect(client.lastConnectCfg).not.toBeNull();
+      expect(client.lastConnectCfg!.hostVerifier).toBeUndefined();
+    }
+  );
+
   it("strict host-key policy: rejects when the fingerprint does not match", async () => {
     const client = new FakeClient({
       hostKeyBlob: Buffer.from("host-key-bytes")

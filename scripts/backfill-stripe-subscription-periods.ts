@@ -53,6 +53,32 @@ type Args = {
   verifyToleranceSec: number;
 };
 
+/**
+ * Consume the next positional argument as a number, validated by `predicate`.
+ * Mutates `state.i` so the outer loop skips the consumed value on the next
+ * iteration. Produces distinct error messages for missing-value vs.
+ * invalid-value, and always echoes the user's raw input (JSON-stringified so
+ * `undefined`, empty strings, or values with whitespace are unambiguous).
+ */
+function consumeNumberFlag(
+  argv: string[],
+  state: { i: number },
+  flag: string,
+  predicate: (v: number) => boolean,
+  constraint: string
+): number {
+  state.i += 1;
+  const raw = argv[state.i];
+  if (raw === undefined) {
+    throw new Error(`${flag} requires a value (${constraint})`);
+  }
+  const v = Number(raw);
+  if (!Number.isFinite(v) || !predicate(v)) {
+    throw new Error(`${flag} ${constraint} (got ${JSON.stringify(raw)})`);
+  }
+  return v;
+}
+
 function parseArgs(argv: string[]): Args {
   const out: Args = {
     apply: false,
@@ -62,24 +88,30 @@ function parseArgs(argv: string[]): Args {
     verifyOnly: false,
     verifyToleranceSec: 2
   };
-  for (let i = 0; i < argv.length; i += 1) {
-    const a = argv[i];
+  const state = { i: 0 };
+  for (; state.i < argv.length; state.i += 1) {
+    const a = argv[state.i];
     if (a === "--apply") out.apply = true;
     else if (a === "--only-missing") out.onlyMissing = true;
     else if (a === "--verify-only") out.verifyOnly = true;
     else if (a === "--verify-tolerance-sec") {
-      const v = Number(argv[++i]);
-      if (!Number.isFinite(v) || v < 0)
-        throw new Error(`--verify-tolerance-sec must be a non-negative number (got ${argv[i]})`);
-      out.verifyToleranceSec = v;
+      out.verifyToleranceSec = consumeNumberFlag(
+        argv,
+        state,
+        a,
+        (v) => v >= 0,
+        "must be a non-negative number"
+      );
     } else if (a === "--stale-hours") {
-      const v = Number(argv[++i]);
-      if (!Number.isFinite(v) || v < 0) throw new Error(`--stale-hours must be a non-negative number (got ${argv[i]})`);
-      out.staleHours = v;
+      out.staleHours = consumeNumberFlag(
+        argv,
+        state,
+        a,
+        (v) => v >= 0,
+        "must be a non-negative number"
+      );
     } else if (a === "--rps") {
-      const v = Number(argv[++i]);
-      if (!Number.isFinite(v) || v <= 0) throw new Error(`--rps must be > 0 (got ${argv[i]})`);
-      out.rps = v;
+      out.rps = consumeNumberFlag(argv, state, a, (v) => v > 0, "must be > 0");
     } else if (a === "--help" || a === "-h") {
       console.log(
         "Usage: tsx scripts/backfill-stripe-subscription-periods.ts [--apply] [--only-missing] [--stale-hours N] [--rps N] [--verify-only] [--verify-tolerance-sec N]"

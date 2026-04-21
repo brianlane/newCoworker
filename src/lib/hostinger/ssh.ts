@@ -168,6 +168,15 @@ export async function sshExec(
     // CA-backed fleet yet, so the default policy is to accept any host key
     // (TOFU-ish). When the caller wants strict, we compute the SHA-256 of
     // the presented host key and compare it to `expectedHostKeyFingerprint`.
+    //
+    // NOTE: ssh2's default (when `hostVerifier` is undefined) is *accept any
+    // host key* — the library has no known_hosts integration and logs
+    // "Host accepted by default (no verification)" at the debug level. So
+    // `accept-any` intentionally leaves `hostVerifier` unset; do NOT
+    // reflexively add `hostVerifier: () => true` thinking ssh2 defaults to
+    // reject, because it doesn't — and re-running under a future major
+    // version that changes that default is covered by the dedicated test
+    // in `tests/hostinger-ssh.test.ts`.
     const connectCfg: ConnectConfig = {
       host,
       port,
