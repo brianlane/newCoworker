@@ -29,6 +29,11 @@
  *   # rate-limit Stripe requests (default: 4 rps)
  *   npx tsx scripts/backfill-stripe-subscription-periods.ts --apply --rps 2
  *
+ *   # audit-only: report drift between DB cache and Stripe WITHOUT writing.
+ *   # Use this to confirm a past backfill is still accurate, or to spot-check
+ *   # webhook coverage. Always exits 0 unless Stripe calls themselves failed.
+ *   npx tsx scripts/backfill-stripe-subscription-periods.ts --verify-only
+ *
  * Required env:
  *   NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL)
  *   SUPABASE_SERVICE_ROLE_KEY
@@ -42,31 +47,82 @@ type Args = {
   onlyMissing: boolean;
   staleHours: number;
   rps: number;
+  /** Audit mode: compare DB cache vs. Stripe, never write. Supersedes --apply. */
+  verifyOnly: boolean;
+  /** Drift tolerance in seconds when comparing Stripe period_end to DB cache. */
+  verifyToleranceSec: number;
 };
 
+/**
+ * Consume the next positional argument as a number, validated by `predicate`.
+ * Mutates `state.i` so the outer loop skips the consumed value on the next
+ * iteration. Produces distinct error messages for missing-value vs.
+ * invalid-value, and always echoes the user's raw input (JSON-stringified so
+ * `undefined`, empty strings, or values with whitespace are unambiguous).
+ */
+function consumeNumberFlag(
+  argv: string[],
+  state: { i: number },
+  flag: string,
+  predicate: (v: number) => boolean,
+  constraint: string
+): number {
+  state.i += 1;
+  const raw = argv[state.i];
+  if (raw === undefined) {
+    throw new Error(`${flag} requires a value (${constraint})`);
+  }
+  const v = Number(raw);
+  if (!Number.isFinite(v) || !predicate(v)) {
+    throw new Error(`${flag} ${constraint} (got ${JSON.stringify(raw)})`);
+  }
+  return v;
+}
+
 function parseArgs(argv: string[]): Args {
-  const out: Args = { apply: false, onlyMissing: false, staleHours: 24, rps: 4 };
-  for (let i = 0; i < argv.length; i += 1) {
-    const a = argv[i];
+  const out: Args = {
+    apply: false,
+    onlyMissing: false,
+    staleHours: 24,
+    rps: 4,
+    verifyOnly: false,
+    verifyToleranceSec: 2
+  };
+  const state = { i: 0 };
+  for (; state.i < argv.length; state.i += 1) {
+    const a = argv[state.i];
     if (a === "--apply") out.apply = true;
     else if (a === "--only-missing") out.onlyMissing = true;
-    else if (a === "--stale-hours") {
-      const v = Number(argv[++i]);
-      if (!Number.isFinite(v) || v < 0) throw new Error(`--stale-hours must be a non-negative number (got ${argv[i]})`);
-      out.staleHours = v;
+    else if (a === "--verify-only") out.verifyOnly = true;
+    else if (a === "--verify-tolerance-sec") {
+      out.verifyToleranceSec = consumeNumberFlag(
+        argv,
+        state,
+        a,
+        (v) => v >= 0,
+        "must be a non-negative number"
+      );
+    } else if (a === "--stale-hours") {
+      out.staleHours = consumeNumberFlag(
+        argv,
+        state,
+        a,
+        (v) => v >= 0,
+        "must be a non-negative number"
+      );
     } else if (a === "--rps") {
-      const v = Number(argv[++i]);
-      if (!Number.isFinite(v) || v <= 0) throw new Error(`--rps must be > 0 (got ${argv[i]})`);
-      out.rps = v;
+      out.rps = consumeNumberFlag(argv, state, a, (v) => v > 0, "must be > 0");
     } else if (a === "--help" || a === "-h") {
       console.log(
-        "Usage: tsx scripts/backfill-stripe-subscription-periods.ts [--apply] [--only-missing] [--stale-hours N] [--rps N]"
+        "Usage: tsx scripts/backfill-stripe-subscription-periods.ts [--apply] [--only-missing] [--stale-hours N] [--rps N] [--verify-only] [--verify-tolerance-sec N]"
       );
       process.exit(0);
     } else {
       throw new Error(`Unknown argument: ${a}`);
     }
   }
+  // --verify-only overrides --apply so we never accidentally write in audit mode.
+  if (out.verifyOnly) out.apply = false;
   return out;
 }
 
@@ -96,9 +152,9 @@ async function main(): Promise<void> {
   const stripe = new Stripe(stripeKey, { apiVersion: "2026-02-25.clover" });
 
   const staleCutoffIso = new Date(Date.now() - args.staleHours * 3600 * 1000).toISOString();
-  const mode = args.apply ? "APPLY" : "DRY-RUN";
+  const mode = args.verifyOnly ? "VERIFY-ONLY" : args.apply ? "APPLY" : "DRY-RUN";
   console.log(
-    `[backfill] mode=${mode} onlyMissing=${args.onlyMissing} staleHours=${args.staleHours} rps=${args.rps}`
+    `[backfill] mode=${mode} onlyMissing=${args.onlyMissing} staleHours=${args.staleHours} rps=${args.rps}${args.verifyOnly ? ` toleranceSec=${args.verifyToleranceSec}` : ""}`
   );
 
   // PostgREST caps any single response at its `max-rows` setting (default
@@ -129,8 +185,12 @@ async function main(): Promise<void> {
     if (page.length < PAGE_SIZE) break;
   }
 
+  // In verify mode we want EVERY sub with a stripe_subscription_id — the
+  // staleness/missing filter is a write-path optimization and would hide
+  // drift on freshly cached rows that are nevertheless wrong.
   const targets = rows.filter((r) => {
     if (!r.stripe_subscription_id) return false;
+    if (args.verifyOnly) return true;
     if (r.stripe_current_period_end == null) return true;
     if (args.onlyMissing) return false;
     if (!r.stripe_subscription_cached_at) return true;
@@ -143,7 +203,17 @@ async function main(): Promise<void> {
 
   const minGapMs = Math.ceil(1000 / args.rps);
   let lastTickAt = 0;
-  const counts = { updated: 0, skippedNoPeriods: 0, skippedStripeError: 0 };
+  const counts = {
+    updated: 0,
+    skippedNoPeriods: 0,
+    skippedStripeError: 0,
+    /** --verify-only: rows where DB cache matches Stripe within tolerance. */
+    verifiedOk: 0,
+    /** --verify-only: rows where DB `stripe_current_period_end` differs from Stripe. */
+    verifiedDrift: 0,
+    /** --verify-only: rows where DB has no cached period_end (i.e. needs backfill). */
+    verifiedMissing: 0
+  };
 
   for (const row of targets) {
     const wait = Math.max(0, minGapMs - (Date.now() - lastTickAt));
@@ -210,6 +280,33 @@ async function main(): Promise<void> {
       stripe_subscription_cached_at: new Date().toISOString()
     };
 
+    // -------- Verify-only: compare DB cache to Stripe. --------------------
+    // Drift tolerance is tiny on purpose; webhook races might set the cache
+    // a few seconds off from Stripe's canonical `current_period_end` but
+    // anything > 2s is almost certainly a missed/stale webhook worth
+    // surfacing. `rawStart` is not checked — Stripe never mutates the start
+    // of an active period, so an end-only check catches drift reliably.
+    if (args.verifyOnly) {
+      if (row.stripe_current_period_end == null) {
+        counts.verifiedMissing += 1;
+        console.log(
+          `[backfill] VERIFY-MISSING biz=${row.business_id} sub=${row.stripe_subscription_id} status=${row.status}/${sub.status} stripe_period_end=${update.stripe_current_period_end} db_period_end=NULL`
+        );
+        continue;
+      }
+      const dbEndSec = Math.floor(Date.parse(row.stripe_current_period_end) / 1000);
+      const driftSec = Math.abs(rawEnd - dbEndSec);
+      if (driftSec <= args.verifyToleranceSec) {
+        counts.verifiedOk += 1;
+      } else {
+        counts.verifiedDrift += 1;
+        console.log(
+          `[backfill] VERIFY-DRIFT biz=${row.business_id} sub=${row.stripe_subscription_id} status=${row.status}/${sub.status} stripe_period_end=${update.stripe_current_period_end} db_period_end=${row.stripe_current_period_end} drift=${driftSec}s`
+        );
+      }
+      continue;
+    }
+
     console.log(
       `[backfill] ${mode} biz=${row.business_id} sub=${row.stripe_subscription_id} status=${row.status}/${sub.status} period=${update.stripe_current_period_start} → ${update.stripe_current_period_end}`
     );
@@ -225,6 +322,19 @@ async function main(): Promise<void> {
       continue;
     }
     counts.updated += 1;
+  }
+
+  if (args.verifyOnly) {
+    const total = counts.verifiedOk + counts.verifiedDrift + counts.verifiedMissing;
+    console.log(
+      `[backfill] verify done: ok=${counts.verifiedOk}, drift=${counts.verifiedDrift}, missing=${counts.verifiedMissing}, skipped_no_periods=${counts.skippedNoPeriods}, skipped_stripe_error=${counts.skippedStripeError} (examined=${total})`
+    );
+    if (counts.verifiedDrift > 0 || counts.verifiedMissing > 0) {
+      console.log(
+        "[backfill] NOTE: drift/missing rows detected — re-run with --apply (no --verify-only) to sync them."
+      );
+    }
+    return;
   }
 
   console.log(

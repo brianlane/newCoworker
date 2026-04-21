@@ -11,6 +11,9 @@ export default defineConfig({
     environment: "node",
     include: ["tests/**/*.test.ts"],
     exclude: ["tests/integration/**"],
+    // v8 coverage instrumentation slows some orchestrator tests past the
+    // default 5s; give every test a generous 15s budget.
+    testTimeout: 15000,
     coverage: {
       provider: "v8",
       reporter: ["text", "html"],

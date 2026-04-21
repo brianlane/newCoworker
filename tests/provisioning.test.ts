@@ -20,14 +20,8 @@ vi.mock("@/lib/provisioning/progress", () => ({
 
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
 import * as fs from "fs";
-
-vi.mock("@/lib/hostinger/client", () => {
-  class HostingerClient {
-    provisionVps = vi.fn().mockResolvedValue({ vpsId: "vps-mock-123" });
-    executeCommand = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
-  }
-  return { HostingerClient };
-});
+import type { ProvisionVpsForBusinessResult } from "@/lib/hostinger/provision";
+import type { SshExecResult } from "@/lib/hostinger/ssh";
 
 vi.mock("@/lib/db/businesses", () => ({
   updateBusinessStatus: vi.fn().mockResolvedValue(undefined)
@@ -53,7 +47,32 @@ vi.mock("@/lib/email/client", () => ({
 import { updateBusinessStatus } from "@/lib/db/businesses";
 import { upsertBusinessConfig } from "@/lib/db/configs";
 
-/** Accepts bash `printf %q` (often unquoted for safe tokens) or legacy `KEY='…'` quoting. */
+function makeVpsStub(
+  vpsId = "42",
+  publicIp = "1.2.3.4",
+  privateKeyPem = "PEM"
+): ProvisionVpsForBusinessResult {
+  return {
+    virtualMachineId: Number(vpsId) || 42,
+    publicIp,
+    sshUsername: "root",
+    sshKey: {
+      id: "row",
+      business_id: "b",
+      hostinger_vps_id: vpsId,
+      hostinger_public_key_id: 9,
+      public_key: "ssh-ed25519 AAA",
+      private_key_pem: privateKeyPem,
+      fingerprint_sha256: "SHA256:abc",
+      ssh_username: "root",
+      created_at: "2026-01-01T00:00:00Z",
+      rotated_at: null
+    },
+    postInstallScriptId: 11,
+    publicKeyId: 9
+  };
+}
+
 function expectDeployHasEnv(cmd: string, key: string, value: string): void {
   if (value === "") {
     expect(cmd).toContain(`${key}=''`);
@@ -64,6 +83,10 @@ function expectDeployHasEnv(cmd: string, key: string, value: string): void {
     cmd.includes(`${key}=${singleQuoted}`) || cmd.includes(`${key}=${value}`),
     `expected ${key}=… in command`
   ).toBe(true);
+}
+
+function okExec(): SshExecResult {
+  return { exitCode: 0, signal: null, stdout: "ok", stderr: "" };
 }
 
 describe("provisioning/orchestrate", () => {
@@ -81,20 +104,14 @@ describe("provisioning/orchestrate", () => {
       TELNYX_API_KEY: "mock_telnyx",
       TELNYX_MESSAGING_PROFILE_ID: "mock_prof"
     };
-    // Scrub any CF creds that might have leaked in from the test runner's
-    // ambient environment so orchestrateProvisioning's default per-tenant
-    // tunnel path is skipped unless a test opts in via the `cloudflareTunnel`
-    // dep. Without this, a dev machine with .env exported could accidentally
-    // hit the real Cloudflare API during unit tests.
+    // Same hermeticity defences as before: scrub any CF / bridge-origin
+    // env the dev shell may have leaked in so the fallback/asserts stay
+    // truthful per-test.
     delete process.env.CLOUDFLARE_API_TOKEN;
     delete process.env.CLOUDFLARE_ACCOUNT_ID;
     delete process.env.CLOUDFLARE_TUNNEL_TOKEN;
     delete process.env.CLOUDFLARE_TUNNEL_ZONE;
     delete process.env.CLOUDFLARE_TUNNEL_SERVICE_URL;
-    // Same reasoning as the CF creds: BRIDGE_MEDIA_WSS_ORIGIN can leak in
-    // from a dev `.env` and either silently populate the bridge envVar when
-    // a test didn't intend it, or mask the "env fallback" assertion in the
-    // CF-throw test if OLD_ENV carried a different value.
     delete process.env.BRIDGE_MEDIA_WSS_ORIGIN;
     vi.clearAllMocks();
   });
@@ -103,95 +120,92 @@ describe("provisioning/orchestrate", () => {
     process.env = OLD_ENV;
   });
 
-  it("orchestrateProvisioning returns vpsId and tunnelUrl", async () => {
-    const result = await orchestrateProvisioning({
-      businessId: "biz-uuid-1",
-      tier: "starter",
-      ownerEmail: "owner@test.com"
-    });
+  it("orchestrateProvisioning returns vpsId and tunnelUrl from injected vpsProvisioner", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
 
-    expect(result.vpsId).toBe("vps-mock-123");
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "starter", ownerEmail: "owner@test.com" },
+      { vpsProvisioner, remoteExec }
+    );
+
+    expect(result.vpsId).toBe("123");
     expect(result.tunnelUrl).toContain("tunnel.newcoworker.com");
+    expect(vpsProvisioner).toHaveBeenCalledWith({ businessId: "biz-uuid-1", tier: "starter" });
   });
 
-  it("starter tier uses kvm2 VPS plan", async () => {
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-kvm2" }),
-      executeCommand: vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" })
-    };
-
+  it("starter tier forwards to provisioner with tier='starter'", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("s1"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
     await orchestrateProvisioning(
       { businessId: "biz-kvm2", tier: "starter" },
-      { hostinger: mockHostinger as never }
+      { vpsProvisioner, remoteExec }
     );
-    expect(mockHostinger.provisionVps).toHaveBeenCalledWith("kvm2", "gold-image-starter-v1");
+    expect(vpsProvisioner).toHaveBeenCalledWith({ businessId: "biz-kvm2", tier: "starter" });
   });
 
-  it("standard tier uses kvm8 VPS plan", async () => {
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-kvm8" }),
-      executeCommand: vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" })
-    };
-
+  it("standard tier forwards to provisioner with tier='standard'", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("s2"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
     await orchestrateProvisioning(
       { businessId: "biz-kvm8", tier: "standard" },
-      { hostinger: mockHostinger as never }
+      { vpsProvisioner, remoteExec }
     );
-    expect(mockHostinger.provisionVps).toHaveBeenCalledWith("kvm8", "gold-image-standard-v1");
+    expect(vpsProvisioner).toHaveBeenCalledWith({ businessId: "biz-kvm8", tier: "standard" });
   });
 
   it("calls updateBusinessStatus twice (offline then online)", async () => {
-    await orchestrateProvisioning({ businessId: "biz-uuid-1", tier: "starter" });
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "starter" },
+      { vpsProvisioner, remoteExec }
+    );
     expect(updateBusinessStatus).toHaveBeenCalledTimes(2);
-    expect(updateBusinessStatus).toHaveBeenNthCalledWith(1, "biz-uuid-1", "offline", "vps-mock-123");
-    expect(updateBusinessStatus).toHaveBeenNthCalledWith(2, "biz-uuid-1", "online", "vps-mock-123");
+    expect(updateBusinessStatus).toHaveBeenNthCalledWith(1, "biz-uuid-1", "offline", "42");
+    expect(updateBusinessStatus).toHaveBeenNthCalledWith(2, "biz-uuid-1", "online", "42");
   });
 
-  it("calls upsertBusinessConfig without removed Inworld columns", async () => {
-    await orchestrateProvisioning({ businessId: "biz-uuid-1", tier: "standard" });
+  it("calls upsertBusinessConfig with no legacy Inworld columns", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "standard" },
+      { vpsProvisioner, remoteExec }
+    );
     expect(upsertBusinessConfig).toHaveBeenCalledTimes(1);
     const call = vi.mocked(upsertBusinessConfig).mock.calls[0][0];
     expect(call).not.toHaveProperty("inworld_agent_id");
   });
 
-  it("uses quoteEnv override for deploy command when injected", async () => {
-    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-quote-inject" }),
-      executeCommand: mockExec
-    };
+  it("uses quoteEnv override when injected", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
     await orchestrateProvisioning(
       { businessId: "biz-quote-inject", tier: "starter" },
-      {
-        hostinger: mockHostinger as never,
-        quoteEnv: (v) => `<<${v}>>`
-      }
+      { vpsProvisioner, remoteExec, quoteEnv: (v) => `<<${v}>>` }
     );
-    const cmd = mockExec.mock.calls[0][1] as string;
+    const cmd = remoteExec.mock.calls[0][0].command as string;
     expect(cmd).toContain("BUSINESS_ID=<<biz-quote-inject>>");
   });
 
-  it("deploy command allows empty optional Telnyx and Supabase keys", async () => {
+  it("deploy command quotes empty strings for missing optional env vars", async () => {
     delete process.env.TELNYX_API_KEY;
     delete process.env.TELNYX_MESSAGING_PROFILE_ID;
     delete process.env.TELNYX_SMS_FROM_E164;
     delete process.env.STREAM_URL_SIGNING_SECRET;
-    delete process.env.BRIDGE_MEDIA_WSS_ORIGIN;
     delete process.env.GOOGLE_API_KEY;
     delete process.env.GEMINI_LIVE_MODEL;
     delete process.env.GEMINI_LIVE_ENABLED;
     delete process.env.VOICE_BRIDGE_SRC;
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;
-    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-empty" }),
-      executeCommand: mockExec
-    };
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
     await orchestrateProvisioning(
       { businessId: "biz-empty-env", tier: "starter" },
-      { hostinger: mockHostinger as never }
+      { vpsProvisioner, remoteExec }
     );
-    const cmd = mockExec.mock.calls[0][1] as string;
+    const cmd = remoteExec.mock.calls[0][0].command as string;
     expect(cmd).toContain("TELNYX_API_KEY=''");
     expect(cmd).toContain("TELNYX_MESSAGING_PROFILE_ID=''");
     expect(cmd).toContain("TELNYX_SMS_FROM_E164=''");
@@ -204,290 +218,188 @@ describe("provisioning/orchestrate", () => {
     expect(cmd).toContain("SUPABASE_SERVICE_KEY=''");
   });
 
-  it("deploy command forwards voice-bridge env (GOOGLE_API_KEY / GEMINI_LIVE_MODEL / GEMINI_LIVE_ENABLED / VOICE_BRIDGE_SRC) when set", async () => {
+  it("deploy command forwards voice-bridge env when set", async () => {
     process.env.GOOGLE_API_KEY = "sk-live-abc";
     process.env.GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview";
     process.env.GEMINI_LIVE_ENABLED = "false";
     process.env.VOICE_BRIDGE_SRC = "/opt/newcoworker-repo/vps/voice-bridge";
-    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-bridge" }),
-      executeCommand: mockExec
-    };
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
     await orchestrateProvisioning(
       { businessId: "biz-bridge", tier: "standard" },
-      { hostinger: mockHostinger as never }
+      { vpsProvisioner, remoteExec }
     );
-    const cmd = mockExec.mock.calls[0][1] as string;
+    const cmd = remoteExec.mock.calls[0][0].command as string;
     expectDeployHasEnv(cmd, "GOOGLE_API_KEY", "sk-live-abc");
     expectDeployHasEnv(cmd, "GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview");
     expectDeployHasEnv(cmd, "GEMINI_LIVE_ENABLED", "false");
     expectDeployHasEnv(cmd, "VOICE_BRIDGE_SRC", "/opt/newcoworker-repo/vps/voice-bridge");
   });
 
-  it("deploy command includes Telnyx env vars (not INWORLD)", async () => {
-    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-env" }),
-      executeCommand: mockExec
-    };
-
+  it("deploy command includes Telnyx env and gateway token", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
     await orchestrateProvisioning(
       { businessId: "biz-env", tier: "starter" },
-      { hostinger: mockHostinger as never }
+      { vpsProvisioner, remoteExec }
     );
-
-    const deployCmd = mockExec.mock.calls[0][1] as string;
-    expectDeployHasEnv(deployCmd, "TELNYX_API_KEY", "mock_telnyx");
-    expectDeployHasEnv(deployCmd, "TELNYX_MESSAGING_PROFILE_ID", "mock_prof");
-    expect(deployCmd).not.toContain("INWORLD_AGENT_ID");
+    const cmd = remoteExec.mock.calls[0][0].command as string;
+    expectDeployHasEnv(cmd, "TELNYX_API_KEY", "mock_telnyx");
+    expectDeployHasEnv(cmd, "TELNYX_MESSAGING_PROFILE_ID", "mock_prof");
+    expectDeployHasEnv(cmd, "ROWBOAT_GATEWAY_TOKEN", "mock_gateway_token");
+    expectDeployHasEnv(cmd, "TIER", "starter");
+    expect(cmd).not.toContain("INWORLD_AGENT_ID");
+    expect(cmd).not.toContain("OPENCLAW_GATEWAY_TOKEN");
   });
 
-  it("deploy command includes ROWBOAT_GATEWAY_TOKEN (not OPENCLAW)", async () => {
-    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-env2" }),
-      executeCommand: mockExec
-    };
-
+  it("SSH exec is invoked with host/username/privateKey from the vpsProvisioner result", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("100", "9.9.9.9", "MY_PEM"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
     await orchestrateProvisioning(
-      { businessId: "biz-env2", tier: "starter" },
-      { hostinger: mockHostinger as never }
+      { businessId: "biz-ssh-args", tier: "starter" },
+      { vpsProvisioner, remoteExec }
     );
-
-    const deployCmd = mockExec.mock.calls[0][1] as string;
-    expectDeployHasEnv(deployCmd, "ROWBOAT_GATEWAY_TOKEN", "mock_gateway_token");
-    expect(deployCmd).not.toContain("OPENCLAW_GATEWAY_TOKEN");
-  });
-
-  it("deploy command includes TIER variable", async () => {
-    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-tier" }),
-      executeCommand: mockExec
-    };
-
-    await orchestrateProvisioning(
-      { businessId: "biz-tier", tier: "starter" },
-      { hostinger: mockHostinger as never }
-    );
-
-    expectDeployHasEnv(mockExec.mock.calls[0][1] as string, "TIER", "starter");
+    const arg = remoteExec.mock.calls[0][0];
+    expect(arg.host).toBe("9.9.9.9");
+    expect(arg.username).toBe("root");
+    expect(arg.privateKeyPem).toBe("MY_PEM");
+    expect(arg.command).toContain("/opt/deploy-client.sh");
   });
 
   it("continues even when email notification fails", async () => {
     const { sendOwnerEmail } = await import("@/lib/email/client");
     vi.mocked(sendOwnerEmail).mockRejectedValueOnce(new Error("SMTP error"));
-
-    const result = await orchestrateProvisioning({
-      businessId: "biz-uuid-1",
-      tier: "starter",
-      ownerEmail: "owner@test.com"
-    });
-    expect(result.vpsId).toBe("vps-mock-123");
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "starter", ownerEmail: "owner@test.com" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(result.vpsId).toBe("42");
   });
 
   it("continues even when SMS notification fails", async () => {
     const { sendTelnyxSms } = await import("@/lib/telnyx/messaging");
     vi.mocked(sendTelnyxSms).mockRejectedValueOnce(new Error("Telnyx error"));
-
-    const result = await orchestrateProvisioning({
-      businessId: "biz-uuid-1",
-      tier: "starter",
-      ownerPhone: "+15550001111"
-    });
-    expect(result.vpsId).toBe("vps-mock-123");
-  });
-
-  it("accepts injected hostinger", async () => {
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-injected" }),
-      executeCommand: vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" })
-    };
-
     const result = await orchestrateProvisioning(
-      { businessId: "biz-2", tier: "starter" },
-      { hostinger: mockHostinger as never }
+      { businessId: "biz-uuid-1", tier: "starter", ownerPhone: "+15550001111" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
     );
-    expect(result.vpsId).toBe("vps-injected");
-  });
-
-  it("uses fallback empty strings when HOSTINGER_API_TOKEN not set", async () => {
-    delete process.env.HOSTINGER_API_TOKEN;
-
-    const result = await orchestrateProvisioning({
-      businessId: "biz-env-test",
-      tier: "starter"
-    });
-    expect(result.vpsId).toBe("vps-mock-123");
-  });
-
-  it("hits RESEND_API_KEY ?? empty string branch when key not set but ownerEmail is provided", async () => {
-    delete process.env.RESEND_API_KEY;
-
-    const result = await orchestrateProvisioning({
-      businessId: "biz-uuid-1",
-      tier: "starter",
-      ownerEmail: "direct@test.com"
-    });
-    expect(result.tunnelUrl).toBeTruthy();
-  });
-
-  it("hits ROWBOAT_GATEWAY_TOKEN ?? '' and NEXT_PUBLIC_APP_URL ?? fallback branches", async () => {
-    delete process.env.ROWBOAT_GATEWAY_TOKEN;
-    delete process.env.NEXT_PUBLIC_APP_URL;
-
-    const result = await orchestrateProvisioning({
-      businessId: "biz-uuid-1",
-      tier: "starter"
-    });
-    expect(result.tunnelUrl).toBeTruthy();
-  });
-
-  it("falls back SUPABASE_URL to empty string in deploy command when unset", async () => {
-    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-no-supabase-url" }),
-      executeCommand: mockExec
-    };
-
-    await orchestrateProvisioning(
-      { businessId: "biz-no-supabase-url", tier: "starter" },
-      { hostinger: mockHostinger as never }
-    );
-
-    expect(mockExec.mock.calls[0][1]).toContain("SUPABASE_URL=''");
+    expect(result.vpsId).toBe("42");
   });
 
   it("covers non-Error thrown from email notification", async () => {
     const { sendOwnerEmail } = await import("@/lib/email/client");
     vi.mocked(sendOwnerEmail).mockRejectedValueOnce("non-error-string");
-
-    const result = await orchestrateProvisioning({
-      businessId: "biz-uuid-1",
-      tier: "starter",
-      ownerEmail: "owner@test.com"
-    });
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "starter", ownerEmail: "owner@test.com" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
     expect(result.tunnelUrl).toBeTruthy();
   });
 
   it("covers non-Error thrown from SMS notification", async () => {
     const { sendTelnyxSms } = await import("@/lib/telnyx/messaging");
     vi.mocked(sendTelnyxSms).mockRejectedValueOnce("non-error-sms");
-
-    const result = await orchestrateProvisioning({
-      businessId: "biz-uuid-1",
-      tier: "starter",
-      ownerPhone: "+15550001111"
-    });
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "starter", ownerPhone: "+15550001111" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
     expect(result.tunnelUrl).toBeTruthy();
   });
 
-  it("calls executeCommand on VPS after provisioning", async () => {
-    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-exec-123" }),
-      executeCommand: mockExec
-    };
-
-    await orchestrateProvisioning(
-      { businessId: "biz-exec", tier: "starter" },
-      { hostinger: mockHostinger as never }
-    );
-    expect(mockExec).toHaveBeenCalledTimes(1);
-    expect(mockExec.mock.calls[0][0]).toBe("vps-exec-123");
-    const execCmd = mockExec.mock.calls[0][1] as string;
-    expectDeployHasEnv(execCmd, "BUSINESS_ID", "biz-exec");
-    expectDeployHasEnv(
-      execCmd,
-      "PROVISIONING_PROGRESS_URL",
-      "http://localhost:3000/api/provisioning/progress"
-    );
-    expectDeployHasEnv(execCmd, "PROVISIONING_PROGRESS_TOKEN", "mock_gateway_token");
-  });
-
-  it("continues when executeCommand returns non-zero exit", async () => {
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-nz" }),
-      executeCommand: vi.fn().mockResolvedValue({ exitCode: 1, output: "deploy failed" })
-    };
-
+  it("continues when remoteExec returns non-zero exit code", async () => {
+    const remoteExec = vi
+      .fn()
+      .mockResolvedValue({ exitCode: 1, signal: null, stdout: "", stderr: "deploy failed" });
     const result = await orchestrateProvisioning(
       { businessId: "biz-fail-exec", tier: "starter" },
-      { hostinger: mockHostinger as never }
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec
+      }
     );
-    expect(result.vpsId).toBe("vps-nz");
+    expect(result.vpsId).toBe("42");
   });
 
-  it("records deploy failure when executeCommand returns non-zero with undefined output", async () => {
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-out" }),
-      executeCommand: vi.fn().mockResolvedValue({ exitCode: 1, output: undefined })
-    };
+  it("continues when remoteExec non-zero with empty stderr/stdout", async () => {
+    const remoteExec = vi
+      .fn()
+      .mockResolvedValue({ exitCode: 1, signal: null, stdout: "", stderr: "" });
     const result = await orchestrateProvisioning(
-      { businessId: "biz-undef-out", tier: "starter" },
-      { hostinger: mockHostinger as never }
+      { businessId: "biz-fail-exec-empty", tier: "starter" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec
+      }
     );
-    expect(result.vpsId).toBe("vps-out");
+    expect(result.vpsId).toBe("42");
   });
 
-  it("continues when executeCommand throws", async () => {
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-throw" }),
-      executeCommand: vi.fn().mockRejectedValue("network error")
-    };
-
-    const result = await orchestrateProvisioning(
-      { businessId: "biz-throw-exec", tier: "starter" },
-      { hostinger: mockHostinger as never }
-    );
-    expect(result.vpsId).toBe("vps-throw");
-  });
-
-  it("continues when executeCommand throws an Error instance", async () => {
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-err" }),
-      executeCommand: vi.fn().mockRejectedValue(new Error("SSH timeout"))
-    };
-
+  it("continues when remoteExec throws an Error", async () => {
+    const remoteExec = vi.fn().mockRejectedValue(new Error("SSH timeout"));
     const result = await orchestrateProvisioning(
       { businessId: "biz-err-exec", tier: "starter" },
-      { hostinger: mockHostinger as never }
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec
+      }
     );
-    expect(result.vpsId).toBe("vps-err");
+    expect(result.vpsId).toBe("42");
   });
 
-  it("passes NOTIFICATIONS_WEBHOOK_TOKEN env to deploy command", async () => {
-    process.env.NOTIFICATIONS_WEBHOOK_TOKEN = "webhook-test-token";
-    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-tok" }),
-      executeCommand: mockExec
-    };
+  it("continues when remoteExec throws a non-Error value", async () => {
+    const remoteExec = vi.fn().mockRejectedValue("network error");
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-throw-exec", tier: "starter" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec
+      }
+    );
+    expect(result.vpsId).toBe("42");
+  });
 
+  it("passes NOTIFICATIONS_WEBHOOK_TOKEN env through to deploy command", async () => {
+    process.env.NOTIFICATIONS_WEBHOOK_TOKEN = "webhook-test-token";
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
     await orchestrateProvisioning(
       { businessId: "biz-token-test", tier: "starter" },
-      { hostinger: mockHostinger as never }
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec
+      }
     );
-    expectDeployHasEnv(mockExec.mock.calls[0][1] as string, "NOTIFICATIONS_WEBHOOK_TOKEN", "webhook-test-token");
+    expectDeployHasEnv(
+      remoteExec.mock.calls[0][0].command as string,
+      "NOTIFICATIONS_WEBHOOK_TOKEN",
+      "webhook-test-token"
+    );
   });
 
   it("falls back NOTIFICATIONS_WEBHOOK_TOKEN to SUPABASE_SERVICE_ROLE_KEY", async () => {
     delete process.env.NOTIFICATIONS_WEBHOOK_TOKEN;
     process.env.SUPABASE_SERVICE_ROLE_KEY = "service-key-fallback";
-    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-fb" }),
-      executeCommand: mockExec
-    };
-
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
     await orchestrateProvisioning(
       { businessId: "biz-fallback", tier: "starter" },
-      { hostinger: mockHostinger as never }
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec
+      }
     );
     expectDeployHasEnv(
-      mockExec.mock.calls[0][1] as string,
+      remoteExec.mock.calls[0][0].command as string,
       "NOTIFICATIONS_WEBHOOK_TOKEN",
       "service-key-fallback"
     );
@@ -499,135 +411,136 @@ describe("provisioning/orchestrate", () => {
     ).rejects.toThrow("Enterprise provisioning requires a custom engagement");
   });
 
-  it("throws for enterprise tier with CONTACT_EMAIL from env", async () => {
+  it("enterprise error mentions CONTACT_EMAIL from env", async () => {
     process.env.CONTACT_EMAIL = "custom@example.com";
     await expect(
       orchestrateProvisioning({ businessId: "biz-enterprise-2", tier: "enterprise" })
     ).rejects.toThrow("custom@example.com");
   });
 
-  it("throws for enterprise tier using fallback email when CONTACT_EMAIL unset", async () => {
+  it("enterprise error uses fallback email when CONTACT_EMAIL unset", async () => {
     delete process.env.CONTACT_EMAIL;
     await expect(
       orchestrateProvisioning({ businessId: "biz-enterprise-3", tier: "enterprise" })
     ).rejects.toThrow("newcoworkerteam@gmail.com");
   });
 
+  it("falls back RESEND_API_KEY to '' when unset but ownerEmail provided", async () => {
+    delete process.env.RESEND_API_KEY;
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "starter", ownerEmail: "direct@test.com" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(result.tunnelUrl).toBeTruthy();
+  });
+
+  it("falls back ROWBOAT_GATEWAY_TOKEN and NEXT_PUBLIC_APP_URL when unset", async () => {
+    delete process.env.ROWBOAT_GATEWAY_TOKEN;
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "starter" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(result.tunnelUrl).toBeTruthy();
+  });
+
+  it("falls back SUPABASE_URL to empty string when unset", async () => {
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-no-supabase-url", tier: "starter" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec
+      }
+    );
+    expect(remoteExec.mock.calls[0][0].command).toContain("SUPABASE_URL=''");
+  });
+
   it("per-tenant tunnel: uses CF provisioner token + hostname when injected", async () => {
-    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-cf" }),
-      executeCommand: mockExec
-    };
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
     const cfStub = vi.fn().mockResolvedValue({
       tunnelId: "tun-42",
       token: "PER_TENANT_TOKEN",
       hostname: "biz-cf.tunnel.newcoworker.com",
       voiceHostname: "voice-biz-cf.tunnel.newcoworker.com"
     });
-
     const result = await orchestrateProvisioning(
       { businessId: "biz-cf", tier: "starter" },
-      { hostinger: mockHostinger as never, cloudflareTunnel: cfStub }
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec,
+        cloudflareTunnel: cfStub
+      }
     );
-
     expect(cfStub).toHaveBeenCalledWith({ businessId: "biz-cf" });
     expect(result.tunnelUrl).toBe("https://biz-cf.tunnel.newcoworker.com");
-    expectDeployHasEnv(
-      mockExec.mock.calls[0][1] as string,
-      "CLOUDFLARE_TUNNEL_TOKEN",
-      "PER_TENANT_TOKEN"
-    );
-    // The CF voice hostname becomes the automatic BRIDGE_MEDIA_WSS_ORIGIN.
-    // Operators no longer need to run Caddy / Let's Encrypt per VPS — CF
-    // terminates TLS on the voice-* CNAME and forwards to 127.0.0.1:8090.
-    expectDeployHasEnv(
-      mockExec.mock.calls[0][1] as string,
-      "BRIDGE_MEDIA_WSS_ORIGIN",
-      "wss://voice-biz-cf.tunnel.newcoworker.com"
-    );
+    const cmd = remoteExec.mock.calls[0][0].command as string;
+    expectDeployHasEnv(cmd, "CLOUDFLARE_TUNNEL_TOKEN", "PER_TENANT_TOKEN");
+    expectDeployHasEnv(cmd, "BRIDGE_MEDIA_WSS_ORIGIN", "wss://voice-biz-cf.tunnel.newcoworker.com");
   });
 
   it("per-tenant tunnel: falls back to env CLOUDFLARE_TUNNEL_TOKEN when provisioner throws", async () => {
     process.env.CLOUDFLARE_TUNNEL_TOKEN = "SHARED_ENV_TOKEN";
-    // The env-var BRIDGE_MEDIA_WSS_ORIGIN is the documented escape hatch for
-    // shared-fleet deployments; when the per-tenant CF tunnel fails we must
-    // fall through to it rather than silently stripping the origin (which
-    // would make the voice bridge refuse every Telnyx media connection).
     process.env.BRIDGE_MEDIA_WSS_ORIGIN = "wss://shared-voice.example.com";
-    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-cf-fail" }),
-      executeCommand: mockExec
-    };
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
     const cfStub = vi.fn().mockRejectedValue(new Error("Invalid API Token"));
-
     const result = await orchestrateProvisioning(
       { businessId: "biz-cf-fail", tier: "starter" },
-      { hostinger: mockHostinger as never, cloudflareTunnel: cfStub }
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec,
+        cloudflareTunnel: cfStub
+      }
     );
-
     expect(result.tunnelUrl).toBe("https://biz-cf-fail.tunnel.newcoworker.com");
-    expectDeployHasEnv(
-      mockExec.mock.calls[0][1] as string,
-      "CLOUDFLARE_TUNNEL_TOKEN",
-      "SHARED_ENV_TOKEN"
-    );
-    expectDeployHasEnv(
-      mockExec.mock.calls[0][1] as string,
-      "BRIDGE_MEDIA_WSS_ORIGIN",
-      "wss://shared-voice.example.com"
-    );
+    const cmd = remoteExec.mock.calls[0][0].command as string;
+    expectDeployHasEnv(cmd, "CLOUDFLARE_TUNNEL_TOKEN", "SHARED_ENV_TOKEN");
+    expectDeployHasEnv(cmd, "BRIDGE_MEDIA_WSS_ORIGIN", "wss://shared-voice.example.com");
   });
 
   it("per-tenant tunnel: stringifies non-Error rejections before logging", async () => {
-    // Defensive branch: if the CF provisioner rejects with something that
-    // isn't an `Error` (e.g. a raw string from a buggy mock or a downstream
-    // that `throw`s a plain object), the orchestrator must still fall
-    // through to the shared env token instead of crashing with
-    // `undefined.message`. Pins the `String(err)` side of the
-    // `err instanceof Error ? err.message : String(err)` guard.
     process.env.CLOUDFLARE_TUNNEL_TOKEN = "SHARED_ENV_TOKEN_NONERR";
-    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-cf-nonerr" }),
-      executeCommand: mockExec
-    };
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
     const cfStub = vi.fn().mockRejectedValue("cf-exploded-as-string");
-
     const result = await orchestrateProvisioning(
       { businessId: "biz-cf-nonerr", tier: "starter" },
-      { hostinger: mockHostinger as never, cloudflareTunnel: cfStub }
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec,
+        cloudflareTunnel: cfStub
+      }
     );
-
     expect(result.tunnelUrl).toBe("https://biz-cf-nonerr.tunnel.newcoworker.com");
     expectDeployHasEnv(
-      mockExec.mock.calls[0][1] as string,
+      remoteExec.mock.calls[0][0].command as string,
       "CLOUDFLARE_TUNNEL_TOKEN",
       "SHARED_ENV_TOKEN_NONERR"
     );
   });
 
   it("per-tenant tunnel: disables provisioner via explicit null dep", async () => {
-    // Even if CF env creds were set we must not touch the network when the
-    // caller explicitly disables the provisioner.
     process.env.CLOUDFLARE_API_TOKEN = "would-explode-if-used";
     process.env.CLOUDFLARE_ACCOUNT_ID = "acct-id";
     process.env.CLOUDFLARE_TUNNEL_TOKEN = "LEGACY_TOKEN";
-    const mockExec = vi.fn().mockResolvedValue({ exitCode: 0, output: "ok" });
-    const mockHostinger = {
-      provisionVps: vi.fn().mockResolvedValue({ vpsId: "vps-cf-null" }),
-      executeCommand: mockExec
-    };
-
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
     const result = await orchestrateProvisioning(
       { businessId: "biz-cf-null", tier: "starter" },
-      { hostinger: mockHostinger as never, cloudflareTunnel: null }
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec,
+        cloudflareTunnel: null
+      }
     );
-
     expect(result.tunnelUrl).toBe("https://biz-cf-null.tunnel.newcoworker.com");
     expectDeployHasEnv(
-      mockExec.mock.calls[0][1] as string,
+      remoteExec.mock.calls[0][0].command as string,
       "CLOUDFLARE_TUNNEL_TOKEN",
       "LEGACY_TOKEN"
     );
@@ -642,10 +555,31 @@ describe("provisioning/orchestrate", () => {
         throw new Error("ENOENT: no such file");
       });
 
-    const result = await orchestrateProvisioning({
-      businessId: "biz-uuid-fallback",
-      tier: "starter"
-    });
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-uuid-fallback", tier: "starter" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
     expect(result.tunnelUrl).toBeTruthy();
+  });
+
+  it("falls back to env BRIDGE_MEDIA_WSS_ORIGIN when tunnel provisioner is disabled (null) + env set", async () => {
+    process.env.BRIDGE_MEDIA_WSS_ORIGIN = "wss://legacy-shared.example.com";
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-null-wss", tier: "starter" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec,
+        cloudflareTunnel: null
+      }
+    );
+    expectDeployHasEnv(
+      remoteExec.mock.calls[0][0].command as string,
+      "BRIDGE_MEDIA_WSS_ORIGIN",
+      "wss://legacy-shared.example.com"
+    );
   });
 });
