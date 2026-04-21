@@ -31,8 +31,7 @@ import {
   type VpsSetupRequest
 } from "./client";
 import { generateSshKeypair, type SshKeypair } from "./keypair";
-import { insertVpsSshKey, markVpsSshKeyRotated, type VpsSshKeyRow } from "@/lib/db/vps-ssh-keys";
-import { updateBusinessStatus } from "@/lib/db/businesses";
+import { insertVpsSshKey, type VpsSshKeyRow } from "@/lib/db/vps-ssh-keys";
 
 /**
  * Price-item id for each tier.
@@ -97,11 +96,16 @@ export type ProvisionVpsDeps = {
   generateKeypair?: (comment: string) => Promise<SshKeypair>;
   /** Override the sleep/polling primitive (testing). */
   sleep?: (ms: number) => Promise<void>;
-  /** Override DB writes (testing). */
+  /**
+   * Override DB writes (testing). Only `insertVpsSshKey` is consumed by
+   * {@link provisionVpsForBusiness}; rotation / business-status writes happen
+   * in the higher-level orchestrator (`src/lib/provisioning/orchestrate.ts`)
+   * and are injected there, not here. Don't add fields to this shape without
+   * a caller that actually reads them — stale override hooks give test
+   * authors false confidence that their mocks are being exercised.
+   */
   db?: {
     insertVpsSshKey?: typeof insertVpsSshKey;
-    markVpsSshKeyRotated?: typeof markVpsSshKeyRotated;
-    updateBusinessStatus?: typeof updateBusinessStatus;
   };
   /** Progress hook called after each significant step. */
   onProgress?: (phase: ProvisioningPhase, detail: Record<string, unknown>) => void;
@@ -277,6 +281,16 @@ export function buildDefaultPostInstallScript(opts?: {
   const repoUrl = opts?.repoUrl ?? "https://github.com/brianlane/newCoworker.git";
   const repoRef = opts?.repoRef ?? "main";
 
+  // Defense-in-depth: reject values that could break out of the bash string
+  // even before single-quote escaping runs. `repoUrl` must be an http(s) URL;
+  // `repoRef` must look like a git ref (no shell metachars, no spaces, no
+  // leading `-` which would be interpreted as a git flag). This complements
+  // the single-quote emission below — callers should never reach the script
+  // generator with hostile input, but we belt-and-suspenders it because this
+  // script runs as root on a fresh VPS.
+  assertSafeRepoUrl(repoUrl);
+  assertSafeRepoRef(repoRef);
+
   // Keep under 48KB (Hostinger hard limit). Idempotent by design so that a
   // recreate re-runs safely.
   return `#!/bin/bash
@@ -322,8 +336,11 @@ sed -ri 's/^#?ChallengeResponseAuthentication.*/ChallengeResponseAuthentication 
 systemctl reload ssh || systemctl reload sshd || true
 
 # Stage the repo so deploy-client.sh's VOICE_BRIDGE_SRC rsync works.
-REPO_URL="${repoUrl}"
-REPO_REF="${repoRef}"
+# Values are emitted in single quotes so bash performs NO interpolation on
+# them — this neutralises \`$(...)\`, backticks, and \\ even if the JS-side
+# validators ever regress. Do not switch these back to double quotes.
+REPO_URL=${bashSingleQuote(repoUrl)}
+REPO_REF=${bashSingleQuote(repoRef)}
 REPO_PATH="/opt/newcoworker-repo"
 mkdir -p "$(dirname "$REPO_PATH")"
 if [[ -d "$REPO_PATH/.git" ]]; then
@@ -341,6 +358,59 @@ fi
 
 echo "[newcoworker] post_install complete: $(date -Is)"
 `;
+}
+
+/**
+ * Wrap `value` in bash single quotes with correct escaping. Inside single
+ * quotes bash performs zero interpolation, so the only character that needs
+ * handling is the single quote itself, which we close, emit as an escaped
+ * literal (`'\''`), and re-open.
+ *
+ * This is the canonical safe-shell-string pattern; see e.g. Python's
+ * `shlex.quote` and Ruby's `Shellwords.escape`.
+ */
+function bashSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function assertSafeRepoUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`buildDefaultPostInstallScript: invalid repoUrl (not a URL): ${url}`);
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error(
+      `buildDefaultPostInstallScript: repoUrl must be http(s), got ${parsed.protocol}`
+    );
+  }
+  // Extra safety net: reject any ASCII control or shell metachars even though
+  // `bashSingleQuote` would already neutralise them. This turns silent-but-
+  // quoted values into loud errors during script build.
+  if (/[\s`$\\"';&|<>]/.test(url)) {
+    throw new Error(
+      `buildDefaultPostInstallScript: repoUrl contains disallowed characters`
+    );
+  }
+}
+
+function assertSafeRepoRef(ref: string): void {
+  // Git refs permit a wide range of chars, but for our own repo staging we
+  // only ever pass branch/tag names. Restrict to the intersection that is
+  // safe everywhere (also no leading `-` to avoid `git checkout -B -foo`
+  // being interpreted as a flag).
+  if (ref.length === 0 || ref.length > 255) {
+    throw new Error("buildDefaultPostInstallScript: repoRef must be 1-255 chars");
+  }
+  if (ref.startsWith("-")) {
+    throw new Error("buildDefaultPostInstallScript: repoRef must not start with '-'");
+  }
+  if (!/^[A-Za-z0-9._/-]+$/.test(ref)) {
+    throw new Error(
+      `buildDefaultPostInstallScript: repoRef contains disallowed characters`
+    );
+  }
 }
 
 async function waitForVpsReady(

@@ -471,7 +471,7 @@ describe("buildDefaultPostInstallScript", () => {
   it("uses default repo URL + ref when no options are passed", () => {
     const s = buildDefaultPostInstallScript();
     expect(s).toContain("https://github.com/brianlane/newCoworker.git");
-    expect(s).toContain("REPO_REF=\"main\"");
+    expect(s).toContain("REPO_REF='main'");
   });
 
   it("accepts custom repo URL and ref", () => {
@@ -479,8 +479,39 @@ describe("buildDefaultPostInstallScript", () => {
       repoUrl: "https://github.com/other/repo.git",
       repoRef: "release"
     });
-    expect(s).toContain("https://github.com/other/repo.git");
-    expect(s).toContain('REPO_REF="release"');
+    expect(s).toContain("REPO_URL='https://github.com/other/repo.git'");
+    expect(s).toContain("REPO_REF='release'");
+  });
+
+  it("rejects repoRef values that would enable shell command injection", () => {
+    // Bash `$(...)` command substitution inside a double-quoted string was
+    // the original vulnerability this guard prevents. Even though the emitter
+    // now uses single quotes, we validate up-front so a regression in the
+    // emitter can't silently re-open the hole.
+    expect(() =>
+      buildDefaultPostInstallScript({ repoRef: "main$(rm -rf /)" })
+    ).toThrow(/disallowed characters/);
+    expect(() =>
+      buildDefaultPostInstallScript({ repoRef: "`id`" })
+    ).toThrow(/disallowed characters/);
+    expect(() =>
+      buildDefaultPostInstallScript({ repoRef: "main; echo pwned" })
+    ).toThrow(/disallowed characters/);
+    expect(() =>
+      buildDefaultPostInstallScript({ repoRef: "-foo" })
+    ).toThrow(/must not start with/);
+  });
+
+  it("rejects repoUrl values that are not http(s) or contain shell metachars", () => {
+    expect(() =>
+      buildDefaultPostInstallScript({ repoUrl: "file:///etc/passwd" })
+    ).toThrow(/must be http/);
+    expect(() =>
+      buildDefaultPostInstallScript({ repoUrl: "not a url" })
+    ).toThrow(/invalid repoUrl/);
+    expect(() =>
+      buildDefaultPostInstallScript({ repoUrl: "https://evil.com/$(id).git" })
+    ).toThrow(/disallowed characters/);
   });
 
   it("includes the critical elements: SSH hardening, UFW, repo staging, deploy script install", () => {
