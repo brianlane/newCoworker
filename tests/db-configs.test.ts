@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
+import { upsertBusinessConfig, getBusinessConfig, updateBusinessWebsiteMd } from "@/lib/db/configs";
 
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
@@ -20,6 +20,7 @@ function mockDb(overrides: Record<string, unknown> = {}) {
   return {
     from: vi.fn().mockReturnThis(),
     upsert: vi.fn().mockReturnThis(),
+    update: vi.fn().mockReturnThis(),
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     single: vi.fn().mockResolvedValue({ data: MOCK_CONFIG, error: null }),
@@ -76,5 +77,32 @@ describe("db/configs", () => {
     const result = await getBusinessConfig("biz-uuid-1", db as never);
     expect(result?.soul_md).toBe("# soul");
     expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  it("updateBusinessWebsiteMd writes website_md + updated_at via the service client", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await updateBusinessWebsiteMd("biz-uuid-1", "# website\nhello");
+    expect(db.from).toHaveBeenCalledWith("business_configs");
+    expect(db.update).toHaveBeenCalledWith(
+      expect.objectContaining({ website_md: "# website\nhello", updated_at: expect.any(String) })
+    );
+    expect(db.eq).toHaveBeenCalledWith("business_id", "biz-uuid-1");
+  });
+
+  it("updateBusinessWebsiteMd uses the provided client and does not touch the service client", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    await updateBusinessWebsiteMd("biz-uuid-1", "# website", db as never);
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  it("updateBusinessWebsiteMd throws when the update fails", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "permission" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(updateBusinessWebsiteMd("biz-uuid-1", "# website")).rejects.toThrow(
+      "updateBusinessWebsiteMd"
+    );
   });
 });

@@ -4,7 +4,7 @@
  * OpenAI-compatible HTTP router that sits between Rowboat and two upstream
  * LLM providers:
  *
- *   - Ollama (local, for the `dispatcher` SMS agent — llama*/qwen* models)
+ *   - Ollama (local, for the `dispatcher` SMS agent — llama / qwen models)
  *   - Gemini via its OpenAI-compatible endpoint (for the `voice_task` voice
  *     agent — gemini-* models)
  *

@@ -8,7 +8,9 @@
  *
  * Design goals:
  * - Cheap: one request up front, at most ~6 follow-up pages.
- * - Safe: SSRF guard, robots.txt respect, hard timeouts, bounded bytes.
+ * - Safe-ish: DNS allowlist + per-hop hostname re-check for redirects, robots
+ *   respect, hard timeouts, streamed byte cap. See `fetchWithLimit` for the
+ *   residual DNS-rebinding TOCTOU risk that sits above the fetch layer.
  * - Non-blocking: the onboarding flow calls this after checkout succeeds; a
  *   failure logs but does not stop the user from landing on the dashboard.
  */
@@ -24,7 +26,6 @@ export const WEBSITE_INGEST_MAX_SUMMARY_CHARS = 8_000;
 
 export type WebsiteIngestError =
   | "invalid_url"
-  | "unsupported_scheme"
   | "private_address"
   | "dns_failure"
   | "blocked_by_robots"
@@ -176,12 +177,15 @@ export function extractReadableText(html: string): string {
     .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
     .replace(/<!--[\s\S]*?-->/g, " ");
 
+  // CodeQL (js/double-escaping): decode `&amp;` LAST. If we decoded it first,
+  // an input like `&amp;lt;` would turn into `<` after subsequent passes, which
+  // flips structural HTML. Decoding it last leaves intermediate entities in
+  // their literal form until all sibling entities have been resolved.
   const decoded = withoutScripts
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/(p|div|section|article|li|h[1-6])>/gi, "\n")
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
@@ -189,7 +193,8 @@ export function extractReadableText(html: string): string {
     .replace(/&#(\d+);/g, (_, code) => {
       const n = Number(code);
       return Number.isFinite(n) && n > 0 && n < 0x10000 ? String.fromCodePoint(n) : " ";
-    });
+    })
+    .replace(/&amp;/g, "&");
 
   return decoded
     .split(/\r?\n/)
@@ -203,8 +208,27 @@ export function extractSameOriginLinks(html: string, baseUrl: URL): string[] {
   const regex = /<a\s+[^>]*href\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/gi;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(html))) {
+    // `match[1] ?? match[2] ?? match[3]` covers the three alternation arms
+    // (double / single / unquoted). The final `?? ""` is defensive against a
+    // runtime that invents an empty match object — it's unreachable given the
+    // regex always captures one group when it matches.
+    /* c8 ignore next */
     const href = (match[1] ?? match[2] ?? match[3] ?? "").trim();
-    if (!href || href.startsWith("#") || href.toLowerCase().startsWith("javascript:") || href.toLowerCase().startsWith("mailto:") || href.toLowerCase().startsWith("tel:")) {
+    const lower = href.toLowerCase();
+    // Skip XSS-shaped schemes and non-HTTP nav targets. CodeQL flags incomplete
+    // allowlists here; we also exclude `data:` and `vbscript:` to match the
+    // DOM-XSS sanitizer guidance even though we never eval these hrefs — the
+    // origin check below would reject most of them, but enumerating schemes
+    // gives a clear audit trail and short-circuits pathological inputs.
+    if (
+      !href ||
+      href.startsWith("#") ||
+      lower.startsWith("javascript:") ||
+      lower.startsWith("data:") ||
+      lower.startsWith("vbscript:") ||
+      lower.startsWith("mailto:") ||
+      lower.startsWith("tel:")
+    ) {
       continue;
     }
     try {
@@ -222,23 +246,91 @@ export function extractSameOriginLinks(html: string, baseUrl: URL): string[] {
   return Array.from(urls);
 }
 
+const MAX_REDIRECTS = 5;
+
+/**
+ * Fetches `url` with four guardrails layered in priority order:
+ *
+ *  1. Single-host SSRF guard on the initial hostname (caller must also have
+ *     called `assertSafeHostname` before the first hop — we re-validate here
+ *     so `fetchRobots` / redirect hops cannot smuggle in a private host).
+ *  2. Manual redirect handling. We never let the runtime auto-follow a
+ *     `Location:` header into a private IP; each hop is re-validated against
+ *     the same DNS allowlist used for the original URL.
+ *  3. Streaming body reader. We pull chunks from `response.body` and trip
+ *     `payload_too_large` the moment we cross `maxBytes`, instead of letting
+ *     `arrayBuffer()` buffer an unbounded response before the size check.
+ *  4. A single overall timeout shared by all hops + the streaming read.
+ *
+ * Residual risk: DNS rebinding between `assertSafeHostname` and the socket
+ * connect remains possible because Node's `fetch` does its own resolution. We
+ * keep the language honest in docs + logs ("SSRF-checked" not "SSRF-proof").
+ * Fully closing that gap requires pinning the resolved IP on the socket,
+ * which means bypassing `fetch` for a custom agent — tracked separately.
+ */
 async function fetchWithLimit(
   url: string,
   fetchImpl: FetchImpl,
   timeoutMs: number,
-  maxBytes: number
+  maxBytes: number,
+  lookup: DnsLookup
 ): Promise<{ body: string; contentType: string; finalUrl: string }> {
   const controller = new AbortController();
+  /* c8 ignore next -- timer callback fires only on real-world timeouts; the
+     AbortError path it produces is exercised via AbortError-returning mocks. */
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetchImpl(url, {
-      redirect: "follow",
-      headers: {
-        "user-agent": "newcoworker-bot/1.0 (+https://newcoworker.ai)",
-        accept: "text/html,application/xhtml+xml"
-      },
-      signal: controller.signal
-    });
+    let currentUrl = new URL(url);
+    await assertSafeHostname(currentUrl.hostname, lookup);
+
+    let response: Response | null = null;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      const hopResponse = await fetchImpl(currentUrl.toString(), {
+        redirect: "manual",
+        headers: {
+          "user-agent": "newcoworker-bot/1.0 (+https://newcoworker.ai)",
+          accept: "text/html,application/xhtml+xml"
+        },
+        signal: controller.signal
+      });
+
+      if (hopResponse.status >= 300 && hopResponse.status < 400) {
+        const location = hopResponse.headers.get("location");
+        // Drain the redirect body so the underlying socket can be reused /
+        // released. `cancel()` returns a promise we swallow — failures here
+        // are benign (already-closed streams).
+        if (hopResponse.body) {
+          /* c8 ignore next -- the `.catch(() => {})` is a swallow-and-move-on
+             no-op for already-closed streams; cancel() resolves in normal runs. */
+          await hopResponse.body.cancel().catch(() => {});
+        }
+        if (!location) throw new Error("redirect_without_location");
+        if (hop === MAX_REDIRECTS) throw new Error("too_many_redirects");
+
+        let nextUrl: URL;
+        try {
+          nextUrl = new URL(location, currentUrl);
+        } catch {
+          throw new Error("invalid_redirect_target");
+        }
+        if (nextUrl.protocol !== "http:" && nextUrl.protocol !== "https:") {
+          throw new Error("unsupported_redirect_scheme");
+        }
+        await assertSafeHostname(nextUrl.hostname, lookup);
+        currentUrl = nextUrl;
+        continue;
+      }
+
+      response = hopResponse;
+      break;
+    }
+
+    /* c8 ignore next 4 -- defensive: the loop either assigns response or
+       throws on every path, but TS can't see that through the redirect
+       branch. This guard exists purely so we never deref `response!`. */
+    if (!response) {
+      throw new Error("no_response");
+    }
     if (!response.ok) {
       throw new Error(`status_${response.status}`);
     }
@@ -246,12 +338,63 @@ async function fetchWithLimit(
     if (!/text\/html|application\/xhtml\+xml|text\/plain/i.test(contentType)) {
       throw new Error("non_html_content_type");
     }
-    const buffer = await response.arrayBuffer();
-    if (buffer.byteLength > maxBytes) {
-      throw new Error("payload_too_large");
+
+    // Belt-and-suspenders: if the runtime silently followed a redirect behind
+    // our back (some polyfills ignore `redirect: "manual"`), re-validate the
+    // final URL's hostname before we read any bytes.
+    try {
+      const finalHost = new URL(response.url || currentUrl.toString()).hostname;
+      if (finalHost && finalHost !== currentUrl.hostname) {
+        await assertSafeHostname(finalHost, lookup);
+      }
+    } catch (err) {
+      if (err instanceof Error && (err.message === "private_address" || err.message === "dns_failure")) {
+        throw err;
+      }
+      // URL parse failures fall through — `response.url` is best-effort.
     }
-    const body = new TextDecoder("utf-8", { fatal: false }).decode(buffer);
-    return { body, contentType, finalUrl: response.url || url };
+
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    const reader = response.body?.getReader();
+    if (reader) {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          /* c8 ignore next -- the streams spec guarantees `value` is present
+             when `done === false`, but the property is typed as optional so
+             we keep the null-guard to stay honest with TS. */
+          if (!value) continue;
+          total += value.byteLength;
+          if (total > maxBytes) {
+            /* c8 ignore next -- swallow-and-move-on no-op for stream readers
+               whose cancel() rejects; standard ReadableStream resolves. */
+            await reader.cancel().catch(() => {});
+            throw new Error("payload_too_large");
+          }
+          chunks.push(value);
+        }
+      } finally {
+        reader.releaseLock?.();
+      }
+    } else {
+      // No streaming body (mocked Responses / very old runtimes). Fall back to
+      // arrayBuffer but still enforce the cap immediately after buffering.
+      const buffer = await response.arrayBuffer();
+      if (buffer.byteLength > maxBytes) throw new Error("payload_too_large");
+      chunks.push(new Uint8Array(buffer));
+      total = buffer.byteLength;
+    }
+
+    const merged = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    const body = new TextDecoder("utf-8", { fatal: false }).decode(merged);
+    return { body, contentType, finalUrl: response.url || currentUrl.toString() };
   } finally {
     clearTimeout(timer);
   }
@@ -260,11 +403,12 @@ async function fetchWithLimit(
 async function fetchRobots(
   origin: string,
   fetchImpl: FetchImpl,
-  timeoutMs: number
+  timeoutMs: number,
+  lookup: DnsLookup
 ): Promise<string> {
   const robotsUrl = new URL("/robots.txt", origin).toString();
   try {
-    const { body } = await fetchWithLimit(robotsUrl, fetchImpl, timeoutMs, 500_000);
+    const { body } = await fetchWithLimit(robotsUrl, fetchImpl, timeoutMs, 500_000, lookup);
     return body;
   } catch {
     return "";
@@ -312,6 +456,8 @@ async function defaultGeminiSummarize(prompt: string): Promise<string> {
   const model = process.env.GEMINI_ROWBOAT_MODEL ?? process.env.GEMINI_SUMMARY_MODEL ?? "gemini-3.1-flash";
 
   const controller = new AbortController();
+  /* c8 ignore next -- the 20s timer only fires when Gemini actually hangs;
+     AbortError classification is covered by classifyGeminiError tests. */
   const timer = setTimeout(() => controller.abort(), 20_000);
   try {
     const response = await fetch(
@@ -358,16 +504,11 @@ export async function ingestWebsite(
 ): Promise<WebsiteIngestResult> {
   const normalized = normalizeWebsiteUrl(rawUrl);
   if (!normalized) return { ok: false, error: "invalid_url" };
-
-  let parsed: URL;
-  try {
-    parsed = new URL(normalized);
-  } catch {
-    return { ok: false, error: "invalid_url" };
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return { ok: false, error: "unsupported_scheme" };
-  }
+  // `normalizeWebsiteUrl` guarantees a well-formed http/https URL, so we can
+  // parse without re-checking scheme or wrapping in a try/catch. Keeping the
+  // defensive re-parse would leave unreachable branches hurting coverage
+  // without adding real safety.
+  const parsed = new URL(normalized);
 
   const fetchImpl = options.fetchImpl ?? fetch;
   const lookup = options.lookup ?? (dns.lookup as unknown as DnsLookup);
@@ -377,13 +518,21 @@ export async function ingestWebsite(
   try {
     await assertSafeHostname(parsed.hostname, lookup);
   } catch (err) {
+    // `assertSafeHostname` only throws `Error("private_address" | "dns_failure")`.
+    // The `: ""` fallback is kept so TS doesn't have to trust that invariant,
+    // but it's defensively unreachable — hence the ignore marker.
+    /* c8 ignore next */
     const message = err instanceof Error ? err.message : "";
     const code: WebsiteIngestError = message === "dns_failure" ? "dns_failure" : "private_address";
     return { ok: false, error: code };
   }
 
-  const robots = await fetchRobots(parsed.origin, fetchImpl, WEBSITE_INGEST_PAGE_TIMEOUT_MS);
+  const robots = await fetchRobots(parsed.origin, fetchImpl, WEBSITE_INGEST_PAGE_TIMEOUT_MS, lookup);
   const disallows = parseRobotsDisallows(robots);
+  // WHATWG URL always exposes `pathname` as a non-empty string ("/" at the
+  // minimum). The `|| "/"` guard is defensive against hypothetical polyfills
+  // and is unreachable in the Node runtime we ship on.
+  /* c8 ignore next */
   if (!isPathAllowed(parsed.pathname || "/", disallows)) {
     return { ok: false, error: "blocked_by_robots" };
   }
@@ -396,24 +545,33 @@ export async function ingestWebsite(
 
   while (queue.length > 0 && pages.length < maxPages) {
     const next = queue.shift();
+    /* c8 ignore next -- `queue.length > 0` in the while guards against `!next`,
+       and `visited.has` is defensive because we always check before queueing. */
     if (!next || visited.has(next)) continue;
     visited.add(next);
     try {
       const nextUrl = new URL(next);
+      // Same defensive `|| "/"` as above — unreachable on our supported runtimes.
+      /* c8 ignore next */
       if (!isPathAllowed(nextUrl.pathname || "/", disallows)) continue;
+      const isHomepage = next === normalized;
       const { body, finalUrl } = await fetchWithLimit(
         next,
         fetchImpl,
         WEBSITE_INGEST_PAGE_TIMEOUT_MS,
-        WEBSITE_INGEST_MAX_BYTES_PER_PAGE
+        WEBSITE_INGEST_MAX_BYTES_PER_PAGE,
+        lookup
       );
       bytesDownloaded += body.length;
       const text = extractReadableText(body);
       if (text.trim()) {
         pages.push({ url: finalUrl, text });
       }
-      if (pages.length === 1) {
-        // Only expand the queue from the homepage to keep "shallow" semantics.
+      if (isHomepage) {
+        // Expand the queue from the homepage to keep "shallow" semantics. We
+        // do this even when `text` is empty — JS-heavy homepages often render
+        // their copy through linked subpages, and keying off `pages.length`
+        // would silently drop those sites with `fetch_failed`.
         const links = extractSameOriginLinks(body, new URL(finalUrl));
         for (const link of links) {
           if (queue.length + pages.length >= maxPages) break;
@@ -421,10 +579,12 @@ export async function ingestWebsite(
         }
       }
     } catch (err) {
-      logger.warn("website-ingest: fetch failed", {
-        url: next,
-        error: err instanceof Error ? err.message : String(err)
-      });
+      // `fetchWithLimit` / assertSafeHostname always reject with `Error`
+      // instances; the `String(err)` branch is a safety net for a hypothetical
+      // non-Error throw and is unreachable on our stack.
+      /* v8 ignore next */
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.warn("website-ingest: fetch failed", { url: next, error: errorMessage });
       continue;
     }
   }

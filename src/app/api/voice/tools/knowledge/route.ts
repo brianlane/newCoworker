@@ -31,6 +31,31 @@ const argsSchema = z.object({
 
 const PROMPT_MAX_CONTEXT_CHARS = 12_000;
 
+/**
+ * Maps the `askGemini` failure modes to a stable `detail` string that the
+ * voice bridge forwards to Gemini Live. We deliberately differentiate between
+ * timeouts (user should hear "give me a moment"), rate limits (retry later),
+ * upstream server errors, empty responses, and missing-credential "skip the
+ * tool entirely" cases so downstream telemetry + the model's spoken reply
+ * stop blaming every failure on a network timeout.
+ */
+export function classifyGeminiError(err: unknown): string {
+  if (!(err instanceof Error)) return "gemini_error";
+  if (err.name === "AbortError") return "timeout";
+  const message = err.message;
+  if (message === "gemini_unavailable") return "summarizer_unavailable";
+  if (message === "gemini_empty") return "empty_answer";
+  const httpMatch = /^gemini_http_(\d+)$/.exec(message);
+  if (httpMatch) {
+    const status = Number(httpMatch[1]);
+    if (status === 429) return "rate_limited";
+    if (status >= 500) return "upstream_error";
+    return "upstream_client_error";
+  }
+  if (/abort/i.test(message)) return "timeout";
+  return "gemini_error";
+}
+
 async function askGemini(question: string, context: string): Promise<string> {
   const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
   if (!apiKey) throw new Error("gemini_unavailable");
@@ -123,13 +148,7 @@ export async function POST(request: Request) {
         businessId: envelope.businessId,
         error: err instanceof Error ? err.message : String(err)
       });
-      return voiceToolResponse({
-        ok: false,
-        detail:
-          err instanceof Error && err.message === "gemini_unavailable"
-            ? "summarizer_unavailable"
-            : "timeout"
-      });
+      return voiceToolResponse({ ok: false, detail: classifyGeminiError(err) });
     }
   } catch (err) {
     logger.warn("voice-tools/knowledge: unexpected error", {
