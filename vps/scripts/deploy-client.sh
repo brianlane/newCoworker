@@ -17,6 +17,11 @@
 #   BRIDGE_MEDIA_WSS_ORIGIN  — public wss:// origin for the VPS voice bridge
 #   GOOGLE_API_KEY           — Gemini API key; blank disables Live on the bridge
 #   GEMINI_LIVE_MODEL        — optional; default gemini-3.1-flash-live-preview
+#   GEMINI_ROWBOAT_MODEL     — optional; Gemini model used by Rowboat's voice_task
+#                               agent via the llm-router sidecar. Defaults to
+#                               gemini-3.1-flash.
+#   LLM_ROUTER_PORT          — optional; loopback port for the llm-router
+#                               sidecar (default 11435).
 #   GEMINI_LIVE_ENABLED      — optional secondary rollout kill switch for the
 #                               bridge ("false" keeps media WS up but silences
 #                               AI audio). When unset the deploy preserves any
@@ -67,12 +72,15 @@ log "Fetching business config from Supabase..."
 CONFIG_JSON=$(curl -sf \
   -H "apikey: ${SUPABASE_SERVICE_KEY}" \
   -H "Authorization: Bearer ${SUPABASE_SERVICE_KEY}" \
-  "${SUPABASE_URL}/rest/v1/business_configs?business_id=eq.${BUSINESS_ID}&select=soul_md,identity_md,memory_md" \
+  "${SUPABASE_URL}/rest/v1/business_configs?business_id=eq.${BUSINESS_ID}&select=soul_md,identity_md,memory_md,website_md" \
   | jq -r '.[0]')
 
 SOUL_MD=$(echo "$CONFIG_JSON" | jq -r '.soul_md // empty')
 IDENTITY_MD=$(echo "$CONFIG_JSON" | jq -r '.identity_md // empty')
 MEMORY_MD=$(echo "$CONFIG_JSON" | jq -r '.memory_md // empty')
+# website_md is optional; absent on older deployments without the
+# 20260426000000_add_business_website migration applied yet.
+WEBSITE_MD=$(echo "$CONFIG_JSON" | jq -r '.website_md // empty')
 
 slugify() {
   echo "$1" \
@@ -85,6 +93,10 @@ mkdir -p /opt/rowboat/vault /opt/rowboat/memory
 echo "$SOUL_MD"     > /opt/rowboat/vault/soul.md
 echo "$IDENTITY_MD" > /opt/rowboat/vault/identity.md
 echo "$MEMORY_MD"   > /opt/rowboat/vault/memory.md
+# website.md is written even when empty so the voice-bridge vault loader has
+# a stable file to stat; an empty file simply omits the website section from
+# Gemini Live's system instruction.
+echo "$WEBSITE_MD"  > /opt/rowboat/vault/website.md
 
 mkdir -p /opt/rowboat/memory/Organizations /opt/rowboat/memory/People /opt/rowboat/memory/Topics /opt/rowboat/memory/Projects
 mkdir -p /opt/rowboat/memory/.newcoworker-seeds
@@ -173,17 +185,38 @@ else
 fi
 # Optional: cap num_ctx for starter TTFT — see vps/fragments/ollama-Modelfile-starter-4096.example
 
+# llm-router sidecar: Rowboat talks to a small proxy (compose service
+# `llm-router`) that forwards llama*/qwen* traffic to Ollama and gemini-*
+# traffic to Gemini's OpenAI-compatible endpoint. This lets a single Rowboat
+# container serve both the SMS dispatcher agent (Ollama) and the voice_task
+# agent (Gemini).
+LLM_ROUTER_PORT="${LLM_ROUTER_PORT:-11435}"
+GEMINI_ROWBOAT_MODEL_DEFAULT="gemini-3.1-flash"
+
 cat > /opt/rowboat/.env <<RENV_EOF
 # Rowboat runtime configuration for business: ${BUSINESS_ID}
 ROWBOAT_GATEWAY_TOKEN=${ROWBOAT_GATEWAY_TOKEN}
 BUSINESS_ID=${BUSINESS_ID}
 TIER=${TIER}
 
-# Ollama / LLM (host systemd — reachable from Rowboat container via Docker host-gateway)
-PROVIDER_BASE_URL=http://host.docker.internal:11434/v1
-PROVIDER_API_KEY=ollama
+# LLM provider routing — Rowboat talks to the llm-router sidecar (same
+# docker-compose network) which forwards to Ollama for dispatcher (SMS)
+# and Gemini for voice_task (voice). The llm-router service uses its
+# compose DNS alias; no host.docker.internal hop needed from Rowboat.
+PROVIDER_BASE_URL=http://llm-router:${LLM_ROUTER_PORT}/v1
+PROVIDER_API_KEY=router
 PROVIDER_DEFAULT_MODEL=${OLLAMA_MODEL}
 PROVIDER_COPILOT_MODEL=${OLLAMA_MODEL}
+
+# Gemini model used by the voice_task agent via the llm-router.
+GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+GEMINI_ROWBOAT_MODEL=${GEMINI_ROWBOAT_MODEL:-${GEMINI_ROWBOAT_MODEL_DEFAULT}}
+OLLAMA_MODEL=${OLLAMA_MODEL}
+
+# Where Rowboat should POST voice-tool calls from the voice_task agent.
+# Routed through the platform Next.js app which proxies to Nango / Telnyx /
+# CRM loggers. ROWBOAT_GATEWAY_TOKEN authenticates these calls.
+APP_BASE_URL=${APP_BASE_URL:-}
 
 # Telnyx (SMS + voice Call Control is on platform Edge; bridge uses stream signing secret)
 TELNYX_API_KEY=${TELNYX_API_KEY:-}
@@ -350,6 +383,19 @@ BRIDGE_MEDIA_WSS_ORIGIN=${BRIDGE_MEDIA_WSS_ORIGIN:-}
 GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
 GEMINI_LIVE_MODEL=${GEMINI_LIVE_MODEL:-gemini-3.1-flash-live-preview}
 GEMINI_LIVE_ENABLED=${effective_gemini_live_enabled}
+
+# Vault + Rowboat + platform app endpoints for Gemini Live tool calls.
+# VAULT_PATH: where the bridge reads soul/identity/memory/website md.
+# ROWBOAT_URL: Rowboat /chat endpoint reachable from the bridge container;
+#              uses Docker's host-gateway alias because Rowboat listens on
+#              the host's loopback interface.
+# APP_BASE_URL: platform Next.js origin for /api/voice/tools/* adapters.
+# ROWBOAT_GATEWAY_TOKEN: shared bearer used by both Rowboat and the bridge
+#                        when calling the platform app.
+VAULT_PATH=/vault
+ROWBOAT_URL=${ROWBOAT_URL:-http://host.docker.internal:3000}
+APP_BASE_URL=${APP_BASE_URL:-}
+ROWBOAT_GATEWAY_TOKEN=${ROWBOAT_GATEWAY_TOKEN:-}
 VBENV_EOF
     chmod 600 .env
 

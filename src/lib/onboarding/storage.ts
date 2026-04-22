@@ -36,6 +36,7 @@ export type OnboardingData = {
   businessType: string;
   ownerName: string;
   phone: string;
+  websiteUrl?: string;
   serviceArea: string;
   typicalInquiry: string;
   teamSize: string;

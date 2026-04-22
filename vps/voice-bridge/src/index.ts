@@ -9,6 +9,7 @@ import { WebSocketServer, type RawData } from "ws";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { loadEnv } from "./load-env.js";
 import { createGeminiTelnyxBridge, type TransferCapability } from "./gemini-telnyx-bridge.js";
+import { loadVaultForPrompt } from "./vault-loader.js";
 import { telnyxTransferCall, telnyxSendPlainSms } from "./telnyx-call-actions.js";
 
 loadEnv();
@@ -317,6 +318,35 @@ function main(): void {
           const warnBeforeMs = readPositiveMs("GEMINI_LIVE_SESSION_WARN_BEFORE_MS", 60 * 1000);
           const finalNudgeBeforeMs = readPositiveMs("GEMINI_LIVE_SESSION_FINAL_NUDGE_MS", 15 * 1000);
           const model = process.env.GEMINI_LIVE_MODEL ?? "gemini-3.1-flash-live-preview";
+
+          // Prime Gemini's system instruction with the Rowboat vault so
+          // identity/tone/long-term memory/website knowledge is already in
+          // context when the greeting fires. A missing vault directory is
+          // logged but never fatal — the bridge still works with a generic
+          // receptionist persona.
+          const vault = await loadVaultForPrompt().catch((err) => {
+            console.warn("voice-bridge: vault load failed; proceeding without priming", err);
+            return undefined;
+          });
+          if (vault) {
+            console.log("voice-bridge: vault primed", {
+              files: vault.presentFiles,
+              chars: vault.totalChars
+            });
+          }
+
+          const appBaseUrl = process.env.APP_BASE_URL ?? "";
+          const gatewayToken = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
+          const voiceTools =
+            appBaseUrl && gatewayToken
+              ? {
+                  appBaseUrl,
+                  gatewayToken,
+                  callControlId,
+                  callerE164: fromE164Info || ""
+                }
+              : undefined;
+
           const bridge = await createGeminiTelnyxBridge({
             ws,
             businessId,
@@ -327,7 +357,10 @@ function main(): void {
             warnBeforeMs,
             finalNudgeBeforeMs,
             businessName,
-            transfer
+            transfer,
+            vault,
+            callerE164: fromE164Info || "",
+            voiceTools
           });
           onTelnyxGemini = bridge.onTelnyxMessage;
           geminiTeardown = bridge.teardown;

@@ -11,7 +11,15 @@ const schema = z.object({
   signupUserId: z.string().uuid().optional(),
   soulMd: z.string().min(1),
   identityMd: z.string().min(1),
-  memoryMd: z.string().optional()
+  memoryMd: z.string().optional(),
+  /**
+   * Optional manual override for the website.md vault file. The dashboard
+   * lets owners edit or re-crawl it; onboarding leaves it undefined so the
+   * value written by `/api/onboard/website-ingest` survives the config
+   * save. When present (including empty string), we persist exactly what
+   * the client sent.
+   */
+  websiteMd: z.string().optional()
 });
 
 export async function POST(request: Request) {
@@ -73,7 +81,11 @@ export async function POST(request: Request) {
       business_id: body.businessId,
       soul_md: body.soulMd,
       identity_md: body.identityMd,
-      memory_md: body.memoryMd ?? existing?.memory_md ?? ""
+      memory_md: body.memoryMd ?? existing?.memory_md ?? "",
+      // Preserve existing website_md (set by the onboarding crawl) unless the
+      // caller explicitly sent one. Sending an empty string clears it.
+      website_md:
+        body.websiteMd !== undefined ? body.websiteMd : existing?.website_md ?? ""
     });
 
     return successResponse({ updated: true });

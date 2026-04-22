@@ -390,6 +390,14 @@ export async function orchestrateProvisioning(
     ["GOOGLE_API_KEY", process.env.GOOGLE_API_KEY ?? ""],
     ["GEMINI_LIVE_MODEL", process.env.GEMINI_LIVE_MODEL ?? ""],
     ["GEMINI_LIVE_ENABLED", process.env.GEMINI_LIVE_ENABLED ?? ""],
+    // Model name Rowboat uses for the voice_task agent via the llm-router
+    // sidecar. Falls back to the deploy-client.sh default when unset.
+    ["GEMINI_ROWBOAT_MODEL", process.env.GEMINI_ROWBOAT_MODEL ?? ""],
+    // Public origin of the platform app so Rowboat's voice_task agent and
+    // the voice-bridge tool dispatcher can POST to /api/voice/tools/* with
+    // the shared gateway token. Falls back to NEXT_PUBLIC_APP_URL so local
+    // and preview deployments work without a separate knob.
+    ["APP_BASE_URL", process.env.APP_BASE_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? ""],
     ["VOICE_BRIDGE_SRC", process.env.VOICE_BRIDGE_SRC ?? ""],
     ["CLOUDFLARE_TUNNEL_TOKEN", cloudflareTunnelToken],
     ["LIGHTPANDA_WSS_URL", process.env.LIGHTPANDA_WSS_URL ?? "wss://cdn.lightpanda.io/ws"],

@@ -173,6 +173,29 @@ git clone https://github.com/rowboatlabs/rowboat.git /opt/rowboat/src 2>/dev/nul
 cd /opt/rowboat/src
 cp .env.example .env 2>/dev/null || true
 
+# Stage the llm-router source from the checked-out repo so the compose
+# `build:` directive below can reuse the same Dockerfile across tiers.
+#
+# We tolerate a missing source tree for air-gapped recovery reboots: the
+# router service stays in compose either way, and bootstrap's
+# `docker compose up` will surface a build failure loudly. deploy-client.sh
+# re-runs compose on every deploy and so will recover once the repo appears.
+LLM_ROUTER_SRC="${LLM_ROUTER_SRC:-/opt/newcoworker-repo/vps/llm-router}"
+LLM_ROUTER_DEST="/opt/rowboat/llm-router"
+if [[ -d "${LLM_ROUTER_SRC}" ]]; then
+  mkdir -p "${LLM_ROUTER_DEST}"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete \
+      --exclude "node_modules" \
+      "${LLM_ROUTER_SRC}/" "${LLM_ROUTER_DEST}/"
+  else
+    cp -R "${LLM_ROUTER_SRC}/." "${LLM_ROUTER_DEST}/"
+  fi
+  log "llm-router source staged at ${LLM_ROUTER_DEST}"
+else
+  log "WARN: llm-router source not found at ${LLM_ROUTER_SRC}; compose build will fail until repo is staged"
+fi
+
 # Tier-aware Rowboat docker-compose
 if [[ "$TIER" == "starter" ]]; then
   # KVM 2: slim stack — no qdrant, constrained mongo, no rag-worker
@@ -193,6 +216,25 @@ services:
       - /opt/rowboat/vault:/vault:ro
       - /opt/rowboat/memory:/memory
     mem_limit: 1536m
+    depends_on:
+      - llm-router
+
+  llm-router:
+    build:
+      context: /opt/rowboat/llm-router
+    container_name: llm-router
+    restart: always
+    env_file: /opt/rowboat/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # Ollama runs on the host via systemd; route traffic back out through
+      # the docker host-gateway so the container can reach 127.0.0.1:11434.
+      OLLAMA_URL: http://host.docker.internal:11434
+      LLM_ROUTER_PORT: 11435
+    ports:
+      - "127.0.0.1:11435:11435"
+    mem_limit: 128m
 
   mongo:
     image: mongo:7
@@ -208,7 +250,9 @@ services:
     restart: always
     mem_limit: 100m
 
-# Ollama: host systemd only (§4). Rowboat reaches it via PROVIDER_BASE_URL=http://host.docker.internal:11434/v1 (OpenAI-compatible path)
+# Ollama: host systemd only (§4). Rowboat routes LLM traffic through the
+# llm-router sidecar (PROVIDER_BASE_URL=http://llm-router:11435/v1) which
+# forwards llama*/qwen* to Ollama and gemini-* to Google.
 
 volumes:
   rowboat_mongo:
@@ -231,6 +275,22 @@ services:
     volumes:
       - /opt/rowboat/vault:/vault:ro
       - /opt/rowboat/memory:/memory
+    depends_on:
+      - llm-router
+
+  llm-router:
+    build:
+      context: /opt/rowboat/llm-router
+    container_name: llm-router
+    restart: always
+    env_file: /opt/rowboat/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      OLLAMA_URL: http://host.docker.internal:11434
+      LLM_ROUTER_PORT: 11435
+    ports:
+      - "127.0.0.1:11435:11435"
 
   jobs-worker:
     build:
@@ -261,7 +321,8 @@ services:
     volumes:
       - rowboat_qdrant:/qdrant/storage
 
-# Ollama: host systemd only (§4). Rowboat / jobs-worker use host.docker.internal:11434/v1 for OpenAI-compatible calls
+# Ollama: host systemd only (§4). Rowboat / jobs-worker route LLM traffic
+# through the llm-router sidecar (PROVIDER_BASE_URL=http://llm-router:11435/v1).
 
 volumes:
   rowboat_mongo:

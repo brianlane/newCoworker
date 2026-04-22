@@ -1,0 +1,11 @@
+{
+  "name": "newcoworker-llm-router",
+  "version": "0.1.0",
+  "description": "Tiny OpenAI-compatible router: forwards gemini-* to Google, everything else to Ollama. Runs beside Rowboat on the VPS.",
+  "private": true,
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  }
+}

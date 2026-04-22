@@ -188,3 +188,87 @@ so you can trend the stale/stuck counts without parsing logs.
 
 Rollback never touches the database; telemetry continues recording so you can
 verify the traffic actually did drop to speak-only.
+
+---
+
+## 9. Voice knowledge + tool suite (Phase 2)
+
+Phase 2 adds two things on top of the "audio works" base from sections 1–7:
+the tenant's vault files are injected into Gemini Live's system prompt, and
+Gemini can call typed tools that hit the platform Next.js app for calendar /
+email / SMS / CRM / knowledge lookups.
+
+### What gets shipped where
+
+- **Vault files** — `soul.md`, `identity.md`, `memory.md`, and the new
+  `website.md` live under `/opt/rowboat/vault/*.md`. `deploy-client.sh`
+  writes all four from `business_configs` on every deploy, and the voice
+  bridge mounts the directory read-only at `/vault`. See
+  `vps/voice-bridge/src/vault-loader.ts` for the truncation budget.
+- **Website knowledge** — owners paste a URL during onboarding. Next.js
+  crawls it once via `/api/onboard/website-ingest` (SSRF-guarded,
+  robots.txt-respecting), summarizes with Gemini, and stores markdown in
+  `business_configs.website_md`. Owners can re-crawl from
+  `/dashboard/memory` (the "Website Knowledge" card).
+- **LLM router sidecar** — `vps/llm-router/` is a ~200-line Node service
+  that Rowboat talks to instead of Ollama directly. It forwards
+  `gemini-*` traffic to Google's OpenAI-compat endpoint and everything
+  else to Ollama. Declared as a compose service (`llm-router`) in
+  `bootstrap.sh`, reachable internally at `http://llm-router:11435/v1`.
+- **Voice tool adapters** — `src/app/api/voice/tools/{knowledge,calendar/find-slots,calendar/book,email,sms,capture}/route.ts`.
+  Authenticated via `ROWBOAT_GATEWAY_TOKEN`; calendar/email proxy via
+  Nango, SMS via the existing metered Telnyx helper, capture via
+  `coworker_logs`.
+
+### Rollout order for Phase 2
+
+1. Apply `supabase db push` so the `website_url` + `website_md` columns
+   exist before any deploy hits the VPS fetch step.
+2. Redeploy the app so the new `/api/voice/tools/*` routes and onboarding
+   field ship together.
+3. Bump `ROWBOAT_GATEWAY_TOKEN` in the app and re-run the orchestrator
+   so every VPS gets the new token + `APP_BASE_URL` env.
+4. Place a test call. Gemini should now reference vault content (ask
+   about hours / services / location) and successfully call
+   `capture_caller_details` when the caller gives their name and reason.
+
+### Required env (Phase 2)
+
+| Variable                 | Lives on                         | Notes                                                                      |
+| ------------------------ | -------------------------------- | --------------------------------------------------------------------------- |
+| `APP_BASE_URL`           | Next.js + Rowboat VPS `.env`     | Public origin of the app; used by bridge + Rowboat for tool calls           |
+| `GEMINI_ROWBOAT_MODEL`   | Rowboat VPS `.env` (optional)    | Model used by the `voice_task` agent. Defaults to `gemini-3.1-flash`.       |
+| `GOOGLE_API_KEY`         | App + VPS (already existed)      | Used by bridge (Live), Rowboat (router), and the knowledge adapter         |
+| `ROWBOAT_GATEWAY_TOKEN`  | App + Rowboat + voice-bridge     | Single bearer token shared across all three; any mismatch breaks tools.     |
+
+### Manual tool smoke test
+
+From your workstation, with `APP_BASE_URL` pointing at the app and the
+gateway token in hand:
+
+```bash
+curl -sf -X POST "$APP_BASE_URL/api/voice/tools/knowledge" \
+  -H "authorization: Bearer $ROWBOAT_GATEWAY_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{"businessId":"<biz-uuid>","args":{"question":"what are your hours?"}}'
+```
+
+Expected response shape:
+
+```json
+{ "ok": true, "data": { "answer": "We're open 9 to 5 on weekdays." } }
+```
+
+A `{ "ok": false, "detail": "knowledge_empty" }` reply means the tenant's
+vault is blank; complete onboarding or edit `/dashboard/memory` first.
+
+### Rollback (Phase 2)
+
+- Set `GOOGLE_API_KEY=""` in the Rowboat VPS `.env` and redeploy. The
+  router returns 503 for `gemini-*` traffic, so the `voice_task` agent
+  fails closed, but the bridge keeps running (it already has a direct
+  Gemini Live session) and the `dispatcher` SMS agent is unaffected.
+- To roll back just the tool suite without touching Gemini Live, point
+  `APP_BASE_URL` at an empty value on the VPS. The bridge's
+  `voiceToolsReady` guard trips and Gemini receives no tool declarations
+  for the next call.

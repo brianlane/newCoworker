@@ -107,6 +107,7 @@ function CheckoutContent() {
             businessType: data.businessType,
             ownerName: data.ownerName,
             phone: data.phone,
+            websiteUrl: data.websiteUrl,
             serviceArea: data.serviceArea,
             typicalInquiry: data.typicalInquiry,
             teamSize: data.teamSize,
@@ -123,6 +124,26 @@ function CheckoutContent() {
         };
         localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(onboardingData));
         setData(onboardingData);
+      }
+
+      if (data.websiteUrl && data.websiteUrl.trim()) {
+        // Kick off website ingestion in the background while the user goes to
+        // Stripe. `keepalive` lets the request continue after navigation, and
+        // we never await it so a slow summarization cannot block checkout.
+        try {
+          void fetch("/api/onboard/website-ingest", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            keepalive: true,
+            body: JSON.stringify({
+              businessId,
+              websiteUrl: data.websiteUrl,
+              draftToken: data.draftToken,
+              businessName: data.businessName,
+              businessType: data.businessType
+            })
+          });
+        } catch { /* non-blocking */ }
       }
 
       if (onboardingData.assistantChat?.drafts) {
