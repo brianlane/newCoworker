@@ -135,6 +135,27 @@ describe("api/onboard/website-ingest route", () => {
     expect(res.status).toBe(403);
   });
 
+  it("returns FORBIDDEN (not 500) when the business row has a null owner_email", async () => {
+    // `BusinessRow.owner_email` is typed as `string` but the column is nullable
+    // in the DB. A null value used to crash `.toLowerCase()` — this test locks
+    // in a clean 403 response instead of the old 500.
+    vi.mocked(getAuthUser).mockResolvedValue({ email: "owner@example.com", isAdmin: false } as never);
+    vi.mocked(getBusiness).mockResolvedValue({ owner_email: null } as never);
+
+    const res = await POST(jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/" }));
+    expect(res.status).toBe(403);
+    expect(ingestWebsite).not.toHaveBeenCalled();
+  });
+
+  it("returns FORBIDDEN when the business row has an undefined owner_email", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ email: "owner@example.com", isAdmin: false } as never);
+    vi.mocked(getBusiness).mockResolvedValue({} as never);
+
+    const res = await POST(jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/" }));
+    expect(res.status).toBe(403);
+    expect(ingestWebsite).not.toHaveBeenCalled();
+  });
+
   it("tolerates a thrown getOnboardingDraft and still falls through to session auth", async () => {
     vi.mocked(getOnboardingDraft).mockRejectedValue(new Error("boom"));
     vi.mocked(getAuthUser).mockResolvedValue({ email: "owner@example.com", isAdmin: false } as never);

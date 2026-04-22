@@ -30,7 +30,15 @@ async function isAuthorized(
   if (!user.email) return { ok: false, reason: "no email" };
 
   const business = await getBusiness(businessId);
-  if (!business || business.owner_email.toLowerCase() !== user.email.toLowerCase()) {
+  // `BusinessRow.owner_email` is typed as `string`, but the column is nullable
+  // at the SQL layer (pending rows, manual DB edits, legacy backfills). Without
+  // this guard a null value would throw `Cannot read properties of null` from
+  // `.toLowerCase()` and bubble up as a 500, leaking an internal crash for what
+  // should be a clean "not owner" 403.
+  if (!business || !business.owner_email) {
+    return { ok: false, reason: "not owner" };
+  }
+  if (business.owner_email.toLowerCase() !== user.email.toLowerCase()) {
     return { ok: false, reason: "not owner" };
   }
   return { ok: true, source: "owner" };
