@@ -145,7 +145,11 @@ describe("db/configs", () => {
       })
     };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-    await expect(setBusinessWebsiteMd("biz", "md")).rejects.toThrow("setBusinessWebsiteMd(ensure)");
+    // `setBusinessWebsiteMd` now delegates to `patchBusinessConfig`, so the
+    // error prefix reflects the inner function. We still assert it surfaces
+    // an "(ensure)" classifier so operators can tell the skeleton upsert is
+    // the failing step (vs the targeted update).
+    await expect(setBusinessWebsiteMd("biz", "md")).rejects.toThrow("patchBusinessConfig(ensure)");
   });
 
   it("setBusinessWebsiteMd throws when the patch update fails", async () => {
@@ -162,7 +166,7 @@ describe("db/configs", () => {
       })
     };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-    await expect(setBusinessWebsiteMd("biz", "md")).rejects.toThrow("setBusinessWebsiteMd(patch)");
+    await expect(setBusinessWebsiteMd("biz", "md")).rejects.toThrow("patchBusinessConfig(patch)");
   });
 
   it("setBusinessWebsiteMd reuses the provided client", async () => {

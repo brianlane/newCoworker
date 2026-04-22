@@ -32,57 +32,10 @@ export async function upsertBusinessConfig(
 }
 
 /**
- * Idempotently set `website_md` for a business.
- *
- * Race safety: website ingestion runs fire-and-forget during checkout while the
- * onboarding assistant's drafts are being upserted through `/api/business/config`.
- * If both handlers see "no config row yet" and race on `upsertBusinessConfig`,
- * one side's empty `soul_md`/`identity_md`/`memory_md` defaults would clobber the
- * other side's real drafts. This helper avoids that by:
- *
- *   1. Inserting a row with `ignoreDuplicates: true` — a no-op if the row
- *      already exists, so it never overwrites soul/identity/memory.
- *   2. Patching only `website_md` via a targeted `update`.
- *
- * Either ordering of (website-ingest, config save) now converges to the correct
- * state: website_md is the most recent ingestion result, and soul/identity/
- * memory keep whatever the config save wrote.
- */
-export async function setBusinessWebsiteMd(
-  businessId: string,
-  websiteMd: string,
-  client?: SupabaseClient
-): Promise<void> {
-  const db = client ?? (await createSupabaseServiceClient());
-  const now = new Date().toISOString();
-  const { error: insertError } = await db
-    .from("business_configs")
-    .upsert(
-      {
-        business_id: businessId,
-        soul_md: "",
-        identity_md: "",
-        memory_md: "",
-        website_md: "",
-        updated_at: now
-      },
-      { onConflict: "business_id", ignoreDuplicates: true }
-    );
-  if (insertError) throw new Error(`setBusinessWebsiteMd(ensure): ${insertError.message}`);
-
-  const { error: updateError } = await db
-    .from("business_configs")
-    .update({ website_md: websiteMd, updated_at: new Date().toISOString() })
-    .eq("business_id", businessId);
-  if (updateError) throw new Error(`setBusinessWebsiteMd(patch): ${updateError.message}`);
-}
-
-/**
  * Race-safe partial update for `business_configs`. Used by the onboarding
- * config save so it never clobbers `website_md` written by the parallel
- * fire-and-forget `/api/onboard/website-ingest` call.
+ * config save and the website-ingest handler so they never clobber fields
+ * owned by the other writer during the fire-and-forget window after checkout.
  *
- * Pattern mirrors `setBusinessWebsiteMd`:
  *   1. `upsert({...empty}, { ignoreDuplicates: true })` creates the row if
  *      it doesn't exist, and is a no-op if it does — so fields owned by other
  *      writers (website_md, soul_md, etc.) are never overwritten here.
@@ -126,6 +79,21 @@ export async function patchBusinessConfig(
     .update(updatePayload)
     .eq("business_id", businessId);
   if (updateError) throw new Error(`patchBusinessConfig(patch): ${updateError.message}`);
+}
+
+/**
+ * Convenience wrapper: idempotently set only `website_md` via
+ * `patchBusinessConfig`. Kept as a named export because the website-ingest
+ * handler and its tests both import this verb directly — collapsing it to a
+ * thin delegate removes the duplicated skeleton-upsert logic that used to
+ * live here while preserving the call-site API.
+ */
+export async function setBusinessWebsiteMd(
+  businessId: string,
+  websiteMd: string,
+  client?: SupabaseClient
+): Promise<void> {
+  await patchBusinessConfig(businessId, { website_md: websiteMd }, client);
 }
 
 export async function getBusinessConfig(
