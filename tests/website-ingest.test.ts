@@ -213,6 +213,31 @@ describe("extractReadableText", () => {
     );
     expect(text.split("\n")).toEqual(["A", "B", "C"]);
   });
+
+  // CodeQL (js/bad-tag-filter): earlier regex `<\/script>` missed closing
+  // tags with whitespace. Confirm the hardened regex strips `</script >`,
+  // `</style\n>`, and `</noscript\t>` so inline JS/CSS cannot slip through.
+  it("strips script/style/noscript tags with whitespace before the closing >", () => {
+    const html =
+      "<p>hi</p>" +
+      "<script>alert('x')</script >" +
+      "<style>body{color:red}</style\n>" +
+      "<noscript>nope</noscript\t>" +
+      "<p>bye</p>";
+    const text = extractReadableText(html);
+    expect(text).not.toMatch(/alert\(/);
+    expect(text).not.toMatch(/color:red/);
+    expect(text).not.toMatch(/nope/);
+    expect(text).toContain("hi");
+    expect(text).toContain("bye");
+  });
+
+  it("drops unterminated <script>/<style> openers so their bodies never leak", () => {
+    const text = extractReadableText("<p>intro</p><script>evil()");
+    expect(text).toBe("intro");
+    const text2 = extractReadableText("<p>css</p><style>body{color:red}");
+    expect(text2).toBe("css");
+  });
 });
 
 describe("extractSameOriginLinks", () => {
@@ -911,7 +936,10 @@ describe("ingestWebsite", () => {
     const globalFetch = vi.fn(async (input: Request | string | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
-      if (url.includes("generativelanguage.googleapis.com")) {
+      // CodeQL (js/incomplete-url-substring-sanitization): compare the parsed
+      // hostname exactly instead of `url.includes(...)` so spoofed URLs like
+      // `https://attacker.com/?generativelanguage.googleapis.com` can't match.
+      if (new URL(url).hostname === "generativelanguage.googleapis.com") {
         return new Response(
           JSON.stringify({ choices: [{ message: { content: "## Summary\nok" } }] }),
           { status: 200, headers: { "content-type": "application/json" } }
@@ -1006,7 +1034,7 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
     process.env.GOOGLE_API_KEY = "test-key";
     const globalFetch = vi.fn(async (input: Request | string | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (url.includes("generativelanguage.googleapis.com")) {
+      if (new URL(url).hostname === "generativelanguage.googleapis.com") {
         return new Response(
           JSON.stringify({ choices: [{ message: { content: "## Summary\nclean" } }] }),
           { status: 200, headers: { "content-type": "application/json" } }

@@ -171,10 +171,17 @@ export function isPathAllowed(pathname: string, disallows: string[]): boolean {
 }
 
 export function extractReadableText(html: string): string {
+  // CodeQL (js/bad-tag-filter): allow whitespace before `>` in closing tags —
+  // `</script >` / `</style\n>` are valid HTML but would otherwise escape the
+  // strip pass and leak inline JS/CSS into the extracted corpus.
   const withoutScripts = html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<script\b[\s\S]*?<\/script\s*>/gi, " ")
+    .replace(/<style\b[\s\S]*?<\/style\s*>/gi, " ")
+    .replace(/<noscript\b[\s\S]*?<\/noscript\s*>/gi, " ")
+    // Drop any remaining unterminated script/style openers so a malformed
+    // document can't smuggle their bodies into the text pipeline.
+    .replace(/<script\b[\s\S]*$/gi, " ")
+    .replace(/<style\b[\s\S]*$/gi, " ")
     .replace(/<!--[\s\S]*?-->/g, " ");
 
   // CodeQL (js/double-escaping): decode `&amp;` LAST. If we decoded it first,
