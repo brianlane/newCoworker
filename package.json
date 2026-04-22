@@ -21,7 +21,8 @@
     "integration:down-kvm2:keep": "docker compose -f vps/integration/real/docker-compose.kvm2.yml down",
     "integration:up-kvm8": "docker compose -f vps/integration/real/docker-compose.kvm8.yml up -d --wait",
     "integration:down-kvm8": "docker compose -f vps/integration/real/docker-compose.kvm8.yml down -v",
-    "integration:down-kvm8:keep": "docker compose -f vps/integration/real/docker-compose.kvm8.yml down"
+    "integration:down-kvm8:keep": "docker compose -f vps/integration/real/docker-compose.kvm8.yml down",
+    "verify:voice-bonus-prices": "tsx scripts/verify-voice-bonus-prices.ts"
   },
   "repository": {
     "type": "git",

@@ -123,3 +123,83 @@ jobs:
 
       - name: npm audit (prod deps, high+)
         run: npm audit --omit=dev --audit-level=high
+
+  # Asserts `stripe.prices.retrieve(id).unit_amount === minutes ×
+  # VOICE_BONUS_USD_PER_MINUTE × 100` for every configured voice-bonus pack —
+  # the env ⇄ Stripe pricing contract documented in
+  # `src/lib/billing/voice-bonus-packs.ts`. Fails the build if an operator ever
+  # bumps the rate env without rotating the Price IDs to matching Prices, so
+  # UI ≠ Stripe charge never reaches prod.
+  #
+  # Secrets required for this job to run (all skipped cleanly when unset, so
+  # fork PRs don't error on a missing secret):
+  #   STRIPE_SECRET_KEY                    — same key whose Price IDs below live in
+  #   STRIPE_VOICE_BONUS_30MIN_PRICE_ID    — must be rotated together with the rate
+  #   STRIPE_VOICE_BONUS_120MIN_PRICE_ID
+  #   STRIPE_VOICE_BONUS_600MIN_PRICE_ID
+  # Optional:
+  #   VOICE_BONUS_USD_PER_MINUTE           — defaults to 0.43/min when unset (mirrors
+  #                                          `getVoiceBonusUsdPerMinute()` fallback).
+  #                                          Keep this in sync with Vercel env.
+  #
+  # NOTE: `--require-all` is used on push-to-main so a partial rollout never
+  # ships to prod; PR runs omit it so a staging PR can temporarily leave one
+  # pack unconfigured without blocking review.
+  verify-voice-bonus-prices:
+    name: Verify Voice Bonus Prices
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+      STRIPE_VOICE_BONUS_30MIN_PRICE_ID: ${{ secrets.STRIPE_VOICE_BONUS_30MIN_PRICE_ID }}
+      STRIPE_VOICE_BONUS_120MIN_PRICE_ID: ${{ secrets.STRIPE_VOICE_BONUS_120MIN_PRICE_ID }}
+      STRIPE_VOICE_BONUS_600MIN_PRICE_ID: ${{ secrets.STRIPE_VOICE_BONUS_600MIN_PRICE_ID }}
+      VOICE_BONUS_USD_PER_MINUTE: ${{ secrets.VOICE_BONUS_USD_PER_MINUTE }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Forked PRs don't have access to repo secrets. Skip with a clear reason
+      # instead of failing the check — the push-to-main run will still gate prod.
+      - name: Check secrets availability
+        id: gate
+        run: |
+          if [ -z "${STRIPE_SECRET_KEY}" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Voice bonus verify skipped::STRIPE_SECRET_KEY not available (fork PR?). The push-to-main run will enforce this check."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify pack Price parity (JSON)
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          FLAGS=""
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            FLAGS="--require-all"
+          fi
+          npm run verify:voice-bonus-prices -- $FLAGS --json | tee verify-voice-bonus-prices.json
+          {
+            echo "### Voice bonus price parity"
+            echo ""
+            echo '```json'
+            cat verify-voice-bonus-prices.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload verify report
+        if: always() && steps.gate.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-bonus-verify-report
+          path: verify-voice-bonus-prices.json
+          if-no-files-found: ignore

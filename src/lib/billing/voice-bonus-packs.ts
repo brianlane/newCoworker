@@ -29,6 +29,10 @@
  * PRICE_ID` env var is set — missing IDs fail closed (pack is hidden from the
  * UI and rejected by the API) so a partial rollout never creates a broken
  * purchase button.
+ *
+ * The env ⇄ Stripe invariant is verifiable in CI via
+ * `scripts/verify-voice-bonus-prices.ts` (npm run `verify:voice-bonus-prices`),
+ * which retrieves each Price and asserts `unit_amount === minutes × rate × 100`.
  */
 
 export const VOICE_BONUS_PACK_IDS = ["min_30", "min_120", "min_600"] as const;
