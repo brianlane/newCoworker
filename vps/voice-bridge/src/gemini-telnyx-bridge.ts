@@ -214,8 +214,23 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     for (const call of calls) {
       if (call.name === "transfer_to_owner" && opts.transfer) {
         const reason = typeof call.args?.reason === "string" ? (call.args.reason as string) : undefined;
+        // Wrap the whole IIFE in a try/catch. `execute` can throw on any
+        // network-layer failure (Telnyx fetch timeout, DNS blip, AbortError,
+        // etc.) and the `void` would otherwise leak the rejection and crash
+        // the bridge process under Node ≥15, taking every active call on
+        // this VPS down with it. On failure we still send a tool response
+        // back to the model so it can close its turn gracefully.
         void (async () => {
-          const result = await opts.transfer!.execute({ reason });
+          let result: { ok: boolean; detail?: string };
+          try {
+            result = await opts.transfer!.execute({ reason });
+          } catch (err) {
+            console.error("gemini-bridge: transfer execute threw", err);
+            result = {
+              ok: false,
+              detail: err instanceof Error ? `transfer error: ${err.message}` : "transfer error"
+            };
+          }
           try {
             session.sendToolResponse({
               functionResponses: [
