@@ -705,6 +705,24 @@ describe("provisioning/orchestrate", () => {
       expect(didProvisioner).toHaveBeenCalled();
     });
 
+    it("does spread a concrete bridgeMediaWssOrigin from env into platformDefaults", async () => {
+      process.env.BRIDGE_MEDIA_WSS_ORIGIN = "wss://shared-voice.example.com";
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+15550008888" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      await orchestrateProvisioning(
+        { businessId: "biz-did-env-origin", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          cloudflareTunnel: null,
+          didProvisioner
+        }
+      );
+      expect(didProvisioner.mock.calls[0][0].platformDefaults.bridgeMediaWssOrigin).toBe(
+        "wss://shared-voice.example.com"
+      );
+    });
+
     it("does not spread an empty bridgeMediaWssOrigin into platformDefaults", async () => {
       // Regression: orchestrate initialised bridgeMediaWssOrigin = "" and
       // spread it onto readPlatformTelnyxDefaults(), clobbering the
