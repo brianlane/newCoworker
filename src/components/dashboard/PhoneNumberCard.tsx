@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { formatDid } from "@/lib/telnyx/format";
+import { resolveBridgeHealthState, type BridgeHealthState } from "@/lib/telnyx/bridge-health";
 
 type Props = {
   e164: string | null;
@@ -11,34 +12,32 @@ type Props = {
   transferEnabled?: boolean;
 };
 
-function bridgeHealth(heartbeatAt: string | null): {
-  variant: "success" | "error" | "neutral";
-  label: string;
-  hint: string;
-} {
-  if (!heartbeatAt) {
-    return {
-      variant: "neutral",
-      label: "Warming up",
-      hint: "Your voice bridge hasn't checked in yet. This is normal right after provisioning."
-    };
-  }
-  const ageMs = Date.now() - new Date(heartbeatAt).getTime();
-  if (Number.isNaN(ageMs)) return { variant: "neutral", label: "Unknown", hint: "" };
-  if (ageMs < 3 * 60 * 1000) {
-    return { variant: "success", label: "Ready", hint: "Your line is ready to take calls and texts." };
-  }
-  return {
+const TENANT_HEALTH_COPY: Record<
+  BridgeHealthState,
+  { variant: "success" | "error" | "neutral"; label: string; hint: string }
+> = {
+  pending: {
+    variant: "neutral",
+    label: "Warming up",
+    hint: "Your voice bridge hasn't checked in yet. This is normal right after provisioning."
+  },
+  healthy: {
+    variant: "success",
+    label: "Ready",
+    hint: "Your line is ready to take calls and texts."
+  },
+  stale: {
     variant: "error",
     label: "Needs attention",
     hint: "Bridge is stale; our team has been alerted."
-  };
-}
+  },
+  unknown: { variant: "neutral", label: "Unknown", hint: "" }
+};
 
 export function PhoneNumberCard({ e164, bridgeHeartbeatAt, forwardToE164, transferEnabled }: Props) {
   const [copied, setCopied] = useState(false);
   const pretty = e164 ? formatDid(e164) : null;
-  const bridge = bridgeHealth(bridgeHeartbeatAt);
+  const bridge = TENANT_HEALTH_COPY[resolveBridgeHealthState(bridgeHeartbeatAt)];
 
   async function copy() {
     if (!e164) return;

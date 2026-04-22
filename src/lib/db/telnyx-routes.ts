@@ -56,20 +56,6 @@ export async function getTelnyxVoiceRouteForBusiness(
   return (data as TelnyxVoiceRouteRow | null) ?? null;
 }
 
-export async function getTelnyxVoiceRouteByE164(
-  toE164: string,
-  client?: SupabaseClient
-): Promise<TelnyxVoiceRouteRow | null> {
-  const db = client ?? (await createSupabaseServiceClient());
-  const { data, error } = await db
-    .from("telnyx_voice_routes")
-    .select("*")
-    .eq("to_e164", toE164)
-    .maybeSingle();
-  if (error) throw new Error(`getTelnyxVoiceRouteByE164: ${error.message}`);
-  return (data as TelnyxVoiceRouteRow | null) ?? null;
-}
-
 export type UpsertTelnyxVoiceRouteInput = {
   toE164: string;
   businessId: string;
@@ -97,15 +83,6 @@ export async function upsertTelnyxVoiceRoute(
     .single();
   if (error) throw new Error(`upsertTelnyxVoiceRoute: ${error.message}`);
   return data as TelnyxVoiceRouteRow;
-}
-
-export async function deleteTelnyxVoiceRoute(
-  toE164: string,
-  client?: SupabaseClient
-): Promise<void> {
-  const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db.from("telnyx_voice_routes").delete().eq("to_e164", toE164);
-  if (error) throw new Error(`deleteTelnyxVoiceRoute: ${error.message}`);
 }
 
 export async function getBusinessTelnyxSettings(

@@ -12,21 +12,21 @@ export function voiceMinutesLine(tier: PlanTier, enterpriseLimitsOverride?: unkn
   const sec = L.voiceIncludedSecondsPerStripePeriod;
 
   if (sec === Infinity || !Number.isFinite(sec)) {
-    return "Unlimited voice / billing period";
+    return "Unlimited voice";
   }
   if (sec <= 0) {
-    return "No included voice / billing period";
+    return "No included voice";
   }
   if (sec >= VOICE_INCLUDED_DISPLAY_MAX_SECONDS) {
-    return "Custom included voice / billing period";
+    return "Custom included voice";
   }
 
   if (sec < 60) {
-    return "Under 1 voice minute / billing period";
+    return "Under 1 voice minute";
   }
 
   const minRounded = Math.round(sec / 60);
-  return `${voiceMinutesFormatter.format(minRounded)} voice minutes / billing period`;
+  return `${voiceMinutesFormatter.format(minRounded)} voice minutes`;
 }
 
 /** Strict monthly SMS cap copy. */

@@ -144,7 +144,7 @@ export default function OnboardPage() {
       total: undefined,
       setup: "Contact us for pricing",
       features: [
-        "Everything in Standard",
+        "Everything in Starter and Standard, plus:",
         "Multi-tenant agency setup",
         "White-label dashboard",
         "SLA + dedicated support",

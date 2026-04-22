@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { formatDid } from "@/lib/telnyx/format";
+import { resolveBridgeHealthState, type BridgeHealthState } from "@/lib/telnyx/bridge-health";
 
 type AvailableNumber = {
   phone_number: string;
@@ -25,16 +26,15 @@ type AssignDidPanelProps = {
   defaultState?: string;
 };
 
-function bridgeHealth(heartbeatAt: string | null): {
-  variant: "success" | "error" | "neutral";
-  label: string;
-} {
-  if (!heartbeatAt) return { variant: "neutral", label: "Never" };
-  const ageMs = Date.now() - new Date(heartbeatAt).getTime();
-  if (Number.isNaN(ageMs)) return { variant: "neutral", label: "Unknown" };
-  if (ageMs < 3 * 60 * 1000) return { variant: "success", label: "Healthy" };
-  return { variant: "error", label: "Stale" };
-}
+const ADMIN_HEALTH_COPY: Record<
+  BridgeHealthState,
+  { variant: "success" | "error" | "neutral"; label: string }
+> = {
+  pending: { variant: "neutral", label: "Never" },
+  healthy: { variant: "success", label: "Healthy" },
+  stale: { variant: "error", label: "Stale" },
+  unknown: { variant: "neutral", label: "Unknown" }
+};
 
 export function AssignDidPanel(props: AssignDidPanelProps) {
   const router = useRouter();
@@ -50,7 +50,7 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
   const [transferEnabled, setTransferEnabled] = useState(props.transferEnabled);
   const [smsFallbackEnabled, setSmsFallbackEnabled] = useState(props.smsFallbackEnabled);
 
-  const bridge = bridgeHealth(props.bridgeHeartbeatAt);
+  const bridge = ADMIN_HEALTH_COPY[resolveBridgeHealthState(props.bridgeHeartbeatAt)];
 
   async function handleSearch(e: FormEvent) {
     e.preventDefault();

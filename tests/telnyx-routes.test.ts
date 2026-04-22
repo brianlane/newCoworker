@@ -7,9 +7,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   getTelnyxVoiceRouteForBusiness,
-  getTelnyxVoiceRouteByE164,
   upsertTelnyxVoiceRoute,
-  deleteTelnyxVoiceRoute,
   getBusinessTelnyxSettings,
   upsertBusinessTelnyxSettings
 } from "@/lib/db/telnyx-routes";
@@ -94,22 +92,6 @@ describe("telnyx-routes DB layer", () => {
     await expect(getTelnyxVoiceRouteForBusiness("biz", makeDb(c2) as never)).rejects.toThrow(/db/);
   });
 
-  it("getTelnyxVoiceRouteByE164 filters by to_e164", async () => {
-    const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: sampleRoute, error: null });
-    const db = makeDb(c);
-    await getTelnyxVoiceRouteByE164("+15551234567", db as never);
-    expect(c.eq).toHaveBeenCalledWith("to_e164", "+15551234567");
-
-    const c2 = chain();
-    c2.maybeSingle.mockResolvedValue({ data: null, error: { message: "x" } });
-    await expect(getTelnyxVoiceRouteByE164("+1", makeDb(c2) as never)).rejects.toThrow(/x/);
-
-    const c3 = chain();
-    c3.maybeSingle.mockResolvedValue({ data: null, error: null });
-    await expect(getTelnyxVoiceRouteByE164("+1", makeDb(c3) as never)).resolves.toBeNull();
-  });
-
   it("upsertTelnyxVoiceRoute sends onConflict to_e164 and defaults media_path", async () => {
     const c = chain();
     c.single.mockResolvedValue({ data: sampleRoute, error: null });
@@ -156,19 +138,6 @@ describe("telnyx-routes DB layer", () => {
         makeDb(c2) as never
       )
     ).rejects.toThrow(/conflict/);
-  });
-
-  it("deleteTelnyxVoiceRoute filters by to_e164 and surfaces errors", async () => {
-    const c = chain();
-    // delete chain resolves when `eq` returns promise-like
-    c.eq.mockReturnValue(Promise.resolve({ error: null }));
-    const db = makeDb(c);
-    await deleteTelnyxVoiceRoute("+15551234567", db as never);
-    expect(c.delete).toHaveBeenCalled();
-
-    const c2 = chain();
-    c2.eq.mockReturnValue(Promise.resolve({ error: { message: "bad" } }));
-    await expect(deleteTelnyxVoiceRoute("+1", makeDb(c2) as never)).rejects.toThrow(/bad/);
   });
 
   it("getBusinessTelnyxSettings returns row, null, or throws", async () => {
@@ -293,20 +262,9 @@ describe("telnyx-routes DB layer", () => {
       c.single.mockResolvedValue({ data: sampleSettings, error: null });
       return c;
     }
-    function deleteChain() {
-      const c = chain();
-      c.eq.mockReturnValue(Promise.resolve({ error: null }));
-      return c;
-    }
-
     it("getTelnyxVoiceRouteForBusiness uses the default service client", async () => {
       defaultClientSpy.mockReturnValueOnce(makeDb(routeChain()));
       await expect(getTelnyxVoiceRouteForBusiness("biz")).resolves.toEqual(sampleRoute);
-    });
-
-    it("getTelnyxVoiceRouteByE164 uses the default service client", async () => {
-      defaultClientSpy.mockReturnValueOnce(makeDb(routeChain()));
-      await expect(getTelnyxVoiceRouteByE164("+1")).resolves.toEqual(sampleRoute);
     });
 
     it("upsertTelnyxVoiceRoute uses the default service client", async () => {
@@ -314,11 +272,6 @@ describe("telnyx-routes DB layer", () => {
       await expect(
         upsertTelnyxVoiceRoute({ toE164: "+1", businessId: "b" })
       ).resolves.toEqual(sampleRoute);
-    });
-
-    it("deleteTelnyxVoiceRoute uses the default service client", async () => {
-      defaultClientSpy.mockReturnValueOnce(makeDb(deleteChain()));
-      await deleteTelnyxVoiceRoute("+1");
     });
 
     it("getBusinessTelnyxSettings uses the default service client", async () => {
