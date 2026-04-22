@@ -7,7 +7,12 @@ import {
   shouldMountProvisioningWidget,
   shouldShowProvisioningProgress
 } from "@/lib/provisioning/progress";
+import {
+  getTelnyxVoiceRouteForBusiness,
+  getBusinessTelnyxSettings
+} from "@/lib/db/telnyx-routes";
 import { CoworkerProvisioningProgress } from "@/components/dashboard/CoworkerProvisioningProgress";
+import { PhoneNumberCard } from "@/components/dashboard/PhoneNumberCard";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
@@ -33,10 +38,14 @@ export default async function DashboardPage() {
 
   let recentLogs: Awaited<ReturnType<typeof getRecentLogs>> = [];
   let latestProvisioning = null;
+  let telnyxRoute: Awaited<ReturnType<typeof getTelnyxVoiceRouteForBusiness>> = null;
+  let telnyxSettings: Awaited<ReturnType<typeof getBusinessTelnyxSettings>> = null;
   if (business) {
-    [recentLogs, latestProvisioning] = await Promise.all([
+    [recentLogs, latestProvisioning, telnyxRoute, telnyxSettings] = await Promise.all([
       getRecentLogs(business.id, 10, undefined, { excludeProvisioning: true }),
-      getLatestProvisioningStatus(business.id)
+      getLatestProvisioningStatus(business.id),
+      getTelnyxVoiceRouteForBusiness(business.id),
+      getBusinessTelnyxSettings(business.id)
     ]);
   }
 
@@ -90,6 +99,15 @@ export default async function DashboardPage() {
           )}
 
           <KillSwitch businessId={business.id} initiallyPaused={!!business.is_paused} />
+
+          <Card>
+            <PhoneNumberCard
+              e164={telnyxRoute?.to_e164 ?? null}
+              bridgeHeartbeatAt={telnyxSettings?.bridge_last_heartbeat_at ?? null}
+              forwardToE164={telnyxSettings?.forward_to_e164 ?? null}
+              transferEnabled={telnyxSettings?.transfer_enabled ?? true}
+            />
+          </Card>
 
           {/* Status Card */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -181,7 +199,7 @@ export default async function DashboardPage() {
             <a href="/dashboard/integrations" className="block">
               <Card className="hover:border-signal-teal/40 transition-colors cursor-pointer">
                 <p className="font-semibold text-signal-teal text-sm">Integrations →</p>
-                <p className="text-xs text-parchment/40 mt-1">Nango connections and platform settings</p>
+                <p className="text-xs text-parchment/40 mt-1">Connections and platform settings</p>
               </Card>
             </a>
             <a href="/dashboard/notifications" className="block">
@@ -190,10 +208,16 @@ export default async function DashboardPage() {
                 <p className="text-xs text-parchment/40 mt-1">Configure SMS and email alerts</p>
               </Card>
             </a>
+            <a href="/dashboard/billing" className="block">
+              <Card className="hover:border-signal-teal/40 transition-colors cursor-pointer">
+                <p className="font-semibold text-signal-teal text-sm">Billing →</p>
+                <p className="text-xs text-parchment/40 mt-1">Voice minutes and top-ups</p>
+              </Card>
+            </a>
             <a href="/dashboard/settings" className="block">
               <Card className="hover:border-signal-teal/40 transition-colors cursor-pointer">
                 <p className="font-semibold text-signal-teal text-sm">Account Settings →</p>
-                <p className="text-xs text-parchment/40 mt-1">Billing and account</p>
+                <p className="text-xs text-parchment/40 mt-1">Account and preferences</p>
               </Card>
             </a>
           </div>

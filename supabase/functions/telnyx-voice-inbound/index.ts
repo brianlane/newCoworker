@@ -278,6 +278,16 @@ serve(async (req: Request) => {
   const callControlId = String(payload["call_control_id"] ?? "");
   const toRaw = (payload["to"] ?? payload["To"]) as string | undefined;
   const toE164 = normalizeE164(toRaw);
+  const fromRaw = (payload["from"] ?? payload["From"]) as string | undefined;
+  // Best-effort normalize; `from` is used only for operator SMS fallback and
+  // never as a routing key, so a missing/garbled value is fine.
+  const fromE164Informational = (() => {
+    try {
+      return fromRaw ? normalizeE164(fromRaw) : "";
+    } catch {
+      return "";
+    }
+  })();
   if (!callControlId || !toE164) {
     return new Response(JSON.stringify({ ok: false, error: "missing_call_fields" }), {
       status: 200,
@@ -605,6 +615,12 @@ serve(async (req: Request) => {
     nonce,
     mac
   });
+  // Informational only — the bridge uses this to compose an SMS fallback to
+  // the business owner when Gemini Live can't start. Not signed because it
+  // is never used as a routing key or security boundary.
+  if (fromE164Informational) {
+    qs.set("from_e164_info", fromE164Informational);
+  }
   const streamUrl = `${base}${pth}?${qs.toString()}`.replace(/^http:/i, "ws:").replace(/^https:/i, "wss:");
 
   const answerRes = await telnyxAnswerWithStream(apiKey, callControlId, { streamUrl });

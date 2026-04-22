@@ -71,8 +71,14 @@ export default async function SettingsPage() {
             </dd>
           </div>
         </dl>
+        <a
+          href="/dashboard/billing"
+          className="mt-4 inline-block text-sm text-claw-green hover:underline"
+        >
+          Voice minutes and top-ups →
+        </a>
         {subscription?.stripe_customer_id && (
-          <form action="/api/billing/portal" method="POST" className="mt-4">
+          <form action="/api/billing/portal" method="POST" className="mt-2">
             <button
               type="submit"
               className="text-sm text-claw-green hover:underline"

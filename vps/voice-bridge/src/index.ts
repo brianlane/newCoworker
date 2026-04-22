@@ -8,7 +8,8 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData } from "ws";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { loadEnv } from "./load-env.js";
-import { createGeminiTelnyxBridge } from "./gemini-telnyx-bridge.js";
+import { createGeminiTelnyxBridge, type TransferCapability } from "./gemini-telnyx-bridge.js";
+import { telnyxTransferCall, telnyxSendPlainSms } from "./telnyx-call-actions.js";
 
 loadEnv();
 
@@ -62,6 +63,70 @@ function signMac(payload: {
   return b64url(createHmac("sha256", STREAM_SECRET).update(canonical).digest());
 }
 
+type TenantTelnyxSettings = {
+  forwardToE164: string | null;
+  transferEnabled: boolean;
+  smsFallbackEnabled: boolean;
+  smsFromE164: string | null;
+  messagingProfileId: string | null;
+};
+
+async function loadTenantTelnyxSettings(
+  supabase: SupabaseClient,
+  businessId: string
+): Promise<TenantTelnyxSettings> {
+  const { data } = await supabase
+    .from("business_telnyx_settings")
+    .select(
+      "forward_to_e164, transfer_enabled, sms_fallback_enabled, telnyx_sms_from_e164, telnyx_messaging_profile_id"
+    )
+    .eq("business_id", businessId)
+    .maybeSingle();
+  const row = (data ?? null) as null | {
+    forward_to_e164: string | null;
+    transfer_enabled: boolean | null;
+    sms_fallback_enabled: boolean | null;
+    telnyx_sms_from_e164: string | null;
+    telnyx_messaging_profile_id: string | null;
+  };
+  return {
+    forwardToE164: row?.forward_to_e164 ?? null,
+    transferEnabled: row?.transfer_enabled ?? true,
+    smsFallbackEnabled: row?.sms_fallback_enabled ?? true,
+    smsFromE164: row?.telnyx_sms_from_e164 ?? null,
+    messagingProfileId: row?.telnyx_messaging_profile_id ?? null
+  };
+}
+
+/**
+ * Send the owner a "missed AI call" SMS when the Gemini Live session could
+ * not start. This path is only ever hit when `sms_fallback_enabled` is on
+ * AND a `forward_to_e164` is configured; we never SMS the caller.
+ */
+async function sendMissedCallSms(params: {
+  settings: TenantTelnyxSettings;
+  callerE164: string;
+  businessName: string;
+  reason: string;
+}): Promise<void> {
+  const { settings, callerE164, businessName, reason } = params;
+  if (!settings.smsFallbackEnabled || !settings.forwardToE164 || !settings.smsFromE164) return;
+  const apiKey = process.env.TELNYX_API_KEY ?? "";
+  if (!apiKey) return;
+  const text =
+    `[${businessName}] your AI receptionist couldn't take a live call from ${callerE164}. ` +
+    `Please call them back. (Reason: ${reason.slice(0, 80)})`;
+  const res = await telnyxSendPlainSms(apiKey, {
+    toE164: settings.forwardToE164,
+    fromE164: settings.smsFromE164,
+    messagingProfileId: settings.messagingProfileId ?? undefined,
+    text
+  });
+  if (!res.ok) {
+    console.error("voice-bridge: fallback SMS failed", res.status, res.body);
+  }
+}
+
 async function heartbeat(supabase: SupabaseClient, businessId: string): Promise<void> {
   await supabase
     .from("business_telnyx_settings")
@@ -105,6 +170,9 @@ function main(): void {
     const exp = Number(url.searchParams.get("exp") ?? "0");
     const nonce = url.searchParams.get("nonce") ?? "";
     const mac = url.searchParams.get("mac") ?? "";
+    // Informational only (unsigned). See telnyx-voice-inbound: used to craft
+    // operator SMS fallback; never a routing key.
+    const fromE164Info = url.searchParams.get("from_e164_info") ?? "";
 
     if (v !== 1 || !callControlId || !businessId || !toE164 || !nonce || !mac) {
       socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
@@ -203,14 +271,48 @@ function main(): void {
       const geminiFlag = (process.env.GEMINI_LIVE_ENABLED ?? "true").trim().toLowerCase();
       const geminiLiveEnabled = geminiFlag !== "false" && geminiFlag !== "0";
       const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
+
+      const tenantSettings = await loadTenantTelnyxSettings(supabase, businessId);
+      const { data: biz } = await supabase
+        .from("businesses")
+        .select("name")
+        .eq("id", businessId)
+        .maybeSingle();
+      const businessName = typeof biz?.name === "string" && biz.name.length > 0 ? biz.name : "your business";
+
+      /** Compose the Gemini tool capability only when admin opted in + a forwarding target exists. */
+      let transfer: TransferCapability | undefined;
+      if (tenantSettings.transferEnabled && tenantSettings.forwardToE164) {
+        const telnyxApiKey = process.env.TELNYX_API_KEY ?? "";
+        const forwardE164 = tenantSettings.forwardToE164;
+        const fromDid = toE164;
+        transfer = {
+          toE164: forwardE164,
+          execute: async ({ reason }) => {
+            if (!telnyxApiKey) {
+              console.warn("voice-bridge: transfer requested but TELNYX_API_KEY missing");
+              return { ok: false, detail: "transfer not configured" };
+            }
+            const result = await telnyxTransferCall(telnyxApiKey, callControlId, {
+              toE164: forwardE164,
+              fromE164: fromDid
+            });
+            if (!result.ok) {
+              console.error("voice-bridge: telnyx transfer failed", result.status, result.body);
+              return { ok: false, detail: `telnyx ${result.status}` };
+            }
+            console.log("voice-bridge: transfer initiated", {
+              callControlId,
+              to: forwardE164,
+              reason: reason ?? ""
+            });
+            return { ok: true, detail: "transfer initiated" };
+          }
+        };
+      }
+
       if (geminiLiveEnabled && apiKey) {
         try {
-          const { data: biz } = await supabase
-            .from("businesses")
-            .select("name")
-            .eq("id", businessId)
-            .maybeSingle();
-          const businessName = typeof biz?.name === "string" && biz.name.length > 0 ? biz.name : "your business";
           const sessionMaxMs = readPositiveMs("GEMINI_LIVE_SESSION_MAX_MS", 14 * 60 * 1000);
           const warnBeforeMs = readPositiveMs("GEMINI_LIVE_SESSION_WARN_BEFORE_MS", 60 * 1000);
           const finalNudgeBeforeMs = readPositiveMs("GEMINI_LIVE_SESSION_FINAL_NUDGE_MS", 15 * 1000);
@@ -224,17 +326,37 @@ function main(): void {
             sessionMaxMs,
             warnBeforeMs,
             finalNudgeBeforeMs,
-            businessName
+            businessName,
+            transfer
           });
           onTelnyxGemini = bridge.onTelnyxMessage;
           geminiTeardown = bridge.teardown;
         } catch (e) {
-          console.error("voice-bridge: Gemini Live unavailable (continuing without AI audio)", e);
+          const reason = e instanceof Error ? e.message : String(e);
+          console.error("voice-bridge: Gemini Live unavailable (continuing without AI audio)", reason);
+          await sendMissedCallSms({
+            settings: tenantSettings,
+            callerE164: fromE164Info || "unknown",
+            businessName,
+            reason: `Gemini Live init failed: ${reason}`
+          });
         }
       } else if (!geminiLiveEnabled) {
         console.warn("voice-bridge: GEMINI_LIVE_ENABLED=false; AI audio pipe disabled (media stream still accepted)");
+        await sendMissedCallSms({
+          settings: tenantSettings,
+          callerE164: fromE164Info || "unknown",
+          businessName,
+          reason: "AI audio disabled (flag off)"
+        });
       } else {
         console.warn("voice-bridge: GOOGLE_API_KEY or GEMINI_API_KEY unset; AI audio pipe disabled");
+        await sendMissedCallSms({
+          settings: tenantSettings,
+          callerE164: fromE164Info || "unknown",
+          businessName,
+          reason: "AI audio disabled (no API key)"
+        });
       }
 
       let lastLastSeenWriteMs = Date.now();

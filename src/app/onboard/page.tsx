@@ -91,7 +91,9 @@ export default function OnboardPage() {
       setup: "No setup fee · 30-day money-back guarantee",
       features: [
         "AI voice coworker",
-        "Telnyx phone number",
+        "Phone number",
+        "Chat access to your coworker",
+        "3rd party integrations",
         "Lossless memory and expansive knowledge base",
         "Unlimited emails and appointment booking",
         voiceMinutesLine("starter"),
@@ -126,8 +128,6 @@ export default function OnboardPage() {
         "Send texts during calls",
         "Warm handoff call transfers",
         "Full Swarm reasoning + deep reasoning",
-        "Chat access to your coworker",
-        "Voice Clone generation available",
         "Configuration and training updates",
         "Priority support & maintenance",
         "Full browser skills"
@@ -144,7 +144,7 @@ export default function OnboardPage() {
       total: undefined,
       setup: "Contact us for pricing",
       features: [
-        "Everything in Standard",
+        "Everything in Starter and Standard, plus:",
         "Multi-tenant agency setup",
         "White-label dashboard",
         "SLA + dedicated support",

@@ -18,7 +18,7 @@ const features: FeatureItem[] = [
   },
   {
     title: "Permanent Memory",
-    description: "Lossless Claw memory learns your business over time so every interaction builds context.",
+    description: "Lossless memory learns your business over time so every interaction builds context.",
     Icon: Brain,
   },
   {
@@ -38,7 +38,7 @@ const features: FeatureItem[] = [
   },
   {
     title: "Deploy in Minutes",
-    description: "One-click provisioning: VPS, voice agent, phone number all handled automatically.",
+    description: "One-click provisioning: tailored assistant, voice agent, phone number all handled automatically.",
     Icon: Rocket,
   },
 ];
