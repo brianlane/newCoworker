@@ -6,6 +6,7 @@ import { Textarea } from "@/components/ui/Textarea";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { starterVaultBudgetStatus } from "@/lib/vault/starterContextBudget";
+import { websiteIngestErrorMessage } from "@/lib/website-ingest-copy";
 
 interface MemoryEditorProps {
   businessId: string;
@@ -114,7 +115,7 @@ export function MemoryEditor({
       if (inner.ok === false) {
         setRecrawl({
           status: "error",
-          message: inner.detail || inner.error || "Re-crawl could not find public pages."
+          message: websiteIngestErrorMessage(inner.error, inner.detail)
         });
         return;
       }
@@ -138,9 +139,10 @@ export function MemoryEditor({
     <div className="space-y-5">
       {starterBudget?.overBudget && (
         <p className="text-sm text-amber-200/90 border border-amber-500/40 rounded-lg px-3 py-2 bg-amber-950/30">
-          Starter tier: combined Soul + Identity + Memory is large (~{starterBudget.estimatedTotal} estimated
-          tokens vs ~{starterBudget.maxTokens} target). Very long vault text can slow responses on your
-          coworker&apos;s KVM2 instance—consider trimming less-used detail.
+          Starter tier: combined Soul + Identity + Memory + Website is large (~{starterBudget.estimatedTotal}{" "}
+          estimated tokens vs ~{starterBudget.maxTokens} target). Very long vault text can slow responses on
+          your coworker&apos;s KVM2 instance—consider trimming less-used detail or re-crawling a shorter
+          landing page.
         </p>
       )}
       <Card>
