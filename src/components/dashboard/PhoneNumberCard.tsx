@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Badge } from "@/components/ui/Badge";
+import { formatDid } from "@/lib/telnyx/format";
 
 type Props = {
   e164: string | null;
@@ -9,11 +10,6 @@ type Props = {
   forwardToE164?: string | null;
   transferEnabled?: boolean;
 };
-
-function formatDid(e164: string): string {
-  const m = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(e164);
-  return m ? `(${m[1]}) ${m[2]}-${m[3]}` : e164;
-}
 
 function bridgeHealth(heartbeatAt: string | null): {
   variant: "success" | "error" | "neutral";

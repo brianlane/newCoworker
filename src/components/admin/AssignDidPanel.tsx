@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
+import { formatDid } from "@/lib/telnyx/format";
 
 type AvailableNumber = {
   phone_number: string;
@@ -23,11 +24,6 @@ type AssignDidPanelProps = {
   defaultAreaCode?: string;
   defaultState?: string;
 };
-
-function formatDid(e164: string): string {
-  const m = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(e164);
-  return m ? `(${m[1]}) ${m[2]}-${m[3]}` : e164;
-}
 
 function bridgeHealth(heartbeatAt: string | null): {
   variant: "success" | "error" | "neutral";
@@ -122,6 +118,11 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           businessId: props.businessId,
+          // Pass the exact number so the backend orders the DID the admin
+          // clicked on, not an arbitrary one from the same area code. The
+          // area/state filters are kept as a fallback hint for the rare case
+          // the picked number is already gone at order time.
+          specificNumber: toE164,
           areaCode: match ? match[1] : undefined,
           administrativeArea: admin.trim() || undefined
         })

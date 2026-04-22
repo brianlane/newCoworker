@@ -332,6 +332,41 @@ describe("orderAndAssignDidForBusiness", () => {
     expect(tn.waitForNumberOrder).toHaveBeenCalledWith("ord_1", expect.objectContaining({ timeoutMs: 5_000 }));
   });
 
+  it("orders the exact number when specificNumber is provided (skips search)", async () => {
+    const tn = makeTelnyxMock({
+      // If the code incorrectly re-searched, this would return a different
+      // number and the test would fail.
+      searchAvailable: vi.fn().mockResolvedValue([{ phone_number: "+19999999999" }]),
+      waitForNumberOrder: vi.fn().mockResolvedValue({
+        id: "ord_2",
+        status: "success",
+        phone_numbers: [{ phone_number: "+16025551234" }]
+      })
+    } as never);
+    const res = await orderAndAssignDidForBusiness(
+      {
+        businessId: "biz",
+        specificNumber: "+1 (602) 555-1234",
+        search: { areaCode: "602" }
+      },
+      { telnyxNumbers: tn }
+    );
+    expect(tn.searchAvailable).not.toHaveBeenCalled();
+    expect(tn.orderNumbers).toHaveBeenCalledWith(
+      expect.objectContaining({ phoneNumbers: ["+16025551234"] })
+    );
+    expect(res.orderId).toBe("ord_2");
+  });
+
+  it("ignores an empty/whitespace specificNumber and falls back to search", async () => {
+    const tn = makeTelnyxMock();
+    await orderAndAssignDidForBusiness(
+      { businessId: "biz", specificNumber: "   ", search: { areaCode: "212" } },
+      { telnyxNumbers: tn }
+    );
+    expect(tn.searchAvailable).toHaveBeenCalled();
+  });
+
   it("OrderAndAssignError exposes optional order payload", () => {
     const err = new OrderAndAssignError("order_not_success", "x", {
       id: "o",

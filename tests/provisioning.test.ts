@@ -705,6 +705,33 @@ describe("provisioning/orchestrate", () => {
       expect(didProvisioner).toHaveBeenCalled();
     });
 
+    it("does not abort the deploy when getTelnyxVoiceRouteForBusiness throws", async () => {
+      // Regression: the route lookup used to sit outside the try/catch, so a
+      // transient Supabase error would abort orchestrateProvisioning before
+      // the deploy phase. The fix moves the lookup inside the catch so the
+      // DID provisioning phase stays non-blocking.
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+15550003333" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockRejectedValueOnce(
+        new Error("supabase is down")
+      );
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-did-db-fail", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec,
+          didProvisioner
+        }
+      );
+      // Deploy still ran (that's the whole point of the fix).
+      expect(result.vpsId).toBe("42");
+      expect(remoteExec).toHaveBeenCalled();
+      // And the DID provisioner itself was NOT called, because the failure
+      // happened before we got that far — the phase logs "failed, assign
+      // manually" and moves on.
+      expect(didProvisioner).not.toHaveBeenCalled();
+    });
+
     it("skips when didProvisioner is explicitly null regardless of env flag", async () => {
       process.env.TELNYX_AUTO_PURCHASE_DID = "true";
       // If null disabled the step, getTelnyxVoiceRouteForBusiness should NOT

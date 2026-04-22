@@ -140,6 +140,15 @@ export async function assignExistingDidToBusiness(
 export type OrderAndAssignDidInput = {
   businessId: string;
   platformDefaults?: PlatformTelnyxDefaults;
+  /**
+   * When set, the caller has already chosen an exact DID (e.g. the admin
+   * clicked "Buy & assign" next to a specific number in a search result list)
+   * and we order _that_ number. The `search` filters are ignored except as a
+   * safety cross-check: the chosen number must live in Telnyx's available
+   * inventory at order time, otherwise Telnyx will reject the order and we
+   * throw `missing_ordered_number`. Normalized via `normalizeE164`.
+   */
+  specificNumber?: string;
   search: {
     countryCode?: string;
     areaCode?: string;
@@ -177,22 +186,30 @@ export async function orderAndAssignDidForBusiness(
     client?: SupabaseClient;
   }
 ): Promise<AssignDidResult> {
-  const candidates: AvailablePhoneNumber[] = await deps.telnyxNumbers.searchAvailable({
-    countryCode: input.search.countryCode ?? "US",
-    areaCode: input.search.areaCode,
-    locality: input.search.locality,
-    administrativeArea: input.search.administrativeArea,
-    features: input.search.features ?? ["sms", "voice"],
-    limit: 5
-  });
-  if (candidates.length === 0) {
-    throw new OrderAndAssignError(
-      "no_numbers_available",
-      "Telnyx returned no available numbers matching the search criteria"
-    );
+  let pick: string;
+  if (input.specificNumber && input.specificNumber.trim().length > 0) {
+    // Operator picked an exact number from a prior search. Skip the
+    // search-and-take-first dance so "Buy & assign" actually orders the
+    // number they clicked on, not an arbitrary sibling from the same area.
+    pick = normalizeE164(input.specificNumber);
+  } else {
+    const candidates: AvailablePhoneNumber[] = await deps.telnyxNumbers.searchAvailable({
+      countryCode: input.search.countryCode ?? "US",
+      areaCode: input.search.areaCode,
+      locality: input.search.locality,
+      administrativeArea: input.search.administrativeArea,
+      features: input.search.features ?? ["sms", "voice"],
+      limit: 5
+    });
+    if (candidates.length === 0) {
+      throw new OrderAndAssignError(
+        "no_numbers_available",
+        "Telnyx returned no available numbers matching the search criteria"
+      );
+    }
+    pick = candidates[0].phone_number;
   }
 
-  const pick = candidates[0].phone_number;
   const order = await deps.telnyxNumbers.orderNumbers({
     phoneNumbers: [pick],
     connectionId: input.platformDefaults?.connectionId,

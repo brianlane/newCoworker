@@ -309,17 +309,20 @@ export async function orchestrateProvisioning(
   if (shouldAutoOrderDid) {
     /* c8 ignore next -- tests always inject deps.didProvisioner when shouldAutoOrderDid is true */
     const didProvisioner = deps?.didProvisioner ?? defaultDidProvisioner();
-    const existingRoute = await getTelnyxVoiceRouteForBusiness(businessId);
-    if (existingRoute) {
-      await recordProvisioningProgress({
-        businessId,
-        phase: "did_already_assigned",
-        percent: 37,
-        message: `DID already assigned (${existingRoute.to_e164}); skipping order`,
-        source: "orchestrator"
-      });
-    } else {
-      try {
+    try {
+      // Look up the existing route inside the try so a transient Supabase
+      // failure (network blip, missing relation mid-rollout, etc.) degrades
+      // gracefully into "log and continue" instead of aborting the deploy.
+      const existingRoute = await getTelnyxVoiceRouteForBusiness(businessId);
+      if (existingRoute) {
+        await recordProvisioningProgress({
+          businessId,
+          phase: "did_already_assigned",
+          percent: 37,
+          message: `DID already assigned (${existingRoute.to_e164}); skipping order`,
+          source: "orchestrator"
+        });
+      } else {
         const platformDefaults: PlatformTelnyxDefaults = {
           ...readPlatformTelnyxDefaults(),
           bridgeMediaWssOrigin
@@ -340,19 +343,19 @@ export async function orchestrateProvisioning(
           message: `Per-tenant DID assigned (${toE164})`,
           source: "orchestrator"
         });
-      } catch (err) {
-        const reason =
-          err instanceof OrderAndAssignError ? err.reason : err instanceof Error ? err.message : String(err);
-        logger.error("DID provisioning failed", { businessId, reason });
-        await recordProvisioningProgress({
-          businessId,
-          phase: "did_provisioning_failed",
-          percent: 38,
-          message: `DID provisioning failed: ${reason}. Assign manually from admin.`,
-          source: "orchestrator",
-          status: "error"
-        });
       }
+    } catch (err) {
+      const reason =
+        err instanceof OrderAndAssignError ? err.reason : err instanceof Error ? err.message : String(err);
+      logger.error("DID provisioning failed", { businessId, reason });
+      await recordProvisioningProgress({
+        businessId,
+        phase: "did_provisioning_failed",
+        percent: 38,
+        message: `DID provisioning failed: ${reason}. Assign manually from admin.`,
+        source: "orchestrator",
+        status: "error"
+      });
     }
   }
 
