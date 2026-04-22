@@ -46,8 +46,10 @@ export function MemoryEditor({
 
   const starterBudget = useMemo(() => {
     if (tier !== "starter") return null;
-    return starterVaultBudgetStatus(soul, identity, memory);
-  }, [tier, soul, identity, memory]);
+    // `websiteMd` is up to 8k chars (~2k tokens) and is shipped to the vault
+    // alongside soul/identity/memory, so it must factor into the KVM2 budget.
+    return starterVaultBudgetStatus(soul, identity, memory, websiteMd);
+  }, [tier, soul, identity, memory, websiteMd]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 

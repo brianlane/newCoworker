@@ -15,12 +15,21 @@ export function starterVaultBudgetStatus(
   soulMd: string,
   identityMd: string,
   memoryMd: string,
+  /**
+   * Onboarding-crawled website summary capped at 8k chars (`WEBSITE_INGEST_MAX_SUMMARY_CHARS`).
+   * It gets injected into the Gemini Live / Rowboat prompt alongside soul/identity/memory, so
+   * it counts against the KVM2 prefill budget and must be included here. The parameter is
+   * optional (default "") to keep older callers — dashboard, prompt composers — compiling
+   * until they opt in.
+   */
+  websiteMd: string = "",
   maxTokens: number = STARTER_VAULT_MAX_ESTIMATED_TOKENS
 ): { estimatedTotal: number; maxTokens: number; overBudget: boolean } {
   const estimatedTotal =
     estimateTokenCountRough(soulMd) +
     estimateTokenCountRough(identityMd) +
-    estimateTokenCountRough(memoryMd);
+    estimateTokenCountRough(memoryMd) +
+    estimateTokenCountRough(websiteMd);
   return {
     estimatedTotal,
     maxTokens,

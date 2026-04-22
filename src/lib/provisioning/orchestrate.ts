@@ -240,7 +240,10 @@ export async function orchestrateProvisioning(
     business_id: businessId,
     soul_md: existingConfig?.soul_md ?? loadSoulTemplate(),
     identity_md: existingConfig?.identity_md ?? loadIdentityTemplate(),
-    memory_md: existingConfig?.memory_md ?? "# memory.md\nLossless memory DAG initialized."
+    memory_md: existingConfig?.memory_md ?? "# memory.md\nLossless memory DAG initialized.",
+    // Preserve the onboarding website crawl. Without this the upsert defaults
+    // `website_md` to "" and wipes the content every time we re-provision.
+    website_md: existingConfig?.website_md ?? ""
   });
 
   await recordProvisioningProgress({

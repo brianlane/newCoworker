@@ -49,7 +49,7 @@ vi.mock("@/lib/db/telnyx-routes", () => ({
 }));
 
 import { updateBusinessStatus } from "@/lib/db/businesses";
-import { upsertBusinessConfig } from "@/lib/db/configs";
+import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
 
 function makeVpsStub(
@@ -181,6 +181,41 @@ describe("provisioning/orchestrate", () => {
     expect(upsertBusinessConfig).toHaveBeenCalledTimes(1);
     const call = vi.mocked(upsertBusinessConfig).mock.calls[0][0];
     expect(call).not.toHaveProperty("inworld_agent_id");
+  });
+
+  it("preserves existing website_md when re-provisioning so the onboarding crawl is not wiped", async () => {
+    vi.mocked(getBusinessConfig).mockResolvedValueOnce({
+      business_id: "biz-uuid-1",
+      soul_md: "# s",
+      identity_md: "# i",
+      memory_md: "# m",
+      website_md: "# crawled\nImportant business context",
+      updated_at: "2026-04-20T00:00:00Z"
+    } as never);
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+    await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "standard" },
+      { vpsProvisioner, remoteExec }
+    );
+
+    const call = vi.mocked(upsertBusinessConfig).mock.calls[0][0];
+    expect(call.website_md).toBe("# crawled\nImportant business context");
+  });
+
+  it("defaults website_md to empty string when no prior config exists", async () => {
+    vi.mocked(getBusinessConfig).mockResolvedValueOnce(null as never);
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+    await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "standard" },
+      { vpsProvisioner, remoteExec }
+    );
+
+    const call = vi.mocked(upsertBusinessConfig).mock.calls[0][0];
+    expect(call.website_md).toBe("");
   });
 
   it("uses quoteEnv override when injected", async () => {
