@@ -83,7 +83,7 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
     }
   }
 
-  async function handleAssign(toE164: string) {
+  async function handleAssign(toE164: string): Promise<boolean> {
     setError(null);
     setNotice(null);
     setLoading("assign");
@@ -96,12 +96,14 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
       const json = await res.json();
       if (!res.ok) {
         setError(json.error?.message ?? "Assign failed");
-      } else {
-        setNotice(`Assigned ${toE164}`);
-        router.refresh();
+        return false;
       }
+      setNotice(`Assigned ${toE164}`);
+      router.refresh();
+      return true;
     } catch {
       setError("Network error");
+      return false;
     } finally {
       setLoading(null);
     }
@@ -144,8 +146,13 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
   async function handleManualAssign(e: FormEvent) {
     e.preventDefault();
     if (!manual.trim()) return;
-    await handleAssign(manual.trim());
-    setManual("");
+    // Only clear the input on a confirmed success so the admin doesn't lose
+    // what they typed when the API rejects (validation error, DID not owned
+    // by our Telnyx account, etc.). `handleAssign` already surfaces the
+    // failure reason via `setError`, so leaving the field populated makes
+    // the retry path one keystroke instead of re-typing the number.
+    const ok = await handleAssign(manual.trim());
+    if (ok) setManual("");
   }
 
   async function handleSaveSettings(e: FormEvent) {

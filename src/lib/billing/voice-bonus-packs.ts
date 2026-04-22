@@ -9,11 +9,26 @@
  * webhook (`src/app/api/webhooks/stripe/route.ts`). Expiry is `max(period_end,
  * purchased_at + 30d)` and refund/dispute-lost triggers clawback.
  *
- * All packs share the same effective rate (`VOICE_BONUS_USD_PER_MINUTE`, default
- * $0.43/min). A pack is considered available only when its `STRIPE_VOICE_BONUS_
- * <NMIN>MIN_PRICE_ID` env var is set — missing IDs fail closed (pack is hidden
- * from the UI and rejected by the API) so a partial rollout never creates a
- * broken purchase button.
+ * ## Pricing contract (single source of truth)
+ *
+ * Stripe Prices are immutable by id — once created, a Price's `unit_amount`
+ * never changes. That means the pack's displayed USD price and what Stripe
+ * actually charges only diverge if an operator ships a mismatched config:
+ * new Price IDs pointing at different amounts than `VOICE_BONUS_USD_PER_MINUTE`
+ * implies.
+ *
+ * We treat env as the single source of truth and enforce the contract at the
+ * operator boundary: whenever `VOICE_BONUS_USD_PER_MINUTE` changes, the
+ * corresponding `STRIPE_VOICE_BONUS_*MIN_PRICE_ID`s MUST be rotated in the
+ * same deploy to Stripe Prices whose `unit_amount = minutes * rate * 100`.
+ * This keeps render-time compute at zero (no Stripe round-trip per billing
+ * page load) while still guaranteeing UI ≡ charge as long as deploys are
+ * done correctly.
+ *
+ * A pack is considered available only when its `STRIPE_VOICE_BONUS_<NMIN>MIN_
+ * PRICE_ID` env var is set — missing IDs fail closed (pack is hidden from the
+ * UI and rejected by the API) so a partial rollout never creates a broken
+ * purchase button.
  */
 
 export const VOICE_BONUS_PACK_IDS = ["min_30", "min_120", "min_600"] as const;
@@ -92,66 +107,4 @@ export function getVoiceBonusPack(id: string): VoiceBonusPack | null {
   const priceId = process.env[def.priceEnv];
   if (!priceId) return null;
   return buildPack(def, priceId, getVoiceBonusUsdPerMinute());
-}
-
-/**
- * Shape we need from a Stripe Price to display the authoritative amount.
- * Kept structural (not the full Stripe.Price) so tests can inject a stub
- * without pulling in the Stripe SDK.
- */
-export type VoiceBonusPriceResolver = (
-  priceId: string
-) => Promise<{ unit_amount: number | null }>;
-
-async function applyStripeAmount(
-  pack: VoiceBonusPack,
-  resolver: VoiceBonusPriceResolver
-): Promise<VoiceBonusPack> {
-  try {
-    const price = await resolver(pack.priceId);
-    const unit = typeof price.unit_amount === "number" ? price.unit_amount : null;
-    if (unit === null || !Number.isFinite(unit) || unit <= 0) {
-      // Stripe returned a Price with no usable unit_amount (e.g. metered
-      // price or usage-based tiers). Fall back to the env-derived display
-      // — the checkout itself is still driven by Stripe, so the customer
-      // sees the real amount on the hosted Checkout page regardless.
-      return pack;
-    }
-    return { ...pack, priceCents: unit, priceUsd: unit / 100 };
-  } catch (err) {
-    // Network / auth failures from Stripe must not break the billing
-    // page render. Log + keep the env-derived amount; Stripe-hosted
-    // Checkout remains the authoritative source at purchase time.
-    console.warn(
-      `voice-bonus-packs: Stripe price retrieve failed for ${pack.priceId}`,
-      err instanceof Error ? err.message : err
-    );
-    return pack;
-  }
-}
-
-/**
- * Stripe-authoritative version of {@link listVoiceBonusPacks}. Fetches each
- * Price's real `unit_amount` and overrides `priceCents` / `priceUsd` with it,
- * so the rate displayed in the UI matches what Stripe will actually charge
- * — closes the "env rate drifted from Stripe Price" footgun.
- */
-export async function resolveVoiceBonusPacks(
-  resolver: VoiceBonusPriceResolver
-): Promise<VoiceBonusPack[]> {
-  const envPacks = listVoiceBonusPacks();
-  if (envPacks.length === 0) return envPacks;
-  return Promise.all(envPacks.map((pack) => applyStripeAmount(pack, resolver)));
-}
-
-/**
- * Per-minute top-up rate derived from the Stripe-authoritative packs. Equal
- * to `priceCents / minutes / 100` of any pack (they share a flat rate in the
- * current pricing model). Falls back to `getVoiceBonusUsdPerMinute()` when
- * no packs are configured so the billing page never renders a bogus $0/min.
- */
-export function deriveVoiceBonusUsdPerMinute(packs: VoiceBonusPack[]): number {
-  const first = packs[0];
-  if (!first || first.minutes <= 0) return getVoiceBonusUsdPerMinute();
-  return first.priceCents / first.minutes / 100;
 }

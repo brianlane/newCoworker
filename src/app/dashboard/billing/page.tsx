@@ -21,10 +21,9 @@ import { getVoiceBillingSnapshotForBusiness } from "@/lib/db/voice-usage";
 import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import {
-  deriveVoiceBonusUsdPerMinute,
-  resolveVoiceBonusPacks
+  getVoiceBonusUsdPerMinute,
+  listVoiceBonusPacks
 } from "@/lib/billing/voice-bonus-packs";
-import { getStripe } from "@/lib/stripe/client";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { VoiceBonusPacks } from "@/components/dashboard/VoiceBonusPacks";
@@ -62,16 +61,14 @@ export default async function BillingPage(props: {
   const subscription = business ? await getSubscription(business.id) : null;
   const snapshot = business ? await getVoiceBillingSnapshotForBusiness(business.id) : null;
 
-  // Use Stripe as the source of truth for displayed pack amounts so the UI
-  // always matches what the customer is actually charged on Stripe Checkout.
-  // Resolver fails open per-pack on Stripe errors (logs + keeps env-derived
-  // amount), and if Stripe isn't configured at all we throw inside the
-  // resolver and let the per-pack catch absorb it.
-  const packs = await resolveVoiceBonusPacks(async (priceId) => {
-    const price = await getStripe().prices.retrieve(priceId);
-    return { unit_amount: price.unit_amount };
-  });
-  const usdPerMinute = deriveVoiceBonusUsdPerMinute(packs);
+  // Pack amounts and the per-minute rate are derived from env
+  // (`VOICE_BONUS_USD_PER_MINUTE` × pack minutes). Stripe Prices are
+  // immutable by id, so UI ≡ charge is guaranteed as long as whenever the
+  // rate env changes the `STRIPE_VOICE_BONUS_*MIN_PRICE_ID`s are rotated in
+  // the same deploy — see the pricing-contract comment in
+  // `src/lib/billing/voice-bonus-packs.ts`.
+  const packs = listVoiceBonusPacks();
+  const usdPerMinute = getVoiceBonusUsdPerMinute();
 
   const canPurchase = Boolean(
     subscription?.stripe_subscription_id && subscription.status === "active"

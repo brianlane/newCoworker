@@ -3,10 +3,11 @@
 /**
  * Voice-bonus top-up card: lists the configured packs and redirects to Stripe
  * Checkout on click. Pack amounts and the rate-per-minute header are both
- * Stripe-authoritative — the billing page calls `resolveVoiceBonusPacks` on
- * the server, which fetches each Price's actual `unit_amount` and overrides
- * the env-derived display with it, so the UI always matches what Stripe will
- * actually charge on the hosted Checkout page.
+ * env-derived (`VOICE_BONUS_USD_PER_MINUTE` × pack minutes). Stripe Prices
+ * are immutable by id, so as long as the `STRIPE_VOICE_BONUS_*MIN_PRICE_ID`s
+ * are rotated in the same deploy as any rate change, UI ≡ Stripe charge by
+ * construction — see the pricing-contract comment in
+ * `src/lib/billing/voice-bonus-packs.ts` for the operator rule.
  *
  * Purchase flow:
  *   1. POST /api/billing/voice-bonus/checkout { packId }
