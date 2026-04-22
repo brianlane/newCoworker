@@ -8,6 +8,18 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    # Mount the Rowboat vault read-only so the bridge can prime Gemini Live's
+    # system instruction with soul/identity/memory/website markdown on every
+    # call. The vault directory on the host is populated by deploy-client.sh.
+    volumes:
+      - /opt/rowboat/vault:/vault:ro
+    environment:
+      - VAULT_PATH=${VAULT_PATH:-/vault}
+      - ROWBOAT_URL=${ROWBOAT_URL:-http://host.docker.internal:3000}
+      - ROWBOAT_GATEWAY_TOKEN=${ROWBOAT_GATEWAY_TOKEN:-}
+      - APP_BASE_URL=${APP_BASE_URL:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Container user is pinned to non-root in the Dockerfile; don't override here.
     # read_only FS + tmpfs for any scratch writes keeps the blast radius tight if the
     # process is compromised. tsx caches to node_modules/.tsx which is baked into the

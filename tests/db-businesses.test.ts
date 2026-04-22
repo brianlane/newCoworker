@@ -7,6 +7,7 @@ import {
   updateBusinessOwnerEmail,
   updateBusinessOwnerEmailIfPending,
   updateBusinessStatus,
+  updateBusinessWebsiteUrl,
   updateEnterpriseLimits
 } from "@/lib/db/businesses";
 import { createPendingOwnerEmail } from "@/lib/onboarding/token";
@@ -319,6 +320,32 @@ describe("db/businesses", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     await expect(updateBusinessOwnerEmailIfPending("uuid-biz-1", "paid@test.com")).resolves.toBe(true);
+  });
+
+  it("updateBusinessWebsiteUrl writes the normalized URL and uses the service client by default", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await updateBusinessWebsiteUrl("uuid-biz-1", "https://example.com/");
+    expect(db.update).toHaveBeenCalledWith({ website_url: "https://example.com/" });
+    expect(db.from).toHaveBeenCalledWith("businesses");
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+  });
+
+  it("updateBusinessWebsiteUrl accepts a null URL to clear the field and honors an injected client", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    await updateBusinessWebsiteUrl("uuid-biz-1", null, db as never);
+    expect(db.update).toHaveBeenCalledWith({ website_url: null });
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  it("updateBusinessWebsiteUrl throws when Supabase reports an error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(updateBusinessWebsiteUrl("uuid-biz-1", "https://example.com/")).rejects.toThrow(
+      "updateBusinessWebsiteUrl"
+    );
   });
 
   it("createBusiness uses provided client", async () => {

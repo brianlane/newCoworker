@@ -115,6 +115,7 @@ interface FormData {
   businessType: string;
   ownerName: string;
   phone: string;
+  websiteUrl: string;
   serviceArea: string;
   typicalInquiry: string;
   teamSize: string;
@@ -127,6 +128,7 @@ const EMPTY_FORM: FormData = {
   businessType: DEFAULT_BUSINESS_TYPE,
   ownerName: "",
   phone: "",
+  websiteUrl: "",
   serviceArea: "",
   typicalInquiry: "",
   teamSize: "",
@@ -153,6 +155,7 @@ function toFormData(data: Partial<OnboardingData>): Partial<FormData> {
     businessType: typeof data.businessType === "string" ? data.businessType : EMPTY_FORM.businessType,
     ownerName: typeof data.ownerName === "string" ? data.ownerName : EMPTY_FORM.ownerName,
     phone: typeof data.phone === "string" ? data.phone : EMPTY_FORM.phone,
+    websiteUrl: typeof data.websiteUrl === "string" ? data.websiteUrl : EMPTY_FORM.websiteUrl,
     serviceArea: typeof data.serviceArea === "string" ? data.serviceArea : EMPTY_FORM.serviceArea,
     typicalInquiry: typeof data.typicalInquiry === "string" ? data.typicalInquiry : EMPTY_FORM.typicalInquiry,
     teamSize: typeof data.teamSize === "string" ? data.teamSize : EMPTY_FORM.teamSize,
@@ -555,6 +558,18 @@ function QuestionnaireForm() {
                 onChange={(e) => update("phone", e.target.value)}
                 placeholder="+1 (555) 000-0000"
               />
+              <Input
+                label="Business Website (optional)"
+                type="url"
+                value={form.websiteUrl}
+                onChange={(e) => update("websiteUrl", e.target.value)}
+                placeholder="https://sunriserealty.com"
+                autoComplete="url"
+              />
+              <p className="-mt-2 text-[11px] text-parchment/45">
+                We&apos;ll scan public pages once to give your coworker context about what you do,
+                your services, and your service area.
+              </p>
               <Input
                 label="Email"
                 type="email"

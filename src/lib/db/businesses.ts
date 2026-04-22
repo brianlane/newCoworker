@@ -27,6 +27,7 @@ export async function createBusiness(
     businessType?: string;
     ownerName?: string;
     phone?: string;
+    websiteUrl?: string;
     serviceArea?: string;
     typicalInquiry?: string;
     teamSize?: number;
@@ -46,6 +47,7 @@ export async function createBusiness(
       business_type: data.businessType ?? null,
       owner_name: data.ownerName ?? null,
       phone: data.phone ?? null,
+      website_url: data.websiteUrl ?? null,
       service_area: data.serviceArea ?? null,
       typical_inquiry: data.typicalInquiry ?? null,
       team_size: data.teamSize ?? null,
@@ -56,6 +58,19 @@ export async function createBusiness(
 
   if (error) throw new Error(`createBusiness: ${error.message}`);
   return row as BusinessRow;
+}
+
+export async function updateBusinessWebsiteUrl(
+  id: string,
+  websiteUrl: string | null,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("businesses")
+    .update({ website_url: websiteUrl })
+    .eq("id", id);
+  if (error) throw new Error(`updateBusinessWebsiteUrl: ${error.message}`);
 }
 
 export async function getBusiness(id: string, client?: SupabaseClient): Promise<BusinessRow | null> {

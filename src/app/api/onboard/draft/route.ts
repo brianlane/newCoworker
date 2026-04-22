@@ -16,6 +16,7 @@ const onboardingDraftPayloadSchema = z.object({
   businessType: z.string(),
   ownerName: z.string(),
   phone: z.string(),
+  websiteUrl: z.string().optional(),
   serviceArea: z.string(),
   typicalInquiry: z.string(),
   teamSize: z.string(),
