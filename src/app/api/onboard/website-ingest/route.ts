@@ -3,7 +3,7 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import { getAuthUser } from "@/lib/auth";
 import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { getBusiness, updateBusinessWebsiteUrl } from "@/lib/db/businesses";
-import { getBusinessConfig, updateBusinessWebsiteMd, upsertBusinessConfig } from "@/lib/db/configs";
+import { setBusinessWebsiteMd } from "@/lib/db/configs";
 import { ingestWebsite, normalizeWebsiteUrl } from "@/lib/website-ingest";
 import { logger } from "@/lib/logger";
 
@@ -68,8 +68,10 @@ export async function POST(request: Request) {
       });
     }
 
-    // Persist results. Ensure a business_configs row exists before patching
-    // website_md so the first-time onboarding case still works.
+    // Persist results. `setBusinessWebsiteMd` is race-safe against the parallel
+    // `/api/business/config` upsert that runs from checkout — it inserts a
+    // skeleton row with `ignoreDuplicates` (so it never clobbers existing
+    // soul/identity/memory drafts) and then targets `website_md` alone.
     await updateBusinessWebsiteUrl(body.businessId, normalized).catch((err) => {
       logger.warn("website-ingest: persist website_url failed", {
         businessId: body.businessId,
@@ -77,18 +79,7 @@ export async function POST(request: Request) {
       });
     });
 
-    const existingConfig = await getBusinessConfig(body.businessId);
-    if (existingConfig) {
-      await updateBusinessWebsiteMd(body.businessId, result.websiteMd);
-    } else {
-      await upsertBusinessConfig({
-        business_id: body.businessId,
-        soul_md: "",
-        identity_md: "",
-        memory_md: "",
-        website_md: result.websiteMd
-      });
-    }
+    await setBusinessWebsiteMd(body.businessId, result.websiteMd);
 
     logger.info("website-ingest: success", {
       businessId: body.businessId,

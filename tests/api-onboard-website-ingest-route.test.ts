@@ -6,9 +6,7 @@ vi.mock("@/lib/db/businesses", () => ({
   updateBusinessWebsiteUrl: vi.fn()
 }));
 vi.mock("@/lib/db/configs", () => ({
-  getBusinessConfig: vi.fn(),
-  updateBusinessWebsiteMd: vi.fn(),
-  upsertBusinessConfig: vi.fn()
+  setBusinessWebsiteMd: vi.fn()
 }));
 vi.mock("@/lib/website-ingest", () => ({
   ingestWebsite: vi.fn(),
@@ -26,7 +24,7 @@ vi.mock("@/lib/logger", () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: 
 import { POST } from "@/app/api/onboard/website-ingest/route";
 import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { getBusiness, updateBusinessWebsiteUrl } from "@/lib/db/businesses";
-import { getBusinessConfig, updateBusinessWebsiteMd, upsertBusinessConfig } from "@/lib/db/configs";
+import { setBusinessWebsiteMd } from "@/lib/db/configs";
 import { ingestWebsite } from "@/lib/website-ingest";
 import { getAuthUser } from "@/lib/auth";
 
@@ -54,9 +52,7 @@ describe("api/onboard/website-ingest route", () => {
     vi.clearAllMocks();
     vi.mocked(ingestWebsite).mockResolvedValue(INGEST_OK);
     vi.mocked(updateBusinessWebsiteUrl).mockResolvedValue(undefined as never);
-    vi.mocked(updateBusinessWebsiteMd).mockResolvedValue(undefined as never);
-    vi.mocked(upsertBusinessConfig).mockResolvedValue(undefined as never);
-    vi.mocked(getBusinessConfig).mockResolvedValue(null);
+    vi.mocked(setBusinessWebsiteMd).mockResolvedValue(undefined as never);
     vi.mocked(getAuthUser).mockResolvedValue(null);
   });
 
@@ -76,9 +72,10 @@ describe("api/onboard/website-ingest route", () => {
     expect(json.data.websiteMdPreview).toContain("Website");
     // Pre-auth (draft) callers must not receive the full websiteMd payload.
     expect(json.data.websiteMd).toBeUndefined();
-    // New business_configs row is created via upsertBusinessConfig on first-time
-    // onboarding (getBusinessConfig returned null above).
-    expect(upsertBusinessConfig).toHaveBeenCalledWith(expect.objectContaining({ business_id: BIZ }));
+    // The race-safe helper is called directly; it handles insert-if-absent +
+    // targeted update internally, so there's no separate `upsertBusinessConfig`
+    // call to assert against anymore.
+    expect(setBusinessWebsiteMd).toHaveBeenCalledWith(BIZ, INGEST_OK.websiteMd);
   });
 
   it("rejects when draftToken does not match the persisted draft and no user session exists", async () => {
@@ -98,19 +95,17 @@ describe("api/onboard/website-ingest route", () => {
   it("authorizes owners by email and returns the full websiteMd so dashboard re-crawl can refresh in place", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({ email: "owner@example.com", isAdmin: false } as never);
     vi.mocked(getBusiness).mockResolvedValue({ owner_email: "Owner@Example.com" } as never);
-    vi.mocked(getBusinessConfig).mockResolvedValue({ business_id: BIZ } as never);
 
     const res = await POST(jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/" }));
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.data.ok).toBe(true);
     expect(json.data.websiteMd).toBe(INGEST_OK.websiteMd);
-    expect(updateBusinessWebsiteMd).toHaveBeenCalledWith(BIZ, INGEST_OK.websiteMd);
+    expect(setBusinessWebsiteMd).toHaveBeenCalledWith(BIZ, INGEST_OK.websiteMd);
   });
 
   it("authorizes admin users without checking business ownership", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({ email: "admin@nc", isAdmin: true } as never);
-    vi.mocked(getBusinessConfig).mockResolvedValue(null);
 
     const res = await POST(jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/" }));
     expect(res.status).toBe(200);
@@ -175,17 +170,15 @@ describe("api/onboard/website-ingest route", () => {
   it("tolerates updateBusinessWebsiteUrl failures and still persists website_md", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({ email: "admin@nc", isAdmin: true } as never);
     vi.mocked(updateBusinessWebsiteUrl).mockRejectedValue(new Error("db down"));
-    vi.mocked(getBusinessConfig).mockResolvedValue({ business_id: BIZ } as never);
 
     const res = await POST(jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/" }));
     expect(res.status).toBe(200);
-    expect(updateBusinessWebsiteMd).toHaveBeenCalledWith(BIZ, INGEST_OK.websiteMd);
+    expect(setBusinessWebsiteMd).toHaveBeenCalledWith(BIZ, INGEST_OK.websiteMd);
   });
 
   it("handles non-Error rejections from updateBusinessWebsiteUrl via String() fallback", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({ email: "admin@nc", isAdmin: true } as never);
     vi.mocked(updateBusinessWebsiteUrl).mockRejectedValue("plain string");
-    vi.mocked(getBusinessConfig).mockResolvedValue({ business_id: BIZ } as never);
 
     const res = await POST(jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/" }));
     expect(res.status).toBe(200);

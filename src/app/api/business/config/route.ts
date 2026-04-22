@@ -1,5 +1,5 @@
 import { getAuthUser, verifySignupIdentity } from "@/lib/auth";
-import { upsertBusinessConfig } from "@/lib/db/configs";
+import { patchBusinessConfig } from "@/lib/db/configs";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { verifyOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
 import { z } from "zod";
@@ -74,19 +74,24 @@ export async function POST(request: Request) {
 
     if (!data && !isAdmin) return errorResponse("FORBIDDEN", "Not authorized for this business");
 
-    const { getBusinessConfig } = await import("@/lib/db/configs");
-    const existing = await getBusinessConfig(body.businessId);
-
-    await upsertBusinessConfig({
-      business_id: body.businessId,
+    // `patchBusinessConfig` is race-safe against the parallel website-ingest
+    // fire-and-forget. It never touches fields we don't explicitly patch, so
+    // `website_md` (absent from onboarding's payload) is preserved whether the
+    // crawl finished before or after this save. Dashboard callers that want to
+    // clear it send `websiteMd: ""` explicitly.
+    const patch: {
+      soul_md: string;
+      identity_md: string;
+      memory_md?: string;
+      website_md?: string;
+    } = {
       soul_md: body.soulMd,
-      identity_md: body.identityMd,
-      memory_md: body.memoryMd ?? existing?.memory_md ?? "",
-      // Preserve existing website_md (set by the onboarding crawl) unless the
-      // caller explicitly sent one. Sending an empty string clears it.
-      website_md:
-        body.websiteMd !== undefined ? body.websiteMd : existing?.website_md ?? ""
-    });
+      identity_md: body.identityMd
+    };
+    if (body.memoryMd !== undefined) patch.memory_md = body.memoryMd;
+    if (body.websiteMd !== undefined) patch.website_md = body.websiteMd;
+
+    await patchBusinessConfig(body.businessId, patch);
 
     return successResponse({ updated: true });
   } catch (err) {

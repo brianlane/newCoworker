@@ -171,13 +171,15 @@ export function isPathAllowed(pathname: string, disallows: string[]): boolean {
 }
 
 export function extractReadableText(html: string): string {
-  // CodeQL (js/bad-tag-filter): allow whitespace before `>` in closing tags —
-  // `</script >` / `</style\n>` are valid HTML but would otherwise escape the
-  // strip pass and leak inline JS/CSS into the extracted corpus.
+  // CodeQL (js/bad-tag-filter): HTML parsers accept arbitrary junk between the
+  // tag name and `>` on a closing tag — `</script >`, `</script\t\nfoo>`, and
+  // `</style bar="baz">` all legally close the element. Our strip pass has to
+  // swallow anything up to the next `>` after the tag name (`\b[^>]*>`) so
+  // those malformed closers can't leak inline JS/CSS into the text corpus.
   const withoutScripts = html
-    .replace(/<script\b[\s\S]*?<\/script\s*>/gi, " ")
-    .replace(/<style\b[\s\S]*?<\/style\s*>/gi, " ")
-    .replace(/<noscript\b[\s\S]*?<\/noscript\s*>/gi, " ")
+    .replace(/<script\b[\s\S]*?<\/script\b[^>]*>/gi, " ")
+    .replace(/<style\b[\s\S]*?<\/style\b[^>]*>/gi, " ")
+    .replace(/<noscript\b[\s\S]*?<\/noscript\b[^>]*>/gi, " ")
     // Drop any remaining unterminated script/style openers so a malformed
     // document can't smuggle their bodies into the text pipeline.
     .replace(/<script\b[\s\S]*$/gi, " ")
