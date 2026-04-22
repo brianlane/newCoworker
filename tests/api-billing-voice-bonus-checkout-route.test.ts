@@ -27,10 +27,13 @@ const BID = "11111111-1111-4111-8111-111111111111";
 const UID = "22222222-2222-4222-8222-222222222222";
 
 function mockBusinessesQuery(rows: Array<{ id: string }>) {
+  // Route sorts by created_at DESC before limiting, so the mock needs an
+  // `order` hop in the chain to match the production query shape.
   vi.mocked(createSupabaseServiceClient).mockResolvedValue({
     from: vi.fn().mockReturnThis(),
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
+    order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockResolvedValue({ data: rows, error: null })
   } as never);
 }

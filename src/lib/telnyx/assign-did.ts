@@ -85,7 +85,12 @@ async function resolveBridgeOrigin(
   if (existing?.bridge_media_wss_origin && existing.bridge_media_wss_origin.length > 0) {
     return existing.bridge_media_wss_origin;
   }
-  return platformDefaults?.bridgeMediaWssOrigin ?? null;
+  // Defence in depth: callers sometimes pass `""` (e.g. `process.env.X ?? ""`
+  // propagating through an object spread). `""` would bypass `?? null` and
+  // get persisted as an empty origin, so treat any blank string as "no
+  // origin available" and let the row stay null until a real one is known.
+  const fallback = platformDefaults?.bridgeMediaWssOrigin;
+  return fallback && fallback.trim().length > 0 ? fallback : null;
 }
 
 export async function assignExistingDidToBusiness(

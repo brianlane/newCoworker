@@ -47,10 +47,14 @@ export default async function BillingPage(props: {
   if (!user.email) redirect("/login?redirectTo=/dashboard/billing");
 
   const db = await createSupabaseServiceClient();
+  // Match the dashboard's ordering (created_at DESC) so the billing
+  // snapshot and the "Buy bonus minutes" flow always target the same
+  // business row as /dashboard.
   const { data: businesses } = await db
     .from("businesses")
     .select("id, tier, enterprise_limits, name")
     .eq("owner_email", user.email)
+    .order("created_at", { ascending: false })
     .limit(1);
 
   const business = businesses?.[0] ?? null;

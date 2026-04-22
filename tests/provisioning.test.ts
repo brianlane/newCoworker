@@ -705,6 +705,33 @@ describe("provisioning/orchestrate", () => {
       expect(didProvisioner).toHaveBeenCalled();
     });
 
+    it("does not spread an empty bridgeMediaWssOrigin into platformDefaults", async () => {
+      // Regression: orchestrate initialised bridgeMediaWssOrigin = "" and
+      // spread it onto readPlatformTelnyxDefaults(), clobbering the
+      // `undefined` default. Downstream `?? null` fallbacks don't catch
+      // "", so it used to be persisted as an empty origin and produce a
+      // malformed wss:// URL for the inbound-voice edge function.
+      delete process.env.BRIDGE_MEDIA_WSS_ORIGIN;
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+15550007777" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      await orchestrateProvisioning(
+        { businessId: "biz-did-empty-origin", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          // Disable the tunnel provisioner so bridgeMediaWssOrigin stays "".
+          cloudflareTunnel: null,
+          didProvisioner
+        }
+      );
+      const call = didProvisioner.mock.calls[0][0];
+      // platformDefaults should NOT carry a bridgeMediaWssOrigin key at all
+      // when there's no concrete origin. Either "undefined" or "not set" is
+      // acceptable; an empty string is the failure mode we guard against.
+      expect(call.platformDefaults.bridgeMediaWssOrigin ?? null).toBeNull();
+      expect(call.platformDefaults.bridgeMediaWssOrigin).not.toBe("");
+    });
+
     it("does not abort the deploy when getTelnyxVoiceRouteForBusiness throws", async () => {
       // Regression: the route lookup used to sit outside the try/catch, so a
       // transient Supabase error would abort orchestrateProvisioning before

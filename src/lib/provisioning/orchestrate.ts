@@ -325,7 +325,14 @@ export async function orchestrateProvisioning(
       } else {
         const platformDefaults: PlatformTelnyxDefaults = {
           ...readPlatformTelnyxDefaults(),
-          bridgeMediaWssOrigin
+          // Only override the platform default when we actually resolved a
+          // concrete origin. If the tunnel provisioner failed (or isn't
+          // configured) AND BRIDGE_MEDIA_WSS_ORIGIN is empty, the local is
+          // "" — spreading that would clobber the `undefined` default,
+          // bypass the `?? null` fallback downstream, and persist "" into
+          // telnyx_voice_routes.media_wss_origin, producing a malformed
+          // wss:// URL for the inbound-voice edge function.
+          ...(bridgeMediaWssOrigin ? { bridgeMediaWssOrigin } : {})
         };
         const { toE164 } = await didProvisioner({
           businessId,

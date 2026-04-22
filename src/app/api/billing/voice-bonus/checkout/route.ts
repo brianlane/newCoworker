@@ -43,10 +43,16 @@ export async function POST(request: Request) {
     }
 
     const db = await createSupabaseServiceClient();
+    // Mirror the ordering the dashboard uses (created_at DESC) so an owner
+    // with multiple businesses always sees and checks out for the same row
+    // the billing page displays. Without this, Postgres is free to return
+    // rows in an arbitrary order and the checkout session could target a
+    // different business than the one shown to the user.
     const { data: businesses } = await db
       .from("businesses")
       .select("id")
       .eq("owner_email", user.email)
+      .order("created_at", { ascending: false })
       .limit(1);
     const business = businesses?.[0] ?? null;
     if (!business) {

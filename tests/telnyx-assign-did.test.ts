@@ -183,6 +183,37 @@ describe("assignExistingDidToBusiness", () => {
     );
   });
 
+  it("coerces an empty/whitespace platform bridge origin to null (never persists '')", async () => {
+    // Regression: orchestrate used to spread a local `bridgeMediaWssOrigin`
+    // that defaults to "" onto platformDefaults. "" is not nullish so it
+    // used to bypass `?? null` and get persisted as an empty origin,
+    // producing a malformed wss:// URL for the inbound-voice edge function.
+    mockedRoutes.getBusinessTelnyxSettings.mockResolvedValue({
+      ...sampleSettings,
+      bridge_media_wss_origin: null
+    });
+    await assignExistingDidToBusiness({
+      businessId: "biz",
+      toE164: "+15551234567",
+      platformDefaults: { bridgeMediaWssOrigin: "" }
+    });
+    expect(mockedRoutes.upsertBusinessTelnyxSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ bridgeMediaWssOrigin: null }),
+      expect.anything()
+    );
+
+    mockedRoutes.upsertBusinessTelnyxSettings.mockClear();
+    await assignExistingDidToBusiness({
+      businessId: "biz",
+      toE164: "+15551234567",
+      platformDefaults: { bridgeMediaWssOrigin: "   " }
+    });
+    expect(mockedRoutes.upsertBusinessTelnyxSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ bridgeMediaWssOrigin: null }),
+      expect.anything()
+    );
+  });
+
   it("calls Telnyx PATCH when associateWithPlatform=true", async () => {
     const tn = makeTelnyxMock();
     await assignExistingDidToBusiness(
