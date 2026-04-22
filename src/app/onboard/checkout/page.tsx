@@ -126,10 +126,16 @@ function CheckoutContent() {
         setData(onboardingData);
       }
 
-      if (data.websiteUrl && data.websiteUrl.trim()) {
+      if (onboardingData.websiteUrl && onboardingData.websiteUrl.trim()) {
         // Kick off website ingestion in the background while the user goes to
         // Stripe. `keepalive` lets the request continue after navigation, and
         // we never await it so a slow summarization cannot block checkout.
+        //
+        // Read every field off `onboardingData` (not `data`) — after business
+        // creation the local `data` state still holds the pre-persist snapshot
+        // because `setData` is async. Today these overlapping fields happen to
+        // be identical, but pulling from one source prevents a latent drift if
+        // `/api/business/create` ever enriches the onboarding payload.
         try {
           void fetch("/api/onboard/website-ingest", {
             method: "POST",
@@ -137,10 +143,10 @@ function CheckoutContent() {
             keepalive: true,
             body: JSON.stringify({
               businessId,
-              websiteUrl: data.websiteUrl,
-              draftToken: data.draftToken,
-              businessName: data.businessName,
-              businessType: data.businessType
+              websiteUrl: onboardingData.websiteUrl,
+              draftToken: onboardingData.draftToken,
+              businessName: onboardingData.businessName,
+              businessType: onboardingData.businessType
             })
           });
         } catch { /* non-blocking */ }
