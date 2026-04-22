@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   upsertBusinessConfig,
   getBusinessConfig,
-  updateBusinessWebsiteMd,
   setBusinessWebsiteMd,
   patchBusinessConfig
 } from "@/lib/db/configs";
@@ -83,33 +82,6 @@ describe("db/configs", () => {
     const result = await getBusinessConfig("biz-uuid-1", db as never);
     expect(result?.soul_md).toBe("# soul");
     expect(createSupabaseServiceClient).not.toHaveBeenCalled();
-  });
-
-  it("updateBusinessWebsiteMd writes website_md + updated_at via the service client", async () => {
-    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
-    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-
-    await updateBusinessWebsiteMd("biz-uuid-1", "# website\nhello");
-    expect(db.from).toHaveBeenCalledWith("business_configs");
-    expect(db.update).toHaveBeenCalledWith(
-      expect.objectContaining({ website_md: "# website\nhello", updated_at: expect.any(String) })
-    );
-    expect(db.eq).toHaveBeenCalledWith("business_id", "biz-uuid-1");
-  });
-
-  it("updateBusinessWebsiteMd uses the provided client and does not touch the service client", async () => {
-    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
-    await updateBusinessWebsiteMd("biz-uuid-1", "# website", db as never);
-    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
-  });
-
-  it("updateBusinessWebsiteMd throws when the update fails", async () => {
-    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "permission" } }) };
-    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-
-    await expect(updateBusinessWebsiteMd("biz-uuid-1", "# website")).rejects.toThrow(
-      "updateBusinessWebsiteMd"
-    );
   });
 
   // --- setBusinessWebsiteMd ---
@@ -217,6 +189,21 @@ describe("db/configs", () => {
     expect(updateCall.identity_md).toBe("# i");
     expect(updateCall.memory_md).toBeUndefined();
     expect(updateCall.website_md).toBeUndefined();
+  });
+
+  it("patchBusinessConfig with an empty patch still runs the skeleton upsert and a no-op update", async () => {
+    // Exercises the false branch of every `patch.* !== undefined` check so the
+    // partial-update payload is literally just `{ updated_at }`. This path
+    // supports callers that only want to ensure a row exists without mutating
+    // any other field.
+    const { db, upsertChain, updateChain } = raceSafeDb();
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await patchBusinessConfig("biz-uuid-1", {});
+
+    expect(upsertChain.upsert).toHaveBeenCalled();
+    const payload = updateChain.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(Object.keys(payload)).toEqual(["updated_at"]);
   });
 
   it("patchBusinessConfig forwards memory_md and website_md when present", async () => {

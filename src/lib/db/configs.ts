@@ -31,19 +31,6 @@ export async function upsertBusinessConfig(
   return row as ConfigRow;
 }
 
-export async function updateBusinessWebsiteMd(
-  businessId: string,
-  websiteMd: string,
-  client?: SupabaseClient
-): Promise<void> {
-  const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db
-    .from("business_configs")
-    .update({ website_md: websiteMd, updated_at: new Date().toISOString() })
-    .eq("business_id", businessId);
-  if (error) throw new Error(`updateBusinessWebsiteMd: ${error.message}`);
-}
-
 /**
  * Idempotently set `website_md` for a business.
  *
