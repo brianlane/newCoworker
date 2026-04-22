@@ -64,13 +64,21 @@ export type AssignExistingDidInput = {
 
 /**
  * Normalize an E.164 number to `+<digits>`. Throws on malformed input.
+ *
+ * Accepts 8–15 digits after `+` and requires the first digit to be 1–9 (no
+ * leading-zero country codes). This mirrors the DB check constraint on
+ * `business_telnyx_settings.forward_to_e164` (`^\+[1-9][0-9]{7,14}$`) so a
+ * value that passes this normalizer is guaranteed to pass downstream inserts
+ * — `+012345678` used to sneak through app validation and then get rejected
+ * by Postgres as a 500, and a 7-digit input that the shared edge normalizer
+ * would accept for inbound routing is refused here because it can't be
+ * persisted via assign-did.
  */
 export function normalizeE164(input: string): string {
   const trimmed = (input ?? "").trim();
   const digits = trimmed.replace(/[^\d+]/g, "");
   const stripped = digits.startsWith("+") ? `+${digits.slice(1).replace(/\+/g, "")}` : `+${digits}`;
-  const rest = stripped.slice(1);
-  if (rest.length < 8 || rest.length > 15 || !/^\d+$/.test(rest)) {
+  if (!/^\+[1-9]\d{7,14}$/.test(stripped)) {
     throw new Error(`normalizeE164: invalid E.164 number: ${input}`);
   }
   return stripped;

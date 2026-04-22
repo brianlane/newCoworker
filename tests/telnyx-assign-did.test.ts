@@ -92,6 +92,20 @@ describe("normalizeE164", () => {
     expect(() => normalizeE164(undefined as unknown as string)).toThrow(/invalid E.164/);
     expect(() => normalizeE164(null as unknown as string)).toThrow(/invalid E.164/);
   });
+  it("rejects numbers whose first digit after + is 0 (matches DB constraint)", () => {
+    // Regression: the DB check constraint on `forward_to_e164` is
+    // `^\+[1-9][0-9]{7,14}$`. The old validator allowed a leading-zero
+    // country code, so `+012345678` passed app-level normalization and
+    // then blew up as a Postgres check-constraint violation on insert.
+    expect(() => normalizeE164("+012345678")).toThrow(/invalid E.164/);
+    expect(() => normalizeE164("012345678")).toThrow(/invalid E.164/);
+  });
+  it("rejects a bare 7-digit number (below the 8-digit floor)", () => {
+    // The shared edge normalizer accepts 7+ digits for inbound routing,
+    // but anything persisted via assign-did must fit the DB constraint,
+    // so we refuse 7-digit inputs here.
+    expect(() => normalizeE164("+1234567")).toThrow(/invalid E.164/);
+  });
 });
 
 describe("assignExistingDidToBusiness", () => {

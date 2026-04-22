@@ -2,14 +2,15 @@
 
 /**
  * Voice-bonus top-up card: lists the configured packs and redirects to Stripe
- * Checkout on click. The price-per-minute above each pack is the single source
- * of truth for the operator-set rate (`VOICE_BONUS_USD_PER_MINUTE`, default
- * $0.43/min); the pack list is whatever `listVoiceBonusPacks()` returned on
- * the server, so hiding a pack is a pure env-var change (no redeploy).
+ * Checkout on click. Pack amounts and the rate-per-minute header are both
+ * Stripe-authoritative — the billing page calls `resolveVoiceBonusPacks` on
+ * the server, which fetches each Price's actual `unit_amount` and overrides
+ * the env-derived display with it, so the UI always matches what Stripe will
+ * actually charge on the hosted Checkout page.
  *
  * Purchase flow:
  *   1. POST /api/billing/voice-bonus/checkout { packId }
- *   2. Server returns { checkoutUrl } → we window.location.href to it.
+ *   2. Server returns { checkoutUrl } → we window.location.assign to it.
  *   3. Stripe webhook (`checkout.session.completed` + voice_bonus_seconds
  *      metadata) records the grant; tenant sees it in the balance card above.
  */
