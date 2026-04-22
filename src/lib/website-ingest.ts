@@ -283,7 +283,7 @@ async function fetchWithLimit(
   timeoutMs: number,
   maxBytes: number,
   lookup: DnsLookup
-): Promise<{ body: string; contentType: string; finalUrl: string }> {
+): Promise<{ body: string; contentType: string; finalUrl: string; bytes: number }> {
   const controller = new AbortController();
   /* c8 ignore next -- timer callback fires only on real-world timeouts; the
      AbortError path it produces is exercised via AbortError-returning mocks. */
@@ -403,7 +403,12 @@ async function fetchWithLimit(
       offset += chunk.byteLength;
     }
     const body = new TextDecoder("utf-8", { fatal: false }).decode(merged);
-    return { body, contentType, finalUrl: response.url || currentUrl.toString() };
+    // `total` is the true number of bytes pulled off the wire (or buffered from
+    // arrayBuffer in the no-stream fallback). We return it alongside the decoded
+    // string because callers that report `bytesDownloaded` need real byte counts
+    // — `body.length` is a UTF-16 code-unit count and under-reports non-ASCII
+    // payloads by up to 4x.
+    return { body, contentType, finalUrl: response.url || currentUrl.toString(), bytes: total };
   } finally {
     clearTimeout(timer);
   }
@@ -564,14 +569,14 @@ export async function ingestWebsite(
       /* c8 ignore next */
       if (!isPathAllowed(nextUrl.pathname || "/", disallows)) continue;
       const isHomepage = next === normalized;
-      const { body, finalUrl } = await fetchWithLimit(
+      const { body, finalUrl, bytes } = await fetchWithLimit(
         next,
         fetchImpl,
         WEBSITE_INGEST_PAGE_TIMEOUT_MS,
         WEBSITE_INGEST_MAX_BYTES_PER_PAGE,
         lookup
       );
-      bytesDownloaded += body.length;
+      bytesDownloaded += bytes;
       const text = extractReadableText(body);
       if (text.trim()) {
         pages.push({ url: finalUrl, text });

@@ -1,7 +1,10 @@
 import { getAuthUser, verifySignupIdentity } from "@/lib/auth";
+import { updateBusinessWebsiteUrl } from "@/lib/db/businesses";
 import { patchBusinessConfig } from "@/lib/db/configs";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { verifyOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
+import { normalizeWebsiteUrl } from "@/lib/website-ingest";
+import { logger } from "@/lib/logger";
 import { z } from "zod";
 
 const schema = z.object({
@@ -19,7 +22,15 @@ const schema = z.object({
    * save. When present (including empty string), we persist exactly what
    * the client sent.
    */
-  websiteMd: z.string().optional()
+  websiteMd: z.string().optional(),
+  /**
+   * Optional updated website URL. The dashboard lets owners edit the URL
+   * input and click Save without re-crawling; previously this change was
+   * silently discarded because only the Re-crawl path called
+   * `updateBusinessWebsiteUrl`. An empty string clears the value so an
+   * owner can remove a broken URL without re-crawling.
+   */
+  websiteUrl: z.string().optional()
 });
 
 export async function POST(request: Request) {
@@ -73,6 +84,36 @@ export async function POST(request: Request) {
           .single();
 
     if (!data && !isAdmin) return errorResponse("FORBIDDEN", "Not authorized for this business");
+
+    // Persist `website_url` on the `businesses` row when the dashboard sends
+    // one. The Re-crawl path has always written this column; without this
+    // branch a plain Save would silently drop URL edits because the rest of
+    // this route only touches `business_configs`. An empty string explicitly
+    // clears the field (owner removing a stale URL); anything non-empty is
+    // normalized through the same helper the ingest route uses so bad input
+    // fails fast with a 422 instead of persisting a malformed URL.
+    if (body.websiteUrl !== undefined) {
+      const trimmed = body.websiteUrl.trim();
+      if (trimmed.length === 0) {
+        await updateBusinessWebsiteUrl(body.businessId, null);
+      } else {
+        const normalized = normalizeWebsiteUrl(trimmed);
+        if (!normalized) {
+          return errorResponse("VALIDATION_ERROR", "Please provide a valid http(s) URL");
+        }
+        try {
+          await updateBusinessWebsiteUrl(body.businessId, normalized);
+        } catch (err) {
+          // Don't fail the entire save for a transient `businesses` update
+          // error — the soul/identity/memory patch below is the higher-value
+          // write. Log so we can catch repeated failures in telemetry.
+          logger.warn("business-config: persist website_url failed", {
+            businessId: body.businessId,
+            error: err instanceof Error ? err.message : String(err)
+          });
+        }
+      }
+    }
 
     // `patchBusinessConfig` is race-safe against the parallel website-ingest
     // fire-and-forget. It never touches fields we don't explicitly patch, so

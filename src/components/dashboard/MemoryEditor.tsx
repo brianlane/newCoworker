@@ -65,7 +65,8 @@ export function MemoryEditor({
           soulMd: soul,
           identityMd: identity,
           memoryMd: memory,
-          websiteMd
+          websiteMd,
+          websiteUrl
         })
       });
       if (!res.ok) throw new Error("Save failed");

@@ -355,6 +355,36 @@ describe("ingestWebsite", () => {
     expect(prompt).toMatch(/Sunrise Realty/);
   });
 
+  it("reports bytesDownloaded as true UTF-8 byte count, not UTF-16 code units", async () => {
+    // Multi-byte payload: each "café" is 5 UTF-8 bytes but 4 JS string
+    // characters. Before the fix `bytesDownloaded += body.length` under-
+    // counted by 1 byte per occurrence. We serve ~200 occurrences so the gap
+    // is unambiguous (>= 150 bytes).
+    const sentence = `café ${"Service detail. ".repeat(40)}`;
+    const html = `<html><body><h1>Heading</h1><p>${sentence.repeat(5)}</p></body></html>`;
+    const expectedBytes = new TextEncoder().encode(html).byteLength;
+    const expectedStringLen = html.length;
+    expect(expectedBytes).toBeGreaterThan(expectedStringLen);
+
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      return new Response(html, {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" }
+      });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nCafé services.");
+
+    const res = await ingestWebsite("https://example.com/", { fetchImpl, lookup, summarize });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.bytesDownloaded).toBe(expectedBytes);
+      expect(res.bytesDownloaded).toBeGreaterThan(expectedStringLen);
+    }
+  });
+
   it("reports empty_content when the page has almost no readable text", async () => {
     const fetchImpl = vi.fn(async (url: string) => {
       if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
