@@ -411,11 +411,20 @@ serve(async (req: Request) => {
             (await sp.text()).slice(0, 300)
           );
         }
-        // Small delay so the apology finishes before we tear down, matching
-        // the answer→speak→transfer pacing above. Reuse the same env knob so
-        // tests can collapse both delays to zero.
-        const delayRawEnd = Deno.env.get("VOICE_SAFE_MODE_TRANSFER_DELAY_MS");
-        const delayMsEnd = delayRawEnd ? Number(delayRawEnd) : 2500;
+        // Delay so the apology finishes before we tear down. The failure
+        // message is ~17 words (~6s of Polly TTS), substantially longer than
+        // the "Connecting you now." prompt that sets the pre-transfer delay,
+        // so we can't reuse 2500ms here — the caller would hear a truncated
+        // "We're sorry, we could not con—" and then silence. Tied to the
+        // message content: if VOICE_MSG_SAFE_MODE_FORWARD_FAILED changes,
+        // update this constant in the same commit. We still honor the
+        // transfer-delay env knob so tests that set it to 0 collapse this
+        // delay too.
+        const SAFE_MODE_FAILURE_HANGUP_DELAY_MS = 7000;
+        const delayRawEndOverride = Deno.env.get("VOICE_SAFE_MODE_TRANSFER_DELAY_MS");
+        const delayMsEnd = delayRawEndOverride
+          ? Number(delayRawEndOverride)
+          : SAFE_MODE_FAILURE_HANGUP_DELAY_MS;
         if (Number.isFinite(delayMsEnd) && delayMsEnd > 0) {
           await new Promise<void>((resolve) => setTimeout(resolve, delayMsEnd));
         }
