@@ -464,18 +464,37 @@ serve(async (req: Request) => {
               { status: 503, headers: { "Content-Type": "application/json" } }
             );
           }
-        } else {
-          console.warn("telnyx-sms-inbound: safe mode forward skipped — missing send config");
+          await telemetryRecord(supabase, "sms_inbound_safe_mode_forwarded", {
+            business_id: businessId,
+            event_id: eventId,
+            forwarded: true
+          });
+          return new Response(
+            JSON.stringify({ ok: true, skip: "safe_mode_forwarded" }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
         }
-        await telemetryRecord(supabase, "sms_inbound_safe_mode_forwarded", {
+        // Fallthrough: Safe Mode is on but forwarding credentials aren't
+        // available (e.g. `TELNYX_API_KEY` unset, no messaging profile). We
+        // must NOT short-circuit with `{ ok: true, skip: "safe_mode_forwarded",
+        // forwarded: false }` — that silently drops the customer's message.
+        // Instead, drop through to the regular enqueue path so:
+        //   1. the inbound is persisted in sms_inbound_jobs (audit trail),
+        //   2. the worker re-evaluates the gate with the same canForward
+        //      check, and
+        //   3. if still not forwardable, the worker dead-letters the job with
+        //      `safe_mode_missing_telnyx_env` instead of pretending success.
+        console.warn(
+          "telnyx-sms-inbound: safe mode forward deferred to worker — missing send config"
+        );
+        await telemetryRecord(supabase, "sms_inbound_safe_mode_forward_deferred", {
           business_id: businessId,
           event_id: eventId,
-          forwarded: canForward
+          has_api_key: Boolean(telnyxApiKey),
+          has_profile: Boolean(fwdProfile),
+          has_forward_to: Boolean(gate.forwardToE164)
         });
-        return new Response(
-          JSON.stringify({ ok: true, skip: "safe_mode_forwarded" }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        );
+        // Fallthrough — enqueue below.
       }
     }
 
