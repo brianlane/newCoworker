@@ -237,8 +237,12 @@ describe("provisioning/orchestrate", () => {
     delete process.env.GOOGLE_API_KEY;
     delete process.env.GEMINI_LIVE_MODEL;
     delete process.env.GEMINI_LIVE_ENABLED;
+    delete process.env.GEMINI_ROWBOAT_MODEL;
+    delete process.env.APP_BASE_URL;
+    delete process.env.NEXT_PUBLIC_APP_URL;
     delete process.env.VOICE_BRIDGE_SRC;
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    delete process.env.NOTIFICATIONS_WEBHOOK_TOKEN;
     const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
     const remoteExec = vi.fn().mockResolvedValue(okExec());
     await orchestrateProvisioning(
@@ -254,8 +258,41 @@ describe("provisioning/orchestrate", () => {
     expect(cmd).toContain("GOOGLE_API_KEY=''");
     expect(cmd).toContain("GEMINI_LIVE_MODEL=''");
     expect(cmd).toContain("GEMINI_LIVE_ENABLED=''");
+    expect(cmd).toContain("GEMINI_ROWBOAT_MODEL=''");
+    expect(cmd).toContain("APP_BASE_URL=''");
     expect(cmd).toContain("VOICE_BRIDGE_SRC=''");
     expect(cmd).toContain("SUPABASE_SERVICE_KEY=''");
+    expect(cmd).toContain("NOTIFICATIONS_WEBHOOK_TOKEN=''");
+  });
+
+  it("skips SMS notification when neither ownerPhone nor TELNYX_OWNER_PHONE is set", async () => {
+    delete process.env.TELNYX_OWNER_PHONE;
+    const { sendTelnyxSms } = await import("@/lib/telnyx/messaging");
+    vi.mocked(sendTelnyxSms).mockClear();
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-no-phone", tier: "starter" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(result.vpsId).toBe("42");
+    expect(sendTelnyxSms).not.toHaveBeenCalled();
+  });
+
+  it("skips email notification when neither ownerEmail nor ADMIN_EMAIL is set", async () => {
+    delete process.env.ADMIN_EMAIL;
+    const { sendOwnerEmail } = await import("@/lib/email/client");
+    vi.mocked(sendOwnerEmail).mockClear();
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-no-email", tier: "starter" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(result.vpsId).toBe("42");
+    expect(sendOwnerEmail).not.toHaveBeenCalled();
   });
 
   it("deploy command forwards voice-bridge env when set", async () => {
