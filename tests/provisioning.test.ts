@@ -695,6 +695,26 @@ describe("provisioning/orchestrate", () => {
       );
     });
 
+    it("falls back search.countryCode to 'US' when TELNYX_DEFAULT_COUNTRY is unset", async () => {
+      delete process.env.TELNYX_DEFAULT_COUNTRY;
+      process.env.TELNYX_AUTO_PURCHASE_DID = "true";
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+15550004444" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      await orchestrateProvisioning(
+        { businessId: "biz-did-fallback-country", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(didProvisioner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          search: expect.objectContaining({ countryCode: "US" })
+        })
+      );
+    });
+
     it("skips when business already has a DID", async () => {
       const didProvisioner = vi.fn();
       vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce({
