@@ -170,6 +170,29 @@ describe("db/dashboard-chat — threads", () => {
     ).rejects.toThrow(/network failure/);
   });
 
+  it("getOrCreateActiveThread rethrows non-Error rejections that aren't unique violations", async () => {
+    // Guard against the rare case where the driver rejects with a bare string
+    // (not an Error instance). `isUniqueViolation` must coerce safely and the
+    // caller must still see the original throw.
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    c.single.mockRejectedValue("network flaked");
+    await expect(
+      getOrCreateActiveThread(BIZ, "t", makeDb(c) as never)
+    ).rejects.toBe("network flaked");
+  });
+
+  it("getOrCreateActiveThread treats non-Error 23505 rejections as race recoveries", async () => {
+    const c = chain();
+    c.maybeSingle
+      .mockResolvedValueOnce({ data: null, error: null })
+      .mockResolvedValueOnce({ data: THREAD, error: null });
+    c.single.mockRejectedValue("duplicate key (23505)");
+    await expect(
+      getOrCreateActiveThread(BIZ, "t", makeDb(c) as never)
+    ).resolves.toEqual(THREAD);
+  });
+
   it("getOrCreateActiveThread rethrows the original error when the winner lookup is empty", async () => {
     const c = chain();
     c.maybeSingle
@@ -281,6 +304,19 @@ describe("db/dashboard-chat — messages", () => {
     const update = c.update.mock.calls[0][0] as Record<string, unknown>;
     expect(update).not.toHaveProperty("rowboat_state");
     expect(update.rowboat_conversation_id).toBe("conv-1");
+  });
+
+  it("updateThreadConversation writes only updated_at when conversationId is null and state is undefined", async () => {
+    // Defense-in-depth: the route layer shouldn't call us in this shape, but
+    // if it does we must not clobber the stored conversationId / state with
+    // nulls — only bump updated_at.
+    const c = chain();
+    c.eq.mockResolvedValue({ error: null });
+    await updateThreadConversation("thread-1", null, undefined, makeDb(c) as never);
+    const update = c.update.mock.calls[0][0];
+    expect(update).toHaveProperty("updated_at");
+    expect(update).not.toHaveProperty("rowboat_conversation_id");
+    expect(update).not.toHaveProperty("rowboat_state");
   });
 
   it("updateThreadConversation omits conversationId when null", async () => {

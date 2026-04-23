@@ -72,8 +72,9 @@ export async function createThread(
 const PG_UNIQUE_VIOLATION = "23505";
 
 function isUniqueViolation(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  const msg = err.message ?? "";
+  // Callers always throw `new Error(...)`, but be defensive: PG drivers can
+  // surface rejections as strings/plain objects in edge cases.
+  const msg = err instanceof Error ? err.message : String(err);
   return (
     msg.includes(PG_UNIQUE_VIOLATION) ||
     msg.toLowerCase().includes("duplicate key") ||
@@ -153,13 +154,17 @@ export async function updateThreadConversation(
   client?: SupabaseClient
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
+  // Only persist fields the caller actually provided. A null conversationId
+  // or undefined state means "leave the prior value alone" — Rowboat may
+  // respond without a state key between turns. We build the patch via
+  // conditional spread to avoid partial-overwrite bugs.
   const update: Record<string, unknown> = {
-    updated_at: new Date().toISOString()
+    updated_at: new Date().toISOString(),
+    ...(conversationId === null
+      ? {}
+      : { rowboat_conversation_id: conversationId }),
+    ...(state === undefined ? {} : { rowboat_state: state })
   };
-  if (conversationId !== null) update.rowboat_conversation_id = conversationId;
-  // Only write state when we actually have one. Rowboat may respond without a
-  // state key between turns; preserving the prior value is the desired default.
-  if (state !== undefined) update.rowboat_state = state;
   const { error } = await db
     .from("dashboard_chat_threads")
     .update(update)

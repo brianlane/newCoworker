@@ -419,7 +419,15 @@ serve(async (req: Request) => {
         // Label is "[Safe Mode]" — Safe Mode is NOT the kill switch (paused path
         // is handled above), so saying "paused" would mislead the owner reading
         // the forwarded text on their phone.
-        const forwardText = `[Safe Mode] From ${from ?? "unknown"}: ${inboundSmsBody(payload)}`;
+        //
+        // Mirror the worker's truncation contract (§sms-inbound-worker) so an
+        // oversized MMS body cannot produce a multi-segment owner SMS or get
+        // rejected outright by Telnyx:
+        //   inbound body: cap to 1000 chars
+        //   final forwarded text: cap to 1600 chars (Telnyx SMS limit)
+        const rawBody = inboundSmsBody(payload).slice(0, 1000);
+        const forwardText =
+          `[Safe Mode] From ${from ?? "unknown"}: ${rawBody}`.slice(0, 1600);
         // Per-tenant settings override env fallbacks. `fwdFrom` may legitimately
         // be empty when the tenant relies on the messaging profile's number
         // pool — telnyxSendSms omits `from` when the string is empty.

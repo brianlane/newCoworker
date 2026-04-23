@@ -369,6 +369,16 @@ serve(async (req: Request) => {
 
     if (gate.kind === "safe_mode_forward") {
       await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SAFE_MODE_CONNECTING);
+      // Telnyx `speak` returns as soon as TTS is queued, not when playback
+      // finishes. If we call `transfer` immediately, the call bridges to the
+      // owner before the caller hears the "Connecting you now." confirmation.
+      // Wait roughly long enough for the short prompt to finish. Configurable
+      // for tests / regions where TTS pacing differs.
+      const delayRaw = Deno.env.get("VOICE_SAFE_MODE_TRANSFER_DELAY_MS");
+      const delayMs = delayRaw ? Number(delayRaw) : 2500;
+      if (Number.isFinite(delayMs) && delayMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+      }
       const transferRes = await telnyxTransferCall(
         apiKey,
         callControlId,
