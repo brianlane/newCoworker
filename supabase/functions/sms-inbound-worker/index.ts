@@ -20,6 +20,7 @@ import { telnyxMessagingPhoneString } from "../_shared/telnyx_messaging_payload.
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
+import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 
 const MAX_ATTEMPTS = 8;
 const NCW_IDEM_TAG_PREFIX = "ncw_idem:";
@@ -158,6 +159,164 @@ serve(async (req: Request) => {
       await clearJobReplyCache(supabase, job.id);
       processed += 1;
       continue;
+    }
+
+    // Defense in depth against the telnyx-sms-inbound gate: flags can flip
+    // between enqueue and drain, so re-check the kill switch + Safe Mode
+    // before running Rowboat. Matches the webhook gate (§CustomerChannelGate).
+    {
+      const { data: bizRow } = await supabase
+        .from("businesses")
+        .select("is_paused, customer_channels_enabled")
+        .eq("id", job.business_id)
+        .maybeSingle();
+      const biz = bizRow as
+        | { is_paused?: boolean; customer_channels_enabled?: boolean }
+        | null;
+
+      if (biz?.is_paused || biz?.customer_channels_enabled === false) {
+        const { data: settingsRow } = await supabase
+          .from("business_telnyx_settings")
+          .select(
+            "forward_to_e164, telnyx_messaging_profile_id, telnyx_sms_from_e164"
+          )
+          .eq("business_id", job.business_id)
+          .maybeSingle();
+        const settings = settingsRow as
+          | {
+              forward_to_e164?: string | null;
+              telnyx_messaging_profile_id?: string | null;
+              telnyx_sms_from_e164?: string | null;
+            }
+          | null;
+
+        const gate = evaluateCustomerChannelGate({
+          isPaused: Boolean(biz?.is_paused),
+          customerChannelsEnabled: biz?.customer_channels_enabled !== false,
+          forwardToE164: settings?.forward_to_e164 ?? null
+        });
+
+        if (gate.kind === "paused") {
+          await supabase.rpc("complete_sms_inbound_job", {
+            p_job_id: job.id,
+            p_status: "dead_letter",
+            p_telnyx_outbound_message_id: null,
+            p_rowboat_conversation_id: null,
+            p_last_error: "paused"
+          });
+          await clearJobReplyCache(supabase, job.id);
+          await telemetryRecord(supabase, "sms_worker_killswitch", {
+            job_id: job.id,
+            business_id: job.business_id,
+            is_paused: Boolean(biz?.is_paused)
+          });
+          processed += 1;
+          continue;
+        }
+
+        if (gate.kind === "safe_mode_forward") {
+          const apiKey = Deno.env.get("TELNYX_API_KEY") ?? "";
+          const fwdProfile =
+            (settings?.telnyx_messaging_profile_id as string | null)?.length
+              ? String(settings!.telnyx_messaging_profile_id)
+              : Deno.env.get("TELNYX_MESSAGING_PROFILE_ID") ?? "";
+          const fwdFrom =
+            (settings?.telnyx_sms_from_e164 as string | null)?.length
+              ? String(settings!.telnyx_sms_from_e164)
+              : Deno.env.get("TELNYX_SMS_FROM_E164") ?? "";
+          const canForward = Boolean(apiKey && fwdProfile);
+
+          if (!canForward) {
+            await supabase.rpc("complete_sms_inbound_job", {
+              p_job_id: job.id,
+              p_status: "dead_letter",
+              p_telnyx_outbound_message_id: null,
+              p_rowboat_conversation_id: null,
+              p_last_error: "safe_mode_missing_telnyx_env"
+            });
+            await clearJobReplyCache(supabase, job.id);
+            processed += 1;
+            continue;
+          }
+
+          const idem = job.outbound_idempotency_key;
+          // Label is "[Safe Mode]" (not "[Coworker paused]") — Safe Mode keeps the
+          // owner's dashboard + VPS online; customers just get forwarded. The
+          // paused path is handled above and never reaches this branch.
+          const forwardText = `[Safe Mode] From ${fromE164}: ${userText.slice(0, 1000)}`;
+          const fwdBody: Record<string, unknown> = {
+            to: gate.forwardToE164,
+            text: forwardText.slice(0, 1600),
+            messaging_profile_id: fwdProfile
+          };
+          if (fwdFrom) fwdBody.from = fwdFrom;
+          if (idem) fwdBody.tags = [`${NCW_IDEM_TAG_PREFIX}${idem}`];
+
+          const fwdHeaders: Record<string, string> = {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json"
+          };
+          if (idem) fwdHeaders["Idempotency-Key"] = idem;
+
+          try {
+            const fwdRes = await fetch("https://api.telnyx.com/v2/messages", {
+              method: "POST",
+              headers: fwdHeaders,
+              body: JSON.stringify(fwdBody)
+            });
+            if (!fwdRes.ok) {
+              throw new Error(`telnyx_forward_${fwdRes.status}`);
+            }
+            const fwdJson = (await fwdRes.json()) as { data?: { id?: string } };
+            const mid = fwdJson.data?.id ?? null;
+            await supabase.rpc("complete_sms_inbound_job", {
+              p_job_id: job.id,
+              p_status: "done",
+              p_telnyx_outbound_message_id: mid,
+              p_rowboat_conversation_id: null,
+              p_last_error: "safe_mode_forwarded"
+            });
+            await clearJobReplyCache(supabase, job.id);
+            await telemetryRecord(supabase, "sms_worker_safe_mode_forwarded", {
+              job_id: job.id,
+              business_id: job.business_id
+            });
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            console.error("sms_worker safe mode forward", msg);
+            // Bound the retry budget just like the Rowboat error path below —
+            // a persistently-failing forward (bad number, Telnyx outage, etc.)
+            // would otherwise burn worker capacity on every cron tick forever.
+            if (job.attempt_count >= MAX_ATTEMPTS) {
+              await supabase.rpc("complete_sms_inbound_job", {
+                p_job_id: job.id,
+                p_status: "dead_letter",
+                p_telnyx_outbound_message_id: null,
+                p_rowboat_conversation_id: null,
+                p_last_error: `safe_mode_forward:${msg}`.slice(0, 2000)
+              });
+              await clearJobReplyCache(supabase, job.id);
+            } else {
+              await supabase
+                .from("sms_inbound_jobs")
+                .update({
+                  status: "pending",
+                  processing_started_at: null,
+                  last_error: `safe_mode_forward:${msg}`.slice(0, 2000),
+                  updated_at: new Date().toISOString()
+                })
+                .eq("id", job.id);
+            }
+            await telemetryRecord(supabase, "sms_worker_safe_mode_forward_failed", {
+              job_id: job.id,
+              business_id: job.business_id,
+              error: msg
+            });
+          }
+          processed += 1;
+          continue;
+        }
+      }
     }
 
     const { data: cfg } = await supabase

@@ -20,3 +20,19 @@ export const VOICE_MSG_CONCURRENT_LIMIT =
  */
 export const VOICE_MSG_STREAM_ROLLOUT_DISABLED =
   "AI voice is not available for this call right now. Please send a text message or try again later. Goodbye.";
+
+/** Kill switch (is_paused): hard stop, no forwarding. */
+export const VOICE_MSG_PAUSED =
+  "This line is temporarily unavailable. Please try again later. Goodbye.";
+
+/** Safe mode: about to transfer to the owner's forwarding number. */
+export const VOICE_MSG_SAFE_MODE_CONNECTING = "Connecting you now.";
+
+/**
+ * Safe mode: Telnyx refused the /actions/transfer request (e.g. the forwarding
+ * number isn't reachable, account misconfig). Played before we hang up so the
+ * caller isn't stuck on a silent answered line waiting for Telnyx's inactivity
+ * timeout.
+ */
+export const VOICE_MSG_SAFE_MODE_FORWARD_FAILED =
+  "We're sorry, we could not connect your call right now. Please try again later. Goodbye.";

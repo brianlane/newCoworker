@@ -96,6 +96,50 @@ export async function answerThenSpeak(
   }
 }
 
+/**
+ * Transfer (bridge) an already-answered inbound call to `toE164`.
+ * Used by Safe Mode to hand the caller to the owner's forwarding number after
+ * a short spoken confirmation. We do not set `from` explicitly — Telnyx will
+ * present the original DID as the caller ID by default.
+ */
+export async function telnyxTransferCall(
+  apiKey: string,
+  callControlId: string,
+  toE164: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<Response> {
+  const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/transfer`;
+  return fetchImpl(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ to: toE164 })
+  });
+}
+
+/**
+ * Hang up an already-answered call. Used as the Safe Mode recovery step when
+ * `/actions/transfer` fails — without this the caller is stranded on a silent
+ * bridged leg until Telnyx's inactivity timeout fires (~30-60s of silence).
+ */
+export async function telnyxHangupCall(
+  apiKey: string,
+  callControlId: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<Response> {
+  const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/hangup`;
+  return fetchImpl(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({})
+  });
+}
+
 /** Reject without answering so carrier/PBX can apply busy treatment (e.g. voicemail). */
 export async function rejectIncomingCall(
   apiKey: string,

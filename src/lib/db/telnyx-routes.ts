@@ -147,3 +147,30 @@ export async function upsertBusinessTelnyxSettings(
   if (error) throw new Error(`upsertBusinessTelnyxSettings: ${error.message}`);
   return data as BusinessTelnyxSettingsRow;
 }
+
+/**
+ * E.164 format: `+` then 8–15 digits, first digit 1–9. Matches the CHECK
+ * constraint in 20260425000000_telnyx_transfer_forwarding.sql so we reject
+ * at the API layer with a friendly message instead of letting Postgres
+ * throw a raw constraint violation.
+ */
+export const E164_REGEX = /^\+[1-9][0-9]{7,14}$/;
+
+/**
+ * Upsert (or clear) the owner/staff forwarding cell. Passing null/empty
+ * clears the column. Safe Mode depends on this being set.
+ */
+export async function setForwardToE164(
+  businessId: string,
+  phone: string | null,
+  client?: SupabaseClient
+): Promise<BusinessTelnyxSettingsRow> {
+  const normalized = phone && phone.trim() ? phone.trim() : null;
+  if (normalized !== null && !E164_REGEX.test(normalized)) {
+    throw new Error("setForwardToE164: invalid E.164 phone number");
+  }
+  return upsertBusinessTelnyxSettings(
+    { businessId, forwardToE164: normalized },
+    client
+  );
+}

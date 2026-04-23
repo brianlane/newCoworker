@@ -20,6 +20,7 @@ import {
   telnyxWebhookClientIp,
   telnyxWebhookRateAllow
 } from "../_shared/telnyx_edge_guard.ts";
+import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 
 const MAX_BODY = 256 * 1024;
 
@@ -358,6 +359,142 @@ serve(async (req: Request) => {
           status: 200,
           headers: { "Content-Type": "application/json" }
         });
+      }
+    }
+
+    // Kill switch + Safe Mode gate (§CustomerChannelGate):
+    //   is_paused           → drop the message, no reply, no forward.
+    //   safe_mode + forward → forward the text to the owner's cell and stop.
+    //   safe_mode w/o fwd   → treated as kill switch (fail-safe; the API
+    //                         prevents this state but protects against
+    //                         direct DB edits).
+    // Runs AFTER STOP/HELP/START compliance so carrier-required auto-replies
+    // always fire, and AFTER the opt-out check so we never forward messages
+    // from suppressed senders.
+    const { data: bizRow } = await supabase
+      .from("businesses")
+      .select("is_paused, customer_channels_enabled")
+      .eq("id", businessId)
+      .maybeSingle();
+    const biz = bizRow as
+      | { is_paused?: boolean; customer_channels_enabled?: boolean }
+      | null;
+
+    if (biz?.is_paused || biz?.customer_channels_enabled === false) {
+      const { data: settingsRow } = await supabase
+        .from("business_telnyx_settings")
+        .select(
+          "forward_to_e164, telnyx_messaging_profile_id, telnyx_sms_from_e164"
+        )
+        .eq("business_id", businessId)
+        .maybeSingle();
+      const settings = settingsRow as
+        | {
+            forward_to_e164?: string | null;
+            telnyx_messaging_profile_id?: string | null;
+            telnyx_sms_from_e164?: string | null;
+          }
+        | null;
+
+      const gate = evaluateCustomerChannelGate({
+        isPaused: Boolean(biz?.is_paused),
+        customerChannelsEnabled: biz?.customer_channels_enabled !== false,
+        forwardToE164: settings?.forward_to_e164 ?? null
+      });
+
+      if (gate.kind === "paused") {
+        await telemetryRecord(supabase, "sms_inbound_killswitch", {
+          business_id: businessId,
+          event_id: eventId,
+          is_paused: Boolean(biz?.is_paused),
+          had_forward: Boolean((settings?.forward_to_e164 ?? "").trim())
+        });
+        return new Response(
+          JSON.stringify({ ok: true, skip: "paused" }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      if (gate.kind === "safe_mode_forward") {
+        // Label is "[Safe Mode]" — Safe Mode is NOT the kill switch (paused path
+        // is handled above), so saying "paused" would mislead the owner reading
+        // the forwarded text on their phone.
+        //
+        // Mirror the worker's truncation contract (§sms-inbound-worker) so an
+        // oversized MMS body cannot produce a multi-segment owner SMS or get
+        // rejected outright by Telnyx:
+        //   inbound body: cap to 1000 chars
+        //   final forwarded text: cap to 1600 chars (Telnyx SMS limit)
+        const rawBody = inboundSmsBody(payload).slice(0, 1000);
+        const forwardText =
+          `[Safe Mode] From ${from ?? "unknown"}: ${rawBody}`.slice(0, 1600);
+        // Per-tenant settings override env fallbacks. `fwdFrom` may legitimately
+        // be empty when the tenant relies on the messaging profile's number
+        // pool — telnyxSendSms omits `from` when the string is empty.
+        const fwdFrom =
+          (settings?.telnyx_sms_from_e164 && settings.telnyx_sms_from_e164.trim()) ||
+          smsFromE164;
+        const fwdProfile =
+          (settings?.telnyx_messaging_profile_id &&
+            settings.telnyx_messaging_profile_id.trim()) ||
+          messagingProfileId;
+        // DO NOT require `fwdFrom` — profile-only sends are valid on Telnyx and
+        // requiring it here would silently drop inbound customer SMS whenever
+        // TELNYX_SMS_FROM_E164 is unset. The gate only needs api key + profile
+        // + destination.
+        const canForward = Boolean(telnyxApiKey && fwdProfile && gate.forwardToE164);
+        if (canForward) {
+          const send = await telnyxSendSms({
+            apiKey: telnyxApiKey,
+            messagingProfileId: fwdProfile,
+            fromE164: fwdFrom,
+            toE164: gate.forwardToE164,
+            text: forwardText,
+            idempotencyKey: `${eventId}:safe-mode-forward`
+          });
+          if (!send.ok) {
+            console.error("sms_inbound safe mode forward", send.status, send.body.slice(0, 300));
+            await telemetryRecord(supabase, "sms_inbound_safe_mode_forward_failed", {
+              business_id: businessId,
+              event_id: eventId,
+              status: send.status
+            });
+            return new Response(
+              JSON.stringify({ ok: false, error: "safe_mode_forward_failed" }),
+              { status: 503, headers: { "Content-Type": "application/json" } }
+            );
+          }
+          await telemetryRecord(supabase, "sms_inbound_safe_mode_forwarded", {
+            business_id: businessId,
+            event_id: eventId,
+            forwarded: true
+          });
+          return new Response(
+            JSON.stringify({ ok: true, skip: "safe_mode_forwarded" }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        // Fallthrough: Safe Mode is on but forwarding credentials aren't
+        // available (e.g. `TELNYX_API_KEY` unset, no messaging profile). We
+        // must NOT short-circuit with `{ ok: true, skip: "safe_mode_forwarded",
+        // forwarded: false }` — that silently drops the customer's message.
+        // Instead, drop through to the regular enqueue path so:
+        //   1. the inbound is persisted in sms_inbound_jobs (audit trail),
+        //   2. the worker re-evaluates the gate with the same canForward
+        //      check, and
+        //   3. if still not forwardable, the worker dead-letters the job with
+        //      `safe_mode_missing_telnyx_env` instead of pretending success.
+        console.warn(
+          "telnyx-sms-inbound: safe mode forward deferred to worker — missing send config"
+        );
+        await telemetryRecord(supabase, "sms_inbound_safe_mode_forward_deferred", {
+          business_id: businessId,
+          event_id: eventId,
+          has_api_key: Boolean(telnyxApiKey),
+          has_profile: Boolean(fwdProfile),
+          has_forward_to: Boolean(gate.forwardToE164)
+        });
+        // Fallthrough — enqueue below.
       }
     }
 

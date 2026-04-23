@@ -28,7 +28,13 @@ export function isStartKeyword(normalizedUpper: string): boolean {
 export async function telnyxSendSms(params: {
   apiKey: string;
   messagingProfileId: string;
-  fromE164: string;
+  /**
+   * Optional sender E.164. Leave empty/undefined to let Telnyx pick a sender
+   * from the messaging profile's number pool — the correct behaviour for
+   * tenants that don't have a dedicated `telnyx_sms_from_e164` configured.
+   * When empty we must OMIT the `from` key entirely (sending "" would 400).
+   */
+  fromE164?: string;
   toE164: string;
   text: string;
   fetchImpl?: typeof fetch;
@@ -47,16 +53,18 @@ export async function telnyxSendSms(params: {
   if (params.idempotencyKey) {
     headers["Idempotency-Key"] = params.idempotencyKey;
   }
+  const body: Record<string, unknown> = {
+    to: params.toE164,
+    text: params.text,
+    messaging_profile_id: params.messagingProfileId
+  };
+  const fromTrimmed = (params.fromE164 ?? "").trim();
+  if (fromTrimmed) body.from = fromTrimmed;
   const res = await fetchImpl("https://api.telnyx.com/v2/messages", {
     method: "POST",
     headers,
-    body: JSON.stringify({
-      to: params.toE164,
-      from: params.fromE164,
-      text: params.text,
-      messaging_profile_id: params.messagingProfileId
-    })
+    body: JSON.stringify(body)
   });
-  const body = await res.text();
-  return { ok: res.ok, status: res.status, body };
+  const bodyText = await res.text();
+  return { ok: res.ok, status: res.status, body: bodyText };
 }

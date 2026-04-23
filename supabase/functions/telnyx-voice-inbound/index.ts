@@ -20,14 +20,24 @@ import { VOICE_RES_LIMITS } from "../_shared/voice_reservation_limits.ts";
 import {
   VOICE_MSG_BRIDGE_DEGRADED,
   VOICE_MSG_CONCURRENT_LIMIT,
+  VOICE_MSG_PAUSED,
   VOICE_MSG_QUOTA_EXHAUSTED,
+  VOICE_MSG_SAFE_MODE_CONNECTING,
+  VOICE_MSG_SAFE_MODE_FORWARD_FAILED,
   VOICE_MSG_STREAM_ROLLOUT_DISABLED,
   VOICE_MSG_SYSTEM_ERROR,
   VOICE_MSG_UNCONFIGURED_NUMBER
 } from "../_shared/voice_messages.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
-import { answerThenSpeak, telnyxAnswerWithStream } from "../_shared/telnyx_call_actions.ts";
+import {
+  answerThenSpeak,
+  telnyxAnswerWithStream,
+  telnyxHangupCall,
+  telnyxSpeak,
+  telnyxTransferCall
+} from "../_shared/telnyx_call_actions.ts";
+import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 import {
   cacheLooksValidForQuotaAfterJitFailure,
   STRIPE_PERIOD_ROLLOVER_GRACE_MS,
@@ -315,6 +325,132 @@ serve(async (req: Request) => {
   }
 
   const businessId = routeRow.business_id as string;
+
+  // Kill switch + Safe Mode gate (§CustomerChannelGate).
+  // Runs BEFORE reserve/Stripe/bridge checks so paused + forwarding calls never
+  // consume concurrency or bill minutes. Safe Mode answers + speaks, then
+  // transfers to the owner cell; kill switch answers + speaks, then hangs up
+  // (via Telnyx's natural post-speak termination). We do not reserve capacity
+  // on either branch.
+  const { data: gateBizRow } = await supabase
+    .from("businesses")
+    .select("is_paused, customer_channels_enabled")
+    .eq("id", businessId)
+    .maybeSingle();
+  const gateBiz = gateBizRow as
+    | { is_paused?: boolean; customer_channels_enabled?: boolean }
+    | null;
+
+  if (gateBiz?.is_paused || gateBiz?.customer_channels_enabled === false) {
+    const { data: gateSettingsRow } = await supabase
+      .from("business_telnyx_settings")
+      .select("forward_to_e164")
+      .eq("business_id", businessId)
+      .maybeSingle();
+    const gateSettings = gateSettingsRow as
+      | { forward_to_e164?: string | null }
+      | null;
+
+    const gate = evaluateCustomerChannelGate({
+      isPaused: Boolean(gateBiz?.is_paused),
+      customerChannelsEnabled: gateBiz?.customer_channels_enabled !== false,
+      forwardToE164: gateSettings?.forward_to_e164 ?? null
+    });
+
+    if (gate.kind === "paused") {
+      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_PAUSED);
+      await telemetryRecord(supabase, "voice_killswitch", {
+        business_id: businessId,
+        call_control_id: callControlId,
+        is_paused: Boolean(gateBiz?.is_paused)
+      });
+      return new Response(JSON.stringify({ ok: true, path: "paused" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    if (gate.kind === "safe_mode_forward") {
+      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SAFE_MODE_CONNECTING);
+      // Telnyx `speak` returns as soon as TTS is queued, not when playback
+      // finishes. If we call `transfer` immediately, the call bridges to the
+      // owner before the caller hears the "Connecting you now." confirmation.
+      // Wait roughly long enough for the short prompt to finish. Configurable
+      // for tests / regions where TTS pacing differs.
+      const delayRaw = Deno.env.get("VOICE_SAFE_MODE_TRANSFER_DELAY_MS");
+      const delayMs = delayRaw ? Number(delayRaw) : 2500;
+      if (Number.isFinite(delayMs) && delayMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+      }
+      const transferRes = await telnyxTransferCall(
+        apiKey,
+        callControlId,
+        gate.forwardToE164
+      );
+      if (!transferRes.ok) {
+        const errText = await transferRes.text();
+        console.error("safe mode transfer failed", transferRes.status, errText.slice(0, 300));
+        await telemetryRecord(supabase, "voice_safe_mode_forward_failed", {
+          business_id: businessId,
+          call_control_id: callControlId,
+          http_status: transferRes.status
+        });
+        // The call has already been answered (we spoke "Connecting you now.")
+        // and Telnyx refused the bridge. Without an explicit recovery the
+        // caller sits on silent answered audio until Telnyx times the call
+        // out. Play a short apology and hang up cleanly.
+        const sp = await telnyxSpeak(
+          apiKey,
+          callControlId,
+          VOICE_MSG_SAFE_MODE_FORWARD_FAILED
+        );
+        if (!sp.ok) {
+          console.error(
+            "safe mode failure speak",
+            sp.status,
+            (await sp.text()).slice(0, 300)
+          );
+        }
+        // Delay so the apology finishes before we tear down. The failure
+        // message is ~17 words (~6s of Polly TTS), substantially longer than
+        // the "Connecting you now." prompt that sets the pre-transfer delay,
+        // so we can't reuse 2500ms here — the caller would hear a truncated
+        // "We're sorry, we could not con—" and then silence. Tied to the
+        // message content: if VOICE_MSG_SAFE_MODE_FORWARD_FAILED changes,
+        // update this constant in the same commit. We still honor the
+        // transfer-delay env knob so tests that set it to 0 collapse this
+        // delay too.
+        const SAFE_MODE_FAILURE_HANGUP_DELAY_MS = 7000;
+        const delayRawEndOverride = Deno.env.get("VOICE_SAFE_MODE_TRANSFER_DELAY_MS");
+        const delayMsEnd = delayRawEndOverride
+          ? Number(delayRawEndOverride)
+          : SAFE_MODE_FAILURE_HANGUP_DELAY_MS;
+        if (Number.isFinite(delayMsEnd) && delayMsEnd > 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, delayMsEnd));
+        }
+        const hup = await telnyxHangupCall(apiKey, callControlId);
+        if (!hup.ok) {
+          console.error(
+            "safe mode failure hangup",
+            hup.status,
+            (await hup.text()).slice(0, 300)
+          );
+        }
+        return new Response(
+          JSON.stringify({ ok: true, path: "safe_mode_forward_failed" }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      await telemetryRecord(supabase, "voice_safe_mode_forwarded", {
+        business_id: businessId,
+        call_control_id: callControlId
+      });
+      return new Response(
+        JSON.stringify({ ok: true, path: "safe_mode_forwarded" }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  }
 
   const { data: biz, error: bizErr } = await supabase
     .from("businesses")

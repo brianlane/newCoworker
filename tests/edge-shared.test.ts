@@ -254,6 +254,51 @@ describe("_shared/telnyx_sms_compliance", () => {
     expect(init.headers).not.toHaveProperty("Idempotency-Key");
   });
 
+  it("telnyxSendSms omits `from` when fromE164 is empty/whitespace/undefined (profile-pool send)", async () => {
+    // When a tenant relies on the messaging profile's number pool (no
+    // dedicated TELNYX_SMS_FROM_E164), we must NOT send from:"" — Telnyx
+    // would reject the request. This guard is what lets Safe Mode forward
+    // succeed without requiring an explicit from-number.
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "{}"
+    });
+    for (const fromVal of ["", "   ", undefined] as const) {
+      fetchImpl.mockClear();
+      await telnyxSendSms({
+        apiKey: "KEY",
+        messagingProfileId: "mp",
+        fromE164: fromVal,
+        toE164: "+15550002222",
+        text: "hi",
+        fetchImpl: fetchImpl as unknown as typeof fetch
+      });
+      const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+      const parsed = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(parsed).not.toHaveProperty("from");
+      expect(parsed.messaging_profile_id).toBe("mp");
+    }
+  });
+
+  it("telnyxSendSms trims whitespace-padded fromE164 before sending", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "{}"
+    });
+    await telnyxSendSms({
+      apiKey: "KEY",
+      messagingProfileId: "mp",
+      fromE164: "  +15550001111  ",
+      toE164: "+15550002222",
+      text: "hi",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toMatchObject({ from: "+15550001111" });
+  });
+
   it("telnyxSendSms uses global fetch when fetchImpl omitted", async () => {
     const g = vi.fn().mockResolvedValue({
       ok: false,

@@ -17,6 +17,7 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { KillSwitch } from "@/components/dashboard/KillSwitch";
+import { SafeModeToggle } from "@/components/dashboard/SafeModeToggle";
 import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 
@@ -30,7 +31,9 @@ export default async function DashboardPage() {
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
-    .select("id, name, owner_email, status, tier, enterprise_limits, is_paused, created_at")
+    .select(
+      "id, name, owner_email, status, tier, enterprise_limits, is_paused, customer_channels_enabled, created_at"
+    )
     .eq("owner_email", user.email)
     .order("created_at", { ascending: false });
 
@@ -100,6 +103,12 @@ export default async function DashboardPage() {
 
           <KillSwitch businessId={business.id} initiallyPaused={!!business.is_paused} />
 
+          <SafeModeToggle
+            businessId={business.id}
+            initiallyEnabled={business.customer_channels_enabled === false}
+            initialForwardToE164={telnyxSettings?.forward_to_e164 ?? null}
+          />
+
           <Card>
             <PhoneNumberCard
               e164={telnyxRoute?.to_e164 ?? null}
@@ -117,6 +126,13 @@ export default async function DashboardPage() {
                 {business.is_paused ? (
                   <div className="flex items-center gap-2">
                     <Badge variant="error">Paused</Badge>
+                    <span className="text-xs text-parchment/45 capitalize">
+                      Infra: {business.status.replace("_", " ")}
+                    </span>
+                  </div>
+                ) : business.customer_channels_enabled === false ? (
+                  <div className="flex items-center gap-2">
+                    <Badge variant="pending">Safe mode</Badge>
                     <span className="text-xs text-parchment/45 capitalize">
                       Infra: {business.status.replace("_", " ")}
                     </span>
