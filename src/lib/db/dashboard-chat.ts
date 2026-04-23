@@ -65,7 +65,31 @@ export async function createThread(
   return data as DashboardChatThreadRow;
 }
 
-/** Get the active thread or create a fresh one in a single round-trip intent. */
+/** Postgres unique-violation SQLSTATE; thrown when two requests race to
+ * create the single active thread allowed by
+ * `dashboard_chat_threads_one_active` (partial unique index on business_id
+ * where is_active). */
+const PG_UNIQUE_VIOLATION = "23505";
+
+function isUniqueViolation(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message ?? "";
+  return (
+    msg.includes(PG_UNIQUE_VIOLATION) ||
+    msg.toLowerCase().includes("duplicate key") ||
+    msg.toLowerCase().includes("one_active")
+  );
+}
+
+/**
+ * Get the active thread or create a fresh one in a single round-trip intent.
+ *
+ * Race-safety: the migration adds a partial unique index so only one active
+ * thread per business can exist. Two concurrent first-message POSTs can both
+ * see "no active thread" and race the insert — one wins, one fails with
+ * 23505. We swallow that and re-read the winner's row instead of bubbling up
+ * a spurious 500.
+ */
 export async function getOrCreateActiveThread(
   businessId: string,
   titleForNew: string | null,
@@ -74,7 +98,17 @@ export async function getOrCreateActiveThread(
   const db = client ?? (await createSupabaseServiceClient());
   const existing = await getActiveThread(businessId, db);
   if (existing) return existing;
-  return createThread(businessId, titleForNew, db);
+  try {
+    return await createThread(businessId, titleForNew, db);
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    const winner = await getActiveThread(businessId, db);
+    if (winner) return winner;
+    // Extremely unlikely: unique violation without a winner row (e.g. the
+    // winner was immediately deactivated). Surface the original error rather
+    // than loop forever.
+    throw err;
+  }
 }
 
 export async function appendMessage(

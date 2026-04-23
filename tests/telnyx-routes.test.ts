@@ -6,9 +6,11 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import {
+  E164_REGEX,
   getTelnyxVoiceRouteForBusiness,
   upsertTelnyxVoiceRoute,
   getBusinessTelnyxSettings,
+  setForwardToE164,
   upsertBusinessTelnyxSettings
 } from "@/lib/db/telnyx-routes";
 
@@ -284,6 +286,71 @@ describe("telnyx-routes DB layer", () => {
       await expect(upsertBusinessTelnyxSettings({ businessId: "biz" })).resolves.toEqual(
         sampleSettings
       );
+    });
+
+    it("setForwardToE164 uses the default service client when not provided", async () => {
+      defaultClientSpy.mockReturnValueOnce(makeDb(settingsChain()));
+      await expect(setForwardToE164("biz", "+15551234567")).resolves.toEqual(sampleSettings);
+    });
+  });
+
+  describe("E164_REGEX", () => {
+    it("accepts valid international E.164", () => {
+      for (const p of ["+15551234567", "+442079460958", "+8613800138000"]) {
+        expect(E164_REGEX.test(p)).toBe(true);
+      }
+    });
+    it("rejects invalid inputs (missing +, leading 0, alpha, too short/long)", () => {
+      for (const p of [
+        "15551234567",
+        "+05551234567",
+        "+1abc4567890",
+        "+123",
+        "+1234567890123456",
+        ""
+      ]) {
+        expect(E164_REGEX.test(p)).toBe(false);
+      }
+    });
+  });
+
+  describe("setForwardToE164", () => {
+    it("upserts a trimmed, valid E.164 into forward_to_e164", async () => {
+      const c = chain();
+      c.single.mockResolvedValue({ data: sampleSettings, error: null });
+      const db = makeDb(c);
+      await setForwardToE164("biz", "  +15551234567  ", db as never);
+      const [row] = c.upsert.mock.calls[0];
+      expect(row as Record<string, unknown>).toMatchObject({
+        business_id: "biz",
+        forward_to_e164: "+15551234567"
+      });
+    });
+
+    it("clears the column when given null", async () => {
+      const c = chain();
+      c.single.mockResolvedValue({ data: sampleSettings, error: null });
+      await setForwardToE164("biz", null, makeDb(c) as never);
+      const [row] = c.upsert.mock.calls[0];
+      expect((row as Record<string, unknown>).forward_to_e164).toBeNull();
+    });
+
+    it("clears the column when given an empty/whitespace string", async () => {
+      for (const blank of ["", "   "]) {
+        const c = chain();
+        c.single.mockResolvedValue({ data: sampleSettings, error: null });
+        await setForwardToE164("biz", blank, makeDb(c) as never);
+        const [row] = c.upsert.mock.calls[0];
+        expect((row as Record<string, unknown>).forward_to_e164).toBeNull();
+      }
+    });
+
+    it("rejects invalid E.164 before touching the DB", async () => {
+      const c = chain();
+      await expect(
+        setForwardToE164("biz", "555-1234", makeDb(c) as never)
+      ).rejects.toThrow(/invalid E\.164/);
+      expect(c.upsert).not.toHaveBeenCalled();
     });
   });
 });

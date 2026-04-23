@@ -47,8 +47,8 @@ export function buildRowboatChatUrl(businessId: string, projectId: string): stri
 }
 
 export function assistantFromRowboat(json: unknown): string {
-  const o = json as RowboatTurnJson;
-  const outs = o.turn?.output ?? [];
+  const o = json as RowboatTurnJson | null | undefined;
+  const outs = o?.turn?.output ?? [];
   for (const m of outs) {
     if (m.role === "assistant" && typeof m.content === "string" && m.content.trim()) {
       return m.content.trim();
@@ -58,11 +58,10 @@ export function assistantFromRowboat(json: unknown): string {
 }
 
 export function parseRowboatChatJson(json: unknown): ParsedRowboatChat {
-  const o = json as { conversationId?: string; state?: unknown };
+  const isObj = json !== null && typeof json === "object";
+  const o = (isObj ? json : {}) as { conversationId?: string; state?: unknown };
   const hasStateKey =
-    json !== null &&
-    typeof json === "object" &&
-    Object.prototype.hasOwnProperty.call(json, "state");
+    isObj && Object.prototype.hasOwnProperty.call(json, "state");
   return {
     reply: assistantFromRowboat(json),
     conversationId: o.conversationId,

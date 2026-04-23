@@ -4,6 +4,7 @@ import {
   getBusiness,
   listBusinesses,
   setBusinessPaused,
+  setCustomerChannelsEnabled,
   updateBusinessOwnerEmail,
   updateBusinessOwnerEmailIfPending,
   updateBusinessStatus,
@@ -154,6 +155,31 @@ describe("db/businesses", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     await expect(setBusinessPaused("uuid-biz-1", false)).rejects.toThrow("setBusinessPaused");
+  });
+
+  it("setCustomerChannelsEnabled writes the Safe Mode flag (enabled=true → Safe Mode OFF)", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await setCustomerChannelsEnabled("uuid-biz-1", true);
+    expect(db.from).toHaveBeenCalledWith("businesses");
+    expect(db.update).toHaveBeenCalledWith({ customer_channels_enabled: true });
+    expect(db.eq).toHaveBeenCalledWith("id", "uuid-biz-1");
+  });
+
+  it("setCustomerChannelsEnabled writes false when Safe Mode is turned ON", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    await setCustomerChannelsEnabled("uuid-biz-1", false, db as never);
+    expect(db.update).toHaveBeenCalledWith({ customer_channels_enabled: false });
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  it("setCustomerChannelsEnabled throws on error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "boom" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(setCustomerChannelsEnabled("uuid-biz-1", true)).rejects.toThrow(
+      "setCustomerChannelsEnabled"
+    );
   });
 
   it("updateEnterpriseLimits writes enterprise_limits json", async () => {

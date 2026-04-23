@@ -240,7 +240,10 @@ serve(async (req: Request) => {
           }
 
           const idem = job.outbound_idempotency_key;
-          const forwardText = `[Coworker paused] From ${fromE164}: ${userText.slice(0, 1000)}`;
+          // Label is "[Safe Mode]" (not "[Coworker paused]") — Safe Mode keeps the
+          // owner's dashboard + VPS online; customers just get forwarded. The
+          // paused path is handled above and never reaches this branch.
+          const forwardText = `[Safe Mode] From ${fromE164}: ${userText.slice(0, 1000)}`;
           const fwdBody: Record<string, unknown> = {
             to: gate.forwardToE164,
             text: forwardText.slice(0, 1600),
@@ -281,15 +284,29 @@ serve(async (req: Request) => {
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             console.error("sms_worker safe mode forward", msg);
-            await supabase
-              .from("sms_inbound_jobs")
-              .update({
-                status: "pending",
-                processing_started_at: null,
-                last_error: `safe_mode_forward:${msg}`.slice(0, 2000),
-                updated_at: new Date().toISOString()
-              })
-              .eq("id", job.id);
+            // Bound the retry budget just like the Rowboat error path below —
+            // a persistently-failing forward (bad number, Telnyx outage, etc.)
+            // would otherwise burn worker capacity on every cron tick forever.
+            if (job.attempt_count >= MAX_ATTEMPTS) {
+              await supabase.rpc("complete_sms_inbound_job", {
+                p_job_id: job.id,
+                p_status: "dead_letter",
+                p_telnyx_outbound_message_id: null,
+                p_rowboat_conversation_id: null,
+                p_last_error: `safe_mode_forward:${msg}`.slice(0, 2000)
+              });
+              await clearJobReplyCache(supabase, job.id);
+            } else {
+              await supabase
+                .from("sms_inbound_jobs")
+                .update({
+                  status: "pending",
+                  processing_started_at: null,
+                  last_error: `safe_mode_forward:${msg}`.slice(0, 2000),
+                  updated_at: new Date().toISOString()
+                })
+                .eq("id", job.id);
+            }
             await telemetryRecord(supabase, "sms_worker_safe_mode_forward_failed", {
               job_id: job.id,
               business_id: job.business_id,

@@ -144,14 +144,19 @@ export async function POST(request: Request) {
 
     const title = body.message.slice(0, 140);
     const thread = await getOrCreateActiveThread(body.businessId, title);
-    await appendMessage(thread.id, "user", body.message);
 
+    // Build the Rowboat request off the *persisted* history plus the just-
+    // received user turn, WITHOUT persisting the user turn yet. If Rowboat
+    // fails (timeout / 5xx / empty reply) we return 502 and the client's
+    // optimistic-undo stays consistent with DB state — otherwise we'd leave
+    // orphaned user turns that poison retries and show a phantom message
+    // after refresh.
     const history = await listMessages(thread.id);
     const tail = history.slice(-HISTORY_TURNS);
-    const rowboatMessages: RowboatChatMessage[] = tail.map((m) => ({
-      role: m.role,
-      content: m.content
-    }));
+    const rowboatMessages: RowboatChatMessage[] = [
+      ...tail.map((m) => ({ role: m.role, content: m.content })),
+      { role: "user", content: body.message }
+    ];
 
     let reply: string;
     let conversationId: string | undefined;
@@ -173,6 +178,9 @@ export async function POST(request: Request) {
       return errorResponse("CONFLICT", friendly, 502);
     }
 
+    // Success path: persist user + assistant together so they always appear
+    // as a matched turn in history. Order is preserved by created_at.
+    await appendMessage(thread.id, "user", body.message);
     await appendMessage(thread.id, "assistant", reply);
     if (conversationId || state !== undefined) {
       await updateThreadConversation(

@@ -416,7 +416,13 @@ serve(async (req: Request) => {
       }
 
       if (gate.kind === "safe_mode_forward") {
-        const forwardText = `[Coworker paused] From ${from ?? "unknown"}: ${inboundSmsBody(payload)}`;
+        // Label is "[Safe Mode]" — Safe Mode is NOT the kill switch (paused path
+        // is handled above), so saying "paused" would mislead the owner reading
+        // the forwarded text on their phone.
+        const forwardText = `[Safe Mode] From ${from ?? "unknown"}: ${inboundSmsBody(payload)}`;
+        // Per-tenant settings override env fallbacks. `fwdFrom` may legitimately
+        // be empty when the tenant relies on the messaging profile's number
+        // pool — telnyxSendSms omits `from` when the string is empty.
         const fwdFrom =
           (settings?.telnyx_sms_from_e164 && settings.telnyx_sms_from_e164.trim()) ||
           smsFromE164;
@@ -424,9 +430,11 @@ serve(async (req: Request) => {
           (settings?.telnyx_messaging_profile_id &&
             settings.telnyx_messaging_profile_id.trim()) ||
           messagingProfileId;
-        const canForward = Boolean(
-          telnyxApiKey && fwdFrom && fwdProfile && gate.forwardToE164
-        );
+        // DO NOT require `fwdFrom` — profile-only sends are valid on Telnyx and
+        // requiring it here would silently drop inbound customer SMS whenever
+        // TELNYX_SMS_FROM_E164 is unset. The gate only needs api key + profile
+        // + destination.
+        const canForward = Boolean(telnyxApiKey && fwdProfile && gate.forwardToE164);
         if (canForward) {
           const send = await telnyxSendSms({
             apiKey: telnyxApiKey,
