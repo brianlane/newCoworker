@@ -7,6 +7,7 @@ import {
   rejectIncomingCall,
   telnyxAnswerPlain,
   telnyxAnswerWithStream,
+  telnyxHangupCall,
   telnyxSpeak,
   telnyxTransferCall
 } from "../supabase/functions/_shared/telnyx_call_actions";
@@ -213,6 +214,39 @@ describe("telnyx call-control", () => {
       expect(res.status).toBe(200);
       expect(spy).toHaveBeenCalledWith(
         "https://api.telnyx.com/v2/calls/cc4/actions/transfer",
+        expect.objectContaining({ method: "POST" })
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("telnyxHangupCall posts /actions/hangup with empty body", async () => {
+    // Used as the Safe Mode recovery step after a failed transfer — the call
+    // has already been answered, so we need a real /actions/hangup, not
+    // /actions/reject (which only works pre-answer).
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, text: () => Promise.resolve("") });
+    const res = await telnyxHangupCall("key", "cc-hup", fetchMock as typeof fetch);
+    expect(res.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://api.telnyx.com/v2/calls/cc-hup/actions/hangup");
+    expect(init.method).toBe("POST");
+    expect(init.headers.Authorization).toBe("Bearer key");
+    expect(init.body).toBe("{}");
+  });
+
+  it("telnyxHangupCall uses default global fetch when fetchImpl omitted", async () => {
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    try {
+      const res = await telnyxHangupCall("k", "cc-default");
+      expect(res.status).toBe(200);
+      expect(spy).toHaveBeenCalledWith(
+        "https://api.telnyx.com/v2/calls/cc-default/actions/hangup",
         expect.objectContaining({ method: "POST" })
       );
     } finally {

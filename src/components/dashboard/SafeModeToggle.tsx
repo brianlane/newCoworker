@@ -15,10 +15,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Badge } from "@/components/ui/Badge";
-
-type ApiEnvelope<T> =
-  | { ok: true; data: T }
-  | { ok: false; error: { code: string; message: string } };
+import { parseEnvelope } from "@/lib/client/api-envelope";
 
 type Props = {
   businessId: string;
@@ -29,17 +26,6 @@ type Props = {
 };
 
 const E164_REGEX = /^\+[1-9][0-9]{7,14}$/;
-
-async function parseEnvelope<T>(res: Response): Promise<ApiEnvelope<T>> {
-  try {
-    return (await res.json()) as ApiEnvelope<T>;
-  } catch {
-    return {
-      ok: false,
-      error: { code: "INTERNAL_SERVER_ERROR", message: "Unexpected server response" }
-    };
-  }
-}
 
 export function SafeModeToggle({
   businessId,

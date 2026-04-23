@@ -23,6 +23,7 @@ import {
   VOICE_MSG_PAUSED,
   VOICE_MSG_QUOTA_EXHAUSTED,
   VOICE_MSG_SAFE_MODE_CONNECTING,
+  VOICE_MSG_SAFE_MODE_FORWARD_FAILED,
   VOICE_MSG_STREAM_ROLLOUT_DISABLED,
   VOICE_MSG_SYSTEM_ERROR,
   VOICE_MSG_UNCONFIGURED_NUMBER
@@ -32,6 +33,8 @@ import { telemetryRecord } from "../_shared/telemetry.ts";
 import {
   answerThenSpeak,
   telnyxAnswerWithStream,
+  telnyxHangupCall,
+  telnyxSpeak,
   telnyxTransferCall
 } from "../_shared/telnyx_call_actions.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
@@ -392,12 +395,47 @@ serve(async (req: Request) => {
           call_control_id: callControlId,
           http_status: transferRes.status
         });
-      } else {
-        await telemetryRecord(supabase, "voice_safe_mode_forwarded", {
-          business_id: businessId,
-          call_control_id: callControlId
-        });
+        // The call has already been answered (we spoke "Connecting you now.")
+        // and Telnyx refused the bridge. Without an explicit recovery the
+        // caller sits on silent answered audio until Telnyx times the call
+        // out. Play a short apology and hang up cleanly.
+        const sp = await telnyxSpeak(
+          apiKey,
+          callControlId,
+          VOICE_MSG_SAFE_MODE_FORWARD_FAILED
+        );
+        if (!sp.ok) {
+          console.error(
+            "safe mode failure speak",
+            sp.status,
+            (await sp.text()).slice(0, 300)
+          );
+        }
+        // Small delay so the apology finishes before we tear down, matching
+        // the answer→speak→transfer pacing above. Reuse the same env knob so
+        // tests can collapse both delays to zero.
+        const delayRawEnd = Deno.env.get("VOICE_SAFE_MODE_TRANSFER_DELAY_MS");
+        const delayMsEnd = delayRawEnd ? Number(delayRawEnd) : 2500;
+        if (Number.isFinite(delayMsEnd) && delayMsEnd > 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, delayMsEnd));
+        }
+        const hup = await telnyxHangupCall(apiKey, callControlId);
+        if (!hup.ok) {
+          console.error(
+            "safe mode failure hangup",
+            hup.status,
+            (await hup.text()).slice(0, 300)
+          );
+        }
+        return new Response(
+          JSON.stringify({ ok: true, path: "safe_mode_forward_failed" }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
       }
+      await telemetryRecord(supabase, "voice_safe_mode_forwarded", {
+        business_id: businessId,
+        call_control_id: callControlId
+      });
       return new Response(
         JSON.stringify({ ok: true, path: "safe_mode_forwarded" }),
         { status: 200, headers: { "Content-Type": "application/json" } }

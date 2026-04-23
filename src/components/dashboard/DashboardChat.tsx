@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/Button";
 import { Textarea } from "@/components/ui/Textarea";
 import { Badge } from "@/components/ui/Badge";
 import { ChatMarkdown } from "@/components/ui/ChatMarkdown";
+import { parseEnvelope } from "@/lib/client/api-envelope";
 
 type Role = "user" | "assistant" | "system";
 
@@ -28,10 +29,6 @@ type Props = {
   businessName: string;
 };
 
-type ApiEnvelope<T> =
-  | { ok: true; data: T }
-  | { ok: false; error: { code: string; message: string } };
-
 type ChatGetResponse = {
   threadId: string | null;
   messages: ChatMessage[];
@@ -44,17 +41,6 @@ type ChatPostResponse = {
   reply: string;
   messages: ChatMessage[];
 };
-
-async function parseEnvelope<T>(res: Response): Promise<ApiEnvelope<T>> {
-  try {
-    return (await res.json()) as ApiEnvelope<T>;
-  } catch {
-    return {
-      ok: false,
-      error: { code: "INTERNAL_SERVER_ERROR", message: "Unexpected server response" }
-    };
-  }
-}
 
 function formatTime(ts?: string): string {
   if (!ts) return "";
