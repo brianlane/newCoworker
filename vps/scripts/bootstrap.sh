@@ -108,6 +108,10 @@ Environment="OLLAMA_KV_CACHE_TYPE=q4_0"
 # Flash Attention — ACTIVE: enables memory-efficient attention computation
 # (prerequisite for Dynamic VRAM / Weight Streaming on llama.cpp backend).
 Environment="OLLAMA_FLASH_ATTENTION=1"
+# Keep the owner's primary model resident so /dashboard/chat feels instant.
+# -1 = never unload. Paired with the ollama-keep-warm.timer single-token ping
+# that only fires when the owner has NOT chatted in the last 180s.
+Environment="OLLAMA_KEEP_ALIVE=-1"
 EOF
 # Copyable env list for Compose / docs: vps/fragments/starter-ollama-container.env
 else
@@ -122,6 +126,8 @@ Environment="OLLAMA_HOST=127.0.0.1:11434"
 Environment="OLLAMA_KV_CACHE_TYPE=q4_0"
 # Flash Attention — ACTIVE
 Environment="OLLAMA_FLASH_ATTENTION=1"
+# Keep the owner's primary model resident (see starter tier comment above).
+Environment="OLLAMA_KEEP_ALIVE=-1"
 EOF
 fi
 

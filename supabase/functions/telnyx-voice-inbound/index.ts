@@ -20,14 +20,21 @@ import { VOICE_RES_LIMITS } from "../_shared/voice_reservation_limits.ts";
 import {
   VOICE_MSG_BRIDGE_DEGRADED,
   VOICE_MSG_CONCURRENT_LIMIT,
+  VOICE_MSG_PAUSED,
   VOICE_MSG_QUOTA_EXHAUSTED,
+  VOICE_MSG_SAFE_MODE_CONNECTING,
   VOICE_MSG_STREAM_ROLLOUT_DISABLED,
   VOICE_MSG_SYSTEM_ERROR,
   VOICE_MSG_UNCONFIGURED_NUMBER
 } from "../_shared/voice_messages.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
-import { answerThenSpeak, telnyxAnswerWithStream } from "../_shared/telnyx_call_actions.ts";
+import {
+  answerThenSpeak,
+  telnyxAnswerWithStream,
+  telnyxTransferCall
+} from "../_shared/telnyx_call_actions.ts";
+import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 import {
   cacheLooksValidForQuotaAfterJitFailure,
   STRIPE_PERIOD_ROLLOVER_GRACE_MS,
@@ -315,6 +322,78 @@ serve(async (req: Request) => {
   }
 
   const businessId = routeRow.business_id as string;
+
+  // Kill switch + Safe Mode gate (§CustomerChannelGate).
+  // Runs BEFORE reserve/Stripe/bridge checks so paused + forwarding calls never
+  // consume concurrency or bill minutes. Safe Mode answers + speaks, then
+  // transfers to the owner cell; kill switch answers + speaks, then hangs up
+  // (via Telnyx's natural post-speak termination). We do not reserve capacity
+  // on either branch.
+  const { data: gateBizRow } = await supabase
+    .from("businesses")
+    .select("is_paused, customer_channels_enabled")
+    .eq("id", businessId)
+    .maybeSingle();
+  const gateBiz = gateBizRow as
+    | { is_paused?: boolean; customer_channels_enabled?: boolean }
+    | null;
+
+  if (gateBiz?.is_paused || gateBiz?.customer_channels_enabled === false) {
+    const { data: gateSettingsRow } = await supabase
+      .from("business_telnyx_settings")
+      .select("forward_to_e164")
+      .eq("business_id", businessId)
+      .maybeSingle();
+    const gateSettings = gateSettingsRow as
+      | { forward_to_e164?: string | null }
+      | null;
+
+    const gate = evaluateCustomerChannelGate({
+      isPaused: Boolean(gateBiz?.is_paused),
+      customerChannelsEnabled: gateBiz?.customer_channels_enabled !== false,
+      forwardToE164: gateSettings?.forward_to_e164 ?? null
+    });
+
+    if (gate.kind === "paused") {
+      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_PAUSED);
+      await telemetryRecord(supabase, "voice_killswitch", {
+        business_id: businessId,
+        call_control_id: callControlId,
+        is_paused: Boolean(gateBiz?.is_paused)
+      });
+      return new Response(JSON.stringify({ ok: true, path: "paused" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    if (gate.kind === "safe_mode_forward") {
+      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SAFE_MODE_CONNECTING);
+      const transferRes = await telnyxTransferCall(
+        apiKey,
+        callControlId,
+        gate.forwardToE164
+      );
+      if (!transferRes.ok) {
+        const errText = await transferRes.text();
+        console.error("safe mode transfer failed", transferRes.status, errText.slice(0, 300));
+        await telemetryRecord(supabase, "voice_safe_mode_forward_failed", {
+          business_id: businessId,
+          call_control_id: callControlId,
+          http_status: transferRes.status
+        });
+      } else {
+        await telemetryRecord(supabase, "voice_safe_mode_forwarded", {
+          business_id: businessId,
+          call_control_id: callControlId
+        });
+      }
+      return new Response(
+        JSON.stringify({ ok: true, path: "safe_mode_forwarded" }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  }
 
   const { data: biz, error: bizErr } = await supabase
     .from("businesses")

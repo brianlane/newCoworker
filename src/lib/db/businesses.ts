@@ -14,6 +14,13 @@ export type BusinessRow = {
   hostinger_vps_id: string | null;
   created_at: string;
   is_paused?: boolean;
+  /**
+   * Safe Mode flag. When `false`, inbound customer SMS/voice is forwarded to
+   * `business_telnyx_settings.forward_to_e164` instead of being handled by the
+   * AI. Distinct from `is_paused`: Safe Mode keeps the VPS and owner chat
+   * fully online.
+   */
+  customer_channels_enabled?: boolean;
   /** Enterprise tier only: partial TierLimits JSON; merged with defaults in app + Edge. */
   enterprise_limits?: Record<string, unknown> | null;
 };
@@ -118,6 +125,19 @@ export async function setBusinessPaused(
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db.from("businesses").update({ is_paused: paused }).eq("id", id);
   if (error) throw new Error(`setBusinessPaused: ${error.message}`);
+}
+
+export async function setCustomerChannelsEnabled(
+  id: string,
+  enabled: boolean,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("businesses")
+    .update({ customer_channels_enabled: enabled })
+    .eq("id", id);
+  if (error) throw new Error(`setCustomerChannelsEnabled: ${error.message}`);
 }
 
 export async function updateEnterpriseLimits(

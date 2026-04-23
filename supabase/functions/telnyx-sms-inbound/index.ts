@@ -20,6 +20,7 @@ import {
   telnyxWebhookClientIp,
   telnyxWebhookRateAllow
 } from "../_shared/telnyx_edge_guard.ts";
+import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 
 const MAX_BODY = 256 * 1024;
 
@@ -358,6 +359,107 @@ serve(async (req: Request) => {
           status: 200,
           headers: { "Content-Type": "application/json" }
         });
+      }
+    }
+
+    // Kill switch + Safe Mode gate (§CustomerChannelGate):
+    //   is_paused           → drop the message, no reply, no forward.
+    //   safe_mode + forward → forward the text to the owner's cell and stop.
+    //   safe_mode w/o fwd   → treated as kill switch (fail-safe; the API
+    //                         prevents this state but protects against
+    //                         direct DB edits).
+    // Runs AFTER STOP/HELP/START compliance so carrier-required auto-replies
+    // always fire, and AFTER the opt-out check so we never forward messages
+    // from suppressed senders.
+    const { data: bizRow } = await supabase
+      .from("businesses")
+      .select("is_paused, customer_channels_enabled")
+      .eq("id", businessId)
+      .maybeSingle();
+    const biz = bizRow as
+      | { is_paused?: boolean; customer_channels_enabled?: boolean }
+      | null;
+
+    if (biz?.is_paused || biz?.customer_channels_enabled === false) {
+      const { data: settingsRow } = await supabase
+        .from("business_telnyx_settings")
+        .select(
+          "forward_to_e164, telnyx_messaging_profile_id, telnyx_sms_from_e164"
+        )
+        .eq("business_id", businessId)
+        .maybeSingle();
+      const settings = settingsRow as
+        | {
+            forward_to_e164?: string | null;
+            telnyx_messaging_profile_id?: string | null;
+            telnyx_sms_from_e164?: string | null;
+          }
+        | null;
+
+      const gate = evaluateCustomerChannelGate({
+        isPaused: Boolean(biz?.is_paused),
+        customerChannelsEnabled: biz?.customer_channels_enabled !== false,
+        forwardToE164: settings?.forward_to_e164 ?? null
+      });
+
+      if (gate.kind === "paused") {
+        await telemetryRecord(supabase, "sms_inbound_killswitch", {
+          business_id: businessId,
+          event_id: eventId,
+          is_paused: Boolean(biz?.is_paused),
+          had_forward: Boolean((settings?.forward_to_e164 ?? "").trim())
+        });
+        return new Response(
+          JSON.stringify({ ok: true, skip: "paused" }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      if (gate.kind === "safe_mode_forward") {
+        const forwardText = `[Coworker paused] From ${from ?? "unknown"}: ${inboundSmsBody(payload)}`;
+        const fwdFrom =
+          (settings?.telnyx_sms_from_e164 && settings.telnyx_sms_from_e164.trim()) ||
+          smsFromE164;
+        const fwdProfile =
+          (settings?.telnyx_messaging_profile_id &&
+            settings.telnyx_messaging_profile_id.trim()) ||
+          messagingProfileId;
+        const canForward = Boolean(
+          telnyxApiKey && fwdFrom && fwdProfile && gate.forwardToE164
+        );
+        if (canForward) {
+          const send = await telnyxSendSms({
+            apiKey: telnyxApiKey,
+            messagingProfileId: fwdProfile,
+            fromE164: fwdFrom,
+            toE164: gate.forwardToE164,
+            text: forwardText,
+            idempotencyKey: `${eventId}:safe-mode-forward`
+          });
+          if (!send.ok) {
+            console.error("sms_inbound safe mode forward", send.status, send.body.slice(0, 300));
+            await telemetryRecord(supabase, "sms_inbound_safe_mode_forward_failed", {
+              business_id: businessId,
+              event_id: eventId,
+              status: send.status
+            });
+            return new Response(
+              JSON.stringify({ ok: false, error: "safe_mode_forward_failed" }),
+              { status: 503, headers: { "Content-Type": "application/json" } }
+            );
+          }
+        } else {
+          console.warn("telnyx-sms-inbound: safe mode forward skipped — missing send config");
+        }
+        await telemetryRecord(supabase, "sms_inbound_safe_mode_forwarded", {
+          business_id: businessId,
+          event_id: eventId,
+          forwarded: canForward
+        });
+        return new Response(
+          JSON.stringify({ ok: true, skip: "safe_mode_forwarded" }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
       }
     }
 

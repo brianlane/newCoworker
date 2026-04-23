@@ -20,3 +20,10 @@ export const VOICE_MSG_CONCURRENT_LIMIT =
  */
 export const VOICE_MSG_STREAM_ROLLOUT_DISABLED =
   "AI voice is not available for this call right now. Please send a text message or try again later. Goodbye.";
+
+/** Kill switch (is_paused): hard stop, no forwarding. */
+export const VOICE_MSG_PAUSED =
+  "This line is temporarily unavailable. Please try again later. Goodbye.";
+
+/** Safe mode: about to transfer to the owner's forwarding number. */
+export const VOICE_MSG_SAFE_MODE_CONNECTING = "Connecting you now.";

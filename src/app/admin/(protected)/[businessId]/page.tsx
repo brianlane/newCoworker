@@ -17,6 +17,7 @@ import { SkipPaymentButton } from "@/components/admin/SkipPaymentButton";
 import { DeleteClientButton } from "@/components/admin/DeleteClientButton";
 import { AssignDidPanel } from "@/components/admin/AssignDidPanel";
 import { KillSwitch } from "@/components/dashboard/KillSwitch";
+import { SafeModeToggle } from "@/components/dashboard/SafeModeToggle";
 import { getTierLimits } from "@/lib/plans/limits";
 import { parseEnterpriseLimitsOverride } from "@/lib/plans/enterprise-limits";
 import { EnterpriseLimitsEditor } from "@/components/admin/EnterpriseLimitsEditor";
@@ -66,6 +67,13 @@ export default async function BusinessDetailPage({
       <KillSwitch
         businessId={businessId}
         initiallyPaused={!!business.is_paused}
+        compact
+      />
+
+      <SafeModeToggle
+        businessId={businessId}
+        initiallyEnabled={business.customer_channels_enabled === false}
+        initialForwardToE164={telnyxSettings?.forward_to_e164 ?? null}
         compact
       />
 

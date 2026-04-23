@@ -242,6 +242,75 @@ log "Rowboat .env written."
 report_progress 55 "env_written" "Rowboat .env written"
 
 # ------------------------------------------------------------------
+# 2b. Install ollama-keep-warm timer
+#
+# /dashboard/chat's first message cold-starts Ollama (20-40s on KVM 2),
+# which is the single biggest source of "the chat is slow" reports. We
+# pair `OLLAMA_KEEP_ALIVE=-1` (set in bootstrap's service override) with
+# a scheduled single-token generate that stands down while the owner is
+# actively chatting — implementation in vps/scripts/keep-warm.sh.
+# ------------------------------------------------------------------
+log "Installing ollama-keep-warm.timer..."
+
+# Script lives alongside the staged repo so rsync from bootstrap picks it
+# up; we copy into /opt/rowboat so the systemd unit has a stable path.
+KEEPWARM_SRC="${NEWCOWORKER_REPO_PATH:-/opt/newcoworker-repo}/vps/scripts/keep-warm.sh"
+if [[ -f "${KEEPWARM_SRC}" ]]; then
+  install -m 0755 "${KEEPWARM_SRC}" /opt/rowboat/keep-warm.sh
+else
+  log "WARN: ${KEEPWARM_SRC} missing; keep-warm will not be installed on this deploy"
+fi
+
+# Dedicated env file — avoids exposing unrelated Rowboat secrets to a
+# systemd-invoked script that only needs the 4 keys below.
+cat > /opt/rowboat/keep-warm.env <<KWENV
+BUSINESS_ID=${BUSINESS_ID}
+SUPABASE_URL=${SUPABASE_URL}
+SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_KEY}
+OLLAMA_MODEL=${OLLAMA_MODEL}
+KWENV
+chmod 600 /opt/rowboat/keep-warm.env
+
+if [[ -f /opt/rowboat/keep-warm.sh ]]; then
+  cat > /etc/systemd/system/ollama-keep-warm.service <<'SERVICE'
+[Unit]
+Description=Keep Ollama warm for /dashboard/chat
+After=network-online.target ollama.service
+Wants=ollama.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/opt/rowboat/keep-warm.env
+ExecStart=/opt/rowboat/keep-warm.sh
+# Exit codes other than 0 are already swallowed inside the script so a
+# transient ollama restart doesn't flag the unit red.
+SuccessExitStatus=0
+SERVICE
+
+  cat > /etc/systemd/system/ollama-keep-warm.timer <<'TIMER'
+[Unit]
+Description=Run ollama-keep-warm every 5 minutes after boot
+Requires=ollama-keep-warm.service
+
+[Timer]
+# Start soon after boot once Ollama has finished loading, then fire every 5m.
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=ollama-keep-warm.service
+
+[Install]
+WantedBy=timers.target
+TIMER
+
+  systemctl daemon-reload
+  systemctl enable --now ollama-keep-warm.timer
+  log "ollama-keep-warm.timer enabled"
+else
+  log "WARN: skipping ollama-keep-warm.timer install (script missing)"
+fi
+
+# ------------------------------------------------------------------
 # 3. Apply Rowboat stack (recreate if compose changed; drop orphan ollama from older layouts)
 # ------------------------------------------------------------------
 docker compose -f /opt/rowboat/docker-compose.yml up -d --remove-orphans || true
