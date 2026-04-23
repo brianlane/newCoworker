@@ -2,10 +2,11 @@
 
 /**
  * Voice-bonus top-up card: lists the configured packs and redirects to Stripe
- * Checkout on click. Pack amounts and the rate-per-minute header are both
- * env-derived (`VOICE_BONUS_USD_PER_MINUTE` × pack minutes). Stripe Prices
- * are immutable by id, so as long as the `STRIPE_VOICE_BONUS_*MIN_PRICE_ID`s
- * are rotated in the same deploy as any rate change, UI ≡ Stripe charge by
+ * Checkout on click. Pack amounts are env-derived (either an explicit per-pack
+ * cents override or `VOICE_BONUS_USD_PER_MINUTE` × minutes); the header rate
+ * is the best effective $/min across the configured packs. Stripe Prices are
+ * immutable by id, so as long as the `STRIPE_VOICE_BONUS_*MIN_PRICE_ID`s are
+ * rotated in the same deploy as any env price change, UI ≡ Stripe charge by
  * construction — see the pricing-contract comment in
  * `src/lib/billing/voice-bonus-packs.ts` for the operator rule.
  *
@@ -36,7 +37,7 @@ const currency = new Intl.NumberFormat("en-US", {
 });
 
 function formatRatePerMinute(usdPerMinute: number): string {
-  return `${currency.format(usdPerMinute)} / min`;
+  return `from ${currency.format(usdPerMinute)} / min`;
 }
 
 export function VoiceBonusPacks({ packs, usdPerMinute, canPurchase, disabledReason }: Props) {
@@ -116,9 +117,6 @@ export function VoiceBonusPacks({ packs, usdPerMinute, canPurchase, disabledReas
               <p className="text-xs text-parchment/50 uppercase tracking-wider">{pack.label}</p>
               <p className="text-2xl font-semibold text-parchment">
                 {currency.format(pack.priceUsd)}
-              </p>
-              <p className="text-xs text-parchment/50">
-                {pack.minutes} min ({pack.seconds.toLocaleString()} sec)
               </p>
               <Button
                 size="sm"
