@@ -1,6 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it } from "vitest";
 import {
   VOICE_BONUS_PACK_IDS,
+  getVoiceBonusBestUsdPerMinute,
   getVoiceBonusPack,
   getVoiceBonusUsdPerMinute,
   listVoiceBonusPacks
@@ -10,7 +11,10 @@ const ENV_KEYS = [
   "VOICE_BONUS_USD_PER_MINUTE",
   "STRIPE_VOICE_BONUS_30MIN_PRICE_ID",
   "STRIPE_VOICE_BONUS_120MIN_PRICE_ID",
-  "STRIPE_VOICE_BONUS_600MIN_PRICE_ID"
+  "STRIPE_VOICE_BONUS_600MIN_PRICE_ID",
+  "STRIPE_VOICE_BONUS_30MIN_CENTS",
+  "STRIPE_VOICE_BONUS_120MIN_CENTS",
+  "STRIPE_VOICE_BONUS_600MIN_CENTS"
 ];
 
 describe("lib/billing/voice-bonus-packs", () => {
@@ -75,6 +79,7 @@ describe("lib/billing/voice-bonus-packs", () => {
       priceId: "price_30",
       label: "30 minutes"
     });
+    expect(pack30?.effectiveUsdPerMinute).toBeCloseTo(0.43, 5);
 
     const pack600 = packs.find((p) => p.id === "min_600");
     expect(pack600).toMatchObject({
@@ -85,6 +90,7 @@ describe("lib/billing/voice-bonus-packs", () => {
       priceUsd: 258,
       priceId: "price_600"
     });
+    expect(pack600?.effectiveUsdPerMinute).toBeCloseTo(0.43, 5);
   });
 
   it("honors custom rate in pack pricing", () => {
@@ -99,6 +105,40 @@ describe("lib/billing/voice-bonus-packs", () => {
       priceCents: 6000,
       priceUsd: 60
     });
+  });
+
+  it("per-pack cents override beats the $/min rate", () => {
+    process.env.VOICE_BONUS_USD_PER_MINUTE = "0.43";
+    process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID = "price_30";
+    process.env.STRIPE_VOICE_BONUS_120MIN_PRICE_ID = "price_120";
+    process.env.STRIPE_VOICE_BONUS_600MIN_PRICE_ID = "price_600";
+    process.env.STRIPE_VOICE_BONUS_30MIN_CENTS = "1399";
+    process.env.STRIPE_VOICE_BONUS_120MIN_CENTS = "5199";
+    process.env.STRIPE_VOICE_BONUS_600MIN_CENTS = "25799";
+
+    const packs = listVoiceBonusPacks();
+    expect(packs.map((p) => [p.id, p.priceCents, p.priceUsd])).toEqual([
+      ["min_30", 1399, 13.99],
+      ["min_120", 5199, 51.99],
+      ["min_600", 25799, 257.99]
+    ]);
+    expect(packs[0].effectiveUsdPerMinute).toBeCloseTo(13.99 / 30, 5);
+    expect(packs[2].effectiveUsdPerMinute).toBeCloseTo(257.99 / 600, 5);
+  });
+
+  it("ignores malformed cents override and falls back to the rate", () => {
+    process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID = "price_30";
+    process.env.STRIPE_VOICE_BONUS_30MIN_CENTS = "not-a-number";
+    const [pack] = listVoiceBonusPacks();
+    expect(pack.priceCents).toBe(1290);
+
+    process.env.STRIPE_VOICE_BONUS_30MIN_CENTS = "-5";
+    const [pack2] = listVoiceBonusPacks();
+    expect(pack2.priceCents).toBe(1290);
+
+    process.env.STRIPE_VOICE_BONUS_30MIN_CENTS = "12.5";
+    const [pack3] = listVoiceBonusPacks();
+    expect(pack3.priceCents).toBe(1290);
   });
 
   it("getVoiceBonusPack returns null for unknown id", () => {
@@ -116,5 +156,46 @@ describe("lib/billing/voice-bonus-packs", () => {
     expect(pack?.priceId).toBe("price_120");
     expect(pack?.seconds).toBe(7200);
     expect(pack?.priceCents).toBe(5160);
+  });
+
+  it("getVoiceBonusPack honors per-pack cents override", () => {
+    process.env.STRIPE_VOICE_BONUS_600MIN_PRICE_ID = "price_600";
+    process.env.STRIPE_VOICE_BONUS_600MIN_CENTS = "25799";
+    const pack = getVoiceBonusPack("min_600");
+    expect(pack?.priceCents).toBe(25799);
+    expect(pack?.priceUsd).toBeCloseTo(257.99, 5);
+  });
+
+  it("getVoiceBonusBestUsdPerMinute returns lowest effective rate", () => {
+    process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID = "price_30";
+    process.env.STRIPE_VOICE_BONUS_120MIN_PRICE_ID = "price_120";
+    process.env.STRIPE_VOICE_BONUS_600MIN_PRICE_ID = "price_600";
+    process.env.STRIPE_VOICE_BONUS_30MIN_CENTS = "1399";
+    process.env.STRIPE_VOICE_BONUS_120MIN_CENTS = "5199";
+    process.env.STRIPE_VOICE_BONUS_600MIN_CENTS = "25799";
+
+    const packs = listVoiceBonusPacks();
+    const best = getVoiceBonusBestUsdPerMinute(packs);
+    expect(best).toBeCloseTo(257.99 / 600, 5);
+  });
+
+  it("getVoiceBonusBestUsdPerMinute falls back to rate when no packs configured", () => {
+    process.env.VOICE_BONUS_USD_PER_MINUTE = "0.55";
+    expect(getVoiceBonusBestUsdPerMinute([])).toBe(0.55);
+  });
+
+  it("getVoiceBonusBestUsdPerMinute keeps running min when later packs are more expensive per minute", () => {
+    // Rates in ascending order (cheapest first) force the reduce callback to
+    // take its "else" branch on every iteration after the first — this is the
+    // branch coverage complement to the strictly-decreasing case above.
+    process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID = "price_30";
+    process.env.STRIPE_VOICE_BONUS_120MIN_PRICE_ID = "price_120";
+    process.env.STRIPE_VOICE_BONUS_600MIN_PRICE_ID = "price_600";
+    process.env.STRIPE_VOICE_BONUS_30MIN_CENTS = "600"; // $0.20/min
+    process.env.STRIPE_VOICE_BONUS_120MIN_CENTS = "3600"; // $0.30/min
+    process.env.STRIPE_VOICE_BONUS_600MIN_CENTS = "24000"; // $0.40/min
+
+    const packs = listVoiceBonusPacks();
+    expect(getVoiceBonusBestUsdPerMinute(packs)).toBeCloseTo(0.2, 5);
   });
 });

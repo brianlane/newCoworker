@@ -21,7 +21,7 @@ import { getVoiceBillingSnapshotForBusiness } from "@/lib/db/voice-usage";
 import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import {
-  getVoiceBonusUsdPerMinute,
+  getVoiceBonusBestUsdPerMinute,
   listVoiceBonusPacks
 } from "@/lib/billing/voice-bonus-packs";
 import { Card } from "@/components/ui/Card";
@@ -61,14 +61,14 @@ export default async function BillingPage(props: {
   const subscription = business ? await getSubscription(business.id) : null;
   const snapshot = business ? await getVoiceBillingSnapshotForBusiness(business.id) : null;
 
-  // Pack amounts and the per-minute rate are derived from env
-  // (`VOICE_BONUS_USD_PER_MINUTE` × pack minutes). Stripe Prices are
-  // immutable by id, so UI ≡ charge is guaranteed as long as whenever the
-  // rate env changes the `STRIPE_VOICE_BONUS_*MIN_PRICE_ID`s are rotated in
-  // the same deploy — see the pricing-contract comment in
+  // Pack amounts are derived from env — either an explicit per-pack cents
+  // override or `VOICE_BONUS_USD_PER_MINUTE` × minutes. Stripe Prices are
+  // immutable by id, so UI ≡ charge is guaranteed as long as any env price
+  // change ships alongside a rotation of the matching
+  // `STRIPE_VOICE_BONUS_*MIN_PRICE_ID` — see the pricing-contract comment in
   // `src/lib/billing/voice-bonus-packs.ts`.
   const packs = listVoiceBonusPacks();
-  const usdPerMinute = getVoiceBonusUsdPerMinute();
+  const usdPerMinute = getVoiceBonusBestUsdPerMinute(packs);
 
   const canPurchase = Boolean(
     subscription?.stripe_subscription_id && subscription.status === "active"
@@ -197,10 +197,10 @@ export default async function BillingPage(props: {
                 Top-up rate
               </dt>
               <dd className="mt-1 text-lg font-semibold text-parchment font-mono">
-                ${usdPerMinute.toFixed(2)}/min
+                from ${usdPerMinute.toFixed(2)}/min
               </dd>
               <dd className="text-[11px] text-parchment/40">
-                flat rate, any pack size
+                best effective rate; see packs below
               </dd>
             </div>
           </dl>

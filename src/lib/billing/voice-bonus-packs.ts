@@ -14,13 +14,20 @@
  * Stripe Prices are immutable by id — once created, a Price's `unit_amount`
  * never changes. That means the pack's displayed USD price and what Stripe
  * actually charges only diverge if an operator ships a mismatched config:
- * new Price IDs pointing at different amounts than `VOICE_BONUS_USD_PER_MINUTE`
- * implies.
+ * new Price IDs pointing at different amounts than what env implies.
+ *
+ * Pricing is resolved per pack with this precedence:
+ *   1. Explicit per-pack cents override (`STRIPE_VOICE_BONUS_<NMIN>MIN_CENTS`).
+ *      Use this when the catalog has non-uniform rates (e.g. marketing-friendly
+ *      `.99` pricing that doesn't share a single $/min).
+ *   2. `VOICE_BONUS_USD_PER_MINUTE` × pack minutes, which keeps a single rate
+ *      across all packs for simpler ops.
+ *   3. The documented $0.43/min default when neither is set.
  *
  * We treat env as the single source of truth and enforce the contract at the
- * operator boundary: whenever `VOICE_BONUS_USD_PER_MINUTE` changes, the
- * corresponding `STRIPE_VOICE_BONUS_*MIN_PRICE_ID`s MUST be rotated in the
- * same deploy to Stripe Prices whose `unit_amount = minutes * rate * 100`.
+ * operator boundary: whenever any pack's effective price changes, the
+ * corresponding `STRIPE_VOICE_BONUS_*MIN_PRICE_ID` MUST be rotated in the same
+ * deploy to a Stripe Price whose `unit_amount` matches the new cents value.
  * This keeps render-time compute at zero (no Stripe round-trip per billing
  * page load) while still guaranteeing UI ≡ charge as long as deploys are
  * done correctly.
@@ -41,6 +48,8 @@ export type VoiceBonusPack = {
   seconds: number;
   priceCents: number;
   priceUsd: number;
+  /** Effective $/min for this pack (priceUsd / minutes), for display/compare. */
+  effectiveUsdPerMinute: number;
   priceId: string;
   label: string;
   description: string;
@@ -51,17 +60,33 @@ const DEFAULT_USD_PER_MINUTE = 0.43;
 const PACK_DEFS: ReadonlyArray<{
   id: VoiceBonusPackId;
   minutes: number;
-  priceEnv: string;
+  priceIdEnv: string;
+  priceCentsEnv: string;
 }> = [
-  { id: "min_30", minutes: 30, priceEnv: "STRIPE_VOICE_BONUS_30MIN_PRICE_ID" },
-  { id: "min_120", minutes: 120, priceEnv: "STRIPE_VOICE_BONUS_120MIN_PRICE_ID" },
-  { id: "min_600", minutes: 600, priceEnv: "STRIPE_VOICE_BONUS_600MIN_PRICE_ID" }
+  {
+    id: "min_30",
+    minutes: 30,
+    priceIdEnv: "STRIPE_VOICE_BONUS_30MIN_PRICE_ID",
+    priceCentsEnv: "STRIPE_VOICE_BONUS_30MIN_CENTS"
+  },
+  {
+    id: "min_120",
+    minutes: 120,
+    priceIdEnv: "STRIPE_VOICE_BONUS_120MIN_PRICE_ID",
+    priceCentsEnv: "STRIPE_VOICE_BONUS_120MIN_CENTS"
+  },
+  {
+    id: "min_600",
+    minutes: 600,
+    priceIdEnv: "STRIPE_VOICE_BONUS_600MIN_PRICE_ID",
+    priceCentsEnv: "STRIPE_VOICE_BONUS_600MIN_CENTS"
+  }
 ];
 
 /**
- * USD/min sold to tenants for bonus voice seconds. Read from
- * `VOICE_BONUS_USD_PER_MINUTE` so ops can tune pricing without a redeploy; falls
- * back to the documented $0.43/min default when unset.
+ * Fallback USD/min used when a pack has no explicit cents override. Read from
+ * `VOICE_BONUS_USD_PER_MINUTE`; falls back to the documented $0.43/min default
+ * when unset or malformed.
  */
 export function getVoiceBonusUsdPerMinute(): number {
   const raw = process.env.VOICE_BONUS_USD_PER_MINUTE;
@@ -71,14 +96,29 @@ export function getVoiceBonusUsdPerMinute(): number {
   return parsed;
 }
 
+function readPositiveInt(raw: string | undefined): number | null {
+  if (!raw) return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
+function resolvePriceCents(def: (typeof PACK_DEFS)[number], usdPerMinute: number): number {
+  const override = readPositiveInt(process.env[def.priceCentsEnv]);
+  if (override !== null) return override;
+  return Math.round(def.minutes * usdPerMinute * 100);
+}
+
 function buildPack(def: (typeof PACK_DEFS)[number], priceId: string, usdPerMinute: number): VoiceBonusPack {
-  const priceCents = Math.round(def.minutes * usdPerMinute * 100);
+  const priceCents = resolvePriceCents(def, usdPerMinute);
+  const priceUsd = priceCents / 100;
   return {
     id: def.id,
     minutes: def.minutes,
     seconds: def.minutes * 60,
     priceCents,
-    priceUsd: priceCents / 100,
+    priceUsd,
+    effectiveUsdPerMinute: priceUsd / def.minutes,
     priceId,
     label: `${def.minutes} minutes`,
     description: `Adds ${def.minutes} voice minutes (${def.minutes * 60} seconds) of AI talk time.`
@@ -90,7 +130,7 @@ export function listVoiceBonusPacks(): VoiceBonusPack[] {
   const usdPerMinute = getVoiceBonusUsdPerMinute();
   const out: VoiceBonusPack[] = [];
   for (const def of PACK_DEFS) {
-    const priceId = process.env[def.priceEnv];
+    const priceId = process.env[def.priceIdEnv];
     if (!priceId) continue;
     out.push(buildPack(def, priceId, usdPerMinute));
   }
@@ -104,7 +144,17 @@ export function listVoiceBonusPacks(): VoiceBonusPack[] {
 export function getVoiceBonusPack(id: string): VoiceBonusPack | null {
   const def = PACK_DEFS.find((p) => p.id === id);
   if (!def) return null;
-  const priceId = process.env[def.priceEnv];
+  const priceId = process.env[def.priceIdEnv];
   if (!priceId) return null;
   return buildPack(def, priceId, getVoiceBonusUsdPerMinute());
+}
+
+/**
+ * Best (lowest) effective $/min across the configured packs. Used by the UI
+ * header to show a truthful "from $X / min" when packs have non-uniform rates.
+ * Returns the fallback rate when no packs are configured.
+ */
+export function getVoiceBonusBestUsdPerMinute(packs: VoiceBonusPack[]): number {
+  if (packs.length === 0) return getVoiceBonusUsdPerMinute();
+  return packs.reduce((min, p) => (p.effectiveUsdPerMinute < min ? p.effectiveUsdPerMinute : min), Infinity);
 }
