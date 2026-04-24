@@ -316,13 +316,14 @@ if ! command -v docker-compose >/dev/null 2>&1; then
   docker compose version >/dev/null 2>&1 || apt-get install -y docker-compose-plugin || true
 fi
 
-# Firewall: deny-by-default, allow SSH + 443. The voice bridge (8090) and
-# anything else stays local — Cloudflare Tunnel carries public traffic.
+# Firewall: deny-by-default, allow SSH only. Cloudflare Tunnel (cloudflared)
+# dials outbound from the VPS, so no inbound ports are needed for public
+# traffic. The voice bridge (8090), Rowboat (3000), and everything else
+# listen on 127.0.0.1 and are reached exclusively through the tunnel.
 ufw --force reset
 ufw default deny incoming
 ufw default allow outgoing
 ufw allow 22/tcp
-ufw allow 443/tcp
 ufw --force enable || true
 systemctl enable --now fail2ban || true
 

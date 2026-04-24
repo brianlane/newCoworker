@@ -237,6 +237,13 @@ ROWBOAT_VAULT_PATH=/vault
 ROWBOAT_MEMORY_PATH=/memory
 RENV_EOF
 
+# Lock down the env file: it carries ROWBOAT_GATEWAY_TOKEN,
+# NOTIFICATION_WEBHOOK_TOKEN (Supabase service-role by default),
+# STREAM_URL_SIGNING_SECRET, TELNYX_API_KEY, and GOOGLE_API_KEY. Root-only
+# read matches the posture of /opt/rowboat/keep-warm.env and the
+# voice-bridge .env written later in this script.
+chmod 600 /opt/rowboat/.env
+
 log "Rowboat .env written."
 
 report_progress 55 "env_written" "Rowboat .env written"
