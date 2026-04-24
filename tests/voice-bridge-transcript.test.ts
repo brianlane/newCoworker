@@ -273,6 +273,76 @@ describe("voice-bridge transcript recorder", () => {
     );
   });
 
+  it("preserves conversational ordering when two turnComplete frames race", async () => {
+    // Regression: turnIndex used to be incremented at each `insertTurn` call,
+    // so two concurrent flushes could interleave at each await boundary and
+    // produce caller_A=0, caller_B=1, assistant_A=2, assistant_B=3 — wrong,
+    // because the UI sorts by turn_index. Indices must now be reserved
+    // synchronously at flushTurn entry so order follows ingest order.
+    let resolveCreate: ((id: string | null) => void) | null = null;
+    const insertCalls: Array<{ turnIndex: number; role: string; content: string }> = [];
+    let resolveInsertA: (() => void) | null = null;
+    let resolveInsertB: (() => void) | null = null;
+    let insertAttempt = 0;
+    const adapter: TranscriptAdapter = {
+      createTranscript: () =>
+        new Promise<string | null>((res) => {
+          resolveCreate = res;
+        }),
+      insertTurn: async (input) => {
+        insertCalls.push({
+          turnIndex: input.turnIndex,
+          role: input.role,
+          content: input.content
+        });
+        // Force each insertTurn to wait a tick so the two flushes interleave
+        // between their caller-insert and assistant-insert steps — the exact
+        // race described in the bug report.
+        insertAttempt += 1;
+        if (insertAttempt === 1) {
+          await new Promise<void>((res) => {
+            resolveInsertA = res;
+          });
+        } else if (insertAttempt === 2) {
+          await new Promise<void>((res) => {
+            resolveInsertB = res;
+          });
+        }
+      },
+      finalizeTranscript: async () => {}
+    };
+    const r = createTranscriptRecorder(adapter, INIT);
+
+    const pA = r.ingest(frame({ caller: "A_c", assistant: "A_a", turnComplete: true }));
+    const pB = r.ingest(frame({ caller: "B_c", assistant: "B_a", turnComplete: true }));
+
+    // Let createTranscript resolve, then release the inserts in an order
+    // that would cause interleaving under the old implementation.
+    resolveCreate!("transcript-1");
+    await new Promise((res) => setTimeout(res, 0));
+    resolveInsertA!();
+    await new Promise((res) => setTimeout(res, 0));
+    resolveInsertB!();
+
+    await Promise.all([pA, pB]);
+
+    // The DB *insert* order here is [0,2,1,3] — flushB's caller insert fired
+    // between flushA's two inserts because we deliberately forced the await
+    // interleaving. That's fine: the only thing that matters is that, sorted
+    // by turn_index (how the UI renders), we get the correct conversation.
+    // Under the old code the indices themselves would have been interleaved
+    // (0=caller_A, 1=caller_B, 2=assistant_A, 3=assistant_B), producing a
+    // wrong conversational order.
+    const sorted = [...insertCalls].sort((a, b) => a.turnIndex - b.turnIndex);
+    expect(sorted.map((c) => c.turnIndex)).toEqual([0, 1, 2, 3]);
+    expect(sorted.map((c) => `${c.role}:${c.content}`)).toEqual([
+      "caller:A_c",
+      "assistant:A_a",
+      "caller:B_c",
+      "assistant:B_a"
+    ]);
+  });
+
   it("finalize waits for a pending createTranscript so the row is never stuck in_progress", async () => {
     // Regression: finalize used to check `transcriptId` before awaiting the
     // in-flight createTranscript kicked off by an earlier ingest. When a

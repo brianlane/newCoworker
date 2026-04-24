@@ -115,11 +115,22 @@ export function createTranscriptRecorder(
   }
 
   async function flushTurn(): Promise<void> {
+    // Capture AND reserve indices synchronously — before any `await`. If we
+    // allocated `turnIndex++` at the insertTurn call sites instead, two
+    // concurrent flushes (fire-and-forget ingests for two back-to-back
+    // `turnComplete` frames) would interleave at each await boundary and
+    // produce caller_A=0, caller_B=1, assistant_A=2, assistant_B=3 — the
+    // UI sorts by turn_index so the owner would see the conversation in
+    // the wrong order. Reserving the slice here locks the ordering to
+    // match the synchronous order flushTurn was invoked in, which is the
+    // order the turnComplete events arrived.
     const caller = callerBuf.trim();
     const assistant = assistantBuf.trim();
     callerBuf = "";
     assistantBuf = "";
     if (!caller && !assistant) return;
+    const callerIdx = caller ? turnIndex++ : -1;
+    const assistantIdx = assistant ? turnIndex++ : -1;
     const id = await ensureTranscript();
     if (!id) return;
     if (caller) {
@@ -128,7 +139,7 @@ export function createTranscriptRecorder(
           transcriptId: id,
           role: "caller",
           content: caller,
-          turnIndex: turnIndex++
+          turnIndex: callerIdx
         });
       } catch (err) {
         console.error("voice-transcript: insertTurn(caller)", err);
@@ -140,7 +151,7 @@ export function createTranscriptRecorder(
           transcriptId: id,
           role: "assistant",
           content: assistant,
-          turnIndex: turnIndex++
+          turnIndex: assistantIdx
         });
       } catch (err) {
         console.error("voice-transcript: insertTurn(assistant)", err);
