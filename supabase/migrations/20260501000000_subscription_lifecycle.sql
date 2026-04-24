@@ -206,6 +206,7 @@ begin
       select id into v_existing_by_ip
         from customer_profiles
         where last_signup_ip = p_last_signup_ip
+          and normalized_email is null
         order by created_at asc
         limit 1;
       if v_existing_by_ip is not null then

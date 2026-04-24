@@ -372,8 +372,11 @@ function planPeriodEndReached(ctx: LifecycleContext): LifecyclePlanResult {
   const { subscription: sub } = ctx;
   const now = ctx.now ?? new Date();
 
-  if (sub.status !== "active" && sub.status !== "canceled") {
+  if (sub.status !== "active") {
     return { ok: false, reason: "subscription_not_active" };
+  }
+  if (!sub.cancel_at_period_end) {
+    return { ok: false, reason: "subscription_not_cancel_at_period_end" };
   }
 
   return {
@@ -593,6 +596,7 @@ function buildCancelPlan(args: {
     skipStripeCancel = false
   } = args;
   const sub = ctx.subscription;
+  const profileId = sub.customer_profile_id ?? ctx.profile?.id ?? null;
   const graceEndsAtIso = new Date(now.getTime() + graceMs).toISOString();
 
   const plan: LifecyclePlan = {
@@ -647,6 +651,7 @@ function buildCancelPlan(args: {
     subscriptionId: sub.id,
     patch: {
       status: "canceled",
+      customer_profile_id: profileId,
       cancel_reason: cancelReason,
       canceled_at: now.toISOString(),
       grace_ends_at: graceEndsAtIso,
@@ -655,16 +660,16 @@ function buildCancelPlan(args: {
       cancel_at_period_end: false
     }
   });
-  if (includeRefund && sub.customer_profile_id) {
+  if (includeRefund && profileId) {
     plan.dbUpdates.push({
       type: "mark_refund_used",
-      profileId: sub.customer_profile_id,
+      profileId,
       at: now.toISOString()
     });
     plan.dbUpdates.push({
       type: "record_refund",
       subscriptionId: sub.id,
-      profileId: sub.customer_profile_id,
+      profileId,
       // Filled in by the executor after Stripe returns the refund id.
       stripeRefundId: null,
       stripeChargeId: null,

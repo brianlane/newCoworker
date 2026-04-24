@@ -404,6 +404,89 @@ describe("stripe webhook route", () => {
     );
   });
 
+  it("does not rerun period-end teardown when a deleted webhook is replayed after teardown", async () => {
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "local_sub_period_end",
+      business_id: "biz_period_end",
+      status: "canceled",
+      cancel_reason: "user_period_end",
+      cancel_at_period_end: false,
+      grace_ends_at: "2026-06-01T00:00:00.000Z",
+      canceled_at: "2026-05-01T00:00:00.000Z"
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_period_end_deleted_replay",
+      type: "customer.subscription.deleted",
+      data: {
+        object: {
+          id: "sub_period_end",
+          metadata: { businessId: "biz_period_end" }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockLoadLifecycleContext).not.toHaveBeenCalled();
+    expect(mockExecuteLifecyclePlan).not.toHaveBeenCalled();
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "local_sub_period_end",
+      expect.objectContaining({
+        status: "canceled",
+        cancel_reason: "user_period_end",
+        cancel_at_period_end: false
+      })
+    );
+  });
+
+  it("preserves null cancel reason for external Stripe cancellations", async () => {
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "local_sub_external",
+      business_id: "biz_external",
+      status: "active",
+      cancel_reason: null,
+      cancel_at_period_end: false,
+      grace_ends_at: null,
+      canceled_at: null
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_external_deleted",
+      type: "customer.subscription.deleted",
+      data: {
+        object: {
+          id: "sub_external",
+          metadata: { businessId: "biz_external" }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockLoadLifecycleContext).not.toHaveBeenCalled();
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "local_sub_external",
+      expect.objectContaining({
+        status: "canceled",
+        cancel_reason: null,
+        cancel_at_period_end: false
+      })
+    );
+  });
+
   it("marks subscription active on invoice.paid", async () => {
     vi.mocked(verifyWebhook).mockReturnValue({
       id: "evt_3",

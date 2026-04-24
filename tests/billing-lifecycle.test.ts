@@ -119,6 +119,36 @@ describe("planLifecycleAction: cancelWithRefund", () => {
     ]);
   });
 
+  it("records refund bookkeeping against profile loaded from business when subscription is unlinked", () => {
+    const res = planLifecycleAction(
+      { type: "cancelWithRefund" },
+      makeCtx({
+        subscription: makeSub({ customer_profile_id: null }),
+        profile: makeProfile({ id: "prof-from-business" })
+      })
+    );
+    if (!res.ok) throw new Error(`expected ok, got ${res.reason}`);
+
+    const subUpdate = res.plan.dbUpdates.find((op) => op.type === "update_subscription");
+    expect(subUpdate).toEqual(
+      expect.objectContaining({
+        patch: expect.objectContaining({ customer_profile_id: "prof-from-business" })
+      })
+    );
+    expect(res.plan.dbUpdates).toContainEqual({
+      type: "mark_refund_used",
+      profileId: "prof-from-business",
+      at: "2026-04-15T00:00:00.000Z"
+    });
+    expect(res.plan.dbUpdates).toContainEqual(
+      expect.objectContaining({
+        type: "record_refund",
+        profileId: "prof-from-business",
+        reason: "thirty_day_money_back"
+      })
+    );
+  });
+
   it("rejects when subscription is not active", () => {
     const ctx = makeCtx({ subscription: makeSub({ status: "canceled" }) });
     const res = planLifecycleAction({ type: "cancelWithRefund" }, ctx);
@@ -191,6 +221,12 @@ describe("planLifecycleAction: cancelAtPeriodEnd", () => {
       ok: false,
       reason: "subscription_not_active"
     });
+  });
+
+  it("rejects when Stripe subscription id is missing", () => {
+    const ctx = makeCtx({ subscription: makeSub({ stripe_subscription_id: null }) });
+    const res = planLifecycleAction({ type: "cancelAtPeriodEnd" }, ctx);
+    expect(res).toEqual({ ok: false, reason: "no_stripe_subscription" });
   });
 });
 
@@ -317,12 +353,33 @@ describe("planLifecycleAction: periodEndReached", () => {
     expect(subUpdate.patch.cancel_at_period_end).toBe(false);
   });
 
-  it("rejects period-end teardown for non-active/non-canceled rows", () => {
+  it("rejects period-end teardown for rows that are not still pending period-end cancel", () => {
     const res = planLifecycleAction(
       { type: "periodEndReached" },
       makeCtx({ subscription: makeSub({ status: "pending" }) })
     );
     expect(res).toEqual({ ok: false, reason: "subscription_not_active" });
+
+    const alreadyTornDown = planLifecycleAction(
+      { type: "periodEndReached" },
+      makeCtx({
+        subscription: makeSub({
+          status: "canceled",
+          cancel_reason: "user_period_end",
+          cancel_at_period_end: false
+        })
+      })
+    );
+    expect(alreadyTornDown).toEqual({ ok: false, reason: "subscription_not_active" });
+
+    const notScheduled = planLifecycleAction(
+      { type: "periodEndReached" },
+      makeCtx({ subscription: makeSub({ status: "active", cancel_at_period_end: false }) })
+    );
+    expect(notScheduled).toEqual({
+      ok: false,
+      reason: "subscription_not_cancel_at_period_end"
+    });
   });
 });
 
@@ -422,6 +479,14 @@ describe("planLifecycleAction: changePlan", () => {
 });
 
 describe("planLifecycleAction: undo/reactivate edge cases", () => {
+  it("rejects undo when subscription is not active", () => {
+    const res = planLifecycleAction(
+      { type: "undoCancelAtPeriodEnd" },
+      makeCtx({ subscription: makeSub({ status: "canceled", cancel_at_period_end: true }) })
+    );
+    expect(res).toEqual({ ok: false, reason: "subscription_not_active" });
+  });
+
   it("rejects undo when the Stripe subscription id is missing", () => {
     const res = planLifecycleAction(
       { type: "undoCancelAtPeriodEnd" },

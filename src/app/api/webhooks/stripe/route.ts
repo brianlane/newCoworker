@@ -146,7 +146,7 @@ export async function POST(request: Request) {
           const existing = await getSubscription(businessId);
           if (existing) {
             const now = new Date();
-            if (existing.cancel_at_period_end || existing.cancel_reason === "user_period_end") {
+            if (existing.cancel_at_period_end) {
               const ctxRes = await loadLifecycleContextForBusiness(businessId);
               if (ctxRes.ok) {
                 const planRes = planLifecycleAction({ type: "periodEndReached" }, ctxRes.context);
@@ -186,7 +186,7 @@ export async function POST(request: Request) {
               stripe_subscription_cached_at: now.toISOString(),
               grace_ends_at: graceEndsAt,
               canceled_at: existing.canceled_at ?? now.toISOString(),
-              cancel_reason: existing.cancel_reason ?? "user_period_end",
+              cancel_reason: existing.cancel_reason,
               cancel_at_period_end: false
             });
           }

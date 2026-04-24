@@ -396,5 +396,59 @@ describe("executeLifecyclePlan refund handling", () => {
       { businessId: "biz_1", vpsHost: null },
       { stripe: {} as never, sendEmail: vi.fn().mockRejectedValue(new Error("smtp down")) }
     );
+
+    process.env.RESEND_API_KEY = "resend_test";
+    await executeLifecyclePlan(
+      {
+        stripeOps: [],
+        hostingerOps: [],
+        sshOps: [],
+        dbUpdates: [],
+        emailsToSend: [
+          {
+            type: "send_cancel_confirmation",
+            toEmail: "owner@example.com",
+            businessId: "biz_1",
+            reason: "user_refund",
+            effectiveAt: "2026-04-01T00:00:00.000Z",
+            graceEndsAt: "2026-05-01T00:00:00.000Z"
+          }
+        ]
+      },
+      { businessId: "biz_1", vpsHost: null },
+      { stripe: {} as never, sendEmail: vi.fn().mockRejectedValue(new Error("smtp down")) }
+    );
+  });
+
+  it("surfaces non-tolerated Hostinger failures and tolerates backup deletion failures", async () => {
+    const hostinger = {
+      createSnapshot: vi.fn().mockRejectedValue(new Error("hostinger hard fail"))
+    };
+    await expect(
+      executeLifecyclePlan(
+        {
+          stripeOps: [],
+          hostingerOps: [{ type: "create_snapshot", virtualMachineId: 1 }],
+          sshOps: [],
+          dbUpdates: [],
+          emailsToSend: []
+        },
+        { businessId: "biz_1", vpsHost: null },
+        { stripe: {} as never, hostinger: hostinger as never }
+      )
+    ).rejects.toThrow("hostinger hard fail");
+
+    deleteBusinessBackupMock.mockRejectedValueOnce(new Error("delete failed"));
+    await executeLifecyclePlan(
+      {
+        stripeOps: [],
+        hostingerOps: [],
+        sshOps: [],
+        dbUpdates: [{ type: "delete_backup_artifact", businessId: "biz_1" }],
+        emailsToSend: []
+      },
+      { businessId: "biz_1", vpsHost: null },
+      { stripe: {} as never }
+    );
   });
 });
