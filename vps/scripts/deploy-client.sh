@@ -29,6 +29,14 @@
 #                               /opt/voice-bridge/.env, defaulting to "true".
 #                               This matches the bridge's own default in
 #                               vps/voice-bridge/src/index.ts.
+#   VOICE_TRANSCRIPTION_ENABLED — optional rollout flag for Gemini Live
+#                               transcript capture. "true" attaches the
+#                               Supabase transcript adapter in the bridge and
+#                               persists voice_call_transcript_turns rows.
+#                               Same preserve-existing-value pattern as
+#                               GEMINI_LIVE_ENABLED: when unset the deploy
+#                               keeps whatever is in /opt/voice-bridge/.env,
+#                               defaulting to "false" (off for staged rollout).
 #   VOICE_BRIDGE_SRC         — optional; path on VPS to copy bridge source from
 #                               (default: /opt/newcoworker-repo/vps/voice-bridge).
 #                               Operator is responsible for syncing the repo to
@@ -450,6 +458,21 @@ if [[ -f "${VOICE_BRIDGE_DEST}/docker-compose.yml" ]]; then
     fi
     effective_gemini_live_enabled="${GEMINI_LIVE_ENABLED:-${prev_gemini_live_enabled:-true}}"
 
+    # Same precedence ladder as GEMINI_LIVE_ENABLED above — operator can flip
+    # transcription on for a single VPS without losing the flag on redeploy.
+    # Default stays "false" so the feature only turns on where explicitly opted
+    # in (either via Vercel → orchestrator, or by hand-editing the VPS .env).
+    prev_voice_transcription_enabled=""
+    if [[ -f "${VOICE_BRIDGE_DEST}/.env" ]]; then
+      prev_voice_transcription_enabled=$(
+        grep -E '^VOICE_TRANSCRIPTION_ENABLED=' "${VOICE_BRIDGE_DEST}/.env" 2>/dev/null \
+          | tail -n 1 \
+          | cut -d= -f2- \
+          | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//"
+      ) || true
+    fi
+    effective_voice_transcription_enabled="${VOICE_TRANSCRIPTION_ENABLED:-${prev_voice_transcription_enabled:-false}}"
+
     cat > .env <<VBENV_EOF
 STREAM_URL_SIGNING_SECRET=${STREAM_URL_SIGNING_SECRET:-}
 SUPABASE_URL=${SUPABASE_URL:-}
@@ -459,6 +482,7 @@ BRIDGE_MEDIA_WSS_ORIGIN=${BRIDGE_MEDIA_WSS_ORIGIN:-}
 GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
 GEMINI_LIVE_MODEL=${GEMINI_LIVE_MODEL:-gemini-3.1-flash-live-preview}
 GEMINI_LIVE_ENABLED=${effective_gemini_live_enabled}
+VOICE_TRANSCRIPTION_ENABLED=${effective_voice_transcription_enabled}
 
 # Vault + Rowboat + platform app endpoints for Gemini Live tool calls.
 # VAULT_PATH: where the bridge reads soul/identity/memory/website md.
@@ -492,6 +516,12 @@ VBENV_EOF
       BRIDGE_MEDIA_WSS_ORIGIN
       GEMINI_LIVE_MODEL
       GEMINI_LIVE_ENABLED
+      # Rollout flag, not strictly required for bridge function (default "false"
+      # disables transcripts and calls still work). Included here so the
+      # post-write verification catches accidentally-blank writes — the
+      # effective_* fallback above always resolves to "true" or "false", so a
+      # blank line would indicate the env block was tampered with.
+      VOICE_TRANSCRIPTION_ENABLED
     )
     missing_keys=()
     for key in "${bridge_required_keys[@]}"; do

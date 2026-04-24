@@ -393,6 +393,12 @@ export async function orchestrateProvisioning(
     ["GOOGLE_API_KEY", process.env.GOOGLE_API_KEY ?? ""],
     ["GEMINI_LIVE_MODEL", process.env.GEMINI_LIVE_MODEL ?? ""],
     ["GEMINI_LIVE_ENABLED", process.env.GEMINI_LIVE_ENABLED ?? ""],
+    // Rollout flag for Gemini Live transcript capture. Read by the voice
+    // bridge (vps/voice-bridge/src/index.ts); when "true" it attaches the
+    // Supabase transcript adapter and persists caller/assistant turn rows
+    // into voice_call_transcript_turns. Default-off so tenants opt in by
+    // setting the var on Vercel and re-running provisioning.
+    ["VOICE_TRANSCRIPTION_ENABLED", process.env.VOICE_TRANSCRIPTION_ENABLED ?? ""],
     // Model name Rowboat uses for the voice_task agent via the llm-router
     // sidecar. Falls back to the deploy-client.sh default when unset.
     ["GEMINI_ROWBOAT_MODEL", process.env.GEMINI_ROWBOAT_MODEL ?? ""],
