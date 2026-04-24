@@ -3,6 +3,11 @@ import { GoogleGenAI, Modality, Type, type LiveServerMessage, type Session } fro
 import { parsePcmRateFromMime, resamplePCM16Mono } from "./audio-resample.js";
 import { telnyxMediaMessageFromPcmBase64, tryParseTelnyxMediaPayloadBase64 } from "./telnyx-media-json.js";
 import { composeVaultPromptSection, type VaultSnapshot } from "./vault-loader.js";
+import {
+  createTranscriptRecorder,
+  type TranscriptAdapter,
+  type TranscriptRecorder
+} from "./voice-transcript.js";
 
 const TELNYX_PCM_RATE = 16000;
 const GEMINI_OUTPUT_DEFAULT_RATE = 24000;
@@ -78,6 +83,13 @@ export type GeminiBridgeOptions = {
   callerE164?: string;
   /** HTTP adapters for the knowledge/calendar/email/sms/capture tool suite. */
   voiceTools?: VoiceToolsConfig;
+  /**
+   * When set, Gemini Live's `inputAudioTranscription` and
+   * `outputAudioTranscription` are enabled and the bridge writes one row per
+   * completed turn through this adapter. Leave undefined to disable the
+   * feature entirely (behaviour preserved from before the feature shipped).
+   */
+  transcriptAdapter?: TranscriptAdapter;
 };
 
 export function systemInstructionForBusiness(
@@ -398,6 +410,15 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   const voiceToolsReady =
     Boolean(opts.voiceTools?.appBaseUrl) && Boolean(opts.voiceTools?.gatewayToken);
 
+  const transcriptRecorder: TranscriptRecorder | null = opts.transcriptAdapter
+    ? createTranscriptRecorder(opts.transcriptAdapter, {
+        businessId: opts.businessId,
+        callControlId: opts.callControlId,
+        callerE164: opts.callerE164 ?? "",
+        model: opts.model
+      })
+    : null;
+
   const clearTimers = () => {
     for (const t of timers) clearTimeout(t);
     timers.length = 0;
@@ -406,19 +427,34 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   let session!: Session;
 
   const teardown = async () => {
-    if (ended) return;
-    ended = true;
-    clearTimers();
-    try {
-      session.sendRealtimeInput({ audioStreamEnd: true });
-    } catch {
-      /* ignore */
+    // Gemini-side teardown is one-shot (sendRealtimeInput / session.close would
+    // fail on a dead session) but the transcript recorder must ALWAYS run its
+    // finalize, even if `onclose` already set `ended=true`. Otherwise an
+    // upstream Live-session close (session expiry, quota, network drop) fires
+    // `onclose` first, and the later `geminiTeardown` from ws.on("close")
+    // short-circuits — leaving the transcript row stuck at status='in_progress'
+    // with a NULL `ended_at`.
+    if (!ended) {
+      ended = true;
+      clearTimers();
+      try {
+        session.sendRealtimeInput({ audioStreamEnd: true });
+      } catch {
+        /* ignore */
+      }
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        session.close();
+      } catch {
+        /* ignore */
+      }
     }
-    await new Promise((r) => setTimeout(r, 500));
-    try {
-      session.close();
-    } catch {
-      /* ignore */
+    if (transcriptRecorder) {
+      try {
+        await transcriptRecorder.finalize();
+      } catch (err) {
+        console.error("gemini-bridge: transcript finalize", err);
+      }
     }
   };
 
@@ -449,10 +485,22 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       ? [{ functionDeclarations: declarations as never }]
       : undefined;
 
+  // `inputAudioTranscription` / `outputAudioTranscription` keys are documented
+  // Live API fields that turn on caller + assistant transcripts delivered on
+  // the `serverContent` channel. We only set them when the recorder is wired
+  // so a VPS without the feature flag runs the same shape as before.
+  const transcriptionConfig = transcriptRecorder
+    ? {
+        inputAudioTranscription: {},
+        outputAudioTranscription: {}
+      }
+    : {};
+
   session = await ai.live.connect({
     model: opts.model,
     config: {
       responseModalities: [Modality.AUDIO],
+      ...(transcriptionConfig as Record<string, unknown>),
       systemInstruction: systemInstructionForBusiness(
         opts.businessName,
         Boolean(opts.transfer),
@@ -465,6 +513,11 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       onmessage: (message: LiveServerMessage) => {
         if (ended || opts.ws.readyState !== WebSocket.OPEN) return;
         handleModelToolCalls(message);
+        if (transcriptRecorder) {
+          // Fire-and-forget: ingest is async but callbacks can't await.
+          // Errors are swallowed inside the recorder.
+          void transcriptRecorder.ingest(message);
+        }
         for (const chunk of extractModelAudioParts(message)) {
           try {
             const raw = Buffer.from(chunk.dataB64, "base64");
@@ -480,10 +533,22 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       },
       onerror: (e: ErrorEvent) => {
         console.error("gemini-bridge: Live API error", e.message ?? String(e));
+        if (transcriptRecorder) {
+          void transcriptRecorder.finalize({ errored: true });
+        }
       },
       onclose: () => {
         ended = true;
         clearTimers();
+        // Kick the recorder finalize as soon as the Live session closes.
+        // `teardown` (called from ws.on("close")) will do the same — both paths
+        // hit the recorder's internal `finalized` guard so whichever fires
+        // first wins and the second is a no-op. This protects against the
+        // case where Gemini closes first (session expiry / upstream drop) and
+        // teardown might otherwise short-circuit before finalizing the row.
+        if (transcriptRecorder) {
+          void transcriptRecorder.finalize();
+        }
       }
     }
   });

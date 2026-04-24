@@ -11,6 +11,7 @@ import { loadEnv } from "./load-env.js";
 import { createGeminiTelnyxBridge, type TransferCapability } from "./gemini-telnyx-bridge.js";
 import { loadVaultForPrompt } from "./vault-loader.js";
 import { telnyxTransferCall, telnyxSendPlainSms } from "./telnyx-call-actions.js";
+import type { TranscriptAdapter } from "./voice-transcript.js";
 
 loadEnv();
 
@@ -71,6 +72,77 @@ type TenantTelnyxSettings = {
   smsFromE164: string | null;
   messagingProfileId: string | null;
 };
+
+/**
+ * Supabase-backed `TranscriptAdapter`. Writes are direct (service-role) —
+ * same trust model as `voice_active_sessions` heartbeats. All methods log on
+ * failure and never throw; a DB issue must not crash the media pipe.
+ */
+function createSupabaseTranscriptAdapter(
+  supabase: SupabaseClient
+): TranscriptAdapter {
+  return {
+    createTranscript: async (input) => {
+      // Best-effort FK to the reservation. Transcript is still usable if the
+      // lookup fails (reservation_id stays NULL).
+      let reservationId: string | null = null;
+      try {
+        const { data } = await supabase
+          .from("voice_reservations")
+          .select("id")
+          .eq("call_control_id", input.callControlId)
+          .maybeSingle();
+        reservationId = (data as { id: string } | null)?.id ?? null;
+      } catch (err) {
+        console.warn("voice-transcript: reservation lookup failed", err);
+      }
+      const { data, error } = await supabase
+        .from("voice_call_transcripts")
+        .insert({
+          business_id: input.businessId,
+          call_control_id: input.callControlId,
+          reservation_id: reservationId,
+          caller_e164: input.callerE164 || null,
+          model: input.model,
+          status: "in_progress"
+        })
+        .select("id")
+        .single();
+      if (error) {
+        console.error("voice-transcript: create failed", error.message);
+        return null;
+      }
+      return (data as { id: string }).id;
+    },
+    insertTurn: async (input) => {
+      const { error } = await supabase
+        .from("voice_call_transcript_turns")
+        .insert({
+          transcript_id: input.transcriptId,
+          role: input.role,
+          content: input.content,
+          turn_index: input.turnIndex
+        });
+      if (error) {
+        console.error("voice-transcript: insert turn failed", error.message);
+      }
+    },
+    finalizeTranscript: async (input) => {
+      const nowIso = new Date().toISOString();
+      const { error } = await supabase
+        .from("voice_call_transcripts")
+        .update({
+          status: input.status,
+          ended_at: nowIso,
+          updated_at: nowIso
+        })
+        .eq("id", input.transcriptId);
+      if (error) {
+        console.error("voice-transcript: finalize failed", error.message);
+      }
+    }
+  };
+}
 
 async function loadTenantTelnyxSettings(
   supabase: SupabaseClient,
@@ -347,6 +419,16 @@ function main(): void {
                 }
               : undefined;
 
+          // Transcription is behind a per-VPS flag so rollout can be staged.
+          // Default off for one release; setting it to "true" (any casing)
+          // enables inputAudioTranscription + outputAudioTranscription on the
+          // Live session and persists turn rows.
+          const transcriptionEnabled =
+            (process.env.VOICE_TRANSCRIPTION_ENABLED ?? "").toLowerCase() === "true";
+          const transcriptAdapter = transcriptionEnabled
+            ? createSupabaseTranscriptAdapter(supabase)
+            : undefined;
+
           const bridge = await createGeminiTelnyxBridge({
             ws,
             businessId,
@@ -360,7 +442,8 @@ function main(): void {
             transfer,
             vault,
             callerE164: fromE164Info || "",
-            voiceTools
+            voiceTools,
+            transcriptAdapter
           });
           onTelnyxGemini = bridge.onTelnyxMessage;
           geminiTeardown = bridge.teardown;
