@@ -29,8 +29,13 @@ export default async function CallTranscriptPage({
 }: {
   params: Promise<{ callControlId: string }>;
 }) {
-  const { callControlId: raw } = await params;
-  const callControlId = decodeURIComponent(raw);
+  // Next.js App Router already URL-decodes dynamic route segments before
+  // exposing them on `params`. Calling decodeURIComponent here would
+  // double-decode — e.g. a Telnyx call_control_id containing a literal `%3A`
+  // is sent as `%253A`, arrives decoded to `%3A`, and a second decode would
+  // corrupt it to `:`. The sibling API route (/api/dashboard/calls/[id])
+  // uses params directly, so we must do the same to keep lookups consistent.
+  const { callControlId } = await params;
 
   const user = await getAuthUser();
   if (!user) {
