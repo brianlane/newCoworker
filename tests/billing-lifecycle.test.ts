@@ -316,6 +316,14 @@ describe("planLifecycleAction: periodEndReached", () => {
     expect(subUpdate.patch.cancel_reason).toBe("user_period_end");
     expect(subUpdate.patch.cancel_at_period_end).toBe(false);
   });
+
+  it("rejects period-end teardown for non-active/non-canceled rows", () => {
+    const res = planLifecycleAction(
+      { type: "periodEndReached" },
+      makeCtx({ subscription: makeSub({ status: "pending" }) })
+    );
+    expect(res).toEqual({ ok: false, reason: "subscription_not_active" });
+  });
 });
 
 describe("planLifecycleAction: graceExpiredWipe", () => {
@@ -402,5 +410,28 @@ describe("planLifecycleAction: changePlan", () => {
       makeCtx({ profile: makeProfile({ lifetime_subscription_count: 3 }) })
     );
     expect(res).toEqual({ ok: false, reason: "lifetime_subscription_cap_reached" });
+  });
+
+  it("rejects when subscription is not active", () => {
+    const res = planLifecycleAction(
+      { type: "changePlan", newTier: "standard", newPeriod: "monthly" },
+      makeCtx({ subscription: makeSub({ status: "canceled" }) })
+    );
+    expect(res).toEqual({ ok: false, reason: "subscription_not_active" });
+  });
+});
+
+describe("planLifecycleAction: undo/reactivate edge cases", () => {
+  it("rejects undo when the Stripe subscription id is missing", () => {
+    const res = planLifecycleAction(
+      { type: "undoCancelAtPeriodEnd" },
+      makeCtx({
+        subscription: makeSub({
+          cancel_at_period_end: true,
+          stripe_subscription_id: null
+        })
+      })
+    );
+    expect(res).toEqual({ ok: false, reason: "no_stripe_subscription" });
   });
 });

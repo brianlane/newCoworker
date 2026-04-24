@@ -345,6 +345,35 @@ describe("runChangePlanFromCheckout", () => {
     );
   });
 
+  it("covers string teardown failures and already-missing Stripe subscriptions", async () => {
+    stripeRetrieveMock.mockImplementation(async (id: string) => {
+      if (id === "sub_old") throw new Error("No such subscription: sub_old");
+      return {
+        id,
+        status: "active",
+        schedule: null,
+        items: { data: [{ current_period_start: 1700000000, current_period_end: 1702678400 }] }
+      };
+    });
+    hostingerCancelBillingSubscriptionMock.mockRejectedValueOnce("hostinger string failure");
+
+    await runChangePlanFromCheckout(makeSession(), "evt_missing_old");
+
+    expect(createSubscriptionMock).toHaveBeenCalled();
+    expect(updateSubscriptionMock).toHaveBeenCalledWith(
+      "sub-row-old",
+      expect.objectContaining({ status: "canceled" })
+    );
+  });
+
+  it("continues when old Stripe schedule release throws a non-Error", async () => {
+    stripeScheduleReleaseMock.mockRejectedValueOnce("release string failure");
+
+    await runChangePlanFromCheckout(makeSession(), "evt_release_string");
+
+    expect(stripeCancelMock).toHaveBeenCalledWith("sub_old", { prorate: false });
+  });
+
   it("aborts cleanly if new provisioning throws (does not touch old subscription)", async () => {
     orchestrateProvisioningMock.mockRejectedValueOnce(new Error("provision boom"));
 

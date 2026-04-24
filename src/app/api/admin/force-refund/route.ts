@@ -28,7 +28,9 @@ import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader"
 import {
   planLifecycleAction,
   type LifecycleContext,
-  type LifecyclePlan
+  type LifecyclePlan,
+  type DbUpdateOp,
+  type StripeOp
 } from "@/lib/billing/lifecycle";
 import { executeLifecyclePlan } from "@/lib/billing/lifecycle-executor";
 import { getBusiness } from "@/lib/db/businesses";
@@ -99,7 +101,7 @@ function buildAdminForceRefundPlan(
   ctx: LifecycleContext
 ): { ok: true; plan: LifecyclePlan } | { ok: false; reason: string } {
   const primary = planLifecycleAction({ type: "cancelWithRefund" }, ctx);
-  if (primary.ok) return primary;
+  if (primary.ok) return { ok: true, plan: asAdminForceRefundPlan(primary.plan) };
 
   // If the only blocker is refund-window / already-used / missing profile,
   // rebuild ctx with a synthetic eligibility-green profile. For structural
@@ -130,5 +132,17 @@ function buildAdminForceRefundPlan(
     { ...ctx, profile: syntheticProfile }
   );
   if (!forced.ok) return { ok: false, reason: forced.reason };
-  return forced;
+  return { ok: true, plan: asAdminForceRefundPlan(forced.plan) };
+}
+
+function asAdminForceRefundPlan(plan: LifecyclePlan): LifecyclePlan {
+  return {
+    ...plan,
+    stripeOps: plan.stripeOps.map((op): StripeOp =>
+      op.type === "refund_latest_charge" ? { ...op, reason: "admin_force" } : op
+    ),
+    dbUpdates: plan.dbUpdates.map((op): DbUpdateOp =>
+      op.type === "record_refund" ? { ...op, reason: "admin_force" } : op
+    )
+  };
 }

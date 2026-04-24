@@ -31,6 +31,7 @@ export function assertCronAuth(request: Request): boolean {
   if (digestToken.length !== digestSecret.length) return false;
   try {
     return timingSafeEqual(digestToken, digestSecret);
+    /* c8 ignore next -- Node can throw for non-Buffer inputs; both digests above are Buffers. */
   } catch {
     return false;
   }

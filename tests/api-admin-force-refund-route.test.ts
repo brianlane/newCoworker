@@ -82,14 +82,30 @@ beforeEach(() => {
 });
 
 describe("api/admin/force-refund route", () => {
-  it("runs cancelWithRefund directly when the planner accepts it", async () => {
+  it("runs cancelWithRefund directly and relabels refund audit as admin_force", async () => {
     vi.mocked(planLifecycleAction).mockReturnValueOnce({
       ok: true,
       plan: {
-        stripeOps: [],
+        stripeOps: [
+          {
+            type: "refund_latest_charge",
+            stripeSubscriptionId: "sub_stripe",
+            reason: "thirty_day_money_back"
+          }
+        ],
         hostingerOps: [],
         sshOps: [],
-        dbUpdates: [],
+        dbUpdates: [
+          {
+            type: "record_refund",
+            subscriptionId: "sub-1",
+            profileId: "prof-1",
+            stripeRefundId: null,
+            stripeChargeId: null,
+            amountCents: 1000,
+            reason: "thirty_day_money_back"
+          }
+        ],
         emailsToSend: []
       }
     } as never);
@@ -103,7 +119,24 @@ describe("api/admin/force-refund route", () => {
       expect.anything()
     );
     expect(planLifecycleAction).toHaveBeenCalledTimes(1);
-    expect(executeLifecyclePlan).toHaveBeenCalled();
+    expect(executeLifecyclePlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stripeOps: [
+          {
+            type: "refund_latest_charge",
+            stripeSubscriptionId: "sub_stripe",
+            reason: "admin_force"
+          }
+        ],
+        dbUpdates: [
+          expect.objectContaining({
+            type: "record_refund",
+            reason: "admin_force"
+          })
+        ]
+      }),
+      expect.anything()
+    );
   });
 
   it("retries with a synthetic profile when the refund window has closed", async () => {
@@ -112,10 +145,26 @@ describe("api/admin/force-refund route", () => {
       .mockReturnValueOnce({
         ok: true,
         plan: {
-          stripeOps: [],
+          stripeOps: [
+            {
+              type: "refund_latest_charge",
+              stripeSubscriptionId: "sub_stripe",
+              reason: "thirty_day_money_back"
+            }
+          ],
           hostingerOps: [],
           sshOps: [],
-          dbUpdates: [],
+          dbUpdates: [
+            {
+              type: "record_refund",
+              subscriptionId: "sub-1",
+              profileId: "prof-1",
+              stripeRefundId: null,
+              stripeChargeId: null,
+              amountCents: 1000,
+              reason: "thirty_day_money_back"
+            }
+          ],
           emailsToSend: []
         }
       } as never);
@@ -127,7 +176,13 @@ describe("api/admin/force-refund route", () => {
       .mock.calls[1][1];
     expect(secondCallCtx.profile.refund_used_at).toBeNull();
     expect(secondCallCtx.profile.first_paid_at).not.toBeNull();
-    expect(executeLifecyclePlan).toHaveBeenCalled();
+    expect(executeLifecyclePlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stripeOps: [expect.objectContaining({ reason: "admin_force" })],
+        dbUpdates: [expect.objectContaining({ reason: "admin_force" })]
+      }),
+      expect.anything()
+    );
   });
 
   it("retries with a synthetic profile when the refund was already used", async () => {

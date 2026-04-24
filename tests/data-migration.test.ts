@@ -93,6 +93,24 @@ function makeStorage() {
   };
 }
 
+function makeFailingStorage(kind: "upload" | "download" | "remove", error: unknown = { message: "storage failed" }) {
+  return {
+    from() {
+      return {
+        async upload() {
+          return { data: null, error: kind === "upload" ? error : null };
+        },
+        async download() {
+          return { data: null, error: kind === "download" ? error : null };
+        },
+        async remove() {
+          return { data: null, error: kind === "remove" ? error : null };
+        }
+      };
+    }
+  };
+}
+
 describe("data-migration (backup)", () => {
   beforeEach(() => {
     getDataBackupMock.mockReset();
@@ -195,6 +213,84 @@ describe("data-migration (backup)", () => {
       )
     ).rejects.toThrow(/no SSH key/);
   });
+
+  it("throws on malformed tar output, invalid sizes, size mismatch, and upload errors", async () => {
+    const { storage } = makeStorage();
+    await expect(
+      backupBusinessData(
+        { businessId: "biz-1", vpsHost: "1.2.3.4" },
+        {
+          storage,
+          sshKeyLookup: async () => makeSshKey(),
+          sshExecutor: vi.fn().mockResolvedValue({ exitCode: 0, stdout: "bad-output", stderr: "" })
+        }
+      )
+    ).rejects.toThrow(/unexpected tar output/);
+
+    await expect(
+      backupBusinessData(
+        { businessId: "biz-1", vpsHost: "1.2.3.4" },
+        {
+          storage,
+          sshKeyLookup: async () => makeSshKey(),
+          sshExecutor: vi.fn().mockResolvedValue({
+            exitCode: 0,
+            stdout: `${"00".repeat(32)}  nope  ${Buffer.from("abc").toString("base64")}`,
+            stderr: ""
+          })
+        }
+      )
+    ).rejects.toThrow(/invalid size/);
+
+    const body = Buffer.from("abc");
+    const sha = nodeCrypto.createHash("sha256").update(body).digest("hex");
+    await expect(
+      backupBusinessData(
+        { businessId: "biz-1", vpsHost: "1.2.3.4" },
+        {
+          storage,
+          sshKeyLookup: async () => makeSshKey(),
+          sshExecutor: vi.fn().mockResolvedValue({
+            exitCode: 0,
+            stdout: `${sha}  999  ${body.toString("base64")}`,
+            stderr: ""
+          })
+        }
+      )
+    ).rejects.toThrow(/size mismatch/);
+
+    await expect(
+      backupBusinessData(
+        { businessId: "biz-1", vpsHost: "1.2.3.4" },
+        {
+          storage: makeFailingStorage("upload"),
+          sshKeyLookup: async () => makeSshKey(),
+          sshExecutor: vi.fn().mockResolvedValue({
+            exitCode: 0,
+            stdout: `${sha}  ${body.byteLength}  ${body.toString("base64")}`,
+            stderr: ""
+          })
+        }
+      )
+    ).rejects.toThrow(/storage upload failed/);
+
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    await expect(
+      backupBusinessData(
+        { businessId: "biz-1", vpsHost: "1.2.3.4" },
+        {
+          storage: makeFailingStorage("upload", circular),
+          sshKeyLookup: async () => makeSshKey(),
+          sshExecutor: vi.fn().mockResolvedValue({
+            exitCode: 0,
+            stdout: `${sha}  ${body.byteLength}  ${body.toString("base64")}`,
+            stderr: ""
+          })
+        }
+      )
+    ).rejects.toThrow(/storage upload failed/);
+  });
 });
 
 describe("data-migration (restore)", () => {
@@ -271,6 +367,49 @@ describe("data-migration (restore)", () => {
       )
     ).rejects.toThrow(/downloaded sha256 mismatch/);
   });
+
+  it("fails when no SSH key, download fails, or remote untar exits non-zero", async () => {
+    const body = Buffer.from("restore");
+    const sha = nodeCrypto.createHash("sha256").update(body).digest("hex");
+    getDataBackupMock.mockResolvedValue({
+      business_id: "biz-1",
+      storage_bucket: DATA_BACKUP_BUCKET,
+      storage_path: buildBackupStoragePath("biz-1"),
+      sha256: sha,
+      size_bytes: body.byteLength,
+      created_at: "now",
+      updated_at: "now"
+    });
+
+    const { storage, setDownload } = makeStorage();
+    setDownload(body);
+    await expect(
+      restoreBusinessData(
+        { businessId: "biz-1", vpsHost: "4.3.2.1" },
+        { storage, sshExecutor: vi.fn(), sshKeyLookup: async () => null }
+      )
+    ).rejects.toThrow(/no SSH key/);
+
+    await expect(
+      restoreBusinessData(
+        { businessId: "biz-1", vpsHost: "4.3.2.1" },
+        { storage: makeFailingStorage("download"), sshExecutor: vi.fn(), sshKeyLookup: async () => makeSshKey() }
+      )
+    ).rejects.toThrow(/storage download failed/);
+
+    await expect(
+      restoreBusinessData(
+        { businessId: "biz-1", vpsHost: "4.3.2.1", sshKey: makeSshKey(), username: "ubuntu" },
+        {
+          storage,
+          sshExecutor: vi.fn().mockResolvedValue({ exitCode: 66, stdout: "", stderr: "sha mismatch" }),
+          sshKeyLookup: async () => {
+            throw new Error("should not lookup");
+          }
+        }
+      )
+    ).rejects.toThrow(/untar exited 66.*sha mismatch/);
+  });
 });
 
 describe("data-migration (delete)", () => {
@@ -302,6 +441,23 @@ describe("data-migration (delete)", () => {
     getDataBackupMock.mockResolvedValue(null);
     await deleteBusinessBackup("biz-2", { storage });
     expect(removals).toEqual([]);
+    expect(deleteDataBackupRowMock).not.toHaveBeenCalled();
+  });
+
+  it("throws and keeps audit row when storage removal fails", async () => {
+    getDataBackupMock.mockResolvedValue({
+      business_id: "biz-1",
+      storage_bucket: DATA_BACKUP_BUCKET,
+      storage_path: buildBackupStoragePath("biz-1"),
+      sha256: "x",
+      size_bytes: 1,
+      created_at: "now",
+      updated_at: "now"
+    });
+
+    await expect(deleteBusinessBackup("biz-1", { storage: makeFailingStorage("remove") })).rejects.toThrow(
+      /storage remove failed/
+    );
     expect(deleteDataBackupRowMock).not.toHaveBeenCalled();
   });
 });

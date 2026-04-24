@@ -72,7 +72,7 @@ serve(async (req: Request) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("subscription-grace-sweep bridge failure", { target, message });
-    return json({ ok: false, error: "bridge_failure", message }, 502);
+    return json({ ok: false, error: "bridge_failure" }, 502);
   } finally {
     clearTimeout(timeout);
   }
