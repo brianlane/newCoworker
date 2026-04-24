@@ -80,7 +80,8 @@ describe("provisionVpsForBusiness", () => {
       sshUsername: "root",
       sshKey: expect.objectContaining({ id: "row-uuid", business_id: "biz-1" }),
       postInstallScriptId: 11,
-      publicKeyId: 9
+      publicKeyId: 9,
+      hostingerBillingSubscriptionId: null
     });
     expect(phases).toEqual([
       "keypair_generated",

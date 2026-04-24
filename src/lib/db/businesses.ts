@@ -10,7 +10,12 @@ export type BusinessRow = {
   name: string;
   owner_email: string;
   tier: "starter" | "standard" | "enterprise";
-  status: "online" | "offline" | "high_load";
+  /**
+   * `wiped` is a terminal state set by the subscription-grace-sweep after a
+   * canceled subscription's 30-day retention window expires. See the
+   * lifecycle plan and migration 20260501000000_subscription_lifecycle.
+   */
+  status: "online" | "offline" | "high_load" | "wiped";
   hostinger_vps_id: string | null;
   created_at: string;
   is_paused?: boolean;
@@ -23,6 +28,8 @@ export type BusinessRow = {
   customer_channels_enabled?: boolean;
   /** Enterprise tier only: partial TierLimits JSON; merged with defaults in app + Edge. */
   enterprise_limits?: Record<string, unknown> | null;
+  /** Lifetime abuse-tracking profile — null for pre-lifecycle businesses. */
+  customer_profile_id?: string | null;
 };
 
 export async function createBusiness(
@@ -158,6 +165,19 @@ export async function updateBusinessOwnerEmail(
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db.from("businesses").update({ owner_email: ownerEmail }).eq("id", id);
   if (error) throw new Error(`updateBusinessOwnerEmail: ${error.message}`);
+}
+
+export async function setBusinessCustomerProfile(
+  id: string,
+  customerProfileId: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("businesses")
+    .update({ customer_profile_id: customerProfileId })
+    .eq("id", id);
+  if (error) throw new Error(`setBusinessCustomerProfile: ${error.message}`);
 }
 
 export async function updateBusinessOwnerEmailIfPending(

@@ -138,14 +138,14 @@ describe("assertCronAuth", () => {
     expect(await assertCronAuth(fake)).toBe(false);
   });
 
-  it("falls back to SUPABASE_SERVICE_ROLE_KEY only when CRON_ALLOW_SERVICE_ROLE_BEARER=true", async () => {
+  it("rejects SUPABASE_SERVICE_ROLE_KEY even when CRON_ALLOW_SERVICE_ROLE_BEARER=true", async () => {
     envGet.mockImplementation((key: string) => {
       if (key === "INTERNAL_CRON_SECRET") return undefined;
       if (key === "CRON_ALLOW_SERVICE_ROLE_BEARER") return "true";
       if (key === "SUPABASE_SERVICE_ROLE_KEY") return "service-key";
       return undefined;
     });
-    expect(await assertCronAuth(req("Bearer service-key"))).toBe(true);
+    expect(await assertCronAuth(req("Bearer service-key"))).toBe(false);
   });
 
   it("rejects service role bearer when INTERNAL_CRON_SECRET is unset and fallback flag is off", async () => {
@@ -158,14 +158,14 @@ describe("assertCronAuth", () => {
     expect(await assertCronAuth(req("Bearer service-key"))).toBe(false);
   });
 
-  it("treats whitespace-only INTERNAL_CRON_SECRET as unset (fallback to service role when allowed)", async () => {
+  it("treats whitespace-only INTERNAL_CRON_SECRET as unset and rejects service role", async () => {
     envGet.mockImplementation((key: string) => {
       if (key === "INTERNAL_CRON_SECRET") return "   \t";
       if (key === "CRON_ALLOW_SERVICE_ROLE_BEARER") return "true";
       if (key === "SUPABASE_SERVICE_ROLE_KEY") return "service-key";
       return undefined;
     });
-    expect(await assertCronAuth(req("Bearer service-key"))).toBe(true);
+    expect(await assertCronAuth(req("Bearer service-key"))).toBe(false);
   });
 
   it("returns false when fallback is allowed but SUPABASE_SERVICE_ROLE_KEY is empty", async () => {
@@ -178,24 +178,24 @@ describe("assertCronAuth", () => {
     expect(await assertCronAuth(req("Bearer service-key"))).toBe(false);
   });
 
-  it("treats CRON_ALLOW_SERVICE_ROLE_BEARER=TRUE as enabled", async () => {
+  it("ignores CRON_ALLOW_SERVICE_ROLE_BEARER=TRUE", async () => {
     envGet.mockImplementation((key: string) => {
       if (key === "INTERNAL_CRON_SECRET") return undefined;
       if (key === "CRON_ALLOW_SERVICE_ROLE_BEARER") return "TRUE";
       if (key === "SUPABASE_SERVICE_ROLE_KEY") return "svc";
       return undefined;
     });
-    expect(await assertCronAuth(req("Bearer svc"))).toBe(true);
+    expect(await assertCronAuth(req("Bearer svc"))).toBe(false);
   });
 
-  it("trims CRON_ALLOW_SERVICE_ROLE_BEARER value", async () => {
+  it("ignores trimmed CRON_ALLOW_SERVICE_ROLE_BEARER value", async () => {
     envGet.mockImplementation((key: string) => {
       if (key === "INTERNAL_CRON_SECRET") return undefined;
       if (key === "CRON_ALLOW_SERVICE_ROLE_BEARER") return "  true ";
       if (key === "SUPABASE_SERVICE_ROLE_KEY") return "svc";
       return undefined;
     });
-    expect(await assertCronAuth(req("Bearer svc"))).toBe(true);
+    expect(await assertCronAuth(req("Bearer svc"))).toBe(false);
   });
 
   it("returns false when service role is whitespace-only under fallback", async () => {

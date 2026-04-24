@@ -11,6 +11,11 @@ const { mockCheckoutSessionsList } = vi.hoisted(() => ({
   mockCheckoutSessionsList: vi.fn()
 }));
 
+const { mockLoadLifecycleContext, mockExecuteLifecyclePlan } = vi.hoisted(() => ({
+  mockLoadLifecycleContext: vi.fn(),
+  mockExecuteLifecyclePlan: vi.fn()
+}));
+
 vi.mock("@/lib/stripe/client", () => ({
   ensureCommitmentSchedule: vi.fn(),
   verifyWebhook: vi.fn(),
@@ -56,6 +61,14 @@ vi.mock("@/lib/provisioning/orchestrate", () => ({
   orchestrateProvisioning: vi.fn().mockResolvedValue(undefined)
 }));
 
+vi.mock("@/lib/billing/lifecycle-loader", () => ({
+  loadLifecycleContextForBusiness: mockLoadLifecycleContext
+}));
+
+vi.mock("@/lib/billing/lifecycle-executor", () => ({
+  executeLifecyclePlan: mockExecuteLifecyclePlan
+}));
+
 vi.mock("@/lib/logger", () => ({
   logger: {
     error: vi.fn(),
@@ -99,6 +112,9 @@ describe("stripe webhook route", () => {
       current_period_start: 1700000000,
       current_period_end: 1702678400
     });
+    mockLoadLifecycleContext.mockReset();
+    mockExecuteLifecyclePlan.mockReset();
+    mockExecuteLifecyclePlan.mockResolvedValue({});
     vi.mocked(getBusiness).mockResolvedValue({ status: "pending" } as never);
     vi.mocked(ensureCommitmentSchedule).mockResolvedValue("sub_sched_123");
   });
@@ -252,21 +268,23 @@ describe("stripe webhook route", () => {
     expect(mockVoiceBonusRpc).not.toHaveBeenCalled();
   });
 
-  it("marks subscription past_due on async payment failure", async () => {
+  it("leaves pending subscription untouched on async payment failure (no past_due)", async () => {
+    // Lifecycle policy (plan §blocker B2): `past_due` is never written by
+    // app code. Pending subs (never activated) are simply left for the
+    // abandoned-subs cleanup job to prune; active subs are routed through
+    // the `autoCancelOnPaymentFailure` lifecycle action on
+    // `invoice.payment_failed`, not here.
     vi.mocked(verifyWebhook).mockReturnValue({
       id: "evt_2",
       type: "checkout.session.async_payment_failed",
       data: {
         object: {
+          id: "cs_test_failed",
           metadata: {
             businessId: "biz_2"
           }
         }
       }
-    } as never);
-    vi.mocked(getSubscription).mockResolvedValue({
-      id: "local_sub_2",
-      status: "pending"
     } as never);
 
     const response = await POST(
@@ -278,7 +296,112 @@ describe("stripe webhook route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(updateSubscription).toHaveBeenCalledWith("local_sub_2", { status: "past_due" });
+    expect(updateSubscription).not.toHaveBeenCalled();
+  });
+
+  it("does not clobber a canceled lifecycle row when Stripe keeps sending dunning statuses", async () => {
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "local_sub_canceled",
+      status: "canceled",
+      business_id: "biz_canceled"
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_dunning_tail",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_dunning",
+          status: "past_due",
+          cancel_at_period_end: false,
+          metadata: { businessId: "biz_canceled" }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(updateSubscription).not.toHaveBeenCalledWith(
+      "local_sub_canceled",
+      expect.objectContaining({ status: "pending" })
+    );
+  });
+
+  it("runs lifecycle teardown when a period-end subscription is deleted by Stripe", async () => {
+    const existing = {
+      id: "local_sub_period_end",
+      business_id: "biz_period_end",
+      stripe_customer_id: "cus_1",
+      stripe_subscription_id: "sub_period_end",
+      tier: "starter",
+      status: "active",
+      billing_period: "monthly",
+      renewal_at: null,
+      commitment_months: 1,
+      stripe_current_period_start: "2026-04-01T00:00:00.000Z",
+      stripe_current_period_end: "2026-05-01T00:00:00.000Z",
+      stripe_subscription_cached_at: "2026-04-01T00:00:00.000Z",
+      customer_profile_id: "prof-1",
+      canceled_at: "2026-04-15T00:00:00.000Z",
+      cancel_reason: "user_period_end",
+      grace_ends_at: null,
+      wiped_at: null,
+      vps_stopped_at: null,
+      hostinger_billing_subscription_id: "hbs-1",
+      cancel_at_period_end: true,
+      stripe_refund_id: null,
+      refund_amount_cents: null,
+      created_at: "2026-04-01T00:00:00.000Z"
+    };
+    vi.mocked(getSubscription).mockResolvedValue(existing as never);
+    mockLoadLifecycleContext.mockResolvedValue({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: {
+        subscription: existing,
+        ownerEmail: "owner@example.com",
+        ownerAuthUserId: "user-1",
+        profile: null,
+        virtualMachineId: 42,
+        vpsHost: "1.2.3.4",
+        now: new Date("2026-05-01T00:00:00.000Z")
+      }
+    });
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_period_end_deleted",
+      type: "customer.subscription.deleted",
+      data: {
+        object: {
+          id: "sub_period_end",
+          metadata: { businessId: "biz_period_end" }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockExecuteLifecyclePlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stripeOps: [],
+        hostingerOps: expect.arrayContaining([
+          { type: "cancel_billing_subscription", hostingerBillingSubscriptionId: "hbs-1" }
+        ])
+      }),
+      expect.objectContaining({ businessId: "biz_period_end", vpsHost: "1.2.3.4" })
+    );
   });
 
   it("marks subscription active on invoice.paid", async () => {

@@ -3,7 +3,13 @@ import { createCheckoutSession, resolveIntroDiscountCouponId, resolvePriceId } f
 import { createSubscription } from "@/lib/db/subscriptions";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { verifyOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
-import { getBusiness } from "@/lib/db/businesses";
+import { getBusiness, setBusinessCustomerProfile } from "@/lib/db/businesses";
+import {
+  LIFETIME_SUBSCRIPTION_CAP,
+  upsertCustomerProfile,
+  getCustomerProfileById
+} from "@/lib/db/customer-profiles";
+import { logger } from "@/lib/logger";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import { getCommitmentMonths } from "@/lib/plans/tier";
@@ -17,6 +23,22 @@ const schema = z.object({
   signupUserId: z.string().uuid().optional(),
   draftToken: z.string().uuid().optional()
 });
+
+/**
+ * Best-effort signup IP: prefers the left-most (client) value of
+ * `x-forwarded-for`, falls back to `x-real-ip`, otherwise `null`. The IP is
+ * stored on the customer profile for abuse correlation only — a missing or
+ * spoofed header never blocks checkout, it just weakens later identity
+ * merging.
+ */
+function readClientIpFromHeaders(headers: Headers): string | null {
+  const xff = headers.get("x-forwarded-for") ?? "";
+  const first = xff.split(",")[0]?.trim();
+  if (first) return first;
+  const real = headers.get("x-real-ip")?.trim();
+  if (real) return real;
+  return null;
+}
 
 export async function POST(request: Request) {
   try {
@@ -49,6 +71,55 @@ export async function POST(request: Request) {
       }
     }
 
+    // Abuse profile: upsert the `customer_profiles` row for this email + IP
+    // and block checkout if the profile has already consumed its lifetime
+    // subscription allotment (cap = 3). The count is only incremented on
+    // `checkout.session.completed` — not here — so abandoned checkouts
+    // don't burn lifetimes. Errors in the upsert do NOT block checkout;
+    // they just leave `customer_profile_id` unattached on the pending
+    // subscription and we log a warning. The 3-lifetime gate still fires
+    // the next time the user's profile is reachable.
+    const profileEmail = customerEmail;
+    const signupIp = readClientIpFromHeaders(request.headers);
+    let customerProfileId: string | null = null;
+    if (profileEmail) {
+      try {
+        customerProfileId = await upsertCustomerProfile({
+          email: profileEmail,
+          signupIp
+        });
+      } catch (err) {
+        logger.warn("customer_profiles upsert failed during checkout", {
+          businessId: body.businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+        return errorResponse(
+          "INTERNAL_SERVER_ERROR",
+          "Could not verify subscription eligibility. Please retry.",
+          500
+        );
+      }
+
+      if (customerProfileId) {
+        const profile = await getCustomerProfileById(customerProfileId);
+        if (
+          profile &&
+          profile.lifetime_subscription_count >= LIFETIME_SUBSCRIPTION_CAP
+        ) {
+          logger.info("checkout blocked: lifetime subscription cap reached", {
+            businessId: body.businessId,
+            profileId: customerProfileId,
+            count: profile.lifetime_subscription_count
+          });
+          return errorResponse(
+            "FORBIDDEN",
+            "You've reached the maximum number of subscription signups for this account. Contact support if you need another.",
+            403
+          );
+        }
+      }
+    }
+
     const priceId = resolvePriceId(body.tier, body.billingPeriod);
     const discountCouponId = resolveIntroDiscountCouponId(body.tier, body.billingPeriod);
     const commitmentMonths = getCommitmentMonths(body.billingPeriod);
@@ -69,8 +140,21 @@ export async function POST(request: Request) {
       status: "pending",
       billing_period: body.billingPeriod,
       renewal_at: renewalAt.toISOString(),
-      commitment_months: commitmentMonths
+      commitment_months: commitmentMonths,
+      customer_profile_id: customerProfileId
     });
+
+    if (customerProfileId) {
+      try {
+        await setBusinessCustomerProfile(body.businessId, customerProfileId);
+      } catch (err) {
+        logger.warn("businesses.customer_profile_id attach failed during checkout", {
+          businessId: body.businessId,
+          profileId: customerProfileId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
 
     const session = await createCheckoutSession({
       priceId,
@@ -84,7 +168,8 @@ export async function POST(request: Request) {
         businessId: body.businessId,
         tier: body.tier,
         billingPeriod: body.billingPeriod,
-        userId: metadataUserId
+        userId: metadataUserId,
+        ...(customerProfileId ? { customerProfileId } : {})
       }
     });
 

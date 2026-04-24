@@ -1,16 +1,18 @@
 /**
  * /dashboard/billing
  *
- * Tenant-facing billing page. Shows:
- *   - current plan + included usage line
- *   - Stripe-period voice balance (included headroom + bonus remaining, via
- *     `getVoiceBillingSnapshotForBusiness`)
- *   - self-serve voice-bonus top-up packs at `VOICE_BONUS_USD_PER_MINUTE`
- *   - "Manage billing" button → Stripe Customer Portal (reuses existing
- *     `/api/billing/portal`)
+ * Tenant-facing billing page. Rebuilt for the subscription lifecycle
+ * overhaul to surface:
+ *   - <PlanCard>: tier, billing period, status badge, next renewal /
+ *     period-end / grace-wipe date, cancel / undo / reactivate buttons,
+ *     inline upgrade/downgrade selector.
+ *   - <GraceBanner>: only when canceled-in-grace, warns about the wipe
+ *     deadline and offers a single reactivate CTA.
+ *   - Voice balance + bonus packs (unchanged).
  *
- * Bonus purchase requires an active subscription row; the API enforces the
- * same check so the UI is just an early nudge.
+ * Eligibility math (refund-window + change-plan abuse cap) is computed
+ * server-side from the LifecycleContext so the client never needs to
+ * re-derive it.
  */
 
 import { redirect } from "next/navigation";
@@ -24,13 +26,18 @@ import {
   getVoiceBonusBestUsdPerMinute,
   listVoiceBonusPacks
 } from "@/lib/billing/voice-bonus-packs";
+import {
+  getCustomerProfileById,
+  isWithinLifetimeRefundWindow,
+  LIFETIME_SUBSCRIPTION_CAP
+} from "@/lib/db/customer-profiles";
 import { Card } from "@/components/ui/Card";
-import { Badge } from "@/components/ui/Badge";
 import { VoiceBonusPacks } from "@/components/dashboard/VoiceBonusPacks";
+import { PlanCard } from "@/components/billing/PlanCard";
 
 export const dynamic = "force-dynamic";
 
-type SearchParams = { bonus?: string };
+type SearchParams = { bonus?: string; planChanged?: string; reactivated?: string };
 
 function formatMinutes(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return "0 min";
@@ -47,12 +54,9 @@ export default async function BillingPage(props: {
   if (!user.email) redirect("/login?redirectTo=/dashboard/billing");
 
   const db = await createSupabaseServiceClient();
-  // Match the dashboard's ordering (created_at DESC) so the billing
-  // snapshot and the "Buy bonus minutes" flow always target the same
-  // business row as /dashboard.
   const { data: businesses } = await db
     .from("businesses")
-    .select("id, tier, enterprise_limits, name")
+    .select("id, tier, enterprise_limits, name, customer_profile_id")
     .eq("owner_email", user.email)
     .order("created_at", { ascending: false })
     .limit(1);
@@ -61,12 +65,13 @@ export default async function BillingPage(props: {
   const subscription = business ? await getSubscription(business.id) : null;
   const snapshot = business ? await getVoiceBillingSnapshotForBusiness(business.id) : null;
 
-  // Pack amounts are derived from env — either an explicit per-pack cents
-  // override or `VOICE_BONUS_USD_PER_MINUTE` × minutes. Stripe Prices are
-  // immutable by id, so UI ≡ charge is guaranteed as long as any env price
-  // change ships alongside a rotation of the matching
-  // `STRIPE_VOICE_BONUS_*MIN_PRICE_ID` — see the pricing-contract comment in
-  // `src/lib/billing/voice-bonus-packs.ts`.
+  const profile =
+    subscription?.customer_profile_id || business?.customer_profile_id
+      ? await getCustomerProfileById(
+          (subscription?.customer_profile_id ?? business?.customer_profile_id) as string
+        )
+      : null;
+
   const packs = listVoiceBonusPacks();
   const usdPerMinute = getVoiceBonusBestUsdPerMinute(packs);
 
@@ -87,14 +92,80 @@ export default async function BillingPage(props: {
         ? { kind: "warn" as const, text: "Checkout cancelled. No charge was made." }
         : null;
 
+  const planChangedBanner =
+    searchParams.planChanged === "1"
+      ? {
+          kind: "ok" as const,
+          text: "Plan change submitted. We're migrating your workspace to the new VPS — this can take a few minutes."
+        }
+      : null;
+  const reactivatedBanner =
+    searchParams.reactivated === "1"
+      ? {
+          kind: "ok" as const,
+          text: "Reactivation submitted. We're restoring your workspace onto a fresh VPS — this can take a few minutes."
+        }
+      : null;
+
+  // ---- Derive PlanCard props from subscription + profile ---------------
+  const now = new Date();
+  const planStatus: "active" | "active_cancel_at_period_end" | "canceled_in_grace" | "pending" | "canceled" | "wiped" =
+    !subscription
+      ? "canceled"
+      : subscription.wiped_at
+        ? "wiped"
+        : subscription.status === "canceled" && subscription.grace_ends_at &&
+            new Date(subscription.grace_ends_at).getTime() > now.getTime()
+          ? "canceled_in_grace"
+          : subscription.status === "active" && subscription.cancel_at_period_end
+            ? "active_cancel_at_period_end"
+            : subscription.status === "active"
+              ? "active"
+              : subscription.status === "pending"
+                ? "pending"
+                : "canceled";
+
+  const withinRefundWindow = profile ? isWithinLifetimeRefundWindow(profile, now) : false;
+  const refundUsed = Boolean(profile?.refund_used_at);
+  const canRefund =
+    (planStatus === "active" || planStatus === "active_cancel_at_period_end") &&
+    withinRefundWindow &&
+    !refundUsed;
+  const refundBlockedReason = refundUsed
+    ? "You've already used your one-time lifetime refund."
+    : !profile
+      ? "We couldn't verify your lifetime refund eligibility. Contact support if you believe this is wrong."
+      : !withinRefundWindow
+      ? "Your 30-day money-back window has passed."
+      : null;
+
+  const lifetimeCount = profile?.lifetime_subscription_count ?? 0;
+  const capReached = lifetimeCount >= LIFETIME_SUBSCRIPTION_CAP;
+  const canChangePlan = planStatus === "active" && !capReached;
+  const changePlanBlockedReason = capReached
+    ? "You've reached the maximum number of subscription lifetimes for this account."
+    : planStatus !== "active"
+      ? "Plan changes are only available on an active subscription."
+      : null;
+
   return (
     <div className="space-y-6 max-w-3xl">
       <div>
         <h1 className="text-2xl font-bold text-parchment">Billing</h1>
-        <p className="text-sm text-parchment/50 mt-1">
-          Plan, voice minutes, and top-up packs
-        </p>
+        <p className="text-sm text-parchment/50 mt-1">Plan, voice minutes, and top-up packs</p>
       </div>
+
+      {planChangedBanner && (
+        <Card className="border-claw-green/40 bg-claw-green/10">
+          <p className="text-sm text-claw-green">{planChangedBanner.text}</p>
+        </Card>
+      )}
+
+      {reactivatedBanner && (
+        <Card className="border-claw-green/40 bg-claw-green/10">
+          <p className="text-sm text-claw-green">{reactivatedBanner.text}</p>
+        </Card>
+      )}
 
       {bonusBanner && (
         <Card
@@ -106,9 +177,7 @@ export default async function BillingPage(props: {
         >
           <p
             className={
-              bonusBanner.kind === "ok"
-                ? "text-sm text-claw-green"
-                : "text-sm text-spark-orange"
+              bonusBanner.kind === "ok" ? "text-sm text-claw-green" : "text-sm text-spark-orange"
             }
           >
             {bonusBanner.text}
@@ -116,54 +185,36 @@ export default async function BillingPage(props: {
         </Card>
       )}
 
-      <Card>
-        <h2 className="text-sm font-semibold text-parchment mb-4">Subscription</h2>
-        <dl className="space-y-3 text-sm">
-          <div className="flex justify-between">
-            <dt className="text-parchment/50">Plan</dt>
-            <dd>
-              <Badge variant={business?.tier === "standard" ? "online" : "neutral"}>
-                {business?.tier ?? "—"}
-              </Badge>
-            </dd>
-          </div>
-          <div className="flex justify-between">
-            <dt className="text-parchment/50">Status</dt>
-            <dd>
-              <Badge variant={subscription?.status === "active" ? "success" : "pending"}>
-                {subscription?.status ?? "—"}
-              </Badge>
-            </dd>
-          </div>
-          {business?.tier && (
-            <div className="pt-2 border-t border-parchment/10">
-              <dt className="text-parchment/50 text-xs mb-1">Included usage</dt>
-              <dd className="text-xs text-parchment/60 leading-relaxed">
-                {voiceMinutesLine(
-                  business.tier as PlanTier,
-                  business.tier === "enterprise" ? business.enterprise_limits : undefined
-                )}
-                <br />
-                {smsMonthlyLine(
-                  business.tier as PlanTier,
-                  business.tier === "enterprise" ? business.enterprise_limits : undefined
-                )}
-              </dd>
-            </div>
-          )}
-        </dl>
+      <PlanCard
+        tier={(business?.tier ?? null) as PlanTier | null}
+        billingPeriod={subscription?.billing_period ?? null}
+        status={planStatus}
+        renewalAt={subscription?.renewal_at ?? null}
+        periodEnd={subscription?.stripe_current_period_end ?? null}
+        graceEndsAt={subscription?.grace_ends_at ?? null}
+        canRefund={canRefund}
+        refundBlockedReason={refundBlockedReason}
+        canChangePlan={canChangePlan}
+        changePlanBlockedReason={changePlanBlockedReason}
+        stripeCustomerId={subscription?.stripe_customer_id ?? null}
+      />
 
-        {subscription?.stripe_customer_id && (
-          <form action="/api/billing/portal" method="POST" className="mt-4">
-            <button
-              type="submit"
-              className="text-sm text-claw-green hover:underline"
-            >
-              Manage billing and payment methods →
-            </button>
-          </form>
-        )}
-      </Card>
+      {business?.tier && (
+        <Card>
+          <h2 className="text-sm font-semibold text-parchment mb-3">Included usage</h2>
+          <p className="text-xs text-parchment/60 leading-relaxed">
+            {voiceMinutesLine(
+              business.tier as PlanTier,
+              business.tier === "enterprise" ? business.enterprise_limits : undefined
+            )}
+            <br />
+            {smsMonthlyLine(
+              business.tier as PlanTier,
+              business.tier === "enterprise" ? business.enterprise_limits : undefined
+            )}
+          </p>
+        </Card>
+      )}
 
       <Card>
         <h2 className="text-sm font-semibold text-parchment mb-4">Voice balance</h2>
@@ -182,20 +233,14 @@ export default async function BillingPage(props: {
               </dd>
             </div>
             <div>
-              <dt className="text-xs text-parchment/50 uppercase tracking-wider">
-                Bonus balance
-              </dt>
+              <dt className="text-xs text-parchment/50 uppercase tracking-wider">Bonus balance</dt>
               <dd className="mt-1 text-lg font-semibold text-parchment">
                 {formatMinutes(snapshot.bonusSecondsAvailable)}
               </dd>
-              <dd className="text-[11px] text-parchment/40">
-                unused top-up minutes
-              </dd>
+              <dd className="text-[11px] text-parchment/40">unused top-up minutes</dd>
             </div>
             <div>
-              <dt className="text-xs text-parchment/50 uppercase tracking-wider">
-                Top-up rate
-              </dt>
+              <dt className="text-xs text-parchment/50 uppercase tracking-wider">Top-up rate</dt>
               <dd className="mt-1 text-lg font-semibold text-parchment font-mono">
                 from ${usdPerMinute.toFixed(2)}/min
               </dd>

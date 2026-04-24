@@ -87,3 +87,39 @@ export async function verifySignupIdentity(userId: string, email: string): Promi
     return false;
   }
 }
+
+/**
+ * Resolves a Supabase auth user's id by their email via the admin
+ * `listUsers` API. Used by the grace-sweep cron, which needs to delete the
+ * auth user for a wiped business but only has the business's `owner_email`.
+ *
+ * Pagination: we iterate pages until we hit either a match or an empty page.
+ * For tenants with <100K auth users this lands inside the first page almost
+ * always; the outer cap of 10 pages keeps a pathological misconfigured
+ * deployment from hammering the auth API.
+ *
+ * Returns `null` when no user matches — callers should treat that as a
+ * benign "already deleted" state rather than an error, since the same
+ * grace-sweep row can be retried if an earlier run already removed the user.
+ */
+export async function findAuthUserIdByEmail(email: string): Promise<string | null> {
+  if (!email) return null;
+  const target = email.trim().toLowerCase();
+  if (!target) return null;
+
+  const { createSupabaseServiceClient } = await import("@/lib/supabase/server");
+  const db = await createSupabaseServiceClient();
+
+  const PAGE_CAP = 500;
+  const perPage = 200;
+  for (let page = 1; page <= PAGE_CAP; page += 1) {
+    const { data, error } = await db.auth.admin.listUsers({ page, perPage });
+    if (error) return null;
+    const users = data?.users ?? [];
+    if (users.length === 0) return null;
+    const hit = users.find((u) => (u.email ?? "").toLowerCase() === target);
+    if (hit) return hit.id;
+    if (users.length < perPage) return null;
+  }
+  return null;
+}

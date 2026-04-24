@@ -74,7 +74,8 @@ function makeVpsStub(
       rotated_at: null
     },
     postInstallScriptId: 11,
-    publicKeyId: 9
+    publicKeyId: 9,
+    hostingerBillingSubscriptionId: null
   };
 }
 
