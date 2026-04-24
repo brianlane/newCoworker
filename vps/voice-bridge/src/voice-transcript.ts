@@ -12,7 +12,18 @@
  * preferable to hanging up the caller.
  */
 
-import type { LiveServerMessage } from "@google/genai";
+// Structural type for the subset of Gemini `LiveServerMessage` fields we
+// actually touch. Duck-typed rather than imported from `@google/genai` so the
+// root Next.js `tsc --noEmit` (which doesn't resolve the voice-bridge
+// subpackage's node_modules) can still type-check callers of this module
+// without the root package depending on the Gemini SDK.
+export type LiveTranscriptMessage = {
+  serverContent?: {
+    inputTranscription?: { text?: unknown } | null;
+    outputTranscription?: { text?: unknown } | null;
+    turnComplete?: unknown;
+  } | null;
+};
 
 export type TranscriptRole = "caller" | "assistant";
 
@@ -36,7 +47,7 @@ export type TranscriptAdapter = {
 };
 
 export type TranscriptRecorder = {
-  ingest: (message: LiveServerMessage | null | undefined) => Promise<void>;
+  ingest: (message: LiveTranscriptMessage | null | undefined) => Promise<void>;
   finalize: (opts?: { errored?: boolean }) => Promise<void>;
 };
 
@@ -50,21 +61,16 @@ export type TranscriptRecorderInit = {
 /**
  * Narrow the Live-API server content frame to the transcription fields we
  * care about. The `@google/genai` types don't yet declare
- * `inputTranscription` / `outputTranscription`, so we access them through an
- * `unknown` cast with runtime shape checks.
+ * `inputTranscription` / `outputTranscription`, and we don't import from the
+ * SDK here (see `LiveTranscriptMessage` above), so we access fields through
+ * runtime shape checks.
  */
-function extractTranscriptionFrame(message: LiveServerMessage): {
+function extractTranscriptionFrame(message: LiveTranscriptMessage): {
   callerText: string;
   assistantText: string;
   turnComplete: boolean;
 } {
-  const sc = (message as unknown as {
-    serverContent?: {
-      inputTranscription?: { text?: unknown };
-      outputTranscription?: { text?: unknown };
-      turnComplete?: unknown;
-    };
-  }).serverContent;
+  const sc = message.serverContent;
   if (!sc || typeof sc !== "object") {
     return { callerText: "", assistantText: "", turnComplete: false };
   }
@@ -85,6 +91,11 @@ export function createTranscriptRecorder(
   let assistantBuf = "";
   let turnIndex = 0;
   let finalized = false;
+  // Tracks every in-flight `flushTurn` so `finalize` can wait for them to
+  // complete before updating the transcript status. Without this, a flush
+  // awaiting `createTranscript` can leave `transcriptId` null at the moment
+  // finalize checks it, and the row stays 'in_progress' forever.
+  const pendingFlushes = new Set<Promise<void>>();
 
   async function ensureTranscript(): Promise<string | null> {
     if (transcriptId) return transcriptId;
@@ -137,20 +148,46 @@ export function createTranscriptRecorder(
     }
   }
 
-  async function ingest(message: LiveServerMessage | null | undefined): Promise<void> {
+  function trackFlush(): Promise<void> {
+    const p = flushTurn().finally(() => {
+      pendingFlushes.delete(p);
+    });
+    pendingFlushes.add(p);
+    return p;
+  }
+
+  async function ingest(message: LiveTranscriptMessage | null | undefined): Promise<void> {
     if (finalized || !message) return;
     const { callerText, assistantText, turnComplete } = extractTranscriptionFrame(message);
     if (callerText) callerBuf += callerText;
     if (assistantText) assistantBuf += assistantText;
     if (turnComplete) {
-      await flushTurn();
+      await trackFlush();
     }
   }
 
   async function finalize(opts: { errored?: boolean } = {}): Promise<void> {
     if (finalized) return;
     finalized = true;
-    await flushTurn();
+    // 1. Flush any trailing partial (caller's last phrase etc.).
+    await trackFlush();
+    // 2. Drain every in-flight flush. An earlier ingest may have already
+    //    consumed the buffers and be awaiting createTranscript / insertTurn;
+    //    we must wait for that chain to resolve before touching the row.
+    while (pendingFlushes.size > 0) {
+      await Promise.allSettled(Array.from(pendingFlushes));
+    }
+    // 3. Defence in depth: even if all flushes reported "empty buffers" and
+    //    skipped ensureTranscript, a prior flush may have left createInFlight
+    //    pending. Waiting on it lets transcriptId settle so we don't leak an
+    //    'in_progress' row behind a row that was created moments later.
+    if (createInFlight) {
+      try {
+        await createInFlight;
+      } catch {
+        /* already logged in ensureTranscript */
+      }
+    }
     if (!transcriptId) return;
     try {
       await adapter.finalizeTranscript({

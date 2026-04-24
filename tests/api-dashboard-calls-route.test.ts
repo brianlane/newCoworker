@@ -11,7 +11,7 @@ vi.mock("@/lib/db/voice-transcripts", () => ({
 }));
 
 vi.mock("@/lib/rate-limit", () => ({
-  rateLimit: vi.fn(() => ({ success: true, remaining: 59, reset: 0 }))
+  rateLimit: vi.fn(() => ({ success: true, limit: 60, remaining: 59, reset: 0 }))
 }));
 
 import { GET } from "@/app/api/dashboard/calls/[callControlId]/route";
@@ -52,6 +52,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(rateLimit).mockReturnValue({
     success: true,
+    limit: 60,
     remaining: 59,
     reset: 0
   });
@@ -124,6 +125,7 @@ describe("GET /api/dashboard/calls/:callControlId", () => {
     vi.mocked(requireOwner).mockResolvedValue(undefined as never);
     vi.mocked(rateLimit).mockReturnValue({
       success: false,
+      limit: 60,
       remaining: 0,
       reset: Date.now() + 60_000
     });

@@ -11,56 +11,15 @@ import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
-import { Badge } from "@/components/ui/Badge";
+import { listTranscriptsForBusiness } from "@/lib/db/voice-transcripts";
 import {
-  listTranscriptsForBusiness,
-  type VoiceCallTranscriptRow,
-  type VoiceTranscriptStatus
-} from "@/lib/db/voice-transcripts";
+  StatusBadge,
+  callerLabel,
+  formatDateTime,
+  formatDuration
+} from "@/components/dashboard/voice-transcript-helpers";
 
 export const dynamic = "force-dynamic";
-
-function formatDateTime(iso: string): string {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleString(undefined, {
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit"
-    });
-  } catch {
-    return iso;
-  }
-}
-
-function formatDuration(startIso: string, endIso: string | null): string {
-  if (!endIso) return "in progress";
-  const start = Date.parse(startIso);
-  const end = Date.parse(endIso);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return "—";
-  const seconds = Math.round((end - start) / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  return remainder === 0 ? `${minutes}m` : `${minutes}m ${remainder}s`;
-}
-
-function statusBadge(status: VoiceTranscriptStatus) {
-  switch (status) {
-    case "in_progress":
-      return <Badge variant="pending">In progress</Badge>;
-    case "errored":
-      return <Badge variant="error">Errored</Badge>;
-    case "completed":
-    default:
-      return <Badge variant="success">Completed</Badge>;
-  }
-}
-
-function callerLabel(row: VoiceCallTranscriptRow): string {
-  return row.caller_e164?.trim() ? row.caller_e164 : "Unknown caller";
-}
 
 export default async function DashboardCallsPage() {
   const user = await getAuthUser();
@@ -139,9 +98,9 @@ export default async function DashboardCallsPage() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-parchment truncate">
-                        {callerLabel(row)}
+                        {callerLabel(row.caller_e164)}
                       </span>
-                      {statusBadge(row.status)}
+                      <StatusBadge status={row.status} />
                     </div>
                     <p className="text-xs text-parchment/50 mt-0.5">
                       {formatDateTime(row.started_at)} ·{" "}

@@ -427,19 +427,27 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   let session!: Session;
 
   const teardown = async () => {
-    if (ended) return;
-    ended = true;
-    clearTimers();
-    try {
-      session.sendRealtimeInput({ audioStreamEnd: true });
-    } catch {
-      /* ignore */
-    }
-    await new Promise((r) => setTimeout(r, 500));
-    try {
-      session.close();
-    } catch {
-      /* ignore */
+    // Gemini-side teardown is one-shot (sendRealtimeInput / session.close would
+    // fail on a dead session) but the transcript recorder must ALWAYS run its
+    // finalize, even if `onclose` already set `ended=true`. Otherwise an
+    // upstream Live-session close (session expiry, quota, network drop) fires
+    // `onclose` first, and the later `geminiTeardown` from ws.on("close")
+    // short-circuits — leaving the transcript row stuck at status='in_progress'
+    // with a NULL `ended_at`.
+    if (!ended) {
+      ended = true;
+      clearTimers();
+      try {
+        session.sendRealtimeInput({ audioStreamEnd: true });
+      } catch {
+        /* ignore */
+      }
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        session.close();
+      } catch {
+        /* ignore */
+      }
     }
     if (transcriptRecorder) {
       try {
@@ -532,6 +540,15 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       onclose: () => {
         ended = true;
         clearTimers();
+        // Kick the recorder finalize as soon as the Live session closes.
+        // `teardown` (called from ws.on("close")) will do the same — both paths
+        // hit the recorder's internal `finalized` guard so whichever fires
+        // first wins and the second is a no-op. This protects against the
+        // case where Gemini closes first (session expiry / upstream drop) and
+        // teardown might otherwise short-circuit before finalizing the row.
+        if (transcriptRecorder) {
+          void transcriptRecorder.finalize();
+        }
       }
     }
   });

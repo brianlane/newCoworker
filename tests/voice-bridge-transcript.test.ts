@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import type { LiveServerMessage } from "@google/genai";
 import {
   createTranscriptRecorder,
+  type LiveTranscriptMessage,
   type TranscriptAdapter
 } from "../vps/voice-bridge/src/voice-transcript";
 
@@ -61,14 +61,14 @@ function frame(input: {
   caller?: string;
   assistant?: string;
   turnComplete?: boolean;
-}): LiveServerMessage {
+}): LiveTranscriptMessage {
   const sc: Record<string, unknown> = {};
   if (input.caller !== undefined) sc.inputTranscription = { text: input.caller };
   if (input.assistant !== undefined) {
     sc.outputTranscription = { text: input.assistant };
   }
   if (input.turnComplete) sc.turnComplete = true;
-  return { serverContent: sc } as unknown as LiveServerMessage;
+  return { serverContent: sc } as unknown as LiveTranscriptMessage;
 }
 
 let errorSpy: MockInstance<(...args: unknown[]) => void>;
@@ -167,9 +167,9 @@ describe("voice-bridge transcript recorder", () => {
     const r = createTranscriptRecorder(adapter, INIT);
     await r.ingest(null);
     await r.ingest(undefined);
-    await r.ingest({ serverContent: null } as unknown as LiveServerMessage);
-    await r.ingest({ serverContent: 42 } as unknown as LiveServerMessage);
-    await r.ingest({} as LiveServerMessage);
+    await r.ingest({ serverContent: null } as unknown as LiveTranscriptMessage);
+    await r.ingest({ serverContent: 42 } as unknown as LiveTranscriptMessage);
+    await r.ingest({} as LiveTranscriptMessage);
     expect(turns).toHaveLength(0);
   });
 
@@ -182,7 +182,7 @@ describe("voice-bridge transcript recorder", () => {
         outputTranscription: { text: null },
         turnComplete: true
       }
-    } as unknown as LiveServerMessage;
+    } as unknown as LiveTranscriptMessage;
     await r.ingest(bad);
     expect(turns).toHaveLength(0);
   });
@@ -271,6 +271,42 @@ describe("voice-bridge transcript recorder", () => {
       "voice-transcript: finalizeTranscript",
       expect.any(Error)
     );
+  });
+
+  it("finalize waits for a pending createTranscript so the row is never stuck in_progress", async () => {
+    // Regression: finalize used to check `transcriptId` before awaiting the
+    // in-flight createTranscript kicked off by an earlier ingest. When a
+    // concurrent finalize raced an ingest whose flushTurn was still awaiting
+    // ensureTranscript, the row was created moments after finalize returned
+    // and stayed at status='in_progress' forever.
+    let resolveCreate: ((id: string | null) => void) | null = null;
+    let insertedTurns = 0;
+    const finalizeCalls: Array<{ transcriptId: string; status: string }> = [];
+    const adapter: TranscriptAdapter = {
+      createTranscript: () =>
+        new Promise<string | null>((res) => {
+          resolveCreate = res;
+        }),
+      insertTurn: async () => {
+        insertedTurns += 1;
+      },
+      finalizeTranscript: async (input) => {
+        finalizeCalls.push(input);
+      }
+    };
+    const r = createTranscriptRecorder(adapter, INIT);
+    // Ingest fires (fire-and-forget from onmessage) and starts awaiting
+    // createTranscript.
+    const ingestPromise = r.ingest(frame({ caller: "hi", turnComplete: true }));
+    // Finalize races the ingest before createTranscript resolves.
+    const finalizePromise = r.finalize();
+    // Now let createTranscript resolve.
+    resolveCreate!("late-id");
+    await Promise.all([ingestPromise, finalizePromise]);
+    expect(insertedTurns).toBe(1);
+    expect(finalizeCalls).toEqual([
+      { transcriptId: "late-id", status: "completed" }
+    ]);
   });
 
   it("coalesces two concurrent turns into a single createTranscript call", async () => {
