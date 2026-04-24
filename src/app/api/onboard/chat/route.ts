@@ -20,10 +20,10 @@ function resolveOnboardingModels(): string[] {
   const isDev = process.env.NODE_ENV !== "production";
 
   if (isDev || isLocalAppUrl) {
-    return ["openrouter/free", "openai/gpt-5.4-nano"];
+    return ["deepseek/deepseek-v4-flash", "openai/gpt-5.4-nano"];
   }
 
-  return ["openai/gpt-5.4-nano"];
+  return ["deepseek/deepseek-v4-flash"];
 }
 
 const requestSchema = z.object({
@@ -166,6 +166,7 @@ export async function POST(request: Request) {
           temperature: 0.3,
           max_completion_tokens: 1200,
           reasoning: {
+            enabled: false,
             effort: "minimal",
             exclude: true
           },
