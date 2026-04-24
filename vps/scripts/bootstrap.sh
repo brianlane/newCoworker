@@ -20,12 +20,19 @@ log "Hardening system..."
 apt-get update -qq
 apt-get install -y -qq ufw fail2ban unattended-upgrades curl wget git jq zram-config
 
-# UFW firewall — only allow SSH, HTTP, HTTPS
+# UFW firewall — Cloudflare Tunnel (cloudflared) handles all public traffic
+# via an outbound dial, so the only port that needs to be reachable from the
+# internet is SSH. 80/443 are intentionally closed: nothing on the VPS
+# listens on them, and leaving them open is a latent footgun if a future
+# service ever binds 0.0.0.0 by accident.
 ufw default deny incoming
 ufw default allow outgoing
-ufw allow 22/tcp   # SSH
-ufw allow 80/tcp   # HTTP
-ufw allow 443/tcp  # HTTPS
+ufw allow 22/tcp   # SSH (orchestrator deploy + operator escape hatch)
+# Close legacy rules from older bootstraps (idempotent; UFW ignores absent
+# rules). Keeps state in sync with intent on re-bootstrapped hosts that
+# were provisioned before this tightening landed.
+ufw delete allow 80/tcp 2>/dev/null || true
+ufw delete allow 443/tcp 2>/dev/null || true
 ufw --force enable
 
 # fail2ban — block brute-force SSH
@@ -34,6 +41,45 @@ systemctl start fail2ban
 
 # Automatic security updates
 dpkg-reconfigure -plow unattended-upgrades > /dev/null 2>&1
+
+# SSH hardening — a drop-in under /etc/ssh/sshd_config.d/ takes precedence
+# over the main sshd_config (sshd reads .d files first, first match wins).
+# Using a drop-in makes this idempotent across re-bootstraps and keeps the
+# main sshd_config untouched for operator inspection.
+#
+# IMPORTANT: PermitRootLogin stays at `prohibit-password` because the
+# orchestrator SSHes in as root with a per-VPS ed25519 key (see
+# src/lib/hostinger/provision.ts — keypair stored in the `vps_ssh_keys`
+# table). Flipping to `no` would break every subsequent deploy.
+mkdir -p /etc/ssh/sshd_config.d
+cat > /etc/ssh/sshd_config.d/10-newcoworker.conf <<'SSHD_EOF'
+# Managed by vps/scripts/bootstrap.sh. Re-bootstrap to regenerate.
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+PermitEmptyPasswords no
+UsePAM yes
+X11Forwarding no
+AllowTcpForwarding no
+MaxAuthTries 3
+LoginGraceTime 30
+ClientAliveInterval 300
+ClientAliveCountMax 2
+SSHD_EOF
+chmod 0644 /etc/ssh/sshd_config.d/10-newcoworker.conf
+
+# Validate the merged config before reloading sshd — a typo here would
+# prevent sshd from starting on the next reboot and lock us out of the VPS.
+# If validation fails, remove the drop-in so the host stays reachable; the
+# operator can diagnose via /var/log/newcoworker-bootstrap.log.
+if sshd -t 2>/tmp/sshd-test.err; then
+  systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+  log "SSH hardened via /etc/ssh/sshd_config.d/10-newcoworker.conf"
+else
+  log "WARN: sshd -t rejected drop-in; removing to avoid lockout. stderr: $(cat /tmp/sshd-test.err 2>/dev/null)"
+  rm -f /etc/ssh/sshd_config.d/10-newcoworker.conf
+fi
 
 log "System hardening complete."
 
