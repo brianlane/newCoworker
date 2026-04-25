@@ -30,10 +30,7 @@
 
 import type { CancelReason, SubscriptionRow } from "@/lib/db/subscriptions";
 import type { CustomerProfileRow } from "@/lib/db/customer-profiles";
-import {
-  LIFETIME_SUBSCRIPTION_CAP,
-  isWithinLifetimeRefundWindow
-} from "@/lib/db/customer-profiles";
+import { isWithinLifetimeRefundWindow } from "@/lib/db/customer-profiles";
 import { isCanceledInGrace } from "@/lib/db/subscriptions";
 
 /** 30-day grace window after any cancellation. Centralised so callers stay in sync. */
@@ -195,7 +192,6 @@ export type LifecyclePlanError =
   | "refund_already_used"
   | "no_hostinger_billing_subscription"
   | "no_stripe_subscription"
-  | "lifetime_subscription_cap_reached"
   | "missing_context";
 
 // ───────────────────────────────────────────────────────────────────────
@@ -582,7 +578,16 @@ function buildCancelPlan(args: {
       // ctx.virtualMachineId null) doesn't erase the accurate earlier stamp
       // produced on the first run.
       vps_stopped_at: ctx.virtualMachineId !== null ? now.toISOString() : sub.vps_stopped_at,
-      cancel_at_period_end: false
+      cancel_at_period_end: false,
+      // Invalidate the cached Stripe billing-period bounds on cancel so the
+      // Edge voice inbound's `cacheLooksValidForQuotaAfterJitFailure` path
+      // cannot keep reserving minutes against a stale period after the
+      // subscription is terminated. Mirrors the fallback write in the
+      // `customer.subscription.deleted` webhook branch — without this, a
+      // cancel_at_period_end sub that hits `periodEndReached` here would
+      // leave the cache looking live until period_end elapses naturally.
+      stripe_current_period_start: null,
+      stripe_current_period_end: null
     }
   });
   if (includeRefund && profileId) {
