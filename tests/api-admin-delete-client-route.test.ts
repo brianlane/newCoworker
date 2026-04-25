@@ -6,6 +6,7 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 vi.mock("@/lib/db/businesses", () => ({
+  deleteBusiness: vi.fn(),
   getBusiness: vi.fn()
 }));
 
@@ -27,7 +28,7 @@ vi.mock("@/lib/logger", () => ({
 
 import { DELETE } from "@/app/api/admin/delete-client/route";
 import { requireAdmin, findAuthUserIdByEmail } from "@/lib/auth";
-import { getBusiness } from "@/lib/db/businesses";
+import { deleteBusiness, getBusiness } from "@/lib/db/businesses";
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
 import { planLifecycleAction } from "@/lib/billing/lifecycle";
 import { executeLifecyclePlan } from "@/lib/billing/lifecycle-executor";
@@ -58,6 +59,7 @@ beforeEach(() => {
     customer_profile_id: "prof-1"
   } as never);
   vi.mocked(findAuthUserIdByEmail).mockResolvedValue("auth-owner-1");
+  vi.mocked(deleteBusiness).mockResolvedValue(undefined);
   vi.mocked(loadLifecycleContextForBusiness).mockResolvedValue({
     ok: true,
     vpsHost: "1.2.3.4",
@@ -121,13 +123,29 @@ describe("api/admin/delete-client route (adminForceCancel)", () => {
     expect(executeLifecyclePlan).not.toHaveBeenCalled();
   });
 
-  it("returns 404 when the lifecycle context cannot be loaded", async () => {
+  it("deletes subscription-less businesses without lifecycle context", async () => {
     vi.mocked(loadLifecycleContextForBusiness).mockResolvedValueOnce({
       ok: false,
-      reason: "no_subscription"
+      reason: "subscription_not_found"
+    } as never);
+    const response = await DELETE(makeRequest());
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      data: { deleted: true }
+    });
+    expect(deleteBusiness).toHaveBeenCalledWith(BUSINESS_ID);
+    expect(planLifecycleAction).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when a non-subscription lifecycle context cannot be loaded", async () => {
+    vi.mocked(loadLifecycleContextForBusiness).mockResolvedValueOnce({
+      ok: false,
+      reason: "business_owner_mismatch"
     } as never);
     const response = await DELETE(makeRequest());
     expect(response.status).toBe(404);
+    expect(deleteBusiness).not.toHaveBeenCalled();
     expect(planLifecycleAction).not.toHaveBeenCalled();
   });
 

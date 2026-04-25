@@ -683,13 +683,14 @@ describe("runChangePlanFromCheckout", () => {
     expect(stripeCancelMock).toHaveBeenCalledWith("sub_old", { prorate: false });
   });
 
-  it("aborts cleanly if new provisioning throws (does not touch old subscription)", async () => {
+  it("cancels the fresh Stripe sub if new provisioning throws before touching old subscription", async () => {
     orchestrateProvisioningMock.mockRejectedValueOnce(new Error("provision boom"));
 
     await runChangePlanFromCheckout(makeSession(), "evt_7");
 
     expect(createSubscriptionMock).not.toHaveBeenCalled();
-    expect(stripeCancelMock).not.toHaveBeenCalled();
+    expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
+    expect(stripeCancelMock).not.toHaveBeenCalledWith("sub_old", expect.anything());
     expect(hostingerCancelBillingSubscriptionMock).not.toHaveBeenCalled();
     expect(updateSubscriptionMock).not.toHaveBeenCalled();
   });

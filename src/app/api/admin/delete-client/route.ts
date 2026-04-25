@@ -24,7 +24,7 @@ import { successResponse, errorResponse, handleRouteError } from "@/lib/api-resp
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
 import { planLifecycleAction } from "@/lib/billing/lifecycle";
 import { executeLifecyclePlan } from "@/lib/billing/lifecycle-executor";
-import { getBusiness } from "@/lib/db/businesses";
+import { deleteBusiness, getBusiness } from "@/lib/db/businesses";
 import { logger } from "@/lib/logger";
 
 const schema = z.object({
@@ -55,6 +55,15 @@ export async function DELETE(request: Request) {
       ownerAuthUserId
     });
     if (!ctxRes.ok) {
+      if (ctxRes.reason === "subscription_not_found") {
+        await deleteBusiness(body.businessId);
+        logger.info("admin.delete-client: deleted subscription-less business", {
+          adminEmail: admin.email,
+          businessId: body.businessId,
+          ownerEmail: business.owner_email ?? null
+        });
+        return successResponse({ deleted: true });
+      }
       return errorResponse("NOT_FOUND", ctxRes.reason, 404);
     }
 

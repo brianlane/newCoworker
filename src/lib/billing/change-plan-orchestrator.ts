@@ -293,8 +293,8 @@ export async function runChangePlanFromCheckout(
   // internally overwrites `businesses.hostinger_vps_id` with the new VM
   // id, mints a new SSH key, and re-registers the per-tenant Cloudflare
   // tunnel (so DNS swings onto the new VM once the new cloudflared
-  // connects). Fire-and-forget failure leaves the new Stripe sub active
-  // with no VPS — the admin UI surfaces this as a manual recovery step.
+  // connects). If provisioning fails, immediately cancel the freshly paid
+  // Stripe sub so it cannot renew without a corresponding DB row/VPS.
   let newProv: Awaited<ReturnType<typeof orchestrateProvisioning>>;
   try {
     newProv = await orchestrateProvisioning({
@@ -307,6 +307,9 @@ export async function runChangePlanFromCheckout(
       businessId,
       error: errorMessage(err)
     });
+    if (stripeSubscriptionId) {
+      await cancelStripeSubscriptionSafely(stripeSubscriptionId, businessId);
+    }
     return;
   }
 

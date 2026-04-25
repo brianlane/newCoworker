@@ -27,7 +27,7 @@ import {
   listRefundsForSubscription,
   recordSubscriptionRefund
 } from "@/lib/db/subscription-refunds";
-import { setBusinessCustomerProfile } from "@/lib/db/businesses";
+import { deleteBusiness, setBusinessCustomerProfile } from "@/lib/db/businesses";
 import { isCanceledInGrace, listGraceExpiredSubscriptions } from "@/lib/db/subscriptions";
 
 function tableClient(result: unknown, error: unknown = null) {
@@ -357,7 +357,7 @@ describe("subscription refunds db helpers", () => {
 });
 
 describe("remaining lifecycle DB/auth helpers", () => {
-  it("sets business profile and lists grace-expired subscriptions", async () => {
+  it("sets/deletes business rows and lists grace-expired subscriptions", async () => {
     const updateChain = {
       update: vi.fn().mockReturnThis(),
       eq: vi.fn().mockResolvedValue({ error: null })
@@ -369,6 +369,17 @@ describe("remaining lifecycle DB/auth helpers", () => {
     await expect(
       setBusinessCustomerProfile("biz", "prof", { from: vi.fn(() => updateChain) } as never)
     ).rejects.toThrow("setBusinessCustomerProfile: bad");
+
+    const deleteChain = {
+      delete: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockResolvedValue({ error: null })
+    };
+    await expect(deleteBusiness("biz", { from: vi.fn(() => deleteChain) } as never)).resolves.toBeUndefined();
+    expect(deleteChain.delete).toHaveBeenCalled();
+    deleteChain.eq.mockResolvedValueOnce({ error: { message: "delete failed" } });
+    await expect(deleteBusiness("biz", { from: vi.fn(() => deleteChain) } as never)).rejects.toThrow(
+      "deleteBusiness: delete failed"
+    );
 
     const subRows = [{ id: "sub-1" }];
     const listChain = {
@@ -400,6 +411,8 @@ describe("remaining lifecycle DB/auth helpers", () => {
 
     vi.mocked(createSupabaseServiceClient).mockResolvedValueOnce({ from: vi.fn(() => updateChain) } as never);
     await expect(setBusinessCustomerProfile("biz", "prof")).resolves.toBeUndefined();
+    vi.mocked(createSupabaseServiceClient).mockResolvedValueOnce({ from: vi.fn(() => deleteChain) } as never);
+    await expect(deleteBusiness("biz")).resolves.toBeUndefined();
     vi.mocked(createSupabaseServiceClient).mockResolvedValueOnce({ from: vi.fn(() => listChain) } as never);
     listChain.limit.mockResolvedValueOnce({ data: subRows, error: null });
     await expect(listGraceExpiredSubscriptions()).resolves.toEqual(subRows);

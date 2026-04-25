@@ -383,7 +383,7 @@ describe("stripe webhook route", () => {
   });
 
   it("does not clobber a canceled lifecycle row when Stripe keeps sending dunning statuses", async () => {
-    vi.mocked(getSubscription).mockResolvedValue({
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
       id: "local_sub_canceled",
       status: "canceled",
       business_id: "biz_canceled"
@@ -413,6 +413,92 @@ describe("stripe webhook route", () => {
     expect(updateSubscription).not.toHaveBeenCalledWith(
       "local_sub_canceled",
       expect.objectContaining({ status: "pending" })
+    );
+  });
+
+  it("mirrors subscription updates onto the row matching the Stripe subscription id", async () => {
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+      id: "old_sub_row",
+      business_id: "biz_change",
+      status: "active",
+      stripe_subscription_id: "sub_old"
+    } as never);
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "new_sub_row",
+      business_id: "biz_change",
+      status: "active",
+      stripe_subscription_id: "sub_new"
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_old_sub_update",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_old",
+          status: "canceled",
+          cancel_at_period_end: false,
+          metadata: { businessId: "biz_change" },
+          items: { data: [{ current_period_start: 1700000000, current_period_end: 1702678400 }] }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "old_sub_row",
+      expect.objectContaining({
+        status: "canceled",
+        stripe_subscription_id: "sub_old"
+      })
+    );
+    expect(updateSubscription).not.toHaveBeenCalledWith("new_sub_row", expect.any(Object));
+  });
+
+  it("falls back to the pending row for early subscription.created before checkout activation", async () => {
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(null);
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "pending_sub_row",
+      business_id: "biz_pending",
+      status: "pending",
+      stripe_subscription_id: null
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_created_before_checkout",
+      type: "customer.subscription.created",
+      data: {
+        object: {
+          id: "sub_created",
+          status: "active",
+          cancel_at_period_end: false,
+          metadata: { businessId: "biz_pending" },
+          items: { data: [{ current_period_start: 1700000000, current_period_end: 1702678400 }] }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "pending_sub_row",
+      expect.objectContaining({
+        status: "active",
+        stripe_subscription_id: "sub_created"
+      })
     );
   });
 
@@ -566,6 +652,46 @@ describe("stripe webhook route", () => {
         status: "canceled",
         cancel_reason: null,
         cancel_at_period_end: false
+      })
+    );
+  });
+
+  it("does not synthesize grace for already-canceled upgrade-switch subscription deletes", async () => {
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+      id: "old_change_sub",
+      business_id: "biz_change",
+      status: "canceled",
+      cancel_reason: "upgrade_switch",
+      cancel_at_period_end: false,
+      grace_ends_at: null,
+      canceled_at: "2026-04-24T00:00:00.000Z"
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_deleted_old_change_sub",
+      type: "customer.subscription.deleted",
+      data: {
+        object: {
+          id: "sub_old_change",
+          metadata: { businessId: "biz_change" }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "old_change_sub",
+      expect.objectContaining({
+        status: "canceled",
+        cancel_reason: "upgrade_switch",
+        grace_ends_at: null
       })
     );
   });

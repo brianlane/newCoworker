@@ -99,6 +99,12 @@ export async function getBusiness(id: string, client?: SupabaseClient): Promise<
   return data as BusinessRow;
 }
 
+export async function deleteBusiness(id: string, client?: SupabaseClient): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("businesses").delete().eq("id", id);
+  if (error) throw new Error(`deleteBusiness: ${error.message}`);
+}
+
 export async function listBusinesses(client?: SupabaseClient): Promise<BusinessRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db

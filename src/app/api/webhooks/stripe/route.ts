@@ -84,57 +84,73 @@ export async function POST(request: Request) {
       case "customer.subscription.updated": {
         const sub = event.data.object as Stripe.Subscription;
         const businessId = sub.metadata?.businessId;
-        if (businessId) {
-          const existing = await getSubscription(businessId);
-          if (existing) {
-            // Lifecycle rewrite: `past_due` / `unpaid` / `paused` are NOT
-            // valid app states. When Stripe reports those we dispatch the
-            // auto-cancel-on-payment-failure action, which walks the normal
-            // cancel flow (backup, stop VM, cancel Hostinger billing, grace
-            // window). For everything else we keep the existing status
-            // mirror since it's already correct.
-            const lifecycleCancelStatuses: ReadonlySet<Stripe.Subscription.Status> = new Set([
-              "past_due",
-              "unpaid",
-              "paused"
-            ]);
-            if (lifecycleCancelStatuses.has(sub.status) && existing.status === "active") {
-              await dispatchAutoCancelOnPaymentFailure({
-                businessId,
-                reason: `stripe_status:${sub.status}`,
-                eventId: event.id
-              });
-              break;
-            }
-            if (lifecycleCancelStatuses.has(sub.status)) {
-              logger.info("Ignoring Stripe dunning status for non-active lifecycle row", {
-                businessId,
-                stripeSubscriptionId: sub.id,
-                stripeStatus: sub.status,
-                dbStatus: existing.status,
-                eventId: event.id
-              });
-              break;
-            }
-
-            type DbStatus = "active" | "canceled" | "pending";
-            const statusMap: Record<string, DbStatus> = {
-              active: "active",
-              trialing: "active",
-              canceled: "canceled",
-              incomplete_expired: "canceled",
-              incomplete: "pending"
-            };
-            const status: DbStatus = statusMap[sub.status] ?? "pending";
-            // Mirror cancel_at_period_end so the dashboard reflects user
-            // intent without polling Stripe on every render.
-            await updateSubscription(existing.id, {
-              status,
-              stripe_subscription_id: sub.id,
-              cancel_at_period_end: Boolean(sub.cancel_at_period_end),
-              ...stripeSubscriptionPeriodCache(sub)
+        let existing = await getSubscriptionByStripeSubscriptionId(sub.id);
+        if (!existing && event.type === "customer.subscription.created" && businessId) {
+          const candidate = await getSubscription(businessId);
+          existing = candidate && !candidate.stripe_subscription_id ? candidate : null;
+        }
+        if (existing) {
+          if (businessId && existing.business_id !== businessId) {
+            logger.warn("Stripe subscription metadata businessId mismatches local row", {
+              stripeSubscriptionId: sub.id,
+              metadataBusinessId: businessId,
+              rowBusinessId: existing.business_id,
+              eventId: event.id
             });
           }
+          // Lifecycle rewrite: `past_due` / `unpaid` / `paused` are NOT
+          // valid app states. When Stripe reports those we dispatch the
+          // auto-cancel-on-payment-failure action, which walks the normal
+          // cancel flow (backup, stop VM, cancel Hostinger billing, grace
+          // window). For everything else we keep the existing status
+          // mirror since it's already correct.
+          const lifecycleCancelStatuses: ReadonlySet<Stripe.Subscription.Status> = new Set([
+            "past_due",
+            "unpaid",
+            "paused"
+          ]);
+          if (lifecycleCancelStatuses.has(sub.status) && existing.status === "active") {
+            await dispatchAutoCancelOnPaymentFailure({
+              businessId: existing.business_id,
+              reason: `stripe_status:${sub.status}`,
+              eventId: event.id
+            });
+            break;
+          }
+          if (lifecycleCancelStatuses.has(sub.status)) {
+            logger.info("Ignoring Stripe dunning status for non-active lifecycle row", {
+              businessId: existing.business_id,
+              stripeSubscriptionId: sub.id,
+              stripeStatus: sub.status,
+              dbStatus: existing.status,
+              eventId: event.id
+            });
+            break;
+          }
+
+          type DbStatus = "active" | "canceled" | "pending";
+          const statusMap: Record<string, DbStatus> = {
+            active: "active",
+            trialing: "active",
+            canceled: "canceled",
+            incomplete_expired: "canceled",
+            incomplete: "pending"
+          };
+          const status: DbStatus = statusMap[sub.status] ?? "pending";
+          // Mirror cancel_at_period_end so the dashboard reflects user
+          // intent without polling Stripe on every render.
+          await updateSubscription(existing.id, {
+            status,
+            stripe_subscription_id: sub.id,
+            cancel_at_period_end: Boolean(sub.cancel_at_period_end),
+            ...stripeSubscriptionPeriodCache(sub)
+          });
+        } else {
+          logger.info("customer.subscription mirror skipped: no local subscription row for Stripe sub", {
+            stripeSubscriptionId: sub.id,
+            businessId: businessId ?? null,
+            eventId: event.id
+          });
         }
         break;
       }
@@ -174,8 +190,11 @@ export async function POST(request: Request) {
               });
             }
           }
+          const shouldStartGrace =
+            existing.status !== "canceled" && existing.cancel_reason !== "upgrade_switch";
           const graceEndsAt =
-            existing.grace_ends_at ?? new Date(now.getTime() + GRACE_WINDOW_MS).toISOString();
+            existing.grace_ends_at ??
+            (shouldStartGrace ? new Date(now.getTime() + GRACE_WINDOW_MS).toISOString() : null);
           // Clear cached Stripe billing-period bounds on cancel so the
           // Edge voice inbound cannot keep reserving minutes against a
           // stale period after the subscription is gone. Pair with a
