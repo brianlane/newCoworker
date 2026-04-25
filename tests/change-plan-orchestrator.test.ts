@@ -706,14 +706,18 @@ describe("runChangePlanFromCheckout", () => {
     expect(updateSubscriptionMock).not.toHaveBeenCalled();
   });
 
-  it("aborts before provisioning when the lifetime cap increment rejects", async () => {
+  it("aborts before provisioning when the lifetime cap increment rejects and cancels the fresh Stripe sub", async () => {
     incrementLifetimeSubscriptionCountMock.mockRejectedValueOnce(new Error("cap reached"));
 
     await runChangePlanFromCheckout(makeSession(), "evt_change_cap");
 
     expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
     expect(createSubscriptionMock).not.toHaveBeenCalled();
-    expect(stripeCancelMock).not.toHaveBeenCalled();
+    // The newly paid Stripe subscription must be canceled so it doesn't
+    // silently auto-renew for a customer who'll never be provisioned.
+    expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
+    // The OLD sub is NOT touched — teardown never ran.
+    expect(stripeCancelMock).not.toHaveBeenCalledWith("sub_old", expect.anything());
   });
 });
 
@@ -808,7 +812,7 @@ describe("runResubscribeFromCheckout", () => {
     expect(ensureCommitmentScheduleMock).toHaveBeenCalled();
   });
 
-  it("aborts resubscribe before provisioning when the lifetime cap increment rejects", async () => {
+  it("aborts resubscribe before provisioning when the lifetime cap increment rejects and cancels the fresh Stripe sub", async () => {
     getSubscriptionMock.mockResolvedValue({
       id: "sub-row-grace",
       business_id: "biz-1",
@@ -834,6 +838,10 @@ describe("runResubscribeFromCheckout", () => {
 
     expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
     expect(updateSubscriptionMock).not.toHaveBeenCalled();
+    // Same guarantee as the changePlan cap-reached branch: the freshly
+    // paid resubscribe Stripe sub must be canceled so the customer
+    // doesn't keep getting billed with no service behind it.
+    expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
   });
 
   it("aborts resubscribe when fresh provisioning fails", async () => {

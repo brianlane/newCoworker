@@ -37,10 +37,16 @@ export async function POST(request: Request) {
     const payload = bodySchema.parse(await request.json());
 
     const db = await createSupabaseServiceClient();
+    // Match the tenant-facing UI ordering (`/dashboard/billing`,
+    // `/dashboard/layout.tsx`) so owners of multiple businesses act on the
+    // same row the page renders. Without an explicit order, Postgres is
+    // free to return any row and the API would silently target a
+    // different subscription than the one the user sees.
     const { data: businesses } = await db
       .from("businesses")
       .select("id")
       .eq("owner_email", user.email)
+      .order("created_at", { ascending: false })
       .limit(1);
     const business = businesses?.[0];
     if (!business) return errorResponse("NOT_FOUND", "Business not found", 404);

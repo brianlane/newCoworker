@@ -241,6 +241,26 @@ export async function runChangePlanFromCheckout(
         profileId: customerProfileId,
         error: errorMessage(err)
       });
+      // Stripe Checkout has already captured the customer's money for the
+      // new plan, but we're refusing to provision because the atomic
+      // `increment_customer_profile_lifetime_count` RPC enforces
+      // `lifetime_subscription_count < LIFETIME_SUBSCRIPTION_CAP`. The
+      // upstream UI cap check narrows the race (two concurrent checkouts,
+      // or a checkout crossing a different change-plan's completion) but
+      // cannot close it, so we MUST proactively cancel the new Stripe
+      // subscription here — otherwise it stays live, auto-renews on the
+      // next cycle, and we've charged the customer indefinitely for a
+      // service we committed never to provide. Matches the
+      // provisioning-failed abort path above.
+      //
+      // We intentionally do not auto-refund the initial charge from this
+      // path: it's operator-triaged (same as the provisioning-failed
+      // branch) because the event is rare and surfacing it in Stripe
+      // dashboards / ops logs lets humans decide whether a refund is
+      // appropriate per customer.
+      if (stripeSubscriptionId) {
+        await cancelStripeSubscriptionSafely(stripeSubscriptionId, businessId);
+      }
       return;
     }
   }
@@ -533,6 +553,14 @@ export async function runResubscribeFromCheckout(
         profileId: customerProfileId,
         error: errorMessage(err)
       });
+      // Same reasoning as the changePlan cap-reached branch: Stripe has
+      // already captured payment for the new plan, so we must cancel the
+      // new subscription here to prevent silent auto-renewal of a sub the
+      // customer will never receive service on. Refunds are left for
+      // operator triage.
+      if (stripeSubscriptionId) {
+        await cancelStripeSubscriptionSafely(stripeSubscriptionId, businessId);
+      }
       return;
     }
   }

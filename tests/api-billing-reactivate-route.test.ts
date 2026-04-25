@@ -86,6 +86,7 @@ describe("/api/billing/reactivate", () => {
     supabaseFromMock.mockReturnValue({
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
       limit: vi.fn().mockResolvedValue({ data: [{ id: "biz_1" }], error: null })
     });
     loadLifecycleContextMock.mockResolvedValue({
