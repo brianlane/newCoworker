@@ -22,6 +22,13 @@ vi.mock("@/lib/billing/lifecycle-executor", () => ({
   executeLifecyclePlan: vi.fn()
 }));
 
+const mockDeleteAuthUser = vi.fn();
+vi.mock("@/lib/supabase/server", () => ({
+  createSupabaseServiceClient: vi.fn(async () => ({
+    auth: { admin: { deleteUser: mockDeleteAuthUser } }
+  }))
+}));
+
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
 }));
@@ -45,6 +52,8 @@ function makeRequest() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockDeleteAuthUser.mockReset();
+  mockDeleteAuthUser.mockResolvedValue({ error: null });
   vi.mocked(requireAdmin).mockResolvedValue({
     userId: "admin-1",
     email: "admin@example.com",
@@ -123,7 +132,7 @@ describe("api/admin/delete-client route (adminForceCancel)", () => {
     expect(executeLifecyclePlan).not.toHaveBeenCalled();
   });
 
-  it("deletes subscription-less businesses without lifecycle context", async () => {
+  it("deletes subscription-less businesses and disables the owner's auth user", async () => {
     vi.mocked(loadLifecycleContextForBusiness).mockResolvedValueOnce({
       ok: false,
       reason: "subscription_not_found"
@@ -135,7 +144,95 @@ describe("api/admin/delete-client route (adminForceCancel)", () => {
       data: { deleted: true }
     });
     expect(deleteBusiness).toHaveBeenCalledWith(BUSINESS_ID);
+    expect(mockDeleteAuthUser).toHaveBeenCalledWith("auth-owner-1");
     expect(planLifecycleAction).not.toHaveBeenCalled();
+  });
+
+  it("deletes subscription-less businesses even when the owner has no auth user", async () => {
+    vi.mocked(findAuthUserIdByEmail).mockResolvedValueOnce(null);
+    vi.mocked(loadLifecycleContextForBusiness).mockResolvedValueOnce({
+      ok: false,
+      reason: "subscription_not_found"
+    } as never);
+    const response = await DELETE(makeRequest());
+    expect(response.status).toBe(200);
+    expect(deleteBusiness).toHaveBeenCalledWith(BUSINESS_ID);
+    expect(mockDeleteAuthUser).not.toHaveBeenCalled();
+  });
+
+  it("continues subscription-less delete when the auth user is already gone", async () => {
+    mockDeleteAuthUser.mockResolvedValueOnce({ error: { message: "User not found" } });
+    vi.mocked(loadLifecycleContextForBusiness).mockResolvedValueOnce({
+      ok: false,
+      reason: "subscription_not_found"
+    } as never);
+    const response = await DELETE(makeRequest());
+    expect(response.status).toBe(200);
+    expect(deleteBusiness).toHaveBeenCalledWith(BUSINESS_ID);
+    expect(mockDeleteAuthUser).toHaveBeenCalledWith("auth-owner-1");
+  });
+
+  it("continues subscription-less delete when the auth user delete fails", async () => {
+    mockDeleteAuthUser.mockResolvedValueOnce({ error: { message: "Boom" } });
+    vi.mocked(loadLifecycleContextForBusiness).mockResolvedValueOnce({
+      ok: false,
+      reason: "subscription_not_found"
+    } as never);
+    const response = await DELETE(makeRequest());
+    expect(response.status).toBe(200);
+    expect(deleteBusiness).toHaveBeenCalledWith(BUSINESS_ID);
+    expect(mockDeleteAuthUser).toHaveBeenCalledWith("auth-owner-1");
+  });
+
+  it("continues subscription-less delete when deleteUser throws", async () => {
+    mockDeleteAuthUser.mockRejectedValueOnce(new Error("network"));
+    vi.mocked(loadLifecycleContextForBusiness).mockResolvedValueOnce({
+      ok: false,
+      reason: "subscription_not_found"
+    } as never);
+    const response = await DELETE(makeRequest());
+    expect(response.status).toBe(200);
+    expect(deleteBusiness).toHaveBeenCalledWith(BUSINESS_ID);
+  });
+
+  it("continues subscription-less delete when deleteUser throws a non-Error", async () => {
+    mockDeleteAuthUser.mockImplementationOnce(() => {
+      throw "kaboom"; // eslint-disable-line @typescript-eslint/no-throw-literal
+    });
+    vi.mocked(loadLifecycleContextForBusiness).mockResolvedValueOnce({
+      ok: false,
+      reason: "subscription_not_found"
+    } as never);
+    const response = await DELETE(makeRequest());
+    expect(response.status).toBe(200);
+    expect(deleteBusiness).toHaveBeenCalledWith(BUSINESS_ID);
+  });
+
+  it("continues subscription-less delete when auth error has no message", async () => {
+    mockDeleteAuthUser.mockResolvedValueOnce({ error: {} });
+    vi.mocked(loadLifecycleContextForBusiness).mockResolvedValueOnce({
+      ok: false,
+      reason: "subscription_not_found"
+    } as never);
+    const response = await DELETE(makeRequest());
+    expect(response.status).toBe(200);
+    expect(mockDeleteAuthUser).toHaveBeenCalledWith("auth-owner-1");
+  });
+
+  it("skips auth lookup for subscription-less delete when owner email is missing", async () => {
+    vi.mocked(getBusiness).mockResolvedValueOnce({
+      id: BUSINESS_ID,
+      owner_email: null
+    } as never);
+    vi.mocked(loadLifecycleContextForBusiness).mockResolvedValueOnce({
+      ok: false,
+      reason: "subscription_not_found"
+    } as never);
+    const response = await DELETE(makeRequest());
+    expect(response.status).toBe(200);
+    expect(findAuthUserIdByEmail).not.toHaveBeenCalled();
+    expect(mockDeleteAuthUser).not.toHaveBeenCalled();
+    expect(deleteBusiness).toHaveBeenCalledWith(BUSINESS_ID);
   });
 
   it("returns 404 when a non-subscription lifecycle context cannot be loaded", async () => {

@@ -431,6 +431,13 @@ function planAdminForceCancel(ctx: LifecycleContext): LifecyclePlanResult {
 
   // Append the immediate wipe ops so force-cancel is truly terminal even if
   // the grace-sweep doesn't fire before the operator closes the modal.
+  //
+  // We deliberately DO NOT append delete_snapshot / delete_backup_artifact
+  // here: admin force-cancel takes a final backup + Hostinger snapshot
+  // (promised to the operator by DeleteClientButton's "takes a final SSH
+  // backup + snapshot" copy) so those artifacts stay available for
+  // audit/recovery. The grace-expired wipe path — not admin force — is the
+  // one that cleans those artifacts up after the 30-day retention window.
   if (ctx.ownerAuthUserId) {
     plan.dbUpdates.push({
       type: "delete_auth_user",
@@ -441,13 +448,6 @@ function planAdminForceCancel(ctx: LifecycleContext): LifecyclePlanResult {
     type: "mark_business_wiped",
     businessId: sub.business_id
   });
-  plan.dbUpdates.push({
-    type: "delete_backup_artifact",
-    businessId: sub.business_id
-  });
-  if (ctx.virtualMachineId !== null) {
-    plan.hostingerOps.push({ type: "delete_snapshot", virtualMachineId: ctx.virtualMachineId });
-  }
 
   return { ok: true, plan };
 }
@@ -578,7 +578,10 @@ function buildCancelPlan(args: {
       canceled_at: now.toISOString(),
       grace_ends_at: graceEndsAtIso,
       wiped_at: graceMs === 0 ? now.toISOString() : sub.wiped_at,
-      vps_stopped_at: ctx.virtualMachineId !== null ? now.toISOString() : null,
+      // Coalesce vps_stopped_at so an idempotent retry (VM already gone,
+      // ctx.virtualMachineId null) doesn't erase the accurate earlier stamp
+      // produced on the first run.
+      vps_stopped_at: ctx.virtualMachineId !== null ? now.toISOString() : sub.vps_stopped_at,
       cancel_at_period_end: false
     }
   });

@@ -365,7 +365,7 @@ describe("planLifecycleAction: autoCancelOnPaymentFailure", () => {
 });
 
 describe("planLifecycleAction: adminForceCancel", () => {
-  it("collapses grace to zero + appends wipe ops + deletes auth user + snapshot", () => {
+  it("collapses grace to zero + appends wipe ops + deletes auth user, retains backup + snapshot", () => {
     const res = planLifecycleAction({ type: "adminForceCancel" }, makeCtx());
     if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
     const subUpdate = res.plan.dbUpdates[0] as {
@@ -377,7 +377,18 @@ describe("planLifecycleAction: adminForceCancel", () => {
     expect(subUpdate.patch.wiped_at).toBe(subUpdate.patch.canceled_at);
     expect(res.plan.dbUpdates.some((op) => op.type === "mark_business_wiped")).toBe(true);
     expect(res.plan.dbUpdates.some((op) => op.type === "delete_auth_user")).toBe(true);
-    expect(res.plan.hostingerOps).toContainEqual({ type: "delete_snapshot", virtualMachineId: 42 });
+    // Admin force-cancel must NOT wastefully delete the backup + snapshot it
+    // just took — those are retained for audit/recovery.
+    expect(res.plan.dbUpdates.some((op) => op.type === "delete_backup_artifact")).toBe(false);
+    expect(res.plan.hostingerOps).toContainEqual({ type: "create_snapshot", virtualMachineId: 42 });
+    expect(res.plan.hostingerOps).not.toContainEqual(
+      expect.objectContaining({ type: "delete_snapshot" })
+    );
+    expect(res.plan.sshOps).toContainEqual({
+      type: "backup_durable_data",
+      businessId: "biz-1",
+      vpsHost: "1.2.3.4"
+    });
   });
 
   it("omits delete_auth_user when no ownerAuthUserId is known", () => {
@@ -389,7 +400,7 @@ describe("planLifecycleAction: adminForceCancel", () => {
     expect(res.plan.dbUpdates.some((op) => op.type === "delete_auth_user")).toBe(false);
   });
 
-  it("omits final snapshot delete when VM info is unknown", () => {
+  it("omits snapshot creation when VM info is unknown but never emits delete_snapshot", () => {
     const res = planLifecycleAction(
       { type: "adminForceCancel" },
       makeCtx({ virtualMachineId: null, vpsHost: null })
@@ -398,6 +409,24 @@ describe("planLifecycleAction: adminForceCancel", () => {
     expect(res.plan.hostingerOps).not.toContainEqual(
       expect.objectContaining({ type: "delete_snapshot" })
     );
+    expect(res.plan.hostingerOps).not.toContainEqual(
+      expect.objectContaining({ type: "create_snapshot" })
+    );
+  });
+
+  it("preserves the prior vps_stopped_at on idempotent retry when the VM is already gone", () => {
+    const alreadyStopped = makeSub({
+      vps_stopped_at: "2026-04-01T00:00:00.000Z"
+    });
+    const res = planLifecycleAction(
+      { type: "adminForceCancel" },
+      makeCtx({ subscription: alreadyStopped, virtualMachineId: null, vpsHost: null })
+    );
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    const subUpdate = res.plan.dbUpdates.find(
+      (op) => op.type === "update_subscription"
+    ) as { type: "update_subscription"; patch: Record<string, unknown> };
+    expect(subUpdate.patch.vps_stopped_at).toBe("2026-04-01T00:00:00.000Z");
   });
 });
 

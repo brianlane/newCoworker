@@ -77,44 +77,59 @@ export async function POST(request: Request) {
     // `checkout.session.completed` — not here — so abandoned checkouts
     // don't burn lifetimes. If the profile cannot be upserted we block
     // checkout; otherwise failures here could bypass the lifetime cap.
+    //
+    // If we can't resolve an email at all we FAIL CLOSED: without an email
+    // the abuse tracker can't enforce the lifetime cap, so allowing the
+    // checkout to proceed would silently open a bypass for any auth
+    // identity without an email on the session (OAuth provider that
+    // doesn't expose email, etc.).
     const profileEmail = customerEmail;
     const signupIp = readClientIpFromHeaders(request.headers);
     let customerProfileId: string | null = null;
-    if (profileEmail) {
-      try {
-        customerProfileId = await upsertCustomerProfile({
-          email: profileEmail,
-          signupIp
-        });
-      } catch (err) {
-        logger.warn("customer_profiles upsert failed during checkout", {
+    if (!profileEmail) {
+      logger.warn("checkout blocked: no email available for abuse tracking", {
+        businessId: body.businessId,
+        authenticatedUserId: user?.userId ?? null
+      });
+      return errorResponse(
+        "FORBIDDEN",
+        "A verified email is required to start a subscription. Contact support if you think this is a mistake.",
+        403
+      );
+    }
+    try {
+      customerProfileId = await upsertCustomerProfile({
+        email: profileEmail,
+        signupIp
+      });
+    } catch (err) {
+      logger.warn("customer_profiles upsert failed during checkout", {
+        businessId: body.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return errorResponse(
+        "INTERNAL_SERVER_ERROR",
+        "Could not verify subscription eligibility. Please retry.",
+        500
+      );
+    }
+
+    if (customerProfileId) {
+      const profile = await getCustomerProfileById(customerProfileId);
+      if (
+        profile &&
+        profile.lifetime_subscription_count >= LIFETIME_SUBSCRIPTION_CAP
+      ) {
+        logger.info("checkout blocked: lifetime subscription cap reached", {
           businessId: body.businessId,
-          error: err instanceof Error ? err.message : String(err)
+          profileId: customerProfileId,
+          count: profile.lifetime_subscription_count
         });
         return errorResponse(
-          "INTERNAL_SERVER_ERROR",
-          "Could not verify subscription eligibility. Please retry.",
-          500
+          "FORBIDDEN",
+          "You've reached the maximum number of subscription signups for this account. Contact support if you need another.",
+          403
         );
-      }
-
-      if (customerProfileId) {
-        const profile = await getCustomerProfileById(customerProfileId);
-        if (
-          profile &&
-          profile.lifetime_subscription_count >= LIFETIME_SUBSCRIPTION_CAP
-        ) {
-          logger.info("checkout blocked: lifetime subscription cap reached", {
-            businessId: body.businessId,
-            profileId: customerProfileId,
-            count: profile.lifetime_subscription_count
-          });
-          return errorResponse(
-            "FORBIDDEN",
-            "You've reached the maximum number of subscription signups for this account. Contact support if you need another.",
-            403
-          );
-        }
       }
     }
 

@@ -228,6 +228,35 @@ describe("api/checkout route", () => {
     );
   });
 
+  it("blocks checkout when the authenticated user has no email on session", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({
+      userId: signupUserId,
+      email: null,
+      isAdmin: false
+    } as never);
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "standard",
+        businessId,
+        billingPeriod: "annual"
+      })
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.ok).toBe(false);
+    expect(body.error.message).toMatch(/verified email is required/i);
+    expect(upsertCustomerProfile).not.toHaveBeenCalled();
+    expect(getCustomerProfileById).not.toHaveBeenCalled();
+    expect(createCheckoutSession).not.toHaveBeenCalled();
+    expect(createSubscription).not.toHaveBeenCalled();
+  });
+
   it("rejects onboarding-token checkout when the business is no longer pending", async () => {
     vi.mocked(getAuthUser).mockResolvedValue(null);
     vi.mocked(verifyOnboardingToken).mockReturnValue(true);

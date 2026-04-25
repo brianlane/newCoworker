@@ -695,6 +695,17 @@ describe("runChangePlanFromCheckout", () => {
     expect(updateSubscriptionMock).not.toHaveBeenCalled();
   });
 
+  it("aborts without cancelling Stripe when provisioning throws and no new Stripe sub id is on the session", async () => {
+    orchestrateProvisioningMock.mockRejectedValueOnce(new Error("provision boom"));
+
+    await runChangePlanFromCheckout(makeSession({ subscription: null }), "evt_7b");
+
+    expect(createSubscriptionMock).not.toHaveBeenCalled();
+    expect(stripeCancelMock).not.toHaveBeenCalled();
+    expect(hostingerCancelBillingSubscriptionMock).not.toHaveBeenCalled();
+    expect(updateSubscriptionMock).not.toHaveBeenCalled();
+  });
+
   it("aborts before provisioning when the lifetime cap increment rejects", async () => {
     incrementLifetimeSubscriptionCountMock.mockRejectedValueOnce(new Error("cap reached"));
 

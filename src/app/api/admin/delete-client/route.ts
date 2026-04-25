@@ -25,6 +25,7 @@ import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader"
 import { planLifecycleAction } from "@/lib/billing/lifecycle";
 import { executeLifecyclePlan } from "@/lib/billing/lifecycle-executor";
 import { deleteBusiness, getBusiness } from "@/lib/db/businesses";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
 
 const schema = z.object({
@@ -56,11 +57,42 @@ export async function DELETE(request: Request) {
     });
     if (!ctxRes.ok) {
       if (ctxRes.reason === "subscription_not_found") {
+        // Subscription-less hard delete: hard-delete the business row AND
+        // disable the owner's auth user so the UI promise that this
+        // "disables the owner's login" holds. Auth deletion is best-effort
+        // — missing users are ignored, other errors are logged but don't
+        // fail the operator's action since the business row is already
+        // gone at that point.
         await deleteBusiness(body.businessId);
+        if (ownerAuthUserId) {
+          try {
+            const db = await createSupabaseServiceClient();
+            const { error } = await db.auth.admin.deleteUser(ownerAuthUserId);
+            if (error) {
+              const message = error.message ?? String(error);
+              if (!/not found|does not exist/i.test(message)) {
+                logger.warn("admin.delete-client: auth user delete failed", {
+                  adminEmail: admin.email,
+                  businessId: body.businessId,
+                  supabaseUserId: ownerAuthUserId,
+                  error: message
+                });
+              }
+            }
+          } catch (err) {
+            logger.warn("admin.delete-client: auth user delete threw", {
+              adminEmail: admin.email,
+              businessId: body.businessId,
+              supabaseUserId: ownerAuthUserId,
+              error: err instanceof Error ? err.message : String(err)
+            });
+          }
+        }
         logger.info("admin.delete-client: deleted subscription-less business", {
           adminEmail: admin.email,
           businessId: body.businessId,
-          ownerEmail: business.owner_email ?? null
+          ownerEmail: business.owner_email ?? null,
+          authUserDeleted: Boolean(ownerAuthUserId)
         });
         return successResponse({ deleted: true });
       }
