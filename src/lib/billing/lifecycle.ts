@@ -20,7 +20,6 @@
  *   * cancelAtPeriodEnd           — stops auto-renew; stays active till period end
  *   * undoCancelAtPeriodEnd       — re-enables auto-renew; must still be active
  *   * reactivate                  — user produces a fresh checkout during grace
- *   * changePlan                  — upgrade/downgrade (tier and/or billing period)
  *   * autoCancelOnPaymentFailure  — webhook dispatch on invoice.payment_failed
  *   * adminForceCancel            — operator-triggered immediate wipe, no grace
  *   * graceExpiredWipe            — cron-triggered at grace_ends_at
@@ -29,7 +28,6 @@
  * state machine this engine implements.
  */
 
-import type { BillingPeriod, PlanTier } from "@/lib/plans/tier";
 import type { CancelReason, SubscriptionRow } from "@/lib/db/subscriptions";
 import type { CustomerProfileRow } from "@/lib/db/customer-profiles";
 import {
@@ -157,17 +155,10 @@ export type LifecycleAction =
   | {
       type: "reactivate";
       /**
-       * `undoPeriodEnd` flips cancel_at_period_end=false (still inside the
-       * paid period). `resubscribe` produces no plan — the caller must run a
-       * fresh checkout and then dispatch `changePlan` or let the webhook
-       * handle it. Kept distinct here for readability at the call sites.
+       * `undoPeriodEnd` flips cancel_at_period_end=false while the
+       * subscription is still inside the paid period.
        */
       mode: "undoPeriodEnd";
-    }
-  | {
-      type: "changePlan";
-      newTier: PlanTier;
-      newPeriod: BillingPeriod;
     }
   | { type: "autoCancelOnPaymentFailure" }
   | { type: "adminForceCancel" }
@@ -226,8 +217,6 @@ export function planLifecycleAction(
       return planUndoCancelAtPeriodEnd(ctx);
     case "reactivate":
       return planReactivateUndoPeriodEnd(ctx);
-    case "changePlan":
-      return planChangePlan(action.newTier, action.newPeriod, ctx);
     case "autoCancelOnPaymentFailure":
       return planAutoCancelOnPaymentFailure(ctx);
     case "adminForceCancel":
@@ -396,80 +385,6 @@ function planReactivateUndoPeriodEnd(ctx: LifecycleContext): LifecyclePlanResult
   // The grace-period `resubscribe` path is deliberately NOT handled here;
   // it's driven by a fresh Stripe checkout + webhook, not by the planner.
   return planUndoCancelAtPeriodEnd(ctx);
-}
-
-function planChangePlan(
-  _newTier: PlanTier,
-  _newPeriod: BillingPeriod,
-  ctx: LifecycleContext
-): LifecyclePlanResult {
-  const { subscription: sub, profile } = ctx;
-  const now = ctx.now ?? new Date();
-
-  // changePlan is only meaningful on an active subscription. Grace-period
-  // changes go through the resubscribe checkout instead.
-  if (sub.status !== "active") {
-    return { ok: false, reason: "subscription_not_active" };
-  }
-  // Block the abuse cap here too: changePlan counts as a new lifetime
-  // (fresh Stripe sub), so the user must still have headroom.
-  if (profile && profile.lifetime_subscription_count >= LIFETIME_SUBSCRIPTION_CAP) {
-    return { ok: false, reason: "lifetime_subscription_cap_reached" };
-  }
-
-  // The bulk of change-plan runs OUTSIDE the planner: the new checkout is
-  // driven by the user-facing route, and the new VPS is provisioned by the
-  // webhook handler on checkout.session.completed. What the planner covers
-  // is the teardown of the OLD sub: backup data, snapshot, stop VM, cancel
-  // old Stripe + Hostinger billing. We mark the old sub with
-  // cancel_reason='upgrade_switch' so reporting can distinguish it from a
-  // real cancellation.
-  const ops: LifecyclePlan = {
-    stripeOps: [],
-    hostingerOps: [],
-    sshOps: [],
-    dbUpdates: [
-      {
-        type: "update_subscription",
-        subscriptionId: sub.id,
-        patch: {
-          cancel_reason: "upgrade_switch",
-          canceled_at: now.toISOString()
-          // status flip to canceled happens once the NEW sub is provisioned
-          // and webhooks confirm it; we intentionally don't flip here to
-          // avoid a gap where both subs look canceled.
-        }
-      }
-    ],
-    emailsToSend: []
-  };
-
-  if (ctx.virtualMachineId !== null && ctx.vpsHost !== null) {
-    ops.sshOps.push({
-      type: "backup_durable_data",
-      businessId: sub.business_id,
-      vpsHost: ctx.vpsHost
-    });
-    ops.hostingerOps.push({ type: "create_snapshot", virtualMachineId: ctx.virtualMachineId });
-    ops.hostingerOps.push({ type: "stop_vm", virtualMachineId: ctx.virtualMachineId });
-  }
-
-  if (sub.stripe_subscription_id) {
-    ops.stripeOps.push({
-      type: "cancel_subscription",
-      stripeSubscriptionId: sub.stripe_subscription_id,
-      releaseSchedule: true
-    });
-  }
-
-  if (sub.hostinger_billing_subscription_id) {
-    ops.hostingerOps.push({
-      type: "cancel_billing_subscription",
-      hostingerBillingSubscriptionId: sub.hostinger_billing_subscription_id
-    });
-  }
-
-  return { ok: true, plan: ops };
 }
 
 function planAutoCancelOnPaymentFailure(ctx: LifecycleContext): LifecyclePlanResult {

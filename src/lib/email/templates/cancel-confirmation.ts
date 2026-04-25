@@ -106,7 +106,8 @@ function fmtDate(iso: string): string {
       month: "long",
       day: "numeric"
     });
-    /* c8 ignore next -- Intl date formatting does not throw for invalid ISO strings in supported runtimes. */
+  /* v8 ignore next 3 -- Intl date formatting does not throw for invalid ISO strings in supported runtimes. */
+  /* c8 ignore next 3 -- Intl date formatting does not throw for invalid ISO strings in supported runtimes. */
   } catch {
     return iso;
   }

@@ -24,11 +24,11 @@ export type LoadLifecycleContextResult =
 
 export async function loadLifecycleContextForBusiness(
   businessId: string,
-  opts: { ownerAuthUserId?: string } = {}
+  opts: { ownerAuthUserId?: string; subscription?: Awaited<ReturnType<typeof getSubscription>> } = {}
 ): Promise<LoadLifecycleContextResult> {
   const business = await getBusiness(businessId);
   if (!business) return { ok: false, reason: "business_not_found" };
-  const subscription = await getSubscription(businessId);
+  const subscription = opts.subscription ?? (await getSubscription(businessId));
   if (!subscription) return { ok: false, reason: "subscription_not_found" };
 
   const profile = subscription.customer_profile_id

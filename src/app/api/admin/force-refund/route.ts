@@ -100,8 +100,11 @@ export async function POST(request: Request) {
 function buildAdminForceRefundPlan(
   ctx: LifecycleContext
 ): { ok: true; plan: LifecyclePlan } | { ok: false; reason: string } {
+  const realProfileId = ctx.subscription.customer_profile_id ?? ctx.profile?.id ?? null;
   const primary = planLifecycleAction({ type: "cancelWithRefund" }, ctx);
-  if (primary.ok) return { ok: true, plan: asAdminForceRefundPlan(primary.plan) };
+  if (primary.ok) {
+    return { ok: true, plan: asAdminForceRefundPlan(primary.plan, realProfileId) };
+  }
 
   // If the only blocker is refund-window / already-used / missing profile,
   // rebuild ctx with a synthetic eligibility-green profile. For structural
@@ -132,17 +135,26 @@ function buildAdminForceRefundPlan(
     { ...ctx, profile: syntheticProfile }
   );
   if (!forced.ok) return { ok: false, reason: forced.reason };
-  return { ok: true, plan: asAdminForceRefundPlan(forced.plan) };
+  return { ok: true, plan: asAdminForceRefundPlan(forced.plan, realProfileId) };
 }
 
-function asAdminForceRefundPlan(plan: LifecyclePlan): LifecyclePlan {
+function asAdminForceRefundPlan(plan: LifecyclePlan, profileId: string | null): LifecyclePlan {
   return {
     ...plan,
     stripeOps: plan.stripeOps.map((op): StripeOp =>
       op.type === "refund_latest_charge" ? { ...op, reason: "admin_force" } : op
     ),
-    dbUpdates: plan.dbUpdates.map((op): DbUpdateOp =>
-      op.type === "record_refund" ? { ...op, reason: "admin_force" } : op
-    )
+    dbUpdates: plan.dbUpdates.flatMap((op): DbUpdateOp[] => {
+      if (op.type === "mark_refund_used") {
+        return profileId ? [{ ...op, profileId }] : [];
+      }
+      if (op.type === "record_refund") {
+        return [{ ...op, profileId, reason: "admin_force" }];
+      }
+      if (op.type === "update_subscription") {
+        return [{ ...op, patch: { ...op.patch, customer_profile_id: profileId } }];
+      }
+      return [op];
+    })
   };
 }

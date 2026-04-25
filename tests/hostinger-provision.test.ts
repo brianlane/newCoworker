@@ -105,6 +105,50 @@ describe("provisionVpsForBusiness", () => {
     expect(purchaseArg.setup.hostname).toMatch(/^nc-/);
   });
 
+  it("uses Hostinger billing subscription lookup when purchase response omits subscription_id", async () => {
+    const client = makeClientStub({
+      getVirtualMachine: vi.fn().mockResolvedValueOnce({
+        id: 42,
+        state: "running",
+        ipv4: [{ id: 1, address: "1.2.3.4" }]
+      }),
+      listBillingSubscriptions: vi.fn().mockResolvedValue([
+        { id: "billing-other", resource_id: "999" },
+        { id: "billing-42", resource_id: "42" }
+      ])
+    });
+    const dbInsert = vi.fn().mockResolvedValue({
+      id: "row-uuid",
+      business_id: "biz-1",
+      hostinger_vps_id: "42",
+      hostinger_public_key_id: 9,
+      public_key: fakeKeypair.publicKey,
+      private_key_pem: fakeKeypair.privateKeyPem,
+      fingerprint_sha256: fakeKeypair.fingerprintSha256,
+      ssh_username: "root",
+      created_at: "2026-01-01T00:00:00Z",
+      rotated_at: null
+    });
+
+    const result = await provisionVpsForBusiness(
+      {
+        businessId: "biz-1",
+        tier: "starter",
+        postInstallScript: "#!/bin/bash\necho hi",
+        pollIntervalMs: 1,
+        readyTimeoutMs: 10_000
+      },
+      {
+        client: client as unknown as HostingerClient,
+        generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
+        sleep: vi.fn().mockResolvedValue(undefined),
+        db: { insertVpsSshKey: dbInsert }
+      }
+    );
+
+    expect(result.hostingerBillingSubscriptionId).toBe("billing-42");
+  });
+
   it("reuses postInstallScriptId when provided (no upload)", async () => {
     const client = makeClientStub({
       getVirtualMachine: vi.fn().mockResolvedValueOnce({

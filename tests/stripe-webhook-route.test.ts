@@ -359,7 +359,7 @@ describe("stripe webhook route", () => {
       refund_amount_cents: null,
       created_at: "2026-04-01T00:00:00.000Z"
     };
-    vi.mocked(getSubscription).mockResolvedValue(existing as never);
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(existing as never);
     mockLoadLifecycleContext.mockResolvedValue({
       ok: true,
       vpsHost: "1.2.3.4",
@@ -405,7 +405,7 @@ describe("stripe webhook route", () => {
   });
 
   it("does not rerun period-end teardown when a deleted webhook is replayed after teardown", async () => {
-    vi.mocked(getSubscription).mockResolvedValue({
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
       id: "local_sub_period_end",
       business_id: "biz_period_end",
       status: "canceled",
@@ -447,7 +447,7 @@ describe("stripe webhook route", () => {
   });
 
   it("preserves null cancel reason for external Stripe cancellations", async () => {
-    vi.mocked(getSubscription).mockResolvedValue({
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
       id: "local_sub_external",
       business_id: "biz_external",
       status: "active",

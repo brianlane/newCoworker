@@ -185,6 +185,79 @@ describe("api/admin/force-refund route", () => {
     );
   });
 
+  it("does not send synthetic profile ids to DB ops when no real profile exists", async () => {
+    vi.mocked(loadLifecycleContextForBusiness).mockResolvedValueOnce({
+      ...defaultCtx,
+      context: {
+        ...defaultCtx.context,
+        subscription: {
+          ...defaultCtx.context.subscription,
+          customer_profile_id: null
+        },
+        profile: null
+      }
+    } as never);
+    vi.mocked(planLifecycleAction)
+      .mockReturnValueOnce({ ok: false, reason: "missing_context" } as never)
+      .mockReturnValueOnce({
+        ok: true,
+        plan: {
+          stripeOps: [
+            {
+              type: "refund_latest_charge",
+              stripeSubscriptionId: "sub_stripe",
+              reason: "thirty_day_money_back"
+            }
+          ],
+          hostingerOps: [],
+          sshOps: [],
+          dbUpdates: [
+            {
+              type: "update_subscription",
+              subscriptionId: "sub-1",
+              patch: { customer_profile_id: "admin-synthetic" }
+            },
+            {
+              type: "mark_refund_used",
+              profileId: "admin-synthetic",
+              at: "2026-04-15T00:00:00.000Z"
+            },
+            {
+              type: "record_refund",
+              subscriptionId: "sub-1",
+              profileId: "admin-synthetic",
+              stripeRefundId: null,
+              stripeChargeId: null,
+              amountCents: 1000,
+              reason: "thirty_day_money_back"
+            }
+          ],
+          emailsToSend: []
+        }
+      } as never);
+
+    const response = await POST(makeRequest());
+    expect(response.status).toBe(200);
+    expect(executeLifecyclePlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dbUpdates: [
+          expect.objectContaining({
+            type: "update_subscription",
+            patch: expect.objectContaining({ customer_profile_id: null })
+          }),
+          expect.objectContaining({
+            type: "record_refund",
+            profileId: null,
+            reason: "admin_force"
+          })
+        ]
+      }),
+      expect.anything()
+    );
+    const plan = vi.mocked(executeLifecyclePlan).mock.calls[0][0];
+    expect(plan.dbUpdates.some((op) => op.type === "mark_refund_used")).toBe(false);
+  });
+
   it("retries with a synthetic profile when the refund was already used", async () => {
     vi.mocked(planLifecycleAction)
       .mockReturnValueOnce({ ok: false, reason: "refund_already_used" } as never)

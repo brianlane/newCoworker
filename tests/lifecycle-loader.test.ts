@@ -139,4 +139,38 @@ describe("loadLifecycleContextForBusiness", () => {
       context: expect.objectContaining({ virtualMachineId: 42, vpsHost: null })
     });
   });
+
+  it("uses subscription override, defaults env values, and handles non-Error Hostinger failures", async () => {
+    delete process.env.HOSTINGER_API_BASE_URL;
+    delete process.env.HOSTINGER_API_TOKEN;
+    getBusinessMock.mockResolvedValueOnce({
+      id: "biz-1",
+      owner_email: "owner@example.com",
+      customer_profile_id: null,
+      hostinger_vps_id: "42"
+    });
+    getVirtualMachineMock.mockRejectedValueOnce("hostinger string failure");
+
+    const override = {
+      id: "sub-override",
+      business_id: "biz-1",
+      customer_profile_id: null
+    };
+    const res = await loadLifecycleContextForBusiness("biz-1", {
+      subscription: override as never
+    });
+
+    expect(getSubscriptionMock).not.toHaveBeenCalled();
+    expect(getCustomerProfileByIdMock).not.toHaveBeenCalled();
+    expect(res).toEqual({
+      ok: true,
+      vpsHost: null,
+      context: expect.objectContaining({
+        subscription: override,
+        profile: null,
+        virtualMachineId: 42,
+        vpsHost: null
+      })
+    });
+  });
 });

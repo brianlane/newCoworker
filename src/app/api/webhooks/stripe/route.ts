@@ -141,55 +141,61 @@ export async function POST(request: Request) {
 
       case "customer.subscription.deleted": {
         const sub = event.data.object as Stripe.Subscription;
-        const businessId = sub.metadata?.businessId;
-        if (businessId) {
-          const existing = await getSubscription(businessId);
-          if (existing) {
-            const now = new Date();
-            if (existing.cancel_at_period_end) {
-              const ctxRes = await loadLifecycleContextForBusiness(businessId);
-              if (ctxRes.ok) {
-                const planRes = planLifecycleAction({ type: "periodEndReached" }, ctxRes.context);
-                if (planRes.ok) {
-                  await executeLifecyclePlan(planRes.plan, {
-                    businessId,
-                    vpsHost: ctxRes.vpsHost,
-                    customerProfileId: ctxRes.context.subscription.customer_profile_id
-                  });
-                  break;
-                }
-                logger.warn("periodEndReached planner rejected; falling back to DB mirror", {
-                  businessId,
-                  subscriptionId: existing.id,
-                  reason: planRes.reason,
-                  eventId: event.id
-                });
-              } else {
-                logger.warn("periodEndReached context load failed; falling back to DB mirror", {
-                  businessId,
-                  subscriptionId: existing.id,
-                  reason: ctxRes.reason,
-                  eventId: event.id
-                });
-              }
-            }
-            const graceEndsAt =
-              existing.grace_ends_at ?? new Date(now.getTime() + GRACE_WINDOW_MS).toISOString();
-            // Clear cached Stripe billing-period bounds on cancel so the
-            // Edge voice inbound cannot keep reserving minutes against a
-            // stale period after the subscription is gone. Pair with a
-            // grace deadline so the wipe-sweep picks the row up.
-            await updateSubscription(existing.id, {
-              status: "canceled",
-              stripe_current_period_start: null,
-              stripe_current_period_end: null,
-              stripe_subscription_cached_at: now.toISOString(),
-              grace_ends_at: graceEndsAt,
-              canceled_at: existing.canceled_at ?? now.toISOString(),
-              cancel_reason: existing.cancel_reason,
-              cancel_at_period_end: false
+        const existing = await getSubscriptionByStripeSubscriptionId(sub.id);
+        if (existing) {
+          const businessId = existing.business_id;
+          const now = new Date();
+          if (existing.cancel_at_period_end) {
+            const ctxRes = await loadLifecycleContextForBusiness(businessId, {
+              subscription: existing
             });
+            if (ctxRes.ok) {
+              const planRes = planLifecycleAction({ type: "periodEndReached" }, ctxRes.context);
+              if (planRes.ok) {
+                await executeLifecyclePlan(planRes.plan, {
+                  businessId,
+                  vpsHost: ctxRes.vpsHost,
+                  customerProfileId: ctxRes.context.subscription.customer_profile_id
+                });
+                break;
+              }
+              logger.warn("periodEndReached planner rejected; falling back to DB mirror", {
+                businessId,
+                subscriptionId: existing.id,
+                reason: planRes.reason,
+                eventId: event.id
+              });
+            } else {
+              logger.warn("periodEndReached context load failed; falling back to DB mirror", {
+                businessId,
+                subscriptionId: existing.id,
+                reason: ctxRes.reason,
+                eventId: event.id
+              });
+            }
           }
+          const graceEndsAt =
+            existing.grace_ends_at ?? new Date(now.getTime() + GRACE_WINDOW_MS).toISOString();
+          // Clear cached Stripe billing-period bounds on cancel so the
+          // Edge voice inbound cannot keep reserving minutes against a
+          // stale period after the subscription is gone. Pair with a
+          // grace deadline so the wipe-sweep picks the row up.
+          await updateSubscription(existing.id, {
+            status: "canceled",
+            stripe_current_period_start: null,
+            stripe_current_period_end: null,
+            stripe_subscription_cached_at: now.toISOString(),
+            grace_ends_at: graceEndsAt,
+            canceled_at: existing.canceled_at ?? now.toISOString(),
+            cancel_reason: existing.cancel_reason,
+            cancel_at_period_end: false
+          });
+        } else {
+          logger.info("customer.subscription.deleted: no local subscription row for Stripe sub", {
+            stripeSubscriptionId: sub.id,
+            businessId: sub.metadata?.businessId ?? null,
+            eventId: event.id
+          });
         }
         break;
       }

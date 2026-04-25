@@ -439,4 +439,134 @@ describe("runResubscribeFromCheckout", () => {
     );
     expect(incrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
   });
+
+  it("continues when resubscribe post-update bookkeeping fails", async () => {
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-row-grace",
+      business_id: "biz-1",
+      stripe_subscription_id: "sub_old_canceled",
+      hostinger_billing_subscription_id: "billing_old_canceled",
+      customer_profile_id: "prof-1",
+      tier: "starter",
+      billing_period: "monthly",
+      status: "canceled",
+      grace_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      wiped_at: null,
+      created_at: "2026-01-01T00:00:00.000Z"
+    });
+    setBusinessCustomerProfileMock.mockRejectedValueOnce(new Error("profile link failed"));
+    incrementLifetimeSubscriptionCountMock.mockRejectedValueOnce("count failed");
+    ensureCommitmentScheduleMock.mockRejectedValueOnce(new Error("schedule failed"));
+
+    await runResubscribeFromCheckout(
+      makeSession({
+        metadata: {
+          businessId: "biz-1",
+          tier: "standard",
+          billingPeriod: "annual",
+          lifecycleAction: "resubscribe",
+          customerProfileId: "prof-1"
+        }
+      }),
+      "evt_resub_failures"
+    );
+
+    expect(updateSubscriptionMock).toHaveBeenCalledWith(
+      "sub-row-grace",
+      expect.objectContaining({ status: "active", cancel_reason: null })
+    );
+    expect(ensureCommitmentScheduleMock).toHaveBeenCalled();
+  });
+
+  it("aborts resubscribe when fresh provisioning fails", async () => {
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-row-grace",
+      business_id: "biz-1",
+      customer_profile_id: "prof-1",
+      status: "canceled",
+      grace_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      wiped_at: null
+    });
+    orchestrateProvisioningMock.mockRejectedValueOnce(new Error("provision failed"));
+
+    await runResubscribeFromCheckout(
+      makeSession({
+        metadata: {
+          businessId: "biz-1",
+          tier: "standard",
+          billingPeriod: "annual",
+          lifecycleAction: "resubscribe",
+          customerProfileId: "prof-1"
+        }
+      }),
+      "evt_resub_provision_fail"
+    );
+
+    expect(updateSubscriptionMock).not.toHaveBeenCalled();
+  });
+
+  it("continues resubscribe when restore or Stripe subscription lookup fails", async () => {
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-row-grace",
+      business_id: "biz-1",
+      customer_profile_id: "prof-1",
+      status: "canceled",
+      grace_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      wiped_at: null
+    });
+    restoreBusinessDataMock.mockRejectedValueOnce("restore string failure");
+    stripeRetrieveMock.mockRejectedValueOnce(new Error("stripe lookup failed"));
+
+    await runResubscribeFromCheckout(
+      makeSession({
+        metadata: {
+          businessId: "biz-1",
+          tier: "standard",
+          billingPeriod: "annual",
+          lifecycleAction: "resubscribe",
+          customerProfileId: "prof-1"
+        }
+      }),
+      "evt_resub_restore_fail"
+    );
+
+    expect(updateSubscriptionMock).toHaveBeenCalledWith(
+      "sub-row-grace",
+      expect.objectContaining({ status: "active" })
+    );
+  });
+
+  it("skips resubscribe restore when the new VPS host cannot be resolved", async () => {
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-row-grace",
+      business_id: "biz-1",
+      customer_profile_id: "prof-1",
+      status: "canceled",
+      grace_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      wiped_at: null
+    });
+    hostingerGetVmMock.mockImplementation(async (id: number) => ({
+      id,
+      ipv4: []
+    }));
+
+    await runResubscribeFromCheckout(
+      makeSession({
+        metadata: {
+          businessId: "biz-1",
+          tier: "standard",
+          billingPeriod: "annual",
+          lifecycleAction: "resubscribe",
+          customerProfileId: "prof-1"
+        }
+      }),
+      "evt_resub_no_host"
+    );
+
+    expect(restoreBusinessDataMock).not.toHaveBeenCalled();
+    expect(updateSubscriptionMock).toHaveBeenCalledWith(
+      "sub-row-grace",
+      expect.objectContaining({ status: "active" })
+    );
+  });
 });

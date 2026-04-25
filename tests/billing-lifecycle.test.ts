@@ -435,49 +435,6 @@ describe("planLifecycleAction: graceExpiredWipe", () => {
   });
 });
 
-describe("planLifecycleAction: changePlan", () => {
-  it("tears old sub down and emits backup + snapshot + stop + stripe cancel", () => {
-    const res = planLifecycleAction(
-      { type: "changePlan", newTier: "standard", newPeriod: "monthly" },
-      makeCtx()
-    );
-    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
-    const subUpdate = res.plan.dbUpdates[0] as {
-      type: "update_subscription";
-      patch: Record<string, unknown>;
-    };
-    expect(subUpdate.patch.cancel_reason).toBe("upgrade_switch");
-    expect(res.plan.sshOps[0].type).toBe("backup_durable_data");
-    expect(res.plan.hostingerOps).toContainEqual({ type: "create_snapshot", virtualMachineId: 42 });
-    expect(res.plan.hostingerOps).toContainEqual({ type: "stop_vm", virtualMachineId: 42 });
-    expect(res.plan.hostingerOps).toContainEqual({
-      type: "cancel_billing_subscription",
-      hostingerBillingSubscriptionId: "hbs-1"
-    });
-    expect(res.plan.stripeOps).toContainEqual({
-      type: "cancel_subscription",
-      stripeSubscriptionId: "sub_stripe_1",
-      releaseSchedule: true
-    });
-  });
-
-  it("rejects when lifetime cap is already reached", () => {
-    const res = planLifecycleAction(
-      { type: "changePlan", newTier: "standard", newPeriod: "monthly" },
-      makeCtx({ profile: makeProfile({ lifetime_subscription_count: 3 }) })
-    );
-    expect(res).toEqual({ ok: false, reason: "lifetime_subscription_cap_reached" });
-  });
-
-  it("rejects when subscription is not active", () => {
-    const res = planLifecycleAction(
-      { type: "changePlan", newTier: "standard", newPeriod: "monthly" },
-      makeCtx({ subscription: makeSub({ status: "canceled" }) })
-    );
-    expect(res).toEqual({ ok: false, reason: "subscription_not_active" });
-  });
-});
-
 describe("planLifecycleAction: undo/reactivate edge cases", () => {
   it("rejects undo when subscription is not active", () => {
     const res = planLifecycleAction(

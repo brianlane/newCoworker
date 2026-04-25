@@ -28,7 +28,7 @@ import {
   recordSubscriptionRefund
 } from "@/lib/db/subscription-refunds";
 import { setBusinessCustomerProfile } from "@/lib/db/businesses";
-import { listGraceExpiredSubscriptions } from "@/lib/db/subscriptions";
+import { isCanceledInGrace, listGraceExpiredSubscriptions } from "@/lib/db/subscriptions";
 
 function tableClient(result: unknown, error: unknown = null) {
   const chain = {
@@ -421,5 +421,30 @@ describe("remaining lifecycle DB/auth helpers", () => {
       auth: { admin: { listUsers: vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } }) } }
     } as never);
     await expect(findAuthUserIdByEmail("error@example.com")).resolves.toBeNull();
+
+    await expect(findAuthUserIdByEmail(undefined as unknown as string)).resolves.toBeNull();
+    vi.mocked(createSupabaseServiceClient).mockResolvedValueOnce({
+      auth: { admin: { listUsers: vi.fn().mockResolvedValue({ data: null, error: null }) } }
+    } as never);
+    await expect(findAuthUserIdByEmail("nodata@example.com")).resolves.toBeNull();
+    vi.mocked(createSupabaseServiceClient).mockResolvedValueOnce({
+      auth: {
+        admin: {
+          listUsers: vi.fn().mockResolvedValue({
+            data: { users: [{ id: "null-email", email: null }] },
+            error: null
+          })
+        }
+      }
+    } as never);
+    await expect(findAuthUserIdByEmail("null-email@example.com")).resolves.toBeNull();
+  });
+
+  it("covers canceled-in-grace predicate branches", () => {
+    const future = new Date(Date.now() + 60_000).toISOString();
+    expect(isCanceledInGrace({ status: "active", grace_ends_at: future, wiped_at: null })).toBe(false);
+    expect(isCanceledInGrace({ status: "canceled", grace_ends_at: future, wiped_at: "now" })).toBe(false);
+    expect(isCanceledInGrace({ status: "canceled", grace_ends_at: null, wiped_at: null })).toBe(false);
+    expect(isCanceledInGrace({ status: "canceled", grace_ends_at: future, wiped_at: null })).toBe(true);
   });
 });

@@ -75,10 +75,8 @@ export async function POST(request: Request) {
     // and block checkout if the profile has already consumed its lifetime
     // subscription allotment (cap = 3). The count is only incremented on
     // `checkout.session.completed` — not here — so abandoned checkouts
-    // don't burn lifetimes. Errors in the upsert do NOT block checkout;
-    // they just leave `customer_profile_id` unattached on the pending
-    // subscription and we log a warning. The 3-lifetime gate still fires
-    // the next time the user's profile is reachable.
+    // don't burn lifetimes. If the profile cannot be upserted we block
+    // checkout; otherwise failures here could bypass the lifetime cap.
     const profileEmail = customerEmail;
     const signupIp = readClientIpFromHeaders(request.headers);
     let customerProfileId: string | null = null;
