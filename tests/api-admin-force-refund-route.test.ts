@@ -97,6 +97,15 @@ describe("api/admin/force-refund route", () => {
         sshOps: [],
         dbUpdates: [
           {
+            type: "update_subscription",
+            subscriptionId: "sub-1",
+            patch: {
+              status: "canceled",
+              cancel_reason: "user_refund",
+              customer_profile_id: "prof-old"
+            }
+          },
+          {
             type: "record_refund",
             subscriptionId: "sub-1",
             profileId: "prof-1",
@@ -106,7 +115,16 @@ describe("api/admin/force-refund route", () => {
             reason: "thirty_day_money_back"
           }
         ],
-        emailsToSend: []
+        emailsToSend: [
+          {
+            type: "send_cancel_confirmation",
+            toEmail: "owner@example.com",
+            businessId: BUSINESS_ID,
+            reason: "user_refund",
+            effectiveAt: "2026-04-15T00:00:00.000Z",
+            graceEndsAt: "2026-05-15T00:00:00.000Z"
+          }
+        ]
       }
     } as never);
 
@@ -130,7 +148,20 @@ describe("api/admin/force-refund route", () => {
         ],
         dbUpdates: [
           expect.objectContaining({
+            type: "update_subscription",
+            patch: expect.objectContaining({
+              cancel_reason: "admin_force",
+              customer_profile_id: "prof-1"
+            })
+          }),
+          expect.objectContaining({
             type: "record_refund",
+            reason: "admin_force"
+          })
+        ],
+        emailsToSend: [
+          expect.objectContaining({
+            type: "send_cancel_confirmation",
             reason: "admin_force"
           })
         ]

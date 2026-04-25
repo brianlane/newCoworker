@@ -30,6 +30,7 @@ import {
   type LifecycleContext,
   type LifecyclePlan,
   type DbUpdateOp,
+  type EmailOp,
   type StripeOp
 } from "@/lib/billing/lifecycle";
 import { executeLifecyclePlan } from "@/lib/billing/lifecycle-executor";
@@ -139,6 +140,13 @@ function buildAdminForceRefundPlan(
 }
 
 function asAdminForceRefundPlan(plan: LifecyclePlan, profileId: string | null): LifecyclePlan {
+  // The cancel-with-refund planner stamps `cancel_reason: "user_refund"` on
+  // the subscription patch + cancel-confirmation email because the planner
+  // is generic to self-serve + admin flows. When we re-use it for an
+  // operator-initiated force-refund, rewrite every spot that labels intent
+  // so the `subscriptions.cancel_reason` audit column, the GraceBanner
+  // headline, and the cancel-confirmation email copy all attribute the
+  // action to admin rather than the customer.
   return {
     ...plan,
     stripeOps: plan.stripeOps.map((op): StripeOp =>
@@ -152,9 +160,21 @@ function asAdminForceRefundPlan(plan: LifecyclePlan, profileId: string | null): 
         return [{ ...op, profileId, reason: "admin_force" }];
       }
       if (op.type === "update_subscription") {
-        return [{ ...op, patch: { ...op.patch, customer_profile_id: profileId } }];
+        return [
+          {
+            ...op,
+            patch: {
+              ...op.patch,
+              customer_profile_id: profileId,
+              cancel_reason: "admin_force"
+            }
+          }
+        ];
       }
       return [op];
-    })
+    }),
+    emailsToSend: plan.emailsToSend.map((op): EmailOp =>
+      op.type === "send_cancel_confirmation" ? { ...op, reason: "admin_force" } : op
+    )
   };
 }

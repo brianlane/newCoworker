@@ -197,7 +197,8 @@ describe("api/admin/delete-client route (adminForceCancel)", () => {
 
   it("continues subscription-less delete when deleteUser throws a non-Error", async () => {
     mockDeleteAuthUser.mockImplementationOnce(() => {
-      throw "kaboom"; // eslint-disable-line @typescript-eslint/no-throw-literal
+      // eslint-disable-next-line no-throw-literal
+      throw "kaboom";
     });
     vi.mocked(loadLifecycleContextForBusiness).mockResolvedValueOnce({
       ok: false,
