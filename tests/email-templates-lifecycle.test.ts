@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildCancelConfirmationEmail } from "@/lib/email/templates/cancel-confirmation";
 import { buildRefundIssuedEmail } from "@/lib/email/templates/refund-issued";
 
@@ -25,6 +25,15 @@ describe("cancel-confirmation email", () => {
     expect(text).toMatch(/couldn't process your last payment/i);
     expect(text).toMatch(/Reactivate/);
     expect(text).toMatch(/2026/);
+  });
+
+  it("uses the default retention message for payment failures without a grace deadline", () => {
+    const { text } = buildCancelConfirmationEmail({
+      reason: "payment_failed",
+      effectiveAt: "2026-06-01T00:00:00.000Z",
+      graceEndsAt: null
+    });
+    expect(text).toMatch(/30 days from now/);
   });
 
   it("signals the plan-change in-progress for upgrade_switch", () => {
@@ -66,6 +75,24 @@ describe("cancel-confirmation email", () => {
       graceEndsAt: null
     });
     expect(text).toMatch(/30 days from now/);
+  });
+
+  it("falls back to the raw date if formatting throws", () => {
+    const spy = vi
+      .spyOn(Date.prototype, "toLocaleDateString")
+      .mockImplementation(() => {
+        throw new Error("date formatting unavailable");
+      });
+    try {
+      const { text } = buildCancelConfirmationEmail({
+        reason: "user_refund",
+        effectiveAt: "2026-06-01T00:00:00.000Z",
+        graceEndsAt: "2026-07-01T00:00:00.000Z"
+      });
+      expect(text).toContain("2026-07-01T00:00:00.000Z");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

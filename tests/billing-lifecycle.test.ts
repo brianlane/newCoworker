@@ -149,6 +149,27 @@ describe("planLifecycleAction: cancelWithRefund", () => {
     );
   });
 
+  it("defaults refund amounts to null/zero when invoice amount is unknown", () => {
+    const res = planLifecycleAction(
+      { type: "cancelWithRefund" },
+      makeCtx({ lastInvoiceAmountCents: undefined })
+    );
+    if (!res.ok) throw new Error(`expected ok, got ${res.reason}`);
+
+    expect(res.plan.dbUpdates).toContainEqual(
+      expect.objectContaining({
+        type: "record_refund",
+        amountCents: null
+      })
+    );
+    expect(res.plan.emailsToSend).toContainEqual(
+      expect.objectContaining({
+        type: "send_refund_issued",
+        amountCents: 0
+      })
+    );
+  });
+
   it("rejects when subscription is not active", () => {
     const ctx = makeCtx({ subscription: makeSub({ status: "canceled" }) });
     const res = planLifecycleAction({ type: "cancelWithRefund" }, ctx);
@@ -194,6 +215,18 @@ describe("planLifecycleAction: cancelWithRefund", () => {
     ]);
     expect(res.plan.sshOps).toEqual([]);
   });
+
+  it("omits Hostinger billing cancellation when no billing subscription id is known", () => {
+    const ctx = makeCtx({
+      subscription: makeSub({ hostinger_billing_subscription_id: null })
+    });
+    const res = planLifecycleAction({ type: "cancelWithRefund" }, ctx);
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    expect(res.plan.hostingerOps).toEqual([
+      { type: "create_snapshot", virtualMachineId: 42 },
+      { type: "stop_vm", virtualMachineId: 42 }
+    ]);
+  });
 });
 
 describe("planLifecycleAction: cancelAtPeriodEnd", () => {
@@ -213,6 +246,17 @@ describe("planLifecycleAction: cancelAtPeriodEnd", () => {
     expect(patch.cancel_at_period_end).toBe(true);
     expect(patch.cancel_reason).toBe("user_period_end");
     expect(res.plan.emailsToSend[0].type).toBe("send_cancel_confirmation");
+  });
+
+  it("uses the request time as effective date when Stripe period end is missing", () => {
+    const res = planLifecycleAction(
+      { type: "cancelAtPeriodEnd" },
+      makeCtx({ subscription: makeSub({ stripe_current_period_end: null }) })
+    );
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    expect(res.plan.emailsToSend[0]).toEqual(
+      expect.objectContaining({ effectiveAt: "2026-04-15T00:00:00.000Z" })
+    );
   });
 
   it("rejects when sub is not active", () => {
@@ -301,6 +345,23 @@ describe("planLifecycleAction: autoCancelOnPaymentFailure", () => {
       reason: "subscription_not_active"
     });
   });
+
+  it("allows non-refund cancellation when no customer profile is known", () => {
+    const res = planLifecycleAction(
+      { type: "autoCancelOnPaymentFailure" },
+      makeCtx({
+        subscription: makeSub({ customer_profile_id: null }),
+        profile: null
+      })
+    );
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    expect(res.plan.dbUpdates).toContainEqual(
+      expect.objectContaining({
+        type: "update_subscription",
+        patch: expect.objectContaining({ customer_profile_id: null })
+      })
+    );
+  });
 });
 
 describe("planLifecycleAction: adminForceCancel", () => {
@@ -326,6 +387,17 @@ describe("planLifecycleAction: adminForceCancel", () => {
     );
     if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
     expect(res.plan.dbUpdates.some((op) => op.type === "delete_auth_user")).toBe(false);
+  });
+
+  it("omits final snapshot delete when VM info is unknown", () => {
+    const res = planLifecycleAction(
+      { type: "adminForceCancel" },
+      makeCtx({ virtualMachineId: null, vpsHost: null })
+    );
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    expect(res.plan.hostingerOps).not.toContainEqual(
+      expect.objectContaining({ type: "delete_snapshot" })
+    );
   });
 });
 
@@ -432,6 +504,25 @@ describe("planLifecycleAction: graceExpiredWipe", () => {
       })
     );
     expect(res).toEqual({ ok: false, reason: "subscription_not_in_grace" });
+  });
+
+  it("wipes backup without VM or auth delete when optional context is missing", () => {
+    const res = planLifecycleAction(
+      { type: "graceExpiredWipe" },
+      makeCtx({
+        virtualMachineId: null,
+        ownerAuthUserId: undefined,
+        subscription: makeSub({
+          status: "canceled",
+          grace_ends_at: "2026-04-01T00:00:00.000Z",
+          wiped_at: null
+        })
+      })
+    );
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    expect(res.plan.hostingerOps).toEqual([]);
+    expect(res.plan.dbUpdates).toContainEqual({ type: "delete_backup_artifact", businessId: "biz-1" });
+    expect(res.plan.dbUpdates.some((op) => op.type === "delete_auth_user")).toBe(false);
   });
 });
 

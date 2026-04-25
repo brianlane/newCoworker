@@ -53,6 +53,7 @@ describe("node cron auth", () => {
   it("accepts only the configured internal cron secret", () => {
     process.env.INTERNAL_CRON_SECRET = " secret ";
     expect(assertCronAuth(new Request("http://x", { headers: { authorization: "Bearer secret" } }))).toBe(true);
+    expect(assertCronAuth(new Request("http://x", { headers: { authorization: "secret" } }))).toBe(true);
     expect(assertCronAuth(new Request("http://x", { headers: { authorization: "Bearer wrong" } }))).toBe(false);
   });
 
@@ -61,6 +62,25 @@ describe("node cron auth", () => {
     process.env.INTERNAL_CRON_SECRET = "secret";
     expect(assertCronAuth(new Request("http://x"))).toBe(false);
     expect(assertCronAuth(new Request("http://x", { headers: { authorization: "Bearer   " } }))).toBe(false);
+  });
+
+  it("rejects if constant-time comparison throws", async () => {
+    vi.resetModules();
+    vi.doMock("node:crypto", async () => {
+      const actual = await vi.importActual<typeof import("node:crypto")>("node:crypto");
+      return {
+        ...actual,
+        timingSafeEqual: vi.fn(() => {
+          throw new Error("comparison failed");
+        })
+      };
+    });
+    const { assertCronAuth: throwingAssertCronAuth } = await import("@/lib/cron-auth");
+    process.env.INTERNAL_CRON_SECRET = "secret";
+    expect(
+      throwingAssertCronAuth(new Request("http://x", { headers: { authorization: "Bearer secret" } }))
+    ).toBe(false);
+    vi.doUnmock("node:crypto");
   });
 
 });

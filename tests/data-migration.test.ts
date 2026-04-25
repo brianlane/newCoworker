@@ -203,6 +203,21 @@ describe("data-migration (backup)", () => {
     ).rejects.toThrow(/tar exited 2.*disk full/);
   });
 
+  it("throws when tar exits non-zero without stderr", async () => {
+    const sshExecutor = vi
+      .fn()
+      .mockResolvedValue({ exitCode: 3, signal: null, stdout: "", stderr: "" });
+    const { storage } = makeStorage();
+
+    await expect(
+      backupBusinessData(
+        { businessId: "biz-1", vpsHost: "1.2.3.4" },
+        { sshExecutor, storage, sshKeyLookup: async () => makeSshKey() }
+      )
+    ).rejects.toThrow(/tar exited 3$/);
+  });
+
+
   it("throws when no SSH key is recorded for the business", async () => {
     const sshExecutor = vi.fn();
     const { storage } = makeStorage();
@@ -399,6 +414,17 @@ describe("data-migration (restore)", () => {
 
     await expect(
       restoreBusinessData(
+        { businessId: "biz-1", vpsHost: "4.3.2.1" },
+        {
+          storage: makeFailingStorage("download", null),
+          sshExecutor: vi.fn(),
+          sshKeyLookup: async () => makeSshKey()
+        }
+      )
+    ).rejects.toThrow(/empty blob/);
+
+    await expect(
+      restoreBusinessData(
         { businessId: "biz-1", vpsHost: "4.3.2.1", sshKey: makeSshKey(), username: "ubuntu" },
         {
           storage,
@@ -409,6 +435,19 @@ describe("data-migration (restore)", () => {
         }
       )
     ).rejects.toThrow(/untar exited 66.*sha mismatch/);
+
+    await expect(
+      restoreBusinessData(
+        { businessId: "biz-1", vpsHost: "4.3.2.1", sshKey: makeSshKey(), username: "ubuntu" },
+        {
+          storage,
+          sshExecutor: vi.fn().mockResolvedValue({ exitCode: 66, stdout: "", stderr: "" }),
+          sshKeyLookup: async () => {
+            throw new Error("should not lookup");
+          }
+        }
+      )
+    ).rejects.toThrow(/untar exited 66$/);
   });
 });
 
@@ -459,5 +498,24 @@ describe("data-migration (delete)", () => {
       /storage remove failed/
     );
     expect(deleteDataBackupRowMock).not.toHaveBeenCalled();
+  });
+
+  it("formats storage removal Error and string failures", async () => {
+    getDataBackupMock.mockResolvedValue({
+      business_id: "biz-1",
+      storage_bucket: DATA_BACKUP_BUCKET,
+      storage_path: buildBackupStoragePath("biz-1"),
+      sha256: "x",
+      size_bytes: 1,
+      created_at: "now",
+      updated_at: "now"
+    });
+
+    await expect(
+      deleteBusinessBackup("biz-1", { storage: makeFailingStorage("remove", new Error("remove error")) })
+    ).rejects.toThrow(/remove error/);
+    await expect(
+      deleteBusinessBackup("biz-1", { storage: makeFailingStorage("remove", "remove string") })
+    ).rejects.toThrow(/remove string/);
   });
 });

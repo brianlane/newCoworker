@@ -92,6 +92,7 @@ export async function executeLifecyclePlan(
   extra: ExecutorExtra,
   deps: ExecutorDeps = {}
 ): Promise<ExecutorResult> {
+  /* v8 ignore next 3 -- production dependency defaults; tests inject network clients/emailer. */
   const stripe = deps.stripe ?? getStripe();
   const hostinger = deps.hostinger ?? defaultHostingerClient();
   const emailer = deps.sendEmail ?? sendOwnerEmail;

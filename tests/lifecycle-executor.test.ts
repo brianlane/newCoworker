@@ -195,12 +195,16 @@ describe("executeLifecyclePlan refund handling", () => {
         retrieve: vi
           .fn()
           .mockResolvedValueOnce({ status: "active", schedule: { id: "sched_obj" } })
+          .mockResolvedValueOnce({ status: "active", schedule: "sched_string" })
           .mockResolvedValueOnce({ status: "canceled", schedule: null })
           .mockRejectedValueOnce(new Error("missing")),
         cancel: vi.fn().mockResolvedValue({})
       },
       subscriptionSchedules: {
-        release: vi.fn().mockRejectedValueOnce(new Error("release failed"))
+        release: vi
+          .fn()
+          .mockRejectedValueOnce(new Error("release failed"))
+          .mockRejectedValueOnce("release string failed")
       }
     };
     const notFound = new HostingerApiError("/snapshot", 404, {}, "gone");
@@ -216,6 +220,7 @@ describe("executeLifecyclePlan refund handling", () => {
         stripeOps: [
           { type: "set_cancel_at_period_end", stripeSubscriptionId: "sub_1", cancelAtPeriodEnd: true },
           { type: "cancel_subscription", stripeSubscriptionId: "sub_1", releaseSchedule: true },
+          { type: "cancel_subscription", stripeSubscriptionId: "sub_string_schedule", releaseSchedule: true },
           { type: "cancel_subscription", stripeSubscriptionId: "sub_2", releaseSchedule: true },
           { type: "cancel_subscription", stripeSubscriptionId: "sub_missing", releaseSchedule: true }
         ],
@@ -255,7 +260,12 @@ describe("executeLifecyclePlan refund handling", () => {
       proration_behavior: "none"
     });
     expect(stripe.subscriptionSchedules.release).toHaveBeenCalledWith("sched_obj");
+    expect(stripe.subscriptionSchedules.release).toHaveBeenCalledWith("sched_string");
     expect(stripe.subscriptions.cancel).toHaveBeenCalledWith("sub_1", {
+      prorate: false,
+      invoice_now: false
+    });
+    expect(stripe.subscriptions.cancel).toHaveBeenCalledWith("sub_string_schedule", {
       prorate: false,
       invoice_now: false
     });
@@ -291,6 +301,24 @@ describe("executeLifecyclePlan refund handling", () => {
       { stripe: chargeObjectStripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
     );
     expect(chargeObjectStripe.refunds.create).toHaveBeenCalledWith(expect.objectContaining({ charge: "ch_obj" }));
+
+    const chargeStringStripe = {
+      subscriptions: { retrieve: vi.fn().mockResolvedValue({ latest_invoice: "in_charge_string" }) },
+      invoices: {
+        retrieve: vi.fn().mockResolvedValue({
+          amount_paid: 1400,
+          charge: "ch_string",
+          payments: { data: [] }
+        })
+      },
+      refunds: { create: vi.fn().mockResolvedValue({ id: "re_string" }) }
+    };
+    await executeLifecyclePlan(
+      refundPlan(1400),
+      { businessId: "biz_1", vpsHost: null },
+      { stripe: chargeStringStripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
+    );
+    expect(chargeStringStripe.refunds.create).toHaveBeenCalledWith(expect.objectContaining({ charge: "ch_string" }));
 
     const expandedPiStripe = {
       subscriptions: { retrieve: vi.fn().mockResolvedValue({ latest_invoice: "in_pi_obj" }) },
@@ -340,6 +368,40 @@ describe("executeLifecyclePlan refund handling", () => {
     await expect(
       executeLifecyclePlan(refundPlan(), { businessId: "biz_1", vpsHost: null }, { stripe: noChargeStripe as never })
     ).rejects.toThrow("no charge on invoice");
+
+    const noAmountStripe = {
+      subscriptions: { retrieve: vi.fn().mockResolvedValue({ latest_invoice: "in_no_amount" }) },
+      invoices: {
+        retrieve: vi.fn().mockResolvedValue({
+          charge: "ch_no_amount",
+          payments: { data: [] }
+        })
+      },
+      refunds: { create: vi.fn() }
+    };
+    await executeLifecyclePlan(
+      refundPlan(0),
+      { businessId: "biz_1", vpsHost: null },
+      { stripe: noAmountStripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
+    );
+    expect(noAmountStripe.refunds.create).not.toHaveBeenCalled();
+
+    const latestChargeMissingStripe = {
+      subscriptions: { retrieve: vi.fn().mockResolvedValue({ latest_invoice: "in_latest_missing" }) },
+      invoices: {
+        retrieve: vi.fn().mockResolvedValue({
+          amount_paid: 1000,
+          payments: { data: [{ payment: { payment_intent: { latest_charge: null } } }] }
+        })
+      }
+    };
+    await expect(
+      executeLifecyclePlan(
+        refundPlan(),
+        { businessId: "biz_1", vpsHost: null },
+        { stripe: latestChargeMissingStripe as never }
+      )
+    ).rejects.toThrow("no charge on invoice");
   });
 
   it("handles auth-delete and email failure branches", async () => {
@@ -374,6 +436,23 @@ describe("executeLifecyclePlan refund handling", () => {
         { stripe: {} as never }
       )
     ).rejects.toThrow("delete_auth_user: hard fail");
+
+    createSupabaseServiceClientMock.mockResolvedValueOnce({
+      auth: { admin: { deleteUser: vi.fn().mockResolvedValue({ error: "string auth fail" }) } }
+    });
+    await expect(
+      executeLifecyclePlan(
+        {
+          stripeOps: [],
+          hostingerOps: [],
+          sshOps: [],
+          dbUpdates: [{ type: "delete_auth_user", supabaseUserId: "string-error-user" }],
+          emailsToSend: []
+        },
+        { businessId: "biz_1", vpsHost: null },
+        { stripe: {} as never }
+      )
+    ).rejects.toThrow("delete_auth_user: string auth fail");
 
     delete process.env.RESEND_API_KEY;
     await executeLifecyclePlan(
@@ -470,6 +549,52 @@ describe("executeLifecyclePlan refund handling", () => {
       },
       { businessId: "biz_1", vpsHost: null },
       { stripe: {} as never }
+    );
+
+    deleteBusinessBackupMock.mockRejectedValueOnce(new Error("delete error failed"));
+    await executeLifecyclePlan(
+      {
+        stripeOps: [],
+        hostingerOps: [],
+        sshOps: [],
+        dbUpdates: [{ type: "delete_backup_artifact", businessId: "biz_1" }],
+        emailsToSend: []
+      },
+      { businessId: "biz_1", vpsHost: null },
+      { stripe: {} as never }
+    );
+  });
+
+  it("records a pre-resolved refund without a live Stripe refund result", async () => {
+    await executeLifecyclePlan(
+      {
+        stripeOps: [],
+        hostingerOps: [],
+        sshOps: [],
+        dbUpdates: [
+          {
+            type: "record_refund",
+            subscriptionId: "sub_row_pre_resolved",
+            profileId: "prof_1",
+            stripeRefundId: "re_pre",
+            stripeChargeId: "ch_pre",
+            amountCents: null,
+            reason: "admin_force"
+          }
+        ],
+        emailsToSend: []
+      },
+      { businessId: "biz_1", vpsHost: null },
+      { stripe: {} as never }
+    );
+
+    expect(recordSubscriptionRefundMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stripeRefundId: "re_pre",
+        stripeChargeId: "ch_pre",
+        amountCents: 0,
+        reason: "admin_force"
+      })
     );
   });
 });

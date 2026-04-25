@@ -169,6 +169,89 @@ describe("stripe webhook route", () => {
     expect(orchestrateProvisioning).toHaveBeenCalledWith({ businessId: "biz_1", tier: "starter" });
   });
 
+  it("does not activate checkout sessions without a local subscription row", async () => {
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_no_local_sub",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_no_local_sub",
+          metadata: {
+            businessId: "biz_missing",
+            tier: "starter",
+            billingPeriod: "annual"
+          },
+          customer: "cus_1",
+          subscription: "sub_1"
+        }
+      }
+    } as never);
+    vi.mocked(getSubscription).mockResolvedValue(null);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(updateSubscription).not.toHaveBeenCalled();
+    expect(orchestrateProvisioning).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "checkout activation skipped: no local subscription row found",
+      expect.objectContaining({ businessId: "biz_missing" })
+    );
+  });
+
+  it("does not activate when the atomic lifetime increment rejects", async () => {
+    mockVoiceBonusRpc.mockImplementation((name: string) => {
+      if (name === "increment_customer_profile_lifetime_count") {
+        return Promise.resolve({ data: null, error: { message: "cap reached" } });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_cap_block",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_cap_block",
+          metadata: {
+            businessId: "biz_1",
+            tier: "starter",
+            billingPeriod: "annual",
+            customerProfileId: "prof-capped"
+          },
+          customer: "cus_1",
+          subscription: "sub_1"
+        }
+      }
+    } as never);
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "local_sub_1",
+      status: "pending",
+      stripe_subscription_id: null
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(updateSubscription).not.toHaveBeenCalled();
+    expect(orchestrateProvisioning).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "checkout activation blocked by lifetime count increment",
+      expect.objectContaining({ businessId: "biz_1", profileId: "prof-capped" })
+    );
+  });
+
   it("records voice bonus grant on payment checkout with voice_bonus_seconds metadata", async () => {
     const bid = "00000000-0000-4000-8000-000000000001";
     const periodEndSec = 1702678400;

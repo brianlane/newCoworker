@@ -471,15 +471,40 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
     }
   }
 
-  if (existing) {
-    await updateSubscription(existing.id, {
-      status: "active",
-      stripe_customer_id: customerId,
-      stripe_subscription_id: subscriptionId,
-      customer_profile_id: customerProfileId ?? existing.customer_profile_id,
-      ...periodCache
+  if (!existing) {
+    logger.warn("checkout activation skipped: no local subscription row found", {
+      businessId,
+      sessionId: session.id,
+      eventId
     });
+    return;
   }
+
+  // Increment before activation/provisioning so the atomic DB cap is the last
+  // authority under concurrent checkouts. If the profile is already capped,
+  // we leave the pending row untouched for operator cleanup instead of
+  // activating services beyond policy.
+  const firstActivation = existing.status !== "active";
+  if (customerProfileId && firstActivation) {
+    try {
+      await incrementLifetimeSubscriptionCount(customerProfileId);
+    } catch (err) {
+      logger.warn("checkout activation blocked by lifetime count increment", {
+        businessId,
+        profileId: customerProfileId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return;
+    }
+  }
+
+  await updateSubscription(existing.id, {
+    status: "active",
+    stripe_customer_id: customerId,
+    stripe_subscription_id: subscriptionId,
+    customer_profile_id: customerProfileId ?? existing.customer_profile_id,
+    ...periodCache
+  });
 
   if (customerProfileId) {
     try {
@@ -492,21 +517,6 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
       });
     }
 
-    // Increment the lifetime count only on first activation of THIS
-    // subscription. Idempotent against webhook replays because we gate on
-    // the row's prior status being non-active.
-    const firstActivation = !existing || existing.status !== "active";
-    if (firstActivation) {
-      try {
-        await incrementLifetimeSubscriptionCount(customerProfileId);
-      } catch (err) {
-        logger.warn("incrementLifetimeSubscriptionCount failed in webhook activate", {
-          businessId,
-          profileId: customerProfileId,
-          error: err instanceof Error ? err.message : String(err)
-        });
-      }
-    }
   }
 
   if (subscriptionId && billingPeriod && tier !== "enterprise") {

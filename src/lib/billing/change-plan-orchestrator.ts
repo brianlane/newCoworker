@@ -14,9 +14,9 @@
  *      swings the per-tenant Cloudflare tunnel hostname onto the new box
  *      by re-using the same tunnel token.
  *   4. SSH-restore the backed-up data onto the new VM.
- *   5. Create the NEW `subscriptions` row as `active`, set
- *      `business.customer_profile_id`, wire up a commitment schedule, and
- *      bump `customer_profiles.lifetime_subscription_count`.
+ *   5. Atomically bump `customer_profiles.lifetime_subscription_count`,
+ *      create the NEW `subscriptions` row as `active`, set
+ *      `business.customer_profile_id`, and wire up a commitment schedule.
  *   6. Cancel the OLD Stripe subscription + release any commitment
  *      schedule (no proration, no refund).
  *   7. Cancel the OLD Hostinger billing subscription (DELETE
@@ -66,6 +66,15 @@ import {
   upsertCustomerProfile
 } from "@/lib/db/customer-profiles";
 import { logger } from "@/lib/logger";
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function checkoutObjectId<T extends { id?: string }>(value: string | T | null | undefined): string | null {
+  if (typeof value === "string") return value;
+  return value?.id ?? null;
+}
 
 export type ChangePlanMetadata = {
   businessId: string;
@@ -124,12 +133,8 @@ export function parseChangePlanSessionMetadata(
     previousSubscriptionId,
     tier: tierRaw,
     billingPeriod: billingPeriodRaw,
-    stripeCustomerId:
-      typeof session.customer === "string" ? session.customer : session.customer?.id ?? null,
-    stripeSubscriptionId:
-      typeof session.subscription === "string"
-        ? session.subscription
-        : session.subscription?.id ?? null,
+    stripeCustomerId: checkoutObjectId(session.customer),
+    stripeSubscriptionId: checkoutObjectId(session.subscription),
     sessionEmail: session.customer_details?.email ?? session.customer_email ?? null
   };
 }
@@ -151,7 +156,7 @@ async function resolveVmIp(
   } catch (err) {
     logger.warn("changePlan: resolveVmIp failed", {
       virtualMachineId,
-      error: err instanceof Error ? err.message : String(err)
+      error: errorMessage(err)
     });
     return null;
   }
@@ -222,8 +227,21 @@ export async function runChangePlanFromCheckout(
     } catch (err) {
       logger.warn("changePlan: customer_profiles upsert failed (continuing)", {
         businessId,
-        error: err instanceof Error ? err.message : String(err)
+        error: errorMessage(err)
       });
+    }
+  }
+
+  if (customerProfileId) {
+    try {
+      await incrementLifetimeSubscriptionCount(customerProfileId);
+    } catch (err) {
+      logger.warn("changePlan: lifetime subscription cap reached; abort", {
+        businessId,
+        profileId: customerProfileId,
+        error: errorMessage(err)
+      });
+      return;
     }
   }
 
@@ -243,7 +261,7 @@ export async function runChangePlanFromCheckout(
       logger.warn("changePlan: old VPS snapshot failed (continuing)", {
         businessId,
         oldVmId,
-        error: err instanceof Error ? err.message : String(err)
+        error: errorMessage(err)
       });
     }
   }
@@ -261,7 +279,7 @@ export async function runChangePlanFromCheckout(
       logger.error("changePlan: backup failed (continuing without data migration)", {
         businessId,
         oldVpsHost,
-        error: err instanceof Error ? err.message : String(err)
+        error: errorMessage(err)
       });
     }
   } else {
@@ -287,7 +305,7 @@ export async function runChangePlanFromCheckout(
   } catch (err) {
     logger.error("changePlan: new provisioning failed; aborting without teardown", {
       businessId,
-      error: err instanceof Error ? err.message : String(err)
+      error: errorMessage(err)
     });
     return;
   }
@@ -305,7 +323,7 @@ export async function runChangePlanFromCheckout(
       logger.error("changePlan: restore failed (customer may need manual recovery)", {
         businessId,
         newVpsHost,
-        error: err instanceof Error ? err.message : String(err)
+        error: errorMessage(err)
       });
     }
   }
@@ -326,7 +344,7 @@ export async function runChangePlanFromCheckout(
       logger.warn("changePlan: Stripe subscription retrieve failed (continuing)", {
         businessId,
         stripeSubscriptionId,
-        error: err instanceof Error ? err.message : String(err)
+        error: errorMessage(err)
       });
     }
   }
@@ -353,15 +371,7 @@ export async function runChangePlanFromCheckout(
     } catch (err) {
       logger.warn("changePlan: setBusinessCustomerProfile failed (continuing)", {
         businessId,
-        error: err instanceof Error ? err.message : String(err)
-      });
-    }
-    try {
-      await incrementLifetimeSubscriptionCount(customerProfileId);
-    } catch (err) {
-      logger.warn("changePlan: incrementLifetimeSubscriptionCount failed (continuing)", {
-        businessId,
-        error: err instanceof Error ? err.message : String(err)
+        error: errorMessage(err)
       });
     }
   }
@@ -373,7 +383,7 @@ export async function runChangePlanFromCheckout(
       logger.warn("changePlan: ensureCommitmentSchedule failed (continuing)", {
         businessId,
         stripeSubscriptionId,
-        error: err instanceof Error ? err.message : String(err)
+        error: errorMessage(err)
       });
     }
   }
@@ -396,7 +406,7 @@ export async function runChangePlanFromCheckout(
           logger.warn("changePlan: old VPS stop failed before billing cancel (continuing)", {
             businessId,
             oldVmId,
-            error: err instanceof Error ? err.message : String(err)
+            error: errorMessage(err)
           });
         }
       }
@@ -412,7 +422,7 @@ export async function runChangePlanFromCheckout(
       logger.warn("changePlan: old Hostinger billing cancel failed (continuing)", {
         businessId,
         billingSubscriptionId: oldSub.hostinger_billing_subscription_id,
-        error: err instanceof Error ? err.message : String(err)
+        error: errorMessage(err)
       });
     }
   }
@@ -464,12 +474,8 @@ export async function runResubscribeFromCheckout(
 
   const tier = tierRaw;
   const billingPeriod = billingPeriodRaw;
-  const stripeCustomerId =
-    typeof session.customer === "string" ? session.customer : session.customer?.id ?? null;
-  const stripeSubscriptionId =
-    typeof session.subscription === "string"
-      ? session.subscription
-      : session.subscription?.id ?? null;
+  const stripeCustomerId = checkoutObjectId(session.customer);
+  const stripeSubscriptionId = checkoutObjectId(session.subscription);
   const sessionEmail = session.customer_details?.email ?? session.customer_email ?? null;
 
   logger.info("resubscribe: start", {
@@ -510,8 +516,21 @@ export async function runResubscribeFromCheckout(
     } catch (err) {
       logger.warn("resubscribe: customer_profiles upsert failed (continuing)", {
         businessId,
-        error: err instanceof Error ? err.message : String(err)
+        error: errorMessage(err)
       });
+    }
+  }
+
+  if (customerProfileId) {
+    try {
+      await incrementLifetimeSubscriptionCount(customerProfileId);
+    } catch (err) {
+      logger.warn("resubscribe: lifetime subscription cap reached; abort", {
+        businessId,
+        profileId: customerProfileId,
+        error: errorMessage(err)
+      });
+      return;
     }
   }
 
@@ -525,7 +544,7 @@ export async function runResubscribeFromCheckout(
   } catch (err) {
     logger.error("resubscribe: provisioning failed; aborting restore/update", {
       businessId,
-      error: err instanceof Error ? err.message : String(err)
+      error: errorMessage(err)
     });
     return;
   }
@@ -541,7 +560,7 @@ export async function runResubscribeFromCheckout(
       logger.error("resubscribe: restore failed (customer may need manual recovery)", {
         businessId,
         newVpsHost,
-        error: err instanceof Error ? err.message : String(err)
+        error: errorMessage(err)
       });
     }
   } else {
@@ -565,7 +584,7 @@ export async function runResubscribeFromCheckout(
       logger.warn("resubscribe: Stripe subscription retrieve failed (continuing)", {
         businessId,
         stripeSubscriptionId,
-        error: err instanceof Error ? err.message : String(err)
+        error: errorMessage(err)
       });
     }
   }
@@ -596,15 +615,7 @@ export async function runResubscribeFromCheckout(
     } catch (err) {
       logger.warn("resubscribe: setBusinessCustomerProfile failed (continuing)", {
         businessId,
-        error: err instanceof Error ? err.message : String(err)
-      });
-    }
-    try {
-      await incrementLifetimeSubscriptionCount(customerProfileId);
-    } catch (err) {
-      logger.warn("resubscribe: incrementLifetimeSubscriptionCount failed (continuing)", {
-        businessId,
-        error: err instanceof Error ? err.message : String(err)
+        error: errorMessage(err)
       });
     }
   }
@@ -616,7 +627,7 @@ export async function runResubscribeFromCheckout(
       logger.warn("resubscribe: ensureCommitmentSchedule failed (continuing)", {
         businessId,
         stripeSubscriptionId,
-        error: err instanceof Error ? err.message : String(err)
+        error: errorMessage(err)
       });
     }
   }
@@ -648,7 +659,7 @@ async function cancelStripeSubscriptionSafely(
         logger.warn("changePlan: schedule release failed (continuing)", {
           businessId,
           scheduleId,
-          error: err instanceof Error ? err.message : String(err)
+          error: errorMessage(err)
         });
       }
     }
@@ -656,7 +667,7 @@ async function cancelStripeSubscriptionSafely(
       await stripe.subscriptions.cancel(subscriptionId, { prorate: false });
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     // Don't fail the whole orchestrator if Stripe says the sub is already
     // gone — the teardown goal is achieved either way.
     if (/No such subscription|resource_missing/i.test(message)) {

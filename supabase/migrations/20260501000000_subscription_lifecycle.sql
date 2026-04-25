@@ -254,9 +254,18 @@ begin
     set lifetime_subscription_count = lifetime_subscription_count + 1,
         updated_at = now()
     where id = p_profile_id
+      and lifetime_subscription_count < 3
     returning lifetime_subscription_count into v_count;
 
   if v_count is null then
+    if exists (
+      select 1
+        from customer_profiles
+        where id = p_profile_id
+          and lifetime_subscription_count >= 3
+    ) then
+      raise exception 'increment_customer_profile_lifetime_count: lifetime subscription cap reached %', p_profile_id;
+    end if;
     raise exception 'increment_customer_profile_lifetime_count: profile not found %', p_profile_id;
   end if;
 

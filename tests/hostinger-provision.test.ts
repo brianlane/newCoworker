@@ -9,7 +9,9 @@ import {
 } from "@/lib/hostinger/provision";
 import type { HostingerClient } from "@/lib/hostinger/client";
 
-function makeClientStub(overrides: Partial<Record<string, unknown>> = {}) {
+function makeClientStub<T extends Record<string, unknown> = Record<string, never>>(
+  overrides: T = {} as T
+) {
   return {
     createPublicKey: vi.fn().mockResolvedValue({ id: 9, name: "k", key: "ssh-ed25519 AAA k" }),
     createPostInstallScript: vi.fn().mockResolvedValue({ id: 11, name: "s", content: "" }),
@@ -20,6 +22,12 @@ function makeClientStub(overrides: Partial<Record<string, unknown>> = {}) {
     getVirtualMachine: vi.fn(),
     installMonarx: vi.fn().mockResolvedValue({ id: 1, name: "a", state: "initiated" }),
     ...overrides
+  } as T & {
+    createPublicKey: ReturnType<typeof vi.fn>;
+    createPostInstallScript: ReturnType<typeof vi.fn>;
+    purchaseVirtualMachine: ReturnType<typeof vi.fn>;
+    getVirtualMachine: ReturnType<typeof vi.fn>;
+    installMonarx: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -147,6 +155,96 @@ describe("provisionVpsForBusiness", () => {
     );
 
     expect(result.hostingerBillingSubscriptionId).toBe("billing-42");
+  });
+
+  it("keeps billing subscription id null when lookup finds no matching VPS", async () => {
+    const client = makeClientStub({
+      getVirtualMachine: vi.fn().mockResolvedValueOnce({
+        id: 42,
+        state: "running",
+        ipv4: [{ id: 1, address: "1.2.3.4" }]
+      }),
+      listBillingSubscriptions: vi.fn().mockResolvedValue([
+        { id: "billing-other", resource_id: "999" }
+      ])
+    });
+    const dbInsert = vi.fn().mockResolvedValue({
+      id: "row-uuid",
+      business_id: "biz-1",
+      hostinger_vps_id: "42",
+      hostinger_public_key_id: 9,
+      public_key: fakeKeypair.publicKey,
+      private_key_pem: fakeKeypair.privateKeyPem,
+      fingerprint_sha256: fakeKeypair.fingerprintSha256,
+      ssh_username: "root",
+      created_at: "2026-01-01T00:00:00Z",
+      rotated_at: null
+    });
+
+    const result = await provisionVpsForBusiness(
+      {
+        businessId: "biz-1",
+        tier: "starter",
+        postInstallScript: "#!/bin/bash\necho hi",
+        pollIntervalMs: 1,
+        readyTimeoutMs: 10_000
+      },
+      {
+        client: client as unknown as HostingerClient,
+        generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
+        sleep: vi.fn().mockResolvedValue(undefined),
+        db: { insertVpsSshKey: dbInsert }
+      }
+    );
+
+    expect(result.hostingerBillingSubscriptionId).toBeNull();
+  });
+
+
+  it("uses Hostinger subscription_id from the purchase response when present", async () => {
+    const client = makeClientStub({
+      purchaseVirtualMachine: vi.fn().mockResolvedValue({
+        order_id: "o1",
+        virtual_machines: [{ id: 42, state: "initial", subscription_id: "billing-direct" }]
+      }),
+      getVirtualMachine: vi.fn().mockResolvedValueOnce({
+        id: 42,
+        state: "running",
+        ipv4: [{ id: 1, address: "1.2.3.4" }]
+      }),
+      listBillingSubscriptions: vi.fn()
+    });
+    const dbInsert = vi.fn().mockResolvedValue({
+      id: "row-uuid",
+      business_id: "biz-1",
+      hostinger_vps_id: "42",
+      hostinger_public_key_id: 9,
+      public_key: fakeKeypair.publicKey,
+      private_key_pem: fakeKeypair.privateKeyPem,
+      fingerprint_sha256: fakeKeypair.fingerprintSha256,
+      ssh_username: "root",
+      created_at: "2026-01-01T00:00:00Z",
+      rotated_at: null
+    });
+
+    const result = await provisionVpsForBusiness(
+      {
+        businessId: "biz-1",
+        tier: "starter",
+        postInstallScript: "#!/bin/bash\necho hi",
+        pollIntervalMs: 1,
+        readyTimeoutMs: 10_000
+      },
+      {
+        client: client as unknown as HostingerClient,
+        generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
+        sleep: vi.fn().mockResolvedValue(undefined),
+        db: { insertVpsSshKey: dbInsert }
+      }
+    );
+
+    expect(result.hostingerBillingSubscriptionId).toBe("billing-direct");
+    expect(client.listBillingSubscriptions).not.toHaveBeenCalled();
   });
 
   it("reuses postInstallScriptId when provided (no upload)", async () => {
