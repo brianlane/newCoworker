@@ -733,17 +733,65 @@ export async function runResubscribeFromCheckout(
       await restoreBusinessData({ businessId, vpsHost: newVpsHost });
       logger.info("resubscribe: data restored onto new VPS", { businessId, newVpsHost });
     } catch (err) {
-      logger.error("resubscribe: restore failed (customer may need manual recovery)", {
-        businessId,
-        newVpsHost,
-        error: errorMessage(err)
-      });
+      // Restore is fail-CLOSED. The customer reactivated specifically
+      // to recover their old workspace; if we proceed past a restore
+      // failure, the optimistic write below would flip the row to
+      // `active` on a fresh empty VPS and the customer would be
+      // charged for service we silently never delivered. The
+      // `updateSubscriptionIfNotWiped` guard a few lines down only
+      // catches the race where `wiped_at` is set, NOT the broader
+      // class of restore failures: missing `data_backups` row (e.g.
+      // grace-sweep partially executed and deleted the artifact
+      // before `wiped_at` was stamped — which we also fixed in the
+      // grace-sweep planner ordering, but defense-in-depth catches
+      // any other path that nukes the backup early), Supabase
+      // Storage download empty/404, sha256 corruption, missing SSH
+      // key, or any transient SSH error. In every case the new VM
+      // does not have the customer's data, so we must NOT bill them.
+      // Abort: cancel the brand-new Stripe sub (so it can't auto-
+      // renew forever for service we'll never provide), roll back
+      // the lifetime counter (so they don't lose a slot for an
+      // attempt that never landed), and log loudly so operators
+      // get a paged signal instead of a silent empty workspace.
+      logger.error(
+        "resubscribe: restore failed; aborting before optimistic write to prevent silent empty-workspace activation",
+        {
+          eventId,
+          businessId,
+          newVpsHost,
+          stripeSubscriptionId,
+          error: errorMessage(err)
+        }
+      );
+      if (stripeSubscriptionId) {
+        await cancelStripeSubscriptionSafely(stripeSubscriptionId, businessId);
+      }
+      if (customerProfileId) {
+        await rollbackLifetimeCount(customerProfileId, businessId, "resubscribe");
+      }
+      return;
     }
   } else {
-    logger.warn("resubscribe: no new VPS host resolvable; skipping restore", {
-      businessId,
-      vpsId: newProv.vpsId
-    });
+    // No reachable VPS host means the just-provisioned VM is
+    // unreachable — same fail-closed reasoning as the restore-throw
+    // branch above. Proceeding would charge the customer for a
+    // workspace they cannot reach, with no operator signal.
+    logger.error(
+      "resubscribe: new VPS host unresolvable; aborting before optimistic write",
+      {
+        eventId,
+        businessId,
+        vpsId: newProv.vpsId,
+        stripeSubscriptionId
+      }
+    );
+    if (stripeSubscriptionId) {
+      await cancelStripeSubscriptionSafely(stripeSubscriptionId, businessId);
+    }
+    if (customerProfileId) {
+      await rollbackLifetimeCount(customerProfileId, businessId, "resubscribe");
+    }
+    return;
   }
 
   const now = new Date();

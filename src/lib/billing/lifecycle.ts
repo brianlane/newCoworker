@@ -496,15 +496,41 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
   if (ctx.virtualMachineId !== null) {
     plan.hostingerOps.push({ type: "delete_snapshot", virtualMachineId: ctx.virtualMachineId });
   }
-  plan.dbUpdates.push({ type: "delete_backup_artifact", businessId: sub.business_id });
-  if (ctx.ownerAuthUserId) {
-    plan.dbUpdates.push({ type: "delete_auth_user", supabaseUserId: ctx.ownerAuthUserId });
-  }
+  // Stamp `wiped_at` BEFORE deleting the durable backup artifact. Order
+  // matters here because both `runResubscribeFromCheckout` (in
+  // `change-plan-orchestrator.ts`) and `isCanceledInGrace` (in
+  // `subscriptions.ts`) treat `wiped_at !== null` as the authoritative
+  // "this row's data is gone" signal — the resubscribe orchestrator's
+  // pre-flight `isCanceledInGrace(oldSub)` guard AND its final
+  // `updateSubscriptionIfNotWiped` write both key on it. If we ran the
+  // backup-delete first and then crashed (Vercel timeout, transient
+  // Supabase Storage error, executor exception) before stamping
+  // `wiped_at`, a customer who reactivated during that crash window
+  // could pass both guards, get provisioned, see `restoreBusinessData`
+  // throw "no backup recorded" (which the orchestrator currently
+  // catches and logs), and end up with an empty workspace they were
+  // charged for — silent data loss. Reordering closes that race
+  // because a partial-execute now leaves `wiped_at` stamped, so both
+  // the orchestrator's isCanceledInGrace guard and the
+  // `updateSubscriptionIfNotWiped` server-side conditional refuse the
+  // resubscribe with a loud abort log instead of silently
+  // provisioning empty data.
+  //
+  // Trade-off: if `delete_backup_artifact` later fails, we have an
+  // orphan Supabase Storage object. That's storage cost but no
+  // correctness issue — subsequent grace-sweep cron runs are
+  // idempotent and will retry the delete (the executor logs but
+  // does not throw on `delete_backup_artifact` errors so the rest of
+  // the wipe proceeds).
   plan.dbUpdates.push({
     type: "update_subscription",
     subscriptionId: sub.id,
     patch: { wiped_at: now.toISOString() }
   });
+  plan.dbUpdates.push({ type: "delete_backup_artifact", businessId: sub.business_id });
+  if (ctx.ownerAuthUserId) {
+    plan.dbUpdates.push({ type: "delete_auth_user", supabaseUserId: ctx.ownerAuthUserId });
+  }
   plan.dbUpdates.push({ type: "mark_business_wiped", businessId: sub.business_id });
 
   return { ok: true, plan };

@@ -448,6 +448,48 @@ describe("api/admin/force-refund route", () => {
     expect(response.status).toBe(404);
   });
 
+  it("reads vpsHost from ctxRes.vpsHost (top-level), matching every other lifecycle-plan caller", async () => {
+    // Regression: this route used to read `effectiveCtx.vpsHost`
+    // (i.e. `ctxRes.context.vpsHost`) while `/api/billing/cancel`,
+    // `/reactivate`, the Stripe webhook, and the grace-sweep cron all
+    // read from `ctxRes.vpsHost`. The loader populates BOTH today, so
+    // both paths happen to resolve to the same value, but having two
+    // divergent conventions in code paths that all execute lifecycle
+    // plans makes future refactors of the loader's return shape error-
+    // prone. Pin every executor caller to the top-level convention.
+    vi.mocked(loadLifecycleContextForBusiness).mockResolvedValueOnce({
+      ok: true,
+      vpsHost: "9.9.9.9",
+      context: {
+        ...defaultCtx.context,
+        vpsHost: "1.1.1.1"
+      }
+    } as never);
+    vi.mocked(planLifecycleAction).mockReturnValueOnce({
+      ok: true,
+      plan: {
+        stripeOps: [],
+        hostingerOps: [],
+        sshOps: [],
+        dbUpdates: [
+          {
+            type: "update_subscription",
+            subscriptionId: "sub-1",
+            patch: { status: "canceled", cancel_reason: "user_refund" }
+          }
+        ],
+        emailsToSend: []
+      }
+    } as never);
+
+    const response = await POST(makeRequest());
+    expect(response.status).toBe(200);
+    expect(executeLifecyclePlanFastPhase).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ vpsHost: "9.9.9.9" })
+    );
+  });
+
   describe("split-phase execution survives Vercel timeout (maxDuration + after)", () => {
     // Regression: this route previously awaited `executeLifecyclePlan`
     // synchronously, which performs Stripe refund + cancel, SSH backup

@@ -1108,7 +1108,23 @@ describe("runResubscribeFromCheckout", () => {
     expect(decrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
   });
 
-  it("continues resubscribe when restore or Stripe subscription lookup fails", async () => {
+  it("aborts resubscribe (fail-closed) when restoreBusinessData throws — prevents silent empty-workspace activation after grace-sweep partial-execute", async () => {
+    // Regression: the orchestrator previously caught and swallowed
+    // restoreBusinessData errors (logging "customer may need manual
+    // recovery") and continued to the optimistic write. The
+    // `updateSubscriptionIfNotWiped` guard ONLY blocks when
+    // `wiped_at` is set, but the grace-sweep planner used to delete
+    // the backup artifact BEFORE stamping `wiped_at` — so a
+    // partial-execute crash (Vercel timeout, transient Storage
+    // error) could leave the backup gone but `wiped_at` still null,
+    // and the orchestrator would silently provision an empty
+    // workspace + charge the customer + bump lifetime. The grace-
+    // sweep planner ordering is now fixed too (sister test in
+    // billing-lifecycle.test.ts), but this orchestrator-side
+    // fail-closed is defense-in-depth: any `restoreBusinessData`
+    // throw (no backup recorded, sha mismatch, missing SSH key,
+    // transient SSH error) must abort the resubscribe with an
+    // operator-visible signal rather than silently activating.
     getSubscriptionMock.mockResolvedValue({
       id: "sub-row-grace",
       business_id: "biz-1",
@@ -1117,8 +1133,9 @@ describe("runResubscribeFromCheckout", () => {
       grace_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
       wiped_at: null
     });
-    restoreBusinessDataMock.mockRejectedValueOnce("restore string failure");
-    stripeRetrieveMock.mockRejectedValueOnce(new Error("stripe lookup failed"));
+    restoreBusinessDataMock.mockRejectedValueOnce(
+      new Error("restoreBusinessData: no backup recorded for biz-1")
+    );
 
     await runResubscribeFromCheckout(
       makeSession({
@@ -1131,6 +1148,48 @@ describe("runResubscribeFromCheckout", () => {
         }
       }),
       "evt_resub_restore_fail"
+    );
+
+    // No optimistic write — the row stays canceled-in-grace so
+    // operators can investigate the missing backup.
+    expect(updateSubscriptionIfNotWipedMock).not.toHaveBeenCalled();
+    // Cancel the brand-new Stripe sub so it can't auto-renew for
+    // service we'll never provide.
+    expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
+    // Roll back the lifetime counter we bumped earlier so the
+    // customer doesn't lose a slot for an attempt that never landed.
+    expect(decrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
+  });
+
+  it("continues resubscribe when ONLY the post-restore Stripe subscription lookup fails (period cache is best-effort)", async () => {
+    // Stripe.subscriptions.retrieve at the end of the orchestrator
+    // is purely for refreshing the local period cache — its failure
+    // must NOT abort because the customer's data restored fine and
+    // every other field on the write is already known. The
+    // resurrected-row period cache is recomputed on the next
+    // `invoice.paid` / `customer.subscription.updated` mirror.
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-row-grace",
+      business_id: "biz-1",
+      customer_profile_id: "prof-1",
+      status: "canceled",
+      grace_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      wiped_at: null
+    });
+    restoreBusinessDataMock.mockResolvedValueOnce(undefined as never);
+    stripeRetrieveMock.mockRejectedValueOnce(new Error("stripe lookup failed"));
+
+    await runResubscribeFromCheckout(
+      makeSession({
+        metadata: {
+          businessId: "biz-1",
+          tier: "standard",
+          billingPeriod: "annual",
+          lifecycleAction: "resubscribe",
+          customerProfileId: "prof-1"
+        }
+      }),
+      "evt_resub_stripe_lookup_fail"
     );
 
     expect(updateSubscriptionIfNotWipedMock).toHaveBeenCalledWith(
@@ -1622,7 +1681,11 @@ describe("runResubscribeFromCheckout", () => {
     expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
   });
 
-  it("skips resubscribe restore when the new VPS host cannot be resolved", async () => {
+  it("aborts resubscribe (fail-closed) when the new VPS host cannot be resolved (no IP) — prevents charging for unreachable workspace", async () => {
+    // Same fail-closed reasoning as the restore-throw branch: the
+    // customer can't be served from a VM we can't reach, so we must
+    // not flip the row to active + bill them. Cancel the new Stripe
+    // sub and roll back the lifetime slot.
     getSubscriptionMock.mockResolvedValue({
       id: "sub-row-grace",
       business_id: "biz-1",
@@ -1650,13 +1713,12 @@ describe("runResubscribeFromCheckout", () => {
     );
 
     expect(restoreBusinessDataMock).not.toHaveBeenCalled();
-    expect(updateSubscriptionIfNotWipedMock).toHaveBeenCalledWith(
-      "sub-row-grace",
-      expect.objectContaining({ status: "active" })
-    );
+    expect(updateSubscriptionIfNotWipedMock).not.toHaveBeenCalled();
+    expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
+    expect(decrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
   });
 
-  it("skips resubscribe restore when the new provisioning id is not numeric", async () => {
+  it("aborts resubscribe (fail-closed) when the new provisioning id is not numeric — same prevent-silent-empty-workspace contract", async () => {
     getSubscriptionMock.mockResolvedValue({
       id: "sub-row-grace",
       business_id: "biz-1",
@@ -1685,10 +1747,9 @@ describe("runResubscribeFromCheckout", () => {
     );
 
     expect(restoreBusinessDataMock).not.toHaveBeenCalled();
-    expect(updateSubscriptionIfNotWipedMock).toHaveBeenCalledWith(
-      "sub-row-grace",
-      expect.objectContaining({ status: "active" })
-    );
+    expect(updateSubscriptionIfNotWipedMock).not.toHaveBeenCalled();
+    expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
+    expect(decrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
   });
 
   it("is idempotent on webhook re-delivery: skips re-execution when an active row is already linked to the new Stripe sub", async () => {

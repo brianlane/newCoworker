@@ -54,6 +54,51 @@ async function fetchSubscriptionPeriodCacheOrEmpty(
   }
 }
 
+/**
+ * Activation-time variant of {@link fetchSubscriptionPeriodCacheOrEmpty}
+ * that ALSO surfaces `cancel_at_period_end` from the live Stripe
+ * subscription. Used by `activateCheckoutSession` to reconcile any
+ * portal-driven state change that landed BEFORE we planted the row's
+ * `stripe_subscription_id` linkage.
+ *
+ * Background: the `customer.subscription.created/updated` mirror in
+ * this file deliberately skips rows with no local `stripe_subscription_id`
+ * link (that linkage is only ever planted by `checkout.session.completed`
+ * to avoid lifetime-cap bypasses on weak webhook ordering). That's
+ * correct for the common case, BUT if a user opens the Stripe portal
+ * during the activation race window and toggles "Cancel at period end",
+ * the mirror skip would silently lose that flag. Once we land here in
+ * `checkout.session.completed`, the linkage is finally being planted —
+ * any `cancel_at_period_end` we read from Stripe at this moment IS the
+ * authoritative current state, so we mirror it inline. We do NOT
+ * mirror `status` here: that would tangle with the activation flow's
+ * `firstActivation` accounting and is out of scope for this race.
+ */
+type StripeSubscriptionMirror = Partial<SubscriptionPeriodStripeCache> & {
+  cancel_at_period_end?: boolean;
+};
+
+async function fetchStripeSubscriptionMirrorOrEmpty(
+  subscriptionId: string,
+  logMessage: string,
+  logFields?: Record<string, unknown>
+): Promise<StripeSubscriptionMirror> {
+  try {
+    const stripeSub = await getStripe().subscriptions.retrieve(subscriptionId);
+    return {
+      ...stripeSubscriptionPeriodCache(stripeSub),
+      cancel_at_period_end: Boolean(stripeSub.cancel_at_period_end)
+    };
+  } catch (err) {
+    logger.error(logMessage, {
+      subscriptionId,
+      ...logFields,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return {};
+  }
+}
+
 export async function POST(request: Request) {
   const signature = request.headers.get("stripe-signature");
   if (!signature) return errorResponse("VALIDATION_ERROR", "Missing stripe-signature", 400);
@@ -493,8 +538,17 @@ export async function POST(request: Request) {
         // Lifecycle policy (blocker B2): there is no `past_due` state any more.
         //  - `active` subs → `autoCancelOnPaymentFailure` (backup, stop VM,
         //    cancel Hostinger billing, grace window, NO refund).
-        //  - `pending` subs (never activated) → discarded; we drop the row
-        //    so the abandoned-subs cleanup job can prune the business.
+        //  - `pending` subs (never activated) → leave UNTOUCHED. The PR
+        //    design treats `pending → discard` as the correct semantic:
+        //    the parallel `checkout.session.async_payment_failed` handler
+        //    above intentionally takes no DB action and lets the
+        //    abandoned-subs cleanup job prune the row + business.
+        //    Flipping `status="canceled"` here would create a row whose
+        //    appearance on the dashboard (PlanCard `status === "canceled"`
+        //    branch) misleads a user who never actually had an active
+        //    workspace into thinking they had service that was taken
+        //    away. We emit a single info log so operators can still
+        //    correlate failed-first-payment Stripe events to the row.
         //  - `canceled` / `canceled_in_grace` → ignore; this is likely the
         //    dunning tail for an already-canceled subscription and we've
         //    already run the teardown.
@@ -521,15 +575,16 @@ export async function POST(request: Request) {
             }
           });
         } else if (existing.status === "pending") {
-          logger.info("invoice.payment_failed on pending subscription; discarding", {
+          // Match `checkout.session.async_payment_failed` above: leave
+          // the pending row untouched and let the abandoned-subs
+          // cleanup job prune it. Writing `status="canceled"` here
+          // would surface a misleading "canceled" plan card on the
+          // dashboard for a user whose workspace was never actually
+          // provisioned.
+          logger.info("invoice.payment_failed on pending subscription; leaving row untouched for abandoned-subs cleanup", {
             businessId: existing.business_id,
             subscriptionId: existing.id,
             eventId: event.id
-          });
-          await updateSubscription(existing.id, {
-            status: "canceled",
-            canceled_at: new Date().toISOString(),
-            cancel_reason: "payment_failed"
           });
         } else {
           logger.debug("invoice.payment_failed on non-active subscription; ignoring", {
@@ -709,8 +764,18 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
       : session.subscription?.id ?? null;
 
   const existing = await getSubscription(businessId);
-  const periodCache = subscriptionId
-    ? await fetchSubscriptionPeriodCacheOrEmpty(
+  // Pull period bounds AND `cancel_at_period_end` from the live Stripe
+  // subscription so we can reconcile any portal toggle that landed
+  // BEFORE this `checkout.session.completed` planted our local linkage.
+  // The `customer.subscription.updated` mirror branch above intentionally
+  // skips rows with no `stripe_subscription_id` link (that linkage is
+  // only ever planted here, to avoid lifetime-cap bypasses on weak
+  // webhook ordering); without this catch-up read, a customer who
+  // immediately clicks "End at period end" through the portal during
+  // the activation race would see no flag mirrored on their dashboard
+  // until the next Stripe-driven event arrives.
+  const stripeMirror = subscriptionId
+    ? await fetchStripeSubscriptionMirrorOrEmpty(
         subscriptionId,
         "Stripe subscription retrieve failed after checkout",
         { businessId }
@@ -873,7 +938,7 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
       stripe_customer_id: customerId,
       stripe_subscription_id: subscriptionId,
       customer_profile_id: customerProfileId ?? existing.customer_profile_id,
-      ...periodCache
+      ...stripeMirror
     });
   }
 
@@ -912,7 +977,7 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
     ...(customerId ? { stripe_customer_id: customerId } : {}),
     ...(subscriptionId ? { stripe_subscription_id: subscriptionId } : {}),
     customer_profile_id: customerProfileId ?? existing.customer_profile_id,
-    ...periodCache
+    ...stripeMirror
   });
 
   if (customerProfileId) {

@@ -164,9 +164,16 @@ export async function POST(request: Request) {
       return errorResponse("CONFLICT", plan.reason, 409);
     }
 
+    // Read from `ctxRes.vpsHost` (top-level) rather than
+    // `effectiveCtx.vpsHost` / `ctxRes.context.vpsHost` to stay aligned
+    // with every other lifecycle-plan caller (`/api/billing/cancel`,
+    // `/reactivate`, the Stripe webhook, the grace-sweep cron). The
+    // loader populates both today; pinning every executor caller to the
+    // single top-level convention prevents a future loader-shape
+    // refactor from silently dropping the field on the admin path.
     const extra = {
       businessId: body.businessId,
-      vpsHost: effectiveCtx.vpsHost,
+      vpsHost: ctxRes.vpsHost,
       customerProfileId: profileIdForPlan
     };
 

@@ -601,6 +601,45 @@ describe("planLifecycleAction: graceExpiredWipe", () => {
     );
   });
 
+  it("stamps wiped_at BEFORE delete_backup_artifact so a partial-execute crash can't strand the row in a 'data gone but not wiped' state", () => {
+    // Regression: `runResubscribeFromCheckout` (in the change-plan
+    // orchestrator) keys both its pre-flight `isCanceledInGrace`
+    // guard and its final `updateSubscriptionIfNotWiped` write on
+    // `wiped_at`. If the planner ran `delete_backup_artifact` first
+    // and the executor crashed (Vercel timeout, transient Supabase
+    // Storage error, executor exception) before stamping `wiped_at`,
+    // a customer who reactivated during that window could pass both
+    // guards, get provisioned, see `restoreBusinessData` throw "no
+    // backup recorded" (currently caught + logged), and end up with
+    // an empty workspace they were charged for — silent data loss.
+    // Reordering closes that race because a partial-execute now
+    // leaves `wiped_at` stamped, so resubscribe aborts loudly.
+    const res = planLifecycleAction(
+      { type: "graceExpiredWipe" },
+      makeCtx({
+        ownerAuthUserId: "auth-1",
+        subscription: makeSub({
+          status: "canceled",
+          grace_ends_at: "2026-04-01T00:00:00.000Z",
+          wiped_at: null
+        })
+      })
+    );
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+
+    const dbTypes = res.plan.dbUpdates.map((op) => op.type);
+    const wipedAtIdx = res.plan.dbUpdates.findIndex(
+      (op) =>
+        op.type === "update_subscription" &&
+        (op as { patch?: { wiped_at?: unknown } }).patch?.wiped_at !== undefined
+    );
+    const deleteBackupIdx = dbTypes.indexOf("delete_backup_artifact");
+
+    expect(wipedAtIdx).toBeGreaterThanOrEqual(0);
+    expect(deleteBackupIdx).toBeGreaterThanOrEqual(0);
+    expect(wipedAtIdx).toBeLessThan(deleteBackupIdx);
+  });
+
   it("omits stop_vm + cancel_billing_subscription when VM id and billing id are missing", () => {
     const res = planLifecycleAction(
       { type: "graceExpiredWipe" },

@@ -238,6 +238,74 @@ describe("stripe webhook route", () => {
     expect(orchestrateProvisioning).toHaveBeenCalledWith({ businessId: "biz_1", tier: "starter" });
   });
 
+  it("mirrors Stripe's live cancel_at_period_end on activation when the portal toggle landed during the activation race", async () => {
+    // Regression: `customer.subscription.created/updated` deliberately
+    // skips rows with no `stripe_subscription_id` linkage (that
+    // linkage is only ever planted here, so allowing the
+    // subscription.{created,updated} mirror to adopt a pending row
+    // would open a lifetime-cap bypass on weak webhook ordering).
+    // That's correct for the common case, but if a customer
+    // immediately clicks "End at period end" in the Stripe portal
+    // during the activation race window, the prior mirror skip would
+    // silently lose the flag — no `customer.subscription.updated`
+    // would be re-delivered after our `checkout.session.completed`
+    // plants the linkage. Reconcile by reading the live Stripe sub's
+    // `cancel_at_period_end` here and applying it inline so the
+    // dashboard immediately reflects user intent.
+    mockStripeRetrieve.mockResolvedValueOnce({
+      current_period_start: 1700000000,
+      current_period_end: 1702678400,
+      cancel_at_period_end: true
+    });
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_race",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_race",
+          metadata: {
+            businessId: "biz_race",
+            tier: "starter",
+            billingPeriod: "annual"
+          },
+          customer: "cus_race",
+          subscription: "sub_race"
+        }
+      }
+    } as never);
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "local_sub_race",
+      status: "pending",
+      stripe_subscription_id: null,
+      cancel_at_period_end: false
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    // Linkage write (planted before increment) AND the final
+    // activation write both carry the live cancel_at_period_end.
+    const cancelAtPeriodEndPatches = vi
+      .mocked(updateSubscription)
+      .mock.calls.map(([, patch]) => (patch as { cancel_at_period_end?: boolean }).cancel_at_period_end);
+    expect(cancelAtPeriodEndPatches).toContain(true);
+    // The final activation write specifically must carry the flag —
+    // that's the row state the dashboard reads after the activation.
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "local_sub_race",
+      expect.objectContaining({
+        status: "active",
+        cancel_at_period_end: true
+      })
+    );
+  });
+
   it("does not activate checkout sessions without a local subscription row", async () => {
     vi.mocked(verifyWebhook).mockReturnValue({
       id: "evt_no_local_sub",
@@ -583,6 +651,50 @@ describe("stripe webhook route", () => {
 
     expect(response.status).toBe(200);
     expect(updateSubscription).not.toHaveBeenCalled();
+  });
+
+  it("leaves pending subscription untouched on invoice.payment_failed (no canceled-row spoof on dashboard)", async () => {
+    // Regression: previously the `invoice.payment_failed` handler
+    // wrote `status: "canceled"` + `canceled_at` + `cancel_reason:
+    // "payment_failed"` for pending rows. The PR's overall design
+    // treats `pending → discard` as the correct semantic (matching
+    // the parallel `checkout.session.async_payment_failed` handler
+    // above), and the abandoned-subs cleanup job is responsible for
+    // pruning the row + business. Flipping pending rows to canceled
+    // here surfaced a misleading "canceled" plan card on the
+    // dashboard for a user whose workspace was never actually
+    // provisioned. Take no DB action; just log.
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+      id: "local_sub_pending_invfail",
+      business_id: "biz_pending_invfail",
+      status: "pending",
+      stripe_subscription_id: "sub_pending_invfail"
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_pending_invfail",
+      type: "invoice.payment_failed",
+      data: {
+        object: {
+          id: "in_pending_invfail",
+          parent: {
+            subscription_details: { subscription: "sub_pending_invfail" }
+          }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(updateSubscription).not.toHaveBeenCalled();
+    // No autoCancel dispatch either — that's the active-row path only.
+    expect(afterCallbacks.length).toBe(0);
   });
 
   it("does not clobber a canceled lifecycle row when Stripe keeps sending dunning statuses", async () => {

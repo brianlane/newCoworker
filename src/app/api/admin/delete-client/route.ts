@@ -199,9 +199,16 @@ export async function DELETE(request: Request) {
       return errorResponse("CONFLICT", planResult.reason, 409);
     }
 
+    // `ctxRes.vpsHost` is the canonical top-level field across every
+    // lifecycle-plan caller (`/api/billing/cancel`, `/reactivate`, the
+    // Stripe webhook, the grace-sweep cron). The loader populates both
+    // `ctxRes.vpsHost` and `ctxRes.context.vpsHost` to the same value
+    // today, but reading from the top-level keeps every executor caller
+    // on a single convention so a future loader-shape refactor can't
+    // silently drop the field on this path.
     const extra = {
       businessId: body.businessId,
-      vpsHost: ctxRes.context.vpsHost,
+      vpsHost: ctxRes.vpsHost,
       customerProfileId: ctxRes.context.subscription.customer_profile_id
     };
 

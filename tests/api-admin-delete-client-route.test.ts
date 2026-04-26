@@ -292,6 +292,42 @@ describe("api/admin/delete-client route (adminForceCancel)", () => {
     expect(executeLifecyclePlanFastPhase).not.toHaveBeenCalled();
   });
 
+  it("reads vpsHost from ctxRes.vpsHost (top-level), matching every other lifecycle-plan caller", async () => {
+    // Regression: this route used to read `ctxRes.context.vpsHost`
+    // while `/api/billing/cancel`, `/reactivate`, the Stripe webhook,
+    // and the grace-sweep cron all read from `ctxRes.vpsHost`. Both
+    // paths happen to resolve to the same value because the loader
+    // populates BOTH today, but having two divergent conventions in
+    // code paths that all execute lifecycle plans makes future
+    // refactors of the loader's return shape error-prone. Pin every
+    // executor caller to the top-level convention so a future loader
+    // refactor can't silently drop the field on this admin path.
+    vi.mocked(loadLifecycleContextForBusiness).mockResolvedValueOnce({
+      ok: true,
+      vpsHost: "9.9.9.9",
+      context: {
+        subscription: {
+          id: "sub-1",
+          business_id: BUSINESS_ID,
+          customer_profile_id: "prof-1",
+          stripe_subscription_id: "sub_stripe",
+          status: "active"
+        } as never,
+        ownerEmail: "owner@example.com",
+        ownerAuthUserId: "auth-owner-1",
+        profile: null,
+        virtualMachineId: 42,
+        vpsHost: "1.1.1.1"
+      }
+    } as never);
+    const response = await DELETE(makeRequest());
+    expect(response.status).toBe(200);
+    expect(executeLifecyclePlanFastPhase).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ vpsHost: "9.9.9.9" })
+    );
+  });
+
   it("rejects malformed businessId with 400 VALIDATION_ERROR", async () => {
     const response = await DELETE(
       new Request("http://localhost/api/admin/delete-client", {
