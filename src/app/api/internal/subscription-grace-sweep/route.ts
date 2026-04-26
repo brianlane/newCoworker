@@ -16,9 +16,11 @@
  *   3. `executeLifecyclePlan(...)` — runs the plan. Missing VM/snapshot is
  *      treated as benign (prior runs likely already tore them down).
  *
+ * Each row is processed individually (no batching). Errors on individual
+ * rows are captured and the sweep continues on the next row — one broken
+ * tenant can't block the rest.
+ *
  * Response: `{ ok: true, processed, wiped, skipped, errors: [...] }`.
- * Errors on individual rows are captured and the sweep continues on the
- * next row — one broken tenant can't block the rest.
  */
 
 import { assertCronAuth } from "@/lib/cron-auth";
@@ -31,7 +33,23 @@ import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader"
 import { planLifecycleAction } from "@/lib/billing/lifecycle";
 import { executeLifecyclePlan } from "@/lib/billing/lifecycle-executor";
 
-const DEFAULT_BATCH_LIMIT = 50;
+// Process every eligible row per cron tick. The previous 50-row cap meant
+// a backlog of >50 grace-expired rows would only drain by 50 per cron
+// fire; if cron runs daily and 60 rows expire in a single 24h window, the
+// 11-row tail would wait an extra day before being wiped while their
+// Hostinger billing kept charging. Lift the cap (we still pass a large
+// `Number.MAX_SAFE_INTEGER` defensively so a runaway insert can't crash
+// the helper) so a single invocation drains the full backlog.
+const PER_INVOCATION_ROW_CEILING = Number.MAX_SAFE_INTEGER;
+
+// Vercel Pro allows up to 300s. Each grace-expired row's plan is mostly
+// fast DB writes plus a handful of idempotent Hostinger API calls
+// (`stop_vm`, `cancel_billing_subscription`, `delete_snapshot`). A
+// pathological backlog could still push past the platform default, so we
+// pin the ceiling to 300s as a safety net — anything over that gets
+// re-driven on the next cron tick because each row is idempotent. Mirrors
+// the `/api/billing/cancel` + admin-route pattern.
+export const maxDuration = 300;
 
 export const runtime = "nodejs";
 
@@ -51,7 +69,7 @@ export async function POST(request: Request): Promise<Response> {
 
   let expired;
   try {
-    expired = await listGraceExpiredSubscriptions(now, DEFAULT_BATCH_LIMIT);
+    expired = await listGraceExpiredSubscriptions(now, PER_INVOCATION_ROW_CEILING);
   } catch (err) {
     logger.error("subscription-grace-sweep: listGraceExpiredSubscriptions failed", {
       error: err instanceof Error ? err.message : String(err)

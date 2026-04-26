@@ -224,6 +224,17 @@ export async function DELETE(request: Request) {
     // Stripe canceled but the VPS still running with Hostinger billing
     // active. The grace-sweep cron is the backstop for any individual
     // Hostinger step that fails mid-background.
+    //
+    // Auth-delete vs slow-phase email ordering: the fast phase runs
+    // `delete_auth_user` BEFORE the slow phase fires the operator/owner
+    // emails. This is intentional and benign — the email step pulls the
+    // recipient address from `business.owner_email` (which we kept on
+    // the row even after wiping) rather than from the just-deleted
+    // Supabase auth user, so the email still goes through. The
+    // executor's `delete_auth_user` op also tolerates a "user not
+    // found" response, so an idempotent retry of the fast phase
+    // (rare but possible if the slow phase failed and an operator
+    // re-runs the DELETE) is safe and won't double-error.
     let fastResult;
     try {
       fastResult = await executeLifecyclePlanFastPhase(planResult.plan, extra);

@@ -157,7 +157,33 @@ describe("api/internal/subscription-grace-sweep route", () => {
     expect(vi.mocked(executeLifecyclePlan)).not.toHaveBeenCalled();
   });
 
-  it("captures per-row failures without aborting the batch", async () => {
+  it("processes every eligible row per cron tick (no 50-row batch cap)", async () => {
+    // Regression: the prior `DEFAULT_BATCH_LIMIT = 50` cap meant a >50-row
+    // backlog drained at one batch per cron fire, so the 51st-and-up
+    // tail kept burning Hostinger billing until the next tick. We now
+    // request every eligible row per invocation; the helper still gets
+    // a finite limit (Number.MAX_SAFE_INTEGER) to satisfy its required
+    // arg, but the route must not pass the old 50-row default.
+    vi.mocked(listGraceExpiredSubscriptions).mockResolvedValue([] as never);
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    expect(vi.mocked(listGraceExpiredSubscriptions)).toHaveBeenCalledTimes(1);
+    const passedLimit = vi.mocked(listGraceExpiredSubscriptions).mock.calls[0][1];
+    expect(passedLimit).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it("exports maxDuration so Vercel keeps the function alive long enough to drain the backlog", async () => {
+    // Mirrors the `/api/billing/cancel` + `/api/admin/delete-client` +
+    // `/api/admin/force-refund` pattern. Without this, the platform
+    // default (10s on Hobby, ~15s on most Pro configs) would tear the
+    // function down mid-sweep and leave Stripe-canceled-but-VPS-alive
+    // tenants until the next cron tick — exactly what the sweep is
+    // supposed to backstop.
+    const routeModule = await import("@/app/api/internal/subscription-grace-sweep/route");
+    expect(routeModule.maxDuration).toBe(300);
+  });
+
+  it("captures per-row failures without aborting the run", async () => {
     vi.mocked(listGraceExpiredSubscriptions).mockResolvedValue([
       makeSubRow({ id: "sub-ok", business_id: "biz-ok" }),
       makeSubRow({ id: "sub-boom", business_id: "biz-boom" })

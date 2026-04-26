@@ -17,8 +17,26 @@
  *   - Flip the `subscriptions` row into the 30-day grace window so the
  *     customer doesn't get an abrupt data wipe; they can still restore
  *     from the backup via reactivation until `grace_ends_at`.
- *   - Stamp `customer_profiles.refund_used_at` so the lifetime-once
- *     guarantee stays enforced (even admin-granted refunds count).
+ *   - Append a `subscription_refunds` row via `record_refund` for a
+ *     per-refund audit trail.
+ *   - Stamp `customer_profiles.refund_used_at` IFF the customer had not
+ *     previously used their lifetime refund. The DB write
+ *     (`markRefundUsed`) is conditional on `refund_used_at IS NULL`, so a
+ *     second admin force-refund against the same profile is a no-op on
+ *     this column — the timestamp captures "first lifetime allowance
+ *     consumption" and is intentionally never re-stamped.
+ *
+ * Refund-cap semantics (intentional asymmetry):
+ *   - Self-serve `/api/billing/cancel` is gated by
+ *     `profile.refund_used_at` + `isWithinLifetimeRefundWindow`, so once
+ *     ANY refund has stamped that column the customer can never self-
+ *     serve refund again.
+ *   - This admin route deliberately bypasses BOTH gates so support can
+ *     honor a refund for genuine edge cases. It has no per-customer cap;
+ *     a third or fourth admin force-refund will succeed at Stripe and
+ *     append a fresh `subscription_refunds` audit row each time. The
+ *     audit trail is the operator-facing accountability surface, not a
+ *     hard lock.
  */
 
 import { z } from "zod";
