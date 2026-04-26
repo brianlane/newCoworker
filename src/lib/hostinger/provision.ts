@@ -88,6 +88,13 @@ export type ProvisionVpsForBusinessResult = {
   postInstallScriptId: number;
   /** Id of the public key resource we registered. */
   publicKeyId: number;
+  /**
+   * Hostinger billing subscription id that backs this VPS. Required by the
+   * lifecycle engine to cancel the VPS-side billing on user cancel. Pulled
+   * from the purchase response; null if Hostinger didn't return it (we'll
+   * fall back to a subscriptions-list lookup in that case).
+   */
+  hostingerBillingSubscriptionId: string | null;
 };
 
 export type ProvisionVpsDeps = {
@@ -248,13 +255,32 @@ export async function provisionVpsForBusiness(
   });
   onProgress?.("ssh_key_persisted", { sshKeyId: sshKey.id });
 
+  // `vm.subscription_id` is populated by Hostinger's purchase response. If
+  // absent we fall back to a subscriptions-list lookup below so the lifecycle
+  // engine always has a billing id to cancel.
+  let hostingerBillingSubscriptionId = typeof vm.subscription_id === "string" ? vm.subscription_id : null;
+  if (!hostingerBillingSubscriptionId) {
+    try {
+      const subs = await client.listBillingSubscriptions();
+      const match = subs.find((s) => s.resource_id === String(vm.id));
+      if (match?.id) hostingerBillingSubscriptionId = match.id;
+    } catch (err) {
+      logger.warn("Hostinger listBillingSubscriptions lookup failed", {
+        businessId: input.businessId,
+        virtualMachineId: vm.id,
+        error: errToMessage(err)
+      });
+    }
+  }
+
   return {
     virtualMachineId: vm.id,
     publicIp,
     sshUsername: "root",
     sshKey,
     postInstallScriptId,
-    publicKeyId: publicKeyResource.id
+    publicKeyId: publicKeyResource.id,
+    hostingerBillingSubscriptionId
   };
 }
 

@@ -347,6 +347,70 @@ describe("HostingerClient (real API)", () => {
     ]);
   });
 
+  it("snapshot endpoints hit the VPS scoped snapshot path", async () => {
+    const fetchMock = vi.fn(async () => ok({ id: 1, name: "snapshot", state: "initiated" }));
+    const client = makeClient(fetchMock);
+    await client.createSnapshot(77);
+    await client.getSnapshot(77);
+    await client.restoreSnapshot(77);
+    await client.deleteSnapshot(77);
+
+    const urls = calls(fetchMock).map((c) => c[0]);
+    expect(urls).toEqual([
+      "https://dev.hostinger/api/vps/v1/virtual-machines/77/snapshot",
+      "https://dev.hostinger/api/vps/v1/virtual-machines/77/snapshot",
+      "https://dev.hostinger/api/vps/v1/virtual-machines/77/snapshot/restore",
+      "https://dev.hostinger/api/vps/v1/virtual-machines/77/snapshot"
+    ]);
+    const methods = calls(fetchMock).map((c) => (c[1] as RequestInit).method);
+    expect(methods).toEqual(["POST", "GET", "POST", "DELETE"]);
+  });
+
+  it("listBillingSubscriptions normalises paginated envelope", async () => {
+    const fetchMock = vi.fn(async () =>
+      ok({
+        data: [{ id: "sub-1", status: "ACTIVE", resource_id: "42" }],
+        meta: { current_page: 1, last_page: 1, total: 1 }
+      })
+    );
+    const client = makeClient(fetchMock);
+    const subs = await client.listBillingSubscriptions();
+    expect(subs).toEqual([{ id: "sub-1", status: "ACTIVE", resource_id: "42" }]);
+    expect(calls(fetchMock)[0][0]).toBe("https://dev.hostinger/api/billing/v1/subscriptions");
+  });
+
+  it("cancelBillingSubscription DELETEs with cancel_option=immediately body", async () => {
+    const fetchMock = vi.fn(async () => ok({ deleted: true }));
+    const client = makeClient(fetchMock);
+    await client.cancelBillingSubscription("sub-abc", "user-cancel-test");
+    const [url, init] = calls(fetchMock)[0];
+    expect(url).toBe("https://dev.hostinger/api/billing/v1/subscriptions/sub-abc");
+    expect((init as RequestInit).method).toBe("DELETE");
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      reason_code: "other",
+      reason_description: "user-cancel-test",
+      cancel_option: "immediately"
+    });
+  });
+
+  it("disableBillingAutoRenewal and enableBillingAutoRenewal hit the renewal endpoints", async () => {
+    const fetchMock = vi.fn(async () => ok({ ok: true }));
+    const client = makeClient(fetchMock);
+    await client.disableBillingAutoRenewal("sub-xyz");
+    await client.enableBillingAutoRenewal("sub-xyz");
+
+    const [disableUrl, disableInit] = calls(fetchMock)[0];
+    const [enableUrl, enableInit] = calls(fetchMock)[1];
+    expect(disableUrl).toBe(
+      "https://dev.hostinger/api/billing/v1/subscriptions/sub-xyz/auto-renewal/disable"
+    );
+    expect((disableInit as RequestInit).method).toBe("DELETE");
+    expect(enableUrl).toBe(
+      "https://dev.hostinger/api/billing/v1/subscriptions/sub-xyz/auto-renewal/enable"
+    );
+    expect((enableInit as RequestInit).method).toBe("PATCH");
+  });
+
   it("strips trailing slash from baseUrl", () => {
     const client = new HostingerClient({ baseUrl: "https://x/", token: "t" });
     expect((client as unknown as { baseUrl: string }).baseUrl).toBe("https://x");

@@ -77,6 +77,28 @@ export type PublicKey = {
   key: string;
 };
 
+export type Snapshot = {
+  id?: number;
+  virtual_machine_id?: number;
+  state?: "available" | "creating" | "deleting" | "restoring" | "error" | string;
+  created_at?: string;
+};
+
+export type BillingSubscription = {
+  id: string;
+  /** Usually `ACTIVE`, `SUSPENDED`, `CANCELLED`. */
+  status: string;
+  /** Resource id backing the subscription — for VPS this is the VM id. */
+  resource_id?: string;
+  category?: string;
+  next_billing_at?: string | null;
+  /** Period unit of the billing cycle, e.g. "month" or "year". */
+  period_unit?: string;
+  period?: number;
+  item_id?: string;
+  created_at?: string;
+};
+
 export type PostInstallScript = {
   id: number;
   name: string;
@@ -387,6 +409,97 @@ export class HostingerClient {
     );
   }
 
+  // -------------------- Snapshots --------------------
+  //
+  // Hostinger supports exactly ONE snapshot per VM — `createSnapshotV1` on an
+  // existing snapshot overwrites it. We rely on that behaviour in the
+  // lifecycle engine (cancel-grace always calls `createSnapshot` fresh).
+  //
+  // Snapshots are stored against the VM, so if the VM is destroyed (via
+  // `cancelBillingSubscription`) the snapshot goes with it. This is why the
+  // SSH-tarball backup in `data-migration.ts` is the durable artefact for
+  // grace and change-plan flows; the Hostinger snapshot is a fast path for
+  // the "cancel billing immediately but VM still exists briefly" window.
+
+  async createSnapshot(virtualMachineId: number): Promise<Action> {
+    return this.request<Action>(
+      "POST",
+      `/api/vps/v1/virtual-machines/${virtualMachineId}/snapshot`
+    );
+  }
+
+  async getSnapshot(virtualMachineId: number): Promise<Snapshot> {
+    return this.request<Snapshot>(
+      "GET",
+      `/api/vps/v1/virtual-machines/${virtualMachineId}/snapshot`
+    );
+  }
+
+  async deleteSnapshot(virtualMachineId: number): Promise<Action | void> {
+    return this.request<Action | void>(
+      "DELETE",
+      `/api/vps/v1/virtual-machines/${virtualMachineId}/snapshot`
+    );
+  }
+
+  async restoreSnapshot(virtualMachineId: number): Promise<Action> {
+    return this.request<Action>(
+      "POST",
+      `/api/vps/v1/virtual-machines/${virtualMachineId}/snapshot/restore`
+    );
+  }
+
+  // -------------------- Billing subscriptions (Hostinger side) --------------------
+  //
+  // A VPS purchase creates TWO resources: a virtual machine AND a billing
+  // subscription. `stopVirtualMachine` powers off the VM but keeps the
+  // subscription billing. To stop paying Hostinger we must explicitly DELETE
+  // the billing subscription. See the lifecycle plan, blocker B1 (option A).
+
+  async listBillingSubscriptions(): Promise<BillingSubscription[]> {
+    const res = await this.request<BillingSubscription[] | Paginated<BillingSubscription>>(
+      "GET",
+      "/api/billing/v1/subscriptions"
+    );
+    return normalizeList<BillingSubscription>(res);
+  }
+
+  /**
+   * Cancel a Hostinger billing subscription. The Hostinger PHP/Python SDKs
+   * describe the body as `billingV1SubscriptionCancelRequest` (cancel
+   * options). We always pass the "immediate cancel" flags so the VM is
+   * powered off and removed as soon as the request succeeds — we've already
+   * taken the SSH-tarball backup by this point.
+   */
+  async cancelBillingSubscription(
+    subscriptionId: string,
+    reason: string = "newcoworker-lifecycle-cancel"
+  ): Promise<unknown> {
+    return this.request<unknown>(
+      "DELETE",
+      `/api/billing/v1/subscriptions/${encodeURIComponent(subscriptionId)}`,
+      {
+        reason_code: "other",
+        reason_description: reason,
+        cancel_option: "immediately"
+      }
+    );
+  }
+
+  async disableBillingAutoRenewal(subscriptionId: string): Promise<unknown> {
+    return this.request<unknown>(
+      "DELETE",
+      `/api/billing/v1/subscriptions/${encodeURIComponent(subscriptionId)}/auto-renewal/disable`
+    );
+  }
+
+  async enableBillingAutoRenewal(subscriptionId: string): Promise<unknown> {
+    return this.request<unknown>(
+      "PATCH",
+      `/api/billing/v1/subscriptions/${encodeURIComponent(subscriptionId)}/auto-renewal/enable`
+    );
+  }
+
   // -------------------- Actions --------------------
 
   async listActions(virtualMachineId: number, page = 1): Promise<Action[]> {
@@ -470,7 +583,7 @@ export class HostingerClient {
   // -------------------- Request plumbing --------------------
 
   private async request<T>(
-    method: "GET" | "POST" | "PUT" | "DELETE",
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
     body?: unknown
   ): Promise<T> {

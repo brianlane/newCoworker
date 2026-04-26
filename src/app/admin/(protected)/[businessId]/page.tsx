@@ -15,6 +15,7 @@ import { StatusDot } from "@/components/ui/StatusDot";
 import { SoulEditor } from "@/components/dashboard/SoulEditor";
 import { SkipPaymentButton } from "@/components/admin/SkipPaymentButton";
 import { DeleteClientButton } from "@/components/admin/DeleteClientButton";
+import { ForceRefundButton } from "@/components/admin/ForceRefundButton";
 import { AssignDidPanel } from "@/components/admin/AssignDidPanel";
 import { KillSwitch } from "@/components/dashboard/KillSwitch";
 import { SafeModeToggle } from "@/components/dashboard/SafeModeToggle";
@@ -54,14 +55,19 @@ export default async function BusinessDetailPage({
             <p className="text-sm text-parchment/50">{business.owner_email}</p>
           </div>
           <StatusDot
-            status={business.status as "online" | "offline" | "high_load"}
+            status={business.status as "online" | "offline" | "high_load" | "wiped"}
             showLabel
           />
           <Badge variant={business.tier === "standard" ? "online" : "neutral"}>
             {business.tier}
           </Badge>
         </div>
-        <DeleteClientButton businessId={businessId} businessName={business.name} />
+        <div className="flex flex-col gap-2 items-end">
+          <DeleteClientButton businessId={businessId} businessName={business.name} />
+          {subscription && subscription.status === "active" && (
+            <ForceRefundButton businessId={businessId} businessName={business.name} />
+          )}
+        </div>
       </div>
 
       <KillSwitch

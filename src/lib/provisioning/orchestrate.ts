@@ -37,6 +37,13 @@ type ProvisioningInput = {
 export type ProvisioningResult = {
   vpsId: string;
   tunnelUrl: string;
+  /**
+   * Hostinger billing subscription id (separate from the VM id). We persist
+   * this on the `subscriptions` row so the lifecycle engine can cancel the
+   * Hostinger-side billing when the user cancels their NewCoworker plan.
+   * Null if Hostinger didn't return it (we couldn't reconcile via list).
+   */
+  hostingerBillingSubscriptionId: string | null;
 };
 
 function resolveStarterOrStandard(tier: ProvisioningInput["tier"]): "starter" | "standard" {
@@ -515,5 +522,9 @@ export async function orchestrateProvisioning(
     }
   }
 
-  return { vpsId, tunnelUrl };
+  return {
+    vpsId,
+    tunnelUrl,
+    hostingerBillingSubscriptionId: provisioned.hostingerBillingSubscriptionId
+  };
 }

@@ -1,4 +1,4 @@
-type Status = "online" | "offline" | "high_load";
+type Status = "online" | "offline" | "high_load" | "wiped";
 
 interface StatusDotProps {
   status: Status;
@@ -8,13 +8,15 @@ interface StatusDotProps {
 const dotClasses: Record<Status, string> = {
   online: "bg-claw-green",
   offline: "bg-parchment/30",
-  high_load: "bg-spark-orange"
+  high_load: "bg-spark-orange",
+  wiped: "bg-spark-orange/60"
 };
 
 const labels: Record<Status, string> = {
   online: "Online",
   offline: "Offline",
-  high_load: "High Load"
+  high_load: "High Load",
+  wiped: "Wiped"
 };
 
 export function StatusDot({ status, showLabel = false }: StatusDotProps) {

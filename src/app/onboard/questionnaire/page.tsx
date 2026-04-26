@@ -505,7 +505,7 @@ function QuestionnaireForm() {
               />
               <p className="-mt-2 text-[11px] text-parchment/45">
                 We&apos;ll scan public pages once to give your coworker context about what you do,
-                your services, and your service area.
+                and to understand your business better.
               </p>
               <Input
                 label="Email"
