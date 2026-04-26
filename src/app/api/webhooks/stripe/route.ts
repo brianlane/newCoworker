@@ -9,6 +9,20 @@ import {
 import { successResponse, errorResponse } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
 import type Stripe from "stripe";
+import { planLifecycleAction, GRACE_WINDOW_MS } from "@/lib/billing/lifecycle";
+import { executeLifecyclePlan } from "@/lib/billing/lifecycle-executor";
+import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
+import {
+  incrementLifetimeSubscriptionCount,
+  markFirstPaidIfUnset,
+  upsertCustomerProfile
+} from "@/lib/db/customer-profiles";
+import { setBusinessCustomerProfile } from "@/lib/db/businesses";
+import {
+  cancelStripeSubscriptionSafely,
+  runChangePlanFromCheckout,
+  runResubscribeFromCheckout
+} from "@/lib/billing/change-plan-orchestrator";
 
 async function fetchSubscriptionPeriodCacheOrEmpty(
   subscriptionId: string,
@@ -54,14 +68,16 @@ export async function POST(request: Request) {
       }
 
       case "checkout.session.async_payment_failed": {
+        // Pending subs (never activated) are discarded on initial payment
+        // failure — we never write `past_due` for new signups. The DB row
+        // stays as `pending` with status unchanged; the abandoned-subs
+        // cleanup job (existing) will prune it.
         const session = event.data.object as Stripe.Checkout.Session;
         const businessId = session.metadata?.businessId;
-        if (businessId) {
-          const existing = await getSubscription(businessId);
-          if (existing) {
-            await updateSubscription(existing.id, { status: "past_due" });
-          }
-        }
+        logger.info("checkout.session.async_payment_failed: leaving pending row untouched", {
+          businessId,
+          sessionId: session.id
+        });
         break;
       }
 
@@ -69,49 +85,178 @@ export async function POST(request: Request) {
       case "customer.subscription.updated": {
         const sub = event.data.object as Stripe.Subscription;
         const businessId = sub.metadata?.businessId;
-        if (businessId) {
-          const existing = await getSubscription(businessId);
-          if (existing) {
-            type DbStatus = "active" | "past_due" | "canceled" | "pending";
-            const statusMap: Record<string, DbStatus> = {
-              active: "active",
-              trialing: "active",
-              past_due: "past_due",
-              unpaid: "past_due",
-              canceled: "canceled",
-              incomplete_expired: "canceled",
-              incomplete: "pending",
-              paused: "past_due"
-            };
-            const status: DbStatus = statusMap[sub.status] ?? "pending";
-            await updateSubscription(existing.id, {
-              status,
-              stripe_subscription_id: sub.id,
-              ...stripeSubscriptionPeriodCache(sub)
+        // Only mirror rows that are ALREADY linked to this Stripe
+        // subscription id. `checkout.session.completed` is the single
+        // authoritative site for planting the first linkage (because only
+        // that handler has the checkout session metadata + email needed
+        // to run the lifetime-cap increment idempotently). If
+        // `customer.subscription.created` were allowed to adopt a pending
+        // unlinked row and stamp `stripe_subscription_id` + flip status
+        // to active here, Stripe's weak webhook ordering guarantees could
+        // deliver this event before `checkout.session.completed`. The
+        // later activation would then see `alreadyLinkedToThisStripeSub
+        // === true` AND `status === "active"`, making `firstActivation`
+        // false and silently skipping `incrementLifetimeSubscriptionCount`
+        // — a lifetime-cap bypass under ordinary webhook delivery.
+        //
+        // Downside: if `checkout.session.completed` is genuinely lost
+        // (not retried, not delivered), the mirror is a no-op and the
+        // local row stays pending. Stripe guarantees delivery of
+        // `checkout.session.completed` for successful Checkout sessions
+        // (and we rely on that guarantee elsewhere), so this is the
+        // strictly safer default.
+        const existing = await getSubscriptionByStripeSubscriptionId(sub.id);
+        if (existing) {
+          if (businessId && existing.business_id !== businessId) {
+            logger.warn("Stripe subscription metadata businessId mismatches local row", {
+              stripeSubscriptionId: sub.id,
+              metadataBusinessId: businessId,
+              rowBusinessId: existing.business_id,
+              eventId: event.id
             });
           }
+          // Lifecycle rewrite: `past_due` / `unpaid` / `paused` are NOT
+          // valid app states. When Stripe reports those we dispatch the
+          // auto-cancel-on-payment-failure action, which walks the normal
+          // cancel flow (backup, stop VM, cancel Hostinger billing, grace
+          // window). For everything else we keep the existing status
+          // mirror since it's already correct.
+          const lifecycleCancelStatuses: ReadonlySet<Stripe.Subscription.Status> = new Set([
+            "past_due",
+            "unpaid",
+            "paused"
+          ]);
+          if (lifecycleCancelStatuses.has(sub.status) && existing.status === "active") {
+            await dispatchAutoCancelOnPaymentFailure({
+              businessId: existing.business_id,
+              reason: `stripe_status:${sub.status}`,
+              eventId: event.id
+            });
+            break;
+          }
+          if (lifecycleCancelStatuses.has(sub.status)) {
+            logger.info("Ignoring Stripe dunning status for non-active lifecycle row", {
+              businessId: existing.business_id,
+              stripeSubscriptionId: sub.id,
+              stripeStatus: sub.status,
+              dbStatus: existing.status,
+              eventId: event.id
+            });
+            break;
+          }
+
+          type DbStatus = "active" | "canceled" | "pending";
+          const statusMap: Record<string, DbStatus> = {
+            active: "active",
+            trialing: "active",
+            canceled: "canceled",
+            incomplete_expired: "canceled",
+            incomplete: "pending"
+          };
+          const status: DbStatus = statusMap[sub.status] ?? "pending";
+          // Mirror cancel_at_period_end so the dashboard reflects user
+          // intent without polling Stripe on every render.
+          await updateSubscription(existing.id, {
+            status,
+            stripe_subscription_id: sub.id,
+            cancel_at_period_end: Boolean(sub.cancel_at_period_end),
+            ...stripeSubscriptionPeriodCache(sub)
+          });
+        } else {
+          logger.info("customer.subscription mirror skipped: no local subscription row for Stripe sub", {
+            stripeSubscriptionId: sub.id,
+            businessId: businessId ?? null,
+            eventId: event.id
+          });
         }
         break;
       }
 
       case "customer.subscription.deleted": {
         const sub = event.data.object as Stripe.Subscription;
-        const businessId = sub.metadata?.businessId;
-        if (businessId) {
-          const existing = await getSubscription(businessId);
-          if (existing) {
-            // Clear cached Stripe billing-period bounds on cancel so the Edge voice
-            // inbound cannot keep reserving minutes against a stale period after the
-            // subscription is gone. Without this, `stripe_current_period_*` would
-            // remain pointing at the final paid period indefinitely (cache looks valid
-            // to `cacheLooksValidForQuotaAfterJitFailure` until `period_end` passes).
-            await updateSubscription(existing.id, {
-              status: "canceled",
-              stripe_current_period_start: null,
-              stripe_current_period_end: null,
-              stripe_subscription_cached_at: new Date().toISOString()
+        const existing = await getSubscriptionByStripeSubscriptionId(sub.id);
+        if (existing) {
+          const businessId = existing.business_id;
+          const now = new Date();
+          if (existing.cancel_at_period_end) {
+            const ctxRes = await loadLifecycleContextForBusiness(businessId, {
+              subscription: existing
             });
+            if (ctxRes.ok) {
+              const planRes = planLifecycleAction({ type: "periodEndReached" }, ctxRes.context);
+              if (planRes.ok) {
+                await executeLifecyclePlan(planRes.plan, {
+                  businessId,
+                  vpsHost: ctxRes.vpsHost,
+                  customerProfileId: ctxRes.context.subscription.customer_profile_id
+                });
+                break;
+              }
+              logger.warn("periodEndReached planner rejected; falling back to DB mirror", {
+                businessId,
+                subscriptionId: existing.id,
+                reason: planRes.reason,
+                eventId: event.id
+              });
+            } else {
+              logger.warn("periodEndReached context load failed; falling back to DB mirror", {
+                businessId,
+                subscriptionId: existing.id,
+                reason: ctxRes.reason,
+                eventId: event.id
+              });
+            }
           }
+          // Upgrade-switch old rows are finalized inline by
+          // `runChangePlanFromCheckout` (status=canceled, cancel_reason=
+          // upgrade_switch, periods nulled, cached_at stamped) *before*
+          // the orchestrator calls `stripe.subscriptions.cancel()`.
+          // Stripe then delivers `customer.subscription.deleted` to this
+          // handler, and the fallback DB-mirror below would race with
+          // the orchestrator's own final write, re-stamping
+          // `stripe_subscription_cached_at` and potentially clobbering
+          // state for an already-torn-down sub. Short-circuit on the
+          // orchestrator's exact signature instead.
+          if (
+            existing.status === "canceled" &&
+            existing.cancel_reason === "upgrade_switch"
+          ) {
+            logger.info(
+              "customer.subscription.deleted: skipping fallback mirror for upgrade_switch (orchestrator finalized)",
+              {
+                businessId,
+                subscriptionId: existing.id,
+                stripeSubscriptionId: sub.id,
+                eventId: event.id
+              }
+            );
+            break;
+          }
+          const shouldStartGrace =
+            existing.status !== "canceled" && existing.cancel_reason !== "upgrade_switch";
+          const graceEndsAt =
+            existing.grace_ends_at ??
+            (shouldStartGrace ? new Date(now.getTime() + GRACE_WINDOW_MS).toISOString() : null);
+          // Clear cached Stripe billing-period bounds on cancel so the
+          // Edge voice inbound cannot keep reserving minutes against a
+          // stale period after the subscription is gone. Pair with a
+          // grace deadline so the wipe-sweep picks the row up.
+          await updateSubscription(existing.id, {
+            status: "canceled",
+            stripe_current_period_start: null,
+            stripe_current_period_end: null,
+            stripe_subscription_cached_at: now.toISOString(),
+            grace_ends_at: graceEndsAt,
+            canceled_at: existing.canceled_at ?? now.toISOString(),
+            cancel_reason: existing.cancel_reason,
+            cancel_at_period_end: false
+          });
+        } else {
+          logger.info("customer.subscription.deleted: no local subscription row for Stripe sub", {
+            stripeSubscriptionId: sub.id,
+            businessId: sub.metadata?.businessId ?? null,
+            eventId: event.id
+          });
         }
         break;
       }
@@ -154,6 +299,22 @@ export async function POST(request: Request) {
               "Stripe subscription retrieve failed on invoice.paid"
             );
             await updateSubscription(existing.id, { status: "active", ...periodCache });
+
+            // Anchor the 30-day lifetime refund window on the very first
+            // successful invoice for this customer_profile. Subsequent paid
+            // invoices are no-ops because `markFirstPaidIfUnset` only writes
+            // when the column is still NULL.
+            if (existing.customer_profile_id) {
+              try {
+                await markFirstPaidIfUnset(existing.customer_profile_id, new Date());
+              } catch (err) {
+                logger.warn("markFirstPaidIfUnset failed on invoice.paid", {
+                  subscriptionId: existing.id,
+                  customerProfileId: existing.customer_profile_id,
+                  error: err instanceof Error ? err.message : String(err)
+                });
+              }
+            }
           }
         }
         break;
@@ -163,15 +324,43 @@ export async function POST(request: Request) {
         const invoice = event.data.object as Stripe.Invoice;
         const subscriptionId = getInvoiceSubscriptionId(invoice);
 
-        if (subscriptionId) {
-          const existing = await getSubscriptionByStripeSubscriptionId(subscriptionId);
-          if (existing) {
-            const periodCache = await fetchSubscriptionPeriodCacheOrEmpty(
-              subscriptionId,
-              "Stripe subscription retrieve failed on invoice.payment_failed"
-            );
-            await updateSubscription(existing.id, { status: "past_due", ...periodCache });
-          }
+        if (!subscriptionId) break;
+
+        const existing = await getSubscriptionByStripeSubscriptionId(subscriptionId);
+        if (!existing) break;
+
+        // Lifecycle policy (blocker B2): there is no `past_due` state any more.
+        //  - `active` subs → `autoCancelOnPaymentFailure` (backup, stop VM,
+        //    cancel Hostinger billing, grace window, NO refund).
+        //  - `pending` subs (never activated) → discarded; we drop the row
+        //    so the abandoned-subs cleanup job can prune the business.
+        //  - `canceled` / `canceled_in_grace` → ignore; this is likely the
+        //    dunning tail for an already-canceled subscription and we've
+        //    already run the teardown.
+        if (existing.status === "active") {
+          await dispatchAutoCancelOnPaymentFailure({
+            businessId: existing.business_id,
+            reason: "invoice.payment_failed",
+            eventId: event.id
+          });
+        } else if (existing.status === "pending") {
+          logger.info("invoice.payment_failed on pending subscription; discarding", {
+            businessId: existing.business_id,
+            subscriptionId: existing.id,
+            eventId: event.id
+          });
+          await updateSubscription(existing.id, {
+            status: "canceled",
+            canceled_at: new Date().toISOString(),
+            cancel_reason: "payment_failed"
+          });
+        } else {
+          logger.debug("invoice.payment_failed on non-active subscription; ignoring", {
+            businessId: existing.business_id,
+            subscriptionId: existing.id,
+            status: existing.status,
+            eventId: event.id
+          });
         }
         break;
       }
@@ -190,12 +379,109 @@ export async function POST(request: Request) {
   return successResponse({ received: true, eventId: event.id });
 }
 
+/**
+ * Fire the lifecycle `autoCancelOnPaymentFailure` plan for a business. Used by
+ * both `invoice.payment_failed` (dunning exhausted) and
+ * `customer.subscription.updated` when Stripe moves the sub into a terminal
+ * dunning state (`past_due`, `unpaid`, `paused`). Never refunds.
+ *
+ * Errors are logged but not thrown — webhook acknowledgement must stay 200 or
+ * Stripe will retry, and by the time we get here the subscription is already
+ * canceled on the Stripe side.
+ */
+async function dispatchAutoCancelOnPaymentFailure(params: {
+  businessId: string;
+  reason: string;
+  eventId: string;
+}): Promise<void> {
+  const { businessId, reason, eventId } = params;
+  try {
+    const ctxRes = await loadLifecycleContextForBusiness(businessId);
+    if (!ctxRes.ok) {
+      logger.warn("autoCancelOnPaymentFailure: context load failed", {
+        businessId,
+        reason: ctxRes.reason,
+        eventId
+      });
+      return;
+    }
+    const planRes = planLifecycleAction(
+      { type: "autoCancelOnPaymentFailure" },
+      ctxRes.context
+    );
+    if (!planRes.ok) {
+      logger.info("autoCancelOnPaymentFailure: planner rejected (likely already canceled)", {
+        businessId,
+        reason: planRes.reason,
+        eventId
+      });
+      return;
+    }
+    await executeLifecyclePlan(planRes.plan, {
+      businessId,
+      vpsHost: ctxRes.vpsHost,
+      customerProfileId: ctxRes.context.subscription.customer_profile_id
+    });
+    logger.info("autoCancelOnPaymentFailure executed", { businessId, reason, eventId });
+  } catch (err) {
+    logger.error("autoCancelOnPaymentFailure execution failed", {
+      businessId,
+      reason,
+      eventId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
 async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId: string) {
   if (
     session.mode === "payment" &&
     session.metadata?.checkoutKind === "voice_bonus_seconds"
   ) {
     await applyVoiceBonusGrantFromCheckout(session, eventId);
+    return;
+  }
+
+  // `changePlan` is a full-price fresh-checkout that goes through the
+  // normal `mode: subscription` path but must NOT run the default
+  // provisioning flow. Instead, it triggers the change-plan orchestrator
+  // which handles: snapshot → backup old → provision new VM → SSH restore
+  // → cancel old Stripe/Hostinger → mark old sub canceled. We early-return
+  // after dispatching so the default path below doesn't double-provision.
+  const lifecycleAction = session.metadata?.lifecycleAction;
+  if (lifecycleAction === "changePlan") {
+    logger.info("checkout.session.completed: dispatching changePlan orchestrator", {
+      sessionId: session.id,
+      businessId: session.metadata?.businessId,
+      previousSubscriptionId: session.metadata?.previousSubscriptionId,
+      eventId
+    });
+    try {
+      await runChangePlanFromCheckout(session, eventId);
+    } catch (err) {
+      logger.error("changePlan orchestrator failed", {
+        sessionId: session.id,
+        eventId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+    return;
+  }
+  if (lifecycleAction === "resubscribe") {
+    logger.info("checkout.session.completed: dispatching resubscribe orchestrator", {
+      sessionId: session.id,
+      businessId: session.metadata?.businessId,
+      eventId
+    });
+    try {
+      await runResubscribeFromCheckout(session, eventId);
+    } catch (err) {
+      logger.error("resubscribe orchestrator failed", {
+        sessionId: session.id,
+        eventId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
     return;
   }
 
@@ -221,13 +507,119 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
       )
     : {};
 
-  if (existing) {
+  // Abuse profile bookkeeping. Preferred source is the profile id tagged on
+  // the Checkout Session at /api/checkout creation time; we also re-upsert
+  // using the session's customer email + Stripe customer id so existing
+  // profiles from a later login path get merged with any profile we had
+  // only from email. Falls back to the existing subscription row's
+  // customer_profile_id if metadata is missing (old checkouts).
+  let customerProfileId: string | null =
+    session.metadata?.customerProfileId ?? existing?.customer_profile_id ?? null;
+  const sessionCustomerEmail =
+    session.customer_details?.email ?? session.customer_email ?? null;
+  if (sessionCustomerEmail) {
+    try {
+      customerProfileId = await upsertCustomerProfile({
+        email: sessionCustomerEmail,
+        stripeCustomerId: customerId,
+        signupIp: null
+      });
+    } catch (err) {
+      logger.warn("customer_profiles upsert failed in webhook activate", {
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+
+  if (!existing) {
+    logger.warn("checkout activation skipped: no local subscription row found", {
+      businessId,
+      sessionId: session.id,
+      eventId
+    });
+    return;
+  }
+
+  // Idempotency marker: once we've linked this DB row to *this* Stripe
+  // subscription id, any Stripe webhook retry (e.g. a network glitch
+  // between the increment and the final status flip causes Stripe to
+  // re-deliver `checkout.session.completed`) must NOT re-increment the
+  // lifetime count. A naive `existing.status !== "active"` guard would
+  // re-enter this branch on every retry, burning multiple lifetimes off
+  // the 3-count cap for a single real activation. We plant the linkage
+  // BEFORE attempting the increment so a retry at any point after this
+  // first write sees `alreadyLinked === true` and skips the increment.
+  //
+  // Trade-off: a crash *between* the linkage write and the increment RPC
+  // (e.g. process kill exactly then) can leave the row linked but
+  // uncounted, so a retry would also skip the increment and we under-
+  // count by 1. That's acceptable because under-counting is permissive
+  // (lets a legit user through), while over-counting is restrictive
+  // (incorrectly blocks legit future subs) — and the atomic DB RPC is
+  // still the last authority on concurrent checkouts at the cap.
+  const alreadyLinkedToThisStripeSub =
+    !!subscriptionId && existing.stripe_subscription_id === subscriptionId;
+  const firstActivation = existing.status !== "active" && !alreadyLinkedToThisStripeSub;
+
+  if (!alreadyLinkedToThisStripeSub && subscriptionId) {
     await updateSubscription(existing.id, {
-      status: "active",
       stripe_customer_id: customerId,
       stripe_subscription_id: subscriptionId,
+      customer_profile_id: customerProfileId ?? existing.customer_profile_id,
       ...periodCache
     });
+  }
+
+  if (firstActivation && customerProfileId) {
+    try {
+      await incrementLifetimeSubscriptionCount(customerProfileId);
+    } catch (err) {
+      logger.warn("checkout activation blocked by lifetime count increment", {
+        businessId,
+        profileId: customerProfileId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      // Cap-reached after Stripe already captured payment. Same policy as
+      // the change-plan/resubscribe orchestrators: cancel the fresh Stripe
+      // subscription so it doesn't auto-renew forever for a service we
+      // committed to never provision. Refunds are left for operator
+      // triage since this branch is rare (UI cap check narrows the race
+      // upstream, but cannot close it).
+      if (subscriptionId) {
+        await cancelStripeSubscriptionSafely(subscriptionId, businessId);
+      }
+      return;
+    }
+  }
+
+  // Do NOT unconditionally write `stripe_subscription_id` / `stripe_customer_id`
+  // here: if a Stripe Checkout Session for some reason lacks a subscription or
+  // customer id (retry races, unusual metadata states, a `mode=payment` session
+  // that slipped past earlier guards), writing `null` would clobber the
+  // linkage planted by the first `updateSubscription` above (or by a prior
+  // `customer.subscription.created` mirror), orphaning a valid live Stripe
+  // subscription from its local row. Only overwrite when we actually have
+  // fresh values.
+  await updateSubscription(existing.id, {
+    status: "active",
+    ...(customerId ? { stripe_customer_id: customerId } : {}),
+    ...(subscriptionId ? { stripe_subscription_id: subscriptionId } : {}),
+    customer_profile_id: customerProfileId ?? existing.customer_profile_id,
+    ...periodCache
+  });
+
+  if (customerProfileId) {
+    try {
+      await setBusinessCustomerProfile(businessId, customerProfileId);
+    } catch (err) {
+      logger.warn("setBusinessCustomerProfile failed in webhook activate", {
+        businessId,
+        profileId: customerProfileId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+
   }
 
   if (subscriptionId && billingPeriod && tier !== "enterprise") {
@@ -266,12 +658,34 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
   }
 
   const { orchestrateProvisioning } = await import("@/lib/provisioning/orchestrate");
-  orchestrateProvisioning({ businessId, tier }).catch((err) => {
-    logger.error("Provisioning failed after checkout", {
-      businessId,
-      error: err instanceof Error ? err.message : String(err)
+  orchestrateProvisioning({ businessId, tier })
+    .then(async (result) => {
+      // Persist the Hostinger billing-subscription id so the lifecycle
+      // engine can later cancel Hostinger billing (DELETE
+      // /api/billing/v1/subscriptions/{id}) when the user cancels. Done on
+      // success only — if provisioning failed we don't want to write a stale
+      // id onto the row.
+      if (!result.hostingerBillingSubscriptionId) return;
+      try {
+        const sub = await getSubscription(businessId);
+        if (sub) {
+          await updateSubscription(sub.id, {
+            hostinger_billing_subscription_id: result.hostingerBillingSubscriptionId
+          });
+        }
+      } catch (err) {
+        logger.warn("Failed to persist hostinger_billing_subscription_id", {
+          businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    })
+    .catch((err) => {
+      logger.error("Provisioning failed after checkout", {
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
     });
-  });
 }
 
 /**

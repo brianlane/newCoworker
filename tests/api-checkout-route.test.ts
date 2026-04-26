@@ -16,7 +16,14 @@ vi.mock("@/lib/db/subscriptions", () => ({
 }));
 
 vi.mock("@/lib/db/businesses", () => ({
-  getBusiness: vi.fn()
+  getBusiness: vi.fn(),
+  setBusinessCustomerProfile: vi.fn()
+}));
+
+vi.mock("@/lib/db/customer-profiles", () => ({
+  LIFETIME_SUBSCRIPTION_CAP: 3,
+  upsertCustomerProfile: vi.fn(),
+  getCustomerProfileById: vi.fn()
 }));
 
 vi.mock("@/lib/onboarding/token", () => ({
@@ -28,7 +35,8 @@ import { POST } from "@/app/api/checkout/route";
 import { getAuthUser, verifySignupIdentity } from "@/lib/auth";
 import { createCheckoutSession, resolveIntroDiscountCouponId, resolvePriceId } from "@/lib/stripe/client";
 import { createSubscription } from "@/lib/db/subscriptions";
-import { getBusiness } from "@/lib/db/businesses";
+import { getBusiness, setBusinessCustomerProfile } from "@/lib/db/businesses";
+import { upsertCustomerProfile, getCustomerProfileById } from "@/lib/db/customer-profiles";
 import { verifyOnboardingToken } from "@/lib/onboarding/token";
 
 describe("api/checkout route", () => {
@@ -51,6 +59,55 @@ describe("api/checkout route", () => {
       id: "cs_test_123",
       url: "https://checkout.stripe.test/session"
     });
+    vi.mocked(upsertCustomerProfile).mockResolvedValue("profile-1" as never);
+    vi.mocked(getCustomerProfileById).mockResolvedValue({
+      id: "profile-1",
+      normalized_email: "owner@example.com",
+      stripe_customer_id: null,
+      last_signup_ip: null,
+      lifetime_subscription_count: 0,
+      refund_used_at: null,
+      first_paid_at: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    } as never);
+    vi.mocked(setBusinessCustomerProfile).mockResolvedValue(undefined as never);
+  });
+
+  it("blocks checkout once the lifetime subscription cap is reached", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    vi.mocked(verifySignupIdentity).mockResolvedValue(true);
+    vi.mocked(getCustomerProfileById).mockResolvedValue({
+      id: "profile-1",
+      normalized_email: "owner@example.com",
+      stripe_customer_id: null,
+      last_signup_ip: null,
+      lifetime_subscription_count: 3,
+      refund_used_at: null,
+      first_paid_at: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    } as never);
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "standard",
+        businessId,
+        billingPeriod: "annual",
+        ownerEmail: "owner@example.com",
+        signupUserId
+      })
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.ok).toBe(false);
+    expect(createCheckoutSession).not.toHaveBeenCalled();
+    expect(createSubscription).not.toHaveBeenCalled();
   });
 
   it("allows unconfirmed signup users to create checkout when identity is verified", async () => {
@@ -169,6 +226,35 @@ describe("api/checkout route", () => {
         })
       })
     );
+  });
+
+  it("blocks checkout when the authenticated user has no email on session", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({
+      userId: signupUserId,
+      email: null,
+      isAdmin: false
+    } as never);
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "standard",
+        businessId,
+        billingPeriod: "annual"
+      })
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.ok).toBe(false);
+    expect(body.error.message).toMatch(/verified email is required/i);
+    expect(upsertCustomerProfile).not.toHaveBeenCalled();
+    expect(getCustomerProfileById).not.toHaveBeenCalled();
+    expect(createCheckoutSession).not.toHaveBeenCalled();
+    expect(createSubscription).not.toHaveBeenCalled();
   });
 
   it("rejects onboarding-token checkout when the business is no longer pending", async () => {
