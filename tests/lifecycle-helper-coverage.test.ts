@@ -418,7 +418,59 @@ describe("remaining lifecycle DB/auth helpers", () => {
     await expect(listGraceExpiredSubscriptions()).resolves.toEqual(subRows);
   });
 
-  it("finds auth users by email across pages and handles misses/errors", async () => {
+  it("finds auth users via RPC fast path when available", async () => {
+    // Production path: the `find_auth_user_id_by_email` SECURITY DEFINER
+    // RPC returns the uuid with a single index lookup.
+    const rpc = vi.fn().mockResolvedValue({ data: "auth-user-123", error: null });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+      rpc,
+      auth: { admin: { listUsers: vi.fn() } }
+    } as never);
+    await expect(findAuthUserIdByEmail(" Owner@Example.com ")).resolves.toBe("auth-user-123");
+    // RPC must receive the normalized (lowercased + trimmed) email so a
+    // case-insensitive DB index lookup works.
+    expect(rpc).toHaveBeenCalledWith("find_auth_user_id_by_email", {
+      p_email: "owner@example.com"
+    });
+  });
+
+  it("falls back to listUsers when the RPC errors with PGRST202 (migration unapplied)", async () => {
+    const rpc = vi
+      .fn()
+      .mockResolvedValue({ data: null, error: { code: "PGRST202", message: "not found" } });
+    const listUsers = vi
+      .fn()
+      .mockResolvedValueOnce({
+        data: { users: [{ id: "u-fallback", email: "fallback@example.com" }] },
+        error: null
+      });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+      rpc,
+      auth: { admin: { listUsers } }
+    } as never);
+    await expect(findAuthUserIdByEmail("fallback@example.com")).resolves.toBe("u-fallback");
+    expect(rpc).toHaveBeenCalled();
+    expect(listUsers).toHaveBeenCalled();
+  });
+
+  it("returns null when the RPC surfaces a non-PGRST202 error (true lookup failure)", async () => {
+    const rpc = vi
+      .fn()
+      .mockResolvedValue({ data: null, error: { code: "42501", message: "permission denied" } });
+    const listUsers = vi.fn();
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+      rpc,
+      auth: { admin: { listUsers } }
+    } as never);
+    await expect(findAuthUserIdByEmail("denied@example.com")).resolves.toBeNull();
+    expect(rpc).toHaveBeenCalled();
+    // Must NOT fall through to listUsers on a real DB error — that would
+    // mask a misconfigured permission as a silent "not found".
+    expect(listUsers).not.toHaveBeenCalled();
+  });
+
+  it("falls back when the RPC throws (network error) and then paginates listUsers", async () => {
+    const rpc = vi.fn().mockRejectedValue(new Error("network"));
     const fullPage = Array.from({ length: 200 }, (_, i) => ({
       id: `u-page1-${i}`,
       email: `user${i}@example.com`
@@ -426,19 +478,31 @@ describe("remaining lifecycle DB/auth helpers", () => {
     const listUsers = vi
       .fn()
       .mockResolvedValueOnce({ data: { users: fullPage }, error: null })
-      .mockResolvedValueOnce({ data: { users: [{ id: "u2", email: "Owner@Example.com" }] }, error: null });
+      .mockResolvedValueOnce({
+        data: { users: [{ id: "u2", email: "Owner@Example.com" }] },
+        error: null
+      });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+      rpc,
       auth: { admin: { listUsers } }
     } as never);
     await expect(findAuthUserIdByEmail(" owner@example.com ")).resolves.toBe("u2");
+  });
+
+  it("covers listUsers miss/empty/error/null-email branches under RPC fallback", async () => {
+    const rpcMiss = () =>
+      vi.fn().mockResolvedValue({ data: null, error: { code: "PGRST202", message: "not found" } });
 
     vi.mocked(createSupabaseServiceClient).mockResolvedValueOnce({
+      rpc: rpcMiss(),
       auth: { admin: { listUsers: vi.fn().mockResolvedValue({ data: { users: [] }, error: null }) } }
     } as never);
     await expect(findAuthUserIdByEmail("missing@example.com")).resolves.toBeNull();
+
     await expect(findAuthUserIdByEmail("  ")).resolves.toBeNull();
 
     vi.mocked(createSupabaseServiceClient).mockResolvedValueOnce({
+      rpc: rpcMiss(),
       auth: {
         admin: {
           listUsers: vi.fn().mockResolvedValue({
@@ -451,16 +515,21 @@ describe("remaining lifecycle DB/auth helpers", () => {
     await expect(findAuthUserIdByEmail("short-miss@example.com")).resolves.toBeNull();
 
     vi.mocked(createSupabaseServiceClient).mockResolvedValueOnce({
+      rpc: rpcMiss(),
       auth: { admin: { listUsers: vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } }) } }
     } as never);
     await expect(findAuthUserIdByEmail("error@example.com")).resolves.toBeNull();
 
     await expect(findAuthUserIdByEmail(undefined as unknown as string)).resolves.toBeNull();
+
     vi.mocked(createSupabaseServiceClient).mockResolvedValueOnce({
+      rpc: rpcMiss(),
       auth: { admin: { listUsers: vi.fn().mockResolvedValue({ data: null, error: null }) } }
     } as never);
     await expect(findAuthUserIdByEmail("nodata@example.com")).resolves.toBeNull();
+
     vi.mocked(createSupabaseServiceClient).mockResolvedValueOnce({
+      rpc: rpcMiss(),
       auth: {
         admin: {
           listUsers: vi.fn().mockResolvedValue({

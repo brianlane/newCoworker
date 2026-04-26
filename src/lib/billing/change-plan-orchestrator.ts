@@ -477,37 +477,16 @@ export async function runResubscribeFromCheckout(
   eventId: string
 ): Promise<void> {
   const businessId = session.metadata?.businessId;
-  const tierRaw = session.metadata?.tier;
-  const billingPeriodRaw = session.metadata?.billingPeriod;
-  if (
-    !businessId ||
-    (tierRaw !== "starter" && tierRaw !== "standard") ||
-    (billingPeriodRaw !== "monthly" &&
-      billingPeriodRaw !== "annual" &&
-      billingPeriodRaw !== "biennial")
-  ) {
-    logger.warn("resubscribe: missing/invalid checkout metadata; skipping", {
-      sessionId: session.id,
-      businessId: businessId ?? null,
-      tier: tierRaw ?? null,
-      billingPeriod: billingPeriodRaw ?? null
+  if (!businessId) {
+    logger.warn("resubscribe: missing businessId metadata; skipping", {
+      sessionId: session.id
     });
     return;
   }
 
-  const tier = tierRaw;
-  const billingPeriod = billingPeriodRaw;
   const stripeCustomerId = checkoutObjectId(session.customer);
   const stripeSubscriptionId = checkoutObjectId(session.subscription);
   const sessionEmail = session.customer_details?.email ?? session.customer_email ?? null;
-
-  logger.info("resubscribe: start", {
-    eventId,
-    businessId,
-    tier,
-    billingPeriod,
-    stripeSubscriptionId
-  });
 
   const business = await getBusiness(businessId);
   if (!business) {
@@ -523,6 +502,62 @@ export async function runResubscribeFromCheckout(
     });
     return;
   }
+
+  // `GraceBanner` reactivates without posting a tier/period (the grace-
+  // state tenant wants the SAME plan back, not a plan change), and the
+  // `/api/billing/reactivate` route fills in defaults from the old sub
+  // row before creating the Stripe Checkout. Mirror that fallback here
+  // so a single missing metadata field never silently aborts a webhook
+  // that's already taken the customer's money — if tier/period are
+  // present and valid on the session we use them, otherwise we fall back
+  // to the same defaults the route would have used.
+  const tierRaw = session.metadata?.tier;
+  const billingPeriodRaw = session.metadata?.billingPeriod;
+  const tierFromMeta =
+    tierRaw === "starter" || tierRaw === "standard" ? tierRaw : null;
+  const tierFromSub =
+    oldSub.tier === "starter" || oldSub.tier === "standard" ? oldSub.tier : null;
+  const tier = tierFromMeta ?? tierFromSub;
+  const billingPeriodFromMeta =
+    billingPeriodRaw === "monthly" ||
+    billingPeriodRaw === "annual" ||
+    billingPeriodRaw === "biennial"
+      ? billingPeriodRaw
+      : null;
+  const billingPeriodFromSub =
+    oldSub.billing_period === "monthly" ||
+    oldSub.billing_period === "annual" ||
+    oldSub.billing_period === "biennial"
+      ? oldSub.billing_period
+      : null;
+  const billingPeriod = billingPeriodFromMeta ?? billingPeriodFromSub;
+  if (!tier || !billingPeriod) {
+    logger.warn("resubscribe: unresolvable tier/billingPeriod; skipping", {
+      sessionId: session.id,
+      businessId,
+      metaTier: tierRaw ?? null,
+      metaBillingPeriod: billingPeriodRaw ?? null,
+      // tier is a non-null enum in the DB schema; billing_period is
+      // nullable, log as-is. No `?? null` fallbacks here — they'd be
+      // either dead code (tier) or a no-op (billing_period already null).
+      subTier: oldSub.tier,
+      subBillingPeriod: oldSub.billing_period
+    });
+    if (stripeSubscriptionId) {
+      await cancelStripeSubscriptionSafely(stripeSubscriptionId, businessId);
+    }
+    return;
+  }
+
+  logger.info("resubscribe: start", {
+    eventId,
+    businessId,
+    tier,
+    billingPeriod,
+    stripeSubscriptionId,
+    tierSource: tierFromMeta ? "metadata" : "sub_row",
+    billingPeriodSource: billingPeriodFromMeta ? "metadata" : "sub_row"
+  });
 
   let customerProfileId: string | null =
     session.metadata?.customerProfileId ??
@@ -669,8 +704,13 @@ export async function runResubscribeFromCheckout(
 /**
  * Stripe subscription cancel that swallows 404/already-canceled errors and
  * releases any attached schedule so the cancel sticks. Does not refund.
+ *
+ * Exported for reuse by the checkout activation path in the Stripe
+ * webhook, which needs the same "cancel a just-minted Stripe sub when we
+ * refuse to provision" semantics when the atomic lifetime cap increment
+ * rejects a concurrent signup.
  */
-async function cancelStripeSubscriptionSafely(
+export async function cancelStripeSubscriptionSafely(
   subscriptionId: string,
   businessId: string
 ): Promise<void> {

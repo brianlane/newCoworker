@@ -19,6 +19,7 @@ import {
 } from "@/lib/db/customer-profiles";
 import { setBusinessCustomerProfile } from "@/lib/db/businesses";
 import {
+  cancelStripeSubscriptionSafely,
   runChangePlanFromCheckout,
   runResubscribeFromCheckout
 } from "@/lib/billing/change-plan-orchestrator";
@@ -189,6 +190,31 @@ export async function POST(request: Request) {
                 eventId: event.id
               });
             }
+          }
+          // Upgrade-switch old rows are finalized inline by
+          // `runChangePlanFromCheckout` (status=canceled, cancel_reason=
+          // upgrade_switch, periods nulled, cached_at stamped) *before*
+          // the orchestrator calls `stripe.subscriptions.cancel()`.
+          // Stripe then delivers `customer.subscription.deleted` to this
+          // handler, and the fallback DB-mirror below would race with
+          // the orchestrator's own final write, re-stamping
+          // `stripe_subscription_cached_at` and potentially clobbering
+          // state for an already-torn-down sub. Short-circuit on the
+          // orchestrator's exact signature instead.
+          if (
+            existing.status === "canceled" &&
+            existing.cancel_reason === "upgrade_switch"
+          ) {
+            logger.info(
+              "customer.subscription.deleted: skipping fallback mirror for upgrade_switch (orchestrator finalized)",
+              {
+                businessId,
+                subscriptionId: existing.id,
+                stripeSubscriptionId: sub.id,
+                eventId: event.id
+              }
+            );
+            break;
           }
           const shouldStartGrace =
             existing.status !== "canceled" && existing.cancel_reason !== "upgrade_switch";
@@ -499,12 +525,37 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
     return;
   }
 
-  // Increment before activation/provisioning so the atomic DB cap is the last
-  // authority under concurrent checkouts. If the profile is already capped,
-  // we leave the pending row untouched for operator cleanup instead of
-  // activating services beyond policy.
-  const firstActivation = existing.status !== "active";
-  if (customerProfileId && firstActivation) {
+  // Idempotency marker: once we've linked this DB row to *this* Stripe
+  // subscription id, any Stripe webhook retry (e.g. a network glitch
+  // between the increment and the final status flip causes Stripe to
+  // re-deliver `checkout.session.completed`) must NOT re-increment the
+  // lifetime count. A naive `existing.status !== "active"` guard would
+  // re-enter this branch on every retry, burning multiple lifetimes off
+  // the 3-count cap for a single real activation. We plant the linkage
+  // BEFORE attempting the increment so a retry at any point after this
+  // first write sees `alreadyLinked === true` and skips the increment.
+  //
+  // Trade-off: a crash *between* the linkage write and the increment RPC
+  // (e.g. process kill exactly then) can leave the row linked but
+  // uncounted, so a retry would also skip the increment and we under-
+  // count by 1. That's acceptable because under-counting is permissive
+  // (lets a legit user through), while over-counting is restrictive
+  // (incorrectly blocks legit future subs) — and the atomic DB RPC is
+  // still the last authority on concurrent checkouts at the cap.
+  const alreadyLinkedToThisStripeSub =
+    !!subscriptionId && existing.stripe_subscription_id === subscriptionId;
+  const firstActivation = existing.status !== "active" && !alreadyLinkedToThisStripeSub;
+
+  if (!alreadyLinkedToThisStripeSub && subscriptionId) {
+    await updateSubscription(existing.id, {
+      stripe_customer_id: customerId,
+      stripe_subscription_id: subscriptionId,
+      customer_profile_id: customerProfileId ?? existing.customer_profile_id,
+      ...periodCache
+    });
+  }
+
+  if (firstActivation && customerProfileId) {
     try {
       await incrementLifetimeSubscriptionCount(customerProfileId);
     } catch (err) {
@@ -513,6 +564,15 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
         profileId: customerProfileId,
         error: err instanceof Error ? err.message : String(err)
       });
+      // Cap-reached after Stripe already captured payment. Same policy as
+      // the change-plan/resubscribe orchestrators: cancel the fresh Stripe
+      // subscription so it doesn't auto-renew forever for a service we
+      // committed to never provision. Refunds are left for operator
+      // triage since this branch is rare (UI cap check narrows the race
+      // upstream, but cannot close it).
+      if (subscriptionId) {
+        await cancelStripeSubscriptionSafely(subscriptionId, businessId);
+      }
       return;
     }
   }

@@ -7,6 +7,14 @@ const { mockStripeRetrieve } = vi.hoisted(() => ({
   })
 }));
 
+const { mockStripeCancel } = vi.hoisted(() => ({
+  mockStripeCancel: vi.fn().mockResolvedValue({ id: "cancelled_sub", status: "canceled" })
+}));
+
+const { mockStripeScheduleRelease } = vi.hoisted(() => ({
+  mockStripeScheduleRelease: vi.fn().mockResolvedValue({})
+}));
+
 const { mockCheckoutSessionsList } = vi.hoisted(() => ({
   mockCheckoutSessionsList: vi.fn()
 }));
@@ -20,7 +28,8 @@ vi.mock("@/lib/stripe/client", () => ({
   ensureCommitmentSchedule: vi.fn(),
   verifyWebhook: vi.fn(),
   getStripe: vi.fn(() => ({
-    subscriptions: { retrieve: mockStripeRetrieve },
+    subscriptions: { retrieve: mockStripeRetrieve, cancel: mockStripeCancel },
+    subscriptionSchedules: { release: mockStripeScheduleRelease },
     checkout: { sessions: { list: mockCheckoutSessionsList } }
   }))
 }));
@@ -112,6 +121,10 @@ describe("stripe webhook route", () => {
       current_period_start: 1700000000,
       current_period_end: 1702678400
     });
+    mockStripeCancel.mockClear();
+    mockStripeCancel.mockResolvedValue({ id: "cancelled_sub", status: "canceled" });
+    mockStripeScheduleRelease.mockClear();
+    mockStripeScheduleRelease.mockResolvedValue({});
     mockLoadLifecycleContext.mockReset();
     mockExecuteLifecyclePlan.mockReset();
     mockExecuteLifecyclePlan.mockResolvedValue({});
@@ -205,7 +218,7 @@ describe("stripe webhook route", () => {
     );
   });
 
-  it("does not activate when the atomic lifetime increment rejects", async () => {
+  it("does not activate when the atomic lifetime increment rejects and cancels the fresh Stripe sub", async () => {
     mockVoiceBonusRpc.mockImplementation((name: string) => {
       if (name === "increment_customer_profile_lifetime_count") {
         return Promise.resolve({ data: null, error: { message: "cap reached" } });
@@ -244,12 +257,89 @@ describe("stripe webhook route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(updateSubscription).not.toHaveBeenCalled();
+    // Linkage write MUST happen first (our idempotency marker) — a
+    // retry would re-enter this branch and double-increment without it.
+    expect(updateSubscription).toHaveBeenCalledTimes(1);
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "local_sub_1",
+      expect.objectContaining({
+        stripe_subscription_id: "sub_1",
+        stripe_customer_id: "cus_1",
+        customer_profile_id: "prof-capped"
+      })
+    );
+    // But the status flip to active MUST NOT happen on cap-reject.
+    expect(updateSubscription).not.toHaveBeenCalledWith(
+      "local_sub_1",
+      expect.objectContaining({ status: "active" })
+    );
+    // The fresh Stripe sub must be canceled to prevent auto-renewal for
+    // a service we won't provision.
+    expect(mockStripeCancel).toHaveBeenCalledWith("sub_1", { prorate: false });
     expect(orchestrateProvisioning).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(
       "checkout activation blocked by lifetime count increment",
       expect.objectContaining({ businessId: "biz_1", profileId: "prof-capped" })
     );
+  });
+
+  it("treats a Stripe webhook retry after linkage as idempotent (no double-increment)", async () => {
+    // Simulate a retry: the local sub row is already linked to the same
+    // Stripe subscription id (previous delivery planted the linkage),
+    // but the lifetime count has already been incremented in that prior
+    // run. Under the old `firstActivation = existing.status !== 'active'`
+    // logic this would re-enter and re-increment. With the idempotency
+    // guard the increment RPC must NOT be called again.
+    let incrementCalls = 0;
+    mockVoiceBonusRpc.mockImplementation((name: string) => {
+      if (name === "increment_customer_profile_lifetime_count") {
+        incrementCalls += 1;
+        return Promise.resolve({ data: 1, error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_retry",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_retry",
+          metadata: {
+            businessId: "biz_retry",
+            tier: "starter",
+            billingPeriod: "annual",
+            customerProfileId: "prof-retry"
+          },
+          customer: "cus_retry",
+          subscription: "sub_retry"
+        }
+      }
+    } as never);
+    // Key: stripe_subscription_id on the existing row already matches the
+    // session's subscription id — classic retry signature.
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "local_sub_retry",
+      status: "pending",
+      stripe_subscription_id: "sub_retry",
+      customer_profile_id: "prof-retry"
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(incrementCalls).toBe(0);
+    // The final status flip still runs (idempotent).
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "local_sub_retry",
+      expect.objectContaining({ status: "active" })
+    );
+    expect(mockStripeCancel).not.toHaveBeenCalled();
   });
 
   it("records voice bonus grant on payment checkout with voice_bonus_seconds metadata", async () => {
@@ -656,7 +746,13 @@ describe("stripe webhook route", () => {
     );
   });
 
-  it("does not synthesize grace for already-canceled upgrade-switch subscription deletes", async () => {
+  it("short-circuits customer.subscription.deleted fallback for already-finalized upgrade_switch rows", async () => {
+    // The change-plan orchestrator finalizes the old subscription row
+    // inline (status=canceled, cancel_reason=upgrade_switch) BEFORE
+    // calling Stripe cancel, which triggers this webhook. The fallback
+    // mirror below would otherwise race the orchestrator's own write
+    // and re-stamp `stripe_subscription_cached_at`. Assert we skip the
+    // mirror entirely in that case.
     vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
       id: "old_change_sub",
       business_id: "biz_change",
@@ -686,12 +782,12 @@ describe("stripe webhook route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(updateSubscription).toHaveBeenCalledWith(
-      "old_change_sub",
+    expect(updateSubscription).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      "customer.subscription.deleted: skipping fallback mirror for upgrade_switch (orchestrator finalized)",
       expect.objectContaining({
-        status: "canceled",
-        cancel_reason: "upgrade_switch",
-        grace_ends_at: null
+        businessId: "biz_change",
+        subscriptionId: "old_change_sub"
       })
     );
   });

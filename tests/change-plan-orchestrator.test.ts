@@ -719,6 +719,22 @@ describe("runChangePlanFromCheckout", () => {
     // The OLD sub is NOT touched — teardown never ran.
     expect(stripeCancelMock).not.toHaveBeenCalledWith("sub_old", expect.anything());
   });
+
+  it("aborts without calling Stripe cancel when cap rejects and no fresh sub id was issued", async () => {
+    // Defensive branch: if session.subscription is absent (pathological
+    // Stripe state), we can't cancel anything, but we still must not
+    // provision.
+    incrementLifetimeSubscriptionCountMock.mockRejectedValueOnce(new Error("cap reached"));
+
+    await runChangePlanFromCheckout(
+      makeSession({ subscription: null }),
+      "evt_change_cap_no_sub"
+    );
+
+    expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+    expect(createSubscriptionMock).not.toHaveBeenCalled();
+    expect(stripeCancelMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("runResubscribeFromCheckout", () => {
@@ -1053,6 +1069,141 @@ describe("runResubscribeFromCheckout", () => {
       })
     );
     expect(ensureCommitmentScheduleMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to old sub's tier/billingPeriod when the checkout session metadata omits them (banner flow)", async () => {
+    // GraceBanner POSTs `{ mode: "resubscribe" }` with no tier/period —
+    // the reactivate route fills in defaults from the grace-state sub
+    // row before creating Stripe Checkout. If, for any reason, tier/
+    // billingPeriod are absent from the returned session metadata, the
+    // orchestrator MUST still be able to resubscribe using the old sub
+    // row's plan — otherwise a paid Checkout silently aborts and the
+    // customer is charged without being re-provisioned.
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-row-grace",
+      business_id: "biz-1",
+      customer_profile_id: "prof-1",
+      tier: "starter",
+      billing_period: "monthly",
+      status: "canceled",
+      grace_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      wiped_at: null
+    });
+
+    await runResubscribeFromCheckout(
+      makeSession({
+        metadata: {
+          businessId: "biz-1",
+          lifecycleAction: "resubscribe"
+        }
+      }),
+      "evt_resub_banner"
+    );
+
+    expect(orchestrateProvisioningMock).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz-1", tier: "starter" })
+    );
+    expect(updateSubscriptionMock).toHaveBeenCalledWith(
+      "sub-row-grace",
+      expect.objectContaining({
+        status: "active",
+        tier: "starter",
+        billing_period: "monthly"
+      })
+    );
+  });
+
+  it("cancels the fresh Stripe sub when neither metadata nor old sub yields a supported tier", async () => {
+    // If BOTH sources produce an unsupported tier (e.g. enterprise-only
+    // old sub), bail — but cancel the just-minted Stripe subscription
+    // so the customer isn't auto-renewed for a service we won't
+    // provision. This is the defense-in-depth branch.
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-row-grace",
+      business_id: "biz-1",
+      customer_profile_id: "prof-1",
+      tier: "enterprise",
+      billing_period: "annual",
+      status: "canceled",
+      grace_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      wiped_at: null
+    });
+
+    await runResubscribeFromCheckout(
+      makeSession({
+        subscription: "sub_new_unsupported",
+        metadata: {
+          businessId: "biz-1",
+          lifecycleAction: "resubscribe"
+        }
+      }),
+      "evt_resub_unsupported"
+    );
+
+    expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+    expect(stripeCancelMock).toHaveBeenCalledWith("sub_new_unsupported", { prorate: false });
+  });
+
+  it("bails cleanly when tier is unresolvable AND no fresh Stripe sub id was issued", async () => {
+    // Covers the false branch of the `if (stripeSubscriptionId)` guard
+    // in the unresolvable-tier path — nothing to cancel, just log + return.
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-row-grace",
+      business_id: "biz-1",
+      customer_profile_id: "prof-1",
+      tier: "enterprise",
+      billing_period: "annual",
+      status: "canceled",
+      grace_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      wiped_at: null
+    });
+
+    await runResubscribeFromCheckout(
+      makeSession({
+        subscription: null,
+        metadata: {
+          businessId: "biz-1",
+          lifecycleAction: "resubscribe"
+        }
+      }),
+      "evt_resub_unsupported_no_sub"
+    );
+
+    expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+    expect(stripeCancelMock).not.toHaveBeenCalled();
+  });
+
+  it("aborts resubscribe cap-reject without Stripe cancel when no fresh sub id was issued", async () => {
+    // Covers the false branch of the `if (stripeSubscriptionId)` guard
+    // in the resubscribe cap-reject path.
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-row-grace",
+      business_id: "biz-1",
+      customer_profile_id: "prof-1",
+      tier: "starter",
+      billing_period: "monthly",
+      status: "canceled",
+      grace_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      wiped_at: null
+    });
+    incrementLifetimeSubscriptionCountMock.mockRejectedValueOnce(new Error("cap reached"));
+
+    await runResubscribeFromCheckout(
+      makeSession({
+        subscription: null,
+        metadata: {
+          businessId: "biz-1",
+          tier: "starter",
+          billingPeriod: "monthly",
+          lifecycleAction: "resubscribe",
+          customerProfileId: "prof-1"
+        }
+      }),
+      "evt_resub_cap_no_sub"
+    );
+
+    expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+    expect(stripeCancelMock).not.toHaveBeenCalled();
   });
 
   it("rejects invalid resubscribe metadata without provisioning", async () => {
