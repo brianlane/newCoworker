@@ -122,15 +122,22 @@ export async function findAuthUserIdByEmail(email: string): Promise<string | nul
     const { data, error } = await db.rpc("find_auth_user_id_by_email", {
       p_email: target
     });
-    if (!error && typeof data === "string" && data.length > 0) {
-      return data;
+    if (!error) {
+      // RPC is present and returned a definitive answer. Trust it: a
+      // non-empty string is a hit, null/empty is a genuine miss. The
+      // SQL is `select id from auth.users where lower(email)=... limit 1`
+      // so a `null` result means "no such user". Falling through to
+      // the paginated listUsers scan in the miss case would burn up to
+      // PAGE_CAP * perPage (2,000) admin API calls per nonexistent
+      // email — exactly the regression this RPC was added to fix.
+      return typeof data === "string" && data.length > 0 ? data : null;
     }
     // PostgREST surfaces "function does not exist" with PGRST202 on
     // older instances that haven't applied the migration yet. Swallow
     // and fall through to the listUsers fallback so staging/dev don't
     // hard-break. Any OTHER rpc error is a true lookup failure and we
     // return null (same contract as before — "not found").
-    if (error && error.code !== "PGRST202") {
+    if (error.code !== "PGRST202") {
       return null;
     }
   } catch {

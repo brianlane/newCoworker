@@ -489,6 +489,24 @@ describe("remaining lifecycle DB/auth helpers", () => {
     expect(listUsers).not.toHaveBeenCalled();
   });
 
+  it("returns null without fallback when RPC succeeds with null (genuine miss)", async () => {
+    // The SQL is `select id from auth.users ... limit 1`, so PostgREST
+    // surfaces a true miss as `{ data: null, error: null }`. That is a
+    // definitive answer from an indexed lookup — falling through to the
+    // listUsers paginated scan would burn up to 2,000 admin API calls
+    // per nonexistent email, exactly the regression the RPC was added
+    // to close.
+    const rpc = vi.fn().mockResolvedValue({ data: null, error: null });
+    const listUsers = vi.fn();
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+      rpc,
+      auth: { admin: { listUsers } }
+    } as never);
+    await expect(findAuthUserIdByEmail("ghost@example.com")).resolves.toBeNull();
+    expect(rpc).toHaveBeenCalled();
+    expect(listUsers).not.toHaveBeenCalled();
+  });
+
   it("falls back when the RPC throws (network error) and then paginates listUsers", async () => {
     const rpc = vi.fn().mockRejectedValue(new Error("network"));
     const fullPage = Array.from({ length: 200 }, (_, i) => ({
