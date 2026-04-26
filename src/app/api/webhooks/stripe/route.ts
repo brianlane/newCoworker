@@ -85,11 +85,27 @@ export async function POST(request: Request) {
       case "customer.subscription.updated": {
         const sub = event.data.object as Stripe.Subscription;
         const businessId = sub.metadata?.businessId;
-        let existing = await getSubscriptionByStripeSubscriptionId(sub.id);
-        if (!existing && event.type === "customer.subscription.created" && businessId) {
-          const candidate = await getSubscription(businessId);
-          existing = candidate && !candidate.stripe_subscription_id ? candidate : null;
-        }
+        // Only mirror rows that are ALREADY linked to this Stripe
+        // subscription id. `checkout.session.completed` is the single
+        // authoritative site for planting the first linkage (because only
+        // that handler has the checkout session metadata + email needed
+        // to run the lifetime-cap increment idempotently). If
+        // `customer.subscription.created` were allowed to adopt a pending
+        // unlinked row and stamp `stripe_subscription_id` + flip status
+        // to active here, Stripe's weak webhook ordering guarantees could
+        // deliver this event before `checkout.session.completed`. The
+        // later activation would then see `alreadyLinkedToThisStripeSub
+        // === true` AND `status === "active"`, making `firstActivation`
+        // false and silently skipping `incrementLifetimeSubscriptionCount`
+        // — a lifetime-cap bypass under ordinary webhook delivery.
+        //
+        // Downside: if `checkout.session.completed` is genuinely lost
+        // (not retried, not delivered), the mirror is a no-op and the
+        // local row stays pending. Stripe guarantees delivery of
+        // `checkout.session.completed` for successful Checkout sessions
+        // (and we rely on that guarantee elsewhere), so this is the
+        // strictly safer default.
+        const existing = await getSubscriptionByStripeSubscriptionId(sub.id);
         if (existing) {
           if (businessId && existing.business_id !== businessId) {
             logger.warn("Stripe subscription metadata businessId mismatches local row", {
@@ -577,10 +593,18 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
     }
   }
 
+  // Do NOT unconditionally write `stripe_subscription_id` / `stripe_customer_id`
+  // here: if a Stripe Checkout Session for some reason lacks a subscription or
+  // customer id (retry races, unusual metadata states, a `mode=payment` session
+  // that slipped past earlier guards), writing `null` would clobber the
+  // linkage planted by the first `updateSubscription` above (or by a prior
+  // `customer.subscription.created` mirror), orphaning a valid live Stripe
+  // subscription from its local row. Only overwrite when we actually have
+  // fresh values.
   await updateSubscription(existing.id, {
     status: "active",
-    stripe_customer_id: customerId,
-    stripe_subscription_id: subscriptionId,
+    ...(customerId ? { stripe_customer_id: customerId } : {}),
+    ...(subscriptionId ? { stripe_subscription_id: subscriptionId } : {}),
     customer_profile_id: customerProfileId ?? existing.customer_profile_id,
     ...periodCache
   });

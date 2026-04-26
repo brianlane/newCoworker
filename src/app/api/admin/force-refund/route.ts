@@ -34,7 +34,8 @@ import {
   type StripeOp
 } from "@/lib/billing/lifecycle";
 import { executeLifecyclePlan } from "@/lib/billing/lifecycle-executor";
-import { getBusiness } from "@/lib/db/businesses";
+import { getBusiness, setBusinessCustomerProfile } from "@/lib/db/businesses";
+import { upsertCustomerProfile } from "@/lib/db/customer-profiles";
 import { logger } from "@/lib/logger";
 
 const schema = z.object({
@@ -63,15 +64,75 @@ export async function POST(request: Request) {
       return errorResponse("NOT_FOUND", ctxRes.reason, 404);
     }
 
-    const plan = buildAdminForceRefundPlan(ctxRes.context);
+    // Ensure we have a real customer_profile_id before planning. The
+    // lifetime-once refund policy is enforced via
+    // `customer_profiles.refund_used_at`; if neither the subscription row
+    // nor the loaded context has a profile id, the planner can emit a
+    // `mark_refund_used` op only against a synthetic id (which the plan
+    // rewrite would then drop), silently waiving the policy. Upsert one
+    // now using the business owner's email so the stamp lands on a real
+    // row that will match any future profile merged for that email.
+    let effectiveCtx: LifecycleContext = ctxRes.context;
+    let profileIdForPlan: string | null =
+      ctxRes.context.subscription.customer_profile_id ?? ctxRes.context.profile?.id ?? null;
+    if (!profileIdForPlan) {
+      if (!business.owner_email) {
+        logger.warn("admin.force-refund: no owner_email to upsert customer profile", {
+          adminEmail: admin.email,
+          businessId: body.businessId
+        });
+        return errorResponse(
+          "CONFLICT",
+          "cannot_enforce_refund_policy_without_profile",
+          409
+        );
+      }
+      try {
+        profileIdForPlan = await upsertCustomerProfile({
+          email: business.owner_email,
+          signupIp: null
+        });
+      } catch (err) {
+        logger.error("admin.force-refund: failed to upsert customer profile", {
+          adminEmail: admin.email,
+          businessId: body.businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+        return errorResponse("INTERNAL_SERVER_ERROR", "Profile upsert failed", 500);
+      }
+      // Best-effort attach the profile id to the business row so later
+      // self-serve lookups resolve the same id.
+      try {
+        await setBusinessCustomerProfile(body.businessId, profileIdForPlan);
+      } catch (err) {
+        logger.warn("admin.force-refund: setBusinessCustomerProfile failed (continuing)", {
+          businessId: body.businessId,
+          profileId: profileIdForPlan,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+      // Thread the real profile id into the lifecycle context so the
+      // planner's `cancelWithRefund` precondition check sees a profile
+      // (and so the rewritten plan stamps `customer_profile_id` on the
+      // `subscriptions` row for future self-serve lookups).
+      effectiveCtx = {
+        ...ctxRes.context,
+        subscription: {
+          ...ctxRes.context.subscription,
+          customer_profile_id: profileIdForPlan
+        }
+      };
+    }
+
+    const plan = buildAdminForceRefundPlan(effectiveCtx);
     if (!plan.ok) {
       return errorResponse("CONFLICT", plan.reason, 409);
     }
 
     await executeLifecyclePlan(plan.plan, {
       businessId: body.businessId,
-      vpsHost: ctxRes.context.vpsHost,
-      customerProfileId: ctxRes.context.subscription.customer_profile_id
+      vpsHost: effectiveCtx.vpsHost,
+      customerProfileId: profileIdForPlan
     });
 
     logger.info("admin.force-refund complete", {
@@ -101,7 +162,8 @@ export async function POST(request: Request) {
 function buildAdminForceRefundPlan(
   ctx: LifecycleContext
 ): { ok: true; plan: LifecyclePlan } | { ok: false; reason: string } {
-  const realProfileId = ctx.subscription.customer_profile_id ?? ctx.profile?.id ?? null;
+  // Guaranteed non-null by the route-level upsert-or-fail guard.
+  const realProfileId = (ctx.subscription.customer_profile_id ?? ctx.profile?.id) as string;
   const primary = planLifecycleAction({ type: "cancelWithRefund" }, ctx);
   if (primary.ok) {
     return { ok: true, plan: asAdminForceRefundPlan(primary.plan, realProfileId) };
@@ -139,7 +201,7 @@ function buildAdminForceRefundPlan(
   return { ok: true, plan: asAdminForceRefundPlan(forced.plan, realProfileId) };
 }
 
-function asAdminForceRefundPlan(plan: LifecyclePlan, profileId: string | null): LifecyclePlan {
+function asAdminForceRefundPlan(plan: LifecyclePlan, profileId: string): LifecyclePlan {
   // The cancel-with-refund planner stamps `cancel_reason: "user_refund"` on
   // the subscription patch + cancel-confirmation email because the planner
   // is generic to self-serve + admin flows. When we re-use it for an
@@ -147,31 +209,37 @@ function asAdminForceRefundPlan(plan: LifecyclePlan, profileId: string | null): 
   // so the `subscriptions.cancel_reason` audit column, the GraceBanner
   // headline, and the cancel-confirmation email copy all attribute the
   // action to admin rather than the customer.
+  //
+  // `profileId` is required (non-null): the route guarantees we resolve a
+  // real customer_profiles row BEFORE reaching this rewrite so
+  // `mark_refund_used` always lands on a real row. The module docstring
+  // explicitly promises "the executor still stamps `refund_used_at` for
+  // real, so subsequent self-serve attempts remain blocked as policy
+  // requires" — silently dropping the op because the profile is missing
+  // would violate that guarantee.
   return {
     ...plan,
     stripeOps: plan.stripeOps.map((op): StripeOp =>
       op.type === "refund_latest_charge" ? { ...op, reason: "admin_force" } : op
     ),
-    dbUpdates: plan.dbUpdates.flatMap((op): DbUpdateOp[] => {
+    dbUpdates: plan.dbUpdates.map((op): DbUpdateOp => {
       if (op.type === "mark_refund_used") {
-        return profileId ? [{ ...op, profileId }] : [];
+        return { ...op, profileId };
       }
       if (op.type === "record_refund") {
-        return [{ ...op, profileId, reason: "admin_force" }];
+        return { ...op, profileId, reason: "admin_force" };
       }
       if (op.type === "update_subscription") {
-        return [
-          {
-            ...op,
-            patch: {
-              ...op.patch,
-              customer_profile_id: profileId,
-              cancel_reason: "admin_force"
-            }
+        return {
+          ...op,
+          patch: {
+            ...op.patch,
+            customer_profile_id: profileId,
+            cancel_reason: "admin_force"
           }
-        ];
+        };
       }
-      return [op];
+      return op;
     }),
     emailsToSend: plan.emailsToSend.map((op): EmailOp =>
       op.type === "send_cancel_confirmation" ? { ...op, reason: "admin_force" } : op

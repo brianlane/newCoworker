@@ -218,6 +218,63 @@ describe("stripe webhook route", () => {
     );
   });
 
+  it("does not overwrite previously linked stripe ids with null on a session missing subscription/customer", async () => {
+    // Defensive branch: a Checkout Session webhook that (for whatever
+    // reason — retry races, unusual metadata, a `mode=payment` session
+    // that slips past the earlier voice-bonus guard) carries neither a
+    // `subscription` nor a `customer` field must NOT clobber a
+    // previously-linked `stripe_subscription_id` / `stripe_customer_id`
+    // on the local row with null.
+    mockVoiceBonusRpc.mockImplementation((name: string) => {
+      if (name === "increment_customer_profile_lifetime_count") {
+        return Promise.resolve({ data: 1, error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_null_ids",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_null_ids",
+          metadata: {
+            businessId: "biz_linked",
+            tier: "starter",
+            billingPeriod: "annual"
+          },
+          customer: null,
+          subscription: null
+        }
+      }
+    } as never);
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "local_linked",
+      status: "pending",
+      stripe_customer_id: "cus_prev",
+      stripe_subscription_id: "sub_prev",
+      customer_profile_id: "prof-prev"
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    // The linkage-planting write at the top of activateCheckoutSession is
+    // gated on `subscriptionId`, so it should NOT fire when null. The
+    // final status-flip write should still happen — but MUST omit the
+    // nullable fields so the previously-linked ids are preserved.
+    expect(updateSubscription).toHaveBeenCalledTimes(1);
+    const [, patch] = vi.mocked(updateSubscription).mock.calls[0];
+    expect(patch).toMatchObject({ status: "active" });
+    expect(patch).not.toHaveProperty("stripe_subscription_id");
+    expect(patch).not.toHaveProperty("stripe_customer_id");
+  });
+
   it("does not activate when the atomic lifetime increment rejects and cancels the fresh Stripe sub", async () => {
     mockVoiceBonusRpc.mockImplementation((name: string) => {
       if (name === "increment_customer_profile_lifetime_count") {
@@ -552,14 +609,17 @@ describe("stripe webhook route", () => {
     expect(updateSubscription).not.toHaveBeenCalledWith("new_sub_row", expect.any(Object));
   });
 
-  it("falls back to the pending row for early subscription.created before checkout activation", async () => {
+  it("does NOT adopt a pending row on early customer.subscription.created (prevents lifetime-cap bypass)", async () => {
+    // Stripe does not guarantee webhook ordering. If `customer.subscription
+    // .created` arrives before `checkout.session.completed` and we adopted
+    // the pending local row here (writing `stripe_subscription_id` + flipping
+    // status to active), the subsequent activation would see
+    // `alreadyLinkedToThisStripeSub === true` AND `status === "active"`,
+    // causing `firstActivation` to be false and silently skipping
+    // `incrementLifetimeSubscriptionCount` — a lifetime-cap bypass under
+    // ordinary webhook delivery. The handler must mirror ONLY rows that
+    // are already linked by stripe_subscription_id.
     vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(null);
-    vi.mocked(getSubscription).mockResolvedValue({
-      id: "pending_sub_row",
-      business_id: "biz_pending",
-      status: "pending",
-      stripe_subscription_id: null
-    } as never);
     vi.mocked(verifyWebhook).mockReturnValue({
       id: "evt_created_before_checkout",
       type: "customer.subscription.created",
@@ -583,12 +643,11 @@ describe("stripe webhook route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(updateSubscription).toHaveBeenCalledWith(
-      "pending_sub_row",
-      expect.objectContaining({
-        status: "active",
-        stripe_subscription_id: "sub_created"
-      })
+    expect(getSubscription).not.toHaveBeenCalled();
+    expect(updateSubscription).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      "customer.subscription mirror skipped: no local subscription row for Stripe sub",
+      expect.objectContaining({ stripeSubscriptionId: "sub_created", businessId: "biz_pending" })
     );
   });
 
