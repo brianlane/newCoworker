@@ -19,9 +19,21 @@ import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { planLifecycleAction } from "@/lib/billing/lifecycle";
-import { executeLifecyclePlan } from "@/lib/billing/lifecycle-executor";
+import {
+  executeLifecyclePlan,
+  executeLifecyclePlanFastPhase,
+  executeLifecyclePlanSlowPhase
+} from "@/lib/billing/lifecycle-executor";
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
 import { logger } from "@/lib/logger";
+
+// Vercel Pro allows up to 300s. The cancel flow's slow phase (SSH backup
+// + Hostinger teardown) runs post-response via the split-phase executor,
+// but we keep a generous ceiling as a safety net so the serverless
+// function doesn't get torn down mid-background-work on large tenants.
+// (Hobby tier's 10s default is nowhere near enough even for the fast
+// phase's Stripe refund + cancel round-trip.)
+export const maxDuration = 300;
 
 const bodySchema = z.object({
   mode: z.enum(["refund", "period_end"])
@@ -69,14 +81,40 @@ export async function POST(request: Request) {
       return errorResponse("CONFLICT", planRes.reason, 409);
     }
 
+    const extra = {
+      businessId: business.id,
+      vpsHost: ctxRes.vpsHost,
+      customerProfileId: ctxRes.context.subscription.customer_profile_id
+    };
+
+    if (payload.mode === "period_end") {
+      // cancelAtPeriodEnd has NO SSH/Hostinger ops in its plan (VM keeps
+      // running until the period actually ends), so the all-in-one path
+      // is already fast enough for HTTP. Keep it simple.
+      try {
+        await executeLifecyclePlan(planRes.plan, extra);
+      } catch (err) {
+        logger.error("lifecycle execute failed on /api/billing/cancel", {
+          businessId: business.id,
+          mode: payload.mode,
+          error: err instanceof Error ? err.message : String(err)
+        });
+        return errorResponse("INTERNAL_SERVER_ERROR", "Cancellation failed; please retry", 500);
+      }
+      return successResponse({ mode: payload.mode, graceEndsAt: null });
+    }
+
+    // Refund path: Stripe refund + cancel + DB flip are fast (seconds),
+    // but SSH backup + Hostinger teardown are minutes-long. Split so the
+    // user gets a definitive answer on the refund without risking an
+    // HTTP timeout mid-teardown (which would leave Stripe refunded, DB
+    // unclear, and the VM/billing dangling). See the screenshot-reported
+    // bug "Synchronous SSH backup in cancellation API may time out".
+    let fastResult;
     try {
-      await executeLifecyclePlan(planRes.plan, {
-        businessId: business.id,
-        vpsHost: ctxRes.vpsHost,
-        customerProfileId: ctxRes.context.subscription.customer_profile_id
-      });
+      fastResult = await executeLifecyclePlanFastPhase(planRes.plan, extra);
     } catch (err) {
-      logger.error("lifecycle execute failed on /api/billing/cancel", {
+      logger.error("lifecycle fast-phase failed on /api/billing/cancel", {
         businessId: business.id,
         mode: payload.mode,
         error: err instanceof Error ? err.message : String(err)
@@ -84,15 +122,25 @@ export async function POST(request: Request) {
       return errorResponse("INTERNAL_SERVER_ERROR", "Cancellation failed; please retry", 500);
     }
 
+    // Kick off the slow phase (SSH backup, Hostinger snapshot + stop VM
+    // + cancel billing, owner emails) without blocking the HTTP
+    // response. Errors are fully internalised; the grace-sweep cron is
+    // the backstop for any Hostinger step that fails.
+    void executeLifecyclePlanSlowPhase(planRes.plan, fastResult).catch((err) => {
+      logger.error("lifecycle slow-phase failed on /api/billing/cancel (background)", {
+        businessId: business.id,
+        mode: payload.mode,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    });
+
     return successResponse({
       mode: payload.mode,
       graceEndsAt:
-        payload.mode === "refund"
-          ? ((planRes.plan.dbUpdates.find(
-              (op) => op.type === "update_subscription"
-            ) as { type: "update_subscription"; patch: { grace_ends_at?: string | null } } | undefined)
-              ?.patch.grace_ends_at ?? null)
-          : null
+        ((planRes.plan.dbUpdates.find(
+          (op) => op.type === "update_subscription"
+        ) as { type: "update_subscription"; patch: { grace_ends_at?: string | null } } | undefined)
+          ?.patch.grace_ends_at ?? null)
     });
   } catch (err) {
     return handleRouteError(err);

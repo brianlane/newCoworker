@@ -257,6 +257,61 @@ describe("api/checkout route", () => {
     expect(createSubscription).not.toHaveBeenCalled();
   });
 
+  it("fails closed with 500 when profile readback returns null after a successful upsert", async () => {
+    // Previously this branch short-circuited on `profile && count >=
+    // CAP`, so a null readback silently bypassed the lifetime cap check
+    // (see the "Stale profile check bypasses lifetime cap on checkout"
+    // screenshot). We now fail closed so the client retries.
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    vi.mocked(verifySignupIdentity).mockResolvedValue(true);
+    vi.mocked(getCustomerProfileById).mockResolvedValue(null as never);
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "standard",
+        businessId,
+        billingPeriod: "annual",
+        ownerEmail: "owner@example.com",
+        signupUserId
+      })
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body.error.message).toMatch(/verify subscription eligibility/i);
+    expect(createCheckoutSession).not.toHaveBeenCalled();
+    expect(createSubscription).not.toHaveBeenCalled();
+  });
+
+  it("fails closed with 500 when the profile readback throws", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    vi.mocked(verifySignupIdentity).mockResolvedValue(true);
+    vi.mocked(getCustomerProfileById).mockRejectedValue(new Error("db read timeout"));
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "starter",
+        businessId,
+        billingPeriod: "monthly",
+        ownerEmail: "owner@example.com",
+        signupUserId
+      })
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body.error.message).toMatch(/verify subscription eligibility/i);
+    expect(createCheckoutSession).not.toHaveBeenCalled();
+  });
+
   it("rejects onboarding-token checkout when the business is no longer pending", async () => {
     vi.mocked(getAuthUser).mockResolvedValue(null);
     vi.mocked(verifyOnboardingToken).mockReturnValue(true);

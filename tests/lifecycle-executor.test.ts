@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { executeLifecyclePlan, type ExecutorDeps } from "@/lib/billing/lifecycle-executor";
+import {
+  executeLifecyclePlan,
+  executeLifecyclePlanFastPhase,
+  executeLifecyclePlanSlowPhase,
+  type ExecutorDeps
+} from "@/lib/billing/lifecycle-executor";
 import type { LifecyclePlan } from "@/lib/billing/lifecycle";
 import { HostingerApiError } from "@/lib/hostinger/client";
 
@@ -596,5 +601,218 @@ describe("executeLifecyclePlan refund handling", () => {
         reason: "admin_force"
       })
     );
+  });
+});
+
+describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.RESEND_API_KEY = "resend_test";
+    backupBusinessDataMock.mockResolvedValue({});
+    deleteBusinessBackupMock.mockResolvedValue(undefined);
+    updateBusinessStatusMock.mockResolvedValue(undefined);
+  });
+
+  it("fast phase runs Stripe + DB ops only and hands the refund result to the slow phase email", async () => {
+    // Fast phase: issues the Stripe refund + flips the subscription row.
+    // We feed the resulting ExecutorResult into the slow phase so the
+    // refund-issued email surfaces the amount we already recorded,
+    // exactly matching the deferred-email contract expected by
+    // /api/billing/cancel.
+    const stripe = {
+      subscriptions: {
+        retrieve: vi.fn().mockResolvedValue({ latest_invoice: "in_fastslow" }),
+        cancel: vi.fn().mockResolvedValue({})
+      },
+      invoices: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: "in_fastslow",
+          amount_paid: 4200,
+          charge: "ch_fastslow",
+          payments: { data: [] }
+        })
+      },
+      refunds: { create: vi.fn().mockResolvedValue({ id: "re_fastslow" }) }
+    };
+
+    const plan: LifecyclePlan = {
+      stripeOps: [
+        {
+          type: "refund_latest_charge",
+          stripeSubscriptionId: "sub_fastslow",
+          reason: "thirty_day_money_back"
+        },
+        {
+          type: "cancel_subscription",
+          stripeSubscriptionId: "sub_fastslow",
+          releaseSchedule: false
+        }
+      ],
+      sshOps: [{ type: "backup_durable_data", businessId: "biz_fastslow", vpsHost: "1.2.3.4" }],
+      hostingerOps: [
+        { type: "create_snapshot", virtualMachineId: 9 },
+        { type: "stop_vm", virtualMachineId: 9 },
+        { type: "cancel_billing_subscription", hostingerBillingSubscriptionId: "hbs_9" }
+      ],
+      dbUpdates: [
+        {
+          type: "update_subscription",
+          subscriptionId: "sub_row_fastslow",
+          patch: { status: "canceled", grace_ends_at: "2026-06-01T00:00:00.000Z" }
+        },
+        { type: "mark_refund_used", profileId: "prof_fs", at: "2026-05-01T00:00:00.000Z" },
+        {
+          type: "record_refund",
+          subscriptionId: "sub_row_fastslow",
+          profileId: "prof_fs",
+          stripeRefundId: null,
+          stripeChargeId: null,
+          amountCents: 4200,
+          reason: "thirty_day_money_back"
+        }
+      ],
+      emailsToSend: [
+        {
+          type: "send_refund_issued",
+          toEmail: "owner@example.com",
+          businessId: "biz_fastslow",
+          amountCents: 4200
+        }
+      ]
+    };
+
+    const hostinger = {
+      createSnapshot: vi.fn().mockResolvedValue({}),
+      stopVirtualMachine: vi.fn().mockResolvedValue({}),
+      cancelBillingSubscription: vi.fn().mockResolvedValue({})
+    };
+
+    const fastResult = await executeLifecyclePlanFastPhase(
+      plan,
+      { businessId: "biz_fastslow", vpsHost: "1.2.3.4", customerProfileId: "prof_fs" },
+      { stripe: stripe as unknown as ExecutorDeps["stripe"] }
+    );
+
+    expect(stripe.refunds.create).toHaveBeenCalledTimes(1);
+    expect(stripe.subscriptions.cancel).toHaveBeenCalledWith("sub_fastslow", {
+      prorate: false,
+      invoice_now: false
+    });
+    expect(updateSubscriptionMock).toHaveBeenCalledWith(
+      "sub_row_fastslow",
+      expect.objectContaining({ status: "canceled" })
+    );
+    expect(markRefundUsedMock).toHaveBeenCalledWith("prof_fs", expect.any(Date));
+    expect(recordSubscriptionRefundMock).toHaveBeenCalledWith(
+      expect.objectContaining({ stripeRefundId: "re_fastslow", amountCents: 4200 })
+    );
+    expect(backupBusinessDataMock).not.toHaveBeenCalled();
+    expect(hostinger.createSnapshot).not.toHaveBeenCalled();
+    expect(sendOwnerEmailMock).not.toHaveBeenCalled();
+    expect(fastResult.refund).toEqual({
+      stripeRefundId: "re_fastslow",
+      stripeChargeId: "ch_fastslow",
+      amountCents: 4200
+    });
+
+    await executeLifecyclePlanSlowPhase(plan, fastResult, {
+      hostinger: hostinger as never,
+      sendEmail: sendOwnerEmailMock
+    });
+
+    expect(backupBusinessDataMock).toHaveBeenCalledWith({
+      businessId: "biz_fastslow",
+      vpsHost: "1.2.3.4"
+    });
+    expect(hostinger.createSnapshot).toHaveBeenCalledWith(9);
+    expect(hostinger.stopVirtualMachine).toHaveBeenCalledWith(9);
+    expect(hostinger.cancelBillingSubscription).toHaveBeenCalledWith("hbs_9");
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "owner@example.com",
+      expect.stringMatching(/refund/i),
+      expect.stringContaining("$42.00")
+    );
+  });
+
+  it("slow phase swallows SSH, Hostinger, and email failures so the background task can never crash the server", async () => {
+    // The /api/billing/cancel route kicks the slow phase off as a
+    // fire-and-forget Promise. Any unhandled rejection would surface as
+    // an unhandledRejection on the serverless worker — assert every
+    // failure class is internalised. Mix Error and non-Error rejection
+    // values to exercise both branches of the defensive
+    // `err instanceof Error ? err.message : String(err)` normalisation.
+    backupBusinessDataMock.mockRejectedValueOnce(new Error("ssh pipe broken"));
+    const hostinger = {
+      // Non-Error reject value — forces the String(err) branch on the
+      // hostinger error path.
+      createSnapshot: vi.fn().mockRejectedValue("hostinger 500"),
+      deleteSnapshot: vi.fn(),
+      stopVirtualMachine: vi.fn(),
+      cancelBillingSubscription: vi.fn()
+    };
+
+    await executeLifecyclePlanSlowPhase(
+      {
+        stripeOps: [],
+        sshOps: [{ type: "backup_durable_data", businessId: "biz_slow", vpsHost: "1.2.3.4" }],
+        hostingerOps: [{ type: "create_snapshot", virtualMachineId: 7 }],
+        dbUpdates: [],
+        emailsToSend: [
+          {
+            type: "send_cancel_confirmation",
+            toEmail: "owner@example.com",
+            businessId: "biz_slow",
+            reason: "user_refund",
+            effectiveAt: "2026-04-01T00:00:00.000Z",
+            graceEndsAt: "2026-05-01T00:00:00.000Z"
+          }
+        ]
+      },
+      {},
+      {
+        hostinger: hostinger as never,
+        // Non-Error reject value — forces String(err) on the email path.
+        sendEmail: vi.fn().mockRejectedValue("smtp down")
+      }
+    );
+
+    expect(backupBusinessDataMock).toHaveBeenCalled();
+    expect(hostinger.createSnapshot).toHaveBeenCalled();
+  });
+
+  it("slow phase exercises the Error branch of ssh, hostinger, and email error normalisation", async () => {
+    backupBusinessDataMock.mockRejectedValueOnce("ssh non-error");
+    const hostinger = {
+      createSnapshot: vi.fn().mockRejectedValue(new Error("hostinger error-branch")),
+      deleteSnapshot: vi.fn(),
+      stopVirtualMachine: vi.fn(),
+      cancelBillingSubscription: vi.fn()
+    };
+    await executeLifecyclePlanSlowPhase(
+      {
+        stripeOps: [],
+        sshOps: [{ type: "backup_durable_data", businessId: "biz_slow2", vpsHost: "1.2.3.4" }],
+        hostingerOps: [{ type: "create_snapshot", virtualMachineId: 11 }],
+        dbUpdates: [],
+        emailsToSend: [
+          {
+            type: "send_cancel_confirmation",
+            toEmail: "owner2@example.com",
+            businessId: "biz_slow2",
+            reason: "user_refund",
+            effectiveAt: "2026-04-01T00:00:00.000Z",
+            graceEndsAt: "2026-05-01T00:00:00.000Z"
+          }
+        ]
+      },
+      {},
+      {
+        hostinger: hostinger as never,
+        sendEmail: vi.fn().mockRejectedValue(new Error("smtp error-branch"))
+      }
+    );
+    expect(backupBusinessDataMock).toHaveBeenCalled();
+    expect(hostinger.createSnapshot).toHaveBeenCalled();
   });
 });

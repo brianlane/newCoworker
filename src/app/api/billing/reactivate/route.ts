@@ -25,7 +25,12 @@ import {
   createCheckoutSession,
   resolvePriceId
 } from "@/lib/stripe/client";
-import { LIFETIME_SUBSCRIPTION_CAP } from "@/lib/db/customer-profiles";
+import {
+  LIFETIME_SUBSCRIPTION_CAP,
+  getCustomerProfileById,
+  upsertCustomerProfile
+} from "@/lib/db/customer-profiles";
+import { setBusinessCustomerProfile } from "@/lib/db/businesses";
 import { logger } from "@/lib/logger";
 
 const bodySchema = z.discriminatedUnion("mode", [
@@ -100,10 +105,54 @@ export async function POST(request: Request) {
 
     // Abuse gate: resubscription is a new lifetime. Block the 4th+ one so a
     // serial-canceler can't keep cycling intro discounts.
-    if (
-      ctxRes.context.profile &&
-      ctxRes.context.profile.lifetime_subscription_count >= LIFETIME_SUBSCRIPTION_CAP
-    ) {
+    //
+    // Fail closed when no profile can be resolved — previously this branch
+    // read `ctxRes.context.profile && count >= CAP`, so a null profile
+    // (pre-lifecycle business or transient readback failure) would
+    // short-circuit to falsy and silently skip the cap, letting a
+    // serial-canceler produce unlimited fresh Stripe checkout sessions.
+    // Mirror the /api/admin/force-refund pattern: upsert a real profile
+    // using the authenticated owner's email and attach it to the
+    // subscription so the cap check lands on a real row.
+    let resubscribeProfileId =
+      ctxRes.context.subscription.customer_profile_id ?? ctxRes.context.profile?.id ?? null;
+    let resubscribeLifetimeCount = ctxRes.context.profile?.lifetime_subscription_count ?? null;
+    if (!resubscribeProfileId || resubscribeLifetimeCount === null) {
+      try {
+        resubscribeProfileId = await upsertCustomerProfile({
+          email: user.email,
+          signupIp: null
+        });
+      } catch (err) {
+        logger.error("reactivate resubscribe: failed to upsert customer profile", {
+          businessId: business.id,
+          error: err instanceof Error ? err.message : String(err)
+        });
+        return errorResponse("INTERNAL_SERVER_ERROR", "Could not verify subscription eligibility", 500);
+      }
+      try {
+        await setBusinessCustomerProfile(business.id, resubscribeProfileId);
+      } catch (err) {
+        logger.warn("reactivate resubscribe: setBusinessCustomerProfile failed (continuing)", {
+          businessId: business.id,
+          profileId: resubscribeProfileId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+      const refreshed = await getCustomerProfileById(resubscribeProfileId);
+      if (!refreshed) {
+        // Upsert just returned a real id; a null readback here is a
+        // transient DB issue. Fail closed so we don't let a potentially
+        // capped profile through unchecked.
+        logger.warn("reactivate resubscribe: profile readback returned null post-upsert", {
+          businessId: business.id,
+          profileId: resubscribeProfileId
+        });
+        return errorResponse("INTERNAL_SERVER_ERROR", "Could not verify subscription eligibility", 500);
+      }
+      resubscribeLifetimeCount = refreshed.lifetime_subscription_count;
+    }
+    if (resubscribeLifetimeCount >= LIFETIME_SUBSCRIPTION_CAP) {
       return errorResponse("CONFLICT", "lifetime_subscription_cap_reached", 409);
     }
 
@@ -122,6 +171,11 @@ export async function POST(request: Request) {
 
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
     const priceId = resolvePriceId(tier, billingPeriod);
+    // Thread the resolved (possibly just-upserted) profile id through so
+    // the webhook's resubscribe orchestrator can increment the lifetime
+    // count against the same row we just cap-checked.
+    const metadataProfileId =
+      resubscribeProfileId ?? ctxRes.context.subscription.customer_profile_id ?? null;
     const session = await createCheckoutSession({
       priceId,
       successUrl: `${appUrl}/dashboard/billing?reactivated=1`,
@@ -133,9 +187,7 @@ export async function POST(request: Request) {
         billingPeriod,
         userId: user.userId,
         lifecycleAction: "resubscribe",
-        ...(ctxRes.context.subscription.customer_profile_id
-          ? { customerProfileId: ctxRes.context.subscription.customer_profile_id }
-          : {})
+        ...(metadataProfileId ? { customerProfileId: metadataProfileId } : {})
       }
     });
 

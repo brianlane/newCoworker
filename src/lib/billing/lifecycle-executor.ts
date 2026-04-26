@@ -124,6 +124,100 @@ export async function executeLifecyclePlan(
   return result;
 }
 
+/**
+ * Split-phase variant of {@link executeLifecyclePlan} for HTTP callers that
+ * can't afford to block on minutes-long SSH backups / Hostinger teardown.
+ *
+ * Runs the "fast" phase synchronously: Stripe ops (refund + cancel, ~1–3s)
+ * and DB updates (tens of ms). This is enough to give the user an accurate
+ * yes/no answer on whether the refund succeeded and leaves the
+ * `subscriptions` row flipped to canceled + grace_ends_at set so the UI
+ * reflects the new state immediately.
+ *
+ * Trade-off vs. the combined executor: in the all-in-one path the DB
+ * updates run LAST so the row only reflects reality if all prior ops
+ * succeeded. Here we deliberately flip the DB before the slow phase so
+ * the HTTP response can return while SSH backup + Hostinger teardown
+ * complete in the background. If the slow phase crashes mid-way:
+ *   - User's data is still on the VPS (grace-sweep retries the teardown
+ *     30 days later as a backstop).
+ *   - User sees "canceled, in grace" in the UI, which matches their
+ *     intent.
+ *   - Stripe refund is already locked in before we respond.
+ *
+ * Returns the {@link ExecutorResult} so callers can hand it to
+ * {@link executeLifecyclePlanSlowPhase} without re-running Stripe ops.
+ */
+export async function executeLifecyclePlanFastPhase(
+  plan: LifecyclePlan,
+  extra: ExecutorExtra,
+  deps: ExecutorDeps = {}
+): Promise<ExecutorResult> {
+  /* v8 ignore next -- production dependency default; tests inject a Stripe client. */
+  const stripe = deps.stripe ?? getStripe();
+  const result: ExecutorResult = {};
+  for (const op of plan.stripeOps) {
+    await runStripeOp(op, stripe, result);
+  }
+  for (const op of plan.dbUpdates) {
+    await runDbOp(op, extra, result);
+  }
+  return result;
+}
+
+/**
+ * Complement to {@link executeLifecyclePlanFastPhase}. Runs the slow ops
+ * (SSH backup + Hostinger snapshot/stop/cancel + owner emails) AFTER the
+ * HTTP response has been returned. Callers MUST pass the {@link
+ * ExecutorResult} returned by the fast phase so the email op can
+ * surface the Stripe refund amount we already recorded.
+ *
+ * All errors are logged but swallowed — the DB state is already
+ * authoritative from the fast phase, and the grace-sweep will retry any
+ * missed Hostinger ops when the grace window elapses.
+ */
+export async function executeLifecyclePlanSlowPhase(
+  plan: LifecyclePlan,
+  priorResult: ExecutorResult,
+  deps: ExecutorDeps = {}
+): Promise<void> {
+  /* v8 ignore start -- production dependency defaults; tests inject clients. */
+  const hostinger = deps.hostinger ?? defaultHostingerClient();
+  const emailer = deps.sendEmail ?? sendOwnerEmail;
+  /* v8 ignore stop */
+  const result: ExecutorResult = { ...priorResult };
+  for (const op of plan.sshOps) {
+    try {
+      await runSshOp(op);
+    } catch (err) {
+      logger.error("lifecycle slow-phase ssh op failed", {
+        type: op.type,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+  for (const op of plan.hostingerOps) {
+    try {
+      await runHostingerOp(op, hostinger);
+    } catch (err) {
+      logger.error("lifecycle slow-phase hostinger op failed", {
+        type: op.type,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+  for (const op of plan.emailsToSend) {
+    try {
+      await runEmailOp(op, emailer, result);
+    } catch (err) {
+      logger.warn("lifecycle slow-phase email dispatch failed", {
+        type: op.type,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+}
+
 async function runStripeOp(op: StripeOp, stripe: Stripe, result: ExecutorResult): Promise<void> {
   switch (op.type) {
     case "set_cancel_at_period_end":

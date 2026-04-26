@@ -115,11 +115,38 @@ export async function POST(request: Request) {
     }
 
     if (customerProfileId) {
-      const profile = await getCustomerProfileById(customerProfileId);
-      if (
-        profile &&
-        profile.lifetime_subscription_count >= LIFETIME_SUBSCRIPTION_CAP
-      ) {
+      // Fail closed: we JUST upserted this profile id above, so a null
+      // readback indicates a transient DB fault (replica lag, read
+      // timeout, etc.) — proceeding would silently bypass the lifetime
+      // subscription cap enforcement. Surface a 500 so the client
+      // retries instead.
+      let profile;
+      try {
+        profile = await getCustomerProfileById(customerProfileId);
+      } catch (err) {
+        logger.warn("customer_profiles readback failed during checkout", {
+          businessId: body.businessId,
+          profileId: customerProfileId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+        return errorResponse(
+          "INTERNAL_SERVER_ERROR",
+          "Could not verify subscription eligibility. Please retry.",
+          500
+        );
+      }
+      if (!profile) {
+        logger.warn("customer_profiles readback returned null post-upsert; blocking to avoid cap bypass", {
+          businessId: body.businessId,
+          profileId: customerProfileId
+        });
+        return errorResponse(
+          "INTERNAL_SERVER_ERROR",
+          "Could not verify subscription eligibility. Please retry.",
+          500
+        );
+      }
+      if (profile.lifetime_subscription_count >= LIFETIME_SUBSCRIPTION_CAP) {
         logger.info("checkout blocked: lifetime subscription cap reached", {
           businessId: body.businessId,
           profileId: customerProfileId,

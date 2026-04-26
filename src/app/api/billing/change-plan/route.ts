@@ -16,12 +16,18 @@ import { z } from "zod";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
-import { LIFETIME_SUBSCRIPTION_CAP } from "@/lib/db/customer-profiles";
+import {
+  LIFETIME_SUBSCRIPTION_CAP,
+  getCustomerProfileById,
+  upsertCustomerProfile
+} from "@/lib/db/customer-profiles";
+import { setBusinessCustomerProfile } from "@/lib/db/businesses";
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
 import {
   createCheckoutSession,
   resolvePriceId
 } from "@/lib/stripe/client";
+import { logger } from "@/lib/logger";
 
 const bodySchema = z.object({
   tier: z.enum(["starter", "standard"]),
@@ -63,7 +69,50 @@ export async function POST(request: Request) {
       return errorResponse("CONFLICT", "subscription_not_active", 409);
     }
     // Abuse cap: a change-plan burns a lifetime slot (fresh Stripe sub).
-    if (profile && profile.lifetime_subscription_count >= LIFETIME_SUBSCRIPTION_CAP) {
+    //
+    // Fail closed when no profile can be resolved — previously this branch
+    // read `profile && count >= CAP`, so a null profile (pre-lifecycle
+    // business or transient readback failure) would short-circuit to
+    // falsy and silently skip the cap. Mirror the /api/admin/force-refund
+    // + /api/billing/reactivate pattern: upsert a real profile using the
+    // authenticated owner's email and attach it to the subscription so
+    // the cap check lands on a real row and subsequent lifetime-cap
+    // enforcement points (webhook increment, reactivate) see it too.
+    let changePlanProfileId = subscription.customer_profile_id ?? profile?.id ?? null;
+    let changePlanLifetimeCount = profile?.lifetime_subscription_count ?? null;
+    if (!changePlanProfileId || changePlanLifetimeCount === null) {
+      try {
+        changePlanProfileId = await upsertCustomerProfile({
+          email: user.email,
+          signupIp: null
+        });
+      } catch (err) {
+        logger.error("change-plan: failed to upsert customer profile", {
+          businessId: business.id,
+          error: err instanceof Error ? err.message : String(err)
+        });
+        return errorResponse("INTERNAL_SERVER_ERROR", "Could not verify subscription eligibility", 500);
+      }
+      try {
+        await setBusinessCustomerProfile(business.id, changePlanProfileId);
+      } catch (err) {
+        logger.warn("change-plan: setBusinessCustomerProfile failed (continuing)", {
+          businessId: business.id,
+          profileId: changePlanProfileId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+      const refreshed = await getCustomerProfileById(changePlanProfileId);
+      if (!refreshed) {
+        logger.warn("change-plan: profile readback returned null post-upsert", {
+          businessId: business.id,
+          profileId: changePlanProfileId
+        });
+        return errorResponse("INTERNAL_SERVER_ERROR", "Could not verify subscription eligibility", 500);
+      }
+      changePlanLifetimeCount = refreshed.lifetime_subscription_count;
+    }
+    if (changePlanLifetimeCount >= LIFETIME_SUBSCRIPTION_CAP) {
       return errorResponse("CONFLICT", "lifetime_subscription_cap_reached", 409);
     }
     // No-op guard: same tier AND same period. Cheap to enforce here so the
@@ -93,7 +142,8 @@ export async function POST(request: Request) {
         billingPeriod: payload.billingPeriod,
         userId: user.userId,
         lifecycleAction: "changePlan",
-        previousSubscriptionId: subscription.id
+        previousSubscriptionId: subscription.id,
+        ...(changePlanProfileId ? { customerProfileId: changePlanProfileId } : {})
       }
     });
 

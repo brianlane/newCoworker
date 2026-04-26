@@ -127,7 +127,13 @@ export async function POST(request: Request) {
             "paused"
           ]);
           if (lifecycleCancelStatuses.has(sub.status) && existing.status === "active") {
-            await dispatchAutoCancelOnPaymentFailure({
+            // Fire-and-forget: the autoCancel plan includes SSH backup
+            // of durable data + Hostinger teardown (snapshot, stop VM,
+            // cancel billing) which can take minutes on large tenants.
+            // Awaiting would exceed Stripe's ~30s webhook ack window,
+            // triggering a retry that would double-dispatch the plan.
+            // The dispatcher already catches and logs its own errors.
+            dispatchAutoCancelOnPaymentFailure({
               businessId: existing.business_id,
               reason: `stripe_status:${sub.status}`,
               eventId: event.id
@@ -232,11 +238,26 @@ export async function POST(request: Request) {
             );
             break;
           }
-          const shouldStartGrace =
-            existing.status !== "canceled" && existing.cancel_reason !== "upgrade_switch";
+          // Stamp a grace deadline whenever we reach the fallback mirror
+          // AND the row isn't already past the grace window (i.e.
+          // wiped_at is null). Previously this gate was
+          // `status !== "canceled"`, which missed the case where a prior
+          // `customer.subscription.updated` had already mirrored
+          // status=canceled (e.g. Stripe dunning → canceled → deleted)
+          // and left `grace_ends_at` null. Without a deadline the
+          // grace-sweep cron never picks the row up — SSH backup,
+          // Hostinger snapshot, stop VM, and Hostinger billing cancel
+          // are all silently skipped, leaving the VPS running and
+          // Hostinger billing active indefinitely. The upgrade_switch
+          // short-circuit above already handles the one case where
+          // another orchestrator owns finalization, so from here we
+          // unconditionally schedule a grace deadline unless one has
+          // already been stamped or the row is already wiped.
           const graceEndsAt =
             existing.grace_ends_at ??
-            (shouldStartGrace ? new Date(now.getTime() + GRACE_WINDOW_MS).toISOString() : null);
+            (existing.wiped_at
+              ? null
+              : new Date(now.getTime() + GRACE_WINDOW_MS).toISOString());
           // Clear cached Stripe billing-period bounds on cancel so the
           // Edge voice inbound cannot keep reserving minutes against a
           // stale period after the subscription is gone. Pair with a
@@ -338,7 +359,8 @@ export async function POST(request: Request) {
         //    dunning tail for an already-canceled subscription and we've
         //    already run the teardown.
         if (existing.status === "active") {
-          await dispatchAutoCancelOnPaymentFailure({
+          // Fire-and-forget for the same timeout reason as above.
+          dispatchAutoCancelOnPaymentFailure({
             businessId: existing.business_id,
             reason: "invoice.payment_failed",
             eventId: event.id
@@ -384,6 +406,13 @@ export async function POST(request: Request) {
  * both `invoice.payment_failed` (dunning exhausted) and
  * `customer.subscription.updated` when Stripe moves the sub into a terminal
  * dunning state (`past_due`, `unpaid`, `paused`). Never refunds.
+ *
+ * Call sites invoke this WITHOUT `await` (fire-and-forget) because the
+ * plan includes minutes-long SSH backup + Hostinger teardown that would
+ * exceed Stripe's ~30s webhook ack window and trigger retries. This
+ * function is explicitly designed to swallow all errors internally so a
+ * background execution can never produce an unhandled promise rejection
+ * from the webhook entrypoint.
  *
  * Errors are logged but not thrown — webhook acknowledgement must stay 200 or
  * Stripe will retry, and by the time we get here the subscription is already
@@ -456,15 +485,22 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
       previousSubscriptionId: session.metadata?.previousSubscriptionId,
       eventId
     });
-    try {
-      await runChangePlanFromCheckout(session, eventId);
-    } catch (err) {
-      logger.error("changePlan orchestrator failed", {
+    // Fire-and-forget: the orchestrator runs a multi-minute flow (old-VM
+    // SSH backup + Hostinger snapshot + new-VM provisioning + Cloudflare
+    // tunnel swing + SSH restore + old-plan teardown) that routinely
+    // exceeds Stripe's ~30s webhook ack window. Awaiting here would cause
+    // Stripe to time out and retry, which would double-dispatch the
+    // orchestrator and potentially double-provision + double-increment
+    // the lifetime-subscription counter. The orchestrator is designed
+    // idempotent and swallows its own errors, matching its docstring
+    // that says it is "invoked fire-and-forget by the webhook".
+    void runChangePlanFromCheckout(session, eventId).catch((err) => {
+      logger.error("changePlan orchestrator failed (background)", {
         sessionId: session.id,
         eventId,
         error: err instanceof Error ? err.message : String(err)
       });
-    }
+    });
     return;
   }
   if (lifecycleAction === "resubscribe") {
@@ -473,15 +509,16 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
       businessId: session.metadata?.businessId,
       eventId
     });
-    try {
-      await runResubscribeFromCheckout(session, eventId);
-    } catch (err) {
-      logger.error("resubscribe orchestrator failed", {
+    // Fire-and-forget for the same reason as changePlan above: fresh VM
+    // provisioning + SSH restore is minutes-long work that must not
+    // block the Stripe webhook ack.
+    void runResubscribeFromCheckout(session, eventId).catch((err) => {
+      logger.error("resubscribe orchestrator failed (background)", {
         sessionId: session.id,
         eventId,
         error: err instanceof Error ? err.message : String(err)
       });
-    }
+    });
     return;
   }
 
