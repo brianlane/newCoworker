@@ -11,7 +11,11 @@ import { successResponse, errorResponse } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
 import type Stripe from "stripe";
 import { planLifecycleAction, GRACE_WINDOW_MS } from "@/lib/billing/lifecycle";
-import { executeLifecyclePlan } from "@/lib/billing/lifecycle-executor";
+import {
+  executeLifecyclePlan,
+  executeLifecyclePlanFastPhase,
+  executeLifecyclePlanSlowPhase
+} from "@/lib/billing/lifecycle-executor";
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
 import {
   incrementLifetimeSubscriptionCount,
@@ -266,17 +270,72 @@ export async function POST(request: Request) {
             if (ctxRes.ok) {
               const planRes = planLifecycleAction({ type: "periodEndReached" }, ctxRes.context);
               if (planRes.ok) {
-                await executeLifecyclePlan(planRes.plan, {
+                // Split-phase: the fast phase (Stripe ops + DB updates
+                // including status=canceled + grace_ends_at) runs inline
+                // so the row reflects the cancellation by the time we
+                // ack, but the slow phase (SSH backup + Hostinger
+                // snapshot/stop/billing-cancel + cancel-confirmation
+                // email) runs post-response via `after()`.
+                //
+                // CRITICAL: a synchronous `await executeLifecyclePlan`
+                // here would routinely exceed Stripe's ~30s webhook ack
+                // window on real tenants, causing Stripe to retry and
+                // race a duplicate SSH backup + Hostinger snapshot
+                // against the still-running first execution. The
+                // neighbouring `dispatchAutoCancelOnPaymentFailure` path
+                // already split-phases for this exact reason; the
+                // `periodEndReached` path needs the same treatment. The
+                // grace-sweep cron is the backstop if the slow phase
+                // fails or the function is torn down before `after()`
+                // completes.
+                const periodEndPlan = planRes.plan;
+                const periodEndExtra = {
                   businessId: existing.business_id,
                   vpsHost: ctxRes.vpsHost,
                   customerProfileId: ctxRes.context.subscription.customer_profile_id
+                };
+                const fastResult = await executeLifecyclePlanFastPhase(
+                  periodEndPlan,
+                  periodEndExtra
+                );
+                const dispatchBusinessId = existing.business_id;
+                const dispatchSubscriptionRowId = existing.id;
+                const dispatchStripeSubscriptionId = sub.id;
+                const dispatchEventId = event.id;
+                after(async () => {
+                  try {
+                    await executeLifecyclePlanSlowPhase(periodEndPlan, fastResult);
+                    logger.info(
+                      "customer.subscription.updated: periodEndReached slow phase complete",
+                      {
+                        businessId: dispatchBusinessId,
+                        subscriptionRowId: dispatchSubscriptionRowId,
+                        stripeSubscriptionId: dispatchStripeSubscriptionId,
+                        eventId: dispatchEventId
+                      }
+                    );
+                  } catch (err) {
+                    logger.error(
+                      "customer.subscription.updated: periodEndReached slow phase failed (background)",
+                      {
+                        businessId: dispatchBusinessId,
+                        subscriptionRowId: dispatchSubscriptionRowId,
+                        stripeSubscriptionId: dispatchStripeSubscriptionId,
+                        eventId: dispatchEventId,
+                        error: err instanceof Error ? err.message : String(err)
+                      }
+                    );
+                  }
                 });
-                logger.info("customer.subscription.updated: ran periodEndReached on cancel transition", {
-                  businessId: existing.business_id,
-                  subscriptionRowId: existing.id,
-                  stripeSubscriptionId: sub.id,
-                  eventId: event.id
-                });
+                logger.info(
+                  "customer.subscription.updated: ran periodEndReached fast phase on cancel transition; slow phase deferred",
+                  {
+                    businessId: existing.business_id,
+                    subscriptionRowId: existing.id,
+                    stripeSubscriptionId: sub.id,
+                    eventId: event.id
+                  }
+                );
                 break;
               }
               logger.warn("periodEndReached planner rejected on update; falling back to bare mirror", {
@@ -376,11 +435,67 @@ export async function POST(request: Request) {
             if (ctxRes.ok) {
               const planRes = planLifecycleAction({ type: "periodEndReached" }, ctxRes.context);
               if (planRes.ok) {
-                await executeLifecyclePlan(planRes.plan, {
+                // Split-phase for the same reason as the parallel
+                // `customer.subscription.updated` path: the slow ops
+                // (SSH backup + Hostinger snapshot/stop/billing-cancel
+                // + cancel-confirmation email) would exceed Stripe's
+                // ~30s ack window if we awaited them synchronously,
+                // making Stripe retry and race duplicate snapshots/
+                // backups against the still-running first execution.
+                // Run the fast phase (Stripe ops + DB updates that flip
+                // status=canceled + stamp grace_ends_at) inline so the
+                // row reflects cancellation immediately, then defer the
+                // slow phase via `after()`. Backstop: the grace-sweep
+                // cron picks up rows that ended up status=canceled +
+                // grace-expired but still have data to wipe.
+                const periodEndPlan = planRes.plan;
+                const periodEndExtra = {
                   businessId,
                   vpsHost: ctxRes.vpsHost,
                   customerProfileId: ctxRes.context.subscription.customer_profile_id
+                };
+                const fastResult = await executeLifecyclePlanFastPhase(
+                  periodEndPlan,
+                  periodEndExtra
+                );
+                const dispatchBusinessId = businessId;
+                const dispatchSubscriptionId = existing.id;
+                const dispatchStripeSubscriptionId = sub.id;
+                const dispatchEventId = event.id;
+                after(async () => {
+                  try {
+                    await executeLifecyclePlanSlowPhase(periodEndPlan, fastResult);
+                    logger.info(
+                      "customer.subscription.deleted: periodEndReached slow phase complete",
+                      {
+                        businessId: dispatchBusinessId,
+                        subscriptionId: dispatchSubscriptionId,
+                        stripeSubscriptionId: dispatchStripeSubscriptionId,
+                        eventId: dispatchEventId
+                      }
+                    );
+                  } catch (err) {
+                    logger.error(
+                      "customer.subscription.deleted: periodEndReached slow phase failed (background)",
+                      {
+                        businessId: dispatchBusinessId,
+                        subscriptionId: dispatchSubscriptionId,
+                        stripeSubscriptionId: dispatchStripeSubscriptionId,
+                        eventId: dispatchEventId,
+                        error: err instanceof Error ? err.message : String(err)
+                      }
+                    );
+                  }
                 });
+                logger.info(
+                  "customer.subscription.deleted: ran periodEndReached fast phase; slow phase deferred",
+                  {
+                    businessId,
+                    subscriptionId: existing.id,
+                    stripeSubscriptionId: sub.id,
+                    eventId: event.id
+                  }
+                );
                 break;
               }
               logger.warn("periodEndReached planner rejected; falling back to DB mirror", {

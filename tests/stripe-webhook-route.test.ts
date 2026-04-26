@@ -19,9 +19,16 @@ const { mockCheckoutSessionsList } = vi.hoisted(() => ({
   mockCheckoutSessionsList: vi.fn()
 }));
 
-const { mockLoadLifecycleContext, mockExecuteLifecyclePlan } = vi.hoisted(() => ({
+const {
+  mockLoadLifecycleContext,
+  mockExecuteLifecyclePlan,
+  mockExecuteLifecyclePlanFastPhase,
+  mockExecuteLifecyclePlanSlowPhase
+} = vi.hoisted(() => ({
   mockLoadLifecycleContext: vi.fn(),
-  mockExecuteLifecyclePlan: vi.fn()
+  mockExecuteLifecyclePlan: vi.fn(),
+  mockExecuteLifecyclePlanFastPhase: vi.fn(),
+  mockExecuteLifecyclePlanSlowPhase: vi.fn()
 }));
 
 const { afterCallbacks } = vi.hoisted(() => ({
@@ -126,7 +133,9 @@ vi.mock("@/lib/billing/lifecycle-loader", () => ({
 }));
 
 vi.mock("@/lib/billing/lifecycle-executor", () => ({
-  executeLifecyclePlan: mockExecuteLifecyclePlan
+  executeLifecyclePlan: mockExecuteLifecyclePlan,
+  executeLifecyclePlanFastPhase: mockExecuteLifecyclePlanFastPhase,
+  executeLifecyclePlanSlowPhase: mockExecuteLifecyclePlanSlowPhase
 }));
 
 vi.mock("@/lib/logger", () => ({
@@ -179,6 +188,10 @@ describe("stripe webhook route", () => {
     mockLoadLifecycleContext.mockReset();
     mockExecuteLifecyclePlan.mockReset();
     mockExecuteLifecyclePlan.mockResolvedValue({});
+    mockExecuteLifecyclePlanFastPhase.mockReset();
+    mockExecuteLifecyclePlanFastPhase.mockResolvedValue({});
+    mockExecuteLifecyclePlanSlowPhase.mockReset();
+    mockExecuteLifecyclePlanSlowPhase.mockResolvedValue(undefined);
     mockRunChangePlanFromCheckout.mockClear();
     mockRunChangePlanFromCheckout.mockResolvedValue(undefined);
     mockRunResubscribeFromCheckout.mockClear();
@@ -879,7 +892,15 @@ describe("stripe webhook route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(mockExecuteLifecyclePlan).toHaveBeenCalledWith(
+    // Split-phase: fast phase runs inline (Stripe ops + DB updates that
+    // flip status=canceled + grace_ends_at); slow phase (SSH backup +
+    // Hostinger ops + email) is deferred via `after()`. The bare
+    // `executeLifecyclePlan` MUST NOT be called on this path because a
+    // synchronous await would routinely exceed Stripe's ~30s webhook ack
+    // window and cause Stripe retries to race duplicate snapshots/
+    // backups against the still-running first execution.
+    expect(mockExecuteLifecyclePlan).not.toHaveBeenCalled();
+    expect(mockExecuteLifecyclePlanFastPhase).toHaveBeenCalledWith(
       expect.objectContaining({
         stripeOps: [],
         hostingerOps: expect.arrayContaining([
@@ -888,6 +909,113 @@ describe("stripe webhook route", () => {
       }),
       expect.objectContaining({ businessId: "biz_period_end", vpsHost: "1.2.3.4" })
     );
+    expect(afterCallbacks).toHaveLength(1);
+    await afterCallbacks[0]();
+    expect(mockExecuteLifecyclePlanSlowPhase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hostingerOps: expect.arrayContaining([
+          { type: "cancel_billing_subscription", hostingerBillingSubscriptionId: "hbs-1" }
+        ])
+      }),
+      expect.any(Object)
+    );
+  });
+
+  it("split-phases periodEndReached on customer.subscription.updated active→canceled (no synchronous SSH/Hostinger work in the ack path)", async () => {
+    // Regression: the dispatch path that fires when Stripe transitions a
+    // `cancel_at_period_end=true` sub from `active` → `canceled` used
+    // to `await executeLifecyclePlan` synchronously. SSH backup +
+    // Hostinger snapshot/stop/billing-cancel routinely exceed Stripe's
+    // ~30s webhook ack window, so Stripe would retry and race a
+    // duplicate run against the still-executing first invocation. The
+    // path must mirror the dispatchAutoCancelOnPaymentFailure pattern:
+    // run the fast phase inline (so the row reflects cancellation
+    // before we ack) and defer the slow phase via `after()`.
+    const existing = {
+      id: "local_sub_period_end_updated",
+      business_id: "biz_period_end_updated",
+      stripe_customer_id: "cus_1",
+      stripe_subscription_id: "sub_period_end_updated",
+      tier: "starter",
+      status: "active",
+      billing_period: "monthly",
+      renewal_at: null,
+      commitment_months: 1,
+      stripe_current_period_start: "2026-04-01T00:00:00.000Z",
+      stripe_current_period_end: "2026-05-01T00:00:00.000Z",
+      stripe_subscription_cached_at: "2026-04-01T00:00:00.000Z",
+      customer_profile_id: "prof-pe-1",
+      canceled_at: null,
+      cancel_reason: null,
+      grace_ends_at: null,
+      wiped_at: null,
+      vps_stopped_at: null,
+      hostinger_billing_subscription_id: "hbs-pe-updated",
+      cancel_at_period_end: true,
+      stripe_refund_id: null,
+      refund_amount_cents: null,
+      created_at: "2026-04-01T00:00:00.000Z"
+    };
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(existing as never);
+    mockLoadLifecycleContext.mockResolvedValue({
+      ok: true,
+      vpsHost: "9.9.9.9",
+      context: {
+        subscription: existing,
+        ownerEmail: "owner@example.com",
+        ownerAuthUserId: "user-1",
+        profile: null,
+        virtualMachineId: 84,
+        vpsHost: "9.9.9.9",
+        now: new Date("2026-05-01T00:00:00.000Z")
+      }
+    });
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_period_end_updated",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_period_end_updated",
+          status: "canceled",
+          cancel_at_period_end: true,
+          metadata: { businessId: "biz_period_end_updated" },
+          items: {
+            data: [
+              {
+                current_period_start: 1735689600,
+                current_period_end: 1738368000
+              }
+            ]
+          }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockExecuteLifecyclePlan).not.toHaveBeenCalled();
+    expect(mockExecuteLifecyclePlanFastPhase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hostingerOps: expect.arrayContaining([
+          { type: "cancel_billing_subscription", hostingerBillingSubscriptionId: "hbs-pe-updated" }
+        ])
+      }),
+      expect.objectContaining({
+        businessId: "biz_period_end_updated",
+        vpsHost: "9.9.9.9"
+      })
+    );
+    expect(mockExecuteLifecyclePlanSlowPhase).not.toHaveBeenCalled();
+    expect(afterCallbacks).toHaveLength(1);
+    await afterCallbacks[0]();
+    expect(mockExecuteLifecyclePlanSlowPhase).toHaveBeenCalledTimes(1);
   });
 
   it("does not rerun period-end teardown when a deleted webhook is replayed after teardown", async () => {

@@ -1161,6 +1161,155 @@ describe("runResubscribeFromCheckout", () => {
     expect(decrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
   });
 
+  it("aborts resubscribe on restore failure even when the Stripe sub id is missing — only the lifetime rollback runs (no Stripe.cancel call)", async () => {
+    // Branch coverage for the restore-throw abort: `if
+    // (stripeSubscriptionId)` false. A checkout session with no
+    // `subscription` field should still trigger the lifetime rollback
+    // but NOT call Stripe.cancel (there is no Stripe sub to cancel).
+    // This ensures we don't blow up trying to cancel a null id.
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-row-grace",
+      business_id: "biz-1",
+      customer_profile_id: "prof-1",
+      status: "canceled",
+      grace_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      wiped_at: null
+    });
+    restoreBusinessDataMock.mockRejectedValueOnce(new Error("no backup"));
+
+    await runResubscribeFromCheckout(
+      makeSession({
+        subscription: null,
+        metadata: {
+          businessId: "biz-1",
+          tier: "standard",
+          billingPeriod: "annual",
+          lifecycleAction: "resubscribe",
+          customerProfileId: "prof-1"
+        }
+      }),
+      "evt_resub_restore_fail_no_sub"
+    );
+
+    expect(updateSubscriptionIfNotWipedMock).not.toHaveBeenCalled();
+    expect(stripeCancelMock).not.toHaveBeenCalled();
+    expect(decrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
+  });
+
+  it("aborts resubscribe on restore failure even when no customer profile is resolvable — only Stripe.cancel runs (no rollback call)", async () => {
+    // Branch coverage for the restore-throw abort: `if
+    // (customerProfileId)` false. With no profile id resolvable from
+    // metadata, the old sub, business row, OR session email upsert,
+    // the lifetime rollback is skipped (there's no profile slot to
+    // give back), but Stripe.cancel still fires to stop the new sub.
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-row-grace",
+      business_id: "biz-1",
+      customer_profile_id: null,
+      status: "canceled",
+      grace_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      wiped_at: null,
+      tier: "standard",
+      billing_period: "annual"
+    });
+    getBusinessMock.mockResolvedValue({
+      id: "biz-1",
+      owner_email: null,
+      hostinger_vps_id: "1001",
+      customer_profile_id: null,
+      status: "online"
+    });
+    restoreBusinessDataMock.mockRejectedValueOnce(new Error("no backup"));
+
+    await runResubscribeFromCheckout(
+      makeSession({
+        customer_email: null,
+        customer_details: null as unknown as Stripe.Checkout.Session.CustomerDetails,
+        metadata: {
+          businessId: "biz-1",
+          lifecycleAction: "resubscribe"
+        }
+      }),
+      "evt_resub_restore_fail_no_profile"
+    );
+
+    expect(updateSubscriptionIfNotWipedMock).not.toHaveBeenCalled();
+    expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
+    expect(decrementLifetimeSubscriptionCountMock).not.toHaveBeenCalled();
+  });
+
+  it("aborts resubscribe on unresolvable VPS host even when the Stripe sub id is missing — only the lifetime rollback runs", async () => {
+    // Branch coverage for the host-unresolvable abort: `if
+    // (stripeSubscriptionId)` false. Same defense-in-depth reasoning
+    // as the restore-throw branch, but for the unreachable-VM path.
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-row-grace",
+      business_id: "biz-1",
+      customer_profile_id: "prof-1",
+      status: "canceled",
+      grace_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      wiped_at: null
+    });
+    hostingerGetVmMock.mockImplementation(async (id: number) => ({ id, ipv4: [] }));
+
+    await runResubscribeFromCheckout(
+      makeSession({
+        subscription: null,
+        metadata: {
+          businessId: "biz-1",
+          tier: "standard",
+          billingPeriod: "annual",
+          lifecycleAction: "resubscribe",
+          customerProfileId: "prof-1"
+        }
+      }),
+      "evt_resub_no_host_no_sub"
+    );
+
+    expect(updateSubscriptionIfNotWipedMock).not.toHaveBeenCalled();
+    expect(stripeCancelMock).not.toHaveBeenCalled();
+    expect(decrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
+  });
+
+  it("aborts resubscribe on unresolvable VPS host even when no customer profile is resolvable — only Stripe.cancel runs", async () => {
+    // Branch coverage for the host-unresolvable abort: `if
+    // (customerProfileId)` false.
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-row-grace",
+      business_id: "biz-1",
+      customer_profile_id: null,
+      status: "canceled",
+      grace_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      wiped_at: null,
+      tier: "standard",
+      billing_period: "annual"
+    });
+    getBusinessMock.mockResolvedValue({
+      id: "biz-1",
+      owner_email: null,
+      hostinger_vps_id: "1001",
+      customer_profile_id: null,
+      status: "online"
+    });
+    hostingerGetVmMock.mockImplementation(async (id: number) => ({ id, ipv4: [] }));
+
+    await runResubscribeFromCheckout(
+      makeSession({
+        customer_email: null,
+        customer_details: null as unknown as Stripe.Checkout.Session.CustomerDetails,
+        metadata: {
+          businessId: "biz-1",
+          lifecycleAction: "resubscribe"
+        }
+      }),
+      "evt_resub_no_host_no_profile"
+    );
+
+    expect(updateSubscriptionIfNotWipedMock).not.toHaveBeenCalled();
+    expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
+    expect(decrementLifetimeSubscriptionCountMock).not.toHaveBeenCalled();
+  });
+
   it("continues resubscribe when ONLY the post-restore Stripe subscription lookup fails (period cache is best-effort)", async () => {
     // Stripe.subscriptions.retrieve at the end of the orchestrator
     // is purely for refreshing the local period cache — its failure
