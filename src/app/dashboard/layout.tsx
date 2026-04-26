@@ -2,8 +2,14 @@ import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
 import { DashboardSidebar } from "@/components/dashboard/DashboardSidebar";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { getSubscription, isCanceledInGrace } from "@/lib/db/subscriptions";
+import { isCanceledInGrace } from "@/lib/db/subscriptions";
+import type { CancelReason, SubscriptionRow } from "@/lib/db/subscriptions";
 import { GraceBanner } from "@/components/billing/GraceBanner";
+
+type EmbeddedSubscriptionRow = Pick<
+  SubscriptionRow,
+  "status" | "grace_ends_at" | "wiped_at" | "cancel_reason" | "created_at"
+>;
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const user = await getAuthUser();
@@ -13,19 +19,34 @@ export default async function DashboardLayout({ children }: { children: React.Re
     | { graceEndsAt: string; reason: Parameters<typeof GraceBanner>[0]["reason"] }
     | null = null;
   if (user.email) {
+    // Single-round-trip grace lookup. Next.js layouts re-execute on every
+    // navigation under `/dashboard`, so we previously paid 2 sequential
+    // DB round-trips per page render (businesses lookup + subscriptions
+    // lookup) for every signed-in user — even on pages unrelated to
+    // billing (soul editor, voice usage, etc.). Fold both lookups into
+    // one PostgREST query that selects the most recent business by
+    // owner_email and embeds the subscriptions for that business in the
+    // same response. We then pick the most recent subscription on the
+    // server before deciding whether to render `<GraceBanner />`.
     const db = await createSupabaseServiceClient();
     const { data: businesses } = await db
       .from("businesses")
-      .select("id")
+      .select("id, subscriptions(status, grace_ends_at, wiped_at, cancel_reason, created_at)")
       .eq("owner_email", user.email)
       .order("created_at", { ascending: false })
       .limit(1);
     const business = businesses?.[0] ?? null;
-    const subscription = business ? await getSubscription(business.id) : null;
+    const embeddedSubs = (business?.subscriptions ?? []) as EmbeddedSubscriptionRow[];
+    const subscription =
+      embeddedSubs.length === 0
+        ? null
+        : embeddedSubs
+            .slice()
+            .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
     if (subscription?.grace_ends_at && isCanceledInGrace(subscription)) {
       grace = {
         graceEndsAt: subscription.grace_ends_at,
-        reason: subscription.cancel_reason
+        reason: subscription.cancel_reason as CancelReason | null
       };
     }
   }

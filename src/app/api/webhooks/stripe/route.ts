@@ -1049,8 +1049,17 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
   }
 
   if (!alreadyLinkedToThisStripeSub && subscriptionId) {
+    // Same null-clobber defense as the second activation write below
+    // (status="active" branch). Writing `stripe_customer_id: null` here
+    // would orphan a valid customer linkage planted by a prior
+    // `customer.subscription.created` mirror or earlier checkout retry
+    // when a degenerate Stripe session arrives without a customer id
+    // (retry races, mode=payment sessions that slipped past earlier
+    // guards, etc.). The two activation writes must apply this guard
+    // uniformly — otherwise the first write silently undoes the second
+    // write's protection on rare-but-real null-customer payloads.
     await updateSubscription(existing.id, {
-      stripe_customer_id: customerId,
+      ...(customerId ? { stripe_customer_id: customerId } : {}),
       stripe_subscription_id: subscriptionId,
       customer_profile_id: customerProfileId ?? existing.customer_profile_id,
       ...stripeMirror

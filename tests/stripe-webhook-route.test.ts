@@ -412,6 +412,74 @@ describe("stripe webhook route", () => {
     expect(patch).not.toHaveProperty("stripe_customer_id");
   });
 
+  it("does not overwrite a previously linked stripe_customer_id with null on the linkage-planting write when the session carries a subscription but no customer", async () => {
+    // Regression: the FIRST activation write (the linkage-planting branch
+    // gated on `!alreadyLinkedToThisStripeSub && subscriptionId`) must
+    // apply the same null-clobber defense as the SECOND activation write
+    // (the status-flip branch). A degenerate Stripe session that carries
+    // a subscription id but lacks a customer id (retry races, mode=
+    // payment sessions slipping past the bonus guard, etc.) was
+    // previously writing `stripe_customer_id: null` on the linkage
+    // plant — silently orphaning a customer linkage planted by a prior
+    // `customer.subscription.created` mirror or earlier checkout retry.
+    // The defensive policy must be uniform across both writes.
+    mockVoiceBonusRpc.mockImplementation((name: string) => {
+      if (name === "increment_customer_profile_lifetime_count") {
+        return Promise.resolve({ data: 1, error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_link_no_customer",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_link_no_customer",
+          metadata: {
+            businessId: "biz_link_nc",
+            tier: "starter",
+            billingPeriod: "annual"
+          },
+          customer: null,
+          subscription: "sub_new_linked"
+        }
+      }
+    } as never);
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "local_link_nc",
+      status: "pending",
+      stripe_customer_id: "cus_prev_linked",
+      stripe_subscription_id: null,
+      customer_profile_id: "prof-link-nc"
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    // BOTH activation writes must omit `stripe_customer_id` (because
+    // the session payload's customer is null), so the previously-
+    // linked `cus_prev_linked` value on the local row is preserved.
+    expect(updateSubscription).toHaveBeenCalledTimes(2);
+    for (const [, patch] of vi.mocked(updateSubscription).mock.calls) {
+      expect(patch).not.toHaveProperty("stripe_customer_id");
+    }
+    // The first call is the linkage-planting write — it must still
+    // adopt the new `stripe_subscription_id` so the local row is
+    // linked to the freshly-paid Stripe sub.
+    const [, linkagePatch] = vi.mocked(updateSubscription).mock.calls[0];
+    expect(linkagePatch).toMatchObject({ stripe_subscription_id: "sub_new_linked" });
+    // The second call is the status flip — it must carry `status:
+    // "active"` and similarly avoid clobbering the customer id.
+    const [, statusPatch] = vi.mocked(updateSubscription).mock.calls[1];
+    expect(statusPatch).toMatchObject({ status: "active" });
+  });
+
   it("does not activate when the atomic lifetime increment rejects and cancels the fresh Stripe sub", async () => {
     mockVoiceBonusRpc.mockImplementation((name: string) => {
       if (name === "increment_customer_profile_lifetime_count") {
