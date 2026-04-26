@@ -24,6 +24,57 @@ const { mockLoadLifecycleContext, mockExecuteLifecyclePlan } = vi.hoisted(() => 
   mockExecuteLifecyclePlan: vi.fn()
 }));
 
+const { afterCallbacks } = vi.hoisted(() => ({
+  afterCallbacks: [] as Array<() => void | Promise<void>>
+}));
+
+// `after()` from `next/server` requires the Next.js work-units context
+// (only present inside the actual Next runtime). In tests we run the
+// route handler bare, so polyfill it to record callbacks; tests that
+// need the slow phase to have executed call `flushAfterCallbacks()`.
+// (Mirrors the polyfill in `tests/api-billing-cancel-route.test.ts`.)
+vi.mock("next/server", async () => {
+  const actual = await vi.importActual<typeof import("next/server")>("next/server");
+  return {
+    ...actual,
+    after: (cb: () => void | Promise<void>) => {
+      afterCallbacks.push(cb);
+    }
+  };
+});
+
+async function flushAfterCallbacks() {
+  while (afterCallbacks.length > 0) {
+    const cb = afterCallbacks.shift();
+    if (!cb) continue;
+    try {
+      await cb();
+    } catch {
+      // The route's own try/catch is what tests assert on; the polyfill
+      // just makes sure the callback runs.
+    }
+  }
+}
+
+const { mockRunChangePlanFromCheckout, mockRunResubscribeFromCheckout } = vi.hoisted(() => ({
+  mockRunChangePlanFromCheckout: vi.fn().mockResolvedValue(undefined),
+  mockRunResubscribeFromCheckout: vi.fn().mockResolvedValue(undefined)
+}));
+
+// Stub only the heavy orchestrators — keep the real
+// `cancelStripeSubscriptionSafely` so existing assertions on
+// `mockStripeCancel` (which the real impl calls under the hood) still
+// hold.
+vi.mock("@/lib/billing/change-plan-orchestrator", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/billing/change-plan-orchestrator")>();
+  return {
+    ...actual,
+    runChangePlanFromCheckout: mockRunChangePlanFromCheckout,
+    runResubscribeFromCheckout: mockRunResubscribeFromCheckout
+  };
+});
+
 vi.mock("@/lib/stripe/client", () => ({
   ensureCommitmentSchedule: vi.fn(),
   verifyWebhook: vi.fn(),
@@ -128,6 +179,11 @@ describe("stripe webhook route", () => {
     mockLoadLifecycleContext.mockReset();
     mockExecuteLifecyclePlan.mockReset();
     mockExecuteLifecyclePlan.mockResolvedValue({});
+    mockRunChangePlanFromCheckout.mockClear();
+    mockRunChangePlanFromCheckout.mockResolvedValue(undefined);
+    mockRunResubscribeFromCheckout.mockClear();
+    mockRunResubscribeFromCheckout.mockResolvedValue(undefined);
+    afterCallbacks.length = 0;
     vi.mocked(getBusiness).mockResolvedValue({ status: "pending" } as never);
     vi.mocked(ensureCommitmentSchedule).mockResolvedValue("sub_sched_123");
   });
@@ -946,6 +1002,396 @@ describe("stripe webhook route", () => {
         incomingStripeSubscriptionId: "sub_anom_new"
       })
     );
+  });
+
+  it("refuses to resurrect a canceled row from a fresh checkout that bypassed the resubscribe orchestrator", async () => {
+    // Bug regression: a fresh `/api/checkout` (no `lifecycleAction=resubscribe`
+    // metadata) completes for a business whose local row is already in
+    // `status="canceled"` (with grace metadata, possibly already wiped).
+    // Without this guard:
+    //   - `alreadyLinkedToThisStripeSub === false` (new sub id) and
+    //     `firstActivation === true`, so the linkage write silently
+    //     attaches the new Stripe sub to the canceled row, the lifetime
+    //     counter increments, and the final `status: "active"` write
+    //     resurrects the row WITHOUT clearing `grace_ends_at` /
+    //     `wiped_at` / `cancel_at` / `cancel_reason` — a Frankenstein
+    //     state invisible to the grace-sweep cron (which filters
+    //     `status="canceled"`).
+    // The handler must refuse and cancel the fresh Stripe sub so the
+    // customer isn't billed for service we won't provision; the legit
+    // path is `/api/billing/reactivate` (mode=resubscribe).
+    let incrementCalls = 0;
+    mockVoiceBonusRpc.mockImplementation((name: string) => {
+      if (name === "increment_customer_profile_lifetime_count") {
+        incrementCalls += 1;
+        return Promise.resolve({ data: 1, error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_canceled_resurrect_attempt",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_canceled_resurrect",
+          metadata: {
+            businessId: "biz_canceled_resurrect",
+            tier: "starter",
+            billingPeriod: "annual",
+            customerProfileId: "prof-canceled-resurrect"
+          },
+          customer: "cus_resurrect_new",
+          subscription: "sub_resurrect_new"
+        }
+      }
+    } as never);
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "local_sub_canceled_resurrect",
+      status: "canceled",
+      stripe_subscription_id: "sub_resurrect_old",
+      customer_profile_id: "prof-canceled-resurrect",
+      grace_ends_at: "2026-05-24T00:00:00.000Z",
+      wiped_at: null
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    // Critical: NO linkage write, NO status flip, NO provisioning trigger.
+    expect(updateSubscription).not.toHaveBeenCalled();
+    expect(incrementCalls).toBe(0);
+    expect(orchestrateProvisioning).not.toHaveBeenCalled();
+    // The fresh (unlinked) Stripe sub must be canceled so it doesn't
+    // auto-renew forever for service we won't provision.
+    expect(mockStripeCancel).toHaveBeenCalledWith("sub_resurrect_new", { prorate: false });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "checkout activation refused: local row is canceled; resubscribe must go through /api/billing/reactivate",
+      expect.objectContaining({
+        businessId: "biz_canceled_resurrect",
+        subscriptionRowId: "local_sub_canceled_resurrect",
+        alreadyLinkedToThisStripeSub: false,
+        existingStripeSubscriptionId: "sub_resurrect_old",
+        incomingStripeSubscriptionId: "sub_resurrect_new",
+        graceEndsAt: "2026-05-24T00:00:00.000Z",
+        wipedAt: null
+      })
+    );
+  });
+
+  it("silently bails (no Stripe teardown) on a webhook re-delivery where the canceled row is already linked to this sub", async () => {
+    // Companion to the test above. When `checkout.session.completed`
+    // is re-delivered for a row that legitimately moved to canceled
+    // between the original delivery and the retry (e.g. a concurrent
+    // `customer.subscription.deleted` flipped it), the Stripe sub is
+    // already canceled at Stripe's end — no teardown call needed,
+    // just bail to preserve the grace state.
+    let incrementCalls = 0;
+    mockVoiceBonusRpc.mockImplementation((name: string) => {
+      if (name === "increment_customer_profile_lifetime_count") {
+        incrementCalls += 1;
+        return Promise.resolve({ data: 1, error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_canceled_redeliver",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_canceled_redeliver",
+          metadata: {
+            businessId: "biz_canceled_redeliver",
+            tier: "starter",
+            billingPeriod: "annual",
+            customerProfileId: "prof-canceled-redeliver"
+          },
+          customer: "cus_redeliver",
+          subscription: "sub_redeliver"
+        }
+      }
+    } as never);
+    // Same sub id as the incoming event → alreadyLinkedToThisStripeSub.
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "local_sub_canceled_redeliver",
+      status: "canceled",
+      stripe_subscription_id: "sub_redeliver",
+      customer_profile_id: "prof-canceled-redeliver",
+      grace_ends_at: "2026-05-24T00:00:00.000Z",
+      wiped_at: null
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(updateSubscription).not.toHaveBeenCalled();
+    expect(incrementCalls).toBe(0);
+    expect(orchestrateProvisioning).not.toHaveBeenCalled();
+    // No Stripe teardown on re-delivery: Stripe already canceled the
+    // sub (the deleted event is what flipped us to canceled).
+    expect(mockStripeCancel).not.toHaveBeenCalled();
+  });
+
+  describe("background dispatches survive the 200 ack via after()", () => {
+    // Bug regression: the four fire-and-forget dispatches
+    // (`dispatchAutoCancelOnPaymentFailure` x2, `runChangePlanFromCheckout`,
+    // `runResubscribeFromCheckout`) used to be bare floating promises.
+    // On Vercel serverless the function can be torn down shortly after
+    // the 200 response is returned, killing the multi-minute SSH backup
+    // / Hostinger teardown / new-VM provisioning work mid-flight. They
+    // must be scheduled via `after()` (Next.js `waitUntil`) so the
+    // runtime keeps the function alive until the work completes.
+    //
+    // Each test below asserts:
+    //   1. The 200 ack is returned BEFORE the heavy work runs (i.e. the
+    //      orchestrator/dispatcher hasn't been called by the time POST
+    //      resolves).
+    //   2. The work was registered via `after()` (visible in
+    //      `afterCallbacks`).
+    //   3. After flushing the `after()` queue, the dispatcher / orchestrator
+    //      actually runs.
+    it("schedules autoCancelOnPaymentFailure via after() on subscription.updated→past_due", async () => {
+      mockLoadLifecycleContext.mockResolvedValue({
+        ok: true,
+        context: {
+          subscription: { id: "sub_row_pd", status: "active", customer_profile_id: null },
+          profile: null,
+          now: new Date(),
+          vpsHost: null
+        },
+        vpsHost: null
+      } as never);
+      vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+        id: "local_sub_pd",
+        business_id: "biz_pd",
+        status: "active",
+        stripe_subscription_id: "sub_pd"
+      } as never);
+      vi.mocked(verifyWebhook).mockReturnValue({
+        id: "evt_pd_active",
+        type: "customer.subscription.updated",
+        data: {
+          object: {
+            id: "sub_pd",
+            status: "past_due",
+            cancel_at_period_end: false,
+            metadata: { businessId: "biz_pd" }
+          }
+        }
+      } as never);
+
+      const response = await POST(
+        new Request("http://localhost:3000/api/webhooks/stripe", {
+          method: "POST",
+          headers: { "stripe-signature": "sig" },
+          body: "{}"
+        })
+      );
+
+      expect(response.status).toBe(200);
+      // Before flushing: the slow work must NOT have run yet (the whole
+      // point of `after()` is that it runs after the response).
+      expect(mockLoadLifecycleContext).not.toHaveBeenCalled();
+      expect(mockExecuteLifecyclePlan).not.toHaveBeenCalled();
+      // But it WAS scheduled.
+      expect(afterCallbacks.length).toBe(1);
+
+      await flushAfterCallbacks();
+
+      // Now the dispatcher actually executed.
+      expect(mockLoadLifecycleContext).toHaveBeenCalledWith("biz_pd");
+    });
+
+    it("schedules autoCancelOnPaymentFailure via after() on invoice.payment_failed for active subs", async () => {
+      mockLoadLifecycleContext.mockResolvedValue({
+        ok: true,
+        context: {
+          subscription: { id: "sub_row_invfail", status: "active", customer_profile_id: null },
+          profile: null,
+          now: new Date(),
+          vpsHost: null
+        },
+        vpsHost: null
+      } as never);
+      vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+        id: "local_sub_invfail",
+        business_id: "biz_invfail",
+        status: "active",
+        stripe_subscription_id: "sub_invfail"
+      } as never);
+      vi.mocked(verifyWebhook).mockReturnValue({
+        id: "evt_invfail",
+        type: "invoice.payment_failed",
+        data: {
+          object: {
+            id: "in_invfail",
+            // Match the post-2024 Stripe invoice shape that the route's
+            // `getInvoiceSubscriptionId` helper reads.
+            parent: {
+              subscription_details: { subscription: "sub_invfail" }
+            }
+          }
+        }
+      } as never);
+
+      const response = await POST(
+        new Request("http://localhost:3000/api/webhooks/stripe", {
+          method: "POST",
+          headers: { "stripe-signature": "sig" },
+          body: "{}"
+        })
+      );
+
+      expect(response.status).toBe(200);
+      expect(mockLoadLifecycleContext).not.toHaveBeenCalled();
+      expect(afterCallbacks.length).toBe(1);
+
+      await flushAfterCallbacks();
+
+      expect(mockLoadLifecycleContext).toHaveBeenCalledWith("biz_invfail");
+    });
+
+    it("schedules runChangePlanFromCheckout via after() on lifecycleAction=changePlan", async () => {
+      vi.mocked(verifyWebhook).mockReturnValue({
+        id: "evt_changeplan",
+        type: "checkout.session.completed",
+        data: {
+          object: {
+            id: "cs_changeplan",
+            metadata: {
+              businessId: "biz_changeplan",
+              lifecycleAction: "changePlan",
+              tier: "standard",
+              billingPeriod: "annual"
+            },
+            customer: "cus_changeplan",
+            subscription: "sub_changeplan_new"
+          }
+        }
+      } as never);
+
+      const response = await POST(
+        new Request("http://localhost:3000/api/webhooks/stripe", {
+          method: "POST",
+          headers: { "stripe-signature": "sig" },
+          body: "{}"
+        })
+      );
+
+      expect(response.status).toBe(200);
+      // Orchestrator must NOT have run synchronously.
+      expect(mockRunChangePlanFromCheckout).not.toHaveBeenCalled();
+      expect(afterCallbacks.length).toBe(1);
+
+      await flushAfterCallbacks();
+
+      expect(mockRunChangePlanFromCheckout).toHaveBeenCalledTimes(1);
+      expect(mockRunChangePlanFromCheckout).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "cs_changeplan" }),
+        "evt_changeplan"
+      );
+    });
+
+    it("schedules runResubscribeFromCheckout via after() on lifecycleAction=resubscribe", async () => {
+      vi.mocked(verifyWebhook).mockReturnValue({
+        id: "evt_resub",
+        type: "checkout.session.completed",
+        data: {
+          object: {
+            id: "cs_resub",
+            metadata: {
+              businessId: "biz_resub",
+              lifecycleAction: "resubscribe",
+              tier: "starter",
+              billingPeriod: "annual"
+            },
+            customer: "cus_resub",
+            subscription: "sub_resub_new"
+          }
+        }
+      } as never);
+
+      const response = await POST(
+        new Request("http://localhost:3000/api/webhooks/stripe", {
+          method: "POST",
+          headers: { "stripe-signature": "sig" },
+          body: "{}"
+        })
+      );
+
+      expect(response.status).toBe(200);
+      expect(mockRunResubscribeFromCheckout).not.toHaveBeenCalled();
+      expect(afterCallbacks.length).toBe(1);
+
+      await flushAfterCallbacks();
+
+      expect(mockRunResubscribeFromCheckout).toHaveBeenCalledTimes(1);
+      expect(mockRunResubscribeFromCheckout).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "cs_resub" }),
+        "evt_resub"
+      );
+    });
+
+    it("logs but does not throw when the orchestrator scheduled via after() rejects", async () => {
+      // Defense-in-depth: the orchestrators are documented to swallow
+      // their own errors, but the `after()` wrapper has its own
+      // try/catch in case that contract regresses. A rejected
+      // orchestrator must NOT surface an unhandled rejection from the
+      // serverless function (which would taint Vercel's function logs
+      // and could in some runtimes crash subsequent invocations on the
+      // same warm instance).
+      mockRunResubscribeFromCheckout.mockRejectedValueOnce(
+        new Error("orchestrator boom")
+      );
+      vi.mocked(verifyWebhook).mockReturnValue({
+        id: "evt_resub_throws",
+        type: "checkout.session.completed",
+        data: {
+          object: {
+            id: "cs_resub_throws",
+            metadata: {
+              businessId: "biz_resub_throws",
+              lifecycleAction: "resubscribe",
+              tier: "starter",
+              billingPeriod: "annual"
+            },
+            customer: "cus_resub_throws",
+            subscription: "sub_resub_throws"
+          }
+        }
+      } as never);
+
+      const response = await POST(
+        new Request("http://localhost:3000/api/webhooks/stripe", {
+          method: "POST",
+          headers: { "stripe-signature": "sig" },
+          body: "{}"
+        })
+      );
+      expect(response.status).toBe(200);
+
+      await expect(flushAfterCallbacks()).resolves.toBeUndefined();
+
+      expect(logger.error).toHaveBeenCalledWith(
+        "resubscribe orchestrator failed (background)",
+        expect.objectContaining({
+          sessionId: "cs_resub_throws",
+          eventId: "evt_resub_throws",
+          error: "orchestrator boom"
+        })
+      );
+    });
   });
 
   it("short-circuits customer.subscription.deleted fallback for already-finalized upgrade_switch rows", async () => {

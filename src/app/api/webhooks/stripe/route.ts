@@ -1,3 +1,4 @@
+import { after } from "next/server";
 import { ensureCommitmentSchedule, getStripe, verifyWebhook } from "@/lib/stripe/client";
 import {
   getSubscription,
@@ -23,6 +24,17 @@ import {
   runChangePlanFromCheckout,
   runResubscribeFromCheckout
 } from "@/lib/billing/change-plan-orchestrator";
+
+// Vercel Pro allows up to 300s. Several dispatch paths below
+// (`dispatchAutoCancelOnPaymentFailure`, `runChangePlanFromCheckout`,
+// `runResubscribeFromCheckout`) schedule minutes-long SSH backup +
+// Hostinger teardown / new-VM provisioning work via `after()`, and
+// the runtime keeps the function alive only up to `maxDuration`. The
+// Hobby tier's 10s default would tear the slow-phase work down almost
+// immediately after the 200 ack — leaving Stripe acknowledged, the DB
+// half-flipped, and the VM/billing dangling. (Mirrors the same
+// reasoning used in `/api/billing/cancel`.)
+export const maxDuration = 300;
 
 async function fetchSubscriptionPeriodCacheOrEmpty(
   subscriptionId: string,
@@ -127,16 +139,34 @@ export async function POST(request: Request) {
             "paused"
           ]);
           if (lifecycleCancelStatuses.has(sub.status) && existing.status === "active") {
-            // Fire-and-forget: the autoCancel plan includes SSH backup
-            // of durable data + Hostinger teardown (snapshot, stop VM,
-            // cancel billing) which can take minutes on large tenants.
-            // Awaiting would exceed Stripe's ~30s webhook ack window,
-            // triggering a retry that would double-dispatch the plan.
-            // The dispatcher already catches and logs its own errors.
-            dispatchAutoCancelOnPaymentFailure({
-              businessId: existing.business_id,
-              reason: `stripe_status:${sub.status}`,
-              eventId: event.id
+            // Schedule the autoCancel plan to run AFTER the 200 ack so we
+            // don't exceed Stripe's ~30s webhook ack window (which would
+            // trigger a retry and double-dispatch the plan). Must use
+            // `after()` rather than a bare floating promise: on Vercel
+            // serverless the function can be torn down shortly after the
+            // response is returned, killing the multi-minute SSH backup
+            // + Hostinger teardown mid-flight. `after()` (Vercel
+            // `waitUntil` under the hood) keeps the runtime alive until
+            // the callback resolves. The dispatcher already catches and
+            // logs its own errors; the `try/catch` here is defensive in
+            // case that contract regresses.
+            const dispatchBusinessId = existing.business_id;
+            const dispatchReason = `stripe_status:${sub.status}`;
+            const dispatchEventId = event.id;
+            after(async () => {
+              try {
+                await dispatchAutoCancelOnPaymentFailure({
+                  businessId: dispatchBusinessId,
+                  reason: dispatchReason,
+                  eventId: dispatchEventId
+                });
+              } catch (err) {
+                logger.error("autoCancelOnPaymentFailure dispatcher threw (background)", {
+                  businessId: dispatchBusinessId,
+                  eventId: dispatchEventId,
+                  error: err instanceof Error ? err.message : String(err)
+                });
+              }
             });
             break;
           }
@@ -457,11 +487,26 @@ export async function POST(request: Request) {
         //    dunning tail for an already-canceled subscription and we've
         //    already run the teardown.
         if (existing.status === "active") {
-          // Fire-and-forget for the same timeout reason as above.
-          dispatchAutoCancelOnPaymentFailure({
-            businessId: existing.business_id,
-            reason: "invoice.payment_failed",
-            eventId: event.id
+          // Same `after()` wrapper as the `customer.subscription.updated`
+          // dispatch above: must outlive the 200 ack on Vercel
+          // serverless so the SSH backup + Hostinger teardown actually
+          // get to run.
+          const dispatchBusinessId = existing.business_id;
+          const dispatchEventId = event.id;
+          after(async () => {
+            try {
+              await dispatchAutoCancelOnPaymentFailure({
+                businessId: dispatchBusinessId,
+                reason: "invoice.payment_failed",
+                eventId: dispatchEventId
+              });
+            } catch (err) {
+              logger.error("autoCancelOnPaymentFailure dispatcher threw (background)", {
+                businessId: dispatchBusinessId,
+                eventId: dispatchEventId,
+                error: err instanceof Error ? err.message : String(err)
+              });
+            }
           });
         } else if (existing.status === "pending") {
           logger.info("invoice.payment_failed on pending subscription; discarding", {
@@ -583,21 +628,33 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
       previousSubscriptionId: session.metadata?.previousSubscriptionId,
       eventId
     });
-    // Fire-and-forget: the orchestrator runs a multi-minute flow (old-VM
-    // SSH backup + Hostinger snapshot + new-VM provisioning + Cloudflare
-    // tunnel swing + SSH restore + old-plan teardown) that routinely
-    // exceeds Stripe's ~30s webhook ack window. Awaiting here would cause
-    // Stripe to time out and retry, which would double-dispatch the
-    // orchestrator and potentially double-provision + double-increment
-    // the lifetime-subscription counter. The orchestrator is designed
-    // idempotent and swallows its own errors, matching its docstring
-    // that says it is "invoked fire-and-forget by the webhook".
-    void runChangePlanFromCheckout(session, eventId).catch((err) => {
-      logger.error("changePlan orchestrator failed (background)", {
-        sessionId: session.id,
-        eventId,
-        error: err instanceof Error ? err.message : String(err)
-      });
+    // Schedule the orchestrator to run AFTER the 200 ack. The flow is a
+    // multi-minute pipeline (old-VM SSH backup + Hostinger snapshot +
+    // new-VM provisioning + Cloudflare tunnel swing + SSH restore + old-
+    // plan teardown) that routinely exceeds Stripe's ~30s webhook ack
+    // window. Awaiting here would cause Stripe to time out and retry,
+    // which would double-dispatch the orchestrator and potentially
+    // double-provision + double-increment the lifetime-subscription
+    // counter.
+    //
+    // CRITICAL: must be `after()` rather than a bare floating promise.
+    // On Vercel serverless the function can be torn down shortly after
+    // the 200 response is returned, killing the orchestrator mid-flight
+    // (see the same comment block in `/api/billing/cancel`). `after()`
+    // keeps the runtime alive (Vercel `waitUntil` under the hood) until
+    // the orchestrator settles. The orchestrator is idempotent and
+    // swallows its own errors per its docstring; this `try/catch` is
+    // defensive in case that contract regresses.
+    after(async () => {
+      try {
+        await runChangePlanFromCheckout(session, eventId);
+      } catch (err) {
+        logger.error("changePlan orchestrator failed (background)", {
+          sessionId: session.id,
+          eventId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
     });
     return;
   }
@@ -607,15 +664,21 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
       businessId: session.metadata?.businessId,
       eventId
     });
-    // Fire-and-forget for the same reason as changePlan above: fresh VM
-    // provisioning + SSH restore is minutes-long work that must not
-    // block the Stripe webhook ack.
-    void runResubscribeFromCheckout(session, eventId).catch((err) => {
-      logger.error("resubscribe orchestrator failed (background)", {
-        sessionId: session.id,
-        eventId,
-        error: err instanceof Error ? err.message : String(err)
-      });
+    // Same `after()` wrapper as changePlan above: fresh VM provisioning
+    // + SSH restore is minutes-long work that must (a) not block the
+    // Stripe webhook ack, and (b) must outlive it on Vercel serverless
+    // — a bare floating promise is NOT guaranteed to keep the function
+    // alive past the response.
+    after(async () => {
+      try {
+        await runResubscribeFromCheckout(session, eventId);
+      } catch (err) {
+        logger.error("resubscribe orchestrator failed (background)", {
+          sessionId: session.id,
+          eventId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
     });
     return;
   }
@@ -732,6 +795,67 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
     return;
   }
 
+  // Canceled-row resurrection guard. Must run BEFORE the linkage write
+  // and the lifetime-count increment below, otherwise we silently relink
+  // the canceled row to a fresh Stripe sub, burn a lifetime slot, and
+  // (further down) flip `status` back to `active` while leaving
+  // `grace_ends_at` / `wiped_at` / `cancel_at` / `cancel_reason` set —
+  // a Frankenstein state that the grace-sweep cron can't see (it filters
+  // `status="canceled"`) and that races a possibly-already-running wipe.
+  //
+  // Two shapes land here, both refused:
+  //
+  //   1. Webhook re-delivery on a row whose teardown already ran:
+  //      `alreadyLinkedToThisStripeSub === true` AND status === "canceled".
+  //      Stripe re-delivers `checkout.session.completed` on ack timeouts,
+  //      manual replays, and periodic delivery sweeps; if a concurrent
+  //      `customer.subscription.deleted` flipped the row to canceled
+  //      between the original delivery and the retry, the retry must
+  //      not unwind that. The Stripe sub is already canceled at Stripe's
+  //      end (the deleted event is what flipped us), so we don't need
+  //      to issue a teardown — silent bail is correct.
+  //
+  //   2. Fresh checkout against a previously-canceled row that did NOT
+  //      go through `/api/billing/reactivate` (mode=resubscribe):
+  //      `alreadyLinkedToThisStripeSub === false` AND status ===
+  //      "canceled". The legitimate resubscribe path short-circuits at
+  //      the `lifecycleAction === "resubscribe"` dispatch above and
+  //      runs the resubscribe orchestrator (which restores the SSH
+  //      backup, clears grace metadata, and bumps the lifetime counter
+  //      on its own terms). Reaching this branch with a canceled row
+  //      means a stale `/api/checkout` flow (old browser tab, scripted
+  //      caller, lost lifecycleAction metadata). Refuse the activation
+  //      and cancel the fresh Stripe sub so the customer isn't auto-
+  //      renewed for service we won't provision; operators can issue
+  //      a manual refund and route the customer through the proper
+  //      reactivate flow.
+  //
+  // We MUST NOT bail when status is `pending`: that signals the prior
+  // delivery linked the sub but crashed before the final flip, and
+  // the retry's job is to complete that activation. We also intentionally
+  // proceed when status is already `active` so a retry's redundant
+  // status-flip write remains a no-op (an earlier idempotency test in
+  // `tests/stripe-webhook-route.test.ts` documents this).
+  if (existing.status === "canceled") {
+    logger.warn(
+      "checkout activation refused: local row is canceled; resubscribe must go through /api/billing/reactivate",
+      {
+        businessId,
+        eventId,
+        subscriptionRowId: existing.id,
+        alreadyLinkedToThisStripeSub,
+        existingStripeSubscriptionId: existing.stripe_subscription_id,
+        incomingStripeSubscriptionId: subscriptionId,
+        graceEndsAt: existing.grace_ends_at ?? null,
+        wipedAt: existing.wiped_at ?? null
+      }
+    );
+    if (subscriptionId && !alreadyLinkedToThisStripeSub) {
+      await cancelStripeSubscriptionSafely(subscriptionId, businessId);
+    }
+    return;
+  }
+
   if (!alreadyLinkedToThisStripeSub && subscriptionId) {
     await updateSubscription(existing.id, {
       stripe_customer_id: customerId,
@@ -761,38 +885,6 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
       }
       return;
     }
-  }
-
-  // Webhook re-delivery resurrection guard. Stripe re-delivers
-  // `checkout.session.completed` on ack timeouts, manual replays, and
-  // periodic delivery sweeps. On a retry where we've already linked
-  // this row to THIS Stripe sub id AND the local row was meanwhile
-  // flipped to `canceled` / `canceled_in_grace` by a concurrent
-  // `customer.subscription.deleted` (or any other teardown path), the
-  // unconditional `status: "active"` write below would resurrect that
-  // row WITHOUT restoring grace metadata — leaving Stripe and our
-  // local state out of sync, and the grace sweep wouldn't pick the row
-  // up because status is now "active". Bail in that scenario.
-  //
-  // We must NOT bail when status is `pending`: that signals the prior
-  // delivery linked the sub but crashed before the final flip, and
-  // the retry's job is to complete that activation. We also intentionally
-  // proceed when status is already `active` so a retry's redundant
-  // status-flip write remains a no-op (matches prior behavior — an
-  // earlier idempotency test in `tests/stripe-webhook-route.test.ts`
-  // documents this).
-  if (alreadyLinkedToThisStripeSub && existing.status === "canceled") {
-    logger.warn(
-      "checkout activation retry observed canceled row; not resurrecting",
-      {
-        businessId,
-        eventId,
-        subscriptionRowId: existing.id,
-        graceEndsAt: existing.grace_ends_at ?? null,
-        wipedAt: existing.wiped_at ?? null
-      }
-    );
-    return;
   }
 
   // Do NOT unconditionally write `stripe_subscription_id` / `stripe_customer_id`
