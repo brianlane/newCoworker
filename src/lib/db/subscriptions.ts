@@ -263,6 +263,37 @@ export async function updateSubscription(
 }
 
 /**
+ * Conditional update: applies `update` ONLY if the row still has
+ * `wiped_at IS NULL`. Returns the updated row when the predicate
+ * matched, or `null` when the row was wiped between caller's read and
+ * this write (i.e. an interleaved grace-sweep finalized the prior
+ * lifetime).
+ *
+ * Used by `runResubscribeFromCheckout` to avoid silently resurrecting
+ * a row whose data backup has already been deleted by the grace-sweep.
+ * Without this guard the orchestrator's final
+ * `updateSubscription({status:"active", wiped_at:null, ...})` would
+ * overwrite the wipe stamp and leave us with a row that claims active
+ * service on a fresh VPS that has none of the customer's data.
+ */
+export async function updateSubscriptionIfNotWiped(
+  id: string,
+  update: Parameters<typeof updateSubscription>[1],
+  client?: SupabaseClient
+): Promise<SubscriptionRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("subscriptions")
+    .update(update)
+    .eq("id", id)
+    .is("wiped_at", null)
+    .select();
+  if (error) throw new Error(`updateSubscriptionIfNotWiped: ${error.message}`);
+  const rows = (data ?? []) as SubscriptionRow[];
+  return rows[0] ?? null;
+}
+
+/**
  * Returns true if the subscription is in the data-retention grace window:
  * canceled, a grace deadline is set in the future, and the wipe hasn't run.
  * Keeps lifecycle callers from duplicating this predicate.

@@ -19,6 +19,31 @@ const {
   executeLifecyclePlanSlowPhaseMock: vi.fn()
 }));
 
+// `after()` from `next/server` requires the Next.js work-units context
+// (only present inside the actual Next runtime). In tests we run the
+// route handler bare, so polyfill it to invoke the callback on
+// `queueMicrotask` — close enough to "after the response" for assertions
+// that need the slow phase to have executed.
+vi.mock("next/server", async () => {
+  const actual = await vi.importActual<typeof import("next/server")>("next/server");
+  return {
+    ...actual,
+    after: (cb: () => void | Promise<void>) => {
+      queueMicrotask(() => {
+        try {
+          const result = cb();
+          if (result && typeof (result as Promise<unknown>).then === "function") {
+            (result as Promise<unknown>).catch(() => undefined);
+          }
+        } catch {
+          // Test polyfill: errors are intentionally swallowed; the route
+          // handler's own try/catch is what tests assert on.
+        }
+      });
+    }
+  };
+});
+
 vi.mock("@/lib/auth", () => ({
   getAuthUser: getAuthUserMock
 }));

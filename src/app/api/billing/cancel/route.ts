@@ -15,6 +15,7 @@
  */
 
 import { z } from "zod";
+import { after } from "next/server";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
@@ -124,14 +125,27 @@ export async function POST(request: Request) {
 
     // Kick off the slow phase (SSH backup, Hostinger snapshot + stop VM
     // + cancel billing, owner emails) without blocking the HTTP
-    // response. Errors are fully internalised; the grace-sweep cron is
-    // the backstop for any Hostinger step that fails.
-    void executeLifecyclePlanSlowPhase(planRes.plan, fastResult).catch((err) => {
-      logger.error("lifecycle slow-phase failed on /api/billing/cancel (background)", {
-        businessId: business.id,
-        mode: payload.mode,
-        error: err instanceof Error ? err.message : String(err)
-      });
+    // response. We use Next.js `after` (Vercel `waitUntil` under the
+    // hood on serverless) so the runtime is guaranteed to keep the
+    // function alive until this work completes — a bare `void
+    // promise.catch(...)` is NOT guaranteed to keep the serverless
+    // function alive past the HTTP response, and a customer who got
+    // refunded would otherwise be left with no SSH backup and a still-
+    // running VM until the 30-day grace-sweep fires (and the sweep
+    // doesn't take a backup, so their data would be permanently lost
+    // on reactivation). Errors are fully internalised; the grace-sweep
+    // cron is the backstop for any individual Hostinger step that
+    // fails.
+    after(async () => {
+      try {
+        await executeLifecyclePlanSlowPhase(planRes.plan, fastResult);
+      } catch (err) {
+        logger.error("lifecycle slow-phase failed on /api/billing/cancel (background)", {
+          businessId: business.id,
+          mode: payload.mode,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
     });
 
     return successResponse({

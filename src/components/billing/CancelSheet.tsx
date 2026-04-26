@@ -138,7 +138,7 @@ export function CancelSheet({
             </p>
             <p className="text-xs text-parchment/50 mt-1">
               {refundBlockedReason ??
-                "You're past your 30-day money-back window or have already used your lifetime refund."}
+                "We couldn't confirm your refund eligibility. Contact support if you believe this is wrong."}
             </p>
           </div>
         )}

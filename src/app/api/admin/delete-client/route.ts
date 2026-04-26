@@ -26,6 +26,11 @@ import { planLifecycleAction } from "@/lib/billing/lifecycle";
 import { executeLifecyclePlan } from "@/lib/billing/lifecycle-executor";
 import { deleteBusiness, getBusiness } from "@/lib/db/businesses";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import {
+  HostingerClient,
+  HostingerApiError,
+  DEFAULT_HOSTINGER_BASE_URL
+} from "@/lib/hostinger/client";
 import { logger } from "@/lib/logger";
 
 const schema = z.object({
@@ -57,12 +62,64 @@ export async function DELETE(request: Request) {
     });
     if (!ctxRes.ok) {
       if (ctxRes.reason === "subscription_not_found") {
-        // Subscription-less hard delete: hard-delete the business row AND
-        // disable the owner's auth user so the UI promise that this
-        // "disables the owner's login" holds. Auth deletion is best-effort
-        // — missing users are ignored, other errors are logged but don't
-        // fail the operator's action since the business row is already
-        // gone at that point.
+        // Subscription-less hard delete: stop the VPS first (if any),
+        // then hard-delete the business row AND disable the owner's
+        // auth user so the UI promise that this "disables the owner's
+        // login" holds.
+        //
+        // The VPS-stop step is critical for partially-completed
+        // onboardings that provisioned a Hostinger VM before any
+        // `subscriptions` row was inserted. Without it, the route
+        // would delete the business row (severing our only DB
+        // correlation) while the VM keeps running and Hostinger keeps
+        // billing — there'd be no way to find or stop the orphan
+        // afterward. Auth deletion is best-effort — missing users are
+        // ignored, other errors are logged but don't fail the
+        // operator's action since the business row is already gone at
+        // that point.
+        if (business.hostinger_vps_id) {
+          const vmId = Number.parseInt(business.hostinger_vps_id, 10);
+          if (Number.isFinite(vmId)) {
+            try {
+              const hostinger = new HostingerClient({
+                baseUrl: process.env.HOSTINGER_API_BASE_URL ?? DEFAULT_HOSTINGER_BASE_URL,
+                token: process.env.HOSTINGER_API_TOKEN ?? ""
+              });
+              await hostinger.stopVirtualMachine(vmId);
+              logger.info("admin.delete-client: stopped orphan VM (subscription-less)", {
+                adminEmail: admin.email,
+                businessId: body.businessId,
+                virtualMachineId: vmId
+              });
+            } catch (err) {
+              // Tolerate 404 (VM already gone) but surface other failures
+              // so an operator can chase the orphan; we still proceed
+              // with the business-row delete because aborting here would
+              // leave the operator unable to complete the action and
+              // we've already committed to the deletion path.
+              if (err instanceof HostingerApiError && err.status === 404) {
+                logger.info("admin.delete-client: orphan VM already gone (404)", {
+                  adminEmail: admin.email,
+                  businessId: body.businessId,
+                  virtualMachineId: vmId
+                });
+              } else {
+                logger.error("admin.delete-client: failed to stop orphan VM", {
+                  adminEmail: admin.email,
+                  businessId: body.businessId,
+                  virtualMachineId: vmId,
+                  error: err instanceof Error ? err.message : String(err)
+                });
+              }
+            }
+          } else {
+            logger.warn("admin.delete-client: hostinger_vps_id is non-numeric; cannot stop VM", {
+              adminEmail: admin.email,
+              businessId: body.businessId,
+              hostingerVpsId: business.hostinger_vps_id
+            });
+          }
+        }
         await deleteBusiness(body.businessId);
         if (ownerAuthUserId) {
           try {

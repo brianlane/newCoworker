@@ -64,6 +64,26 @@ export async function POST(request: Request) {
       return errorResponse("NOT_FOUND", ctxRes.reason, 404);
     }
 
+    // Defense-in-depth active-state guard. The admin UI gates the
+    // button on `subscription.status === "active"`, but a direct POST
+    // (operator browser-tabs lingering after a status flip, scripted
+    // bulk-call, etc.) would otherwise fall through to the
+    // profile-upsert + planner pipeline below. The planner's own
+    // `subscription_not_active` rejection prevents the actual refund
+    // from running, but only AFTER we've eagerly upserted a
+    // customer_profiles row and stamped `business.customer_profile_id`
+    // — wasted writes for pending and idempotency-noise for canceled.
+    // Surface the precondition cleanly here so the UI can branch and
+    // the audit log shows a single 409 instead of a tangled 409 chain.
+    if (ctxRes.context.subscription.status !== "active") {
+      logger.info("admin.force-refund rejected: subscription not active", {
+        adminEmail: admin.email,
+        businessId: body.businessId,
+        status: ctxRes.context.subscription.status
+      });
+      return errorResponse("CONFLICT", "subscription_not_active", 409);
+    }
+
     // Ensure we have a real customer_profile_id before planning. The
     // lifetime-once refund policy is enforced via
     // `customer_profiles.refund_used_at`; if neither the subscription row

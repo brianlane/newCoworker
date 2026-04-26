@@ -22,12 +22,14 @@ const {
   getSubscriptionMock,
   getSubscriptionByStripeSubscriptionIdMock,
   createSubscriptionMock,
-  updateSubscriptionMock
+  updateSubscriptionMock,
+  updateSubscriptionIfNotWipedMock
 } = vi.hoisted(() => ({
   getSubscriptionMock: vi.fn(),
   getSubscriptionByStripeSubscriptionIdMock: vi.fn(),
   createSubscriptionMock: vi.fn(),
-  updateSubscriptionMock: vi.fn()
+  updateSubscriptionMock: vi.fn(),
+  updateSubscriptionIfNotWipedMock: vi.fn()
 }));
 
 const {
@@ -107,6 +109,7 @@ vi.mock("@/lib/db/subscriptions", async (importOriginal) => {
     getSubscriptionByStripeSubscriptionId: getSubscriptionByStripeSubscriptionIdMock,
     createSubscription: createSubscriptionMock,
     updateSubscription: updateSubscriptionMock,
+    updateSubscriptionIfNotWiped: updateSubscriptionIfNotWipedMock,
     stripeSubscriptionPeriodCache: vi.fn().mockReturnValue({})
   };
 });
@@ -192,6 +195,10 @@ beforeEach(() => {
   upsertCustomerProfileMock.mockResolvedValue("prof-1");
   createSubscriptionMock.mockResolvedValue({});
   updateSubscriptionMock.mockResolvedValue({});
+  // Default: the conditional resurrect-write succeeds (i.e. no
+  // grace-sweep wipe raced this orchestrator). Tests covering the
+  // grace-sweep race override this with `null`.
+  updateSubscriptionIfNotWipedMock.mockResolvedValue({ id: "sub-row-old" });
   incrementLifetimeSubscriptionCountMock.mockResolvedValue(undefined);
   decrementLifetimeSubscriptionCountMock.mockResolvedValue(2);
   setBusinessCustomerProfileMock.mockResolvedValue(undefined);
@@ -953,7 +960,7 @@ describe("runResubscribeFromCheckout", () => {
       businessId: "biz-1",
       vpsHost: "10.0.0.2"
     });
-    expect(updateSubscriptionMock).toHaveBeenCalledWith(
+    expect(updateSubscriptionIfNotWipedMock).toHaveBeenCalledWith(
       "sub-row-grace",
       expect.objectContaining({
         status: "active",
@@ -999,7 +1006,7 @@ describe("runResubscribeFromCheckout", () => {
       "evt_resub_failures"
     );
 
-    expect(updateSubscriptionMock).toHaveBeenCalledWith(
+    expect(updateSubscriptionIfNotWipedMock).toHaveBeenCalledWith(
       "sub-row-grace",
       expect.objectContaining({ status: "active", cancel_reason: null })
     );
@@ -1126,7 +1133,7 @@ describe("runResubscribeFromCheckout", () => {
       "evt_resub_restore_fail"
     );
 
-    expect(updateSubscriptionMock).toHaveBeenCalledWith(
+    expect(updateSubscriptionIfNotWipedMock).toHaveBeenCalledWith(
       "sub-row-grace",
       expect.objectContaining({ status: "active" })
     );
@@ -1343,7 +1350,7 @@ describe("runResubscribeFromCheckout", () => {
       "evt_resub_upsert_fail"
     );
 
-    expect(updateSubscriptionMock).toHaveBeenCalledWith(
+    expect(updateSubscriptionIfNotWipedMock).toHaveBeenCalledWith(
       "sub-row-grace",
       expect.objectContaining({ customer_profile_id: "prof-1" })
     );
@@ -1380,7 +1387,7 @@ describe("runResubscribeFromCheckout", () => {
       stripeCustomerId: "cus_object",
       signupIp: null
     });
-    expect(updateSubscriptionMock).toHaveBeenCalledWith(
+    expect(updateSubscriptionIfNotWipedMock).toHaveBeenCalledWith(
       "sub-row-grace",
       expect.objectContaining({
         stripe_customer_id: "cus_object",
@@ -1424,7 +1431,7 @@ describe("runResubscribeFromCheckout", () => {
 
     expect(incrementLifetimeSubscriptionCountMock).not.toHaveBeenCalled();
     expect(setBusinessCustomerProfileMock).not.toHaveBeenCalled();
-    expect(updateSubscriptionMock).toHaveBeenCalledWith(
+    expect(updateSubscriptionIfNotWipedMock).toHaveBeenCalledWith(
       "sub-row-grace",
       expect.objectContaining({
         stripe_customer_id: null,
@@ -1467,7 +1474,7 @@ describe("runResubscribeFromCheckout", () => {
     expect(orchestrateProvisioningMock).toHaveBeenCalledWith(
       expect.objectContaining({ businessId: "biz-1", tier: "starter" })
     );
-    expect(updateSubscriptionMock).toHaveBeenCalledWith(
+    expect(updateSubscriptionIfNotWipedMock).toHaveBeenCalledWith(
       "sub-row-grace",
       expect.objectContaining({
         status: "active",
@@ -1643,7 +1650,7 @@ describe("runResubscribeFromCheckout", () => {
     );
 
     expect(restoreBusinessDataMock).not.toHaveBeenCalled();
-    expect(updateSubscriptionMock).toHaveBeenCalledWith(
+    expect(updateSubscriptionIfNotWipedMock).toHaveBeenCalledWith(
       "sub-row-grace",
       expect.objectContaining({ status: "active" })
     );
@@ -1678,7 +1685,7 @@ describe("runResubscribeFromCheckout", () => {
     );
 
     expect(restoreBusinessDataMock).not.toHaveBeenCalled();
-    expect(updateSubscriptionMock).toHaveBeenCalledWith(
+    expect(updateSubscriptionIfNotWipedMock).toHaveBeenCalledWith(
       "sub-row-grace",
       expect.objectContaining({ status: "active" })
     );

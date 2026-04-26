@@ -58,6 +58,7 @@ import {
   isCanceledInGrace,
   stripeSubscriptionPeriodCache,
   updateSubscription,
+  updateSubscriptionIfNotWiped,
   type CancelReason
 } from "@/lib/db/subscriptions";
 import { getBusiness, setBusinessCustomerProfile } from "@/lib/db/businesses";
@@ -765,8 +766,22 @@ export async function runResubscribeFromCheckout(
   }
   const periodCache = newStripeSub ? stripeSubscriptionPeriodCache(newStripeSub) : {};
 
-  await updateSubscription(oldSub.id, {
-    status: "active",
+  // Optimistic write guard against a concurrent grace-sweep wipe.
+  // Between this orchestrator's `getSubscription` (line ~584) and the
+  // write below, the grace-sweep cron may have run for this same row,
+  // stamped `wiped_at`, deleted the Supabase Storage backup artifact,
+  // stopped the VM, and canceled Hostinger billing — all of which
+  // finalise the prior lifetime. Naively writing `wiped_at: null` here
+  // would silently resurrect that wiped row to active on a fresh VPS
+  // that has none of the customer's data (the backup that
+  // `restoreBusinessData` would have read is already gone). Use a
+  // conditional UPDATE keyed on `wiped_at IS NULL` so we only
+  // overwrite when the wipe hasn't landed yet; on miss, abort and
+  // cancel the brand-new Stripe subscription so it doesn't auto-renew
+  // forever for a tenant we'll never serve. Operator triage handles
+  // any refund.
+  const writePatch = {
+    status: "active" as const,
     stripe_customer_id: stripeCustomerId,
     stripe_subscription_id: stripeSubscriptionId,
     tier,
@@ -782,7 +797,26 @@ export async function runResubscribeFromCheckout(
     vps_stopped_at: null,
     cancel_at_period_end: false,
     ...periodCache
-  });
+  };
+  const updated = await updateSubscriptionIfNotWiped(oldSub.id, writePatch);
+  if (!updated) {
+    logger.warn(
+      "resubscribe: grace-sweep wiped row between orchestrator entry and final write; aborting and canceling new Stripe sub",
+      {
+        eventId,
+        businessId,
+        subscriptionRowId: oldSub.id,
+        stripeSubscriptionId
+      }
+    );
+    if (stripeSubscriptionId) {
+      await cancelStripeSubscriptionSafely(stripeSubscriptionId, businessId);
+    }
+    if (customerProfileId) {
+      await rollbackLifetimeCount(customerProfileId, businessId, "resubscribe");
+    }
+    return;
+  }
 
   if (customerProfileId) {
     try {

@@ -160,6 +160,65 @@ export async function POST(request: Request) {
             incomplete: "pending"
           };
           const status: DbStatus = statusMap[sub.status] ?? "pending";
+
+          // Period-end-reached promotion. Stripe's webhook ordering for a
+          // `cancel_at_period_end=true` sub reaching its boundary is
+          // weak: `customer.subscription.updated` (status=canceled) can
+          // arrive BEFORE `customer.subscription.deleted`. If we just
+          // mirrored `status=canceled` here without populating the grace
+          // metadata, the subsequent `deleted` handler would re-load the
+          // row with `status="canceled"`, fail
+          // `planPeriodEndReached`'s `status !== "active"` precondition,
+          // and skip the proper SSH backup + Hostinger snapshot/teardown
+          // + cancel-confirmation email — deferring everything to the
+          // 30-day grace-sweep backstop and losing the
+          // `user_period_end` audit reason. Detect the period-end
+          // signature here (active row, scheduled-cancel flag, Stripe
+          // now reports canceled) and dispatch the proper
+          // `periodEndReached` lifecycle plan instead. The later
+          // `customer.subscription.deleted` handler already short-
+          // circuits on rows whose grace metadata is already stamped
+          // (the upgrade_switch + grace-deadline-already-set guards in
+          // the fallback mirror), so dispatching here is safe.
+          if (
+            status === "canceled" &&
+            existing.cancel_at_period_end &&
+            existing.status === "active"
+          ) {
+            const ctxRes = await loadLifecycleContextForBusiness(existing.business_id, {
+              subscription: existing
+            });
+            if (ctxRes.ok) {
+              const planRes = planLifecycleAction({ type: "periodEndReached" }, ctxRes.context);
+              if (planRes.ok) {
+                await executeLifecyclePlan(planRes.plan, {
+                  businessId: existing.business_id,
+                  vpsHost: ctxRes.vpsHost,
+                  customerProfileId: ctxRes.context.subscription.customer_profile_id
+                });
+                logger.info("customer.subscription.updated: ran periodEndReached on cancel transition", {
+                  businessId: existing.business_id,
+                  subscriptionRowId: existing.id,
+                  stripeSubscriptionId: sub.id,
+                  eventId: event.id
+                });
+                break;
+              }
+              logger.warn("periodEndReached planner rejected on update; falling back to bare mirror", {
+                businessId: existing.business_id,
+                subscriptionRowId: existing.id,
+                reason: planRes.reason,
+                eventId: event.id
+              });
+            } else {
+              logger.warn("periodEndReached context load failed on update; falling back to bare mirror", {
+                businessId: existing.business_id,
+                subscriptionRowId: existing.id,
+                reason: ctxRes.reason,
+                eventId: event.id
+              });
+            }
+          }
           // Mirror cancel_at_period_end so the dashboard reflects user
           // intent without polling Stripe on every render.
           await updateSubscription(existing.id, {
@@ -628,6 +687,38 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
       }
       return;
     }
+  }
+
+  // Webhook re-delivery resurrection guard. Stripe re-delivers
+  // `checkout.session.completed` on ack timeouts, manual replays, and
+  // periodic delivery sweeps. On a retry where we've already linked
+  // this row to THIS Stripe sub id AND the local row was meanwhile
+  // flipped to `canceled` / `canceled_in_grace` by a concurrent
+  // `customer.subscription.deleted` (or any other teardown path), the
+  // unconditional `status: "active"` write below would resurrect that
+  // row WITHOUT restoring grace metadata — leaving Stripe and our
+  // local state out of sync, and the grace sweep wouldn't pick the row
+  // up because status is now "active". Bail in that scenario.
+  //
+  // We must NOT bail when status is `pending`: that signals the prior
+  // delivery linked the sub but crashed before the final flip, and
+  // the retry's job is to complete that activation. We also intentionally
+  // proceed when status is already `active` so a retry's redundant
+  // status-flip write remains a no-op (matches prior behavior — an
+  // earlier idempotency test in `tests/stripe-webhook-route.test.ts`
+  // documents this).
+  if (alreadyLinkedToThisStripeSub && existing.status === "canceled") {
+    logger.warn(
+      "checkout activation retry observed canceled row; not resurrecting",
+      {
+        businessId,
+        eventId,
+        subscriptionRowId: existing.id,
+        graceEndsAt: existing.grace_ends_at ?? null,
+        wipedAt: existing.wiped_at ?? null
+      }
+    );
+    return;
   }
 
   // Do NOT unconditionally write `stripe_subscription_id` / `stripe_customer_id`
