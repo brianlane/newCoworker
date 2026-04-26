@@ -22,6 +22,7 @@
  */
 
 import { z } from "zod";
+import { after } from "next/server";
 import { requireAdmin, findAuthUserIdByEmail } from "@/lib/auth";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
@@ -33,10 +34,24 @@ import {
   type EmailOp,
   type StripeOp
 } from "@/lib/billing/lifecycle";
-import { executeLifecyclePlan } from "@/lib/billing/lifecycle-executor";
+import {
+  executeLifecyclePlanFastPhase,
+  executeLifecyclePlanSlowPhase
+} from "@/lib/billing/lifecycle-executor";
 import { getBusiness, setBusinessCustomerProfile } from "@/lib/db/businesses";
 import { upsertCustomerProfile } from "@/lib/db/customer-profiles";
 import { logger } from "@/lib/logger";
+
+// Vercel Pro allows up to 300s. The admin force-refund flow's slow
+// phase (SSH backup + Hostinger snapshot/stop/billing-cancel + owner
+// emails) runs post-response via the split-phase executor, but we keep
+// a generous ceiling as a safety net so the serverless function isn't
+// torn down mid-background-work on large tenants. Without this we'd
+// fall back to the platform default (10s on Hobby, ~15s on most Pro
+// configs) and operators would see Stripe-refunded-but-VPS-still-alive
+// states that the grace-sweep can't clean up immediately. Mirrors the
+// `/api/billing/cancel` pattern.
+export const maxDuration = 300;
 
 const schema = z.object({
   businessId: z.string().uuid()
@@ -149,10 +164,47 @@ export async function POST(request: Request) {
       return errorResponse("CONFLICT", plan.reason, 409);
     }
 
-    await executeLifecyclePlan(plan.plan, {
+    const extra = {
       businessId: body.businessId,
       vpsHost: effectiveCtx.vpsHost,
       customerProfileId: profileIdForPlan
+    };
+
+    // Split-phase execution mirroring `/api/billing/cancel`: the fast
+    // phase (Stripe refund + Stripe cancel + DB updates) runs inline
+    // so the operator gets a definitive yes/no on the refund and the
+    // `subscriptions` row is flipped to canceled + grace_ends_at set
+    // before we return. The slow phase (SSH backup, Hostinger
+    // snapshot/stop/billing-cancel, owner emails) runs post-response
+    // via `next/server` `after()` (Vercel `waitUntil` under the hood)
+    // so the serverless runtime keeps the function alive long enough
+    // for minutes-long teardown work — a synchronous `await` here
+    // would otherwise time out on real tenants and leave Stripe
+    // refunded but the VPS/Hostinger billing dangling. The grace-
+    // sweep cron is the backstop for any individual Hostinger step
+    // that fails mid-background.
+    let fastResult;
+    try {
+      fastResult = await executeLifecyclePlanFastPhase(plan.plan, extra);
+    } catch (err) {
+      logger.error("admin.force-refund: fast-phase failed", {
+        adminEmail: admin.email,
+        businessId: body.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return errorResponse("INTERNAL_SERVER_ERROR", "Force refund failed; please retry", 500);
+    }
+
+    after(async () => {
+      try {
+        await executeLifecyclePlanSlowPhase(plan.plan, fastResult);
+      } catch (err) {
+        logger.error("admin.force-refund: slow-phase failed (background)", {
+          adminEmail: admin.email,
+          businessId: body.businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
     });
 
     logger.info("admin.force-refund complete", {

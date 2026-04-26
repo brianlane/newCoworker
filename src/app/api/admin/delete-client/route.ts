@@ -19,11 +19,15 @@
  */
 
 import { z } from "zod";
+import { after } from "next/server";
 import { requireAdmin, findAuthUserIdByEmail } from "@/lib/auth";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
 import { planLifecycleAction } from "@/lib/billing/lifecycle";
-import { executeLifecyclePlan } from "@/lib/billing/lifecycle-executor";
+import {
+  executeLifecyclePlanFastPhase,
+  executeLifecyclePlanSlowPhase
+} from "@/lib/billing/lifecycle-executor";
 import { deleteBusiness, getBusiness } from "@/lib/db/businesses";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
@@ -32,6 +36,16 @@ import {
   DEFAULT_HOSTINGER_BASE_URL
 } from "@/lib/hostinger/client";
 import { logger } from "@/lib/logger";
+
+// Vercel Pro allows up to 300s. The admin force-cancel flow's slow
+// phase (SSH backup + Hostinger snapshot/stop/billing-cancel + owner
+// emails) runs post-response via the split-phase executor, but we keep
+// a generous ceiling as a safety net so the serverless function isn't
+// torn down mid-background-work on large tenants. Without this we'd
+// fall back to the platform default and operators would see Stripe-
+// canceled-but-VPS-still-alive states. Mirrors the `/api/billing/cancel`
+// + `/api/admin/force-refund` pattern.
+export const maxDuration = 300;
 
 const schema = z.object({
   businessId: z.string().uuid()
@@ -185,10 +199,46 @@ export async function DELETE(request: Request) {
       return errorResponse("CONFLICT", planResult.reason, 409);
     }
 
-    await executeLifecyclePlan(planResult.plan, {
+    const extra = {
       businessId: body.businessId,
       vpsHost: ctxRes.context.vpsHost,
       customerProfileId: ctxRes.context.subscription.customer_profile_id
+    };
+
+    // Split-phase execution mirroring `/api/billing/cancel`: the fast
+    // phase (Stripe cancel + DB updates including auth-user delete +
+    // mark_business_wiped) runs inline so the operator gets a
+    // definitive answer and the business row is flipped to wiped
+    // before we return. The slow phase (SSH backup, Hostinger
+    // snapshot/stop/billing-cancel, owner emails) runs post-response
+    // via `next/server` `after()` so the serverless runtime keeps the
+    // function alive for minutes-long teardown — a synchronous
+    // `await` here would otherwise time out on real tenants and leave
+    // Stripe canceled but the VPS still running with Hostinger billing
+    // active. The grace-sweep cron is the backstop for any individual
+    // Hostinger step that fails mid-background.
+    let fastResult;
+    try {
+      fastResult = await executeLifecyclePlanFastPhase(planResult.plan, extra);
+    } catch (err) {
+      logger.error("admin.delete-client: fast-phase failed", {
+        adminEmail: admin.email,
+        businessId: body.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return errorResponse("INTERNAL_SERVER_ERROR", "Force cancel failed; please retry", 500);
+    }
+
+    after(async () => {
+      try {
+        await executeLifecyclePlanSlowPhase(planResult.plan, fastResult);
+      } catch (err) {
+        logger.error("admin.delete-client: slow-phase failed (background)", {
+          adminEmail: admin.email,
+          businessId: body.businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
     });
 
     logger.info("admin.delete-client: adminForceCancel complete", {

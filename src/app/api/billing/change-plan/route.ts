@@ -22,6 +22,7 @@ import {
   upsertCustomerProfile
 } from "@/lib/db/customer-profiles";
 import { setBusinessCustomerProfile } from "@/lib/db/businesses";
+import { updateSubscription } from "@/lib/db/subscriptions";
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
 import {
   createCheckoutSession,
@@ -81,6 +82,7 @@ export async function POST(request: Request) {
     let changePlanProfileId = subscription.customer_profile_id ?? profile?.id ?? null;
     let changePlanLifetimeCount = profile?.lifetime_subscription_count ?? null;
     if (!changePlanProfileId || changePlanLifetimeCount === null) {
+      const staleProfileId = subscription.customer_profile_id ?? null;
       try {
         changePlanProfileId = await upsertCustomerProfile({
           email: user.email,
@@ -101,6 +103,37 @@ export async function POST(request: Request) {
           profileId: changePlanProfileId,
           error: err instanceof Error ? err.message : String(err)
         });
+      }
+      // Persist the resolved profile id back onto the subscription row
+      // so the cap-check we're about to run, the new checkout's
+      // metadata, and any later context loads (the webhook's
+      // `runChangePlanFromCheckout` path keys off
+      // `previousSubscriptionId` and re-reads `subscription.customer_profile_id`)
+      // all see the same profile. Without this we'd cap-check the
+      // freshly-upserted profile while the stale id remains pinned to
+      // the subscription row — splitting lifetime accounting across
+      // two profile rows and effectively bypassing the lifetime cap
+      // when the linked profile was hard-deleted (GDPR purge, manual
+      // cleanup) since the upsert-by-email returns a new id with
+      // count=0. Best-effort: we already wrote the new id to
+      // `business.customer_profile_id` above; if this update fails
+      // the orchestrator's own re-upsert keeps lifetime accounting
+      // self-consistent for the new sub, so log + continue rather
+      // than failing the user's change-plan request.
+      if (staleProfileId && staleProfileId !== changePlanProfileId) {
+        try {
+          await updateSubscription(subscription.id, {
+            customer_profile_id: changePlanProfileId
+          });
+        } catch (err) {
+          logger.warn("change-plan: failed to repoint subscription to resolved profile id (continuing)", {
+            businessId: business.id,
+            subscriptionRowId: subscription.id,
+            staleProfileId,
+            resolvedProfileId: changePlanProfileId,
+            error: err instanceof Error ? err.message : String(err)
+          });
+        }
       }
       const refreshed = await getCustomerProfileById(changePlanProfileId);
       if (!refreshed) {

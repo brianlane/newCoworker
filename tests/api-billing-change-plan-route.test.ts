@@ -8,6 +8,7 @@ const {
   upsertCustomerProfileMock,
   getCustomerProfileByIdMock,
   setBusinessCustomerProfileMock,
+  updateSubscriptionMock,
   loggerErrorMock,
   loggerWarnMock
 } = vi.hoisted(() => ({
@@ -18,6 +19,7 @@ const {
   upsertCustomerProfileMock: vi.fn(),
   getCustomerProfileByIdMock: vi.fn(),
   setBusinessCustomerProfileMock: vi.fn(),
+  updateSubscriptionMock: vi.fn(),
   loggerErrorMock: vi.fn(),
   loggerWarnMock: vi.fn()
 }));
@@ -49,6 +51,10 @@ vi.mock("@/lib/db/customer-profiles", () => ({
 
 vi.mock("@/lib/db/businesses", () => ({
   setBusinessCustomerProfile: setBusinessCustomerProfileMock
+}));
+
+vi.mock("@/lib/db/subscriptions", () => ({
+  updateSubscription: updateSubscriptionMock
 }));
 
 vi.mock("@/lib/logger", () => ({
@@ -124,6 +130,7 @@ describe("/api/billing/change-plan", () => {
       lifetime_subscription_count: 0
     });
     setBusinessCustomerProfileMock.mockResolvedValue(undefined);
+    updateSubscriptionMock.mockResolvedValue(undefined);
   });
 
   it("rejects unauthenticated callers with 403", async () => {
@@ -302,6 +309,157 @@ describe("/api/billing/change-plan", () => {
       const res = await POST(makeRequest({ tier: "standard", billingPeriod: "annual" }));
       expect(res.status).toBe(200);
       expect(loggerWarnMock).toHaveBeenCalled();
+    });
+  });
+
+  describe("stale-linked-profile divergence (lifetime-cap split-accounting guard)", () => {
+    // Regression: the subscription row may carry a `customer_profile_id`
+    // that points at a hard-deleted (GDPR purge / manual cleanup) or
+    // otherwise-unreadable profile row. In that case `loadLifecycleContext`
+    // returns `profile=null` even though `subscription.customer_profile_id`
+    // is set, so this route's null-profile branch fires, upserts by
+    // owner email, and may receive a NEW profile id (count=0 fresh).
+    // Without the repoint, the cap-check passes on the new id while the
+    // old subscription row keeps pointing at the stale id — splitting
+    // lifetime accounting across two rows and effectively bypassing the
+    // lifetime cap because the orchestrator's `previousSubscriptionId`
+    // lookup still resolves the stale id. The route must update
+    // `subscription.customer_profile_id` to the resolved id so all
+    // downstream lookups see the same profile we cap-checked.
+    function ctxWithStaleLinkedProfile() {
+      return makeContext({
+        subscription: {
+          id: "sub_stale",
+          business_id: "biz_stale",
+          status: "active",
+          tier: "starter",
+          billing_period: "monthly",
+          customer_profile_id: "prof_stale_deleted",
+          cancel_at_period_end: false
+        },
+        profile: null
+      });
+    }
+
+    it("repoints the subscription row to the resolved profile id when the linked profile is missing", async () => {
+      supabaseFromMock.mockReturnValue(makeSupabaseBusinessChain("biz_stale"));
+      loadLifecycleContextMock.mockResolvedValue({
+        ok: true,
+        vpsHost: "1.2.3.4",
+        context: ctxWithStaleLinkedProfile()
+      });
+      upsertCustomerProfileMock.mockResolvedValue("prof_resolved");
+      getCustomerProfileByIdMock.mockResolvedValue({
+        id: "prof_resolved",
+        lifetime_subscription_count: 0
+      });
+
+      const res = await POST(makeRequest({ tier: "standard", billingPeriod: "annual" }));
+      expect(res.status).toBe(200);
+      expect(updateSubscriptionMock).toHaveBeenCalledWith("sub_stale", {
+        customer_profile_id: "prof_resolved"
+      });
+      expect(setBusinessCustomerProfileMock).toHaveBeenCalledWith("biz_stale", "prof_resolved");
+      expect(createCheckoutSessionMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            previousSubscriptionId: "sub_stale",
+            customerProfileId: "prof_resolved"
+          })
+        })
+      );
+    });
+
+    it("does NOT repoint when the upsert returns the same id (no divergence)", async () => {
+      supabaseFromMock.mockReturnValue(makeSupabaseBusinessChain("biz_stale"));
+      loadLifecycleContextMock.mockResolvedValue({
+        ok: true,
+        vpsHost: "1.2.3.4",
+        context: ctxWithStaleLinkedProfile()
+      });
+      // RPC primary-keys on normalized_email — when a profile already
+      // exists for the owner email, upsert returns its existing id even
+      // if the linked-by-id readback failed. No divergence → no need to
+      // touch the subscription row.
+      upsertCustomerProfileMock.mockResolvedValue("prof_stale_deleted");
+      getCustomerProfileByIdMock.mockResolvedValue({
+        id: "prof_stale_deleted",
+        lifetime_subscription_count: 0
+      });
+
+      const res = await POST(makeRequest({ tier: "standard", billingPeriod: "annual" }));
+      expect(res.status).toBe(200);
+      expect(updateSubscriptionMock).not.toHaveBeenCalled();
+    });
+
+    it("survives an updateSubscription failure and still completes the change-plan", async () => {
+      supabaseFromMock.mockReturnValue(makeSupabaseBusinessChain("biz_stale"));
+      loadLifecycleContextMock.mockResolvedValue({
+        ok: true,
+        vpsHost: "1.2.3.4",
+        context: ctxWithStaleLinkedProfile()
+      });
+      upsertCustomerProfileMock.mockResolvedValue("prof_resolved");
+      getCustomerProfileByIdMock.mockResolvedValue({
+        id: "prof_resolved",
+        lifetime_subscription_count: 0
+      });
+      updateSubscriptionMock.mockRejectedValue(new Error("constraint violation"));
+
+      const res = await POST(makeRequest({ tier: "standard", billingPeriod: "annual" }));
+      // Best-effort write: the new checkout's metadata still threads the
+      // resolved profile id, and the orchestrator's own re-upsert keeps
+      // the new sub's lifetime accounting consistent. We log + continue
+      // rather than failing the user's change-plan request.
+      expect(res.status).toBe(200);
+      expect(loggerWarnMock).toHaveBeenCalledWith(
+        "change-plan: failed to repoint subscription to resolved profile id (continuing)",
+        expect.objectContaining({
+          subscriptionRowId: "sub_stale",
+          staleProfileId: "prof_stale_deleted",
+          resolvedProfileId: "prof_resolved"
+        })
+      );
+      expect(createCheckoutSessionMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            customerProfileId: "prof_resolved"
+          })
+        })
+      );
+    });
+
+    it("does NOT call updateSubscription when subscription.customer_profile_id is null (pre-lifecycle row)", async () => {
+      // Pre-lifecycle businesses can have no linked profile at all.
+      // There's no stale id to repoint from, so `updateSubscription`
+      // should stay quiet — `setBusinessCustomerProfile` and the
+      // checkout metadata are sufficient to thread the new id through.
+      supabaseFromMock.mockReturnValue(makeSupabaseBusinessChain("biz_pre"));
+      loadLifecycleContextMock.mockResolvedValue({
+        ok: true,
+        vpsHost: "1.2.3.4",
+        context: makeContext({
+          subscription: {
+            id: "sub_pre",
+            business_id: "biz_pre",
+            status: "active",
+            tier: "starter",
+            billing_period: "monthly",
+            customer_profile_id: null,
+            cancel_at_period_end: false
+          },
+          profile: null
+        })
+      });
+      upsertCustomerProfileMock.mockResolvedValue("prof_new");
+      getCustomerProfileByIdMock.mockResolvedValue({
+        id: "prof_new",
+        lifetime_subscription_count: 0
+      });
+
+      const res = await POST(makeRequest({ tier: "standard", billingPeriod: "annual" }));
+      expect(res.status).toBe(200);
+      expect(updateSubscriptionMock).not.toHaveBeenCalled();
     });
   });
 

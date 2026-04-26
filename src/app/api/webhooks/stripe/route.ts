@@ -264,9 +264,22 @@ export async function POST(request: Request) {
           // grace_ends_at/canceled_at/cancel_reason) and make it
           // invisible to the grace-sweep cron, which filters on
           // `status === "canceled"`. Refuse the active-write and let
-          // reactivation flow through `/api/billing/reactivate` instead;
-          // we still keep the period cache + cancel_at_period_end mirror
-          // up to date so the dashboard reads stay accurate.
+          // reactivation flow through `/api/billing/reactivate` instead.
+          //
+          // CRITICAL: do NOT spread `stripeSubscriptionPeriodCache(sub)`
+          // here. The lifecycle planner and the
+          // `customer.subscription.deleted` handler both explicitly null
+          // `stripe_current_period_{start,end}` on cancel so the Edge
+          // voice inbound's `cacheLooksValidForQuotaAfterJitFailure`
+          // (supabase/functions/_shared/stripe_voice_period.ts) cannot
+          // reserve minutes against a stale period after the
+          // subscription is gone. Re-stamping live period bounds from a
+          // resurrected-in-Stripe sub onto a canceled-in-grace row
+          // would silently re-validate that JIT-fail proceed path —
+          // voice usage on the still-running VPS during grace would be
+          // billed against the supposedly-terminated subscription. We
+          // still mirror `cancel_at_period_end` (UI-only, no quota
+          // impact) and the Stripe sub id (no-op when already linked).
           if (status === "active" && existing.status === "canceled") {
             logger.warn(
               "customer.subscription.updated: refusing to resurrect canceled row to active without lifecycle reactivation",
@@ -282,8 +295,7 @@ export async function POST(request: Request) {
             );
             await updateSubscription(existing.id, {
               stripe_subscription_id: sub.id,
-              cancel_at_period_end: Boolean(sub.cancel_at_period_end),
-              ...stripeSubscriptionPeriodCache(sub)
+              cancel_at_period_end: Boolean(sub.cancel_at_period_end)
             });
             break;
           }

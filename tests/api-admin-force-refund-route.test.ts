@@ -1,5 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const { afterCallbacks } = vi.hoisted(() => ({
+  afterCallbacks: [] as Array<() => Promise<void> | void>
+}));
+
+vi.mock("next/server", async () => {
+  const actual = await vi.importActual<typeof import("next/server")>("next/server");
+  return {
+    ...actual,
+    after: (cb: () => Promise<void> | void) => {
+      afterCallbacks.push(cb);
+    }
+  };
+});
+
+async function flushAfterCallbacks(): Promise<void> {
+  while (afterCallbacks.length > 0) {
+    const cb = afterCallbacks.shift()!;
+    await cb();
+  }
+}
+
 vi.mock("@/lib/auth", () => ({
   requireAdmin: vi.fn(),
   findAuthUserIdByEmail: vi.fn()
@@ -23,7 +44,8 @@ vi.mock("@/lib/billing/lifecycle", () => ({
 }));
 
 vi.mock("@/lib/billing/lifecycle-executor", () => ({
-  executeLifecyclePlan: vi.fn()
+  executeLifecyclePlanFastPhase: vi.fn(),
+  executeLifecyclePlanSlowPhase: vi.fn()
 }));
 
 vi.mock("@/lib/logger", () => ({
@@ -36,7 +58,10 @@ import { getBusiness, setBusinessCustomerProfile } from "@/lib/db/businesses";
 import { upsertCustomerProfile } from "@/lib/db/customer-profiles";
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
 import { planLifecycleAction } from "@/lib/billing/lifecycle";
-import { executeLifecyclePlan } from "@/lib/billing/lifecycle-executor";
+import {
+  executeLifecyclePlanFastPhase,
+  executeLifecyclePlanSlowPhase
+} from "@/lib/billing/lifecycle-executor";
 import { logger } from "@/lib/logger";
 
 const BUSINESS_ID = "11111111-1111-4111-8111-111111111111";
@@ -70,6 +95,7 @@ const defaultCtx = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  afterCallbacks.length = 0;
   vi.mocked(requireAdmin).mockResolvedValue({
     userId: "admin-1",
     email: "admin@example.com",
@@ -85,7 +111,8 @@ beforeEach(() => {
   } as never);
   vi.mocked(findAuthUserIdByEmail).mockResolvedValue("auth-owner-1");
   vi.mocked(loadLifecycleContextForBusiness).mockResolvedValue(defaultCtx as never);
-  vi.mocked(executeLifecyclePlan).mockResolvedValue({} as never);
+  vi.mocked(executeLifecyclePlanFastPhase).mockResolvedValue({} as never);
+  vi.mocked(executeLifecyclePlanSlowPhase).mockResolvedValue(undefined as never);
   vi.mocked(upsertCustomerProfile).mockResolvedValue("prof-upserted");
   vi.mocked(setBusinessCustomerProfile).mockResolvedValue(undefined);
 });
@@ -146,7 +173,7 @@ describe("api/admin/force-refund route", () => {
       expect.anything()
     );
     expect(planLifecycleAction).toHaveBeenCalledTimes(1);
-    expect(executeLifecyclePlan).toHaveBeenCalledWith(
+    expect(executeLifecyclePlanFastPhase).toHaveBeenCalledWith(
       expect.objectContaining({
         stripeOps: [
           {
@@ -216,7 +243,7 @@ describe("api/admin/force-refund route", () => {
       .mock.calls[1][1];
     expect(secondCallCtx.profile.refund_used_at).toBeNull();
     expect(secondCallCtx.profile.first_paid_at).not.toBeNull();
-    expect(executeLifecyclePlan).toHaveBeenCalledWith(
+    expect(executeLifecyclePlanFastPhase).toHaveBeenCalledWith(
       expect.objectContaining({
         stripeOps: [expect.objectContaining({ reason: "admin_force" })],
         dbUpdates: [expect.objectContaining({ reason: "admin_force" })]
@@ -294,7 +321,7 @@ describe("api/admin/force-refund route", () => {
     expect(plannerCtx.subscription.customer_profile_id).toBe("prof-upserted");
     // Executor receives the rewritten plan with mark_refund_used retained
     // and pointing at the real profile id.
-    const plan = vi.mocked(executeLifecyclePlan).mock.calls[0][0];
+    const plan = vi.mocked(executeLifecyclePlanFastPhase).mock.calls[0][0];
     expect(plan.dbUpdates.some((op) => op.type === "mark_refund_used")).toBe(true);
     const markOp = plan.dbUpdates.find((op) => op.type === "mark_refund_used") as
       | { type: "mark_refund_used"; profileId: string }
@@ -336,7 +363,7 @@ describe("api/admin/force-refund route", () => {
     });
     expect(upsertCustomerProfile).not.toHaveBeenCalled();
     expect(planLifecycleAction).not.toHaveBeenCalled();
-    expect(executeLifecyclePlan).not.toHaveBeenCalled();
+    expect(executeLifecyclePlanFastPhase).not.toHaveBeenCalled();
   });
 
   it("returns 500 when the customer profile upsert fails", async () => {
@@ -412,12 +439,127 @@ describe("api/admin/force-refund route", () => {
 
     const response = await POST(makeRequest());
     expect(response.status).toBe(409);
-    expect(executeLifecyclePlan).not.toHaveBeenCalled();
+    expect(executeLifecyclePlanFastPhase).not.toHaveBeenCalled();
   });
 
   it("returns 404 when the business is missing", async () => {
     vi.mocked(getBusiness).mockResolvedValueOnce(null);
     const response = await POST(makeRequest());
     expect(response.status).toBe(404);
+  });
+
+  describe("split-phase execution survives Vercel timeout (maxDuration + after)", () => {
+    // Regression: this route previously awaited `executeLifecyclePlan`
+    // synchronously, which performs Stripe refund + cancel, SSH backup
+    // of durable data, Hostinger snapshot/stop/billing-cancel, DB
+    // updates, and emails — minutes-long work end-to-end. With no
+    // `maxDuration` export the route fell back to the platform default
+    // and was torn down mid-teardown on larger tenants, leaving Stripe
+    // refunded but the VPS/Hostinger billing dangling. The fix mirrors
+    // `/api/billing/cancel`: split-phase executor + `next/server`
+    // `after()` for the slow phase + a 300s ceiling.
+    function makeFullPlan() {
+      return {
+        stripeOps: [
+          {
+            type: "refund_latest_charge",
+            stripeSubscriptionId: "sub_stripe",
+            reason: "thirty_day_money_back"
+          }
+        ],
+        sshOps: [{ type: "backup_durable_data", vpsHost: "1.2.3.4" }],
+        hostingerOps: [
+          { type: "create_snapshot", virtualMachineId: 42 },
+          { type: "stop_virtual_machine", virtualMachineId: 42 },
+          { type: "cancel_billing_subscription", virtualMachineId: 42 }
+        ],
+        dbUpdates: [
+          {
+            type: "update_subscription",
+            subscriptionId: "sub-1",
+            patch: { status: "canceled", cancel_reason: "user_refund" }
+          }
+        ],
+        emailsToSend: [
+          {
+            type: "send_cancel_confirmation",
+            toEmail: "owner@example.com",
+            businessId: BUSINESS_ID,
+            reason: "user_refund",
+            effectiveAt: "2026-04-15T00:00:00.000Z",
+            graceEndsAt: "2026-05-15T00:00:00.000Z"
+          }
+        ]
+      };
+    }
+
+    it("exports maxDuration = 300 to keep Vercel from tearing down mid-teardown", async () => {
+      const mod = await import("@/app/api/admin/force-refund/route");
+      expect(mod.maxDuration).toBe(300);
+    });
+
+    it("runs the fast phase inline and defers the slow phase via after()", async () => {
+      vi.mocked(planLifecycleAction).mockReturnValueOnce({ ok: true, plan: makeFullPlan() } as never);
+      vi.mocked(executeLifecyclePlanFastPhase).mockResolvedValueOnce({
+        refund: { stripeRefundId: "re_1", stripeChargeId: "ch_1", amountCents: 1000 }
+      } as never);
+
+      const response = await POST(makeRequest());
+      // Fast phase ran before the response; slow phase has NOT yet run.
+      expect(response.status).toBe(200);
+      expect(executeLifecyclePlanFastPhase).toHaveBeenCalledTimes(1);
+      expect(executeLifecyclePlanSlowPhase).not.toHaveBeenCalled();
+      expect(afterCallbacks.length).toBe(1);
+
+      // Once the runtime drains its `after` queue (or `waitUntil` on
+      // Vercel), the slow phase runs with the fast-phase result threaded
+      // through so the email op can surface the recorded refund amount.
+      await flushAfterCallbacks();
+      expect(executeLifecyclePlanSlowPhase).toHaveBeenCalledTimes(1);
+      expect(executeLifecyclePlanSlowPhase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sshOps: expect.any(Array),
+          hostingerOps: expect.any(Array)
+        }),
+        { refund: { stripeRefundId: "re_1", stripeChargeId: "ch_1", amountCents: 1000 } }
+      );
+    });
+
+    it("returns 500 and skips after() when the fast phase throws", async () => {
+      vi.mocked(planLifecycleAction).mockReturnValueOnce({ ok: true, plan: makeFullPlan() } as never);
+      vi.mocked(executeLifecyclePlanFastPhase).mockRejectedValueOnce(
+        new Error("stripe refund declined")
+      );
+
+      const response = await POST(makeRequest());
+      expect(response.status).toBe(500);
+      // No background work scheduled — DB never flipped to canceled, so
+      // the slow phase would be operating on inconsistent state. The
+      // operator must be able to retry the whole call.
+      expect(afterCallbacks.length).toBe(0);
+      expect(executeLifecyclePlanSlowPhase).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledWith(
+        "admin.force-refund: fast-phase failed",
+        expect.objectContaining({ businessId: BUSINESS_ID })
+      );
+    });
+
+    it("swallows slow-phase errors so the operator's HTTP call still succeeds", async () => {
+      vi.mocked(planLifecycleAction).mockReturnValueOnce({ ok: true, plan: makeFullPlan() } as never);
+      vi.mocked(executeLifecyclePlanFastPhase).mockResolvedValueOnce({} as never);
+      vi.mocked(executeLifecyclePlanSlowPhase).mockRejectedValueOnce(
+        new Error("hostinger api 500")
+      );
+
+      const response = await POST(makeRequest());
+      expect(response.status).toBe(200);
+      // The failing slow phase MUST NOT propagate (the response is
+      // already sent and the grace-sweep cron is the backstop).
+      await expect(flushAfterCallbacks()).resolves.toBeUndefined();
+      expect(logger.error).toHaveBeenCalledWith(
+        "admin.force-refund: slow-phase failed (background)",
+        expect.objectContaining({ businessId: BUSINESS_ID })
+      );
+    });
   });
 });

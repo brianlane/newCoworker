@@ -1,5 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const { afterCallbacks } = vi.hoisted(() => ({
+  afterCallbacks: [] as Array<() => Promise<void> | void>
+}));
+
+vi.mock("next/server", async () => {
+  const actual = await vi.importActual<typeof import("next/server")>("next/server");
+  return {
+    ...actual,
+    after: (cb: () => Promise<void> | void) => {
+      afterCallbacks.push(cb);
+    }
+  };
+});
+
+async function flushAfterCallbacks(): Promise<void> {
+  while (afterCallbacks.length > 0) {
+    const cb = afterCallbacks.shift()!;
+    await cb();
+  }
+}
+
 vi.mock("@/lib/auth", () => ({
   requireAdmin: vi.fn(),
   findAuthUserIdByEmail: vi.fn()
@@ -19,7 +40,8 @@ vi.mock("@/lib/billing/lifecycle", () => ({
 }));
 
 vi.mock("@/lib/billing/lifecycle-executor", () => ({
-  executeLifecyclePlan: vi.fn()
+  executeLifecyclePlanFastPhase: vi.fn(),
+  executeLifecyclePlanSlowPhase: vi.fn()
 }));
 
 const mockDeleteAuthUser = vi.fn();
@@ -38,7 +60,11 @@ import { requireAdmin, findAuthUserIdByEmail } from "@/lib/auth";
 import { deleteBusiness, getBusiness } from "@/lib/db/businesses";
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
 import { planLifecycleAction } from "@/lib/billing/lifecycle";
-import { executeLifecyclePlan } from "@/lib/billing/lifecycle-executor";
+import {
+  executeLifecyclePlanFastPhase,
+  executeLifecyclePlanSlowPhase
+} from "@/lib/billing/lifecycle-executor";
+import { logger } from "@/lib/logger";
 
 const BUSINESS_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -52,6 +78,7 @@ function makeRequest() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  afterCallbacks.length = 0;
   mockDeleteAuthUser.mockReset();
   mockDeleteAuthUser.mockResolvedValue({ error: null });
   vi.mocked(requireAdmin).mockResolvedValue({
@@ -97,7 +124,8 @@ beforeEach(() => {
       emailsToSend: []
     }
   } as never);
-  vi.mocked(executeLifecyclePlan).mockResolvedValue({} as never);
+  vi.mocked(executeLifecyclePlanFastPhase).mockResolvedValue({} as never);
+  vi.mocked(executeLifecyclePlanSlowPhase).mockResolvedValue(undefined as never);
 });
 
 describe("api/admin/delete-client route (adminForceCancel)", () => {
@@ -114,7 +142,7 @@ describe("api/admin/delete-client route (adminForceCancel)", () => {
       { type: "adminForceCancel" },
       expect.objectContaining({ ownerAuthUserId: "auth-owner-1" })
     );
-    expect(executeLifecyclePlan).toHaveBeenCalledWith(
+    expect(executeLifecyclePlanFastPhase).toHaveBeenCalledWith(
       expect.any(Object),
       expect.objectContaining({
         businessId: BUSINESS_ID,
@@ -129,7 +157,7 @@ describe("api/admin/delete-client route (adminForceCancel)", () => {
     const response = await DELETE(makeRequest());
     expect(response.status).toBe(404);
     expect(planLifecycleAction).not.toHaveBeenCalled();
-    expect(executeLifecyclePlan).not.toHaveBeenCalled();
+    expect(executeLifecyclePlanFastPhase).not.toHaveBeenCalled();
   });
 
   it("deletes subscription-less businesses and disables the owner's auth user", async () => {
@@ -261,7 +289,7 @@ describe("api/admin/delete-client route (adminForceCancel)", () => {
     } as never);
     const response = await DELETE(makeRequest());
     expect(response.status).toBe(409);
-    expect(executeLifecyclePlan).not.toHaveBeenCalled();
+    expect(executeLifecyclePlanFastPhase).not.toHaveBeenCalled();
   });
 
   it("rejects malformed businessId with 400 VALIDATION_ERROR", async () => {
@@ -273,5 +301,104 @@ describe("api/admin/delete-client route (adminForceCancel)", () => {
       })
     );
     expect(response.status).toBe(400);
+  });
+
+  describe("split-phase execution survives Vercel timeout (maxDuration + after)", () => {
+    // Regression: this route previously awaited `executeLifecyclePlan`
+    // synchronously, which performs Stripe cancel, SSH backup, Hostinger
+    // snapshot/stop/billing-cancel, DB updates (auth-user delete +
+    // mark_business_wiped), and emails — minutes-long work end-to-end.
+    // With no `maxDuration` export the route fell back to the platform
+    // default and was torn down mid-teardown on larger tenants. The
+    // fix mirrors `/api/billing/cancel` + `/api/admin/force-refund`:
+    // split-phase executor + `next/server` `after()` for the slow
+    // phase + a 300s ceiling.
+    function makeFullPlan() {
+      return {
+        stripeOps: [
+          { type: "cancel_stripe_subscription", stripeSubscriptionId: "sub_stripe" }
+        ],
+        sshOps: [{ type: "backup_durable_data", vpsHost: "1.2.3.4" }],
+        hostingerOps: [
+          { type: "create_snapshot", virtualMachineId: 42 },
+          { type: "stop_virtual_machine", virtualMachineId: 42 },
+          { type: "cancel_billing_subscription", virtualMachineId: 42 }
+        ],
+        dbUpdates: [
+          {
+            type: "update_subscription",
+            subscriptionId: "sub-1",
+            patch: { status: "canceled", cancel_reason: "admin_force" }
+          },
+          { type: "delete_auth_user", supabaseUserId: "auth-owner-1" },
+          { type: "mark_business_wiped", businessId: BUSINESS_ID }
+        ],
+        emailsToSend: []
+      };
+    }
+
+    it("exports maxDuration = 300 to keep Vercel from tearing down mid-teardown", async () => {
+      const mod = await import("@/app/api/admin/delete-client/route");
+      expect(mod.maxDuration).toBe(300);
+    });
+
+    it("runs the fast phase inline and defers the slow phase via after()", async () => {
+      vi.mocked(planLifecycleAction).mockReturnValueOnce({ ok: true, plan: makeFullPlan() } as never);
+      vi.mocked(executeLifecyclePlanFastPhase).mockResolvedValueOnce({} as never);
+
+      const response = await DELETE(makeRequest());
+      expect(response.status).toBe(200);
+      expect(executeLifecyclePlanFastPhase).toHaveBeenCalledTimes(1);
+      // Slow phase has NOT yet run when the response is returned —
+      // critical so the operator's HTTP call returns in seconds rather
+      // than minutes.
+      expect(executeLifecyclePlanSlowPhase).not.toHaveBeenCalled();
+      expect(afterCallbacks.length).toBe(1);
+
+      await flushAfterCallbacks();
+      expect(executeLifecyclePlanSlowPhase).toHaveBeenCalledTimes(1);
+      expect(executeLifecyclePlanSlowPhase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sshOps: expect.any(Array),
+          hostingerOps: expect.any(Array)
+        }),
+        expect.any(Object)
+      );
+    });
+
+    it("returns 500 and skips after() when the fast phase throws", async () => {
+      vi.mocked(planLifecycleAction).mockReturnValueOnce({ ok: true, plan: makeFullPlan() } as never);
+      vi.mocked(executeLifecyclePlanFastPhase).mockRejectedValueOnce(
+        new Error("stripe cancel failed")
+      );
+
+      const response = await DELETE(makeRequest());
+      expect(response.status).toBe(500);
+      // No background work scheduled — Stripe cancel never landed.
+      expect(afterCallbacks.length).toBe(0);
+      expect(executeLifecyclePlanSlowPhase).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledWith(
+        "admin.delete-client: fast-phase failed",
+        expect.objectContaining({ businessId: BUSINESS_ID })
+      );
+    });
+
+    it("swallows slow-phase errors so the operator's HTTP call still succeeds", async () => {
+      vi.mocked(planLifecycleAction).mockReturnValueOnce({ ok: true, plan: makeFullPlan() } as never);
+      vi.mocked(executeLifecyclePlanFastPhase).mockResolvedValueOnce({} as never);
+      vi.mocked(executeLifecyclePlanSlowPhase).mockRejectedValueOnce(
+        new Error("hostinger api 500")
+      );
+
+      const response = await DELETE(makeRequest());
+      expect(response.status).toBe(200);
+      // Failing slow phase MUST NOT propagate; the response is already
+      // sent and the grace-sweep cron is the backstop.
+      await expect(flushAfterCallbacks()).resolves.toBeUndefined();
+      expect(logger.error).toHaveBeenCalledWith(
+        "admin.delete-client: slow-phase failed (background)",
+        expect.objectContaining({ businessId: BUSINESS_ID })
+      );
+    });
   });
 });

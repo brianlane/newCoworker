@@ -872,8 +872,8 @@ describe("stripe webhook route", () => {
     // / canceled_at / cancel_reason) and invisible to the grace-sweep
     // cron. The handler must refuse the active-write and let
     // reactivation flow through `/api/billing/reactivate`. We still
-    // mirror cancel_at_period_end + the period cache so the dashboard
-    // reads stay accurate.
+    // mirror cancel_at_period_end (UI-only) but MUST NOT re-stamp the
+    // period cache (see the dedicated quota-leak regression below).
     vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
       id: "local_sub_grace",
       business_id: "biz_grace",
@@ -915,7 +915,7 @@ describe("stripe webhook route", () => {
       "local_sub_grace",
       expect.not.objectContaining({ status: expect.anything() })
     );
-    // But it should still mirror cancel_at_period_end + the period cache.
+    // But it should still mirror cancel_at_period_end + the Stripe sub id.
     expect(updateSubscription).toHaveBeenCalledWith(
       "local_sub_grace",
       expect.objectContaining({
@@ -931,6 +931,73 @@ describe("stripe webhook route", () => {
         stripeSubscriptionId: "sub_grace"
       })
     );
+  });
+
+  it("does NOT re-stamp Stripe period cache onto a canceled-in-grace row (Edge voice quota-leak guard)", async () => {
+    // Quota-leak regression: the lifecycle planner and
+    // `customer.subscription.deleted` handler both null
+    // `stripe_current_period_{start,end}` on cancel so the Edge voice
+    // inbound's `cacheLooksValidForQuotaAfterJitFailure` cannot reserve
+    // minutes against a stale period after the subscription is gone.
+    // If `customer.subscription.updated` arrives with `status="active"`
+    // for a canceled row (e.g. operator-clicked "Resume subscription"
+    // in the Stripe dashboard, schedule phase transition flipping back
+    // to active, or webhook reordering on retry), the resurrection
+    // guard refuses the status flip — but it must NOT re-stamp live
+    // period bounds either, otherwise the canceled-in-grace row goes
+    // back to looking quota-valid and voice usage on the still-running
+    // VPS during grace would be billed against a terminated sub.
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+      id: "local_sub_quota",
+      business_id: "biz_quota",
+      status: "canceled",
+      stripe_subscription_id: "sub_quota",
+      cancel_at_period_end: false,
+      stripe_current_period_start: null,
+      stripe_current_period_end: null,
+      stripe_subscription_cached_at: null,
+      grace_ends_at: "2026-05-24T00:00:00.000Z",
+      canceled_at: "2026-04-24T00:00:00.000Z",
+      cancel_reason: "user_period_end",
+      wiped_at: null
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_resume_active_with_period",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_quota",
+          status: "active",
+          cancel_at_period_end: false,
+          metadata: { businessId: "biz_quota" },
+          // Live period bounds straight from a "Resume" click in the
+          // Stripe dashboard — these MUST NOT be mirrored back onto the
+          // canceled row.
+          items: { data: [{ current_period_start: 1799999000, current_period_end: 1802678400 }] }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(updateSubscription).toHaveBeenCalledTimes(1);
+    const [, patch] = vi.mocked(updateSubscription).mock.calls[0];
+    // The patch must not contain ANY of the period cache fields, so the
+    // explicit nulls written by `customer.subscription.deleted` /
+    // lifecycle planner survive intact and the JIT-fail proceed path
+    // stays gated.
+    expect(patch).not.toHaveProperty("stripe_current_period_start");
+    expect(patch).not.toHaveProperty("stripe_current_period_end");
+    expect(patch).not.toHaveProperty("stripe_subscription_cached_at");
+    // Sanity: status is also still untouched.
+    expect(patch).not.toHaveProperty("status");
   });
 
   it("refuses to relink an active row to a different Stripe sub id (lifetime-cap bypass guard)", async () => {
