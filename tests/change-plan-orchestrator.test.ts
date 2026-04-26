@@ -20,10 +20,12 @@ const {
 
 const {
   getSubscriptionMock,
+  getSubscriptionByStripeSubscriptionIdMock,
   createSubscriptionMock,
   updateSubscriptionMock
 } = vi.hoisted(() => ({
   getSubscriptionMock: vi.fn(),
+  getSubscriptionByStripeSubscriptionIdMock: vi.fn(),
   createSubscriptionMock: vi.fn(),
   updateSubscriptionMock: vi.fn()
 }));
@@ -102,6 +104,7 @@ vi.mock("@/lib/db/subscriptions", async (importOriginal) => {
   return {
     ...actual,
     getSubscription: getSubscriptionMock,
+    getSubscriptionByStripeSubscriptionId: getSubscriptionByStripeSubscriptionIdMock,
     createSubscription: createSubscriptionMock,
     updateSubscription: updateSubscriptionMock,
     stripeSubscriptionPeriodCache: vi.fn().mockReturnValue({})
@@ -182,6 +185,10 @@ beforeEach(() => {
     created_at: "2026-01-01T00:00:00.000Z",
     cancel_at_period_end: false
   });
+  // Default: the orchestrator hasn't run for this Stripe subscription
+  // id yet, so the idempotency guard is a no-op for the existing
+  // suite. Tests covering re-delivery override this explicitly.
+  getSubscriptionByStripeSubscriptionIdMock.mockResolvedValue(null);
   upsertCustomerProfileMock.mockResolvedValue("prof-1");
   createSubscriptionMock.mockResolvedValue({});
   updateSubscriptionMock.mockResolvedValue({});
@@ -826,6 +833,85 @@ describe("runChangePlanFromCheckout", () => {
     expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
     expect(createSubscriptionMock).not.toHaveBeenCalled();
     expect(stripeCancelMock).not.toHaveBeenCalled();
+  });
+
+  it("is idempotent on webhook re-delivery: skips re-execution when an active row is already linked to the new Stripe sub", async () => {
+    // Regression: Stripe re-delivers `checkout.session.completed` on
+    // ack timeouts, manual replays, and delivery sweeps, and the webhook
+    // entrypoint has no event-id deduplication. A naïve re-entry after
+    // a successful first run would observe `getSubscription(businessId)`
+    // returning the new active sub (most-recent row), see its id !==
+    // `previousSubscriptionId`, and call `cancelStripeSubscriptionSafely`
+    // on `stripeSubscriptionId` — which is the LIVE customer-paid
+    // subscription. Detecting the already-completed signature must
+    // short-circuit BEFORE that branch can fire.
+    getSubscriptionByStripeSubscriptionIdMock.mockResolvedValueOnce({
+      id: "sub-row-new",
+      business_id: "biz-1",
+      stripe_subscription_id: "sub_new",
+      hostinger_billing_subscription_id: "billing_new",
+      customer_profile_id: "prof-1",
+      tier: "standard",
+      billing_period: "annual",
+      status: "active",
+      created_at: "2026-02-01T00:00:00.000Z",
+      cancel_at_period_end: false
+    });
+
+    await runChangePlanFromCheckout(makeSession(), "evt_redelivery");
+
+    // Critical: must NOT cancel the live, customer-paid Stripe sub.
+    expect(stripeCancelMock).not.toHaveBeenCalled();
+    // And must not re-run any of the orchestrator's side effects.
+    expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+    expect(backupBusinessDataMock).not.toHaveBeenCalled();
+    expect(restoreBusinessDataMock).not.toHaveBeenCalled();
+    expect(createSubscriptionMock).not.toHaveBeenCalled();
+    expect(updateSubscriptionMock).not.toHaveBeenCalled();
+    expect(incrementLifetimeSubscriptionCountMock).not.toHaveBeenCalled();
+    expect(hostingerCancelBillingSubscriptionMock).not.toHaveBeenCalled();
+  });
+
+  it("does NOT short-circuit on a same-stripe-id row owned by a different business (defense against id-collision spoofing)", async () => {
+    // The idempotency check requires both the stripe id match AND the
+    // business id match. A row pinned to a different business must not
+    // be treated as a successful prior run for this business.
+    getSubscriptionByStripeSubscriptionIdMock.mockResolvedValueOnce({
+      id: "sub-row-new",
+      business_id: "biz-OTHER",
+      stripe_subscription_id: "sub_new",
+      status: "active",
+      tier: "standard",
+      billing_period: "annual",
+      customer_profile_id: "prof-other",
+      created_at: "2026-02-01T00:00:00.000Z",
+      cancel_at_period_end: false
+    });
+
+    await runChangePlanFromCheckout(makeSession(), "evt_id_collision");
+
+    expect(orchestrateProvisioningMock).toHaveBeenCalled();
+  });
+
+  it("does NOT short-circuit when the linked row is non-active (e.g. mid-cancellation)", async () => {
+    // A canceled / wiped row is not a "successful prior run" — the
+    // orchestrator should be free to proceed (or hit a structural
+    // abort) rather than returning silently.
+    getSubscriptionByStripeSubscriptionIdMock.mockResolvedValueOnce({
+      id: "sub-row-new",
+      business_id: "biz-1",
+      stripe_subscription_id: "sub_new",
+      status: "canceled",
+      tier: "standard",
+      billing_period: "annual",
+      customer_profile_id: "prof-1",
+      created_at: "2026-02-01T00:00:00.000Z",
+      cancel_at_period_end: false
+    });
+
+    await runChangePlanFromCheckout(makeSession(), "evt_canceled_link");
+
+    expect(orchestrateProvisioningMock).toHaveBeenCalled();
   });
 });
 
@@ -1596,5 +1682,46 @@ describe("runResubscribeFromCheckout", () => {
       "sub-row-grace",
       expect.objectContaining({ status: "active" })
     );
+  });
+
+  it("is idempotent on webhook re-delivery: skips re-execution when an active row is already linked to the new Stripe sub", async () => {
+    // Same regression as the changePlan idempotency test, applied to
+    // the resubscribe orchestrator. After a successful first run the
+    // grace row was flipped to `status: active` with
+    // `stripe_subscription_id = stripeSubscriptionId`, so a re-entry
+    // would observe `isCanceledInGrace(oldSub) === false` and cancel
+    // the LIVE customer-paid Stripe sub via the `not in grace` abort
+    // branch.
+    getSubscriptionByStripeSubscriptionIdMock.mockResolvedValueOnce({
+      id: "sub-row-grace",
+      business_id: "biz-1",
+      stripe_subscription_id: "sub_new",
+      status: "active",
+      tier: "standard",
+      billing_period: "annual",
+      customer_profile_id: "prof-1",
+      created_at: "2026-01-01T00:00:00.000Z",
+      cancel_at_period_end: false
+    });
+
+    await runResubscribeFromCheckout(
+      makeSession({
+        metadata: {
+          businessId: "biz-1",
+          tier: "standard",
+          billingPeriod: "annual",
+          lifecycleAction: "resubscribe",
+          customerProfileId: "prof-1"
+        }
+      }),
+      "evt_resub_redelivery"
+    );
+
+    // Critical: must NOT cancel the live, customer-paid Stripe sub.
+    expect(stripeCancelMock).not.toHaveBeenCalled();
+    expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+    expect(restoreBusinessDataMock).not.toHaveBeenCalled();
+    expect(updateSubscriptionMock).not.toHaveBeenCalled();
+    expect(incrementLifetimeSubscriptionCountMock).not.toHaveBeenCalled();
   });
 });

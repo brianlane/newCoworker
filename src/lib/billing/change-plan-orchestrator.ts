@@ -54,6 +54,7 @@ import {
 import {
   createSubscription,
   getSubscription,
+  getSubscriptionByStripeSubscriptionId,
   isCanceledInGrace,
   stripeSubscriptionPeriodCache,
   updateSubscription,
@@ -179,6 +180,37 @@ export async function runChangePlanFromCheckout(
     stripeSubscriptionId,
     sessionEmail
   } = meta;
+
+  // Webhook re-delivery idempotency. Stripe re-delivers
+  // `checkout.session.completed` on ack timeouts, manual replays, and
+  // periodic delivery sweeps, and the webhook entrypoint has no
+  // event-id deduplication. After a successful first run the
+  // most-recent `subscriptions` row for this business is the new active
+  // sub linked to `stripeSubscriptionId`, so a naïve re-entry would
+  // (a) miss `previousSubscriptionId` (since `getSubscription` returns
+  // most-recent and the new row IS most-recent) and fall into the
+  // `sub mismatch` abort branch which calls `cancelStripeSubscriptionSafely`
+  // on `stripeSubscriptionId` — i.e. the LIVE customer-paid subscription —
+  // or (b) re-bump the lifetime counter past the cap and hit the
+  // cap-rejected branch which also cancels the live sub. Detect the
+  // already-completed signature here and bail before either lands.
+  if (stripeSubscriptionId) {
+    const existingByStripe = await getSubscriptionByStripeSubscriptionId(stripeSubscriptionId);
+    if (
+      existingByStripe &&
+      existingByStripe.business_id === businessId &&
+      existingByStripe.status === "active"
+    ) {
+      logger.info("changePlan: idempotency hit; orchestrator already completed", {
+        eventId,
+        businessId,
+        previousSubscriptionId,
+        stripeSubscriptionId,
+        subscriptionRowId: existingByStripe.id
+      });
+      return;
+    }
+  }
 
   logger.info("changePlan: start", {
     eventId,
@@ -510,6 +542,32 @@ export async function runResubscribeFromCheckout(
   const stripeCustomerId = checkoutObjectId(session.customer);
   const stripeSubscriptionId = checkoutObjectId(session.subscription);
   const sessionEmail = session.customer_details?.email ?? session.customer_email ?? null;
+
+  // Webhook re-delivery idempotency. See the analogous guard in
+  // `runChangePlanFromCheckout` for the full rationale. After a
+  // successful first run the grace row was flipped in place to
+  // `status: "active"` with `stripe_subscription_id = stripeSubscriptionId`,
+  // so a naïve re-entry would fall into the `not in grace` abort branch
+  // (status now active, fails `isCanceledInGrace`) and cancel the LIVE
+  // Stripe subscription via `cancelStripeSubscriptionSafely`. The
+  // lifetime-cap re-bump on re-entry is the same hazard. Detect the
+  // already-completed signature and bail before either branch executes.
+  if (stripeSubscriptionId) {
+    const existingByStripe = await getSubscriptionByStripeSubscriptionId(stripeSubscriptionId);
+    if (
+      existingByStripe &&
+      existingByStripe.business_id === businessId &&
+      existingByStripe.status === "active"
+    ) {
+      logger.info("resubscribe: idempotency hit; orchestrator already completed", {
+        eventId,
+        businessId,
+        stripeSubscriptionId,
+        subscriptionRowId: existingByStripe.id
+      });
+      return;
+    }
+  }
 
   const business = await getBusiness(businessId);
   if (!business) {
