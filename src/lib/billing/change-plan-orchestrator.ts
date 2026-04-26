@@ -62,6 +62,7 @@ import {
 import { getBusiness, setBusinessCustomerProfile } from "@/lib/db/businesses";
 import { getCommitmentMonths, type BillingPeriod } from "@/lib/plans/tier";
 import {
+  decrementLifetimeSubscriptionCount,
   incrementLifetimeSubscriptionCount,
   upsertCustomerProfile
 } from "@/lib/db/customer-profiles";
@@ -190,7 +191,17 @@ export async function runChangePlanFromCheckout(
 
   const business = await getBusiness(businessId);
   if (!business) {
+    // Stripe has already captured the customer's payment for the new
+    // plan, but we can't orchestrate anything without a business row to
+    // pin it to. Cancel the freshly-minted Stripe sub here so the user
+    // isn't silently auto-renewed on a plan we'll never provision. (An
+    // operator can triage the outstanding first-cycle charge — this path
+    // should be vanishingly rare since the checkout route validates the
+    // business up front.)
     logger.warn("changePlan: business missing; abort", { businessId });
+    if (stripeSubscriptionId) {
+      await cancelStripeSubscriptionSafely(stripeSubscriptionId, businessId);
+    }
     return;
   }
 
@@ -201,6 +212,9 @@ export async function runChangePlanFromCheckout(
   const oldSub = await getSubscription(businessId);
   if (!oldSub) {
     logger.warn("changePlan: no existing subscription; abort", { businessId });
+    if (stripeSubscriptionId) {
+      await cancelStripeSubscriptionSafely(stripeSubscriptionId, businessId);
+    }
     return;
   }
   if (oldSub.id !== previousSubscriptionId) {
@@ -209,6 +223,9 @@ export async function runChangePlanFromCheckout(
       current: oldSub.id,
       expected: previousSubscriptionId
     });
+    if (stripeSubscriptionId) {
+      await cancelStripeSubscriptionSafely(stripeSubscriptionId, businessId);
+    }
     return;
   }
 
@@ -314,7 +331,10 @@ export async function runChangePlanFromCheckout(
   // id, mints a new SSH key, and re-registers the per-tenant Cloudflare
   // tunnel (so DNS swings onto the new VM once the new cloudflared
   // connects). If provisioning fails, immediately cancel the freshly paid
-  // Stripe sub so it cannot renew without a corresponding DB row/VPS.
+  // Stripe sub so it cannot renew without a corresponding DB row/VPS
+  // AND roll back the lifetime counter we just bumped, so a transient
+  // provisioning failure doesn't permanently burn one of the customer's
+  // three lifetime slots for a subscription they never received.
   let newProv: Awaited<ReturnType<typeof orchestrateProvisioning>>;
   try {
     newProv = await orchestrateProvisioning({
@@ -329,6 +349,9 @@ export async function runChangePlanFromCheckout(
     });
     if (stripeSubscriptionId) {
       await cancelStripeSubscriptionSafely(stripeSubscriptionId, businessId);
+    }
+    if (customerProfileId) {
+      await rollbackLifetimeCount(customerProfileId, businessId, "changePlan");
     }
     return;
   }
@@ -490,16 +513,32 @@ export async function runResubscribeFromCheckout(
 
   const business = await getBusiness(businessId);
   if (!business) {
+    // Stripe already charged the customer for the new subscription but
+    // we have no business row to attach it to — cancel the new Stripe
+    // sub here so we don't auto-renew indefinitely for a resubscribe
+    // flow we can't complete. (Matches the changePlan orchestrator.)
     logger.warn("resubscribe: business missing; abort", { businessId });
+    if (stripeSubscriptionId) {
+      await cancelStripeSubscriptionSafely(stripeSubscriptionId, businessId);
+    }
     return;
   }
   const oldSub = await getSubscription(businessId);
   if (!oldSub || !isCanceledInGrace(oldSub)) {
+    // The grace window lapsed (or the old sub was wiped / never
+    // canceled) between checkout-creation and checkout-completion. The
+    // customer has been charged but we refuse to resubscribe outside of
+    // grace — cancel the brand-new Stripe sub so it can't silently
+    // auto-renew forever against a tenant we've stopped serving. The
+    // cap-reached branch below already does this; mirror it here.
     logger.warn("resubscribe: latest subscription is not in grace; abort", {
       businessId,
       subscriptionId: oldSub?.id ?? null,
       status: oldSub?.status ?? null
     });
+    if (stripeSubscriptionId) {
+      await cancelStripeSubscriptionSafely(stripeSubscriptionId, businessId);
+    }
     return;
   }
 
@@ -612,6 +651,18 @@ export async function runResubscribeFromCheckout(
       businessId,
       error: errorMessage(err)
     });
+    // The customer was charged for the new subscription but provisioning
+    // failed. Cancel the fresh Stripe sub so it can't silently renew
+    // against a resubscribe we never completed, AND roll back the
+    // lifetime counter we just bumped so they don't lose a lifetime
+    // slot for service they never received. Matches the changePlan
+    // provisioning-failed branch.
+    if (stripeSubscriptionId) {
+      await cancelStripeSubscriptionSafely(stripeSubscriptionId, businessId);
+    }
+    if (customerProfileId) {
+      await rollbackLifetimeCount(customerProfileId, businessId, "resubscribe");
+    }
     return;
   }
 
@@ -699,6 +750,34 @@ export async function runResubscribeFromCheckout(
   }
 
   logger.info("resubscribe: complete", { eventId, businessId, tier, billingPeriod });
+}
+
+/**
+ * Compensating decrement for the lifetime counter when we aborted a
+ * subscription AFTER bumping the counter. Logged-not-thrown so it can't
+ * mask the underlying provisioning error the caller is already
+ * surfacing. Floor-at-zero is enforced server-side by the
+ * `decrement_customer_profile_lifetime_count` RPC so a replay can't
+ * produce a negative count.
+ */
+async function rollbackLifetimeCount(
+  profileId: string,
+  businessId: string,
+  flow: "changePlan" | "resubscribe"
+): Promise<void> {
+  try {
+    await decrementLifetimeSubscriptionCount(profileId);
+    logger.info(`${flow}: rolled back lifetime subscription count after provisioning failure`, {
+      businessId,
+      profileId
+    });
+  } catch (err) {
+    logger.warn(`${flow}: lifetime count rollback failed (continuing)`, {
+      businessId,
+      profileId,
+      error: errorMessage(err)
+    });
+  }
 }
 
 /**

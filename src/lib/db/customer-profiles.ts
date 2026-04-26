@@ -121,6 +121,31 @@ export async function incrementLifetimeSubscriptionCount(
   return data;
 }
 
+/**
+ * Compensating decrement for the lifetime counter. Invoked from the
+ * Stripe webhook orchestrators when provisioning fails AFTER the
+ * counter was already bumped, so the customer never loses a lifetime
+ * slot for a subscription we refused to provision. Floors at zero via
+ * the RPC so replays can't produce negative counts.
+ *
+ * Only called from trusted server-side code — never from user-facing
+ * request handlers.
+ */
+export async function decrementLifetimeSubscriptionCount(
+  profileId: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db.rpc("decrement_customer_profile_lifetime_count", {
+    p_profile_id: profileId
+  });
+  if (error) throw new Error(`decrementLifetimeSubscriptionCount: ${error.message}`);
+  if (typeof data !== "number") {
+    throw new Error(`decrementLifetimeSubscriptionCount: expected number, got ${typeof data}`);
+  }
+  return data;
+}
+
 /** Stamp refund_used_at on the first successful lifetime refund. Idempotent. */
 export async function markRefundUsed(
   profileId: string,

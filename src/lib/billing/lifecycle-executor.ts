@@ -326,7 +326,15 @@ async function runHostingerOp(op: HostingerOp, client: HostingerClient): Promise
       );
       return;
     case "stop_vm":
-      await safeHostinger(() => client.stopVirtualMachine(op.virtualMachineId), "stop_vm");
+      // Tolerate 404: the grace-expired-wipe backstop re-emits `stop_vm`
+      // even when the normal cancel path already tore the VM down via
+      // `cancel_billing_subscription` (which immediately destroys the
+      // VM). A 404 there is benign — the goal state is achieved.
+      await safeHostinger(
+        () => client.stopVirtualMachine(op.virtualMachineId),
+        "stop_vm",
+        /* tolerate404 */ true
+      );
       return;
     case "cancel_billing_subscription":
       await safeHostinger(

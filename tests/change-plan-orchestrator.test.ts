@@ -30,10 +30,12 @@ const {
 
 const {
   upsertCustomerProfileMock,
-  incrementLifetimeSubscriptionCountMock
+  incrementLifetimeSubscriptionCountMock,
+  decrementLifetimeSubscriptionCountMock
 } = vi.hoisted(() => ({
   upsertCustomerProfileMock: vi.fn(),
-  incrementLifetimeSubscriptionCountMock: vi.fn()
+  incrementLifetimeSubscriptionCountMock: vi.fn(),
+  decrementLifetimeSubscriptionCountMock: vi.fn()
 }));
 
 const {
@@ -108,7 +110,8 @@ vi.mock("@/lib/db/subscriptions", async (importOriginal) => {
 
 vi.mock("@/lib/db/customer-profiles", () => ({
   upsertCustomerProfile: upsertCustomerProfileMock,
-  incrementLifetimeSubscriptionCount: incrementLifetimeSubscriptionCountMock
+  incrementLifetimeSubscriptionCount: incrementLifetimeSubscriptionCountMock,
+  decrementLifetimeSubscriptionCount: decrementLifetimeSubscriptionCountMock
 }));
 
 vi.mock("@/lib/stripe/client", () => ({
@@ -183,6 +186,7 @@ beforeEach(() => {
   createSubscriptionMock.mockResolvedValue({});
   updateSubscriptionMock.mockResolvedValue({});
   incrementLifetimeSubscriptionCountMock.mockResolvedValue(undefined);
+  decrementLifetimeSubscriptionCountMock.mockResolvedValue(2);
   setBusinessCustomerProfileMock.mockResolvedValue(undefined);
   ensureCommitmentScheduleMock.mockResolvedValue(null);
 
@@ -284,14 +288,24 @@ describe("runChangePlanFromCheckout", () => {
     );
   });
 
-  it("aborts if the business is missing", async () => {
+  it("aborts if the business is missing and cancels the fresh Stripe sub", async () => {
     getBusinessMock.mockResolvedValueOnce(null);
     await runChangePlanFromCheckout(makeSession(), "evt_2");
     expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
     expect(backupBusinessDataMock).not.toHaveBeenCalled();
+    // Regression: Stripe captured payment for the new plan but we can't
+    // orchestrate anything without a business row. Cancel the new sub.
+    expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
   });
 
-  it("aborts if previousSubscriptionId does not match the current subscription", async () => {
+  it("aborts if the old subscription row is missing and cancels the fresh Stripe sub", async () => {
+    getSubscriptionMock.mockResolvedValueOnce(null);
+    await runChangePlanFromCheckout(makeSession(), "evt_no_old_sub");
+    expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+    expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
+  });
+
+  it("aborts if previousSubscriptionId does not match the current subscription and cancels the fresh Stripe sub", async () => {
     getSubscriptionMock.mockResolvedValueOnce({
       id: "sub-row-different",
       business_id: "biz-1",
@@ -309,6 +323,9 @@ describe("runChangePlanFromCheckout", () => {
 
     expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
     expect(updateSubscriptionMock).not.toHaveBeenCalled();
+    // Regression: stale/ooo replay can't clobber the newer row, but
+    // must still cancel the fresh Stripe sub to avoid silent renewal.
+    expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
   });
 
   it("skips session without required metadata", async () => {
@@ -693,6 +710,11 @@ describe("runChangePlanFromCheckout", () => {
     expect(stripeCancelMock).not.toHaveBeenCalledWith("sub_old", expect.anything());
     expect(hostingerCancelBillingSubscriptionMock).not.toHaveBeenCalled();
     expect(updateSubscriptionMock).not.toHaveBeenCalled();
+    // Lifetime-count rollback: the counter was bumped before provisioning
+    // (atomic cap enforcement); when provisioning throws we must
+    // compensate so the customer doesn't permanently lose a lifetime
+    // slot for a subscription they never received.
+    expect(decrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
   });
 
   it("aborts without cancelling Stripe when provisioning throws and no new Stripe sub id is on the session", async () => {
@@ -704,6 +726,76 @@ describe("runChangePlanFromCheckout", () => {
     expect(stripeCancelMock).not.toHaveBeenCalled();
     expect(hostingerCancelBillingSubscriptionMock).not.toHaveBeenCalled();
     expect(updateSubscriptionMock).not.toHaveBeenCalled();
+  });
+
+  it("skips lifetime rollback when provisioning fails and customer profile id is unresolved", async () => {
+    // Edge: no session email + no customer_profile_id linkage on either
+    // the business row or the old subscription row → customerProfileId
+    // ends up null. Provisioning failure must NOT call decrement (no row
+    // to compensate) and the cancel still fires.
+    getBusinessMock.mockResolvedValueOnce({
+      id: "biz-1",
+      owner_email: "owner@example.com",
+      hostinger_vps_id: "1001",
+      customer_profile_id: null,
+      status: "online"
+    });
+    getSubscriptionMock.mockResolvedValueOnce({
+      id: "sub-row-old",
+      business_id: "biz-1",
+      stripe_subscription_id: "sub_old",
+      hostinger_billing_subscription_id: "billing_old",
+      customer_profile_id: null,
+      tier: "starter",
+      billing_period: "monthly",
+      status: "active",
+      created_at: "2026-01-01T00:00:00.000Z",
+      cancel_at_period_end: false
+    });
+    orchestrateProvisioningMock.mockRejectedValueOnce(new Error("provision boom"));
+
+    await runChangePlanFromCheckout(
+      makeSession({ customer_details: null, customer_email: null }),
+      "evt_change_no_profile"
+    );
+
+    expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
+    expect(decrementLifetimeSubscriptionCountMock).not.toHaveBeenCalled();
+  });
+
+  it("aborts changePlan business-missing without cancelling Stripe when no new Stripe sub id is on the session", async () => {
+    getBusinessMock.mockResolvedValueOnce(null);
+    await runChangePlanFromCheckout(makeSession({ subscription: null }), "evt_no_biz_no_sub");
+    expect(stripeCancelMock).not.toHaveBeenCalled();
+  });
+
+  it("aborts changePlan when oldSub is missing and no new Stripe sub id was issued", async () => {
+    getSubscriptionMock.mockResolvedValueOnce(null);
+    await runChangePlanFromCheckout(
+      makeSession({ subscription: null }),
+      "evt_no_old_sub_no_stripe"
+    );
+    expect(stripeCancelMock).not.toHaveBeenCalled();
+  });
+
+  it("aborts changePlan on sub mismatch without cancelling Stripe when no new Stripe sub id is on the session", async () => {
+    getSubscriptionMock.mockResolvedValueOnce({
+      id: "sub-row-different",
+      business_id: "biz-1",
+      stripe_subscription_id: "sub_old",
+      hostinger_billing_subscription_id: "billing_old",
+      customer_profile_id: "prof-1",
+      tier: "starter",
+      billing_period: "monthly",
+      status: "active",
+      created_at: "2026-01-01T00:00:00.000Z",
+      cancel_at_period_end: false
+    });
+    await runChangePlanFromCheckout(
+      makeSession({ subscription: null }),
+      "evt_sub_mismatch_no_stripe"
+    );
+    expect(stripeCancelMock).not.toHaveBeenCalled();
   });
 
   it("aborts before provisioning when the lifetime cap increment rejects and cancels the fresh Stripe sub", async () => {
@@ -860,7 +952,7 @@ describe("runResubscribeFromCheckout", () => {
     expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
   });
 
-  it("aborts resubscribe when fresh provisioning fails", async () => {
+  it("aborts resubscribe when fresh provisioning fails and cancels the new Stripe sub + rolls back lifetime count", async () => {
     getSubscriptionMock.mockResolvedValue({
       id: "sub-row-grace",
       business_id: "biz-1",
@@ -885,6 +977,42 @@ describe("runResubscribeFromCheckout", () => {
     );
 
     expect(updateSubscriptionMock).not.toHaveBeenCalled();
+    // Regression: previously this path silently returned, leaving the
+    // customer charged forever for a subscription that delivered no
+    // service. Cancel the fresh Stripe sub and roll back the lifetime
+    // counter that was bumped before provisioning.
+    expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
+    expect(decrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
+  });
+
+  it("swallows rollback errors so the primary provisioning error stays surfaced", async () => {
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-row-grace",
+      business_id: "biz-1",
+      customer_profile_id: "prof-1",
+      status: "canceled",
+      grace_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      wiped_at: null
+    });
+    orchestrateProvisioningMock.mockRejectedValueOnce(new Error("provision failed"));
+    decrementLifetimeSubscriptionCountMock.mockRejectedValueOnce(new Error("rollback RPC down"));
+
+    await expect(
+      runResubscribeFromCheckout(
+        makeSession({
+          metadata: {
+            businessId: "biz-1",
+            tier: "standard",
+            billingPeriod: "annual",
+            lifecycleAction: "resubscribe",
+            customerProfileId: "prof-1"
+          }
+        }),
+        "evt_resub_rollback_fail"
+      )
+    ).resolves.toBeUndefined();
+
+    expect(decrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
   });
 
   it("continues resubscribe when restore or Stripe subscription lookup fails", async () => {
@@ -918,7 +1046,7 @@ describe("runResubscribeFromCheckout", () => {
     );
   });
 
-  it("aborts resubscribe when business is missing or latest row is not in grace", async () => {
+  it("aborts resubscribe when business is missing or latest row is not in grace and cancels the new Stripe sub", async () => {
     getBusinessMock.mockResolvedValueOnce(null);
     await runResubscribeFromCheckout(
       makeSession({
@@ -932,7 +1060,11 @@ describe("runResubscribeFromCheckout", () => {
       "evt_resub_no_business"
     );
     expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+    // Regression: must cancel the freshly-minted Stripe sub so the
+    // customer isn't billed forever for a resubscribe we won't complete.
+    expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
 
+    stripeCancelMock.mockClear();
     getBusinessMock.mockResolvedValueOnce({
       id: "biz-1",
       owner_email: "owner@example.com",
@@ -953,6 +1085,152 @@ describe("runResubscribeFromCheckout", () => {
       "evt_resub_no_grace"
     );
     expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+    // Same regression: out-of-grace / wiped old sub must still cancel
+    // the new Stripe sub.
+    expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
+  });
+
+  it("aborts resubscribe business-missing without cancelling when there is no new Stripe sub id on the session", async () => {
+    getBusinessMock.mockResolvedValueOnce(null);
+    await runResubscribeFromCheckout(
+      makeSession({
+        subscription: null,
+        metadata: {
+          businessId: "biz-1",
+          tier: "standard",
+          billingPeriod: "annual",
+          lifecycleAction: "resubscribe"
+        }
+      }),
+      "evt_resub_no_biz_no_sub"
+    );
+    expect(stripeCancelMock).not.toHaveBeenCalled();
+    expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+  });
+
+  it("aborts resubscribe out-of-grace without cancelling when there is no new Stripe sub id on the session", async () => {
+    getSubscriptionMock.mockResolvedValueOnce(null);
+    await runResubscribeFromCheckout(
+      makeSession({
+        subscription: null,
+        metadata: {
+          businessId: "biz-1",
+          tier: "standard",
+          billingPeriod: "annual",
+          lifecycleAction: "resubscribe"
+        }
+      }),
+      "evt_resub_no_grace_no_sub"
+    );
+    expect(stripeCancelMock).not.toHaveBeenCalled();
+    expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+  });
+
+  it("skips resubscribe Stripe cancel when provisioning fails and no new Stripe sub id is on the session", async () => {
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-row-grace",
+      business_id: "biz-1",
+      customer_profile_id: "prof-1",
+      status: "canceled",
+      grace_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      wiped_at: null,
+      tier: "standard",
+      billing_period: "annual"
+    });
+    orchestrateProvisioningMock.mockRejectedValueOnce(new Error("provision failed"));
+
+    await runResubscribeFromCheckout(
+      makeSession({
+        subscription: null,
+        metadata: {
+          businessId: "biz-1",
+          tier: "standard",
+          billingPeriod: "annual",
+          lifecycleAction: "resubscribe",
+          customerProfileId: "prof-1"
+        }
+      }),
+      "evt_resub_provision_fail_no_sub"
+    );
+
+    expect(stripeCancelMock).not.toHaveBeenCalled();
+    // Lifetime count rollback still runs even without a Stripe sub id
+    // since we already bumped the counter.
+    expect(decrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
+  });
+
+  it("skips resubscribe lifetime rollback when provisioning fails and no profile is resolved", async () => {
+    // Edge: session has no email + neither business nor old sub has a
+    // customer_profile_id linkage AND the metadata customerProfileId
+    // is missing → customerProfileId stays null. Provisioning failure
+    // must skip the rollback (no row to compensate) but still cancel
+    // the fresh Stripe sub.
+    getBusinessMock.mockResolvedValueOnce({
+      id: "biz-1",
+      owner_email: "owner@example.com",
+      hostinger_vps_id: "1001",
+      customer_profile_id: null,
+      status: "online"
+    });
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-row-grace",
+      business_id: "biz-1",
+      customer_profile_id: null,
+      status: "canceled",
+      grace_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      wiped_at: null,
+      tier: "standard",
+      billing_period: "annual"
+    });
+    orchestrateProvisioningMock.mockRejectedValueOnce(new Error("provision failed"));
+
+    await runResubscribeFromCheckout(
+      makeSession({
+        customer_details: null,
+        customer_email: null,
+        metadata: {
+          businessId: "biz-1",
+          tier: "standard",
+          billingPeriod: "annual",
+          lifecycleAction: "resubscribe"
+        }
+      }),
+      "evt_resub_no_profile_provision_fail"
+    );
+
+    expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
+    expect(decrementLifetimeSubscriptionCountMock).not.toHaveBeenCalled();
+  });
+
+  it("cancels the new Stripe sub when the old sub was wiped between checkout creation and completion", async () => {
+    // Grace-state tenant clicks Resubscribe, pays, but the grace-sweep
+    // cron wiped the row between session creation and
+    // `checkout.session.completed`. The sub is now out-of-grace, so we
+    // refuse to resubscribe — but must not leave the fresh Stripe sub
+    // auto-renewing.
+    getSubscriptionMock.mockResolvedValueOnce({
+      id: "sub-row-wiped",
+      business_id: "biz-1",
+      customer_profile_id: "prof-1",
+      status: "canceled",
+      grace_ends_at: "2026-01-01T00:00:00.000Z",
+      wiped_at: "2026-01-02T00:00:00.000Z"
+    });
+
+    await runResubscribeFromCheckout(
+      makeSession({
+        metadata: {
+          businessId: "biz-1",
+          tier: "standard",
+          billingPeriod: "annual",
+          lifecycleAction: "resubscribe"
+        }
+      }),
+      "evt_resub_wiped_race"
+    );
+
+    expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+    expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
   });
 
   it("continues resubscribe when profile upsert fails", async () => {

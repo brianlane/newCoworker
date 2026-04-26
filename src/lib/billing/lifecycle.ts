@@ -474,6 +474,25 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
     emailsToSend: []
   };
 
+  // Backstop teardown: if the cancel path that produced this grace row
+  // skipped the VPS teardown (e.g. manual operator cancel in the Stripe
+  // Dashboard, or an `autoCancelOnPaymentFailure` dispatch that failed
+  // before the fire-and-forget ran), the VM is still running and
+  // Hostinger billing is still charging at grace-end. The sweep is our
+  // only backstop — emit `stop_vm` + `cancel_billing_subscription` here
+  // so VPS compute and Hostinger billing both terminate at grace-end
+  // regardless of which cancel path got us here. Both ops are idempotent
+  // via 404-tolerance in the executor, so re-running against an already
+  // torn-down VPS is benign.
+  if (ctx.virtualMachineId !== null) {
+    plan.hostingerOps.push({ type: "stop_vm", virtualMachineId: ctx.virtualMachineId });
+  }
+  if (sub.hostinger_billing_subscription_id) {
+    plan.hostingerOps.push({
+      type: "cancel_billing_subscription",
+      hostingerBillingSubscriptionId: sub.hostinger_billing_subscription_id
+    });
+  }
   if (ctx.virtualMachineId !== null) {
     plan.hostingerOps.push({ type: "delete_snapshot", virtualMachineId: ctx.virtualMachineId });
   }

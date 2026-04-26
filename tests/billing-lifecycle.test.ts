@@ -498,7 +498,17 @@ describe("planLifecycleAction: graceExpiredWipe", () => {
       })
     );
     if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
-    expect(res.plan.hostingerOps).toEqual([{ type: "delete_snapshot", virtualMachineId: 42 }]);
+    // Backstop teardown: for cancel paths that bypassed
+    // cancel-with-refund / autoCancel (e.g. manual Stripe Dashboard
+    // cancel, autoCancel fire-and-forget dispatch failing), the VM is
+    // still running and Hostinger is still billing at grace-end. The
+    // sweep must stop the VM and cancel Hostinger billing here;
+    // otherwise the tenant's VPS keeps charging indefinitely.
+    expect(res.plan.hostingerOps).toEqual([
+      { type: "stop_vm", virtualMachineId: 42 },
+      { type: "cancel_billing_subscription", hostingerBillingSubscriptionId: "hbs-1" },
+      { type: "delete_snapshot", virtualMachineId: 42 }
+    ]);
     const updatedSub = res.plan.dbUpdates.find(
       (op) => op.type === "update_subscription"
     ) as { type: "update_subscription"; patch: Record<string, unknown> };
@@ -544,7 +554,10 @@ describe("planLifecycleAction: graceExpiredWipe", () => {
         subscription: makeSub({
           status: "canceled",
           grace_ends_at: "2026-04-01T00:00:00.000Z",
-          wiped_at: null
+          wiped_at: null,
+          // No Hostinger billing to cancel either — we expect a
+          // completely empty hostingerOps list.
+          hostinger_billing_subscription_id: null
         })
       })
     );
@@ -552,6 +565,57 @@ describe("planLifecycleAction: graceExpiredWipe", () => {
     expect(res.plan.hostingerOps).toEqual([]);
     expect(res.plan.dbUpdates).toContainEqual({ type: "delete_backup_artifact", businessId: "biz-1" });
     expect(res.plan.dbUpdates.some((op) => op.type === "delete_auth_user")).toBe(false);
+  });
+
+  it("emits stop_vm + cancel_billing_subscription backstop when cancel path skipped VPS teardown", () => {
+    // Regression test for the screenshot-reported bug:
+    // `customer.subscription.deleted` fallback stamps `grace_ends_at` but
+    // does not stop the VM or cancel Hostinger billing. If the normal
+    // cancel path (cancelWithRefund / autoCancelOnPaymentFailure) was
+    // bypassed (manual Stripe Dashboard cancel, autoCancel dispatch
+    // failing), the VPS keeps running and Hostinger keeps billing
+    // indefinitely. The grace-expired sweep must be the backstop.
+    const res = planLifecycleAction(
+      { type: "graceExpiredWipe" },
+      makeCtx({
+        subscription: makeSub({
+          status: "canceled",
+          grace_ends_at: "2026-04-01T00:00:00.000Z",
+          wiped_at: null,
+          hostinger_billing_subscription_id: "hbs-backstop",
+          // vps_stopped_at is intentionally null: the cancel path
+          // skipped teardown entirely, so the VM is still running.
+          vps_stopped_at: null
+        })
+      })
+    );
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    const opTypes = res.plan.hostingerOps.map((op) => op.type);
+    expect(opTypes).toContain("stop_vm");
+    expect(opTypes).toContain("cancel_billing_subscription");
+    // Order matters: stop the VM first so the Hostinger billing cancel
+    // (which also destroys the VM) doesn't race with a still-running
+    // instance generating work.
+    expect(opTypes.indexOf("stop_vm")).toBeLessThan(
+      opTypes.indexOf("cancel_billing_subscription")
+    );
+  });
+
+  it("omits stop_vm + cancel_billing_subscription when VM id and billing id are missing", () => {
+    const res = planLifecycleAction(
+      { type: "graceExpiredWipe" },
+      makeCtx({
+        virtualMachineId: null,
+        subscription: makeSub({
+          status: "canceled",
+          grace_ends_at: "2026-04-01T00:00:00.000Z",
+          wiped_at: null,
+          hostinger_billing_subscription_id: null
+        })
+      })
+    );
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    expect(res.plan.hostingerOps).toEqual([]);
   });
 });
 

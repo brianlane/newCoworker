@@ -14,6 +14,7 @@ import {
   upsertDataBackup
 } from "@/lib/db/data-backups";
 import {
+  decrementLifetimeSubscriptionCount,
   getCustomerProfileByEmail,
   getCustomerProfileById,
   incrementLifetimeSubscriptionCount,
@@ -156,6 +157,8 @@ describe("customer profile helpers", () => {
       .mockResolvedValueOnce({ data: "prof-1", error: null })
       .mockResolvedValueOnce({ data: 4, error: null })
       .mockResolvedValueOnce({ data: 99, error: null })
+      .mockResolvedValueOnce({ data: "not-number", error: null })
+      .mockResolvedValueOnce({ data: 2, error: null })
       .mockResolvedValueOnce({ data: "not-number", error: null });
     const client = { rpc } as never;
     await expect(
@@ -169,6 +172,13 @@ describe("customer profile helpers", () => {
     await expect(incrementLifetimeSubscriptionCount("prof-1", client)).resolves.toBe(4);
     await expect(upsertCustomerProfile({ email: "x@example.com" }, client)).rejects.toThrow("expected uuid");
     await expect(incrementLifetimeSubscriptionCount("prof-1", client)).rejects.toThrow("expected number");
+    // Compensating decrement: returns the new floor-capped count and
+    // throws on malformed RPC responses, same shape as the increment.
+    await expect(decrementLifetimeSubscriptionCount("prof-1", client)).resolves.toBe(2);
+    expect(rpc).toHaveBeenLastCalledWith("decrement_customer_profile_lifetime_count", {
+      p_profile_id: "prof-1"
+    });
+    await expect(decrementLifetimeSubscriptionCount("prof-1", client)).rejects.toThrow("expected number");
   });
 
   it("uses default service client for profile helpers", async () => {
@@ -212,11 +222,21 @@ describe("customer profile helpers", () => {
     const rpcClient = { rpc: vi.fn().mockResolvedValue({ data: null, error: { message: "rpc failed" } }) } as never;
     await expect(upsertCustomerProfile({ email: "x@example.com" }, rpcClient)).rejects.toThrow("rpc failed");
     await expect(incrementLifetimeSubscriptionCount("prof", rpcClient)).rejects.toThrow("rpc failed");
+    await expect(decrementLifetimeSubscriptionCount("prof", rpcClient)).rejects.toThrow(
+      "decrementLifetimeSubscriptionCount: rpc failed"
+    );
 
     const { chain } = tableClient(null, { message: "write failed" });
     const client = { from: vi.fn(() => chain) } as never;
     await expect(markRefundUsed("prof", new Date(), client)).rejects.toThrow("markRefundUsed: write failed");
     await expect(markFirstPaidIfUnset("prof", new Date(), client)).rejects.toThrow("markFirstPaidIfUnset: write failed");
+  });
+
+  it("uses default service client for decrementLifetimeSubscriptionCount", async () => {
+    vi.mocked(createSupabaseServiceClient).mockResolvedValueOnce({
+      rpc: vi.fn().mockResolvedValue({ data: 0, error: null })
+    } as never);
+    await expect(decrementLifetimeSubscriptionCount("prof-default")).resolves.toBe(0);
   });
 
   it("reads profiles and calculates refund window", async () => {
