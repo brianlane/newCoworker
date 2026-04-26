@@ -172,32 +172,36 @@ describe("api/admin/delete-client route (adminForceCancel)", () => {
     expect(mockDeleteAuthUser).toHaveBeenCalledWith("auth-owner-1");
   });
 
-  it("continues subscription-less delete when the auth user delete fails", async () => {
+  it("aborts subscription-less delete when the auth user delete fails (returns 500, preserves business row)", async () => {
+    // New contract: auth-delete is the login-disable promise, so a real
+    // failure here must abort BEFORE the business-row delete so the
+    // operator can retry. Previously the route swallowed the error and
+    // soldiered on, leaving an active login attached to a deleted
+    // business with no recovery path from this endpoint.
     mockDeleteAuthUser.mockResolvedValueOnce({ error: { message: "Boom" } });
     vi.mocked(loadLifecycleContextForBusiness).mockResolvedValueOnce({
       ok: false,
       reason: "subscription_not_found"
     } as never);
     const response = await DELETE(makeRequest());
-    expect(response.status).toBe(200);
-    expect(deleteBusiness).toHaveBeenCalledWith(BUSINESS_ID);
+    expect(response.status).toBe(500);
+    expect(deleteBusiness).not.toHaveBeenCalled();
     expect(mockDeleteAuthUser).toHaveBeenCalledWith("auth-owner-1");
   });
 
-  it("continues subscription-less delete when deleteUser throws", async () => {
+  it("aborts subscription-less delete when deleteUser throws", async () => {
     mockDeleteAuthUser.mockRejectedValueOnce(new Error("network"));
     vi.mocked(loadLifecycleContextForBusiness).mockResolvedValueOnce({
       ok: false,
       reason: "subscription_not_found"
     } as never);
     const response = await DELETE(makeRequest());
-    expect(response.status).toBe(200);
-    expect(deleteBusiness).toHaveBeenCalledWith(BUSINESS_ID);
+    expect(response.status).toBe(500);
+    expect(deleteBusiness).not.toHaveBeenCalled();
   });
 
-  it("continues subscription-less delete when deleteUser throws a non-Error", async () => {
+  it("aborts subscription-less delete when deleteUser throws a non-Error", async () => {
     mockDeleteAuthUser.mockImplementationOnce(() => {
-      // eslint-disable-next-line no-throw-literal
       throw "kaboom";
     });
     vi.mocked(loadLifecycleContextForBusiness).mockResolvedValueOnce({
@@ -205,18 +209,21 @@ describe("api/admin/delete-client route (adminForceCancel)", () => {
       reason: "subscription_not_found"
     } as never);
     const response = await DELETE(makeRequest());
-    expect(response.status).toBe(200);
-    expect(deleteBusiness).toHaveBeenCalledWith(BUSINESS_ID);
+    expect(response.status).toBe(500);
+    expect(deleteBusiness).not.toHaveBeenCalled();
   });
 
-  it("continues subscription-less delete when auth error has no message", async () => {
+  it("aborts subscription-less delete when auth error has no message", async () => {
+    // Empty message doesn't match the "not found" regex, so it counts
+    // as a real failure under the new contract.
     mockDeleteAuthUser.mockResolvedValueOnce({ error: {} });
     vi.mocked(loadLifecycleContextForBusiness).mockResolvedValueOnce({
       ok: false,
       reason: "subscription_not_found"
     } as never);
     const response = await DELETE(makeRequest());
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(500);
+    expect(deleteBusiness).not.toHaveBeenCalled();
     expect(mockDeleteAuthUser).toHaveBeenCalledWith("auth-owner-1");
   });
 

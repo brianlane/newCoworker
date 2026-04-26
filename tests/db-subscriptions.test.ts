@@ -7,6 +7,7 @@ import {
   stripeSubscriptionPeriodCache,
   subscriptionPeriodCacheFromStripe,
   updateSubscription,
+  updateSubscriptionIfNotWiped,
   type SubscriptionPeriodStripeCache
 } from "@/lib/db/subscriptions";
 
@@ -253,6 +254,101 @@ describe("db/subscriptions", () => {
     await expect(listSubscriptionsByBusinessIds(["biz-uuid-1"])).rejects.toThrow(
       "listSubscriptionsByBusinessIds"
     );
+  });
+
+  it("updateSubscriptionIfNotWiped returns updated row when wiped_at IS NULL matches", async () => {
+    // Conditional update used by the resubscribe orchestrator's final
+    // resurrect-write to avoid silently overwriting a row whose data
+    // backup has already been deleted by the grace-sweep cron. The
+    // happy path: the predicate matched, the update returned the row.
+    const updatedRow = { ...MOCK_SUB, status: "active", wiped_at: null };
+    const isFn = vi.fn().mockReturnThis();
+    const selectFn = vi.fn().mockResolvedValue({ data: [updatedRow], error: null });
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      is: isFn,
+      select: selectFn
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const result = await updateSubscriptionIfNotWiped("sub-uuid-1", { status: "active" });
+    expect(result).toEqual(updatedRow);
+    expect(db.from).toHaveBeenCalledWith("subscriptions");
+    expect(db.update).toHaveBeenCalledWith({ status: "active" });
+    expect(db.eq).toHaveBeenCalledWith("id", "sub-uuid-1");
+    expect(isFn).toHaveBeenCalledWith("wiped_at", null);
+  });
+
+  it("updateSubscriptionIfNotWiped returns null when wiped_at IS NOT NULL (grace-sweep raced)", async () => {
+    // Race-loss path: the grace-sweep cron stamped wiped_at between
+    // the orchestrator's read and this conditional write, so the
+    // `wiped_at IS NULL` filter excludes the row and Postgres returns
+    // an empty array. The orchestrator uses this null return to abort
+    // and cancel the brand-new Stripe sub.
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      is: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: [], error: null })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const result = await updateSubscriptionIfNotWiped("sub-uuid-1", { status: "active" });
+    expect(result).toBeNull();
+  });
+
+  it("updateSubscriptionIfNotWiped returns null when data is null (defensive)", async () => {
+    // PostgREST has been observed to return `data: null, error: null`
+    // for some no-row UPDATE shapes; guard against it explicitly.
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      is: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: null, error: null })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const result = await updateSubscriptionIfNotWiped("sub-uuid-1", { status: "active" });
+    expect(result).toBeNull();
+  });
+
+  it("updateSubscriptionIfNotWiped throws on Postgres error", async () => {
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      is: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(
+      updateSubscriptionIfNotWiped("sub-uuid-1", { status: "active" })
+    ).rejects.toThrow("updateSubscriptionIfNotWiped: boom");
+  });
+
+  it("updateSubscriptionIfNotWiped accepts an injected client (skips createSupabaseServiceClient)", async () => {
+    // The optional `client` parameter is part of the public contract
+    // of every other db helper in this module; pin it for parity.
+    const updatedRow = { ...MOCK_SUB, status: "active" };
+    const injected = {
+      from: vi.fn().mockReturnThis(),
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      is: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: [updatedRow], error: null })
+    };
+    const result = await updateSubscriptionIfNotWiped(
+      "sub-uuid-1",
+      { status: "active" },
+      injected as never
+    );
+    expect(result).toEqual(updatedRow);
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
   });
 
   it("listSubscriptionsByBusinessIds returns an empty map when data is null", async () => {

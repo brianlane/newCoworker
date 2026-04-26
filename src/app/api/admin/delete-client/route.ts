@@ -120,7 +120,18 @@ export async function DELETE(request: Request) {
             });
           }
         }
-        await deleteBusiness(body.businessId);
+        // Disable the owner's login BEFORE deleting the business row.
+        // Previous order (delete business → delete auth user) made the
+        // login-disable promise best-effort with no recovery: if the
+        // auth-delete failed for a non-"not found" reason, the operator
+        // had no way to retry from this endpoint because a follow-up
+        // call would 404 (the business row is already gone). Now we
+        // delete the auth user first so a transient Supabase auth
+        // failure leaves both rows intact and the operator can retry
+        // the whole DELETE. A 404-equivalent (user already gone) is
+        // tolerated since the desired end-state is "owner can't log
+        // in", which a missing user already satisfies.
+        let authDeleteFailed = false;
         if (ownerAuthUserId) {
           try {
             const db = await createSupabaseServiceClient();
@@ -128,7 +139,8 @@ export async function DELETE(request: Request) {
             if (error) {
               const message = error.message ?? String(error);
               if (!/not found|does not exist/i.test(message)) {
-                logger.warn("admin.delete-client: auth user delete failed", {
+                authDeleteFailed = true;
+                logger.error("admin.delete-client: auth user delete failed; aborting before business-row delete", {
                   adminEmail: admin.email,
                   businessId: body.businessId,
                   supabaseUserId: ownerAuthUserId,
@@ -137,7 +149,8 @@ export async function DELETE(request: Request) {
               }
             }
           } catch (err) {
-            logger.warn("admin.delete-client: auth user delete threw", {
+            authDeleteFailed = true;
+            logger.error("admin.delete-client: auth user delete threw; aborting before business-row delete", {
               adminEmail: admin.email,
               businessId: body.businessId,
               supabaseUserId: ownerAuthUserId,
@@ -145,6 +158,17 @@ export async function DELETE(request: Request) {
             });
           }
         }
+        if (authDeleteFailed) {
+          // Surface the failure to the operator so they can retry the
+          // whole DELETE rather than silently leaving an active login
+          // attached to a soon-to-be-deleted business row.
+          return errorResponse(
+            "INTERNAL_SERVER_ERROR",
+            "Auth user delete failed; business row preserved for retry",
+            500
+          );
+        }
+        await deleteBusiness(body.businessId);
         logger.info("admin.delete-client: deleted subscription-less business", {
           adminEmail: admin.email,
           businessId: body.businessId,

@@ -65,12 +65,35 @@ export default async function BillingPage(props: {
   const subscription = business ? await getSubscription(business.id) : null;
   const snapshot = business ? await getVoiceBillingSnapshotForBusiness(business.id) : null;
 
-  const profile =
-    subscription?.customer_profile_id || business?.customer_profile_id
-      ? await getCustomerProfileById(
-          (subscription?.customer_profile_id ?? business?.customer_profile_id) as string
-        )
-      : null;
+  // Prefer `business.customer_profile_id` over `subscription.customer_profile_id`
+  // when the subscription is in a terminal state (canceled or wiped),
+  // because:
+  //   * `subscriptions.customer_profile_id` is stamped at row creation and
+  //     never automatically re-keyed when the customer's profile is
+  //     remapped (e.g. /api/billing/change-plan upserts a fresh profile
+  //     and stamps `business.customer_profile_id` but cannot retroactively
+  //     update older subscription rows).
+  //   * `businesses.customer_profile_id` IS actively maintained by
+  //     /api/billing/reactivate, /api/admin/force-refund, and
+  //     /api/billing/change-plan (each upserts by owner email and writes
+  //     the resolved id back to the business row).
+  // For an active subscription, the two values agree (both are written
+  // by the orchestrator's atomic write), so it doesn't matter which
+  // we read first; we keep subscription-first for that case so this is
+  // a strictly minor change for the common path.
+  //
+  // Also use `??` consistently (instead of mixed `||` / `??`) so an
+  // unexpected empty-string id (vanishingly rare for a uuid column,
+  // but defensible) doesn't cause us to attempt a `getCustomerProfileById("")`
+  // lookup.
+  const subIsTerminal =
+    subscription?.status === "canceled" || Boolean(subscription?.wiped_at);
+  const resolvedProfileId = subIsTerminal
+    ? (business?.customer_profile_id ?? subscription?.customer_profile_id ?? null)
+    : (subscription?.customer_profile_id ?? business?.customer_profile_id ?? null);
+  const profile = resolvedProfileId
+    ? await getCustomerProfileById(resolvedProfileId)
+    : null;
 
   const packs = listVoiceBonusPacks();
   const usdPerMinute = getVoiceBonusBestUsdPerMinute(packs);

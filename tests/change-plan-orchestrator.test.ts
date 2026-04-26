@@ -1731,4 +1731,116 @@ describe("runResubscribeFromCheckout", () => {
     expect(updateSubscriptionMock).not.toHaveBeenCalled();
     expect(incrementLifetimeSubscriptionCountMock).not.toHaveBeenCalled();
   });
+
+  it("aborts and rolls back when the grace-sweep wiped the row between orchestrator entry and final write", async () => {
+    // Optimistic-concurrency race: the grace-sweep cron wiped the row
+    // (stamped wiped_at, deleted backup, stopped VM, canceled
+    // Hostinger billing) AFTER this orchestrator's getSubscription
+    // read but BEFORE its conditional final write. The conditional
+    // update returns null because `wiped_at IS NOT NULL` filtered out
+    // the row. We must:
+    //   * NOT silently resurrect the row (the data backup is gone, so
+    //     the new VPS would come up empty).
+    //   * Cancel the brand-new Stripe subscription so the customer
+    //     isn't auto-renewed for service we'll never provision.
+    //   * Roll back the lifetime counter so the customer doesn't lose
+    //     a slot to a no-op resubscribe.
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-row-grace",
+      business_id: "biz-1",
+      stripe_subscription_id: "sub_old_canceled",
+      hostinger_billing_subscription_id: "billing_old_canceled",
+      customer_profile_id: "prof-1",
+      tier: "starter",
+      billing_period: "monthly",
+      status: "canceled",
+      grace_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      wiped_at: null,
+      created_at: "2026-01-01T00:00:00.000Z"
+    });
+    // Simulate the race: the conditional update misses because the
+    // grace-sweep cron stamped wiped_at concurrently.
+    updateSubscriptionIfNotWipedMock.mockResolvedValueOnce(null);
+
+    await runResubscribeFromCheckout(
+      makeSession({
+        metadata: {
+          businessId: "biz-1",
+          tier: "standard",
+          billingPeriod: "annual",
+          lifecycleAction: "resubscribe",
+          customerProfileId: "prof-1"
+        }
+      }),
+      "evt_resub_grace_sweep_race"
+    );
+
+    // Conditional write was attempted (and returned null).
+    expect(updateSubscriptionIfNotWipedMock).toHaveBeenCalledWith(
+      "sub-row-grace",
+      expect.objectContaining({ status: "active", wiped_at: null })
+    );
+    // Brand-new Stripe sub canceled to stop auto-renewal.
+    expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
+    // Lifetime slot rolled back so the customer doesn't lose it.
+    expect(decrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
+  });
+
+  it("aborts on grace-sweep race without Stripe cancel or rollback when neither is resolvable", async () => {
+    // Branch coverage for the falsy paths inside the wiped-row guard:
+    // when the session has no Stripe subscription id and we couldn't
+    // resolve a customer_profile_id (no metadata, no oldSub link, no
+    // business link, no session email to upsert from), the abort path
+    // must short-circuit the inner `if (stripeSubscriptionId)` and
+    // `if (customerProfileId)` guards rather than calling Stripe-cancel
+    // / decrement on null inputs.
+    getBusinessMock.mockResolvedValueOnce({
+      id: "biz-1",
+      owner_email: "owner@example.com",
+      hostinger_vps_id: "1001",
+      customer_profile_id: null,
+      status: "online"
+    });
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-row-grace",
+      business_id: "biz-1",
+      stripe_subscription_id: "sub_old_canceled",
+      hostinger_billing_subscription_id: "billing_old_canceled",
+      customer_profile_id: null,
+      tier: "starter",
+      billing_period: "monthly",
+      status: "canceled",
+      grace_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      wiped_at: null,
+      created_at: "2026-01-01T00:00:00.000Z"
+    });
+    updateSubscriptionIfNotWipedMock.mockResolvedValueOnce(null);
+
+    await runResubscribeFromCheckout(
+      makeSession({
+        // subscription: null -> stripeSubscriptionId is null.
+        subscription: null,
+        // No email -> upsertCustomerProfile is skipped, leaving
+        // customerProfileId null (no metadata.customerProfileId,
+        // no oldSub link, no business link).
+        customer_email: null,
+        customer_details: { email: null } as Stripe.Checkout.Session.CustomerDetails,
+        metadata: {
+          businessId: "biz-1",
+          tier: "standard",
+          billingPeriod: "annual",
+          lifecycleAction: "resubscribe"
+        }
+      }),
+      "evt_resub_grace_sweep_race_no_ids"
+    );
+
+    expect(updateSubscriptionIfNotWipedMock).toHaveBeenCalledWith(
+      "sub-row-grace",
+      expect.objectContaining({ status: "active", wiped_at: null })
+    );
+    // Both guarded calls must NOT fire when their inputs are null.
+    expect(stripeCancelMock).not.toHaveBeenCalledWith("sub_new", expect.anything());
+    expect(decrementLifetimeSubscriptionCountMock).not.toHaveBeenCalled();
+  });
 });

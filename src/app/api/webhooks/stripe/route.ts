@@ -219,6 +219,45 @@ export async function POST(request: Request) {
               });
             }
           }
+          // Resurrection guard. Stripe can deliver `subscription.updated`
+          // with `status="active"` for a row our lifecycle has already
+          // moved into the canceled/grace state — typical sources:
+          //   * Operator clicks "Resume subscription" in the Stripe
+          //     dashboard (Stripe re-activates without dispatching a
+          //     re-checkout, so we never run our resubscribe orchestrator
+          //     and the local row keeps its grace metadata).
+          //   * Schedule phase transition on a `cancel_at_period_end`
+          //     sub that Stripe revs back to `active`.
+          //   * Webhook reordering on retry windows.
+          // Blindly mirroring `status="active"` here would leave the row
+          // internally inconsistent (status=active alongside
+          // grace_ends_at/canceled_at/cancel_reason) and make it
+          // invisible to the grace-sweep cron, which filters on
+          // `status === "canceled"`. Refuse the active-write and let
+          // reactivation flow through `/api/billing/reactivate` instead;
+          // we still keep the period cache + cancel_at_period_end mirror
+          // up to date so the dashboard reads stay accurate.
+          if (status === "active" && existing.status === "canceled") {
+            logger.warn(
+              "customer.subscription.updated: refusing to resurrect canceled row to active without lifecycle reactivation",
+              {
+                businessId: existing.business_id,
+                subscriptionRowId: existing.id,
+                stripeSubscriptionId: sub.id,
+                stripeStatus: sub.status,
+                graceEndsAt: existing.grace_ends_at ?? null,
+                wipedAt: existing.wiped_at ?? null,
+                eventId: event.id
+              }
+            );
+            await updateSubscription(existing.id, {
+              stripe_subscription_id: sub.id,
+              cancel_at_period_end: Boolean(sub.cancel_at_period_end),
+              ...stripeSubscriptionPeriodCache(sub)
+            });
+            break;
+          }
+
           // Mirror cancel_at_period_end so the dashboard reflects user
           // intent without polling Stripe on every render.
           await updateSubscription(existing.id, {
@@ -657,6 +696,41 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
   const alreadyLinkedToThisStripeSub =
     !!subscriptionId && existing.stripe_subscription_id === subscriptionId;
   const firstActivation = existing.status !== "active" && !alreadyLinkedToThisStripeSub;
+
+  // Cap-bypass guard. If the row is already `active` and previously
+  // linked to a *different* Stripe subscription id, then re-linking it
+  // here (the unconditional update below) would attach a brand-new paid
+  // Stripe sub to an existing local row WITHOUT consuming a lifetime
+  // slot — `firstActivation` is false because the row is already
+  // active, so the increment branch is skipped. This is the lifetime-
+  // cap bypass that the screenshot bug report describes. Real
+  // subscription transitions (changePlan / resubscribe) never reach
+  // this default activation branch — they short-circuit at the
+  // `lifecycleAction` dispatch above and run their own orchestrators
+  // (which DO bump the lifetime counter). So an active row arriving
+  // here with a fresh-and-different Stripe sub id is anomalous: a
+  // crafted Stripe event, a desync, or an attacker trying to game the
+  // cap. Refuse the relink and cancel the new Stripe sub so the
+  // customer isn't auto-renewed for service we won't provision.
+  if (
+    existing.status === "active" &&
+    !!subscriptionId &&
+    !!existing.stripe_subscription_id &&
+    existing.stripe_subscription_id !== subscriptionId
+  ) {
+    logger.error(
+      "checkout activation refused: active row already linked to a different Stripe sub id",
+      {
+        businessId,
+        eventId,
+        subscriptionRowId: existing.id,
+        existingStripeSubscriptionId: existing.stripe_subscription_id,
+        incomingStripeSubscriptionId: subscriptionId
+      }
+    );
+    await cancelStripeSubscriptionSafely(subscriptionId, businessId);
+    return;
+  }
 
   if (!alreadyLinkedToThisStripeSub && subscriptionId) {
     await updateSubscription(existing.id, {

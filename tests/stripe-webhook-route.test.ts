@@ -805,6 +805,149 @@ describe("stripe webhook route", () => {
     );
   });
 
+  it("refuses to resurrect a locally-canceled row when Stripe sends an active subscription.updated", async () => {
+    // Bug A regression: Stripe can re-deliver `subscription.updated`
+    // with `status="active"` for a row our lifecycle has already moved
+    // into the canceled/grace state — most commonly when an operator
+    // clicks "Resume subscription" in the Stripe dashboard, or on
+    // weak webhook ordering during a schedule phase transition.
+    // Naively mirroring `status="active"` would leave the row
+    // internally inconsistent (status=active alongside grace_ends_at
+    // / canceled_at / cancel_reason) and invisible to the grace-sweep
+    // cron. The handler must refuse the active-write and let
+    // reactivation flow through `/api/billing/reactivate`. We still
+    // mirror cancel_at_period_end + the period cache so the dashboard
+    // reads stay accurate.
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+      id: "local_sub_grace",
+      business_id: "biz_grace",
+      status: "canceled",
+      stripe_subscription_id: "sub_grace",
+      cancel_at_period_end: false,
+      grace_ends_at: "2026-05-24T00:00:00.000Z",
+      canceled_at: "2026-04-24T00:00:00.000Z",
+      cancel_reason: "user_period_end",
+      wiped_at: null
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_resume_active",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_grace",
+          status: "active",
+          cancel_at_period_end: false,
+          metadata: { businessId: "biz_grace" },
+          items: { data: [{ current_period_start: 1700000000, current_period_end: 1702678400 }] }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(updateSubscription).toHaveBeenCalledTimes(1);
+    // Critical: the call must NOT include `status: "active"` (would
+    // resurrect the row out of the grace-sweep's reach).
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "local_sub_grace",
+      expect.not.objectContaining({ status: expect.anything() })
+    );
+    // But it should still mirror cancel_at_period_end + the period cache.
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "local_sub_grace",
+      expect.objectContaining({
+        stripe_subscription_id: "sub_grace",
+        cancel_at_period_end: false
+      })
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      "customer.subscription.updated: refusing to resurrect canceled row to active without lifecycle reactivation",
+      expect.objectContaining({
+        businessId: "biz_grace",
+        subscriptionRowId: "local_sub_grace",
+        stripeSubscriptionId: "sub_grace"
+      })
+    );
+  });
+
+  it("refuses to relink an active row to a different Stripe sub id (lifetime-cap bypass guard)", async () => {
+    // Bug B regression: `firstActivation = existing.status !== "active"
+    // && !alreadyLinkedToThisStripeSub`. If we hit the default
+    // activation branch with an existing active row already linked to
+    // a *different* Stripe subscription id (anomalous: changePlan /
+    // resubscribe orchestrators short-circuit at `lifecycleAction`
+    // dispatch and never reach this branch), the unconditional
+    // linkage update would overwrite stripe_subscription_id without
+    // bumping the lifetime counter — a cap bypass. The handler must
+    // refuse the relink and cancel the new Stripe sub so the customer
+    // isn't auto-renewed for service we won't provision.
+    let incrementCalls = 0;
+    mockVoiceBonusRpc.mockImplementation((name: string) => {
+      if (name === "increment_customer_profile_lifetime_count") {
+        incrementCalls += 1;
+        return Promise.resolve({ data: 1, error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_anomalous_relink",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_anomalous",
+          metadata: {
+            businessId: "biz_anom",
+            tier: "starter",
+            billingPeriod: "annual",
+            customerProfileId: "prof-anom"
+          },
+          customer: "cus_anom_new",
+          subscription: "sub_anom_new"
+        }
+      }
+    } as never);
+    // Existing active row was previously linked to a *different*
+    // Stripe sub id. Reaching activateCheckoutSession for sub_anom_new
+    // is the cap-bypass shape.
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "local_sub_anom",
+      status: "active",
+      stripe_subscription_id: "sub_anom_old",
+      customer_profile_id: "prof-anom"
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    // No relink write.
+    expect(updateSubscription).not.toHaveBeenCalled();
+    // No silent slot-skip.
+    expect(incrementCalls).toBe(0);
+    // The new Stripe sub is canceled so it doesn't auto-renew forever.
+    expect(mockStripeCancel).toHaveBeenCalledWith("sub_anom_new", { prorate: false });
+    expect(logger.error).toHaveBeenCalledWith(
+      "checkout activation refused: active row already linked to a different Stripe sub id",
+      expect.objectContaining({
+        businessId: "biz_anom",
+        existingStripeSubscriptionId: "sub_anom_old",
+        incomingStripeSubscriptionId: "sub_anom_new"
+      })
+    );
+  });
+
   it("short-circuits customer.subscription.deleted fallback for already-finalized upgrade_switch rows", async () => {
     // The change-plan orchestrator finalizes the old subscription row
     // inline (status=canceled, cancel_reason=upgrade_switch) BEFORE
