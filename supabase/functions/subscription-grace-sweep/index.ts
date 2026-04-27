@@ -58,7 +58,12 @@ serve(async (req: Request) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${cronSecret}`
+        Authorization: `Bearer ${cronSecret}`,
+        // The Next.js CSRF middleware (src/proxy.ts) blocks state-changing
+        // /api/* POSTs whose Origin/Referer doesn't match NEXT_PUBLIC_APP_URL.
+        // Server-to-server bearer-authed calls aren't a CSRF risk, but we set
+        // Origin explicitly so the gate lets us through to the bearer check.
+        Origin: appUrl
       },
       body: "{}",
       signal: controller.signal
