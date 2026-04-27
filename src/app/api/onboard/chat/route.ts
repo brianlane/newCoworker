@@ -251,7 +251,11 @@ export async function POST(request: Request) {
         clearTimeout(abortTimer);
       }
 
-      if (!response || !response.ok) {
+      // `timedOut` must be part of the failure guard: if the abort fires after `fetch()`
+      // resolves but during `response.text()`, `response.ok` is true and `responseText` is
+      // empty. Without this check we'd fall into JSON parsing and mislabel the timeout as
+      // an invalid-JSON parse error in the logs.
+      if (!response || !response.ok || timedOut) {
         console.error("[onboard/chat] openrouter request failed", {
           model,
           status: response?.status,

@@ -135,26 +135,46 @@ function QuestionnaireForm() {
   useEffect(() => {
     try {
       const draft = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) ?? "null");
+      const storedOnboarding = JSON.parse(
+        localStorage.getItem(ONBOARD_STORAGE_KEY) ?? "null"
+      ) as OnboardingData | null;
+
       if (draft?.step && [1, 2, 3].includes(draft.step)) {
         setStep(draft.step as Step);
-      } else {
-        const storedOnboarding = JSON.parse(localStorage.getItem(ONBOARD_STORAGE_KEY) ?? "null") as OnboardingData | null;
-        if (storedOnboarding) setStep(3);
+      } else if (storedOnboarding) {
+        setStep(3);
       }
 
-      if (draft?.form) {
-        setForm((prev) => ({ ...prev, ...draft.form }));
-        if (typeof draft.signupEmail === "string") {
-          setSignupEmail(draft.signupEmail);
+      // Layer order matters: DRAFT carries in-progress edits + the chat transcript
+      // (OnboardingAssistantChatState in ONBOARD intentionally omits messages), but
+      // ONBOARD is the authoritative snapshot for fields that may be updated downstream
+      // (e.g. ownerEmail rewritten from the Stripe-verified address by /api/onboard/finalize-signup).
+      // We start from DRAFT so chat messages survive a back-navigation, then overlay
+      // ONBOARD's authoritative fields, then re-attach the DRAFT messages so the
+      // overlay's empty `messages: []` from toFormData doesn't clobber them.
+      setForm((prev) => {
+        let next: FormData = { ...prev };
+        if (draft?.form) {
+          next = { ...next, ...draft.form };
         }
-      } else {
-        const storedOnboarding = JSON.parse(localStorage.getItem(ONBOARD_STORAGE_KEY) ?? "null") as OnboardingData | null;
         if (storedOnboarding) {
-          setForm((prev) => ({ ...prev, ...toFormData(storedOnboarding) }));
-          if (typeof storedOnboarding.ownerEmail === "string") {
-            setSignupEmail(storedOnboarding.ownerEmail);
+          const onboardFormData = toFormData(storedOnboarding);
+          const draftMessages = draft?.form?.assistantChat?.messages;
+          next = { ...next, ...onboardFormData };
+          if (Array.isArray(draftMessages) && draftMessages.length > 0 && next.assistantChat) {
+            next.assistantChat = { ...next.assistantChat, messages: draftMessages };
           }
         }
+        return next;
+      });
+
+      // Email precedence: prefer the authoritative ONBOARD.ownerEmail (it may have been
+      // rewritten post-checkout) over the DRAFT-cached signupEmail. This prevents a stale
+      // step-1 typo from being re-applied via persistOnboardingDraft on a return visit.
+      if (typeof storedOnboarding?.ownerEmail === "string" && storedOnboarding.ownerEmail) {
+        setSignupEmail(storedOnboarding.ownerEmail);
+      } else if (typeof draft?.signupEmail === "string") {
+        setSignupEmail(draft.signupEmail);
       }
     } catch { /* ignore corrupt data */ }
     setHydrated(true);
