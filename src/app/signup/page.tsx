@@ -13,6 +13,7 @@ import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 type StoredOnboardingData = {
   businessName?: string;
+  ownerEmail?: string;
   [key: string]: unknown;
 };
 
@@ -24,6 +25,11 @@ function readStoredOnboardingData(): StoredOnboardingData | null {
   } catch {
     return null;
   }
+}
+
+function readPrefilledOwnerEmail(): string {
+  const stored = readStoredOnboardingData();
+  return typeof stored?.ownerEmail === "string" ? stored.ownerEmail : "";
 }
 
 export default function SignupPage() {
@@ -44,7 +50,10 @@ function SignupForm() {
   const loginHref = `/login?redirectTo=${encodeURIComponent(redirectTo)}${tier ? `&tier=${encodeURIComponent(tier)}` : ""}`;
   const questionnaireHref = `/onboard/questionnaire?tier=${encodeURIComponent(tier ?? "starter")}&period=${encodeURIComponent(period ?? "biennial")}`;
 
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(() => readPrefilledOwnerEmail());
+  // Track whether the email came from the onboarding questionnaire so we can render it
+  // as a non-editable confirmation line (matching `/onboard/success`) instead of a duplicate input.
+  const [emailFromOnboarding] = useState(() => readPrefilledOwnerEmail().length > 0);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [businessName, setBusinessName] = useState(() => {
@@ -158,15 +167,30 @@ function SignupForm() {
               placeholder="Sunrise Realty"
               required
             />
-            <Input
-              label="Email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@business.com"
-              autoComplete="email"
-              required
-            />
+            {emailFromOnboarding ? (
+              <div className="rounded-lg border border-parchment/10 bg-parchment/5 px-3 py-2 text-sm">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-parchment/45">
+                  Email
+                </p>
+                <p className="mt-1 text-parchment break-all">{email}</p>
+                <p className="mt-1 text-[11px] text-parchment/45">
+                  Using the email from your onboarding details.{" "}
+                  <a href={questionnaireHref} className="text-signal-teal hover:underline">
+                    Change it
+                  </a>
+                </p>
+              </div>
+            ) : (
+              <Input
+                label="Email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@business.com"
+                autoComplete="email"
+                required
+              />
+            )}
             <Input
               label="Password"
               type="password"

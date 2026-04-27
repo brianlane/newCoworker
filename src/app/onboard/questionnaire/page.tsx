@@ -394,7 +394,11 @@ function QuestionnaireForm() {
     try {
       setSignupLoading(true);
       const onboardingData = await persistOnboardingDraft();
-      localStorage.removeItem(DRAFT_STORAGE_KEY);
+      // Intentionally keep DRAFT_STORAGE_KEY here. It is the only place the full chat
+      // transcript lives locally (OnboardingAssistantChatState in ONBOARD_STORAGE_KEY
+      // omits messages by design). If the user back-navigates from /onboard/checkout
+      // or /signup we want them to land back on this questionnaire with their interview
+      // history intact. The draft is overwritten on every form change anyway.
       const checkoutUrl = new URL("/onboard/checkout", window.location.origin);
       checkoutUrl.searchParams.set("businessId", onboardingData.businessId ?? "");
       checkoutUrl.searchParams.set("draftToken", onboardingData.draftToken ?? "");
