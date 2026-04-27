@@ -15,15 +15,76 @@ import {
 } from "@/lib/onboarding/chat";
 
 function resolveOnboardingModels(): string[] {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
-  const isLocalAppUrl = appUrl.includes("localhost") || appUrl.includes("127.0.0.1");
-  const isDev = process.env.NODE_ENV !== "production";
+  // Always carry a fallback so a single upstream provider rate-limit (e.g. DeepInfra)
+  // never surfaces to onboarding users.
+  return ["deepseek/deepseek-v4-flash", "openai/gpt-5.4-nano"];
+}
 
-  if (isDev || isLocalAppUrl) {
-    return ["deepseek/deepseek-v4-flash", "openai/gpt-5.4-nano"];
+const TRANSIENT_OPENROUTER_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const FRIENDLY_ASSISTANT_ERROR =
+  "The onboarding assistant is briefly unavailable. Please retry in a few seconds.";
+
+function classifyOpenRouterStatus(status: number): { transient: boolean } {
+  return { transient: TRANSIENT_OPENROUTER_STATUSES.has(status) };
+}
+
+async function fetchOpenRouterChat(params: {
+  apiKey: string;
+  model: string;
+  messages: unknown[];
+  appUrl: string;
+}): Promise<Response> {
+  return fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${params.apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": params.appUrl,
+      "X-Title": "New Coworker Onboarding"
+    },
+    body: JSON.stringify({
+      model: params.model,
+      temperature: 0.3,
+      max_completion_tokens: 1200,
+      reasoning: {
+        enabled: false,
+        effort: "minimal",
+        exclude: true
+      },
+      response_format: { type: "json_object" },
+      messages: params.messages
+    })
+  });
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Extract only non-sensitive failure metadata from an OpenRouter error envelope so we
+// never log assistant output (which echoes user-provided business/contact context).
+function extractSafeOpenRouterErrorMeta(responseText: string): {
+  code?: string | number;
+  upstreamMessage?: string;
+  providerName?: string;
+} {
+  if (!responseText) return {};
+  try {
+    const parsed = JSON.parse(responseText) as {
+      error?: { code?: string | number; message?: string; metadata?: { provider_name?: string } };
+    };
+    const err = parsed?.error;
+    if (!err || typeof err !== "object") return {};
+    const meta: { code?: string | number; upstreamMessage?: string; providerName?: string } = {};
+    if (err.code !== undefined) meta.code = err.code;
+    // err.message is OpenRouter's static category label (e.g. "Provider returned error"),
+    // not the raw upstream body, so it is safe to surface.
+    if (typeof err.message === "string") meta.upstreamMessage = err.message.slice(0, 120);
+    if (typeof err.metadata?.provider_name === "string") meta.providerName = err.metadata.provider_name;
+    return meta;
+  } catch {
+    return {};
   }
-
-  return ["deepseek/deepseek-v4-flash"];
 }
 
 const requestSchema = z.object({
@@ -148,47 +209,44 @@ export async function POST(request: Request) {
     };
 
     const models = resolveOnboardingModels();
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+    const messages = [
+      {
+        role: "system",
+        content: buildOnboardingChatSystemPrompt(knownContext, body.profile ?? null, body.messages)
+      },
+      ...body.messages
+    ];
     let json: any = null;
     let parsed: z.infer<typeof onboardingChatModelResponseSchema> | null = null;
-    let lastErrorText = "";
 
     for (const model of models) {
-      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
-          "X-Title": "New Coworker Onboarding"
-        },
-        body: JSON.stringify({
-          model,
-          temperature: 0.3,
-          max_completion_tokens: 1200,
-          reasoning: {
-            enabled: false,
-            effort: "minimal",
-            exclude: true
-          },
-          response_format: { type: "json_object" },
-          messages: [
-            {
-              role: "system",
-              content: buildOnboardingChatSystemPrompt(knownContext, body.profile ?? null, body.messages)
-            },
-            ...body.messages
-          ]
-        })
-      });
+      const isLastModel = model === models[models.length - 1];
+      let response: Response | null = null;
+      let responseText = "";
+      let attemptedRetry = false;
 
-      const responseText = await response.text();
-
-      if (!response.ok) {
-        lastErrorText = responseText;
-        if (model !== models[models.length - 1]) {
-          continue;
+      // Retry once on transient upstream failures (429/5xx) before failing over to the next model.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (attempt > 0) {
+          attemptedRetry = true;
+          await delay(450);
         }
-        return errorResponse("INTERNAL_SERVER_ERROR", `OpenRouter request failed: ${responseText.slice(0, 300)}`);
+        response = await fetchOpenRouterChat({ apiKey, model, messages, appUrl });
+        responseText = await response.text();
+        if (response.ok) break;
+        if (!classifyOpenRouterStatus(response.status).transient) break;
+      }
+
+      if (!response || !response.ok) {
+        console.error("[onboard/chat] openrouter request failed", {
+          model,
+          status: response?.status,
+          attemptedRetry,
+          ...extractSafeOpenRouterErrorMeta(responseText)
+        });
+        if (!isLastModel) continue;
+        return errorResponse("INTERNAL_SERVER_ERROR", FRIENDLY_ASSISTANT_ERROR);
       }
 
       try {
@@ -198,7 +256,7 @@ export async function POST(request: Request) {
           const finishReason = json?.choices?.[0]?.finish_reason;
           throw new Error(
             finishReason === "length"
-              ? "The onboarding model ran out of response budget. Please try again."
+              ? "The onboarding model ran out of response budget."
               : "The onboarding model returned an empty response."
           );
         }
@@ -206,16 +264,26 @@ export async function POST(request: Request) {
         parsed = onboardingChatModelResponseSchema.parse(parseJsonPayload(content));
         break;
       } catch (error) {
-        lastErrorText = error instanceof Error ? error.message : "Model returned invalid onboarding JSON";
-        if (model !== models[models.length - 1]) {
-          continue;
-        }
-        return errorResponse("INTERNAL_SERVER_ERROR", lastErrorText);
+        // Intentionally do not log the response body here: on a parse failure it is
+        // typically the assistant's JSON output, which restates user-provided business
+        // and contact context. Only log non-sensitive metadata.
+        const errorType =
+          error instanceof z.ZodError ? "schema_mismatch"
+            : error instanceof SyntaxError ? "invalid_json"
+              : "parse_error";
+        console.error("[onboard/chat] openrouter parse failed", {
+          model,
+          errorType,
+          finishReason: json?.choices?.[0]?.finish_reason,
+          responseLength: responseText.length
+        });
+        if (!isLastModel) continue;
+        return errorResponse("INTERNAL_SERVER_ERROR", FRIENDLY_ASSISTANT_ERROR);
       }
     }
 
     if (!json || !parsed) {
-      return errorResponse("INTERNAL_SERVER_ERROR", `OpenRouter request failed: ${lastErrorText.slice(0, 300)}`);
+      return errorResponse("INTERNAL_SERVER_ERROR", FRIENDLY_ASSISTANT_ERROR);
     }
     const topicStatus = summarizeOnboardingTopicStatus(knownContext, parsed.profile, body.messages);
     if (
