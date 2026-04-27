@@ -61,6 +61,32 @@ async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Extract only non-sensitive failure metadata from an OpenRouter error envelope so we
+// never log assistant output (which echoes user-provided business/contact context).
+function extractSafeOpenRouterErrorMeta(responseText: string): {
+  code?: string | number;
+  upstreamMessage?: string;
+  providerName?: string;
+} {
+  if (!responseText) return {};
+  try {
+    const parsed = JSON.parse(responseText) as {
+      error?: { code?: string | number; message?: string; metadata?: { provider_name?: string } };
+    };
+    const err = parsed?.error;
+    if (!err || typeof err !== "object") return {};
+    const meta: { code?: string | number; upstreamMessage?: string; providerName?: string } = {};
+    if (err.code !== undefined) meta.code = err.code;
+    // err.message is OpenRouter's static category label (e.g. "Provider returned error"),
+    // not the raw upstream body, so it is safe to surface.
+    if (typeof err.message === "string") meta.upstreamMessage = err.message.slice(0, 120);
+    if (typeof err.metadata?.provider_name === "string") meta.providerName = err.metadata.provider_name;
+    return meta;
+  } catch {
+    return {};
+  }
+}
+
 const requestSchema = z.object({
   businessName: z.string().optional(),
   businessType: z.string().optional(),
@@ -217,7 +243,7 @@ export async function POST(request: Request) {
           model,
           status: response?.status,
           attemptedRetry,
-          body: responseText.slice(0, 1000)
+          ...extractSafeOpenRouterErrorMeta(responseText)
         });
         if (!isLastModel) continue;
         return errorResponse("INTERNAL_SERVER_ERROR", FRIENDLY_ASSISTANT_ERROR);
@@ -238,10 +264,18 @@ export async function POST(request: Request) {
         parsed = onboardingChatModelResponseSchema.parse(parseJsonPayload(content));
         break;
       } catch (error) {
+        // Intentionally do not log the response body here: on a parse failure it is
+        // typically the assistant's JSON output, which restates user-provided business
+        // and contact context. Only log non-sensitive metadata.
+        const errorType =
+          error instanceof z.ZodError ? "schema_mismatch"
+            : error instanceof SyntaxError ? "invalid_json"
+              : "parse_error";
         console.error("[onboard/chat] openrouter parse failed", {
           model,
-          message: error instanceof Error ? error.message : String(error),
-          body: responseText.slice(0, 1000)
+          errorType,
+          finishReason: json?.choices?.[0]?.finish_reason,
+          responseLength: responseText.length
         });
         if (!isLastModel) continue;
         return errorResponse("INTERNAL_SERVER_ERROR", FRIENDLY_ASSISTANT_ERROR);
