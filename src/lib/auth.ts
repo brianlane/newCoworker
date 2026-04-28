@@ -109,6 +109,60 @@ export async function verifySignupIdentity(userId: string, email: string): Promi
  * grace-sweep row can be retried if an earlier run already removed the
  * user.
  */
+export async function findAuthUserIdByEmail(email: string): Promise<string | null> {
+  if (!email) return null;
+  const target = email.trim().toLowerCase();
+  if (!target) return null;
+
+  const { createSupabaseServiceClient } = await import("@/lib/supabase/server");
+  const db = await createSupabaseServiceClient();
+
+  // Fast path: SECURITY DEFINER RPC backed by `auth.users.email` index.
+  try {
+    const { data, error } = await db.rpc("find_auth_user_id_by_email", {
+      p_email: target
+    });
+    if (!error) {
+      // RPC is present and returned a definitive answer. Trust it: a
+      // non-empty string is a hit, null/empty is a genuine miss. The
+      // SQL is `select id from auth.users where lower(email)=... limit 1`
+      // so a `null` result means "no such user". Falling through to
+      // the paginated listUsers scan in the miss case would burn up to
+      // PAGE_CAP * perPage (2,000) admin API calls per nonexistent
+      // email — exactly the regression this RPC was added to fix.
+      return typeof data === "string" && data.length > 0 ? data : null;
+    }
+    // PostgREST surfaces "function does not exist" with PGRST202 on
+    // older instances that haven't applied the migration yet. Swallow
+    // and fall through to the listUsers fallback so staging/dev don't
+    // hard-break. Any OTHER rpc error is a true lookup failure and we
+    // return null (same contract as before — "not found").
+    if (error.code !== "PGRST202") {
+      return null;
+    }
+  } catch {
+    // Network / unexpected runtime error: fall through to fallback.
+  }
+
+  // Legacy fallback: bounded admin.listUsers scan. The hard cap is
+  // deliberately small (10 pages × 200 per page = 2,000 users) because
+  // any production deployment large enough to exceed this should have
+  // the RPC applied. The prior 500-page cap meant a single miss on a
+  // nonexistent email burned up to 100,000 auth API calls.
+  const PAGE_CAP = 10;
+  const perPage = 200;
+  for (let page = 1; page <= PAGE_CAP; page += 1) {
+    const { data, error } = await db.auth.admin.listUsers({ page, perPage });
+    if (error) return null;
+    const users = data?.users ?? [];
+    if (users.length === 0) return null;
+    const hit = users.find((u) => (u.email ?? "").toLowerCase() === target);
+    if (hit) return hit.id;
+    if (users.length < perPage) return null;
+  }
+  return null;
+}
+
 /**
  * Strict variant of `findAuthUserIdByEmail` that throws on lookup
  * failure instead of collapsing it into a "no user found" result.
@@ -166,58 +220,4 @@ export async function authUserExistsByEmail(email: string): Promise<boolean> {
   throw new Error(
     "Auth-user lookup failed: paginated scan reached the cap without a definitive miss; refuse rather than risk a false negative"
   );
-}
-
-export async function findAuthUserIdByEmail(email: string): Promise<string | null> {
-  if (!email) return null;
-  const target = email.trim().toLowerCase();
-  if (!target) return null;
-
-  const { createSupabaseServiceClient } = await import("@/lib/supabase/server");
-  const db = await createSupabaseServiceClient();
-
-  // Fast path: SECURITY DEFINER RPC backed by `auth.users.email` index.
-  try {
-    const { data, error } = await db.rpc("find_auth_user_id_by_email", {
-      p_email: target
-    });
-    if (!error) {
-      // RPC is present and returned a definitive answer. Trust it: a
-      // non-empty string is a hit, null/empty is a genuine miss. The
-      // SQL is `select id from auth.users where lower(email)=... limit 1`
-      // so a `null` result means "no such user". Falling through to
-      // the paginated listUsers scan in the miss case would burn up to
-      // PAGE_CAP * perPage (2,000) admin API calls per nonexistent
-      // email — exactly the regression this RPC was added to fix.
-      return typeof data === "string" && data.length > 0 ? data : null;
-    }
-    // PostgREST surfaces "function does not exist" with PGRST202 on
-    // older instances that haven't applied the migration yet. Swallow
-    // and fall through to the listUsers fallback so staging/dev don't
-    // hard-break. Any OTHER rpc error is a true lookup failure and we
-    // return null (same contract as before — "not found").
-    if (error.code !== "PGRST202") {
-      return null;
-    }
-  } catch {
-    // Network / unexpected runtime error: fall through to fallback.
-  }
-
-  // Legacy fallback: bounded admin.listUsers scan. The hard cap is
-  // deliberately small (10 pages × 200 per page = 2,000 users) because
-  // any production deployment large enough to exceed this should have
-  // the RPC applied. The prior 500-page cap meant a single miss on a
-  // nonexistent email burned up to 100,000 auth API calls.
-  const PAGE_CAP = 10;
-  const perPage = 200;
-  for (let page = 1; page <= PAGE_CAP; page += 1) {
-    const { data, error } = await db.auth.admin.listUsers({ page, perPage });
-    if (error) return null;
-    const users = data?.users ?? [];
-    if (users.length === 0) return null;
-    const hit = users.find((u) => (u.email ?? "").toLowerCase() === target);
-    if (hit) return hit.id;
-    if (users.length < perPage) return null;
-  }
-  return null;
 }
