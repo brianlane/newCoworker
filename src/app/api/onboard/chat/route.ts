@@ -20,13 +20,58 @@ function resolveOnboardingModels(): string[] {
   return ["deepseek/deepseek-v4-flash", "openai/gpt-5.4-nano"];
 }
 
+// Hard ceiling on total route time. Sized so the worst-case negative path
+// (both models exhaust their per-attempt timeout) finishes with comfortable headroom
+// before the platform tears the function down — see the math next to
+// `OPENROUTER_ATTEMPT_TIMEOUT_MS` below.
+export const maxDuration = 45;
+
 const FRIENDLY_ASSISTANT_ERROR =
   "The onboarding assistant is briefly unavailable. Please retry in a few seconds.";
 
-// Bound a single OpenRouter call so a stalled upstream provider (DeepInfra etc.) cannot
-// pin the request behind multiple ~30s socket timeouts. If exceeded we fail over to the
+// Per-attempt OpenRouter timeout. A stalled upstream provider (DeepInfra etc.) can
+// otherwise pin the request behind a ~30s socket timeout; this lets us fail over to the
 // next model in the list, which acts as the retry.
-const OPENROUTER_ATTEMPT_TIMEOUT_MS = 15_000;
+//
+// Worst-case negative path the user can experience:
+//   pre-flight (rate limit + body parse + prompt build)        ~ 0.2s
+//   attempt 1 hits OPENROUTER_ATTEMPT_TIMEOUT_MS                 20.0s
+//   attempt 2 hits OPENROUTER_ATTEMPT_TIMEOUT_MS                 20.0s
+//   final error response serialization                          ~ 0.1s
+//   ───────────────────────────────────────────────────────────────────
+//   total                                                       ~40.3s   ( < maxDuration of 45s )
+//
+// 20s per attempt also comfortably covers a *successful* call: the gpt-5.4-nano response
+// observed in production rendered ~6.9KB in roughly 10s, so a fully-populated profile at
+// the new 3000-token cap should still come back under ~15s.
+const OPENROUTER_ATTEMPT_TIMEOUT_MS = 20_000;
+
+// Cap the model's response length. We keep a cap (rather than letting the model decide)
+// because:
+//   1. Latency: each output token costs ~10-20ms, so an uncapped runaway response could
+//      easily blow past OPENROUTER_ATTEMPT_TIMEOUT_MS even on a healthy provider.
+//   2. Cost: misbehaving models can loop or hallucinate verbosely; the cap caps the bill.
+//   3. Safety: `response_format: { type: "json_object" }` constrains shape, not length —
+//      without a cap we'd inherit whatever provider default applies (often 4-8K).
+//
+// Sizing: every turn the model has to re-emit the *full* assistant profile (16 fields,
+// most of them growing string arrays) plus the next assistantMessage. A late-conversation
+// profile with realistic content (offerings, multiple inquiry flows, routing/escalation
+// rules, facts to remember, tone directives, signature) tops out around ~2K tokens of
+// content + key/syntax overhead. 3000 leaves ~30% headroom over that worst case while
+// still fitting within the per-attempt time budget above.
+const ONBOARDING_MAX_COMPLETION_TOKENS = 3000;
+
+// Sentinel for the case where the model returns valid envelope JSON but its inner content
+// was truncated mid-output (`finish_reason: "length"`). Detecting this before parsing lets
+// us fall over to the next model and log the real cause instead of an `invalid_json`
+// SyntaxError.
+class TruncatedModelOutputError extends Error {
+  constructor() {
+    super("The onboarding model ran out of response budget.");
+    this.name = "TruncatedModelOutputError";
+  }
+}
 
 async function fetchOpenRouterChat(params: {
   apiKey: string;
@@ -46,7 +91,7 @@ async function fetchOpenRouterChat(params: {
     body: JSON.stringify({
       model: params.model,
       temperature: 0.3,
-      max_completion_tokens: 1200,
+      max_completion_tokens: ONBOARDING_MAX_COMPLETION_TOKENS,
       reasoning: {
         enabled: false,
         effort: "minimal",
@@ -275,14 +320,21 @@ export async function POST(request: Request) {
 
       try {
         json = JSON.parse(responseText);
-        const content = extractTextContent(json?.choices?.[0]?.message?.content);
+        const choice = json?.choices?.[0];
+        const finishReason = choice?.finish_reason;
+        const content = extractTextContent(choice?.message?.content);
+
+        // A `length` finish_reason means the model hit max_completion_tokens mid-output.
+        // The content is truncated mid-JSON, so attempting to parse it will always fail
+        // with a SyntaxError that gets mislabeled as `invalid_json`. Short-circuit to a
+        // distinct `truncated` error so the log captures the real cause and we can fall
+        // over to the next model immediately.
+        if (finishReason === "length") {
+          throw new TruncatedModelOutputError();
+        }
+
         if (!content) {
-          const finishReason = json?.choices?.[0]?.finish_reason;
-          throw new Error(
-            finishReason === "length"
-              ? "The onboarding model ran out of response budget."
-              : "The onboarding model returned an empty response."
-          );
+          throw new Error("The onboarding model returned an empty response.");
         }
 
         parsed = onboardingChatModelResponseSchema.parse(parseJsonPayload(content));
@@ -292,9 +344,10 @@ export async function POST(request: Request) {
         // typically the assistant's JSON output, which restates user-provided business
         // and contact context. Only log non-sensitive metadata.
         const errorType =
-          error instanceof z.ZodError ? "schema_mismatch"
-            : error instanceof SyntaxError ? "invalid_json"
-              : "parse_error";
+          error instanceof TruncatedModelOutputError ? "truncated"
+            : error instanceof z.ZodError ? "schema_mismatch"
+              : error instanceof SyntaxError ? "invalid_json"
+                : "parse_error";
         console.error("[onboard/chat] openrouter parse failed", {
           model,
           errorType,

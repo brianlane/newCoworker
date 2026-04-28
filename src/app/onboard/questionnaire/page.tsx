@@ -597,8 +597,20 @@ function QuestionnaireForm() {
                     </div>
                   )}
                   {chatLoading && (
-                    <div className="mr-12 rounded-2xl border border-signal-teal/12 bg-signal-teal/10 px-4 py-3 text-sm text-parchment/70">
-                      Thinking...
+                    <div
+                      className="mr-12 rounded-2xl border border-signal-teal/12 bg-signal-teal/10 px-4 py-3 text-sm text-parchment/70"
+                      role="status"
+                      aria-live="polite"
+                      aria-label="Onboarding assistant is thinking"
+                    >
+                      <span className="inline-flex items-center gap-1.5">
+                        <span>Thinking</span>
+                        <span className="inline-flex items-end gap-0.5" aria-hidden="true">
+                          <span className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.3s]" />
+                          <span className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.15s]" />
+                          <span className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-bounce" />
+                        </span>
+                      </span>
                     </div>
                   )}
                 </div>
