@@ -196,6 +196,15 @@ function shouldSuppressRepeatedToolsQuestion(
   return countToolSignalUserMessages(messages) >= 2;
 }
 
+// Detects "dead-end" assistant turns: messages with no question for the user to answer.
+// Question-mark presence is a deliberately conservative signal — it catches the failure
+// mode we've actually observed in production ("you can continue by answering the next
+// question; we should be ready to finalize soon" with no `?`) without false-positives on
+// legitimately question-bearing messages.
+function hasQuestionForUser(message: string): boolean {
+  return /\?/.test(message);
+}
+
 function createFallbackAssistantQuestion(
   knownContext: z.infer<typeof requestSchema>,
   profile: z.infer<typeof onboardingAssistantProfileSchema>
@@ -381,6 +390,28 @@ export async function POST(request: Request) {
         assistantMessage: createFallbackAssistantQuestion(body, parsed.profile)
       };
     }
+
+    // Dead-end guard: the model occasionally telegraphs "we're almost done — answer the
+    // next question" without actually asking one and without setting readyToFinalize.
+    // That leaves the user stuck (no question to answer, Continue button disabled) and
+    // forces a wasted round-trip just to elicit the missing question. The prompt forbids
+    // this, but LLMs ignore rules late in long conversations, so we deterministically
+    // recover here:
+    //   - if every onboarding topic is already covered, finalize for the model;
+    //   - otherwise, swap the message for a concrete next question driven by the
+    //     server's view of what's still missing.
+    if (!parsed.readyToFinalize && !hasQuestionForUser(parsed.assistantMessage)) {
+      const allTopicsCovered = Object.values(topicStatus).every(Boolean);
+      if (allTopicsCovered) {
+        parsed = { ...parsed, readyToFinalize: true };
+      } else {
+        parsed = {
+          ...parsed,
+          assistantMessage: createFallbackAssistantQuestion(body, parsed.profile)
+        };
+      }
+    }
+
     parsed = {
       ...parsed,
       assistantMessage: finalizeAssistantMessage(parsed.assistantMessage, parsed.readyToFinalize)
