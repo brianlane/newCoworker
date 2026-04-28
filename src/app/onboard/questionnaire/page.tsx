@@ -135,26 +135,38 @@ function QuestionnaireForm() {
   useEffect(() => {
     try {
       const draft = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) ?? "null");
+      const storedOnboarding = JSON.parse(
+        localStorage.getItem(ONBOARD_STORAGE_KEY) ?? "null"
+      ) as OnboardingData | null;
+
       if (draft?.step && [1, 2, 3].includes(draft.step)) {
         setStep(draft.step as Step);
-      } else {
-        const storedOnboarding = JSON.parse(localStorage.getItem(ONBOARD_STORAGE_KEY) ?? "null") as OnboardingData | null;
-        if (storedOnboarding) setStep(3);
+      } else if (storedOnboarding) {
+        setStep(3);
       }
 
+      // Form fields: DRAFT is the source of truth when it exists. It carries the most
+      // recent in-progress edits AND the chat transcript (OnboardingAssistantChatState
+      // in ONBOARD intentionally omits messages). Only fall back to ONBOARD when DRAFT
+      // is missing — overlaying ONBOARD on top of DRAFT would clobber unsynced field
+      // edits that the user made between back-navigations. The one downstream-updated
+      // field — ownerEmail — is reconciled separately below (it lives in `signupEmail`,
+      // not in the form payload) so it does not need to participate in this merge.
       if (draft?.form) {
         setForm((prev) => ({ ...prev, ...draft.form }));
-        if (typeof draft.signupEmail === "string") {
-          setSignupEmail(draft.signupEmail);
-        }
-      } else {
-        const storedOnboarding = JSON.parse(localStorage.getItem(ONBOARD_STORAGE_KEY) ?? "null") as OnboardingData | null;
-        if (storedOnboarding) {
-          setForm((prev) => ({ ...prev, ...toFormData(storedOnboarding) }));
-          if (typeof storedOnboarding.ownerEmail === "string") {
-            setSignupEmail(storedOnboarding.ownerEmail);
-          }
-        }
+      } else if (storedOnboarding) {
+        setForm((prev) => ({ ...prev, ...toFormData(storedOnboarding) }));
+      }
+
+      // Email precedence: prefer the authoritative ONBOARD.ownerEmail (it may have been
+      // rewritten post-checkout, e.g. by /api/onboard/finalize-signup using the Stripe
+      // customer email) over the DRAFT-cached signupEmail. Without this, a stale step-1
+      // value would be re-applied via persistOnboardingDraft on a return visit
+      // (`signupEmail || existingOnboarding?.ownerEmail`).
+      if (typeof storedOnboarding?.ownerEmail === "string" && storedOnboarding.ownerEmail) {
+        setSignupEmail(storedOnboarding.ownerEmail);
+      } else if (typeof draft?.signupEmail === "string") {
+        setSignupEmail(draft.signupEmail);
       }
     } catch { /* ignore corrupt data */ }
     setHydrated(true);
@@ -394,7 +406,11 @@ function QuestionnaireForm() {
     try {
       setSignupLoading(true);
       const onboardingData = await persistOnboardingDraft();
-      localStorage.removeItem(DRAFT_STORAGE_KEY);
+      // Intentionally keep DRAFT_STORAGE_KEY here. It is the only place the full chat
+      // transcript lives locally (OnboardingAssistantChatState in ONBOARD_STORAGE_KEY
+      // omits messages by design). If the user back-navigates from /onboard/checkout
+      // or /signup we want them to land back on this questionnaire with their interview
+      // history intact. The draft is overwritten on every form change anyway.
       const checkoutUrl = new URL("/onboard/checkout", window.location.origin);
       checkoutUrl.searchParams.set("businessId", onboardingData.businessId ?? "");
       checkoutUrl.searchParams.set("draftToken", onboardingData.draftToken ?? "");

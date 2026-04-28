@@ -20,19 +20,20 @@ function resolveOnboardingModels(): string[] {
   return ["deepseek/deepseek-v4-flash", "openai/gpt-5.4-nano"];
 }
 
-const TRANSIENT_OPENROUTER_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const FRIENDLY_ASSISTANT_ERROR =
   "The onboarding assistant is briefly unavailable. Please retry in a few seconds.";
 
-function classifyOpenRouterStatus(status: number): { transient: boolean } {
-  return { transient: TRANSIENT_OPENROUTER_STATUSES.has(status) };
-}
+// Bound a single OpenRouter call so a stalled upstream provider (DeepInfra etc.) cannot
+// pin the request behind multiple ~30s socket timeouts. If exceeded we fail over to the
+// next model in the list, which acts as the retry.
+const OPENROUTER_ATTEMPT_TIMEOUT_MS = 15_000;
 
 async function fetchOpenRouterChat(params: {
   apiKey: string;
   model: string;
   messages: unknown[];
   appUrl: string;
+  signal: AbortSignal;
 }): Promise<Response> {
   return fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -53,12 +54,9 @@ async function fetchOpenRouterChat(params: {
       },
       response_format: { type: "json_object" },
       messages: params.messages
-    })
+    }),
+    signal: params.signal
   });
-}
-
-async function delay(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // Extract only non-sensitive failure metadata from an OpenRouter error envelope so we
@@ -222,29 +220,55 @@ export async function POST(request: Request) {
 
     for (const model of models) {
       const isLastModel = model === models[models.length - 1];
+      const attemptStart = Date.now();
+      const abortController = new AbortController();
+      const abortTimer = setTimeout(() => abortController.abort(), OPENROUTER_ATTEMPT_TIMEOUT_MS);
+
       let response: Response | null = null;
       let responseText = "";
-      let attemptedRetry = false;
+      let timedOut = false;
+      let attemptFailed = false;
+      let networkErrorName: string | null = null;
 
-      // Retry once on transient upstream failures (429/5xx) before failing over to the next model.
-      for (let attempt = 0; attempt < 2; attempt++) {
-        if (attempt > 0) {
-          attemptedRetry = true;
-          await delay(450);
-        }
-        response = await fetchOpenRouterChat({ apiKey, model, messages, appUrl });
+      try {
+        response = await fetchOpenRouterChat({
+          apiKey,
+          model,
+          messages,
+          appUrl,
+          signal: abortController.signal
+        });
         responseText = await response.text();
-        if (response.ok) break;
-        if (!classifyOpenRouterStatus(response.status).transient) break;
+      } catch (fetchError) {
+        // Any throw between fetch start and end-of-body-read counts as a failed attempt:
+        // - AbortError / signal.aborted -> our timeout
+        // - anything else (DNS, TLS, socket reset mid-stream, etc.) -> non-abort failure
+        // Flagging both via `attemptFailed` keeps the failure guard below correct even
+        // when `fetch()` resolved with `response.ok === true` but `response.text()` then
+        // threw — otherwise we'd fall into JSON parsing and mislabel the failure as
+        // `invalid_json` in logs.
+        attemptFailed = true;
+        timedOut =
+          (fetchError instanceof Error && fetchError.name === "AbortError") ||
+          abortController.signal.aborted;
+        networkErrorName = fetchError instanceof Error ? fetchError.name : "unknown";
+      } finally {
+        clearTimeout(abortTimer);
       }
 
-      if (!response || !response.ok) {
+      if (attemptFailed || !response || !response.ok) {
         console.error("[onboard/chat] openrouter request failed", {
           model,
           status: response?.status,
-          attemptedRetry,
+          timedOut,
+          // Only surface networkErrorName when the failure was an actual thrown error
+          // (and not just an HTTP non-2xx with a body we already extract metadata from).
+          networkErrorName: attemptFailed && !timedOut ? networkErrorName : undefined,
+          elapsedMs: Date.now() - attemptStart,
           ...extractSafeOpenRouterErrorMeta(responseText)
         });
+        // Model-to-model fallback IS the retry: a same-provider rate limit rarely clears
+        // within a few hundred ms, so falling over to the next model is the meaningful hedge.
         if (!isLastModel) continue;
         return errorResponse("INTERNAL_SERVER_ERROR", FRIENDLY_ASSISTANT_ERROR);
       }
