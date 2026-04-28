@@ -7,13 +7,14 @@ type AuthUser = {
   email: string | null;
 };
 
-// Routes that require an authenticated session. /onboard/checkout and
-// /onboard/success are intentionally NOT here: the post-questionnaire flow
-// goes Stripe-first (anonymous → /onboard/checkout → /api/checkout with an
-// onboarding token → Stripe → /onboard/success), and the account is then
-// minted server-side via `auth.admin.createUser({ email_confirm: true })` in
-// /api/onboard/set-password. Routing those pages through /signup would force
-// a pre-payment email-confirmation roundtrip (the source of Vercel's 494
+// Routes that require an authenticated session. /onboard/success is
+// intentionally NOT here: the post-questionnaire flow goes Stripe-first
+// (anonymous /onboard/questionnaire Step 3 → /api/business/create with an
+// onboarding token → /api/checkout → Stripe → /onboard/success), and the
+// account is then minted server-side via
+// `auth.admin.createUser({ email_confirm: true })` in
+// /api/onboard/set-password. Gating /onboard/success on auth would force a
+// pre-payment email-confirmation roundtrip (the source of Vercel's 494
 // REQUEST_HEADER_TOO_LARGE on chunked-cookie accumulation) and contradicts
 // the OrderSummaryCard copy that promises "create your password and confirm
 // your email" AFTER payment.

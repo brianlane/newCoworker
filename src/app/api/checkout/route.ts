@@ -227,9 +227,17 @@ export async function POST(request: Request) {
     const session = await createCheckoutSession({
       priceId,
       successUrl: `${appUrl}/onboard/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancelUrl: body.draftToken
-        ? `${appUrl}/onboard/checkout?businessId=${encodeURIComponent(body.businessId)}&draftToken=${encodeURIComponent(body.draftToken)}`
-        : `${appUrl}/onboard`,
+      // Stripe-cancel returns the user to the questionnaire, where the
+      // localStorage draft already has `businessId` + `draftToken` +
+      // `persistedToDatabase: true`, so retrying "Proceed to Payment"
+      // skips /api/business/create and just re-mints the Stripe session.
+      // We pass `tier`/`period` so the QuestionnairePage Suspense'd
+      // useSearchParams resolves the right plan on Step 3. We don't echo
+      // `businessId`/`draftToken` in the URL because the questionnaire
+      // reads them from localStorage and exposing them in the URL would
+      // hand a checkout-resumption surface to anyone with link-leak
+      // logging (referrer headers, browser history, screenshares).
+      cancelUrl: `${appUrl}/onboard/questionnaire?tier=${encodeURIComponent(body.tier)}&period=${encodeURIComponent(body.billingPeriod)}`,
       customerEmail,
       discountCouponId,
       metadata: {

@@ -17,7 +17,8 @@ const schema = z.object({
  * This is the "Step 4 after payment" half of the Stripe-first onboarding
  * flow:
  *
- *   /onboard/checkout (anon) → /api/checkout (anon, onboardingToken-gated,
+ *   /onboard/questionnaire Step 3 (anon) → /api/business/create (anon,
+ *     mints onboardingToken) → /api/checkout (anon, onboardingToken-gated,
  *     refuses any email that already has a Supabase auth user — see the
  *     `authUserExistsByEmail` gate in that route)
  *   → Stripe Checkout → /onboard/success?session_id=...

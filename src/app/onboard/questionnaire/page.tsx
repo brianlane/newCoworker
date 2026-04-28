@@ -356,7 +356,6 @@ function QuestionnaireForm() {
     businessId?: string,
     draftToken?: string,
     ownerEmail?: string,
-    signupUserId?: string,
     onboardingToken?: string,
     persistedToDatabase = false
   ): OnboardingData {
@@ -371,11 +370,18 @@ function QuestionnaireForm() {
       }
     };
 
+    // NOTE: `signupUserId` is intentionally not carried forward here. In the
+    // current Stripe-first flow the auth user is minted post-payment by
+    // /api/onboard/set-password; there is no Supabase session pre-checkout,
+    // so any `signupUserId` left in localStorage is a stale relic from the
+    // previous auth-first deployment. Sending it would route the legacy
+    // server branches that call `verifySignupIdentity`, which fails for an
+    // unauthenticated caller and surfaces as "Not authorized to create
+    // business". Dropping it forces the anonymous onboarding-token branch.
     return {
       businessId,
       draftToken,
       ownerEmail,
-      signupUserId,
       onboardingToken,
       persistedToDatabase,
       tier,
@@ -394,7 +400,6 @@ function QuestionnaireForm() {
       businessId,
       draftToken,
       signupEmail || existingOnboarding?.ownerEmail,
-      existingOnboarding?.signupUserId,
       existingOnboarding?.onboardingToken,
       existingOnboarding?.persistedToDatabase ?? false
     );
@@ -418,6 +423,16 @@ function QuestionnaireForm() {
     return onboardingData;
   }
 
+  /**
+   * Step 3's "Proceed to Payment" handler. Previously this just persisted
+   * the draft and bounced to /onboard/checkout, which then ran the actual
+   * orchestration (create business → save assistant config → mint Stripe
+   * session) behind a second confirm-this-summary tap. The interstitial
+   * page showed an Order Summary identical to the one already rendered on
+   * Step 3, which was redundant from the user's perspective and added a
+   * second click between "I'm done" and Stripe. We now do the whole
+   * orchestration here and redirect straight to Stripe.
+   */
   async function handleContinueToCheckout(event: FormEvent) {
     event.preventDefault();
     if (signupLoading) return;
@@ -430,16 +445,133 @@ function QuestionnaireForm() {
 
     try {
       setSignupLoading(true);
-      const onboardingData = await persistOnboardingDraft();
-      // Intentionally keep DRAFT_STORAGE_KEY here. It is the only place the full chat
-      // transcript lives locally (OnboardingAssistantChatState in ONBOARD_STORAGE_KEY
-      // omits messages by design). If the user back-navigates from /onboard/checkout
-      // or /signup we want them to land back on this questionnaire with their interview
-      // history intact. The draft is overwritten on every form change anyway.
-      const checkoutUrl = new URL("/onboard/checkout", window.location.origin);
-      checkoutUrl.searchParams.set("businessId", onboardingData.businessId ?? "");
-      checkoutUrl.searchParams.set("draftToken", onboardingData.draftToken ?? "");
-      window.location.href = checkoutUrl.toString();
+      let onboardingData = await persistOnboardingDraft();
+      const businessId = onboardingData.businessId;
+      if (!businessId) {
+        throw new Error("Missing business id for checkout");
+      }
+
+      // Skip /api/business/create when the draft already persisted the
+      // `businesses` row (e.g. user retried after a Stripe cancel). The
+      // onboardingToken minted on the original create is the proof of
+      // ownership for subsequent calls in this anonymous flow.
+      const businessAlreadyPersisted =
+        onboardingData.persistedToDatabase === true ||
+        (onboardingData.persistedToDatabase === undefined &&
+          Boolean(onboardingData.businessId) &&
+          !onboardingData.draftToken);
+
+      if (!businessAlreadyPersisted) {
+        const createRes = await fetch("/api/business/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            businessId,
+            ownerEmail: onboardingData.ownerEmail,
+            name: onboardingData.businessName,
+            tier: onboardingData.tier,
+            businessType: onboardingData.businessType,
+            ownerName: onboardingData.ownerName,
+            phone: onboardingData.phone,
+            websiteUrl: onboardingData.websiteUrl,
+            serviceArea: onboardingData.serviceArea,
+            typicalInquiry: onboardingData.typicalInquiry,
+            teamSize: onboardingData.teamSize,
+            crmUsed: onboardingData.crmUsed
+          })
+        });
+        const createJson = await createRes.json().catch(() => null);
+        if (!createRes.ok) {
+          throw new Error(createJson?.error?.message ?? "Failed to create business");
+        }
+        onboardingData = {
+          ...onboardingData,
+          onboardingToken: createJson?.data?.onboardingToken ?? undefined,
+          persistedToDatabase: true
+        };
+        localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(onboardingData));
+      }
+
+      // Fire-and-forget website ingest while the user goes to Stripe.
+      // `keepalive` lets the request keep going after navigation; we never
+      // await it so a slow summarizer can't block checkout.
+      if (onboardingData.websiteUrl && onboardingData.websiteUrl.trim()) {
+        try {
+          void fetch("/api/onboard/website-ingest", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            keepalive: true,
+            body: JSON.stringify({
+              businessId,
+              websiteUrl: onboardingData.websiteUrl,
+              draftToken: onboardingData.draftToken,
+              businessName: onboardingData.businessName,
+              businessType: onboardingData.businessType
+            })
+          });
+        } catch { /* non-blocking */ }
+      }
+
+      if (onboardingData.assistantChat?.drafts) {
+        const configRes = await fetch("/api/business/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            businessId,
+            ownerEmail: onboardingData.ownerEmail,
+            onboardingToken: onboardingData.onboardingToken,
+            soulMd: onboardingData.assistantChat.drafts.soulMd,
+            identityMd: onboardingData.assistantChat.drafts.identityMd,
+            memoryMd: onboardingData.assistantChat.drafts.memoryMd
+          })
+        });
+        if (!configRes.ok) throw new Error("Failed to save assistant profile");
+      }
+
+      // Re-sync the draft now that we may have a fresh `onboardingToken`
+      // and `persistedToDatabase: true`. This keeps the server-side draft
+      // in step with localStorage so a Stripe-cancel return reads a
+      // consistent record.
+      if (onboardingData.businessId && onboardingData.draftToken) {
+        const draftRes = await fetch("/api/onboard/draft", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            businessId: onboardingData.businessId,
+            draftToken: onboardingData.draftToken,
+            onboardingData
+          })
+        });
+        const draftJson = await draftRes.json().catch(() => null);
+        if (!draftRes.ok) {
+          throw new Error(draftJson?.error?.message ?? "Failed to sync onboarding draft");
+        }
+      }
+
+      const checkoutRes = await fetch("/api/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tier: onboardingData.tier,
+          businessId,
+          billingPeriod: onboardingData.billingPeriod ?? "biennial",
+          ownerEmail: onboardingData.ownerEmail,
+          onboardingToken: onboardingData.onboardingToken,
+          draftToken: onboardingData.draftToken
+        })
+      });
+      const checkoutJson = await checkoutRes.json().catch(() => null);
+      if (!checkoutRes.ok) {
+        throw new Error(checkoutJson?.error?.message ?? "Checkout failed");
+      }
+
+      const checkoutUrl = checkoutJson?.data?.checkoutUrl;
+      if (typeof checkoutUrl !== "string" || !checkoutUrl) {
+        throw new Error("Invalid checkout response");
+      }
+
+      localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(onboardingData));
+      window.location.href = checkoutUrl;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not continue to checkout");
     } finally {
@@ -734,13 +866,21 @@ function QuestionnaireForm() {
                     businessName={form.businessName}
                   />
 
+                  <p className="text-xs text-parchment/40 text-center">
+                    30-day money-back guarantee · Cancel within 30 days for a full refund
+                  </p>
+
                   <div className="rounded-lg border border-parchment/10 bg-parchment/5 px-3 py-2 text-xs text-parchment/65">
                     After payment, you&apos;ll complete Step 4 by creating your password and confirming your email.
                   </div>
 
                   <Button type="submit" className="w-full" loading={signupLoading}>
-                    Continue to Payment →
+                    Proceed to Payment →
                   </Button>
+
+                  <p className="text-center text-xs text-parchment/30">
+                    You&apos;ll be redirected to Stripe for secure payment.
+                  </p>
               </form>
             </div>
           )}
