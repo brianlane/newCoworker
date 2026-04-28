@@ -120,6 +120,7 @@ function QuestionnaireForm() {
   const [error, setError] = useState<string | null>(null);
   const [signupEmail, setSignupEmail] = useState("");
   const [signupLoading, setSignupLoading] = useState(false);
+  const [emailChecking, setEmailChecking] = useState(false);
   const [draftSaving, setDraftSaving] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
@@ -456,6 +457,38 @@ function QuestionnaireForm() {
         setError("Please enter a valid email address");
         return;
       }
+
+      // UX preflight against the email-uniqueness gate. The real
+      // security boundary lives on /api/checkout (using the strict
+      // `authUserExistsByEmail` helper that fails closed); this
+      // preflight just spares the user from filling out the rest of
+      // the questionnaire only to be rejected at "Proceed to
+      // Payment". A network/5xx error here is intentionally treated
+      // as "go ahead" — the server-side gate will catch any false
+      // negative.
+      try {
+        setEmailChecking(true);
+        const checkRes = await fetch("/api/onboard/check-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: signupEmail.trim() })
+        });
+        if (checkRes.ok) {
+          const checkJson = await checkRes.json().catch(() => null);
+          if (checkJson?.data?.available === false) {
+            setError(
+              "An account with this email already exists. Please sign in instead."
+            );
+            return;
+          }
+        }
+      } catch {
+        // Network failure; fall through to advance. Server-side gate
+        // is authoritative.
+      } finally {
+        setEmailChecking(false);
+      }
+
       setError(null);
       setStep(2);
       return;
@@ -730,8 +763,10 @@ function QuestionnaireForm() {
             <Button
               className="flex-1"
               onClick={() => void handleAdvanceStep()}
+              loading={step === 1 && emailChecking}
               disabled={
                 draftSaving ||
+                emailChecking ||
                 (step === 1 && (!form.businessName || !signupEmail.trim())) ||
                 (step === 2 && !canContinueFromChat)
               }

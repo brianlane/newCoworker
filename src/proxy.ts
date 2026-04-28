@@ -7,7 +7,17 @@ type AuthUser = {
   email: string | null;
 };
 
-const protectedPrefixes = ["/dashboard", "/onboard/checkout", "/onboard/success"];
+// Routes that require an authenticated session. /onboard/checkout and
+// /onboard/success are intentionally NOT here: the post-questionnaire flow
+// goes Stripe-first (anonymous → /onboard/checkout → /api/checkout with an
+// onboarding token → Stripe → /onboard/success), and the account is then
+// minted server-side via `auth.admin.createUser({ email_confirm: true })` in
+// /api/onboard/set-password. Routing those pages through /signup would force
+// a pre-payment email-confirmation roundtrip (the source of Vercel's 494
+// REQUEST_HEADER_TOO_LARGE on chunked-cookie accumulation) and contradicts
+// the OrderSummaryCard copy that promises "create your password and confirm
+// your email" AFTER payment.
+const protectedPrefixes = ["/dashboard"];
 
 function isProtectedRoute(pathname: string) {
   return protectedPrefixes.some((p) => pathname.startsWith(p));
@@ -195,13 +205,8 @@ export async function proxy(request: NextRequest) {
   // --- Protected route gate (owner dashboard) ---
   if (isProtectedRoute(pathname) && !user) {
     const redirectUrl = request.nextUrl.clone();
-    if (pathname.startsWith("/onboard/checkout")) {
-      redirectUrl.pathname = "/signup";
-      redirectUrl.searchParams.set("redirectTo", pathname);
-    } else {
-      redirectUrl.pathname = "/login";
-      redirectUrl.searchParams.set("redirectTo", pathname);
-    }
+    redirectUrl.pathname = "/login";
+    redirectUrl.searchParams.set("redirectTo", pathname);
     return redirectWithCookies(response, redirectUrl);
   }
 

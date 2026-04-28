@@ -6,7 +6,7 @@ import Image from "next/image";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card } from "@/components/ui/Card";
-import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
+import { clearStaleSupabaseAuthCookies, getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 export default function LoginPage() {
   return (
@@ -52,6 +52,11 @@ function LoginForm() {
     }
     setLoading(true);
     setError(null);
+    // Scrub stale `sb-*` cookies so the magic-link callback to
+    // /api/auth/callback doesn't blow past Vercel's edge header limit. See
+    // `clearStaleSupabaseAuthCookies` for the full rationale (494 / chunked
+    // auth-token accumulation across abandoned sessions).
+    await clearStaleSupabaseAuthCookies();
     const supabase = getSupabaseBrowserClient();
     const encodedRedirect = encodeURIComponent(redirectTo);
     const { error: magicError } = await supabase.auth.signInWithOtp({

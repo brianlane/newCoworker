@@ -1,4 +1,4 @@
-import { getAuthUser, verifySignupIdentity } from "@/lib/auth";
+import { authUserExistsByEmail, getAuthUser, verifySignupIdentity } from "@/lib/auth";
 import { createCheckoutSession, resolveIntroDiscountCouponId, resolvePriceId } from "@/lib/stripe/client";
 import { createSubscription } from "@/lib/db/subscriptions";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
@@ -64,6 +64,34 @@ export async function POST(request: Request) {
         if (!business || business.owner_email !== createPendingOwnerEmail(body.businessId)) {
           return errorResponse("FORBIDDEN", "Onboarding token is no longer valid");
         }
+
+        // Pre-payment account-uniqueness gate. By design, "account
+        // creation" (post-payment `admin.createUser` in
+        // /api/onboard/set-password) and "password reset" (the
+        // standard Supabase `resetPasswordForEmail` link delivered to
+        // the user's real mailbox) are SEPARATE flows. The anonymous
+        // Stripe-first checkout has no business creating a paid
+        // session bound to an email that ALREADY has an auth user —
+        // doing so would either (a) collide with the post-payment
+        // create and 409, stranding the customer on a paid checkout,
+        // or (b) re-open the registration-injection surface if we
+        // ever loosened set-password. The legitimate path for an
+        // existing user is /login, not anonymous re-onboarding.
+        //
+        // Uses the strict `authUserExistsByEmail` helper so a
+        // transient lookup failure surfaces as 500 (driving a client
+        // retry) rather than silently allowing the checkout through.
+        if (await authUserExistsByEmail(body.ownerEmail)) {
+          logger.info("checkout blocked: email already has an auth user", {
+            businessId: body.businessId
+          });
+          return errorResponse(
+            "CONFLICT",
+            "An account with this email already exists. Please sign in to continue.",
+            409
+          );
+        }
+
         metadataUserId = body.businessId;
         customerEmail = body.ownerEmail;
       } else {
