@@ -554,9 +554,21 @@ function QuestionnaireForm() {
                   ref={chatViewportRef}
                   className="max-h-[36rem] min-h-[24rem] space-y-3 overflow-y-auto rounded-2xl border border-parchment/8 bg-deep-ink/25 p-4"
                 >
-                  {!form.assistantChat?.messages.length && !chatLoading && !chatError && (
-                    <div className="flex h-full min-h-[12rem] items-center justify-center text-center text-sm text-parchment/45">
-                      Starting your onboarding interview...
+                  {!form.assistantChat?.messages.length && !chatError && (
+                    <div
+                      className="flex h-full min-h-[12rem] items-center justify-center text-center text-sm text-parchment/45"
+                      role="status"
+                      aria-live="polite"
+                      aria-label="Starting your onboarding interview"
+                    >
+                      <span className="inline-flex items-center gap-1.5">
+                        <span>Starting your onboarding interview</span>
+                        <span className="inline-flex items-end gap-0.5" aria-hidden="true">
+                          <span className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.3s]" />
+                          <span className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.15s]" />
+                          <span className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-bounce" />
+                        </span>
+                      </span>
                     </div>
                   )}
                   {form.assistantChat?.messages.map((message, index) => (
@@ -596,9 +608,21 @@ function QuestionnaireForm() {
                       <p>{pendingUserMessage.content}</p>
                     </div>
                   )}
-                  {chatLoading && (
-                    <div className="mr-12 rounded-2xl border border-signal-teal/12 bg-signal-teal/10 px-4 py-3 text-sm text-parchment/70">
-                      Thinking...
+                  {chatLoading && (form.assistantChat?.messages.length ?? 0) > 0 && (
+                    <div
+                      className="mr-12 rounded-2xl border border-signal-teal/12 bg-signal-teal/10 px-4 py-3 text-sm text-parchment/70"
+                      role="status"
+                      aria-live="polite"
+                      aria-label="Onboarding assistant is thinking"
+                    >
+                      <span className="inline-flex items-center gap-1.5">
+                        <span>Thinking</span>
+                        <span className="inline-flex items-end gap-0.5" aria-hidden="true">
+                          <span className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.3s]" />
+                          <span className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.15s]" />
+                          <span className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-bounce" />
+                        </span>
+                      </span>
                     </div>
                   )}
                 </div>
