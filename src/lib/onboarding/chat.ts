@@ -255,7 +255,9 @@ export function buildOnboardingChatSystemPrompt(
     "- profile: { businessSummary, serviceArea, teamSize, crmUsed, offerings, customerTypes, commonRequests, inquiryFlows[{trigger,responseGoal}], routingRules, schedulingRules, escalationRules, tools, toneDirectives, signature, policies, factsToRemember }",
     "",
     "Mark readyToFinalize true only when you have enough information to draft a useful business assistant without obvious gaps.",
-    "When readyToFinalize is true, assistantMessage should briefly confirm that you have what you need and tell the user they can continue."
+    "When readyToFinalize is true, assistantMessage should briefly confirm that you have what you need and tell the user they can continue.",
+    "When readyToFinalize is false, the LAST sentence of assistantMessage MUST be a single concrete question that ends with a question mark. Do not summarize what you have unless it is followed by that question.",
+    "When readyToFinalize is false, NEVER write phrases like 'you can continue', 'answer the next question', 'ready to finalize soon', 'almost done', or any similar wording that implies the interview is wrapping up. Either ask the next concrete question or set readyToFinalize true — never both, and never neither."
   ].join("\n");
 }
 

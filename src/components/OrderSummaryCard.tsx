@@ -11,7 +11,6 @@ type OrderSummaryCardProps = {
   tier: PlanTier;
   period: BillingPeriod;
   businessName?: string;
-  assistantBriefPercent?: number;
   preferFirstMonthLabel?: boolean;
 };
 
@@ -29,7 +28,6 @@ export function OrderSummaryCard({
   tier,
   period,
   businessName,
-  assistantBriefPercent,
   preferFirstMonthLabel = false
 }: OrderSummaryCardProps) {
   const hasIntroDiscount = hasFirstCycleDiscount(tier, period);
@@ -53,12 +51,6 @@ export function OrderSummaryCard({
         <span>Business</span>
         <span>{businessName?.trim() ? businessName : "—"}</span>
       </div>
-      {typeof assistantBriefPercent === "number" && (
-        <div className="flex justify-between text-parchment/70">
-          <span>Assistant brief</span>
-          <span>{assistantBriefPercent}% captured</span>
-        </div>
-      )}
       <div className="flex justify-between text-parchment/70">
         <span>{monthlyLabel}</span>
         <span className="flex items-center gap-2">

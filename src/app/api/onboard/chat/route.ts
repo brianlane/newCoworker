@@ -196,29 +196,48 @@ function shouldSuppressRepeatedToolsQuestion(
   return countToolSignalUserMessages(messages) >= 2;
 }
 
+// Detects "dead-end" assistant turns: messages with no question for the user to answer.
+// Question-mark presence is a deliberately conservative signal — it catches the failure
+// mode we've actually observed in production ("you can continue by answering the next
+// question; we should be ready to finalize soon" with no `?`) without false-positives on
+// legitimately question-bearing messages.
+function hasQuestionForUser(message: string): boolean {
+  return /\?/.test(message);
+}
+
+// Drives every fallback question off the server-computed `topicStatus` so the priority
+// order matches `Object.values(topicStatus).every(Boolean)` exactly. The earlier version
+// used profile/context shape checks and silently lacked a tools branch — when toolsKnown
+// was the only remaining gap, `allTopicsCovered` was false but this helper would still
+// jump to the generic policy question, never asking about CRM/tools and letting that gap
+// linger across multiple dead-end turns.
 function createFallbackAssistantQuestion(
-  knownContext: z.infer<typeof requestSchema>,
-  profile: z.infer<typeof onboardingAssistantProfileSchema>
+  topicStatus: ReturnType<typeof summarizeOnboardingTopicStatus>
 ): string {
-  if (!profile.serviceArea.trim() && !knownContext.serviceArea?.trim()) {
+  if (!topicStatus.serviceAreaKnown) {
     return "What service area, market, or territory do you cover?";
   }
-  if (!profile.teamSize.trim() && !knownContext.teamSize?.trim()) {
+  if (!topicStatus.teamSizeKnown) {
     return "How big is the team the assistant supports? If it is just you, say that directly.";
   }
-  if (profile.customerTypes.length === 0) {
+  if (!topicStatus.toolsKnown) {
+    // Wording intentionally avoids the substrings detected by `isRepeatedToolsQuestion`
+    // so this fallback isn't itself flagged as the very thing that other guard suppresses.
+    return "Which tools do you rely on day-to-day to track leads, schedule, or message customers? If you don't have a CRM, just list whatever you use (texts, Gmail, calendar, etc.).";
+  }
+  if (!topicStatus.customerTypesKnown) {
     return "What types of customers usually reach out first? List the top 1-3 customer types.";
   }
-  if (profile.commonRequests.length === 0) {
+  if (!topicStatus.commonRequestsKnown) {
     return "What are the top 1-3 recurring questions or requests customers usually send first?";
   }
-  if (profile.inquiryFlows.length === 0) {
+  if (!topicStatus.inquiryFlowsKnown) {
     return "Give me one common inbound scenario in cause/effect form: what triggers the conversation, and what outcome should the assistant guide it toward?";
   }
-  if (profile.routingRules.length === 0 && profile.escalationRules.length === 0) {
+  if (!topicStatus.routingRulesKnown) {
     return "When should the assistant route someone to you or another human instead of handling it alone?";
   }
-  if (profile.toneDirectives.length === 0 && !profile.signature.trim()) {
+  if (!topicStatus.toneKnown) {
     return "How should the assistant sound in messages? Give 3-5 tone rules and any preferred sign-off.";
   }
   return "What is one business rule, policy, or fact the assistant must remember so it does not mislead customers?";
@@ -378,9 +397,44 @@ export async function POST(request: Request) {
     ) {
       parsed = {
         ...parsed,
-        assistantMessage: createFallbackAssistantQuestion(body, parsed.profile)
+        assistantMessage: createFallbackAssistantQuestion(topicStatus)
       };
     }
+
+    // Dead-end guard: the model occasionally telegraphs "we're almost done — answer the
+    // next question" without actually asking one and without setting readyToFinalize.
+    // That leaves the user stuck (no question to answer, Continue button disabled) and
+    // forces a wasted round-trip just to elicit the missing question. The prompt forbids
+    // this, but LLMs ignore rules late in long conversations, so we deterministically
+    // recover here:
+    //   - if every onboarding topic is already covered, finalize for the model;
+    //   - otherwise, swap the message for a concrete next question driven by the
+    //     server's view of what's still missing.
+    if (!parsed.readyToFinalize && !hasQuestionForUser(parsed.assistantMessage)) {
+      const allTopicsCovered = Object.values(topicStatus).every(Boolean);
+      if (allTopicsCovered) {
+        parsed = { ...parsed, readyToFinalize: true };
+      } else {
+        parsed = {
+          ...parsed,
+          assistantMessage: createFallbackAssistantQuestion(topicStatus)
+        };
+      }
+    }
+
+    // Whenever the conversation is finalized — whether the model set it, or the dead-end
+    // guard forced it above — the brief is by definition complete. Clamp the progress
+    // metadata so downstream consumers (UI summaries, persisted state, future analytics)
+    // never see a finalized response carrying a stale "92% captured" + non-empty
+    // missingTopics from an earlier turn.
+    if (parsed.readyToFinalize) {
+      parsed = {
+        ...parsed,
+        completionPercent: 100,
+        missingTopics: []
+      };
+    }
+
     parsed = {
       ...parsed,
       assistantMessage: finalizeAssistantMessage(parsed.assistantMessage, parsed.readyToFinalize)

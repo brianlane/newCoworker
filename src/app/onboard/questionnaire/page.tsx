@@ -520,7 +520,7 @@ function QuestionnaireForm() {
                 autoComplete="url"
               />
               <p className="-mt-2 text-[11px] text-parchment/45">
-                We&apos;ll scan public pages once to give your coworker context about what you do,
+                We scan public pages to give your new coworker context about what you do,
                 and to understand your business better.
               </p>
               <Input
@@ -675,7 +675,6 @@ function QuestionnaireForm() {
                     tier={tier}
                     period={period}
                     businessName={form.businessName}
-                    assistantBriefPercent={form.assistantChat?.completionPercent ?? 0}
                   />
 
                   <div className="rounded-lg border border-parchment/10 bg-parchment/5 px-3 py-2 text-xs text-parchment/65">
