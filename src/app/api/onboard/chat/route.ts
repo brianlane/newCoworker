@@ -324,21 +324,29 @@ export async function POST(request: Request) {
         const finishReason = choice?.finish_reason;
         const content = extractTextContent(choice?.message?.content);
 
-        // A `length` finish_reason means the model hit max_completion_tokens mid-output.
-        // The content is truncated mid-JSON, so attempting to parse it will always fail
-        // with a SyntaxError that gets mislabeled as `invalid_json`. Short-circuit to a
-        // distinct `truncated` error so the log captures the real cause and we can fall
-        // over to the next model immediately.
-        if (finishReason === "length") {
-          throw new TruncatedModelOutputError();
-        }
-
         if (!content) {
-          throw new Error("The onboarding model returned an empty response.");
+          // Empty body with `length` is a real truncation (the cap was hit before any
+          // content was emitted); empty body otherwise is a different upstream failure.
+          throw finishReason === "length"
+            ? new TruncatedModelOutputError()
+            : new Error("The onboarding model returned an empty response.");
         }
 
-        parsed = onboardingChatModelResponseSchema.parse(parseJsonPayload(content));
-        break;
+        // Try to parse + validate first. Providers can stamp `finish_reason: "length"`
+        // any time the token cap is reached, including cases where the JSON happens to
+        // be complete and schema-valid (e.g. the model finished the object and would
+        // have kept narrating). Treating those as truncated would discard usable
+        // answers and force unnecessary fallover. Only escalate to `truncated` when the
+        // output also fails parse or schema validation.
+        try {
+          parsed = onboardingChatModelResponseSchema.parse(parseJsonPayload(content));
+          break;
+        } catch (parseError) {
+          if (finishReason === "length") {
+            throw new TruncatedModelOutputError();
+          }
+          throw parseError;
+        }
       } catch (error) {
         // Intentionally do not log the response body here: on a parse failure it is
         // typically the assistant's JSON output, which restates user-provided business
