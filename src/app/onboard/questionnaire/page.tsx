@@ -145,32 +145,24 @@ function QuestionnaireForm() {
         setStep(3);
       }
 
-      // Layer order matters: DRAFT carries in-progress edits + the chat transcript
-      // (OnboardingAssistantChatState in ONBOARD intentionally omits messages), but
-      // ONBOARD is the authoritative snapshot for fields that may be updated downstream
-      // (e.g. ownerEmail rewritten from the Stripe-verified address by /api/onboard/finalize-signup).
-      // We start from DRAFT so chat messages survive a back-navigation, then overlay
-      // ONBOARD's authoritative fields, then re-attach the DRAFT messages so the
-      // overlay's empty `messages: []` from toFormData doesn't clobber them.
-      setForm((prev) => {
-        let next: FormData = { ...prev };
-        if (draft?.form) {
-          next = { ...next, ...draft.form };
-        }
-        if (storedOnboarding) {
-          const onboardFormData = toFormData(storedOnboarding);
-          const draftMessages = draft?.form?.assistantChat?.messages;
-          next = { ...next, ...onboardFormData };
-          if (Array.isArray(draftMessages) && draftMessages.length > 0 && next.assistantChat) {
-            next.assistantChat = { ...next.assistantChat, messages: draftMessages };
-          }
-        }
-        return next;
-      });
+      // Form fields: DRAFT is the source of truth when it exists. It carries the most
+      // recent in-progress edits AND the chat transcript (OnboardingAssistantChatState
+      // in ONBOARD intentionally omits messages). Only fall back to ONBOARD when DRAFT
+      // is missing — overlaying ONBOARD on top of DRAFT would clobber unsynced field
+      // edits that the user made between back-navigations. The one downstream-updated
+      // field — ownerEmail — is reconciled separately below (it lives in `signupEmail`,
+      // not in the form payload) so it does not need to participate in this merge.
+      if (draft?.form) {
+        setForm((prev) => ({ ...prev, ...draft.form }));
+      } else if (storedOnboarding) {
+        setForm((prev) => ({ ...prev, ...toFormData(storedOnboarding) }));
+      }
 
       // Email precedence: prefer the authoritative ONBOARD.ownerEmail (it may have been
-      // rewritten post-checkout) over the DRAFT-cached signupEmail. This prevents a stale
-      // step-1 typo from being re-applied via persistOnboardingDraft on a return visit.
+      // rewritten post-checkout, e.g. by /api/onboard/finalize-signup using the Stripe
+      // customer email) over the DRAFT-cached signupEmail. Without this, a stale step-1
+      // value would be re-applied via persistOnboardingDraft on a return visit
+      // (`signupEmail || existingOnboarding?.ownerEmail`).
       if (typeof storedOnboarding?.ownerEmail === "string" && storedOnboarding.ownerEmail) {
         setSignupEmail(storedOnboarding.ownerEmail);
       } else if (typeof draft?.signupEmail === "string") {
