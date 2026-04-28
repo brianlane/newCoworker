@@ -227,6 +227,8 @@ export async function POST(request: Request) {
       let response: Response | null = null;
       let responseText = "";
       let timedOut = false;
+      let attemptFailed = false;
+      let networkErrorName: string | null = null;
 
       try {
         response = await fetchOpenRouterChat({
@@ -238,28 +240,30 @@ export async function POST(request: Request) {
         });
         responseText = await response.text();
       } catch (fetchError) {
+        // Any throw between fetch start and end-of-body-read counts as a failed attempt:
+        // - AbortError / signal.aborted -> our timeout
+        // - anything else (DNS, TLS, socket reset mid-stream, etc.) -> non-abort failure
+        // Flagging both via `attemptFailed` keeps the failure guard below correct even
+        // when `fetch()` resolved with `response.ok === true` but `response.text()` then
+        // threw — otherwise we'd fall into JSON parsing and mislabel the failure as
+        // `invalid_json` in logs.
+        attemptFailed = true;
         timedOut =
           (fetchError instanceof Error && fetchError.name === "AbortError") ||
           abortController.signal.aborted;
-        if (!timedOut) {
-          console.error("[onboard/chat] openrouter network error", {
-            model,
-            errorName: fetchError instanceof Error ? fetchError.name : "unknown"
-          });
-        }
+        networkErrorName = fetchError instanceof Error ? fetchError.name : "unknown";
       } finally {
         clearTimeout(abortTimer);
       }
 
-      // `timedOut` must be part of the failure guard: if the abort fires after `fetch()`
-      // resolves but during `response.text()`, `response.ok` is true and `responseText` is
-      // empty. Without this check we'd fall into JSON parsing and mislabel the timeout as
-      // an invalid-JSON parse error in the logs.
-      if (!response || !response.ok || timedOut) {
+      if (attemptFailed || !response || !response.ok) {
         console.error("[onboard/chat] openrouter request failed", {
           model,
           status: response?.status,
           timedOut,
+          // Only surface networkErrorName when the failure was an actual thrown error
+          // (and not just an HTTP non-2xx with a body we already extract metadata from).
+          networkErrorName: attemptFailed && !timedOut ? networkErrorName : undefined,
           elapsedMs: Date.now() - attemptStart,
           ...extractSafeOpenRouterErrorMeta(responseText)
         });
