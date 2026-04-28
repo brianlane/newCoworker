@@ -264,6 +264,68 @@ describe("auth", () => {
       await expect(authUserExistsByEmail("owner@test.com")).resolves.toBe(true);
     });
 
+    it("returns false on a partial page that doesn't contain the target (definitive miss without exhausting the scan)", async () => {
+      // Hits the `users.length < perPage` short-circuit: a single
+      // partial page (< perPage users, none matching) is a definitive
+      // miss — listing further pages would just churn admin API
+      // calls. This branch is the common case for small / fresh
+      // deployments that haven't applied the RPC migration yet, so
+      // its correctness directly affects every legacy fallback miss.
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+        rpc: vi.fn().mockResolvedValue({
+          data: null,
+          error: { code: "PGRST202", message: "function does not exist" }
+        }),
+        auth: {
+          admin: {
+            listUsers: vi.fn().mockResolvedValue({
+              data: {
+                users: [
+                  { id: "u-1", email: "someone@test.com" },
+                  { id: "u-2", email: "another@test.com" }
+                ]
+              },
+              error: null
+            })
+          }
+        }
+      } as never);
+
+      await expect(authUserExistsByEmail("nobody@test.com")).resolves.toBe(false);
+    });
+
+    it("THROWS when the paginated scan exhausts PAGE_CAP without a definitive answer", async () => {
+      // Pathological case: every page comes back FULL with the wrong
+      // emails, meaning the cursor never reaches a definitive miss
+      // and we never find the target. The strict variant must refuse
+      // (throw) rather than silently report `false`, which would
+      // re-open the security-gate bypass on legacy deployments
+      // running with > PAGE_CAP * perPage = 2,000 users without the
+      // RPC migration applied.
+      const fullPage = Array.from({ length: 200 }, (_, i) => ({
+        id: `u-${i}`,
+        email: `user-${i}@test.com`
+      }));
+      const listUsers = vi.fn().mockResolvedValue({
+        data: { users: fullPage },
+        error: null
+      });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+        rpc: vi.fn().mockResolvedValue({
+          data: null,
+          error: { code: "PGRST202", message: "function does not exist" }
+        }),
+        auth: { admin: { listUsers } }
+      } as never);
+
+      await expect(authUserExistsByEmail("nobody@test.com")).rejects.toThrow(
+        /scan reached the cap/i
+      );
+      // 10 = PAGE_CAP. Pinning it here so any future loosening of the
+      // cap is paired with a deliberate test update.
+      expect(listUsers).toHaveBeenCalledTimes(10);
+    });
+
     it("THROWS when listUsers fails on the legacy fallback path", async () => {
       vi.mocked(createSupabaseServiceClient).mockResolvedValue({
         rpc: vi.fn().mockResolvedValue({
@@ -280,6 +342,98 @@ describe("auth", () => {
       } as never);
 
       await expect(authUserExistsByEmail("owner@test.com")).rejects.toThrow(/lookup failed/i);
+    });
+
+    it("formats the RPC error fallback message when error.message is missing", async () => {
+      // Branch coverage for the `?? "unknown error"` fallback in the
+      // RPC error path. Some Postgres errors arrive with a code but
+      // no human-readable message; the strict variant must still
+      // produce an actionable thrown error rather than rendering
+      // `undefined` into log lines.
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+        rpc: vi
+          .fn()
+          .mockResolvedValue({ data: null, error: { code: "57014" } }),
+        auth: { admin: { listUsers: vi.fn() } }
+      } as never);
+
+      await expect(authUserExistsByEmail("owner@test.com")).rejects.toThrow(
+        /unknown error/i
+      );
+    });
+
+    it("formats the listUsers error fallback message when pageError.message is missing", async () => {
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+        rpc: vi.fn().mockResolvedValue({
+          data: null,
+          error: { code: "PGRST202", message: "function does not exist" }
+        }),
+        auth: {
+          admin: {
+            // Error object intentionally has no `message` field — pins
+            // the `?? "unknown error"` fallback in the listUsers
+            // branch.
+            listUsers: vi
+              .fn()
+              .mockResolvedValue({ data: null, error: { code: "PGRST301" } })
+          }
+        }
+      } as never);
+
+      await expect(authUserExistsByEmail("owner@test.com")).rejects.toThrow(
+        /unknown error/i
+      );
+    });
+
+    it("tolerates users with null/undefined email on the listUsers fallback (does not throw on the email comparison)", async () => {
+      // Branch coverage for the `(u.email ?? "")` fallback inside
+      // the page scan. Real auth.users rows occasionally carry null
+      // emails (provider-only signups, post-deletion soft-tombstones,
+      // historical rows) — the comparator must skip them rather than
+      // throw on `null.toLowerCase()`.
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+        rpc: vi.fn().mockResolvedValue({
+          data: null,
+          error: { code: "PGRST202", message: "function does not exist" }
+        }),
+        auth: {
+          admin: {
+            listUsers: vi.fn().mockResolvedValue({
+              data: {
+                users: [
+                  { id: "u-null", email: null },
+                  { id: "u-real", email: "owner@test.com" }
+                ]
+              },
+              error: null
+            })
+          }
+        }
+      } as never);
+
+      await expect(authUserExistsByEmail("owner@test.com")).resolves.toBe(true);
+    });
+
+    it("returns false on an empty page (covers the `pageData?.users ?? []` fallback and the empty-page early return)", async () => {
+      // Two adjacent branches in one test: listUsers resolves with a
+      // null `data` payload (so the `?? []` defensive fallback runs)
+      // and the resulting empty users array hits the
+      // `users.length === 0` early-return. This is the "fewer users
+      // than perPage and the FIRST page is empty" shape — a
+      // freshly-provisioned auth schema, for instance.
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+        rpc: vi.fn().mockResolvedValue({
+          data: null,
+          error: { code: "PGRST202", message: "function does not exist" }
+        }),
+        auth: {
+          admin: {
+            listUsers: vi.fn().mockResolvedValue({ data: null, error: null })
+          }
+        }
+      } as never);
+
+      await expect(authUserExistsByEmail("owner@test.com")).resolves.toBe(false);
     });
 
     it("returns false on an empty trimmed email without hitting the DB", async () => {
