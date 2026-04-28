@@ -48,7 +48,13 @@ function SignupForm() {
   const tier = searchParams.get("tier");
   const period = searchParams.get("period");
   const loginHref = `/login?redirectTo=${encodeURIComponent(redirectTo)}${tier ? `&tier=${encodeURIComponent(tier)}` : ""}`;
-  const questionnaireHref = `/onboard/questionnaire?tier=${encodeURIComponent(tier ?? "starter")}&period=${encodeURIComponent(period ?? "biennial")}`;
+  // Default deep-link back into the questionnaire keeps users on the review step (where
+  // the persisted onboarding data lands them anyway). The "Change it" email link below
+  // appends `&step=1` so the user actually arrives on the step that owns the email field
+  // — otherwise the questionnaire's hydration logic drops them on step 3 (review), which
+  // has no email input and turns the link into a dead-end.
+  const questionnaireBaseHref = `/onboard/questionnaire?tier=${encodeURIComponent(tier ?? "starter")}&period=${encodeURIComponent(period ?? "biennial")}`;
+  const questionnaireEditEmailHref = `${questionnaireBaseHref}&step=1`;
 
   const [email, setEmail] = useState(() => readPrefilledOwnerEmail());
   // Track whether the email came from the onboarding questionnaire so we can render it
@@ -152,7 +158,7 @@ function SignupForm() {
           <p className="text-sm text-parchment/50">
             {tier ? `${tier.charAt(0).toUpperCase() + tier.slice(1)} plan selected — almost there!` : "Your AI coworker starts here"}
           </p>
-          <a href={questionnaireHref} className="text-sm text-signal-teal hover:underline">
+          <a href={questionnaireBaseHref} className="text-sm text-signal-teal hover:underline">
             ← Back to onboarding
           </a>
         </div>
@@ -175,7 +181,7 @@ function SignupForm() {
                 <p className="mt-1 text-parchment break-all">{email}</p>
                 <p className="mt-1 text-[11px] text-parchment/45">
                   Using the email from your onboarding details.{" "}
-                  <a href={questionnaireHref} className="text-signal-teal hover:underline">
+                  <a href={questionnaireEditEmailHref} className="text-signal-teal hover:underline">
                     Change it
                   </a>
                 </p>

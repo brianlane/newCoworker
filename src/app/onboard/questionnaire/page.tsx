@@ -139,7 +139,21 @@ function QuestionnaireForm() {
         localStorage.getItem(ONBOARD_STORAGE_KEY) ?? "null"
       ) as OnboardingData | null;
 
-      if (draft?.step && [1, 2, 3].includes(draft.step)) {
+      // URL-driven step intent (e.g. the "Change it" email link from /signup uses
+      // `?step=1`) takes precedence over both the draft-cached step and the
+      // onboarding-derived default of step 3. Without this, users completing the funnel
+      // get force-routed to the review step on every return visit because their
+      // onboarding data is already persisted, which makes deep-links to a specific edit
+      // step impossible.
+      const stepParamRaw = Number(searchParams.get("step"));
+      const stepFromUrl: Step | null =
+        stepParamRaw === 1 || stepParamRaw === 2 || stepParamRaw === 3
+          ? (stepParamRaw as Step)
+          : null;
+
+      if (stepFromUrl !== null) {
+        setStep(stepFromUrl);
+      } else if (draft?.step && [1, 2, 3].includes(draft.step)) {
         setStep(draft.step as Step);
       } else if (storedOnboarding) {
         setStep(3);
