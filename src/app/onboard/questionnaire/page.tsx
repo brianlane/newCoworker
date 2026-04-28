@@ -139,7 +139,31 @@ function QuestionnaireForm() {
         localStorage.getItem(ONBOARD_STORAGE_KEY) ?? "null"
       ) as OnboardingData | null;
 
-      if (draft?.step && [1, 2, 3].includes(draft.step)) {
+      // URL-driven step intent: ONLY `?step=1` is honored. That's the sole deep-link
+      // we currently expose (the "Change it" email link from /signup → step 1, which
+      // owns the email field). Honoring ?step=2 or ?step=3 would let users bypass the
+      // questionnaire's progression gates — `handleAdvanceStep` requires `chatClosed`
+      // to advance from step 2 to step 3 — and land directly on checkout with an empty
+      // or low-quality assistant profile. ?step=2/3 therefore falls through to the
+      // existing localStorage-derived precedence chain instead of overriding it.
+      const stepParamRaw = Number(searchParams.get("step"));
+      const stepFromUrl: Step | null = stepParamRaw === 1 ? 1 : null;
+
+      if (stepFromUrl !== null) {
+        setStep(stepFromUrl);
+        // Strip the consumed `step` param from the URL so a subsequent refresh or
+        // browser-back doesn't silently re-apply ?step=1 and yank the user back to
+        // step 1 after they've naturally advanced. After consumption, the draft's
+        // persisted `step` (written by the effect below on every step change) is the
+        // correct source of truth for return visits.
+        if (typeof window !== "undefined") {
+          const url = new URL(window.location.href);
+          url.searchParams.delete("step");
+          const search = url.searchParams.toString();
+          const cleaned = `${url.pathname}${search ? `?${search}` : ""}${url.hash}`;
+          window.history.replaceState(null, "", cleaned);
+        }
+      } else if (draft?.step && [1, 2, 3].includes(draft.step)) {
         setStep(draft.step as Step);
       } else if (storedOnboarding) {
         setStep(3);
