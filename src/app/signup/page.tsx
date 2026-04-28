@@ -9,7 +9,7 @@ import { Card } from "@/components/ui/Card";
 import { buildSignupAuthMetadata } from "@/lib/onboarding/auth-metadata";
 import { ONBOARD_STORAGE_KEY } from "@/lib/onboarding/storage";
 import { getPasswordValidationError, PASSWORD_RULES } from "@/lib/password";
-import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
+import { clearStaleSupabaseAuthCookies, getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 type StoredOnboardingData = {
   businessName?: string;
@@ -88,6 +88,15 @@ function SignupForm() {
     const onboardingDataWithLatestBusinessName = onboardingData
       ? { ...onboardingData, businessName }
       : null;
+
+    // Scrub stale `sb-*` auth cookies before kicking off the new signup so
+    // the eventual /api/auth/callback request (when the user clicks the
+    // confirmation email) carries at most a fresh PKCE code-verifier. Without
+    // this, accumulated chunked auth-token cookies from prior abandoned
+    // sessions can blow past Vercel's ~32 KB header limit and trigger a 494
+    // REQUEST_HEADER_TOO_LARGE at the edge — which we can't recover from
+    // server-side because Vercel rejects the request before middleware runs.
+    await clearStaleSupabaseAuthCookies();
 
     const supabase = getSupabaseBrowserClient();
     const encodedRedirect = encodeURIComponent(redirectTo);

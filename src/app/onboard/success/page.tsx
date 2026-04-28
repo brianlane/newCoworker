@@ -7,9 +7,8 @@ import { Card } from "@/components/ui/Card";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
-import { buildSignupAuthMetadata } from "@/lib/onboarding/auth-metadata";
 import { ONBOARD_STORAGE_KEY, type OnboardingData } from "@/lib/onboarding/storage";
-import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
+import { clearStaleSupabaseAuthCookies, getSupabaseBrowserClient } from "@/lib/supabase/browser";
 import { getPasswordValidationError, PASSWORD_RULES } from "@/lib/password";
 
 type SuccessStatus =
@@ -156,48 +155,81 @@ function OnboardSuccessContent() {
       return;
     }
 
+    if (!sessionId) {
+      // The Stripe-signed sessionId is the credential the server uses to
+      // mint the auth user. Without it, /api/onboard/set-password has no
+      // way to bind the password to a paid checkout — refuse rather than
+      // silently dropping the request.
+      setError("Your payment session has expired. Please complete checkout again.");
+      return;
+    }
+
     try {
       setSubmitting(true);
       const rawOnboarding = localStorage.getItem(ONBOARD_STORAGE_KEY);
       const onboardingData = rawOnboarding ? JSON.parse(rawOnboarding) as OnboardingData : null;
+
+      // Scrub any stale `sb-*` cookies BEFORE we sign in. This protects
+      // the subsequent dashboard requests (which include every chunked
+      // auth-token cookie in their headers) from Vercel's ~32KB edge
+      // header limit if the browser is carrying leftover cookies from
+      // earlier abandoned auth attempts. See `clearStaleSupabaseAuthCookies`
+      // for the full rationale.
+      await clearStaleSupabaseAuthCookies();
+
+      // Mint (or update) the auth user server-side. This goes through
+      // `auth.admin.createUser({ email_confirm: true })` in the route,
+      // which deliberately replaces the old client-side
+      // `supabase.auth.signUp({ emailRedirectTo })` flow: that flow
+      // forced an email-confirmation roundtrip whose callback to
+      // /api/auth/callback was the original 494 REQUEST_HEADER_TOO_LARGE
+      // failure surface for new signups.
+      const setPasswordRes = await fetch("/api/onboard/set-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, password })
+      });
+      const setPasswordJson = await setPasswordRes.json().catch(() => null);
+      if (!setPasswordRes.ok) {
+        throw new Error(setPasswordJson?.error?.message ?? "Could not create your account.");
+      }
+      const resolvedEmail =
+        (typeof setPasswordJson?.data?.ownerEmail === "string" && setPasswordJson.data.ownerEmail) ||
+        signupEmail;
+
+      // Sign the user in directly with the password they just set. The
+      // server already confirmed the email, so this is a normal login —
+      // no callback hop, no 494 risk. On success, Supabase's browser
+      // client writes the session cookies (chunked sb-*-auth-token) and
+      // subsequent /api/business/status polling will see an authenticated
+      // request.
       const supabase = getSupabaseBrowserClient();
-      const encodedRedirect = encodeURIComponent("/onboard/success");
-      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-        email: signupEmail,
-        password,
-        options: {
-          data: buildSignupAuthMetadata(
-            onboardingData?.businessName ?? "",
-            onboardingData ? { ...onboardingData, ownerEmail: signupEmail } : null
-          ),
-          emailRedirectTo: `${window.location.origin}/api/auth/callback?redirectTo=${encodedRedirect}`
-        }
+      const { error: signInErr } = await supabase.auth.signInWithPassword({
+        email: resolvedEmail,
+        password
       });
 
-      if (signUpError) {
-        throw new Error(signUpError.message);
-      }
-
-      const identities = signUpData.user?.identities ?? [];
-      if (identities.length === 0) {
-        throw new Error("An account with this email already exists. Sign in to access your dashboard.");
+      if (signInErr) {
+        // Account exists in the auth system but signInWithPassword
+        // refused our credentials. Most likely cause: a returning
+        // customer paid with an email tied to an existing account whose
+        // password we just rotated to the value they typed — but a
+        // mid-flight transient error left their session unestablished.
+        // Send them to /login rather than stranding them here.
+        throw new Error(
+          "Your account is ready, but we couldn't sign you in automatically. Please sign in to continue."
+        );
       }
 
       if (onboardingData) {
         localStorage.setItem(
           ONBOARD_STORAGE_KEY,
-          JSON.stringify({ ...onboardingData, ownerEmail: signupEmail })
+          JSON.stringify({ ...onboardingData, ownerEmail: resolvedEmail })
         );
       }
 
-      if (signUpData.session) {
-        window.history.replaceState({}, "", "/onboard/success");
-        setStatus("provisioning");
-        return;
-      }
-
       window.history.replaceState({}, "", "/onboard/success");
-      setStatus("awaiting_confirmation");
+      setStatus("provisioning");
     } catch (err) {
       setStatus("needs_password");
       setError(err instanceof Error ? err.message : "Could not create your account.");
@@ -243,7 +275,7 @@ function OnboardSuccessContent() {
                   : status === "online"
                     ? "Your Coworker is Live!"
                     : status === "awaiting_confirmation"
-                      ? "Check your email"
+                      ? "Sign in to continue"
                       : status === "error"
                         ? "We hit a snag"
                         : "Confirming your payment"}
@@ -255,8 +287,8 @@ function OnboardSuccessContent() {
                   ? "We're provisioning your VPS and configuring your AI coworker. This takes 2–5 minutes."
                   : status === "online"
                     ? "Everything is ready. Head to your dashboard."
-                    : status === "awaiting_confirmation"
-                      ? "We sent your confirmation link after payment. Confirm your email to continue."
+                      : status === "awaiting_confirmation"
+                      ? "Your account is ready and your VPS is provisioning. Sign in to track progress."
                       : status === "error"
                         ? error ?? "We could not finish account setup after payment."
                         : "Verifying your Stripe payment before we create your account."}
@@ -354,10 +386,17 @@ function OnboardSuccessContent() {
         )}
 
         {status === "awaiting_confirmation" && (
-          <Card>
-            <p className="text-xs text-parchment/40 text-center">
-              Check your inbox for the confirmation link, then sign in to continue.
+          <Card className="space-y-3 text-center">
+            <p className="text-xs text-parchment/60">
+              Your account is ready and we&apos;re still provisioning your VPS in the background.
+              Sign in to pick up where you left off.
             </p>
+            <a
+              href="/login"
+              className="inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
+            >
+              Sign in
+            </a>
           </Card>
         )}
 

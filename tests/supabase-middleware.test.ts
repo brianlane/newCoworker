@@ -221,14 +221,29 @@ describe("proxy", () => {
     expect(res.status).toBe(200);
   });
 
-  it("redirects unauthenticated user from /onboard/checkout to /signup", async () => {
+  it("allows unauthenticated user to access /onboard/checkout (Stripe-first flow)", async () => {
+    // Onboarding now goes Stripe-first: anonymous users hit /onboard/checkout
+    // directly, /api/checkout creates the session via the onboardingToken
+    // path, and the auth user is minted server-side AFTER payment via
+    // /api/onboard/set-password (admin.createUser({ email_confirm: true })).
+    // Routing this through /signup would force a pre-payment email-
+    // confirmation roundtrip and reintroduce the 494 REQUEST_HEADER_TOO_LARGE
+    // failure mode at Vercel's edge.
     mockSupabaseWithUser(null);
     const req = makeRequest("/onboard/checkout");
     const res = await proxy(req);
-    expect(res.status).toBe(307);
-    const location = res.headers.get("location") ?? "";
-    expect(location).toContain("/signup");
-    expect(decodeURIComponent(location)).toContain("redirectTo=/onboard/checkout");
+    expect(res.status).toBe(200);
+  });
+
+  it("allows unauthenticated user to access /onboard/success (post-payment landing)", async () => {
+    // Stripe redirects back here with `?session_id=` BEFORE the user has
+    // created their password. /api/onboard/finalize-signup verifies the
+    // Stripe-signed session id, and /api/onboard/set-password mints the
+    // auth user. Both run before any session cookie exists.
+    mockSupabaseWithUser(null);
+    const req = makeRequest("/onboard/success?session_id=cs_test_abc");
+    const res = await proxy(req);
+    expect(res.status).toBe(200);
   });
 
   it("redirects unauthenticated user from /admin to /admin/login", async () => {
