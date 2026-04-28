@@ -6,7 +6,7 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import { createSupabaseServerClient, createSupabaseServiceClient } from "@/lib/supabase/server";
-import { getAuthUser, requireAuth, requireAdmin, requireOwner, verifySignupIdentity } from "@/lib/auth";
+import { authUserExistsByEmail, getAuthUser, requireAuth, requireAdmin, requireOwner, verifySignupIdentity } from "@/lib/auth";
 
 function mockSupabase(user: Record<string, unknown> | null, error: unknown = null) {
   return {
@@ -208,5 +208,89 @@ describe("auth", () => {
   it("verifySignupIdentity returns false when service client lookup throws", async () => {
     vi.mocked(createSupabaseServiceClient).mockRejectedValue(new Error("service unavailable"));
     await expect(verifySignupIdentity("user-1", "owner@test.com")).resolves.toBe(false);
+  });
+
+  describe("authUserExistsByEmail (strict variant)", () => {
+    it("returns true when the RPC returns a user id", async () => {
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+        rpc: vi.fn().mockResolvedValue({ data: "user-1", error: null }),
+        auth: { admin: { listUsers: vi.fn() } }
+      } as never);
+
+      await expect(authUserExistsByEmail("owner@test.com")).resolves.toBe(true);
+    });
+
+    it("returns false when the RPC returns null (definitive miss)", async () => {
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+        rpc: vi.fn().mockResolvedValue({ data: null, error: null }),
+        auth: { admin: { listUsers: vi.fn() } }
+      } as never);
+
+      await expect(authUserExistsByEmail("nobody@test.com")).resolves.toBe(false);
+    });
+
+    it("THROWS on a non-PGRST202 RPC error (fail-closed for security gates)", async () => {
+      // Diverges from the soft `findAuthUserIdByEmail` which would
+      // collapse this to null. The strict variant exists precisely so
+      // /api/checkout's email-uniqueness gate fails closed on
+      // transient lookup errors.
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+        rpc: vi.fn().mockResolvedValue({
+          data: null,
+          error: { code: "57014", message: "statement timeout" }
+        }),
+        auth: { admin: { listUsers: vi.fn() } }
+      } as never);
+
+      await expect(authUserExistsByEmail("owner@test.com")).rejects.toThrow(/lookup failed/i);
+    });
+
+    it("falls back to listUsers when the RPC is missing (PGRST202)", async () => {
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+        rpc: vi.fn().mockResolvedValue({
+          data: null,
+          error: { code: "PGRST202", message: "function does not exist" }
+        }),
+        auth: {
+          admin: {
+            listUsers: vi.fn().mockResolvedValue({
+              data: { users: [{ id: "u-1", email: "Owner@Test.com" }] },
+              error: null
+            })
+          }
+        }
+      } as never);
+
+      await expect(authUserExistsByEmail("owner@test.com")).resolves.toBe(true);
+    });
+
+    it("THROWS when listUsers fails on the legacy fallback path", async () => {
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+        rpc: vi.fn().mockResolvedValue({
+          data: null,
+          error: { code: "PGRST202", message: "function does not exist" }
+        }),
+        auth: {
+          admin: {
+            listUsers: vi
+              .fn()
+              .mockResolvedValue({ data: null, error: { message: "auth-admin offline" } })
+          }
+        }
+      } as never);
+
+      await expect(authUserExistsByEmail("owner@test.com")).rejects.toThrow(/lookup failed/i);
+    });
+
+    it("returns false on an empty trimmed email without hitting the DB", async () => {
+      const rpc = vi.fn();
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+        rpc,
+        auth: { admin: { listUsers: vi.fn() } }
+      } as never);
+
+      await expect(authUserExistsByEmail("   ")).resolves.toBe(false);
+      expect(rpc).not.toHaveBeenCalled();
+    });
   });
 });

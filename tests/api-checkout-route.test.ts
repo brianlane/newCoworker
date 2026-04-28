@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  verifySignupIdentity: vi.fn()
+  verifySignupIdentity: vi.fn(),
+  authUserExistsByEmail: vi.fn()
 }));
 
 vi.mock("@/lib/stripe/client", () => ({
@@ -32,7 +33,7 @@ vi.mock("@/lib/onboarding/token", () => ({
 }));
 
 import { POST } from "@/app/api/checkout/route";
-import { getAuthUser, verifySignupIdentity } from "@/lib/auth";
+import { authUserExistsByEmail, getAuthUser, verifySignupIdentity } from "@/lib/auth";
 import { createCheckoutSession, resolveIntroDiscountCouponId, resolvePriceId } from "@/lib/stripe/client";
 import { createSubscription } from "@/lib/db/subscriptions";
 import { getBusiness, setBusinessCustomerProfile } from "@/lib/db/businesses";
@@ -55,6 +56,11 @@ describe("api/checkout route", () => {
       owner_email: `pending+${businessId}@onboarding.local`
     } as never);
     vi.mocked(verifyOnboardingToken).mockReturnValue(false);
+    // Default the strict email-uniqueness gate to "available" so the
+    // existing onboarding-token tests below keep passing without
+    // having to opt into the gate explicitly. Tests that exercise the
+    // gate override this in-place.
+    vi.mocked(authUserExistsByEmail).mockResolvedValue(false);
     vi.mocked(createCheckoutSession).mockResolvedValue({
       id: "cs_test_123",
       url: "https://checkout.stripe.test/session"
@@ -340,5 +346,98 @@ describe("api/checkout route", () => {
     expect(body.error.message).toBe("Onboarding token is no longer valid");
     expect(createSubscription).not.toHaveBeenCalled();
     expect(createCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it("blocks anonymous onboarding-token checkout when the email already has an auth user", async () => {
+    // The pre-payment account-uniqueness gate is the primary mechanism
+    // that keeps "account creation" and "password reset" as separate
+    // flows. Without it, an attacker could pay a Stripe Checkout for a
+    // victim's email and reach /api/onboard/set-password with a
+    // session that names that email — even though set-password itself
+    // is now create-only, sending a paid customer to a guaranteed 409
+    // is poor UX and the right place to refuse is here.
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    vi.mocked(verifyOnboardingToken).mockReturnValue(true);
+    vi.mocked(authUserExistsByEmail).mockResolvedValue(true);
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "starter",
+        businessId,
+        billingPeriod: "annual",
+        ownerEmail: "victim@example.com",
+        onboardingToken: "token"
+      })
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe("CONFLICT");
+    expect(authUserExistsByEmail).toHaveBeenCalledWith("victim@example.com");
+    expect(upsertCustomerProfile).not.toHaveBeenCalled();
+    expect(createSubscription).not.toHaveBeenCalled();
+    expect(createCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the strict email-uniqueness lookup throws (transient DB error)", async () => {
+    // `authUserExistsByEmail` throws on lookup failure (vs. the soft
+    // `findAuthUserIdByEmail` helper which collapses errors to null).
+    // The /api/checkout gate must surface that as a 500 so the client
+    // retries — silently allowing the checkout through would re-open
+    // the bypass this entire gate exists to close.
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    vi.mocked(verifyOnboardingToken).mockReturnValue(true);
+    vi.mocked(authUserExistsByEmail).mockRejectedValue(new Error("rpc replica timeout"));
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "starter",
+        businessId,
+        billingPeriod: "annual",
+        ownerEmail: "owner@example.com",
+        onboardingToken: "token"
+      })
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(500);
+    expect(createCheckoutSession).not.toHaveBeenCalled();
+    expect(createSubscription).not.toHaveBeenCalled();
+  });
+
+  it("does NOT call the strict email-uniqueness lookup for authenticated users (existing-user happy path)", async () => {
+    // An authenticated user spinning up a SECOND business goes through
+    // the user-branch on /api/checkout, not the onboardingToken
+    // branch. They obviously already have an auth user; running the
+    // gate against their own email would falsely 409 them.
+    vi.mocked(getAuthUser).mockResolvedValue({
+      userId: signupUserId,
+      email: "owner@example.com",
+      isAdmin: false
+    } as never);
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "standard",
+        businessId,
+        billingPeriod: "biennial"
+      })
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(authUserExistsByEmail).not.toHaveBeenCalled();
+    expect(createCheckoutSession).toHaveBeenCalled();
   });
 });

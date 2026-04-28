@@ -109,6 +109,65 @@ export async function verifySignupIdentity(userId: string, email: string): Promi
  * grace-sweep row can be retried if an earlier run already removed the
  * user.
  */
+/**
+ * Strict variant of `findAuthUserIdByEmail` that throws on lookup
+ * failure instead of collapsing it into a "no user found" result.
+ *
+ * Use at security gates where a silent miss on a transient DB error
+ * would silently open the gate. The pre-payment account-uniqueness
+ * check at `/api/checkout` is the canonical caller: refusing the
+ * checkout when we cannot determine email availability is strictly
+ * safer than letting a paid Stripe session bind to an email we
+ * couldn't verify is unclaimed (which would re-open the
+ * registration-injection surface that motivated this gate).
+ *
+ * Returns `true` iff the email definitively maps to an existing
+ * auth user, `false` iff it definitively does not. Throws on every
+ * other condition (RPC error, listUsers error, scan exhausted
+ * without a definitive answer).
+ */
+export async function authUserExistsByEmail(email: string): Promise<boolean> {
+  const target = email.trim().toLowerCase();
+  if (!target) return false;
+
+  const { createSupabaseServiceClient } = await import("@/lib/supabase/server");
+  const db = await createSupabaseServiceClient();
+
+  // Fast path: SECURITY DEFINER RPC. Treat any RPC error other than
+  // "function does not exist" (PGRST202) as a hard failure — silent
+  // null on, say, a replica timeout would let an attacker bypass
+  // the uniqueness gate by retrying until a transient miss landed.
+  const { data, error } = await db.rpc("find_auth_user_id_by_email", {
+    p_email: target
+  });
+  if (!error) {
+    return typeof data === "string" && data.length > 0;
+  }
+  if (error.code !== "PGRST202") {
+    throw new Error(`Auth-user lookup failed: ${error.message ?? "unknown error"}`);
+  }
+
+  // Legacy fallback for deployments without the RPC migration. Same
+  // bounded scan as `findAuthUserIdByEmail`, but listUsers errors
+  // and exhausted-scan-without-answer both throw rather than being
+  // swallowed.
+  const PAGE_CAP = 10;
+  const perPage = 200;
+  for (let page = 1; page <= PAGE_CAP; page += 1) {
+    const { data: pageData, error: pageError } = await db.auth.admin.listUsers({ page, perPage });
+    if (pageError) {
+      throw new Error(`Auth-user lookup failed: ${pageError.message ?? "unknown error"}`);
+    }
+    const users = pageData?.users ?? [];
+    if (users.length === 0) return false;
+    if (users.find((u) => (u.email ?? "").toLowerCase() === target)) return true;
+    if (users.length < perPage) return false;
+  }
+  throw new Error(
+    "Auth-user lookup failed: paginated scan reached the cap without a definitive miss; refuse rather than risk a false negative"
+  );
+}
+
 export async function findAuthUserIdByEmail(email: string): Promise<string | null> {
   if (!email) return null;
   const target = email.trim().toLowerCase();

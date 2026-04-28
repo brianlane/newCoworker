@@ -20,16 +20,21 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 const VALID_PASSWORD = "Hunter2-strong";
 const VALID_BUSINESS_ID = "11111111-1111-4111-8111-111111111111";
 const VALID_EMAIL = "paid@example.com";
+const VALID_SESSION_ID = "cs_test_owner";
 
 type FakeAdmin = {
   createUser: ReturnType<typeof vi.fn>;
+  // updateUserById is asserted-NOT-called across the suite to lock the
+  // create-only contract. We still expose it on the fake so any
+  // accidental call would surface as a real invocation rather than a
+  // type error.
   updateUserById: ReturnType<typeof vi.fn>;
 };
 
 function fakeServiceClient(admin: Partial<FakeAdmin> = {}) {
   const defaults: FakeAdmin = {
     createUser: vi.fn(),
-    updateUserById: vi.fn().mockResolvedValue({ error: null })
+    updateUserById: vi.fn()
   };
   const merged: FakeAdmin = { ...defaults, ...admin };
   return {
@@ -68,8 +73,7 @@ describe("api/onboard/set-password route", () => {
     mockStripeSession();
   });
 
-  it("creates a new auth user with email_confirm=true when one does not exist", async () => {
-    vi.mocked(findAuthUserIdByEmail).mockResolvedValue(null);
+  it("mints a brand-new auth user without ever calling updateUserById", async () => {
     const { client, admin } = fakeServiceClient({
       createUser: vi
         .fn()
@@ -78,50 +82,52 @@ describe("api/onboard/set-password route", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
 
     const response = await POST(
-      makeRequest({ sessionId: "cs_test_new", password: VALID_PASSWORD })
+      makeRequest({ sessionId: VALID_SESSION_ID, password: VALID_PASSWORD })
     );
     const body = await response.json();
 
     expect(response.status).toBe(200);
     expect(body.ok).toBe(true);
-    expect(body.data).toEqual({ ownerEmail: VALID_EMAIL, businessId: VALID_BUSINESS_ID });
     expect(admin.createUser).toHaveBeenCalledWith(
       expect.objectContaining({
         email: VALID_EMAIL,
         password: VALID_PASSWORD,
-        email_confirm: true
+        email_confirm: true,
+        user_metadata: expect.objectContaining({
+          business_id: VALID_BUSINESS_ID
+        })
       })
     );
-    expect(admin.updateUserById).toHaveBeenCalledWith(
-      "user-new",
-      expect.objectContaining({ password: VALID_PASSWORD, email_confirm: true })
-    );
+    // Pin the create-only contract: this route NEVER calls
+    // updateUserById. Any future change that re-introduces an update
+    // path on an existing account is a security regression — see the
+    // route's docstring.
+    expect(admin.updateUserById).not.toHaveBeenCalled();
+    // findAuthUserIdByEmail is only consulted on the duplicate-email
+    // failure path, never on the happy path.
+    expect(vi.mocked(findAuthUserIdByEmail)).not.toHaveBeenCalled();
   });
 
-  it("updates the password on an existing auth user without re-creating", async () => {
-    vi.mocked(findAuthUserIdByEmail).mockResolvedValue("user-existing");
-    const { client, admin } = fakeServiceClient();
+  it("does NOT tag user_metadata.checkout_session_id (provenance-tag mechanism removed with the create-only refactor)", async () => {
+    const { client, admin } = fakeServiceClient({
+      createUser: vi
+        .fn()
+        .mockResolvedValue({ data: { user: { id: "user-new" } }, error: null })
+    });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
 
-    const response = await POST(
-      makeRequest({ sessionId: "cs_test_existing", password: VALID_PASSWORD })
-    );
+    await POST(makeRequest({ sessionId: VALID_SESSION_ID, password: VALID_PASSWORD }));
 
-    expect(response.status).toBe(200);
-    expect(admin.createUser).not.toHaveBeenCalled();
-    expect(admin.updateUserById).toHaveBeenCalledWith(
-      "user-existing",
-      expect.objectContaining({ password: VALID_PASSWORD, email_confirm: true })
-    );
+    const callArgs = admin.createUser.mock.calls[0]?.[0] as { user_metadata?: Record<string, unknown> };
+    expect(callArgs?.user_metadata).toBeDefined();
+    expect(callArgs?.user_metadata).not.toHaveProperty("checkout_session_id");
   });
 
-  it("recovers from a race when admin.createUser fails because a parallel caller already minted the user", async () => {
-    // First lookup misses (we proceed to create), createUser fails (e.g.
-    // duplicate-email), second lookup hits (the parallel caller won the
-    // race). The route MUST fall through to update rather than 500ing.
-    vi.mocked(findAuthUserIdByEmail)
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce("user-raced-in");
+  it("returns 409 CONFLICT when the email already has an auth user (TOCTOU defence-in-depth past the upstream /api/checkout gate)", async () => {
+    // Reachable only when the upstream `authUserExistsByEmail` gate on
+    // /api/checkout was bypassed by a TOCTOU window or when the
+    // account is created by a parallel same-session call. The route
+    // MUST refuse rather than overwriting the password.
     const { client, admin } = fakeServiceClient({
       createUser: vi.fn().mockResolvedValue({
         data: null,
@@ -129,20 +135,45 @@ describe("api/onboard/set-password route", () => {
       })
     });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+    vi.mocked(findAuthUserIdByEmail).mockResolvedValue("existing-user");
 
     const response = await POST(
-      makeRequest({ sessionId: "cs_test_race", password: VALID_PASSWORD })
+      makeRequest({ sessionId: VALID_SESSION_ID, password: VALID_PASSWORD })
     );
+    const body = await response.json();
 
-    expect(response.status).toBe(200);
-    expect(admin.updateUserById).toHaveBeenCalledWith(
-      "user-raced-in",
-      expect.objectContaining({ password: VALID_PASSWORD })
-    );
+    expect(response.status).toBe(409);
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe("CONFLICT");
+    expect(admin.updateUserById).not.toHaveBeenCalled();
   });
 
-  it("returns 500 when admin.createUser fails and no parallel mint is detected", async () => {
-    vi.mocked(findAuthUserIdByEmail).mockResolvedValue(null);
+  it("returns 409 CONFLICT on a same-session retry race (Call 1 succeeded, Call 2 finds the email taken)", async () => {
+    // Network drop after a successful admin.createUser → client
+    // retries with the same sessionId. The route must NOT silently
+    // succeed (there's no provenance tag to verify against anymore)
+    // and must NOT update. 409 sends the customer to /login, where
+    // the password Call 1 set already works.
+    const { client, admin } = fakeServiceClient({
+      createUser: vi.fn().mockResolvedValue({
+        data: null,
+        error: { message: "User already registered" }
+      })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+    vi.mocked(findAuthUserIdByEmail).mockResolvedValue("user-just-minted-by-call-1");
+
+    const response = await POST(
+      makeRequest({ sessionId: VALID_SESSION_ID, password: VALID_PASSWORD })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error.code).toBe("CONFLICT");
+    expect(admin.updateUserById).not.toHaveBeenCalled();
+  });
+
+  it("returns 500 when admin.createUser fails for a non-duplicate reason (no existing user found)", async () => {
     const { client } = fakeServiceClient({
       createUser: vi.fn().mockResolvedValue({
         data: null,
@@ -150,27 +181,10 @@ describe("api/onboard/set-password route", () => {
       })
     });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+    vi.mocked(findAuthUserIdByEmail).mockResolvedValue(null);
 
     const response = await POST(
-      makeRequest({ sessionId: "cs_test_fail", password: VALID_PASSWORD })
-    );
-    const body = await response.json();
-
-    expect(response.status).toBe(500);
-    expect(body.ok).toBe(false);
-  });
-
-  it("returns 500 when admin.updateUserById fails", async () => {
-    vi.mocked(findAuthUserIdByEmail).mockResolvedValue("user-existing");
-    const { client } = fakeServiceClient({
-      updateUserById: vi
-        .fn()
-        .mockResolvedValue({ error: { message: "DB error" } })
-    });
-    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
-
-    const response = await POST(
-      makeRequest({ sessionId: "cs_test_update_fail", password: VALID_PASSWORD })
+      makeRequest({ sessionId: VALID_SESSION_ID, password: VALID_PASSWORD })
     );
 
     expect(response.status).toBe(500);
@@ -244,11 +258,7 @@ describe("api/onboard/set-password route", () => {
   });
 
   it("falls back to session.customer_email when customer_details is absent", async () => {
-    // Stripe sometimes omits customer_details on test fixtures or when the
-    // session predates the customer object. The route should still accept
-    // a session that carries `customer_email` directly.
     mockStripeSession({ customer_details: null, customer_email: VALID_EMAIL });
-    vi.mocked(findAuthUserIdByEmail).mockResolvedValue(null);
     const { client } = fakeServiceClient({
       createUser: vi
         .fn()

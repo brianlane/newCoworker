@@ -190,6 +190,22 @@ function OnboardSuccessContent() {
         body: JSON.stringify({ sessionId, password })
       });
       const setPasswordJson = await setPasswordRes.json().catch(() => null);
+
+      if (setPasswordRes.status === 409 || setPasswordJson?.error?.code === "CONFLICT") {
+        // The server detected that an auth user already exists for the
+        // email Stripe billed and that user was NOT minted by this
+        // checkout. We deliberately refuse to set a password in that
+        // case (see /api/onboard/set-password's docstring for the
+        // takeover attack this prevents). The customer's payment is
+        // still bound to their business via /api/onboard/finalize-signup,
+        // so steering them to /login is the correct recovery — they
+        // sign in with their existing credentials and the new business
+        // shows up under the same email-keyed authorization.
+        window.history.replaceState({}, "", "/onboard/success");
+        setStatus("awaiting_confirmation");
+        return;
+      }
+
       if (!setPasswordRes.ok) {
         throw new Error(setPasswordJson?.error?.message ?? "Could not create your account.");
       }
@@ -210,22 +226,30 @@ function OnboardSuccessContent() {
       });
 
       if (signInErr) {
-        // Account exists in the auth system but signInWithPassword
-        // refused our credentials. Most likely cause: a returning
-        // customer paid with an email tied to an existing account whose
-        // password we just rotated to the value they typed — but a
-        // mid-flight transient error left their session unestablished.
-        // Send them to /login rather than stranding them here.
-        throw new Error(
-          "Your account is ready, but we couldn't sign you in automatically. Please sign in to continue."
-        );
+        // The set-password call above already passed, so the auth user
+        // exists with this password — but the immediate sign-in didn't
+        // establish a session. Most likely cause is a transient cookie/
+        // network glitch on the same browser. Steer the user to /login
+        // (via the `awaiting_confirmation` UI variant) where they can
+        // retry the sign-in with a clean cookie jar; their account is
+        // already provisioned and waiting.
+        window.history.replaceState({}, "", "/onboard/success");
+        setStatus("awaiting_confirmation");
+        return;
       }
 
+      // Re-persist the onboarding draft so a refresh after sign-in
+      // still has the locally-cached business context. We deliberately
+      // do NOT re-overlay the email here: the page-mount useEffect
+      // already wrote the verified Stripe-side email back into
+      // localStorage when /api/onboard/finalize-signup succeeded, so
+      // any further overlay just risks drift if the user ever edits
+      // it from another tab. (Also flagged by CodeQL js/clear-text-
+      // storage-of-sensitive-information — the field was already
+      // present, so refraining from re-writing keeps the same data
+      // surface without adding a new write site.)
       if (onboardingData) {
-        localStorage.setItem(
-          ONBOARD_STORAGE_KEY,
-          JSON.stringify({ ...onboardingData, ownerEmail: resolvedEmail })
-        );
+        localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(onboardingData));
       }
 
       window.history.replaceState({}, "", "/onboard/success");
