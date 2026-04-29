@@ -98,6 +98,28 @@ describe("rateLimitIdentifierFromRequest", () => {
     expect(id).toBe("192.0.2.5");
   });
 
+  it("falls back when x-forwarded-for has an empty first hop", () => {
+    // Some L4 proxies prepend an empty entry when no upstream IP is
+    // known (e.g. ", 10.0.0.1"). The outer header is truthy so the
+    // RFC 7230 OWS-stripping in `Headers.get()` won't reduce it to "",
+    // but the first comma-separated segment trims to empty — we must
+    // fall through to the next header rather than rate-limiting all
+    // such requests under a shared empty-string bucket.
+    const id = rateLimitIdentifierFromRequest(
+      makeRequest({ "x-forwarded-for": ", 10.0.0.1", "x-real-ip": "192.0.2.6" })
+    );
+    expect(id).toBe("192.0.2.6");
+  });
+
+  it("falls back to 'unknown' when x-forwarded-for has an empty first hop and no other headers", () => {
+    const id = rateLimitIdentifierFromRequest(
+      makeRequest({ "x-forwarded-for": ", , 10.0.0.1" })
+    );
+    // No x-real-ip / cf-connecting-ip → "unknown" rather than
+    // returning a malformed empty string as a rate-limit key.
+    expect(id).toBe("unknown");
+  });
+
   it("falls back to cf-connecting-ip when neither x-forwarded-for nor x-real-ip is set", () => {
     const id = rateLimitIdentifierFromRequest(
       makeRequest({ "cf-connecting-ip": "192.0.2.10" })
