@@ -13,6 +13,8 @@ import {
 } from "@/lib/db/telnyx-routes";
 import { CoworkerProvisioningProgress } from "@/components/dashboard/CoworkerProvisioningProgress";
 import { PhoneNumberCard } from "@/components/dashboard/PhoneNumberCard";
+import { UnverifiedEmailBanner } from "@/components/dashboard/UnverifiedEmailBanner";
+import { getCustomerProfileByEmail } from "@/lib/db/customer-profiles";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
@@ -52,6 +54,20 @@ export default async function DashboardPage() {
     ]);
   }
 
+  // Pull verification status from `customer_profiles` (the single
+  // source of truth for "the human pressed the verification link in
+  // their inbox" — see `customer_profiles.email_verified_at` in
+  // migration 20260505000000). On a transient lookup error we treat
+  // the email as already verified to avoid spuriously rendering the
+  // banner during a Supabase blip on every dashboard load.
+  let emailVerified = true;
+  try {
+    const profile = await getCustomerProfileByEmail(user.email);
+    if (profile && !profile.email_verified_at) emailVerified = false;
+  } catch {
+    emailVerified = true;
+  }
+
   const showProvisioningWidget =
     business !== null && shouldMountProvisioningWidget(business.status, latestProvisioning);
 
@@ -70,6 +86,8 @@ export default async function DashboardPage() {
         <h1 className="text-2xl font-bold text-parchment">Your AI Coworker</h1>
         <p className="text-sm text-parchment/50 mt-1">Monitor and manage your digital employee</p>
       </div>
+
+      {!emailVerified && <UnverifiedEmailBanner email={user.email} />}
 
       {!business ? (
         <Card>

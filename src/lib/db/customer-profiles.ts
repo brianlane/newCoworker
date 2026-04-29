@@ -26,6 +26,19 @@ export type CustomerProfileRow = {
   lifetime_subscription_count: number;
   refund_used_at: string | null;
   first_paid_at: string | null;
+  /**
+   * Stamped when the customer clicks the verification link we emailed at
+   * `/api/onboard/set-password` (or via the dashboard's "Resend email"
+   * button). Distinct from `auth.users.email_confirmed_at` — that one is
+   * set by the admin-API user-mint and only means "Supabase considers
+   * this email valid for sign-in", not "the human pressed a link in
+   * their inbox". The dashboard renders the unverified-email banner
+   * while this is null. See migration
+   * `20260505000000_email_verification.sql` (which back-fills existing
+   * rows to NOW() so customers who onboarded before this feature don't
+   * suddenly get a banner with no obvious provenance).
+   */
+  email_verified_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -189,4 +202,55 @@ export function isWithinLifetimeRefundWindow(
   const paidMs = new Date(profile.first_paid_at).getTime();
   const windowMs = 30 * 24 * 60 * 60 * 1000;
   return now.getTime() - paidMs <= windowMs;
+}
+
+export type MarkEmailVerifiedResult =
+  | { ok: true; alreadyVerified: boolean }
+  | { ok: false; reason: "not_found" };
+
+/**
+ * Idempotently stamp `customer_profiles.email_verified_at = now()` for
+ * the profile keyed by the normalized form of `email`. Returns
+ * `alreadyVerified: true` when the column was already non-null so the
+ * `/verify-email` route can render a "Email already confirmed" path
+ * (typical when the user clicks the link from two devices or hits the
+ * back button). Returns `not_found` when the profile doesn't exist —
+ * which in production is essentially unreachable because
+ * `upsertCustomerProfile` runs on `/api/checkout` BEFORE the user is
+ * sent to Stripe, so by the time set-password fires the verification
+ * email the profile is guaranteed to exist. The caller still surfaces
+ * a friendly message rather than throwing so a manually-malformed link
+ * doesn't 500 the page.
+ */
+export async function markEmailVerifiedByEmail(
+  email: string,
+  client?: SupabaseClient
+): Promise<MarkEmailVerifiedResult> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const normalized = normalizeEmailForProfile(email);
+
+  const { data: existing, error: fetchErr } = await db
+    .from("customer_profiles")
+    .select("id, email_verified_at")
+    .eq("normalized_email", normalized)
+    .maybeSingle();
+  if (fetchErr) throw new Error(`markEmailVerifiedByEmail: ${fetchErr.message}`);
+  if (!existing) return { ok: false, reason: "not_found" };
+
+  if ((existing as { email_verified_at: string | null }).email_verified_at) {
+    return { ok: true, alreadyVerified: true };
+  }
+
+  // Conditional update on the still-null column so concurrent clicks
+  // (two tabs, double-tap, etc.) settle on a single timestamp instead of
+  // racing each other to overwrite.
+  const now = new Date().toISOString();
+  const { error: updErr } = await db
+    .from("customer_profiles")
+    .update({ email_verified_at: now, updated_at: now })
+    .eq("id", (existing as { id: string }).id)
+    .is("email_verified_at", null);
+  if (updErr) throw new Error(`markEmailVerifiedByEmail: ${updErr.message}`);
+
+  return { ok: true, alreadyVerified: false };
 }

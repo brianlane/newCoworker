@@ -287,6 +287,7 @@ function buildAdminForceRefundPlan(
     lifetime_subscription_count: ctx.profile?.lifetime_subscription_count ?? 0,
     refund_used_at: null as string | null,
     first_paid_at: now.toISOString() as string | null,
+    email_verified_at: ctx.profile?.email_verified_at ?? null,
     created_at: ctx.profile?.created_at ?? now.toISOString(),
     updated_at: ctx.profile?.updated_at ?? now.toISOString()
   };
