@@ -12,8 +12,8 @@ const schema = z.object({
  *
  * Lets the client tell the user "this email already has an account,
  * please sign in" the moment they advance past step 1, instead of
- * forcing them to fill out the entire questionnaire and reach
- * /onboard/checkout before getting that signal.
+ * forcing them to fill out the entire questionnaire and click
+ * "Proceed to Payment" before getting that signal.
  *
  * Intentionally NOT the security boundary. The actual gate that
  * prevents an anonymous Stripe-first checkout from binding to an

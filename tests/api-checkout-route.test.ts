@@ -142,7 +142,7 @@ describe("api/checkout route", () => {
     expect(verifySignupIdentity).toHaveBeenCalledWith(signupUserId, "owner@example.com");
     expect(createCheckoutSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        cancelUrl: `http://localhost:3000/onboard/checkout?businessId=${encodeURIComponent(businessId)}&draftToken=33333333-3333-4333-8333-333333333333`,
+        cancelUrl: "http://localhost:3000/onboard/questionnaire?tier=standard&period=biennial",
         customerEmail: "owner@example.com",
         metadata: expect.objectContaining({
           userId: signupUserId,
