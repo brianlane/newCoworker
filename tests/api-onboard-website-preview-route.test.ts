@@ -77,7 +77,17 @@ describe("/api/onboard/website-preview", () => {
     expect(body.data.finalUrl).toBe("https://www.phoenixareasbestrealtor.com/");
     expect(ingestWebsite).toHaveBeenCalledWith(
       "https://phoenixareasbestrealtor.com/",
-      expect.objectContaining({ businessName: "Amy Laidlaw Real Estate", businessType: "real_estate" })
+      expect.objectContaining({
+        businessName: "Amy Laidlaw Real Estate",
+        businessType: "real_estate",
+        // Onboarding is an owner-consented context — the user just typed
+        // in their own URL and asked us to summarize it. robots.txt is a
+        // crawler preference, not a first-party-agent prohibition; many
+        // small-business sites ship default-deny `User-agent: *` rules
+        // (real production case: phoenixareasbestrealtor.com) that would
+        // otherwise stop the owner's own onboarding from working.
+        ignoreRobots: true
+      })
     );
   });
 

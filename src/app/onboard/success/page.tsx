@@ -384,7 +384,7 @@ function OnboardSuccessContent() {
           <Card className="text-left space-y-3">
             {[
               "Provisioning Hostinger VPS",
-              "Installing Ollama",
+              "Installing Your New Coworker",
               "Configuring Rowboat agent",
               "Configuring Telnyx voice + SMS routing",
               "Linking VPS media bridge",

@@ -59,7 +59,16 @@ export async function POST(request: Request) {
 
     const result = await ingestWebsite(normalized, {
       businessName: body.businessName,
-      businessType: body.businessType
+      businessType: body.businessType,
+      // Owner-consented bypass: this route is invoked post-checkout
+      // with a URL the business owner explicitly provided during
+      // onboarding. robots.txt expresses third-party-crawler
+      // preferences, not first-party-agent prohibitions, and many
+      // small-business sites ship a default-deny `User-agent: * /
+      // Disallow: /` block that would otherwise prevent the owner's
+      // own assistant from learning their own business. SSRF /
+      // private-IP / size / redirect defenses still apply.
+      ignoreRobots: true
     });
 
     if (!result.ok) {
