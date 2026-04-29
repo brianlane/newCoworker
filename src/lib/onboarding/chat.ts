@@ -238,18 +238,78 @@ const TEAM_SIZE_ON_TEAM_PATTERN = new RegExp(
   "i"
 );
 
+// Phrasings the onboarding assistant uses to elicit team size. Used
+// only as the LEFT half of a Q/A-paired heuristic — bare replies like
+// "4 or 5" carry no role noun on their own (the standalone patterns
+// above all require one), but they're unambiguous when paired with
+// the immediately preceding assistant question.
+//
+// Tightening:
+// - "how many people" alone is too broad (could ask about customers,
+//   leads, recipients) — we require "team" within ~60 chars.
+// - "how many <role>" is allowed without an extra team constraint
+//   because in onboarding the assistant doesn't ask about volume of
+//   role-bearing contacts; that phrasing is reserved for team size.
+const TEAM_SIZE_QUESTION_PATTERN = new RegExp(
+  String.raw`\b(?:` +
+    String.raw`how (?:big|large) (?:is |are )?(?:the |your )?team` +
+    String.raw`|how many (?:agents?|team[ -]?members?|staff|reps?|teammates?|colleagues?|employees?)` +
+    String.raw`|how many people\b[^?]{0,60}\bteam` +
+    String.raw`|team size` +
+    String.raw`|size of (?:the|your) team` +
+  String.raw`)\b`,
+  "i"
+);
+
+// What counts as a team-size REPLY when paired with a team-size
+// question. Intentionally broader than the standalone team-size
+// patterns: the prior question supplies the missing role-noun
+// context, so bare numbers (digit OR written-out), fuzzy quantifiers,
+// and solo phrasings all qualify. Required to catch the production
+// case "4 or 5" replying directly to "How many people are on your
+// team..." — the model emits a confirmation but then drops `teamSize`
+// from later profile updates, and without this pairing the dead-end
+// guard re-asks the same question turn after turn.
+const USER_QUANTITY_REPLY_PATTERN = new RegExp(
+  String.raw`\b(?:` +
+    NUMBER_QUANTIFIER_FRAGMENT +
+    String.raw`|a few|a couple|a handful|several|many|small|big|large|just me|by myself|solo|alone|no team|one[ -]person|nobody|none` +
+  String.raw`)\b`,
+  "i"
+);
+
 function hasUserTeamSizeSignal(messages: OnboardingChatMessage[]): boolean {
-  return messages.some((message) => {
-    if (message.role !== "user") return false;
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
+    if (message.role !== "user") continue;
     const text = message.content;
-    return (
+
+    if (
       TEAM_SIZE_SOLO_PATTERN.test(text) ||
       TEAM_SIZE_TEAM_OF_PATTERN.test(text) ||
       TEAM_SIZE_NUMERIC_ROLE_PATTERN.test(text) ||
       TEAM_SIZE_ON_TEAM_PATTERN.test(text) ||
       TEAM_SIZE_FUZZY_ROLE_PATTERN.test(text)
-    );
-  });
+    ) {
+      return true;
+    }
+
+    // Q/A pairing: if the immediately preceding assistant message
+    // asked about team size, accept any quantity-bearing reply as the
+    // answer. Required for bare-number replies like "4 or 5" that are
+    // semantically clear in context but lack a role noun on their own.
+    if (i > 0) {
+      const prev = messages[i - 1];
+      if (
+        prev.role === "assistant" &&
+        TEAM_SIZE_QUESTION_PATTERN.test(prev.content) &&
+        USER_QUANTITY_REPLY_PATTERN.test(text)
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 export function summarizeOnboardingTopicStatus(

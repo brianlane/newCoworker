@@ -102,6 +102,16 @@ describe("api/onboard/website-ingest route", () => {
     expect(json.data.ok).toBe(true);
     expect(json.data.websiteMd).toBe(INGEST_OK.websiteMd);
     expect(setBusinessWebsiteMd).toHaveBeenCalledWith(BIZ, INGEST_OK.websiteMd);
+    // Owner-consented bypass: the URL belongs to the owner, robots.txt
+    // expresses third-party-crawler preferences (not first-party-agent
+    // prohibitions), and many small-business sites ship default-deny
+    // wildcards. Bypass is forwarded so onboarding doesn't break on
+    // sites like phoenixareasbestrealtor.com whose robots blocks every
+    // unknown UA. SSRF/private-IP defenses remain in place.
+    expect(ingestWebsite).toHaveBeenCalledWith(
+      "https://example.com/",
+      expect.objectContaining({ ignoreRobots: true })
+    );
   });
 
   it("authorizes admin users without checking business ownership", async () => {

@@ -62,6 +62,24 @@ export interface WebsiteIngestOptions {
   businessName?: string;
   businessType?: string;
   maxPages?: number;
+  /**
+   * When true, skip the robots.txt fetch and the per-page
+   * `isPathAllowed` check. Intended ONLY for owner-consented contexts
+   * — i.e. the onboarding flow where the business owner has
+   * explicitly typed in their own site's URL and is asking us to
+   * summarize it for their assistant. robots.txt is a directive to
+   * third-party crawlers, not to first-party agents the site owner
+   * has actively invoked, and many small-business sites ship a
+   * default-deny `User-agent: * / Disallow: /` block that would
+   * otherwise prevent the owner's own assistant from learning about
+   * their own business.
+   *
+   * SSRF / DNS-rebinding / private-IP / size / timeout / redirect
+   * defenses are all unaffected by this flag — only the robots.txt
+   * preference layer is bypassed. Callers MUST NOT pass `true` for
+   * URLs the user did not explicitly provide.
+   */
+  ignoreRobots?: boolean;
 }
 
 export function normalizeWebsiteUrl(raw: string): string | null {
@@ -541,14 +559,27 @@ export async function ingestWebsite(
     return { ok: false, error: code };
   }
 
-  const robots = await fetchRobots(parsed.origin, fetchImpl, WEBSITE_INGEST_PAGE_TIMEOUT_MS, lookup);
-  const disallows = parseRobotsDisallows(robots);
-  // WHATWG URL always exposes `pathname` as a non-empty string ("/" at the
-  // minimum). The `|| "/"` guard is defensive against hypothetical polyfills
-  // and is unreachable in the Node runtime we ship on.
-  /* c8 ignore next */
-  if (!isPathAllowed(parsed.pathname || "/", disallows)) {
-    return { ok: false, error: "blocked_by_robots" };
+  // Owner-consented contexts (onboarding) skip robots entirely; see
+  // the JSDoc on `WebsiteIngestOptions.ignoreRobots`. We log an
+  // explicit audit marker so the bypass is greppable in production
+  // logs — robots.txt expresses a third-party-crawler preference, not
+  // a first-party-agent prohibition, but the bypass is still worth
+  // recording so we have an audit trail per-URL.
+  let disallows: string[] = [];
+  if (options.ignoreRobots) {
+    logger.info("website-ingest: skipping robots.txt (owner-consented bypass)", {
+      url: normalized
+    });
+  } else {
+    const robots = await fetchRobots(parsed.origin, fetchImpl, WEBSITE_INGEST_PAGE_TIMEOUT_MS, lookup);
+    disallows = parseRobotsDisallows(robots);
+    // WHATWG URL always exposes `pathname` as a non-empty string ("/" at the
+    // minimum). The `|| "/"` guard is defensive against hypothetical polyfills
+    // and is unreachable in the Node runtime we ship on.
+    /* c8 ignore next */
+    if (!isPathAllowed(parsed.pathname || "/", disallows)) {
+      return { ok: false, error: "blocked_by_robots" };
+    }
   }
 
   const visited = new Set<string>();

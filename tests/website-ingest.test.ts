@@ -322,6 +322,79 @@ describe("ingestWebsite", () => {
     if (!res.ok) expect(res.error).toBe("blocked_by_robots");
   });
 
+  it("ignoreRobots=true bypasses a default-deny robots.txt and still ingests", async () => {
+    // The exact production case: a site (e.g. phoenixareasbestrealtor.com)
+    // ships a default `User-agent: * / Disallow: /` block that locks out
+    // every unknown crawler. With strict compliance the owner's own
+    // assistant can never learn about their own business. The
+    // owner-consented bypass (passed by /api/onboard/website-preview and
+    // /api/onboard/website-ingest, both invoked with an URL the owner
+    // explicitly typed in) skips robots and proceeds to crawl.
+    const html = `<html><body><h1>Realty</h1><p>${"We help buyers. ".repeat(50)}</p></body></html>`;
+    const rawFetch = vi.fn(async (url: string) => {
+      if (url.endsWith("/robots.txt")) {
+        // Default-deny — would block under strict compliance.
+        return new Response("User-agent: *\nDisallow: /\n", {
+          status: 200,
+          headers: { "content-type": "text/plain" }
+        });
+      }
+      return new Response(html, {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" }
+      });
+    });
+    const fetchImpl = rawFetch as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nRealty.");
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize,
+      ignoreRobots: true
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.websiteMd).toMatch(/Realty/);
+      expect(res.pagesCrawled).toBeGreaterThanOrEqual(1);
+    }
+    // Bypass is total — robots.txt is never even fetched, saving the
+    // round-trip and removing it as a possible failure mode.
+    expect(
+      rawFetch.mock.calls.some(([url]) => String(url).endsWith("/robots.txt"))
+    ).toBe(false);
+  });
+
+  it("ignoreRobots does not weaken SSRF / private-IP / DNS-rebind defenses", async () => {
+    // Bypass MUST only relax the robots layer — security guardrails still
+    // apply. A redirect to a private IP must still be blocked even though
+    // robots is being skipped.
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url === "https://example.com/") {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://intranet.example/" }
+        });
+      }
+      throw new Error(`leaked redirect to ${url}`);
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn(async (host: string) => {
+      if (host === "intranet.example") return [{ address: "10.0.0.5", family: 4 }];
+      return [{ address: "93.184.216.34", family: 4 }];
+    }) as never;
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize: async () => "unused",
+      ignoreRobots: true
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe("fetch_failed");
+  });
+
   it("summarizes crawled content on the happy path", async () => {
     const html = `<html><body><h1>Sunrise Realty</h1><p>${"We help buyers. ".repeat(40)}</p></body></html>`;
     const fetchImpl = vi.fn(async (url: string) => {

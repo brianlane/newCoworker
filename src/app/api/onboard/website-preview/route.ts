@@ -57,7 +57,18 @@ export async function POST(request: Request) {
 
     const result = await ingestWebsite(normalized, {
       businessName: body.businessName,
-      businessType: body.businessType
+      businessType: body.businessType,
+      // Owner-consented bypass: the user just typed in their own
+      // site's URL on the onboarding questionnaire, which is an
+      // explicit ask to summarize that site for their assistant.
+      // robots.txt expresses third-party-crawler preferences and
+      // doesn't apply to first-party agents the owner has actively
+      // invoked — many small-business sites ship a default-deny
+      // `User-agent: * / Disallow: /` block (often inserted by
+      // Wordpress/SquareSpace defaults) that would otherwise stop
+      // the owner's own onboarding from working. SSRF / private-IP
+      // / size / redirect defenses still apply.
+      ignoreRobots: true
     });
 
     if (!result.ok) {

@@ -371,6 +371,26 @@ describe("onboarding chat helpers", () => {
       // spelled out ("five years experience" vs "five agents").
       { content: "I have five years experience", expected: false },
       { content: "we serve ten cities", expected: false },
+      // Mixed-signal sentence: a real team-size answer ("team of
+      // nine or ten") embedded alongside customer count ("150
+      // people") and a plural other-team mention ("many teams in
+      // california"). Must latch onto the team-of-N phrasing and
+      // ignore the customer/other-team distractors. Regression
+      // guard for a corner case raised during review.
+      {
+        content:
+          "my team of nine or ten serves about 150 people and many teams in california",
+        expected: true
+      },
+      // Same shape but WITHOUT the "team of N" anchor — the user
+      // answers about clients and other teams only. Without an
+      // explicit own-team-size phrase this should NOT flip the flag
+      // standalone (Q/A pairing only happens when the prior assistant
+      // message asked about team size, which this case doesn't carry).
+      {
+        content: "we serve about 150 people and many teams in california",
+        expected: false
+      },
       // Customer-context "people" — these are the cases the previous
       // heuristic false-positived on, causing the assistant to skip
       // asking about actual team size after a customer-volume answer.
@@ -387,6 +407,116 @@ describe("onboarding chat helpers", () => {
         [{ role: "user", content, timestamp: "2026-04-29T17:00:00.000Z" }]
       );
       expect(topicStatus.teamSizeKnown, `for "${content}"`).toBe(expected);
+    }
+  });
+
+  it("flips teamSizeKnown true via Q/A pairing when the user replies bare-numerically to a team-size question", () => {
+    // Production regression: the assistant asked
+    //   "How many people are on your team that may interact with leads (including you)?"
+    // and the user replied "4 or 5". The standalone patterns all need
+    // an adjacent role noun, so the user reply alone doesn't match —
+    // but the prior assistant question supplies the missing context.
+    // Without this pairing, the dead-end guard re-fires the same
+    // team-size question several turns later (real Apr-29 transcript:
+    // "How big is the team the assistant supports?" after the user
+    // had already answered "4 or 5" and the assistant had confirmed
+    // "Got it—4–5 team members").
+    const topicStatus = summarizeOnboardingTopicStatus(
+      { serviceArea: "", teamSize: "", crmUsed: "" },
+      createEmptyAssistantProfile(),
+      [
+        {
+          role: "assistant",
+          content:
+            "How many people are on your team that may interact with leads (including you)?",
+          timestamp: "2026-04-29T20:01:00.000Z"
+        },
+        { role: "user", content: "4 or 5", timestamp: "2026-04-29T20:02:00.000Z" }
+      ]
+    );
+    expect(topicStatus.teamSizeKnown).toBe(true);
+  });
+
+  it("flips teamSizeKnown true via Q/A pairing for written-out and fuzzy bare replies", () => {
+    const cases: { question: string; reply: string }[] = [
+      {
+        question: "How big is your team?",
+        reply: "five"
+      },
+      {
+        question: "How big is the team — just you, or more?",
+        reply: "just me"
+      },
+      {
+        question: "How many agents do you work with?",
+        reply: "a couple"
+      },
+      {
+        question: "What's the team size you're staffing for?",
+        reply: "twelve"
+      },
+      {
+        question: "How big is your team?",
+        reply: "small"
+      }
+    ];
+    for (const { question, reply } of cases) {
+      const topicStatus = summarizeOnboardingTopicStatus(
+        { serviceArea: "", teamSize: "", crmUsed: "" },
+        createEmptyAssistantProfile(),
+        [
+          { role: "assistant", content: question, timestamp: "2026-04-29T20:01:00.000Z" },
+          { role: "user", content: reply, timestamp: "2026-04-29T20:02:00.000Z" }
+        ]
+      );
+      expect(topicStatus.teamSizeKnown, `for "${question}" → "${reply}"`).toBe(true);
+    }
+  });
+
+  it("does not flip teamSizeKnown true via Q/A pairing when the prior assistant question was unrelated", () => {
+    // Guard against the Q/A pair hijacking a non-team-size question.
+    // An assistant asking about lead volume / service-area / closings
+    // followed by a numeric user reply must NOT count as a team-size
+    // answer.
+    const cases: { question: string; reply: string }[] = [
+      { question: "How many leads do you get per week?", reply: "200" },
+      { question: "How big is your service area?", reply: "Phoenix metro" },
+      { question: "How many closings did you do last year?", reply: "40" },
+      { question: "How many cities do you cover?", reply: "5" },
+      { question: "What is your average response time in minutes?", reply: "10" }
+    ];
+    for (const { question, reply } of cases) {
+      const topicStatus = summarizeOnboardingTopicStatus(
+        { serviceArea: "", teamSize: "", crmUsed: "" },
+        createEmptyAssistantProfile(),
+        [
+          { role: "assistant", content: question, timestamp: "2026-04-29T20:01:00.000Z" },
+          { role: "user", content: reply, timestamp: "2026-04-29T20:02:00.000Z" }
+        ]
+      );
+      expect(topicStatus.teamSizeKnown, `for "${question}" → "${reply}"`).toBe(false);
+    }
+  });
+
+  it("does not flip teamSizeKnown true via Q/A pairing on a non-quantity reply", () => {
+    // "What do you mean?" / "I'm not sure" / "Can you repeat that?" are
+    // realistic responses to a team-size question that should leave the
+    // topic open rather than flipping it true on prior-context alone.
+    const cases = ["What do you mean?", "I'm not sure", "Can you repeat that?"];
+    for (const reply of cases) {
+      const topicStatus = summarizeOnboardingTopicStatus(
+        { serviceArea: "", teamSize: "", crmUsed: "" },
+        createEmptyAssistantProfile(),
+        [
+          {
+            role: "assistant",
+            content: "How many people are on your team?",
+            timestamp: "2026-04-29T20:01:00.000Z"
+          },
+          { role: "user", content: reply, timestamp: "2026-04-29T20:02:00.000Z" }
+        ]
+      );
+      expect(topicStatus.teamSizeKnown, `for reply "${reply}"`).toBe(false);
     }
   });
 
