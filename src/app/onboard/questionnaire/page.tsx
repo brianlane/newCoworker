@@ -146,6 +146,15 @@ function QuestionnaireForm() {
   // chat POST only includes `websiteMd` when the source still matches.
   const [websiteMdSourceUrl, setWebsiteMdSourceUrl] = useState("");
   const chatViewportRef = useRef<HTMLDivElement>(null);
+  // AbortController for the latest in-flight website-preview fetch. A
+  // user who advances → goes back → edits the URL → advances again can
+  // launch a second preview before the first resolves. Without abort
+  // the slower (stale) response still calls `setWebsiteMd` after the
+  // fresher one wins, permanently losing the correct summary for the
+  // session. Aborting the previous fetch makes out-of-order resolution
+  // impossible by construction: the prior request's promise rejects
+  // with an AbortError that the existing try/catch swallows.
+  const websitePreviewAbortRef = useRef<AbortController | null>(null);
   const assistantDone = form.assistantChat?.readyToFinalize ?? false;
   const storedChatMessageCount = form.assistantChat?.messages.length ?? 0;
   const chatLimitReached = storedChatMessageCount >= MAX_ONBOARDING_CHAT_MESSAGES - 1;
@@ -684,8 +693,6 @@ function QuestionnaireForm() {
       // is what the chat sees.
       const currentUrl = form.websiteUrl?.trim() ?? "";
       if (currentUrl && currentUrl !== websiteMdSourceUrl) {
-        // Capture the URL we're about to fetch so a fast user-edit
-        // race cannot let a stale response overwrite a fresher one.
         const requestedUrl = currentUrl;
         // Clear any previous summary so the chat doesn't keep sending
         // the old site's markdown while the new fetch is in flight.
@@ -693,6 +700,13 @@ function QuestionnaireForm() {
           setWebsiteMd("");
           setWebsiteMdSourceUrl("");
         }
+        // Cancel any earlier preview fetch still in flight. This is
+        // what makes out-of-order resolution safe: a slow response for
+        // a previously-typed URL can no longer arrive after the fresher
+        // request and overwrite its result.
+        websitePreviewAbortRef.current?.abort();
+        const controller = new AbortController();
+        websitePreviewAbortRef.current = controller;
         void (async () => {
           try {
             const res = await fetch("/api/onboard/website-preview", {
@@ -702,16 +716,23 @@ function QuestionnaireForm() {
                 websiteUrl: requestedUrl,
                 businessName: form.businessName,
                 businessType: form.businessType
-              })
+              }),
+              signal: controller.signal
             });
             if (!res.ok) return;
             const json = await res.json().catch(() => null);
+            // Belt-and-suspenders staleness check: even after abort, a
+            // freshly-rejected race or a very fast back-to-back submit
+            // could in theory deliver an outdated body here. Refusing
+            // to commit unless this is still the active controller
+            // closes that gap completely.
+            if (websitePreviewAbortRef.current !== controller) return;
             if (json?.data?.ok && typeof json.data.websiteMd === "string") {
               setWebsiteMd(json.data.websiteMd);
               setWebsiteMdSourceUrl(requestedUrl);
             }
           } catch {
-            /* non-blocking */
+            /* aborted or non-blocking network error */
           }
         })();
       }
