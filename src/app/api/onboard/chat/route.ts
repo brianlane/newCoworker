@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { errorResponse, successResponse, handleRouteError } from "@/lib/api-response";
-import { rateLimit } from "@/lib/rate-limit";
+import { rateLimit, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
 import {
   buildOnboardingChatSystemPrompt,
   compileRowboatMarkdownDrafts,
@@ -177,13 +177,6 @@ function parseJsonPayload(content: string): unknown {
   }
 }
 
-function getRequestIdentifier(request: Request): string {
-  const forwardedFor = request.headers.get("x-forwarded-for");
-  if (forwardedFor) return forwardedFor.split(",")[0]?.trim() || "unknown";
-
-  return request.headers.get("x-real-ip") || request.headers.get("cf-connecting-ip") || "unknown";
-}
-
 function isRepeatedToolsQuestion(message: string): boolean {
   return /what tools do you currently use|what tools you currently use|manage leads, schedule calls, and handle messages|specific crm|gmail, calendly|phone\/text/i
     .test(message.toLowerCase());
@@ -253,7 +246,7 @@ function createFallbackAssistantQuestion(
 export async function POST(request: Request) {
   try {
     const body = requestSchema.parse(await request.json());
-    const limiter = rateLimit(`onboard-chat:${getRequestIdentifier(request)}`, ONBOARDING_CHAT_RATE_LIMIT);
+    const limiter = rateLimit(`onboard-chat:${rateLimitIdentifierFromRequest(request)}`, ONBOARDING_CHAT_RATE_LIMIT);
     if (!limiter.success) {
       return errorResponse("INTERNAL_SERVER_ERROR", "Too many chat messages right now. Please wait a minute and try again.", 429);
     }

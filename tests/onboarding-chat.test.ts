@@ -351,11 +351,26 @@ describe("onboarding chat helpers", () => {
       { content: "Small team", expected: true },
       { content: "a handful of agents", expected: true },
       { content: "3 people on my team", expected: true },
+      // Written-out numbers — owners regularly use these in chat
+      // ("two staff", "five agents", "team of six"). Comment claims
+      // these match; previously they didn't, since `\d+` only covers
+      // digits.
+      { content: "two staff", expected: true },
+      { content: "five agents", expected: true },
+      { content: "Team of six", expected: true },
+      { content: "team of about ten", expected: true },
+      { content: "two people on my team", expected: true },
+      { content: "a couple of agents", expected: true },
+      { content: "two or three reps", expected: true },
       // Negative cases — the bare numeric/quantifier without a team
       // role noun must not falsely flip teamSizeKnown true.
       { content: "We cover 5 cities", expected: false },
       { content: "I have 12 listings", expected: false },
       { content: "We do 200 closings a year", expected: false },
+      // Written-out negatives — the same false-positive class but
+      // spelled out ("five years experience" vs "five agents").
+      { content: "I have five years experience", expected: false },
+      { content: "we serve ten cities", expected: false },
       // Customer-context "people" — these are the cases the previous
       // heuristic false-positived on, causing the assistant to skip
       // asking about actual team size after a customer-volume answer.

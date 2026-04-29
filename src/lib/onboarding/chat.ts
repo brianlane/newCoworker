@@ -185,31 +185,58 @@ const TEAM_SIZE_SOLO_PATTERN = /\b(?:just me|by myself|solo|no team|one[ -]perso
 const TEAM_ROLE_NOUN_FRAGMENT =
   "agents?|team[ -]?members?|employees?|teammates?|staff|reps?|colleagues?";
 
+// Either digit numbers or written-out numbers conversational owners
+// realistically use ("two staff", "five agents", "team of six"). We
+// cap at twenty plus a few common round numbers — anything bigger
+// than ~20 is overwhelmingly typed as digits in practice, and
+// extending further would only inflate false-positive surface (e.g.
+// "thousand customers") for negligible recall gain.
+const NUMBER_QUANTIFIER_FRAGMENT =
+  String.raw`(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty)`;
+
+// `<n>` or `<low>-<high>` / `<low> to <high>` / `<low> or <high>`,
+// with each endpoint independently a digit or written-out number.
+// Note: a hyphen in compound written numbers like "twenty-five" will
+// be parsed as a range separator by this fragment, which still results
+// in a correct team-size signal even if the semantic decomposition
+// differs from a human reading.
+const NUMBER_RANGE_FRAGMENT =
+  NUMBER_QUANTIFIER_FRAGMENT +
+  String.raw`(?:\s*(?:[-–—]|to|or)\s*` +
+  NUMBER_QUANTIFIER_FRAGMENT +
+  String.raw`)?`;
+
 // "<number> <role>" or "<low>-<high> <role>": e.g. "4 or 5 agents",
-// "4-5 team members", "12 reps", "two staff".
+// "4-5 team members", "12 reps", "two staff", "five agents".
 const TEAM_SIZE_NUMERIC_ROLE_PATTERN = new RegExp(
-  String.raw`\b\d+(?:\s*(?:[-–—]|to|or)\s*\d+)?\s+(?:` + TEAM_ROLE_NOUN_FRAGMENT + String.raw`)\b`,
+  String.raw`\b` + NUMBER_RANGE_FRAGMENT + String.raw`\s+(?:` + TEAM_ROLE_NOUN_FRAGMENT + String.raw`)\b`,
   "i"
 );
 
 // "<fuzzy> <role>" or "<fuzzy> team": e.g. "a handful of agents",
-// "small team", "several reps". `team` is allowed here (without an
-// adjacent role noun) because phrases like "small team" / "big team"
-// are themselves the answer, while "people" is still excluded.
+// "small team", "several reps", "a couple agents". `team` is allowed
+// here (without an adjacent role noun) because phrases like "small
+// team" / "big team" are themselves the answer, while "people" is
+// still excluded.
 const TEAM_SIZE_FUZZY_ROLE_PATTERN = new RegExp(
-  String.raw`\b(?:a few|a handful|several|many|small|big|large)\b(?:\s+(?:of\s+)?(?:real[ -]estate\s+)?(?:my|our|the)?\s*)?\s*(?:team|` + TEAM_ROLE_NOUN_FRAGMENT + String.raw`)\b`,
+  String.raw`\b(?:a few|a couple|a handful|several|many|small|big|large)\b(?:\s+(?:of\s+)?(?:real[ -]estate\s+)?(?:my|our|the)?\s*)?\s*(?:team|` + TEAM_ROLE_NOUN_FRAGMENT + String.raw`)\b`,
   "i"
 );
 
 // "team of <n>" / "team of about <n>": explicit team-of-N phrasing.
-const TEAM_SIZE_TEAM_OF_PATTERN = /\bteam of (?:about\s+|around\s+|roughly\s+)?\d+\b/i;
+const TEAM_SIZE_TEAM_OF_PATTERN = new RegExp(
+  String.raw`\bteam of (?:about\s+|around\s+|roughly\s+)?` + NUMBER_RANGE_FRAGMENT + String.raw`\b`,
+  "i"
+);
 
 // "<n> on (the|my|our) team" or "<n> people on (the|my|our) team":
 // possessive-team phrasing. `people` is allowed ONLY here, gated by the
 // possessive team modifier — that's what disambiguates "3 people on my
 // team" (team-size) from "3 people texted me" (customers).
-const TEAM_SIZE_ON_TEAM_PATTERN =
-  /\b\d+(?:\s*(?:[-–—]|to|or)\s*\d+)?\s+(?:people\s+)?(?:on|in|with)\s+(?:the|my|our|his|her)\s+team\b/i;
+const TEAM_SIZE_ON_TEAM_PATTERN = new RegExp(
+  String.raw`\b` + NUMBER_RANGE_FRAGMENT + String.raw`\s+(?:people\s+)?(?:on|in|with)\s+(?:the|my|our|his|her)\s+team\b`,
+  "i"
+);
 
 function hasUserTeamSizeSignal(messages: OnboardingChatMessage[]): boolean {
   return messages.some((message) => {

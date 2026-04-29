@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
-import { rateLimit } from "@/lib/rate-limit";
+import { rateLimit, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
 import { ingestWebsite, normalizeWebsiteUrl } from "@/lib/website-ingest";
 import { logger } from "@/lib/logger";
 
@@ -38,16 +38,10 @@ const schema = z.object({
   businessType: z.string().optional()
 });
 
-function getRequestIdentifier(request: Request): string {
-  const forwardedFor = request.headers.get("x-forwarded-for");
-  if (forwardedFor) return forwardedFor.split(",")[0]?.trim() || "unknown";
-  return request.headers.get("x-real-ip") || request.headers.get("cf-connecting-ip") || "unknown";
-}
-
 export async function POST(request: Request) {
   try {
     const body = schema.parse(await request.json());
-    const limiter = rateLimit(`website-preview:${getRequestIdentifier(request)}`, RATE_LIMIT_CONFIG);
+    const limiter = rateLimit(`website-preview:${rateLimitIdentifierFromRequest(request)}`, RATE_LIMIT_CONFIG);
     if (!limiter.success) {
       return errorResponse(
         "INTERNAL_SERVER_ERROR",

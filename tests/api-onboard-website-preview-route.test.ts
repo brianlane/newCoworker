@@ -4,9 +4,17 @@ vi.mock("@/lib/website-ingest", () => ({
   ingestWebsite: vi.fn(),
   normalizeWebsiteUrl: vi.fn()
 }));
-vi.mock("@/lib/rate-limit", () => ({
-  rateLimit: vi.fn()
-}));
+vi.mock("@/lib/rate-limit", async () => {
+  // Stub `rateLimit` per-test, but keep the real
+  // `rateLimitIdentifierFromRequest` so the assertion that
+  // `x-forwarded-for` flows into the rate-limit key actually
+  // exercises the production header-parsing code path.
+  const actual = await vi.importActual<typeof import("@/lib/rate-limit")>("@/lib/rate-limit");
+  return {
+    ...actual,
+    rateLimit: vi.fn()
+  };
+});
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
 }));
