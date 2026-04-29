@@ -512,7 +512,19 @@ function QuestionnaireForm() {
         } catch { /* non-blocking */ }
       }
 
-      if (onboardingData.assistantChat?.drafts) {
+      // Only POST the assistant profile when the interview actually
+      // produced markdown for it. `buildStoredOnboardingData` always
+      // synthesizes a non-null `assistantChat.drafts` (with empty-string
+      // defaults) so a presence check on `assistantChat?.drafts` is
+      // always truthy here; meanwhile `/api/business/config` validates
+      // `soulMd`/`identityMd` with `.min(1)` and rejects empty strings
+      // with a 400 that surfaces as "Failed to save assistant profile".
+      // Skipping when both fields are blank (assistant errored out, user
+      // bypassed Step 2 via `chatClosed`-on-error, etc.) lets the user
+      // still complete checkout and fill in the profile from the
+      // dashboard later, instead of stranding them at Step 3.
+      const drafts = onboardingData.assistantChat?.drafts;
+      if (drafts && drafts.soulMd.trim() && drafts.identityMd.trim()) {
         const configRes = await fetch("/api/business/config", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -520,9 +532,9 @@ function QuestionnaireForm() {
             businessId,
             ownerEmail: onboardingData.ownerEmail,
             onboardingToken: onboardingData.onboardingToken,
-            soulMd: onboardingData.assistantChat.drafts.soulMd,
-            identityMd: onboardingData.assistantChat.drafts.identityMd,
-            memoryMd: onboardingData.assistantChat.drafts.memoryMd
+            soulMd: drafts.soulMd,
+            identityMd: drafts.identityMd,
+            memoryMd: drafts.memoryMd
           })
         });
         if (!configRes.ok) throw new Error("Failed to save assistant profile");
