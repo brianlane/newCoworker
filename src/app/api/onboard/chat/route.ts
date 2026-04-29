@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { errorResponse, successResponse, handleRouteError } from "@/lib/api-response";
-import { rateLimit } from "@/lib/rate-limit";
+import { rateLimit, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
 import {
   buildOnboardingChatSystemPrompt,
   compileRowboatMarkdownDrafts,
@@ -138,6 +138,13 @@ const requestSchema = z.object({
   serviceArea: z.string().optional(),
   teamSize: z.string().optional(),
   crmUsed: z.string().optional(),
+  websiteUrl: z.string().optional(),
+  // Defense-in-depth cap. The legitimate upstream is
+  // `WEBSITE_INGEST_MAX_SUMMARY_CHARS = 8_000`, so 16KB is 2× headroom
+  // for any future bump or summarizer drift. Anything larger is either
+  // a malformed client or an attempt to inflate prompt cost, and we'd
+  // rather a clean 400 here than silently burn LLM input tokens on it.
+  websiteMd: z.string().max(16_000).optional(),
   messages: z.array(onboardingChatMessageSchema),
   profile: onboardingAssistantProfileSchema.optional()
 });
@@ -168,13 +175,6 @@ function parseJsonPayload(content: string): unknown {
     if (!match) throw new Error("Model returned non-JSON content");
     return JSON.parse(match[0]);
   }
-}
-
-function getRequestIdentifier(request: Request): string {
-  const forwardedFor = request.headers.get("x-forwarded-for");
-  if (forwardedFor) return forwardedFor.split(",")[0]?.trim() || "unknown";
-
-  return request.headers.get("x-real-ip") || request.headers.get("cf-connecting-ip") || "unknown";
 }
 
 function isRepeatedToolsQuestion(message: string): boolean {
@@ -246,7 +246,7 @@ function createFallbackAssistantQuestion(
 export async function POST(request: Request) {
   try {
     const body = requestSchema.parse(await request.json());
-    const limiter = rateLimit(`onboard-chat:${getRequestIdentifier(request)}`, ONBOARDING_CHAT_RATE_LIMIT);
+    const limiter = rateLimit(`onboard-chat:${rateLimitIdentifierFromRequest(request)}`, ONBOARDING_CHAT_RATE_LIMIT);
     if (!limiter.success) {
       return errorResponse("INTERNAL_SERVER_ERROR", "Too many chat messages right now. Please wait a minute and try again.", 429);
     }
@@ -267,7 +267,9 @@ export async function POST(request: Request) {
       phone: body.phone,
       serviceArea: body.serviceArea,
       teamSize: body.teamSize,
-      crmUsed: body.crmUsed
+      crmUsed: body.crmUsed,
+      websiteUrl: body.websiteUrl,
+      websiteMd: body.websiteMd
     };
 
     const models = resolveOnboardingModels();

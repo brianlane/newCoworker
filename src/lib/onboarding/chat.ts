@@ -129,6 +129,22 @@ export type OnboardingKnownContext = {
   serviceArea?: string;
   teamSize?: string;
   crmUsed?: string;
+  /**
+   * The user's website URL as entered on Step 1. Surfaced to the
+   * onboarding model so it can acknowledge the URL even when the
+   * stateless preview ingest hasn't returned `websiteMd` yet (or
+   * couldn't crawl the page). Without this the model asks "do you
+   * have a website?" right after the user pasted it, which reads as
+   * the assistant ignoring the user.
+   */
+  websiteUrl?: string;
+  /**
+   * Crawler-and-summarizer output from `/api/onboard/website-preview`,
+   * cached on the client across Step-2 chat turns. Capped to
+   * `WEBSITE_INGEST_MAX_SUMMARY_CHARS` upstream. The model is allowed
+   * to reference this content but must not fabricate facts beyond it.
+   */
+  websiteMd?: string;
 };
 
 export const MAX_ONBOARDING_CHAT_MESSAGES = 36;
@@ -155,6 +171,87 @@ function hasUserTranscriptSignal(messages: OnboardingChatMessage[], pattern: Reg
   return messages.some((message) => message.role === "user" && pattern.test(message.content));
 }
 
+// "Just me / solo / by myself" answers are valid team-size signals on
+// their own — no number required.
+const TEAM_SIZE_SOLO_PATTERN = /\b(?:just me|by myself|solo|no team|one[ -]person|alone)\b/i;
+
+// Role-bearing nouns. Owners refer to their own team using these
+// specific words; we deliberately exclude the bare noun "people"
+// because in onboarding interviews users frequently describe customers
+// with it ("I help many people buy homes", "some people text me for
+// quotes", "I spoke with 3 people today", "we serve 200 people a
+// month") — all of which would falsely flip `teamSizeKnown` true and
+// cause the assistant to skip asking about actual team size.
+const TEAM_ROLE_NOUN_FRAGMENT =
+  "agents?|team[ -]?members?|employees?|teammates?|staff|reps?|colleagues?";
+
+// Either digit numbers or written-out numbers conversational owners
+// realistically use ("two staff", "five agents", "team of six"). We
+// cap at twenty plus a few common round numbers — anything bigger
+// than ~20 is overwhelmingly typed as digits in practice, and
+// extending further would only inflate false-positive surface (e.g.
+// "thousand customers") for negligible recall gain.
+const NUMBER_QUANTIFIER_FRAGMENT =
+  String.raw`(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty)`;
+
+// `<n>` or `<low>-<high>` / `<low> to <high>` / `<low> or <high>`,
+// with each endpoint independently a digit or written-out number.
+// Note: a hyphen in compound written numbers like "twenty-five" will
+// be parsed as a range separator by this fragment, which still results
+// in a correct team-size signal even if the semantic decomposition
+// differs from a human reading.
+const NUMBER_RANGE_FRAGMENT =
+  NUMBER_QUANTIFIER_FRAGMENT +
+  String.raw`(?:\s*(?:[-–—]|to|or)\s*` +
+  NUMBER_QUANTIFIER_FRAGMENT +
+  String.raw`)?`;
+
+// "<number> <role>" or "<low>-<high> <role>": e.g. "4 or 5 agents",
+// "4-5 team members", "12 reps", "two staff", "five agents".
+const TEAM_SIZE_NUMERIC_ROLE_PATTERN = new RegExp(
+  String.raw`\b` + NUMBER_RANGE_FRAGMENT + String.raw`\s+(?:` + TEAM_ROLE_NOUN_FRAGMENT + String.raw`)\b`,
+  "i"
+);
+
+// "<fuzzy> <role>" or "<fuzzy> team": e.g. "a handful of agents",
+// "small team", "several reps", "a couple agents". `team` is allowed
+// here (without an adjacent role noun) because phrases like "small
+// team" / "big team" are themselves the answer, while "people" is
+// still excluded.
+const TEAM_SIZE_FUZZY_ROLE_PATTERN = new RegExp(
+  String.raw`\b(?:a few|a couple|a handful|several|many|small|big|large)\b(?:\s+(?:of\s+)?(?:real[ -]estate\s+)?(?:my|our|the)?\s*)?\s*(?:team|` + TEAM_ROLE_NOUN_FRAGMENT + String.raw`)\b`,
+  "i"
+);
+
+// "team of <n>" / "team of about <n>": explicit team-of-N phrasing.
+const TEAM_SIZE_TEAM_OF_PATTERN = new RegExp(
+  String.raw`\bteam of (?:about\s+|around\s+|roughly\s+)?` + NUMBER_RANGE_FRAGMENT + String.raw`\b`,
+  "i"
+);
+
+// "<n> on (the|my|our) team" or "<n> people on (the|my|our) team":
+// possessive-team phrasing. `people` is allowed ONLY here, gated by the
+// possessive team modifier — that's what disambiguates "3 people on my
+// team" (team-size) from "3 people texted me" (customers).
+const TEAM_SIZE_ON_TEAM_PATTERN = new RegExp(
+  String.raw`\b` + NUMBER_RANGE_FRAGMENT + String.raw`\s+(?:people\s+)?(?:on|in|with)\s+(?:the|my|our|his|her)\s+team\b`,
+  "i"
+);
+
+function hasUserTeamSizeSignal(messages: OnboardingChatMessage[]): boolean {
+  return messages.some((message) => {
+    if (message.role !== "user") return false;
+    const text = message.content;
+    return (
+      TEAM_SIZE_SOLO_PATTERN.test(text) ||
+      TEAM_SIZE_TEAM_OF_PATTERN.test(text) ||
+      TEAM_SIZE_NUMERIC_ROLE_PATTERN.test(text) ||
+      TEAM_SIZE_ON_TEAM_PATTERN.test(text) ||
+      TEAM_SIZE_FUZZY_ROLE_PATTERN.test(text)
+    );
+  });
+}
+
 export function summarizeOnboardingTopicStatus(
   knownContext: OnboardingKnownContext,
   profile: OnboardingAssistantProfile,
@@ -162,7 +259,15 @@ export function summarizeOnboardingTopicStatus(
 ): OnboardingTopicStatus {
   return {
     serviceAreaKnown: Boolean((knownContext.serviceArea || profile.serviceArea).trim()),
-    teamSizeKnown: Boolean((knownContext.teamSize || profile.teamSize).trim()),
+    // Also scan the user transcript so a clear answer ("4 or 5 agents",
+    // "just me", "small team of 3") flips this true even when the model
+    // forgot to write it into the emitted profile. Without this fall-
+    // through the dead-end guard in /api/onboard/chat keeps re-asking
+    // the team-size question turn after turn while the user reads the
+    // assistant's own acknowledgement of the same answer they gave.
+    teamSizeKnown:
+      Boolean((knownContext.teamSize || profile.teamSize).trim()) ||
+      hasUserTeamSizeSignal(messages),
     toolsKnown:
       Boolean(knownContext.crmUsed?.trim()) ||
       profile.crmUsed.length > 0 ||
@@ -221,6 +326,28 @@ export function buildOnboardingChatSystemPrompt(
   const profile = existingProfile ?? createEmptyAssistantProfile();
   const topicStatus = summarizeOnboardingTopicStatus(knownContext, profile, messages);
 
+  // The full website summary can be ~8KB and is the dominant component
+  // of the system prompt's size when present. Pull it out of
+  // `knownContext` for the JSON dump so the rest of the context stays
+  // small/scannable for the model, then re-attach the website summary
+  // as its own labelled section with explicit usage rules.
+  const { websiteMd, ...contextWithoutWebsite } = knownContext;
+
+  const websiteSection = websiteMd
+    ? [
+        "",
+        "Website summary (crawled from the user's site, treat as authoritative):",
+        websiteMd,
+        "",
+        "When the user references their website or asks the assistant to use info from it, draw from the summary above instead of asking the user to retype it. Do NOT invent facts the summary does not contain. If the summary lacks the specific detail you need, ask the user directly."
+      ].join("\n")
+    : knownContext.websiteUrl
+      ? [
+          "",
+          `The user has a website at ${knownContext.websiteUrl} but the crawl summary is not yet available. Acknowledge that you can see the URL — do NOT ask "do you have a website?" — and ask for whatever specific detail you need (bio, services, hours) instead of asking the user to retype the URL.`
+        ].join("\n")
+      : "";
+
   return [
     "You are a high-signal onboarding interviewer for creating a Rowboat/OpenClaw-style business assistant.",
     "Your job is to gather the information needed to produce a strong assistant profile and business memory.",
@@ -239,13 +366,14 @@ export function buildOnboardingChatSystemPrompt(
     "Return JSON only.",
     "",
     "Known context:",
-    JSON.stringify(knownContext),
+    JSON.stringify(contextWithoutWebsite),
     "",
     "Existing profile:",
     JSON.stringify(profile),
     "",
     "Answered topic status:",
     JSON.stringify(topicStatus),
+    websiteSection,
     "",
     "Return an object with exactly these keys:",
     "- assistantMessage: string",

@@ -127,7 +127,34 @@ function QuestionnaireForm() {
   const [chatError, setChatError] = useState<string | null>(null);
   const [pendingUserMessage, setPendingUserMessage] = useState<PendingUserMessage | null>(null);
   const [retryableUserMessage, setRetryableUserMessage] = useState<PendingUserMessage | null>(null);
+  // Cached website summary from `/api/onboard/website-preview`. Kicked
+  // off on the Step 1 → Step 2 transition so the assistant chat has
+  // crawl-derived business context to draw from when the user
+  // references their site. Empty string until the preview returns
+  // (chat still works without it; the system prompt falls back to
+  // mentioning just the URL). Lives in component state rather than
+  // localStorage because it's transient — the persistent ingest at
+  // /api/onboard/website-ingest re-runs at "Proceed to Payment" and is
+  // the canonical source for `business_configs.website_md`.
+  const [websiteMd, setWebsiteMd] = useState("");
+  // Tracks which URL produced the cached `websiteMd`. Without this, a
+  // user who clicks Back to Step 1, edits the URL, and advances again
+  // keeps sending the OLD site's summary in chat requests — the
+  // assistant references content from a different site than the one
+  // currently in the form. The Step 1 → Step 2 gate only refetches
+  // when this source URL no longer matches `form.websiteUrl`, and the
+  // chat POST only includes `websiteMd` when the source still matches.
+  const [websiteMdSourceUrl, setWebsiteMdSourceUrl] = useState("");
   const chatViewportRef = useRef<HTMLDivElement>(null);
+  // AbortController for the latest in-flight website-preview fetch. A
+  // user who advances → goes back → edits the URL → advances again can
+  // launch a second preview before the first resolves. Without abort
+  // the slower (stale) response still calls `setWebsiteMd` after the
+  // fresher one wins, permanently losing the correct summary for the
+  // session. Aborting the previous fetch makes out-of-order resolution
+  // impossible by construction: the prior request's promise rejects
+  // with an AbortError that the existing try/catch swallows.
+  const websitePreviewAbortRef = useRef<AbortController | null>(null);
   const assistantDone = form.assistantChat?.readyToFinalize ?? false;
   const storedChatMessageCount = form.assistantChat?.messages.length ?? 0;
   const chatLimitReached = storedChatMessageCount >= MAX_ONBOARDING_CHAT_MESSAGES - 1;
@@ -241,6 +268,19 @@ function QuestionnaireForm() {
           serviceArea: form.serviceArea,
           teamSize: form.teamSize,
           crmUsed: form.crmUsed,
+          // Pass the URL even when the preview hasn't returned yet so
+          // the model at least acknowledges the user has a website
+          // (the system prompt branches on this) instead of asking
+          // "do you have a website?" right after Step 1's submit.
+          websiteUrl: form.websiteUrl?.trim() || undefined,
+          // Only forward the cached summary when its source URL still
+          // matches what's currently in the form. Without this guard,
+          // editing the URL on a Back-to-Step-1 trip would leave the
+          // chat referencing the previous site's content.
+          websiteMd:
+            websiteMd && websiteMdSourceUrl === form.websiteUrl?.trim()
+              ? websiteMd
+              : undefined,
           messages,
           profile: form.assistantChat?.profile ?? createEmptyAssistantProfile()
         })
@@ -634,6 +674,69 @@ function QuestionnaireForm() {
       }
 
       setError(null);
+
+      // Fire the website-summary preview in the background. This feeds
+      // the Step-2 chat with crawl-derived business context so the model
+      // can reference the user's site instead of asking "do you have a
+      // website?" right after they pasted the URL on Step 1. We don't
+      // await it: chat starts immediately, the markdown lands once
+      // ingest completes (typically within the first 2-3 turns), and
+      // subsequent chat POSTs pick it up via the cached `websiteMd`.
+      // Errors are logged silently — chat falls back to the "we can see
+      // the URL but not the content" prompt branch in `chat.ts`.
+      //
+      // Refetch whenever the URL the user typed differs from whatever
+      // produced the cached summary. This catches the Back-to-Step-1
+      // edit case: the user goes back, replaces the URL, advances
+      // again, and the cached `websiteMd` (still tagged with the old
+      // URL) gets thrown out by `setWebsiteMd("")` so the new URL
+      // is what the chat sees.
+      const currentUrl = form.websiteUrl?.trim() ?? "";
+      if (currentUrl && currentUrl !== websiteMdSourceUrl) {
+        const requestedUrl = currentUrl;
+        // Clear any previous summary so the chat doesn't keep sending
+        // the old site's markdown while the new fetch is in flight.
+        if (websiteMd) {
+          setWebsiteMd("");
+          setWebsiteMdSourceUrl("");
+        }
+        // Cancel any earlier preview fetch still in flight. This is
+        // what makes out-of-order resolution safe: a slow response for
+        // a previously-typed URL can no longer arrive after the fresher
+        // request and overwrite its result.
+        websitePreviewAbortRef.current?.abort();
+        const controller = new AbortController();
+        websitePreviewAbortRef.current = controller;
+        void (async () => {
+          try {
+            const res = await fetch("/api/onboard/website-preview", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                websiteUrl: requestedUrl,
+                businessName: form.businessName,
+                businessType: form.businessType
+              }),
+              signal: controller.signal
+            });
+            if (!res.ok) return;
+            const json = await res.json().catch(() => null);
+            // Belt-and-suspenders staleness check: even after abort, a
+            // freshly-rejected race or a very fast back-to-back submit
+            // could in theory deliver an outdated body here. Refusing
+            // to commit unless this is still the active controller
+            // closes that gap completely.
+            if (websitePreviewAbortRef.current !== controller) return;
+            if (json?.data?.ok && typeof json.data.websiteMd === "string") {
+              setWebsiteMd(json.data.websiteMd);
+              setWebsiteMdSourceUrl(requestedUrl);
+            }
+          } catch {
+            /* aborted or non-blocking network error */
+          }
+        })();
+      }
+
       setStep(2);
       return;
     }
