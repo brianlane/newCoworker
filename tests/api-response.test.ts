@@ -1,5 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+vi.mock("@/lib/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
+}));
+
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
+import { logger } from "@/lib/logger";
 import { z } from "zod";
 
 describe("api-response", () => {
@@ -84,5 +90,40 @@ describe("api-response", () => {
   it("handleRouteError handles non-Error values", async () => {
     const res = handleRouteError("string error");
     expect(res.status).toBe(500);
+  });
+
+  it("handleRouteError logs the underlying error before collapsing to 500", async () => {
+    vi.mocked(logger.error).mockClear();
+    const err = new Error("supabase: insert failed");
+    handleRouteError(err);
+    expect(logger.error).toHaveBeenCalledWith(
+      "Unhandled route error",
+      expect.objectContaining({
+        message: "supabase: insert failed",
+        name: "Error",
+        stack: expect.any(String)
+      })
+    );
+  });
+
+  it("handleRouteError logs non-Error values with stringified message", async () => {
+    vi.mocked(logger.error).mockClear();
+    handleRouteError({ kind: "weird non-error" });
+    expect(logger.error).toHaveBeenCalledWith(
+      "Unhandled route error",
+      expect.objectContaining({
+        message: "[object Object]",
+        name: "object"
+      })
+    );
+  });
+
+  it("handleRouteError does NOT log when collapsing a known status-coded error", async () => {
+    // 401/403/404 errors take their own dedicated branches and are
+    // returned to clients with the same surface message — no need to
+    // double-log them as 'unhandled'.
+    vi.mocked(logger.error).mockClear();
+    handleRouteError(Object.assign(new Error("nope"), { status: 403 }));
+    expect(logger.error).not.toHaveBeenCalled();
   });
 });
