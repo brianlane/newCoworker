@@ -1,5 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+vi.mock("@/lib/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
+}));
+
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
+import { logger } from "@/lib/logger";
 import { z } from "zod";
 
 describe("api-response", () => {
@@ -84,5 +90,57 @@ describe("api-response", () => {
   it("handleRouteError handles non-Error values", async () => {
     const res = handleRouteError("string error");
     expect(res.status).toBe(500);
+  });
+
+  it("handleRouteError logs the underlying error before collapsing to 500", async () => {
+    vi.mocked(logger.error).mockClear();
+    const err = new Error("supabase: insert failed");
+    handleRouteError(err);
+    expect(logger.error).toHaveBeenCalledWith(
+      "Unhandled route error",
+      expect.objectContaining({
+        errorMessage: "supabase: insert failed",
+        errorName: "Error",
+        errorStack: expect.any(String)
+      })
+    );
+  });
+
+  it("handleRouteError logs non-Error values with stringified message", async () => {
+    vi.mocked(logger.error).mockClear();
+    handleRouteError({ kind: "weird non-error" });
+    expect(logger.error).toHaveBeenCalledWith(
+      "Unhandled route error",
+      expect.objectContaining({
+        errorMessage: "[object Object]",
+        errorName: "object"
+      })
+    );
+  });
+
+  it("handleRouteError context keys never collide with `logger.log`'s top-level fields", async () => {
+    // Regression guard. `logger.log` spreads context AFTER the top-level
+    // `{ level, message, timestamp }`, so any context key named `message`
+    // (or `level`/`timestamp`) silently overwrites the stable
+    // "Unhandled route error" marker that monitoring/alerts pin on. The
+    // fix prefixes the diagnostic fields with `error*` — this test makes
+    // a future "let's just call it `message`" change loud rather than
+    // silently breaking observability.
+    vi.mocked(logger.error).mockClear();
+    handleRouteError(new Error("boom"));
+    const [, context] = vi.mocked(logger.error).mock.calls[0]!;
+    const reservedKeys = ["level", "message", "timestamp"];
+    for (const key of reservedKeys) {
+      expect(context).not.toHaveProperty(key);
+    }
+  });
+
+  it("handleRouteError does NOT log when collapsing a known status-coded error", async () => {
+    // 401/403/404 errors take their own dedicated branches and are
+    // returned to clients with the same surface message — no need to
+    // double-log them as 'unhandled'.
+    vi.mocked(logger.error).mockClear();
+    handleRouteError(Object.assign(new Error("nope"), { status: 403 }));
+    expect(logger.error).not.toHaveBeenCalled();
   });
 });

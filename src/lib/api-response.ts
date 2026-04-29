@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
+import { logger } from "@/lib/logger";
 
 type ErrorCode =
   | "DB_ERROR"
@@ -45,5 +46,26 @@ export function handleRouteError(error: unknown): NextResponse {
     if (status === 403) return errorResponse("FORBIDDEN", error.message);
     if (status === 404) return errorResponse("NOT_FOUND", error.message);
   }
+
+  // Log the underlying error before collapsing it into the generic 500 we
+  // return to clients. Without this, every "An unexpected error occurred"
+  // surfaced in the UI is a black hole in Vercel/Datadog: the runtime log
+  // shows a 500 but no stack, no message, no diagnostic. Routes catch with
+  // `handleRouteError(err)` precisely because they don't want to leak the
+  // raw error to callers (DB messages can contain schema/internals); the
+  // log keeps the diagnostic on the server where it belongs.
+  //
+  // The fields are deliberately prefixed `error*` rather than `message`/
+  // `name`/`stack` because `logger.log` builds entries as
+  // `{ level, message, timestamp, ...context }` (see src/lib/logger.ts),
+  // so a context key named `message` would silently overwrite the
+  // top-level `"Unhandled route error"` marker. Filters and alerts pinned
+  // to that string would stop matching, defeating the entire diagnostic.
+  logger.error("Unhandled route error", {
+    errorMessage: error instanceof Error ? error.message : String(error),
+    errorName: error instanceof Error ? error.name : typeof error,
+    errorStack: error instanceof Error ? error.stack : undefined
+  });
+
   return errorResponse("INTERNAL_SERVER_ERROR", "An unexpected error occurred");
 }
