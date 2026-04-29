@@ -345,14 +345,24 @@ describe("onboarding chat helpers", () => {
       { content: "I already told you, 4 or 5 team members.", expected: true },
       { content: "4-5 team members", expected: true },
       { content: "Team of 6", expected: true },
+      { content: "team of about 12", expected: true },
       { content: "Just me", expected: true },
       { content: "By myself for now", expected: true },
       { content: "Small team", expected: true },
+      { content: "a handful of agents", expected: true },
+      { content: "3 people on my team", expected: true },
       // Negative cases — the bare numeric/quantifier without a team
-      // noun must not falsely flip teamSizeKnown true.
+      // role noun must not falsely flip teamSizeKnown true.
       { content: "We cover 5 cities", expected: false },
       { content: "I have 12 listings", expected: false },
-      { content: "We do 200 closings a year", expected: false }
+      { content: "We do 200 closings a year", expected: false },
+      // Customer-context "people" — these are the cases the previous
+      // heuristic false-positived on, causing the assistant to skip
+      // asking about actual team size after a customer-volume answer.
+      { content: "I help many people buy homes", expected: false },
+      { content: "some people text me for quotes", expected: false },
+      { content: "I spoke with 3 people today", expected: false },
+      { content: "we serve 200 people a month", expected: false }
     ];
 
     for (const { content, expected } of cases) {

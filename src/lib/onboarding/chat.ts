@@ -175,24 +175,53 @@ function hasUserTranscriptSignal(messages: OnboardingChatMessage[], pattern: Reg
 // their own — no number required.
 const TEAM_SIZE_SOLO_PATTERN = /\b(?:just me|by myself|solo|no team|one[ -]person|alone)\b/i;
 
-// Nouns that, paired with any quantifier in the same user message, count
-// as a team-size answer ("4 or 5 agents", "I have a handful of reps",
-// "small team of 3", "4-5 on my team").
-const TEAM_SIZE_NOUN_PATTERN =
-  /\b(?:agents?|team|members?|people|employees?|teammates?|staff|reps?|colleagues?)\b/i;
+// Role-bearing nouns. Owners refer to their own team using these
+// specific words; we deliberately exclude the bare noun "people"
+// because in onboarding interviews users frequently describe customers
+// with it ("I help many people buy homes", "some people text me for
+// quotes", "I spoke with 3 people today", "we serve 200 people a
+// month") — all of which would falsely flip `teamSizeKnown` true and
+// cause the assistant to skip asking about actual team size.
+const TEAM_ROLE_NOUN_FRAGMENT =
+  "agents?|team[ -]?members?|employees?|teammates?|staff|reps?|colleagues?";
 
-// Numeric ranges, single counts, or fuzzy quantifiers. Pairing this with
-// `TEAM_SIZE_NOUN_PATTERN` is what keeps "we cover 5 cities" from
-// flipping `teamSizeKnown` true.
-const TEAM_SIZE_QUANTIFIER_PATTERN =
-  /\b\d+(?:\s*(?:[-–—]|to|or)\s*\d+)?\b|\b(?:a few|a handful|several|some|many|small|big|large)\b/i;
+// "<number> <role>" or "<low>-<high> <role>": e.g. "4 or 5 agents",
+// "4-5 team members", "12 reps", "two staff".
+const TEAM_SIZE_NUMERIC_ROLE_PATTERN = new RegExp(
+  String.raw`\b\d+(?:\s*(?:[-–—]|to|or)\s*\d+)?\s+(?:` + TEAM_ROLE_NOUN_FRAGMENT + String.raw`)\b`,
+  "i"
+);
+
+// "<fuzzy> <role>" or "<fuzzy> team": e.g. "a handful of agents",
+// "small team", "several reps". `team` is allowed here (without an
+// adjacent role noun) because phrases like "small team" / "big team"
+// are themselves the answer, while "people" is still excluded.
+const TEAM_SIZE_FUZZY_ROLE_PATTERN = new RegExp(
+  String.raw`\b(?:a few|a handful|several|many|small|big|large)\b(?:\s+(?:of\s+)?(?:real[ -]estate\s+)?(?:my|our|the)?\s*)?\s*(?:team|` + TEAM_ROLE_NOUN_FRAGMENT + String.raw`)\b`,
+  "i"
+);
+
+// "team of <n>" / "team of about <n>": explicit team-of-N phrasing.
+const TEAM_SIZE_TEAM_OF_PATTERN = /\bteam of (?:about\s+|around\s+|roughly\s+)?\d+\b/i;
+
+// "<n> on (the|my|our) team" or "<n> people on (the|my|our) team":
+// possessive-team phrasing. `people` is allowed ONLY here, gated by the
+// possessive team modifier — that's what disambiguates "3 people on my
+// team" (team-size) from "3 people texted me" (customers).
+const TEAM_SIZE_ON_TEAM_PATTERN =
+  /\b\d+(?:\s*(?:[-–—]|to|or)\s*\d+)?\s+(?:people\s+)?(?:on|in|with)\s+(?:the|my|our|his|her)\s+team\b/i;
 
 function hasUserTeamSizeSignal(messages: OnboardingChatMessage[]): boolean {
   return messages.some((message) => {
     if (message.role !== "user") return false;
     const text = message.content;
-    if (TEAM_SIZE_SOLO_PATTERN.test(text)) return true;
-    return TEAM_SIZE_NOUN_PATTERN.test(text) && TEAM_SIZE_QUANTIFIER_PATTERN.test(text);
+    return (
+      TEAM_SIZE_SOLO_PATTERN.test(text) ||
+      TEAM_SIZE_TEAM_OF_PATTERN.test(text) ||
+      TEAM_SIZE_NUMERIC_ROLE_PATTERN.test(text) ||
+      TEAM_SIZE_ON_TEAM_PATTERN.test(text) ||
+      TEAM_SIZE_FUZZY_ROLE_PATTERN.test(text)
+    );
   });
 }
 

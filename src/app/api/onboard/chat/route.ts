@@ -139,9 +139,11 @@ const requestSchema = z.object({
   teamSize: z.string().optional(),
   crmUsed: z.string().optional(),
   websiteUrl: z.string().optional(),
-  // Cap the size at the upstream summarizer cap. Anything larger is
-  // either a bug or an attempt to inflate prompt cost; trim and let the
-  // schema parser quietly accept it.
+  // Defense-in-depth cap. The legitimate upstream is
+  // `WEBSITE_INGEST_MAX_SUMMARY_CHARS = 8_000`, so 16KB is 2× headroom
+  // for any future bump or summarizer drift. Anything larger is either
+  // a malformed client or an attempt to inflate prompt cost, and we'd
+  // rather a clean 400 here than silently burn LLM input tokens on it.
   websiteMd: z.string().max(16_000).optional(),
   messages: z.array(onboardingChatMessageSchema),
   profile: onboardingAssistantProfileSchema.optional()

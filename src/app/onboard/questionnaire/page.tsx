@@ -137,6 +137,14 @@ function QuestionnaireForm() {
   // /api/onboard/website-ingest re-runs at "Proceed to Payment" and is
   // the canonical source for `business_configs.website_md`.
   const [websiteMd, setWebsiteMd] = useState("");
+  // Tracks which URL produced the cached `websiteMd`. Without this, a
+  // user who clicks Back to Step 1, edits the URL, and advances again
+  // keeps sending the OLD site's summary in chat requests — the
+  // assistant references content from a different site than the one
+  // currently in the form. The Step 1 → Step 2 gate only refetches
+  // when this source URL no longer matches `form.websiteUrl`, and the
+  // chat POST only includes `websiteMd` when the source still matches.
+  const [websiteMdSourceUrl, setWebsiteMdSourceUrl] = useState("");
   const chatViewportRef = useRef<HTMLDivElement>(null);
   const assistantDone = form.assistantChat?.readyToFinalize ?? false;
   const storedChatMessageCount = form.assistantChat?.messages.length ?? 0;
@@ -256,7 +264,14 @@ function QuestionnaireForm() {
           // (the system prompt branches on this) instead of asking
           // "do you have a website?" right after Step 1's submit.
           websiteUrl: form.websiteUrl?.trim() || undefined,
-          websiteMd: websiteMd || undefined,
+          // Only forward the cached summary when its source URL still
+          // matches what's currently in the form. Without this guard,
+          // editing the URL on a Back-to-Step-1 trip would leave the
+          // chat referencing the previous site's content.
+          websiteMd:
+            websiteMd && websiteMdSourceUrl === form.websiteUrl?.trim()
+              ? websiteMd
+              : undefined,
           messages,
           profile: form.assistantChat?.profile ?? createEmptyAssistantProfile()
         })
@@ -660,14 +675,31 @@ function QuestionnaireForm() {
       // subsequent chat POSTs pick it up via the cached `websiteMd`.
       // Errors are logged silently — chat falls back to the "we can see
       // the URL but not the content" prompt branch in `chat.ts`.
-      if (form.websiteUrl?.trim() && !websiteMd) {
+      //
+      // Refetch whenever the URL the user typed differs from whatever
+      // produced the cached summary. This catches the Back-to-Step-1
+      // edit case: the user goes back, replaces the URL, advances
+      // again, and the cached `websiteMd` (still tagged with the old
+      // URL) gets thrown out by `setWebsiteMd("")` so the new URL
+      // is what the chat sees.
+      const currentUrl = form.websiteUrl?.trim() ?? "";
+      if (currentUrl && currentUrl !== websiteMdSourceUrl) {
+        // Capture the URL we're about to fetch so a fast user-edit
+        // race cannot let a stale response overwrite a fresher one.
+        const requestedUrl = currentUrl;
+        // Clear any previous summary so the chat doesn't keep sending
+        // the old site's markdown while the new fetch is in flight.
+        if (websiteMd) {
+          setWebsiteMd("");
+          setWebsiteMdSourceUrl("");
+        }
         void (async () => {
           try {
             const res = await fetch("/api/onboard/website-preview", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                websiteUrl: form.websiteUrl,
+                websiteUrl: requestedUrl,
                 businessName: form.businessName,
                 businessType: form.businessType
               })
@@ -676,6 +708,7 @@ function QuestionnaireForm() {
             const json = await res.json().catch(() => null);
             if (json?.data?.ok && typeof json.data.websiteMd === "string") {
               setWebsiteMd(json.data.websiteMd);
+              setWebsiteMdSourceUrl(requestedUrl);
             }
           } catch {
             /* non-blocking */
