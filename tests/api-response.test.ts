@@ -99,9 +99,9 @@ describe("api-response", () => {
     expect(logger.error).toHaveBeenCalledWith(
       "Unhandled route error",
       expect.objectContaining({
-        message: "supabase: insert failed",
-        name: "Error",
-        stack: expect.any(String)
+        errorMessage: "supabase: insert failed",
+        errorName: "Error",
+        errorStack: expect.any(String)
       })
     );
   });
@@ -112,10 +112,27 @@ describe("api-response", () => {
     expect(logger.error).toHaveBeenCalledWith(
       "Unhandled route error",
       expect.objectContaining({
-        message: "[object Object]",
-        name: "object"
+        errorMessage: "[object Object]",
+        errorName: "object"
       })
     );
+  });
+
+  it("handleRouteError context keys never collide with `logger.log`'s top-level fields", async () => {
+    // Regression guard. `logger.log` spreads context AFTER the top-level
+    // `{ level, message, timestamp }`, so any context key named `message`
+    // (or `level`/`timestamp`) silently overwrites the stable
+    // "Unhandled route error" marker that monitoring/alerts pin on. The
+    // fix prefixes the diagnostic fields with `error*` — this test makes
+    // a future "let's just call it `message`" change loud rather than
+    // silently breaking observability.
+    vi.mocked(logger.error).mockClear();
+    handleRouteError(new Error("boom"));
+    const [, context] = vi.mocked(logger.error).mock.calls[0]!;
+    const reservedKeys = ["level", "message", "timestamp"];
+    for (const key of reservedKeys) {
+      expect(context).not.toHaveProperty(key);
+    }
   });
 
   it("handleRouteError does NOT log when collapsing a known status-coded error", async () => {
