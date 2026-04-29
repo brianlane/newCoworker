@@ -127,6 +127,16 @@ function QuestionnaireForm() {
   const [chatError, setChatError] = useState<string | null>(null);
   const [pendingUserMessage, setPendingUserMessage] = useState<PendingUserMessage | null>(null);
   const [retryableUserMessage, setRetryableUserMessage] = useState<PendingUserMessage | null>(null);
+  // Cached website summary from `/api/onboard/website-preview`. Kicked
+  // off on the Step 1 → Step 2 transition so the assistant chat has
+  // crawl-derived business context to draw from when the user
+  // references their site. Empty string until the preview returns
+  // (chat still works without it; the system prompt falls back to
+  // mentioning just the URL). Lives in component state rather than
+  // localStorage because it's transient — the persistent ingest at
+  // /api/onboard/website-ingest re-runs at "Proceed to Payment" and is
+  // the canonical source for `business_configs.website_md`.
+  const [websiteMd, setWebsiteMd] = useState("");
   const chatViewportRef = useRef<HTMLDivElement>(null);
   const assistantDone = form.assistantChat?.readyToFinalize ?? false;
   const storedChatMessageCount = form.assistantChat?.messages.length ?? 0;
@@ -241,6 +251,12 @@ function QuestionnaireForm() {
           serviceArea: form.serviceArea,
           teamSize: form.teamSize,
           crmUsed: form.crmUsed,
+          // Pass the URL even when the preview hasn't returned yet so
+          // the model at least acknowledges the user has a website
+          // (the system prompt branches on this) instead of asking
+          // "do you have a website?" right after Step 1's submit.
+          websiteUrl: form.websiteUrl?.trim() || undefined,
+          websiteMd: websiteMd || undefined,
           messages,
           profile: form.assistantChat?.profile ?? createEmptyAssistantProfile()
         })
@@ -634,6 +650,39 @@ function QuestionnaireForm() {
       }
 
       setError(null);
+
+      // Fire the website-summary preview in the background. This feeds
+      // the Step-2 chat with crawl-derived business context so the model
+      // can reference the user's site instead of asking "do you have a
+      // website?" right after they pasted the URL on Step 1. We don't
+      // await it: chat starts immediately, the markdown lands once
+      // ingest completes (typically within the first 2-3 turns), and
+      // subsequent chat POSTs pick it up via the cached `websiteMd`.
+      // Errors are logged silently — chat falls back to the "we can see
+      // the URL but not the content" prompt branch in `chat.ts`.
+      if (form.websiteUrl?.trim() && !websiteMd) {
+        void (async () => {
+          try {
+            const res = await fetch("/api/onboard/website-preview", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                websiteUrl: form.websiteUrl,
+                businessName: form.businessName,
+                businessType: form.businessType
+              })
+            });
+            if (!res.ok) return;
+            const json = await res.json().catch(() => null);
+            if (json?.data?.ok && typeof json.data.websiteMd === "string") {
+              setWebsiteMd(json.data.websiteMd);
+            }
+          } catch {
+            /* non-blocking */
+          }
+        })();
+      }
+
       setStep(2);
       return;
     }

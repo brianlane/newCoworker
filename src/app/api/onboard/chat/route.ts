@@ -138,6 +138,11 @@ const requestSchema = z.object({
   serviceArea: z.string().optional(),
   teamSize: z.string().optional(),
   crmUsed: z.string().optional(),
+  websiteUrl: z.string().optional(),
+  // Cap the size at the upstream summarizer cap. Anything larger is
+  // either a bug or an attempt to inflate prompt cost; trim and let the
+  // schema parser quietly accept it.
+  websiteMd: z.string().max(16_000).optional(),
   messages: z.array(onboardingChatMessageSchema),
   profile: onboardingAssistantProfileSchema.optional()
 });
@@ -267,7 +272,9 @@ export async function POST(request: Request) {
       phone: body.phone,
       serviceArea: body.serviceArea,
       teamSize: body.teamSize,
-      crmUsed: body.crmUsed
+      crmUsed: body.crmUsed,
+      websiteUrl: body.websiteUrl,
+      websiteMd: body.websiteMd
     };
 
     const models = resolveOnboardingModels();

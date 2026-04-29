@@ -129,6 +129,22 @@ export type OnboardingKnownContext = {
   serviceArea?: string;
   teamSize?: string;
   crmUsed?: string;
+  /**
+   * The user's website URL as entered on Step 1. Surfaced to the
+   * onboarding model so it can acknowledge the URL even when the
+   * stateless preview ingest hasn't returned `websiteMd` yet (or
+   * couldn't crawl the page). Without this the model asks "do you
+   * have a website?" right after the user pasted it, which reads as
+   * the assistant ignoring the user.
+   */
+  websiteUrl?: string;
+  /**
+   * Crawler-and-summarizer output from `/api/onboard/website-preview`,
+   * cached on the client across Step-2 chat turns. Capped to
+   * `WEBSITE_INGEST_MAX_SUMMARY_CHARS` upstream. The model is allowed
+   * to reference this content but must not fabricate facts beyond it.
+   */
+  websiteMd?: string;
 };
 
 export const MAX_ONBOARDING_CHAT_MESSAGES = 36;
@@ -155,6 +171,31 @@ function hasUserTranscriptSignal(messages: OnboardingChatMessage[], pattern: Reg
   return messages.some((message) => message.role === "user" && pattern.test(message.content));
 }
 
+// "Just me / solo / by myself" answers are valid team-size signals on
+// their own — no number required.
+const TEAM_SIZE_SOLO_PATTERN = /\b(?:just me|by myself|solo|no team|one[ -]person|alone)\b/i;
+
+// Nouns that, paired with any quantifier in the same user message, count
+// as a team-size answer ("4 or 5 agents", "I have a handful of reps",
+// "small team of 3", "4-5 on my team").
+const TEAM_SIZE_NOUN_PATTERN =
+  /\b(?:agents?|team|members?|people|employees?|teammates?|staff|reps?|colleagues?)\b/i;
+
+// Numeric ranges, single counts, or fuzzy quantifiers. Pairing this with
+// `TEAM_SIZE_NOUN_PATTERN` is what keeps "we cover 5 cities" from
+// flipping `teamSizeKnown` true.
+const TEAM_SIZE_QUANTIFIER_PATTERN =
+  /\b\d+(?:\s*(?:[-–—]|to|or)\s*\d+)?\b|\b(?:a few|a handful|several|some|many|small|big|large)\b/i;
+
+function hasUserTeamSizeSignal(messages: OnboardingChatMessage[]): boolean {
+  return messages.some((message) => {
+    if (message.role !== "user") return false;
+    const text = message.content;
+    if (TEAM_SIZE_SOLO_PATTERN.test(text)) return true;
+    return TEAM_SIZE_NOUN_PATTERN.test(text) && TEAM_SIZE_QUANTIFIER_PATTERN.test(text);
+  });
+}
+
 export function summarizeOnboardingTopicStatus(
   knownContext: OnboardingKnownContext,
   profile: OnboardingAssistantProfile,
@@ -162,7 +203,15 @@ export function summarizeOnboardingTopicStatus(
 ): OnboardingTopicStatus {
   return {
     serviceAreaKnown: Boolean((knownContext.serviceArea || profile.serviceArea).trim()),
-    teamSizeKnown: Boolean((knownContext.teamSize || profile.teamSize).trim()),
+    // Also scan the user transcript so a clear answer ("4 or 5 agents",
+    // "just me", "small team of 3") flips this true even when the model
+    // forgot to write it into the emitted profile. Without this fall-
+    // through the dead-end guard in /api/onboard/chat keeps re-asking
+    // the team-size question turn after turn while the user reads the
+    // assistant's own acknowledgement of the same answer they gave.
+    teamSizeKnown:
+      Boolean((knownContext.teamSize || profile.teamSize).trim()) ||
+      hasUserTeamSizeSignal(messages),
     toolsKnown:
       Boolean(knownContext.crmUsed?.trim()) ||
       profile.crmUsed.length > 0 ||
@@ -221,6 +270,28 @@ export function buildOnboardingChatSystemPrompt(
   const profile = existingProfile ?? createEmptyAssistantProfile();
   const topicStatus = summarizeOnboardingTopicStatus(knownContext, profile, messages);
 
+  // The full website summary can be ~8KB and is the dominant component
+  // of the system prompt's size when present. Pull it out of
+  // `knownContext` for the JSON dump so the rest of the context stays
+  // small/scannable for the model, then re-attach the website summary
+  // as its own labelled section with explicit usage rules.
+  const { websiteMd, ...contextWithoutWebsite } = knownContext;
+
+  const websiteSection = websiteMd
+    ? [
+        "",
+        "Website summary (crawled from the user's site, treat as authoritative):",
+        websiteMd,
+        "",
+        "When the user references their website or asks the assistant to use info from it, draw from the summary above instead of asking the user to retype it. Do NOT invent facts the summary does not contain. If the summary lacks the specific detail you need, ask the user directly."
+      ].join("\n")
+    : knownContext.websiteUrl
+      ? [
+          "",
+          `The user has a website at ${knownContext.websiteUrl} but the crawl summary is not yet available. Acknowledge that you can see the URL — do NOT ask "do you have a website?" — and ask for whatever specific detail you need (bio, services, hours) instead of asking the user to retype the URL.`
+        ].join("\n")
+      : "";
+
   return [
     "You are a high-signal onboarding interviewer for creating a Rowboat/OpenClaw-style business assistant.",
     "Your job is to gather the information needed to produce a strong assistant profile and business memory.",
@@ -239,13 +310,14 @@ export function buildOnboardingChatSystemPrompt(
     "Return JSON only.",
     "",
     "Known context:",
-    JSON.stringify(knownContext),
+    JSON.stringify(contextWithoutWebsite),
     "",
     "Existing profile:",
     JSON.stringify(profile),
     "",
     "Answered topic status:",
     JSON.stringify(topicStatus),
+    websiteSection,
     "",
     "Return an object with exactly these keys:",
     "- assistantMessage: string",

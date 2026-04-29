@@ -44,6 +44,51 @@ describe("onboarding chat helpers", () => {
     expect(prompt).toContain("Known summary");
   });
 
+  it("includes the crawled website summary as an authoritative section when websiteMd is provided", () => {
+    const prompt = buildOnboardingChatSystemPrompt({
+      businessName: "Northwind Services",
+      websiteUrl: "https://northwind.example.com",
+      websiteMd: "# Northwind Services\n- Heating and cooling repairs"
+    });
+
+    expect(prompt).toContain("Website summary (crawled from the user's site, treat as authoritative)");
+    expect(prompt).toContain("Heating and cooling repairs");
+    expect(prompt).toContain("Do NOT invent facts the summary does not contain");
+    // Empty/preview-not-yet-available branch must not also fire when
+    // we already have the summary.
+    expect(prompt).not.toContain("crawl summary is not yet available");
+  });
+
+  it("falls back to a 'we can see the URL' instruction when only websiteUrl is provided (no preview yet)", () => {
+    const prompt = buildOnboardingChatSystemPrompt({
+      businessName: "Northwind Services",
+      websiteUrl: "https://northwind.example.com"
+    });
+
+    expect(prompt).toContain("https://northwind.example.com");
+    expect(prompt).toContain("crawl summary is not yet available");
+    expect(prompt).toContain('do NOT ask "do you have a website?"');
+    expect(prompt).not.toContain("Website summary (crawled");
+  });
+
+  it("does not embed the website summary verbatim into the JSON.stringify(knownContext) dump", () => {
+    // Bug we're guarding against: dropping `websiteMd` into the raw
+    // `Known context: {...}` JSON dump bloats the prompt by ~8KB and
+    // mixes a multi-thousand-character markdown blob into a section
+    // the model treats as small/scannable. The website content
+    // belongs in its own labelled section with explicit usage rules,
+    // not inside the JSON dump.
+    const summary = "# Long site summary\n" + "- Bullet point\n".repeat(100);
+    const prompt = buildOnboardingChatSystemPrompt({
+      businessName: "Northwind",
+      websiteUrl: "https://northwind.example.com",
+      websiteMd: summary
+    });
+    const knownContextLine = prompt.split("\n").find((line) => line.startsWith('{"businessName"'));
+    expect(knownContextLine, "expected the Known context JSON line to exist").toBeTruthy();
+    expect(knownContextLine).not.toContain("Bullet point");
+  });
+
   it("creates an empty assistant profile with blank arrays and strings", () => {
     const profile = createEmptyAssistantProfile();
 
@@ -285,6 +330,57 @@ describe("onboarding chat helpers", () => {
     expect(topicStatus.customerTypesKnown).toBe(true);
     expect(topicStatus.commonRequestsKnown).toBe(true);
     expect(topicStatus.serviceAreaKnown).toBe(false);
+  });
+
+  it("flips teamSizeKnown true when the user transcript answers it, even when the model omits it from the profile", () => {
+    // Regression: the model occasionally fails to write `teamSize` into
+    // its emitted profile even after the user clearly answered it.
+    // Without this transcript fallback the dead-end guard in
+    // /api/onboard/chat keeps swapping in the team-size fallback
+    // question turn after turn (production case: user said "4 or 5
+    // agents" three times before the interview moved on).
+    const cases: { content: string; expected: boolean }[] = [
+      { content: "4 or 5 agents", expected: true },
+      { content: "I have a handful of real estate agents about 4 or 5 on my team", expected: true },
+      { content: "I already told you, 4 or 5 team members.", expected: true },
+      { content: "4-5 team members", expected: true },
+      { content: "Team of 6", expected: true },
+      { content: "Just me", expected: true },
+      { content: "By myself for now", expected: true },
+      { content: "Small team", expected: true },
+      // Negative cases — the bare numeric/quantifier without a team
+      // noun must not falsely flip teamSizeKnown true.
+      { content: "We cover 5 cities", expected: false },
+      { content: "I have 12 listings", expected: false },
+      { content: "We do 200 closings a year", expected: false }
+    ];
+
+    for (const { content, expected } of cases) {
+      const topicStatus = summarizeOnboardingTopicStatus(
+        { serviceArea: "", teamSize: "", crmUsed: "" },
+        createEmptyAssistantProfile(),
+        [{ role: "user", content, timestamp: "2026-04-29T17:00:00.000Z" }]
+      );
+      expect(topicStatus.teamSizeKnown, `for "${content}"`).toBe(expected);
+    }
+  });
+
+  it("does not flip teamSizeKnown true on assistant messages that mention team-size phrases", () => {
+    // The assistant repeatedly RE-ASKS the team size question — that
+    // text contains "team" and a number, but it's the exact opposite
+    // of a user answer. Only user-role messages should count.
+    const topicStatus = summarizeOnboardingTopicStatus(
+      { serviceArea: "", teamSize: "", crmUsed: "" },
+      createEmptyAssistantProfile(),
+      [
+        {
+          role: "assistant",
+          content: "How big is the team — 4 or 5 people, or just you?",
+          timestamp: "2026-04-29T17:00:00.000Z"
+        }
+      ]
+    );
+    expect(topicStatus.teamSizeKnown).toBe(false);
   });
 
   it("validates a complete model response on the happy path", () => {
