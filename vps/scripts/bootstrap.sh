@@ -31,8 +31,19 @@ log "=== New Coworker VPS Bootstrap (TIER=${TIER}) ==="
 # 1. System hardening
 # ------------------------------------------------------------------
 log "Hardening system..."
-apt-get update -qq
-apt-get install -y -qq ufw fail2ban unattended-upgrades curl wget git jq zram-config
+
+# Race protection — see `buildDefaultPostInstallScript` in
+# src/lib/hostinger/provision.ts for the full rationale. When the
+# orchestrator's SSH-bootstrap kicks off while Hostinger's cloud-init is
+# still running the same script via PIS, both apt invocations fight for
+# /var/lib/dpkg/lock-frontend. Block until cloud-init reports done, then
+# tell apt to retry for up to 5 minutes if some other apt later grabs
+# the lock again.
+cloud-init status --wait 2>/dev/null || true
+APT_LOCK_OPTS=(-o DPkg::Lock::Timeout=300)
+
+apt-get "${APT_LOCK_OPTS[@]}" update -qq
+apt-get "${APT_LOCK_OPTS[@]}" install -y -qq ufw fail2ban unattended-upgrades curl wget git jq zram-config
 
 # UFW firewall — Cloudflare Tunnel (cloudflared) handles all public traffic
 # via an outbound dial, so the only port that needs to be reachable from the

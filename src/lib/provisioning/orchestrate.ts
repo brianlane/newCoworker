@@ -107,18 +107,59 @@ const defaultRemoteExecutor: RemoteExecutor = (args) =>
 /* c8 ignore stop */
 
 /**
+ * Build the SSH command that stages and runs the bootstrap script.
+ *
+ * The leading `cloud-init status --wait` is critical for the PIS-attached
+ * path: when Hostinger executes the post-install-script via cloud-init,
+ * its `runcmd` phase holds `/var/lib/dpkg/lock-frontend` AND `/var/lib/
+ * apt/lists/lock` for the duration of the bootstrap (apt-get update,
+ * Docker install, etc.). The orchestrator's SSH-bootstrap pass starts as
+ * soon as sshd binds — which can be well before cloud-init's runcmd
+ * finishes — and our `apt-get install -y --no-install-recommends git
+ * curl ca-certificates` would race the in-flight cloud-init apt and exit
+ * non-zero under `set -euo pipefail`, aborting the whole provision.
+ *
+ * `cloud-init status --wait` blocks (idempotent) until cloud-init signals
+ * `done`. On hosts where cloud-init isn't installed or has already
+ * finished the call exits ≤2s. The `2>/dev/null || true` belt-and-braces
+ * keeps it non-fatal on minimal templates that lack the binary entirely.
+ *
+ * Belt-and-braces: the slim loader script itself ALSO passes
+ * `-o DPkg::Lock::Timeout=300` (see `buildDefaultPostInstallScript` in
+ * src/lib/hostinger/provision.ts) so even if a cloud-init module finishes
+ * after this wait returns and re-grabs the lock, apt-get blocks for up
+ * to 5 minutes instead of failing immediately.
+ */
+function buildBootstrapSshCommand(bootstrapB64: string): string {
+  return (
+    `cloud-init status --wait 2>/dev/null || true; ` +
+    `printf '%s' '${bootstrapB64}' ` +
+    `| base64 -d > /tmp/newcoworker-bootstrap.sh ` +
+    `&& chmod +x /tmp/newcoworker-bootstrap.sh ` +
+    `&& bash /tmp/newcoworker-bootstrap.sh`
+  );
+}
+
+/**
  * Run the bootstrap script on an already-provisioned VPS over SSH.
  *
- * Public surface for admin / repair flows: lets an operator re-execute
- * `vps/scripts/bootstrap.sh` against a host that drifted from the
- * orchestrator's expected state (e.g. an upstream Rowboat tag bump that
- * only landed after the original deploy, or a host where Hostinger's PIS
- * attach silently no-op'd). Returns the SSH exit code + tail so the
- * caller can render a meaningful error to the dashboard.
+ * Public surface for admin / repair flows. Used by:
+ *   - `scripts/oneshot/finish-provision-stuck-business.ts` as a
+ *     post-orchestration smoke-check (re-runs the idempotent bootstrap
+ *     to flush any residual drift before the operator walks away).
+ *   - Future admin UIs that need to re-bootstrap a host without
+ *     dragging the full orchestrator phase set along.
  *
- * NOT consumed by `orchestrateProvisioning` itself — it has its own
- * inline phase that records progress rows. This helper is a thin wrapper
- * for "run the same thing, tell me the result, don't touch coworker_logs".
+ * Why this co-exists with `runRemoteBootstrapInternal`:
+ *   - Both share `buildBootstrapSshCommand` + the connect-retry loop, so
+ *     `cloud-init status --wait`, apt lock-timeout handling, and
+ *     ssh-handshake retry semantics are guaranteed identical.
+ *   - This public wrapper returns 2KB tails (the right shape for an
+ *     admin UI or oneshot log line); the internal flavor returns the
+ *     full streams so the orchestrator can persist them on
+ *     coworker_logs without truncation.
+ *   - This wrapper does NOT touch coworker_logs / progress recording;
+ *     admin tools handle their own status surfaces.
  */
 export async function runRemoteBootstrap(input: {
   host: string;
@@ -132,11 +173,7 @@ export async function runRemoteBootstrap(input: {
   const remoteExec = input.remoteExec ?? defaultRemoteExecutor;
   const script = buildDefaultPostInstallScript({ tier: input.tier });
   const b64 = Buffer.from(script, "utf8").toString("base64");
-  const cmd =
-    `printf '%s' '${b64}' ` +
-    `| base64 -d > /tmp/newcoworker-bootstrap.sh ` +
-    `&& chmod +x /tmp/newcoworker-bootstrap.sh ` +
-    `&& bash /tmp/newcoworker-bootstrap.sh`;
+  const cmd = buildBootstrapSshCommand(b64);
 
   const result = await runWithSshConnectRetry(
     () =>
@@ -153,6 +190,48 @@ export async function runRemoteBootstrap(input: {
     stdoutTail: (result.stdout ?? "").slice(-2000),
     stderrTail: (result.stderr ?? "").slice(-2000)
   };
+}
+
+/**
+ * Internal flavor of {@link runRemoteBootstrap} that surfaces the FULL
+ * stdout/stderr (not just the 2KB tails the public helper returns).
+ *
+ * The orchestrator's bootstrap phase needs the complete streams so it
+ * can:
+ *   - dump the tail into `coworker_logs` on a non-zero exit (operators
+ *     debugging a partial bootstrap want the actual error, not the
+ *     last 2KB after a wall of progress lines), and
+ *   - feed the trimmed tail back into the thrown Error message so the
+ *     top-level `failed` row in coworker_logs carries something
+ *     actionable.
+ *
+ * The public helper's 2KB cap is fine for an admin who's also tailing
+ * /var/log directly via SSH; it's NOT fine for the orchestrator, which
+ * is the only path a customer ever sees fail. Keeping both shapes
+ * lets the public surface stay small without leaking a "you got
+ * truncated logs" footgun into the orchestrator path.
+ */
+async function runRemoteBootstrapInternal(input: {
+  host: string;
+  username: string;
+  privateKeyPem: string;
+  tier: "starter" | "standard";
+  remoteExec: RemoteExecutor;
+  sleep?: (ms: number) => Promise<void>;
+}): Promise<SshExecResult> {
+  const script = buildDefaultPostInstallScript({ tier: input.tier });
+  const b64 = Buffer.from(script, "utf8").toString("base64");
+  const cmd = buildBootstrapSshCommand(b64);
+  return runWithSshConnectRetry(
+    () =>
+      input.remoteExec({
+        host: input.host,
+        username: input.username,
+        privateKeyPem: input.privateKeyPem,
+        command: cmd
+      }),
+    input.sleep ? { sleep: input.sleep } : undefined
+  );
 }
 
 /**
@@ -476,33 +555,22 @@ async function runOrchestrator(
     source: "orchestrator"
   });
 
-  const bootstrapScript = buildDefaultPostInstallScript({ tier: narrowTier });
-  // Encode the script as base64 so we can ship it to the VPS in a single
-  // shell command without escaping pitfalls (heredoc EOF collisions, single-
-  // quote nesting, $() substitution, etc.). `base64` ships with coreutils on
-  // every Hostinger Ubuntu template, so the only requirement is /bin/sh.
-  const bootstrapB64 = Buffer.from(bootstrapScript, "utf8").toString("base64");
-  const bootstrapCmd =
-    `printf '%s' '${bootstrapB64}' ` +
-    `| base64 -d > /tmp/newcoworker-bootstrap.sh ` +
-    `&& chmod +x /tmp/newcoworker-bootstrap.sh ` +
-    `&& bash /tmp/newcoworker-bootstrap.sh`;
-
-  // Fresh-VPS sshd often isn't accepting connections at the exact instant
-  // Hostinger flips state to `running`. Retry the SSH connection a few times
-  // with backoff so we don't fail provisioning over a 5-30s race window.
-  // Per-attempt timeout already lives inside sshExec; this is the outer
-  // retry loop for connection-refused / connect-timeout errors only.
-  const bootstrapResult = await runWithSshConnectRetry(
-    () =>
-      remoteExec({
-        host: provisioned.publicIp,
-        username: provisioned.sshUsername,
-        privateKeyPem: provisioned.sshKey.private_key_pem,
-        command: bootstrapCmd
-      }),
-    deps?.sleep ? { sleep: deps.sleep } : undefined
-  );
+  // Single-source-of-truth bootstrap invocation. Shares command construction
+  // (`buildBootstrapSshCommand` + `buildDefaultPostInstallScript`) and the
+  // sshd connect-retry loop with `runRemoteBootstrap` (the admin helper) so
+  // an operator running the public helper from a oneshot script gets EXACTLY
+  // the same on-host behavior as a fresh provision — no chance of the two
+  // paths drifting on retry semantics, cloud-init waiting, or apt-lock
+  // handling. See `runRemoteBootstrapInternal` for why this returns the full
+  // exec result instead of the 2KB-tail shape used by the public helper.
+  const bootstrapResult = await runRemoteBootstrapInternal({
+    host: provisioned.publicIp,
+    username: provisioned.sshUsername,
+    privateKeyPem: provisioned.sshKey.private_key_pem,
+    tier: narrowTier,
+    remoteExec,
+    sleep: deps?.sleep
+  });
 
   if (bootstrapResult.exitCode !== 0) {
     const tail = (bootstrapResult.stderr || bootstrapResult.stdout || "").slice(-2000);

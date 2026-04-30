@@ -386,6 +386,141 @@ else
 fi
 
 # ------------------------------------------------------------------
+# 3b. Seed the per-tenant Rowboat project + api_key
+#
+# Rowboat does not expose a public REST API for project creation — projects
+# live as documents in the bundled MongoDB. We use the same pattern the
+# integration tests use (see tests/integration/kvm-rowboat/mongo-seed.ts):
+# stage a mongosh script, copy it into the mongo container, and run it.
+#
+# Why this is mandatory: /api/dashboard/chat reads
+# `business_configs.rowboat_project_id` and POSTs to
+# `https://<biz>.tunnel.newcoworker.com/api/v1/<projectId>/chat`. Rowboat
+# rejects unknown projectIds with HTTP 404, which the dashboard surfaces
+# as "your coworker's chat service isn't ready yet" — even when every
+# container is healthy. Seeding here closes that gap on the deploy path.
+#
+# Schema notes:
+#   * `_id` is the projectId. We use BUSINESS_ID directly so the same
+#     identifier flows through Supabase → tunnel hostname → Rowboat URL.
+#   * `api_keys` row uses `key = ROWBOAT_GATEWAY_TOKEN` so the bearer
+#     the platform Next.js app sends from /api/dashboard/chat
+#     authenticates one-shot. Same shared bearer the voice-bridge uses.
+#   * `liveWorkflow.agents[0]` is a "conversation" agent populated from
+#     the tenant's soul.md / identity.md / memory.md. The platform's
+#     chat copy expects a `user_facing` agent; mirror upstream.
+#   * Idempotent: deleteMany then insertOne, matched on _id / projectId.
+# ------------------------------------------------------------------
+log "Seeding Rowboat project ${BUSINESS_ID}..."
+SEED_TMP=$(mktemp /tmp/rowboat-seed.XXXXXX.js)
+chmod 600 "${SEED_TMP}"
+
+# Build the workflow JSON safely with jq so embedded quotes / newlines in
+# the .md vault files don't break mongosh parsing. Empty md files collapse
+# to empty strings, which Rowboat tolerates — the agent just runs with
+# whatever instructions are non-empty.
+ROWBOAT_INSTRUCTIONS=$(jq -nRs --arg soul "$SOUL_MD" --arg id "$IDENTITY_MD" --arg mem "$MEMORY_MD" --arg web "$WEBSITE_MD" '
+  ([$id, $soul, $web, $mem] | map(select(length > 0)) | join("\n\n"))
+' || echo "")
+ROWBOAT_INSTRUCTIONS=${ROWBOAT_INSTRUCTIONS:-"You are a professional AI coworker. Reply concisely and helpfully."}
+
+# Write the seed script. We embed the project + key docs as Mongo extended
+# JSON so booleans, dates, and special chars round-trip cleanly.
+SEED_NOW=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+WORKFLOW_JSON=$(jq -nc \
+  --arg name "${BUSINESS_NAME:-AI Coworker}" \
+  --arg instructions "${ROWBOAT_INSTRUCTIONS}" \
+  --arg model "${OLLAMA_MODEL}" \
+  --arg now "${SEED_NOW}" '
+{
+  agents: [{
+    name: "Coworker",
+    type: "conversation",
+    description: "Per-tenant AI coworker",
+    disabled: false,
+    instructions: $instructions,
+    outputVisibility: "user_facing",
+    controlType: "retain",
+    model: $model,
+    ragK: 3,
+    ragReturnType: "chunks"
+  }],
+  prompts: [{
+    name: "baseline",
+    type: "base_prompt",
+    prompt: "Owner-facing assistant for \($name)."
+  }],
+  tools: [],
+  startAgent: "Coworker",
+  lastUpdatedAt: $now
+}')
+
+cat > "${SEED_TMP}" <<MONGOSH_EOF
+const projectId = "${BUSINESS_ID}";
+const apiKey = "${ROWBOAT_GATEWAY_TOKEN}";
+const workflow = ${WORKFLOW_JSON};
+const now = "${SEED_NOW}";
+db.projects.deleteMany({ _id: projectId });
+db.projects.insertOne({
+  _id: projectId,
+  name: "${BUSINESS_NAME:-AI Coworker}",
+  createdAt: now,
+  createdByUserId: "newcoworker-orchestrator",
+  secret: "deploy-${BUSINESS_ID}",
+  draftWorkflow: workflow,
+  liveWorkflow: workflow
+});
+db.api_keys.deleteMany({ projectId: projectId });
+db.api_keys.insertOne({ projectId: projectId, key: apiKey, createdAt: now });
+print(JSON.stringify({
+  projects: db.projects.countDocuments({ _id: projectId }),
+  keys: db.api_keys.countDocuments({ projectId: projectId })
+}));
+MONGOSH_EOF
+
+# Wait up to ~90s for mongo to be reachable. On a cold deploy the
+# `--force-recreate` above just restarted Mongo and it can take 5-15s
+# for it to accept connections.
+seed_mongo_ok=0
+for _ in $(seq 1 30); do
+  if docker compose -f /opt/rowboat/docker-compose.yml exec -T mongo mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok' rowboat 2>/dev/null | grep -q '^1$'; then
+    seed_mongo_ok=1
+    break
+  fi
+  sleep 3
+done
+
+if [[ "${seed_mongo_ok}" == "1" ]]; then
+  if docker compose -f /opt/rowboat/docker-compose.yml cp "${SEED_TMP}" mongo:/tmp/rowboat.seed.js \
+    && docker compose -f /opt/rowboat/docker-compose.yml exec -T mongo mongosh rowboat /tmp/rowboat.seed.js > /tmp/rowboat-seed.out 2>&1; then
+    log "Rowboat project seeded: $(tail -1 /tmp/rowboat-seed.out)"
+    # Persist the projectId on `business_configs` so /api/dashboard/chat
+    # picks it up without a code change. Patch is idempotent (PATCH not
+    # POST) and `prefer=resolution=merge-duplicates` prevents a duplicate-
+    # row error when a previous deploy already wrote the same value.
+    if curl -sf -X PATCH \
+      -H "apikey: ${SUPABASE_SERVICE_KEY}" \
+      -H "Authorization: Bearer ${SUPABASE_SERVICE_KEY}" \
+      -H "Content-Type: application/json" \
+      -H "Prefer: return=minimal" \
+      -d "{\"rowboat_project_id\": \"${BUSINESS_ID}\"}" \
+      "${SUPABASE_URL}/rest/v1/business_configs?business_id=eq.${BUSINESS_ID}" \
+      > /dev/null; then
+      log "business_configs.rowboat_project_id set to ${BUSINESS_ID}"
+      report_progress 80 "rowboat_project_seeded" "Rowboat project + business_configs.rowboat_project_id ready"
+    else
+      log "WARN: failed to PATCH business_configs.rowboat_project_id; chat will 409 until set manually"
+      report_progress 80 "rowboat_project_seeded_no_config" "Rowboat project seeded but business_configs PATCH failed"
+    fi
+  else
+    log "WARN: Rowboat mongo seed script failed: $(tail -3 /tmp/rowboat-seed.out 2>/dev/null || echo '<no output>')"
+  fi
+else
+  log "WARN: rowboat mongo never reached ping=1 within 90s; skipping project seed (chat will 409 until next deploy)"
+fi
+rm -f "${SEED_TMP}" /tmp/rowboat-seed.out
+
+# ------------------------------------------------------------------
 # 4. Set up cloudflared tunnel
 # ------------------------------------------------------------------
 if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then

@@ -49,21 +49,27 @@ export async function generateSshKeypair(comment: string): Promise<SshKeypair> {
   // bytes (`d`). We need both for the OpenSSH-format private key.
   const jwkPub = publicKey.export({ format: "jwk" }) as { crv?: string; x?: string };
   const jwkPriv = privateKey.export({ format: "jwk" }) as { crv?: string; d?: string };
-  /* c8 ignore next 6 -- defensive guard against node:crypto regressions */
+  /* c8 ignore start -- defensive guards against a hypothetical node:crypto
+     regression: ed25519 keyGen is contractually shape-stable per RFC 8032 +
+     RFC 8037, so neither branch is reachable from unmodified Node. We keep
+     the throws so the failure mode would be loud rather than silently
+     emitting a broken OpenSSH PEM downstream. */
   if (jwkPub.crv !== "Ed25519" || typeof jwkPub.x !== "string") {
     throw new Error("Unexpected JWK shape from ed25519 keyGen (public)");
   }
   if (jwkPriv.crv !== "Ed25519" || typeof jwkPriv.d !== "string") {
     throw new Error("Unexpected JWK shape from ed25519 keyGen (private)");
   }
+  /* c8 ignore stop */
   const rawPub = base64UrlToBuffer(jwkPub.x);
   const rawPriv = base64UrlToBuffer(jwkPriv.d);
-  /* c8 ignore next 4 -- ed25519 halves are always 32 bytes per RFC 8032 */
+  /* c8 ignore start -- ed25519 halves are always 32 bytes per RFC 8032 */
   if (rawPub.length !== 32 || rawPriv.length !== 32) {
     throw new Error(
       `ed25519 keypair must be 32B/32B; got pub=${rawPub.length}B priv=${rawPriv.length}B`
     );
   }
+  /* c8 ignore stop */
 
   const sshBlob = encodeSshEd25519PublicBlob(rawPub);
   const safeComment = sanitizeComment(comment);
@@ -116,6 +122,10 @@ export function convertPkcs8Ed25519PemToOpenssh(pkcs8Pem: string, comment = "new
   }
   const rawPriv = base64UrlToBuffer(jwkPriv.d);
   const rawPub = base64UrlToBuffer(jwkPriv.x);
+  /* c8 ignore next 5 -- defensive guard: node:crypto's PKCS#8 ed25519 PEM
+     export is contractually 32B/32B per RFC 8032. Hitting this branch
+     would mean node:crypto regressed; we keep the throw so the failure
+     mode is loud rather than a malformed OpenSSH PEM downstream. */
   if (rawPriv.length !== 32 || rawPub.length !== 32) {
     throw new Error(
       `ed25519 keypair must be 32B/32B; got pub=${rawPub.length}B priv=${rawPriv.length}B`
@@ -214,6 +224,9 @@ function encodeOpensshEd25519PrivateKey(rawPriv32: Buffer, rawPub32: Buffer, com
 
   // Pad to a multiple of the (cipher) block size. For cipher=none,
   // OpenSSH uses block size 8. Pad bytes count up from 1 (1, 2, 3, ...).
+  // The padNeeded === 0 branch fires for comments with length ≡ 5 (mod 8)
+  // — see the dedicated test in tests/hostinger-keypair.test.ts which
+  // exercises both halves of this conditional.
   const blockSize = 8;
   const padNeeded = (blockSize - (inner.length % blockSize)) % blockSize;
   if (padNeeded > 0) {
@@ -236,8 +249,13 @@ function encodeOpensshEd25519PrivateKey(rawPriv32: Buffer, rawPub32: Buffer, com
     encodeString(inner)
   ]);
 
-  // Wrap in PEM at 70-char rows (matches ssh-keygen output).
+  // Wrap in PEM at 70-char rows (matches ssh-keygen output). The body is
+  // guaranteed non-empty here — even an empty comment yields a 131-byte
+  // inner blob — so `.match(/.{1,70}/g)` always returns at least one
+  // chunk. The `?? b64` fallback is purely a TypeScript narrowing aid
+  // for the `RegExpMatchArray | null` return type.
   const b64 = body.toString("base64");
+  /* c8 ignore next -- match() never returns null for non-empty strings; fallback exists for type narrowing only */
   const wrapped = b64.match(/.{1,70}/g)?.join("\n") ?? b64;
   return `-----BEGIN OPENSSH PRIVATE KEY-----\n${wrapped}\n-----END OPENSSH PRIVATE KEY-----\n`;
 }
@@ -273,6 +291,12 @@ function parseOpensshEd25519PrivateKey(pem: string): { rawPub: Buffer } {
   readString(); // kdfoptions
   const numkeys = buf.readUInt32BE(off);
   off += 4;
+  /* c8 ignore next -- defensive: openssh-key-v1 always frames a single
+     ed25519 keypair when emitted by `generateSshKeypair`, and our only
+     external input source (`convertPkcs8Ed25519PemToOpenssh`) re-emits
+     using the same single-key encoder. Hitting this branch would
+     require a hand-crafted PEM that wraps multiple keys in one frame,
+     which is not a shape any of our callers produce. */
   if (numkeys !== 1) throw new Error(`Expected numkeys=1, got ${numkeys}`);
   // Public-key blob: (uint32 algo-len | "ssh-ed25519" | uint32 32 | pub32)
   const pubblob = readString();

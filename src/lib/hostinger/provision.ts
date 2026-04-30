@@ -426,9 +426,28 @@ set -euo pipefail
 exec > >(tee -a /post_install.log) 2>&1
 echo "[newcoworker] post_install start: $(date -Is)"
 
+# Race protection for the dual-path bootstrap (Hostinger PIS + orchestrator
+# SSH fallback). When PIS attaches successfully, Hostinger's cloud-init runs
+# this very script during first-boot — and the orchestrator's SSH-bootstrap
+# verify pass starts as soon as sshd is up, well before cloud-init's runcmd
+# finishes. Both paths invoke apt-get under \`set -euo pipefail\`, so the
+# loser of that race exits non-zero on a "Could not get lock /var/lib/dpkg/
+# lock-frontend" error and aborts provisioning.
+#
+# Two belt-and-braces guards:
+#   1. \`cloud-init status --wait\` blocks until cloud-init signals \`done\`.
+#      No-op on hosts where cloud-init isn't installed or has already
+#      finished. The \`2>/dev/null || true\` keeps it non-fatal on minimal
+#      templates lacking the binary.
+#   2. \`-o DPkg::Lock::Timeout=300\` tells apt to retry-with-backoff for
+#      up to 5 minutes when a competing apt holds the lock, instead of
+#      bailing immediately. Survives a cloud-init module that grabs the
+#      lock again right after step (1) returns.
+cloud-init status --wait 2>/dev/null || true
+
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
-apt-get install -y --no-install-recommends git curl ca-certificates
+apt-get -y -o DPkg::Lock::Timeout=300 update
+apt-get -y -o DPkg::Lock::Timeout=300 install --no-install-recommends git curl ca-certificates
 
 # Stage the newCoworker repo. Values are emitted in single quotes so bash
 # performs NO interpolation on them — this neutralises \`$(...)\`, backticks,

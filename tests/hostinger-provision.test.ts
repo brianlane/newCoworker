@@ -472,6 +472,44 @@ describe("provisionVpsForBusiness", () => {
     expect(client.purchaseVirtualMachine).not.toHaveBeenCalled();
   });
 
+  it("re-throws when createPostInstallScript throws a HostingerApiError with a non-numeric status", async () => {
+    // Branch coverage for `errStatus`: we only swallow 403 when the error's
+    // `.status` is the *number* 403. A malformed HostingerApiError that
+    // surfaces `.status: "403"` (string) — which can happen if a future
+    // refactor of the client serialises it via JSON round-trip — must NOT
+    // hit the 403 fast-path. Instead we re-throw, fail before the purchase,
+    // and surface the underlying issue in the orchestrator's `failed` row.
+    class StringStatusHostingerError extends Error {
+      readonly endpoint = "/api/vps/v1/post-install-scripts";
+      readonly status = "403" as unknown as number; /* DELIBERATELY wrong shape */
+      readonly body = { message: "bad shape" };
+      constructor() {
+        super("Hostinger API HTTP <stringly-typed>");
+        this.name = "HostingerApiError";
+      }
+    }
+    const pisStub = vi.fn().mockRejectedValueOnce(new StringStatusHostingerError());
+    const client = makeClientStub({ createPostInstallScript: pisStub });
+    await expect(
+      provisionVpsForBusiness(
+        {
+          businessId: "biz-stringly-status",
+          tier: "starter",
+          postInstallScript: "#!/bin/bash\n",
+          pollIntervalMs: 1
+        },
+        {
+          client: client as unknown as HostingerClient,
+          generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
+          sleep: vi.fn()
+        }
+      )
+    ).rejects.toThrow(/<stringly-typed>/);
+    // Stringly-typed status doesn't match the 403 swallow branch → purchase
+    // never happens.
+    expect(client.purchaseVirtualMachine).not.toHaveBeenCalled();
+  });
+
   it("re-throws non-HostingerApiError errors from createPostInstallScript", async () => {
     // Defense-in-depth: a network-layer Error (not a HostingerApiError) has
     // no `.status`, so the 403 fast-path can't apply. The provisioner
@@ -979,6 +1017,31 @@ describe("buildDefaultPostInstallScript", () => {
     expect(s).toContain("/vps/scripts/bootstrap.sh");
     expect(s).toContain("post_install start");
     expect(s).toContain("post_install complete");
+  });
+
+  it("includes the cloud-init wait + apt lock-timeout race protection (Codex P1)", () => {
+    // The slim loader runs in TWO places that race the dpkg lock:
+    //   1. As Hostinger's first-boot PIS (cloud-init runcmd phase).
+    //   2. As the orchestrator's SSH-bootstrap fallback / verify pass.
+    // When PIS attaches AND the orchestrator's SSH pass fires while
+    // cloud-init's runcmd is still running, both apt-get invocations
+    // fight for /var/lib/dpkg/lock-frontend. Under `set -euo pipefail`
+    // the loser exits non-zero and aborts provisioning.
+    //
+    // Two guards must be present in the script:
+    //   - `cloud-init status --wait` to block on cloud-init completion
+    //     (with `2>/dev/null || true` for templates lacking the binary).
+    //   - `-o DPkg::Lock::Timeout=300` so apt retries-with-backoff
+    //     instead of bailing on the first lock collision.
+    const s = buildDefaultPostInstallScript();
+    expect(s).toContain("cloud-init status --wait");
+    expect(s).toContain("|| true");
+    expect(s).toContain("DPkg::Lock::Timeout=300");
+    // And both apt invocations (update + install) must use the timeout
+    // option — a regression that drops it from one would silently
+    // re-introduce the race.
+    expect(s.match(/apt-get -y -o DPkg::Lock::Timeout=300 update/)).not.toBeNull();
+    expect(s.match(/apt-get -y -o DPkg::Lock::Timeout=300 install/)).not.toBeNull();
   });
 });
 

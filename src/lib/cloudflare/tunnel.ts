@@ -192,6 +192,57 @@ export function createCloudflareTunnelProvisioner(
     }
   }
 
+  /**
+   * Enable Cloudflare Total TLS on a zone (idempotent).
+   *
+   * Why this exists: Cloudflare Universal SSL covers ONLY the zone apex
+   * and a single level of wildcard (`*.<zone>`). Per-tenant tunnels live
+   * at TWO levels deep — `<businessId>.tunnel.newcoworker.com` and
+   * `voice-<businessId>.tunnel.newcoworker.com` inside the
+   * `newcoworker.com` zone. Without Total TLS, Cloudflare's edge has no
+   * matching certificate for those SNI names and the TLS handshake fails
+   * with `sslv3 alert handshake failure` (alert 40), which is exactly
+   * the symptom that left the brianlanefanmail tenant tunnel
+   * unreachable from the dashboard chat after every internal probe
+   * passed. Total TLS lazily issues a Let's Encrypt cert per hostname as
+   * soon as a CNAME for it is created in the zone — exactly when our
+   * `ensureCnameRecord` runs below.
+   *
+   * The PATCH is idempotent: re-enabling on a zone that already has it
+   * on returns 200 with the same body. A 4xx here is logged and
+   * swallowed because cert provisioning is independent of tunnel
+   * functionality on the data plane (the tunnel still proxies; only TLS
+   * to the edge is broken), and we never want a cert-API hiccup to
+   * abort an otherwise-successful provision.
+   */
+  async function ensureZoneTotalTls(zoneId: string, businessId: string): Promise<void> {
+    try {
+      await api(`/zones/${zoneId}/acm/total_tls`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          enabled: true,
+          /* Let's Encrypt is the only CA that supports Total TLS today and
+             is also free; locking the choice keeps the API contract stable
+             across re-runs against zones provisioners may have inherited. */
+          certificate_authority: "lets_encrypt"
+        })
+      });
+      logger.info("cloudflare Total TLS enabled", { businessId, zoneId });
+    } catch (err) {
+      // `api()` only ever throws Error subclasses (see line 153 — `throw new
+      // Error(...)`), so `instanceof Error` is always true here. The
+      // `: String(err)` branch is a defensive narrowing aid for a
+      // hypothetical future caller that throws a non-Error value, and
+      // unreachable from any path the provisioner exercises today.
+      const message = err instanceof Error ? err.message : /* c8 ignore next */ String(err);
+      logger.warn("cloudflare Total TLS PATCH failed (non-fatal)", {
+        businessId,
+        zoneId,
+        error: message
+      });
+    }
+  }
+
   return async function provisionBusinessTunnel({ businessId }): Promise<ProvisionedTunnel> {
     if (!businessId) throw new Error("businessId required");
     const tunnelName = `${tunnelNamePrefix}-${businessId}`;
@@ -271,6 +322,16 @@ export function createCloudflareTunnelProvisioner(
       cnameTarget,
       role: "voice"
     });
+
+    // 5. Enable Total TLS on the zone so Cloudflare lazily issues a Let's
+    //    Encrypt cert for both freshly-CNAMEd hostnames. Universal SSL only
+    //    covers one wildcard level, which leaves multi-level tunnel hosts
+    //    (e.g. `<biz>.tunnel.newcoworker.com` inside the
+    //    `newcoworker.com` zone) without a matching cert and causes the
+    //    `sslv3 alert handshake failure` (alert 40) we saw on
+    //    brianlanefanmail's first tenant. Idempotent + non-fatal — see
+    //    `ensureZoneTotalTls` for why we swallow API errors here.
+    await ensureZoneTotalTls(zoneId, businessId);
 
     return { tunnelId, token, hostname, voiceHostname };
   };

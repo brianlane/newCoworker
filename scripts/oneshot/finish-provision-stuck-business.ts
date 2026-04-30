@@ -79,6 +79,7 @@ import {
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   orchestrateProvisioning,
+  runRemoteBootstrap,
   type VpsProvisioner
 } from "@/lib/provisioning/orchestrate";
 
@@ -356,6 +357,39 @@ async function main(): Promise<void> {
       `[finish-provision] orchestration COMPLETE after ${fmtDuration(Date.now() - t0)}:`,
       result
     );
+
+    // Step 4: post-orchestration smoke check via the public
+    // `runRemoteBootstrap` helper. The orchestrator already ran bootstrap
+    // inline as part of its phases — re-running it here is intentionally
+    // redundant: it (a) exercises the public admin API on the same path
+    // an operator would use to repair a drifted host, and (b) flags any
+    // residual issue (e.g. a Rowboat container that crashed between the
+    // orchestrator's bootstrap pass and now) BEFORE the operator
+    // declares "done" and walks away. The script is idempotent so this
+    // is safe; a non-zero exit is logged but not fatal — orchestration
+    // already succeeded.
+    const verifyKey = await getActiveVpsSshKeyForBusiness(BUSINESS_ID);
+    const liveVm = await client.getVirtualMachine(EXISTING_VPS_ID);
+    const verifyIp = firstIpv4(liveVm);
+    if (verifyKey && verifyIp) {
+      console.log(`[finish-provision] post-deploy smoke: re-running bootstrap via runRemoteBootstrap...`);
+      const v = await runRemoteBootstrap({
+        host: verifyIp,
+        username: verifyKey.ssh_username,
+        privateKeyPem: verifyKey.private_key_pem,
+        tier: TIER
+      });
+      if (v.exitCode === 0) {
+        console.log(`[finish-provision] post-deploy smoke: PASS (bootstrap idempotent re-run exited 0)`);
+      } else {
+        console.warn(
+          `[finish-provision] post-deploy smoke: bootstrap re-run exited ${v.exitCode}; tails:\n` +
+            `  stdout: ${v.stdoutTail.slice(-500)}\n  stderr: ${v.stderrTail.slice(-500)}`
+        );
+      }
+    } else {
+      console.log(`[finish-provision] post-deploy smoke: skipped (missing key or IP)`);
+    }
   } catch (err) {
     console.error(
       `[finish-provision] orchestration FAILED after ${fmtDuration(Date.now() - t0)}:`

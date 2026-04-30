@@ -982,6 +982,14 @@ describe("provisioning/orchestrate", () => {
       // Bootstrap ships the script as base64 to dodge heredoc/quoting issues.
       expect(bootstrapCmd).toContain("base64 -d");
       expect(bootstrapCmd).toContain("/tmp/newcoworker-bootstrap.sh");
+      // Codex P1 fix: bootstrap MUST wait for cloud-init's runcmd to finish
+      // before doing anything that touches apt. Without this, a successful
+      // PIS attach + concurrent SSH-bootstrap race the dpkg lock and the
+      // SSH side fails under `set -euo pipefail`. The wait is also a
+      // belt-and-braces no-op when cloud-init isn't installed (handled by
+      // the `2>/dev/null || true`).
+      expect(bootstrapCmd).toContain("cloud-init status --wait");
+      expect(bootstrapCmd).toContain("|| true");
       // Deploy is the existing /opt/deploy-client.sh path with env injection.
       expect(deployCmd).toContain("/opt/deploy-client.sh");
     });
@@ -1237,6 +1245,11 @@ describe("provisioning/orchestrate", () => {
       const cmd = remoteExec.mock.calls[0][0].command as string;
       expect(cmd).toContain("base64 -d");
       expect(cmd).toContain("/tmp/newcoworker-bootstrap.sh");
+      // Same cloud-init wait the orchestrator's inline path uses (both call
+      // through the same `buildBootstrapSshCommand` helper, so a future
+      // refactor can't accidentally diverge this behavior between the
+      // public admin helper and the production bootstrap path).
+      expect(cmd).toContain("cloud-init status --wait");
     });
 
     it("does NOT touch recordProvisioningProgress (admin helper is log-free)", async () => {
@@ -1297,6 +1310,60 @@ describe("provisioning/orchestrate", () => {
       });
       expect(result.exitCode).toBe(11);
       expect(result.stderrTail).toContain("command not found");
+    });
+
+    it("works when caller omits the optional sleep injector (defaults branch)", async () => {
+      // Pins the `input.sleep ? { sleep: input.sleep } : undefined` ternary
+      // on the `else` side. Every other test injects sleep so the retry
+      // loop's mocks are deterministic; this one exercises the production
+      // shape an admin script would actually use (no injected sleep, the
+      // built-in setTimeout-backed sleep takes over) and proves the
+      // public surface compiles without that field. Branch coverage on
+      // orchestrate.ts drops below 100% without this case.
+      const { runRemoteBootstrap } = await import("@/lib/provisioning/orchestrate");
+      const remoteExec = vi.fn().mockResolvedValue({
+        exitCode: 0,
+        signal: null,
+        stdout: "ok",
+        stderr: ""
+      });
+      const result = await runRemoteBootstrap({
+        host: "1.2.3.4",
+        username: "root",
+        privateKeyPem: "PEM",
+        tier: "starter",
+        remoteExec
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdoutTail).toBe("ok");
+      expect(remoteExec).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back to '' tails when remoteExec returns undefined stdout/stderr", async () => {
+      // Pins the `(result.stdout ?? "").slice(-2000)` and the matching
+      // stderr fallback. `sshExec` historically returned `stdout/stderr:
+      // undefined` when ssh2 closed the channel before any data arrived
+      // (hard ECONNRESET mid-handshake). The public helper's contract
+      // promises a string for both tails — so we explicitly guard with
+      // `?? ""`. Branch coverage on orchestrate.ts drops below 100%
+      // without this case (lines 190-191).
+      const { runRemoteBootstrap } = await import("@/lib/provisioning/orchestrate");
+      const remoteExec = vi.fn().mockResolvedValue({
+        exitCode: 0,
+        signal: null,
+        stdout: undefined,
+        stderr: undefined
+      });
+      const result = await runRemoteBootstrap({
+        host: "1.2.3.4",
+        username: "root",
+        privateKeyPem: "PEM",
+        tier: "starter",
+        remoteExec,
+        sleep: vi.fn().mockResolvedValue(undefined)
+      });
+      expect(result.stdoutTail).toBe("");
+      expect(result.stderrTail).toBe("");
     });
   });
 

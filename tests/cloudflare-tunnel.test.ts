@@ -58,6 +58,25 @@ function fail(code: number, message: string) {
   return { success: false, errors: [{ code, message }], result: null };
 }
 
+/**
+ * Shared handler for the Total TLS PATCH the provisioner now issues at the
+ * end of every successful run (so multi-level tunnel hostnames get a Let's
+ * Encrypt cert from the CF edge — Universal SSL only covers one wildcard
+ * level). Matches `PATCH /zones/<id>/acm/total_tls` for any zone id and
+ * is `reuse: true` because the call happens once per tenant per
+ * provisioning attempt; tests that re-run the provisioner against the same
+ * zone reuse the same handler. Idempotent on the CF side too — re-PATCHes
+ * are no-ops.
+ */
+function totalTlsHandler(): Handler {
+  return {
+    match: (u, i) =>
+      i?.method === "PATCH" && /\/zones\/[^/]+\/acm\/total_tls$/.test(u),
+    body: ok({ enabled: true }),
+    reuse: true
+  };
+}
+
 const BASE = "https://api.cloudflare.com/client/v4";
 const ACCOUNT = "acct-1";
 const ZONE = "tunnel.example.com";
@@ -112,7 +131,8 @@ describe("cloudflareTunnelProvisioner", () => {
           i?.method === "POST" && u === `${BASE}/zones/zone-1/dns_records`,
         body: ok({ id: "rec-1" }),
         reuse: true
-      }
+      },
+      totalTlsHandler()
     ]);
 
     const provisioner = createCloudflareTunnelProvisioner(baseConfig(fetchImpl));
@@ -188,7 +208,8 @@ describe("cloudflareTunnelProvisioner", () => {
         match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/zone-apex/dns_records`,
         body: ok({ id: "rec-h" }),
         reuse: true
-      }
+      },
+      totalTlsHandler()
     ]);
 
     const provisioner = createCloudflareTunnelProvisioner({
@@ -264,7 +285,8 @@ describe("cloudflareTunnelProvisioner", () => {
         match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/preset-zone/dns_records`,
         body: ok({ id: "rec-z" }),
         reuse: true
-      }
+      },
+      totalTlsHandler()
     ]);
     const provisioner = createCloudflareTunnelProvisioner({
       ...baseConfig(fetchImpl),
@@ -311,7 +333,8 @@ describe("cloudflareTunnelProvisioner", () => {
         body: ok([
           { id: "rec-2", content: "tun-existing.cfargotunnel.com", proxied: true }
         ])
-      }
+      },
+      totalTlsHandler()
     ]);
 
     const provisioner = createCloudflareTunnelProvisioner(baseConfig(fetchImpl));
@@ -375,7 +398,8 @@ describe("cloudflareTunnelProvisioner", () => {
         match: (u, i) =>
           i?.method === "PATCH" && u === `${BASE}/zones/zone-1/dns_records/rec-c-voice`,
         body: ok({})
-      }
+      },
+      totalTlsHandler()
     ]);
 
     const provisioner = createCloudflareTunnelProvisioner(baseConfig(fetchImpl));
@@ -454,7 +478,8 @@ describe("cloudflareTunnelProvisioner", () => {
         match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/zone-1/dns_records`,
         body: ok({ id: "rec-na" }),
         reuse: true
-      }
+      },
+      totalTlsHandler()
     ]);
 
     const provisioner = createCloudflareTunnelProvisioner(baseConfig(fetchImpl));
@@ -498,7 +523,8 @@ describe("cloudflareTunnelProvisioner", () => {
         match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/zone-1/dns_records`,
         body: ok({ id: "rec-fresh" }),
         reuse: true
-      }
+      },
+      totalTlsHandler()
     ]);
 
     const provisioner = createCloudflareTunnelProvisioner(baseConfig(fetchImpl));
@@ -603,6 +629,115 @@ describe("cloudflareTunnelProvisioner", () => {
     await expect(provisioner({ businessId: "biz-empty-err" })).rejects.toThrow("unknown error");
   });
 
+  it("PATCHes Total TLS on the zone after CNAMEs are wired (cert auto-issuance)", async () => {
+    // Pin the contract: every successful provision MUST issue a single
+    // PATCH /zones/<id>/acm/total_tls with `{ enabled: true,
+    // certificate_authority: "lets_encrypt" }`. Without this, multi-level
+    // tunnel hostnames (e.g. <biz>.tunnel.newcoworker.com inside the
+    // newcoworker.com zone) have no edge cert and the dashboard chat fails
+    // with `sslv3 alert handshake failure` even when every container is
+    // healthy. See `ensureZoneTotalTls` in tunnel.ts for the full rationale.
+    const { fetchImpl, calls } = makeFetch([
+      {
+        match: (u) => u.startsWith(`${BASE}/accounts/${ACCOUNT}/cfd_tunnel?name=nc-biz-tls`),
+        body: ok([])
+      },
+      {
+        match: (u, i) => i?.method === "POST" && u === `${BASE}/accounts/${ACCOUNT}/cfd_tunnel`,
+        body: ok({ id: "tun-tls" })
+      },
+      { match: (u) => u.endsWith("/cfd_tunnel/tun-tls/token"), body: ok("T") },
+      { match: (u, i) => i?.method === "PUT" && u.endsWith("/configurations"), body: ok({}) },
+      {
+        match: (u) => u === `${BASE}/zones?name=${encodeURIComponent(ZONE)}`,
+        body: ok([{ id: "zone-tls", name: ZONE }])
+      },
+      {
+        match: (u) => u.startsWith(`${BASE}/zones/zone-tls/dns_records?type=CNAME&name=`),
+        body: ok([]),
+        reuse: true
+      },
+      {
+        match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/zone-tls/dns_records`,
+        body: ok({ id: "rec" }),
+        reuse: true
+      },
+      {
+        match: (u, i) =>
+          i?.method === "PATCH" && u === `${BASE}/zones/zone-tls/acm/total_tls`,
+        body: ok({ enabled: true, certificate_authority: "lets_encrypt" })
+      }
+    ]);
+    const provisioner = createCloudflareTunnelProvisioner(baseConfig(fetchImpl));
+    await provisioner({ businessId: "biz-tls" });
+    const totalTlsCall = calls.find(
+      (c) => c.method === "PATCH" && c.url === `${BASE}/zones/zone-tls/acm/total_tls`
+    );
+    expect(totalTlsCall).toBeDefined();
+    expect(totalTlsCall?.body).toEqual({
+      enabled: true,
+      certificate_authority: "lets_encrypt"
+    });
+    // CNAMEs must be created BEFORE Total TLS — Cloudflare lazily issues
+    // certs per existing hostname, so the order matters.
+    const totalTlsIdx = calls.findIndex(
+      (c) => c.method === "PATCH" && c.url === `${BASE}/zones/zone-tls/acm/total_tls`
+    );
+    const lastCnameIdx = calls.map((c, i) => ({ c, i })).reverse().find(
+      (e) => e.c.method === "POST" && e.c.url === `${BASE}/zones/zone-tls/dns_records`
+    )?.i;
+    expect(lastCnameIdx).toBeDefined();
+    expect(totalTlsIdx).toBeGreaterThan(lastCnameIdx as number);
+  });
+
+  it("does NOT abort provisioning when Total TLS PATCH fails (cert is best-effort)", async () => {
+    // The data-plane (tunnel + ingress + CNAMEs) is what makes the
+    // service reachable; Total TLS is an edge-cert convenience that can
+    // be re-tried later. A 4xx here must be logged and swallowed so a
+    // missing-scope token (e.g. operator forgot to add Zone:SSL:Edit)
+    // does not regress the existing happy-path tunnel for every tenant.
+    const { fetchImpl } = makeFetch([
+      {
+        match: (u) => u.startsWith(`${BASE}/accounts/${ACCOUNT}/cfd_tunnel?name=nc-biz-tlsfail`),
+        body: ok([])
+      },
+      {
+        match: (u, i) => i?.method === "POST" && u === `${BASE}/accounts/${ACCOUNT}/cfd_tunnel`,
+        body: ok({ id: "tun-tlsfail" })
+      },
+      { match: (u) => u.endsWith("/cfd_tunnel/tun-tlsfail/token"), body: ok("T") },
+      { match: (u, i) => i?.method === "PUT" && u.endsWith("/configurations"), body: ok({}) },
+      {
+        match: (u) => u === `${BASE}/zones?name=${encodeURIComponent(ZONE)}`,
+        body: ok([{ id: "zone-tlsfail", name: ZONE }])
+      },
+      {
+        match: (u) =>
+          u.startsWith(`${BASE}/zones/zone-tlsfail/dns_records?type=CNAME&name=`),
+        body: ok([]),
+        reuse: true
+      },
+      {
+        match: (u, i) =>
+          i?.method === "POST" && u === `${BASE}/zones/zone-tlsfail/dns_records`,
+        body: ok({ id: "rec" }),
+        reuse: true
+      },
+      {
+        match: (u, i) =>
+          i?.method === "PATCH" && u === `${BASE}/zones/zone-tlsfail/acm/total_tls`,
+        body: fail(10000, "Authentication error"),
+        status: 403
+      }
+    ]);
+    const provisioner = createCloudflareTunnelProvisioner(baseConfig(fetchImpl));
+    const result = await provisioner({ businessId: "biz-tlsfail" });
+    // Provisioning still returns a usable token + hostnames; only the
+    // edge cert is delayed.
+    expect(result.tunnelId).toBe("tun-tlsfail");
+    expect(result.hostname).toBe(`biz-tlsfail.${ZONE}`);
+  });
+
   it("honors voiceServiceUrl + voiceHostnamePrefix overrides end-to-end", async () => {
     // Covers the "caller supplied a real value (non-empty after trim)" branch
     // for both voice-bridge knobs — counterpart to the whitespace-only test
@@ -623,7 +758,8 @@ describe("cloudflareTunnelProvisioner", () => {
         match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/zone-v/dns_records`,
         body: ok({ id: "rec-v" }),
         reuse: true
-      }
+      },
+      totalTlsHandler()
     ]);
     const provisioner = createCloudflareTunnelProvisioner({
       apiToken: TOKEN,
@@ -771,7 +907,8 @@ describe("cloudflareTunnelProvisionerFromEnv", () => {
         match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/zone-w/dns_records`,
         body: ok({ id: "rec-w" }),
         reuse: true
-      }
+      },
+      totalTlsHandler()
     ]);
     const provisioner = createCloudflareTunnelProvisioner({
       apiToken: TOKEN,
