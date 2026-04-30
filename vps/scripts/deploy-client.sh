@@ -360,9 +360,20 @@ else
 fi
 
 # ------------------------------------------------------------------
-# 3. Apply Rowboat stack (recreate if compose changed; drop orphan ollama from older layouts)
-# ------------------------------------------------------------------
-docker compose -f /opt/rowboat/docker-compose.yml up -d --remove-orphans || true
+# 3. Apply Rowboat stack.
+#
+# `--force-recreate` is mandatory: without it, `docker compose up` keeps
+# the existing container alive when ONLY the env_file changed (compose
+# only auto-recreates when image / yaml-level config diff). On a tenant
+# re-deploy that rotates secrets (ROWBOAT_GATEWAY_TOKEN,
+# STREAM_URL_SIGNING_SECRET) or adds a previously-missing key (the
+# late-2025 MONGODB_CONNECTION_STRING / REDIS_URL / AUTH0_* additions),
+# the running container would silently fall back to its in-image
+# defaults and crash-loop on Redis ECONNREFUSED 127.0.0.1:6379.
+#
+# `--remove-orphans` drops the legacy `ollama` compose service from
+# pre-2026-04 layouts that ran ollama inside the same compose project.
+docker compose -f /opt/rowboat/docker-compose.yml up -d --build --force-recreate --remove-orphans || true
 log "Rowboat stack updated."
 
 # Bands align with integration ordering: stack up → HTTP readiness → tunnel → Supabase patch (see vps/integration/README.md).
