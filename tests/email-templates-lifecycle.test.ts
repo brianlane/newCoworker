@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildCancelConfirmationEmail } from "@/lib/email/templates/cancel-confirmation";
+import { buildEmailVerificationMessage } from "@/lib/email/templates/email-verification";
 import { buildRefundIssuedEmail } from "@/lib/email/templates/refund-issued";
 
 describe("cancel-confirmation email", () => {
@@ -107,5 +108,32 @@ describe("refund-issued email", () => {
   it("clamps negative amounts to 0 so the email never shows a weird value", () => {
     const { text } = buildRefundIssuedEmail({ amountCents: -50 });
     expect(text).toMatch(/\$0\.00/);
+  });
+});
+
+describe("email-verification template", () => {
+  it("embeds the verification URL verbatim and carries the 7-day TTL copy", () => {
+    const url = "https://www.newcoworker.com/verify-email?token=abc.def";
+    const { subject, text } = buildEmailVerificationMessage({ verificationUrl: url });
+
+    expect(subject).toBe("Confirm your NewCoworker email");
+    expect(text).toContain(url);
+    expect(text).toMatch(/7 days/);
+    // Welcome line + ignore-clause are part of the deliverability copy
+    // and exist primarily to keep the email out of spam folders; if
+    // they regress we want a clear failure here rather than a silent
+    // shift in tone.
+    expect(text).toMatch(/Welcome to NewCoworker/);
+    expect(text).toMatch(/safely ignore/i);
+  });
+
+  it("does not html-encode the URL or alter casing", () => {
+    // Resend renders the text body as-is; encoding the URL would break
+    // the link click. Use a URL with a fragment + uppercase token to
+    // assert pass-through.
+    const url = "https://www.newcoworker.com/verify-email?token=ABC.DEF&utm_source=onboarding";
+    const { text } = buildEmailVerificationMessage({ verificationUrl: url });
+    expect(text).toContain(url);
+    expect(text).not.toContain("&amp;");
   });
 });

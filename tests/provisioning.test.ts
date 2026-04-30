@@ -18,7 +18,11 @@ vi.mock("@/lib/provisioning/progress", () => ({
   })
 }));
 
-import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
+import {
+  describeProvisioningError,
+  orchestrateProvisioning
+} from "@/lib/provisioning/orchestrate";
+import { recordProvisioningProgress } from "@/lib/provisioning/progress";
 import * as fs from "fs";
 import type { ProvisionVpsForBusinessResult } from "@/lib/hostinger/provision";
 import type { SshExecResult } from "@/lib/hostinger/ssh";
@@ -884,6 +888,174 @@ describe("provisioning/orchestrate", () => {
         }
       );
       expect(vi.mocked(getTelnyxVoiceRouteForBusiness)).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("failure recording", () => {
+    /**
+     * Regression for the production failure where `brianlanefanmail@gmail.com`
+     * sat at "Provisioning started 5%" forever after the Hostinger API
+     * returned 403 on `POST /api/vps/v1/post-install-scripts` (token missing
+     * the post-install-scripts scope). The orchestrator's vpsProvisioner
+     * call was unprotected, so the throw bubbled up to the webhook caller
+     * and the dashboard — which polls the latest `coworker_logs` row —
+     * never saw a terminal failure. The fix wraps the orchestrator body
+     * in a top-level try/catch that records a `phase: "failed"` row with
+     * `status: "error"` so `shouldMountProvisioningWidget` flips into its
+     * terminal-failure UI.
+     */
+    it("records a `failed` progress row with status:error when vpsProvisioner throws", async () => {
+      const recordMock = vi.mocked(recordProvisioningProgress);
+      recordMock.mockClear();
+
+      const boom = new Error("kapow");
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(boom);
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-fail-1", tier: "starter" },
+          { vpsProvisioner, remoteExec: vi.fn() }
+        )
+      ).rejects.toThrow("kapow");
+
+      const failed = recordMock.mock.calls
+        .map((c) => c[0])
+        .find((p) => p.phase === "failed");
+      expect(failed).toBeDefined();
+      expect(failed?.status).toBe("error");
+      expect(failed?.businessId).toBe("biz-fail-1");
+      expect(failed?.message).toMatch(/kapow/);
+      // The first row recorded is still the `started` row at 5% — the
+      // catch block doesn't suppress the upfront recording, only adds
+      // a terminal `failed` row after.
+      expect(recordMock.mock.calls[0][0].phase).toBe("started");
+    });
+
+    it("includes endpoint, status, and body in the failure message when the error is a HostingerApiError", async () => {
+      const recordMock = vi.mocked(recordProvisioningProgress);
+      recordMock.mockClear();
+
+      // We don't import HostingerApiError directly to keep this test
+      // decoupled from the client module shape. The orchestrator's
+      // `describeProvisioningError` checks `err.name === "HostingerApiError"`
+      // duck-typed for the same reason — see the docstring there.
+      class FakeHostingerApiError extends Error {
+        readonly endpoint = "/api/vps/v1/post-install-scripts";
+        readonly status = 403;
+        readonly body = {
+          message: "[VPS:2000] Unauthorized",
+          correlation_id: "abc-123"
+        };
+        constructor() {
+          super("Hostinger API HTTP 403: [VPS:2000] Unauthorized");
+          this.name = "HostingerApiError";
+        }
+      }
+
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakeHostingerApiError());
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-fail-2", tier: "standard" },
+          { vpsProvisioner, remoteExec: vi.fn() }
+        )
+      ).rejects.toThrow(/HTTP 403/);
+
+      const failed = recordMock.mock.calls
+        .map((c) => c[0])
+        .find((p) => p.phase === "failed");
+      expect(failed?.message).toContain("/api/vps/v1/post-install-scripts");
+      expect(failed?.message).toContain("403");
+      expect(failed?.message).toContain("[VPS:2000] Unauthorized");
+    });
+
+    it("does not mask the original error when the failure-row write itself fails", async () => {
+      const recordMock = vi.mocked(recordProvisioningProgress);
+      recordMock.mockClear();
+
+      // First call (the upfront `started` row) succeeds, second call (the
+      // catch-block `failed` row) blows up. The orchestrator must still
+      // surface the *original* error to the caller — losing the original
+      // error to a logging-time failure is the bug we're guarding against.
+      recordMock.mockResolvedValueOnce({} as never);
+      recordMock.mockRejectedValueOnce(new Error("supabase down"));
+
+      const original = new Error("the real failure");
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(original);
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-fail-3", tier: "starter" },
+          { vpsProvisioner, remoteExec: vi.fn() }
+        )
+      ).rejects.toThrow("the real failure");
+    });
+  });
+
+  describe("describeProvisioningError", () => {
+    it("extracts endpoint/status/body from a HostingerApiError-shaped error", () => {
+      class FakeHostingerApiError extends Error {
+        readonly endpoint = "/api/vps/v1/virtual-machines";
+        readonly status = 422;
+        readonly body = { errors: { data_center_id: ["invalid"] } };
+        constructor() {
+          super("Hostinger API HTTP 422");
+          this.name = "HostingerApiError";
+        }
+      }
+      const detail = describeProvisioningError(new FakeHostingerApiError());
+      expect(detail).toEqual({
+        message: "Hostinger API HTTP 422",
+        endpoint: "/api/vps/v1/virtual-machines",
+        status: 422,
+        body: { errors: { data_center_id: ["invalid"] } }
+      });
+    });
+
+    it("returns just `message` for a plain Error", () => {
+      const detail = describeProvisioningError(new Error("nope"));
+      expect(detail).toEqual({ message: "nope" });
+    });
+
+    it("stringifies non-Error throws", () => {
+      expect(describeProvisioningError("a string")).toEqual({ message: "a string" });
+      expect(describeProvisioningError(42)).toEqual({ message: "42" });
+      expect(describeProvisioningError(null)).toEqual({ message: "null" });
+    });
+
+    it("ignores spurious endpoint/status fields when the error name doesn't match", () => {
+      // Defense in depth: another error type with similarly-named
+      // properties shouldn't masquerade as a HostingerApiError. We only
+      // surface endpoint/status/body when `err.name === "HostingerApiError"`.
+      class WrongName extends Error {
+        readonly endpoint = "/api/x";
+        readonly status = 500;
+        constructor() {
+          super("not hostinger");
+          this.name = "SomeOtherError";
+        }
+      }
+      const detail = describeProvisioningError(new WrongName());
+      expect(detail).toEqual({ message: "not hostinger" });
+    });
+
+    it("ignores non-string endpoint and non-number status fields even when name matches", () => {
+      class MalformedHostingerError extends Error {
+        readonly endpoint = 123 as unknown as string;
+        readonly status = "403" as unknown as number;
+        readonly body = { ok: false };
+        constructor() {
+          super("malformed");
+          this.name = "HostingerApiError";
+        }
+      }
+      const detail = describeProvisioningError(new MalformedHostingerError());
+      expect(detail).toEqual({
+        message: "malformed",
+        endpoint: undefined,
+        status: undefined,
+        body: { ok: false }
+      });
     });
   });
 });

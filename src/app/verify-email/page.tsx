@@ -1,87 +1,63 @@
 import Link from "next/link";
 import Image from "next/image";
 import { Card } from "@/components/ui/Card";
-import { markEmailVerifiedByEmail } from "@/lib/db/customer-profiles";
 import { verifyEmailVerificationToken } from "@/lib/email/verification-token";
-import { logger } from "@/lib/logger";
+import { ConfirmForm } from "./ConfirmForm";
 
 export const dynamic = "force-dynamic";
 
-type Outcome =
-  | { kind: "ok"; alreadyVerified: boolean }
+type ServerOutcome =
+  | { kind: "valid"; token: string; email: string }
+  | { kind: "missing" }
   | { kind: "expired" }
-  | { kind: "invalid" }
-  | { kind: "not_found" }
-  | { kind: "error" };
+  | { kind: "invalid" };
 
-async function resolveOutcome(token: string | undefined): Promise<Outcome> {
-  if (!token) return { kind: "invalid" };
-
-  const verified = verifyEmailVerificationToken(token);
-  if (!verified.ok) {
-    return verified.reason === "expired" ? { kind: "expired" } : { kind: "invalid" };
-  }
-
-  try {
-    const result = await markEmailVerifiedByEmail(verified.email);
-    if (!result.ok) return { kind: "not_found" };
-    return { kind: "ok", alreadyVerified: result.alreadyVerified };
-  } catch (err) {
-    logger.error("verify-email: markEmailVerifiedByEmail failed", {
-      email: verified.email,
-      error: err instanceof Error ? err.message : String(err)
-    });
-    return { kind: "error" };
-  }
-}
-
-function renderCopy(outcome: Outcome): { heading: string; body: string; cta: { label: string; href: string } } {
-  switch (outcome.kind) {
-    case "ok":
-      return {
-        heading: outcome.alreadyVerified ? "Email already confirmed" : "Email confirmed",
-        body: outcome.alreadyVerified
-          ? "Your email was already confirmed on this account. You're all set."
-          : "Thanks for confirming your email — your account is fully secured.",
-        cta: { label: "Go to Dashboard →", href: "/dashboard" }
-      };
-    case "expired":
-      return {
-        heading: "Verification link expired",
-        body: "Verification links are valid for 7 days. Sign in and request a fresh one from the dashboard banner.",
-        cta: { label: "Sign in", href: "/login" }
-      };
-    case "invalid":
-      return {
-        heading: "Invalid verification link",
-        body: "This link doesn't look right. Sign in and request a fresh verification email from your dashboard.",
-        cta: { label: "Sign in", href: "/login" }
-      };
-    case "not_found":
-      return {
-        heading: "We couldn't find your account",
-        body: "We couldn't find a NewCoworker account for that email. Sign in to check the address on file, or contact support.",
-        cta: { label: "Sign in", href: "/login" }
-      };
-    case "error":
-    default:
-      return {
-        heading: "Something went wrong",
-        body: "We hit a snag confirming your email. Please try again from your dashboard, or contact support if it persists.",
-        cta: { label: "Sign in", href: "/login" }
-      };
-  }
+function resolveServerOutcome(rawToken: string | undefined): ServerOutcome {
+  if (!rawToken) return { kind: "missing" };
+  const verified = verifyEmailVerificationToken(rawToken);
+  if (verified.ok) return { kind: "valid", token: rawToken, email: verified.email };
+  if (verified.reason === "expired") return { kind: "expired" };
+  return { kind: "invalid" };
 }
 
 type Props = {
   searchParams: Promise<{ token?: string | string[] }>;
 };
 
+/**
+ * GET handler for the email-verification flow.
+ *
+ * CRITICAL CONTRACT: this page MUST NOT mutate any database row. Mailbox
+ * safe-link scanners (Microsoft Safe Links, Mimecast, Proofpoint, Gmail
+ * TLS inspector, etc.) GET-fetch URLs that arrive in inbound emails as
+ * a security pre-flight, often before the human has even opened the
+ * inbox. An earlier revision of this page called `markEmailVerifiedByEmail`
+ * inline on the GET path, which silently consumed the verification on
+ * the scanner's behalf — flipping `customer_profiles.email_verified_at`
+ * for accounts whose owner never actually clicked the link. The
+ * dashboard banner would then disappear with no user action, making the
+ * verification signal worthless and removing the resend affordance for
+ * users who genuinely needed it.
+ *
+ * Today this page only:
+ *   1. Reads the HMAC-signed token from the URL.
+ *   2. Decides which static screen to render (valid / expired / invalid /
+ *      missing). Token verification is purely cryptographic — no DB
+ *      reads, no side effects.
+ *   3. For the `valid` branch, mounts {@link ConfirmForm}, which renders
+ *      a button that POSTs to {@link confirmEmailVerificationAction}.
+ *      That server action is the SINGLE place that flips the column.
+ *
+ * The signed-token + 7-day TTL are the credentials that authenticate
+ * the human-side intent ("I have access to the inbox we sent this to");
+ * the explicit POST submission is the credential that authenticates
+ * the human-side action ("…and I'm choosing to confirm now"). Both
+ * are required.
+ */
 export default async function VerifyEmailPage({ searchParams }: Props) {
   const sp = await searchParams;
   const rawToken = Array.isArray(sp.token) ? sp.token[0] : sp.token;
-  const outcome = await resolveOutcome(rawToken);
-  const { heading, body, cta } = renderCopy(outcome);
+  const outcome = resolveServerOutcome(rawToken);
 
   return (
     <div className="min-h-screen bg-deep-ink flex items-center justify-center px-4 py-12">
@@ -94,17 +70,34 @@ export default async function VerifyEmailPage({ searchParams }: Props) {
             height={64}
             className="rounded-full mx-auto"
           />
-          <h1 className="text-2xl font-bold text-parchment mt-6">{heading}</h1>
-          <p className="text-sm text-parchment/60 mt-2">{body}</p>
+          <h1 className="text-2xl font-bold text-parchment mt-6">
+            {outcome.kind === "valid"
+              ? "Confirm your email"
+              : outcome.kind === "expired"
+                ? "Verification link expired"
+                : "Invalid verification link"}
+          </h1>
+          <p className="text-sm text-parchment/60 mt-2">
+            {outcome.kind === "valid"
+              ? "One more click to finish securing your NewCoworker account."
+              : outcome.kind === "expired"
+                ? "Verification links are valid for 7 days. Sign in and request a fresh one from the dashboard banner."
+                : "This link doesn't look right. Sign in and request a fresh verification email from your dashboard."}
+          </p>
         </div>
-        <Card className="text-center">
-          <Link
-            href={cta.href}
-            className="inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
-          >
-            {cta.label}
-          </Link>
-        </Card>
+
+        {outcome.kind === "valid" ? (
+          <ConfirmForm token={outcome.token} email={outcome.email} />
+        ) : (
+          <Card className="text-center">
+            <Link
+              href="/login"
+              className="inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
+            >
+              Sign in
+            </Link>
+          </Card>
+        )}
       </div>
     </div>
   );

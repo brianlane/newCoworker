@@ -125,6 +125,37 @@ describe("email verification token", () => {
     });
   });
 
+  it("rejects tokens with valid signature + email but missing/non-numeric issuedAt with `decode_error`", async () => {
+    // The email check trips first if email is missing, so to actually
+    // exercise the `issuedAt` validation branch (lines 95-97 of
+    // verification-token.ts) the payload must carry a valid email and
+    // an issuedAt that fails the `typeof number` guard. JSON can't
+    // round-trip NaN/Infinity (those serialize to `null`), so the
+    // `!Number.isFinite()` half of the guard is defense-in-depth and
+    // not reachable from parsed JSON; the typeof half is what we
+    // honestly cover here. Both a missing key and a string-typed key
+    // hit the same return.
+    const crypto = await import("crypto");
+    const cases: ReadonlyArray<Record<string, unknown>> = [
+      { email: "noissued@example.com" }, // issuedAt absent → undefined
+      { email: "stringissued@example.com", issuedAt: "1700000000000" } // wrong type
+    ];
+
+    for (const payload of cases) {
+      const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+      const signature = crypto
+        .createHmac("sha256", process.env.EMAIL_VERIFICATION_TOKEN_SECRET!)
+        .update(encodedPayload)
+        .digest("base64url");
+
+      const { verifyEmailVerificationToken } = await import("@/lib/email/verification-token");
+      expect(verifyEmailVerificationToken(`${encodedPayload}.${signature}`)).toEqual({
+        ok: false,
+        reason: "decode_error"
+      });
+    }
+  });
+
   it("uses SUPABASE_SERVICE_ROLE_KEY as a fallback secret", async () => {
     delete process.env.EMAIL_VERIFICATION_TOKEN_SECRET;
     process.env.SUPABASE_SERVICE_ROLE_KEY = "fallback-secret";
