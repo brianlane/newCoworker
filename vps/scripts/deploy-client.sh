@@ -207,6 +207,40 @@ ROWBOAT_GATEWAY_TOKEN=${ROWBOAT_GATEWAY_TOKEN}
 BUSINESS_ID=${BUSINESS_ID}
 TIER=${TIER}
 
+# Upstream-required Rowboat keys.
+#
+# The pinned Rowboat fork (apps/rowboat) reads these at boot and crashes
+# when any are missing — even when the corresponding feature is disabled.
+# Source of truth for the list: vps/integration/real/fixtures/rowboat.env.kvm8.integration
+# (kept in lockstep with the pinned upstream SHA).
+#
+# We deliberately keep auth + agents-api + copilot-api in the "test stub"
+# state because:
+#   * USE_AUTH=false bypasses Auth0 entirely (auth0 keys are placeholders).
+#   * AGENTS_API / COPILOT_API run inside Rowboat itself; the *_URL=
+#     127.0.0.1:9 placeholder keeps the boot-time validator happy without
+#     spinning up extra services we don't use on the dispatcher path.
+#   * USE_RAG=false disables qdrant; QDRANT_URL is set so retries don't hit
+#     a JSON-parse error on the fallback path.
+NODE_ENV=production
+PORT=3000
+MONGODB_CONNECTION_STRING=mongodb://mongo:27017/rowboat
+REDIS_URL=redis://redis:6379
+OPENAI_API_KEY=sk-deploy-placeholder
+USE_AUTH=false
+AUTH0_BASE_URL=http://127.0.0.1:3000
+AUTH0_SECRET=test_secret
+AUTH0_ISSUER_BASE_URL=https://test.invalid
+AUTH0_CLIENT_ID=test
+AUTH0_CLIENT_SECRET=test
+AGENTS_API_URL=http://127.0.0.1:9
+AGENTS_API_KEY=test
+COPILOT_API_URL=http://127.0.0.1:9
+COPILOT_API_KEY=test
+USE_RAG=false
+QDRANT_URL=http://qdrant:6333
+QDRANT_API_KEY=
+
 # LLM provider routing — Rowboat talks to the llm-router sidecar (same
 # docker-compose network) which forwards to Ollama for dispatcher (SMS)
 # and Gemini for voice_task (voice). The llm-router service uses its
@@ -344,10 +378,25 @@ fi
 # 4. Set up cloudflared tunnel
 # ------------------------------------------------------------------
 if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
-  log "Configuring cloudflared tunnel..."
-  cloudflared service install "${CLOUDFLARE_TUNNEL_TOKEN}"
-  systemctl enable cloudflared
-  systemctl start cloudflared
+  if [[ -f /etc/systemd/system/cloudflared.service ]]; then
+    # `cloudflared service install <TOKEN>` refuses to run when the unit
+    # already exists ("cloudflared service is already installed at
+    # /etc/systemd/system/cloudflared.service ... if you are really sure,
+    # you can do `cloudflared service uninstall`"). Re-running deploy on
+    # an already-provisioned VPS used to surface this as a fatal exit
+    # code, masking real downstream failures. Treat re-installs as a
+    # restart instead — the token is encoded into the existing unit and
+    # only changes during a manual rotation, which an operator handles
+    # explicitly via `cloudflared service uninstall && deploy-client.sh`.
+    log "cloudflared service already installed; restarting to pick up any compose changes"
+    systemctl enable cloudflared || true
+    systemctl restart cloudflared || true
+  else
+    log "Configuring cloudflared tunnel..."
+    cloudflared service install "${CLOUDFLARE_TUNNEL_TOKEN}"
+    systemctl enable cloudflared
+    systemctl start cloudflared
+  fi
   log "cloudflared tunnel active."
 else
   log "WARN: No CLOUDFLARE_TUNNEL_TOKEN provided. Tunnel not configured."

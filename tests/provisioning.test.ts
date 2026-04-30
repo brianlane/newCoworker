@@ -20,7 +20,8 @@ vi.mock("@/lib/provisioning/progress", () => ({
 
 import {
   describeProvisioningError,
-  orchestrateProvisioning
+  orchestrateProvisioning,
+  runWithSshConnectRetry
 } from "@/lib/provisioning/orchestrate";
 import { recordProvisioningProgress } from "@/lib/provisioning/progress";
 import * as fs from "fs";
@@ -59,7 +60,15 @@ import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
 function makeVpsStub(
   vpsId = "42",
   publicIp = "1.2.3.4",
-  privateKeyPem = "PEM"
+  privateKeyPem = "PEM",
+  /**
+   * `null` = SSH-bootstrap fallback path (PIS attach 403'd OR not eligible).
+   * `number` = Hostinger PIS attached + presumed running at first boot. The
+   * orchestrator runs SSH-bootstrap as a verify pass either way, so most
+   * tests don't care; opt-in by passing a number when asserting on the
+   * `vps_bootstrapping` / `vps_bootstrapped` progress copy.
+   */
+  postInstallScriptId: number | null = null
 ): ProvisionVpsForBusinessResult {
   return {
     virtualMachineId: Number(vpsId) || 42,
@@ -77,8 +86,8 @@ function makeVpsStub(
       created_at: "2026-01-01T00:00:00Z",
       rotated_at: null
     },
-    postInstallScriptId: 11,
     publicKeyId: 9,
+    postInstallScriptId,
     hostingerBillingSubscriptionId: null
   };
 }
@@ -97,6 +106,34 @@ function expectDeployHasEnv(cmd: string, key: string, value: string): void {
 
 function okExec(): SshExecResult {
   return { exitCode: 0, signal: null, stdout: "ok", stderr: "" };
+}
+
+/**
+ * The orchestrator now makes TWO SSH calls per successful provision:
+ *   call 0 — bootstrap (`buildDefaultPostInstallScript()` over SSH)
+ *   call 1 — deploy (`/opt/deploy-client.sh` over SSH)
+ *
+ * Tests that inspect "the deploy command" used to index `mock.calls[0][0]`.
+ * Use this helper so the intent (deploy-call inspection) survives a future
+ * reorder, and so a stale call-0 hit can't silently start asserting against
+ * the bootstrap command.
+ */
+function deployCallArg(remoteExec: ReturnType<typeof vi.fn>): {
+  host: string;
+  username: string;
+  privateKeyPem: string;
+  command: string;
+} {
+  const found = remoteExec.mock.calls.find((args: unknown[]) => {
+    const first = args[0] as { command?: unknown } | undefined;
+    return typeof first?.command === "string" && first.command.includes("/opt/deploy-client.sh");
+  });
+  if (!found) {
+    throw new Error(
+      "deployCallArg: no /opt/deploy-client.sh invocation recorded on remoteExec"
+    );
+  }
+  return found[0];
 }
 
 describe("provisioning/orchestrate", () => {
@@ -239,7 +276,7 @@ describe("provisioning/orchestrate", () => {
       { businessId: "biz-quote-inject", tier: "starter" },
       { vpsProvisioner, remoteExec, quoteEnv: (v) => `<<${v}>>` }
     );
-    const cmd = remoteExec.mock.calls[0][0].command as string;
+    const cmd = deployCallArg(remoteExec).command;
     expect(cmd).toContain("BUSINESS_ID=<<biz-quote-inject>>");
   });
 
@@ -263,7 +300,7 @@ describe("provisioning/orchestrate", () => {
       { businessId: "biz-empty-env", tier: "starter" },
       { vpsProvisioner, remoteExec }
     );
-    const cmd = remoteExec.mock.calls[0][0].command as string;
+    const cmd = deployCallArg(remoteExec).command;
     expect(cmd).toContain("TELNYX_API_KEY=''");
     expect(cmd).toContain("TELNYX_MESSAGING_PROFILE_ID=''");
     expect(cmd).toContain("TELNYX_SMS_FROM_E164=''");
@@ -325,7 +362,7 @@ describe("provisioning/orchestrate", () => {
       { businessId: "biz-bridge", tier: "standard" },
       { vpsProvisioner, remoteExec }
     );
-    const cmd = remoteExec.mock.calls[0][0].command as string;
+    const cmd = deployCallArg(remoteExec).command;
     expectDeployHasEnv(cmd, "GOOGLE_API_KEY", "sk-live-abc");
     expectDeployHasEnv(cmd, "GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview");
     expectDeployHasEnv(cmd, "GEMINI_LIVE_ENABLED", "false");
@@ -340,7 +377,7 @@ describe("provisioning/orchestrate", () => {
       { businessId: "biz-env", tier: "starter" },
       { vpsProvisioner, remoteExec }
     );
-    const cmd = remoteExec.mock.calls[0][0].command as string;
+    const cmd = deployCallArg(remoteExec).command;
     expectDeployHasEnv(cmd, "TELNYX_API_KEY", "mock_telnyx");
     expectDeployHasEnv(cmd, "TELNYX_MESSAGING_PROFILE_ID", "mock_prof");
     expectDeployHasEnv(cmd, "ROWBOAT_GATEWAY_TOKEN", "mock_gateway_token");
@@ -356,7 +393,7 @@ describe("provisioning/orchestrate", () => {
       { businessId: "biz-ssh-args", tier: "starter" },
       { vpsProvisioner, remoteExec }
     );
-    const arg = remoteExec.mock.calls[0][0];
+    const arg = deployCallArg(remoteExec);
     expect(arg.host).toBe("9.9.9.9");
     expect(arg.username).toBe("root");
     expect(arg.privateKeyPem).toBe("MY_PEM");
@@ -415,10 +452,14 @@ describe("provisioning/orchestrate", () => {
     expect(result.tunnelUrl).toBeTruthy();
   });
 
-  it("continues when remoteExec returns non-zero exit code", async () => {
+  // Deploy-failure tests: bootstrap (call 0) must succeed so the orchestrator
+  // reaches the deploy phase, then deploy (call 1) exhibits the failure being
+  // asserted. Bootstrap failure is FATAL and is covered separately below.
+  it("continues when deploy remoteExec returns non-zero exit code", async () => {
     const remoteExec = vi
       .fn()
-      .mockResolvedValue({ exitCode: 1, signal: null, stdout: "", stderr: "deploy failed" });
+      .mockResolvedValueOnce(okExec())
+      .mockResolvedValueOnce({ exitCode: 1, signal: null, stdout: "", stderr: "deploy failed" });
     const result = await orchestrateProvisioning(
       { businessId: "biz-fail-exec", tier: "starter" },
       {
@@ -429,10 +470,11 @@ describe("provisioning/orchestrate", () => {
     expect(result.vpsId).toBe("42");
   });
 
-  it("continues when remoteExec non-zero with empty stderr/stdout", async () => {
+  it("continues when deploy remoteExec non-zero with empty stderr/stdout", async () => {
     const remoteExec = vi
       .fn()
-      .mockResolvedValue({ exitCode: 1, signal: null, stdout: "", stderr: "" });
+      .mockResolvedValueOnce(okExec())
+      .mockResolvedValueOnce({ exitCode: 1, signal: null, stdout: "", stderr: "" });
     const result = await orchestrateProvisioning(
       { businessId: "biz-fail-exec-empty", tier: "starter" },
       {
@@ -443,8 +485,11 @@ describe("provisioning/orchestrate", () => {
     expect(result.vpsId).toBe("42");
   });
 
-  it("continues when remoteExec throws an Error", async () => {
-    const remoteExec = vi.fn().mockRejectedValue(new Error("SSH timeout"));
+  it("continues when deploy remoteExec throws an Error", async () => {
+    const remoteExec = vi
+      .fn()
+      .mockResolvedValueOnce(okExec())
+      .mockRejectedValueOnce(new Error("SSH timeout"));
     const result = await orchestrateProvisioning(
       { businessId: "biz-err-exec", tier: "starter" },
       {
@@ -455,8 +500,11 @@ describe("provisioning/orchestrate", () => {
     expect(result.vpsId).toBe("42");
   });
 
-  it("continues when remoteExec throws a non-Error value", async () => {
-    const remoteExec = vi.fn().mockRejectedValue("network error");
+  it("continues when deploy remoteExec throws a non-Error value", async () => {
+    const remoteExec = vi
+      .fn()
+      .mockResolvedValueOnce(okExec())
+      .mockRejectedValueOnce("network error");
     const result = await orchestrateProvisioning(
       { businessId: "biz-throw-exec", tier: "starter" },
       {
@@ -478,7 +526,7 @@ describe("provisioning/orchestrate", () => {
       }
     );
     expectDeployHasEnv(
-      remoteExec.mock.calls[0][0].command as string,
+      deployCallArg(remoteExec).command,
       "NOTIFICATIONS_WEBHOOK_TOKEN",
       "webhook-test-token"
     );
@@ -496,7 +544,7 @@ describe("provisioning/orchestrate", () => {
       }
     );
     expectDeployHasEnv(
-      remoteExec.mock.calls[0][0].command as string,
+      deployCallArg(remoteExec).command,
       "NOTIFICATIONS_WEBHOOK_TOKEN",
       "service-key-fallback"
     );
@@ -557,7 +605,7 @@ describe("provisioning/orchestrate", () => {
         remoteExec
       }
     );
-    expect(remoteExec.mock.calls[0][0].command).toContain("SUPABASE_URL=''");
+    expect(deployCallArg(remoteExec).command).toContain("SUPABASE_URL=''");
   });
 
   it("per-tenant tunnel: uses CF provisioner token + hostname when injected", async () => {
@@ -578,7 +626,7 @@ describe("provisioning/orchestrate", () => {
     );
     expect(cfStub).toHaveBeenCalledWith({ businessId: "biz-cf" });
     expect(result.tunnelUrl).toBe("https://biz-cf.tunnel.newcoworker.com");
-    const cmd = remoteExec.mock.calls[0][0].command as string;
+    const cmd = deployCallArg(remoteExec).command;
     expectDeployHasEnv(cmd, "CLOUDFLARE_TUNNEL_TOKEN", "PER_TENANT_TOKEN");
     expectDeployHasEnv(cmd, "BRIDGE_MEDIA_WSS_ORIGIN", "wss://voice-biz-cf.tunnel.newcoworker.com");
   });
@@ -597,7 +645,7 @@ describe("provisioning/orchestrate", () => {
       }
     );
     expect(result.tunnelUrl).toBe("https://biz-cf-fail.tunnel.newcoworker.com");
-    const cmd = remoteExec.mock.calls[0][0].command as string;
+    const cmd = deployCallArg(remoteExec).command;
     expectDeployHasEnv(cmd, "CLOUDFLARE_TUNNEL_TOKEN", "SHARED_ENV_TOKEN");
     expectDeployHasEnv(cmd, "BRIDGE_MEDIA_WSS_ORIGIN", "wss://shared-voice.example.com");
   });
@@ -616,7 +664,7 @@ describe("provisioning/orchestrate", () => {
     );
     expect(result.tunnelUrl).toBe("https://biz-cf-nonerr.tunnel.newcoworker.com");
     expectDeployHasEnv(
-      remoteExec.mock.calls[0][0].command as string,
+      deployCallArg(remoteExec).command,
       "CLOUDFLARE_TUNNEL_TOKEN",
       "SHARED_ENV_TOKEN_NONERR"
     );
@@ -637,7 +685,7 @@ describe("provisioning/orchestrate", () => {
     );
     expect(result.tunnelUrl).toBe("https://biz-cf-null.tunnel.newcoworker.com");
     expectDeployHasEnv(
-      remoteExec.mock.calls[0][0].command as string,
+      deployCallArg(remoteExec).command,
       "CLOUDFLARE_TUNNEL_TOKEN",
       "LEGACY_TOKEN"
     );
@@ -674,7 +722,7 @@ describe("provisioning/orchestrate", () => {
       }
     );
     expectDeployHasEnv(
-      remoteExec.mock.calls[0][0].command as string,
+      deployCallArg(remoteExec).command,
       "BRIDGE_MEDIA_WSS_ORIGIN",
       "wss://legacy-shared.example.com"
     );
@@ -906,6 +954,352 @@ describe("provisioning/orchestrate", () => {
     });
   });
 
+  describe("SSH bootstrap (always-on safety net for Hostinger first-boot PIS)", () => {
+    /**
+     * Why this exists: Hostinger's `/api/vps/v1/post-install-scripts` is the
+     * preferred bootstrap path because it runs concurrently with cloud-init
+     * and saves the orchestrator from waiting on sshd. But the endpoint
+     * returns `403 [VPS:2000] Unauthorized` until the account already owns
+     * at least one VPS — a chicken-and-egg that can't be resolved at the
+     * purchase call for brand-new accounts. The orchestrator handles BOTH
+     * cases by ALWAYS running an SSH-bootstrap pass after the VPS hits
+     * `running`: it re-executes the same idempotent script content, so on
+     * a PIS-eligible account it's a fast verify (apt-cache warm, repo
+     * already cloned) and on a fresh account it's the only bootstrap.
+     * These tests pin that "always-on" contract so a future refactor can't
+     * silently regress to the PIS-only path that hangs new accounts.
+     */
+    it("invokes remoteExec twice: bootstrap (call 0) then deploy (call 1)", async () => {
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+      await orchestrateProvisioning(
+        { businessId: "biz-bootstrap-order", tier: "starter" },
+        { vpsProvisioner, remoteExec }
+      );
+      expect(remoteExec).toHaveBeenCalledTimes(2);
+      const bootstrapCmd = remoteExec.mock.calls[0][0].command as string;
+      const deployCmd = remoteExec.mock.calls[1][0].command as string;
+      // Bootstrap ships the script as base64 to dodge heredoc/quoting issues.
+      expect(bootstrapCmd).toContain("base64 -d");
+      expect(bootstrapCmd).toContain("/tmp/newcoworker-bootstrap.sh");
+      // Deploy is the existing /opt/deploy-client.sh path with env injection.
+      expect(deployCmd).toContain("/opt/deploy-client.sh");
+    });
+
+    it("records `vps_bootstrapping` then `vps_bootstrapped` progress rows", async () => {
+      const recordMock = vi.mocked(recordProvisioningProgress);
+      recordMock.mockClear();
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      await orchestrateProvisioning(
+        { businessId: "biz-bootstrap-progress", tier: "starter" },
+        { vpsProvisioner, remoteExec }
+      );
+
+      const phases = recordMock.mock.calls.map((c) => c[0].phase);
+      const bootstrapStartIdx = phases.indexOf("vps_bootstrapping");
+      const bootstrapDoneIdx = phases.indexOf("vps_bootstrapped");
+      expect(bootstrapStartIdx).toBeGreaterThan(-1);
+      expect(bootstrapDoneIdx).toBeGreaterThan(bootstrapStartIdx);
+      // Bootstrap must come AFTER vps_provisioned and BEFORE config_upserted.
+      const provisionedIdx = phases.indexOf("vps_provisioned");
+      const configIdx = phases.indexOf("config_upserted");
+      expect(bootstrapStartIdx).toBeGreaterThan(provisionedIdx);
+      expect(bootstrapDoneIdx).toBeLessThan(configIdx);
+    });
+
+    it("aborts provisioning with a `failed` row when bootstrap exits non-zero", async () => {
+      const recordMock = vi.mocked(recordProvisioningProgress);
+      recordMock.mockClear();
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+      // Bootstrap fails with a non-zero exit; the test asserts that the
+      // orchestrator does NOT continue to deploy and DOES record a terminal
+      // failed row (top-level catch).
+      const remoteExec = vi.fn().mockResolvedValueOnce({
+        exitCode: 5,
+        signal: null,
+        stdout: "",
+        stderr: "apt-get update failed: lock file in use"
+      });
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-bootstrap-fail", tier: "starter" },
+          { vpsProvisioner, remoteExec }
+        )
+      ).rejects.toThrow(/VPS bootstrap failed.*exit 5/);
+
+      // Deploy must not have been attempted.
+      expect(remoteExec).toHaveBeenCalledTimes(1);
+      const failed = recordMock.mock.calls.map((c) => c[0]).find((p) => p.phase === "failed");
+      expect(failed?.status).toBe("error");
+      expect(failed?.message).toMatch(/VPS bootstrap failed/);
+    });
+
+    it("aborts with empty-output fallback message when bootstrap exits non-zero with no output", async () => {
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+      const remoteExec = vi.fn().mockResolvedValueOnce({
+        exitCode: 7,
+        signal: null,
+        stdout: "",
+        stderr: ""
+      });
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-bootstrap-silent-fail", tier: "starter" },
+          { vpsProvisioner, remoteExec }
+        )
+      ).rejects.toThrow(/<no output>/);
+    });
+
+    it("retries SSH connection on connection-refused / handshake errors and proceeds on eventual success", async () => {
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+      // Bootstrap connection refused twice, then succeeds on the third attempt.
+      // Deploy then succeeds. Total remoteExec invocations: 4 (3 bootstrap + 1 deploy).
+      const remoteExec = vi.fn();
+      remoteExec.mockRejectedValueOnce(new Error("connect ECONNREFUSED 1.2.3.4:22"));
+      remoteExec.mockRejectedValueOnce(new Error("Connection refused"));
+      remoteExec.mockResolvedValueOnce(okExec()); // bootstrap success
+      remoteExec.mockResolvedValueOnce(okExec()); // deploy success
+
+      const sleep = vi.fn().mockResolvedValue(undefined);
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-bootstrap-retry", tier: "starter" },
+        { vpsProvisioner, remoteExec, sleep }
+      );
+
+      expect(result.vpsId).toBe("42");
+      expect(remoteExec).toHaveBeenCalledTimes(4);
+      // Two connect errors → two backoff sleeps. Per `runWithSshConnectRetry`
+      // defaults: 5000ms × 1, 5000ms × 2.
+      expect(sleep).toHaveBeenCalledTimes(2);
+      expect(sleep).toHaveBeenNthCalledWith(1, 5000);
+      expect(sleep).toHaveBeenNthCalledWith(2, 10000);
+    });
+
+    it("does NOT retry on non-connect errors during bootstrap (fails fast)", async () => {
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+      const remoteExec = vi.fn().mockRejectedValueOnce(new Error("some unrelated failure"));
+      const sleep = vi.fn().mockResolvedValue(undefined);
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-bootstrap-no-retry", tier: "starter" },
+          { vpsProvisioner, remoteExec, sleep }
+        )
+      ).rejects.toThrow(/some unrelated failure/);
+
+      expect(remoteExec).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+    });
+
+    it("gives up after maxAttempts and surfaces the last connect error", async () => {
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+      // Every bootstrap attempt rejects with a connect error → exhaust retries.
+      const remoteExec = vi.fn().mockRejectedValue(new Error("ETIMEDOUT"));
+      const sleep = vi.fn().mockResolvedValue(undefined);
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-bootstrap-exhausted", tier: "starter" },
+          { vpsProvisioner, remoteExec, sleep }
+        )
+      ).rejects.toThrow(/ETIMEDOUT/);
+
+      // Default maxAttempts is 6; sleeps happen between attempts (so 5 sleeps).
+      expect(remoteExec).toHaveBeenCalledTimes(6);
+      expect(sleep).toHaveBeenCalledTimes(5);
+    });
+
+    it("classifies handshake / kex errors as connect-retryable", async () => {
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+      const remoteExec = vi.fn();
+      remoteExec.mockRejectedValueOnce(new Error("Handshake failed: kex algorithm mismatch"));
+      remoteExec.mockResolvedValueOnce(okExec()); // bootstrap success
+      remoteExec.mockResolvedValueOnce(okExec()); // deploy success
+      const sleep = vi.fn().mockResolvedValue(undefined);
+
+      await orchestrateProvisioning(
+        { businessId: "biz-handshake", tier: "starter" },
+        { vpsProvisioner, remoteExec, sleep }
+      );
+      expect(remoteExec).toHaveBeenCalledTimes(3);
+      expect(sleep).toHaveBeenCalledTimes(1);
+    });
+
+    it("does NOT retry on non-Error throws (e.g. string rejection)", async () => {
+      // Defense-in-depth: if a non-Error value is thrown, isSshConnectError
+      // returns false (we can't safely inspect a `.message` property on a
+      // string/number/null), so the orchestrator surfaces immediately rather
+      // than burning the retry budget on an unrecognizable failure.
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+      const remoteExec = vi.fn().mockRejectedValueOnce("string-thrown");
+      const sleep = vi.fn().mockResolvedValue(undefined);
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-string-throw", tier: "starter" },
+          { vpsProvisioner, remoteExec, sleep }
+        )
+      ).rejects.toBe("string-thrown");
+      expect(remoteExec).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+    });
+
+    /**
+     * PIS-attached path: when `provisionVpsForBusiness` successfully
+     * registered a Hostinger post-install-script, the orchestrator's
+     * SSH-bootstrap message reads "Verifying" instead of "Bootstrapping".
+     * This pins the dashboard copy so an observer can tell whether a
+     * provision used the fast PIS path or fell back to SSH-only.
+     */
+    it("vps_bootstrapping/_bootstrapped messages reflect PIS attached when postInstallScriptId is set", async () => {
+      const recordMock = vi.mocked(recordProvisioningProgress);
+      recordMock.mockClear();
+      const vpsProvisioner = vi
+        .fn()
+        .mockResolvedValue(makeVpsStub("42", "1.2.3.4", "PEM", 7777));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      await orchestrateProvisioning(
+        { businessId: "biz-pis-attached", tier: "starter" },
+        { vpsProvisioner, remoteExec }
+      );
+
+      const calls = recordMock.mock.calls.map((c) => c[0]);
+      const start = calls.find((p) => p.phase === "vps_bootstrapping");
+      const done = calls.find((p) => p.phase === "vps_bootstrapped");
+      expect(start?.message).toMatch(/Verifying VPS bootstrap.*PIS attached.*7777/);
+      expect(done?.message).toMatch(/PIS id=7777.*SSH re-run/);
+    });
+
+    /**
+     * PIS-skipped path (default for fresh accounts): message reads
+     * "Bootstrapping" and explicitly mentions the SSH-only fallback.
+     */
+    it("vps_bootstrapping/_bootstrapped messages reflect SSH-only fallback when postInstallScriptId is null", async () => {
+      const recordMock = vi.mocked(recordProvisioningProgress);
+      recordMock.mockClear();
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42")); // null PIS
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      await orchestrateProvisioning(
+        { businessId: "biz-pis-fallback", tier: "starter" },
+        { vpsProvisioner, remoteExec }
+      );
+
+      const calls = recordMock.mock.calls.map((c) => c[0]);
+      const start = calls.find((p) => p.phase === "vps_bootstrapping");
+      const done = calls.find((p) => p.phase === "vps_bootstrapped");
+      expect(start?.message).toMatch(/Bootstrapping VPS over SSH.*PIS not eligible/);
+      expect(done?.message).toMatch(/SSH-only fallback path/);
+    });
+  });
+
+  describe("runRemoteBootstrap (admin re-bootstrap helper)", () => {
+    /**
+     * The admin helper lets operators re-execute bootstrap.sh on a host
+     * that drifted (e.g. an upstream Rowboat tag bump landed after the
+     * original deploy). It MUST:
+     *   1. Re-use the same idempotent script content as orchestrate.
+     *   2. Use the SSH-connect-retry loop so a sshd boot lag doesn't
+     *      flunk a manual repair.
+     *   3. Surface the exit code + tails so the admin UI can render a
+     *      meaningful error without round-tripping to logs.
+     * It MUST NOT touch coworker_logs (admins handle their own status
+     * surfaces; the helper is a thin SSH wrapper).
+     */
+    it("runs the bootstrap script over SSH and returns exit code + tails", async () => {
+      const { runRemoteBootstrap } = await import("@/lib/provisioning/orchestrate");
+      const remoteExec = vi.fn().mockResolvedValue({
+        exitCode: 0,
+        signal: null,
+        stdout: "ok-stdout-x".repeat(300),
+        stderr: ""
+      });
+      const sleep = vi.fn().mockResolvedValue(undefined);
+
+      const result = await runRemoteBootstrap({
+        host: "1.2.3.4",
+        username: "root",
+        privateKeyPem: "PEM",
+        tier: "standard",
+        remoteExec,
+        sleep
+      });
+
+      expect(result.exitCode).toBe(0);
+      // Tails are sliced to the last 2000 chars per the helper docstring.
+      expect(result.stdoutTail.length).toBeLessThanOrEqual(2000);
+      expect(remoteExec).toHaveBeenCalledTimes(1);
+      const cmd = remoteExec.mock.calls[0][0].command as string;
+      expect(cmd).toContain("base64 -d");
+      expect(cmd).toContain("/tmp/newcoworker-bootstrap.sh");
+    });
+
+    it("does NOT touch recordProvisioningProgress (admin helper is log-free)", async () => {
+      const { runRemoteBootstrap } = await import("@/lib/provisioning/orchestrate");
+      const recordMock = vi.mocked(recordProvisioningProgress);
+      recordMock.mockClear();
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      await runRemoteBootstrap({
+        host: "1.2.3.4",
+        username: "root",
+        privateKeyPem: "PEM",
+        tier: "starter",
+        remoteExec,
+        sleep: vi.fn().mockResolvedValue(undefined)
+      });
+
+      expect(recordMock).not.toHaveBeenCalled();
+    });
+
+    it("retries SSH connection on connect errors and eventually succeeds", async () => {
+      const { runRemoteBootstrap } = await import("@/lib/provisioning/orchestrate");
+      const remoteExec = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("connect ECONNREFUSED 1.2.3.4:22"))
+        .mockResolvedValueOnce(okExec());
+      const sleep = vi.fn().mockResolvedValue(undefined);
+
+      const result = await runRemoteBootstrap({
+        host: "1.2.3.4",
+        username: "root",
+        privateKeyPem: "PEM",
+        tier: "starter",
+        remoteExec,
+        sleep
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(remoteExec).toHaveBeenCalledTimes(2);
+      expect(sleep).toHaveBeenCalledTimes(1);
+    });
+
+    it("surfaces a non-zero exit by returning it (no throw)", async () => {
+      const { runRemoteBootstrap } = await import("@/lib/provisioning/orchestrate");
+      const remoteExec = vi.fn().mockResolvedValue({
+        exitCode: 11,
+        signal: null,
+        stdout: "",
+        stderr: "bootstrap.sh: line 3: command not found"
+      });
+      const result = await runRemoteBootstrap({
+        host: "1.2.3.4",
+        username: "root",
+        privateKeyPem: "PEM",
+        tier: "standard",
+        remoteExec,
+        sleep: vi.fn().mockResolvedValue(undefined)
+      });
+      expect(result.exitCode).toBe(11);
+      expect(result.stderrTail).toContain("command not found");
+    });
+  });
+
   describe("failure recording", () => {
     /**
      * Regression for the production failure where `brianlanefanmail@gmail.com`
@@ -1095,6 +1489,38 @@ describe("provisioning/orchestrate", () => {
         status: undefined,
         body: { ok: false }
       });
+    });
+  });
+
+  describe("runWithSshConnectRetry", () => {
+    it("returns the first attempt's value when it succeeds", async () => {
+      const fn = vi.fn().mockResolvedValueOnce("hello");
+      const sleep = vi.fn();
+      const out = await runWithSshConnectRetry(fn, { sleep });
+      expect(out).toBe("hello");
+      expect(fn).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+    });
+
+    it("respects custom maxAttempts and baseDelayMs", async () => {
+      const fn = vi.fn().mockRejectedValue(new Error("connection refused"));
+      const sleep = vi.fn().mockResolvedValue(undefined);
+      await expect(
+        runWithSshConnectRetry(fn, { maxAttempts: 3, baseDelayMs: 100, sleep })
+      ).rejects.toThrow(/connection refused/);
+      expect(fn).toHaveBeenCalledTimes(3);
+      // Two sleeps for three attempts; linear backoff 100, 200.
+      expect(sleep).toHaveBeenNthCalledWith(1, 100);
+      expect(sleep).toHaveBeenNthCalledWith(2, 200);
+    });
+
+    it("propagates a non-connect error without retrying", async () => {
+      const boom = new Error("explicit non-connect failure");
+      const fn = vi.fn().mockRejectedValue(boom);
+      const sleep = vi.fn();
+      await expect(runWithSshConnectRetry(fn, { sleep })).rejects.toBe(boom);
+      expect(fn).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
     });
   });
 });

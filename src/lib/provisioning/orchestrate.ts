@@ -107,6 +107,108 @@ const defaultRemoteExecutor: RemoteExecutor = (args) =>
 /* c8 ignore stop */
 
 /**
+ * Run the bootstrap script on an already-provisioned VPS over SSH.
+ *
+ * Public surface for admin / repair flows: lets an operator re-execute
+ * `vps/scripts/bootstrap.sh` against a host that drifted from the
+ * orchestrator's expected state (e.g. an upstream Rowboat tag bump that
+ * only landed after the original deploy, or a host where Hostinger's PIS
+ * attach silently no-op'd). Returns the SSH exit code + tail so the
+ * caller can render a meaningful error to the dashboard.
+ *
+ * NOT consumed by `orchestrateProvisioning` itself — it has its own
+ * inline phase that records progress rows. This helper is a thin wrapper
+ * for "run the same thing, tell me the result, don't touch coworker_logs".
+ */
+export async function runRemoteBootstrap(input: {
+  host: string;
+  username: string;
+  privateKeyPem: string;
+  tier: "starter" | "standard";
+  remoteExec?: RemoteExecutor;
+  sleep?: (ms: number) => Promise<void>;
+}): Promise<{ exitCode: number; stdoutTail: string; stderrTail: string }> {
+  /* c8 ignore next -- production default; tests inject remoteExec */
+  const remoteExec = input.remoteExec ?? defaultRemoteExecutor;
+  const script = buildDefaultPostInstallScript({ tier: input.tier });
+  const b64 = Buffer.from(script, "utf8").toString("base64");
+  const cmd =
+    `printf '%s' '${b64}' ` +
+    `| base64 -d > /tmp/newcoworker-bootstrap.sh ` +
+    `&& chmod +x /tmp/newcoworker-bootstrap.sh ` +
+    `&& bash /tmp/newcoworker-bootstrap.sh`;
+
+  const result = await runWithSshConnectRetry(
+    () =>
+      remoteExec({
+        host: input.host,
+        username: input.username,
+        privateKeyPem: input.privateKeyPem,
+        command: cmd
+      }),
+    input.sleep ? { sleep: input.sleep } : undefined
+  );
+  return {
+    exitCode: result.exitCode,
+    stdoutTail: (result.stdout ?? "").slice(-2000),
+    stderrTail: (result.stderr ?? "").slice(-2000)
+  };
+}
+
+/**
+ * Wrap a single SSH-exec attempt in a retry loop that ONLY retries on
+ * "connection failed" (refused / handshake timeout / kex failure). Once the
+ * remote command has actually run, its exit code is the source of truth and
+ * we don't retry — re-running a partial bootstrap is more dangerous than
+ * surfacing the error.
+ *
+ * The fresh-VPS race we're catching: Hostinger flips `state=running` as
+ * soon as cloud-init signals success, but sshd's listener can lag by 5-30s
+ * while the OS finishes binding port 22. Without a retry, the orchestrator
+ * sees `ECONNREFUSED` on the first try and fails the whole provision.
+ */
+export async function runWithSshConnectRetry<T>(
+  attempt: () => Promise<T>,
+  opts?: { maxAttempts?: number; baseDelayMs?: number; sleep?: (ms: number) => Promise<void> }
+): Promise<T> {
+  const maxAttempts = opts?.maxAttempts ?? 6;
+  const baseDelayMs = opts?.baseDelayMs ?? 5000;
+  /* c8 ignore next -- production default; tests inject sleep */
+  const sleep = opts?.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+
+  let lastErr: unknown;
+  for (let i = 0; i < maxAttempts; i += 1) {
+    try {
+      return await attempt();
+    } catch (err) {
+      lastErr = err;
+      if (!isSshConnectError(err) || i === maxAttempts - 1) {
+        throw err;
+      }
+      // Linear backoff (5s, 10s, 15s, ...). Total worst-case wait at default
+      // settings is 5+10+15+20+25 = 75s before the final attempt — well under
+      // any practical sshd-startup window we've observed.
+      await sleep(baseDelayMs * (i + 1));
+    }
+  }
+  /* c8 ignore next 2 -- unreachable: loop above either returns or throws */
+  throw lastErr;
+}
+
+function isSshConnectError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const m = err.message.toLowerCase();
+  return (
+    m.includes("connection error") ||
+    m.includes("connection refused") ||
+    m.includes("econnrefused") ||
+    m.includes("etimedout") ||
+    m.includes("timed out") ||
+    m.includes("handshake")
+  );
+}
+
+/**
  * Factory for the VPS provisioning step. Split out from {@link orchestrateProvisioning}
  * so tests can stub the entire "talk to Hostinger + mint SSH key" sequence in
  * one swap.
@@ -138,7 +240,13 @@ function defaultVpsProvisioner(client: HostingerClient): VpsProvisioner {
       {
         businessId,
         tier,
-        postInstallScript: buildDefaultPostInstallScript()
+        // Attempt to attach the bootstrap as Hostinger's first-boot
+        // post-install script. provisionVpsForBusiness gracefully degrades
+        // on the 403 chicken-and-egg ("account doesn't yet own a VPS") so
+        // the SSH-bootstrap phase below always runs the same content
+        // afterward. Either path produces the same state because the
+        // script is idempotent.
+        postInstallScript: buildDefaultPostInstallScript({ tier })
       },
       { client }
     );
@@ -192,6 +300,12 @@ export async function orchestrateProvisioning(
      * admin UI). Pass `null` to force-skip during tests.
      */
     didProvisioner?: DidProvisioner | null;
+    /**
+     * Test-injectable sleep used by the SSH-bootstrap connect-retry loop.
+     * Production uses `setTimeout`; tests inject a no-op so retry assertions
+     * run without burning real wall-clock time.
+     */
+    sleep?: (ms: number) => Promise<void>;
   }
 ): Promise<ProvisioningResult> {
   const { businessId, ownerEmail, ownerPhone, tier } = input;
@@ -327,6 +441,89 @@ async function runOrchestrator(
     phase: "vps_provisioned",
     percent: 15,
     message: `VPS provisioned (${vpsId}, ${provisioned.publicIp})`,
+    source: "orchestrator"
+  });
+
+  // Phase 1b: SSH-bootstrap the VPS.
+  //
+  // This phase ALWAYS runs, regardless of whether `provisionVpsForBusiness`
+  // managed to attach the same content as a Hostinger first-boot script
+  // (see `provisioned.postInstallScriptId`). Two reasons:
+  //
+  //   1. Belt-and-suspenders for fresh accounts: PIS attach 403s on
+  //      accounts that don't already own a VPS. Without this fallback,
+  //      first-time provisions would never get past `running`.
+  //   2. Idempotent re-runs: when PIS *did* attach + complete, this SSH
+  //      pass is a quick \`git fetch\` + idempotent \`bash bootstrap.sh\`
+  //      verification. When it *didn't*, this pass is the only bootstrap.
+  //
+  // The script content is the slim loader from
+  // `buildDefaultPostInstallScript({ tier })`; it clones the repo, drops
+  // /opt/deploy-client.sh, and exec's the FULL `vps/scripts/bootstrap.sh`
+  // (system hardening, Docker, Ollama, Rowboat compose, cloudflared
+  // install). Failure here is fatal: the deploy phase below needs
+  // /opt/deploy-client.sh AND a healthy Rowboat stack to even start, so we
+  // re-use the orchestrator's top-level `failed` recorder via \`throw\`.
+  const bootstrapMessage = provisioned.postInstallScriptId
+    ? `Verifying VPS bootstrap over SSH (Hostinger PIS attached, id=${provisioned.postInstallScriptId})`
+    : "Bootstrapping VPS over SSH (PIS not eligible — running full bootstrap)";
+
+  await recordProvisioningProgress({
+    businessId,
+    phase: "vps_bootstrapping",
+    percent: 17,
+    message: bootstrapMessage,
+    source: "orchestrator"
+  });
+
+  const bootstrapScript = buildDefaultPostInstallScript({ tier: narrowTier });
+  // Encode the script as base64 so we can ship it to the VPS in a single
+  // shell command without escaping pitfalls (heredoc EOF collisions, single-
+  // quote nesting, $() substitution, etc.). `base64` ships with coreutils on
+  // every Hostinger Ubuntu template, so the only requirement is /bin/sh.
+  const bootstrapB64 = Buffer.from(bootstrapScript, "utf8").toString("base64");
+  const bootstrapCmd =
+    `printf '%s' '${bootstrapB64}' ` +
+    `| base64 -d > /tmp/newcoworker-bootstrap.sh ` +
+    `&& chmod +x /tmp/newcoworker-bootstrap.sh ` +
+    `&& bash /tmp/newcoworker-bootstrap.sh`;
+
+  // Fresh-VPS sshd often isn't accepting connections at the exact instant
+  // Hostinger flips state to `running`. Retry the SSH connection a few times
+  // with backoff so we don't fail provisioning over a 5-30s race window.
+  // Per-attempt timeout already lives inside sshExec; this is the outer
+  // retry loop for connection-refused / connect-timeout errors only.
+  const bootstrapResult = await runWithSshConnectRetry(
+    () =>
+      remoteExec({
+        host: provisioned.publicIp,
+        username: provisioned.sshUsername,
+        privateKeyPem: provisioned.sshKey.private_key_pem,
+        command: bootstrapCmd
+      }),
+    deps?.sleep ? { sleep: deps.sleep } : undefined
+  );
+
+  if (bootstrapResult.exitCode !== 0) {
+    const tail = (bootstrapResult.stderr || bootstrapResult.stdout || "").slice(-2000);
+    logger.error("VPS bootstrap failed", {
+      businessId,
+      vpsId,
+      exitCode: bootstrapResult.exitCode,
+      tail
+    });
+    throw new Error(
+      `VPS bootstrap failed (exit ${bootstrapResult.exitCode}): ${tail || "<no output>"}`
+    );
+  }
+
+  await recordProvisioningProgress({
+    businessId,
+    phase: "vps_bootstrapped",
+    percent: 22,
+    message: provisioned.postInstallScriptId
+      ? `VPS bootstrap verified (Hostinger PIS id=${provisioned.postInstallScriptId} + SSH re-run)`
+      : "VPS bootstrap complete (SSH-only fallback path)",
     source: "orchestrator"
   });
 

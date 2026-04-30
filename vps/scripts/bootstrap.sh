@@ -9,6 +9,20 @@ TIER="${TIER:-standard}"
 CLOUDFLARED_VERSION="2025.4.0"
 LOG_FILE="/var/log/newcoworker-bootstrap.log"
 
+# Rowboat upstream pinning.
+#
+# We deploy from a fork (`brianlane/rowboat`) reset to a known-good SHA so
+# upstream refactors (e.g. the late-2025 pivot to an Electron desktop app
+# that moved the server Dockerfile from the repo root to apps/rowboat/) do
+# not silently break production builds on every redeploy. The same SHA is
+# stamped in vps/integration/real/rowboat-git-ref so integration + prod stay
+# bit-identical.
+#
+# Override via env if you ever need to bump (test on a fresh VPS first):
+#   ROWBOAT_GIT_URL=... ROWBOAT_GIT_REF=... bash bootstrap.sh
+ROWBOAT_GIT_URL="${ROWBOAT_GIT_URL:-https://github.com/brianlane/rowboat.git}"
+ROWBOAT_GIT_REF="${ROWBOAT_GIT_REF:-f7e6f783baa98a929880ce1f537481bc7d4f3415}"
+
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
 
 log "=== New Coworker VPS Bootstrap (TIER=${TIER}) ==="
@@ -217,9 +231,24 @@ log "LLM traffic: Rowboat uses PROVIDER_BASE_URL → host Ollama OpenAI API (htt
 log "Installing Rowboat..."
 mkdir -p /opt/rowboat/vault /opt/rowboat/memory /opt/rowboat/logs
 
-# Clone Rowboat
-git clone https://github.com/rowboatlabs/rowboat.git /opt/rowboat/src 2>/dev/null || \
-  git -C /opt/rowboat/src pull
+# Clone Rowboat from the pinned fork.
+#
+# Pin to the SHA in ${ROWBOAT_GIT_REF}. Without an explicit checkout we'd
+# track whatever upstream calls `main` today, and as of late-2025 that is
+# the Electron desktop-app refactor — the server Dockerfile moved from the
+# repo root to apps/rowboat/, breaking every `docker compose up --build`
+# call here (the failure is silent because the surrounding `|| true`).
+# Pinning + apps/rowboat-context (see compose templates below) keep prod
+# building the version our /api/dashboard/chat URL contract was designed
+# against.
+if [[ ! -d /opt/rowboat/src/.git ]]; then
+  git clone "${ROWBOAT_GIT_URL}" /opt/rowboat/src
+fi
+git -C /opt/rowboat/src remote set-url origin "${ROWBOAT_GIT_URL}"
+git -C /opt/rowboat/src fetch --depth=1 origin "${ROWBOAT_GIT_REF}" || \
+  git -C /opt/rowboat/src fetch origin "${ROWBOAT_GIT_REF}"
+git -C /opt/rowboat/src checkout --detach "${ROWBOAT_GIT_REF}"
+log "Rowboat checked out at ${ROWBOAT_GIT_REF} from ${ROWBOAT_GIT_URL}"
 
 # Build the Docker Compose stack
 cd /opt/rowboat/src
@@ -249,14 +278,23 @@ else
 fi
 
 # Tier-aware Rowboat docker-compose
+#
+# Build context note: upstream Rowboat keeps the server Dockerfile under
+# apps/rowboat/Dockerfile, NOT at the repo root. Pointing `context:` at the
+# repo root — as we did before late-2025 — fails with `failed to read
+# dockerfile: open Dockerfile: no such file or directory`. Because
+# `docker compose up --build` is wrapped in `|| true` (preserving the rest
+# of bootstrap on a partial Rowboat failure), that error was silently
+# swallowed and chat was permanently broken. apps/rowboat is the correct
+# context for both `rowboat` and `jobs-worker`.
 if [[ "$TIER" == "starter" ]]; then
   # KVM 2: slim stack — no qdrant, constrained mongo, no rag-worker
   cat > /opt/rowboat/docker-compose.yml <<'REOF'
-version: "3.9"
 services:
   rowboat:
     build:
-      context: /opt/rowboat/src
+      context: /opt/rowboat/src/apps/rowboat
+      dockerfile: Dockerfile
     container_name: rowboat
     restart: always
     env_file: /opt/rowboat/.env
@@ -270,6 +308,8 @@ services:
     mem_limit: 1536m
     depends_on:
       - llm-router
+      - mongo
+      - redis
 
   llm-router:
     build:
@@ -312,11 +352,11 @@ REOF
 else
   # KVM 8: full stack with qdrant for RAG
   cat > /opt/rowboat/docker-compose.yml <<'REOF'
-version: "3.9"
 services:
   rowboat:
     build:
-      context: /opt/rowboat/src
+      context: /opt/rowboat/src/apps/rowboat
+      dockerfile: Dockerfile
     container_name: rowboat
     restart: always
     env_file: /opt/rowboat/.env
@@ -329,6 +369,8 @@ services:
       - /opt/rowboat/memory:/memory
     depends_on:
       - llm-router
+      - mongo
+      - redis
 
   llm-router:
     build:
@@ -346,13 +388,23 @@ services:
 
   jobs-worker:
     build:
-      context: /opt/rowboat/src
+      # Same fork pin + apps/rowboat context as `rowboat`, but with
+      # scripts.Dockerfile (the upstream pin ships a separate dockerfile for
+      # background jobs that includes node-cron + the worker entry script).
+      # Pointing this at the bare `Dockerfile` would build the web app and
+      # then no-op on `npm run jobs-worker`.
+      context: /opt/rowboat/src/apps/rowboat
+      dockerfile: scripts.Dockerfile
     container_name: rowboat-jobs
     restart: always
     env_file: /opt/rowboat/.env
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    command: worker
+    depends_on:
+      - mongo
+      - redis
+      - qdrant
+    command: ["npm", "run", "jobs-worker"]
 
   mongo:
     image: mongo:7
