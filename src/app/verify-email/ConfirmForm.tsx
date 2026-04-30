@@ -24,11 +24,21 @@ type Props = {
  *   2. After action returns `kind: "ok"`: success card. Distinguishes
  *      first-confirm vs. idempotent replay via `alreadyVerified` so the
  *      copy doesn't lie if the user lands here twice.
- *   3. After action returns `kind: "error"`: error card. The reason
- *      carries through to the copy + the redirect target — `expired`
- *      and `invalid` route the user to /login (so they can request a
- *      fresh email from the dashboard banner), while `not_found` and
- *      `internal` keep them on the same page.
+ *   3. After action returns `kind: "error"`: error card. The CTA
+ *      shape branches on `reason` because the recovery affordance is
+ *      genuinely different per failure mode:
+ *        - `expired` / `invalid` / `missing_token` → Sign in (`/login`):
+ *          the link is unrecoverable from this page, but the dashboard's
+ *          "Resend email" banner can mint a fresh token. Sign in.
+ *        - `not_found` → Contact support (`mailto:`): no profile exists
+ *          for the email in the token, so signing in won't help — there
+ *          is no account to log into. Hand off to humans.
+ *        - `internal` → Try again (`window.location.reload()`): the
+ *          token itself is valid (we already cryptographically
+ *          validated it on GET), so a transient DB blip from
+ *          `markEmailVerifiedByEmail` is recoverable just by retrying
+ *          the same submission against the same token. Reload re-runs
+ *          the server-side validation and re-mounts the confirm form.
  *
  * `useActionState` is React 19's replacement for `useFormState`; it
  * gives us the action result in-component without an extra fetch +
@@ -77,22 +87,36 @@ export function ConfirmForm({ token, email }: Props) {
         : result.reason === "invalid" || result.reason === "missing_token"
           ? "This link doesn't look right. Sign in and request a fresh verification email from your dashboard."
           : result.reason === "not_found"
-            ? "We couldn't find a NewCoworker account for that email. Sign in to check the address on file, or contact support."
-            : "We hit a snag confirming your email. Please try again from your dashboard, or contact support if it persists.";
-    const cta =
-      result.reason === "expired" || result.reason === "invalid" || result.reason === "missing_token"
-        ? { label: "Sign in", href: "/login" }
-        : { label: "Sign in", href: "/login" };
+            ? "We couldn't find a NewCoworker account for the email on this verification link. Reach out to support and we'll help you sort it out."
+            : "We hit a snag confirming your email. Try again — your verification link is still valid.";
+    const ctaClasses =
+      "inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors";
     return (
       <Card className="text-center space-y-3">
         <p className="text-sm font-semibold text-spark-orange">{heading}</p>
         <p className="text-xs text-parchment/65">{body}</p>
-        <Link
-          href={cta.href}
-          className="inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
-        >
-          {cta.label}
-        </Link>
+        {result.reason === "internal" ? (
+          // Token was cryptographically valid (the page-level GET already
+          // verified it before mounting this component) so a transient
+          // failure inside `markEmailVerifiedByEmail` is recoverable by
+          // simply re-running the same submission. A full reload re-renders
+          // the server component, which re-validates the token and mounts
+          // a fresh confirm form for the user to click again.
+          <button type="button" onClick={() => window.location.reload()} className={ctaClasses}>
+            Try again
+          </button>
+        ) : result.reason === "not_found" ? (
+          // mailto: deliberately uses a plain <a> rather than next/link —
+          // we don't want client-side navigation to intercept it, the
+          // browser should hand off to the user's mail client.
+          <a href="mailto:support@newcoworker.com" className={ctaClasses}>
+            Contact support
+          </a>
+        ) : (
+          <Link href="/login" className={ctaClasses}>
+            Sign in
+          </Link>
+        )}
       </Card>
     );
   }

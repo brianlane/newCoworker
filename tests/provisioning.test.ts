@@ -123,6 +123,15 @@ describe("provisioning/orchestrate", () => {
     delete process.env.CLOUDFLARE_TUNNEL_ZONE;
     delete process.env.CLOUDFLARE_TUNNEL_SERVICE_URL;
     delete process.env.BRIDGE_MEDIA_WSS_ORIGIN;
+    // VOICE_TRANSCRIPTION_ENABLED is read by the deploy-command builder
+    // (orchestrate.ts ~498) and falls back to "" when unset. Without
+    // this scrub, a developer who has the var exported in their local
+    // shell sees the LHS-of-`??` branch covered every test but the RHS
+    // (empty fallback) never. CI catches it as a branch-coverage gap.
+    // The "deploy command forwards voice-bridge env when set" test
+    // re-sets the var explicitly, which keeps the populated branch
+    // covered.
+    delete process.env.VOICE_TRANSCRIPTION_ENABLED;
     vi.clearAllMocks();
   });
 
@@ -304,6 +313,11 @@ describe("provisioning/orchestrate", () => {
     process.env.GOOGLE_API_KEY = "sk-live-abc";
     process.env.GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview";
     process.env.GEMINI_LIVE_ENABLED = "false";
+    // VOICE_TRANSCRIPTION_ENABLED is set here so the populated branch of
+    // its `?? ""` nullish-coalescing is exercised; the other deploy-env
+    // tests in this file leave the var unset, which already covers the
+    // empty-fallback branch.
+    process.env.VOICE_TRANSCRIPTION_ENABLED = "true";
     process.env.VOICE_BRIDGE_SRC = "/opt/newcoworker-repo/vps/voice-bridge";
     const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
     const remoteExec = vi.fn().mockResolvedValue(okExec());
@@ -315,6 +329,7 @@ describe("provisioning/orchestrate", () => {
     expectDeployHasEnv(cmd, "GOOGLE_API_KEY", "sk-live-abc");
     expectDeployHasEnv(cmd, "GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview");
     expectDeployHasEnv(cmd, "GEMINI_LIVE_ENABLED", "false");
+    expectDeployHasEnv(cmd, "VOICE_TRANSCRIPTION_ENABLED", "true");
     expectDeployHasEnv(cmd, "VOICE_BRIDGE_SRC", "/opt/newcoworker-repo/vps/voice-bridge");
   });
 
@@ -989,6 +1004,30 @@ describe("provisioning/orchestrate", () => {
           { vpsProvisioner, remoteExec: vi.fn() }
         )
       ).rejects.toThrow("the real failure");
+    });
+
+    it("stringifies non-Error rejections from the failure-row write", async () => {
+      // Companion to the previous test: covers the `String(logErr)` half
+      // of the `logErr instanceof Error ? logErr.message : String(logErr)`
+      // guard inside the catch-block's logger.warn. Without this, a
+      // non-Error rejection (string, number, undefined) from the
+      // coworker_logs insert would fall through `instanceof Error` checks
+      // upstream and could surface as `[object Object]` in logs.
+      const recordMock = vi.mocked(recordProvisioningProgress);
+      recordMock.mockClear();
+
+      recordMock.mockResolvedValueOnce({} as never);
+      recordMock.mockRejectedValueOnce("supabase string-thrown");
+
+      const original = new Error("real failure 2");
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(original);
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-fail-4", tier: "starter" },
+          { vpsProvisioner, remoteExec: vi.fn() }
+        )
+      ).rejects.toThrow("real failure 2");
     });
   });
 
