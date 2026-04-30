@@ -45,6 +45,7 @@ function makeProfile(overrides: Partial<CustomerProfileRow> = {}): CustomerProfi
     lifetime_subscription_count: 1,
     refund_used_at: null,
     first_paid_at: "2026-04-01T00:00:00.000Z",
+    email_verified_at: null,
     created_at: "2026-04-01T00:00:00.000Z",
     updated_at: "2026-04-01T00:00:00.000Z",
     ...overrides

@@ -207,6 +207,96 @@ export async function orchestrateProvisioning(
     source: "orchestrator"
   });
 
+  try {
+    return await runOrchestrator({ businessId, ownerEmail, ownerPhone, tier: narrowTier }, deps);
+  } catch (err) {
+    // Top-level safety net. Several inner steps already record their own
+    // `status: "error"` rows AND swallow the error (cloudflare, DID, deploy),
+    // but the calls before the cloudflare phase — `vpsProvisioner`,
+    // `updateBusinessStatus`, the config writes — are unprotected, so a
+    // Hostinger 4xx (e.g. token missing the `post-install-scripts` scope,
+    // retired data-center id, suspended payment method) used to bubble
+    // straight up to the webhook caller. The dashboard, which polls
+    // `coworker_logs` for the latest provisioning row, would then sit on
+    // the 5%/`started` row indefinitely with no actionable feedback.
+    //
+    // Recording a terminal `failed` row here flips the dashboard widget into
+    // its error state via `shouldMountProvisioningWidget` and gives the
+    // owner something concrete to show support. We then re-throw so the
+    // caller can still log + propagate failure to its own callers.
+    const detail = describeProvisioningError(err);
+    logger.error("Provisioning failed", {
+      businessId,
+      ...detail
+    });
+    try {
+      await recordProvisioningProgress({
+        businessId,
+        phase: "failed",
+        percent: 5,
+        message: formatProvisioningErrorMessage(detail),
+        source: "orchestrator",
+        status: "error"
+      });
+    } catch (logErr) {
+      // Logging the failure must never mask the original error. If the
+      // coworker_logs insert itself fails (DB outage, RLS misconfig) we
+      // surface that as a warn so the operator can investigate, but the
+      // outer `throw` below is what the caller sees.
+      logger.warn("Failed to record provisioning failure row", {
+        businessId,
+        error: logErr instanceof Error ? logErr.message : String(logErr)
+      });
+    }
+    throw err;
+  }
+}
+
+/**
+ * Structured detail extracted from a thrown provisioning error.
+ *
+ * Hostinger API failures carry endpoint + status + raw response body that
+ * are essential for diagnosing scope/permission/SKU drift problems
+ * (e.g. `[VPS:2000] Unauthorized` from a token missing the
+ * `post-install-scripts` scope). The plain `err.message` strips all of
+ * that. By inspecting `err.name === "HostingerApiError"` instead of
+ * importing the class we keep this module decoupled from the Hostinger
+ * client (and avoid an import cycle with the test-injected provisioner).
+ */
+type ProvisioningErrorDetail = {
+  message: string;
+  endpoint?: string;
+  status?: number;
+  body?: unknown;
+};
+
+export function describeProvisioningError(err: unknown): ProvisioningErrorDetail {
+  if (err instanceof Error && err.name === "HostingerApiError") {
+    const e = err as Error & { endpoint?: unknown; status?: unknown; body?: unknown };
+    return {
+      message: err.message,
+      endpoint: typeof e.endpoint === "string" ? e.endpoint : undefined,
+      status: typeof e.status === "number" ? e.status : undefined,
+      body: e.body
+    };
+  }
+  if (err instanceof Error) return { message: err.message };
+  return { message: String(err) };
+}
+
+function formatProvisioningErrorMessage(detail: ProvisioningErrorDetail): string {
+  if (detail.endpoint && typeof detail.status === "number") {
+    return `Provisioning failed: Hostinger ${detail.endpoint} → HTTP ${detail.status} (${detail.message})`;
+  }
+  return `Provisioning failed: ${detail.message}`;
+}
+
+async function runOrchestrator(
+  input: ProvisioningInput & { tier: "starter" | "standard" },
+  deps?: Parameters<typeof orchestrateProvisioning>[1]
+): Promise<ProvisioningResult> {
+  const { businessId, ownerEmail, ownerPhone, tier: narrowTier } = input;
+
   const hostinger =
     deps?.hostinger ??
     new HostingerClient({

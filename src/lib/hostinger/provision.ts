@@ -48,8 +48,17 @@ export const DEFAULT_TIER_PRICE_ITEM: Record<"starter" | "standard", string> = {
 /** Ubuntu 24.04 with Docker (verified via `GET /api/vps/v1/templates`). */
 export const DEFAULT_TEMPLATE_ID = 1121;
 
-/** Boston, US — the only US data center in Hostinger's fleet as of 2026-04-20. */
-export const DEFAULT_US_DATA_CENTER_ID = 17;
+/**
+ * Boston 2 — the only US data center in Hostinger's fleet as of 2026-04-29.
+ *
+ * The previous Boston DC (id 17) was retired and replaced with `bos2` (id 24).
+ * `GET /api/vps/v1/data-centers` is the source of truth — verify with
+ * `scripts/hostinger-preflight.ts` whenever Hostinger announces a fleet
+ * change. Sending `data_center_id: 17` to the purchase endpoint after the
+ * retirement returns HTTP 422 with `{ "errors": { "data_center_id": ["…"] } }`,
+ * which surfaces as `Hostinger API HTTP 422` and prevents provisioning.
+ */
+export const DEFAULT_US_DATA_CENTER_ID = 24;
 
 export type ProvisionVpsForBusinessInput = {
   businessId: string;

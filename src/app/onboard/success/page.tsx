@@ -4,12 +4,12 @@ import { Suspense, useEffect, useState, type FormEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { Card } from "@/components/ui/Card";
-import { StatusDot } from "@/components/ui/StatusDot";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { ONBOARD_STORAGE_KEY, type OnboardingData } from "@/lib/onboarding/storage";
 import { clearStaleSupabaseAuthCookies, getSupabaseBrowserClient } from "@/lib/supabase/browser";
 import { getPasswordValidationError, PASSWORD_RULES } from "@/lib/password";
+import { CoworkerProvisioningProgress } from "@/components/dashboard/CoworkerProvisioningProgress";
 
 type SuccessStatus =
   | "verifying_payment"
@@ -37,12 +37,16 @@ function OnboardSuccessContent() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [showRecoveryNotice, setShowRecoveryNotice] = useState(false);
+  const [businessId, setBusinessId] = useState<string | null>(null);
 
   useEffect(() => {
     const rawOnboarding = localStorage.getItem(ONBOARD_STORAGE_KEY);
     const onboardingData = rawOnboarding ? JSON.parse(rawOnboarding) as OnboardingData : null;
     if (onboardingData?.ownerEmail) {
       setSignupEmail(onboardingData.ownerEmail);
+    }
+    if (onboardingData?.businessId) {
+      setBusinessId(onboardingData.businessId);
     }
   }, []);
 
@@ -68,7 +72,7 @@ function OnboardSuccessContent() {
 
         const verifyJson = await verifyRes.json();
         const ownerEmail = verifyJson.data?.ownerEmail;
-        const businessId = verifyJson.data?.businessId;
+        const verifiedBusinessId = verifyJson.data?.businessId;
         const recoveredOnboardingData = verifyJson.data?.onboardingData as OnboardingData | null | undefined;
         const onboardingDraftRecovered = verifyJson.data?.onboardingDraftRecovered === true;
         if (typeof ownerEmail !== "string" || !ownerEmail) {
@@ -76,12 +80,21 @@ function OnboardSuccessContent() {
         }
 
         setSignupEmail(ownerEmail);
+        if (typeof verifiedBusinessId === "string" && verifiedBusinessId) {
+          // Stamp the verified businessId into local state so the
+          // CoworkerProvisioningProgress widget can mount immediately
+          // when the user transitions to "provisioning" — without this,
+          // the widget has to wait on the first /api/business/status
+          // poll roundtrip, leaving a 5-second blank gap where the user
+          // sees no progress signal.
+          setBusinessId(verifiedBusinessId);
+        }
         const rawOnboarding = localStorage.getItem(ONBOARD_STORAGE_KEY);
         const onboardingData = rawOnboarding ? JSON.parse(rawOnboarding) as OnboardingData : null;
         const nextOnboardingData = recoveredOnboardingData
-          ? { ...recoveredOnboardingData, businessId, ownerEmail, persistedToDatabase: true }
+          ? { ...recoveredOnboardingData, businessId: verifiedBusinessId, ownerEmail, persistedToDatabase: true }
           : onboardingData
-            ? { ...onboardingData, businessId, ownerEmail, persistedToDatabase: true }
+            ? { ...onboardingData, businessId: verifiedBusinessId, ownerEmail, persistedToDatabase: true }
             : null;
         if (nextOnboardingData) {
           localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(nextOnboardingData));
@@ -102,10 +115,19 @@ function OnboardSuccessContent() {
     if (status !== "provisioning") return;
 
     let interval: ReturnType<typeof setInterval> | null = null;
-    let attempts = 0;
 
-    interval = setInterval(async () => {
-      attempts++;
+    // Provisioning is server-side (Stripe webhook → orchestrator). It
+    // typically completes in 2–5 minutes but can take longer. We poll
+    // /api/business/status purely to detect the "online" terminal — the
+    // real percent + failure UI comes from the embedded
+    // CoworkerProvisioningProgress widget below, which polls
+    // /api/provisioning/status on its own. Previously this polled for
+    // only 2 minutes and then stopped silently, leaving slow tenants
+    // stranded on a fake step list with no escape hatch. We now keep
+    // polling indefinitely while the user is on this page, and the UI
+    // always exposes a "Go to dashboard" button so the user is never
+    // trapped regardless of provisioning latency.
+    async function pollOnce() {
       try {
         const res = await fetch("/api/business/status");
         if (res.status === 401) {
@@ -115,6 +137,9 @@ function OnboardSuccessContent() {
         }
 
         const json = await res.json();
+        if (typeof json.data?.id === "string") {
+          setBusinessId((prev) => prev ?? json.data.id);
+        }
         if (json.data?.status === "online") {
           setStatus("online");
           if (interval) clearInterval(interval);
@@ -122,11 +147,10 @@ function OnboardSuccessContent() {
       } catch {
         // ignore transient polling failures
       }
+    }
 
-      if (attempts >= 24 && interval) {
-        clearInterval(interval);
-      }
-    }, 5000);
+    void pollOnce();
+    interval = setInterval(pollOnce, 5000);
 
     return () => {
       if (interval) clearInterval(interval);
@@ -381,21 +405,38 @@ function OnboardSuccessContent() {
         )}
 
         {status === "provisioning" && (
-          <Card className="text-left space-y-3">
-            {[
-              "Provisioning Hostinger VPS",
-              "Installing Your New Coworker",
-              "Configuring Rowboat agent",
-              "Configuring Telnyx voice + SMS routing",
-              "Linking VPS media bridge",
-              "Injecting soul.md + identity.md"
-            ].map((step, i) => (
-              <div key={step} className="flex items-center gap-3 text-sm">
-                <StatusDot status={i < 2 ? "online" : "offline"} />
-                <span className={i < 2 ? "text-parchment" : "text-parchment/40"}>{step}</span>
-              </div>
-            ))}
-          </Card>
+          <div className="space-y-4">
+            {businessId ? (
+              <CoworkerProvisioningProgress businessId={businessId} />
+            ) : (
+              <Card>
+                <p className="text-sm text-parchment/70 text-center">
+                  We&apos;re setting things up in the background. This usually takes 2–5 minutes.
+                </p>
+              </Card>
+            )}
+            {/*
+              Always expose an escape hatch to the dashboard. Provisioning
+              runs server-side (Stripe webhook → orchestrator) and the
+              dashboard already renders the same real-time progress widget,
+              handles the failure case, and gives the user a usable
+              workspace shell while the VPS continues to come up. Without
+              this button users whose provisioning takes longer than a few
+              minutes (or whose deploy step partially failed) had no way
+              off this page.
+            */}
+            <div className="text-center">
+              <a
+                href="/dashboard"
+                className="inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
+              >
+                Go to Dashboard →
+              </a>
+              <p className="text-xs text-parchment/45 mt-2">
+                Provisioning continues in the background — you can monitor progress from your dashboard.
+              </p>
+            </div>
+          </div>
         )}
 
         {status === "online" && (

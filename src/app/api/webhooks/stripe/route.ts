@@ -1176,9 +1176,36 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
       }
     })
     .catch((err) => {
+      // `orchestrateProvisioning` already records a `failed` coworker_logs
+      // row on uncaught errors so the dashboard flips into its terminal
+      // failure state instead of sticking at 5%. The remaining job here
+      // is to surface diagnostic detail (endpoint, status, body) into
+      // Vercel logs — `err.message` alone strips the response body, and
+      // the body is exactly where Hostinger puts the actionable error
+      // copy (e.g. `[VPS:2000] Unauthorized` for a token missing scope).
+      //
+      // The detail extraction is duplicated from
+      // `describeProvisioningError` rather than imported because some
+      // tests mock the entire orchestrator module, which leaves the
+      // helper undefined inside an async catch block. Keeping this
+      // inline trades five lines of duplication for hermetic test
+      // mocking — and the logic is small enough that drift is cheap.
+      const detail = (() => {
+        if (err instanceof Error && err.name === "HostingerApiError") {
+          const e = err as Error & { endpoint?: unknown; status?: unknown; body?: unknown };
+          return {
+            message: err.message,
+            endpoint: typeof e.endpoint === "string" ? e.endpoint : undefined,
+            status: typeof e.status === "number" ? e.status : undefined,
+            body: e.body
+          };
+        }
+        if (err instanceof Error) return { message: err.message };
+        return { message: String(err) };
+      })();
       logger.error("Provisioning failed after checkout", {
         businessId,
-        error: err instanceof Error ? err.message : String(err)
+        ...detail
       });
     });
 }

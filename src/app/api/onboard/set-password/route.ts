@@ -1,5 +1,8 @@
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { findAuthUserIdByEmail } from "@/lib/auth";
+import { sendOwnerEmail } from "@/lib/email/client";
+import { buildEmailVerificationMessage } from "@/lib/email/templates/email-verification";
+import { createEmailVerificationToken } from "@/lib/email/verification-token";
 import { logger } from "@/lib/logger";
 import { getPasswordValidationError } from "@/lib/password";
 import { getStripe } from "@/lib/stripe/client";
@@ -148,6 +151,41 @@ export async function POST(request: Request) {
         businessId,
         userId: created.user.id
       });
+
+      // Best-effort post-mint email verification dispatch. We deliberately
+      // mint the auth user with `email_confirm: true` (above) so the
+      // immediate `signInWithPassword` on the client doesn't get gated on
+      // a Supabase confirmation hop — that hop was the original 494
+      // REQUEST_HEADER_TOO_LARGE failure surface for chunked sb-* cookies.
+      // But "Supabase considers this email valid for sign-in" is NOT the
+      // same as "the human pressed a confirmation link in their inbox",
+      // so we send our own HMAC-token verification email here. The
+      // dashboard's `UnverifiedEmailBanner` displays + offers a Resend
+      // button while `customer_profiles.email_verified_at` is still null,
+      // so a Resend hiccup is recoverable from the user's side without
+      // ever blocking account creation. Hence: log-and-continue, never
+      // fail this 200.
+      try {
+        const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+        const verificationToken = createEmailVerificationToken(ownerEmail);
+        const verificationUrl =
+          `${baseUrl.replace(/\/$/, "")}/verify-email?token=${encodeURIComponent(verificationToken)}`;
+        const { subject, text } = buildEmailVerificationMessage({ verificationUrl });
+        await sendOwnerEmail(process.env.RESEND_API_KEY ?? "", ownerEmail, subject, text);
+        logger.info("set-password: verification email dispatched", {
+          sessionId: body.sessionId,
+          businessId,
+          userId: created.user.id
+        });
+      } catch (emailErr) {
+        logger.warn("set-password: verification email send failed (non-fatal)", {
+          sessionId: body.sessionId,
+          businessId,
+          userId: created.user.id,
+          error: emailErr instanceof Error ? emailErr.message : String(emailErr)
+        });
+      }
+
       return successResponse({ ownerEmail, businessId });
     }
 
