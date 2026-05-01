@@ -576,7 +576,11 @@ async function runOrchestrator(
       ? cloudflareTunnelProvisionerFromEnv()
       : deps.cloudflareTunnel;
 
-  let tunnelHostname = `${businessId}.tunnel.newcoworker.com`;
+  // Fallback hostname only used when the tunnel provisioner is disabled
+  // (no CF token in env, dep injected as `null`). The leading subdomain
+  // is the business UUID — ONE level under the zone — so Universal SSL
+  // on the parent zone covers it without paid Total TLS.
+  let tunnelHostname = `${businessId}.${process.env.CLOUDFLARE_TUNNEL_ZONE ?? "newcoworker.com"}`;
   let cloudflareTunnelToken = process.env.CLOUDFLARE_TUNNEL_TOKEN ?? "";
   let bridgeMediaWssOrigin = process.env.BRIDGE_MEDIA_WSS_ORIGIN ?? "";
   if (tunnelProvisioner) {

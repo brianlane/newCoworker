@@ -186,7 +186,7 @@ describe("provisioning/orchestrate", () => {
     );
 
     expect(result.vpsId).toBe("123");
-    expect(result.tunnelUrl).toContain("tunnel.newcoworker.com");
+    expect(result.tunnelUrl).toContain(".newcoworker.com");
     expect(vpsProvisioner).toHaveBeenCalledWith({ businessId: "biz-uuid-1", tier: "starter" });
   });
 
@@ -613,8 +613,8 @@ describe("provisioning/orchestrate", () => {
     const cfStub = vi.fn().mockResolvedValue({
       tunnelId: "tun-42",
       token: "PER_TENANT_TOKEN",
-      hostname: "biz-cf.tunnel.newcoworker.com",
-      voiceHostname: "voice-biz-cf.tunnel.newcoworker.com"
+      hostname: "biz-cf.newcoworker.com",
+      voiceHostname: "voice-biz-cf.newcoworker.com"
     });
     const result = await orchestrateProvisioning(
       { businessId: "biz-cf", tier: "starter" },
@@ -625,10 +625,10 @@ describe("provisioning/orchestrate", () => {
       }
     );
     expect(cfStub).toHaveBeenCalledWith({ businessId: "biz-cf" });
-    expect(result.tunnelUrl).toBe("https://biz-cf.tunnel.newcoworker.com");
+    expect(result.tunnelUrl).toBe("https://biz-cf.newcoworker.com");
     const cmd = deployCallArg(remoteExec).command;
     expectDeployHasEnv(cmd, "CLOUDFLARE_TUNNEL_TOKEN", "PER_TENANT_TOKEN");
-    expectDeployHasEnv(cmd, "BRIDGE_MEDIA_WSS_ORIGIN", "wss://voice-biz-cf.tunnel.newcoworker.com");
+    expectDeployHasEnv(cmd, "BRIDGE_MEDIA_WSS_ORIGIN", "wss://voice-biz-cf.newcoworker.com");
   });
 
   it("per-tenant tunnel: falls back to env CLOUDFLARE_TUNNEL_TOKEN when provisioner throws", async () => {
@@ -644,7 +644,7 @@ describe("provisioning/orchestrate", () => {
         cloudflareTunnel: cfStub
       }
     );
-    expect(result.tunnelUrl).toBe("https://biz-cf-fail.tunnel.newcoworker.com");
+    expect(result.tunnelUrl).toBe("https://biz-cf-fail.newcoworker.com");
     const cmd = deployCallArg(remoteExec).command;
     expectDeployHasEnv(cmd, "CLOUDFLARE_TUNNEL_TOKEN", "SHARED_ENV_TOKEN");
     expectDeployHasEnv(cmd, "BRIDGE_MEDIA_WSS_ORIGIN", "wss://shared-voice.example.com");
@@ -662,7 +662,7 @@ describe("provisioning/orchestrate", () => {
         cloudflareTunnel: cfStub
       }
     );
-    expect(result.tunnelUrl).toBe("https://biz-cf-nonerr.tunnel.newcoworker.com");
+    expect(result.tunnelUrl).toBe("https://biz-cf-nonerr.newcoworker.com");
     expectDeployHasEnv(
       deployCallArg(remoteExec).command,
       "CLOUDFLARE_TUNNEL_TOKEN",
@@ -683,7 +683,7 @@ describe("provisioning/orchestrate", () => {
         cloudflareTunnel: null
       }
     );
-    expect(result.tunnelUrl).toBe("https://biz-cf-null.tunnel.newcoworker.com");
+    expect(result.tunnelUrl).toBe("https://biz-cf-null.newcoworker.com");
     expectDeployHasEnv(
       deployCallArg(remoteExec).command,
       "CLOUDFLARE_TUNNEL_TOKEN",

@@ -12,10 +12,16 @@
 //     returns only primitives (tunnelId/token/hostname) so orchestrate.ts
 //     stays easy to mock.
 //
-// Zone topology assumed: a dedicated CF-managed zone (e.g. tunnel.newcoworker.com)
-// that the operator has either transferred to Cloudflare or delegated via NS
-// records from the primary DNS host. The apex newcoworker.com does not need
-// to live on Cloudflare.
+// Zone topology assumed: a CF-managed zone (e.g. newcoworker.com) hosting the
+// apex. We publish per-tenant hostnames at `<businessId>.<zone>` — ONE level
+// under the zone — so Cloudflare's free Universal SSL cert
+// (covers apex + `*.<zone>`) handles edge TLS for every tenant without paid
+// Total TLS / Advanced Certificate Manager.
+//
+// Going deeper than one level (e.g. `<biz>.tunnel.<zone>`) is supported via
+// `CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX`, but only if the operator has upgraded
+// to a paid plan and enabled Total TLS — Universal SSL's wildcard does not
+// span more than one level.
 
 import { logger } from "@/lib/logger";
 
@@ -47,15 +53,15 @@ export type CloudflareTunnelConfig = {
   sslApiToken?: string;
   accountId: string;
   /**
-   * The CF DNS zone that owns the public hostname (e.g. "newcoworker.com" if
-   * the entire apex is on CF, or "tunnel.newcoworker.com" if only a delegated
-   * subdomain is on CF). Used for the `GET /zones?name=…` lookup.
+   * The CF DNS zone that owns the public hostname (e.g. "newcoworker.com").
+   * Used for the `GET /zones?name=…` lookup.
    */
   zoneName: string;
   /**
    * Suffix appended to `businessId` to form the public hostname. Defaults to
-   * `zoneName` (so businessId.zoneName). Set this when the CF zone is at the
-   * apex but you want hostnames at a deeper subdomain — e.g. zoneName
+   * `zoneName` itself, producing `<businessId>.<zone>` (one wildcard level —
+   * covered by free Universal SSL). Override only if you've upgraded to a
+   * paid plan with Total TLS and need a deeper namespace, e.g. zoneName
    * "newcoworker.com" + hostnameSuffix "tunnel.newcoworker.com" produces
    * "<businessId>.tunnel.newcoworker.com" inside the apex zone.
    */
@@ -219,25 +225,27 @@ export function createCloudflareTunnelProvisioner(
   /**
    * Enable Cloudflare Total TLS on a zone (idempotent).
    *
-   * Why this exists: Cloudflare Universal SSL covers ONLY the zone apex
-   * and a single level of wildcard (`*.<zone>`). Per-tenant tunnels live
-   * at TWO levels deep — `<businessId>.tunnel.newcoworker.com` and
-   * `voice-<businessId>.tunnel.newcoworker.com` inside the
-   * `newcoworker.com` zone. Without Total TLS, Cloudflare's edge has no
-   * matching certificate for those SNI names and the TLS handshake fails
-   * with `sslv3 alert handshake failure` (alert 40), which is exactly
-   * the symptom that left the brianlanefanmail tenant tunnel
-   * unreachable from the dashboard chat after every internal probe
-   * passed. Total TLS lazily issues a Let's Encrypt cert per hostname as
-   * soon as a CNAME for it is created in the zone — exactly when our
-   * `ensureCnameRecord` runs below.
+   * IMPORTANT: this is an OPTIONAL paid-plan opt-in, not a default
+   * dependency. Our hostname pattern is `<businessId>.<zoneName>` —
+   * ONE level under the zone — which Universal SSL covers automatically
+   * on every plan including Free. Total TLS is only required if an
+   * operator chooses to nest tunnel hostnames deeper (e.g. by setting
+   * `CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX=tunnel.newcoworker.com`, which
+   * produces `<biz>.tunnel.<root>` — two levels deep — and would hit
+   * `sslv3 alert handshake failure` without per-hostname certs).
+   *
+   * Total TLS itself ships as part of Advanced Certificate Manager
+   * ($10/mo/zone on Pro+) and lazily issues a Let's Encrypt cert per
+   * hostname as soon as a CNAME for it is created in the zone — exactly
+   * when our `ensureCnameRecord` runs below.
    *
    * The PATCH is idempotent: re-enabling on a zone that already has it
-   * on returns 200 with the same body. A 4xx here is logged and
-   * swallowed because cert provisioning is independent of tunnel
-   * functionality on the data plane (the tunnel still proxies; only TLS
-   * to the edge is broken), and we never want a cert-API hiccup to
-   * abort an otherwise-successful provision.
+   * on returns 200 with the same body. A 4xx here (including the
+   * Free-plan `403 / requires Advanced Certificate Manager` response)
+   * is logged and swallowed because cert provisioning is independent
+   * of tunnel functionality on the data plane (the tunnel still
+   * proxies; only edge TLS would be affected), and we never want a
+   * cert-API hiccup to abort an otherwise-successful provision.
    */
   async function ensureZoneTotalTls(zoneId: string, businessId: string): Promise<void> {
     try {
@@ -358,13 +366,12 @@ export function createCloudflareTunnelProvisioner(
       role: "voice"
     });
 
-    // 5. Enable Total TLS on the zone so Cloudflare lazily issues a Let's
-    //    Encrypt cert for both freshly-CNAMEd hostnames. Universal SSL only
-    //    covers one wildcard level, which leaves multi-level tunnel hosts
-    //    (e.g. `<biz>.tunnel.newcoworker.com` inside the
-    //    `newcoworker.com` zone) without a matching cert and causes the
-    //    `sslv3 alert handshake failure` (alert 40) we saw on
-    //    brianlanefanmail's first tenant. Idempotent + non-fatal — see
+    // 5. Best-effort Total TLS opt-in. With our default one-wildcard-level
+    //    hostname pattern (`<biz>.<zone>`), free Universal SSL already
+    //    covers both freshly-CNAMEd hostnames, so this is a no-op on Free.
+    //    Operators who deliberately nest hostnames deeper via
+    //    `CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX` need this to succeed (paid
+    //    plan + ACM required). Idempotent + non-fatal — see
     //    `ensureZoneTotalTls` for why we swallow API errors here.
     await ensureZoneTotalTls(zoneId, businessId);
 
@@ -399,7 +406,7 @@ export function cloudflareTunnelProvisionerFromEnv(
     // dashboard work.
     sslApiToken: blankToUndefined(env.CLOUDFLARE_SSL_API_TOKEN),
     accountId,
-    zoneName: blankToUndefined(env.CLOUDFLARE_TUNNEL_ZONE) ?? "tunnel.newcoworker.com",
+    zoneName: blankToUndefined(env.CLOUDFLARE_TUNNEL_ZONE) ?? "newcoworker.com",
     serviceUrl: blankToUndefined(env.CLOUDFLARE_TUNNEL_SERVICE_URL) ?? "http://localhost:3000",
     zoneId: blankToUndefined(env.CLOUDFLARE_ZONE_ID),
     hostnameSuffix: blankToUndefined(env.CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX),

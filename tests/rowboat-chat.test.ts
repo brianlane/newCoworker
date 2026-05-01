@@ -27,7 +27,7 @@ afterEach(() => {
 describe("buildRowboatChatUrl", () => {
   it("substitutes both {businessId} and {projectId} using the default template", () => {
     expect(buildRowboatChatUrl(BIZ, PROJ)).toBe(
-      `https://${BIZ}.tunnel.newcoworker.com/api/v1/${PROJ}/chat`
+      `https://${BIZ}.newcoworker.com/api/v1/${PROJ}/chat`
     );
   });
 
@@ -145,7 +145,7 @@ describe("callRowboatChat", () => {
     expect(out.state).toEqual({ step: 1 });
 
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(`https://${BIZ}.tunnel.newcoworker.com/api/v1/${PROJ}/chat`);
+    expect(url).toBe(`https://${BIZ}.newcoworker.com/api/v1/${PROJ}/chat`);
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer B");
     const body = JSON.parse(init.body as string) as Record<string, unknown>;
     expect(body.stream).toBe(false);
