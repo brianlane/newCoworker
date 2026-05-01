@@ -63,6 +63,16 @@ apt-get "${APT_LOCK_OPTS[@]}" install -y -qq ufw fail2ban unattended-upgrades cu
 ufw default deny incoming
 ufw default allow outgoing
 ufw allow 22/tcp   # SSH (orchestrator deploy + operator escape hatch)
+# Allow the Docker bridge subnet to reach Ollama on 11434. Without this,
+# the dockerised llm-router (which resolves Ollama via the
+# `host.docker.internal=host-gateway` extra_host) gets dropped at the
+# host's INPUT chain because UFW's default-deny applies to traffic
+# arriving from any interface — including the docker0 bridge. Symptom
+# without this rule: rowboat-app → llm-router → 502 "fetch failed
+# upstream: ollama" on every chat turn even though Ollama is healthy on
+# the host. /16 covers both the default Docker bridge subnet (172.17/16)
+# and the customised one configured by daemon.json (172.16/16).
+ufw allow from 172.16.0.0/12 to any port 11434 comment 'docker bridge -> ollama'
 # Close legacy rules from older bootstraps (idempotent; UFW ignores absent
 # rules). Keeps state in sync with intent on re-bootstrapped hosts that
 # were provisioned before this tightening landed.
@@ -181,7 +191,11 @@ if [[ "$TIER" == "starter" ]]; then
 Environment="OLLAMA_NUM_PARALLEL=1"
 Environment="OLLAMA_MAX_LOADED_MODELS=1"
 Environment="OMP_NUM_THREADS=2"
-Environment="OLLAMA_HOST=127.0.0.1:11434"
+# Bind to all interfaces so the dockerised llm-router can reach Ollama via the
+# `host.docker.internal` extra_host (resolves to the docker bridge IP). UFW's
+# default-deny on the public interface still blocks external 11434 access;
+# only the loopback + docker bridge paths are reachable.
+Environment="OLLAMA_HOST=0.0.0.0:11434"
 # TurboQuant KV cache compression — ACTIVE: quantizes KV cache to 4-bit,
 # reducing active memory per conversation by ~75% (critical for 8GB KVM 2).
 # OLLAMA_KV_CACHE_TYPE is a live Ollama env var (supported since Ollama 0.3+).
@@ -202,7 +216,11 @@ else
 Environment="OLLAMA_NUM_PARALLEL=3"
 Environment="OLLAMA_MAX_LOADED_MODELS=2"
 Environment="OMP_NUM_THREADS=8"
-Environment="OLLAMA_HOST=127.0.0.1:11434"
+# Bind to all interfaces so the dockerised llm-router can reach Ollama via the
+# `host.docker.internal` extra_host (resolves to the docker bridge IP). UFW's
+# default-deny on the public interface still blocks external 11434 access;
+# only the loopback + docker bridge paths are reachable.
+Environment="OLLAMA_HOST=0.0.0.0:11434"
 # TurboQuant KV cache — ACTIVE: reduces KV cache memory ~75% (beneficial on KVM 8 too)
 Environment="OLLAMA_KV_CACHE_TYPE=q4_0"
 # Flash Attention — ACTIVE
