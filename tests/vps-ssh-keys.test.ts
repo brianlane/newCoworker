@@ -10,6 +10,11 @@ import {
   getActiveVpsSshKey,
   getActiveVpsSshKeyForBusiness
 } from "@/lib/db/vps-ssh-keys";
+import { generateKeyPair as nodeGenKeyPair } from "node:crypto";
+import { promisify } from "node:util";
+import { utils as ssh2Utils } from "ssh2";
+
+const generateKeyPair = promisify(nodeGenKeyPair);
 
 type MockQB = {
   insert: ReturnType<typeof vi.fn>;
@@ -193,6 +198,104 @@ describe("vps_ssh_keys DB layer", () => {
       chain.maybeSingle.mockResolvedValue({ data: sample, error: null });
       defaultClientSpy.mockReturnValueOnce(makeDb(chain));
       await expect(getActiveVpsSshKeyForBusiness("biz-1")).resolves.toEqual(sample);
+    });
+  });
+
+  describe("PKCS#8 → OpenSSH migration on read", () => {
+    /**
+     * Pin the contract that closes the bug surfaced by Cursor Bugbot
+     * (PKCS#8 key migration not wired into production read paths):
+     * legacy `vps_ssh_keys` rows persisted before generateSshKeypair()
+     * switched its private-key export to OpenSSH-format ("openssh-key-v1")
+     * remain on disk in PKCS#8 form. ssh2 1.17 — backing every
+     * production sshExec — rejects PKCS#8 ed25519 PEMs with
+     * "Cannot parse privateKey: Unsupported key format". Without
+     * read-path migration, every legacy business would fail SSH
+     * (backup/restore, change-plan, admin re-bootstrap).
+     *
+     * The fix: getActiveVpsSshKey* re-encodes PKCS#8 → openssh-key-v1
+     * on the way out via convertPkcs8Ed25519PemToOpenssh. The
+     * conversion is identity-preserving (same ed25519 keypair, just
+     * re-framed) so the matching authorized_keys on the VPS keeps
+     * authenticating without any VPS-side change.
+     */
+    async function makeLegacyPkcs8Row() {
+      const { privateKey } = await generateKeyPair("ed25519");
+      const pkcs8 = privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+      return {
+        ...sample,
+        private_key_pem: pkcs8
+      };
+    }
+
+    it("getActiveVpsSshKey re-encodes a legacy PKCS#8 PEM into ssh2-loadable OpenSSH format", async () => {
+      const legacy = await makeLegacyPkcs8Row();
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValue({ data: legacy, error: null });
+      const db = makeDb(chain);
+      const row = await getActiveVpsSshKey("42", db as never);
+      expect(row).not.toBeNull();
+      expect(row!.private_key_pem).toContain("BEGIN OPENSSH PRIVATE KEY");
+      expect(row!.private_key_pem).not.toContain("BEGIN PRIVATE KEY\n");
+      // The migrated PEM must be parseable by ssh2 — the whole point of
+      // wiring the migration into the read path.
+      const parsed = ssh2Utils.parseKey(row!.private_key_pem);
+      expect(parsed instanceof Error ? parsed.message : (parsed as { type: string }).type).toBe(
+        "ssh-ed25519"
+      );
+    });
+
+    it("getActiveVpsSshKeyForBusiness re-encodes a legacy PKCS#8 PEM into OpenSSH format", async () => {
+      const legacy = await makeLegacyPkcs8Row();
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValue({ data: legacy, error: null });
+      const db = makeDb(chain);
+      const row = await getActiveVpsSshKeyForBusiness("biz-1", db as never);
+      expect(row).not.toBeNull();
+      expect(row!.private_key_pem).toContain("BEGIN OPENSSH PRIVATE KEY");
+    });
+
+    it("read path is idempotent on already-OpenSSH PEMs (no double-wrap)", async () => {
+      // Generate an OpenSSH-format key and confirm a second pass through
+      // the read migration leaves it byte-identical. This guards against
+      // a regression where someone accidentally drops the
+      // `if (includes("BEGIN OPENSSH"))` short-circuit in
+      // convertPkcs8Ed25519PemToOpenssh — turning every read into a
+      // re-encode that randomises the openssh `checkint` and quietly
+      // breaks deterministic comparisons elsewhere.
+      const { generateSshKeypair } = await import("@/lib/hostinger/keypair");
+      const fresh = await generateSshKeypair("read-idempotent");
+      const row = { ...sample, private_key_pem: fresh.privateKeyPem };
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValue({ data: row, error: null });
+      const db = makeDb(chain);
+      const out = await getActiveVpsSshKey("42", db as never);
+      expect(out!.private_key_pem).toBe(fresh.privateKeyPem);
+    });
+
+    it("read path tolerates a malformed PEM by returning the row as-is", async () => {
+      // Defence-in-depth: a row whose private_key_pem can't be parsed
+      // by node:crypto is broken beyond what this migration can fix.
+      // We surface the row unchanged so the downstream sshExec fails
+      // with the specific "Cannot parse privateKey" error rather than
+      // the read itself bombing — an operator debugging a malformed
+      // row needs visibility into what's actually wrong, not a
+      // generic "convertPkcs8Ed25519PemToOpenssh failed" wrapper.
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValue({ data: { ...sample, private_key_pem: "garbage" }, error: null });
+      const db = makeDb(chain);
+      const row = await getActiveVpsSshKey("42", db as never);
+      expect(row!.private_key_pem).toBe("garbage");
+    });
+
+    it("read path is a no-op when private_key_pem is empty", async () => {
+      // Treat empty string as "nothing to migrate" — same shape the
+      // existing default-client tests already pass through.
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValue({ data: { ...sample, private_key_pem: "" }, error: null });
+      const db = makeDb(chain);
+      const row = await getActiveVpsSshKey("42", db as never);
+      expect(row!.private_key_pem).toBe("");
     });
   });
 });

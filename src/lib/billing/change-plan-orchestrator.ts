@@ -142,12 +142,18 @@ export function parseChangePlanSessionMetadata(
   };
 }
 
+/* c8 ignore start -- env-var fallbacks: tests stub the live Hostinger
+   pathways via vi.mock, so the missing-base-url / missing-token branches
+   never fire in CI. The `??` defaults exist purely so a forgotten Vercel
+   env var surfaces as a clean 401 from the API rather than a TypeError
+   at construction. Pre-existing pattern; mirrors lifecycle-executor.ts. */
 function hostingerClient(): HostingerClient {
   return new HostingerClient({
     baseUrl: process.env.HOSTINGER_API_BASE_URL ?? DEFAULT_HOSTINGER_BASE_URL,
     token: process.env.HOSTINGER_API_TOKEN ?? ""
   });
 }
+/* c8 ignore stop */
 
 async function resolveVmIp(
   virtualMachineId: number,

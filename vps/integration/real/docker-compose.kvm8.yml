@@ -60,7 +60,10 @@ services:
 
   rowboat:
     build:
-      context: https://github.com/rowboatlabs/rowboat.git#f7e6f783baa98a929880ce1f537481bc7d4f3415:apps/rowboat
+      # Pinned to the brianlane/rowboat fork to mirror prod bootstrap.sh —
+      # see vps/scripts/bootstrap.sh for the rationale. Same SHA stamped in
+      # vps/integration/real/rowboat-git-ref.
+      context: https://github.com/brianlane/rowboat.git#f7e6f783baa98a929880ce1f537481bc7d4f3415:apps/rowboat
       dockerfile: Dockerfile
     image: rowboat-integration-web:local
     restart: "no"
@@ -101,7 +104,7 @@ services:
 
   jobs-worker:
     build:
-      context: https://github.com/rowboatlabs/rowboat.git#f7e6f783baa98a929880ce1f537481bc7d4f3415:apps/rowboat
+      context: https://github.com/brianlane/rowboat.git#f7e6f783baa98a929880ce1f537481bc7d4f3415:apps/rowboat
       dockerfile: scripts.Dockerfile
     image: rowboat-integration-jobs:local
     restart: "no"

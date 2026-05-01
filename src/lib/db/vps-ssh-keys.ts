@@ -1,14 +1,25 @@
 /**
  * Persistence for per-VPS SSH keypairs.
  *
- * ⚠️ Every row here contains a PLAINTEXT PKCS#8 private key. Reads go through
- * the service role only (see the migration in
+ * ⚠️ Every row here contains a PLAINTEXT private key. Reads go through the
+ * service role only (see the migration in
  * `supabase/migrations/20260423000000_vps_ssh_keys.sql`). Never expose the
- * private_key_pem column through a PostgREST view, RPC, or client-side read.
+ * `private_key_pem` column through a PostgREST view, RPC, or client-side read.
+ *
+ * On-the-fly format migration: rows persisted before {@link generateSshKeypair}
+ * switched to OpenSSH-format export contain unencrypted PKCS#8 ed25519
+ * PEMs. `ssh2` (the library backing `sshExec`) can't parse PKCS#8, so we
+ * upgrade the wire format on every read via {@link migrateRow} →
+ * {@link convertPkcs8Ed25519PemToOpenssh}. The conversion is idempotent
+ * and identity-preserving (same keypair, just re-framed), so the matching
+ * public key on the VPS's `~/.ssh/authorized_keys` continues to
+ * authenticate. Fresh rows pay zero cost (the migration short-circuits
+ * on already-OpenSSH PEMs).
  *
  * Access pattern:
  *  - Orchestrator writes once per VPS provision (via {@link insertVpsSshKey}).
  *  - Orchestrator reads to re-SSH for redeploys (via {@link getActiveVpsSshKey}).
+ *  - Lifecycle data-migration reads for backup/restore.
  *  - Admin endpoint reads for break-glass console access.
  *
  * Rotation (stamping `rotated_at` on a predecessor row after a replacement is
@@ -21,6 +32,7 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { convertPkcs8Ed25519PemToOpenssh } from "@/lib/hostinger/keypair";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -36,6 +48,50 @@ export type VpsSshKeyRow = {
   created_at: string;
   rotated_at: string | null;
 };
+
+/**
+ * Apply the PKCS#8 → OpenSSH-format migration on every key read.
+ *
+ * Why on every read (vs. a one-shot table migration):
+ *   * `vps_ssh_keys` rows persisted before the OpenSSH-format export
+ *     switch are unencrypted PKCS#8 ed25519 PEMs, which `node:crypto`
+ *     and `ssh -i` can both parse — but `ssh2` 1.17 (the library
+ *     backing `sshExec`) cannot, returning
+ *     `Cannot parse privateKey: Unsupported key format`.
+ *   * Any production read path that hands `private_key_pem` to
+ *     `sshExec` therefore fails on legacy rows. That includes the
+ *     lifecycle backup/restore (`data-migration.ts`), change-plan,
+ *     and admin re-bootstraps.
+ *   * The conversion is idempotent (`convertPkcs8Ed25519PemToOpenssh`
+ *     short-circuits when given an already-OpenSSH PEM), so applying
+ *     it on every read is safe — fresh rows pay zero cost.
+ *   * Re-encoding is identity-preserving (only the wire format
+ *     changes; the underlying ed25519 keypair is unchanged), so the
+ *     matching public key on the VPS's `~/.ssh/authorized_keys`
+ *     continues to authenticate without any VPS-side update.
+ */
+function migrateRow(row: VpsSshKeyRow | null): VpsSshKeyRow | null {
+  if (!row) return null;
+  if (typeof row.private_key_pem !== "string" || row.private_key_pem.length === 0) {
+    return row;
+  }
+  try {
+    return {
+      ...row,
+      private_key_pem: convertPkcs8Ed25519PemToOpenssh(row.private_key_pem)
+    };
+  } catch {
+    // Don't fail the entire read on a malformed PEM. A row whose
+    // private_key_pem can't be parsed by node:crypto AT ALL is broken
+    // beyond what this migration can fix; surface the original row
+    // and let the downstream `sshExec` fail with the more-specific
+    // "Cannot parse privateKey" error so operators see what's wrong.
+    // This branch also lets test fixtures pass placeholder strings
+    // ("PEM", "stub-pem") without forcing every test to hand-roll a
+    // real ed25519 PEM.
+    return row;
+  }
+}
 
 export type InsertVpsSshKeyInput = {
   business_id: string;
@@ -98,7 +154,7 @@ export async function getActiveVpsSshKey(
     .maybeSingle();
 
   if (error) throw new Error(`getActiveVpsSshKey: ${error.message}`);
-  return (data as VpsSshKeyRow | null) ?? null;
+  return migrateRow((data as VpsSshKeyRow | null) ?? null);
 }
 
 export async function getActiveVpsSshKeyForBusiness(
@@ -116,5 +172,5 @@ export async function getActiveVpsSshKeyForBusiness(
     .maybeSingle();
 
   if (error) throw new Error(`getActiveVpsSshKeyForBusiness: ${error.message}`);
-  return (data as VpsSshKeyRow | null) ?? null;
+  return migrateRow((data as VpsSshKeyRow | null) ?? null);
 }

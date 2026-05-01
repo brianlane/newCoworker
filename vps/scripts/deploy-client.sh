@@ -207,6 +207,40 @@ ROWBOAT_GATEWAY_TOKEN=${ROWBOAT_GATEWAY_TOKEN}
 BUSINESS_ID=${BUSINESS_ID}
 TIER=${TIER}
 
+# Upstream-required Rowboat keys.
+#
+# The pinned Rowboat fork (apps/rowboat) reads these at boot and crashes
+# when any are missing — even when the corresponding feature is disabled.
+# Source of truth for the list: vps/integration/real/fixtures/rowboat.env.kvm8.integration
+# (kept in lockstep with the pinned upstream SHA).
+#
+# We deliberately keep auth + agents-api + copilot-api in the "test stub"
+# state because:
+#   * USE_AUTH=false bypasses Auth0 entirely (auth0 keys are placeholders).
+#   * AGENTS_API / COPILOT_API run inside Rowboat itself; the *_URL=
+#     127.0.0.1:9 placeholder keeps the boot-time validator happy without
+#     spinning up extra services we don't use on the dispatcher path.
+#   * USE_RAG=false disables qdrant; QDRANT_URL is set so retries don't hit
+#     a JSON-parse error on the fallback path.
+NODE_ENV=production
+PORT=3000
+MONGODB_CONNECTION_STRING=mongodb://mongo:27017/rowboat
+REDIS_URL=redis://redis:6379
+OPENAI_API_KEY=sk-deploy-placeholder
+USE_AUTH=false
+AUTH0_BASE_URL=http://127.0.0.1:3000
+AUTH0_SECRET=test_secret
+AUTH0_ISSUER_BASE_URL=https://test.invalid
+AUTH0_CLIENT_ID=test
+AUTH0_CLIENT_SECRET=test
+AGENTS_API_URL=http://127.0.0.1:9
+AGENTS_API_KEY=test
+COPILOT_API_URL=http://127.0.0.1:9
+COPILOT_API_KEY=test
+USE_RAG=false
+QDRANT_URL=http://qdrant:6333
+QDRANT_API_KEY=
+
 # LLM provider routing — Rowboat talks to the llm-router sidecar (same
 # docker-compose network) which forwards to Ollama for dispatcher (SMS)
 # and Gemini for voice_task (voice). The llm-router service uses its
@@ -326,9 +360,20 @@ else
 fi
 
 # ------------------------------------------------------------------
-# 3. Apply Rowboat stack (recreate if compose changed; drop orphan ollama from older layouts)
-# ------------------------------------------------------------------
-docker compose -f /opt/rowboat/docker-compose.yml up -d --remove-orphans || true
+# 3. Apply Rowboat stack.
+#
+# `--force-recreate` is mandatory: without it, `docker compose up` keeps
+# the existing container alive when ONLY the env_file changed (compose
+# only auto-recreates when image / yaml-level config diff). On a tenant
+# re-deploy that rotates secrets (ROWBOAT_GATEWAY_TOKEN,
+# STREAM_URL_SIGNING_SECRET) or adds a previously-missing key (the
+# late-2025 MONGODB_CONNECTION_STRING / REDIS_URL / AUTH0_* additions),
+# the running container would silently fall back to its in-image
+# defaults and crash-loop on Redis ECONNREFUSED 127.0.0.1:6379.
+#
+# `--remove-orphans` drops the legacy `ollama` compose service from
+# pre-2026-04 layouts that ran ollama inside the same compose project.
+docker compose -f /opt/rowboat/docker-compose.yml up -d --build --force-recreate --remove-orphans || true
 log "Rowboat stack updated."
 
 # Bands align with integration ordering: stack up → HTTP readiness → tunnel → Supabase patch (see vps/integration/README.md).
@@ -341,13 +386,163 @@ else
 fi
 
 # ------------------------------------------------------------------
+# 3b. Seed the per-tenant Rowboat project + api_key
+#
+# Rowboat does not expose a public REST API for project creation — projects
+# live as documents in the bundled MongoDB. We use the same pattern the
+# integration tests use (see tests/integration/kvm-rowboat/mongo-seed.ts):
+# stage a mongosh script, copy it into the mongo container, and run it.
+#
+# Why this is mandatory: /api/dashboard/chat reads
+# `business_configs.rowboat_project_id` and POSTs to
+# `https://<biz>.tunnel.newcoworker.com/api/v1/<projectId>/chat`. Rowboat
+# rejects unknown projectIds with HTTP 404, which the dashboard surfaces
+# as "your coworker's chat service isn't ready yet" — even when every
+# container is healthy. Seeding here closes that gap on the deploy path.
+#
+# Schema notes:
+#   * `_id` is the projectId. We use BUSINESS_ID directly so the same
+#     identifier flows through Supabase → tunnel hostname → Rowboat URL.
+#   * `api_keys` row uses `key = ROWBOAT_GATEWAY_TOKEN` so the bearer
+#     the platform Next.js app sends from /api/dashboard/chat
+#     authenticates one-shot. Same shared bearer the voice-bridge uses.
+#   * `liveWorkflow.agents[0]` is a "conversation" agent populated from
+#     the tenant's soul.md / identity.md / memory.md. The platform's
+#     chat copy expects a `user_facing` agent; mirror upstream.
+#   * Idempotent: deleteMany then insertOne, matched on _id / projectId.
+# ------------------------------------------------------------------
+log "Seeding Rowboat project ${BUSINESS_ID}..."
+SEED_TMP=$(mktemp /tmp/rowboat-seed.XXXXXX.js)
+chmod 600 "${SEED_TMP}"
+
+# Build the workflow JSON safely with jq so embedded quotes / newlines in
+# the .md vault files don't break mongosh parsing. Empty md files collapse
+# to empty strings, which Rowboat tolerates — the agent just runs with
+# whatever instructions are non-empty.
+ROWBOAT_INSTRUCTIONS=$(jq -nRs --arg soul "$SOUL_MD" --arg id "$IDENTITY_MD" --arg mem "$MEMORY_MD" --arg web "$WEBSITE_MD" '
+  ([$id, $soul, $web, $mem] | map(select(length > 0)) | join("\n\n"))
+' || echo "")
+ROWBOAT_INSTRUCTIONS=${ROWBOAT_INSTRUCTIONS:-"You are a professional AI coworker. Reply concisely and helpfully."}
+
+# Write the seed script. We embed the project + key docs as Mongo extended
+# JSON so booleans, dates, and special chars round-trip cleanly.
+SEED_NOW=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+WORKFLOW_JSON=$(jq -nc \
+  --arg name "${BUSINESS_NAME:-AI Coworker}" \
+  --arg instructions "${ROWBOAT_INSTRUCTIONS}" \
+  --arg model "${OLLAMA_MODEL}" \
+  --arg now "${SEED_NOW}" '
+{
+  agents: [{
+    name: "Coworker",
+    type: "conversation",
+    description: "Per-tenant AI coworker",
+    disabled: false,
+    instructions: $instructions,
+    outputVisibility: "user_facing",
+    controlType: "retain",
+    model: $model,
+    ragK: 3,
+    ragReturnType: "chunks"
+  }],
+  prompts: [{
+    name: "baseline",
+    type: "base_prompt",
+    prompt: "Owner-facing assistant for \($name)."
+  }],
+  tools: [],
+  startAgent: "Coworker",
+  lastUpdatedAt: $now
+}')
+
+cat > "${SEED_TMP}" <<MONGOSH_EOF
+const projectId = "${BUSINESS_ID}";
+const apiKey = "${ROWBOAT_GATEWAY_TOKEN}";
+const workflow = ${WORKFLOW_JSON};
+const now = "${SEED_NOW}";
+db.projects.deleteMany({ _id: projectId });
+db.projects.insertOne({
+  _id: projectId,
+  name: "${BUSINESS_NAME:-AI Coworker}",
+  createdAt: now,
+  createdByUserId: "newcoworker-orchestrator",
+  secret: "deploy-${BUSINESS_ID}",
+  draftWorkflow: workflow,
+  liveWorkflow: workflow
+});
+db.api_keys.deleteMany({ projectId: projectId });
+db.api_keys.insertOne({ projectId: projectId, key: apiKey, createdAt: now });
+print(JSON.stringify({
+  projects: db.projects.countDocuments({ _id: projectId }),
+  keys: db.api_keys.countDocuments({ projectId: projectId })
+}));
+MONGOSH_EOF
+
+# Wait up to ~90s for mongo to be reachable. On a cold deploy the
+# `--force-recreate` above just restarted Mongo and it can take 5-15s
+# for it to accept connections.
+seed_mongo_ok=0
+for _ in $(seq 1 30); do
+  if docker compose -f /opt/rowboat/docker-compose.yml exec -T mongo mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok' rowboat 2>/dev/null | grep -q '^1$'; then
+    seed_mongo_ok=1
+    break
+  fi
+  sleep 3
+done
+
+if [[ "${seed_mongo_ok}" == "1" ]]; then
+  if docker compose -f /opt/rowboat/docker-compose.yml cp "${SEED_TMP}" mongo:/tmp/rowboat.seed.js \
+    && docker compose -f /opt/rowboat/docker-compose.yml exec -T mongo mongosh rowboat /tmp/rowboat.seed.js > /tmp/rowboat-seed.out 2>&1; then
+    log "Rowboat project seeded: $(tail -1 /tmp/rowboat-seed.out)"
+    # Persist the projectId on `business_configs` so /api/dashboard/chat
+    # picks it up without a code change. Patch is idempotent (PATCH not
+    # POST) and `prefer=resolution=merge-duplicates` prevents a duplicate-
+    # row error when a previous deploy already wrote the same value.
+    if curl -sf -X PATCH \
+      -H "apikey: ${SUPABASE_SERVICE_KEY}" \
+      -H "Authorization: Bearer ${SUPABASE_SERVICE_KEY}" \
+      -H "Content-Type: application/json" \
+      -H "Prefer: return=minimal" \
+      -d "{\"rowboat_project_id\": \"${BUSINESS_ID}\"}" \
+      "${SUPABASE_URL}/rest/v1/business_configs?business_id=eq.${BUSINESS_ID}" \
+      > /dev/null; then
+      log "business_configs.rowboat_project_id set to ${BUSINESS_ID}"
+      report_progress 80 "rowboat_project_seeded" "Rowboat project + business_configs.rowboat_project_id ready"
+    else
+      log "WARN: failed to PATCH business_configs.rowboat_project_id; chat will 409 until set manually"
+      report_progress 80 "rowboat_project_seeded_no_config" "Rowboat project seeded but business_configs PATCH failed"
+    fi
+  else
+    log "WARN: Rowboat mongo seed script failed: $(tail -3 /tmp/rowboat-seed.out 2>/dev/null || echo '<no output>')"
+  fi
+else
+  log "WARN: rowboat mongo never reached ping=1 within 90s; skipping project seed (chat will 409 until next deploy)"
+fi
+rm -f "${SEED_TMP}" /tmp/rowboat-seed.out
+
+# ------------------------------------------------------------------
 # 4. Set up cloudflared tunnel
 # ------------------------------------------------------------------
 if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
-  log "Configuring cloudflared tunnel..."
-  cloudflared service install "${CLOUDFLARE_TUNNEL_TOKEN}"
-  systemctl enable cloudflared
-  systemctl start cloudflared
+  if [[ -f /etc/systemd/system/cloudflared.service ]]; then
+    # `cloudflared service install <TOKEN>` refuses to run when the unit
+    # already exists ("cloudflared service is already installed at
+    # /etc/systemd/system/cloudflared.service ... if you are really sure,
+    # you can do `cloudflared service uninstall`"). Re-running deploy on
+    # an already-provisioned VPS used to surface this as a fatal exit
+    # code, masking real downstream failures. Treat re-installs as a
+    # restart instead — the token is encoded into the existing unit and
+    # only changes during a manual rotation, which an operator handles
+    # explicitly via `cloudflared service uninstall && deploy-client.sh`.
+    log "cloudflared service already installed; restarting to pick up any compose changes"
+    systemctl enable cloudflared || true
+    systemctl restart cloudflared || true
+  else
+    log "Configuring cloudflared tunnel..."
+    cloudflared service install "${CLOUDFLARE_TUNNEL_TOKEN}"
+    systemctl enable cloudflared
+    systemctl start cloudflared
+  fi
   log "cloudflared tunnel active."
 else
   log "WARN: No CLOUDFLARE_TUNNEL_TOKEN provided. Tunnel not configured."

@@ -8,9 +8,19 @@
  * Responsibilities (in order):
  *   1. Generate a fresh ed25519 keypair (comment = business id for audit).
  *   2. Upload the public half to Hostinger as a named resource.
- *   3. Ensure a post-install script is registered for first-boot setup.
- *   4. Purchase a VPS (price item `item_id`), passing the setup payload so
- *      the instance ships with our public key + post-install script attached.
+ *   3. Try to register a post-install script via Hostinger's
+ *      `/api/vps/v1/post-install-scripts`. On accounts that already own a
+ *      VPS this returns 200 and we attach `post_install_script_id` to the
+ *      setup payload so cloud-init runs the bootstrap at first boot.
+ *      Brand-new accounts hit `403 [VPS:2000] Unauthorized` here — that's
+ *      expected (chicken-and-egg: you can only register a script after the
+ *      account owns at least one VPS), so we swallow the 403 and let the
+ *      orchestrator's SSH-bootstrap path run the same script content over
+ *      SSH after the VPS reaches `running`. Either path produces the same
+ *      end state because the script is idempotent.
+ *   4. Purchase a VPS (price item `item_id`), passing a setup payload that
+ *      attaches our public key (and the post-install script id if step 3
+ *      succeeded).
  *   5. Poll until the VPS reaches `running` and has a public IPv4.
  *   6. Install Monarx (malware scanner).
  *   7. Persist the private key + metadata in `vps_ssh_keys`.
@@ -71,10 +81,6 @@ export type ProvisionVpsForBusinessInput = {
   dataCenterId?: number;
   /** Hostname assigned to the VPS. Defaults to a deterministic `nc-<biz>` label. */
   hostname?: string;
-  /** Contents of the post-install script (see {@link buildDefaultPostInstallScript}). */
-  postInstallScript: string;
-  /** Optional override: a previously-registered script id (avoids re-uploading). */
-  postInstallScriptId?: number;
   /** Optional Hostinger payment method id. Defaults to account default. */
   paymentMethodId?: number;
   /** Optional promo coupons. */
@@ -83,6 +89,25 @@ export type ProvisionVpsForBusinessInput = {
   pollIntervalMs?: number;
   /** Total time budget to wait for VPS readiness. Default 15 min. */
   readyTimeoutMs?: number;
+  /**
+   * Inline content for the Hostinger post-install script. When provided we
+   * try to register it via `POST /api/vps/v1/post-install-scripts` and
+   * attach the resulting `post_install_script_id` to the setup payload so
+   * it runs at first boot. On 403 (the chicken-and-egg the endpoint hits
+   * for accounts without an existing VPS) we silently fall back to "no
+   * script attached" — the orchestrator's SSH-bootstrap path runs the
+   * same content after the VPS is up.
+   *
+   * When omitted we DO NOT attempt the API call (the orchestrator can
+   * still choose to SSH-bootstrap on its own).
+   */
+  postInstallScript?: string;
+  /**
+   * Optional name for the post-install script resource. Defaults to a
+   * timestamped `newcoworker-<biz>-<ts>` so re-provisions don't collide
+   * with the previous run's resource in Hostinger's panel.
+   */
+  postInstallScriptName?: string;
 };
 
 export type ProvisionVpsForBusinessResult = {
@@ -93,10 +118,16 @@ export type ProvisionVpsForBusinessResult = {
   sshUsername: string;
   /** The row we wrote to `vps_ssh_keys`, including the private key PEM. */
   sshKey: VpsSshKeyRow;
-  /** Id of the post-install script we registered (or reused). */
-  postInstallScriptId: number;
   /** Id of the public key resource we registered. */
   publicKeyId: number;
+  /**
+   * Id of the post-install-script resource we registered, if attaching
+   * succeeded. `null` means either the caller didn't provide a script OR
+   * the API rejected it (403 chicken-and-egg on a brand-new account).
+   * Surfaced to the orchestrator so the SSH-bootstrap fallback can decide
+   * how loudly to log.
+   */
+  postInstallScriptId: number | null;
   /**
    * Hostinger billing subscription id that backs this VPS. Required by the
    * lifecycle engine to cancel the VPS-side billing on user cancel. Pulled
@@ -130,7 +161,7 @@ export type ProvisionVpsDeps = {
 export type ProvisioningPhase =
   | "keypair_generated"
   | "public_key_uploaded"
-  | "post_install_registered"
+  | "post_install_script_registered"
   | "purchase_initiated"
   | "purchase_completed"
   | "vps_running"
@@ -172,26 +203,59 @@ export async function provisionVpsForBusiness(
     keyName
   });
 
-  // 3. Post-install script — reuse when the caller already registered one
-  //    for this business (on a re-provision), otherwise create a new one.
-  let postInstallScriptId: number;
-  if (typeof input.postInstallScriptId === "number") {
-    postInstallScriptId = input.postInstallScriptId;
-  } else {
-    const scriptName = `newcoworker-${input.businessId}`;
-    const registered = await client.createPostInstallScript(scriptName, input.postInstallScript);
-    postInstallScriptId = registered.id;
+  // 3. Try to register a Hostinger post-install script (PIS) so cloud-init
+  //    runs the bootstrap at first boot — saves the orchestrator from
+  //    waiting on sshd to come up before kicking off install. The endpoint
+  //    is famously gated for fresh accounts: `POST /post-install-scripts`
+  //    returns `403 [VPS:2000] Unauthorized` until the account already
+  //    owns at least one VPS (chicken-and-egg). That 403 is expected and
+  //    NOT an error — we degrade to "no script attached" and the
+  //    orchestrator's SSH-bootstrap path runs the same content over SSH
+  //    after the VPS reaches `running`. Both paths converge to the same
+  //    final state because the script is idempotent.
+  let postInstallScriptId: number | null = null;
+  if (input.postInstallScript) {
+    const scriptName =
+      input.postInstallScriptName ??
+      `newcoworker-${input.businessId}-${Date.now().toString(36)}`;
+    try {
+      const created = await client.createPostInstallScript(scriptName, input.postInstallScript);
+      postInstallScriptId = created.id;
+      onProgress?.("post_install_script_registered", {
+        postInstallScriptId,
+        scriptName
+      });
+    } catch (err) {
+      const status = errStatus(err);
+      if (status === 403) {
+        // Expected on brand-new accounts. Log + continue; SSH-bootstrap
+        // will pick up the slack downstream.
+        logger.warn(
+          "Hostinger post-install-scripts attach skipped (account not yet eligible — falling back to SSH-bootstrap)",
+          {
+            businessId: input.businessId,
+            scriptName,
+            status
+          }
+        );
+      } else {
+        throw err;
+      }
+    }
   }
-  onProgress?.("post_install_registered", { postInstallScriptId });
 
   // 4. Purchase the VPS. `setup.public_key_ids` attaches at first boot, so
   //    SSH works immediately once cloud-init finishes — no later attach call.
+  //    `post_install_script_id` is included only when step 3 succeeded; on
+  //    fallback we let the orchestrator do the bootstrap over SSH.
   const setup: VpsSetupRequest = {
     data_center_id: dataCenterId,
     template_id: templateId,
     hostname,
     public_key_ids: [publicKeyResource.id],
-    post_install_script_id: postInstallScriptId,
+    ...(postInstallScriptId !== null
+      ? { post_install_script_id: postInstallScriptId }
+      : {}),
     // Malware scanner is set up via its own endpoint below rather than the
     // setup payload's `install_monarx` flag — the dedicated endpoint returns
     // an Action we can track, whereas setup-embedded install is fire-and-forget.
@@ -204,7 +268,13 @@ export async function provisionVpsForBusiness(
     /* c8 ignore next -- empty-coupons branch is trivial guard */
     ...(input.coupons && input.coupons.length > 0 ? { coupons: input.coupons } : {})
   };
-  onProgress?.("purchase_initiated", { itemId, hostname, dataCenterId, templateId });
+  onProgress?.("purchase_initiated", {
+    itemId,
+    hostname,
+    dataCenterId,
+    templateId,
+    postInstallScriptId
+  });
 
   const order = await client.purchaseVirtualMachine(purchaseReq);
   if (!order.virtual_machines || order.virtual_machines.length === 0) {
@@ -287,34 +357,49 @@ export async function provisionVpsForBusiness(
     publicIp,
     sshUsername: "root",
     sshKey,
-    postInstallScriptId,
     publicKeyId: publicKeyResource.id,
+    postInstallScriptId,
     hostingerBillingSubscriptionId
   };
 }
 
 /**
- * Default post-install script. Runs once, as root, on the VPS's first boot.
+ * Default post-install / SSH-bootstrap script.
  *
- * Responsibilities:
- *  - Install baseline OS dependencies (git, rsync, jq, ufw, fail2ban, python3).
- *    Docker is already present because we purchase the `Ubuntu 24.04 with
- *    Docker` template (id 1121).
- *  - Harden SSH: disable password auth, keep root-with-key (we need it for
- *    orchestrator-side ssh exec).
- *  - Pre-stage the newCoworker repo at /opt/newcoworker-repo so
- *    `deploy-client.sh`'s rsync source is ready on the first orchestrator
- *    SSH exec.
- *  - Basic firewall: allow 22 (SSH) and 443 (HTTPS from Cloudflare tunnel).
- *    We do NOT open 8090 (voice bridge) publicly — the bridge is reached
- *    over the private Cloudflare tunnel.
+ * The same content runs in two places:
+ *   1. As Hostinger's first-boot hook (when {@link provisionVpsForBusiness}
+ *      successfully attaches it via `POST /api/vps/v1/post-install-scripts`).
+ *   2. As an orchestrator-side SSH exec (fallback when the PIS attach 403'd
+ *      on a brand-new account) — see `runOrchestrator` in
+ *      `src/lib/provisioning/orchestrate.ts`.
+ *
+ * Both invocations converge to the same end state because the script is
+ * idempotent: it stages git+curl, clones our repo, installs deploy-client.sh
+ * to /opt/, and then *delegates the heavy lifting to the FULL
+ * `vps/scripts/bootstrap.sh`* in the repo. Keeping the heavy bootstrap in a
+ * tracked file (rather than inlining it here) means changes to system
+ * hardening / Ollama / Rowboat / cloudflared install land on every new VPS
+ * via a normal commit, with no one-off post-install-script churn in
+ * Hostinger's API.
+ *
+ * Hostinger's post-install-script payload is capped at 48KB so this MUST
+ * stay slim — bootstrap.sh on the cloned repo is unbounded.
  */
 export function buildDefaultPostInstallScript(opts?: {
   repoUrl?: string;
   repoRef?: string;
+  /**
+   * Tier passed through to the full bootstrap (`TIER=…` env). Drives ZRAM,
+   * Ollama tuning, and which Rowboat compose tier to render. Defaults to
+   * `standard` — the safe pick for KVM 8 hosts; starter (KVM 2) MUST pass
+   * `tier: "starter"` or ZRAM swap won't be configured and Ollama will
+   * crash-loop on a 3B model with the wrong parallelism settings.
+   */
+  tier?: "starter" | "standard";
 }): string {
   const repoUrl = opts?.repoUrl ?? "https://github.com/brianlane/newCoworker.git";
   const repoRef = opts?.repoRef ?? "main";
+  const tier = opts?.tier ?? "standard";
 
   // Defense-in-depth: reject values that could break out of the bash string
   // even before single-quote escaping runs. `repoUrl` must be an http(s) URL;
@@ -325,56 +410,51 @@ export function buildDefaultPostInstallScript(opts?: {
   // script runs as root on a fresh VPS.
   assertSafeRepoUrl(repoUrl);
   assertSafeRepoRef(repoRef);
+  assertSafeTier(tier);
 
-  // Keep under 48KB (Hostinger hard limit). Idempotent by design so that a
-  // recreate re-runs safely.
   return `#!/bin/bash
-# newCoworker VPS bootstrap
-# This runs ONCE as root on first boot (Hostinger post-install hook).
-# Subsequent orchestrator-side deploys SSH in and run /opt/deploy-client.sh.
+# newCoworker VPS bootstrap (slim loader).
+#
+# Runs as root via either:
+#   * Hostinger's post-install-script hook on first boot, OR
+#   * orchestrator SSH-bootstrap fallback on accounts that aren't yet
+#     PIS-eligible (see src/lib/hostinger/provision.ts header).
+#
+# Both paths are idempotent: re-running this script is a no-op except for a
+# fresh \`git fetch\` + \`bash bootstrap.sh\` (which is itself idempotent).
 set -euo pipefail
 exec > >(tee -a /post_install.log) 2>&1
 echo "[newcoworker] post_install start: $(date -Is)"
 
+# Race protection for the dual-path bootstrap (Hostinger PIS + orchestrator
+# SSH fallback). When PIS attaches successfully, Hostinger's cloud-init
+# executes THIS script via its \`runcmd\` module during first-boot. We
+# deliberately do NOT call \`cloud-init status --wait\` here:
+#
+#   * Under PIS: \`runcmd\` is part of cloud-init's stages. \`cloud-init
+#     status --wait\` would block waiting for cloud-init to signal \`done\`,
+#     but cloud-init can't reach \`done\` until \`runcmd\` (i.e. this
+#     script) returns — a hard self-deadlock the \`|| true\` guard cannot
+#     cover (it only catches non-zero exits, not infinite hangs).
+#   * Under SSH: the orchestrator's \`buildBootstrapSshCommand\` already
+#     prefixes \`cloud-init status --wait\` BEFORE invoking this script,
+#     so first-boot is already complete by the time we get here. A second
+#     wait would be redundant.
+#
+# Defence-in-depth instead: \`-o DPkg::Lock::Timeout=300\` tells apt to
+# retry-with-backoff for up to 5 minutes when ANY other apt
+# (cloud-init's apt module, unattended-upgrades, etc.) holds the lock,
+# instead of bailing immediately under \`set -euo pipefail\`. Safe under
+# both paths.
+
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
-apt-get install -y --no-install-recommends git rsync jq ufw fail2ban python3 curl ca-certificates
+apt-get -y -o DPkg::Lock::Timeout=300 update
+apt-get -y -o DPkg::Lock::Timeout=300 install --no-install-recommends git curl ca-certificates
 
-# Docker is pre-installed by template 1121; verify.
-if ! command -v docker >/dev/null 2>&1; then
-  echo "[newcoworker] docker missing — installing via get.docker.com"
-  curl -fsSL https://get.docker.com | sh
-fi
-systemctl enable --now docker || true
-if ! command -v docker-compose >/dev/null 2>&1; then
-  # We rely on the plugin, not the standalone binary; verify 'docker compose'.
-  docker compose version >/dev/null 2>&1 || apt-get install -y docker-compose-plugin || true
-fi
-
-# Firewall: deny-by-default, allow SSH only. Cloudflare Tunnel (cloudflared)
-# dials outbound from the VPS, so no inbound ports are needed for public
-# traffic. The voice bridge (8090), Rowboat (3000), and everything else
-# listen on 127.0.0.1 and are reached exclusively through the tunnel.
-ufw --force reset
-ufw default deny incoming
-ufw default allow outgoing
-ufw allow 22/tcp
-ufw --force enable || true
-systemctl enable --now fail2ban || true
-
-# SSH hardening: key-auth only. We generated a fresh per-VPS keypair and it's
-# already attached via Hostinger setup's public_key_ids — disabling password
-# auth is safe here.
-sed -ri 's/^#?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-sed -ri 's/^#?ChallengeResponseAuthentication.*/ChallengeResponseAuthentication no/' /etc/ssh/sshd_config
-# Keep 'PermitRootLogin prohibit-password' — Hostinger's default, and we need
-# root+key for orchestrator exec. Do NOT flip to 'no' or deploys break.
-systemctl reload ssh || systemctl reload sshd || true
-
-# Stage the repo so deploy-client.sh's VOICE_BRIDGE_SRC rsync works.
-# Values are emitted in single quotes so bash performs NO interpolation on
-# them — this neutralises \`$(...)\`, backticks, and \\ even if the JS-side
-# validators ever regress. Do not switch these back to double quotes.
+# Stage the newCoworker repo. Values are emitted in single quotes so bash
+# performs NO interpolation on them — this neutralises \`$(...)\`, backticks,
+# and \\ even if the JS-side validators ever regress. Do not switch these
+# back to double quotes.
 REPO_URL=${bashSingleQuote(repoUrl)}
 REPO_REF=${bashSingleQuote(repoRef)}
 REPO_PATH="/opt/newcoworker-repo"
@@ -384,13 +464,22 @@ if [[ -d "$REPO_PATH/.git" ]]; then
   git -C "$REPO_PATH" checkout -B "$REPO_REF" "origin/$REPO_REF" || true
 else
   git clone --depth=1 --branch "$REPO_REF" "$REPO_URL" "$REPO_PATH" || \\
-    echo "[newcoworker] WARN: repo clone failed — orchestrator deploy must re-sync"
+    { echo "[newcoworker] FATAL: repo clone failed — bootstrap cannot proceed"; exit 1; }
 fi
 
-# Copy the deploy script to /opt so orchestrator SSH exec finds it there.
+# Install deploy-client.sh into /opt so the orchestrator's SSH exec finds it
+# at a stable path. Done BEFORE running the full bootstrap so a partial
+# bootstrap failure still leaves /opt/deploy-client.sh in place — letting
+# operators retry deploy-client.sh independently.
 if [[ -f "$REPO_PATH/vps/scripts/deploy-client.sh" ]]; then
   install -m 0755 "$REPO_PATH/vps/scripts/deploy-client.sh" /opt/deploy-client.sh
 fi
+
+# Hand off to the full bootstrap (system hardening, ZRAM, Docker, Ollama,
+# Rowboat compose, cloudflared). \`TIER\` is locked at script-generation
+# time so a future bug in the orchestrator can't accidentally swap a KVM 2
+# host into the standard-tier compose (which would OOM-kill it).
+TIER=${bashSingleQuote(tier)} bash "$REPO_PATH/vps/scripts/bootstrap.sh"
 
 echo "[newcoworker] post_install complete: $(date -Is)"
 `;
@@ -449,6 +538,20 @@ function assertSafeRepoRef(ref: string): void {
   }
 }
 
+function assertSafeTier(tier: string): asserts tier is "starter" | "standard" {
+  // Defense-in-depth: bootstrap.sh switches behavior on $TIER and the value
+  // is interpolated into the slim loader's `TIER=…` env assignment. The
+  // single-quote emitter neutralises shell metachars, but a bogus tier
+  // string would still flow through to bootstrap.sh and silently mis-tier
+  // the VPS (e.g. configuring ZRAM only when TIER=='starter'). Whitelist
+  // the two values we support.
+  if (tier !== "starter" && tier !== "standard") {
+    throw new Error(
+      `buildDefaultPostInstallScript: tier must be 'starter' or 'standard', got '${tier}'`
+    );
+  }
+}
+
 async function waitForVpsReady(
   client: HostingerClient,
   virtualMachineId: number,
@@ -502,6 +605,21 @@ function errToMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 /* c8 ignore stop */
+
+/**
+ * Pull the HTTP status off a thrown error WITHOUT importing the
+ * Hostinger client class (avoids an import cycle with the test harness
+ * that injects a mock client). Mirrors the `name === "HostingerApiError"`
+ * + numeric-status discriminator used in `src/lib/provisioning/orchestrate.ts`'s
+ * `describeProvisioningError`.
+ */
+function errStatus(err: unknown): number | undefined {
+  if (err instanceof Error && err.name === "HostingerApiError") {
+    const e = err as Error & { status?: unknown };
+    return typeof e.status === "number" ? e.status : undefined;
+  }
+  return undefined;
+}
 
 /**
  * Lookup wrapper around {@link CatalogItem} → price-item id so ops can audit

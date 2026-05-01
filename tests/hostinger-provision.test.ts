@@ -14,7 +14,14 @@ function makeClientStub<T extends Record<string, unknown> = Record<string, never
 ) {
   return {
     createPublicKey: vi.fn().mockResolvedValue({ id: 9, name: "k", key: "ssh-ed25519 AAA k" }),
-    createPostInstallScript: vi.fn().mockResolvedValue({ id: 11, name: "s", content: "" }),
+    // Hostinger post-install-script registration. Default success returns a
+    // resource id; tests that exercise the 403 chicken-and-egg fallback
+    // override this with a rejection. All tests that DON'T pass an
+    // `input.postInstallScript` won't hit this stub at all because
+    // provisionVpsForBusiness only calls it when content is provided.
+    createPostInstallScript: vi
+      .fn()
+      .mockResolvedValue({ id: 555, name: "pis", content: "#!/bin/bash" }),
     purchaseVirtualMachine: vi.fn().mockResolvedValue({
       order_id: "o1",
       virtual_machines: [{ id: 42, state: "initial" }]
@@ -31,6 +38,25 @@ function makeClientStub<T extends Record<string, unknown> = Record<string, never
   };
 }
 
+/**
+ * Minimal HostingerApiError-shaped stub. We don't import the real class to
+ * keep this test decoupled from the client module — provisionVpsForBusiness
+ * checks `err.name === "HostingerApiError"` duck-typed for the same reason
+ * (see the `errStatus` helper in src/lib/hostinger/provision.ts).
+ */
+class FakeHostingerApiError extends Error {
+  readonly endpoint: string;
+  readonly status: number;
+  readonly body: unknown;
+  constructor(endpoint: string, status: number, body: unknown) {
+    super(`Hostinger API ${endpoint} → HTTP ${status}`);
+    this.name = "HostingerApiError";
+    this.endpoint = endpoint;
+    this.status = status;
+    this.body = body;
+  }
+}
+
 const fakeKeypair = {
   publicKey: "ssh-ed25519 AAAA test-comment\n",
   privateKeyPem: "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n",
@@ -38,7 +64,7 @@ const fakeKeypair = {
 };
 
 describe("provisionVpsForBusiness", () => {
-  it("runs the full happy path: keypair → upload → post-install → purchase → poll → monarx → persist", async () => {
+  it("runs the full happy path: keypair → upload → purchase → poll → monarx → persist (no Hostinger post-install hook)", async () => {
     const client = makeClientStub({
       getVirtualMachine: vi
         .fn()
@@ -69,7 +95,6 @@ describe("provisionVpsForBusiness", () => {
       {
         businessId: "biz-1",
         tier: "starter",
-        postInstallScript: "#!/bin/bash\necho hi",
         pollIntervalMs: 1,
         readyTimeoutMs: 10_000
       },
@@ -87,14 +112,18 @@ describe("provisionVpsForBusiness", () => {
       publicIp: "1.2.3.4",
       sshUsername: "root",
       sshKey: expect.objectContaining({ id: "row-uuid", business_id: "biz-1" }),
-      postInstallScriptId: 11,
       publicKeyId: 9,
+      // No `postInstallScript` was provided in the input above so the
+      // attach API was never called → result is `null` and the orchestrator
+      // will exclusively rely on its SSH-bootstrap phase. The PIS-attached
+      // path is exercised by the dedicated `attaches a Hostinger…` tests
+      // further down.
+      postInstallScriptId: null,
       hostingerBillingSubscriptionId: null
     });
     expect(phases).toEqual([
       "keypair_generated",
       "public_key_uploaded",
-      "post_install_registered",
       "purchase_initiated",
       "purchase_completed",
       "vps_running",
@@ -108,7 +137,10 @@ describe("provisionVpsForBusiness", () => {
     expect(purchaseArg.setup.template_id).toBe(DEFAULT_TEMPLATE_ID);
     expect(purchaseArg.setup.data_center_id).toBe(DEFAULT_US_DATA_CENTER_ID);
     expect(purchaseArg.setup.public_key_ids).toEqual([9]);
-    expect(purchaseArg.setup.post_install_script_id).toBe(11);
+    // No `input.postInstallScript` was provided → no attach attempt → no
+    // `post_install_script_id` on the setup payload.
+    expect(purchaseArg.setup.post_install_script_id).toBeUndefined();
+    expect(client.createPostInstallScript).not.toHaveBeenCalled();
     expect(purchaseArg.setup.install_monarx).toBe(false);
     expect(purchaseArg.setup.hostname).toMatch(/^nc-/);
   });
@@ -142,7 +174,6 @@ describe("provisionVpsForBusiness", () => {
       {
         businessId: "biz-1",
         tier: "starter",
-        postInstallScript: "#!/bin/bash\necho hi",
         pollIntervalMs: 1,
         readyTimeoutMs: 10_000
       },
@@ -185,7 +216,6 @@ describe("provisionVpsForBusiness", () => {
       {
         businessId: "biz-1",
         tier: "starter",
-        postInstallScript: "#!/bin/bash\necho hi",
         pollIntervalMs: 1,
         readyTimeoutMs: 10_000
       },
@@ -231,7 +261,6 @@ describe("provisionVpsForBusiness", () => {
       {
         businessId: "biz-1",
         tier: "starter",
-        postInstallScript: "#!/bin/bash\necho hi",
         pollIntervalMs: 1,
         readyTimeoutMs: 10_000
       },
@@ -247,7 +276,7 @@ describe("provisionVpsForBusiness", () => {
     expect(client.listBillingSubscriptions).not.toHaveBeenCalled();
   });
 
-  it("reuses postInstallScriptId when provided (no upload)", async () => {
+  it("uses the standard-tier price-item id when tier=standard", async () => {
     const client = makeClientStub({
       getVirtualMachine: vi.fn().mockResolvedValueOnce({
         id: 42,
@@ -272,8 +301,6 @@ describe("provisionVpsForBusiness", () => {
       {
         businessId: "biz-1",
         tier: "standard",
-        postInstallScript: "",
-        postInstallScriptId: 77,
         pollIntervalMs: 1
       },
       {
@@ -284,10 +311,272 @@ describe("provisionVpsForBusiness", () => {
       }
     );
 
-    expect(client.createPostInstallScript).not.toHaveBeenCalled();
-    expect(client.purchaseVirtualMachine.mock.calls[0][0].setup.post_install_script_id).toBe(77);
+    // No PIS content was passed → no attach API call → no
+    // `post_install_script_id` on the setup payload. The PIS-attach path
+    // (with its own happy-path + 403-fallback assertions) is covered by
+    // the dedicated tests further down.
+    expect(client.purchaseVirtualMachine.mock.calls[0][0].setup.post_install_script_id).toBeUndefined();
     expect(client.purchaseVirtualMachine.mock.calls[0][0].item_id).toBe(
       DEFAULT_TIER_PRICE_ITEM.standard
+    );
+  });
+
+  it("attaches a Hostinger post-install script when content is provided (happy path)", async () => {
+    const client = makeClientStub({
+      createPostInstallScript: vi
+        .fn()
+        .mockResolvedValue({ id: 9001, name: "newcoworker-biz-1-abc", content: "" }),
+      getVirtualMachine: vi.fn().mockResolvedValueOnce({
+        id: 42,
+        state: "running",
+        ipv4: [{ id: 1, address: "1.2.3.4" }]
+      })
+    });
+    const dbInsert = vi.fn().mockResolvedValue({
+      id: "row",
+      business_id: "biz-1",
+      hostinger_vps_id: "42",
+      hostinger_public_key_id: 9,
+      public_key: fakeKeypair.publicKey,
+      private_key_pem: fakeKeypair.privateKeyPem,
+      fingerprint_sha256: fakeKeypair.fingerprintSha256,
+      ssh_username: "root",
+      created_at: "",
+      rotated_at: null
+    });
+    const phases: string[] = [];
+
+    const result = await provisionVpsForBusiness(
+      {
+        businessId: "biz-1",
+        tier: "starter",
+        postInstallScript: "#!/bin/bash\necho hi",
+        postInstallScriptName: "custom-pis-name",
+        pollIntervalMs: 1
+      },
+      {
+        client: client as unknown as HostingerClient,
+        generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
+        sleep: vi.fn(),
+        db: { insertVpsSshKey: dbInsert },
+        onProgress: (p) => phases.push(p)
+      }
+    );
+
+    expect(client.createPostInstallScript).toHaveBeenCalledWith(
+      "custom-pis-name",
+      "#!/bin/bash\necho hi"
+    );
+    expect(client.purchaseVirtualMachine.mock.calls[0][0].setup.post_install_script_id).toBe(9001);
+    expect(result.postInstallScriptId).toBe(9001);
+    expect(phases).toContain("post_install_script_registered");
+  });
+
+  it("falls back gracefully when post-install-script attach hits 403 (chicken-and-egg on fresh accounts)", async () => {
+    const pisStub = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FakeHostingerApiError("/api/vps/v1/post-install-scripts", 403, {
+          message: "[VPS:2000] Unauthorized"
+        })
+      );
+    const client = makeClientStub({
+      createPostInstallScript: pisStub,
+      getVirtualMachine: vi.fn().mockResolvedValueOnce({
+        id: 42,
+        state: "running",
+        ipv4: [{ id: 1, address: "1.2.3.4" }]
+      })
+    });
+    const dbInsert = vi.fn().mockResolvedValue({
+      id: "row",
+      business_id: "biz-1",
+      hostinger_vps_id: "42",
+      hostinger_public_key_id: 9,
+      public_key: fakeKeypair.publicKey,
+      private_key_pem: fakeKeypair.privateKeyPem,
+      fingerprint_sha256: fakeKeypair.fingerprintSha256,
+      ssh_username: "root",
+      created_at: "",
+      rotated_at: null
+    });
+    const phases: string[] = [];
+
+    const result = await provisionVpsForBusiness(
+      {
+        businessId: "biz-1",
+        tier: "starter",
+        postInstallScript: "#!/bin/bash\necho hi",
+        pollIntervalMs: 1
+      },
+      {
+        client: client as unknown as HostingerClient,
+        generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
+        sleep: vi.fn(),
+        db: { insertVpsSshKey: dbInsert },
+        onProgress: (p) => phases.push(p)
+      }
+    );
+
+    // 403 is swallowed → setup payload omits post_install_script_id and
+    // result.postInstallScriptId is null. The orchestrator's SSH-bootstrap
+    // pass is what bootstraps the host on this path.
+    expect(pisStub).toHaveBeenCalledTimes(1);
+    expect(client.purchaseVirtualMachine.mock.calls[0][0].setup.post_install_script_id).toBeUndefined();
+    expect(result.postInstallScriptId).toBeNull();
+    expect(phases).not.toContain("post_install_script_registered");
+    // Provisioning still completed end-to-end.
+    expect(phases).toContain("ssh_key_persisted");
+  });
+
+  it("re-throws non-403 errors from createPostInstallScript", async () => {
+    const pisStub = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FakeHostingerApiError("/api/vps/v1/post-install-scripts", 500, {
+          message: "Internal Server Error"
+        })
+      );
+    const client = makeClientStub({ createPostInstallScript: pisStub });
+    await expect(
+      provisionVpsForBusiness(
+        {
+          businessId: "biz-500",
+          tier: "starter",
+          postInstallScript: "#!/bin/bash\n",
+          pollIntervalMs: 1
+        },
+        {
+          client: client as unknown as HostingerClient,
+          generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
+          sleep: vi.fn(),
+          db: {
+            insertVpsSshKey: vi.fn().mockResolvedValue({
+              id: "x",
+              business_id: "",
+              hostinger_vps_id: "",
+              hostinger_public_key_id: 0,
+              public_key: "",
+              private_key_pem: "",
+              fingerprint_sha256: "",
+              ssh_username: "root",
+              created_at: "",
+              rotated_at: null
+            })
+          }
+        }
+      )
+    ).rejects.toThrow(/HTTP 500/);
+    // Purchase MUST NOT have happened — non-recoverable Hostinger errors
+    // abort before we charge the customer's card.
+    expect(client.purchaseVirtualMachine).not.toHaveBeenCalled();
+  });
+
+  it("re-throws when createPostInstallScript throws a HostingerApiError with a non-numeric status", async () => {
+    // Branch coverage for `errStatus`: we only swallow 403 when the error's
+    // `.status` is the *number* 403. A malformed HostingerApiError that
+    // surfaces `.status: "403"` (string) — which can happen if a future
+    // refactor of the client serialises it via JSON round-trip — must NOT
+    // hit the 403 fast-path. Instead we re-throw, fail before the purchase,
+    // and surface the underlying issue in the orchestrator's `failed` row.
+    class StringStatusHostingerError extends Error {
+      readonly endpoint = "/api/vps/v1/post-install-scripts";
+      readonly status = "403" as unknown as number; /* DELIBERATELY wrong shape */
+      readonly body = { message: "bad shape" };
+      constructor() {
+        super("Hostinger API HTTP <stringly-typed>");
+        this.name = "HostingerApiError";
+      }
+    }
+    const pisStub = vi.fn().mockRejectedValueOnce(new StringStatusHostingerError());
+    const client = makeClientStub({ createPostInstallScript: pisStub });
+    await expect(
+      provisionVpsForBusiness(
+        {
+          businessId: "biz-stringly-status",
+          tier: "starter",
+          postInstallScript: "#!/bin/bash\n",
+          pollIntervalMs: 1
+        },
+        {
+          client: client as unknown as HostingerClient,
+          generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
+          sleep: vi.fn()
+        }
+      )
+    ).rejects.toThrow(/<stringly-typed>/);
+    // Stringly-typed status doesn't match the 403 swallow branch → purchase
+    // never happens.
+    expect(client.purchaseVirtualMachine).not.toHaveBeenCalled();
+  });
+
+  it("re-throws non-HostingerApiError errors from createPostInstallScript", async () => {
+    // Defense-in-depth: a network-layer Error (not a HostingerApiError) has
+    // no `.status`, so the 403 fast-path can't apply. The provisioner
+    // should treat it as fatal and bail before charging the card.
+    const pisStub = vi.fn().mockRejectedValueOnce(new Error("ECONNRESET"));
+    const client = makeClientStub({ createPostInstallScript: pisStub });
+    await expect(
+      provisionVpsForBusiness(
+        {
+          businessId: "biz-econn",
+          tier: "starter",
+          postInstallScript: "#!/bin/bash\n",
+          pollIntervalMs: 1
+        },
+        {
+          client: client as unknown as HostingerClient,
+          generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
+          sleep: vi.fn()
+        }
+      )
+    ).rejects.toThrow(/ECONNRESET/);
+    expect(client.purchaseVirtualMachine).not.toHaveBeenCalled();
+  });
+
+  it("uses a default timestamped script name when postInstallScriptName is omitted", async () => {
+    const pisStub = vi
+      .fn()
+      .mockResolvedValue({ id: 9002, name: "auto", content: "" });
+    const client = makeClientStub({
+      createPostInstallScript: pisStub,
+      getVirtualMachine: vi.fn().mockResolvedValueOnce({
+        id: 42,
+        state: "running",
+        ipv4: [{ id: 1, address: "1.2.3.4" }]
+      })
+    });
+    const dbInsert = vi.fn().mockResolvedValue({
+      id: "r",
+      business_id: "b",
+      hostinger_vps_id: "42",
+      hostinger_public_key_id: 9,
+      public_key: "",
+      private_key_pem: "",
+      fingerprint_sha256: "",
+      ssh_username: "root",
+      created_at: "",
+      rotated_at: null
+    });
+
+    await provisionVpsForBusiness(
+      {
+        businessId: "biz-default-name",
+        tier: "starter",
+        postInstallScript: "#!/bin/bash\n",
+        pollIntervalMs: 1
+      },
+      {
+        client: client as unknown as HostingerClient,
+        generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
+        sleep: vi.fn(),
+        db: { insertVpsSshKey: dbInsert }
+      }
+    );
+
+    expect(pisStub).toHaveBeenCalledWith(
+      expect.stringMatching(/^newcoworker-biz-default-name-/),
+      "#!/bin/bash\n"
     );
   });
 
@@ -316,7 +605,6 @@ describe("provisionVpsForBusiness", () => {
       {
         businessId: "biz-1",
         tier: "starter",
-        postInstallScript: "#!/bin/bash",
         paymentMethodId: 42333536,
         coupons: ["WELCOME5"],
         pollIntervalMs: 1
@@ -345,7 +633,6 @@ describe("provisionVpsForBusiness", () => {
         {
           businessId: "biz-1",
           tier: "starter",
-          postInstallScript: "",
           pollIntervalMs: 1
         },
         {
@@ -369,7 +656,6 @@ describe("provisionVpsForBusiness", () => {
         {
           businessId: "biz-1",
           tier: "starter",
-          postInstallScript: "",
           pollIntervalMs: 1
         },
         {
@@ -401,7 +687,6 @@ describe("provisionVpsForBusiness", () => {
           {
             businessId: "biz-1",
             tier: "starter",
-            postInstallScript: "",
             pollIntervalMs: 1,
             // Deliberately very long — the test asserts we bail on the
             // terminal state *before* burning this window.
@@ -430,7 +715,6 @@ describe("provisionVpsForBusiness", () => {
         {
           businessId: "biz-1",
           tier: "starter",
-          postInstallScript: "",
           pollIntervalMs: 1,
           readyTimeoutMs: 5
         },
@@ -457,7 +741,6 @@ describe("provisionVpsForBusiness", () => {
         {
           businessId: "biz-1",
           tier: "starter",
-          postInstallScript: "",
           pollIntervalMs: 1,
           readyTimeoutMs: 5
         },
@@ -497,7 +780,6 @@ describe("provisionVpsForBusiness", () => {
       {
         businessId: "biz-1",
         tier: "starter",
-        postInstallScript: "",
         pollIntervalMs: 1
       },
       {
@@ -543,7 +825,6 @@ describe("provisionVpsForBusiness", () => {
       {
         businessId: "custom-biz",
         tier: "starter",
-        postInstallScript: "",
         itemId: "custom-price",
         templateId: 7,
         dataCenterId: 29,
@@ -593,7 +874,6 @@ describe("provisionVpsForBusiness", () => {
       {
         businessId: "biz-default-poll",
         tier: "starter",
-        postInstallScript: "#!/bin/bash"
       },
       {
         client: client as unknown as HostingerClient,
@@ -629,7 +909,6 @@ describe("provisionVpsForBusiness", () => {
       {
         businessId: "!!!",
         tier: "starter",
-        postInstallScript: "",
         pollIntervalMs: 1
       },
       {
@@ -649,19 +928,26 @@ describe("buildDefaultPostInstallScript", () => {
     expect(s.length).toBeLessThan(48 * 1024);
   });
 
-  it("uses default repo URL + ref when no options are passed", () => {
+  it("uses default repo URL + ref + tier when no options are passed", () => {
     const s = buildDefaultPostInstallScript();
     expect(s).toContain("https://github.com/brianlane/newCoworker.git");
     expect(s).toContain("REPO_REF='main'");
+    // Default tier is "standard" (KVM 8 safe pick) — the bootstrap loader
+    // emits `TIER='standard' bash …`. Must be single-quoted so the value
+    // is delivered to bootstrap.sh exactly as-is even if the loader is
+    // later sourced from a context that mangles env propagation.
+    expect(s).toContain("TIER='standard'");
   });
 
-  it("accepts custom repo URL and ref", () => {
+  it("accepts custom repo URL, ref, and tier", () => {
     const s = buildDefaultPostInstallScript({
       repoUrl: "https://github.com/other/repo.git",
-      repoRef: "release"
+      repoRef: "release",
+      tier: "starter"
     });
     expect(s).toContain("REPO_URL='https://github.com/other/repo.git'");
     expect(s).toContain("REPO_REF='release'");
+    expect(s).toContain("TIER='starter'");
   });
 
   it("rejects empty or overly long repoRef values", () => {
@@ -707,12 +993,72 @@ describe("buildDefaultPostInstallScript", () => {
     ).toThrow(/disallowed characters/);
   });
 
-  it("includes the critical elements: SSH hardening, UFW, repo staging, deploy script install", () => {
+  it("rejects unknown tier values (only starter|standard allowed)", () => {
+    expect(() =>
+      // @ts-expect-error -- intentionally invalid input, runtime guard catches.
+      buildDefaultPostInstallScript({ tier: "enterprise" })
+    ).toThrow(/tier must be 'starter' or 'standard'/);
+    expect(() =>
+      // @ts-expect-error -- intentionally invalid input, runtime guard catches.
+      buildDefaultPostInstallScript({ tier: "" })
+    ).toThrow(/tier must be 'starter' or 'standard'/);
+  });
+
+  it("includes the critical elements: repo staging, deploy script install, full bootstrap delegation", () => {
     const s = buildDefaultPostInstallScript();
-    expect(s).toContain("PasswordAuthentication no");
-    expect(s).toContain("ufw --force enable");
+    // The slim loader stages /opt/newcoworker-repo (so the orchestrator's
+    // VOICE_BRIDGE_SRC rsync source exists) and installs deploy-client.sh
+    // BEFORE delegating to the full bootstrap. Then it exec's the full
+    // bootstrap with the tier env so heavy work (Docker, Ollama, Rowboat,
+    // cloudflared) lives in the tracked repo file rather than this
+    // 48KB-bounded inline script.
     expect(s).toContain("/opt/newcoworker-repo");
     expect(s).toContain("/opt/deploy-client.sh");
+    expect(s).toContain("/vps/scripts/bootstrap.sh");
+    expect(s).toContain("post_install start");
+    expect(s).toContain("post_install complete");
+  });
+
+  it("uses apt lock-timeout for race protection but does NOT call cloud-init wait (Codex P1 + Bugbot High)", () => {
+    // The slim loader runs in TWO places that race the dpkg lock:
+    //   1. As Hostinger's first-boot PIS (cloud-init runcmd phase).
+    //   2. As the orchestrator's SSH-bootstrap fallback / verify pass.
+    // When PIS attaches AND the orchestrator's SSH pass fires while
+    // cloud-init's runcmd is still running, both apt-get invocations
+    // fight for /var/lib/dpkg/lock-frontend. Under `set -euo pipefail`
+    // the loser exits non-zero and aborts provisioning.
+    //
+    // FIX: defence-in-depth via `-o DPkg::Lock::Timeout=300` on every
+    // apt invocation so the loser of the race retries-with-backoff for
+    // up to 5 minutes instead of bailing immediately.
+    //
+    // ANTI-FIX: we DELIBERATELY do NOT include `cloud-init status
+    // --wait` in this script's body. On the PIS path, the script IS
+    // executed by cloud-init's runcmd; calling `cloud-init status
+    // --wait` from inside runcmd self-deadlocks (cloud-init can't
+    // signal `done` until runcmd returns, but runcmd is waiting on
+    // this wait → infinite hang). The orchestrator's SSH path gates
+    // first-boot completion in `buildBootstrapSshCommand` BEFORE this
+    // script runs, so a wait here is also redundant on that path.
+    // This test pins both invariants together so a future regression
+    // that re-adds the wait fails loudly instead of intermittently
+    // hanging Hostinger PIS provisions.
+    const s = buildDefaultPostInstallScript();
+    // Strip shell comments before searching for the executable command:
+    // the rationale for NOT calling cloud-init wait is documented in
+    // the script header itself, so a naïve `includes()` would match
+    // the comment text. We care about the actual command line.
+    const codeOnly = s
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("#"))
+      .join("\n");
+    expect(codeOnly).not.toMatch(/(^|\s|;)cloud-init\s+status\s+--wait/);
+    expect(s).toContain("DPkg::Lock::Timeout=300");
+    // And both apt invocations (update + install) must use the timeout
+    // option — a regression that drops it from one would silently
+    // re-introduce the race.
+    expect(s.match(/apt-get -y -o DPkg::Lock::Timeout=300 update/)).not.toBeNull();
+    expect(s.match(/apt-get -y -o DPkg::Lock::Timeout=300 install/)).not.toBeNull();
   });
 });
 
