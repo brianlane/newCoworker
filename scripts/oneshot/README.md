@@ -8,7 +8,7 @@ and is **not** part of any automated path.
 
 * The file is run with `tsx`, e.g.:
   ```bash
-  tsx scripts/oneshot/manual-provision-stuck-business.ts
+  tsx scripts/oneshot/ensure-tunnel-subzone.ts
   ```
 * IDs and other parameters are hard-coded near the top of each file —
   edit them in-place rather than passing CLI flags. This keeps the
@@ -23,23 +23,25 @@ and is **not** part of any automated path.
 
 ## Inventory
 
-### `manual-provision-stuck-business.ts`
+### `ensure-tunnel-subzone.ts`
 
-Validates the Hostinger post-install-scripts hypothesis end-to-end (was
-the 403 we hit a "fresh-account chicken-and-egg" gate or a deeper
-account-level lock?). Provisions a brand-new VPS with PIS attached,
-records the API responses, and tears down the script resource on exit.
-
-Kept in the tree as a future Hostinger-API regression harness — if PIS
-ever 403s again on a non-fresh account, run this script to capture a
-clean repro before opening a Hostinger support ticket.
+Idempotent driver that delegates `<TUNNEL_LABEL>.<ROOT_DOMAIN>` to its
+own Cloudflare zone (default: `tunnel.newcoworker.com`). Collapses
+two-level tunnel hostnames (`<biz>.tunnel.<root>`) to one wildcard
+level on the new child zone, which Cloudflare's free Universal SSL
+covers automatically — sidesteps the $10/mo Advanced Certificate
+Manager that Total TLS otherwise requires for multi-level
+wildcards. End-to-end logic + token requirements live in
+`src/lib/cloudflare/subzone.ts`. Reads every config value from env or
+argv (no PII embedded).
 
 ## Removed
 
 A previous generation of customer-specific one-shots
 (`finish-provision-stuck-business.ts`, `live-apply-bootstrap.ts`,
-`seed-rowboat-and-fix-config.ts`, `smoke-brianlanefanmail.ts`) was
-deleted once the situations they fixed were mitigated upstream:
+`seed-rowboat-and-fix-config.ts`, `smoke-brianlanefanmail.ts`,
+`manual-provision-stuck-business.ts`) was deleted once the situations
+they fixed were mitigated upstream:
 
 * The PKCS#8 → OpenSSH key-format migration now runs automatically on
   every read of `vps_ssh_keys` (see `migrateRow` in
