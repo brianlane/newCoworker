@@ -41,6 +41,7 @@ try {
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { sshExec } from "@/lib/hostinger/ssh";
+import { quoteShellEnvValue } from "@/lib/provisioning/orchestrate";
 
 const BUSINESS_ID = "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
 const PUBLIC_IP = "177.7.52.140";
@@ -223,25 +224,42 @@ volumes:
   const APP_BASE_URL = process.env.NEXT_PUBLIC_APP_URL ?? "";
   const LIGHTPANDA_WSS_URL = process.env.LIGHTPANDA_WSS_URL ?? "wss://cdn.lightpanda.io/ws";
 
+  // Bash-quote every value via `printf %q` so secrets containing `$`,
+  // backticks, `"`, or `\` survive the OUTER `bash -c "..."` wrapper.
+  // Naïve single-quoting (`KEY='value'`) is unsafe here because the
+  // outer double quotes still let the shell interpolate `$` inside the
+  // string before the inner shell ever sees the single quotes — i.e.
+  // a Telnyx key like `KEY02$YEAR_FOO` gets silently corrupted to
+  // `KEY02_FOO`. The orchestrator's production deploy uses the same
+  // helper for the same reason; we share its implementation.
+  const q = quoteShellEnvValue;
   const envInline = [
-    `BUSINESS_ID='${BUSINESS_ID}'`,
-    `TIER='standard'`,
-    `SUPABASE_URL='${SUPABASE_URL}'`,
-    `SUPABASE_SERVICE_KEY='${SUPABASE_SERVICE_KEY}'`,
-    `ROWBOAT_GATEWAY_TOKEN='${ROWBOAT_GATEWAY_TOKEN}'`,
-    `NOTIFICATIONS_WEBHOOK_TOKEN='${SUPABASE_SERVICE_KEY}'`,
-    `TELNYX_API_KEY='${TELNYX_API_KEY}'`,
-    `TELNYX_MESSAGING_PROFILE_ID='${TELNYX_MESSAGING_PROFILE_ID}'`,
-    `STREAM_URL_SIGNING_SECRET='${STREAM_URL_SIGNING_SECRET}'`,
-    `GOOGLE_API_KEY='${GOOGLE_API_KEY}'`,
-    `APP_BASE_URL='${APP_BASE_URL}'`,
-    `LIGHTPANDA_WSS_URL='${LIGHTPANDA_WSS_URL}'`,
-    `VOICE_BRIDGE_SRC='/opt/newcoworker-repo/vps/voice-bridge'`
+    `BUSINESS_ID=${q(BUSINESS_ID)}`,
+    `TIER=${q("standard")}`,
+    `SUPABASE_URL=${q(SUPABASE_URL)}`,
+    `SUPABASE_SERVICE_KEY=${q(SUPABASE_SERVICE_KEY)}`,
+    `ROWBOAT_GATEWAY_TOKEN=${q(ROWBOAT_GATEWAY_TOKEN)}`,
+    `NOTIFICATIONS_WEBHOOK_TOKEN=${q(SUPABASE_SERVICE_KEY)}`,
+    `TELNYX_API_KEY=${q(TELNYX_API_KEY)}`,
+    `TELNYX_MESSAGING_PROFILE_ID=${q(TELNYX_MESSAGING_PROFILE_ID)}`,
+    `STREAM_URL_SIGNING_SECRET=${q(STREAM_URL_SIGNING_SECRET)}`,
+    `GOOGLE_API_KEY=${q(GOOGLE_API_KEY)}`,
+    `APP_BASE_URL=${q(APP_BASE_URL)}`,
+    `LIGHTPANDA_WSS_URL=${q(LIGHTPANDA_WSS_URL)}`,
+    `VOICE_BRIDGE_SRC=${q("/opt/newcoworker-repo/vps/voice-bridge")}`
   ].join(" ");
 
+  // Wrap the deploy invocation in a base64-decoded heredoc so we don't
+  // have to think about escaping the OUTER `bash -c "..."` at all —
+  // the env values are already %q-quoted for the inner shell, and we
+  // hand the inner shell its source verbatim. nohup keeps the deploy
+  // alive after the SSH channel closes; the polling loop below tails
+  // /var/log/live-apply-deploy.log to surface progress.
+  const innerScript = `nohup ${envInline} bash /opt/deploy-client.sh > /var/log/live-apply-deploy.log 2>&1 & echo "deploy pid=$!"`;
+  const innerB64 = Buffer.from(innerScript, "utf8").toString("base64");
   await ssh(
     key.private_key_pem,
-    `nohup bash -c "${envInline} bash /opt/deploy-client.sh" > /var/log/live-apply-deploy.log 2>&1 & echo "deploy pid=$!"`,
+    `printf '%s' '${innerB64}' | base64 -d | bash`,
     "kick off deploy-client.sh in background"
   );
 

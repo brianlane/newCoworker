@@ -34,6 +34,17 @@ export type CloudflareTunnelProvisioner = (input: {
 
 export type CloudflareTunnelConfig = {
   apiToken: string;
+  /**
+   * Optional separate API token used ONLY for the Total TLS PATCH (and
+   * any future zone-level SSL operations). Cloudflare's Account-scoped
+   * tokens that already work for tunnels + DNS routinely lack the
+   * `Zone:SSL and Certificates:Edit` permission needed for
+   * `PATCH /zones/<id>/acm/total_tls`, so we accept a second token
+   * scoped specifically to that surface and fall back to `apiToken` when
+   * unset (production behaviour pre-rotation). Surfaced via env as
+   * `CLOUDFLARE_SSL_API_TOKEN` in `cloudflareTunnelProvisionerFromEnv`.
+   */
+  sslApiToken?: string;
   accountId: string;
   /**
    * The CF DNS zone that owns the public hostname (e.g. "newcoworker.com" if
@@ -95,6 +106,7 @@ export function createCloudflareTunnelProvisioner(
 ): CloudflareTunnelProvisioner {
   const {
     apiToken,
+    sslApiToken,
     accountId,
     zoneName,
     serviceUrl,
@@ -134,11 +146,23 @@ export function createCloudflareTunnelProvisioner(
       ? rawVoiceHostnamePrefix.trim()
       : "voice-";
 
-  async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  /**
+   * Cloudflare API caller. The `tokenOverride` parameter lets specific
+   * call sites (notably `ensureZoneTotalTls`) reach for a more privileged
+   * token than the default tunnel-scoped one without exposing that token
+   * to every other call. Any path that doesn't pass `tokenOverride`
+   * uses `apiToken` (the tunnel/DNS scope) — preserving the principle
+   * of least privilege on every request.
+   */
+  async function api<T>(
+    path: string,
+    init?: RequestInit,
+    tokenOverride?: string
+  ): Promise<T> {
     const res = await fetchImpl(`https://api.cloudflare.com/client/v4${path}`, {
       ...init,
       headers: {
-        Authorization: `Bearer ${apiToken}`,
+        Authorization: `Bearer ${tokenOverride ?? apiToken}`,
         "Content-Type": "application/json",
         ...(init?.headers ?? {})
       }
@@ -217,16 +241,27 @@ export function createCloudflareTunnelProvisioner(
    */
   async function ensureZoneTotalTls(zoneId: string, businessId: string): Promise<void> {
     try {
-      await api(`/zones/${zoneId}/acm/total_tls`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          enabled: true,
-          /* Let's Encrypt is the only CA that supports Total TLS today and
-             is also free; locking the choice keeps the API contract stable
-             across re-runs against zones provisioners may have inherited. */
-          certificate_authority: "lets_encrypt"
-        })
-      });
+      // Prefer the SSL-scoped token (CLOUDFLARE_SSL_API_TOKEN) when one
+      // was supplied. The tunnel-scoped `apiToken` typically has Tunnel
+      // + DNS Edit but NOT Zone:SSL:Edit, which is why the production
+      // PATCH was returning `10405 Method not allowed for this auth
+      // scheme` until the operator rotated to a separate token. Falling
+      // through to `apiToken` keeps backward compatibility for setups
+      // that grant SSL scope to the same token.
+      await api(
+        `/zones/${zoneId}/acm/total_tls`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            enabled: true,
+            /* Let's Encrypt is the only CA that supports Total TLS today and
+               is also free; locking the choice keeps the API contract stable
+               across re-runs against zones provisioners may have inherited. */
+            certificate_authority: "lets_encrypt"
+          })
+        },
+        sslApiToken && sslApiToken.length > 0 ? sslApiToken : undefined
+      );
       logger.info("cloudflare Total TLS enabled", { businessId, zoneId });
     } catch (err) {
       // `api()` only ever throws Error subclasses (see line 153 — `throw new
@@ -355,6 +390,14 @@ export function cloudflareTunnelProvisionerFromEnv(
   if (!apiToken || !accountId) return null;
   return createCloudflareTunnelProvisioner({
     apiToken,
+    // Optional separately-scoped token for `Zone:SSL and Certificates:Edit`
+    // (Total TLS PATCH). When unset, `ensureZoneTotalTls` falls back to
+    // `apiToken` — which is fine if that token already grants SSL scope,
+    // and silently no-ops (logs a warn) when it doesn't. The split exists
+    // so operators can keep the tunnel/DNS token narrowly-scoped while
+    // still letting the provisioner enable Total TLS without manual
+    // dashboard work.
+    sslApiToken: blankToUndefined(env.CLOUDFLARE_SSL_API_TOKEN),
     accountId,
     zoneName: blankToUndefined(env.CLOUDFLARE_TUNNEL_ZONE) ?? "tunnel.newcoworker.com",
     serviceUrl: blankToUndefined(env.CLOUDFLARE_TUNNEL_SERVICE_URL) ?? "http://localhost:3000",

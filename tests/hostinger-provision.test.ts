@@ -1019,7 +1019,7 @@ describe("buildDefaultPostInstallScript", () => {
     expect(s).toContain("post_install complete");
   });
 
-  it("includes the cloud-init wait + apt lock-timeout race protection (Codex P1)", () => {
+  it("uses apt lock-timeout for race protection but does NOT call cloud-init wait (Codex P1 + Bugbot High)", () => {
     // The slim loader runs in TWO places that race the dpkg lock:
     //   1. As Hostinger's first-boot PIS (cloud-init runcmd phase).
     //   2. As the orchestrator's SSH-bootstrap fallback / verify pass.
@@ -1028,14 +1028,31 @@ describe("buildDefaultPostInstallScript", () => {
     // fight for /var/lib/dpkg/lock-frontend. Under `set -euo pipefail`
     // the loser exits non-zero and aborts provisioning.
     //
-    // Two guards must be present in the script:
-    //   - `cloud-init status --wait` to block on cloud-init completion
-    //     (with `2>/dev/null || true` for templates lacking the binary).
-    //   - `-o DPkg::Lock::Timeout=300` so apt retries-with-backoff
-    //     instead of bailing on the first lock collision.
+    // FIX: defence-in-depth via `-o DPkg::Lock::Timeout=300` on every
+    // apt invocation so the loser of the race retries-with-backoff for
+    // up to 5 minutes instead of bailing immediately.
+    //
+    // ANTI-FIX: we DELIBERATELY do NOT include `cloud-init status
+    // --wait` in this script's body. On the PIS path, the script IS
+    // executed by cloud-init's runcmd; calling `cloud-init status
+    // --wait` from inside runcmd self-deadlocks (cloud-init can't
+    // signal `done` until runcmd returns, but runcmd is waiting on
+    // this wait → infinite hang). The orchestrator's SSH path gates
+    // first-boot completion in `buildBootstrapSshCommand` BEFORE this
+    // script runs, so a wait here is also redundant on that path.
+    // This test pins both invariants together so a future regression
+    // that re-adds the wait fails loudly instead of intermittently
+    // hanging Hostinger PIS provisions.
     const s = buildDefaultPostInstallScript();
-    expect(s).toContain("cloud-init status --wait");
-    expect(s).toContain("|| true");
+    // Strip shell comments before searching for the executable command:
+    // the rationale for NOT calling cloud-init wait is documented in
+    // the script header itself, so a naïve `includes()` would match
+    // the comment text. We care about the actual command line.
+    const codeOnly = s
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("#"))
+      .join("\n");
+    expect(codeOnly).not.toMatch(/(^|\s|;)cloud-init\s+status\s+--wait/);
     expect(s).toContain("DPkg::Lock::Timeout=300");
     // And both apt invocations (update + install) must use the timeout
     // option — a regression that drops it from one would silently

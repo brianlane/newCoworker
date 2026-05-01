@@ -427,23 +427,25 @@ exec > >(tee -a /post_install.log) 2>&1
 echo "[newcoworker] post_install start: $(date -Is)"
 
 # Race protection for the dual-path bootstrap (Hostinger PIS + orchestrator
-# SSH fallback). When PIS attaches successfully, Hostinger's cloud-init runs
-# this very script during first-boot — and the orchestrator's SSH-bootstrap
-# verify pass starts as soon as sshd is up, well before cloud-init's runcmd
-# finishes. Both paths invoke apt-get under \`set -euo pipefail\`, so the
-# loser of that race exits non-zero on a "Could not get lock /var/lib/dpkg/
-# lock-frontend" error and aborts provisioning.
+# SSH fallback). When PIS attaches successfully, Hostinger's cloud-init
+# executes THIS script via its \`runcmd\` module during first-boot. We
+# deliberately do NOT call \`cloud-init status --wait\` here:
 #
-# Two belt-and-braces guards:
-#   1. \`cloud-init status --wait\` blocks until cloud-init signals \`done\`.
-#      No-op on hosts where cloud-init isn't installed or has already
-#      finished. The \`2>/dev/null || true\` keeps it non-fatal on minimal
-#      templates lacking the binary.
-#   2. \`-o DPkg::Lock::Timeout=300\` tells apt to retry-with-backoff for
-#      up to 5 minutes when a competing apt holds the lock, instead of
-#      bailing immediately. Survives a cloud-init module that grabs the
-#      lock again right after step (1) returns.
-cloud-init status --wait 2>/dev/null || true
+#   * Under PIS: \`runcmd\` is part of cloud-init's stages. \`cloud-init
+#     status --wait\` would block waiting for cloud-init to signal \`done\`,
+#     but cloud-init can't reach \`done\` until \`runcmd\` (i.e. this
+#     script) returns — a hard self-deadlock the \`|| true\` guard cannot
+#     cover (it only catches non-zero exits, not infinite hangs).
+#   * Under SSH: the orchestrator's \`buildBootstrapSshCommand\` already
+#     prefixes \`cloud-init status --wait\` BEFORE invoking this script,
+#     so first-boot is already complete by the time we get here. A second
+#     wait would be redundant.
+#
+# Defence-in-depth instead: \`-o DPkg::Lock::Timeout=300\` tells apt to
+# retry-with-backoff for up to 5 minutes when ANY other apt
+# (cloud-init's apt module, unattended-upgrades, etc.) holds the lock,
+# instead of bailing immediately under \`set -euo pipefail\`. Safe under
+# both paths.
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get -y -o DPkg::Lock::Timeout=300 update

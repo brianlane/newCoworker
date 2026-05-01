@@ -27,9 +27,9 @@ type Handler = {
 
 function makeFetch(handlers: Handler[]): {
   fetchImpl: typeof fetch;
-  calls: Array<{ url: string; method: string; body: unknown }>;
+  calls: Array<{ url: string; method: string; body: unknown; auth?: string }>;
 } {
-  const calls: Array<{ url: string; method: string; body: unknown }> = [];
+  const calls: Array<{ url: string; method: string; body: unknown; auth?: string }> = [];
   const queue = [...handlers];
   const fetchImpl = (async (url: RequestInfo | URL, init?: RequestInit) => {
     const urlStr = String(url);
@@ -38,7 +38,16 @@ function makeFetch(handlers: Handler[]): {
     const parsedBody = typeof rawBody === "string" && rawBody.length > 0
       ? JSON.parse(rawBody)
       : undefined;
-    calls.push({ url: urlStr, method, body: parsedBody });
+    // Capture the Authorization header so tests can pin which token
+    // the provisioner used for any given API call. Critical for the
+    // CLOUDFLARE_SSL_API_TOKEN split: the Total TLS PATCH must use the
+    // SSL-scoped token, every other call uses the tunnel-scoped one.
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    const auth =
+      headers["Authorization"] ??
+      headers["authorization"] ??
+      undefined;
+    calls.push({ url: urlStr, method, body: parsedBody, auth });
     const idx = queue.findIndex((h) => h.match(urlStr, init));
     if (idx < 0) throw new Error(`unmatched fetch: ${method} ${urlStr}`);
     const handler = queue[idx];
@@ -690,6 +699,110 @@ describe("cloudflareTunnelProvisioner", () => {
     expect(totalTlsIdx).toBeGreaterThan(lastCnameIdx as number);
   });
 
+  it("uses CLOUDFLARE_SSL_API_TOKEN for Total TLS only; tunnel + DNS calls keep the regular token", async () => {
+    // Pins the contract that protects operators from the
+    // `10405 Method not allowed for this authentication scheme`
+    // failure mode: Cloudflare's account-scoped tokens that already
+    // grant Tunnel + DNS Edit routinely lack `Zone:SSL and
+    // Certificates:Edit`. Splitting tokens lets the operator keep the
+    // tunnel/DNS surface narrowly scoped while still having the
+    // provisioner enable Total TLS automatically.
+    //
+    // Invariant: if `sslApiToken` is supplied, the Total TLS PATCH
+    // (and ONLY that PATCH) carries the SSL-scoped bearer; every
+    // other call (tunnel CRUD, configurations PUT, zone lookup, DNS
+    // record CRUD) keeps the tunnel-scoped bearer.
+    const SSL_TOKEN = "ssl-scoped-token";
+    const { fetchImpl, calls } = makeFetch([
+      {
+        match: (u) => u.startsWith(`${BASE}/accounts/${ACCOUNT}/cfd_tunnel?name=nc-biz-tls-split`),
+        body: ok([])
+      },
+      {
+        match: (u, i) => i?.method === "POST" && u === `${BASE}/accounts/${ACCOUNT}/cfd_tunnel`,
+        body: ok({ id: "tun-tls-split" })
+      },
+      { match: (u) => u.endsWith("/cfd_tunnel/tun-tls-split/token"), body: ok("T") },
+      { match: (u, i) => i?.method === "PUT" && u.endsWith("/configurations"), body: ok({}) },
+      {
+        match: (u) => u === `${BASE}/zones?name=${encodeURIComponent(ZONE)}`,
+        body: ok([{ id: "zone-tls-split", name: ZONE }])
+      },
+      {
+        match: (u) => u.startsWith(`${BASE}/zones/zone-tls-split/dns_records?type=CNAME&name=`),
+        body: ok([]),
+        reuse: true
+      },
+      {
+        match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/zone-tls-split/dns_records`,
+        body: ok({ id: "rec" }),
+        reuse: true
+      },
+      {
+        match: (u, i) =>
+          i?.method === "PATCH" && u === `${BASE}/zones/zone-tls-split/acm/total_tls`,
+        body: ok({ enabled: true })
+      }
+    ]);
+    const provisioner = createCloudflareTunnelProvisioner({
+      ...baseConfig(fetchImpl),
+      sslApiToken: SSL_TOKEN
+    });
+    await provisioner({ businessId: "biz-tls-split" });
+
+    const totalTlsCall = calls.find(
+      (c) => c.method === "PATCH" && c.url === `${BASE}/zones/zone-tls-split/acm/total_tls`
+    );
+    expect(totalTlsCall?.auth).toBe(`Bearer ${SSL_TOKEN}`);
+    // Every other call must NOT use the SSL token — it carries the
+    // tunnel-scoped one (config.apiToken, set in baseConfig as TOKEN).
+    const nonTotalTlsCalls = calls.filter(
+      (c) => !(c.method === "PATCH" && c.url.endsWith("/acm/total_tls"))
+    );
+    expect(nonTotalTlsCalls.length).toBeGreaterThan(0);
+    for (const c of nonTotalTlsCalls) {
+      expect(c.auth).toBe(`Bearer ${TOKEN}`);
+    }
+  });
+
+  it("falls back to apiToken for Total TLS when sslApiToken is omitted (preserves backward compat)", async () => {
+    // Operators whose existing CLOUDFLARE_API_TOKEN already grants
+    // SSL scope should not need to set a separate var. When
+    // `sslApiToken` is unset, the Total TLS PATCH uses `apiToken` —
+    // exact same wire shape as pre-split provisioners.
+    const { fetchImpl, calls } = makeFetch([
+      {
+        match: (u) => u.startsWith(`${BASE}/accounts/${ACCOUNT}/cfd_tunnel?name=nc-biz-tls-fallback`),
+        body: ok([])
+      },
+      {
+        match: (u, i) => i?.method === "POST" && u === `${BASE}/accounts/${ACCOUNT}/cfd_tunnel`,
+        body: ok({ id: "tun-tls-fallback" })
+      },
+      { match: (u) => u.endsWith("/cfd_tunnel/tun-tls-fallback/token"), body: ok("T") },
+      { match: (u, i) => i?.method === "PUT" && u.endsWith("/configurations"), body: ok({}) },
+      {
+        match: (u) => u === `${BASE}/zones?name=${encodeURIComponent(ZONE)}`,
+        body: ok([{ id: "zone-tls-fallback", name: ZONE }])
+      },
+      {
+        match: (u) => u.startsWith(`${BASE}/zones/zone-tls-fallback/dns_records?type=CNAME&name=`),
+        body: ok([]),
+        reuse: true
+      },
+      {
+        match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/zone-tls-fallback/dns_records`,
+        body: ok({ id: "rec" }),
+        reuse: true
+      },
+      totalTlsHandler()
+    ]);
+    const provisioner = createCloudflareTunnelProvisioner(baseConfig(fetchImpl));
+    await provisioner({ businessId: "biz-tls-fallback" });
+    const totalTlsCall = calls.find((c) => c.url.endsWith("/acm/total_tls"));
+    expect(totalTlsCall?.auth).toBe(`Bearer ${TOKEN}`);
+  });
+
   it("does NOT abort provisioning when Total TLS PATCH fails (cert is best-effort)", async () => {
     // The data-plane (tunnel + ingress + CNAMEs) is what makes the
     // service reachable; Total TLS is an edge-cert convenience that can
@@ -805,6 +918,70 @@ describe("cloudflareTunnelProvisionerFromEnv", () => {
     });
     expect(provisioner).not.toBeNull();
     expect(typeof provisioner).toBe("function");
+  });
+
+  it("threads CLOUDFLARE_SSL_API_TOKEN through to ensureZoneTotalTls", async () => {
+    // End-to-end test: env var → fromEnv → createCloudflareTunnelProvisioner
+    // → ensureZoneTotalTls. We mock fetch via the env var coercion path (no
+    // direct config injection) and assert the Total TLS PATCH carries the
+    // SSL-scoped bearer instead of CLOUDFLARE_API_TOKEN. Closes the loop on
+    // the operator-facing contract surfaced in .env.example.
+    const SSL_TOKEN = "ssl-from-env";
+    const TUNNEL_TOKEN = "tunnel-from-env";
+    const seen: Array<{ url: string; auth?: string; method: string }> = [];
+    const fetchImpl = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      const u = String(url);
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      seen.push({
+        url: u,
+        auth: headers.Authorization ?? headers.authorization,
+        method: (init?.method ?? "GET").toUpperCase()
+      });
+      if (u.includes("cfd_tunnel?name=")) {
+        return new Response(JSON.stringify(ok([{ id: "tun-env" }])), { status: 200 });
+      }
+      if (u.endsWith("/token")) {
+        return new Response(JSON.stringify(ok("T")), { status: 200 });
+      }
+      if (u.includes("/configurations")) {
+        return new Response(JSON.stringify(ok({})), { status: 200 });
+      }
+      if (u.includes("/dns_records")) {
+        return new Response(JSON.stringify(ok([{ id: "rec" }])), { status: 200 });
+      }
+      if (u.endsWith("/acm/total_tls")) {
+        return new Response(JSON.stringify(ok({ enabled: true })), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${u}`);
+    }) as unknown as typeof fetch;
+
+    // Patch the global fetch the env-derived provisioner uses (it doesn't
+    // accept fetchImpl through the env factory). Restore after the test.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchImpl;
+    try {
+      const provisioner = cloudflareTunnelProvisionerFromEnv({
+        CLOUDFLARE_API_TOKEN: TUNNEL_TOKEN,
+        CLOUDFLARE_SSL_API_TOKEN: SSL_TOKEN,
+        CLOUDFLARE_ACCOUNT_ID: "acct-env",
+        CLOUDFLARE_TUNNEL_ZONE: "tunnel.example.com",
+        CLOUDFLARE_ZONE_ID: "zone-env"
+      });
+      expect(provisioner).not.toBeNull();
+      await provisioner!({ businessId: "biz-env-tls" });
+
+      const totalTlsCall = seen.find(
+        (c) => c.method === "PATCH" && c.url.endsWith("/acm/total_tls")
+      );
+      expect(totalTlsCall?.auth).toBe(`Bearer ${SSL_TOKEN}`);
+      // And the tunnel-listing call (the very first one) carries the
+      // tunnel-scoped token — proving the split is wired correctly,
+      // not just defaulting to one token everywhere.
+      const firstTunnelCall = seen.find((c) => c.url.includes("/cfd_tunnel?name="));
+      expect(firstTunnelCall?.auth).toBe(`Bearer ${TUNNEL_TOKEN}`);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("empty-string CLOUDFLARE_* overrides collapse to defaults (dotenv blank-line regression)", async () => {

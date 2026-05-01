@@ -33,13 +33,23 @@ log "=== New Coworker VPS Bootstrap (TIER=${TIER}) ==="
 log "Hardening system..."
 
 # Race protection — see `buildDefaultPostInstallScript` in
-# src/lib/hostinger/provision.ts for the full rationale. When the
-# orchestrator's SSH-bootstrap kicks off while Hostinger's cloud-init is
-# still running the same script via PIS, both apt invocations fight for
-# /var/lib/dpkg/lock-frontend. Block until cloud-init reports done, then
-# tell apt to retry for up to 5 minutes if some other apt later grabs
-# the lock again.
-cloud-init status --wait 2>/dev/null || true
+# src/lib/hostinger/provision.ts for the full rationale. We do NOT call
+# `cloud-init status --wait` here: bootstrap.sh is invoked downstream of
+# the slim PIS loader, which itself runs inside cloud-init's `runcmd`
+# stage on the PIS path. Calling `cloud-init status --wait` from inside
+# `runcmd` self-deadlocks (cloud-init can't reach `done` until `runcmd`
+# returns, but `runcmd` is waiting on this wait → infinite hang).
+#
+# The orchestrator's SSH-bootstrap path gates first-boot completion in
+# `buildBootstrapSshCommand` (src/lib/provisioning/orchestrate.ts) via
+# the SSH command prefix, so by the time we reach this script over SSH
+# cloud-init has already signalled `done`.
+#
+# Defence-in-depth: `-o DPkg::Lock::Timeout=300` tells apt to retry-
+# with-backoff for up to 5 minutes when a competing apt (cloud-init's
+# apt module, unattended-upgrades, etc.) holds /var/lib/dpkg/
+# lock-frontend, instead of failing immediately under `set -euo
+# pipefail`. Safe under both PIS and SSH paths.
 APT_LOCK_OPTS=(-o DPkg::Lock::Timeout=300)
 
 apt-get "${APT_LOCK_OPTS[@]}" update -qq
