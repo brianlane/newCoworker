@@ -8,7 +8,7 @@ and is **not** part of any automated path.
 
 * The file is run with `tsx`, e.g.:
   ```bash
-  tsx scripts/oneshot/finish-provision-stuck-business.ts
+  tsx scripts/oneshot/manual-provision-stuck-business.ts
   ```
 * IDs and other parameters are hard-coded near the top of each file —
   edit them in-place rather than passing CLI flags. This keeps the
@@ -23,24 +23,6 @@ and is **not** part of any automated path.
 
 ## Inventory
 
-### `finish-provision-stuck-business.ts`
-
-Manually finishes orchestration for a business whose Stripe webhook ran
-but whose Hostinger provisioning was interrupted (e.g. `403 [VPS:2000]`
-on `/post-install-scripts` for a fresh account; orchestrator threw
-before recording a terminal `failed` row).
-
-Targets an existing VPS by ID (no `purchaseVirtualMachine` call). Will:
-
-1. Detect whether `vps_ssh_keys` already has a row for this business —
-   if so, reuse it and skip `/setup`.
-2. Migrate any persisted PKCS#8 ed25519 PEM to OpenSSH format (required
-   for `ssh2` v1.17+; see `src/lib/hostinger/keypair.ts` header).
-3. Call `orchestrateProvisioning` with a custom `vpsProvisioner` that
-   returns the existing VPS metadata, so the orchestrator runs SSH
-   bootstrap → Cloudflare tunnel → DID provisioning → deploy → notify
-   without touching the Hostinger purchase APIs.
-
 ### `manual-provision-stuck-business.ts`
 
 Validates the Hostinger post-install-scripts hypothesis end-to-end (was
@@ -51,3 +33,30 @@ records the API responses, and tears down the script resource on exit.
 Kept in the tree as a future Hostinger-API regression harness — if PIS
 ever 403s again on a non-fresh account, run this script to capture a
 clean repro before opening a Hostinger support ticket.
+
+## Removed
+
+A previous generation of customer-specific one-shots
+(`finish-provision-stuck-business.ts`, `live-apply-bootstrap.ts`,
+`seed-rowboat-and-fix-config.ts`, `smoke-brianlanefanmail.ts`) was
+deleted once the situations they fixed were mitigated upstream:
+
+* The PKCS#8 → OpenSSH key-format migration now runs automatically on
+  every read of `vps_ssh_keys` (see `migrateRow` in
+  `src/lib/db/vps-ssh-keys.ts`).
+* Rowboat per-tenant project seeding now happens inside
+  `vps/scripts/deploy-client.sh` (phase 3b).
+* Cloudflare Total TLS automation lives in
+  `src/lib/cloudflare/tunnel.ts` (`ensureZoneTotalTls`), with a
+  dedicated `CLOUDFLARE_SSL_API_TOKEN` for the SSL scope.
+* Apt-lock contention between Hostinger PIS and the orchestrator's
+  SSH-bootstrap is resolved via `DPkg::Lock::Timeout=300` on every
+  apt-get + `cloud-init status --wait` gating in
+  `buildBootstrapSshCommand` (SSH path only — never inside the
+  cloud-init runcmd body, which would self-deadlock).
+
+Customer PII (email, public IP, business UUID) was hard-coded in those
+deleted scripts — a Cursor Bugbot Low warning surfaced this exposure.
+Future one-shots that target a specific tenant should read IDs from
+env or argv instead of hard-coding them so the file itself stays
+PII-free even if the script lingers in git history.

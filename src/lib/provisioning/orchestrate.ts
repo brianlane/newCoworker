@@ -143,73 +143,20 @@ function buildBootstrapSshCommand(bootstrapB64: string): string {
 /**
  * Run the bootstrap script on an already-provisioned VPS over SSH.
  *
- * Public surface for admin / repair flows. Used by:
- *   - `scripts/oneshot/finish-provision-stuck-business.ts` as a
- *     post-orchestration smoke-check (re-runs the idempotent bootstrap
- *     to flush any residual drift before the operator walks away).
- *   - Future admin UIs that need to re-bootstrap a host without
- *     dragging the full orchestrator phase set along.
+ * Internal-only — the only production caller is the orchestrator's own
+ * bootstrap phase below. A previously-exported `runRemoteBootstrap`
+ * wrapper that returned 2KB tails was dropped (per Cursor Bugbot Low
+ * "wire-or-drop" guidance) when the customer-specific oneshot that
+ * consumed it was deleted; future admin UIs can call this directly,
+ * or re-introduce a thin tail-capping wrapper at that time.
  *
- * Why this co-exists with `runRemoteBootstrapInternal`:
- *   - Both share `buildBootstrapSshCommand` + the connect-retry loop, so
- *     `cloud-init status --wait`, apt lock-timeout handling, and
- *     ssh-handshake retry semantics are guaranteed identical.
- *   - This public wrapper returns 2KB tails (the right shape for an
- *     admin UI or oneshot log line); the internal flavor returns the
- *     full streams so the orchestrator can persist them on
- *     coworker_logs without truncation.
- *   - This wrapper does NOT touch coworker_logs / progress recording;
- *     admin tools handle their own status surfaces.
- */
-export async function runRemoteBootstrap(input: {
-  host: string;
-  username: string;
-  privateKeyPem: string;
-  tier: "starter" | "standard";
-  remoteExec?: RemoteExecutor;
-  sleep?: (ms: number) => Promise<void>;
-}): Promise<{ exitCode: number; stdoutTail: string; stderrTail: string }> {
-  /* c8 ignore next -- production default; tests inject remoteExec */
-  const remoteExec = input.remoteExec ?? defaultRemoteExecutor;
-  const script = buildDefaultPostInstallScript({ tier: input.tier });
-  const b64 = Buffer.from(script, "utf8").toString("base64");
-  const cmd = buildBootstrapSshCommand(b64);
-
-  const result = await runWithSshConnectRetry(
-    () =>
-      remoteExec({
-        host: input.host,
-        username: input.username,
-        privateKeyPem: input.privateKeyPem,
-        command: cmd
-      }),
-    input.sleep ? { sleep: input.sleep } : undefined
-  );
-  return {
-    exitCode: result.exitCode,
-    stdoutTail: (result.stdout ?? "").slice(-2000),
-    stderrTail: (result.stderr ?? "").slice(-2000)
-  };
-}
-
-/**
- * Internal flavor of {@link runRemoteBootstrap} that surfaces the FULL
- * stdout/stderr (not just the 2KB tails the public helper returns).
- *
- * The orchestrator's bootstrap phase needs the complete streams so it
- * can:
+ * Returns the FULL `SshExecResult` so the orchestrator can:
  *   - dump the tail into `coworker_logs` on a non-zero exit (operators
- *     debugging a partial bootstrap want the actual error, not the
- *     last 2KB after a wall of progress lines), and
+ *     debugging a partial bootstrap want the actual error, not just
+ *     the last 2KB after a wall of progress lines), and
  *   - feed the trimmed tail back into the thrown Error message so the
  *     top-level `failed` row in coworker_logs carries something
  *     actionable.
- *
- * The public helper's 2KB cap is fine for an admin who's also tailing
- * /var/log directly via SSH; it's NOT fine for the orchestrator, which
- * is the only path a customer ever sees fail. Keeping both shapes
- * lets the public surface stay small without leaking a "you got
- * truncated logs" footgun into the orchestrator path.
  */
 async function runRemoteBootstrapInternal(input: {
   host: string;
@@ -555,14 +502,13 @@ async function runOrchestrator(
     source: "orchestrator"
   });
 
-  // Single-source-of-truth bootstrap invocation. Shares command construction
-  // (`buildBootstrapSshCommand` + `buildDefaultPostInstallScript`) and the
-  // sshd connect-retry loop with `runRemoteBootstrap` (the admin helper) so
-  // an operator running the public helper from a oneshot script gets EXACTLY
-  // the same on-host behavior as a fresh provision — no chance of the two
-  // paths drifting on retry semantics, cloud-init waiting, or apt-lock
-  // handling. See `runRemoteBootstrapInternal` for why this returns the full
-  // exec result instead of the 2KB-tail shape used by the public helper.
+  // Single-source-of-truth bootstrap invocation via
+  // `runRemoteBootstrapInternal`, which encapsulates the script
+  // construction (`buildBootstrapSshCommand` + `buildDefaultPostInstallScript`)
+  // and the sshd connect-retry loop. Returns the full SshExecResult so we
+  // can persist a non-truncated tail to coworker_logs on failure (see the
+  // helper's docstring for why the orchestrator path needs the full
+  // streams instead of a 2KB tail).
   const bootstrapResult = await runRemoteBootstrapInternal({
     host: provisioned.publicIp,
     username: provisioned.sshUsername,
