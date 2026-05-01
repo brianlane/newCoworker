@@ -691,6 +691,42 @@ describe("provisioning/orchestrate", () => {
     );
   });
 
+  // Regression: dotenv parses `CLOUDFLARE_TUNNEL_ZONE=` (the form documented
+  // in `.env.example` for "leave at default") as the empty string, which `??`
+  // treats as defined and would yield the malformed `"<biz>."` hostname when
+  // the tunnel provisioner is disabled. Coercing blank to undefined before
+  // the fallback keeps the hostname well-formed.
+  it.each(["", "   ", "\t\n"])(
+    "per-tenant tunnel: blank CLOUDFLARE_TUNNEL_ZONE (%j) falls back to newcoworker.com without producing a malformed hostname",
+    async (blankValue) => {
+      process.env.CLOUDFLARE_TUNNEL_ZONE = blankValue;
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-blank-zone", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          cloudflareTunnel: null
+        }
+      );
+      expect(result.tunnelUrl).toBe("https://biz-blank-zone.newcoworker.com");
+      expect(result.tunnelUrl).not.toMatch(/\.\s*$/);
+      expect(result.tunnelUrl).not.toBe("https://biz-blank-zone.");
+    }
+  );
+
+  it("per-tenant tunnel: explicit non-blank CLOUDFLARE_TUNNEL_ZONE is honored (and trimmed) by the null-provisioner fallback", async () => {
+    process.env.CLOUDFLARE_TUNNEL_ZONE = "  custom.example.com  ";
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-custom-zone", tier: "starter" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec()),
+        cloudflareTunnel: null
+      }
+    );
+    expect(result.tunnelUrl).toBe("https://biz-custom-zone.custom.example.com");
+  });
+
   it("loads default soul/identity templates when readFileSync throws", async () => {
     vi.mocked(fs.readFileSync)
       .mockImplementationOnce(() => {
