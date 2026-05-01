@@ -34,7 +34,7 @@ export type ParsedRowboatChat = {
 };
 
 export const DEFAULT_ROWBOAT_CHAT_URL_TEMPLATE =
-  "https://{businessId}.tunnel.newcoworker.com/api/v1/{projectId}/chat";
+  "https://{businessId}.newcoworker.com/api/v1/{projectId}/chat";
 
 export const DEFAULT_ROWBOAT_CHAT_TIMEOUT_MS = 30_000;
 

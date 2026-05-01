@@ -6,13 +6,9 @@ and is **not** part of any automated path.
 
 ## Convention
 
-* The file is run with `tsx`, e.g.:
-  ```bash
-  tsx scripts/oneshot/ensure-tunnel-subzone.ts
-  ```
-* IDs and other parameters are hard-coded near the top of each file —
-  edit them in-place rather than passing CLI flags. This keeps the
-  intent (and audit trail) inline with the run.
+* Scripts read every business-specific value (IDs, emails, IPs, etc.)
+  from env or argv — never hard-code customer PII. Cursor Bugbot has
+  flagged this twice now; stick to the convention.
 * Scripts are idempotent where possible. Re-running a successful one
   should be a no-op rather than re-charging a card / re-creating a
   resource. If a script can't be made idempotent, it must guard the
@@ -23,25 +19,16 @@ and is **not** part of any automated path.
 
 ## Inventory
 
-### `ensure-tunnel-subzone.ts`
-
-Idempotent driver that delegates `<TUNNEL_LABEL>.<ROOT_DOMAIN>` to its
-own Cloudflare zone (default: `tunnel.newcoworker.com`). Collapses
-two-level tunnel hostnames (`<biz>.tunnel.<root>`) to one wildcard
-level on the new child zone, which Cloudflare's free Universal SSL
-covers automatically — sidesteps the $10/mo Advanced Certificate
-Manager that Total TLS otherwise requires for multi-level
-wildcards. End-to-end logic + token requirements live in
-`src/lib/cloudflare/subzone.ts`. Reads every config value from env or
-argv (no PII embedded).
+_(Empty — every previous one-shot has either been folded into a
+production code path or deleted as fix-then-discard.)_
 
 ## Removed
 
 A previous generation of customer-specific one-shots
 (`finish-provision-stuck-business.ts`, `live-apply-bootstrap.ts`,
 `seed-rowboat-and-fix-config.ts`, `smoke-brianlanefanmail.ts`,
-`manual-provision-stuck-business.ts`) was deleted once the situations
-they fixed were mitigated upstream:
+`manual-provision-stuck-business.ts`, `ensure-tunnel-subzone.ts`) was
+deleted once the situations they fixed were mitigated upstream:
 
 * The PKCS#8 → OpenSSH key-format migration now runs automatically on
   every read of `vps_ssh_keys` (see `migrateRow` in
@@ -50,15 +37,28 @@ they fixed were mitigated upstream:
   `vps/scripts/deploy-client.sh` (phase 3b).
 * Cloudflare Total TLS automation lives in
   `src/lib/cloudflare/tunnel.ts` (`ensureZoneTotalTls`), with a
-  dedicated `CLOUDFLARE_SSL_API_TOKEN` for the SSL scope.
+  dedicated `CLOUDFLARE_SSL_API_TOKEN` for the SSL scope. This is now
+  an OPTIONAL paid-plan opt-in: the default hostname pattern is
+  `<businessId>.<zone>` (one wildcard level), which free-tier Universal
+  SSL already covers — Total TLS is only required if an operator
+  deliberately nests hostnames deeper.
 * Apt-lock contention between Hostinger PIS and the orchestrator's
   SSH-bootstrap is resolved via `DPkg::Lock::Timeout=300` on every
   apt-get + `cloud-init status --wait` gating in
   `buildBootstrapSshCommand` (SSH path only — never inside the
   cloud-init runcmd body, which would self-deadlock).
+* The Cloudflare subzone-delegation helper (`subzone.ts` +
+  `ensure-tunnel-subzone.ts`) was deleted in the same change that
+  flattened tunnel hostnames to one wildcard level. Free-plan accounts
+  cannot add a subdomain as a delegated zone (the dashboard explicitly
+  rejects "subdomain.example.com" with "ensure you are providing the
+  root domain") and the corresponding API permission group is
+  paid-only — so the helper could never run on the production account
+  it was written for. Single-level hostnames + Universal SSL
+  obsoletes the entire migration story.
 
 Customer PII (email, public IP, business UUID) was hard-coded in those
-deleted scripts — a Cursor Bugbot Low warning surfaced this exposure.
-Future one-shots that target a specific tenant should read IDs from
-env or argv instead of hard-coding them so the file itself stays
-PII-free even if the script lingers in git history.
+deleted scripts — a Cursor Bugbot Low / Medium warning surfaced this
+exposure twice. Future one-shots that target a specific tenant must
+read IDs from env or argv instead of hard-coding them so the file
+itself stays PII-free even if the script lingers in git history.

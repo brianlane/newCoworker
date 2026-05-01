@@ -160,7 +160,14 @@ function QuestionnaireForm() {
   const chatLimitReached = storedChatMessageCount >= MAX_ONBOARDING_CHAT_MESSAGES - 1;
   const chatClosed = assistantDone || chatLimitReached;
 
-  useEffect(() => {
+  // Mount-only hydration. `searchParams` is read inside a `useEffectEvent`
+  // wrapper so the linter's exhaustive-deps rule sees this as a hook with no
+  // reactive dependencies — which is what we want here. Re-running the effect
+  // when `searchParams` changes would re-apply `?step=1` from the URL after
+  // we've explicitly stripped it (line below), yanking the user back to step
+  // 1 after they've naturally advanced. The single-shot semantics are the
+  // contract; useEffectEvent makes that contract lint-clean.
+  const hydrateFromStorage = useEffectEvent(() => {
     try {
       const draft = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) ?? "null");
       const storedOnboarding = JSON.parse(
@@ -222,6 +229,10 @@ function QuestionnaireForm() {
       }
     } catch { /* ignore corrupt data */ }
     setHydrated(true);
+  });
+
+  useEffect(() => {
+    hydrateFromStorage();
   }, []);
 
   useEffect(() => {

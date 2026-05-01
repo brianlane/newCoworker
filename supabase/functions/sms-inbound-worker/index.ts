@@ -136,7 +136,7 @@ serve(async (req: Request) => {
 
   const template =
     Deno.env.get("ROWBOAT_CHAT_URL_TEMPLATE") ??
-    "https://{businessId}.tunnel.newcoworker.com/api/v1/{projectId}/chat";
+    "https://{businessId}.newcoworker.com/api/v1/{projectId}/chat";
   const bearer =
     Deno.env.get("ROWBOAT_VPS_CHAT_BEARER") ?? Deno.env.get("ROWBOAT_GATEWAY_TOKEN") ?? "";
   const defaultProjectId = Deno.env.get("ROWBOAT_DEFAULT_PROJECT_ID") ?? "";

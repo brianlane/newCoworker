@@ -395,7 +395,7 @@ fi
 #
 # Why this is mandatory: /api/dashboard/chat reads
 # `business_configs.rowboat_project_id` and POSTs to
-# `https://<biz>.tunnel.newcoworker.com/api/v1/<projectId>/chat`. Rowboat
+# `https://<biz>.newcoworker.com/api/v1/<projectId>/chat`. Rowboat
 # rejects unknown projectIds with HTTP 404, which the dashboard surfaces
 # as "your coworker's chat service isn't ready yet" — even when every
 # container is healthy. Seeding here closes that gap on the deploy path.

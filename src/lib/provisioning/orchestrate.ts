@@ -576,7 +576,22 @@ async function runOrchestrator(
       ? cloudflareTunnelProvisionerFromEnv()
       : deps.cloudflareTunnel;
 
-  let tunnelHostname = `${businessId}.tunnel.newcoworker.com`;
+  // Fallback hostname only used when the tunnel provisioner is disabled
+  // (no CF token in env, dep injected as `null`). The leading subdomain
+  // is the business UUID — ONE level under the zone — so Universal SSL
+  // on the parent zone covers it without paid Total TLS.
+  //
+  // We coerce blank/whitespace strings to `undefined` BEFORE the `??` because
+  // dotenv parses lines like `CLOUDFLARE_TUNNEL_ZONE=` (the form documented in
+  // `.env.example`) as the empty string, which `??` treats as defined and would
+  // produce the malformed hostname `"<biz>."`. This matches the same blank-coerce
+  // pattern used by `cloudflareTunnelProvisionerFromEnv` in `lib/cloudflare/tunnel.ts`.
+  const rawTunnelZone = process.env.CLOUDFLARE_TUNNEL_ZONE;
+  const tunnelZone =
+    typeof rawTunnelZone === "string" && rawTunnelZone.trim().length > 0
+      ? rawTunnelZone.trim()
+      : "newcoworker.com";
+  let tunnelHostname = `${businessId}.${tunnelZone}`;
   let cloudflareTunnelToken = process.env.CLOUDFLARE_TUNNEL_TOKEN ?? "";
   let bridgeMediaWssOrigin = process.env.BRIDGE_MEDIA_WSS_ORIGIN ?? "";
   if (tunnelProvisioner) {
