@@ -5,6 +5,7 @@ import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { getBusiness, updateBusinessWebsiteUrl } from "@/lib/db/businesses";
 import { setBusinessWebsiteMd } from "@/lib/db/configs";
 import { ingestWebsite, normalizeWebsiteUrl } from "@/lib/website-ingest";
+import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 import { logger } from "@/lib/logger";
 
 const schema = z.object({
@@ -97,6 +98,14 @@ export async function POST(request: Request) {
     });
 
     await setBusinessWebsiteMd(body.businessId, result.websiteMd);
+
+    // Re-seed the live VPS vault + MongoDB agent prompt with the new
+    // website summary. Without this the just-persisted `website_md`
+    // would only reach Supabase; the agent's `instructions` field on
+    // the VPS would still reflect the provision-time snapshot. Skipped
+    // silently when the business has no VPS yet (pre-checkout draft
+    // ingest) — `syncVaultToVpsAndLog` returns `no_vps_assigned`.
+    void syncVaultToVpsAndLog(body.businessId);
 
     logger.info("website-ingest: success", {
       businessId: body.businessId,

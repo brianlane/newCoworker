@@ -31,6 +31,9 @@ vi.mock("@/lib/website-ingest", () => ({
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
+vi.mock("@/lib/vps/sync-vault", () => ({
+  syncVaultToVpsAndLog: vi.fn(async () => undefined)
+}));
 
 type SupabaseQueryStub = {
   from: ReturnType<typeof vi.fn>;
@@ -55,6 +58,7 @@ import { getAuthUser } from "@/lib/auth";
 import { updateBusinessWebsiteUrl } from "@/lib/db/businesses";
 import { patchBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
+import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -151,6 +155,36 @@ describe("api/business/config — websiteUrl persistence", () => {
     const res = await POST(jsonRequest(baseBody()));
     expect(res.status).toBe(200);
     expect(updateBusinessWebsiteUrl).not.toHaveBeenCalled();
+    expect(patchBusinessConfig).toHaveBeenCalled();
+  });
+});
+
+describe("api/business/config — VPS vault sync", () => {
+  // The dashboard's Save button used to land in Supabase ONLY — the per-tenant
+  // Rowboat vault on the VPS and the MongoDB agent.instructions field stayed
+  // frozen at the provision-time snapshot. Owner edits never reached chat /
+  // SMS / voice. These tests pin the new contract: every successful save
+  // fires the (best-effort) vault sync.
+  it("kicks off a vault re-seed on every successful save", async () => {
+    const res = await POST(jsonRequest(baseBody({ websiteUrl: "https://example.com" })));
+    expect(res.status).toBe(200);
+    expect(syncVaultToVpsAndLog).toHaveBeenCalledWith(BIZ);
+  });
+
+  it("does NOT trigger a vault sync when the save itself was rejected (validation error)", async () => {
+    const res = await POST(jsonRequest(baseBody({ websiteUrl: "javascript:alert(1)" })));
+    expect(res.status).toBe(400);
+    expect(syncVaultToVpsAndLog).not.toHaveBeenCalled();
+  });
+
+  it("returns success even if the vault sync rejects post-write (Supabase IS the source of truth)", async () => {
+    // We MUST NOT fail the API on a slow/unreachable VPS — the canonical
+    // write to Supabase has already succeeded by the time the sync fires.
+    // The route uses `void` + the helper's internal try/catch so a
+    // rejection here can't bubble; this asserts the contract.
+    vi.mocked(syncVaultToVpsAndLog).mockRejectedValueOnce(new Error("vps down"));
+    const res = await POST(jsonRequest(baseBody()));
+    expect(res.status).toBe(200);
     expect(patchBusinessConfig).toHaveBeenCalled();
   });
 });

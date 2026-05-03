@@ -20,6 +20,9 @@ vi.mock("@/lib/website-ingest", () => ({
 }));
 vi.mock("@/lib/auth", () => ({ getAuthUser: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
+vi.mock("@/lib/vps/sync-vault", () => ({
+  syncVaultToVpsAndLog: vi.fn(async () => undefined)
+}));
 
 import { POST } from "@/app/api/onboard/website-ingest/route";
 import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
@@ -27,6 +30,7 @@ import { getBusiness, updateBusinessWebsiteUrl } from "@/lib/db/businesses";
 import { setBusinessWebsiteMd } from "@/lib/db/configs";
 import { ingestWebsite } from "@/lib/website-ingest";
 import { getAuthUser } from "@/lib/auth";
+import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const TOKEN = "22222222-2222-4222-8222-222222222222";
@@ -221,5 +225,25 @@ describe("api/onboard/website-ingest route", () => {
 
     const res = await POST(jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/" }));
     expect(res.status).toBe(500);
+  });
+
+  // Vault-sync wiring: every successful ingest re-pushes the new website.md
+  // to the live VPS and re-seeds the MongoDB agent's instructions. Without
+  // this, the just-persisted `website_md` would land in Supabase only and
+  // chat / SMS / voice would still reply from the provision-time vault.
+  it("triggers a vault re-seed after a successful ingest", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ email: "admin@nc", isAdmin: true } as never);
+    const res = await POST(jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/" }));
+    expect(res.status).toBe(200);
+    expect(syncVaultToVpsAndLog).toHaveBeenCalledWith(BIZ);
+  });
+
+  it("does NOT trigger a vault re-seed when the ingest itself failed", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ email: "admin@nc", isAdmin: true } as never);
+    vi.mocked(ingestWebsite).mockResolvedValue({ ok: false, error: "fetch_failed" });
+
+    const res = await POST(jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/" }));
+    expect(res.status).toBe(200);
+    expect(syncVaultToVpsAndLog).not.toHaveBeenCalled();
   });
 });

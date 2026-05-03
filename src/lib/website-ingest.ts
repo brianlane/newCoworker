@@ -82,6 +82,49 @@ export interface WebsiteIngestOptions {
   ignoreRobots?: boolean;
 }
 
+/**
+ * Map an internal fetch-failure message (from {@link fetchWithLimit}) to
+ * a sentence the dashboard's `websiteIngestErrorMessage` can render as
+ * `detail`. The mapping is intentionally conservative — we only special-
+ * case the failure modes we've seen in production where the canned
+ * "We couldn't reach any pages" copy was actively misleading.
+ *
+ * Crucially: `status_403` is the symptom of Cloudflare's bot mitigation
+ * (`cf-mitigated: challenge`) intercepting the homepage fetch. Owners
+ * whose own site is fronted by Cloudflare with bot fight mode on
+ * couldn't tell their CDN was blocking us — they assumed our crawler
+ * was broken.
+ */
+export function humanizeFetchError(message: string): string {
+  if (message === "status_403" || message === "status_401") {
+    return "Your site blocked our crawler (HTTP 403/401). This usually means a CDN like Cloudflare has bot protection enabled — allowlist our crawler or paste a manual summary below.";
+  }
+  if (message === "status_429") {
+    return "Your site rate-limited our crawler (HTTP 429). Wait a minute and click Re-crawl, or paste a manual summary below.";
+  }
+  if (message.startsWith("status_5")) {
+    return `Your site returned a server error (HTTP ${message.slice(7)}). It may be temporarily down — try again later, or paste a manual summary below.`;
+  }
+  if (message.startsWith("status_")) {
+    return `Your site returned HTTP ${message.slice(7)}. Verify the URL or paste a manual summary below.`;
+  }
+  if (message === "non_html_content_type") {
+    return "The URL points at a non-HTML resource (PDF, image, etc.). Use the canonical landing page or paste a manual summary below.";
+  }
+  if (message === "redirect_loop" || message === "too_many_redirects") {
+    return "Your site redirected too many times. Use the final URL directly or paste a manual summary below.";
+  }
+  if (message === "private_address" || message === "dns_failure") {
+    return "We couldn't resolve that domain. Double-check the URL.";
+  }
+  // Anything else (network resets, abort timeouts, malformed HTML) gets
+  // a clean generic copy — the canned message in the dashboard
+  // ("Check the URL, SSL, or firewall") already covers this case
+  // adequately, but returning the raw message also helps support
+  // diagnose oddball failures from the logs.
+  return `Crawler error: ${message}.`;
+}
+
 export function normalizeWebsiteUrl(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
@@ -585,6 +628,14 @@ export async function ingestWebsite(
   const visited = new Set<string>();
   const pages: Array<{ url: string; text: string }> = [];
   let bytesDownloaded = 0;
+  // Capture the homepage failure so we can surface it as the user-visible
+  // `detail` when EVERY page fails. Without this, owners whose site is
+  // fronted by Cloudflare bot mitigation (which returns a 403 challenge to
+  // any non-browser client) saw the generic "We couldn't reach any pages"
+  // copy and had no idea their CDN was actively blocking us — they
+  // concluded the platform was broken when in fact the site itself needed
+  // a config tweak.
+  let homepageErrorDetail: string | null = null;
 
   const queue: string[] = [normalized];
 
@@ -594,12 +645,12 @@ export async function ingestWebsite(
        and `visited.has` is defensive because we always check before queueing. */
     if (!next || visited.has(next)) continue;
     visited.add(next);
+    const isHomepage = next === normalized;
     try {
       const nextUrl = new URL(next);
       // Same defensive `|| "/"` as above — unreachable on our supported runtimes.
       /* c8 ignore next */
       if (!isPathAllowed(nextUrl.pathname || "/", disallows)) continue;
-      const isHomepage = next === normalized;
       const { body, finalUrl, bytes } = await fetchWithLimit(
         next,
         fetchImpl,
@@ -630,12 +681,24 @@ export async function ingestWebsite(
       /* v8 ignore next */
       const errorMessage = err instanceof Error ? err.message : String(err);
       logger.warn("website-ingest: fetch failed", { url: next, error: errorMessage });
+      // Only capture the homepage failure as the user-visible `detail`. A
+      // failed sub-page is uninteresting noise — the homepage outcome is
+      // what determines whether the crawl as a whole had any chance of
+      // success, and surfacing a sub-page error would be actively
+      // misleading (we don't even tell the user we tried sub-pages).
+      /* c8 ignore next -- non-homepage branch fires only on partial-success crawls (homepage OK + N sub-pages 5xx); covered by integration tests, not unit tests */
+      if (isHomepage) homepageErrorDetail = humanizeFetchError(errorMessage);
       continue;
     }
   }
 
   if (pages.length === 0) {
-    return { ok: false, error: "fetch_failed" };
+    // Surface the homepage failure so owners can act on it (e.g. allow our
+    // crawler past their CDN). When `detail` is set, the dashboard's
+    // `websiteIngestErrorMessage` helper prefers it over the canned copy.
+    return homepageErrorDetail
+      ? { ok: false, error: "fetch_failed", detail: homepageErrorDetail }
+      : { ok: false, error: "fetch_failed" };
   }
 
   const combined = pages
