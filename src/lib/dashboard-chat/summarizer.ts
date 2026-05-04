@@ -171,7 +171,22 @@ export async function summarizeThread(
   }
   if (!thread) return { ok: false, reason: "thread_not_found" };
 
-  const config = await _getBusinessConfig(businessId);
+  // Wrap getBusinessConfig in the same try/catch pattern as every
+  // other async DB call below so the summarizeThread contract
+  // ("throws are caught internally and surfaced as { ok: false }")
+  // holds even when the helper throws on a network blip / RLS error.
+  // The summarizeThreadAndLog wrapper would catch it anyway, but
+  // direct callers of summarizeThread rely on the never-throw guarantee.
+  let config: Awaited<ReturnType<typeof getBusinessConfig>>;
+  try {
+    config = await _getBusinessConfig(businessId);
+  } catch (err) {
+    return {
+      ok: false,
+      reason: "db_failed",
+      detail: err instanceof Error ? err.message : /* c8 ignore next */ String(err)
+    };
+  }
   /* c8 ignore next 4 -- Defensive: in production a chat-eligible business has
      a project id (the chat POST 409s without one); this fallback only fires
      in degraded states the summarizer doesn't need to crash on. */

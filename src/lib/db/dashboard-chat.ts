@@ -154,6 +154,17 @@ export async function reactivateThread(
  * `messageCount` is the total messages on the thread at summarize time
  * — recorded so we can later detect "this summary is stale, 20+
  * messages have accrued since" without re-reading the text.
+ *
+ * Concurrent-summarizer guard: summarizer runs are fire-and-forget,
+ * which means two runs can overlap if turns arrive faster than the
+ * model can summarize. A slow run started against an older snapshot
+ * could land AFTER a fast run with a newer snapshot, regressing
+ * `summary_message_count` (re-opening the summarize gate prematurely)
+ * and replacing newer prompt context with older. We defend by
+ * predicating the UPDATE on `summary_message_count <= messageCount`
+ * — PostgREST returns zero updated rows when the predicate fails,
+ * which is exactly the desired no-op for a stale write. Equality is
+ * allowed (idempotent re-summarize at the same message count is fine).
  */
 export async function updateThreadSummary(
   threadId: string,
@@ -169,7 +180,12 @@ export async function updateThreadSummary(
       summary_message_count: messageCount,
       updated_at: new Date().toISOString()
     })
-    .eq("id", threadId);
+    .eq("id", threadId)
+    // Last-writer-wins is wrong here — the LATEST writer wins. If
+    // another summarizer has already persisted at a higher message
+    // count, our row goes nowhere. Surfaces as zero rows updated, no
+    // error, which is the intended outcome.
+    .lte("summary_message_count", messageCount);
   if (error) throw new Error(`updateThreadSummary: ${error.message}`);
 }
 

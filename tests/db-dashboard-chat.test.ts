@@ -29,6 +29,7 @@ type Chain = {
   upsert: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
   neq: ReturnType<typeof vi.fn>;
+  lte: ReturnType<typeof vi.fn>;
   order: ReturnType<typeof vi.fn>;
   limit: ReturnType<typeof vi.fn>;
   single: ReturnType<typeof vi.fn>;
@@ -43,6 +44,7 @@ function chain(): Chain {
     upsert: vi.fn(() => c),
     eq: vi.fn(() => c),
     neq: vi.fn(() => c),
+    lte: vi.fn(() => c),
     order: vi.fn(() => c),
     limit: vi.fn(() => c),
     single: vi.fn(),
@@ -585,7 +587,7 @@ describe("db/dashboard-chat — reactivateThread", () => {
 describe("db/dashboard-chat — updateThreadSummary", () => {
   it("writes summary_md + summary_message_count on the thread row", async () => {
     const c = chain();
-    c.eq.mockResolvedValue({ error: null });
+    c.lte.mockResolvedValue({ error: null });
     await updateThreadSummary("thread-1", "compact summary", 42, makeDb(c) as never);
     expect(c.update).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -596,9 +598,21 @@ describe("db/dashboard-chat — updateThreadSummary", () => {
     expect(c.eq).toHaveBeenCalledWith("id", "thread-1");
   });
 
+  it("guards against older-snapshot overwrites with .lte('summary_message_count', messageCount) — concurrent summarizer runs only land if their snapshot is fresher than what's stored", async () => {
+    // Two summarizer runs can overlap (fire-and-forget). If the slow
+    // run lands second with a STALER snapshot, an unguarded UPDATE
+    // would regress summary_message_count and re-open the summarize
+    // gate prematurely. The .lte predicate makes the UPDATE a no-op
+    // when the stored count is already higher.
+    const c = chain();
+    c.lte.mockResolvedValue({ error: null });
+    await updateThreadSummary("thread-1", "x", 42, makeDb(c) as never);
+    expect(c.lte).toHaveBeenCalledWith("summary_message_count", 42);
+  });
+
   it("bumps updated_at on the thread row so the sidebar's order-by-updated_at-desc surfaces freshly-summarized threads", async () => {
     const c = chain();
-    c.eq.mockResolvedValue({ error: null });
+    c.lte.mockResolvedValue({ error: null });
     await updateThreadSummary("thread-1", "x", 1, makeDb(c) as never);
     const update = c.update.mock.calls[0][0] as Record<string, unknown>;
     expect(update.updated_at).toBeTypeOf("string");
@@ -606,7 +620,7 @@ describe("db/dashboard-chat — updateThreadSummary", () => {
 
   it("throws on db error", async () => {
     const c = chain();
-    c.eq.mockResolvedValue({ error: { message: "rls fail" } });
+    c.lte.mockResolvedValue({ error: { message: "rls fail" } });
     await expect(
       updateThreadSummary("thread-1", "x", 1, makeDb(c) as never)
     ).rejects.toThrow(/updateThreadSummary: rls fail/);
@@ -719,7 +733,7 @@ describe("db/dashboard-chat — default service client fallback", () => {
     // updateThreadSummary
     {
       const c = chain();
-      c.eq.mockResolvedValue({ error: null });
+      c.lte.mockResolvedValue({ error: null });
       defaultClientSpy.mockReturnValueOnce(makeDb(c));
       await expect(updateThreadSummary("t", "s", 5)).resolves.toBeUndefined();
     }

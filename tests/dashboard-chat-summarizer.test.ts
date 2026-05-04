@@ -234,6 +234,16 @@ describe("dashboard-chat summarizer — failure modes (never throws)", () => {
     expect(deps.callRowboatChat).not.toHaveBeenCalled();
   });
 
+  it("returns db_failed when getBusinessConfig throws — preserves the never-throw contract direct callers depend on", async () => {
+    const deps = makeDeps({
+      getBusinessConfig: vi.fn().mockRejectedValue(new Error("rls denied"))
+    });
+    const result = await summarizeThread(BIZ, THREAD_ID, deps);
+    expect(result).toMatchObject({ ok: false, reason: "db_failed" });
+    if (!result.ok) expect(result.detail).toMatch(/rls denied/);
+    expect(deps.callRowboatChat).not.toHaveBeenCalled();
+  });
+
   it("returns no_project_id when the business has no rowboat project (chat itself 409s here too)", async () => {
     const deps = makeDeps({
       getBusinessConfig: vi.fn().mockResolvedValue({ rowboat_project_id: null })
