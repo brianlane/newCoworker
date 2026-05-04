@@ -165,6 +165,42 @@ describe("intakeOptions: isCrmSelectionComplete", () => {
     expect(isCrmSelectionComplete(CRM_OTHER_SENTINEL)).toBe(false);
   });
 
+  it("rejects the bare CRM_OTHER_VALUE ('Other') as incomplete (legacy localStorage / non-serialized path)", () => {
+    // Regression: `serializeCrmSelection` never writes the bare
+    // string `"Other"` (it always produces either the sentinel
+    // `"Other:"` for empty text or the prefixed `"Other: <name>"`
+    // for non-empty text), but a legacy localStorage draft or a
+    // direct API caller could land that value in storage by
+    // pulling `CRM_OPTIONS`' Other entry's `value` directly.
+    // `deriveCrmSelection("Other")` matches the option entry and
+    // renders the dropdown in Other state with an empty "Which
+    // CRM?" text input — so for UX consistency the advance gate
+    // MUST also flag this as incomplete. Otherwise the user can
+    // bypass the text input entirely and submit `crmUsed: "Other"`
+    // as if it were a real answer.
+    expect(isCrmSelectionComplete(CRM_OTHER_VALUE)).toBe(false);
+    expect(isCrmSelectionComplete("  Other  ")).toBe(false);
+  });
+
+  it("agrees with deriveCrmSelection on every Other-state representation (no UI/gate disagreement)", () => {
+    // Whenever `deriveCrmSelection(stored).selection === "Other"`
+    // and `otherText === ""`, the UI shows an empty "Which CRM?"
+    // text input — regardless of whether `stored` is the sentinel,
+    // the bare "Other", or some legacy unknown free-text value
+    // that happens to round-trip into Other. In all of those
+    // cases `isCrmSelectionComplete` MUST return false; otherwise
+    // the user reads "Which CRM?" and can advance without typing.
+    // Pinning this invariant prevents future drift between the
+    // two helpers.
+    const otherEmptyStates = ["Other", "Other:", "  Other:  ", "Other: ", "Other:    "];
+    for (const stored of otherEmptyStates) {
+      const { selection, otherText } = deriveCrmSelection(stored);
+      expect(selection, `for "${stored}"`).toBe(CRM_OTHER_VALUE);
+      expect(otherText, `for "${stored}"`).toBe("");
+      expect(isCrmSelectionComplete(stored), `for "${stored}"`).toBe(false);
+    }
+  });
+
   it("accepts known dropdown values, including the explicit None entry", () => {
     expect(isCrmSelectionComplete("HubSpot")).toBe(true);
     expect(isCrmSelectionComplete("None — texts, email, or calendar only")).toBe(true);

@@ -181,15 +181,27 @@ export function serializeCrmSelection(selection: string, otherText: string): str
 
 /**
  * True when the stored CRM value represents a completed answer the
- * server can rely on. `"Other:"` (the in-flight sentinel) and the
- * empty string both block advance; everything else — including the
- * explicit `"None — texts, email, or calendar only"` entry — counts
- * as a complete answer.
+ * server can rely on. The empty string, the in-flight sentinel
+ * `"Other:"`, AND the bare `"Other"` value all block advance;
+ * everything else — including the explicit
+ * `"None — texts, email, or calendar only"` entry — counts as a
+ * complete answer.
+ *
+ * The bare `"Other"` case matters even though
+ * `serializeCrmSelection` never produces it (it always writes the
+ * sentinel or the prefixed form): a legacy localStorage draft, a
+ * direct API caller, or any code path that wrote `CRM_OPTIONS`'
+ * `Other` entry's `value` straight into storage would land here.
+ * `deriveCrmSelection` correctly renders such a value as
+ * `{ selection: "Other", otherText: "" }` and shows the empty
+ * "Which CRM?" text input — letting the advance gate pass anyway
+ * would short-circuit the user past the field.
  */
 export function isCrmSelectionComplete(stored: string | undefined | null): boolean {
   const value = (stored ?? "").trim();
   if (!value) return false;
   if (value === CRM_OTHER_SENTINEL) return false;
+  if (value === CRM_OTHER_VALUE) return false;
   if (value.startsWith(CRM_OTHER_PREFIX)) {
     return value.slice(CRM_OTHER_PREFIX.length).trim().length > 0;
   }
