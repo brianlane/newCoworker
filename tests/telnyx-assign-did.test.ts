@@ -11,8 +11,15 @@ const mockedRoutes = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/db/telnyx-routes", () => mockedRoutes);
 
+const mockedBusinesses = vi.hoisted(() => ({
+  getBusiness: vi.fn()
+}));
+vi.mock("@/lib/db/businesses", () => mockedBusinesses);
+
 import {
   normalizeE164,
+  coerceOwnerPhoneToE164,
+  resolveDefaultForwardToE164,
   assignExistingDidToBusiness,
   orderAndAssignDidForBusiness,
   OrderAndAssignError
@@ -108,14 +115,102 @@ describe("normalizeE164", () => {
   });
 });
 
+describe("coerceOwnerPhoneToE164", () => {
+  it.each([
+    ["null", null, null],
+    ["undefined", undefined, null],
+    ["empty string", "", null],
+    ["whitespace only", "   ", null],
+    ["only formatting chars", "()-", null],
+    ["+ but no digits", "+", null],
+    ["bare 10 digits", "6026866672", "+16026866672"],
+    ["bare 10 digits with formatting", "(602) 686-6672", "+16026866672"],
+    ["11 digits starting with 1", "16026866672", "+16026866672"],
+    ["already E.164", "+16026866672", "+16026866672"],
+    ["+ with international", "+447911123456", "+447911123456"],
+    ["7-digit local — refuses to guess country code", "5551234", null],
+    ["8 digits — refuses to guess country code", "55512345", null],
+    ["13 digits without +", "1234567890123", null],
+    ["leading-zero country code via +", "+012345678", null],
+    [
+      "NANP coercion accepts a leading-zero area code — that's Telnyx's job to reject, not ours",
+      "0234567890",
+      "+10234567890"
+    ]
+  ])("%s → %s", (_label, raw, expected) => {
+    expect(coerceOwnerPhoneToE164(raw as string | null | undefined)).toBe(expected);
+  });
+});
+
+describe("resolveDefaultForwardToE164", () => {
+  beforeEach(() => {
+    mockedRoutes.getBusinessTelnyxSettings.mockReset();
+    mockedBusinesses.getBusiness.mockReset();
+  });
+
+  it("returns existing forward_to_e164 verbatim (never clobbers owner override)", async () => {
+    mockedRoutes.getBusinessTelnyxSettings.mockResolvedValue({
+      ...sampleSettings,
+      forward_to_e164: "+15555550199"
+    });
+    const r = await resolveDefaultForwardToE164("biz", {} as never);
+    expect(r).toBe("+15555550199");
+    // Existing value short-circuits the businesses lookup.
+    expect(mockedBusinesses.getBusiness).not.toHaveBeenCalled();
+  });
+
+  it("trims whitespace on existing forward (defends against legacy rows)", async () => {
+    mockedRoutes.getBusinessTelnyxSettings.mockResolvedValue({
+      ...sampleSettings,
+      forward_to_e164: "  +15555550199  "
+    });
+    expect(await resolveDefaultForwardToE164("biz", {} as never)).toBe("+15555550199");
+  });
+
+  it("falls back to coerced businesses.phone when forward is null", async () => {
+    mockedRoutes.getBusinessTelnyxSettings.mockResolvedValue({
+      ...sampleSettings,
+      forward_to_e164: null
+    });
+    mockedBusinesses.getBusiness.mockResolvedValue({ id: "biz", phone: "6026866672" });
+    expect(await resolveDefaultForwardToE164("biz", {} as never)).toBe("+16026866672");
+  });
+
+  it("returns null when businesses.phone is missing", async () => {
+    mockedRoutes.getBusinessTelnyxSettings.mockResolvedValue({
+      ...sampleSettings,
+      forward_to_e164: null
+    });
+    mockedBusinesses.getBusiness.mockResolvedValue({ id: "biz", phone: null });
+    expect(await resolveDefaultForwardToE164("biz", {} as never)).toBeNull();
+  });
+
+  it("returns null and never throws when getBusiness rejects (DID-assign must not abort)", async () => {
+    mockedRoutes.getBusinessTelnyxSettings.mockResolvedValue({
+      ...sampleSettings,
+      forward_to_e164: null
+    });
+    mockedBusinesses.getBusiness.mockRejectedValue(new Error("supabase down"));
+    expect(await resolveDefaultForwardToE164("biz", {} as never)).toBeNull();
+  });
+
+  it("returns null when getBusiness resolves to null (deleted business edge case)", async () => {
+    mockedRoutes.getBusinessTelnyxSettings.mockResolvedValue(null);
+    mockedBusinesses.getBusiness.mockResolvedValue(null);
+    expect(await resolveDefaultForwardToE164("biz", {} as never)).toBeNull();
+  });
+});
+
 describe("assignExistingDidToBusiness", () => {
   beforeEach(() => {
     mockedRoutes.upsertTelnyxVoiceRoute.mockReset();
     mockedRoutes.upsertBusinessTelnyxSettings.mockReset();
     mockedRoutes.getBusinessTelnyxSettings.mockReset();
+    mockedBusinesses.getBusiness.mockReset();
     mockedRoutes.upsertTelnyxVoiceRoute.mockResolvedValue(sampleRoute);
     mockedRoutes.upsertBusinessTelnyxSettings.mockResolvedValue(sampleSettings);
     mockedRoutes.getBusinessTelnyxSettings.mockResolvedValue(null);
+    mockedBusinesses.getBusiness.mockResolvedValue(null);
   });
 
   it("upserts settings + route and returns both, without Telnyx when associate=false", async () => {
@@ -286,6 +381,64 @@ describe("assignExistingDidToBusiness", () => {
     expect(mockedRoutes.upsertBusinessTelnyxSettings).toHaveBeenCalledWith(expect.anything(), db);
     expect(mockedRoutes.upsertTelnyxVoiceRoute).toHaveBeenCalledWith(expect.anything(), db);
   });
+
+  it("backfills forwardToE164 from businesses.phone on first provision", async () => {
+    // Regression: the orchestrator captured `businesses.phone` from
+    // onboarding but the DID-assign step never propagated it forward.
+    // Owners had to retype the same number on the dashboard before Safe
+    // Mode worked. This test pins the new behavior so refactors can't
+    // regress us back to "Forwarding phone (E.164)" rendering blank.
+    mockedRoutes.getBusinessTelnyxSettings.mockResolvedValue({
+      ...sampleSettings,
+      forward_to_e164: null
+    });
+    mockedBusinesses.getBusiness.mockResolvedValue({ id: "biz", phone: "6026866672" });
+    await assignExistingDidToBusiness({
+      businessId: "biz",
+      toE164: "+15551234567"
+    });
+    expect(mockedRoutes.upsertBusinessTelnyxSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ forwardToE164: "+16026866672" }),
+      expect.anything()
+    );
+  });
+
+  it("does NOT include forwardToE164 in upsert when no default could be resolved", async () => {
+    // Critical: passing `forwardToE164: null` would clobber an owner-set
+    // value. We verify the field is OMITTED from the patch (not nulled).
+    mockedRoutes.getBusinessTelnyxSettings.mockResolvedValue({
+      ...sampleSettings,
+      forward_to_e164: null
+    });
+    mockedBusinesses.getBusiness.mockResolvedValue({ id: "biz", phone: null });
+    await assignExistingDidToBusiness({
+      businessId: "biz",
+      toE164: "+15551234567"
+    });
+    const call = mockedRoutes.upsertBusinessTelnyxSettings.mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
+    expect(call).not.toHaveProperty("forwardToE164");
+  });
+
+  it("preserves an existing forward_to_e164 by re-passing the same value (never clobbers)", async () => {
+    mockedRoutes.getBusinessTelnyxSettings.mockResolvedValue({
+      ...sampleSettings,
+      forward_to_e164: "+15555550199"
+    });
+    mockedBusinesses.getBusiness.mockResolvedValue({ id: "biz", phone: "6026866672" });
+    await assignExistingDidToBusiness({
+      businessId: "biz",
+      toE164: "+15551234567"
+    });
+    expect(mockedRoutes.upsertBusinessTelnyxSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ forwardToE164: "+15555550199" }),
+      expect.anything()
+    );
+    // Existing value short-circuits getBusiness lookup.
+    expect(mockedBusinesses.getBusiness).not.toHaveBeenCalled();
+  });
 });
 
 describe("orderAndAssignDidForBusiness", () => {
@@ -293,9 +446,11 @@ describe("orderAndAssignDidForBusiness", () => {
     mockedRoutes.upsertTelnyxVoiceRoute.mockReset();
     mockedRoutes.upsertBusinessTelnyxSettings.mockReset();
     mockedRoutes.getBusinessTelnyxSettings.mockReset();
+    mockedBusinesses.getBusiness.mockReset();
     mockedRoutes.upsertTelnyxVoiceRoute.mockResolvedValue(sampleRoute);
     mockedRoutes.upsertBusinessTelnyxSettings.mockResolvedValue(sampleSettings);
     mockedRoutes.getBusinessTelnyxSettings.mockResolvedValue(null);
+    mockedBusinesses.getBusiness.mockResolvedValue(null);
   });
 
   it("happy path: searches, orders, waits, assigns", async () => {

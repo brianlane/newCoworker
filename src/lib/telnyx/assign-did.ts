@@ -35,6 +35,7 @@ import {
   type BusinessTelnyxSettingsRow
 } from "@/lib/db/telnyx-routes";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { getBusiness } from "@/lib/db/businesses";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -84,6 +85,35 @@ export function normalizeE164(input: string): string {
   return stripped;
 }
 
+/**
+ * Best-effort coercion for free-form phone strings collected during onboarding
+ * (which has no country-code requirement on the form). Mirrors the Edge-side
+ * normalizer in `supabase/functions/_shared/normalize_e164.ts` — accepts a
+ * leading `+`, otherwise assumes NANP for bare 10-digit / `1`-prefixed
+ * 11-digit inputs and refuses the rest. Returns `null` on anything that
+ * can't be safely coerced; never throws. Use this when the source data is
+ * "owner-typed onboarding phone" and a wrong guess would route SMS to the
+ * wrong country.
+ */
+export function coerceOwnerPhoneToE164(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const cleaned = trimmed.replace(/[^\d+]/g, "");
+  if (!cleaned) return null;
+  let candidate: string;
+  if (cleaned.startsWith("+")) {
+    candidate = cleaned;
+  } else if (cleaned.length === 10) {
+    candidate = `+1${cleaned}`;
+  } else if (cleaned.length === 11 && cleaned.startsWith("1")) {
+    candidate = `+${cleaned}`;
+  } else {
+    return null;
+  }
+  return /^\+[1-9]\d{7,14}$/.test(candidate) ? candidate : null;
+}
+
 async function resolveBridgeOrigin(
   businessId: string,
   platformDefaults: PlatformTelnyxDefaults | undefined,
@@ -99,6 +129,35 @@ async function resolveBridgeOrigin(
   // origin available" and let the row stay null until a real one is known.
   const fallback = platformDefaults?.bridgeMediaWssOrigin;
   return fallback && fallback.trim().length > 0 ? fallback : null;
+}
+
+/**
+ * Compute the value we should write to `business_telnyx_settings.forward_to_e164`
+ * during DID-assign provisioning.
+ *
+ * The dashboard "Forwarding phone (E.164)" field used to be blank on every
+ * fresh provision because the orchestrator captured `businesses.phone` from
+ * onboarding but never propagated it forward — owners had to retype the same
+ * number they'd just submitted. We backfill it here so Safe Mode is one click
+ * away on day one.
+ *
+ * Precedence:
+ *   1. Existing `forward_to_e164` on the row (owner override) — never clobber.
+ *   2. Coerced `businesses.phone` if it's a structurally valid E.164 (NANP-aware).
+ *   3. `null` — let the owner enter it manually rather than persist garbage.
+ */
+export async function resolveDefaultForwardToE164(
+  businessId: string,
+  client: SupabaseClient
+): Promise<string | null> {
+  const existing = await getBusinessTelnyxSettings(businessId, client);
+  const existingForward = existing?.forward_to_e164?.trim();
+  if (existingForward) return existingForward;
+  // Defence: a missing or unreadable business row should never abort
+  // DID-assign — fall through to a null forward. Worst case the field
+  // stays blank and the owner sets it from the dashboard like before.
+  const business = await getBusiness(businessId, client).catch(() => null);
+  return coerceOwnerPhoneToE164(business?.phone ?? null);
 }
 
 export async function assignExistingDidToBusiness(
@@ -126,13 +185,19 @@ export async function assignExistingDidToBusiness(
     });
   }
 
+  const defaultForward = await resolveDefaultForwardToE164(input.businessId, db);
+
   const settings = await upsertBusinessTelnyxSettings(
     {
       businessId: input.businessId,
       telnyxSmsFromE164: toE164,
       telnyxMessagingProfileId: messagingProfileId,
       telnyxConnectionId: connectionId,
-      bridgeMediaWssOrigin: bridgeOrigin
+      bridgeMediaWssOrigin: bridgeOrigin,
+      // Only set forwardToE164 when we actually computed one. Passing
+      // `forwardToE164: null` would clobber an owner-set value, which is
+      // exactly what `resolveDefaultForwardToE164` is designed to avoid.
+      ...(defaultForward !== null ? { forwardToE164: defaultForward } : {})
     },
     db
   );

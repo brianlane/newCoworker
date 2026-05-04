@@ -12,6 +12,7 @@ import { createGeminiTelnyxBridge, type TransferCapability } from "./gemini-teln
 import { loadVaultForPrompt } from "./vault-loader.js";
 import { telnyxTransferCall, telnyxSendPlainSms } from "./telnyx-call-actions.js";
 import type { TranscriptAdapter } from "./voice-transcript.js";
+import { startIdleHeartbeatLoop, writeHeartbeat } from "./heartbeat.js";
 
 loadEnv();
 
@@ -201,16 +202,7 @@ async function sendMissedCallSms(params: {
 }
 
 async function heartbeat(supabase: SupabaseClient, businessId: string): Promise<void> {
-  await supabase
-    .from("business_telnyx_settings")
-    .upsert(
-      {
-        business_id: businessId,
-        bridge_last_heartbeat_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      },
-      { onConflict: "business_id" }
-    );
+  await writeHeartbeat(supabase, businessId);
 }
 
 function main(): void {
@@ -220,6 +212,18 @@ function main(): void {
   }
 
   const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+
+  // Kick off the idle-heartbeat loop as soon as we have a Supabase client
+  // and a known BUSINESS_ID. We deliberately skip the loop when BUSINESS_ID
+  // is missing (single-tenant container with no provisioned business yet) —
+  // upserts without a primary key would error out with FK violations on
+  // every interval and spam the logs without producing useful signal. The
+  // per-call heartbeat inside the WS upgrade handler is still a backstop,
+  // so we don't lose health visibility for those edge configurations.
+  if (BUSINESS_ID) {
+    startIdleHeartbeatLoop(supabase, BUSINESS_ID);
+  }
+
   const server = createServer((_req, res) => {
     res.writeHead(200, { "Content-Type": "text/plain" });
     res.end("voice-bridge ok\n");
