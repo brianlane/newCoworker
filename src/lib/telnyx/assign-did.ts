@@ -35,6 +35,7 @@ import {
   type BusinessTelnyxSettingsRow
 } from "@/lib/db/telnyx-routes";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { getBusiness } from "@/lib/db/businesses";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -84,12 +85,39 @@ export function normalizeE164(input: string): string {
   return stripped;
 }
 
-async function resolveBridgeOrigin(
-  businessId: string,
-  platformDefaults: PlatformTelnyxDefaults | undefined,
-  client: SupabaseClient
-): Promise<string | null> {
-  const existing = await getBusinessTelnyxSettings(businessId, client);
+/**
+ * Best-effort coercion for free-form phone strings collected during onboarding
+ * (which has no country-code requirement on the form). Mirrors the Edge-side
+ * normalizer in `supabase/functions/_shared/normalize_e164.ts` — accepts a
+ * leading `+`, otherwise assumes NANP for bare 10-digit / `1`-prefixed
+ * 11-digit inputs and refuses the rest. Returns `null` on anything that
+ * can't be safely coerced; never throws. Use this when the source data is
+ * "owner-typed onboarding phone" and a wrong guess would route SMS to the
+ * wrong country.
+ */
+export function coerceOwnerPhoneToE164(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const cleaned = trimmed.replace(/[^\d+]/g, "");
+  if (!cleaned) return null;
+  let candidate: string;
+  if (cleaned.startsWith("+")) {
+    candidate = cleaned;
+  } else if (cleaned.length === 10) {
+    candidate = `+1${cleaned}`;
+  } else if (cleaned.length === 11 && cleaned.startsWith("1")) {
+    candidate = `+${cleaned}`;
+  } else {
+    return null;
+  }
+  return /^\+[1-9]\d{7,14}$/.test(candidate) ? candidate : null;
+}
+
+function resolveBridgeOriginFromRow(
+  existing: BusinessTelnyxSettingsRow | null,
+  platformDefaults: PlatformTelnyxDefaults | undefined
+): string | null {
   if (existing?.bridge_media_wss_origin && existing.bridge_media_wss_origin.length > 0) {
     return existing.bridge_media_wss_origin;
   }
@@ -101,6 +129,44 @@ async function resolveBridgeOrigin(
   return fallback && fallback.trim().length > 0 ? fallback : null;
 }
 
+/**
+ * Compute the value we should write to `business_telnyx_settings.forward_to_e164`
+ * during DID-assign provisioning.
+ *
+ * The dashboard "Forwarding phone (E.164)" field used to be blank on every
+ * fresh provision because the orchestrator captured `businesses.phone` from
+ * onboarding but never propagated it forward — owners had to retype the same
+ * number they'd just submitted. We backfill it here so Safe Mode is one click
+ * away on day one.
+ *
+ * Precedence:
+ *   1. Existing `forward_to_e164` on the row (owner override) — never clobber.
+ *   2. Coerced `businesses.phone` if it's a structurally valid E.164 (NANP-aware).
+ *   3. `null` — let the owner enter it manually rather than persist garbage.
+ */
+export async function resolveDefaultForwardToE164(
+  businessId: string,
+  client: SupabaseClient,
+  /**
+   * The already-fetched `business_telnyx_settings` row, if the caller
+   * happens to have it in scope. `assignExistingDidToBusiness` reads this
+   * row once for both the bridge-origin and forward-phone resolution
+   * paths (Bugbot Low: avoid duplicate DB round-trip on every provision).
+   * Direct callers can omit it and we'll fetch on demand.
+   */
+  existing?: BusinessTelnyxSettingsRow | null
+): Promise<string | null> {
+  const settingsRow =
+    existing !== undefined ? existing : await getBusinessTelnyxSettings(businessId, client);
+  const existingForward = settingsRow?.forward_to_e164?.trim();
+  if (existingForward) return existingForward;
+  // Defence: a missing or unreadable business row should never abort
+  // DID-assign — fall through to a null forward. Worst case the field
+  // stays blank and the owner sets it from the dashboard like before.
+  const business = await getBusiness(businessId, client).catch(() => null);
+  return coerceOwnerPhoneToE164(business?.phone ?? null);
+}
+
 export async function assignExistingDidToBusiness(
   input: AssignExistingDidInput,
   deps?: {
@@ -110,7 +176,10 @@ export async function assignExistingDidToBusiness(
 ): Promise<AssignDidResult> {
   const toE164 = normalizeE164(input.toE164);
   const db = deps?.client ?? (await createSupabaseServiceClient());
-  const bridgeOrigin = await resolveBridgeOrigin(input.businessId, input.platformDefaults, db);
+  // Read the settings row exactly once and reuse it for both the
+  // bridge-origin and forward-phone resolution paths (Bugbot Low).
+  const existingSettings = await getBusinessTelnyxSettings(input.businessId, db);
+  const bridgeOrigin = resolveBridgeOriginFromRow(existingSettings, input.platformDefaults);
   const connectionId = input.platformDefaults?.connectionId ?? null;
   const messagingProfileId = input.platformDefaults?.messagingProfileId ?? null;
 
@@ -126,13 +195,23 @@ export async function assignExistingDidToBusiness(
     });
   }
 
+  const defaultForward = await resolveDefaultForwardToE164(
+    input.businessId,
+    db,
+    existingSettings
+  );
+
   const settings = await upsertBusinessTelnyxSettings(
     {
       businessId: input.businessId,
       telnyxSmsFromE164: toE164,
       telnyxMessagingProfileId: messagingProfileId,
       telnyxConnectionId: connectionId,
-      bridgeMediaWssOrigin: bridgeOrigin
+      bridgeMediaWssOrigin: bridgeOrigin,
+      // Only set forwardToE164 when we actually computed one. Passing
+      // `forwardToE164: null` would clobber an owner-set value, which is
+      // exactly what `resolveDefaultForwardToE164` is designed to avoid.
+      ...(defaultForward !== null ? { forwardToE164: defaultForward } : {})
     },
     db
   );

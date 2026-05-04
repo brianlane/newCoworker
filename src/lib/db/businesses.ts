@@ -30,6 +30,12 @@ export type BusinessRow = {
   enterprise_limits?: Record<string, unknown> | null;
   /** Lifetime abuse-tracking profile — null for pre-lifecycle businesses. */
   customer_profile_id?: string | null;
+  /**
+   * Owner phone number captured during onboarding. May be free-form (no
+   * country code, formatting characters) — coerce via
+   * `coerceOwnerPhoneToE164` before persisting downstream.
+   */
+  phone?: string | null;
 };
 
 export async function createBusiness(
