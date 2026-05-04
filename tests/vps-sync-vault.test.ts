@@ -26,6 +26,7 @@ import {
   buildAgentInstructions,
   buildSyncVaultCommand,
   DEFAULT_AGENT_INSTRUCTIONS_FALLBACK,
+  resolveSyncProjectId,
   syncVaultToVps,
   syncVaultToVpsAndLog,
   type VaultSyncDeps
@@ -145,6 +146,39 @@ describe("buildAgentInstructions", () => {
   });
 });
 
+describe("resolveSyncProjectId", () => {
+  // Codex P2 review on PR #59 caught a divergence: the runtime chat route
+  // resolves the project id from `business_configs.rowboat_project_id`
+  // first (falling back to businessId only when null), but the original
+  // sync path hard-coded the businessId. On tenants whose two values
+  // differed (manual seed, future migration), the sync would target the
+  // wrong/no project document while reporting `ok: true`. These tests
+  // pin the corrected resolution against the chat route's behavior.
+  it("uses business_configs.rowboat_project_id when it differs from businessId (manual seed / drifted row)", () => {
+    expect(
+      resolveSyncProjectId("biz-uuid", { rowboat_project_id: "custom-project-uuid" })
+    ).toBe("custom-project-uuid");
+  });
+
+  it("falls back to businessId when rowboat_project_id is null (orchestrator's default provisioning leaves them equal)", () => {
+    expect(resolveSyncProjectId("biz-uuid", { rowboat_project_id: null })).toBe("biz-uuid");
+  });
+
+  it("treats undefined rowboat_project_id as null (older rows missing the column)", () => {
+    expect(resolveSyncProjectId("biz-uuid", { rowboat_project_id: undefined })).toBe("biz-uuid");
+  });
+
+  it("treats whitespace-only rowboat_project_id as unset (defends against accidental empty patches)", () => {
+    expect(resolveSyncProjectId("biz-uuid", { rowboat_project_id: "   " })).toBe("biz-uuid");
+  });
+
+  it("trims surrounding whitespace from a valid rowboat_project_id (mirrors the chat route's `.trim()`)", () => {
+    expect(
+      resolveSyncProjectId("biz-uuid", { rowboat_project_id: "  custom-project  " })
+    ).toBe("custom-project");
+  });
+});
+
 describe("buildSyncVaultCommand", () => {
   const NOW = new Date("2026-05-03T12:00:00Z");
 
@@ -204,6 +238,40 @@ describe("buildSyncVaultCommand", () => {
     // executes (`base64 -d > .../website.md` from an empty input) and
     // truncates the file to zero bytes.
     expect(cmd).toContain("printf %s ''");
+  });
+
+  it("targets business_configs.rowboat_project_id (not businessId) when the two have drifted apart — closes the Codex P2 finding on PR #59", () => {
+    const cmd = buildSyncVaultCommand(
+      BIZ,
+      { ...FULL_CONFIG, rowboat_project_id: "drifted-project-id" },
+      "INST",
+      NOW
+    );
+    expect(cmd).toContain('{ _id: "drifted-project-id" }');
+    // Must NOT use the businessId when an explicit project id is set.
+    expect(cmd).not.toContain(`{ _id: "${BIZ}" }`);
+  });
+
+  it("falls back to businessId when rowboat_project_id is null (matches the >99% provisioning-default case)", () => {
+    const cmd = buildSyncVaultCommand(
+      BIZ,
+      { ...FULL_CONFIG, rowboat_project_id: null },
+      "INST",
+      NOW
+    );
+    expect(cmd).toContain(`{ _id: "${BIZ}" }`);
+  });
+
+  it("hard-fails the sync when matchedCount === 0 so a drifted business_configs.rowboat_project_id surfaces as ssh_failed instead of silent success", () => {
+    const cmd = buildSyncVaultCommand(BIZ, FULL_CONFIG, "INST", NOW);
+    // `r.matchedCount === 0` is treated as fatal — without this, a tenant
+    // whose project id got out of sync with their VPS Mongo would see
+    // `ok: true` while their agent kept serving the stale prompt.
+    expect(cmd).toMatch(/r\.matchedCount\s*===\s*0/);
+    expect(cmd).toContain("quit(1)");
+    // Diagnostic line so the orchestrator's stderr-tail logging shows
+    // exactly which projectId was requested when this fires.
+    expect(cmd).toContain("vault_sync_target_missing");
   });
 });
 
@@ -272,6 +340,11 @@ describe("syncVaultToVps — success path", () => {
     if (!r.ok) return;
     expect(r.hostingerVpsId).toBe("1632631");
     expect(r.publicIp).toBe("203.0.113.1");
+    // The default fixture has rowboat_project_id === businessId, so the
+    // resolved target is the businessId — same as the chat route's
+    // resolution. The dedicated drift tests below cover the divergent
+    // case.
+    expect(r.projectId).toBe(BIZ);
     expect(r.instructionsLength).toBeGreaterThan(0);
     expect(deps.exec).toHaveBeenCalledTimes(1);
     const call = (deps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0];
@@ -288,6 +361,22 @@ describe("syncVaultToVps — success path", () => {
     await syncVaultToVps(BIZ, deps);
     const call = (deps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(call.timeoutMs).toBe(60_000);
+  });
+
+  it("propagates a drifted business_configs.rowboat_project_id all the way to the SSH command AND the returned result.projectId", async () => {
+    const driftedConfig = { ...FULL_CONFIG, rowboat_project_id: "different-id" };
+    const deps = freshDeps({
+      fetchConfig: vi.fn(async () => driftedConfig)
+    });
+    const r = await syncVaultToVps(BIZ, deps);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // The result tells the caller the actual targeted id, NOT the
+    // businessId — observability for tenants on the divergent path.
+    expect(r.projectId).toBe("different-id");
+    // The bash command targets the same id.
+    const call = (deps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(call.command).toContain('{ _id: "different-id" }');
   });
 });
 
@@ -355,16 +444,58 @@ describe("syncVaultToVps — ssh failure paths", () => {
       expect(r.detail).toContain("cannot connect after 30s");
     }
   });
+
+  it("surfaces a missing-project failure as ssh_failed with the diagnostic sentinel so a drifted rowboat_project_id can't masquerade as silent success", async () => {
+    // Simulates the on-VPS scenario where `business_configs.rowboat_project_id`
+    // points at a project that no longer exists in the per-tenant Mongo.
+    // The mongosh script's `quit(1)` triggers `set -e` to fail the whole
+    // bash command; the wrapper sees exitCode !== 0 and surfaces the
+    // sentinel via the stderr/stdout tail.
+    const deps = freshDeps({
+      exec: vi.fn(async () => ({
+        exitCode: 1,
+        signal: null,
+        stdout: 'matched=0 modified=0 inst.length=42\nvault_sync_target_missing _id="missing-project"\n',
+        stderr: ""
+      }))
+    });
+    const r = await syncVaultToVps(BIZ, deps);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe("ssh_failed");
+      expect(r.detail).toContain("vault_sync_target_missing");
+    }
+  });
 });
 
 describe("syncVaultToVpsAndLog", () => {
-  it("logs at info on success with the businessId + instructionsLength so we have an audit trail per save", async () => {
+  it("logs at info on success with the businessId + projectId + instructionsLength so we have an audit trail per save", async () => {
     await syncVaultToVpsAndLog(BIZ, freshDeps());
     expect(logger.info).toHaveBeenCalledWith(
       "vault sync ok",
-      expect.objectContaining({ businessId: BIZ })
+      expect.objectContaining({
+        businessId: BIZ,
+        projectId: BIZ,
+        // Default fixture has rowboat_project_id === businessId.
+        projectIdDriftedFromBusinessId: false
+      })
     );
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("flags the drift signal when the targeted projectId differs from the businessId so we can spot legacy/manual rows in production logs", async () => {
+    const driftedConfig = { ...FULL_CONFIG, rowboat_project_id: "different-id" };
+    await syncVaultToVpsAndLog(BIZ, freshDeps({
+      fetchConfig: vi.fn(async () => driftedConfig)
+    }));
+    expect(logger.info).toHaveBeenCalledWith(
+      "vault sync ok",
+      expect.objectContaining({
+        businessId: BIZ,
+        projectId: "different-id",
+        projectIdDriftedFromBusinessId: true
+      })
+    );
   });
 
   it("logs at warn (not error) for non-ok results so we don't page on healthy code paths like dev no_hostinger_token", async () => {

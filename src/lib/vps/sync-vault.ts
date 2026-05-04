@@ -46,6 +46,13 @@ export type VaultSyncOk = {
   ok: true;
   hostingerVpsId: string;
   publicIp: string;
+  /**
+   * The `_id` we targeted in `db.projects.updateOne`. Mirrors the runtime
+   * chat route's resolution: `business_configs.rowboat_project_id` first,
+   * `businessId` as fallback. Surfaced so logs / monitoring can spot
+   * tenants whose project id has drifted from their business id.
+   */
+  projectId: string;
   /** Length of the concatenated instructions string written to MongoDB. */
   instructionsLength: number;
 };
@@ -143,6 +150,39 @@ async function defaultResolveIp(hostingerVpsId: string): Promise<string | null> 
 /* c8 ignore stop */
 
 /**
+ * Resolve the MongoDB project id this sync should target. Mirrors the
+ * runtime resolution in `/api/dashboard/chat`:
+ *
+ *   const projectId = projectConfig?.rowboat_project_id?.trim() ?? ...;
+ *
+ * Without this alignment, the sync path would silently update the wrong
+ * (or no) project document on tenants where `rowboat_project_id` was
+ * manually re-pointed to a hand-seeded project — `matchedCount` would be
+ * zero but `mongosh` reports a clean exit, so the orchestrator would
+ * report `ok: true` while the live agent kept serving the stale prompt.
+ *
+ * Falls back to `businessId` because that's how `deploy-client.sh`
+ * provisions every fresh tenant (`db.projects.insertOne({ _id: BUSINESS_ID, ... })`
+ * + `PATCH business_configs.rowboat_project_id = BUSINESS_ID`), so the
+ * fallback exactly matches the on-VPS reality for the >99% case.
+ *
+ * The runtime chat route ALSO falls through to
+ * `process.env.ROWBOAT_DEFAULT_PROJECT_ID` after the businessId path —
+ * that env var is a multi-tenant shared-default for the platform-side
+ * gateway, NOT a per-VPS project id, so it's deliberately omitted here.
+ * A per-tenant Mongo only has the tenant's own project; targeting a
+ * shared default id would update nothing.
+ */
+export function resolveSyncProjectId(
+  businessId: string,
+  config: Pick<ConfigRow, "rowboat_project_id">
+): string {
+  const explicit = config.rowboat_project_id?.trim();
+  if (explicit && explicit.length > 0) return explicit;
+  return businessId;
+}
+
+/**
  * Build the bash command run over SSH. Vault contents are passed as
  * base64 to dodge shell-quoting hazards — markdown frequently contains
  * single quotes, dollar signs, and backticks that would break a heredoc
@@ -154,13 +194,20 @@ async function defaultResolveIp(hostingerVpsId: string): Promise<string | null> 
  * stay in lockstep. Without the live update, the production tunnel would
  * keep serving the old prompt even after a draft save.
  *
+ * `matchedCount === 0` is treated as a hard failure (mongosh `quit(1)`)
+ * so the orchestrator surfaces it as `ssh_failed` instead of silently
+ * reporting success when the targeted project doesn't exist on the VPS
+ * (e.g. `business_configs.rowboat_project_id` got out of sync with the
+ * on-VPS Mongo, or someone wiped the project document manually). The
+ * surrounding `set -euo pipefail` then fails the whole command.
+ *
  * Exported for tests — the unit suite asserts on key substrings of the
  * generated command (e.g. base64 contents, mongo update path, exit
  * sentinel) without needing to spin a real SSH listener.
  */
 export function buildSyncVaultCommand(
   businessId: string,
-  config: Pick<ConfigRow, "soul_md" | "identity_md" | "memory_md" | "website_md">,
+  config: Pick<ConfigRow, "soul_md" | "identity_md" | "memory_md" | "website_md" | "rowboat_project_id">,
   instructions: string,
   now: Date
 ): string {
@@ -179,10 +226,12 @@ export function buildSyncVaultCommand(
   const websiteB64 = enc(config.website_md ?? "");
   /* c8 ignore stop */
   const instructionsB64 = enc(instructions);
-  // The mongosh JSON.stringify of the project id is conservative — we
-  // already validated it's a uuid upstream, but encoding via JSON keeps
-  // the script robust if a future caller passes something weirder.
-  const projectIdJson = JSON.stringify(businessId);
+  // Resolve the Mongo target the same way the runtime chat route does so
+  // we never silently update the wrong project. JSON.stringify keeps the
+  // mongosh literal robust against any oddball characters that slip past
+  // the upstream uuid validation.
+  const projectId = resolveSyncProjectId(businessId, config);
+  const projectIdJson = JSON.stringify(projectId);
   const nowIso = now.toISOString();
 
   return [
@@ -210,6 +259,9 @@ export function buildSyncVaultCommand(
     `  } }`,
     `);`,
     `print("matched=" + r.matchedCount + " modified=" + r.modifiedCount + " inst.length=" + inst.length);`,
+    // Hard fail when the target project doesn't exist on this VPS — see
+    // the function-level comment for why silent zero-matches are dangerous.
+    `if (r.matchedCount === 0) { print("vault_sync_target_missing _id=" + ${projectIdJson}); quit(1); }`,
     `MONGOSH_EOF`,
     `docker compose -f /opt/rowboat/docker-compose.yml cp "$SEED_FILE" mongo:/tmp/sync-vault.js > /dev/null`,
     `docker compose -f /opt/rowboat/docker-compose.yml cp "$INST_FILE" mongo:/tmp/sync-vault.inst > /dev/null`,
@@ -266,6 +318,7 @@ export async function syncVaultToVps(
   if (!publicIp) return { ok: false, reason: "no_public_ip" };
 
   const instructions = buildAgentInstructions(config);
+  const projectId = resolveSyncProjectId(businessId, config);
   const command = buildSyncVaultCommand(businessId, config, instructions, now);
 
   let result: SshExecResult;
@@ -303,6 +356,7 @@ export async function syncVaultToVps(
     ok: true,
     hostingerVpsId: biz.hostinger_vps_id,
     publicIp,
+    projectId,
     instructionsLength: instructions.length
   };
 }
@@ -327,6 +381,13 @@ export async function syncVaultToVpsAndLog(
       logger.info("vault sync ok", {
         businessId,
         hostingerVpsId: result.hostingerVpsId,
+        projectId: result.projectId,
+        // Drift signal: when this is true, the tenant's
+        // `business_configs.rowboat_project_id` points at a project
+        // whose id ISN'T the businessId — typically a manually-seeded
+        // project. Worth surfacing in logs so we can spot tenants who
+        // are off the standard provisioning path.
+        projectIdDriftedFromBusinessId: result.projectId !== businessId,
         instructionsLength: result.instructionsLength
       });
     } else {
