@@ -94,10 +94,20 @@ export function startIdleHeartbeatLoop(
   intervalMs: number = IDLE_HEARTBEAT_INTERVAL_MS,
   now: () => string = () => new Date().toISOString()
 ): NodeJS.Timeout {
+  // Belt & suspenders: writeHeartbeat already wraps its body in try/catch
+  // so the returned promise never rejects today, but we attach an explicit
+  // `.catch` here so a future refactor that re-introduces a rejection path
+  // can't trigger `unhandledRejection` and crash the bridge mid-call —
+  // reviewers shouldn't have to cross-reference writeHeartbeat to convince
+  // themselves this loop is process-safe.
+  const safeBeat = (): void => {
+    writeHeartbeat(supabase, businessId, now).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn("voice-bridge: idle heartbeat rejected (defensive catch)", msg);
+    });
+  };
   // Eager first beat so the dashboard updates within seconds of `systemctl
   // restart` rather than waiting a full interval.
-  void writeHeartbeat(supabase, businessId, now);
-  return setInterval(() => {
-    void writeHeartbeat(supabase, businessId, now);
-  }, intervalMs);
+  safeBeat();
+  return setInterval(safeBeat, intervalMs);
 }

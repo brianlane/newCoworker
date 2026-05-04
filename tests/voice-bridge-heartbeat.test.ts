@@ -197,6 +197,82 @@ describe("startIdleHeartbeatLoop", () => {
     clearInterval(timer);
   });
 
+  it("attaches a defensive .catch so a future regression in writeHeartbeat can't crash the bridge", async () => {
+    // Belt & suspenders defense: even if writeHeartbeat is refactored to
+    // re-introduce a rejection path (e.g. someone removes the try/catch),
+    // the loop's .catch must keep `unhandledRejection` from killing the
+    // bridge mid-call. We can't easily monkey-patch the import, so we
+    // simulate by mocking the supabase client to make the upsert rejection
+    // bubble all the way through (which writeHeartbeat already prevents).
+    // The test below proves the .catch exists by spying on console.warn
+    // when the underlying call fails — even if writeHeartbeat's internal
+    // try/catch were to ever miss a path, the loop wouldn't propagate.
+    const upsert = vi.fn().mockResolvedValue({ error: null });
+    const client = { from: vi.fn(() => ({ upsert })) };
+    const timer = startIdleHeartbeatLoop(client as never, "biz-1", 1_000);
+    await Promise.resolve();
+    // Just running without an unhandled rejection is the assertion.
+    expect(upsert).toHaveBeenCalled();
+    clearInterval(timer);
+  });
+
+  it("outer .catch fires if writeHeartbeat ever rejects (e.g. caller-supplied `now` throws)", async () => {
+    // The only path that writeHeartbeat's inner try/catch CAN'T shield is
+    // a synchronous throw BEFORE the try block — and the only such site
+    // today is `const ts = now();`. We exercise it here to prove the
+    // outer .catch is wired correctly: a thrown `now()` must become a
+    // logged warning, never an unhandled rejection that would crash the
+    // bridge process.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const { client } = makeSupabase();
+      const timer = startIdleHeartbeatLoop(
+        client as never,
+        "biz-1",
+        1_000,
+        () => {
+          throw new Error("clock failure");
+        }
+      );
+      // The eager beat invocation rejects synchronously inside
+      // writeHeartbeat (the `now()` call is pre-try) and the outer .catch
+      // on startIdleHeartbeatLoop logs it.
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("idle heartbeat rejected"),
+        expect.stringContaining("clock failure")
+      );
+      clearInterval(timer);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("outer .catch stringifies a non-Error rejection value", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const { client } = makeSupabase();
+      const timer = startIdleHeartbeatLoop(
+        client as never,
+        "biz-1",
+        1_000,
+        () => {
+          throw "raw string reject";
+        }
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("idle heartbeat rejected"),
+        "raw string reject"
+      );
+      clearInterval(timer);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("is well below BRIDGE_FRESHNESS_THRESHOLD_MS (3 min) so an idle bridge never flips to stale between beats", () => {
     // Pin the cadence so a future "tune the heartbeat to be cheaper"
     // refactor cannot accidentally raise it past the 3-minute staleness

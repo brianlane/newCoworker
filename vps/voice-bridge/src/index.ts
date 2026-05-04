@@ -201,10 +201,6 @@ async function sendMissedCallSms(params: {
   }
 }
 
-async function heartbeat(supabase: SupabaseClient, businessId: string): Promise<void> {
-  await writeHeartbeat(supabase, businessId);
-}
-
 function main(): void {
   if (!STREAM_SECRET || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
     console.error("voice-bridge: set STREAM_URL_SIGNING_SECRET, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY");
@@ -337,9 +333,14 @@ function main(): void {
         }
       }
 
-      void heartbeat(supabase, businessId);
+      // Per-call heartbeat: emit one immediately when the WS upgrade
+      // completes, then every 30 s for the duration of the call. Both
+      // call writeHeartbeat directly (Bugbot Low: the local `heartbeat`
+      // wrapper added no value over the import). writeHeartbeat already
+      // swallows rejections internally, so a `void` here is process-safe.
+      void writeHeartbeat(supabase, businessId);
       const hb = setInterval(() => {
-        void heartbeat(supabase, businessId);
+        void writeHeartbeat(supabase, businessId);
       }, 30_000);
 
       let geminiTeardown: (() => Promise<void>) | undefined;
