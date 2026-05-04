@@ -206,25 +206,18 @@ function hasQuestionForUser(message: string): boolean {
 }
 
 // Drives every fallback question off the server-computed `topicStatus` so the priority
-// order matches `Object.values(topicStatus).every(Boolean)` exactly. The earlier version
-// used profile/context shape checks and silently lacked a tools branch — when toolsKnown
-// was the only remaining gap, `allTopicsCovered` was false but this helper would still
-// jump to the generic policy question, never asking about CRM/tools and letting that gap
-// linger across multiple dead-end turns.
+// order matches `Object.values(topicStatus).every(Boolean)` exactly.
+//
+// Service area / team size / CRM are intentionally absent here — those are collected
+// on the Step 1 form before the chat starts (closed-class dropdowns, validated). When
+// `knownContext` carries them, `topicStatus.{serviceAreaKnown,teamSizeKnown,toolsKnown}`
+// is `true` and the chat dead-end never needed to ask. When `knownContext` is missing
+// them (only for legacy localStorage drafts predating the Step 1 fields), we still
+// don't re-ask via dead-end — the user can fix it by going Back to Step 1, and the
+// system prompt instructs the model to skip the topic rather than treat empty as a gap.
 function createFallbackAssistantQuestion(
   topicStatus: ReturnType<typeof summarizeOnboardingTopicStatus>
 ): string {
-  if (!topicStatus.serviceAreaKnown) {
-    return "What service area, market, or territory do you cover?";
-  }
-  if (!topicStatus.teamSizeKnown) {
-    return "How big is the team the assistant supports? If it is just you, say that directly.";
-  }
-  if (!topicStatus.toolsKnown) {
-    // Wording intentionally avoids the substrings detected by `isRepeatedToolsQuestion`
-    // so this fallback isn't itself flagged as the very thing that other guard suppresses.
-    return "Which tools do you rely on day-to-day to track leads, schedule, or message customers? If you don't have a CRM, just list whatever you use (texts, Gmail, calendar, etc.).";
-  }
   if (!topicStatus.customerTypesKnown) {
     return "What types of customers usually reach out first? List the top 1-3 customer types.";
   }

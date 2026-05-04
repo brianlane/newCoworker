@@ -12,10 +12,22 @@ type RichSelectProps = {
   value: string;
   options: RichSelectOption[];
   placeholder?: string;
+  /** Placeholder shown in the search/filter input inside the open dropdown. */
+  searchPlaceholder?: string;
+  /** Empty-state label shown when no options match the search query. */
+  noMatchesLabel?: string;
   onChange: (value: string) => void;
 };
 
-export function RichSelect({ label, value, options, placeholder = "Select an option", onChange }: RichSelectProps) {
+export function RichSelect({
+  label,
+  value,
+  options,
+  placeholder = "Select an option",
+  searchPlaceholder = "Filter options...",
+  noMatchesLabel = "No options match that search.",
+  onChange
+}: RichSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [openAbove, setOpenAbove] = useState(false);
   const [query, setQuery] = useState("");
@@ -117,14 +129,14 @@ export function RichSelect({ label, value, options, placeholder = "Select an opt
                 type="text"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Filter industries..."
+                placeholder={searchPlaceholder}
                 className="w-full rounded-md border border-parchment/15 bg-deep-ink/70 px-3 py-2 text-sm text-parchment placeholder-parchment/30 focus:outline-none focus:ring-2 focus:ring-signal-teal"
               />
             </div>
 
             {filteredOptions.length === 0 && (
               <div className="px-3 py-3 text-sm text-parchment/50">
-                No industries match that search.
+                {noMatchesLabel}
               </div>
             )}
 

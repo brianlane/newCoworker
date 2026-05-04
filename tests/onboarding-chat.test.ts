@@ -27,9 +27,38 @@ describe("onboarding chat helpers", () => {
     expect(prompt).toContain("assistant profile");
     expect(prompt).toContain("Never mention internal implementation details or file names");
     expect(prompt).toContain("Ask one focused question at a time");
-    expect(prompt).toContain("do not use a CRM");
-    expect(prompt).toContain("texts, calls, or email");
+    // CRM-as-tools fallback — wording shifted post-Step-1 migration
+    // ("None — texts, email, or calendar only" is the canonical
+    // dropdown value), but the underlying instruction (treat no
+    // formal CRM as a valid answer, not a gap) is still present.
+    expect(prompt).toContain("no formal CRM");
+    expect(prompt).toContain("None — texts, email, or calendar only");
     expect(prompt).toContain("Answered topic status");
+  });
+
+  it("instructs the model NOT to re-ask service area / team size / CRM (Step 1 form-collected)", () => {
+    // Service area, team size, and CRM/tools moved from Step 2 chat
+    // elicitation to Step 1 closed-class form fields. The chat
+    // system prompt must explicitly tell the model those values in
+    // `knownContext` are authoritative — re-asking them after the
+    // user already filled out the form reads as the assistant
+    // ignoring the user (the same UX failure that drove the original
+    // dead-end fallback work). Tests the literal contract because
+    // softer wording would let prompt regressions slip in unnoticed.
+    const prompt = buildOnboardingChatSystemPrompt({
+      businessName: "Northwind Services",
+      serviceArea: "Phoenix metro, AZ",
+      teamSize: "4-5",
+      crmUsed: "Follow Up Boss"
+    });
+    expect(prompt).toContain("collected on the Step 1 form");
+    expect(prompt).toContain("do NOT re-ask those topics");
+    // The prompt also dumps knownContext as JSON — sanity check that
+    // the form-collected values arrive there so the model can see
+    // them.
+    expect(prompt).toContain("Phoenix metro, AZ");
+    expect(prompt).toContain("4-5");
+    expect(prompt).toContain("Follow Up Boss");
   });
 
   it("embeds an existing profile in the system prompt when provided", () => {
@@ -495,6 +524,65 @@ describe("onboarding chat helpers", () => {
         ]
       );
       expect(topicStatus.teamSizeKnown, `for "${question}" → "${reply}"`).toBe(false);
+    }
+  });
+
+  it("does not flip teamSizeKnown true when the Q/A reply is entirely non-team-context numbers (Codex P2 guard)", () => {
+    // The Q/A fallback used to mark team size known whenever the
+    // prior assistant message matched a team-size question and the
+    // user reply contained any quantity token. Replies like
+    // "I have 5 years experience" or "about 2 offices" would
+    // hijack the topic — the user is talking past the question, not
+    // answering it. These cases must NOT close the team-size topic.
+    const cases: { question: string; reply: string }[] = [
+      // Codex bot's exact examples
+      { question: "How big is your team?", reply: "I have 5 years experience" },
+      { question: "How many people are on your team?", reply: "about 2 offices" },
+      // Adjacent classes — same root cause (number anchored to a
+      // non-team-context noun)
+      { question: "How big is your team?", reply: "we cover 10 cities" },
+      { question: "How big is your team?", reply: "200 leads a month" },
+      { question: "How many agents do you have?", reply: "we close 12 deals/month" },
+      { question: "How big is your team?", reply: "3 listings active right now" },
+      { question: "How many staff do you have?", reply: "we work with 50 clients" },
+      { question: "How big is your team?", reply: "5 to 10 years in the business" },
+      { question: "How big is your team?", reply: "20% commission" },
+      { question: "How many on your team?", reply: "we serve 3 counties" }
+    ];
+    for (const { question, reply } of cases) {
+      const topicStatus = summarizeOnboardingTopicStatus(
+        { serviceArea: "", teamSize: "", crmUsed: "" },
+        createEmptyAssistantProfile(),
+        [
+          { role: "assistant", content: question, timestamp: "2026-04-29T20:01:00.000Z" },
+          { role: "user", content: reply, timestamp: "2026-04-29T20:02:00.000Z" }
+        ]
+      );
+      expect(topicStatus.teamSizeKnown, `for "${question}" → "${reply}"`).toBe(false);
+    }
+  });
+
+  it("does flip teamSizeKnown true on mixed replies that contain BOTH a team-size signal AND non-team numbers", () => {
+    // Disqualifier must not over-apply: a reply that contains a real
+    // team-size answer alongside customer/listing counts should still
+    // close the topic. The disqualifier only fires when EVERY numeric
+    // token in the reply is anchored to a non-team noun.
+    const cases: { question: string; reply: string }[] = [
+      { question: "How big is your team?", reply: "5 agents and 200 leads/month" },
+      { question: "How many people on your team?", reply: "team of 4 covering 10 cities" },
+      { question: "How big is your team?", reply: "just me but I serve 150 clients" },
+      { question: "How many agents?", reply: "a few agents and 12 listings" }
+    ];
+    for (const { question, reply } of cases) {
+      const topicStatus = summarizeOnboardingTopicStatus(
+        { serviceArea: "", teamSize: "", crmUsed: "" },
+        createEmptyAssistantProfile(),
+        [
+          { role: "assistant", content: question, timestamp: "2026-04-29T20:01:00.000Z" },
+          { role: "user", content: reply, timestamp: "2026-04-29T20:02:00.000Z" }
+        ]
+      );
+      expect(topicStatus.teamSizeKnown, `for "${question}" → "${reply}"`).toBe(true);
     }
   });
 

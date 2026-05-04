@@ -278,6 +278,79 @@ const USER_QUANTITY_REPLY_PATTERN = new RegExp(
   "i"
 );
 
+// Disqualifies a numeric reply when the number is followed by a
+// non-team-context noun. After a team-size question, replies like
+// "I have 5 years experience", "about 2 offices", "we cover 10
+// cities", or "200 leads/month" should NOT close the team-size
+// topic — the user is talking past the question (intentionally or
+// not), and prematurely satisfying it would hide the gap from the
+// dead-end guard. We require ALL quantity tokens in the reply to be
+// disqualified before rejecting the reply, so a mixed sentence like
+// "we have 5 agents and 200 leads/month" (which contains a real
+// team-size signal alongside a customer-context number) still
+// counts as answered.
+const NON_TEAM_CONTEXT_NOUN_FRAGMENT =
+  "years?|decades?|months?|weeks?|days?|hours?|minutes?|seconds?" +
+  "|miles?|blocks?|feet|ft|meters?" +
+  "|offices?|locations?|branches?|stores?|cities|states?|countries?|zips?|zip codes?|counties|districts?|regions?|markets?|territories" +
+  "|listings?|closings?|deals?|properties?|homes?|houses?|units?|sales|inquiries|calls?|messages?|emails?|texts?|appointments?|tickets?" +
+  "|leads?|customers?|clients?|members?|users?|subscribers?|patients?|guests?|visitors?|accounts?" +
+  "|dollars?|cents?|percent|bucks";
+
+// `%` is a non-word character so a trailing `\b` won't anchor on it
+// (`\b` requires a word↔non-word transition). Handle it as a
+// separate alternation that ends without `\b`, otherwise `"20%"`
+// silently fails the disqualifier and re-introduces the false
+// positive class this guard exists to suppress.
+const NUMBER_FOLLOWED_BY_NON_TEAM_NOUN = new RegExp(
+  String.raw`\b` +
+    NUMBER_QUANTIFIER_FRAGMENT +
+    String.raw`(?:\s*(?:[-–—]|to|or)\s*` +
+    NUMBER_QUANTIFIER_FRAGMENT +
+    String.raw`)?(?:\s+(?:` +
+    NON_TEAM_CONTEXT_NOUN_FRAGMENT +
+    String.raw`)\b|\s*%)`,
+  "gi"
+);
+
+const ANY_QUANTITY_TOKEN_PATTERN = new RegExp(
+  String.raw`\b(?:` +
+    NUMBER_QUANTIFIER_FRAGMENT +
+    String.raw`|a few|a couple|a handful|several|many|small|big|large)\b`,
+  "gi"
+);
+
+// True when *every* numeric quantity in the user's reply is
+// immediately followed by a non-team-context noun (`years`, `cities`,
+// `leads`, etc.). Such replies don't carry a team-size signal even
+// if the prior assistant message asked about team size — they're
+// either non-sequiturs or talking about adjacent topics.
+function isReplyEntirelyNonTeamContext(text: string): boolean {
+  // Solo / fuzzy phrases (non-numeric) are always team-size signals;
+  // if any of those are present, never disqualify the reply.
+  if (TEAM_SIZE_SOLO_PATTERN.test(text)) return false;
+  if (/\b(?:a few|a couple|a handful|several|small|big|large)\b/i.test(text)) return false;
+
+  // Find every quantity token and every non-team-context-anchored
+  // quantity token. If they line up 1:1, the reply is entirely
+  // non-team-context.
+  const quantityMatches = text.match(ANY_QUANTITY_TOKEN_PATTERN) ?? [];
+  if (quantityMatches.length === 0) return false;
+  const nonTeamMatches = text.match(NUMBER_FOLLOWED_BY_NON_TEAM_NOUN) ?? [];
+  // `nonTeamMatches` matches a "<n> <noun>" or "<low>-<high> <noun>"
+  // span; one such match consumes one or two quantity tokens depending
+  // on whether the span is a range. We count consumed tokens by
+  // counting digits/written-numbers inside each match span rather
+  // than the match count itself, so "5 to 10 years" correctly
+  // accounts for both `5` and `10`.
+  let consumed = 0;
+  for (const span of nonTeamMatches) {
+    const tokens = span.match(ANY_QUANTITY_TOKEN_PATTERN) ?? [];
+    consumed += tokens.length;
+  }
+  return consumed >= quantityMatches.length;
+}
+
 function hasUserTeamSizeSignal(messages: OnboardingChatMessage[]): boolean {
   for (let i = 0; i < messages.length; i++) {
     const message = messages[i];
@@ -298,12 +371,19 @@ function hasUserTeamSizeSignal(messages: OnboardingChatMessage[]): boolean {
     // asked about team size, accept any quantity-bearing reply as the
     // answer. Required for bare-number replies like "4 or 5" that are
     // semantically clear in context but lack a role noun on their own.
+    //
+    // Guarded by `isReplyEntirelyNonTeamContext`: if every numeric
+    // token in the reply is anchored to a non-team-context noun
+    // ("5 years experience", "about 2 offices", "we cover 10 cities"),
+    // the reply isn't actually answering the team-size question and
+    // we leave the topic open for the assistant to re-ask.
     if (i > 0) {
       const prev = messages[i - 1];
       if (
         prev.role === "assistant" &&
         TEAM_SIZE_QUESTION_PATTERN.test(prev.content) &&
-        USER_QUANTITY_REPLY_PATTERN.test(text)
+        USER_QUANTITY_REPLY_PATTERN.test(text) &&
+        !isReplyEntirelyNonTeamContext(text)
       ) {
         return true;
       }
@@ -413,13 +493,19 @@ export function buildOnboardingChatSystemPrompt(
     "Your job is to gather the information needed to produce a strong assistant profile and business memory.",
     "Be industry agnostic. Do not assume real estate unless the user says so. Industry-specific examples are allowed only to steer the user when helpful.",
     "Ask one focused question at a time. Keep assistant replies concise, practical, and easy to answer.",
-    "Prefer collecting cause/effect communication patterns, routing rules, escalation rules, FAQ facts, tool context, and tone guidance over generic marketing copy.",
+    "Prefer collecting cause/effect communication patterns, routing rules, escalation rules, FAQ facts, and tone guidance over generic marketing copy.",
     "Do not ask for technical integration setup in detail during onboarding. Gmail, calendar, CRM, and OAuth tooling can be captured as current-tool context only.",
     "Never mention internal implementation details or file names like SOUL.md, IDENTITY.md, MEMORY.md, markdown files, knowledge base files, or technical setup artifacts in assistantMessage.",
-    "Ask for service area, market, or territory early unless it is already known in context.",
-    "Also capture team size and the current CRM/inbox/scheduling tools in use during the interview.",
-    "If the user says they do not use a CRM and only use texts, calls, or email, treat that as a complete valid answer rather than a missing field.",
-    "When the user has no formal CRM, keep crmUsed empty or minimal and capture the real operating tools under tools and factsToRemember instead, such as SMS, phone calls, iMessage, or Gmail.",
+    // Service area / team size / CRM are collected on the Step 1
+    // form as closed-class fields (segmented control + dropdown +
+    // validated text). They arrive in `knownContext` already
+    // answered; re-asking them in chat reads as the assistant
+    // ignoring the user. Only if `knownContext` is missing one of
+    // them (legacy localStorage drafts that pre-date the Step 1
+    // fields) is it acceptable to confirm the answer in chat — and
+    // even then, ask once and move on.
+    "Service area, team size, and CRM/tools are collected on the Step 1 form. The values in `knownContext.{serviceArea,teamSize,crmUsed}` are authoritative — do NOT re-ask those topics. If a value is empty in `knownContext`, treat it as the user choosing not to specify and skip past it rather than re-asking.",
+    "If the user has no formal CRM (e.g. `knownContext.crmUsed` says \"None — texts, email, or calendar only\"), keep `profile.crmUsed` empty and capture the real operating tools under `tools` and `factsToRemember` instead.",
     "If the user gives vague answers, ask for one or two concrete examples.",
     "Never ask for information that is already known in the existing profile, known context, or transcript. If a topic is already answered, move to the next missing topic instead of re-asking it.",
     "Update the profile using the conversation and the known context below. Preserve useful prior details; do not erase good data.",
