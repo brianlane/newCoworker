@@ -31,6 +31,25 @@ export type DashboardChatMessageRow = {
   created_at: string;
 };
 
+/**
+ * API-shape projection of a stored message. Single source of truth for the
+ * `{ id, role, content, createdAt }` envelope returned by every
+ * `/api/dashboard/chat*` endpoint that surfaces messages — both the active
+ * conversation (`/api/dashboard/chat`) and the per-archived-thread read-only
+ * route (`/api/dashboard/chat/threads/[threadId]/messages`). Keeping it here
+ * means a future schema change (e.g. attaching attachments or a tool-call
+ * block) lands in one place; otherwise the two routes drift and the dashboard
+ * silently renders inconsistent shapes for live vs. archived chats.
+ */
+export function serializeChatMessages(rows: DashboardChatMessageRow[]) {
+  return rows.map((m) => ({
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    createdAt: m.created_at
+  }));
+}
+
 export async function getActiveThread(
   businessId: string,
   client?: SupabaseClient

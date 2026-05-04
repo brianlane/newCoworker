@@ -27,21 +27,12 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import {
   getThreadById,
   listMessages,
-  type DashboardChatMessageRow
+  serializeChatMessages
 } from "@/lib/db/dashboard-chat";
 
 export const dynamic = "force-dynamic";
 
 const threadIdSchema = z.string().uuid();
-
-function serializeMessages(messages: DashboardChatMessageRow[]) {
-  return messages.map((m) => ({
-    id: m.id,
-    role: m.role,
-    content: m.content,
-    createdAt: m.created_at
-  }));
-}
 
 export async function GET(
   _request: Request,
@@ -68,7 +59,7 @@ export async function GET(
       isActive: thread.is_active,
       createdAt: thread.created_at,
       updatedAt: thread.updated_at,
-      messages: serializeMessages(messages)
+      messages: serializeChatMessages(messages)
     });
   } catch (err) {
     return handleRouteError(err);

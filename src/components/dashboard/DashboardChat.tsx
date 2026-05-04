@@ -181,7 +181,15 @@ export function DashboardChat({ businessId, businessName }: Props) {
       // Returning to the active thread: re-hydrate via the canonical
       // active-thread endpoint so we pick up any messages added by a
       // background tab and so the post path stays consistent with what's
-      // rendered.
+      // rendered. Also re-sync `activeThreadId` from the response —
+      // another tab may have hit "New conversation" since we hydrated,
+      // archiving our local active id and minting a new one. Without
+      // this, `viewingThreadId` would diverge from the stale
+      // `activeThreadId`, `isViewingArchive` would flip back on, and
+      // the composer would lock — clicking "Back to current" again
+      // would just re-enter this same broken path. Every other code
+      // path that fetches active-thread state updates BOTH ids; keep
+      // this one consistent.
       if (threadId === activeThreadId) {
         setLoadingThread(true);
         setError(null);
@@ -193,6 +201,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
           const env = await parseEnvelope<ChatGetResponse>(res);
           if (env.ok) {
             setMessages(env.data.messages);
+            setActiveThreadId(env.data.threadId);
             setViewingThreadId(env.data.threadId);
           } else {
             setError(env.error.message);

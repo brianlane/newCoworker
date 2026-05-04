@@ -5,10 +5,20 @@ vi.mock("@/lib/auth", () => ({
   requireOwner: vi.fn()
 }));
 
-vi.mock("@/lib/db/dashboard-chat", () => ({
-  getThreadById: vi.fn(),
-  listMessages: vi.fn()
-}));
+vi.mock("@/lib/db/dashboard-chat", async () => {
+  // Mock the DB-touching helpers but keep the real
+  // `serializeChatMessages` so the route's response shape is exercised
+  // end-to-end against the canonical projection helper. Stubbing the
+  // serializer would let an accidental shape change pass tests.
+  const actual = await vi.importActual<
+    typeof import("@/lib/db/dashboard-chat")
+  >("@/lib/db/dashboard-chat");
+  return {
+    ...actual,
+    getThreadById: vi.fn(),
+    listMessages: vi.fn()
+  };
+});
 
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
