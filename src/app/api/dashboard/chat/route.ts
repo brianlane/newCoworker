@@ -23,9 +23,9 @@ import {
   getActiveThread,
   getOrCreateActiveThread,
   listMessages,
+  serializeChatMessages,
   touchChatActivity,
-  updateThreadConversation,
-  type DashboardChatMessageRow
+  updateThreadConversation
 } from "@/lib/db/dashboard-chat";
 import {
   callRowboatChat,
@@ -76,15 +76,6 @@ async function loadBusinessFlags(businessId: string): Promise<BusinessFlags | nu
     is_paused: Boolean(data.is_paused),
     customer_channels_enabled: data.customer_channels_enabled !== false
   };
-}
-
-function serializeMessages(messages: DashboardChatMessageRow[]) {
-  return messages.map((m) => ({
-    id: m.id,
-    role: m.role,
-    content: m.content,
-    createdAt: m.created_at
-  }));
 }
 
 export async function POST(request: Request) {
@@ -195,7 +186,7 @@ export async function POST(request: Request) {
     return successResponse({
       threadId: thread.id,
       reply,
-      messages: serializeMessages(updated)
+      messages: serializeChatMessages(updated)
     });
   } catch (err) {
     return handleRouteError(err);
@@ -218,7 +209,7 @@ export async function GET(request: Request) {
 
     return successResponse({
       threadId: thread?.id ?? null,
-      messages: serializeMessages(messages),
+      messages: serializeChatMessages(messages),
       isPaused: flags.is_paused,
       customerChannelsEnabled: flags.customer_channels_enabled
     });

@@ -31,6 +31,25 @@ export type DashboardChatMessageRow = {
   created_at: string;
 };
 
+/**
+ * API-shape projection of a stored message. Single source of truth for the
+ * `{ id, role, content, createdAt }` envelope returned by every
+ * `/api/dashboard/chat*` endpoint that surfaces messages — both the active
+ * conversation (`/api/dashboard/chat`) and the per-archived-thread read-only
+ * route (`/api/dashboard/chat/threads/[threadId]/messages`). Keeping it here
+ * means a future schema change (e.g. attaching attachments or a tool-call
+ * block) lands in one place; otherwise the two routes drift and the dashboard
+ * silently renders inconsistent shapes for live vs. archived chats.
+ */
+export function serializeChatMessages(rows: DashboardChatMessageRow[]) {
+  return rows.map((m) => ({
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    createdAt: m.created_at
+  }));
+}
+
 export async function getActiveThread(
   businessId: string,
   client?: SupabaseClient
@@ -44,6 +63,84 @@ export async function getActiveThread(
     .maybeSingle();
   if (error) throw new Error(`getActiveThread: ${error.message}`);
   return (data as DashboardChatThreadRow | null) ?? null;
+}
+
+/**
+ * Look up a single thread row by primary key. Used by the per-thread
+ * "view archived conversation" route to verify the requested thread
+ * actually belongs to the caller's business before returning messages —
+ * without this check, the read-only history endpoint would let any
+ * authenticated owner page through any thread on the platform by
+ * brute-forcing UUIDs.
+ */
+export async function getThreadById(
+  threadId: string,
+  client?: SupabaseClient
+): Promise<DashboardChatThreadRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("dashboard_chat_threads")
+    .select("*")
+    .eq("id", threadId)
+    .maybeSingle();
+  if (error) throw new Error(`getThreadById: ${error.message}`);
+  return (data as DashboardChatThreadRow | null) ?? null;
+}
+
+/** A thread row plus the count of messages on it, for the conversation-history sidebar. */
+export type DashboardChatThreadSummary = DashboardChatThreadRow & {
+  message_count: number;
+};
+
+/**
+ * List every thread that's ever existed for a business, newest activity
+ * first, with a denormalized `message_count` so the sidebar can show
+ * "5 messages" without an N+1 round-trip per thread.
+ *
+ * Sort key is `updated_at DESC` (not `created_at`) so threads recently
+ * touched by a model reply or a re-hydration float to the top — matches
+ * how the chat surface itself shows the active conversation.
+ *
+ * `limit` defaults to 50: more than enough to surface recent context
+ * without dumping the entire archive on the client. We can add a
+ * cursor-based `loadMore` later if a power user actually hits it.
+ */
+export async function listThreadsForBusiness(
+  businessId: string,
+  opts: { limit?: number } = {},
+  client?: SupabaseClient
+): Promise<DashboardChatThreadSummary[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const limit = opts.limit ?? 50;
+  const { data, error } = await db
+    .from("dashboard_chat_threads")
+    // PostgREST embedded aggregate: returns
+    //   dashboard_chat_messages: [{ count: <n> }]
+    // for each parent row. The FK on
+    // dashboard_chat_messages.thread_id makes this resolution
+    // unambiguous; if a future migration ever adds another FK to
+    // dashboard_chat_messages we'd need to disambiguate with
+    // `dashboard_chat_messages!thread_id(count)`.
+    .select(
+      "id, business_id, rowboat_conversation_id, rowboat_state, title, is_active, created_at, updated_at, dashboard_chat_messages(count)"
+    )
+    .eq("business_id", businessId)
+    .order("updated_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`listThreadsForBusiness: ${error.message}`);
+  type EmbeddedRow = DashboardChatThreadRow & {
+    dashboard_chat_messages?: Array<{ count?: number }> | null;
+  };
+  return ((data as EmbeddedRow[] | null) ?? []).map((row) => {
+    const { dashboard_chat_messages, ...rest } = row;
+    // PostgREST returns the embed as an array; for a `count` aggregate
+    // it's a single-element array `[{ count }]`. Coerce defensively
+    // so a future PostgREST shape change can't crash the dashboard.
+    const count = Array.isArray(dashboard_chat_messages)
+      ? Number(dashboard_chat_messages[0]?.count ?? 0)
+      : 0;
+    return { ...rest, message_count: Number.isFinite(count) ? count : 0 };
+  });
 }
 
 export async function createThread(
