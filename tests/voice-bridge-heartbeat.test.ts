@@ -43,6 +43,104 @@ describe("writeHeartbeat", () => {
     );
     expect(row.bridge_last_heartbeat_at).toBe(row.updated_at);
   });
+
+  it("never rejects when the upsert throws (Bugbot Medium: docstring claim now true)", async () => {
+    // Pre-fix the docstring promised "errors are intentionally swallowed by
+    // the caller" but `void writeHeartbeat(...)` only suppresses the
+    // floating-promise lint, not actual rejections — an unexpected throw
+    // would fall through to `unhandledRejection` and crash the bridge,
+    // disconnecting live calls. We now wrap inside the function so the
+    // returned promise resolves regardless of the upsert outcome.
+    const upsert = vi.fn().mockRejectedValue(new Error("transient supabase 503"));
+    const client = { from: vi.fn(() => ({ upsert })) };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await expect(
+        writeHeartbeat(client as never, "biz-1", () => "2026-01-01T00:00:00Z")
+      ).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("heartbeat upsert threw"),
+        expect.stringContaining("transient supabase 503")
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("logs (but doesn't throw) when supabase resolves with { error }", async () => {
+    // supabase-js typically resolves with `{ error }` rather than throwing
+    // on PostgREST failures (RLS misconfig, FK violations, etc). Surface
+    // those so an operator tailing logs can spot persistent breakage
+    // instead of silently going `pending` for hours.
+    const upsert = vi.fn().mockResolvedValue({ error: { message: "RLS forbids upsert" } });
+    const client = { from: vi.fn(() => ({ upsert })) };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await expect(
+        writeHeartbeat(client as never, "biz-1", () => "2026-01-01T00:00:00Z")
+      ).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("heartbeat upsert returned error"),
+        "RLS forbids upsert"
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("treats { error: null } as success (no warn log)", async () => {
+    const upsert = vi.fn().mockResolvedValue({ error: null, data: [] });
+    const client = { from: vi.fn(() => ({ upsert })) };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await writeHeartbeat(client as never, "biz-1");
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("treats a non-object resolve value as success (defensive: future supabase shape changes)", async () => {
+    const upsert = vi.fn().mockResolvedValue(undefined);
+    const client = { from: vi.fn(() => ({ upsert })) };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await writeHeartbeat(client as never, "biz-1");
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("treats a thrown non-Error value as String(value) in the warn log", async () => {
+    const upsert = vi.fn().mockRejectedValue("plain string failure");
+    const client = { from: vi.fn(() => ({ upsert })) };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await writeHeartbeat(client as never, "biz-1");
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("heartbeat upsert threw"),
+        "plain string failure"
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("ignores an error object that lacks a string `message`", async () => {
+    // Defensive against future supabase-js shapes where `error` exists but
+    // `error.message` isn't a string — we shouldn't warn-log the
+    // un-stringified object, but we also shouldn't reject.
+    const upsert = vi.fn().mockResolvedValue({ error: { code: 42 } });
+    const client = { from: vi.fn(() => ({ upsert })) };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await writeHeartbeat(client as never, "biz-1");
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
 
 describe("startIdleHeartbeatLoop", () => {

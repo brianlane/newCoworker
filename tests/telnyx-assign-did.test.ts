@@ -199,6 +199,28 @@ describe("resolveDefaultForwardToE164", () => {
     mockedBusinesses.getBusiness.mockResolvedValue(null);
     expect(await resolveDefaultForwardToE164("biz", {} as never)).toBeNull();
   });
+
+  it("uses the caller-supplied existing row and skips the settings fetch", async () => {
+    // Bugbot Low remediation: callers can pass the already-fetched row to
+    // avoid a second `getBusinessTelnyxSettings` round-trip.
+    mockedBusinesses.getBusiness.mockResolvedValue({ id: "biz", phone: "6026866672" });
+    const r = await resolveDefaultForwardToE164(
+      "biz",
+      {} as never,
+      { ...sampleSettings, forward_to_e164: null }
+    );
+    expect(r).toBe("+16026866672");
+    expect(mockedRoutes.getBusinessTelnyxSettings).not.toHaveBeenCalled();
+  });
+
+  it("uses the caller-supplied null existing row and skips the settings fetch", async () => {
+    // `null` is distinct from `undefined` here — passing `null` means
+    // "I checked and there's no row", so we should NOT re-fetch.
+    mockedBusinesses.getBusiness.mockResolvedValue({ id: "biz", phone: "6026866672" });
+    const r = await resolveDefaultForwardToE164("biz", {} as never, null);
+    expect(r).toBe("+16026866672");
+    expect(mockedRoutes.getBusinessTelnyxSettings).not.toHaveBeenCalled();
+  });
 });
 
 describe("assignExistingDidToBusiness", () => {
@@ -438,6 +460,25 @@ describe("assignExistingDidToBusiness", () => {
     );
     // Existing value short-circuits getBusiness lookup.
     expect(mockedBusinesses.getBusiness).not.toHaveBeenCalled();
+  });
+
+  it("reads business_telnyx_settings exactly once (Bugbot Low: no duplicate DB round-trip)", async () => {
+    // Pre-fix the bridge-origin and forward-phone resolution helpers each
+    // re-fetched the same settings row. We now read it once at the top of
+    // assignExistingDidToBusiness and pass the row down. Lock that in so
+    // a future refactor can't regress us back to two queries per provision.
+    mockedRoutes.getBusinessTelnyxSettings.mockResolvedValue({
+      ...sampleSettings,
+      bridge_media_wss_origin: "wss://existing",
+      forward_to_e164: null
+    });
+    mockedBusinesses.getBusiness.mockResolvedValue({ id: "biz", phone: "6026866672" });
+    await assignExistingDidToBusiness({
+      businessId: "biz",
+      toE164: "+15551234567",
+      platformDefaults: { bridgeMediaWssOrigin: "wss://platform" }
+    });
+    expect(mockedRoutes.getBusinessTelnyxSettings).toHaveBeenCalledTimes(1);
   });
 });
 

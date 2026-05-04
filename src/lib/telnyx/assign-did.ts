@@ -114,12 +114,10 @@ export function coerceOwnerPhoneToE164(raw: string | null | undefined): string |
   return /^\+[1-9]\d{7,14}$/.test(candidate) ? candidate : null;
 }
 
-async function resolveBridgeOrigin(
-  businessId: string,
-  platformDefaults: PlatformTelnyxDefaults | undefined,
-  client: SupabaseClient
-): Promise<string | null> {
-  const existing = await getBusinessTelnyxSettings(businessId, client);
+function resolveBridgeOriginFromRow(
+  existing: BusinessTelnyxSettingsRow | null,
+  platformDefaults: PlatformTelnyxDefaults | undefined
+): string | null {
   if (existing?.bridge_media_wss_origin && existing.bridge_media_wss_origin.length > 0) {
     return existing.bridge_media_wss_origin;
   }
@@ -148,10 +146,19 @@ async function resolveBridgeOrigin(
  */
 export async function resolveDefaultForwardToE164(
   businessId: string,
-  client: SupabaseClient
+  client: SupabaseClient,
+  /**
+   * The already-fetched `business_telnyx_settings` row, if the caller
+   * happens to have it in scope. `assignExistingDidToBusiness` reads this
+   * row once for both the bridge-origin and forward-phone resolution
+   * paths (Bugbot Low: avoid duplicate DB round-trip on every provision).
+   * Direct callers can omit it and we'll fetch on demand.
+   */
+  existing?: BusinessTelnyxSettingsRow | null
 ): Promise<string | null> {
-  const existing = await getBusinessTelnyxSettings(businessId, client);
-  const existingForward = existing?.forward_to_e164?.trim();
+  const settingsRow =
+    existing !== undefined ? existing : await getBusinessTelnyxSettings(businessId, client);
+  const existingForward = settingsRow?.forward_to_e164?.trim();
   if (existingForward) return existingForward;
   // Defence: a missing or unreadable business row should never abort
   // DID-assign — fall through to a null forward. Worst case the field
@@ -169,7 +176,10 @@ export async function assignExistingDidToBusiness(
 ): Promise<AssignDidResult> {
   const toE164 = normalizeE164(input.toE164);
   const db = deps?.client ?? (await createSupabaseServiceClient());
-  const bridgeOrigin = await resolveBridgeOrigin(input.businessId, input.platformDefaults, db);
+  // Read the settings row exactly once and reuse it for both the
+  // bridge-origin and forward-phone resolution paths (Bugbot Low).
+  const existingSettings = await getBusinessTelnyxSettings(input.businessId, db);
+  const bridgeOrigin = resolveBridgeOriginFromRow(existingSettings, input.platformDefaults);
   const connectionId = input.platformDefaults?.connectionId ?? null;
   const messagingProfileId = input.platformDefaults?.messagingProfileId ?? null;
 
@@ -185,7 +195,11 @@ export async function assignExistingDidToBusiness(
     });
   }
 
-  const defaultForward = await resolveDefaultForwardToE164(input.businessId, db);
+  const defaultForward = await resolveDefaultForwardToE164(
+    input.businessId,
+    db,
+    existingSettings
+  );
 
   const settings = await upsertBusinessTelnyxSettings(
     {
