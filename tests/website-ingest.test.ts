@@ -13,6 +13,7 @@ import {
   assertSafeHostname,
   extractReadableText,
   extractSameOriginLinks,
+  humanizeFetchError,
   ingestWebsite,
   isPathAllowed,
   normalizeWebsiteUrl,
@@ -32,6 +33,60 @@ describe("normalizeWebsiteUrl", () => {
     expect(normalizeWebsiteUrl("")).toBeNull();
     expect(normalizeWebsiteUrl("ftp://example.com")).toBeNull();
     expect(normalizeWebsiteUrl("javascript:alert(1)")).toBeNull();
+  });
+});
+
+describe("humanizeFetchError", () => {
+  // Owners whose own site is fronted by Cloudflare with bot-fight-mode on
+  // see HTTP 403 + `cf-mitigated: challenge` on every crawl. Before this
+  // helper, the dashboard rendered the canned "Check the URL, SSL, or
+  // firewall and retry" — which was actively misleading. These tests
+  // pin the actionable copy.
+  it("maps 403 to a CDN-blocking explanation that mentions Cloudflare and the manual-paste fallback", () => {
+    const msg = humanizeFetchError("status_403");
+    expect(msg).toMatch(/HTTP 403/);
+    expect(msg).toMatch(/Cloudflare|CDN|bot/i);
+    expect(msg).toMatch(/manual summary/i);
+  });
+
+  it("maps 401 the same way (auth-walled site behaves identically from the crawler's perspective)", () => {
+    expect(humanizeFetchError("status_401")).toMatch(/HTTP 403\/401/);
+  });
+
+  it("maps 429 to a 'rate-limited, wait and retry' message", () => {
+    expect(humanizeFetchError("status_429")).toMatch(/rate-limited/i);
+  });
+
+  it("maps any 5xx to a 'server error, try later' message and includes the actual status code", () => {
+    expect(humanizeFetchError("status_503")).toMatch(/HTTP 503/);
+    expect(humanizeFetchError("status_500")).toMatch(/server error/i);
+  });
+
+  it("maps other status_NNN responses to a generic 'verify the URL' message that still echoes the code", () => {
+    const msg = humanizeFetchError("status_418");
+    expect(msg).toMatch(/HTTP 418/);
+    expect(msg).toMatch(/Verify the URL/i);
+  });
+
+  it("maps non_html_content_type to a 'use the canonical landing page' message (not just a raw enum)", () => {
+    expect(humanizeFetchError("non_html_content_type")).toMatch(/canonical landing page|non-HTML/i);
+  });
+
+  it("maps redirect-loop messages to a 'use the final URL' message", () => {
+    expect(humanizeFetchError("redirect_loop")).toMatch(/redirected too many times/i);
+    expect(humanizeFetchError("too_many_redirects")).toMatch(/redirected too many times/i);
+  });
+
+  it("maps DNS / private-address failures to a 'check the URL' copy", () => {
+    expect(humanizeFetchError("private_address")).toMatch(/resolve/i);
+    expect(humanizeFetchError("dns_failure")).toMatch(/resolve/i);
+  });
+
+  it("falls back to a generic prefixed message when the underlying message is unrecognized", () => {
+    // The raw message is preserved so support can still diagnose
+    // oddball crawler errors from production logs without us having to
+    // hand-extend the mapping for every transient failure.
+    expect(humanizeFetchError("ECONNRESET")).toBe("Crawler error: ECONNRESET.");
   });
 });
 
@@ -516,6 +571,32 @@ describe("ingestWebsite", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe("blocked_by_robots");
+  });
+
+  it("forwards the homepage HTTP status as `detail` when every page fails (CDN-blocked sites get an actionable message instead of canned copy)", async () => {
+    // Real-world repro: phoenixareasbestrealtor.com fronts via Cloudflare
+    // with bot mitigation enabled. Every fetch attempt returned 403 with
+    // `cf-mitigated: challenge`, but the dashboard rendered the generic
+    // "Check the URL, SSL, or firewall" copy. Owners had no idea their
+    // own CDN was the blocker. With detail forwarding, the dashboard
+    // shows "Your site blocked our crawler (HTTP 403/401)..." and points
+    // them at the manual-paste fallback.
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      return new Response("forbidden", { status: 403 });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize: async () => "unused"
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toBe("fetch_failed");
+      expect(res.detail).toMatch(/HTTP 403/);
+      expect(res.detail).toMatch(/Cloudflare|CDN|bot/i);
+    }
   });
 
   it("returns summarizer_unavailable when the summarizer reports missing credentials", async () => {

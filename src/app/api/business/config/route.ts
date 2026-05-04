@@ -4,6 +4,7 @@ import { patchBusinessConfig } from "@/lib/db/configs";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { verifyOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
 import { normalizeWebsiteUrl } from "@/lib/website-ingest";
+import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 import { logger } from "@/lib/logger";
 import { z } from "zod";
 
@@ -133,6 +134,14 @@ export async function POST(request: Request) {
     if (body.websiteMd !== undefined) patch.website_md = body.websiteMd;
 
     await patchBusinessConfig(body.businessId, patch);
+
+    // Re-seed the live VPS vault + MongoDB agent prompt from the freshly
+    // patched `business_configs`. Without this, owner edits in the dashboard
+    // would land in Supabase but never reach the per-tenant Rowboat agent —
+    // chat / SMS / voice would keep replying from the provision-time vault
+    // snapshot. Fire-and-forget: a slow or unreachable VPS MUST NOT block
+    // the API response (the Supabase write above is the source of truth).
+    void syncVaultToVpsAndLog(body.businessId);
 
     return successResponse({ updated: true });
   } catch (err) {
