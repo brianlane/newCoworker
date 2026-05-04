@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  areAllChatTopicsCovered,
   buildOnboardingChatSystemPrompt,
+  CHAT_ELICITED_TOPIC_KEYS,
   compileIdentityMd,
   compileMemoryMd,
   compileSoulMd,
@@ -850,5 +852,132 @@ describe("onboarding chat helpers", () => {
 
     expect(zero.teamSize).toBe("0");
     expect(positive.teamSize).toBe("12");
+  });
+});
+
+describe("areAllChatTopicsCovered (dead-end finalize gate)", () => {
+  // Regression: post-Step-1-migration the route's dead-end guard
+  // computed `allTopicsCovered = Object.values(topicStatus).every(Boolean)`,
+  // which still included the form-collected
+  // `serviceArea`/`teamSize`/`tools` keys. For legacy localStorage
+  // drafts (predating the Step 1 form), those fields are empty in
+  // `knownContext` and never flip true via transcript scanning, so
+  // the guard could neither auto-finalize nor produce a useful
+  // fallback question (the corresponding fallback branches were
+  // removed in the migration). Result: an infinite loop where the
+  // guard re-injects the same generic policy fallback every dead-end
+  // turn while the user reads "we're almost done" without ever being
+  // able to advance. `areAllChatTopicsCovered` fixes the gate by
+  // restricting it to the chat-elicited subset of topics — the only
+  // ones the chat is responsible for filling in.
+
+  function makeTopicStatus(overrides: Record<string, boolean> = {}) {
+    return {
+      serviceAreaKnown: false,
+      teamSizeKnown: false,
+      toolsKnown: false,
+      customerTypesKnown: false,
+      commonRequestsKnown: false,
+      inquiryFlowsKnown: false,
+      routingRulesKnown: false,
+      toneKnown: false,
+      ...overrides
+    };
+  }
+
+  it("exposes exactly the 5 chat-elicited keys (locks the public contract)", () => {
+    // The 3 form-collected keys (serviceAreaKnown, teamSizeKnown,
+    // toolsKnown) MUST NOT appear here — they're handled on Step 1
+    // and gating on them in chat-side logic recreates the legacy-
+    // draft loop. Pinning the array prevents the migration from
+    // silently regressing if someone later shoves a form-collected
+    // key into this list.
+    expect([...CHAT_ELICITED_TOPIC_KEYS]).toEqual([
+      "customerTypesKnown",
+      "commonRequestsKnown",
+      "inquiryFlowsKnown",
+      "routingRulesKnown",
+      "toneKnown"
+    ]);
+  });
+
+  it("returns true when every chat-elicited topic is covered, regardless of form-collected keys", () => {
+    // The fix: a session with the 5 chat-elicited topics covered is
+    // ready to finalize even if the 3 form-collected keys are still
+    // false (legacy draft). Pre-fix, this returned false and the
+    // dead-end guard looped on the generic fallback question.
+    expect(
+      areAllChatTopicsCovered(
+        makeTopicStatus({
+          customerTypesKnown: true,
+          commonRequestsKnown: true,
+          inquiryFlowsKnown: true,
+          routingRulesKnown: true,
+          toneKnown: true
+        })
+      )
+    ).toBe(true);
+  });
+
+  it("returns true even when ALL form-collected keys are false (legacy localStorage scenario)", () => {
+    // The exact pre-fix bug case: legacy draft has empty
+    // serviceArea/teamSize/crmUsed in knownContext (form fields
+    // didn't exist when the draft was created), but the chat has
+    // covered every topic the chat is responsible for. The guard
+    // MUST be able to finalize here.
+    expect(
+      areAllChatTopicsCovered({
+        serviceAreaKnown: false,
+        teamSizeKnown: false,
+        toolsKnown: false,
+        customerTypesKnown: true,
+        commonRequestsKnown: true,
+        inquiryFlowsKnown: true,
+        routingRulesKnown: true,
+        toneKnown: true
+      })
+    ).toBe(true);
+  });
+
+  it("returns false when any chat-elicited topic is still uncovered", () => {
+    // Each chat-elicited key independently blocks finalization; the
+    // guard should pick that topic's fallback question instead.
+    for (const blockingKey of CHAT_ELICITED_TOPIC_KEYS) {
+      const allCovered = Object.fromEntries(
+        CHAT_ELICITED_TOPIC_KEYS.map((key) => [key, true])
+      );
+      expect(
+        areAllChatTopicsCovered(
+          makeTopicStatus({ ...allCovered, [blockingKey]: false })
+        ),
+        `expected false when only ${blockingKey} is uncovered`
+      ).toBe(false);
+    }
+  });
+
+  it("ignores form-collected keys for the finalize decision (true regardless of their values)", () => {
+    // Cross-product sanity check: holding the chat-elicited subset
+    // covered, varying any combination of the form-collected keys
+    // should never change the result.
+    const chatCovered = {
+      customerTypesKnown: true,
+      commonRequestsKnown: true,
+      inquiryFlowsKnown: true,
+      routingRulesKnown: true,
+      toneKnown: true
+    };
+    const formCases: { serviceAreaKnown: boolean; teamSizeKnown: boolean; toolsKnown: boolean }[] = [
+      { serviceAreaKnown: false, teamSizeKnown: false, toolsKnown: false },
+      { serviceAreaKnown: true, teamSizeKnown: false, toolsKnown: false },
+      { serviceAreaKnown: false, teamSizeKnown: true, toolsKnown: false },
+      { serviceAreaKnown: false, teamSizeKnown: false, toolsKnown: true },
+      { serviceAreaKnown: true, teamSizeKnown: true, toolsKnown: true }
+    ];
+    for (const formCase of formCases) {
+      expect(
+        areAllChatTopicsCovered({ ...chatCovered, ...formCase }),
+        `with form keys ${JSON.stringify(formCase)}`
+      ).toBe(true);
+    }
   });
 });

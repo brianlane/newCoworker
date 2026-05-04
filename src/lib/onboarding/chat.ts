@@ -164,6 +164,44 @@ type OnboardingTopicStatus = {
   toneKnown: boolean;
 };
 
+/**
+ * The subset of `OnboardingTopicStatus` keys that are answered via
+ * the Step 2 chat interview rather than the Step 1 form. Driving the
+ * dead-end "ready to finalize?" gate off this subset (instead of
+ * `Object.values(topicStatus).every(Boolean)`) is what prevents a
+ * legacy-localStorage draft — one that pre-dates the Step 1
+ * `serviceArea`/`teamSize`/`crmUsed` fields and so leaves those
+ * fields empty in `knownContext` — from getting stuck in a loop
+ * where the dead-end guard can never auto-finalize and the chat
+ * fallback question repeats indefinitely.
+ *
+ * The form-collected keys (`serviceAreaKnown`, `teamSizeKnown`,
+ * `toolsKnown`) still appear in the system prompt's `topicStatus`
+ * dump so the model sees the full picture — the system prompt
+ * itself instructs the model not to re-ask them. The split here is
+ * specifically about which keys gate the route's dead-end recovery.
+ */
+export const CHAT_ELICITED_TOPIC_KEYS = [
+  "customerTypesKnown",
+  "commonRequestsKnown",
+  "inquiryFlowsKnown",
+  "routingRulesKnown",
+  "toneKnown"
+] as const satisfies readonly (keyof OnboardingTopicStatus)[];
+
+/**
+ * True when every chat-elicited topic has been answered. Used by the
+ * dead-end guard to decide between auto-finalizing and emitting a
+ * fallback question. Form-collected topics
+ * (`serviceArea`/`teamSize`/`tools`) are intentionally excluded —
+ * they're not chat's responsibility to elicit, and gating on them
+ * would deadlock legacy-draft sessions where those `knownContext`
+ * fields are empty.
+ */
+export function areAllChatTopicsCovered(topicStatus: OnboardingTopicStatus): boolean {
+  return CHAT_ELICITED_TOPIC_KEYS.every((key) => topicStatus[key]);
+}
+
 export const TOOL_SIGNAL_PATTERN =
   /\b(text|texts|sms|call|calls|phone|phones|gmail|email|emails|calendar|calendly|crm|hubspot|pipeline|imessage)\b/i;
 
