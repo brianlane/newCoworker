@@ -14,8 +14,11 @@ import {
   getThreadById,
   listMessages,
   listThreadsForBusiness,
+  reactivateThread,
+  serializeChatMessages,
   touchChatActivity,
-  updateThreadConversation
+  updateThreadConversation,
+  updateThreadSummary
 } from "@/lib/db/dashboard-chat";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
@@ -25,6 +28,7 @@ type Chain = {
   update: ReturnType<typeof vi.fn>;
   upsert: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
+  neq: ReturnType<typeof vi.fn>;
   order: ReturnType<typeof vi.fn>;
   limit: ReturnType<typeof vi.fn>;
   single: ReturnType<typeof vi.fn>;
@@ -38,6 +42,7 @@ function chain(): Chain {
     update: vi.fn(() => c),
     upsert: vi.fn(() => c),
     eq: vi.fn(() => c),
+    neq: vi.fn(() => c),
     order: vi.fn(() => c),
     limit: vi.fn(() => c),
     single: vi.fn(),
@@ -69,7 +74,9 @@ const THREAD = {
   title: "hello",
   is_active: true,
   created_at: "2026-04-23T00:00:00Z",
-  updated_at: "2026-04-23T00:00:00Z"
+  updated_at: "2026-04-23T00:00:00Z",
+  summary_md: null,
+  summary_message_count: 0
 };
 
 beforeEach(() => {
@@ -468,6 +475,144 @@ describe("db/dashboard-chat — listThreadsForBusiness", () => {
   });
 });
 
+describe("db/dashboard-chat — serializeChatMessages", () => {
+  it("renames created_at to createdAt and drops the thread_id column — matches API envelope shape", () => {
+    expect(
+      serializeChatMessages([
+        {
+          id: 1,
+          thread_id: "t",
+          role: "user",
+          content: "hi",
+          created_at: "2026-04-23T00:00:00Z"
+        },
+        {
+          id: 2,
+          thread_id: "t",
+          role: "assistant",
+          content: "hello",
+          created_at: "2026-04-23T00:00:01Z"
+        }
+      ])
+    ).toEqual([
+      { id: 1, role: "user", content: "hi", createdAt: "2026-04-23T00:00:00Z" },
+      { id: 2, role: "assistant", content: "hello", createdAt: "2026-04-23T00:00:01Z" }
+    ]);
+  });
+});
+
+describe("db/dashboard-chat — reactivateThread", () => {
+  // The helper issues TWO update statements:
+  //   Step 1 (deactivate-others): .update(...).eq("business_id", ...)
+  //                                .eq("is_active", true).neq("id", target)
+  //   Step 2 (activate-target):   .update(...).eq("id", target)
+  //                                .eq("business_id", ...)
+  // Step 1 terminates on `.neq`, step 2 terminates on the SECOND `.eq`.
+  // The mock chain has to honor both sequences without breaking the
+  // proxy contract (every non-terminal call must return the chain).
+
+  function makeReactivateChain(opts: {
+    deactivateError?: { message: string } | null;
+    activateError?: { message: string } | null;
+  }): Chain {
+    const c = chain();
+    // .neq is terminal for the deactivate statement.
+    c.neq = vi.fn(() =>
+      Promise.resolve({ error: opts.deactivateError ?? null })
+    ) as Chain["neq"];
+    // The activate statement's terminal is its SECOND .eq call. We
+    // count eq invocations and resolve when call #4 lands (eq #1 + #2
+    // are step 1's chain prefix → returns chain; #3 + #4 are step 2 →
+    // #4 is the terminal). All non-terminal calls return the chain.
+    let eqCount = 0;
+    c.eq = vi.fn(() => {
+      eqCount += 1;
+      if (eqCount === 4) {
+        return Promise.resolve({
+          error: opts.activateError ?? null
+        }) as unknown as Chain;
+      }
+      return c;
+    }) as Chain["eq"];
+    return c;
+  }
+
+  it("issues deactivate-others-then-activate as two scoped UPDATEs", async () => {
+    const c = makeReactivateChain({});
+    const db = makeDb(c);
+    await reactivateThread(BIZ, "thread-target", db as never);
+    // First UPDATE: archives anything currently active for the business
+    // *except* the target. This is the partial-unique-index-friendly
+    // way to flip the "active" pointer atomically — without this
+    // ordering we'd briefly violate dashboard_chat_threads_one_active.
+    expect(c.update).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ is_active: false })
+    );
+    expect(c.neq).toHaveBeenCalledWith("id", "thread-target");
+    // Second UPDATE: activates the target, scoped to (id, business_id)
+    // so a forged threadId can't be reactivated under the wrong tenant.
+    expect(c.update).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ is_active: true })
+    );
+    // Step 2 must scope the activation by both id AND business_id.
+    const eqCalls = (c.eq as ReturnType<typeof vi.fn>).mock.calls;
+    expect(eqCalls).toContainEqual(["id", "thread-target"]);
+    expect(eqCalls).toContainEqual(["business_id", BIZ]);
+  });
+
+  it("throws when the deactivate UPDATE fails — second UPDATE never runs", async () => {
+    const c = makeReactivateChain({ deactivateError: { message: "deact bad" } });
+    await expect(
+      reactivateThread(BIZ, "t", makeDb(c) as never)
+    ).rejects.toThrow(/reactivateThread\/deactivate: deact bad/);
+    // Critical: when the deactivate fails we MUST NOT proceed to the
+    // activate — that would risk two active rows once the partial
+    // unique index is restored.
+    expect(c.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws when the activate UPDATE fails (deactivate already ran — caller may need recovery)", async () => {
+    const c = makeReactivateChain({ activateError: { message: "act bad" } });
+    await expect(
+      reactivateThread(BIZ, "t", makeDb(c) as never)
+    ).rejects.toThrow(/reactivateThread\/activate: act bad/);
+    expect(c.update).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("db/dashboard-chat — updateThreadSummary", () => {
+  it("writes summary_md + summary_message_count on the thread row", async () => {
+    const c = chain();
+    c.eq.mockResolvedValue({ error: null });
+    await updateThreadSummary("thread-1", "compact summary", 42, makeDb(c) as never);
+    expect(c.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        summary_md: "compact summary",
+        summary_message_count: 42
+      })
+    );
+    expect(c.eq).toHaveBeenCalledWith("id", "thread-1");
+  });
+
+  it("bumps updated_at on the thread row so the sidebar's order-by-updated_at-desc surfaces freshly-summarized threads", async () => {
+    const c = chain();
+    c.eq.mockResolvedValue({ error: null });
+    await updateThreadSummary("thread-1", "x", 1, makeDb(c) as never);
+    const update = c.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(update.updated_at).toBeTypeOf("string");
+  });
+
+  it("throws on db error", async () => {
+    const c = chain();
+    c.eq.mockResolvedValue({ error: { message: "rls fail" } });
+    await expect(
+      updateThreadSummary("thread-1", "x", 1, makeDb(c) as never)
+    ).rejects.toThrow(/updateThreadSummary: rls fail/);
+  });
+});
+
 describe("db/dashboard-chat — default service client fallback", () => {
   it("each helper uses createSupabaseServiceClient when no client is passed", async () => {
     // getActiveThread
@@ -553,6 +698,30 @@ describe("db/dashboard-chat — default service client fallback", () => {
       c.limit.mockResolvedValue({ data: [], error: null });
       defaultClientSpy.mockReturnValueOnce(makeDb(c));
       await expect(listThreadsForBusiness(BIZ)).resolves.toEqual([]);
+    }
+    // reactivateThread — minimal happy-path stub so the default-client
+    // import path is exercised. .neq terminates step 1; the 4th .eq
+    // call terminates step 2.
+    {
+      const c = chain();
+      c.neq = vi.fn(() => Promise.resolve({ error: null })) as Chain["neq"];
+      let eqCount = 0;
+      c.eq = vi.fn(() => {
+        eqCount += 1;
+        if (eqCount === 4) {
+          return Promise.resolve({ error: null }) as unknown as Chain;
+        }
+        return c;
+      }) as Chain["eq"];
+      defaultClientSpy.mockReturnValueOnce(makeDb(c));
+      await expect(reactivateThread(BIZ, "t")).resolves.toBeUndefined();
+    }
+    // updateThreadSummary
+    {
+      const c = chain();
+      c.eq.mockResolvedValue({ error: null });
+      defaultClientSpy.mockReturnValueOnce(makeDb(c));
+      await expect(updateThreadSummary("t", "s", 5)).resolves.toBeUndefined();
     }
   });
 });

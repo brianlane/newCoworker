@@ -22,16 +22,23 @@ import {
   deactivateActiveThread,
   getActiveThread,
   getOrCreateActiveThread,
+  getThreadById,
   listMessages,
+  reactivateThread,
   serializeChatMessages,
   touchChatActivity,
-  updateThreadConversation
+  updateThreadConversation,
+  type DashboardChatThreadRow
 } from "@/lib/db/dashboard-chat";
 import {
   callRowboatChat,
   describeRowboatError,
   type RowboatChatMessage
 } from "@/lib/rowboat/chat";
+import {
+  shouldSummarize,
+  summarizeThreadAndLog
+} from "@/lib/dashboard-chat/summarizer";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +49,14 @@ const DASHBOARD_CHAT_RATE = { interval: 5 * 60 * 1000, maxRequests: 30 };
 
 const postBodySchema = z.object({
   businessId: z.string().uuid(),
+  // Optional: when present, the POST targets that specific thread —
+  // reactivating it (deactivating the previously-active one) so the
+  // user can continue any past conversation, ChatGPT/Claude/Gemini-
+  // style. When omitted, the legacy "use active thread or create one"
+  // path runs. We accept any uuid here and gate ownership against the
+  // resolved row's business_id (NOT this body's businessId) so a
+  // stolen threadId can't be reactivated under a different tenant.
+  threadId: z.string().uuid().optional(),
   message: z
     .string()
     .trim()
@@ -133,8 +148,41 @@ export async function POST(request: Request) {
     // keeps the 180s skip window anchored to the most recent exchange.
     await touchChatActivity(body.businessId);
 
-    const title = body.message.slice(0, 140);
-    const thread = await getOrCreateActiveThread(body.businessId, title);
+    // Thread resolution. Two paths:
+    //   1. Caller supplied threadId → continue (and reactivate if archived)
+    //      that specific thread. Lets archived conversations be resumed
+    //      without ceremony, ChatGPT/Claude/Gemini-style.
+    //   2. No threadId → legacy behavior: use the active thread or mint
+    //      a fresh one if none.
+    let thread: DashboardChatThreadRow;
+    if (body.threadId) {
+      // IDOR guard: resolve the thread first, then verify it belongs
+      // to the business in the body. Trusting body.businessId as the
+      // ownership scope without the cross-check would let an
+      // authenticated owner reactivate any thread on the platform by
+      // pairing a guessed threadId with a businessId they own.
+      const target = await getThreadById(body.threadId);
+      if (!target) return errorResponse("NOT_FOUND", "Conversation not found");
+      if (target.business_id !== body.businessId) {
+        // Same-status response as a missing row so the caller can't
+        // distinguish "not yours" from "doesn't exist" via timing.
+        return errorResponse("NOT_FOUND", "Conversation not found");
+      }
+      if (!target.is_active) {
+        await reactivateThread(body.businessId, body.threadId);
+        // Re-read so downstream sees is_active=true and the freshest
+        // updated_at; the in-memory copy from the lookup is now stale.
+        /* c8 ignore next -- re-read theoretically can return null (race
+           with a concurrent delete) but the prior reactivate would've
+           thrown first; the `?? target` fallback is a defensive belt. */
+        thread = (await getThreadById(body.threadId)) ?? target;
+      } else {
+        thread = target;
+      }
+    } else {
+      const title = body.message.slice(0, 140);
+      thread = await getOrCreateActiveThread(body.businessId, title);
+    }
 
     // Build the Rowboat request off the *persisted* history plus the just-
     // received user turn, WITHOUT persisting the user turn yet. If Rowboat
@@ -144,7 +192,23 @@ export async function POST(request: Request) {
     // after refresh.
     const history = await listMessages(thread.id);
     const tail = history.slice(-HISTORY_TURNS);
+    // Rolling summary (if any) is prepended as a system message so the
+    // model sees long-term context without us having to stuff older
+    // raw turns into the prompt. The summary covers everything the
+    // tail truncation would have dropped; on threads with <= 20
+    // messages there's no summary yet (summarizer below skips that
+    // case) and this prepend is a no-op.
+    const summaryPreamble: RowboatChatMessage[] =
+      thread.summary_md && thread.summary_md.trim()
+        ? [
+            {
+              role: "system",
+              content: `Conversation summary so far:\n\n${thread.summary_md.trim()}`
+            }
+          ]
+        : [];
     const rowboatMessages: RowboatChatMessage[] = [
+      ...summaryPreamble,
       ...tail.map((m) => ({ role: m.role, content: m.content })),
       { role: "user", content: body.message }
     ];
@@ -183,6 +247,16 @@ export async function POST(request: Request) {
     await touchChatActivity(body.businessId);
 
     const updated = await listMessages(thread.id);
+
+    // Rolling-summary trigger. Fire-and-forget so a slow Ollama
+    // doesn't block the chat response. The summarizer module catches
+    // its own errors and logs structured success/failure; this caller
+    // never rejects. Gate before invoking so we don't spam logs with
+    // "below_threshold" rejections on every short-thread turn.
+    if (shouldSummarize(thread, updated.length)) {
+      void summarizeThreadAndLog(body.businessId, thread.id);
+    }
+
     return successResponse({
       threadId: thread.id,
       reply,
