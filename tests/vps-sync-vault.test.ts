@@ -183,7 +183,7 @@ describe("buildSyncVaultCommand", () => {
   const NOW = new Date("2026-05-03T12:00:00Z");
 
   it("base64-encodes each vault file so quotes/backticks/dollar signs in the markdown can't break shell quoting", () => {
-    const cmd = buildSyncVaultCommand(BIZ, FULL_CONFIG, "INST", NOW);
+    const cmd = buildSyncVaultCommand(FULL_CONFIG, BIZ, "INST", NOW);
     // Identity content `# identity\nAcme Co` base64-encodes to a
     // recognizable prefix; substring check avoids hardcoding the full
     // base64 to keep the assertion forward-compatible with content
@@ -198,18 +198,18 @@ describe("buildSyncVaultCommand", () => {
   });
 
   it("updates BOTH draftWorkflow and liveWorkflow agent instructions so the playground draft and the production tunnel stay in lockstep", () => {
-    const cmd = buildSyncVaultCommand(BIZ, FULL_CONFIG, "INSTRUCTIONS", NOW);
+    const cmd = buildSyncVaultCommand(FULL_CONFIG, BIZ, "INSTRUCTIONS", NOW);
     expect(cmd).toContain('"draftWorkflow.agents.0.instructions": inst');
     expect(cmd).toContain('"liveWorkflow.agents.0.instructions": inst');
     // The mongo filter uses the bare `_id` shorthand (Mongo permits it
-    // without quoting); just confirm the businessId reaches the script.
+    // without quoting); just confirm the projectId reaches the script.
     expect(cmd).toContain(`{ _id: "${BIZ}" }`);
     // ISO timestamp is JSON-stringified into the seed script.
     expect(cmd).toContain(`"lastUpdatedAt": "${NOW.toISOString()}"`);
   });
 
   it("reads the instructions blob from a temp file inside the mongo container instead of inlining it (avoids shell-escaping markdown twice)", () => {
-    const cmd = buildSyncVaultCommand(BIZ, FULL_CONFIG, "INSTRUCTIONS", NOW);
+    const cmd = buildSyncVaultCommand(FULL_CONFIG, BIZ, "INSTRUCTIONS", NOW);
     // Hand-off path: write inst to host temp → docker cp into container
     // → read via fs.readFileSync(process.env.INST_FILE_PATH).
     expect(cmd).toContain("docker compose -f /opt/rowboat/docker-compose.yml cp");
@@ -218,19 +218,19 @@ describe("buildSyncVaultCommand", () => {
   });
 
   it("ends with `vault_synced=ok` so the orchestrator can grep for the success sentinel and distinguish 'ssh OK + script crashed mid-flight' from a clean run", () => {
-    const cmd = buildSyncVaultCommand(BIZ, FULL_CONFIG, "INST", NOW);
+    const cmd = buildSyncVaultCommand(FULL_CONFIG, BIZ, "INST", NOW);
     expect(cmd.trim().endsWith('echo "vault_synced=ok"')).toBe(true);
   });
 
   it("starts with `set -euo pipefail` so a failure in any pipeline step (base64 decode, docker cp, mongosh) propagates as a non-zero exit code", () => {
-    const cmd = buildSyncVaultCommand(BIZ, FULL_CONFIG, "INST", NOW);
+    const cmd = buildSyncVaultCommand(FULL_CONFIG, BIZ, "INST", NOW);
     expect(cmd.startsWith("set -euo pipefail")).toBe(true);
   });
 
   it("base64-encodes empty fields to empty strings so an unset website.md still gets a deterministic blank file (not a stale prior content)", () => {
     const cmd = buildSyncVaultCommand(
-      BIZ,
       { ...FULL_CONFIG, website_md: "" },
+      BIZ,
       "INST",
       NOW
     );
@@ -240,30 +240,36 @@ describe("buildSyncVaultCommand", () => {
     expect(cmd).toContain("printf %s ''");
   });
 
-  it("targets business_configs.rowboat_project_id (not businessId) when the two have drifted apart — closes the Codex P2 finding on PR #59", () => {
-    const cmd = buildSyncVaultCommand(
-      BIZ,
-      { ...FULL_CONFIG, rowboat_project_id: "drifted-project-id" },
-      "INST",
-      NOW
-    );
+  it("uses the EXACT projectId the caller supplies — single source of truth from syncVaultToVps", () => {
+    // Bugbot Low on PR #60: previously this function called
+    // `resolveSyncProjectId` internally AND the caller did the same for
+    // its return value. Today they agreed because the resolver was pure
+    // with identical inputs, but a future change to the in-function
+    // resolution that wasn't mirrored at the caller would silently
+    // desync the drift signal from the actually-targeted document. The
+    // refactor threads `projectId` in as a parameter so this whole class
+    // of bug is structurally impossible. Pin it.
+    const cmd = buildSyncVaultCommand(FULL_CONFIG, "drifted-project-id", "INST", NOW);
     expect(cmd).toContain('{ _id: "drifted-project-id" }');
-    // Must NOT use the businessId when an explicit project id is set.
     expect(cmd).not.toContain(`{ _id: "${BIZ}" }`);
+    // Same diagnostic must reference the supplied id, not the businessId.
+    expect(cmd).toContain('vault_sync_target_missing _id=" + "drifted-project-id"');
   });
 
-  it("falls back to businessId when rowboat_project_id is null (matches the >99% provisioning-default case)", () => {
-    const cmd = buildSyncVaultCommand(
-      BIZ,
-      { ...FULL_CONFIG, rowboat_project_id: null },
-      "INST",
-      NOW
-    );
-    expect(cmd).toContain(`{ _id: "${BIZ}" }`);
+  it("JSON-stringifies the projectId so embedded quotes can't escape the mongosh literal", () => {
+    // Defense-in-depth: callers should pass UUIDs that pass upstream
+    // validation, but if a malformed value ever slips through (e.g. from
+    // a future raw-SQL backfill) JSON.stringify keeps the embedded
+    // mongosh string a valid JS string literal instead of a syntax error
+    // or — worse — a code injection.
+    const cmd = buildSyncVaultCommand(FULL_CONFIG, 'evil"; print("pwned"); //', "INST", NOW);
+    // The escaped form makes the dquote literal, so mongosh sees it as
+    // a benign string rather than terminating early.
+    expect(cmd).toContain('"evil\\"; print(\\"pwned\\"); //"');
   });
 
-  it("hard-fails the sync when matchedCount === 0 so a drifted business_configs.rowboat_project_id surfaces as ssh_failed instead of silent success", () => {
-    const cmd = buildSyncVaultCommand(BIZ, FULL_CONFIG, "INST", NOW);
+  it("hard-fails the sync when matchedCount === 0 so a drifted projectId surfaces as ssh_failed instead of silent success", () => {
+    const cmd = buildSyncVaultCommand(FULL_CONFIG, BIZ, "INST", NOW);
     // `r.matchedCount === 0` is treated as fatal — without this, a tenant
     // whose project id got out of sync with their VPS Mongo would see
     // `ok: true` while their agent kept serving the stale prompt.
