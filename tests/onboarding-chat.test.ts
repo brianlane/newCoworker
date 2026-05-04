@@ -345,322 +345,53 @@ describe("onboarding chat helpers", () => {
     })).toThrow();
   });
 
-  it("summarizes answered onboarding topics from profile and transcript", () => {
-    const topicStatus = summarizeOnboardingTopicStatus(
-      { serviceArea: "", teamSize: "", crmUsed: "" },
-      {
-        ...createEmptyAssistantProfile(),
-        customerTypes: ["First-timers"],
-        commonRequests: ["Pricing"],
-        tools: []
-      },
-      [{ role: "user", content: "We just use texts and calls.", timestamp: "2026-03-31T21:00:00.000Z" }]
-    );
+  it("summarizes the chat-elicited topics from the profile alone (no knownContext / transcript inputs)", () => {
+    // Service area / team size / CRM are collected on the Step 1
+    // form and never feed into the chat-side topic status — the
+    // summary function takes only the profile. Pinning the
+    // resulting object's exact shape locks the migration: no
+    // future code path should leak `serviceAreaKnown`,
+    // `teamSizeKnown`, or `toolsKnown` keys back in.
+    const topicStatus = summarizeOnboardingTopicStatus({
+      ...createEmptyAssistantProfile(),
+      customerTypes: ["First-timers"],
+      commonRequests: ["Pricing"],
+      inquiryFlows: [{ trigger: "buyer DM", responseGoal: "ask budget" }],
+      routingRules: ["Send Phoenix listings to Jason"],
+      toneDirectives: ["Warm and concise"]
+    });
 
-    expect(topicStatus.toolsKnown).toBe(true);
-    expect(topicStatus.customerTypesKnown).toBe(true);
-    expect(topicStatus.commonRequestsKnown).toBe(true);
-    expect(topicStatus.serviceAreaKnown).toBe(false);
+    expect(topicStatus).toEqual({
+      customerTypesKnown: true,
+      commonRequestsKnown: true,
+      inquiryFlowsKnown: true,
+      routingRulesKnown: true,
+      toneKnown: true
+    });
   });
 
-  it("flips teamSizeKnown true when the user transcript answers it, even when the model omits it from the profile", () => {
-    // Regression: the model occasionally fails to write `teamSize` into
-    // its emitted profile even after the user clearly answered it.
-    // Without this transcript fallback the dead-end guard in
-    // /api/onboard/chat keeps swapping in the team-size fallback
-    // question turn after turn (production case: user said "4 or 5
-    // agents" three times before the interview moved on).
-    const cases: { content: string; expected: boolean }[] = [
-      { content: "4 or 5 agents", expected: true },
-      { content: "I have a handful of real estate agents about 4 or 5 on my team", expected: true },
-      { content: "I already told you, 4 or 5 team members.", expected: true },
-      { content: "4-5 team members", expected: true },
-      { content: "Team of 6", expected: true },
-      { content: "team of about 12", expected: true },
-      { content: "Just me", expected: true },
-      { content: "By myself for now", expected: true },
-      { content: "Small team", expected: true },
-      { content: "a handful of agents", expected: true },
-      { content: "3 people on my team", expected: true },
-      // Written-out numbers — owners regularly use these in chat
-      // ("two staff", "five agents", "team of six"). Comment claims
-      // these match; previously they didn't, since `\d+` only covers
-      // digits.
-      { content: "two staff", expected: true },
-      { content: "five agents", expected: true },
-      { content: "Team of six", expected: true },
-      { content: "team of about ten", expected: true },
-      { content: "two people on my team", expected: true },
-      { content: "a couple of agents", expected: true },
-      { content: "two or three reps", expected: true },
-      // Negative cases — the bare numeric/quantifier without a team
-      // role noun must not falsely flip teamSizeKnown true.
-      { content: "We cover 5 cities", expected: false },
-      { content: "I have 12 listings", expected: false },
-      { content: "We do 200 closings a year", expected: false },
-      // Written-out negatives — the same false-positive class but
-      // spelled out ("five years experience" vs "five agents").
-      { content: "I have five years experience", expected: false },
-      { content: "we serve ten cities", expected: false },
-      // Mixed-signal sentence: a real team-size answer ("team of
-      // nine or ten") embedded alongside customer count ("150
-      // people") and a plural other-team mention ("many teams in
-      // california"). Must latch onto the team-of-N phrasing and
-      // ignore the customer/other-team distractors. Regression
-      // guard for a corner case raised during review.
-      {
-        content:
-          "my team of nine or ten serves about 150 people and many teams in california",
-        expected: true
-      },
-      // Same shape but WITHOUT the "team of N" anchor — the user
-      // answers about clients and other teams only. Without an
-      // explicit own-team-size phrase this should NOT flip the flag
-      // standalone (Q/A pairing only happens when the prior assistant
-      // message asked about team size, which this case doesn't carry).
-      {
-        content: "we serve about 150 people and many teams in california",
-        expected: false
-      },
-      // Customer-context "people" — these are the cases the previous
-      // heuristic false-positived on, causing the assistant to skip
-      // asking about actual team size after a customer-volume answer.
-      { content: "I help many people buy homes", expected: false },
-      { content: "some people text me for quotes", expected: false },
-      { content: "I spoke with 3 people today", expected: false },
-      { content: "we serve 200 people a month", expected: false }
-    ];
-
-    for (const { content, expected } of cases) {
-      const topicStatus = summarizeOnboardingTopicStatus(
-        { serviceArea: "", teamSize: "", crmUsed: "" },
-        createEmptyAssistantProfile(),
-        [{ role: "user", content, timestamp: "2026-04-29T17:00:00.000Z" }]
-      );
-      expect(topicStatus.teamSizeKnown, `for "${content}"`).toBe(expected);
-    }
+  it("derives toneKnown true from a non-empty signature alone (escalationRules also satisfies routingRulesKnown)", () => {
+    // The two OR clauses inside summarizeOnboardingTopicStatus —
+    // toneKnown via signature, routingRulesKnown via
+    // escalationRules — would otherwise go uncovered if every test
+    // populated the primary branch.
+    const topicStatus = summarizeOnboardingTopicStatus({
+      ...createEmptyAssistantProfile(),
+      escalationRules: ["Escalate legal questions to the broker"],
+      signature: "Sunrise Realty"
+    });
+    expect(topicStatus.routingRulesKnown).toBe(true);
+    expect(topicStatus.toneKnown).toBe(true);
   });
 
-  it("flips teamSizeKnown true via Q/A pairing when the user replies bare-numerically to a team-size question", () => {
-    // Production regression: the assistant asked
-    //   "How many people are on your team that may interact with leads (including you)?"
-    // and the user replied "4 or 5". The standalone patterns all need
-    // an adjacent role noun, so the user reply alone doesn't match —
-    // but the prior assistant question supplies the missing context.
-    // Without this pairing, the dead-end guard re-fires the same
-    // team-size question several turns later (real Apr-29 transcript:
-    // "How big is the team the assistant supports?" after the user
-    // had already answered "4 or 5" and the assistant had confirmed
-    // "Got it—4–5 team members").
-    const topicStatus = summarizeOnboardingTopicStatus(
-      { serviceArea: "", teamSize: "", crmUsed: "" },
-      createEmptyAssistantProfile(),
-      [
-        {
-          role: "assistant",
-          content:
-            "How many people are on your team that may interact with leads (including you)?",
-          timestamp: "2026-04-29T20:01:00.000Z"
-        },
-        { role: "user", content: "4 or 5", timestamp: "2026-04-29T20:02:00.000Z" }
-      ]
-    );
-    expect(topicStatus.teamSizeKnown).toBe(true);
-  });
-
-  it("flips teamSizeKnown true via Q/A pairing for written-out and fuzzy bare replies", () => {
-    const cases: { question: string; reply: string }[] = [
-      {
-        question: "How big is your team?",
-        reply: "five"
-      },
-      {
-        question: "How big is the team — just you, or more?",
-        reply: "just me"
-      },
-      {
-        question: "How many agents do you work with?",
-        reply: "a couple"
-      },
-      {
-        question: "What's the team size you're staffing for?",
-        reply: "twelve"
-      },
-      {
-        question: "How big is your team?",
-        reply: "small"
-      }
-    ];
-    for (const { question, reply } of cases) {
-      const topicStatus = summarizeOnboardingTopicStatus(
-        { serviceArea: "", teamSize: "", crmUsed: "" },
-        createEmptyAssistantProfile(),
-        [
-          { role: "assistant", content: question, timestamp: "2026-04-29T20:01:00.000Z" },
-          { role: "user", content: reply, timestamp: "2026-04-29T20:02:00.000Z" }
-        ]
-      );
-      expect(topicStatus.teamSizeKnown, `for "${question}" → "${reply}"`).toBe(true);
-    }
-  });
-
-  it("does not flip teamSizeKnown true via Q/A pairing when the prior assistant question was unrelated", () => {
-    // Guard against the Q/A pair hijacking a non-team-size question.
-    // An assistant asking about lead volume / service-area / closings
-    // followed by a numeric user reply must NOT count as a team-size
-    // answer.
-    const cases: { question: string; reply: string }[] = [
-      { question: "How many leads do you get per week?", reply: "200" },
-      { question: "How big is your service area?", reply: "Phoenix metro" },
-      { question: "How many closings did you do last year?", reply: "40" },
-      { question: "How many cities do you cover?", reply: "5" },
-      { question: "What is your average response time in minutes?", reply: "10" }
-    ];
-    for (const { question, reply } of cases) {
-      const topicStatus = summarizeOnboardingTopicStatus(
-        { serviceArea: "", teamSize: "", crmUsed: "" },
-        createEmptyAssistantProfile(),
-        [
-          { role: "assistant", content: question, timestamp: "2026-04-29T20:01:00.000Z" },
-          { role: "user", content: reply, timestamp: "2026-04-29T20:02:00.000Z" }
-        ]
-      );
-      expect(topicStatus.teamSizeKnown, `for "${question}" → "${reply}"`).toBe(false);
-    }
-  });
-
-  it("does not flip teamSizeKnown true when the Q/A reply is entirely non-team-context numbers (Codex P2 guard)", () => {
-    // The Q/A fallback used to mark team size known whenever the
-    // prior assistant message matched a team-size question and the
-    // user reply contained any quantity token. Replies like
-    // "I have 5 years experience" or "about 2 offices" would
-    // hijack the topic — the user is talking past the question, not
-    // answering it. These cases must NOT close the team-size topic.
-    const cases: { question: string; reply: string }[] = [
-      // Codex bot's exact examples
-      { question: "How big is your team?", reply: "I have 5 years experience" },
-      { question: "How many people are on your team?", reply: "about 2 offices" },
-      // Adjacent classes — same root cause (number anchored to a
-      // non-team-context noun)
-      { question: "How big is your team?", reply: "we cover 10 cities" },
-      { question: "How big is your team?", reply: "200 leads a month" },
-      { question: "How many agents do you have?", reply: "we close 12 deals/month" },
-      { question: "How big is your team?", reply: "3 listings active right now" },
-      { question: "How many staff do you have?", reply: "we work with 50 clients" },
-      { question: "How big is your team?", reply: "5 to 10 years in the business" },
-      { question: "How big is your team?", reply: "20% commission" },
-      { question: "How many on your team?", reply: "we serve 3 counties" }
-    ];
-    for (const { question, reply } of cases) {
-      const topicStatus = summarizeOnboardingTopicStatus(
-        { serviceArea: "", teamSize: "", crmUsed: "" },
-        createEmptyAssistantProfile(),
-        [
-          { role: "assistant", content: question, timestamp: "2026-04-29T20:01:00.000Z" },
-          { role: "user", content: reply, timestamp: "2026-04-29T20:02:00.000Z" }
-        ]
-      );
-      expect(topicStatus.teamSizeKnown, `for "${question}" → "${reply}"`).toBe(false);
-    }
-  });
-
-  it("does flip teamSizeKnown true on mixed replies that contain BOTH a team-size signal AND non-team numbers", () => {
-    // Disqualifier must not over-apply: a reply that contains a real
-    // team-size answer alongside customer/listing counts should still
-    // close the topic. The disqualifier only fires when EVERY numeric
-    // token in the reply is anchored to a non-team noun.
-    const cases: { question: string; reply: string }[] = [
-      { question: "How big is your team?", reply: "5 agents and 200 leads/month" },
-      { question: "How many people on your team?", reply: "team of 4 covering 10 cities" },
-      { question: "How big is your team?", reply: "just me but I serve 150 clients" },
-      { question: "How many agents?", reply: "a few agents and 12 listings" }
-    ];
-    for (const { question, reply } of cases) {
-      const topicStatus = summarizeOnboardingTopicStatus(
-        { serviceArea: "", teamSize: "", crmUsed: "" },
-        createEmptyAssistantProfile(),
-        [
-          { role: "assistant", content: question, timestamp: "2026-04-29T20:01:00.000Z" },
-          { role: "user", content: reply, timestamp: "2026-04-29T20:02:00.000Z" }
-        ]
-      );
-      expect(topicStatus.teamSizeKnown, `for "${question}" → "${reply}"`).toBe(true);
-    }
-  });
-
-  it("flips teamSizeKnown true via Q/A pairing on a quantity-classed but no-number reply ('nobody' / 'none' — covers null .match() branch in disqualifier)", () => {
-    // "nobody" and "none" are accepted by USER_QUANTITY_REPLY_PATTERN
-    // (they ARE valid "team size" answers — "I work alone, no team")
-    // but contain no actual numeric/fuzzy tokens for
-    // ANY_QUANTITY_TOKEN_PATTERN to find. Inside
-    // `isReplyEntirelyNonTeamContext`, `text.match(...)` returns
-    // `null` and the `?? []` fallback yields a 0-length array, so
-    // the function correctly short-circuits to `return false` (not
-    // disqualified — the answer IS a team-size signal, just one
-    // without numbers). `hasUserTeamSizeSignal` then accepts the
-    // Q/A pair and `teamSizeKnown` flips true.
-    //
-    // Without this test, the `?? []` null-branch and the
-    // `quantityMatches.length === 0` early-return on lines 337-338
-    // of chat.ts both went uncovered: every other Q/A-pair test
-    // input contains either a digit, a written number, or a fuzzy
-    // quantifier that ANY_QUANTITY_TOKEN_PATTERN matches.
-    const cases = ["nobody", "none"];
-    for (const reply of cases) {
-      const topicStatus = summarizeOnboardingTopicStatus(
-        { serviceArea: "", teamSize: "", crmUsed: "" },
-        createEmptyAssistantProfile(),
-        [
-          {
-            role: "assistant",
-            content: "How many people are on your team?",
-            timestamp: "2026-04-29T20:01:00.000Z"
-          },
-          { role: "user", content: reply, timestamp: "2026-04-29T20:02:00.000Z" }
-        ]
-      );
-      expect(topicStatus.teamSizeKnown, `for reply "${reply}"`).toBe(true);
-    }
-  });
-
-  it("does not flip teamSizeKnown true via Q/A pairing on a non-quantity reply", () => {
-    // "What do you mean?" / "I'm not sure" / "Can you repeat that?" are
-    // realistic responses to a team-size question that should leave the
-    // topic open rather than flipping it true on prior-context alone.
-    const cases = ["What do you mean?", "I'm not sure", "Can you repeat that?"];
-    for (const reply of cases) {
-      const topicStatus = summarizeOnboardingTopicStatus(
-        { serviceArea: "", teamSize: "", crmUsed: "" },
-        createEmptyAssistantProfile(),
-        [
-          {
-            role: "assistant",
-            content: "How many people are on your team?",
-            timestamp: "2026-04-29T20:01:00.000Z"
-          },
-          { role: "user", content: reply, timestamp: "2026-04-29T20:02:00.000Z" }
-        ]
-      );
-      expect(topicStatus.teamSizeKnown, `for reply "${reply}"`).toBe(false);
-    }
-  });
-
-  it("does not flip teamSizeKnown true on assistant messages that mention team-size phrases", () => {
-    // The assistant repeatedly RE-ASKS the team size question — that
-    // text contains "team" and a number, but it's the exact opposite
-    // of a user answer. Only user-role messages should count.
-    const topicStatus = summarizeOnboardingTopicStatus(
-      { serviceArea: "", teamSize: "", crmUsed: "" },
-      createEmptyAssistantProfile(),
-      [
-        {
-          role: "assistant",
-          content: "How big is the team — 4 or 5 people, or just you?",
-          timestamp: "2026-04-29T17:00:00.000Z"
-        }
-      ]
-    );
-    expect(topicStatus.teamSizeKnown).toBe(false);
+  it("returns all-false on an empty profile (no chat answers yet)", () => {
+    expect(summarizeOnboardingTopicStatus(createEmptyAssistantProfile())).toEqual({
+      customerTypesKnown: false,
+      commonRequestsKnown: false,
+      inquiryFlowsKnown: false,
+      routingRulesKnown: false,
+      toneKnown: false
+    });
   });
 
   it("validates a complete model response on the happy path", () => {
@@ -855,27 +586,16 @@ describe("onboarding chat helpers", () => {
   });
 });
 
-describe("areAllChatTopicsCovered (dead-end finalize gate)", () => {
-  // Regression: post-Step-1-migration the route's dead-end guard
-  // computed `allTopicsCovered = Object.values(topicStatus).every(Boolean)`,
-  // which still included the form-collected
-  // `serviceArea`/`teamSize`/`tools` keys. For legacy localStorage
-  // drafts (predating the Step 1 form), those fields are empty in
-  // `knownContext` and never flip true via transcript scanning, so
-  // the guard could neither auto-finalize nor produce a useful
-  // fallback question (the corresponding fallback branches were
-  // removed in the migration). Result: an infinite loop where the
-  // guard re-injects the same generic policy fallback every dead-end
-  // turn while the user reads "we're almost done" without ever being
-  // able to advance. `areAllChatTopicsCovered` fixes the gate by
-  // restricting it to the chat-elicited subset of topics — the only
-  // ones the chat is responsible for filling in.
+describe("CHAT_ELICITED_TOPIC_KEYS / areAllChatTopicsCovered", () => {
+  // The post-Step-1-migration shape of `OnboardingTopicStatus` was
+  // shrunk to only chat-elicited keys (service area / team size /
+  // CRM are collected on Step 1 and never feed back into chat-side
+  // logic). These tests pin the resulting public contract: the
+  // tuple must list exactly the 5 chat keys, and the predicate must
+  // be the conjunction of those 5 booleans.
 
-  function makeTopicStatus(overrides: Record<string, boolean> = {}) {
+  function makeTopicStatus(overrides: Partial<Record<string, boolean>> = {}) {
     return {
-      serviceAreaKnown: false,
-      teamSizeKnown: false,
-      toolsKnown: false,
       customerTypesKnown: false,
       commonRequestsKnown: false,
       inquiryFlowsKnown: false,
@@ -885,13 +605,11 @@ describe("areAllChatTopicsCovered (dead-end finalize gate)", () => {
     };
   }
 
-  it("exposes exactly the 5 chat-elicited keys (locks the public contract)", () => {
-    // The 3 form-collected keys (serviceAreaKnown, teamSizeKnown,
-    // toolsKnown) MUST NOT appear here — they're handled on Step 1
-    // and gating on them in chat-side logic recreates the legacy-
-    // draft loop. Pinning the array prevents the migration from
-    // silently regressing if someone later shoves a form-collected
-    // key into this list.
+  it("exposes exactly the 5 chat-elicited keys in declared order", () => {
+    // Order matters because `createFallbackAssistantQuestion` walks
+    // these in priority sequence — pinning it prevents accidental
+    // reordering from changing which question fires when multiple
+    // topics are uncovered.
     expect([...CHAT_ELICITED_TOPIC_KEYS]).toEqual([
       "customerTypesKnown",
       "commonRequestsKnown",
@@ -901,11 +619,7 @@ describe("areAllChatTopicsCovered (dead-end finalize gate)", () => {
     ]);
   });
 
-  it("returns true when every chat-elicited topic is covered, regardless of form-collected keys", () => {
-    // The fix: a session with the 5 chat-elicited topics covered is
-    // ready to finalize even if the 3 form-collected keys are still
-    // false (legacy draft). Pre-fix, this returned false and the
-    // dead-end guard looped on the generic fallback question.
+  it("returns true when every chat-elicited topic is covered", () => {
     expect(
       areAllChatTopicsCovered(
         makeTopicStatus({
@@ -919,29 +633,12 @@ describe("areAllChatTopicsCovered (dead-end finalize gate)", () => {
     ).toBe(true);
   });
 
-  it("returns true even when ALL form-collected keys are false (legacy localStorage scenario)", () => {
-    // The exact pre-fix bug case: legacy draft has empty
-    // serviceArea/teamSize/crmUsed in knownContext (form fields
-    // didn't exist when the draft was created), but the chat has
-    // covered every topic the chat is responsible for. The guard
-    // MUST be able to finalize here.
-    expect(
-      areAllChatTopicsCovered({
-        serviceAreaKnown: false,
-        teamSizeKnown: false,
-        toolsKnown: false,
-        customerTypesKnown: true,
-        commonRequestsKnown: true,
-        inquiryFlowsKnown: true,
-        routingRulesKnown: true,
-        toneKnown: true
-      })
-    ).toBe(true);
-  });
-
   it("returns false when any chat-elicited topic is still uncovered", () => {
-    // Each chat-elicited key independently blocks finalization; the
-    // guard should pick that topic's fallback question instead.
+    // Each key independently blocks finalization. Iterating over
+    // `CHAT_ELICITED_TOPIC_KEYS` (rather than hand-listing) means
+    // adding a new chat-elicited topic in the future automatically
+    // grows the test surface, so a dropped key in the conjunction
+    // would surface here.
     for (const blockingKey of CHAT_ELICITED_TOPIC_KEYS) {
       const allCovered = Object.fromEntries(
         CHAT_ELICITED_TOPIC_KEYS.map((key) => [key, true])
@@ -952,32 +649,6 @@ describe("areAllChatTopicsCovered (dead-end finalize gate)", () => {
         ),
         `expected false when only ${blockingKey} is uncovered`
       ).toBe(false);
-    }
-  });
-
-  it("ignores form-collected keys for the finalize decision (true regardless of their values)", () => {
-    // Cross-product sanity check: holding the chat-elicited subset
-    // covered, varying any combination of the form-collected keys
-    // should never change the result.
-    const chatCovered = {
-      customerTypesKnown: true,
-      commonRequestsKnown: true,
-      inquiryFlowsKnown: true,
-      routingRulesKnown: true,
-      toneKnown: true
-    };
-    const formCases: { serviceAreaKnown: boolean; teamSizeKnown: boolean; toolsKnown: boolean }[] = [
-      { serviceAreaKnown: false, teamSizeKnown: false, toolsKnown: false },
-      { serviceAreaKnown: true, teamSizeKnown: false, toolsKnown: false },
-      { serviceAreaKnown: false, teamSizeKnown: true, toolsKnown: false },
-      { serviceAreaKnown: false, teamSizeKnown: false, toolsKnown: true },
-      { serviceAreaKnown: true, teamSizeKnown: true, toolsKnown: true }
-    ];
-    for (const formCase of formCases) {
-      expect(
-        areAllChatTopicsCovered({ ...chatCovered, ...formCase }),
-        `with form keys ${JSON.stringify(formCase)}`
-      ).toBe(true);
     }
   });
 });

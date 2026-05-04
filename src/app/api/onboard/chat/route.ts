@@ -206,16 +206,12 @@ function hasQuestionForUser(message: string): boolean {
   return /\?/.test(message);
 }
 
-// Drives every fallback question off the server-computed `topicStatus` so the priority
-// order matches `Object.values(topicStatus).every(Boolean)` exactly.
-//
-// Service area / team size / CRM are intentionally absent here — those are collected
-// on the Step 1 form before the chat starts (closed-class dropdowns, validated). When
-// `knownContext` carries them, `topicStatus.{serviceAreaKnown,teamSizeKnown,toolsKnown}`
-// is `true` and the chat dead-end never needed to ask. When `knownContext` is missing
-// them (only for legacy localStorage drafts predating the Step 1 fields), we still
-// don't re-ask via dead-end — the user can fix it by going Back to Step 1, and the
-// system prompt instructs the model to skip the topic rather than treat empty as a gap.
+// Drives every fallback question off the server-computed `topicStatus`, which now
+// only contains the chat-elicited topics — service area / team size / CRM are
+// collected on the Step 1 form (closed-class dropdowns, validated before advance)
+// and never need a chat fallback. The priority order here matches
+// `areAllChatTopicsCovered`'s coverage check, so the dead-end guard's
+// "finalize vs ask next question" decision lines up with the question chosen.
 function createFallbackAssistantQuestion(
   topicStatus: ReturnType<typeof summarizeOnboardingTopicStatus>
 ): string {
@@ -271,7 +267,7 @@ export async function POST(request: Request) {
     const messages = [
       {
         role: "system",
-        content: buildOnboardingChatSystemPrompt(knownContext, body.profile ?? null, body.messages)
+        content: buildOnboardingChatSystemPrompt(knownContext, body.profile ?? null)
       },
       ...body.messages
     ];
@@ -385,9 +381,13 @@ export async function POST(request: Request) {
     if (!json || !parsed) {
       return errorResponse("INTERNAL_SERVER_ERROR", FRIENDLY_ASSISTANT_ERROR);
     }
-    const topicStatus = summarizeOnboardingTopicStatus(knownContext, parsed.profile, body.messages);
+    const topicStatus = summarizeOnboardingTopicStatus(parsed.profile);
+    // `shouldSuppressRepeatedToolsQuestion` already gates on
+    // `knownContext.crmUsed?.trim()` (form-collected on Step 1) /
+    // `profile.{crmUsed,tools}` / a transcript-mention-count
+    // threshold, so a redundant outer `topicStatus.toolsKnown` guard
+    // is no longer needed — the inner check is the actual contract.
     if (
-      topicStatus.toolsKnown &&
       isRepeatedToolsQuestion(parsed.assistantMessage) &&
       shouldSuppressRepeatedToolsQuestion(body, parsed.profile, body.messages)
     ) {
