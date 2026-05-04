@@ -25,6 +25,7 @@ import {
   CRM_OTHER_VALUE,
   TEAM_SIZE_OPTIONS,
   deriveCrmSelection,
+  isCrmSelectionComplete,
   serializeCrmSelection
 } from "@/lib/onboarding/intakeOptions";
 const DRAFT_STORAGE_KEY = "newcoworker_onboard_draft";
@@ -1134,7 +1135,7 @@ function QuestionnaireForm() {
                     !signupEmail.trim() ||
                     !form.serviceArea.trim() ||
                     !form.teamSize ||
-                    !form.crmUsed.trim())) ||
+                    !isCrmSelectionComplete(form.crmUsed))) ||
                 (step === 2 && !canContinueFromChat)
               }
             >

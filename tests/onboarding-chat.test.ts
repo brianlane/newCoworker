@@ -586,6 +586,41 @@ describe("onboarding chat helpers", () => {
     }
   });
 
+  it("flips teamSizeKnown true via Q/A pairing on a quantity-classed but no-number reply ('nobody' / 'none' — covers null .match() branch in disqualifier)", () => {
+    // "nobody" and "none" are accepted by USER_QUANTITY_REPLY_PATTERN
+    // (they ARE valid "team size" answers — "I work alone, no team")
+    // but contain no actual numeric/fuzzy tokens for
+    // ANY_QUANTITY_TOKEN_PATTERN to find. Inside
+    // `isReplyEntirelyNonTeamContext`, `text.match(...)` returns
+    // `null` and the `?? []` fallback yields a 0-length array, so
+    // the function correctly short-circuits to `return false` (not
+    // disqualified — the answer IS a team-size signal, just one
+    // without numbers). `hasUserTeamSizeSignal` then accepts the
+    // Q/A pair and `teamSizeKnown` flips true.
+    //
+    // Without this test, the `?? []` null-branch and the
+    // `quantityMatches.length === 0` early-return on lines 337-338
+    // of chat.ts both went uncovered: every other Q/A-pair test
+    // input contains either a digit, a written number, or a fuzzy
+    // quantifier that ANY_QUANTITY_TOKEN_PATTERN matches.
+    const cases = ["nobody", "none"];
+    for (const reply of cases) {
+      const topicStatus = summarizeOnboardingTopicStatus(
+        { serviceArea: "", teamSize: "", crmUsed: "" },
+        createEmptyAssistantProfile(),
+        [
+          {
+            role: "assistant",
+            content: "How many people are on your team?",
+            timestamp: "2026-04-29T20:01:00.000Z"
+          },
+          { role: "user", content: reply, timestamp: "2026-04-29T20:02:00.000Z" }
+        ]
+      );
+      expect(topicStatus.teamSizeKnown, `for reply "${reply}"`).toBe(true);
+    }
+  });
+
   it("does not flip teamSizeKnown true via Q/A pairing on a non-quantity reply", () => {
     // "What do you mean?" / "I'm not sure" / "Can you repeat that?" are
     // realistic responses to a team-size question that should leave the

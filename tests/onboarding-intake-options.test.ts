@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   CRM_OPTIONS,
   CRM_OTHER_PREFIX,
+  CRM_OTHER_SENTINEL,
   CRM_OTHER_VALUE,
   TEAM_SIZE_OPTIONS,
   deriveCrmSelection,
-  serializeCrmSelection
+  isCrmSelectionComplete,
+  serializeCrmSelection,
+  teamSizeBucketToInt
 } from "@/lib/onboarding/intakeOptions";
 
 describe("intakeOptions: TEAM_SIZE_OPTIONS", () => {
@@ -106,14 +109,23 @@ describe("intakeOptions: deriveCrmSelection / serializeCrmSelection round-trip",
     );
   });
 
-  it("serializes Other with empty text as '' so step-advance validation can flag it", () => {
-    // The dropdown can be in an "Other" state without the user
-    // having typed anything yet. We model that as an unfilled field
-    // (empty stored value) rather than as `Other: ` so the existing
-    // `!form.crmUsed.trim()` advance gate works without a special
-    // case.
-    expect(serializeCrmSelection(CRM_OTHER_VALUE, "")).toBe("");
-    expect(serializeCrmSelection(CRM_OTHER_VALUE, "   ")).toBe("");
+  it("serializes Other-with-empty-text to the sentinel so the dropdown can re-render in Other state", () => {
+    // Regression: previously this serialized to `""`, which made the
+    // dropdown round-trip back to its placeholder on the next render
+    // and hid the "Which CRM?" text input. Picking Other became
+    // a UX dead-end — users couldn't fill out or advance Step 1.
+    // The sentinel preserves the in-flight selection across renders
+    // while still being recognized as incomplete by
+    // `isCrmSelectionComplete`.
+    expect(serializeCrmSelection(CRM_OTHER_VALUE, "")).toBe(CRM_OTHER_SENTINEL);
+    expect(serializeCrmSelection(CRM_OTHER_VALUE, "   ")).toBe(CRM_OTHER_SENTINEL);
+  });
+
+  it("rehydrates the Other-empty sentinel back to { selection: 'Other', otherText: '' }", () => {
+    expect(deriveCrmSelection(CRM_OTHER_SENTINEL)).toEqual({
+      selection: CRM_OTHER_VALUE,
+      otherText: ""
+    });
   });
 
   it("serializes empty selection as ''", () => {
@@ -128,6 +140,8 @@ describe("intakeOptions: deriveCrmSelection / serializeCrmSelection round-trip",
         otherText: "",
         expectedStored: option.value
       })),
+      // In-flight Other-with-empty-text uses the sentinel
+      { selection: CRM_OTHER_VALUE, otherText: "", expectedStored: CRM_OTHER_SENTINEL },
       { selection: CRM_OTHER_VALUE, otherText: "Wise Agent", expectedStored: "Other: Wise Agent" }
     ];
     for (const { selection, otherText, expectedStored } of cases) {
@@ -135,5 +149,76 @@ describe("intakeOptions: deriveCrmSelection / serializeCrmSelection round-trip",
       expect(stored).toBe(expectedStored);
       expect(deriveCrmSelection(stored)).toEqual({ selection, otherText });
     }
+  });
+});
+
+describe("intakeOptions: isCrmSelectionComplete", () => {
+  it("rejects empty / nullish / sentinel values as incomplete", () => {
+    // These are exactly the states the Step 1 advance gate must
+    // block. The sentinel is truthy as a string but represents
+    // "Other selected, no text typed" — letting it through would
+    // submit `body.crmUsed = "Other:"` to the server.
+    expect(isCrmSelectionComplete("")).toBe(false);
+    expect(isCrmSelectionComplete("   ")).toBe(false);
+    expect(isCrmSelectionComplete(undefined)).toBe(false);
+    expect(isCrmSelectionComplete(null)).toBe(false);
+    expect(isCrmSelectionComplete(CRM_OTHER_SENTINEL)).toBe(false);
+  });
+
+  it("accepts known dropdown values, including the explicit None entry", () => {
+    expect(isCrmSelectionComplete("HubSpot")).toBe(true);
+    expect(isCrmSelectionComplete("None — texts, email, or calendar only")).toBe(true);
+  });
+
+  it("accepts Other only when the prefix has non-empty trailing text", () => {
+    expect(isCrmSelectionComplete("Other: Wise Agent")).toBe(true);
+    // Prefix with whitespace-only payload is still an in-flight
+    // state — the user hasn't actually named a CRM yet.
+    expect(isCrmSelectionComplete("Other:    ")).toBe(false);
+  });
+
+  it("accepts legacy free-text values (anything that's not the prefix or sentinel)", () => {
+    expect(isCrmSelectionComplete("My Custom Vertical CRM")).toBe(true);
+  });
+});
+
+describe("intakeOptions: teamSizeBucketToInt", () => {
+  it("maps every Step 1 dropdown bucket to the LOWER bound of its range", () => {
+    // The DB column is `int`. Picking the lower bound preserves
+    // the semantic that `team_size >= N` queries don't over-count
+    // operators (e.g. a 4-5 team should NOT satisfy `team_size >= 5`).
+    expect(teamSizeBucketToInt("Just me")).toBe(1);
+    expect(teamSizeBucketToInt("2-3")).toBe(2);
+    expect(teamSizeBucketToInt("4-5")).toBe(4);
+    expect(teamSizeBucketToInt("6-10")).toBe(6);
+    expect(teamSizeBucketToInt("11-25")).toBe(11);
+    expect(teamSizeBucketToInt("25+")).toBe(25);
+  });
+
+  it("trims surrounding whitespace before matching buckets", () => {
+    expect(teamSizeBucketToInt("  Just me ")).toBe(1);
+    expect(teamSizeBucketToInt("\t4-5\n")).toBe(4);
+  });
+
+  it("falls back to a guarded parseInt for legacy localStorage drafts that pre-date the dropdown", () => {
+    // Pre-migration the field was free-text. Bare numbers and
+    // numbers-with-trailing-noise should still parse rather than
+    // crash, so old drafts survive the migration.
+    expect(teamSizeBucketToInt("5")).toBe(5);
+    expect(teamSizeBucketToInt("12 agents")).toBe(12);
+  });
+
+  it("defaults to 1 (solo) for unparseable input rather than NaN", () => {
+    // Critical: `parseInt("Just me")` was the original bug — `NaN`
+    // hits the DB integer column and breaks create/checkout. Solo
+    // is the safest default because it's the most common small-team
+    // case AND any over/under-count is recoverable from the chat
+    // transcript or follow-up profile edits.
+    expect(teamSizeBucketToInt("nonsense")).toBe(1);
+    expect(teamSizeBucketToInt("0")).toBe(1);
+    expect(teamSizeBucketToInt("-5")).toBe(1);
+    expect(teamSizeBucketToInt("")).toBe(1);
+    expect(teamSizeBucketToInt(undefined)).toBe(1);
+    expect(teamSizeBucketToInt(null)).toBe(1);
   });
 });

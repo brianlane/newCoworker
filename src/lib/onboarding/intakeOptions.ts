@@ -41,6 +41,48 @@ export const TEAM_SIZE_OPTIONS: readonly TeamSizeOption[] = [
   { value: "25+", label: "25+" }
 ] as const;
 
+/**
+ * Maps a Step 1 dropdown value (`"Just me"`, `"2-3"`, …, `"25+"`) to
+ * the integer that gets persisted in `businesses.team_size`. The DB
+ * column is `int`, so we need a deterministic projection: previously
+ * the route called `parseInt(body.teamSize, 10)`, which silently
+ * produced `NaN` for `"Just me"` (breaking create/checkout for the
+ * single largest user segment — solo operators) and silently
+ * truncated `"4-5"` to `4` purely by parseInt's trailing-garbage
+ * tolerance. Both paths corrupted onboarding data.
+ *
+ * Picks the LOWER bound of each bucket so any `team_size >= N`
+ * comparisons (analytics, routing, billing thresholds) don't
+ * over-count operators. Solo is `1`, not `0`, because `0` would imply
+ * "no humans involved" which is never the case.
+ *
+ * Falls through to a guarded `parseInt` for legacy localStorage
+ * drafts that pre-date the dropdown and may still carry free-text
+ * values like `"5"` or `"10 agents"`. If even that fails, defaults to
+ * `1` rather than `NaN` — solo is the most common small-team default
+ * and is recoverable; a NaN insert is not.
+ */
+export function teamSizeBucketToInt(value: string | undefined | null): number {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) return 1;
+  switch (trimmed) {
+    case "Just me":
+      return 1;
+    case "2-3":
+      return 2;
+    case "4-5":
+      return 4;
+    case "6-10":
+      return 6;
+    case "11-25":
+      return 11;
+    case "25+":
+      return 25;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
 export type CrmOption = {
   value: string;
   label: string;
@@ -75,12 +117,26 @@ export const CRM_OTHER_VALUE = "Other";
 export const CRM_OTHER_PREFIX = "Other: ";
 
 /**
+ * Storage marker for "user picked Other from the dropdown but hasn't
+ * typed the CRM name yet". Without this sentinel, an empty Other
+ * state would round-trip through `serializeCrmSelection` → `""` →
+ * `deriveCrmSelection` as `{ selection: "", … }`, which made the
+ * dropdown visually reset to its placeholder and hid the "Which
+ * CRM?" text input — Other became fully non-functional. The sentinel
+ * preserves the in-flight selection across re-renders while still
+ * being recognizable to `isCrmSelectionComplete` as an incomplete
+ * answer that should block Step 1 advance.
+ */
+export const CRM_OTHER_SENTINEL = "Other:";
+
+/**
  * Render the user's stored CRM string as a (selection, free-text)
  * pair the form UI can display. Round-trips with
  * `serializeCrmSelection`.
  *
  *   ""                                → { selection: "",      otherText: "" }
  *   "HubSpot"                         → { selection: "HubSpot", otherText: "" }
+ *   "Other:"                          → { selection: "Other",   otherText: "" }
  *   "Other: My Custom CRM"            → { selection: "Other",   otherText: "My Custom CRM" }
  *   "Some Custom Thing"               → { selection: "Other",   otherText: "Some Custom Thing" }
  *
@@ -94,6 +150,7 @@ export function deriveCrmSelection(stored: string | undefined | null): {
 } {
   const value = (stored ?? "").trim();
   if (!value) return { selection: "", otherText: "" };
+  if (value === CRM_OTHER_SENTINEL) return { selection: CRM_OTHER_VALUE, otherText: "" };
   if (value.startsWith(CRM_OTHER_PREFIX)) {
     return { selection: CRM_OTHER_VALUE, otherText: value.slice(CRM_OTHER_PREFIX.length).trim() };
   }
@@ -106,16 +163,35 @@ export function deriveCrmSelection(stored: string | undefined | null): {
 }
 
 /**
- * Inverse of `deriveCrmSelection`. The `Other` selection without
- * non-empty text is intentionally serialized as `""` (treated as
- * "field not yet filled in"), so step-advance validation can flag it
- * the same way a blank dropdown would be.
+ * Inverse of `deriveCrmSelection`. The Other-with-empty-text case
+ * serializes to the explicit `CRM_OTHER_SENTINEL` rather than `""`
+ * so the dropdown can re-render in its Other state and reveal the
+ * "Which CRM?" text input. Use `isCrmSelectionComplete` (not a raw
+ * truthiness check) for advance-gate validation, since the sentinel
+ * is intentionally truthy-but-incomplete.
  */
 export function serializeCrmSelection(selection: string, otherText: string): string {
   if (!selection) return "";
   if (selection === CRM_OTHER_VALUE) {
     const trimmed = otherText.trim();
-    return trimmed ? `${CRM_OTHER_PREFIX}${trimmed}` : "";
+    return trimmed ? `${CRM_OTHER_PREFIX}${trimmed}` : CRM_OTHER_SENTINEL;
   }
   return selection;
+}
+
+/**
+ * True when the stored CRM value represents a completed answer the
+ * server can rely on. `"Other:"` (the in-flight sentinel) and the
+ * empty string both block advance; everything else — including the
+ * explicit `"None — texts, email, or calendar only"` entry — counts
+ * as a complete answer.
+ */
+export function isCrmSelectionComplete(stored: string | undefined | null): boolean {
+  const value = (stored ?? "").trim();
+  if (!value) return false;
+  if (value === CRM_OTHER_SENTINEL) return false;
+  if (value.startsWith(CRM_OTHER_PREFIX)) {
+    return value.slice(CRM_OTHER_PREFIX.length).trim().length > 0;
+  }
+  return true;
 }

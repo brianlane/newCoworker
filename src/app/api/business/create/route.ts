@@ -1,6 +1,7 @@
 import { getAuthUser, verifySignupIdentity } from "@/lib/auth";
 import { createBusiness, getBusiness } from "@/lib/db/businesses";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
+import { teamSizeBucketToInt } from "@/lib/onboarding/intakeOptions";
 import { createOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
 import { logger } from "@/lib/logger";
 import { z } from "zod";
@@ -92,7 +93,7 @@ export async function POST(request: Request) {
       websiteUrl: body.websiteUrl,
       serviceArea: body.serviceArea,
       typicalInquiry: body.typicalInquiry,
-      teamSize: body.teamSize ? parseInt(body.teamSize, 10) : undefined,
+      teamSize: body.teamSize ? teamSizeBucketToInt(body.teamSize) : undefined,
       crmUsed: body.crmUsed
     });
 

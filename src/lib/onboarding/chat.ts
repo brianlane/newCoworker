@@ -326,8 +326,15 @@ const ANY_QUANTITY_TOKEN_PATTERN = new RegExp(
 // if the prior assistant message asked about team size — they're
 // either non-sequiturs or talking about adjacent topics.
 function isReplyEntirelyNonTeamContext(text: string): boolean {
-  // Solo / fuzzy phrases (non-numeric) are always team-size signals;
-  // if any of those are present, never disqualify the reply.
+  // Solo / fuzzy phrases are always team-size signals; if any of
+  // those are present, never disqualify the reply. The first guard
+  // is structurally unreachable through the only call site —
+  // `hasUserTeamSizeSignal` already returns `true` on
+  // `TEAM_SIZE_SOLO_PATTERN.test(text)` BEFORE invoking
+  // `isReplyEntirelyNonTeamContext` — but the check is kept as a
+  // defense-in-depth contract: any future call site that reaches
+  // here with a solo phrase still gets the right answer.
+  /* c8 ignore next */
   if (TEAM_SIZE_SOLO_PATTERN.test(text)) return false;
   if (/\b(?:a few|a couple|a handful|several|small|big|large)\b/i.test(text)) return false;
 
@@ -345,6 +352,12 @@ function isReplyEntirelyNonTeamContext(text: string): boolean {
   // accounts for both `5` and `10`.
   let consumed = 0;
   for (const span of nonTeamMatches) {
+    // `NUMBER_FOLLOWED_BY_NON_TEAM_NOUN` requires a leading number in
+    // the match span by construction, so `span.match(...)` always
+    // returns at least one token in practice. The `?? []` fallback
+    // is a TS-narrowing convenience for the `null` return type and
+    // is unreachable in the Node runtime we ship on.
+    /* c8 ignore next */
     const tokens = span.match(ANY_QUANTITY_TOKEN_PATTERN) ?? [];
     consumed += tokens.length;
   }
