@@ -108,12 +108,6 @@ export function DashboardChat({ businessId, businessName }: Props) {
   const [loadingThread, setLoadingThread] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  // The viewer is in "archived read-only mode" when it's pointed at a
-  // thread that isn't the live active one. Cleanly derived from state
-  // so individual handlers don't have to keep their own copy in sync.
-  const isViewingArchive =
-    viewingThreadId !== null && viewingThreadId !== activeThreadId;
-
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -175,25 +169,22 @@ export function DashboardChat({ businessId, businessName }: Props) {
   const selectThread = useCallback(
     async (threadId: string) => {
       if (sending || loadingThread) return;
-      // Clicking the thread we're already on is a cheap no-op. Avoids a
-      // pointless fetch and the accompanying flash of "Loading…".
+      // Clicking the thread we're already on is a cheap no-op. Avoids
+      // a pointless fetch and the accompanying flash of "Loading…".
       if (threadId === viewingThreadId) return;
-      // Returning to the active thread: re-hydrate via the canonical
-      // active-thread endpoint so we pick up any messages added by a
-      // background tab and so the post path stays consistent with what's
-      // rendered. Also re-sync `activeThreadId` from the response —
-      // another tab may have hit "New conversation" since we hydrated,
-      // archiving our local active id and minting a new one. Without
-      // this, `viewingThreadId` would diverge from the stale
-      // `activeThreadId`, `isViewingArchive` would flip back on, and
-      // the composer would lock — clicking "Back to current" again
-      // would just re-enter this same broken path. Every other code
-      // path that fetches active-thread state updates BOTH ids; keep
-      // this one consistent.
-      if (threadId === activeThreadId) {
-        setLoadingThread(true);
-        setError(null);
-        try {
+
+      // Two endpoints, one purpose. The active-thread route returns
+      // exactly the same message shape PLUS the live flag state
+      // (paused / safe mode), so we use it whenever we're loading the
+      // currently-active thread (re-syncing flags is cheap insurance
+      // for multi-tab drift). Archived threads hit the per-thread
+      // read endpoint. The composer is editable in BOTH cases — on
+      // submit, the POST includes whichever thread is being viewed
+      // and the server reactivates if needed.
+      setLoadingThread(true);
+      setError(null);
+      try {
+        if (threadId === activeThreadId) {
           const res = await fetch(
             `/api/dashboard/chat?businessId=${encodeURIComponent(businessId)}`,
             { cache: "no-store" }
@@ -201,33 +192,26 @@ export function DashboardChat({ businessId, businessName }: Props) {
           const env = await parseEnvelope<ChatGetResponse>(res);
           if (env.ok) {
             setMessages(env.data.messages);
+            // Re-sync activeThreadId in case another tab archived this
+            // thread and minted a new one in the meantime — without
+            // this, viewingThreadId would point at a stale id.
             setActiveThreadId(env.data.threadId);
             setViewingThreadId(env.data.threadId);
           } else {
             setError(env.error.message);
           }
-        } catch {
-          setError("Network error.");
-        } finally {
-          setLoadingThread(false);
-        }
-        return;
-      }
-
-      // Read-only archive view.
-      setLoadingThread(true);
-      setError(null);
-      try {
-        const res = await fetch(
-          `/api/dashboard/chat/threads/${encodeURIComponent(threadId)}/messages`,
-          { cache: "no-store" }
-        );
-        const env = await parseEnvelope<ThreadMessagesResponse>(res);
-        if (env.ok) {
-          setMessages(env.data.messages);
-          setViewingThreadId(threadId);
         } else {
-          setError(env.error.message);
+          const res = await fetch(
+            `/api/dashboard/chat/threads/${encodeURIComponent(threadId)}/messages`,
+            { cache: "no-store" }
+          );
+          const env = await parseEnvelope<ThreadMessagesResponse>(res);
+          if (env.ok) {
+            setMessages(env.data.messages);
+            setViewingThreadId(threadId);
+          } else {
+            setError(env.error.message);
+          }
         }
       } catch {
         setError("Network error.");
@@ -241,7 +225,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
   async function handleSubmit(evt: FormEvent<HTMLFormElement>) {
     evt.preventDefault();
     const trimmed = input.trim();
-    if (!trimmed || sending || isPaused || isViewingArchive) return;
+    if (!trimmed || sending || isPaused) return;
 
     const optimistic: ChatMessage = {
       id: `local-${Date.now()}`,
@@ -255,18 +239,30 @@ export function DashboardChat({ businessId, businessName }: Props) {
     setError(null);
 
     try {
+      // ChatGPT/Claude/Gemini-style: every thread is continuable. We
+      // pass whichever thread the user is currently viewing as
+      // `threadId` so the server appends to it and reactivates it if
+      // it was archived. Omitting threadId falls back to the legacy
+      // "use active thread or mint a new one" path — used during the
+      // post-"New conversation" window before any thread exists yet.
+      const targetThreadId = viewingThreadId ?? activeThreadId;
       const res = await fetch("/api/dashboard/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ businessId, message: trimmed })
+        body: JSON.stringify({
+          businessId,
+          message: trimmed,
+          ...(targetThreadId ? { threadId: targetThreadId } : {})
+        })
       });
       const env = await parseEnvelope<ChatPostResponse>(res);
       if (env.ok) {
         setMessages(env.data.messages);
         setActiveThreadId(env.data.threadId);
         setViewingThreadId(env.data.threadId);
-        // Refresh sidebar so the active thread's bumped updatedAt + new
-        // message_count appear without a hard reload.
+        // Refresh sidebar so the (newly) active thread's bumped
+        // updatedAt + new message_count + flipped isActive flag show
+        // up without a hard reload.
         void fetchThreads();
       } else {
         setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
@@ -410,45 +406,13 @@ export function DashboardChat({ businessId, businessName }: Props) {
           </div>
         </Card>
 
-        {/* Active conversation pane */}
+        {/*
+          Conversation pane. Every thread is continuable now — sending
+          a message while viewing an archived thread reactivates it
+          server-side and continues the conversation, ChatGPT/Claude/
+          Gemini-style. No archive banner, no read-only state.
+        */}
         <Card className="p-0 overflow-hidden">
-          {isViewingArchive && (
-            <div className="border-b border-parchment/10 bg-signal-teal/5 px-4 py-2 flex items-center justify-between gap-3">
-              <p className="text-xs text-signal-teal">
-                Viewing an archived conversation (read-only).
-              </p>
-              {/*
-                The escape hatch out of archive view MUST always render
-                whenever isViewingArchive is true — otherwise the user is
-                trapped with a locked composer and no obvious way back.
-                Two regimes share the button:
-                  - There IS an active thread: "Back to current" rehydrates
-                    via selectThread() and unlocks the composer against it.
-                  - There is NOT an active thread (post-"New conversation",
-                    pre-first-send): "Start new conversation" clears the
-                    viewer locally so isViewingArchive flips to false; the
-                    next POST mints a fresh active thread.
-              */}
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  if (activeThreadId) {
-                    void selectThread(activeThreadId);
-                  } else {
-                    setMessages([]);
-                    setViewingThreadId(null);
-                    setError(null);
-                  }
-                }}
-                disabled={loadingThread}
-              >
-                {activeThreadId ? "Back to current" : "Start new conversation"}
-              </Button>
-            </div>
-          )}
-
           <div
             ref={scrollRef}
             className="flex flex-col gap-3 max-h-[60vh] min-h-[340px] overflow-y-auto px-4 py-4"
@@ -504,15 +468,11 @@ export function DashboardChat({ businessId, businessName }: Props) {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={
-                isViewingArchive
-                  ? activeThreadId
-                    ? "Archived conversation — go back to current to send a new message."
-                    : "Archived conversation — start a new conversation to send a message."
-                  : isPaused
-                    ? "Your coworker is paused. Resume from the dashboard to chat."
-                    : "Message your coworker. Enter to send, Shift+Enter for a newline."
+                isPaused
+                  ? "Your coworker is paused. Resume from the dashboard to chat."
+                  : "Message your coworker. Enter to send, Shift+Enter for a newline."
               }
-              disabled={sending || isPaused || isViewingArchive}
+              disabled={sending || isPaused}
               maxLength={4000}
               rows={3}
             />
@@ -525,7 +485,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
                 variant="primary"
                 size="sm"
                 loading={sending}
-                disabled={sending || isPaused || isViewingArchive || !input.trim()}
+                disabled={sending || isPaused || !input.trim()}
               >
                 Send
               </Button>
