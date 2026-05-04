@@ -286,3 +286,128 @@ describe("POST /api/dashboard/chat — summarizer trigger", () => {
     expect(appendMessage).not.toHaveBeenCalled();
   });
 });
+
+describe("POST /api/dashboard/chat — stateless retry on stale conversation continuation (Codex P1)", () => {
+  // The bug: when threadId targets an older thread, we always send the
+  // stored rowboat_conversation_id/state. Rowboat may have evicted that
+  // server-side conversation (model restart, retention expiry) — without
+  // this guard the entire archived thread becomes permanently
+  // non-continuable, regressing the "every thread is continuable"
+  // promise from the previous PR.
+
+  const STALE_ERRORS = [
+    "rowboat_http_400",
+    "rowboat_http_404",
+    "rowboat_http_409",
+    "rowboat_http_500",
+    "rowboat_http_502",
+    "rowboat_http_503",
+    "rowboat_empty_assistant"
+  ] as const;
+
+  for (const errMsg of STALE_ERRORS) {
+    it(`retries stateless on ${errMsg} when a stored conversationId was sent — recovery instead of hard-fail`, async () => {
+      // First call (with continuation) fails; second call (stateless)
+      // succeeds with a fresh conversationId.
+      vi.mocked(callRowboatChat)
+        .mockRejectedValueOnce(new Error(errMsg))
+        .mockResolvedValueOnce({
+          reply: "fresh reply",
+          conversationId: "fresh-conv",
+          state: undefined,
+          hasStateKey: false
+        } as never);
+      const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+      expect(res.status).toBe(200);
+      // Two calls: first with continuation, second without.
+      expect(callRowboatChat).toHaveBeenCalledTimes(2);
+      const firstCallArgs = vi.mocked(callRowboatChat).mock.calls[0][0];
+      const secondCallArgs = vi.mocked(callRowboatChat).mock.calls[1][0];
+      expect(firstCallArgs.conversationId).toBe("rb-conv");
+      expect(firstCallArgs.state).toEqual({ foo: 1 });
+      // Stateless retry: continuation tokens dropped.
+      expect(secondCallArgs.conversationId).toBeNull();
+      expect(secondCallArgs.state).toBeNull();
+      // Same messages on both calls — local context (summary +
+      // tail + new user message) is what carries continuity now.
+      expect(secondCallArgs.messages).toEqual(firstCallArgs.messages);
+    });
+  }
+
+  it("does NOT retry on rowboat_timeout — timing out doesn't suggest stale state, retry would just double VPS load", async () => {
+    vi.mocked(callRowboatChat).mockRejectedValueOnce(new Error("rowboat_timeout"));
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(res.status).toBe(502);
+    expect(callRowboatChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT retry on rowboat_http_401 — auth is global, retrying with the same bearer would fail identically", async () => {
+    vi.mocked(callRowboatChat).mockRejectedValueOnce(new Error("rowboat_http_401"));
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(res.status).toBe(502);
+    expect(callRowboatChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT retry on rowboat_http_403 — same auth-failure reasoning as 401", async () => {
+    vi.mocked(callRowboatChat).mockRejectedValueOnce(new Error("rowboat_http_403"));
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(res.status).toBe(502);
+    expect(callRowboatChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT retry on rowboat_invalid_json — protocol-level garble, dropping continuation won't fix it", async () => {
+    vi.mocked(callRowboatChat).mockRejectedValueOnce(new Error("rowboat_invalid_json"));
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(res.status).toBe(502);
+    expect(callRowboatChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT retry when the thread had NO stored conversationId — the failure isn't 'stale state' if we never sent state", async () => {
+    // Fresh thread minted by getOrCreateActiveThread with null
+    // conversation tokens. A retryable error here means something
+    // structural (the message shape, the project, the bearer); a
+    // stateless retry sends the SAME body that just failed.
+    vi.mocked(getOrCreateActiveThread).mockResolvedValueOnce({
+      ...ACTIVE_THREAD,
+      rowboat_conversation_id: null,
+      rowboat_state: null
+    } as never);
+    vi.mocked(callRowboatChat).mockRejectedValueOnce(new Error("rowboat_http_404"));
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(res.status).toBe(502);
+    expect(callRowboatChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT retry when stored conversationId is whitespace-only — same 'no continuation to be stale' reasoning", async () => {
+    vi.mocked(getOrCreateActiveThread).mockResolvedValueOnce({
+      ...ACTIVE_THREAD,
+      rowboat_conversation_id: "   ",
+      rowboat_state: null
+    } as never);
+    vi.mocked(callRowboatChat).mockRejectedValueOnce(new Error("rowboat_http_500"));
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(res.status).toBe(502);
+    expect(callRowboatChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces the RETRY error (not the first error) when the stateless fallback also fails — gives the operator the freshest signal", async () => {
+    vi.mocked(callRowboatChat)
+      .mockRejectedValueOnce(new Error("rowboat_http_404"))
+      .mockRejectedValueOnce(new Error("rowboat_http_503"));
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(res.status).toBe(502);
+    const body = (await res.json()) as { error: { message: string } };
+    // describeRowboatError is mocked to echo the message; the route
+    // must call it with the RETRY error, not the first one.
+    expect(body.error.message).toBe("rowboat_http_503");
+    expect(callRowboatChat).toHaveBeenCalledTimes(2);
+  });
+
+  it("only retries ONCE — no infinite loop when both calls fail with retryable errors", async () => {
+    vi.mocked(callRowboatChat)
+      .mockRejectedValueOnce(new Error("rowboat_http_500"))
+      .mockRejectedValueOnce(new Error("rowboat_http_500"));
+    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(callRowboatChat).toHaveBeenCalledTimes(2);
+  });
+});

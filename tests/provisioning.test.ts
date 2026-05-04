@@ -149,7 +149,14 @@ describe("provisioning/orchestrate", () => {
       NEXT_PUBLIC_SUPABASE_URL: "https://mock.supabase.co",
       SUPABASE_SERVICE_ROLE_KEY: "mock_service_role",
       TELNYX_API_KEY: "mock_telnyx",
-      TELNYX_MESSAGING_PROFILE_ID: "mock_prof"
+      TELNYX_MESSAGING_PROFILE_ID: "mock_prof",
+      // Required by assertPlatformTelnyxDefaults() before the
+      // orchestrator places a number order. The May 2026 outage
+      // (number ordered with `connection_id: ""`, calls failed with
+      // "the call could not be completed") was the symptom of THIS
+      // value being unset in production. Tests for the assertion
+      // path delete it explicitly below.
+      TELNYX_CONNECTION_ID: "mock_conn"
     };
     // Same hermeticity defences as before: scrub any CF / bridge-origin
     // env the dev shell may have leaked in so the fallback/asserts stay
@@ -987,6 +994,53 @@ describe("provisioning/orchestrate", () => {
         }
       );
       expect(vi.mocked(getTelnyxVoiceRouteForBusiness)).not.toHaveBeenCalled();
+    });
+
+    it("refuses to call didProvisioner when TELNYX_CONNECTION_ID is missing — root cause of the May 2026 unwired-DID outage", async () => {
+      // The bug: orchestrate.ts spread readPlatformTelnyxDefaults() into
+      // platformDefaults; if connectionId was undefined the order went
+      // through anyway and Telnyx filed the number with `connection_id: ""`,
+      // producing "the call could not be completed" on every inbound call.
+      // The assertion guard converts that silent regression into a loud
+      // throw (caught by the orchestrator's existing try/catch which
+      // logs "DID provisioning failed, assign manually" and continues
+      // the deploy without burning a real number order).
+      delete process.env.TELNYX_CONNECTION_ID;
+      process.env.TELNYX_AUTO_PURCHASE_DID = "true";
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+15550009999" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-no-conn", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec,
+          didProvisioner
+        }
+      );
+      // Critical: the provisioner was NEVER called, so we didn't pay
+      // Telnyx for an unwired number.
+      expect(didProvisioner).not.toHaveBeenCalled();
+      // Deploy still completes — the assertion is a soft-fail at the
+      // DID phase, same shape as OrderAndAssignError handling.
+      expect(result.vpsId).toBe("42");
+      expect(remoteExec).toHaveBeenCalled();
+    });
+
+    it("refuses when TELNYX_MESSAGING_PROFILE_ID is missing — SMS would route nowhere even if voice were wired", async () => {
+      delete process.env.TELNYX_MESSAGING_PROFILE_ID;
+      process.env.TELNYX_AUTO_PURCHASE_DID = "true";
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+15550001010" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      await orchestrateProvisioning(
+        { businessId: "biz-no-prof", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(didProvisioner).not.toHaveBeenCalled();
     });
   });
 

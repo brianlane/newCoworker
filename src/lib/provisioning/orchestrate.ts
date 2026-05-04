@@ -12,7 +12,10 @@ import {
   OrderAndAssignError,
   type PlatformTelnyxDefaults
 } from "@/lib/telnyx/assign-did";
-import { readPlatformTelnyxDefaults } from "@/lib/telnyx/platform-defaults";
+import {
+  assertPlatformTelnyxDefaults,
+  readPlatformTelnyxDefaults
+} from "@/lib/telnyx/platform-defaults";
 import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { updateBusinessStatus } from "@/lib/db/businesses";
@@ -660,6 +663,16 @@ async function runOrchestrator(
           // wss:// URL for the inbound-voice edge function.
           ...(bridgeMediaWssOrigin ? { bridgeMediaWssOrigin } : {})
         };
+        // Hard-stop before placing a real number order if the platform
+        // doesn't have a Call Control connection_id and/or messaging
+        // profile id. Ordering without these silently produces an
+        // unwired DID that costs money and can't carry calls (root
+        // cause of the May 2026 "call could not be completed" outage
+        // — number was active in Telnyx, but `connection_id: ""` left
+        // inbound webhooks with nowhere to go). Failing here surfaces
+        // the config gap as a deploy-time error instead of a silent
+        // production regression at first call.
+        assertPlatformTelnyxDefaults(platformDefaults);
         const { toE164 } = await didProvisioner({
           businessId,
           platformDefaults,
