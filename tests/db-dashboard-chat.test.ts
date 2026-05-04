@@ -11,7 +11,9 @@ import {
   deactivateActiveThread,
   getActiveThread,
   getOrCreateActiveThread,
+  getThreadById,
   listMessages,
+  listThreadsForBusiness,
   touchChatActivity,
   updateThreadConversation
 } from "@/lib/db/dashboard-chat";
@@ -24,6 +26,7 @@ type Chain = {
   upsert: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
   order: ReturnType<typeof vi.fn>;
+  limit: ReturnType<typeof vi.fn>;
   single: ReturnType<typeof vi.fn>;
   maybeSingle: ReturnType<typeof vi.fn>;
 };
@@ -36,6 +39,7 @@ function chain(): Chain {
     upsert: vi.fn(() => c),
     eq: vi.fn(() => c),
     order: vi.fn(() => c),
+    limit: vi.fn(() => c),
     single: vi.fn(),
     maybeSingle: vi.fn()
   };
@@ -357,6 +361,113 @@ describe("db/dashboard-chat — activity heartbeat", () => {
   });
 });
 
+describe("db/dashboard-chat — getThreadById", () => {
+  it("filters by id and returns the row when present", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: THREAD, error: null });
+    const db = makeDb(c);
+    await expect(getThreadById("thread-1", db as never)).resolves.toEqual(THREAD);
+    expect(db.from).toHaveBeenCalledWith("dashboard_chat_threads");
+    expect(c.eq).toHaveBeenCalledWith("id", "thread-1");
+  });
+
+  it("returns null when the thread doesn't exist (used for IDOR-safe 404 in the read-only history route)", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    await expect(getThreadById("thread-1", makeDb(c) as never)).resolves.toBeNull();
+  });
+
+  it("throws on db error so the route layer can surface a 500 instead of a misleading 404", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: { message: "boom" } });
+    await expect(getThreadById("thread-1", makeDb(c) as never)).rejects.toThrow(
+      /getThreadById: boom/
+    );
+  });
+});
+
+describe("db/dashboard-chat — listThreadsForBusiness", () => {
+  function makeRow(overrides: Partial<typeof THREAD> & { count?: number } = {}) {
+    const { count, ...rest } = overrides;
+    return {
+      ...THREAD,
+      ...rest,
+      dashboard_chat_messages: [{ count: count ?? 0 }]
+    };
+  }
+
+  it("orders by updated_at desc and exposes message_count flattened off the embedded aggregate", async () => {
+    const c = chain();
+    c.limit.mockResolvedValue({
+      data: [
+        makeRow({ id: "t1", updated_at: "2026-04-25T00:00:00Z", count: 7 }),
+        makeRow({ id: "t2", updated_at: "2026-04-24T00:00:00Z", is_active: false, count: 2 })
+      ],
+      error: null
+    });
+    const db = makeDb(c);
+    const rows = await listThreadsForBusiness(BIZ, {}, db as never);
+    expect(db.from).toHaveBeenCalledWith("dashboard_chat_threads");
+    expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+    expect(c.order).toHaveBeenCalledWith("updated_at", { ascending: false });
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ id: "t1", message_count: 7 });
+    expect(rows[1]).toMatchObject({ id: "t2", message_count: 2, is_active: false });
+    // The embedded aggregate field must be stripped — leaking PostgREST
+    // shape into the API surface would couple every consumer to it.
+    expect(rows[0]).not.toHaveProperty("dashboard_chat_messages");
+  });
+
+  it("defaults limit to 50 and forwards an explicit override", async () => {
+    const c = chain();
+    c.limit.mockResolvedValue({ data: [], error: null });
+    await listThreadsForBusiness(BIZ, {}, makeDb(c) as never);
+    expect(c.limit).toHaveBeenLastCalledWith(50);
+    c.limit.mockClear();
+    c.limit.mockResolvedValue({ data: [], error: null });
+    await listThreadsForBusiness(BIZ, { limit: 5 }, makeDb(c) as never);
+    expect(c.limit).toHaveBeenLastCalledWith(5);
+  });
+
+  it("returns an empty array when PostgREST resolves with no rows (data: null)", async () => {
+    const c = chain();
+    c.limit.mockResolvedValue({ data: null, error: null });
+    await expect(listThreadsForBusiness(BIZ, {}, makeDb(c) as never)).resolves.toEqual([]);
+  });
+
+  it("coerces a missing/non-array embed to message_count: 0 (defends against future PostgREST shape drift)", async () => {
+    const c = chain();
+    c.limit.mockResolvedValue({
+      data: [
+        // explicit-array, count missing entirely
+        { ...THREAD, id: "t-no-count", dashboard_chat_messages: [{}] },
+        // explicit-array, count is non-numeric
+        { ...THREAD, id: "t-bad", dashboard_chat_messages: [{ count: "nope" as unknown as number }] },
+        // null embed
+        { ...THREAD, id: "t-null", dashboard_chat_messages: null },
+        // missing embed key
+        { ...THREAD, id: "t-missing" }
+      ],
+      error: null
+    });
+    const rows = await listThreadsForBusiness(BIZ, {}, makeDb(c) as never);
+    expect(rows.map((r) => [r.id, r.message_count])).toEqual([
+      ["t-no-count", 0],
+      ["t-bad", 0],
+      ["t-null", 0],
+      ["t-missing", 0]
+    ]);
+  });
+
+  it("throws on db error", async () => {
+    const c = chain();
+    c.limit.mockResolvedValue({ data: null, error: { message: "rls" } });
+    await expect(listThreadsForBusiness(BIZ, {}, makeDb(c) as never)).rejects.toThrow(
+      /listThreadsForBusiness: rls/
+    );
+  });
+});
+
 describe("db/dashboard-chat — default service client fallback", () => {
   it("each helper uses createSupabaseServiceClient when no client is passed", async () => {
     // getActiveThread
@@ -428,6 +539,20 @@ describe("db/dashboard-chat — default service client fallback", () => {
       c.upsert.mockResolvedValue({ error: null });
       defaultClientSpy.mockReturnValueOnce(makeDb(c));
       await expect(touchChatActivity(BIZ)).resolves.toBeUndefined();
+    }
+    // getThreadById
+    {
+      const c = chain();
+      c.maybeSingle.mockResolvedValue({ data: THREAD, error: null });
+      defaultClientSpy.mockReturnValueOnce(makeDb(c));
+      await expect(getThreadById("thread-1")).resolves.toEqual(THREAD);
+    }
+    // listThreadsForBusiness
+    {
+      const c = chain();
+      c.limit.mockResolvedValue({ data: [], error: null });
+      defaultClientSpy.mockReturnValueOnce(makeDb(c));
+      await expect(listThreadsForBusiness(BIZ)).resolves.toEqual([]);
     }
   });
 });
