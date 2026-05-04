@@ -417,17 +417,35 @@ export function DashboardChat({ businessId, businessName }: Props) {
               <p className="text-xs text-signal-teal">
                 Viewing an archived conversation (read-only).
               </p>
-              {activeThreadId && (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => selectThread(activeThreadId)}
-                  disabled={loadingThread}
-                >
-                  Back to current
-                </Button>
-              )}
+              {/*
+                The escape hatch out of archive view MUST always render
+                whenever isViewingArchive is true — otherwise the user is
+                trapped with a locked composer and no obvious way back.
+                Two regimes share the button:
+                  - There IS an active thread: "Back to current" rehydrates
+                    via selectThread() and unlocks the composer against it.
+                  - There is NOT an active thread (post-"New conversation",
+                    pre-first-send): "Start new conversation" clears the
+                    viewer locally so isViewingArchive flips to false; the
+                    next POST mints a fresh active thread.
+              */}
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  if (activeThreadId) {
+                    void selectThread(activeThreadId);
+                  } else {
+                    setMessages([]);
+                    setViewingThreadId(null);
+                    setError(null);
+                  }
+                }}
+                disabled={loadingThread}
+              >
+                {activeThreadId ? "Back to current" : "Start new conversation"}
+              </Button>
             </div>
           )}
 
@@ -487,7 +505,9 @@ export function DashboardChat({ businessId, businessName }: Props) {
               onKeyDown={handleKeyDown}
               placeholder={
                 isViewingArchive
-                  ? "Archived conversation — go back to current to send a new message."
+                  ? activeThreadId
+                    ? "Archived conversation — go back to current to send a new message."
+                    : "Archived conversation — start a new conversation to send a message."
                   : isPaused
                     ? "Your coworker is paused. Resume from the dashboard to chat."
                     : "Message your coworker. Enter to send, Shift+Enter for a newline."
