@@ -201,13 +201,23 @@ export function resolveSyncProjectId(
  * on-VPS Mongo, or someone wiped the project document manually). The
  * surrounding `set -euo pipefail` then fails the whole command.
  *
+ * The `projectId` parameter is the already-resolved Mongo target — single
+ * source of truth from {@link syncVaultToVps}. Bugbot Low on PR #60
+ * called out that the previous version re-ran `resolveSyncProjectId`
+ * internally AND the caller did the same for its return value: today
+ * they agreed because the function was pure with identical inputs, but
+ * a future change to the resolution inside this function that wasn't
+ * mirrored at the caller would silently desync the drift signal from
+ * the actual targeted document. Threading the resolved id in as a
+ * parameter eliminates that class of bug entirely.
+ *
  * Exported for tests — the unit suite asserts on key substrings of the
  * generated command (e.g. base64 contents, mongo update path, exit
  * sentinel) without needing to spin a real SSH listener.
  */
 export function buildSyncVaultCommand(
-  businessId: string,
-  config: Pick<ConfigRow, "soul_md" | "identity_md" | "memory_md" | "website_md" | "rowboat_project_id">,
+  config: Pick<ConfigRow, "soul_md" | "identity_md" | "memory_md" | "website_md">,
+  projectId: string,
   instructions: string,
   now: Date
 ): string {
@@ -226,11 +236,8 @@ export function buildSyncVaultCommand(
   const websiteB64 = enc(config.website_md ?? "");
   /* c8 ignore stop */
   const instructionsB64 = enc(instructions);
-  // Resolve the Mongo target the same way the runtime chat route does so
-  // we never silently update the wrong project. JSON.stringify keeps the
-  // mongosh literal robust against any oddball characters that slip past
-  // the upstream uuid validation.
-  const projectId = resolveSyncProjectId(businessId, config);
+  // JSON.stringify keeps the mongosh literal robust against any oddball
+  // characters that slip past the upstream uuid validation.
   const projectIdJson = JSON.stringify(projectId);
   const nowIso = now.toISOString();
 
@@ -318,8 +325,12 @@ export async function syncVaultToVps(
   if (!publicIp) return { ok: false, reason: "no_public_ip" };
 
   const instructions = buildAgentInstructions(config);
+  // Single resolution point: the value we report in `result.projectId`
+  // (used as the drift signal in `syncVaultToVpsAndLog`'s log) is the
+  // EXACT same string we ask mongosh to update. See the doc on
+  // `buildSyncVaultCommand` for the Bugbot Low motivation.
   const projectId = resolveSyncProjectId(businessId, config);
-  const command = buildSyncVaultCommand(businessId, config, instructions, now);
+  const command = buildSyncVaultCommand(config, projectId, instructions, now);
 
   let result: SshExecResult;
   try {
