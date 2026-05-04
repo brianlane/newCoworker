@@ -20,6 +20,14 @@ import {
   type OnboardingChatMessage
 } from "@/lib/onboarding/chat";
 import { BUSINESS_TYPE_OPTIONS, DEFAULT_BUSINESS_TYPE } from "@/lib/onboarding/businessTypes";
+import {
+  CRM_OPTIONS,
+  CRM_OTHER_VALUE,
+  TEAM_SIZE_OPTIONS,
+  deriveCrmSelection,
+  isCrmSelectionComplete,
+  serializeCrmSelection
+} from "@/lib/onboarding/intakeOptions";
 const DRAFT_STORAGE_KEY = "newcoworker_onboard_draft";
 
 function isValidEmailAddress(value: string): boolean {
@@ -256,9 +264,18 @@ function QuestionnaireForm() {
     setForm((prev) => ({
       ...prev,
       typicalInquiry: inquirySummary,
-      serviceArea: nextState.profile.serviceArea || prev.serviceArea,
-      teamSize: nextState.profile.teamSize || prev.teamSize,
-      crmUsed: nextState.profile.crmUsed.length > 0 ? nextState.profile.crmUsed.join(", ") : prev.crmUsed,
+      // Step 1 is now the canonical source for serviceArea / teamSize
+      // / crmUsed (closed-class dropdowns, validated before advance),
+      // so prefer the user's form value over whatever the model
+      // emitted into the profile. The OR-fallback is retained for
+      // legacy localStorage drafts that pre-date the Step 1 fields:
+      // those rehydrate with empty form values, and accepting the
+      // model's extracted answer is better than nothing.
+      serviceArea: prev.serviceArea || nextState.profile.serviceArea,
+      teamSize: prev.teamSize || nextState.profile.teamSize,
+      crmUsed:
+        prev.crmUsed ||
+        (nextState.profile.crmUsed.length > 0 ? nextState.profile.crmUsed.join(", ") : ""),
       assistantChat: nextState
     }));
   }
@@ -811,6 +828,8 @@ function QuestionnaireForm() {
                 onChange={(nextValue) => update("businessType", nextValue)}
                 options={BUSINESS_TYPE_OPTIONS}
                 placeholder="Select your industry"
+                searchPlaceholder="Filter industries..."
+                noMatchesLabel="No industries match that search."
               />
               <Input
                 label="Your Name"
@@ -838,6 +857,84 @@ function QuestionnaireForm() {
                 We scan public pages to give your new coworker context about what you do,
                 and to understand your business better.
               </p>
+              <Input
+                label="Service Area"
+                value={form.serviceArea}
+                onChange={(e) => update("serviceArea", e.target.value)}
+                placeholder="Phoenix metro, AZ"
+                required
+              />
+              {/* Team size — segmented control. Closed-class buckets
+                  rather than free numeric input: the downstream
+                  identity.md only needs a rough scale, and a closed
+                  enum eliminates the parsing-by-regex problems we had
+                  when this was elicited via chat ("4 or 5", "team of
+                  nine or ten", "a couple of agents", etc). */}
+              <div>
+                <label className="text-sm font-medium text-parchment/80">
+                  Team Size <span className="text-spark-orange">*</span>
+                </label>
+                <p className="mt-0.5 text-[11px] text-parchment/45">
+                  How many people on your team interact with leads, including you?
+                </p>
+                <div
+                  role="radiogroup"
+                  aria-label="Team size"
+                  className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-6"
+                >
+                  {TEAM_SIZE_OPTIONS.map((option) => {
+                    const selected = form.teamSize === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => update("teamSize", option.value)}
+                        className={[
+                          "rounded-lg border px-3 py-2 text-sm transition-colors",
+                          selected
+                            ? "border-signal-teal bg-signal-teal/15 text-parchment"
+                            : "border-parchment/20 bg-deep-ink/50 text-parchment/85 hover:bg-deep-ink/60"
+                        ].join(" ")}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              {/* CRM — closed-list dropdown with explicit "None" and
+                  "Other" entries. "None" is a real, common answer for
+                  small operators running on texts/calendar/email; the
+                  Other escape hatch covers vertical-specific or
+                  obscure CRMs without forcing us to enumerate every
+                  product on the market. */}
+              <div>
+                <RichSelect
+                  label="CRM Tool"
+                  value={deriveCrmSelection(form.crmUsed).selection}
+                  onChange={(nextValue) => {
+                    const { otherText } = deriveCrmSelection(form.crmUsed);
+                    update("crmUsed", serializeCrmSelection(nextValue, otherText));
+                  }}
+                  options={[...CRM_OPTIONS]}
+                  placeholder="Pick what you use to track leads"
+                  searchPlaceholder="Filter CRMs..."
+                  noMatchesLabel="No CRMs match that search."
+                />
+                {deriveCrmSelection(form.crmUsed).selection === CRM_OTHER_VALUE && (
+                  <Input
+                    label="Which CRM?"
+                    value={deriveCrmSelection(form.crmUsed).otherText}
+                    onChange={(e) =>
+                      update("crmUsed", serializeCrmSelection(CRM_OTHER_VALUE, e.target.value))
+                    }
+                    placeholder="e.g. Wise Agent, LionDesk"
+                    required
+                  />
+                )}
+              </div>
               <Input
                 label="Email"
                 type="email"
@@ -1033,7 +1130,12 @@ function QuestionnaireForm() {
               disabled={
                 draftSaving ||
                 emailChecking ||
-                (step === 1 && (!form.businessName || !signupEmail.trim())) ||
+                (step === 1 &&
+                  (!form.businessName ||
+                    !signupEmail.trim() ||
+                    !form.serviceArea.trim() ||
+                    !form.teamSize ||
+                    !isCrmSelectionComplete(form.crmUsed))) ||
                 (step === 2 && !canContinueFromChat)
               }
             >

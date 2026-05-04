@@ -238,3 +238,47 @@ describe("/api/business/create — validation", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("/api/business/create — Step 1 dropdown teamSize → integer mapping", () => {
+  // Regression suite for the codex-flagged bug where the route called
+  // `parseInt(body.teamSize, 10)` directly. After the Step 1 form
+  // migration, `teamSize` arrives as bucket strings like "Just me",
+  // "2-3", "4-5", etc. — `parseInt("Just me")` was `NaN` (broke
+  // create/checkout for solo operators) and `parseInt("4-5")`
+  // silently truncated to `4` purely by parseInt's trailing-garbage
+  // tolerance. The route now delegates to `teamSizeBucketToInt`,
+  // which is exhaustively unit-tested in
+  // `onboarding-intake-options.test.ts` — these cases lock the route
+  // contract: every dropdown bucket reaches `createBusiness` as a
+  // valid positive integer.
+  const cases: { input: string; expected: number }[] = [
+    { input: "Just me", expected: 1 },
+    { input: "2-3", expected: 2 },
+    { input: "4-5", expected: 4 },
+    { input: "6-10", expected: 6 },
+    { input: "11-25", expected: 11 },
+    { input: "25+", expected: 25 }
+  ];
+
+  for (const { input, expected } of cases) {
+    it(`maps "${input}" to ${expected} before insert`, async () => {
+      const res = await POST(jsonRequest(baseBody({ teamSize: input })));
+      expect(res.status).toBe(200);
+      expect(createBusiness).toHaveBeenCalledWith(
+        expect.objectContaining({ teamSize: expected })
+      );
+    });
+  }
+
+  it("omits teamSize entirely when the field is unset", async () => {
+    // Defensive: the route still has a falsy guard around the
+    // conversion so a missing field stays `undefined` rather than
+    // being defaulted to `1` server-side. The form should never
+    // submit without it (advance gate blocks), but legacy clients
+    // and direct API callers still need this contract.
+    const res = await POST(jsonRequest(baseBody({})));
+    expect(res.status).toBe(200);
+    const lastCall = vi.mocked(createBusiness).mock.calls.at(-1)?.[0];
+    expect(lastCall?.teamSize).toBeUndefined();
+  });
+});

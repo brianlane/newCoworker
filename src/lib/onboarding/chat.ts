@@ -153,10 +153,17 @@ export const ONBOARDING_CHAT_RATE_LIMIT = {
   maxRequests: 12
 } as const;
 
+/**
+ * Topic coverage for the chat-elicited subset of the onboarding
+ * brief. Service area, team size, and CRM/tools are NOT here —
+ * they're collected on the Step 1 form (closed-class dropdowns,
+ * validated before advance) and arrive in `knownContext` directly.
+ * Including them here once meant we shipped an entire team-size
+ * transcript-detection regex chain (~150 LoC) and a Q/A-pairing
+ * disqualifier purely to retro-fit the chat output back into
+ * `knownContext.teamSize` — work that the form now does for free.
+ */
 type OnboardingTopicStatus = {
-  serviceAreaKnown: boolean;
-  teamSizeKnown: boolean;
-  toolsKnown: boolean;
   customerTypesKnown: boolean;
   commonRequestsKnown: boolean;
   inquiryFlowsKnown: boolean;
@@ -164,175 +171,44 @@ type OnboardingTopicStatus = {
   toneKnown: boolean;
 };
 
+/**
+ * Public list of the topic-status keys, exported as a closed-class
+ * tuple so external consumers (route-level dead-end logic, tests)
+ * can iterate without re-inventing the contract. Pinning this in a
+ * test prevents future migrations from silently regressing back to
+ * the form-vs-chat split that caused the legacy-draft finalize loop.
+ */
+export const CHAT_ELICITED_TOPIC_KEYS = [
+  "customerTypesKnown",
+  "commonRequestsKnown",
+  "inquiryFlowsKnown",
+  "routingRulesKnown",
+  "toneKnown"
+] as const satisfies readonly (keyof OnboardingTopicStatus)[];
+
+/**
+ * True when every chat-elicited topic has been answered. Used by the
+ * dead-end guard in `/api/onboard/chat` to decide between
+ * auto-finalizing and emitting a fallback question.
+ */
+export function areAllChatTopicsCovered(topicStatus: OnboardingTopicStatus): boolean {
+  return CHAT_ELICITED_TOPIC_KEYS.every((key) => topicStatus[key]);
+}
+
+/**
+ * Pattern shared with `/api/onboard/chat`'s
+ * `shouldSuppressRepeatedToolsQuestion` so the route can count
+ * tool-mentioning user messages and suppress repeat tools-questions
+ * without re-defining the lexicon. Lives here because it's also part
+ * of the user-facing onboarding vocabulary.
+ */
 export const TOOL_SIGNAL_PATTERN =
   /\b(text|texts|sms|call|calls|phone|phones|gmail|email|emails|calendar|calendly|crm|hubspot|pipeline|imessage)\b/i;
 
-function hasUserTranscriptSignal(messages: OnboardingChatMessage[], pattern: RegExp): boolean {
-  return messages.some((message) => message.role === "user" && pattern.test(message.content));
-}
-
-// "Just me / solo / by myself" answers are valid team-size signals on
-// their own — no number required.
-const TEAM_SIZE_SOLO_PATTERN = /\b(?:just me|by myself|solo|no team|one[ -]person|alone)\b/i;
-
-// Role-bearing nouns. Owners refer to their own team using these
-// specific words; we deliberately exclude the bare noun "people"
-// because in onboarding interviews users frequently describe customers
-// with it ("I help many people buy homes", "some people text me for
-// quotes", "I spoke with 3 people today", "we serve 200 people a
-// month") — all of which would falsely flip `teamSizeKnown` true and
-// cause the assistant to skip asking about actual team size.
-const TEAM_ROLE_NOUN_FRAGMENT =
-  "agents?|team[ -]?members?|employees?|teammates?|staff|reps?|colleagues?";
-
-// Either digit numbers or written-out numbers conversational owners
-// realistically use ("two staff", "five agents", "team of six"). We
-// cap at twenty plus a few common round numbers — anything bigger
-// than ~20 is overwhelmingly typed as digits in practice, and
-// extending further would only inflate false-positive surface (e.g.
-// "thousand customers") for negligible recall gain.
-const NUMBER_QUANTIFIER_FRAGMENT =
-  String.raw`(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty)`;
-
-// `<n>` or `<low>-<high>` / `<low> to <high>` / `<low> or <high>`,
-// with each endpoint independently a digit or written-out number.
-// Note: a hyphen in compound written numbers like "twenty-five" will
-// be parsed as a range separator by this fragment, which still results
-// in a correct team-size signal even if the semantic decomposition
-// differs from a human reading.
-const NUMBER_RANGE_FRAGMENT =
-  NUMBER_QUANTIFIER_FRAGMENT +
-  String.raw`(?:\s*(?:[-–—]|to|or)\s*` +
-  NUMBER_QUANTIFIER_FRAGMENT +
-  String.raw`)?`;
-
-// "<number> <role>" or "<low>-<high> <role>": e.g. "4 or 5 agents",
-// "4-5 team members", "12 reps", "two staff", "five agents".
-const TEAM_SIZE_NUMERIC_ROLE_PATTERN = new RegExp(
-  String.raw`\b` + NUMBER_RANGE_FRAGMENT + String.raw`\s+(?:` + TEAM_ROLE_NOUN_FRAGMENT + String.raw`)\b`,
-  "i"
-);
-
-// "<fuzzy> <role>" or "<fuzzy> team": e.g. "a handful of agents",
-// "small team", "several reps", "a couple agents". `team` is allowed
-// here (without an adjacent role noun) because phrases like "small
-// team" / "big team" are themselves the answer, while "people" is
-// still excluded.
-const TEAM_SIZE_FUZZY_ROLE_PATTERN = new RegExp(
-  String.raw`\b(?:a few|a couple|a handful|several|many|small|big|large)\b(?:\s+(?:of\s+)?(?:real[ -]estate\s+)?(?:my|our|the)?\s*)?\s*(?:team|` + TEAM_ROLE_NOUN_FRAGMENT + String.raw`)\b`,
-  "i"
-);
-
-// "team of <n>" / "team of about <n>": explicit team-of-N phrasing.
-const TEAM_SIZE_TEAM_OF_PATTERN = new RegExp(
-  String.raw`\bteam of (?:about\s+|around\s+|roughly\s+)?` + NUMBER_RANGE_FRAGMENT + String.raw`\b`,
-  "i"
-);
-
-// "<n> on (the|my|our) team" or "<n> people on (the|my|our) team":
-// possessive-team phrasing. `people` is allowed ONLY here, gated by the
-// possessive team modifier — that's what disambiguates "3 people on my
-// team" (team-size) from "3 people texted me" (customers).
-const TEAM_SIZE_ON_TEAM_PATTERN = new RegExp(
-  String.raw`\b` + NUMBER_RANGE_FRAGMENT + String.raw`\s+(?:people\s+)?(?:on|in|with)\s+(?:the|my|our|his|her)\s+team\b`,
-  "i"
-);
-
-// Phrasings the onboarding assistant uses to elicit team size. Used
-// only as the LEFT half of a Q/A-paired heuristic — bare replies like
-// "4 or 5" carry no role noun on their own (the standalone patterns
-// above all require one), but they're unambiguous when paired with
-// the immediately preceding assistant question.
-//
-// Tightening:
-// - "how many people" alone is too broad (could ask about customers,
-//   leads, recipients) — we require "team" within ~60 chars.
-// - "how many <role>" is allowed without an extra team constraint
-//   because in onboarding the assistant doesn't ask about volume of
-//   role-bearing contacts; that phrasing is reserved for team size.
-const TEAM_SIZE_QUESTION_PATTERN = new RegExp(
-  String.raw`\b(?:` +
-    String.raw`how (?:big|large) (?:is |are )?(?:the |your )?team` +
-    String.raw`|how many (?:agents?|team[ -]?members?|staff|reps?|teammates?|colleagues?|employees?)` +
-    String.raw`|how many people\b[^?]{0,60}\bteam` +
-    String.raw`|team size` +
-    String.raw`|size of (?:the|your) team` +
-  String.raw`)\b`,
-  "i"
-);
-
-// What counts as a team-size REPLY when paired with a team-size
-// question. Intentionally broader than the standalone team-size
-// patterns: the prior question supplies the missing role-noun
-// context, so bare numbers (digit OR written-out), fuzzy quantifiers,
-// and solo phrasings all qualify. Required to catch the production
-// case "4 or 5" replying directly to "How many people are on your
-// team..." — the model emits a confirmation but then drops `teamSize`
-// from later profile updates, and without this pairing the dead-end
-// guard re-asks the same question turn after turn.
-const USER_QUANTITY_REPLY_PATTERN = new RegExp(
-  String.raw`\b(?:` +
-    NUMBER_QUANTIFIER_FRAGMENT +
-    String.raw`|a few|a couple|a handful|several|many|small|big|large|just me|by myself|solo|alone|no team|one[ -]person|nobody|none` +
-  String.raw`)\b`,
-  "i"
-);
-
-function hasUserTeamSizeSignal(messages: OnboardingChatMessage[]): boolean {
-  for (let i = 0; i < messages.length; i++) {
-    const message = messages[i];
-    if (message.role !== "user") continue;
-    const text = message.content;
-
-    if (
-      TEAM_SIZE_SOLO_PATTERN.test(text) ||
-      TEAM_SIZE_TEAM_OF_PATTERN.test(text) ||
-      TEAM_SIZE_NUMERIC_ROLE_PATTERN.test(text) ||
-      TEAM_SIZE_ON_TEAM_PATTERN.test(text) ||
-      TEAM_SIZE_FUZZY_ROLE_PATTERN.test(text)
-    ) {
-      return true;
-    }
-
-    // Q/A pairing: if the immediately preceding assistant message
-    // asked about team size, accept any quantity-bearing reply as the
-    // answer. Required for bare-number replies like "4 or 5" that are
-    // semantically clear in context but lack a role noun on their own.
-    if (i > 0) {
-      const prev = messages[i - 1];
-      if (
-        prev.role === "assistant" &&
-        TEAM_SIZE_QUESTION_PATTERN.test(prev.content) &&
-        USER_QUANTITY_REPLY_PATTERN.test(text)
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 export function summarizeOnboardingTopicStatus(
-  knownContext: OnboardingKnownContext,
-  profile: OnboardingAssistantProfile,
-  messages: OnboardingChatMessage[]
+  profile: OnboardingAssistantProfile
 ): OnboardingTopicStatus {
   return {
-    serviceAreaKnown: Boolean((knownContext.serviceArea || profile.serviceArea).trim()),
-    // Also scan the user transcript so a clear answer ("4 or 5 agents",
-    // "just me", "small team of 3") flips this true even when the model
-    // forgot to write it into the emitted profile. Without this fall-
-    // through the dead-end guard in /api/onboard/chat keeps re-asking
-    // the team-size question turn after turn while the user reads the
-    // assistant's own acknowledgement of the same answer they gave.
-    teamSizeKnown:
-      Boolean((knownContext.teamSize || profile.teamSize).trim()) ||
-      hasUserTeamSizeSignal(messages),
-    toolsKnown:
-      Boolean(knownContext.crmUsed?.trim()) ||
-      profile.crmUsed.length > 0 ||
-      profile.tools.length > 0 ||
-      hasUserTranscriptSignal(messages, TOOL_SIGNAL_PATTERN),
     customerTypesKnown: profile.customerTypes.length > 0,
     commonRequestsKnown: profile.commonRequests.length > 0,
     inquiryFlowsKnown: profile.inquiryFlows.length > 0,
@@ -380,11 +256,10 @@ function humanizeSlug(value: string): string {
 
 export function buildOnboardingChatSystemPrompt(
   knownContext: OnboardingKnownContext,
-  existingProfile?: OnboardingAssistantProfile | null,
-  messages: OnboardingChatMessage[] = []
+  existingProfile?: OnboardingAssistantProfile | null
 ): string {
   const profile = existingProfile ?? createEmptyAssistantProfile();
-  const topicStatus = summarizeOnboardingTopicStatus(knownContext, profile, messages);
+  const topicStatus = summarizeOnboardingTopicStatus(profile);
 
   // The full website summary can be ~8KB and is the dominant component
   // of the system prompt's size when present. Pull it out of
@@ -413,13 +288,19 @@ export function buildOnboardingChatSystemPrompt(
     "Your job is to gather the information needed to produce a strong assistant profile and business memory.",
     "Be industry agnostic. Do not assume real estate unless the user says so. Industry-specific examples are allowed only to steer the user when helpful.",
     "Ask one focused question at a time. Keep assistant replies concise, practical, and easy to answer.",
-    "Prefer collecting cause/effect communication patterns, routing rules, escalation rules, FAQ facts, tool context, and tone guidance over generic marketing copy.",
+    "Prefer collecting cause/effect communication patterns, routing rules, escalation rules, FAQ facts, and tone guidance over generic marketing copy.",
     "Do not ask for technical integration setup in detail during onboarding. Gmail, calendar, CRM, and OAuth tooling can be captured as current-tool context only.",
     "Never mention internal implementation details or file names like SOUL.md, IDENTITY.md, MEMORY.md, markdown files, knowledge base files, or technical setup artifacts in assistantMessage.",
-    "Ask for service area, market, or territory early unless it is already known in context.",
-    "Also capture team size and the current CRM/inbox/scheduling tools in use during the interview.",
-    "If the user says they do not use a CRM and only use texts, calls, or email, treat that as a complete valid answer rather than a missing field.",
-    "When the user has no formal CRM, keep crmUsed empty or minimal and capture the real operating tools under tools and factsToRemember instead, such as SMS, phone calls, iMessage, or Gmail.",
+    // Service area / team size / CRM are collected on the Step 1
+    // form as closed-class fields (segmented control + dropdown +
+    // validated text). They arrive in `knownContext` already
+    // answered; re-asking them in chat reads as the assistant
+    // ignoring the user. Only if `knownContext` is missing one of
+    // them (legacy localStorage drafts that pre-date the Step 1
+    // fields) is it acceptable to confirm the answer in chat — and
+    // even then, ask once and move on.
+    "Service area, team size, and CRM/tools are collected on the Step 1 form. The values in `knownContext.{serviceArea,teamSize,crmUsed}` are authoritative — do NOT re-ask those topics. If a value is empty in `knownContext`, treat it as the user choosing not to specify and skip past it rather than re-asking.",
+    "If the user has no formal CRM (e.g. `knownContext.crmUsed` says \"None — texts, email, or calendar only\"), keep `profile.crmUsed` empty and capture the real operating tools under `tools` and `factsToRemember` instead.",
     "If the user gives vague answers, ask for one or two concrete examples.",
     "Never ask for information that is already known in the existing profile, known context, or transcript. If a topic is already answered, move to the next missing topic instead of re-asking it.",
     "Update the profile using the conversation and the known context below. Preserve useful prior details; do not erase good data.",

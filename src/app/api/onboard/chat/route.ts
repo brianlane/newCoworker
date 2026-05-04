@@ -2,6 +2,7 @@ import { z } from "zod";
 import { errorResponse, successResponse, handleRouteError } from "@/lib/api-response";
 import { rateLimit, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
 import {
+  areAllChatTopicsCovered,
   buildOnboardingChatSystemPrompt,
   compileRowboatMarkdownDrafts,
   finalizeAssistantMessage,
@@ -205,26 +206,15 @@ function hasQuestionForUser(message: string): boolean {
   return /\?/.test(message);
 }
 
-// Drives every fallback question off the server-computed `topicStatus` so the priority
-// order matches `Object.values(topicStatus).every(Boolean)` exactly. The earlier version
-// used profile/context shape checks and silently lacked a tools branch — when toolsKnown
-// was the only remaining gap, `allTopicsCovered` was false but this helper would still
-// jump to the generic policy question, never asking about CRM/tools and letting that gap
-// linger across multiple dead-end turns.
+// Drives every fallback question off the server-computed `topicStatus`, which now
+// only contains the chat-elicited topics — service area / team size / CRM are
+// collected on the Step 1 form (closed-class dropdowns, validated before advance)
+// and never need a chat fallback. The priority order here matches
+// `areAllChatTopicsCovered`'s coverage check, so the dead-end guard's
+// "finalize vs ask next question" decision lines up with the question chosen.
 function createFallbackAssistantQuestion(
   topicStatus: ReturnType<typeof summarizeOnboardingTopicStatus>
 ): string {
-  if (!topicStatus.serviceAreaKnown) {
-    return "What service area, market, or territory do you cover?";
-  }
-  if (!topicStatus.teamSizeKnown) {
-    return "How big is the team the assistant supports? If it is just you, say that directly.";
-  }
-  if (!topicStatus.toolsKnown) {
-    // Wording intentionally avoids the substrings detected by `isRepeatedToolsQuestion`
-    // so this fallback isn't itself flagged as the very thing that other guard suppresses.
-    return "Which tools do you rely on day-to-day to track leads, schedule, or message customers? If you don't have a CRM, just list whatever you use (texts, Gmail, calendar, etc.).";
-  }
   if (!topicStatus.customerTypesKnown) {
     return "What types of customers usually reach out first? List the top 1-3 customer types.";
   }
@@ -277,7 +267,7 @@ export async function POST(request: Request) {
     const messages = [
       {
         role: "system",
-        content: buildOnboardingChatSystemPrompt(knownContext, body.profile ?? null, body.messages)
+        content: buildOnboardingChatSystemPrompt(knownContext, body.profile ?? null)
       },
       ...body.messages
     ];
@@ -391,9 +381,13 @@ export async function POST(request: Request) {
     if (!json || !parsed) {
       return errorResponse("INTERNAL_SERVER_ERROR", FRIENDLY_ASSISTANT_ERROR);
     }
-    const topicStatus = summarizeOnboardingTopicStatus(knownContext, parsed.profile, body.messages);
+    const topicStatus = summarizeOnboardingTopicStatus(parsed.profile);
+    // `shouldSuppressRepeatedToolsQuestion` already gates on
+    // `knownContext.crmUsed?.trim()` (form-collected on Step 1) /
+    // `profile.{crmUsed,tools}` / a transcript-mention-count
+    // threshold, so a redundant outer `topicStatus.toolsKnown` guard
+    // is no longer needed — the inner check is the actual contract.
     if (
-      topicStatus.toolsKnown &&
       isRepeatedToolsQuestion(parsed.assistantMessage) &&
       shouldSuppressRepeatedToolsQuestion(body, parsed.profile, body.messages)
     ) {
@@ -409,12 +403,20 @@ export async function POST(request: Request) {
     // forces a wasted round-trip just to elicit the missing question. The prompt forbids
     // this, but LLMs ignore rules late in long conversations, so we deterministically
     // recover here:
-    //   - if every onboarding topic is already covered, finalize for the model;
+    //   - if every chat-elicited topic is already covered, finalize for the model;
     //   - otherwise, swap the message for a concrete next question driven by the
     //     server's view of what's still missing.
+    //
+    // The "covered" check intentionally ignores the form-collected topics
+    // (serviceArea/teamSize/tools) — they're not chat's responsibility to elicit, and
+    // gating on `Object.values(topicStatus).every(Boolean)` would deadlock legacy
+    // localStorage drafts whose `knownContext.{serviceArea,teamSize,crmUsed}` are
+    // empty: those fields would never flip to `known`, so `allTopicsCovered` would
+    // never become true, and `createFallbackAssistantQuestion` (which no longer has
+    // branches for those topics post-Step-1-migration) would loop on the same generic
+    // policy fallback question forever.
     if (!parsed.readyToFinalize && !hasQuestionForUser(parsed.assistantMessage)) {
-      const allTopicsCovered = Object.values(topicStatus).every(Boolean);
-      if (allTopicsCovered) {
+      if (areAllChatTopicsCovered(topicStatus)) {
         parsed = { ...parsed, readyToFinalize: true };
       } else {
         parsed = {

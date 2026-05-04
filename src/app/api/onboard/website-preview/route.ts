@@ -5,6 +5,49 @@ import { ingestWebsite, normalizeWebsiteUrl } from "@/lib/website-ingest";
 import { logger } from "@/lib/logger";
 
 /**
+ * Is the request demonstrably issued by our own questionnaire UI in a
+ * browser context? We accept ONLY when `Origin` (or, as a fallback,
+ * `Referer`) points at the deployed app host.
+ *
+ * Used to gate the owner-consented robots.txt bypass below — the
+ * unauthenticated endpoint must not become a free
+ * robots-bypassing crawler proxy for arbitrary URLs (Codex P1 /
+ * Cursor Bugbot Medium). Origin is unforgeable from a browser tab
+ * context (the browser sets it; pages can't override it for fetches
+ * they didn't initiate), so a same-origin Origin is strong evidence
+ * the request came from a logged-in tab on our site rather than a
+ * scraper.
+ *
+ * A determined attacker can still spoof the header from curl, but
+ * combined with the existing 6/min/IP rate limit and the fact that
+ * the fallback path (strict robots compliance) is the same behavior
+ * external callers would get from a polite crawler library, the
+ * residual abuse surface is dramatically smaller than an
+ * unconditional bypass.
+ */
+function isFromTrustedOrigin(request: Request): boolean {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  if (!appUrl) return false;
+  let trustedHost: string;
+  try {
+    trustedHost = new URL(appUrl).host;
+  } catch {
+    return false;
+  }
+  for (const headerName of ["origin", "referer"] as const) {
+    const value = request.headers.get(headerName);
+    if (!value) continue;
+    try {
+      if (new URL(value).host === trustedHost) return true;
+    } catch {
+      // Malformed Origin/Referer — treat as untrusted, fall through
+      // to strict robots compliance.
+    }
+  }
+  return false;
+}
+
+/**
  * Stateless website-summary preview for the onboarding questionnaire.
  *
  * The Step-2 assistant chat needs the user's website content in its
@@ -55,20 +98,26 @@ export async function POST(request: Request) {
       return errorResponse("VALIDATION_ERROR", "Please provide a valid http(s) URL");
     }
 
+    // Robots bypass is conditional on demonstrable owner-consent
+    // signal — same-origin browser request → owner is on our
+    // questionnaire and just typed in their own URL → bypass robots.
+    // For everyone else (curl, scrapers, cross-origin browsers) we
+    // fall through to strict robots compliance so this route can't
+    // be used as a robots-bypassing crawler proxy for arbitrary
+    // URLs. SSRF / private-IP / size / redirect defenses apply in
+    // both paths regardless.
+    const ownerConsented = isFromTrustedOrigin(request);
+    if (!ownerConsented) {
+      logger.info("website-preview: untrusted origin, robots compliance enforced", {
+        websiteUrl: normalized,
+        hasOrigin: Boolean(request.headers.get("origin")),
+        hasReferer: Boolean(request.headers.get("referer"))
+      });
+    }
     const result = await ingestWebsite(normalized, {
       businessName: body.businessName,
       businessType: body.businessType,
-      // Owner-consented bypass: the user just typed in their own
-      // site's URL on the onboarding questionnaire, which is an
-      // explicit ask to summarize that site for their assistant.
-      // robots.txt expresses third-party-crawler preferences and
-      // doesn't apply to first-party agents the owner has actively
-      // invoked — many small-business sites ship a default-deny
-      // `User-agent: * / Disallow: /` block (often inserted by
-      // Wordpress/SquareSpace defaults) that would otherwise stop
-      // the owner's own onboarding from working. SSRF / private-IP
-      // / size / redirect defenses still apply.
-      ignoreRobots: true
+      ignoreRobots: ownerConsented
     });
 
     if (!result.ok) {

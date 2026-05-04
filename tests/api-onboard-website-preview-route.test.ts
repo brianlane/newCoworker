@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/website-ingest", () => ({
   ingestWebsite: vi.fn(),
@@ -23,6 +23,8 @@ import { POST } from "@/app/api/onboard/website-preview/route";
 import { ingestWebsite, normalizeWebsiteUrl } from "@/lib/website-ingest";
 import { rateLimit } from "@/lib/rate-limit";
 
+const TRUSTED_APP_URL = "https://app.test";
+
 function jsonRequest(body: unknown, headers: Record<string, string> = {}): Request {
   return new Request("http://localhost/api/onboard/website-preview", {
     method: "POST",
@@ -31,8 +33,23 @@ function jsonRequest(body: unknown, headers: Record<string, string> = {}): Reque
   });
 }
 
+/**
+ * Default browser-style request headers — same-origin Origin so the
+ * route's owner-consent gate accepts the request (the production
+ * happy path). Negative tests omit/override `origin` to exercise the
+ * untrusted path.
+ */
+function browserRequest(body: unknown, extraHeaders: Record<string, string> = {}): Request {
+  return jsonRequest(body, { origin: TRUSTED_APP_URL, ...extraHeaders });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  // The owner-consent gate compares request `Origin`/`Referer` against
+  // `process.env.NEXT_PUBLIC_APP_URL`. Without this stub the gate
+  // would fail closed (no trusted host configured) and every test
+  // would land in the untrusted-fallback branch.
+  vi.stubEnv("NEXT_PUBLIC_APP_URL", TRUSTED_APP_URL);
   vi.mocked(rateLimit).mockReturnValue({
     success: true,
     limit: 6,
@@ -51,6 +68,10 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("/api/onboard/website-preview", () => {
   it("returns the website markdown on a successful crawl", async () => {
     vi.mocked(ingestWebsite).mockResolvedValue({
@@ -62,7 +83,7 @@ describe("/api/onboard/website-preview", () => {
     });
 
     const res = await POST(
-      jsonRequest({
+      browserRequest({
         websiteUrl: "phoenixareasbestrealtor.com",
         businessName: "Amy Laidlaw Real Estate",
         businessType: "real_estate"
@@ -80,15 +101,126 @@ describe("/api/onboard/website-preview", () => {
       expect.objectContaining({
         businessName: "Amy Laidlaw Real Estate",
         businessType: "real_estate",
-        // Onboarding is an owner-consented context — the user just typed
-        // in their own URL and asked us to summarize it. robots.txt is a
-        // crawler preference, not a first-party-agent prohibition; many
-        // small-business sites ship default-deny `User-agent: *` rules
-        // (real production case: phoenixareasbestrealtor.com) that would
-        // otherwise stop the owner's own onboarding from working.
+        // Owner-consented bypass: same-origin Origin → request came
+        // from a browser tab on our questionnaire UI → the user just
+        // typed in their own site's URL → bypass robots so default-deny
+        // sites (real production case: phoenixareasbestrealtor.com)
+        // don't break the owner's own onboarding.
         ignoreRobots: true
       })
     );
+  });
+
+  describe("owner-consent gate (P1: prevent abuse as a robots-bypassing crawler proxy)", () => {
+    // The route is unauth'd by design (no business exists at Step 1→2),
+    // so the robots bypass MUST be conditional on a same-origin signal
+    // from a browser tab on our own UI. Otherwise any internet caller
+    // could use the endpoint to crawl + summarize sites whose robots
+    // disallow them — turning the route into a free crawler proxy with
+    // only a 6/min/IP rate limit as mitigation.
+
+    it("forwards ignoreRobots=true when Origin matches NEXT_PUBLIC_APP_URL", async () => {
+      vi.mocked(ingestWebsite).mockResolvedValue({
+        ok: true,
+        websiteMd: "x",
+        pagesCrawled: 1,
+        bytesDownloaded: 1,
+        finalUrl: "https://example.com/"
+      });
+      await POST(jsonRequest({ websiteUrl: "https://example.com" }, { origin: TRUSTED_APP_URL }));
+      expect(ingestWebsite).toHaveBeenCalledWith(
+        "https://example.com/",
+        expect.objectContaining({ ignoreRobots: true })
+      );
+    });
+
+    it("accepts a same-origin Referer when Origin is not set", async () => {
+      // Some browser contexts (notably old `Referer-Policy: no-referrer`
+      // disabling, or fetches that strip Origin) only send Referer.
+      // Both headers identify the same caller, so either matching the
+      // trusted host should consent the bypass.
+      vi.mocked(ingestWebsite).mockResolvedValue({
+        ok: true,
+        websiteMd: "x",
+        pagesCrawled: 1,
+        bytesDownloaded: 1,
+        finalUrl: "https://example.com/"
+      });
+      await POST(
+        jsonRequest({ websiteUrl: "https://example.com" }, { referer: `${TRUSTED_APP_URL}/onboard/questionnaire` })
+      );
+      expect(ingestWebsite).toHaveBeenCalledWith(
+        "https://example.com/",
+        expect.objectContaining({ ignoreRobots: true })
+      );
+    });
+
+    it("falls back to strict robots compliance when no Origin/Referer is sent (curl/scripts)", async () => {
+      vi.mocked(ingestWebsite).mockResolvedValue({
+        ok: true,
+        websiteMd: "x",
+        pagesCrawled: 1,
+        bytesDownloaded: 1,
+        finalUrl: "https://example.com/"
+      });
+      await POST(jsonRequest({ websiteUrl: "https://example.com" }));
+      expect(ingestWebsite).toHaveBeenCalledWith(
+        "https://example.com/",
+        expect.objectContaining({ ignoreRobots: false })
+      );
+    });
+
+    it("falls back to strict robots compliance when Origin is cross-origin", async () => {
+      // A malicious site embedding a fetch to /api/onboard/website-preview
+      // would carry its own Origin, not ours. Browsers set Origin
+      // unforgeably; this is the primary CSRF-style abuse case.
+      vi.mocked(ingestWebsite).mockResolvedValue({
+        ok: true,
+        websiteMd: "x",
+        pagesCrawled: 1,
+        bytesDownloaded: 1,
+        finalUrl: "https://example.com/"
+      });
+      await POST(jsonRequest({ websiteUrl: "https://example.com" }, { origin: "https://attacker.example" }));
+      expect(ingestWebsite).toHaveBeenCalledWith(
+        "https://example.com/",
+        expect.objectContaining({ ignoreRobots: false })
+      );
+    });
+
+    it("falls back to strict robots compliance when Origin is malformed", async () => {
+      // Defensive: a bogus Origin shouldn't get the benefit of the
+      // doubt. Treat malformed values identically to "no Origin set".
+      vi.mocked(ingestWebsite).mockResolvedValue({
+        ok: true,
+        websiteMd: "x",
+        pagesCrawled: 1,
+        bytesDownloaded: 1,
+        finalUrl: "https://example.com/"
+      });
+      await POST(jsonRequest({ websiteUrl: "https://example.com" }, { origin: "not a url" }));
+      expect(ingestWebsite).toHaveBeenCalledWith(
+        "https://example.com/",
+        expect.objectContaining({ ignoreRobots: false })
+      );
+    });
+
+    it("fails closed when NEXT_PUBLIC_APP_URL is unconfigured (no trusted host to compare against)", async () => {
+      vi.unstubAllEnvs();
+      vi.stubEnv("NEXT_PUBLIC_APP_URL", "");
+      vi.mocked(ingestWebsite).mockResolvedValue({
+        ok: true,
+        websiteMd: "x",
+        pagesCrawled: 1,
+        bytesDownloaded: 1,
+        finalUrl: "https://example.com/"
+      });
+      await POST(jsonRequest({ websiteUrl: "https://example.com" }, { origin: TRUSTED_APP_URL }));
+      expect(ingestWebsite).toHaveBeenCalledWith(
+        "https://example.com/",
+        expect.objectContaining({ ignoreRobots: false })
+      );
+    });
   });
 
   it("returns ok:false (200) when ingest fails so the chat client can degrade gracefully", async () => {
