@@ -7,6 +7,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   getTranscriptByCallControlId,
+  getTranscriptById,
   listTranscriptsForBusiness,
   listTurns,
   DEFAULT_LIST_LIMIT,
@@ -145,6 +146,35 @@ describe("db/voice-transcripts — getTranscriptByCallControlId", () => {
     defaultClientSpy.mockReturnValue(makeDb(c));
     await getTranscriptByCallControlId(BIZ, CCI);
     expect(createSupabaseServiceClient).toHaveBeenCalled();
+  });
+});
+
+describe("db/voice-transcripts — getTranscriptById", () => {
+  it("scopes by business_id + id (UUID) and returns the row", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: TRANSCRIPT, error: null });
+    const db = makeDb(c);
+    await expect(
+      getTranscriptById(BIZ, TRANSCRIPT.id, db as never)
+    ).resolves.toEqual(TRANSCRIPT);
+    expect(c.eq).toHaveBeenNthCalledWith(1, "business_id", BIZ);
+    expect(c.eq).toHaveBeenNthCalledWith(2, "id", TRANSCRIPT.id);
+  });
+
+  it("returns null when the row is missing", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    await expect(
+      getTranscriptById(BIZ, TRANSCRIPT.id, makeDb(c) as never)
+    ).resolves.toBeNull();
+  });
+
+  it("throws on db error", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: { message: "bad" } });
+    await expect(
+      getTranscriptById(BIZ, TRANSCRIPT.id, makeDb(c) as never)
+    ).rejects.toThrow(/getTranscriptById: bad/);
   });
 });
 

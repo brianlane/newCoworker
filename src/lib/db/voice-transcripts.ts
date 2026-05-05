@@ -77,6 +77,31 @@ export async function getTranscriptByCallControlId(
   return (data as VoiceCallTranscriptRow | null) ?? null;
 }
 
+/**
+ * Lookup a transcript by its row UUID, scoped to a business.
+ *
+ * The dashboard "Call history" UI links by row UUID rather than by Telnyx
+ * `call_control_id` because the latter starts with `v3:` — and the literal
+ * `:` is a URL sub-delim that Cloudflare/Vercel sometimes pre-decode before
+ * Next.js matches the dynamic segment, producing a 404 on rows that exist
+ * in the DB. UUID lookup avoids the encoding pitfall entirely.
+ */
+export async function getTranscriptById(
+  businessId: string,
+  id: string,
+  client?: SupabaseClient
+): Promise<VoiceCallTranscriptRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("voice_call_transcripts")
+    .select("*")
+    .eq("business_id", businessId)
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw new Error(`getTranscriptById: ${error.message}`);
+  return (data as VoiceCallTranscriptRow | null) ?? null;
+}
+
 export async function listTurns(
   transcriptId: string,
   client?: SupabaseClient

@@ -56,4 +56,21 @@ describe("voice-bridge realtime input field", () => {
       "Gemini Live closes the WS with code 1007 when `media:` is used; switch to `audio:`"
     ).toBe(false);
   });
+
+  it("never gates Telnyx WS routing on a fragile JSON substring check", async () => {
+    // Regression for Cursor bugbot (May 2026): the bridge previously used
+    // `rawUtf8.includes('"event":"media"')` to fast-skip non-media frames.
+    // That substring breaks if Telnyx ever serializes JSON with whitespace
+    // (`"event": "media"`) — every audio frame would silently land in the
+    // non-media branch and be dropped. The robust gate is a JSON.parse via
+    // `parseTelnyxFrame`, so the fragile literal must never reappear.
+    const src = await readFile(bridgePath, "utf8");
+    const stripped = src
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|\s)\/\/[^\n]*/g, "$1");
+    expect(
+      /['"]"event":"media"['"]/.test(stripped),
+      "use parseTelnyxFrame() instead of a substring check on the wire bytes"
+    ).toBe(false);
+  });
 });

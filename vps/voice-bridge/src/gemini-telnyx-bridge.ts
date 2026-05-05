@@ -1,7 +1,7 @@
 import WebSocket from "ws";
 import { GoogleGenAI, Modality, Type, type LiveServerMessage, type Session } from "@google/genai";
 import { parsePcmRateFromMime, resamplePCM16Mono } from "./audio-resample.js";
-import { telnyxMediaMessageFromPcmBase64, tryParseTelnyxMediaPayloadBase64 } from "./telnyx-media-json.js";
+import { parseTelnyxFrame, telnyxMediaMessageFromPcmBase64 } from "./telnyx-media-json.js";
 import { decodeTelnyxMediaPayload, RtpEncoder } from "./rtp-frame.js";
 import { composeVaultPromptSection, type VaultSnapshot } from "./vault-loader.js";
 import {
@@ -814,22 +814,26 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   const seenNonMediaEvents = new Set<string>();
   const onTelnyxMessage = (rawUtf8: string) => {
     if (ended) return;
-    if (!rawUtf8.includes('"event":"media"')) {
-      const head = rawUtf8.slice(0, 240);
-      const eventMatch = /"event"\s*:\s*"([^"]+)"/.exec(head);
-      const eventName = eventMatch?.[1] ?? "unknown";
+    // Always JSON.parse and route by event name. A previous fast-path used
+    // `rawUtf8.includes('"event":"media"')` to skip the parse, but that
+    // substring check breaks the moment Telnyx serializes the frame with
+    // whitespace between key and value (`"event": "media"`) — every audio
+    // frame would silently land in the non-media branch and be dropped.
+    const parsed = parseTelnyxFrame(rawUtf8);
+    if (parsed.kind === "unparseable") return;
+    if (parsed.kind === "non-media") {
+      const eventName = parsed.event;
       if (!seenNonMediaEvents.has(eventName)) {
         seenNonMediaEvents.add(eventName);
         console.log("gemini-bridge: telnyx ws non-media", {
           callControlId: opts.callControlId,
           event: eventName,
-          head
+          head: rawUtf8.slice(0, 240)
         });
       }
       return;
     }
-    const b64 = tryParseTelnyxMediaPayloadBase64(rawUtf8);
-    if (!b64) return;
+    const b64 = parsed.payload;
     try {
       // Telnyx delivers an RTP packet (12-byte header + L16 payload) base64'd
       // when `stream_bidirectional_mode` is "rtp". Strip the header so Gemini
