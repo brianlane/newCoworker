@@ -8,7 +8,11 @@ import {
   OrderAndAssignError,
   normalizeE164
 } from "@/lib/telnyx/assign-did";
-import { readPlatformTelnyxDefaults } from "@/lib/telnyx/platform-defaults";
+import {
+  assertPlatformTelnyxDefaults,
+  MissingTelnyxDefaultsError,
+  readPlatformTelnyxDefaults
+} from "@/lib/telnyx/platform-defaults";
 
 const schema = z.object({
   businessId: z.string().uuid(),
@@ -53,11 +57,28 @@ export async function POST(request: Request) {
       }
     }
 
+    // Stop the admin from spending money on a number that won't carry
+    // calls. The platform-level Call Control connection_id and Messaging
+    // Profile id are required for the resulting DID to actually route
+    // inbound voice + SMS — without them Telnyx files the number under
+    // the account but with `connection_id: ""`, exactly the dangling
+    // state that produced "the call could not be completed" before
+    // this guard existed.
+    const platformDefaults = readPlatformTelnyxDefaults();
+    try {
+      assertPlatformTelnyxDefaults(platformDefaults);
+    } catch (err) {
+      if (err instanceof MissingTelnyxDefaultsError) {
+        return errorResponse("VALIDATION_ERROR", err.message);
+      }
+      throw err;
+    }
+
     const telnyxNumbers = new TelnyxNumbersClient({ apiKey });
     const result = await orderAndAssignDidForBusiness(
       {
         businessId: body.businessId,
-        platformDefaults: readPlatformTelnyxDefaults(),
+        platformDefaults,
         specificNumber: normalizedSpecific,
         search: {
           countryCode: body.countryCode,

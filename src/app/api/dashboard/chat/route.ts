@@ -33,12 +33,14 @@ import {
 import {
   callRowboatChat,
   describeRowboatError,
+  type CallRowboatChatOutput,
   type RowboatChatMessage
 } from "@/lib/rowboat/chat";
 import {
   shouldSummarize,
   summarizeThreadAndLog
 } from "@/lib/dashboard-chat/summarizer";
+import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +48,34 @@ const MAX_MESSAGE_CHARS = 4000;
 const HISTORY_TURNS = 20;
 
 const DASHBOARD_CHAT_RATE = { interval: 5 * 60 * 1000, maxRequests: 30 };
+
+/**
+ * Errors where Rowboat's response strongly suggests the *server-side*
+ * conversation referenced by our stored conversationId is gone (model
+ * restart, retention expiry, version skew). On these we get one
+ * stateless retry — Rowboat's reply will live entirely off the
+ * messages we already include (summary preamble + last 20 turns + new
+ * user message), so dropping conversationId/state is harmless when
+ * the row's continuation tokens have been evicted.
+ *
+ * Deliberately excluded:
+ *   - rowboat_timeout: timing out doesn't tell us anything about
+ *     conversation state and a stateless retry would just double the
+ *     load on a slow VPS.
+ *   - rowboat_http_401 / 403: auth is global, retrying with the same
+ *     bearer would fail identically.
+ *   - rowboat_invalid_json: protocol-level failure; retrying without
+ *     conversationId won't fix garbled bytes.
+ */
+const STATELESS_RETRY_ERRORS = new Set([
+  "rowboat_http_400",
+  "rowboat_http_404",
+  "rowboat_http_409",
+  "rowboat_http_500",
+  "rowboat_http_502",
+  "rowboat_http_503",
+  "rowboat_empty_assistant"
+]);
 
 const postBodySchema = z.object({
   businessId: z.string().uuid(),
@@ -91,6 +121,90 @@ async function loadBusinessFlags(businessId: string): Promise<BusinessFlags | nu
     is_paused: Boolean(data.is_paused),
     customer_channels_enabled: data.customer_channels_enabled !== false
   };
+}
+
+type RowboatRetryInput = {
+  businessId: string;
+  projectId: string;
+  bearer: string;
+  messages: RowboatChatMessage[];
+  conversationId: string | null;
+  state: unknown | null;
+  /** Used only for log correlation. */
+  threadId: string;
+};
+
+/**
+ * Call Rowboat with the stored conversation continuation. If the
+ * continuation appears stale (Rowboat evicted server-side state — see
+ * STATELESS_RETRY_ERRORS) AND we actually had a conversationId to send,
+ * retry once with continuation dropped. Rowboat treats the retry as a
+ * fresh conversation rooted in the messages we send, which already
+ * include the rolling summary + 20-turn tail + new user message — i.e.
+ * everything the model needs to keep going coherently.
+ *
+ * Why retry: the alternative (status quo before this fix) is that any
+ * archived thread whose Rowboat session got reaped becomes permanently
+ * non-continuable from the dashboard, even though we have full local
+ * context. That regresses the "every thread is continuable" promise
+ * we just shipped.
+ *
+ * Why ONLY one retry: if the stateless fallback also fails, the
+ * problem isn't conversation state and another attempt won't help.
+ * We surface the *retry's* error (the more recent signal of what's
+ * wrong with Rowboat right now) so the friendly-error mapping is
+ * accurate.
+ */
+type StatelessFallbackResult = CallRowboatChatOutput & {
+  /**
+   * True iff the first call failed with a STATELESS_RETRY_ERRORS
+   * code AND we re-issued without conversationId/state. The caller
+   * MUST treat the stored rowboat_conversation_id as known-stale
+   * when this is true — even if the retry's response omits a fresh
+   * conversationId — otherwise the next message replays the same
+   * fail-then-retry cycle indefinitely (Bugbot Low: "stale
+   * conversationId persists after successful stateless retry").
+   */
+  retriedStateless: boolean;
+};
+
+async function callRowboatWithStatelessFallback(
+  input: RowboatRetryInput
+): Promise<StatelessFallbackResult> {
+  const hadContinuation =
+    typeof input.conversationId === "string" && input.conversationId.trim().length > 0;
+  try {
+    const out = await callRowboatChat({
+      businessId: input.businessId,
+      projectId: input.projectId,
+      bearer: input.bearer,
+      messages: input.messages,
+      conversationId: input.conversationId,
+      state: input.state
+    });
+    return { ...out, retriedStateless: false };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "";
+    const isStaleContinuation =
+      hadContinuation && STATELESS_RETRY_ERRORS.has(message);
+    if (!isStaleContinuation) throw err;
+    logger.info("rowboat continuation stale, retrying stateless", {
+      businessId: input.businessId,
+      threadId: input.threadId,
+      firstError: message
+    });
+    const out = await callRowboatChat({
+      businessId: input.businessId,
+      projectId: input.projectId,
+      bearer: input.bearer,
+      messages: input.messages,
+      // Drop continuation tokens. Rowboat will mint a fresh
+      // conversation rooted in our local context.
+      conversationId: null,
+      state: null
+    });
+    return { ...out, retriedStateless: true };
+  }
 }
 
 export async function POST(request: Request) {
@@ -216,18 +330,21 @@ export async function POST(request: Request) {
     let reply: string;
     let conversationId: string | undefined;
     let state: unknown | undefined;
+    let retriedStateless: boolean;
     try {
-      const parsed = await callRowboatChat({
+      const parsed = await callRowboatWithStatelessFallback({
         businessId: body.businessId,
         projectId,
         bearer,
         messages: rowboatMessages,
         conversationId: thread.rowboat_conversation_id,
-        state: thread.rowboat_state
+        state: thread.rowboat_state,
+        threadId: thread.id
       });
       reply = parsed.reply;
       conversationId = parsed.conversationId;
       state = parsed.hasStateKey ? parsed.state : undefined;
+      retriedStateless = parsed.retriedStateless;
     } catch (err) {
       const friendly = describeRowboatError(err);
       return errorResponse("CONFLICT", friendly, 502);
@@ -237,7 +354,15 @@ export async function POST(request: Request) {
     // as a matched turn in history. Order is preserved by created_at.
     await appendMessage(thread.id, "user", body.message);
     await appendMessage(thread.id, "assistant", reply);
-    if (conversationId || state !== undefined) {
+    // When we used the stateless fallback, the thread's stored
+    // rowboat_conversation_id is *known* stale — Rowboat had already
+    // failed with a STATELESS_RETRY_ERRORS code on it. Even if the
+    // retry's response omits a fresh conversationId (the field is
+    // optional in RowboatTurnJson), we MUST overwrite the DB with
+    // whatever the retry returned (possibly null). Otherwise the
+    // next turn re-sends the same dead id, fails, retries, and we
+    // pay 2x latency forever (Bugbot Low on PR #66).
+    if (retriedStateless || conversationId || state !== undefined) {
       await updateThreadConversation(
         thread.id,
         conversationId ?? null,
