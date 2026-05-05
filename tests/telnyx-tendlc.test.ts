@@ -377,6 +377,26 @@ describe("TendlcClient.deletePhoneNumberCampaign", () => {
     );
   });
 
+  it("tolerates a non-ok response whose body text() also rejects (defensive .catch fallback)", async () => {
+    // Coverage: the inline `() => ""` arrow is only reachable when
+    // res.text() throws (pathological body stream). Mock a Response-like
+    // whose .text() rejects to exercise the catch path.
+    class BadBodyResponse {
+      ok = false;
+      status = 502;
+      async text() {
+        throw new Error("body stream broken");
+      }
+    }
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(new BadBodyResponse() as unknown as Response);
+    const client = new TendlcClient({ apiKey: "k", fetchImpl });
+    await expect(
+      client.deletePhoneNumberCampaign("+15551234567")
+    ).rejects.toThrow(TendlcApiError);
+  });
+
   it("tolerates a 200 with empty body", async () => {
     const fetchImpl = vi
       .fn()

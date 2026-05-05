@@ -811,6 +811,38 @@ describe("provisioning/orchestrate", () => {
       );
     });
 
+    it("survives a thrown 10DLC attach (catch path: log warn + record `thinking` progress, don't fail orchestrator)", async () => {
+      // Force the attach helper's internal DB write to throw — the
+      // orchestrator catch block at orchestrate.ts:727-740 must absorb
+      // it, log a warning, record the "Will retry" progress message, and
+      // proceed to subsequent phases. If the catch path regressed, this
+      // test would surface a thrown error escaping orchestrateProvisioning.
+      const { setBusinessMessagingCampaignStatus } = await import(
+        "@/lib/db/telnyx-routes"
+      );
+      vi.mocked(setBusinessMessagingCampaignStatus).mockRejectedValueOnce(
+        new Error("simulated db write failure")
+      );
+
+      const didProvisioner = vi
+        .fn()
+        .mockResolvedValue({ toE164: "+15550009999" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-did-attach-throws", tier: "starter" },
+          {
+            vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+            remoteExec: vi.fn().mockResolvedValue(okExec()),
+            didProvisioner
+          }
+        )
+      ).resolves.not.toThrow();
+      // Reset to the default mock so subsequent tests aren't poisoned.
+      vi.mocked(setBusinessMessagingCampaignStatus).mockResolvedValue(undefined);
+    });
+
     it("falls back search.countryCode to 'US' when TELNYX_DEFAULT_COUNTRY is unset", async () => {
       delete process.env.TELNYX_DEFAULT_COUNTRY;
       process.env.TELNYX_AUTO_PURCHASE_DID = "true";

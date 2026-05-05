@@ -115,6 +115,15 @@ describe("inboundTextFromPayload", () => {
       } as never)
     ).toBe("");
   });
+
+  it("hits the `data?.payload ?? {}` fallback when data exists but payload is missing", () => {
+    // Branch coverage: {data:{}} (payload undefined) must yield "" rather
+    // than throw on indexing into undefined.
+    expect(inboundTextFromPayload({ data: {} } as never)).toBe("");
+    expect(
+      inboundTextFromPayload({ data: { payload: undefined } } as never)
+    ).toBe("");
+  });
 });
 
 describe("listConversationsForBusiness", () => {
@@ -167,6 +176,65 @@ describe("listConversationsForBusiness", () => {
     expect(result[1]?.messageCount).toBe(2);
     expect(result[0]?.lastMessage).toBe("newer");
     expect(result[1]?.lastMessage).toBe("older1");
+  });
+
+  it("sorts conversations DESC by lastMessageAt across 3+ customers (exercises both comparator branches)", async () => {
+    const c = chain();
+    // Insertion order is intentionally NOT pre-sorted so the comparator
+    // must take both `<` and `>=` branches across multiple sort steps.
+    c.limit.mockResolvedValue({
+      data: [
+        {
+          id: "j1",
+          business_id: "biz",
+          payload: envelope({
+            from: { phone_number: "+15551111111" },
+            text: "older"
+          }),
+          status: "done",
+          rowboat_reply_cached: "ok",
+          telnyx_outbound_message_id: null,
+          last_error: null,
+          created_at: "2026-05-05T00:00:00Z",
+          updated_at: "2026-05-05T00:00:00Z"
+        },
+        {
+          id: "j2",
+          business_id: "biz",
+          payload: envelope({
+            from: { phone_number: "+15552222222" },
+            text: "newest"
+          }),
+          status: "done",
+          rowboat_reply_cached: "ok",
+          telnyx_outbound_message_id: null,
+          last_error: null,
+          created_at: "2026-05-05T02:00:00Z",
+          updated_at: "2026-05-05T02:00:00Z"
+        },
+        {
+          id: "j3",
+          business_id: "biz",
+          payload: envelope({
+            from: { phone_number: "+15553333333" },
+            text: "middle"
+          }),
+          status: "done",
+          rowboat_reply_cached: "ok",
+          telnyx_outbound_message_id: null,
+          last_error: null,
+          created_at: "2026-05-05T01:00:00Z",
+          updated_at: "2026-05-05T01:00:00Z"
+        }
+      ],
+      error: null
+    });
+    const result = await listConversationsForBusiness("biz", {}, makeDb(c) as never);
+    expect(result.map((r) => r.customerE164)).toEqual([
+      "+15552222222",
+      "+15553333333",
+      "+15551111111"
+    ]);
   });
 
   it("uses the assistant reply as the preview when no inbound text is parseable", async () => {
