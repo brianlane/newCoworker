@@ -410,4 +410,64 @@ describe("POST /api/dashboard/chat — stateless retry on stale conversation con
     await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
     expect(callRowboatChat).toHaveBeenCalledTimes(2);
   });
+
+  // Bugbot Low (PR #66): when the stateless retry succeeds but Rowboat's
+  // response omits a fresh conversationId (the field is optional in
+  // RowboatTurnJson), the legacy guard `if (conversationId || state)` was
+  // false and the OLD known-stale rowboat_conversation_id stayed in the DB.
+  // Every subsequent message would replay the fail-then-retry cycle
+  // forever, doubling latency and API load. The fix forces an UPDATE
+  // whenever a stateless retry happened, even if the response carries
+  // no new continuation tokens.
+
+  it("force-clears stale rowboat_conversation_id after stateless retry, even when retry response omits a fresh one", async () => {
+    vi.mocked(callRowboatChat)
+      .mockRejectedValueOnce(new Error("rowboat_http_404"))
+      .mockResolvedValueOnce({
+        reply: "ok",
+        // CRUCIAL: no conversationId returned. This is the field
+        // being optional in RowboatTurnJson — Rowboat may legitimately
+        // not echo one back, especially on a bare "fresh start" call.
+        conversationId: undefined,
+        state: undefined,
+        hasStateKey: false
+      } as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    // Critical: we still called updateThreadConversation, with both
+    // continuation tokens nulled out. This breaks the perpetual-retry
+    // loop on the next message.
+    expect(updateThreadConversation).toHaveBeenCalledWith(
+      ACTIVE_THREAD_ID,
+      null,
+      undefined
+    );
+  });
+
+  it("persists the FRESH conversationId from the stateless retry response when Rowboat does provide one", async () => {
+    vi.mocked(callRowboatChat)
+      .mockRejectedValueOnce(new Error("rowboat_http_500"))
+      .mockResolvedValueOnce({
+        reply: "ok",
+        conversationId: "rb-conv-fresh",
+        state: { regenerated: true },
+        hasStateKey: true
+      } as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(updateThreadConversation).toHaveBeenCalledWith(
+      ACTIVE_THREAD_ID,
+      "rb-conv-fresh",
+      { regenerated: true }
+    );
+  });
+
+  it("does NOT call updateThreadConversation when no retry happened AND Rowboat's response carries no continuation — preserves legacy 'no-op when nothing changed' semantics", async () => {
+    vi.mocked(callRowboatChat).mockResolvedValueOnce({
+      reply: "ok",
+      conversationId: undefined,
+      state: undefined,
+      hasStateKey: false
+    } as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(updateThreadConversation).not.toHaveBeenCalled();
+  });
 });
