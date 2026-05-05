@@ -11,6 +11,7 @@ import {
   upsertTelnyxVoiceRoute,
   getBusinessTelnyxSettings,
   setForwardToE164,
+  setBusinessMessagingCampaignStatus,
   upsertBusinessTelnyxSettings
 } from "@/lib/db/telnyx-routes";
 
@@ -65,6 +66,11 @@ const sampleSettings = {
   bridge_error_message: null,
   telnyx_tcr_brand_id: null,
   telnyx_tcr_campaign_id: null,
+  telnyx_messaging_campaign_id: null,
+  telnyx_messaging_campaign_status: "pending",
+  telnyx_messaging_campaign_last_error: null,
+  telnyx_messaging_campaign_attached_at: null,
+  telnyx_messaging_campaign_last_attempt_at: null,
   forward_to_e164: null,
   transfer_enabled: true,
   sms_fallback_enabled: true,
@@ -291,6 +297,88 @@ describe("telnyx-routes DB layer", () => {
     it("setForwardToE164 uses the default service client when not provided", async () => {
       defaultClientSpy.mockReturnValueOnce(makeDb(settingsChain()));
       await expect(setForwardToE164("biz", "+15551234567")).resolves.toEqual(sampleSettings);
+    });
+
+    it("setBusinessMessagingCampaignStatus uses the default service client when not provided", async () => {
+      defaultClientSpy.mockReturnValueOnce(makeDb(settingsChain()));
+      await expect(
+        setBusinessMessagingCampaignStatus({ businessId: "biz", status: "pending" })
+      ).resolves.toEqual(sampleSettings);
+    });
+  });
+
+  describe("setBusinessMessagingCampaignStatus", () => {
+    it("registered: sets campaign id, attached_at, last_attempt_at, and clears last_error", async () => {
+      const c = chain();
+      c.single.mockResolvedValue({ data: sampleSettings, error: null });
+      await setBusinessMessagingCampaignStatus(
+        {
+          businessId: "biz",
+          status: "registered",
+          campaignId: "campaign-123",
+          // lastError is intentionally provided to confirm the registered
+          // branch wins (clears to null) regardless of caller input.
+          lastError: "should-be-cleared"
+        },
+        makeDb(c) as never
+      );
+      const [row] = c.upsert.mock.calls[0];
+      const r = row as Record<string, unknown>;
+      expect(r.telnyx_messaging_campaign_id).toBe("campaign-123");
+      expect(r.telnyx_messaging_campaign_status).toBe("registered");
+      expect(r.telnyx_messaging_campaign_attached_at).toBeTypeOf("string");
+      expect(r.telnyx_messaging_campaign_last_error).toBeNull();
+      expect(r.telnyx_messaging_campaign_last_attempt_at).toBeTypeOf("string");
+    });
+
+    it("rejected: persists last_error verbatim, does not set attached_at, does not touch campaign id when undefined", async () => {
+      const c = chain();
+      c.single.mockResolvedValue({ data: sampleSettings, error: null });
+      await setBusinessMessagingCampaignStatus(
+        { businessId: "biz", status: "rejected", lastError: "10dlc/422 brand_unverified" },
+        makeDb(c) as never
+      );
+      const [row] = c.upsert.mock.calls[0];
+      const r = row as Record<string, unknown>;
+      expect(r.telnyx_messaging_campaign_status).toBe("rejected");
+      expect(r.telnyx_messaging_campaign_last_error).toBe("10dlc/422 brand_unverified");
+      expect(r).not.toHaveProperty("telnyx_messaging_campaign_attached_at");
+      expect(r).not.toHaveProperty("telnyx_messaging_campaign_id");
+    });
+
+    it("pending: persists last_error so the dashboard banner can show why we're waiting", async () => {
+      const c = chain();
+      c.single.mockResolvedValue({ data: sampleSettings, error: null });
+      await setBusinessMessagingCampaignStatus(
+        { businessId: "biz", status: "pending", lastError: "campaign_status:VERIFIED" },
+        makeDb(c) as never
+      );
+      const [row] = c.upsert.mock.calls[0];
+      expect((row as Record<string, unknown>).telnyx_messaging_campaign_last_error).toBe(
+        "campaign_status:VERIFIED"
+      );
+    });
+
+    it("explicit campaignId=null clears any existing pairing", async () => {
+      const c = chain();
+      c.single.mockResolvedValue({ data: sampleSettings, error: null });
+      await setBusinessMessagingCampaignStatus(
+        { businessId: "biz", status: "unregistered", campaignId: null },
+        makeDb(c) as never
+      );
+      const [row] = c.upsert.mock.calls[0];
+      expect((row as Record<string, unknown>).telnyx_messaging_campaign_id).toBeNull();
+    });
+
+    it("surfaces underlying DB errors", async () => {
+      const c = chain();
+      c.single.mockResolvedValue({ data: null, error: { message: "fk constraint" } });
+      await expect(
+        setBusinessMessagingCampaignStatus(
+          { businessId: "biz", status: "pending" },
+          makeDb(c) as never
+        )
+      ).rejects.toThrow(/fk constraint/);
     });
   });
 

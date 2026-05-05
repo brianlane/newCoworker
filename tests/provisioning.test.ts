@@ -50,7 +50,12 @@ vi.mock("@/lib/email/client", () => ({
 }));
 
 vi.mock("@/lib/db/telnyx-routes", () => ({
-  getTelnyxVoiceRouteForBusiness: vi.fn().mockResolvedValue(null)
+  getTelnyxVoiceRouteForBusiness: vi.fn().mockResolvedValue(null),
+  // tendlc-attach.ts persists per-business 10DLC status via this helper —
+  // the orchestrator dynamically imports tendlc-attach.ts after a successful
+  // DID assign, so we have to provide a stub or every did-assign test path
+  // throws "is not a function" inside the success branch.
+  setBusinessMessagingCampaignStatus: vi.fn().mockResolvedValue(undefined)
 }));
 
 import { updateBusinessStatus } from "@/lib/db/businesses";

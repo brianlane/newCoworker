@@ -689,6 +689,55 @@ async function runOrchestrator(
           message: `Per-tenant DID assigned (${toE164})`,
           source: "orchestrator"
         });
+
+        // Best-effort 10DLC (A2P SMS) campaign attach. US carriers silently
+        // drop A2P SMS from numbers that aren't registered to an approved
+        // campaign — the May 2026 SMS outage was exactly this. If 10DLC
+        // isn't configured yet, or the shared campaign is still in carrier
+        // vetting, we record the per-DID status as `pending` and let the
+        // dashboard banner + retry worker pick it up later. NEVER block
+        // provisioning on this — the customer's voice + inbound-SMS path
+        // works without it.
+        try {
+          const { attachBusinessDidToCampaign } = await import(
+            "@/lib/provisioning/tendlc-attach"
+          );
+          const outcome = await attachBusinessDidToCampaign({
+            businessId,
+            toE164
+          });
+          await recordProvisioningProgress({
+            businessId,
+            phase: "did_10dlc_attach",
+            percent: 39,
+            message:
+              outcome.kind === "registered"
+                ? `SMS 10DLC registered (${toE164})`
+                : outcome.kind === "pending"
+                  ? `SMS 10DLC queued (carrier vetting): ${outcome.reason}`
+                  : outcome.kind === "rejected"
+                    ? `SMS 10DLC rejected: ${outcome.reason}. Retrying via worker.`
+                    : `SMS 10DLC transient failure: ${outcome.reason}. Retrying via worker.`,
+            source: "orchestrator",
+            // Always "thinking" for non-registered: a pending/rejected DID
+            // doesn't fail the orchestrator (voice + inbound SMS still
+            // work) and the retry worker handles the rest.
+            status: outcome.kind === "registered" ? undefined : "thinking"
+          });
+        } catch (err) {
+          // Including MissingTendlcConfigError — surfaces in progress log
+          // but doesn't fail the orchestrator.
+          const reason = err instanceof Error ? err.message : String(err);
+          logger.warn("10DLC attach skipped", { businessId, reason });
+          await recordProvisioningProgress({
+            businessId,
+            phase: "did_10dlc_attach",
+            percent: 39,
+            message: `SMS 10DLC attach skipped: ${reason}. Will retry.`,
+            source: "orchestrator",
+            status: "thinking"
+          });
+        }
       }
     } catch (err) {
       const reason =

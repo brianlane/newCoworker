@@ -22,6 +22,12 @@ export type TelnyxVoiceRouteRow = {
   created_at: string;
 };
 
+export type BusinessTelnyxMessagingCampaignStatus =
+  | "pending"
+  | "registered"
+  | "rejected"
+  | "unregistered";
+
 export type BusinessTelnyxSettingsRow = {
   business_id: string;
   telnyx_messaging_profile_id: string | null;
@@ -34,6 +40,11 @@ export type BusinessTelnyxSettingsRow = {
   bridge_error_message: string | null;
   telnyx_tcr_brand_id: string | null;
   telnyx_tcr_campaign_id: string | null;
+  telnyx_messaging_campaign_id: string | null;
+  telnyx_messaging_campaign_status: BusinessTelnyxMessagingCampaignStatus;
+  telnyx_messaging_campaign_last_error: string | null;
+  telnyx_messaging_campaign_attached_at: string | null;
+  telnyx_messaging_campaign_last_attempt_at: string | null;
   forward_to_e164: string | null;
   transfer_enabled: boolean;
   sms_fallback_enabled: boolean;
@@ -145,6 +156,53 @@ export async function upsertBusinessTelnyxSettings(
     .select()
     .single();
   if (error) throw new Error(`upsertBusinessTelnyxSettings: ${error.message}`);
+  return data as BusinessTelnyxSettingsRow;
+}
+
+/**
+ * Update the per-business 10DLC campaign-attach lifecycle. See migration
+ * `20260505210000_business_tendlc_status.sql` for the meaning of each
+ * status value. We snapshot:
+ *   - `last_attempt_at` on every call (so the cron worker can throttle),
+ *   - `attached_at` only when transitioning to `registered`,
+ *   - `last_error` only when transitioning to `rejected` (cleared on
+ *     `registered` so a successful retry doesn't leave a stale error in the
+ *     dashboard banner).
+ */
+export async function setBusinessMessagingCampaignStatus(
+  input: {
+    businessId: string;
+    status: BusinessTelnyxMessagingCampaignStatus;
+    campaignId?: string | null;
+    lastError?: string | null;
+  },
+  client?: SupabaseClient
+): Promise<BusinessTelnyxSettingsRow> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const now = new Date().toISOString();
+  const row: Record<string, unknown> = {
+    business_id: input.businessId,
+    telnyx_messaging_campaign_status: input.status,
+    telnyx_messaging_campaign_last_attempt_at: now,
+    updated_at: now
+  };
+  if (input.campaignId !== undefined) {
+    row.telnyx_messaging_campaign_id = input.campaignId;
+  }
+  if (input.status === "registered") {
+    row.telnyx_messaging_campaign_attached_at = now;
+    row.telnyx_messaging_campaign_last_error = null;
+  } else if (input.lastError !== undefined) {
+    row.telnyx_messaging_campaign_last_error = input.lastError;
+  }
+  const { data, error } = await db
+    .from("business_telnyx_settings")
+    .upsert(row, { onConflict: "business_id" })
+    .select()
+    .single();
+  if (error) {
+    throw new Error(`setBusinessMessagingCampaignStatus: ${error.message}`);
+  }
   return data as BusinessTelnyxSettingsRow;
 }
 
