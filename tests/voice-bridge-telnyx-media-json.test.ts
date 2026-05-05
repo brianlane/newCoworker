@@ -52,6 +52,26 @@ describe("parseTelnyxFrame", () => {
     expect(parseTelnyxFrame("not json").kind).toBe("unparseable");
     expect(parseTelnyxFrame("").kind).toBe("unparseable");
   });
+
+  it("returns kind=unparseable for valid-JSON-but-not-an-object payloads without throwing", () => {
+    // Regression: `JSON.parse("null")` succeeds and returns `null`. The
+    // previous implementation read `msg.event` immediately after parsing,
+    // which throws `TypeError: Cannot read properties of null` for the
+    // literal "null" frame. The bridge's onTelnyxMessage handler had no
+    // surrounding try-catch, so that throw would propagate through
+    // `ws.on("message", …)` as an unhandled exception and tear the call
+    // down. Lock the defensive behavior in for every non-object JSON
+    // value (null + primitives + arrays — none of which are valid Telnyx
+    // media frames).
+    expect(() => parseTelnyxFrame("null")).not.toThrow();
+    expect(parseTelnyxFrame("null").kind).toBe("unparseable");
+    expect(parseTelnyxFrame("123").kind).toBe("unparseable");
+    expect(parseTelnyxFrame("true").kind).toBe("unparseable");
+    expect(parseTelnyxFrame("false").kind).toBe("unparseable");
+    expect(parseTelnyxFrame('"a string"').kind).toBe("unparseable");
+    expect(parseTelnyxFrame("[]").kind).toBe("unparseable");
+    expect(parseTelnyxFrame('[{"event":"media"}]').kind).toBe("unparseable");
+  });
 });
 
 describe("tryParseTelnyxMediaPayloadBase64 (back-compat shim)", () => {
