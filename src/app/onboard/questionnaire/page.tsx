@@ -872,7 +872,7 @@ function QuestionnaireForm() {
                   nine or ten", "a couple of agents", etc). */}
               <div>
                 <label className="text-sm font-medium text-parchment/80">
-                  Team Size <span className="text-spark-orange">*</span>
+                  Team Size
                 </label>
                 <p className="mt-0.5 text-[11px] text-parchment/45">
                   How many people on your team interact with leads, including you?
@@ -924,6 +924,8 @@ function QuestionnaireForm() {
                   noMatchesLabel="No CRMs match that search."
                 />
                 {deriveCrmSelection(form.crmUsed).selection === CRM_OTHER_VALUE && (
+                  <>
+                  <br/>
                   <Input
                     label="Which CRM?"
                     value={deriveCrmSelection(form.crmUsed).otherText}
@@ -933,6 +935,7 @@ function QuestionnaireForm() {
                     placeholder="e.g. Wise Agent, LionDesk"
                     required
                   />
+                  </>  
                 )}
               </div>
               <Input
