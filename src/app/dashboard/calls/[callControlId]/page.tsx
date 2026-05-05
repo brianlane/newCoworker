@@ -29,12 +29,11 @@ export default async function CallTranscriptPage({
 }: {
   params: Promise<{ callControlId: string }>;
 }) {
-  // Route segment is named `callControlId` for backward-compat (renaming
-  // the directory would invalidate any older links), but the URL value is
-  // now the transcript row's UUID. Telnyx call_control_ids look like
-  // `v3:zmG1tLVhdK…` — the literal `:` is a URL sub-delim and gets
-  // pre/post-canonicalized differently by Cloudflare/Vercel/Next, so
-  // routing by the stable UUID column dodges every URL-encoding edge case.
+  // The route segment is named `callControlId` for backward compatibility,
+  // but the URL value is now the transcript row's UUID (see the list page
+  // for the rationale — Telnyx call_control_id contains a literal `:` that
+  // the Cloudflare/Vercel routing layer occasionally mangles, producing
+  // 404s on rows that exist in the DB). UUIDs are URL-safe everywhere.
   const { callControlId: rawId } = await params;
   const transcriptId = rawId;
 

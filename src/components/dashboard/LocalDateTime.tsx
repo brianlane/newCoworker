@@ -1,29 +1,23 @@
 "use client";
 
-/**
- * Render an ISO timestamp in the *browser's* local timezone.
- *
- * Why this exists:
- *   `Date#toLocaleString(undefined, …)` resolves "undefined" to the
- *   surrounding ICU locale + timezone. On a Vercel server-component
- *   render that's the runtime container's TZ (UTC), not the user's. The
- *   call-history list was rendering "May 5, 4:18 PM UTC" as if it were
- *   the customer's local time, which read as "the wrong time" in PT.
- *
- *   We render the SSR fallback (also using formatDateTime, which yields
- *   UTC on the server but at least has a consistent locale) wrapped in a
- *   <time dateTime={iso}> with `suppressHydrationWarning`, then re-render
- *   client-side after mount in the user's actual TZ. The hydration warning
- *   ("Server: …+00:00, Client: …Z") is expected and harmless — see the
- *   May 2026 retro for the trade-off vs server-side TZ detection.
- */
-
 import { useEffect, useState } from "react";
 import {
   formatDateTime,
   type FormatDateTimeStyle
 } from "./voice-transcript-helpers";
 
+/**
+ * Client-rendered date/time string in the browser's local timezone.
+ *
+ * Why: `formatDateTime` calls `Date.prototype.toLocaleString(undefined, …)`,
+ * which on the server (RSC + Vercel build) resolves to the server's
+ * locale/timezone — typically `en-US` / `UTC`. That made 16:18 UTC print as
+ * "4:18 PM" on the dashboard even though the owner is in Pacific time
+ * (where it should read "9:18 AM"). Rendering the formatted string on
+ * the client guarantees the user's local timezone wins. We render the SSR
+ * value first (so the markup is non-empty + hydration matches) and then
+ * swap to the client-localized value after mount.
+ */
 export function LocalDateTime({
   iso,
   style = "list"

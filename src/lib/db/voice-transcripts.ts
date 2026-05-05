@@ -78,16 +78,13 @@ export async function getTranscriptByCallControlId(
 }
 
 /**
- * Look up a transcript by its UUID id (preferred for URL routing).
+ * Lookup a transcript by its row UUID, scoped to a business.
  *
- * Why we route by UUID instead of `call_control_id`:
- *   Telnyx call_control_ids look like `v3:zmG1tLVhdKWXb_…`. The literal
- *   `:` is a URL sub-delim; depending on how Cloudflare/Vercel canonicalize
- *   the path before Next.js sees it, that `:` is sometimes pre-decoded
- *   from `%3A` (or vice-versa) and the dynamic segment then doesn't match
- *   the row in the DB. The list page renders "Completed" but clicking
- *   "View →" lands on a 500. Routing by the row's UUID — URL-safe in every
- *   layer — sidesteps the whole class of issues.
+ * The dashboard "Call history" UI links by row UUID rather than by Telnyx
+ * `call_control_id` because the latter starts with `v3:` — and the literal
+ * `:` is a URL sub-delim that Cloudflare/Vercel sometimes pre-decode before
+ * Next.js matches the dynamic segment, producing a 404 on rows that exist
+ * in the DB. UUID lookup avoids the encoding pitfall entirely.
  */
 export async function getTranscriptById(
   businessId: string,

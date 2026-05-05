@@ -92,6 +92,13 @@ export default async function DashboardCallsPage() {
             {transcripts.map((row) => (
               <li key={row.id}>
                 <Link
+                  // Link by transcript row UUID rather than the Telnyx
+                  // call_control_id. The latter starts with `v3:`, and the
+                  // literal `:` is a URL sub-delim that Cloudflare/Vercel
+                  // sometimes pre-decode before Next.js matches the dynamic
+                  // segment — producing a 404 even though the row exists.
+                  // UUIDs are URL-safe everywhere and uniquely identify a
+                  // transcript without exposing the internal Telnyx id.
                   href={`/dashboard/calls/${row.id}`}
                   className="flex items-center justify-between gap-4 px-3 py-3 rounded-lg hover:bg-parchment/5 transition-colors"
                 >

@@ -27,7 +27,13 @@ const NCW_IDEM_TAG_PREFIX = "ncw_idem:";
 // Hard ceiling on a single Rowboat /chat call. A hung business VPS would otherwise
 // keep the worker blocked for the full platform invocation timeout (and stall every
 // other claimed job in the batch). Retries are handled by bounded `attempt_count`.
-const ROWBOAT_CHAT_TIMEOUT_MS = 20_000;
+// Local Ollama inside Rowboat takes ~5s for short prompts but routinely
+// >20s for the first reply on a typical-length SMS once the model has to
+// page in or stream a longer response (verified via end-to-end timing
+// from the VPS through the Cloudflare tunnel back to Rowboat). The
+// Edge-function ceiling is ~150s so we have plenty of budget; 60s gives
+// the model headroom while still bounding a stuck VPS.
+const ROWBOAT_CHAT_TIMEOUT_MS = 60_000;
 
 /** Best-effort: Telnyx list-messages filter may vary by API version — safe to return null. */
 async function telnyxTryRecoverOutboundMessageId(apiKey: string, idem: string): Promise<string | null> {

@@ -1,5 +1,14 @@
 # Optional: run the media bridge beside Rowboat on the customer VPS.
 # Copy `.env` with STREAM_URL_SIGNING_SECRET, SUPABASE_*, GOOGLE_API_KEY, BUSINESS_ID (optional), BRIDGE_MEDIA_WSS_ORIGIN host must match Telnyx stream URL.
+#
+# Network topology: the bridge MUST attach to `rowboat_default` (the network
+# defined by /opt/rowboat/docker-compose.yml) so it can reach `rowboat:3000`
+# and `llm-router:11435` by Docker DNS. Going via `host.docker.internal:3000`
+# does NOT work in production: rowboat publishes 127.0.0.1:3000 only, so
+# packets from a sibling container hit the host's docker-bridge IP — where
+# nothing is listening — and time out. (May 2026 outage: bridge accepted the
+# WebSocket from Telnyx, opened Gemini Live, then sat silent because every
+# Rowboat tool/turn fetch hung 30s before failing.)
 services:
   voice-bridge:
     build: .
@@ -8,14 +17,17 @@ services:
     env_file:
       - .env
     restart: unless-stopped
-    # Mount the Rowboat vault read-only so the bridge can prime Gemini Live's
-    # system instruction with soul/identity/memory/website markdown on every
-    # call. The vault directory on the host is populated by deploy-client.sh.
+    networks:
+      - default
+      - rowboat_default
     volumes:
       - /opt/rowboat/vault:/vault:ro
     environment:
       - VAULT_PATH=${VAULT_PATH:-/vault}
-      - ROWBOAT_URL=${ROWBOAT_URL:-http://host.docker.internal:3000}
+      # Default to the in-network DNS name; override only if Rowboat is on
+      # a different host. `host.docker.internal:3000` is intentionally NOT
+      # the default — see header comment.
+      - ROWBOAT_URL=${ROWBOAT_URL:-http://rowboat:3000}
       - ROWBOAT_GATEWAY_TOKEN=${ROWBOAT_GATEWAY_TOKEN:-}
       - APP_BASE_URL=${APP_BASE_URL:-}
     extra_hosts:
@@ -37,3 +49,13 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+networks:
+  # `default` is created by compose for this stack as
+  # `voice-bridge_default`. We still declare it so adding `rowboat_default`
+  # below doesn't drop it.
+  default:
+  # External network owned by the Rowboat compose stack; must already exist
+  # on the host (deploy-client.sh brings up Rowboat first, which creates it).
+  rowboat_default:
+    external: true

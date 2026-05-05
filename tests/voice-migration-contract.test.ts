@@ -10,6 +10,14 @@ const voicePlatformMigration = readFileSync(
   "utf8"
 );
 
+const noBillZeroTurnsMigration = readFileSync(
+  join(
+    repoRoot,
+    "supabase/migrations/20260505190000_voice_no_bill_when_zero_turns.sql"
+  ),
+  "utf8"
+);
+
 describe("voice SQL migrations (contract)", () => {
   it("voice_reserve_for_call: included headroom sums reserved_included_seconds only", () => {
     expect(voicePlatformMigration).toMatch(/coalesce\(sum\(reserved_included_seconds\), 0\)\s+into v_reserved_sum/s);
@@ -98,5 +106,44 @@ describe("voice SQL migrations (contract)", () => {
     expect(voicePlatformMigration).toMatch(/voice_try_finalize_settlement\(rec\.call_control_id, true\)/);
     expect(voicePlatformMigration).toMatch(/voice_claim_failover_maintenance_speak/);
     expect(voicePlatformMigration).toMatch(/zombie_sessions_swept/);
+  });
+});
+
+describe("voice settlement: zero-turn no-bill guard", () => {
+  it("adds no_turns_zero_billed marker column to voice_settlements", () => {
+    expect(noBillZeroTurnsMigration).toMatch(
+      /alter table voice_settlements\s+add column if not exists no_turns_zero_billed boolean not null default false/
+    );
+  });
+
+  it("counts transcript turns by call_control_id before committing seconds", () => {
+    expect(noBillZeroTurnsMigration).toMatch(
+      /select count\(\*\) into v_turn_count[\s\S]*?from voice_call_transcript_turns t[\s\S]*?join voice_call_transcripts vct on vct\.id = t\.transcript_id[\s\S]*?where vct\.call_control_id = p_call_control_id/s
+    );
+  });
+
+  it("when v_turn_count = 0, stamps billable_seconds = 0 and skips committed_included_seconds update", () => {
+    expect(noBillZeroTurnsMigration).toMatch(
+      /if v_turn_count = 0 then[\s\S]*?billable_seconds = 0,[\s\S]*?no_turns_zero_billed = true/s
+    );
+    // The early-return must move the reservation to settled so the slot is freed.
+    expect(noBillZeroTurnsMigration).toMatch(
+      /if v_turn_count = 0 then[\s\S]*?update voice_reservations\s+set state = 'settled'/s
+    );
+    // The early-return must NOT update committed_included_seconds (i.e. the
+    // `committed_included_seconds = committed_included_seconds + commit_inc`
+    // statement only appears AFTER the v_turn_count = 0 branch).
+    const idx0 = noBillZeroTurnsMigration.indexOf("if v_turn_count = 0 then");
+    const idxCommit = noBillZeroTurnsMigration.indexOf(
+      "committed_included_seconds = committed_included_seconds + commit_inc"
+    );
+    expect(idx0).toBeGreaterThan(0);
+    expect(idxCommit).toBeGreaterThan(idx0);
+  });
+
+  it("returns no_turns_zero_billed flag in the success payload for the early-return path", () => {
+    expect(noBillZeroTurnsMigration).toMatch(
+      /'committed_included_seconds', 0,[\s\S]*?'committed_bonus_seconds', 0,[\s\S]*?'no_turns_zero_billed', true/s
+    );
   });
 });

@@ -23,16 +23,16 @@ import {
 import { rateLimit } from "@/lib/rate-limit";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
-// Route segment is named `callControlId` for backward-compat with the
-// directory layout, but the URL value is now a transcript-row UUID —
-// see route.ts for why we moved off Telnyx call_control_ids.
-const TRANSCRIPT_ID = "33333333-3333-4333-8333-333333333333";
-const CCI = "cc-abc123";
+// Route segment is `callControlId` for backward compat, but the URL value
+// is now the transcript row UUID — `:` in real call_control_ids breaks
+// dynamic-segment routing under Cloudflare/Vercel.
+const TRANSCRIPT_ID = "22222222-2222-4222-8222-222222222222";
+const CCI = TRANSCRIPT_ID;
 
 const TRANSCRIPT = {
   id: TRANSCRIPT_ID,
   business_id: BIZ,
-  call_control_id: CCI,
+  call_control_id: "v3:zmG-some-telnyx-id",
   reservation_id: null,
   caller_e164: "+15551234567",
   model: "gemini-live",
@@ -43,13 +43,13 @@ const TRANSCRIPT = {
   updated_at: "2026-04-23T00:03:00Z"
 };
 
-function urlFor(transcriptId: string, businessId: string | null = BIZ): string {
+function urlFor(cci: string, businessId: string | null = BIZ): string {
   const qs = businessId === null ? "" : `?businessId=${encodeURIComponent(businessId)}`;
-  return `http://localhost/api/dashboard/calls/${encodeURIComponent(transcriptId)}${qs}`;
+  return `http://localhost/api/dashboard/calls/${encodeURIComponent(cci)}${qs}`;
 }
 
-function params(transcriptId: string) {
-  return { params: Promise.resolve({ callControlId: transcriptId }) };
+function params(cci: string) {
+  return { params: Promise.resolve({ callControlId: cci }) };
 }
 
 beforeEach(() => {
@@ -62,10 +62,10 @@ beforeEach(() => {
   });
 });
 
-describe("GET /api/dashboard/calls/:callControlId (URL value = transcript UUID)", () => {
+describe("GET /api/dashboard/calls/:callControlId", () => {
   it("returns 401 when unauthenticated", async () => {
     vi.mocked(getAuthUser).mockResolvedValue(null);
-    const res = await GET(new Request(urlFor(TRANSCRIPT_ID)), params(TRANSCRIPT_ID));
+    const res = await GET(new Request(urlFor(CCI)), params(CCI));
     expect(res.status).toBe(401);
   });
 
@@ -75,7 +75,7 @@ describe("GET /api/dashboard/calls/:callControlId (URL value = transcript UUID)"
       email: "o@o.com",
       isAdmin: false
     });
-    const res = await GET(new Request(urlFor(TRANSCRIPT_ID, null)), params(TRANSCRIPT_ID));
+    const res = await GET(new Request(urlFor(CCI, null)), params(CCI));
     expect(res.status).toBe(400);
   });
 
@@ -86,23 +86,8 @@ describe("GET /api/dashboard/calls/:callControlId (URL value = transcript UUID)"
       isAdmin: false
     });
     const res = await GET(
-      new Request(urlFor(TRANSCRIPT_ID, "not-a-uuid")),
-      params(TRANSCRIPT_ID)
-    );
-    expect(res.status).toBe(400);
-  });
-
-  it("rejects a non-uuid transcript-id segment (defends against routing-mangled `:` from old links)", async () => {
-    vi.mocked(getAuthUser).mockResolvedValue({
-      userId: "u",
-      email: "o@o.com",
-      isAdmin: false
-    });
-    // The Zod schema now requires a UUID; an old "v3:zmG1tLVhdK…" link
-    // would 400 here instead of crashing the page in the catch-all.
-    const res = await GET(
-      new Request(urlFor("v3:zmG1tLVhdK")),
-      params("v3:zmG1tLVhdK")
+      new Request(urlFor(CCI, "not-a-uuid")),
+      params(CCI)
     );
     expect(res.status).toBe(400);
   });
@@ -117,7 +102,7 @@ describe("GET /api/dashboard/calls/:callControlId (URL value = transcript UUID)"
     vi.mocked(getTranscriptById).mockResolvedValue(TRANSCRIPT);
     vi.mocked(listTurns).mockResolvedValue([]);
 
-    await GET(new Request(urlFor(TRANSCRIPT_ID)), params(TRANSCRIPT_ID));
+    await GET(new Request(urlFor(CCI)), params(CCI));
     expect(requireOwner).toHaveBeenCalledWith(BIZ);
   });
 
@@ -130,7 +115,7 @@ describe("GET /api/dashboard/calls/:callControlId (URL value = transcript UUID)"
     vi.mocked(getTranscriptById).mockResolvedValue(TRANSCRIPT);
     vi.mocked(listTurns).mockResolvedValue([]);
 
-    const res = await GET(new Request(urlFor(TRANSCRIPT_ID)), params(TRANSCRIPT_ID));
+    const res = await GET(new Request(urlFor(CCI)), params(CCI));
     expect(requireOwner).not.toHaveBeenCalled();
     expect(res.status).toBe(200);
   });
@@ -149,7 +134,7 @@ describe("GET /api/dashboard/calls/:callControlId (URL value = transcript UUID)"
       reset: Date.now() + 60_000
     });
 
-    const res = await GET(new Request(urlFor(TRANSCRIPT_ID)), params(TRANSCRIPT_ID));
+    const res = await GET(new Request(urlFor(CCI)), params(CCI));
     expect(res.status).toBe(429);
   });
 
@@ -162,7 +147,7 @@ describe("GET /api/dashboard/calls/:callControlId (URL value = transcript UUID)"
     vi.mocked(requireOwner).mockResolvedValue(undefined as never);
     vi.mocked(getTranscriptById).mockResolvedValue(null);
 
-    const res = await GET(new Request(urlFor(TRANSCRIPT_ID)), params(TRANSCRIPT_ID));
+    const res = await GET(new Request(urlFor(CCI)), params(CCI));
     expect(res.status).toBe(404);
     expect(listTurns).not.toHaveBeenCalled();
   });
@@ -198,17 +183,28 @@ describe("GET /api/dashboard/calls/:callControlId (URL value = transcript UUID)"
       }
     ]);
 
-    const res = await GET(new Request(urlFor(TRANSCRIPT_ID)), params(TRANSCRIPT_ID));
+    const res = await GET(new Request(urlFor(CCI)), params(CCI));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.data.transcript.id).toBe(TRANSCRIPT_ID);
-    // The response still surfaces `callControlId` for client convenience —
-    // it just isn't used as the URL key any more.
-    expect(body.data.transcript.callControlId).toBe(CCI);
+    expect(body.data.transcript.callControlId).toBe("v3:zmG-some-telnyx-id");
     expect(body.data.transcript.status).toBe("completed");
     expect(body.data.turns).toHaveLength(2);
     expect(body.data.turns[0].role).toBe("caller");
     expect(body.data.turns[1].role).toBe("assistant");
+  });
+
+  it("validates the transcript-id param shape (non-uuid rejected)", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({
+      userId: "u",
+      email: "o@o.com",
+      isAdmin: false
+    });
+    // Pre-fix code accepted any string up to 128 chars (including raw
+    // `v3:…` Telnyx ids that broke dynamic routing). Lock the URL contract
+    // down to UUID-shaped values now.
+    const res = await GET(new Request(urlFor("v3:not-a-uuid")), params("v3:not-a-uuid"));
+    expect(res.status).toBe(400);
   });
 
   it("propagates 500 when db throws", async () => {
@@ -219,7 +215,7 @@ describe("GET /api/dashboard/calls/:callControlId (URL value = transcript UUID)"
     });
     vi.mocked(requireOwner).mockResolvedValue(undefined as never);
     vi.mocked(getTranscriptById).mockRejectedValue(new Error("boom"));
-    const res = await GET(new Request(urlFor(TRANSCRIPT_ID)), params(TRANSCRIPT_ID));
+    const res = await GET(new Request(urlFor(CCI)), params(CCI));
     expect(res.status).toBe(500);
   });
 });

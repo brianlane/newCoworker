@@ -112,6 +112,30 @@ describe("telnyx call-control", () => {
     expect(body.stream_track).toBe("both_tracks");
   });
 
+  it("telnyxAnswerWithStream pins L16 codec + 16 kHz on both directions", async () => {
+    // Regression: the legacy `stream_sampling_rate` field is NOT in the
+    // Telnyx schema and was silently ignored, leaving outbound at the 8 kHz
+    // default while the bridge generates 16 kHz frames. The inbound stream
+    // also has to be `L16` — without `stream_codec` Telnyx defaults to the
+    // call's PSTN codec (PCMU 8 kHz µ-law), and the bridge feeds those
+    // bytes to Gemini Live as `audio/pcm;rate=16000`, producing speech-
+    // recognition garbage. See `_shared/telnyx_call_actions.ts` header
+    // for the full root-cause writeup.
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    await telnyxAnswerWithStream(
+      "key",
+      "c-rate",
+      { streamUrl: "wss://x" },
+      fetchMock as typeof fetch
+    );
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.stream_codec).toBe("L16");
+    expect(body.stream_bidirectional_mode).toBe("rtp");
+    expect(body.stream_bidirectional_codec).toBe("L16");
+    expect(body.stream_bidirectional_sampling_rate).toBe(16000);
+    expect(body.stream_sampling_rate).toBeUndefined();
+  });
+
   it("telnyxAnswerWithStream includes client_state when set", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true });
     await telnyxAnswerWithStream(

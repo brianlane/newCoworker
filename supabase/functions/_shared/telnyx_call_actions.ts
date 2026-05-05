@@ -28,7 +28,33 @@ export async function telnyxAnswerPlain(
   });
 }
 
-/** POST /v2/calls/{call_control_id}/actions/answer with bidirectional media stream. */
+/**
+ * POST /v2/calls/{call_control_id}/actions/answer with bidirectional media stream.
+ *
+ * Codec/rate notes (verified against Telnyx OpenAPI for /actions/answer and
+ * /actions/streaming_start, May 2026):
+ *
+ *   - `stream_codec`: codec for the INBOUND fork (caller → bridge). Default
+ *     `"default"` means the call's native PSTN codec — almost always
+ *     PCMU 8 kHz µ-law. We force `"L16"` so the bridge gets uncompressed
+ *     16-bit PCM and can hand it straight to Gemini Live (which expects
+ *     `audio/pcm`).
+ *   - `stream_bidirectional_mode: "rtp"`: outbound (bridge → caller) is
+ *     RTP-wrapped. The bridge has a per-call RTP framer in
+ *     `vps/voice-bridge/src/rtp-frame.ts` that strips/synthesizes the
+ *     12-byte header so the round trip stays binary-identical to what
+ *     Telnyx negotiates.
+ *   - `stream_bidirectional_codec: "L16"`: outbound payload is L16 PCM.
+ *   - `stream_bidirectional_sampling_rate: 16000`: outbound runs at 16 kHz
+ *     to match `TELNYX_PCM_RATE` in the bridge. Without this field Telnyx
+ *     defaults the OUTBOUND rate to 8 kHz — and the bridge's L16 16 kHz
+ *     frames played back at 8 kHz sound like sped-up chipmunk noise (or,
+ *     more often, Telnyx silently discards them because they miss the
+ *     expected packet cadence). The legacy `stream_sampling_rate` field
+ *     used here previously is NOT in the Telnyx schema and was ignored —
+ *     left in place undetected, it was the root cause of the May 2026
+ *     "one ring then silence" outage.
+ */
 export async function telnyxAnswerWithStream(
   apiKey: string,
   callControlId: string,
@@ -39,9 +65,10 @@ export async function telnyxAnswerWithStream(
   const body: Record<string, unknown> = {
     stream_url: opts.streamUrl,
     stream_track: "both_tracks",
+    stream_codec: "L16",
     stream_bidirectional_mode: "rtp",
     stream_bidirectional_codec: "L16",
-    stream_sampling_rate: 16000
+    stream_bidirectional_sampling_rate: 16000
   };
   if (opts.clientState) {
     body.client_state = opts.clientState;
