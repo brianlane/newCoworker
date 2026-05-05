@@ -12,15 +12,15 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { ChatMarkdown } from "@/components/ui/ChatMarkdown";
 import {
-  getTranscriptByCallControlId,
+  getTranscriptById,
   listTurns
 } from "@/lib/db/voice-transcripts";
 import {
   StatusBadge,
   callerLabel,
-  formatDateTime,
   formatDuration
 } from "@/components/dashboard/voice-transcript-helpers";
+import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 
 export const dynamic = "force-dynamic";
 
@@ -29,20 +29,20 @@ export default async function CallTranscriptPage({
 }: {
   params: Promise<{ callControlId: string }>;
 }) {
-  // Next.js App Router already URL-decodes dynamic route segments before
-  // exposing them on `params`. Calling decodeURIComponent here would
-  // double-decode — e.g. a Telnyx call_control_id containing a literal `%3A`
-  // is sent as `%253A`, arrives decoded to `%3A`, and a second decode would
-  // corrupt it to `:`. The sibling API route (/api/dashboard/calls/[id])
-  // uses params directly, so we must do the same to keep lookups consistent.
-  const { callControlId } = await params;
+  // The route segment is named `callControlId` for backward compatibility,
+  // but the URL value is now the transcript row's UUID (see the list page
+  // for the rationale — Telnyx call_control_id contains a literal `:` that
+  // the Cloudflare/Vercel routing layer occasionally mangles, producing
+  // 404s on rows that exist in the DB). UUIDs are URL-safe everywhere.
+  const { callControlId: rawId } = await params;
+  const transcriptId = rawId;
 
   const user = await getAuthUser();
   if (!user) {
-    redirect(`/login?redirectTo=/dashboard/calls/${encodeURIComponent(callControlId)}`);
+    redirect(`/login?redirectTo=/dashboard/calls/${transcriptId}`);
   }
   if (!user.email) {
-    redirect(`/login?redirectTo=/dashboard/calls/${encodeURIComponent(callControlId)}`);
+    redirect(`/login?redirectTo=/dashboard/calls/${transcriptId}`);
   }
 
   const db = await createSupabaseServiceClient();
@@ -55,7 +55,7 @@ export default async function CallTranscriptPage({
   const business = businesses?.[0] ?? null;
   if (!business) notFound();
 
-  const transcript = await getTranscriptByCallControlId(business.id, callControlId);
+  const transcript = await getTranscriptById(business.id, transcriptId);
   if (!transcript) notFound();
 
   const turns = await listTurns(transcript.id);
@@ -75,7 +75,7 @@ export default async function CallTranscriptPage({
             {callerLabel(transcript.caller_e164)}
           </span>
           <span>·</span>
-          <span>{formatDateTime(transcript.started_at, "detail")}</span>
+          <LocalDateTime iso={transcript.started_at} style="detail" />
           <span>·</span>
           <span>{formatDuration(transcript.started_at, transcript.ended_at)}</span>
           <StatusBadge status={transcript.status} />

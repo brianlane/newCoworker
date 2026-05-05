@@ -14,7 +14,7 @@ import { getAuthUser, requireOwner } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import {
-  getTranscriptByCallControlId,
+  getTranscriptById,
   listTurns
 } from "@/lib/db/voice-transcripts";
 
@@ -22,8 +22,11 @@ export const dynamic = "force-dynamic";
 
 const CALL_TRANSCRIPT_RATE = { interval: 60 * 1000, maxRequests: 60 };
 
+// Route segment is `callControlId` for backward-compatibility, but the
+// URL value is the transcript row UUID — see the list-page link for the
+// rationale around `:`-in-callControlId routing breakage.
 const paramsSchema = z.object({
-  callControlId: z.string().trim().min(1).max(128)
+  callControlId: z.string().trim().uuid()
 });
 
 const querySchema = z.object({
@@ -38,7 +41,7 @@ export async function GET(
     const user = await getAuthUser();
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
 
-    const { callControlId } = paramsSchema.parse(await ctx.params);
+    const { callControlId: transcriptId } = paramsSchema.parse(await ctx.params);
 
     const url = new URL(request.url);
     const { businessId } = querySchema.parse({
@@ -55,7 +58,7 @@ export async function GET(
       return errorResponse("CONFLICT", "Too many requests, please slow down.", 429);
     }
 
-    const transcript = await getTranscriptByCallControlId(businessId, callControlId);
+    const transcript = await getTranscriptById(businessId, transcriptId);
     if (!transcript) {
       return errorResponse("NOT_FOUND", "Transcript not found");
     }

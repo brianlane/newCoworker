@@ -681,14 +681,18 @@ VOICE_TRANSCRIPTION_ENABLED=${effective_voice_transcription_enabled}
 
 # Vault + Rowboat + platform app endpoints for Gemini Live tool calls.
 # VAULT_PATH: where the bridge reads soul/identity/memory/website md.
-# ROWBOAT_URL: Rowboat /chat endpoint reachable from the bridge container;
-#              uses Docker's host-gateway alias because Rowboat listens on
-#              the host's loopback interface.
+# ROWBOAT_URL: Rowboat /chat endpoint reachable from the bridge container.
+#              Uses Docker DNS via the shared `rowboat_default` network
+#              (attached in vps/voice-bridge/docker-compose.yml). The old
+#              `host.docker.internal:3000` default does NOT work because
+#              Rowboat publishes 127.0.0.1:3000 only — the host gateway
+#              IP isn't listening, so every request hangs ~30s and the
+#              caller hears silence (May 2026 outage).
 # APP_BASE_URL: platform Next.js origin for /api/voice/tools/* adapters.
 # ROWBOAT_GATEWAY_TOKEN: shared bearer used by both Rowboat and the bridge
 #                        when calling the platform app.
 VAULT_PATH=/vault
-ROWBOAT_URL=${ROWBOAT_URL:-http://host.docker.internal:3000}
+ROWBOAT_URL=${ROWBOAT_URL:-http://rowboat:3000}
 APP_BASE_URL=${APP_BASE_URL:-}
 ROWBOAT_GATEWAY_TOKEN=${ROWBOAT_GATEWAY_TOKEN:-}
 VBENV_EOF

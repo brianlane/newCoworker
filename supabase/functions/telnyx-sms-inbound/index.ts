@@ -140,6 +140,43 @@ serve(async (req: Request) => {
   }
 
   const response = await (async (): Promise<Response> => {
+    // Outbound DLR observability: log delivery_failed / sending_failed reasons
+    // for outbound replies. Telnyx accepts the message (HTTP 200 + id) and
+    // then the carrier silently drops it for unregistered A2P (10DLC),
+    // policy violations, or destination-unreachable. Without surfacing the
+    // `to[].status` from message.finalized we have no way to tell a "queued"
+    // message apart from a "delivery_failed" one. Telemetry-only for now —
+    // we don't fail the webhook on outbound DLRs.
+    if (eventType === "message.finalized" || eventType === "message.sent") {
+      const payload = (data?.payload ?? {}) as Record<string, unknown>;
+      const recipients = Array.isArray(payload.to)
+        ? (payload.to as Array<Record<string, unknown>>)
+        : [];
+      for (const recipient of recipients) {
+        const status = typeof recipient.status === "string" ? recipient.status : "";
+        if (status && status !== "delivered" && status !== "queued" && status !== "sent" && status !== "sending") {
+          await telemetryRecord(supabase, "telnyx_sms_outbound_dlr", {
+            event_id: eventId,
+            event_type: eventType,
+            outbound_message_id:
+              typeof (payload.id as string | undefined) === "string"
+                ? (payload.id as string)
+                : null,
+            recipient_e164: typeof recipient.phone_number === "string"
+              ? (recipient.phone_number as string)
+              : null,
+            recipient_status: status,
+            recipient_carrier:
+              typeof recipient.carrier === "string" ? (recipient.carrier as string) : null,
+            errors: Array.isArray(payload.errors) ? payload.errors : null
+          });
+        }
+      }
+      return new Response(JSON.stringify({ ok: true, skipped: eventType }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
     if (eventType !== "message.received") {
       return new Response(JSON.stringify({ ok: true, skipped: eventType }), {
         status: 200,

@@ -15,9 +15,9 @@ import { listTranscriptsForBusiness } from "@/lib/db/voice-transcripts";
 import {
   StatusBadge,
   callerLabel,
-  formatDateTime,
   formatDuration
 } from "@/components/dashboard/voice-transcript-helpers";
+import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 
 export const dynamic = "force-dynamic";
 
@@ -92,7 +92,14 @@ export default async function DashboardCallsPage() {
             {transcripts.map((row) => (
               <li key={row.id}>
                 <Link
-                  href={`/dashboard/calls/${encodeURIComponent(row.call_control_id)}`}
+                  // Link by transcript row UUID rather than the Telnyx
+                  // call_control_id. The latter starts with `v3:`, and the
+                  // literal `:` is a URL sub-delim that Cloudflare/Vercel
+                  // sometimes pre-decode before Next.js matches the dynamic
+                  // segment — producing a 404 even though the row exists.
+                  // UUIDs are URL-safe everywhere and uniquely identify a
+                  // transcript without exposing the internal Telnyx id.
+                  href={`/dashboard/calls/${row.id}`}
                   className="flex items-center justify-between gap-4 px-3 py-3 rounded-lg hover:bg-parchment/5 transition-colors"
                 >
                   <div className="min-w-0">
@@ -103,7 +110,7 @@ export default async function DashboardCallsPage() {
                       <StatusBadge status={row.status} />
                     </div>
                     <p className="text-xs text-parchment/50 mt-0.5">
-                      {formatDateTime(row.started_at)} ·{" "}
+                      <LocalDateTime iso={row.started_at} /> ·{" "}
                       {formatDuration(row.started_at, row.ended_at)}
                     </p>
                   </div>
