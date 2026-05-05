@@ -59,10 +59,20 @@ export class MissingTendlcConfigError extends Error {
 }
 
 /**
- * Read the platform 10DLC config from env. Returns `null` when nothing is
- * set (initial bootstrap) so callers can fall back to "queue as pending".
- * Throws `MissingTendlcConfigError` when SOME but not all values are set —
- * that's almost always a misconfiguration we want loudly visible.
+ * Read the platform 10DLC config from env. Returns `null` when 10DLC isn't
+ * configured yet (initial bootstrap) so callers can fall back to "queue as
+ * pending". Throws `MissingTendlcConfigError` when SOME but not all values
+ * are set — that's almost always a misconfiguration we want loudly visible.
+ *
+ * Why the cold-start gate ignores TELNYX_API_KEY:
+ *   `TELNYX_API_KEY` is shared platform infrastructure — it's set in every
+ *   environment because voice routing, admin tools, and outbound SMS all
+ *   need it. If we required it to be missing for "cold start", every prod
+ *   tenant would hit the partial-config branch (apiKey set, brandId/
+ *   campaignId not yet) and throw — which the orchestrator then catches
+ *   with NO DB write, leaving `last_attempt_at` stale and the dashboard
+ *   banner uninformative. Gate cold-start on the 10DLC-specific keys only;
+ *   they're set together (or not at all) by the rollout that adds 10DLC.
  */
 export function readTendlcConfig(
   env: Record<string, string | undefined> = process.env
@@ -70,8 +80,10 @@ export function readTendlcConfig(
   const apiKey = env.TELNYX_API_KEY?.trim();
   const brandId = env.TELNYX_10DLC_BRAND_ID?.trim();
   const campaignId = env.TELNYX_10DLC_CAMPAIGN_ID?.trim();
-  // Cold start: nothing configured. Caller treats as "no 10DLC yet".
-  if (!apiKey && !brandId && !campaignId) return null;
+  // Cold start: 10DLC not yet rolled out for this deployment. Caller
+  // treats as "no 10DLC", records pending, and the retry worker picks
+  // it up once the env is populated.
+  if (!brandId && !campaignId) return null;
   const missing: Array<keyof TendlcConfig> = [];
   if (!apiKey) missing.push("apiKey");
   if (!brandId) missing.push("brandId");

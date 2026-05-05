@@ -1,9 +1,13 @@
 /**
- * Owner-facing voice call transcript list.
+ * Owner-facing SMS conversation index.
  *
- * Mirrors the dashboard-chat server-component pattern: resolve the caller's
- * business via service-role lookup after auth, then render read-only DB rows.
- * Each row links into `/dashboard/calls/[callControlId]` for the full turn view.
+ * Mirrors the call-history server-component pattern (`/dashboard/calls`):
+ * resolve the caller's business via service-role lookup after auth, then
+ * render read-only conversation summaries grouped by customer phone.
+ *
+ * Each row links into `/dashboard/messages/[customerE164]` for the full
+ * thread view. Phone numbers are URL-encoded once when building the link
+ * and again decoded automatically by Next on the receiving route.
  */
 
 import Link from "next/link";
@@ -11,20 +15,15 @@ import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
-import { listTranscriptsForBusiness } from "@/lib/db/voice-transcripts";
-import {
-  StatusBadge,
-  callerLabel,
-  formatDuration
-} from "@/components/dashboard/voice-transcript-helpers";
+import { listConversationsForBusiness } from "@/lib/db/sms-history";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 
 export const dynamic = "force-dynamic";
 
-export default async function DashboardCallsPage() {
+export default async function DashboardMessagesPage() {
   const user = await getAuthUser();
-  if (!user) redirect("/login?redirectTo=/dashboard/calls");
-  if (!user.email) redirect("/login?redirectTo=/dashboard/calls");
+  if (!user) redirect("/login?redirectTo=/dashboard/messages");
+  if (!user.email) redirect("/login?redirectTo=/dashboard/messages");
 
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
@@ -39,9 +38,9 @@ export default async function DashboardCallsPage() {
     return (
       <div className="space-y-6 max-w-4xl">
         <div>
-          <h1 className="text-2xl font-bold text-parchment">Call history</h1>
+          <h1 className="text-2xl font-bold text-parchment">Text history</h1>
           <p className="text-sm text-parchment/50 mt-1">
-            Transcripts of calls handled by your AI coworker
+            SMS conversations handled by your AI coworker
           </p>
         </div>
         <Card>
@@ -59,52 +58,56 @@ export default async function DashboardCallsPage() {
     );
   }
 
-  const transcripts = await listTranscriptsForBusiness(business.id, { limit: 50 });
+  const conversations = await listConversationsForBusiness(business.id, { limit: 50 });
 
   return (
     <div className="space-y-6 max-w-4xl">
       <div>
-        <h1 className="text-2xl font-bold text-parchment">Call history</h1>
+        <h1 className="text-2xl font-bold text-parchment">Text history</h1>
         <p className="text-sm text-parchment/50 mt-1">
-          Transcripts of calls handled by your AI coworker
+          SMS conversations handled by your AI coworker
         </p>
       </div>
 
       <Card padding="sm" className="border-signal-teal/30 bg-signal-teal/5">
         <p className="text-xs text-parchment/70 leading-relaxed">
-          Calls handled by your AI assistant are transcribed and stored so you
-          can review them later. Transcripts are visible to you only.
+          Texts answered by your AI assistant are stored so you can review
+          them later. Conversations are visible to you only.
         </p>
       </Card>
 
-      {transcripts.length === 0 ? (
+      {conversations.length === 0 ? (
         <Card>
           <div className="text-center py-8">
-            <p className="text-parchment/60">No calls yet.</p>
+            <p className="text-parchment/60">No texts yet.</p>
             <p className="text-xs text-parchment/40 mt-2">
-              Once a customer calls your coworker, their transcript will appear here.
+              Once a customer texts your coworker, the thread will appear here.
             </p>
           </div>
         </Card>
       ) : (
         <Card padding="sm">
           <ul className="divide-y divide-parchment/10">
-            {transcripts.map((row) => (
-              <li key={row.id}>
+            {conversations.map((c) => (
+              <li key={c.customerE164}>
                 <Link
-                  href={`/dashboard/calls/${row.id}`}
+                  href={`/dashboard/messages/${encodeURIComponent(c.customerE164)}`}
                   className="flex items-center justify-between gap-4 px-3 py-3 rounded-lg hover:bg-parchment/5 transition-colors"
                 >
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-parchment truncate">
-                        {callerLabel(row.caller_e164)}
+                        {c.customerE164}
                       </span>
-                      <StatusBadge status={row.status} />
+                      <span className="text-[10px] uppercase tracking-wide text-parchment/40 font-mono">
+                        {c.messageCount} msg{c.messageCount === 1 ? "" : "s"}
+                      </span>
                     </div>
-                    <p className="text-xs text-parchment/50 mt-0.5">
-                      <LocalDateTime iso={row.started_at} /> ·{" "}
-                      {formatDuration(row.started_at, row.ended_at)}
+                    <p className="text-xs text-parchment/60 mt-0.5 truncate">
+                      {c.lastMessage}
+                    </p>
+                    <p className="text-[10px] text-parchment/40 mt-0.5">
+                      <LocalDateTime iso={c.lastMessageAt} />
                     </p>
                   </div>
                   <span className="text-parchment/40 text-sm shrink-0">View →</span>

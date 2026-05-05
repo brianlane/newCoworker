@@ -46,6 +46,14 @@ describe("readTendlcConfig", () => {
     expect(readTendlcConfig({})).toBeNull();
   });
 
+  it("treats apiKey-only as cold start (TELNYX_API_KEY is shared infra, always set in prod)", () => {
+    // Bugbot caught this: requiring apiKey to be ABSENT for cold start
+    // means every real deployment hits the partial-config throw branch
+    // before 10DLC is rolled out. Gate cold-start on the 10DLC-specific
+    // keys only.
+    expect(readTendlcConfig({ TELNYX_API_KEY: "k" })).toBeNull();
+  });
+
   it("returns the populated config when all three values are present", () => {
     expect(
       readTendlcConfig({
@@ -56,15 +64,20 @@ describe("readTendlcConfig", () => {
     ).toEqual({ apiKey: "k", brandId: "brand", campaignId: "camp" });
   });
 
-  it("throws MissingTendlcConfigError when only some values are set", () => {
+  it("throws MissingTendlcConfigError when SOME 10DLC values are populated but others aren't", () => {
+    // brandId set, campaignId missing → real misconfig (someone half-wired
+    // the rollout); this should fail loudly so operators notice.
     expect(() =>
       readTendlcConfig({ TELNYX_API_KEY: "k", TELNYX_10DLC_BRAND_ID: "brand" })
     ).toThrow(MissingTendlcConfigError);
-    expect(() =>
-      readTendlcConfig({ TELNYX_10DLC_BRAND_ID: "brand", TELNYX_10DLC_CAMPAIGN_ID: "c" })
-    ).toThrow(MissingTendlcConfigError);
+    // campaignId set, brandId missing → same.
     expect(() =>
       readTendlcConfig({ TELNYX_API_KEY: "k", TELNYX_10DLC_CAMPAIGN_ID: "c" })
+    ).toThrow(MissingTendlcConfigError);
+    // brandId + campaignId set, apiKey missing → loud throw so we never
+    // try to instantiate a TendlcClient with an empty key.
+    expect(() =>
+      readTendlcConfig({ TELNYX_10DLC_BRAND_ID: "brand", TELNYX_10DLC_CAMPAIGN_ID: "c" })
     ).toThrow(MissingTendlcConfigError);
   });
 
@@ -80,11 +93,11 @@ describe("readTendlcConfig", () => {
 
   it("MissingTendlcConfigError exposes which fields were missing", () => {
     try {
-      readTendlcConfig({ TELNYX_API_KEY: "k" });
+      readTendlcConfig({ TELNYX_API_KEY: "k", TELNYX_10DLC_BRAND_ID: "brand" });
       expect.fail("expected throw");
     } catch (err) {
       expect(err).toBeInstanceOf(MissingTendlcConfigError);
-      expect((err as MissingTendlcConfigError).missing).toEqual(["brandId", "campaignId"]);
+      expect((err as MissingTendlcConfigError).missing).toEqual(["campaignId"]);
     }
   });
 });

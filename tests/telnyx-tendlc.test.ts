@@ -101,6 +101,75 @@ describe("TendlcClient.createCampaign", () => {
     expect(c.status).toBe("ACTIVE");
   });
 
+  it("captures all optional campaign fields when Telnyx returns them", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        data: {
+          campaignId: "c-2",
+          status: "ACTIVE",
+          brandId: "brand_xyz",
+          usecase: "CUSTOMER_CARE",
+          resellerId: "reseller_1",
+          createdAt: "2026-05-05T00:00:00Z",
+          updatedAt: "2026-05-05T01:00:00Z"
+        }
+      })
+    );
+    const client = new TendlcClient({ apiKey: "k", fetchImpl });
+    const c = await client.createCampaign(SAMPLE_SUBMIT);
+    expect(c.resellerId).toBe("reseller_1");
+    expect(c.createdAt).toBe("2026-05-05T00:00:00Z");
+    expect(c.updatedAt).toBe("2026-05-05T01:00:00Z");
+  });
+
+  it("preserves resellerId === null (Telnyx returns null for non-reseller brands)", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        data: { campaignId: "c-3", status: "PENDING", resellerId: null }
+      })
+    );
+    const client = new TendlcClient({ apiKey: "k", fetchImpl });
+    const c = await client.createCampaign(SAMPLE_SUBMIT);
+    expect(c.resellerId).toBeNull();
+  });
+
+  it("falls back to data.id when campaignId is absent (older Telnyx response shape)", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse(200, { data: { id: "c-legacy", status: "ACTIVE" } })
+    );
+    const client = new TendlcClient({ apiKey: "k", fetchImpl });
+    const c = await client.createCampaign(SAMPLE_SUBMIT);
+    expect(c.campaignId).toBe("c-legacy");
+  });
+
+  it("throws when neither campaignId nor id is present", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse(200, { data: { status: "ACTIVE" } })
+    );
+    const client = new TendlcClient({ apiKey: "k", fetchImpl });
+    await expect(client.createCampaign(SAMPLE_SUBMIT)).rejects.toThrow(
+      /missing campaignId/
+    );
+  });
+
+  it("returns undefined for missing/non-string optional fields", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        // resellerId omitted entirely; createdAt is a number (Telnyx
+        // sometimes serializes timestamps oddly); status is missing.
+        data: { campaignId: "c-4", createdAt: 0, updatedAt: 0 }
+      })
+    );
+    const client = new TendlcClient({ apiKey: "k", fetchImpl });
+    const c = await client.createCampaign(SAMPLE_SUBMIT);
+    expect(c.status).toBe("");
+    expect(c.brandId).toBeUndefined();
+    expect(c.usecase).toBeUndefined();
+    expect(c.resellerId).toBeUndefined();
+    expect(c.createdAt).toBeUndefined();
+    expect(c.updatedAt).toBeUndefined();
+  });
+
   it("falls back to .id when .campaignId is absent", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       jsonResponse(200, { id: "c-3", status: "PENDING" })
@@ -206,6 +275,44 @@ describe("TendlcClient.createPhoneNumberCampaign", () => {
     });
     expect(r.phoneNumber).toBe("+15551234567");
     expect(r.campaignId).toBe("c-1");
+  });
+
+  it("populates createdAt / updatedAt when present", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        phoneNumber: "+15551234567",
+        campaignId: "c-1",
+        status: "ACTIVE",
+        createdAt: "2026-05-05T00:00:00Z",
+        updatedAt: "2026-05-05T01:00:00Z"
+      })
+    );
+    const client = new TendlcClient({ apiKey: "k", fetchImpl });
+    const r = await client.createPhoneNumberCampaign({
+      phoneNumber: "+15551234567",
+      campaignId: "c-1"
+    });
+    expect(r.createdAt).toBe("2026-05-05T00:00:00Z");
+    expect(r.updatedAt).toBe("2026-05-05T01:00:00Z");
+  });
+
+  it("leaves createdAt / updatedAt undefined when missing or non-string", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        phoneNumber: "+15551234567",
+        campaignId: "c-1",
+        // Numeric timestamps — Telnyx is inconsistent across endpoints.
+        createdAt: 1700000000,
+        updatedAt: 1700000001
+      })
+    );
+    const client = new TendlcClient({ apiKey: "k", fetchImpl });
+    const r = await client.createPhoneNumberCampaign({
+      phoneNumber: "+15551234567",
+      campaignId: "c-1"
+    });
+    expect(r.createdAt).toBeUndefined();
+    expect(r.updatedAt).toBeUndefined();
   });
 
   it("throws when the response is missing phoneNumber/campaignId", async () => {

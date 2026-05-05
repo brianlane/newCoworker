@@ -159,6 +159,92 @@ export async function upsertBusinessTelnyxSettings(
   return data as BusinessTelnyxSettingsRow;
 }
 
+export type TendlcRetryCandidate = {
+  business_id: string;
+  to_e164: string;
+  status: BusinessTelnyxMessagingCampaignStatus;
+  last_attempt_at: string | null;
+};
+
+/**
+ * List per-business DIDs that need a 10DLC campaign re-attach. Returns
+ * rows whose status is `pending` or `rejected` AND that haven't been
+ * retried within `staleAfterSeconds` (default 5 minutes) — bounded by
+ * `limit` so a backlog of 1k pending DIDs doesn't burn a full Telnyx
+ * budget per cron tick.
+ *
+ * Joined with `telnyx_voice_routes` because the DID lives there, not on
+ * `business_telnyx_settings`. Rows missing a route are filtered out — a
+ * business without a DID has nothing to attach.
+ */
+export async function listBusinessesPendingTendlcAttach(
+  options: { staleAfterSeconds?: number; limit?: number } = {},
+  client?: SupabaseClient
+): Promise<TendlcRetryCandidate[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const stale = Math.max(0, options.staleAfterSeconds ?? 300);
+  const limit = Math.min(Math.max(1, options.limit ?? 25), 100);
+  const cutoff = new Date(Date.now() - stale * 1000).toISOString();
+
+  // Two-step rather than a Postgres view: keeps the helper testable with
+  // the same chain-of-mocks pattern the rest of the codebase uses, and
+  // avoids a migration just for one read path. The N+1 is bounded by
+  // `limit`; for our scale (≤ 100/tick) this is well under one round-trip.
+  const { data: settings, error: sErr } = await db
+    .from("business_telnyx_settings")
+    .select(
+      "business_id, telnyx_messaging_campaign_status, telnyx_messaging_campaign_last_attempt_at"
+    )
+    .in("telnyx_messaging_campaign_status", ["pending", "rejected"])
+    .or(
+      `telnyx_messaging_campaign_last_attempt_at.is.null,telnyx_messaging_campaign_last_attempt_at.lt.${cutoff}`
+    )
+    .order("telnyx_messaging_campaign_last_attempt_at", {
+      ascending: true,
+      nullsFirst: true
+    })
+    .limit(limit);
+  if (sErr) {
+    throw new Error(`listBusinessesPendingTendlcAttach: ${sErr.message}`);
+  }
+  const rows = (settings as Array<{
+    business_id: string;
+    telnyx_messaging_campaign_status: BusinessTelnyxMessagingCampaignStatus;
+    telnyx_messaging_campaign_last_attempt_at: string | null;
+  }> | null) ?? [];
+  if (rows.length === 0) return [];
+
+  const ids = rows.map((r) => r.business_id);
+  const { data: routes, error: rErr } = await db
+    .from("telnyx_voice_routes")
+    .select("business_id, to_e164, created_at")
+    .in("business_id", ids)
+    .order("created_at", { ascending: false });
+  if (rErr) {
+    throw new Error(`listBusinessesPendingTendlcAttach: ${rErr.message}`);
+  }
+  // Most-recent route wins (matches `getTelnyxVoiceRouteForBusiness`).
+  const routeByBiz = new Map<string, string>();
+  for (const route of (routes as Array<{ business_id: string; to_e164: string }> | null) ?? []) {
+    if (!routeByBiz.has(route.business_id)) {
+      routeByBiz.set(route.business_id, route.to_e164);
+    }
+  }
+
+  return rows.flatMap((r) => {
+    const e164 = routeByBiz.get(r.business_id);
+    if (!e164) return [];
+    return [
+      {
+        business_id: r.business_id,
+        to_e164: e164,
+        status: r.telnyx_messaging_campaign_status,
+        last_attempt_at: r.telnyx_messaging_campaign_last_attempt_at
+      }
+    ];
+  });
+}
+
 /**
  * Update the per-business 10DLC campaign-attach lifecycle. See migration
  * `20260505210000_business_tendlc_status.sql` for the meaning of each

@@ -7,6 +7,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   getTranscriptByCallControlId,
+  getTranscriptById,
   listTranscriptsForBusiness,
   listTurns,
   DEFAULT_LIST_LIMIT,
@@ -144,6 +145,45 @@ describe("db/voice-transcripts — getTranscriptByCallControlId", () => {
     c.maybeSingle.mockResolvedValue({ data: null, error: null });
     defaultClientSpy.mockReturnValue(makeDb(c));
     await getTranscriptByCallControlId(BIZ, CCI);
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+  });
+});
+
+describe("db/voice-transcripts — getTranscriptById", () => {
+  const TRANSCRIPT_ID = "22222222-2222-4222-8222-222222222222";
+
+  it("scopes by business_id + id and returns the row", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: TRANSCRIPT, error: null });
+    const db = makeDb(c);
+    await expect(
+      getTranscriptById(BIZ, TRANSCRIPT_ID, db as never)
+    ).resolves.toEqual(TRANSCRIPT);
+    expect(c.eq).toHaveBeenNthCalledWith(1, "business_id", BIZ);
+    expect(c.eq).toHaveBeenNthCalledWith(2, "id", TRANSCRIPT_ID);
+  });
+
+  it("returns null when the transcript is missing", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    await expect(
+      getTranscriptById(BIZ, TRANSCRIPT_ID, makeDb(c) as never)
+    ).resolves.toBeNull();
+  });
+
+  it("throws on db error", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: { message: "bad" } });
+    await expect(
+      getTranscriptById(BIZ, TRANSCRIPT_ID, makeDb(c) as never)
+    ).rejects.toThrow(/getTranscriptById: bad/);
+  });
+
+  it("falls back to the default service client when none is supplied", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: TRANSCRIPT, error: null });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    await expect(getTranscriptById(BIZ, TRANSCRIPT_ID)).resolves.toEqual(TRANSCRIPT);
     expect(createSupabaseServiceClient).toHaveBeenCalled();
   });
 });

@@ -77,6 +77,34 @@ export async function getTranscriptByCallControlId(
   return (data as VoiceCallTranscriptRow | null) ?? null;
 }
 
+/**
+ * Look up a transcript by its UUID id (preferred for URL routing).
+ *
+ * Why we route by UUID instead of `call_control_id`:
+ *   Telnyx call_control_ids look like `v3:zmG1tLVhdKWXb_…`. The literal
+ *   `:` is a URL sub-delim; depending on how Cloudflare/Vercel canonicalize
+ *   the path before Next.js sees it, that `:` is sometimes pre-decoded
+ *   from `%3A` (or vice-versa) and the dynamic segment then doesn't match
+ *   the row in the DB. The list page renders "Completed" but clicking
+ *   "View →" lands on a 500. Routing by the row's UUID — URL-safe in every
+ *   layer — sidesteps the whole class of issues.
+ */
+export async function getTranscriptById(
+  businessId: string,
+  id: string,
+  client?: SupabaseClient
+): Promise<VoiceCallTranscriptRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("voice_call_transcripts")
+    .select("*")
+    .eq("business_id", businessId)
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw new Error(`getTranscriptById: ${error.message}`);
+  return (data as VoiceCallTranscriptRow | null) ?? null;
+}
+
 export async function listTurns(
   transcriptId: string,
   client?: SupabaseClient
