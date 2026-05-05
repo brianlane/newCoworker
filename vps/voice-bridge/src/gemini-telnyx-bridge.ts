@@ -2,6 +2,7 @@ import WebSocket from "ws";
 import { GoogleGenAI, Modality, Type, type LiveServerMessage, type Session } from "@google/genai";
 import { parsePcmRateFromMime, resamplePCM16Mono } from "./audio-resample.js";
 import { telnyxMediaMessageFromPcmBase64, tryParseTelnyxMediaPayloadBase64 } from "./telnyx-media-json.js";
+import { decodeTelnyxMediaPayload, RtpEncoder } from "./rtp-frame.js";
 import { composeVaultPromptSection, type VaultSnapshot } from "./vault-loader.js";
 import {
   createTranscriptRecorder,
@@ -155,7 +156,12 @@ type DownlinkTelemetry = {
   lastDropWarnAtMs: number;
 };
 
-function sendPcmToTelnyx(ws: WebSocket, pcm16le: Int16Array, telemetry: DownlinkTelemetry): void {
+function sendPcmToTelnyx(
+  ws: WebSocket,
+  pcm16le: Int16Array,
+  telemetry: DownlinkTelemetry,
+  rtp: RtpEncoder
+): void {
   if (ws.readyState !== WebSocket.OPEN) return;
   // Backpressure guard: drop frames once the socket's buffered-but-unsent bytes exceed
   // the high watermark. Without this, a slow or stalled Telnyx socket lets every Gemini
@@ -174,8 +180,10 @@ function sendPcmToTelnyx(ws: WebSocket, pcm16le: Int16Array, telemetry: Downlink
     }
     return;
   }
-  const buf = Buffer.from(pcm16le.buffer, pcm16le.byteOffset, pcm16le.byteLength);
-  ws.send(telnyxMediaMessageFromPcmBase64(buf.toString("base64")));
+  // RTP-frame the PCM (Telnyx is in `stream_bidirectional_mode: "rtp"`,
+  // which expects RTP-wrapped payloads — bare PCM is silently discarded).
+  const rtpPacket = rtp.encode(pcm16le);
+  ws.send(telnyxMediaMessageFromPcmBase64(rtpPacket.toString("base64")));
 }
 
 // ---------------------------------------------------------------------------
@@ -406,6 +414,35 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     droppedFrames: 0,
     lastDropWarnAtMs: 0
   };
+  // Per-call RTP encoder for Gemini → Telnyx audio (bidirectional_mode=rtp).
+  // PT is adopted from the first uplink frame so the synthetic stream's
+  // RTP type matches what Telnyx negotiated.
+  const rtpEncoder = new RtpEncoder();
+  // Diagnostic counters (logged at first occurrence and on teardown). The
+  // counters are kept inexpensive — incrementing booleans/integers — but
+  // are critical for diagnosing "ring then silence" in production where
+  // the only other tells are Telnyx delivery records and a bridge log
+  // that's quiet because the happy path never warns.
+  const diag = {
+    firstUplinkLogged: false,
+    firstDownlinkLogged: false,
+    setupCompleteLogged: false,
+    greetingTriggered: false,
+    uplinkFrames: 0,
+    uplinkBytesPostHeader: 0,
+    downlinkFrames: 0,
+    downlinkBytesPostHeader: 0,
+    // Tracks peak |sample| seen since the last heartbeat. Pure silence
+    // stays <100; real speech routinely peaks >5000. Reset every heartbeat
+    // tick so the next window reports its own peak rather than the running
+    // max for the whole call.
+    uplinkPeakSampleWindow: 0,
+    // Snapshot of frame totals at the previous heartbeat so we can suppress
+    // heartbeat logs when nothing has changed (idle WS / call already ended
+    // but `ended=false` not yet propagated).
+    lastHeartbeatUplinkFrames: 0,
+    lastHeartbeatDownlinkFrames: 0
+  };
 
   const voiceToolsReady =
     Boolean(opts.voiceTools?.appBaseUrl) && Boolean(opts.voiceTools?.gatewayToken);
@@ -427,13 +464,29 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   let session!: Session;
 
   const teardown = async () => {
-    // Gemini-side teardown is one-shot (sendRealtimeInput / session.close would
-    // fail on a dead session) but the transcript recorder must ALWAYS run its
-    // finalize, even if `onclose` already set `ended=true`. Otherwise an
-    // upstream Live-session close (session expiry, quota, network drop) fires
-    // `onclose` first, and the later `geminiTeardown` from ws.on("close")
-    // short-circuits — leaving the transcript row stuck at status='in_progress'
-    // with a NULL `ended_at`.
+    // Two-part teardown:
+    //   (1) Always log the session totals. Previously this was gated on
+    //       `!ended`, which silently swallowed the totals when Gemini hung
+    //       up before the Telnyx WS closed — the exact signal we needed to
+    //       diagnose the May 2026 "ring then silence" outage.
+    //   (2) The transcript recorder must run `finalize` even when `ended`
+    //       is already true. An upstream Live-session close (session
+    //       expiry, quota, network drop) fires `onclose` first; without
+    //       running finalize here, the transcript row stays stuck at
+    //       status='in_progress' with a NULL `ended_at`.
+    // Note: `session.close()` itself is one-shot — calling it twice on a
+    // dead session throws — so we still gate the network-side teardown on
+    // `!ended`.
+    console.log("gemini-bridge: teardown summary", {
+      callControlId: opts.callControlId,
+      endedFlagPriorToTeardown: ended,
+      setupComplete: diag.setupCompleteLogged,
+      greetingTriggered: diag.greetingTriggered,
+      uplinkFrames: diag.uplinkFrames,
+      uplinkBytesPostHeader: diag.uplinkBytesPostHeader,
+      downlinkFrames: diag.downlinkFrames,
+      downlinkBytesPostHeader: diag.downlinkBytesPostHeader
+    });
     if (!ended) {
       ended = true;
       clearTimers();
@@ -512,10 +565,32 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     callbacks: {
       onmessage: (message: LiveServerMessage) => {
         if (ended || opts.ws.readyState !== WebSocket.OPEN) return;
+        if (!diag.setupCompleteLogged && message.setupComplete) {
+          diag.setupCompleteLogged = true;
+          console.log("gemini-bridge: setupComplete", { callControlId: opts.callControlId });
+          // Gemini Live waits for the user to speak by default. On a phone
+          // call the caller expects the assistant to greet first — without
+          // this nudge they hear silence after ringback (no audio activity
+          // means VAD never marks a turn complete and the model stays mute).
+          // Sending a coordinator-style prompt with `turnComplete: true`
+          // makes Gemini emit its first audio chunk immediately.
+          if (!diag.greetingTriggered) {
+            diag.greetingTriggered = true;
+            try {
+              session.sendClientContent({
+                turns: `[Coordinator — speak aloud now] The caller has just connected. Greet them warmly in one short sentence (e.g. "Hi, thanks for calling ${opts.businessName} — how can I help?") and wait for their reply.`,
+                turnComplete: true
+              });
+              console.log("gemini-bridge: greeting prompt sent", {
+                callControlId: opts.callControlId
+              });
+            } catch (err) {
+              console.error("gemini-bridge: greeting prompt failed", err);
+            }
+          }
+        }
         handleModelToolCalls(message);
         if (transcriptRecorder) {
-          // Fire-and-forget: ingest is async but callbacks can't await.
-          // Errors are swallowed inside the recorder.
           void transcriptRecorder.ingest(message);
         }
         for (const chunk of extractModelAudioParts(message)) {
@@ -525,19 +600,49 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             const inSamples = new Int16Array(raw.buffer, raw.byteOffset, raw.length / 2);
             const inRate = parsePcmRateFromMime(chunk.mimeType, GEMINI_OUTPUT_DEFAULT_RATE);
             const outSamples = resamplePCM16Mono(inSamples, inRate, TELNYX_PCM_RATE);
-            sendPcmToTelnyx(opts.ws, outSamples, downlinkTelemetry);
+            if (!diag.firstDownlinkLogged) {
+              diag.firstDownlinkLogged = true;
+              console.log("gemini-bridge: first downlink chunk", {
+                callControlId: opts.callControlId,
+                mimeType: chunk.mimeType,
+                inRate,
+                inSamples: inSamples.length,
+                outSamples: outSamples.length
+              });
+            }
+            diag.downlinkFrames += 1;
+            diag.downlinkBytesPostHeader += outSamples.byteLength;
+            sendPcmToTelnyx(opts.ws, outSamples, downlinkTelemetry, rtpEncoder);
           } catch (e) {
             console.error("gemini-bridge: downlink chunk", e);
           }
         }
       },
       onerror: (e: ErrorEvent) => {
-        console.error("gemini-bridge: Live API error", e.message ?? String(e));
+        console.error("gemini-bridge: Live API error", {
+          callControlId: opts.callControlId,
+          message: e.message ?? String(e),
+          uplinkFrames: diag.uplinkFrames,
+          downlinkFrames: diag.downlinkFrames
+        });
         if (transcriptRecorder) {
           void transcriptRecorder.finalize({ errored: true });
         }
       },
-      onclose: () => {
+      onclose: (e?: CloseEvent) => {
+        // Always log; previously this was silent and masked upstream session
+        // drops (quota / model rejects / config error) as "silence after
+        // ringback" because the bridge looked healthy from the Telnyx side.
+        console.log("gemini-bridge: Live API onclose", {
+          callControlId: opts.callControlId,
+          code: e?.code,
+          reason: e?.reason,
+          wasClean: e?.wasClean,
+          setupComplete: diag.setupCompleteLogged,
+          greetingTriggered: diag.greetingTriggered,
+          uplinkFrames: diag.uplinkFrames,
+          downlinkFrames: diag.downlinkFrames
+        });
         ended = true;
         clearTimers();
         // Kick the recorder finalize as soon as the Live session closes.
@@ -635,6 +740,33 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   const warnAt = Math.max(0, sessionMaxMs - warnBeforeMs);
   const nudgeAt = Math.max(0, sessionMaxMs - finalNudgeBeforeMs);
 
+  // Diagnostic heartbeat so production logs show the audio pipeline is still
+  // alive throughout the call (or, more usefully, when it stalls). Fires
+  // every 15s and is suppressed when no frames moved since the last tick,
+  // so a healthy call produces ≤1 heartbeat per 15s and an idle/closing
+  // session produces zero. Cleared with the rest of the timers in
+  // `clearTimers()`.
+  const heartbeat = setInterval(() => {
+    if (ended) return;
+    const uplinkDelta = diag.uplinkFrames - diag.lastHeartbeatUplinkFrames;
+    const downlinkDelta = diag.downlinkFrames - diag.lastHeartbeatDownlinkFrames;
+    if (uplinkDelta === 0 && downlinkDelta === 0) return;
+    console.log("gemini-bridge: heartbeat", {
+      callControlId: opts.callControlId,
+      setupComplete: diag.setupCompleteLogged,
+      greetingTriggered: diag.greetingTriggered,
+      uplinkFrames: diag.uplinkFrames,
+      uplinkBytes: diag.uplinkBytesPostHeader,
+      uplinkPeakSinceLast: diag.uplinkPeakSampleWindow,
+      downlinkFrames: diag.downlinkFrames,
+      downlinkBytes: diag.downlinkBytesPostHeader
+    });
+    diag.lastHeartbeatUplinkFrames = diag.uplinkFrames;
+    diag.lastHeartbeatDownlinkFrames = diag.downlinkFrames;
+    diag.uplinkPeakSampleWindow = 0;
+  }, 15000);
+  timers.push(heartbeat as unknown as NodeJS.Timeout);
+
   timers.push(
     setTimeout(() => {
       if (ended) return;
@@ -674,13 +806,86 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     }, sessionMaxMs)
   );
 
+  // Track which non-media event names we've already logged so that
+  // start/stop/error/mark frames each surface exactly once per call. Without
+  // this guard a chatty client (DTMF + marks + keepalives) could spam the
+  // log; without the log entirely, May-2026-style "ring then silence" is
+  // hard to distinguish from a normal call where Telnyx sends only marks.
+  const seenNonMediaEvents = new Set<string>();
   const onTelnyxMessage = (rawUtf8: string) => {
     if (ended) return;
+    if (!rawUtf8.includes('"event":"media"')) {
+      const head = rawUtf8.slice(0, 240);
+      const eventMatch = /"event"\s*:\s*"([^"]+)"/.exec(head);
+      const eventName = eventMatch?.[1] ?? "unknown";
+      if (!seenNonMediaEvents.has(eventName)) {
+        seenNonMediaEvents.add(eventName);
+        console.log("gemini-bridge: telnyx ws non-media", {
+          callControlId: opts.callControlId,
+          event: eventName,
+          head
+        });
+      }
+      return;
+    }
     const b64 = tryParseTelnyxMediaPayloadBase64(rawUtf8);
     if (!b64) return;
     try {
+      // Telnyx delivers an RTP packet (12-byte header + L16 payload) base64'd
+      // when `stream_bidirectional_mode` is "rtp". Strip the header so Gemini
+      // sees clean PCM, and mirror the observed payload type onto our
+      // downlink encoder so Telnyx accepts our synthetic frames.
+      const decoded = decodeTelnyxMediaPayload(b64);
+      if (decoded.payload.length === 0) return;
+      rtpEncoder.adoptPayloadType(decoded.payloadType);
+      // One-shot first-frame log so we can confirm Telnyx is delivering
+      // the negotiated codec/cadence (640 bytes = 20 ms of L16 16 kHz; the
+      // header hex starts with `0xff`/`0x80` for RTP, anything else means
+      // raw L16 — both are decoded correctly by `decodeTelnyxMediaPayload`).
+      if (!diag.firstUplinkLogged) {
+        diag.firstUplinkLogged = true;
+        const rawBytes = Buffer.from(b64, "base64");
+        console.log("gemini-bridge: first uplink frame", {
+          callControlId: opts.callControlId,
+          rawBytes: rawBytes.length,
+          rawHeaderHex: rawBytes.subarray(0, 16).toString("hex"),
+          payloadBytes: decoded.payload.length,
+          rtpPayloadType: decoded.payloadType
+        });
+      }
+      diag.uplinkFrames += 1;
+      diag.uplinkBytesPostHeader += decoded.payload.length;
+      // Track peak amplitude across this heartbeat window. Pure silence
+      // stays <100; speech routinely peaks >5000. Reported by the heartbeat
+      // tick and reset there.
+      if (decoded.payload.length >= 2 && decoded.payload.length % 2 === 0) {
+        const samples = new Int16Array(
+          decoded.payload.buffer,
+          decoded.payload.byteOffset,
+          decoded.payload.length / 2
+        );
+        let peak = 0;
+        for (let i = 0; i < samples.length; i++) {
+          const a = Math.abs(samples[i]!);
+          if (a > peak) peak = a;
+        }
+        if (peak > diag.uplinkPeakSampleWindow) diag.uplinkPeakSampleWindow = peak;
+      }
+      // Use the modern `audio:` field. Passing `media:` makes the SDK
+      // serialize the chunk as `realtime_input.media_chunks`, which the
+      // Gemini Live API now closes the WS on with code 1007:
+      //   "realtime_input.media_chunks is deprecated.
+      //    Use audio, video, or text instead."
+      // That's exactly what manifested as "ring then silence" on calls —
+      // Gemini accepted ~10 inbound frames, hit the deprecation guard, and
+      // hung up before generating any response audio. The SDK's
+      // liveSendRealtimeInputParametersToMldev converter routes `audio:`
+      // straight to the new server field via `tAudioBlob`.
       session.sendRealtimeInput({
-        media: { mimeType: `audio/pcm;rate=${TELNYX_PCM_RATE}`, data: b64 }
+        audio: {
+          mimeType: `audio/pcm;rate=${TELNYX_PCM_RATE}`,
+          data: decoded.payload.toString("base64")
+        }
       });
     } catch (e) {
       console.error("gemini-bridge: uplink", e);

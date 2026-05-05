@@ -494,7 +494,22 @@ function main(): void {
           .eq("call_control_id", callControlId);
       });
 
-      ws.on("close", () => {
+      ws.on("error", (err: Error) => {
+        // Telnyx-side WS errors were previously swallowed by the default
+        // event handler — surface them so we can correlate them with
+        // "ring then silence" reports.
+        console.error("voice-bridge: telnyx ws error", {
+          callControlId,
+          message: err.message
+        });
+      });
+
+      ws.on("close", (code: number, reason: Buffer) => {
+        console.log("voice-bridge: telnyx ws close", {
+          callControlId,
+          code,
+          reason: reason?.toString?.("utf8") ?? ""
+        });
         clearInterval(hb);
         void geminiTeardown?.();
         const endedAt = new Date().toISOString();
