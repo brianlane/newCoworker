@@ -176,22 +176,31 @@ export async function listMessagesForCustomer(
 ): Promise<SmsMessage[]> {
   const db = client ?? (await createSupabaseServiceClient());
   const limit = clampLimit(options.limit);
-  // We can't filter by customer in SQL without a JSON path index, so over-
-  // fetch + filter in JS. Bounded by `limit` rows after expansion.
+  // We can't filter by customer in SQL without a JSON path index, so we
+  // over-fetch the MOST-RECENT rows for the business (`ascending: false`)
+  // and then post-filter in JS. Sorting ascending here would pull the
+  // OLDEST 200 rows once a business crosses the limit threshold, hiding
+  // every recent message from the thread. Bugbot caught this: see PR #69
+  // discussion_r3192089896. Mirror the conversation index helper which
+  // also uses `ascending: false` for the same reason.
   const { data, error } = await db
     .from("sms_inbound_jobs")
     .select(
       "id, business_id, payload, status, rowboat_reply_cached, telnyx_outbound_message_id, last_error, created_at, updated_at"
     )
     .eq("business_id", businessId)
-    .order("created_at", { ascending: true })
+    .order("created_at", { ascending: false })
     .limit(Math.min(limit * 4, MAX_LIST_LIMIT * 4));
   if (error) {
     throw new Error(`listMessagesForCustomer: ${error.message}`);
   }
   const rows = (data as SmsJobRow[] | null) ?? [];
+  // Reverse to chronological order BEFORE expansion so the inbound/
+  // outbound pairs land in the messages array in the correct order
+  // (inbound at index N, outbound at N+1).
+  const chronological = rows.slice().reverse();
   const messages: SmsMessage[] = [];
-  for (const row of rows) {
+  for (const row of chronological) {
     const cust = customerE164FromPayload(row.payload);
     if (cust !== customerE164) continue;
     const inboundText = inboundTextFromPayload(row.payload);
@@ -220,8 +229,9 @@ export async function listMessagesForCustomer(
       });
     }
   }
-  // Slice by limit AFTER expansion so we don't lose a reply paired with
-  // the row that hit the SQL limit.
+  // Keep the most recent `limit` expanded messages (slice from the END
+  // of the chronological array) so we never drop a reply paired with the
+  // row that hit the SQL limit.
   return messages.slice(-limit);
 }
 

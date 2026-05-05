@@ -349,24 +349,12 @@ describe("listConversationsForBusiness", () => {
 });
 
 describe("listMessagesForCustomer", () => {
-  it("expands each row into inbound + outbound messages, in order", async () => {
+  it("expands each row into inbound + outbound messages, in chronological order", async () => {
     const c = chain();
+    // Supabase returns DESC (newest first) per the query — the helper
+    // must reverse internally so the UI sees oldest→newest.
     c.limit.mockResolvedValue({
       data: [
-        {
-          id: "j1",
-          business_id: "biz",
-          payload: envelope({
-            from: { phone_number: "+15551111111" },
-            text: "hi"
-          }),
-          status: "done",
-          rowboat_reply_cached: "hello back",
-          telnyx_outbound_message_id: "out-1",
-          last_error: null,
-          created_at: "2026-05-05T00:00:00Z",
-          updated_at: "2026-05-05T00:00:01Z"
-        },
         {
           id: "j2",
           business_id: "biz",
@@ -380,6 +368,20 @@ describe("listMessagesForCustomer", () => {
           last_error: null,
           created_at: "2026-05-05T00:01:00Z",
           updated_at: "2026-05-05T00:01:01Z"
+        },
+        {
+          id: "j1",
+          business_id: "biz",
+          payload: envelope({
+            from: { phone_number: "+15551111111" },
+            text: "hi"
+          }),
+          status: "done",
+          rowboat_reply_cached: "hello back",
+          telnyx_outbound_message_id: "out-1",
+          last_error: null,
+          created_at: "2026-05-05T00:00:00Z",
+          updated_at: "2026-05-05T00:00:01Z"
         }
       ],
       error: null
@@ -397,6 +399,24 @@ describe("listMessagesForCustomer", () => {
       "inbound:anyone home?",
       "outbound:yes"
     ]);
+  });
+
+  it("queries with ascending=false so a business with >limit rows still surfaces RECENT messages (bugbot regression)", async () => {
+    const c = chain();
+    c.limit.mockResolvedValue({ data: [], error: null });
+    await listMessagesForCustomer(
+      "biz",
+      "+15551111111",
+      {},
+      makeDb(c) as never
+    );
+    // Order assertion: must request newest-first. If this flips back to
+    // ascending=true, every business with >200 SMS jobs starts showing
+    // empty threads for new customers.
+    expect(c.order).toHaveBeenCalledWith(
+      "created_at",
+      expect.objectContaining({ ascending: false })
+    );
   });
 
   it("filters out messages from other customers", async () => {
@@ -580,21 +600,26 @@ describe("listMessagesForCustomer", () => {
 
   it("respects the limit slice (keeps the most-recent expanded messages)", async () => {
     const c = chain();
+    // Supabase returns DESC (newest first) given our `ascending: false`
+    // query, so we feed mock data in that order. Helper reverses inside.
     c.limit.mockResolvedValue({
-      data: Array.from({ length: 6 }, (_, i) => ({
-        id: `j${i}`,
-        business_id: "biz",
-        payload: envelope({
-          from: { phone_number: "+15551111111" },
-          text: `t${i}`
-        }),
-        status: "done" as const,
-        rowboat_reply_cached: `r${i}`,
-        telnyx_outbound_message_id: null,
-        last_error: null,
-        created_at: `2026-05-05T00:0${i}:00Z`,
-        updated_at: `2026-05-05T00:0${i}:01Z`
-      })),
+      data: Array.from({ length: 6 }, (_, i) => {
+        const idx = 5 - i; // newest first → indices 5,4,3,2,1,0
+        return {
+          id: `j${idx}`,
+          business_id: "biz",
+          payload: envelope({
+            from: { phone_number: "+15551111111" },
+            text: `t${idx}`
+          }),
+          status: "done" as const,
+          rowboat_reply_cached: `r${idx}`,
+          telnyx_outbound_message_id: null,
+          last_error: null,
+          created_at: `2026-05-05T00:0${idx}:00Z`,
+          updated_at: `2026-05-05T00:0${idx}:01Z`
+        };
+      }),
       error: null
     });
     const result = await listMessagesForCustomer(
@@ -604,9 +629,8 @@ describe("listMessagesForCustomer", () => {
       makeDb(c) as never
     );
     expect(result).toHaveLength(3);
-    // Last 3 of the expanded sequence (each row → 2 messages).
-    // After expansion the 12-message list ends with t5,r5,t4,... no, in
-    // chronological order: t0,r0,t1,r1,...,t5,r5. Slice(-3) → r4,t5,r5.
+    // After expansion the 12-message chronological list ends with
+    // t0,r0,t1,r1,...,t5,r5. Slice(-3) → r4, t5, r5.
     expect(result.map((m) => m.content)).toEqual(["r4", "t5", "r5"]);
   });
 });
