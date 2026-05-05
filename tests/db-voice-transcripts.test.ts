@@ -176,6 +176,17 @@ describe("db/voice-transcripts — getTranscriptById", () => {
       getTranscriptById(BIZ, TRANSCRIPT.id, makeDb(c) as never)
     ).rejects.toThrow(/getTranscriptById: bad/);
   });
+
+  it("falls back to the default service client when none is supplied", async () => {
+    // Covers the `client ?? (await createSupabaseServiceClient())` short-circuit
+    // — without this branch, src/lib/db/voice-transcripts.ts stays at 95% line
+    // coverage and the global 100% threshold trips.
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    await getTranscriptById(BIZ, TRANSCRIPT.id);
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+  });
 });
 
 describe("db/voice-transcripts — listTurns", () => {
