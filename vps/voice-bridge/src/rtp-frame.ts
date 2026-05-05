@@ -64,13 +64,48 @@ export function decodeTelnyxMediaPayload(base64: string): RtpDecoded {
     // Not an RTP packet — fall back to treating the whole buffer as audio.
     return { payload: buf, payloadType: 11 };
   }
+  const padding = ((versionFlags >> 5) & 0x01) === 1;
+  const extensionFlag = ((versionFlags >> 4) & 0x01) === 1;
   const csrcCount = versionFlags & 0x0f;
-  const headerLen = RTP_HEADER_BYTES + csrcCount * 4;
-  if (buf.length <= headerLen) {
-    return { payload: Buffer.alloc(0), payloadType: 11 };
+  let headerLen = RTP_HEADER_BYTES + csrcCount * 4;
+
+  // RFC 3550 §5.3.1: when X=1 a variable-length extension header sits
+  // between the CSRC list and the payload:
+  //   16 bits "defined by profile"  +  16 bits length-in-32-bit-words
+  //   + length*4 bytes of extension data.
+  // Telnyx's bidi RTP doesn't currently set X, but if a future profile
+  // (or an upstream codec negotiation) ever does, the prior implementation
+  // would splice the extension bytes into the audio stream and ship
+  // garbled L16 to Gemini Live. Costs us 4 bytes of bounds-check on every
+  // packet — well worth the future-proofing.
+  if (extensionFlag) {
+    const extHeaderStart = headerLen;
+    if (buf.length < extHeaderStart + 4) {
+      return { payload: Buffer.alloc(0), payloadType: (buf[1] ?? 0) & 0x7f };
+    }
+    const extWords = buf.readUInt16BE(extHeaderStart + 2);
+    headerLen = extHeaderStart + 4 + extWords * 4;
   }
+
+  if (buf.length <= headerLen) {
+    return { payload: Buffer.alloc(0), payloadType: (buf[1] ?? 0) & 0x7f };
+  }
+
   const payloadType = (buf[1] ?? 0) & 0x7f;
-  const payload = buf.subarray(headerLen);
+  let payload = buf.subarray(headerLen);
+
+  // RFC 3550 §5.1: when P=1, the last byte of the packet contains the
+  // count of trailing padding bytes (including the count byte itself) and
+  // the padding must NOT be passed to the decoder. Same future-proofing
+  // motivation as the X-bit branch above; Telnyx doesn't pad today but
+  // RTP relays in the chain might.
+  if (padding && payload.length > 0) {
+    const padBytes = payload[payload.length - 1] ?? 0;
+    if (padBytes > 0 && padBytes <= payload.length) {
+      payload = payload.subarray(0, payload.length - padBytes);
+    }
+  }
+
   return { payload, payloadType };
 }
 
