@@ -924,8 +924,7 @@ function QuestionnaireForm() {
                   noMatchesLabel="No CRMs match that search."
                 />
                 {deriveCrmSelection(form.crmUsed).selection === CRM_OTHER_VALUE && (
-                  <>
-                  <br/>
+                  <div className="mt-4"> 
                   <Input
                     label="Which CRM?"
                     value={deriveCrmSelection(form.crmUsed).otherText}
@@ -935,7 +934,7 @@ function QuestionnaireForm() {
                     placeholder="e.g. Wise Agent, LionDesk"
                     required
                   />
-                  </>  
+                  </div>
                 )}
               </div>
               <Input
