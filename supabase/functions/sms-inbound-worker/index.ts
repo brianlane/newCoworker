@@ -398,10 +398,17 @@ serve(async (req: Request) => {
 
         convId = (stableConvId || parsed.conversationId || existingConv || "").trim() || undefined;
 
+        // Denormalize the normalized customer E.164 onto the job row
+        // so the customers page (Phase 4) + nightly cross-channel
+        // summarizer (Phase 2 batch) can query per-customer SMS
+        // history without scanning the JSONB payload. Bundled into
+        // the same UPDATE as rowboat_reply_cached to avoid an extra
+        // round-trip per job.
         const { error: cacheErr } = await supabase
           .from("sms_inbound_jobs")
           .update({
             rowboat_reply_cached: reply,
+            customer_e164: fromE164,
             updated_at: new Date().toISOString()
           })
           .eq("id", job.id);
