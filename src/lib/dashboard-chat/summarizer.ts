@@ -1,19 +1,35 @@
 /**
  * Rolling per-thread conversation summarizer.
  *
- * `HISTORY_TURNS = 20` in the chat route caps how many raw turns we
- * replay as context. Once a thread accrues more than 20 messages, the
- * model stops seeing the older content unless we hand it a compressed
- * digest. This module produces that digest by calling the local model
- * (via the same Rowboat agent that handles user chat) with a tightly-
- * scoped summarizer prompt, then persisting the result on the thread
- * row. The chat route reads it back on the next turn and prepends it
- * as a system message before the recent-turn tail:
+ * `HISTORY_TURNS = 20` in the chat route caps how much recent local
+ * context we have available. Once a thread accrues more than 20
+ * messages, anything older drops out of the live tail unless we hand
+ * the model a compressed digest. This module produces that digest by
+ * calling the local model (via the same Rowboat agent that handles
+ * user chat) with a tightly-scoped summarizer prompt, then persisting
+ * the result on the thread row.
  *
- *   <vault instructions>      ← static (synced via syncVaultToVps)
- *   <conversation summary>    ← rolling, this module
- *   <last 20 raw turns>       ← live tail (HISTORY_TURNS)
+ * On every chat turn the route prepends summary_md as a system
+ * message. The shape sent to Rowboat is:
+ *
+ *   <vault instructions>                ← static (syncVaultToVps)
+ *   <rolling conversation summary>      ← this module, when set
+ *   <recent-tail transcript system msg> ← only on fresh threads /
+ *                                          stateless retries; omitted
+ *                                          when Rowboat already has
+ *                                          server-side memory via
+ *                                          conversationId/state
  *   <new user message>
+ *
+ * Why we don't send the raw tail as `{ role: "assistant", … }` rows:
+ * Rowboat's HTTP /chat validator rejects plain assistant messages on
+ * input (it expects agent/tool-shaped rows). See
+ * src/app/api/dashboard/chat/route.ts → buildRowboatChatMessages and
+ * tests/integration/kvm-rowboat/rowboat-chat.ts:215 for the canonical
+ * contract. For the live-context path we therefore lean on Rowboat's
+ * server-side conversation memory; only when that memory is gone (or
+ * has never existed) do we render the local tail as a single
+ * transcript-shaped system message.
  *
  * Trigger gate (caller-side, fire-and-forget):
  *   total_messages - thread.summary_message_count >= SUMMARY_INTERVAL
