@@ -45,55 +45,51 @@ import { logger } from "@/lib/logger";
 export const dynamic = "force-dynamic";
 
 // The per-tenant Ollama inside Rowboat is fast on warm prompts (~5s)
-// but routinely takes >20s for the first reply when the model has to
-// page in (documented in supabase/functions/sms-inbound-worker/index.ts
-// next to its own 60s ROWBOAT_CHAT_TIMEOUT_MS). Vercel's default
-// function timeout is 30s on Pro, which is *equal* to the Rowboat
-// fetch timeout below — without `maxDuration` the function gets reaped
-// at exactly the same moment our own AbortController fires, so the
-// catch-block that returns the friendly "took too long" envelope
-// never runs and the client sees a generic 502 / "Unexpected server
-// response". maxDuration > DASHBOARD_CHAT_ROWBOAT_BUDGET_MS gives the
-// route headroom to log, return a JSON envelope, and let the summarizer
-// fire-and-forget cleanly.
+// but routinely takes >20s — and on small VPS tiers occasionally
+// >60s — for the first reply when the model has to page in. Stacked
+// with a slow Supabase day (we've observed individual REST calls drift
+// to ~3.7s), the original 60s `maxDuration` left only ~50s for Rowboat
+// once the rest of the request paid its bill. The function then hit
+// the 50s Rowboat cap AND the 60s function cap effectively
+// simultaneously, racing whichever fired first to write the response.
 //
-// Sized so the worst-case negative path stays well under the function
-// budget. NB: DASHBOARD_CHAT_ROWBOAT_BUDGET_MS is the *combined*
-// budget across the initial call AND the optional stateless retry —
-// callRowboatWithStatelessFallback caps the retry's per-call timeout
-// at (budget - elapsed) and skips the retry outright when too little
-// time remains, so a slow first failure can't grant the retry a
-// fresh full window:
-//
-//   pre-flight (auth, rate limit, flag/config reads, thread + history) ~ 1.5s
-//   Rowboat /chat (initial + optional retry, COMBINED hard cap)         50.0s
-//   error mapping + JSON serialization                                  ~ 0.2s
-//   ────────────────────────────────────────────────────────────────────────
-//   total                                                             ~ 51.7s   ( < maxDuration of 60s )
-export const maxDuration = 60;
+// Owner-stated requirement: "let the local model take as long as it
+// needs to." So we lift `maxDuration` to Vercel Pro's hard ceiling
+// (300s) and treat the route as having a single deadline budget — see
+// DASHBOARD_CHAT_ROUTE_DEADLINE_MS — that's anchored at POST entry
+// (NOT at the Rowboat call) so a slow Supabase preflight doesn't
+// secretly grant Rowboat a budget bigger than what's actually left in
+// the function (Codex P2 / Cursor Bugbot Medium on PR #72). The
+// Rowboat budget passed to callRowboatWithStatelessFallback is
+// computed as (deadline − elapsedPreflight − POST_ROWBOAT_RESERVE_MS)
+// at the call site, so the friendly "took too long" envelope reliably
+// wins over Vercel's reaper regardless of where in the route the
+// slowness lives.
+export const maxDuration = 300;
 
 const MAX_MESSAGE_CHARS = 4000;
 const HISTORY_TURNS = 20;
 
-// Combined wall-clock budget for Rowboat /chat across the initial
-// continuation-using call AND the optional stateless retry.
+// Hard ceiling on total wall time the route is allowed to spend before
+// we should give up and return — sized 10s under `maxDuration` so we
+// still have runway to write the response after we hit this budget.
 //
-// Why a combined (not per-call) budget: passing the full value to both
-// attempts would let a slow first failure (e.g. a 502 from Cloudflare
-// at ~30s) plus a fresh 50s retry exceed `maxDuration` and re-trigger
-// the Vercel-reaper race this route is sized to avoid (Codex P2 /
-// Cursor Bugbot Medium on PR #71). The retry helper subtracts the
-// already-elapsed wall time and aborts the retry early — or skips it
-// entirely below RETRY_MIN_BUDGET_MS — so the *sum* of both timeouts
-// stays bounded.
-//
-// Why 50s and not 30s: the previous 30s value matched Vercel's default
-// function timeout exactly, so when the model went cold the function
-// got killed before the AbortController-triggered "rowboat_timeout"
-// path could write its 502 response. 50s gives the local model the
-// same headroom it has on the SMS path while keeping us well inside
-// the function's 60s maxDuration window.
-const DASHBOARD_CHAT_ROWBOAT_BUDGET_MS = 50_000;
+// Anchored at POST entry rather than at the Rowboat call (Codex P2 /
+// Cursor Bugbot Medium on PR #72 flagged that the prior version's
+// fixed-budget-passed-to-Rowboat allowed: preflight 30s + Rowboat 50s
+// + post-Rowboat work = ~85s, well over the 60s maxDuration that
+// version used. With a single route-wide deadline, slow preflight
+// just shrinks the Rowboat budget, never overflows it.)
+const DASHBOARD_CHAT_ROUTE_DEADLINE_MS = 290_000;
+
+// Reserved wall time after the Rowboat call returns for: appendMessage
+// ×2 (user + assistant), updateThreadConversation, touchChatActivity,
+// the JSON-envelope serialization, and the fire-and-forget summarizer
+// trigger. Subtracted from the route deadline before we hand a budget
+// to Rowboat so a reply landing right at the cap can't push the route
+// past `maxDuration`. 10s comfortably covers the ~2-3s typically
+// observed in production with headroom for slow Supabase days.
+const POST_ROWBOAT_RESERVE_MS = 10_000;
 
 // Floor on the post-first-call remaining budget below which we skip
 // the stateless retry entirely. Sized so the retry has a realistic
@@ -379,6 +375,14 @@ function buildRowboatChatMessages(args: {
 }
 
 export async function POST(request: Request) {
+  // Anchored at the very top of the route so the Rowboat budget below
+  // is computed against actual elapsed wall time, not against the
+  // moment we got around to making the Rowboat call. Otherwise a slow
+  // preflight (auth ping + flag/config reads + thread + history — we've
+  // observed those 5 round-trips drift to ~10s on a bad Supabase day)
+  // silently grants Rowboat a fixed budget that doesn't fit inside
+  // what's actually left of `maxDuration`.
+  const routeStartedAt = Date.now();
   try {
     const user = await getAuthUser();
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
@@ -503,6 +507,35 @@ export async function POST(request: Request) {
         })
       : initialMessages;
 
+    // Compute the Rowboat budget at the call site against actual
+    // elapsed wall time. The route's hard deadline is fixed, so a slow
+    // preflight (auth + flags + config + thread + history) shrinks the
+    // Rowboat window, not the function ceiling. POST_ROWBOAT_RESERVE_MS
+    // is held back from the budget for everything that runs AFTER the
+    // call returns (appendMessage ×2, updateThreadConversation,
+    // touchChatActivity, JSON serialization, summarizer trigger) so a
+    // reply landing right at the budget can't push the route past
+    // `maxDuration`. If preflight ate so much of the deadline that
+    // even Ollama's cold-start floor wouldn't fit, surface a friendly
+    // envelope rather than racing Rowboat against the function reaper.
+    const elapsedPreflightMs = Date.now() - routeStartedAt;
+    const rowboatBudgetMs =
+      DASHBOARD_CHAT_ROUTE_DEADLINE_MS - elapsedPreflightMs - POST_ROWBOAT_RESERVE_MS;
+    if (rowboatBudgetMs < RETRY_MIN_BUDGET_MS) {
+      logger.warn("dashboard chat preflight exhausted route budget", {
+        businessId: body.businessId,
+        threadId: thread.id,
+        elapsedPreflightMs,
+        rowboatBudgetMs,
+        deadlineMs: DASHBOARD_CHAT_ROUTE_DEADLINE_MS
+      });
+      return errorResponse(
+        "CONFLICT",
+        "Your coworker is taking longer than usual to start up. Please try again.",
+        502
+      );
+    }
+
     let reply: string;
     let conversationId: string | undefined;
     let state: unknown | undefined;
@@ -517,7 +550,7 @@ export async function POST(request: Request) {
         conversationId: thread.rowboat_conversation_id,
         state: thread.rowboat_state,
         threadId: thread.id,
-        budgetMs: DASHBOARD_CHAT_ROWBOAT_BUDGET_MS
+        budgetMs: rowboatBudgetMs
       });
       reply = parsed.reply;
       conversationId = parsed.conversationId;

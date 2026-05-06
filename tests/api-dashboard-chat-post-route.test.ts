@@ -350,27 +350,76 @@ describe("POST /api/dashboard/chat — Rowboat call budget", () => {
     const callArgs = vi.mocked(callRowboatChat).mock.calls[0][0];
     expect(typeof callArgs.timeoutMs).toBe("number");
     expect(callArgs.timeoutMs).toBeGreaterThan(0);
-    // `maxDuration` is 60s; budget must leave the route enough wall
-    // time after the abort fires to serialize a JSON envelope.
-    expect(callArgs.timeoutMs).toBeLessThan(60_000);
+    // `maxDuration` is 300s (Vercel Pro hard cap); budget must leave
+    // the route enough wall time after the abort fires to serialize
+    // a JSON envelope and fire-and-forget the summarizer.
+    expect(callArgs.timeoutMs).toBeLessThan(300_000);
+  });
+
+  // The route's Rowboat budget is anchored at POST entry, NOT at the
+  // Rowboat call. Otherwise a slow Supabase preflight (~30s observed
+  // in production on bad days) silently grants Rowboat a fixed budget
+  // bigger than what's actually left of `maxDuration`, re-triggering
+  // the same Vercel-reaper race this PR is sized to prevent
+  // (Codex P2 / Cursor Bugbot Medium on PR #72 → fixed in this PR).
+
+  it("anchors the Rowboat budget at POST entry — slow preflight shrinks the Rowboat budget instead of overflowing maxDuration", async () => {
+    // Mock Date.now() so the route sees ~40s elapse between POST entry
+    // and the moment we compute the Rowboat budget. The handler reads
+    // Date.now() twice in the budget path: once at top-of-POST, once
+    // before the call. We then need additional reads for the helper
+    // and any nested code, so make the spy fall through to the real
+    // implementation after the controlled reads.
+    const dateNowSpy = vi.spyOn(Date, "now");
+    dateNowSpy
+      .mockReturnValueOnce(1_000_000) // POST entry
+      .mockReturnValueOnce(1_040_000); // computing budget — 40s in
+    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    const callArgs = vi.mocked(callRowboatChat).mock.calls[0][0];
+    // Route deadline 290s − preflight 40s − post-Rowboat reserve 10s
+    // = 240_000ms remaining for Rowboat. Pinned exactly so a future
+    // change to either constant breaks this test loudly.
+    expect(callArgs.timeoutMs).toBe(240_000);
+    dateNowSpy.mockRestore();
+  });
+
+  it("returns a friendly 502 envelope when preflight has already exhausted the route budget — never races Rowboat against the function reaper", async () => {
+    // Simulate preflight taking 285s (e.g. piled-up Supabase calls all
+    // hitting tail latency at once). Remaining budget after the 10s
+    // post-Rowboat reserve = 290 − 285 − 10 = -5s, well under
+    // RETRY_MIN_BUDGET_MS. The route MUST short-circuit here: a real
+    // Rowboat call with a negative or trivially-small timeoutMs would
+    // either trip an immediate AbortError or sit there until the
+    // function reaper kills it, never reaching our friendly envelope.
+    const dateNowSpy = vi.spyOn(Date, "now");
+    dateNowSpy
+      .mockReturnValueOnce(1_000_000) // POST entry
+      .mockReturnValueOnce(1_285_000); // computing budget — 285s in
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(res.status).toBe(502);
+    expect(vi.mocked(callRowboatChat)).not.toHaveBeenCalled();
+    expect(updateThreadConversation).not.toHaveBeenCalled();
+    expect(appendMessage).not.toHaveBeenCalled();
+    dateNowSpy.mockRestore();
   });
 
   // The retry budget is the COMBINED ceiling minus whatever the first
   // call burned, NOT a fresh full window. Without this, a slow first
-  // failure (e.g. a Cloudflare-edge 502 returned ~25s into the call)
-  // plus a fresh 50s retry would push total Rowboat wall time to ~75s,
-  // outliving the 60s `maxDuration` and re-triggering the same
-  // Vercel-reaper race the per-route timeout was sized to avoid
-  // (Codex P2 / Cursor Bugbot Medium on PR #71).
+  // failure (e.g. a Cloudflare-edge 502 returned partway through)
+  // plus a fresh full-budget retry would push total Rowboat wall time
+  // past `maxDuration` (Codex P2 / Cursor Bugbot Medium on PR #71).
 
   it("retry's timeoutMs is bounded by remaining budget after the first call's elapsed time", async () => {
-    // Mock Date.now() to simulate the first call eating ~20s of the
-    // budget before failing. The helper reads it twice: once at entry,
-    // once after the first call's catch.
+    // Two-stage spy: the first two reads control preflight elapsed
+    // (=0) → initial budget = 280s. Subsequent reads inside
+    // callRowboatWithStatelessFallback simulate the first call eating
+    // 120s before failing, leaving 160s for the retry.
     const dateNowSpy = vi.spyOn(Date, "now");
     dateNowSpy
-      .mockReturnValueOnce(1_000_000) // t0 — entry into the helper
-      .mockReturnValueOnce(1_020_000); // t1 — after first call rejects (20s later)
+      .mockReturnValueOnce(1_000_000) // POST entry
+      .mockReturnValueOnce(1_000_000) // budget computation — preflight 0ms
+      .mockReturnValueOnce(2_000_000) // helper entry (startedAt)
+      .mockReturnValueOnce(2_120_000); // after first failure (120s elapsed within helper)
     vi.mocked(callRowboatChat)
       .mockRejectedValueOnce(new Error("rowboat_http_500"))
       .mockResolvedValueOnce({
@@ -382,29 +431,27 @@ describe("POST /api/dashboard/chat — Rowboat call budget", () => {
     await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
     const firstCall = vi.mocked(callRowboatChat).mock.calls[0][0];
     const retryCall = vi.mocked(callRowboatChat).mock.calls[1][0];
-    expect(firstCall.timeoutMs).toBe(50_000);
-    // 50_000 (budget) - 20_000 (elapsed) = 30_000 remaining.
-    expect(retryCall.timeoutMs).toBe(30_000);
+    // Initial budget = deadline 290s − preflight 0s − reserve 10s = 280s.
+    expect(firstCall.timeoutMs).toBe(280_000);
+    // Retry: 280s budget − 120s elapsed within helper = 160s remaining.
+    expect(retryCall.timeoutMs).toBe(160_000);
     dateNowSpy.mockRestore();
   });
 
   it("skips the stateless retry entirely when remaining budget falls below the cold-start floor — surfaces the FIRST error instead of paying for a doomed retry", async () => {
-    // First call eats 49s of the 50s budget — only 1s remains, well
-    // below the 5s `RETRY_MIN_BUDGET_MS` floor. Forcing the retry
-    // anyway would either succeed in a vanishingly unlikely 1s window
-    // or fall over to "rowboat_timeout" (a generic envelope) when
-    // we have a perfectly diagnostic first error to surface.
+    // Preflight 0s → initial budget 280s. First call burns 279s before
+    // failing → only 1s remains, well below RETRY_MIN_BUDGET_MS.
     const dateNowSpy = vi.spyOn(Date, "now");
     dateNowSpy
-      .mockReturnValueOnce(1_000_000)
-      .mockReturnValueOnce(1_049_000); // 49s elapsed → 1s remaining
+      .mockReturnValueOnce(1_000_000) // POST entry
+      .mockReturnValueOnce(1_000_000) // budget computation
+      .mockReturnValueOnce(2_000_000) // helper entry
+      .mockReturnValueOnce(2_279_000); // 279s elapsed → 1s remaining
     vi.mocked(callRowboatChat).mockRejectedValueOnce(new Error("rowboat_http_500"));
     const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    // 502 status w/ describeRowboatError mocked to echo the message:
     expect(res.status).toBe(502);
     const body = (await res.json()) as { error: { message: string } };
     expect(body.error.message).toBe("rowboat_http_500");
-    // Retry was skipped — only one Rowboat call.
     expect(vi.mocked(callRowboatChat)).toHaveBeenCalledTimes(1);
     // Continuation row must NOT be touched: we never confirmed the
     // continuation was actually stale (the retry would have proven
@@ -416,12 +463,14 @@ describe("POST /api/dashboard/chat — Rowboat call budget", () => {
 
   it("still retries when the first call fails fast (almost the whole budget remains)", async () => {
     // Sanity check that the budget guard doesn't accidentally suppress
-    // the common case: an immediate Rowboat 400 leaves ~50s for the
+    // the common case: an immediate Rowboat 400 leaves ~280s for the
     // retry, which proceeds normally.
     const dateNowSpy = vi.spyOn(Date, "now");
     dateNowSpy
-      .mockReturnValueOnce(1_000_000)
-      .mockReturnValueOnce(1_000_200); // 200ms elapsed
+      .mockReturnValueOnce(1_000_000) // POST entry
+      .mockReturnValueOnce(1_000_000) // budget computation
+      .mockReturnValueOnce(2_000_000) // helper entry
+      .mockReturnValueOnce(2_000_200); // 200ms elapsed
     vi.mocked(callRowboatChat)
       .mockRejectedValueOnce(new Error("rowboat_http_400"))
       .mockResolvedValueOnce({
@@ -434,7 +483,7 @@ describe("POST /api/dashboard/chat — Rowboat call budget", () => {
     expect(res.status).toBe(200);
     expect(vi.mocked(callRowboatChat)).toHaveBeenCalledTimes(2);
     const retryCall = vi.mocked(callRowboatChat).mock.calls[1][0];
-    expect(retryCall.timeoutMs).toBe(49_800); // 50_000 - 200
+    expect(retryCall.timeoutMs).toBe(279_800); // 280_000 − 200
     dateNowSpy.mockRestore();
   });
 });
