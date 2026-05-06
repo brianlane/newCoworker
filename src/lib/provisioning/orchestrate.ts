@@ -413,6 +413,61 @@ type ProvisioningErrorDetail = {
   body?: unknown;
 };
 
+/**
+ * Stringify a thrown value from the 10DLC attach call.
+ *
+ * Pulled into a tiny helper so v8 can instrument the Error vs non-Error
+ * branches without a synthetic uninstrumented arm — when this lived
+ * inline as `err instanceof Error ? err.message : String(err)`, v8
+ * couldn't see the falsy arm under TS source maps and reported partial
+ * coverage on the catch line.
+ */
+export function describeAttachError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+/**
+ * Build the user-facing progress copy for the 10DLC attach phase.
+ *
+ * Pulled out of the orchestrator body because (a) v8 was missing branch
+ * coverage on the inline ternary, and (b) when the marketing/support
+ * team inevitably wants to tweak the wording it should be one focused
+ * change with regression tests, not a 600-line file edit.
+ *
+ * `registered` is the only status that drops `status: undefined` so the
+ * progress UI can advance the phase indicator. Every other outcome
+ * stays in `thinking` because the retry worker still has work to do.
+ */
+export function formatTendlcAttachProgress(
+  outcome: { kind: "registered" | "pending" | "rejected" | "error"; reason?: string },
+  toE164: string
+): { message: string; status: "thinking" | undefined } {
+  if (outcome.kind === "registered") {
+    return {
+      message: `SMS 10DLC registered (${toE164})`,
+      status: undefined
+    };
+  }
+  const reason = outcome.reason ?? "unknown";
+  if (outcome.kind === "pending") {
+    return {
+      message: `SMS 10DLC queued (carrier vetting): ${reason}`,
+      status: "thinking"
+    };
+  }
+  if (outcome.kind === "rejected") {
+    return {
+      message: `SMS 10DLC rejected: ${reason}. Retrying via worker.`,
+      status: "thinking"
+    };
+  }
+  return {
+    message: `SMS 10DLC transient failure: ${reason}. Retrying via worker.`,
+    status: "thinking"
+  };
+}
+
 export function describeProvisioningError(err: unknown): ProvisioningErrorDetail {
   if (err instanceof Error && err.name === "HostingerApiError") {
     const e = err as Error & { endpoint?: unknown; status?: unknown; body?: unknown };
@@ -689,6 +744,49 @@ async function runOrchestrator(
           message: `Per-tenant DID assigned (${toE164})`,
           source: "orchestrator"
         });
+
+        // Best-effort 10DLC (A2P SMS) campaign attach. US carriers silently
+        // drop A2P SMS from numbers that aren't registered to an approved
+        // campaign — the May 2026 SMS outage was exactly this. If 10DLC
+        // isn't configured yet, or the shared campaign is still in carrier
+        // vetting, we record the per-DID status as `pending` and let the
+        // dashboard banner + retry worker pick it up later. NEVER block
+        // provisioning on this — the customer's voice + inbound-SMS path
+        // works without it.
+        try {
+          const { attachBusinessDidToCampaign } = await import(
+            "@/lib/provisioning/tendlc-attach"
+          );
+          const outcome = await attachBusinessDidToCampaign({
+            businessId,
+            toE164
+          });
+          const progress = formatTendlcAttachProgress(outcome, toE164);
+          await recordProvisioningProgress({
+            businessId,
+            phase: "did_10dlc_attach",
+            percent: 39,
+            message: progress.message,
+            source: "orchestrator",
+            // Always "thinking" for non-registered: a pending/rejected DID
+            // doesn't fail the orchestrator (voice + inbound SMS still
+            // work) and the retry worker handles the rest.
+            status: progress.status
+          });
+        } catch (err) {
+          // Including MissingTendlcConfigError — surfaces in progress log
+          // but doesn't fail the orchestrator.
+          const reason = describeAttachError(err);
+          logger.warn("10DLC attach skipped", { businessId, reason });
+          await recordProvisioningProgress({
+            businessId,
+            phase: "did_10dlc_attach",
+            percent: 39,
+            message: `SMS 10DLC attach skipped: ${reason}. Will retry.`,
+            source: "orchestrator",
+            status: "thinking"
+          });
+        }
       }
     } catch (err) {
       const reason =

@@ -18,6 +18,14 @@ const noBillZeroTurnsMigration = readFileSync(
   "utf8"
 );
 
+const perMinuteRoundingMigration = readFileSync(
+  join(
+    repoRoot,
+    "supabase/migrations/20260505230000_voice_per_minute_rounding.sql"
+  ),
+  "utf8"
+);
+
 describe("voice SQL migrations (contract)", () => {
   it("voice_reserve_for_call: included headroom sums reserved_included_seconds only", () => {
     expect(voicePlatformMigration).toMatch(/coalesce\(sum\(reserved_included_seconds\), 0\)\s+into v_reserved_sum/s);
@@ -144,6 +152,73 @@ describe("voice settlement: zero-turn no-bill guard", () => {
   it("returns no_turns_zero_billed flag in the success payload for the early-return path", () => {
     expect(noBillZeroTurnsMigration).toMatch(
       /'committed_included_seconds', 0,[\s\S]*?'committed_bonus_seconds', 0,[\s\S]*?'no_turns_zero_billed', true/s
+    );
+  });
+});
+
+describe("voice settlement: per-minute carrier rounding", () => {
+  it("rounds wall-clock elapsed UP to the next 60-second increment", () => {
+    // ceil(elapsed / 60.0) * 60 — this is what the Telnyx CDR
+    // `Billable time` column does, and what every PSTN carrier bills on.
+    expect(perMinuteRoundingMigration).toMatch(
+      /wall_cap := \(ceil\(elapsed \/ 60\.0\)\)::int \* 60/
+    );
+  });
+
+  it("special-cases elapsed=0 to 0 instead of paying for an unanswered call", () => {
+    // Without this guard, ceil(0/60)*60 also = 0, so the explicit guard
+    // looks redundant — but it's there for clarity and so a future change
+    // to the rounding kernel doesn't accidentally start charging 60s for
+    // call.initiated → immediate hangup events.
+    expect(perMinuteRoundingMigration).toMatch(
+      /if elapsed = 0 then\s+wall_cap := 0;\s+else\s+wall_cap := \(ceil\(elapsed \/ 60\.0\)\)::int \* 60/
+    );
+  });
+
+  it("rounds the carrier-reported duration UP to next 60s before capping", () => {
+    // Telnyx webhook reports raw seconds; their billing rounds up. We must
+    // round our cap the same way or a 33s call with carrier_raw=33 gets
+    // capped to 33 (under-billing the customer relative to carrier cost).
+    expect(perMinuteRoundingMigration).toMatch(
+      /carrier_cap := \(ceil\(carrier_raw \/ 60\.0\)\)::int \* 60/
+    );
+    // And a carrier_raw of zero is preserved as zero (don't bill for
+    // unanswered legs even if the post-rounding kernel would have).
+    expect(perMinuteRoundingMigration).toMatch(
+      /if carrier_raw = 0 then\s+carrier_cap := 0;/
+    );
+  });
+
+  it("preserves the reserved_total_seconds clamp post-rounding", () => {
+    // After per-minute rounding pushes wall_cap up, we still cap at the
+    // reservation ceiling so we never bill more than was reserved at
+    // call-start (e.g. starter plan with <60s left in the window).
+    expect(perMinuteRoundingMigration).toMatch(
+      /wall_cap := \(ceil\(elapsed \/ 60\.0\)\)::int \* 60;\s+end if;\s+if wall_cap > r\.reserved_total_seconds then\s+wall_cap := r\.reserved_total_seconds;\s+end if;/
+    );
+  });
+
+  it("preserves the zero-turn guard on top of per-minute rounding", () => {
+    // Composing the two rules: zero-turn guard takes precedence over the
+    // rounded wall_cap so we never bill 60s for a silent call that
+    // produced no LLM service.
+    expect(perMinuteRoundingMigration).toMatch(
+      /select count\(\*\) into v_turn_count[\s\S]*?from voice_call_transcript_turns/s
+    );
+    expect(perMinuteRoundingMigration).toMatch(
+      /if v_turn_count = 0 then[\s\S]*?billable_seconds = 0,[\s\S]*?no_turns_zero_billed = true/s
+    );
+  });
+
+  it("uses least(wall_cap, carrier_cap) so neither side over-bills the other", () => {
+    // We always trust the smaller of "what we measured" and "what carrier
+    // billed us". If carrier_raw is null (Telnyx hangup webhook hasn't
+    // arrived), we fall back to wall_cap alone.
+    expect(perMinuteRoundingMigration).toMatch(
+      /billable := least\(wall_cap, carrier_cap\)/
+    );
+    expect(perMinuteRoundingMigration).toMatch(
+      /else\s+billable := wall_cap;/
     );
   });
 });

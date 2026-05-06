@@ -11,6 +11,8 @@ import {
   upsertTelnyxVoiceRoute,
   getBusinessTelnyxSettings,
   setForwardToE164,
+  setBusinessMessagingCampaignStatus,
+  listBusinessesPendingTendlcAttach,
   upsertBusinessTelnyxSettings
 } from "@/lib/db/telnyx-routes";
 
@@ -24,6 +26,8 @@ type Chain = {
   limit: ReturnType<typeof vi.fn>;
   single: ReturnType<typeof vi.fn>;
   maybeSingle: ReturnType<typeof vi.fn>;
+  in: ReturnType<typeof vi.fn>;
+  or: ReturnType<typeof vi.fn>;
 };
 
 function chain(): Chain {
@@ -36,7 +40,9 @@ function chain(): Chain {
     order: vi.fn(() => c),
     limit: vi.fn(() => c),
     single: vi.fn(),
-    maybeSingle: vi.fn()
+    maybeSingle: vi.fn(),
+    in: vi.fn(() => c),
+    or: vi.fn(() => c)
   };
   return c;
 }
@@ -65,6 +71,11 @@ const sampleSettings = {
   bridge_error_message: null,
   telnyx_tcr_brand_id: null,
   telnyx_tcr_campaign_id: null,
+  telnyx_messaging_campaign_id: null,
+  telnyx_messaging_campaign_status: "pending",
+  telnyx_messaging_campaign_last_error: null,
+  telnyx_messaging_campaign_attached_at: null,
+  telnyx_messaging_campaign_last_attempt_at: null,
   forward_to_e164: null,
   transfer_enabled: true,
   sms_fallback_enabled: true,
@@ -291,6 +302,320 @@ describe("telnyx-routes DB layer", () => {
     it("setForwardToE164 uses the default service client when not provided", async () => {
       defaultClientSpy.mockReturnValueOnce(makeDb(settingsChain()));
       await expect(setForwardToE164("biz", "+15551234567")).resolves.toEqual(sampleSettings);
+    });
+
+    it("setBusinessMessagingCampaignStatus uses the default service client when not provided", async () => {
+      defaultClientSpy.mockReturnValueOnce(makeDb(settingsChain()));
+      await expect(
+        setBusinessMessagingCampaignStatus({ businessId: "biz", status: "pending" })
+      ).resolves.toEqual(sampleSettings);
+    });
+
+    it("listBusinessesPendingTendlcAttach uses the default service client when not provided", async () => {
+      const cs = chain();
+      cs.limit.mockResolvedValue({ data: [], error: null });
+      defaultClientSpy.mockReturnValueOnce({ from: vi.fn(() => cs) });
+      await expect(listBusinessesPendingTendlcAttach()).resolves.toEqual([]);
+    });
+  });
+
+  describe("listBusinessesPendingTendlcAttach", () => {
+    function makeTwoTableDb(settingsChainObj: Chain, routesChainObj: Chain) {
+      const from = vi
+        .fn()
+        .mockImplementationOnce(() => settingsChainObj) // 1st call: business_telnyx_settings
+        .mockImplementationOnce(() => routesChainObj); //  2nd call: telnyx_voice_routes
+      return { from };
+    }
+
+    it("returns [] when no pending/rejected rows exist (skips the routes round-trip)", async () => {
+      const cs = chain();
+      cs.limit.mockResolvedValue({ data: [], error: null });
+      const cr = chain();
+      const db = makeTwoTableDb(cs, cr);
+      await expect(
+        listBusinessesPendingTendlcAttach({}, db as never)
+      ).resolves.toEqual([]);
+      // Telnyx-route query MUST NOT fire when there are no candidates.
+      expect(db.from).toHaveBeenCalledTimes(1);
+      expect(db.from).toHaveBeenCalledWith("business_telnyx_settings");
+    });
+
+    it("joins settings → most-recent route per business", async () => {
+      const cs = chain();
+      cs.limit.mockResolvedValue({
+        data: [
+          {
+            business_id: "biz1",
+            telnyx_messaging_campaign_status: "pending",
+            telnyx_messaging_campaign_last_attempt_at: null
+          },
+          {
+            business_id: "biz2",
+            telnyx_messaging_campaign_status: "rejected",
+            telnyx_messaging_campaign_last_attempt_at: "2026-05-05T00:00:00Z"
+          }
+        ],
+        error: null
+      });
+      const cr = chain();
+      cr.order.mockResolvedValue({
+        data: [
+          {
+            business_id: "biz1",
+            to_e164: "+15551111111",
+            created_at: "2026-05-04T00:00:00Z"
+          },
+          // Older route for biz1 — must be ignored.
+          {
+            business_id: "biz1",
+            to_e164: "+15550000000",
+            created_at: "2026-05-03T00:00:00Z"
+          },
+          {
+            business_id: "biz2",
+            to_e164: "+15552222222",
+            created_at: "2026-05-04T00:00:00Z"
+          }
+        ],
+        error: null
+      });
+      const db = makeTwoTableDb(cs, cr);
+      const result = await listBusinessesPendingTendlcAttach(
+        { staleAfterSeconds: 60, limit: 10 },
+        db as never
+      );
+      expect(result).toEqual([
+        {
+          business_id: "biz1",
+          to_e164: "+15551111111",
+          status: "pending",
+          last_attempt_at: null
+        },
+        {
+          business_id: "biz2",
+          to_e164: "+15552222222",
+          status: "rejected",
+          last_attempt_at: "2026-05-05T00:00:00Z"
+        }
+      ]);
+      // 1st query: filter on the two interesting statuses + stale-only.
+      expect(cs.in).toHaveBeenCalledWith(
+        "telnyx_messaging_campaign_status",
+        ["pending", "rejected"]
+      );
+      expect(cs.or).toHaveBeenCalledWith(
+        expect.stringMatching(/last_attempt_at\.is\.null,.+last_attempt_at\.lt\./)
+      );
+      expect(cr.in).toHaveBeenCalledWith("business_id", ["biz1", "biz2"]);
+    });
+
+    it("filters out businesses without any voice route (nothing to attach)", async () => {
+      const cs = chain();
+      cs.limit.mockResolvedValue({
+        data: [
+          {
+            business_id: "biz1",
+            telnyx_messaging_campaign_status: "pending",
+            telnyx_messaging_campaign_last_attempt_at: null
+          },
+          {
+            business_id: "biz_no_route",
+            telnyx_messaging_campaign_status: "pending",
+            telnyx_messaging_campaign_last_attempt_at: null
+          }
+        ],
+        error: null
+      });
+      const cr = chain();
+      cr.order.mockResolvedValue({
+        data: [
+          {
+            business_id: "biz1",
+            to_e164: "+15551111111",
+            created_at: "2026-05-04T00:00:00Z"
+          }
+        ],
+        error: null
+      });
+      const result = await listBusinessesPendingTendlcAttach(
+        {},
+        makeTwoTableDb(cs, cr) as never
+      );
+      expect(result).toHaveLength(1);
+      expect(result[0]?.business_id).toBe("biz1");
+    });
+
+    it("clamps caller-supplied limit and staleAfterSeconds to safe ranges", async () => {
+      const cs = chain();
+      cs.limit.mockResolvedValue({ data: [], error: null });
+      const db = makeTwoTableDb(cs, chain());
+      await listBusinessesPendingTendlcAttach(
+        { limit: 9999, staleAfterSeconds: -1 },
+        db as never
+      );
+      // Limit ≤ 100.
+      expect(cs.limit).toHaveBeenCalledWith(100);
+      // Negative stale → 0; second arg is the cutoff iso, captured via `.or()`.
+      const orArg = (cs.or.mock.calls[0]?.[0] ?? "") as string;
+      expect(orArg).toMatch(/last_attempt_at\.is\.null/);
+    });
+
+    it("clamps tiny limit values up to 1", async () => {
+      const cs = chain();
+      cs.limit.mockResolvedValue({ data: [], error: null });
+      await listBusinessesPendingTendlcAttach(
+        { limit: 0 },
+        makeTwoTableDb(cs, chain()) as never
+      );
+      expect(cs.limit).toHaveBeenCalledWith(1);
+    });
+
+    it("surfaces settings-side query errors", async () => {
+      const cs = chain();
+      cs.limit.mockResolvedValue({ data: null, error: { message: "settings boom" } });
+      await expect(
+        listBusinessesPendingTendlcAttach({}, makeTwoTableDb(cs, chain()) as never)
+      ).rejects.toThrow(/settings boom/);
+    });
+
+    it("surfaces routes-side query errors", async () => {
+      const cs = chain();
+      cs.limit.mockResolvedValue({
+        data: [
+          {
+            business_id: "biz1",
+            telnyx_messaging_campaign_status: "pending",
+            telnyx_messaging_campaign_last_attempt_at: null
+          }
+        ],
+        error: null
+      });
+      const cr = chain();
+      cr.order.mockResolvedValue({ data: null, error: { message: "route boom" } });
+      await expect(
+        listBusinessesPendingTendlcAttach({}, makeTwoTableDb(cs, cr) as never)
+      ).rejects.toThrow(/route boom/);
+    });
+
+    it("treats null routes-data as empty (no candidates filtered through)", async () => {
+      const cs = chain();
+      cs.limit.mockResolvedValue({
+        data: [
+          {
+            business_id: "biz1",
+            telnyx_messaging_campaign_status: "pending",
+            telnyx_messaging_campaign_last_attempt_at: null
+          }
+        ],
+        error: null
+      });
+      const cr = chain();
+      cr.order.mockResolvedValue({ data: null, error: null });
+      const result = await listBusinessesPendingTendlcAttach(
+        {},
+        makeTwoTableDb(cs, cr) as never
+      );
+      expect(result).toEqual([]);
+    });
+
+    it("treats null settings-data as empty", async () => {
+      const cs = chain();
+      cs.limit.mockResolvedValue({ data: null, error: null });
+      const result = await listBusinessesPendingTendlcAttach(
+        {},
+        makeTwoTableDb(cs, chain()) as never
+      );
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe("setBusinessMessagingCampaignStatus", () => {
+    it("registered: sets campaign id, attached_at, last_attempt_at, and clears last_error", async () => {
+      const c = chain();
+      c.single.mockResolvedValue({ data: sampleSettings, error: null });
+      await setBusinessMessagingCampaignStatus(
+        {
+          businessId: "biz",
+          status: "registered",
+          campaignId: "campaign-123",
+          // lastError is intentionally provided to confirm the registered
+          // branch wins (clears to null) regardless of caller input.
+          lastError: "should-be-cleared"
+        },
+        makeDb(c) as never
+      );
+      const [row] = c.upsert.mock.calls[0];
+      const r = row as Record<string, unknown>;
+      expect(r.telnyx_messaging_campaign_id).toBe("campaign-123");
+      expect(r.telnyx_messaging_campaign_status).toBe("registered");
+      expect(r.telnyx_messaging_campaign_attached_at).toBeTypeOf("string");
+      expect(r.telnyx_messaging_campaign_last_error).toBeNull();
+      expect(r.telnyx_messaging_campaign_last_attempt_at).toBeTypeOf("string");
+    });
+
+    it("rejected: persists last_error verbatim, does not set attached_at, does not touch campaign id when undefined", async () => {
+      const c = chain();
+      c.single.mockResolvedValue({ data: sampleSettings, error: null });
+      await setBusinessMessagingCampaignStatus(
+        { businessId: "biz", status: "rejected", lastError: "10dlc/422 brand_unverified" },
+        makeDb(c) as never
+      );
+      const [row] = c.upsert.mock.calls[0];
+      const r = row as Record<string, unknown>;
+      expect(r.telnyx_messaging_campaign_status).toBe("rejected");
+      expect(r.telnyx_messaging_campaign_last_error).toBe("10dlc/422 brand_unverified");
+      expect(r).not.toHaveProperty("telnyx_messaging_campaign_attached_at");
+      expect(r).not.toHaveProperty("telnyx_messaging_campaign_id");
+    });
+
+    it("pending: persists last_error so the dashboard banner can show why we're waiting", async () => {
+      const c = chain();
+      c.single.mockResolvedValue({ data: sampleSettings, error: null });
+      await setBusinessMessagingCampaignStatus(
+        { businessId: "biz", status: "pending", lastError: "campaign_status:VERIFIED" },
+        makeDb(c) as never
+      );
+      const [row] = c.upsert.mock.calls[0];
+      expect((row as Record<string, unknown>).telnyx_messaging_campaign_last_error).toBe(
+        "campaign_status:VERIFIED"
+      );
+    });
+
+    it("explicit campaignId=undefined leaves the column untouched (branch coverage)", async () => {
+      const c = chain();
+      c.single.mockResolvedValue({ data: sampleSettings, error: null });
+      // Branch coverage: hit the `input.campaignId !== undefined` false
+      // path with an EXPLICITLY undefined value (not just absent). This
+      // is what the orchestrator passes when it has no campaign id yet.
+      await setBusinessMessagingCampaignStatus(
+        { businessId: "biz", status: "pending", campaignId: undefined },
+        makeDb(c) as never
+      );
+      const [row] = c.upsert.mock.calls[0];
+      expect(row).not.toHaveProperty("telnyx_messaging_campaign_id");
+    });
+
+    it("explicit campaignId=null clears any existing pairing", async () => {
+      const c = chain();
+      c.single.mockResolvedValue({ data: sampleSettings, error: null });
+      await setBusinessMessagingCampaignStatus(
+        { businessId: "biz", status: "unregistered", campaignId: null },
+        makeDb(c) as never
+      );
+      const [row] = c.upsert.mock.calls[0];
+      expect((row as Record<string, unknown>).telnyx_messaging_campaign_id).toBeNull();
+    });
+
+    it("surfaces underlying DB errors", async () => {
+      const c = chain();
+      c.single.mockResolvedValue({ data: null, error: { message: "fk constraint" } });
+      await expect(
+        setBusinessMessagingCampaignStatus(
+          { businessId: "biz", status: "pending" },
+          makeDb(c) as never
+        )
+      ).rejects.toThrow(/fk constraint/);
     });
   });
 

@@ -133,6 +133,7 @@ export default async function DashboardPage() {
               bridgeHeartbeatAt={telnyxSettings?.bridge_last_heartbeat_at ?? null}
               forwardToE164={telnyxSettings?.forward_to_e164 ?? null}
               transferEnabled={telnyxSettings?.transfer_enabled ?? true}
+              smsCampaignStatus={telnyxSettings?.telnyx_messaging_campaign_status ?? null}
             />
           </Card>
 
