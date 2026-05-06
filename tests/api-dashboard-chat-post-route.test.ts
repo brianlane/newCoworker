@@ -42,6 +42,15 @@ vi.mock("@/lib/dashboard-chat/summarizer", () => ({
   summarizeThreadAndLog: vi.fn()
 }));
 
+vi.mock("@/lib/customer-memory/db", () => ({
+  // listCustomerMemories is the only thing the route currently
+  // imports from this module. Default to an empty list so existing
+  // tests don't get an unexpected "recent customers" preamble in
+  // their Rowboat call assertions; tests that exercise Phase 4
+  // override per-call.
+  listCustomerMemories: vi.fn(async () => [])
+}));
+
 const supabaseFlagsStub = {
   from: vi.fn(),
   select: vi.fn(),
@@ -74,6 +83,7 @@ import {
   shouldSummarize,
   summarizeThreadAndLog
 } from "@/lib/dashboard-chat/summarizer";
+import { listCustomerMemories } from "@/lib/customer-memory/db";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const OTHER_BIZ = "22222222-2222-4222-8222-222222222222";
@@ -485,6 +495,75 @@ describe("POST /api/dashboard/chat — Rowboat call budget", () => {
     const retryCall = vi.mocked(callRowboatChat).mock.calls[1][0];
     expect(retryCall.timeoutMs).toBe(279_800); // 280_000 − 200
     dateNowSpy.mockRestore();
+  });
+});
+
+describe("POST /api/dashboard/chat — customer memory preamble (Phase 4)", () => {
+  // The dashboard agent needs ambient awareness of customers across SMS +
+  // voice so the owner can ask things like "what was Joe asking about?"
+  // and get a useful answer. Failure of this lookup MUST NEVER fail the
+  // chat — the route falls back to no-preamble behaviour.
+
+  it("does NOT inject a preamble when the business has no customer memories — keeps first-time owner UX unchanged", async () => {
+    vi.mocked(listCustomerMemories).mockResolvedValueOnce([]);
+    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    const callArgs = vi.mocked(callRowboatChat).mock.calls[0][0];
+    // No system message about customers. The thread summary message
+    // (when present) is the only system msg; here summary_md is null.
+    const customerSystemMsg = callArgs.messages.find(
+      (m) => m.role === "system" && m.content.includes("recent customers")
+    );
+    expect(customerSystemMsg).toBeUndefined();
+  });
+
+  it("injects a recent-customers system preamble when memories exist — agent can answer 'what was Joe asking about?'", async () => {
+    vi.mocked(listCustomerMemories).mockResolvedValueOnce([
+      {
+        id: "00000000-0000-0000-0000-0000000000aa",
+        business_id: BIZ,
+        customer_e164: "+15555550123",
+        display_name: "Joe",
+        summary_md: "Asking about garage door spring sizing",
+        pinned_md: null,
+        interaction_count: 0,
+        total_interaction_count: 4,
+        last_interaction_at: "2026-05-06T10:00:00Z",
+        last_summarized_at: "2026-05-06T10:01:00Z",
+        last_channel: "voice",
+        created_at: "2026-04-01T00:00:00Z",
+        updated_at: "2026-05-06T10:01:00Z"
+      }
+    ] as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "what was Joe asking about?" }));
+    const callArgs = vi.mocked(callRowboatChat).mock.calls[0][0];
+    const customerSystemMsg = callArgs.messages.find(
+      (m) => m.role === "system" && m.content.includes("recent customers")
+    );
+    expect(customerSystemMsg).toBeDefined();
+    expect(customerSystemMsg!.content).toContain("Joe");
+    expect(customerSystemMsg!.content).toContain("+15555550123");
+    expect(customerSystemMsg!.content).toContain("Asking about garage door spring sizing");
+    // Tells the model not to volunteer customer details — keeps every
+    // chat reply from turning into an unsolicited daily-stand-up summary.
+    expect(customerSystemMsg!.content).toContain(
+      "Do NOT proactively volunteer customer details"
+    );
+  });
+
+  it("returns a successful chat reply even when the customer memory lookup throws — degraded awareness, not a 502", async () => {
+    vi.mocked(listCustomerMemories).mockRejectedValueOnce(
+      new Error("supabase_pgrst_500")
+    );
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(res.status).toBe(200);
+    expect(vi.mocked(callRowboatChat)).toHaveBeenCalledTimes(1);
+    const callArgs = vi.mocked(callRowboatChat).mock.calls[0][0];
+    // No customer preamble was injected (lookup failed), but the
+    // chat call still went through.
+    const customerSystemMsg = callArgs.messages.find(
+      (m) => m.role === "system" && m.content.includes("recent customers")
+    );
+    expect(customerSystemMsg).toBeUndefined();
   });
 });
 

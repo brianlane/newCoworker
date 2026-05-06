@@ -40,6 +40,11 @@ import {
   shouldSummarize,
   summarizeThreadAndLog
 } from "@/lib/dashboard-chat/summarizer";
+import { listCustomerMemories } from "@/lib/customer-memory/db";
+import {
+  buildDashboardCustomerPreamble,
+  DASHBOARD_PREAMBLE_MAX_CUSTOMERS
+} from "@/lib/customer-memory/dashboard-preamble";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
@@ -348,8 +353,22 @@ function buildRowboatChatMessages(args: {
   tail: { role: "user" | "assistant" | "system"; content: string }[];
   newUserMessage: string;
   includeTailContext: boolean;
+  /**
+   * Phase 4: optional "recent customers across SMS + voice" preamble.
+   * Built by buildDashboardCustomerPreamble; null when the business
+   * has no notable customers yet (first-time dashboard chat user).
+   * Prepended BEFORE the rolling thread summary so it's the most
+   * stable piece of ambient context — the thread summary is for
+   * THIS owner conversation, the customer preamble is for the
+   * world the owner is operating in.
+   */
+  customerPreamble?: string | null;
 }): RowboatChatMessage[] {
   const out: RowboatChatMessage[] = [];
+  const customerPreamble = args.customerPreamble?.trim();
+  if (customerPreamble) {
+    out.push({ role: "system", content: customerPreamble });
+  }
   const summary = args.summaryMd?.trim();
   if (summary) {
     out.push({
@@ -481,6 +500,28 @@ export async function POST(request: Request) {
     // after refresh.
     const history = await listMessages(thread.id);
     const tail = history.slice(-HISTORY_TURNS);
+
+    // Phase 4: pull recent customer memories so the dashboard agent has
+    // ambient context about who the owner has been doing business with
+    // across SMS and voice. Capped tightly (5 customers, ~200 chars
+    // each) so it doesn't dominate the prompt budget; null when the
+    // business has no notable customers yet (first-time dashboard
+    // user). Failure here MUST NOT break the chat — degraded
+    // customer awareness is acceptable, a 502 because we couldn't
+    // read 5 rows is not.
+    let customerPreamble: string | null = null;
+    try {
+      const memories = await listCustomerMemories(body.businessId, {
+        limit: DASHBOARD_PREAMBLE_MAX_CUSTOMERS
+      });
+      customerPreamble = buildDashboardCustomerPreamble(memories);
+    } catch (memErr) {
+      logger.warn("dashboard chat: customer memory preamble lookup failed", {
+        businessId: body.businessId,
+        error: memErr instanceof Error ? memErr.message : String(memErr)
+      });
+    }
+
     // Two message arrays: one for the initial (continuation-using) call
     // and one for the stateless fallback. When a continuation is in hand
     // Rowboat already remembers the thread server-side, so the initial
@@ -496,14 +537,16 @@ export async function POST(request: Request) {
       summaryMd: thread.summary_md,
       tail,
       newUserMessage: body.message,
-      includeTailContext: !hasContinuation
+      includeTailContext: !hasContinuation,
+      customerPreamble
     });
     const statelessMessages = hasContinuation
       ? buildRowboatChatMessages({
           summaryMd: thread.summary_md,
           tail,
           newUserMessage: body.message,
-          includeTailContext: true
+          includeTailContext: true,
+          customerPreamble
         })
       : initialMessages;
 
