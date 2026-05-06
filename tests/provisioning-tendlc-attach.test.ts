@@ -355,6 +355,24 @@ describe("attachBusinessDidToCampaign", () => {
     expect(outcome.kind).toBe("rejected");
   });
 
+  it.each(["null", '"10036"'])(
+    "rejected: attach 400 valid JSON primitive %s is not mistaken for Telnyx code 10036",
+    async (body) => {
+      const client = makeClient({
+        createPhoneNumberCampaign: vi
+          .fn()
+          .mockRejectedValue(new TendlcApiError("/10dlc/phoneNumberCampaign", 400, body))
+      });
+      const outcome = await attachBusinessDidToCampaign({
+        businessId: "biz",
+        toE164: "+15551234567",
+        client: client as never,
+        config: CONFIG
+      });
+      expect(outcome.kind).toBe("rejected");
+    }
+  );
+
   it("error: attach 5xx → transient error, no DB write", async () => {
     const client = makeClient({
       createPhoneNumberCampaign: vi
