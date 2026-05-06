@@ -75,7 +75,7 @@ export async function listCustomerMemories(
     // `100%` matches the literal `100%`, not "anything starting with
     // 100".
     const escapedForLike = search.replace(/[%_]/g, (m) => `\\${m}`);
-    const escapedForPostgrest = escapedForLike.replace(/"/g, '\\"');
+    const escapedForPostgrest = escapedForLike.replace(/["\\]/g, "\\$&");
     const pattern = `"%${escapedForPostgrest}%"`;
     // Match either the display name or the raw E.164 — owners often
     // remember "Joe" but not the +1555… number, and vice versa.
