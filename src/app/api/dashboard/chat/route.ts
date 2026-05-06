@@ -52,11 +52,18 @@ const DASHBOARD_CHAT_RATE = { interval: 5 * 60 * 1000, maxRequests: 30 };
 /**
  * Errors where Rowboat's response strongly suggests the *server-side*
  * conversation referenced by our stored conversationId is gone (model
- * restart, retention expiry, version skew). On these we get one
- * stateless retry — Rowboat's reply will live entirely off the
- * messages we already include (summary preamble + last 20 turns + new
- * user message), so dropping conversationId/state is harmless when
- * the row's continuation tokens have been evicted.
+ * restart, retention expiry, version skew) OR the conversation is
+ * otherwise unhealthy. On these we get one stateless retry — Rowboat's
+ * reply will live entirely off a fresh stateless prompt (rolling
+ * summary system message + recent-tail transcript system message + new
+ * user turn — see buildRowboatChatMessages), so dropping
+ * conversationId/state is safe.
+ *
+ * 400 specifically also covers the case where the stored
+ * conversationId is intact but Rowboat's input validator rejected the
+ * request body for some other reason; the stateless retry sends a
+ * different (continuation-free, tail-as-system) shape, which often
+ * succeeds where the first call didn't.
  *
  * Deliberately excluded:
  *   - rowboat_timeout: timing out doesn't tell us anything about
@@ -127,7 +134,20 @@ type RowboatRetryInput = {
   businessId: string;
   projectId: string;
   bearer: string;
-  messages: RowboatChatMessage[];
+  /**
+   * Messages for the *first* (continuation-using) call. When a
+   * continuation is in hand, Rowboat already has the full thread
+   * server-side, so this is typically just `[summary?, newUser]`.
+   */
+  initialMessages: RowboatChatMessage[];
+  /**
+   * Messages for the stateless fallback. Because dropping the
+   * continuation reverts Rowboat to a blank conversation, this
+   * variant must carry whatever local context the model needs —
+   * summary + a transcript-shaped system message of the recent
+   * tail + the new user turn.
+   */
+  statelessMessages: RowboatChatMessage[];
   conversationId: string | null;
   state: unknown | null;
   /** Used only for log correlation. */
@@ -138,10 +158,9 @@ type RowboatRetryInput = {
  * Call Rowboat with the stored conversation continuation. If the
  * continuation appears stale (Rowboat evicted server-side state — see
  * STATELESS_RETRY_ERRORS) AND we actually had a conversationId to send,
- * retry once with continuation dropped. Rowboat treats the retry as a
- * fresh conversation rooted in the messages we send, which already
- * include the rolling summary + 20-turn tail + new user message — i.e.
- * everything the model needs to keep going coherently.
+ * retry once with continuation dropped AND the recent-tail system
+ * preamble re-attached so the model has continuity. Rowboat treats the
+ * retry as a fresh conversation rooted in those messages.
  *
  * Why retry: the alternative (status quo before this fix) is that any
  * archived thread whose Rowboat session got reaped becomes permanently
@@ -178,7 +197,7 @@ async function callRowboatWithStatelessFallback(
       businessId: input.businessId,
       projectId: input.projectId,
       bearer: input.bearer,
-      messages: input.messages,
+      messages: input.initialMessages,
       conversationId: input.conversationId,
       state: input.state
     });
@@ -197,14 +216,68 @@ async function callRowboatWithStatelessFallback(
       businessId: input.businessId,
       projectId: input.projectId,
       bearer: input.bearer,
-      messages: input.messages,
-      // Drop continuation tokens. Rowboat will mint a fresh
-      // conversation rooted in our local context.
+      // Stateless retry MUST include the local tail as a system
+      // preamble — Rowboat won't have any server-side memory to
+      // fall back on once the continuation is dropped.
+      messages: input.statelessMessages,
       conversationId: null,
       state: null
     });
     return { ...out, retriedStateless: true };
   }
+}
+
+/**
+ * Build the message array sent to Rowboat for one chat turn.
+ *
+ * Why we don't just replay the live tail of stored messages: Rowboat's
+ * HTTP /chat endpoint validates the input `messages[]` with a Zod
+ * schema that rejects plain `{ role: "assistant", content: string }`
+ * objects (it expects agent/tool-shaped assistant rows produced by
+ * Rowboat itself). Replaying our local assistant turns there always
+ * 400s — see tests/integration/kvm-rowboat/rowboat-chat.ts for the
+ * canonical contract: "Each leg sends only the new user message …
+ * do not replay `{ role: 'assistant', content }`". So we instead:
+ *
+ *   - rely on Rowboat's server-side conversation memory via
+ *     conversationId/state when we have it (`includeTailContext: false`);
+ *   - on a fresh thread or a stateless fallback (continuation evicted
+ *     and we just dropped it), render the recent-turn tail as a single
+ *     transcript-shaped *system* message so the model still has
+ *     continuity (`includeTailContext: true`).
+ *
+ * The summary preamble (rolling-summary system message) and the new
+ * user turn are always included.
+ */
+function buildRowboatChatMessages(args: {
+  summaryMd: string | null;
+  tail: { role: "user" | "assistant" | "system"; content: string }[];
+  newUserMessage: string;
+  includeTailContext: boolean;
+}): RowboatChatMessage[] {
+  const out: RowboatChatMessage[] = [];
+  const summary = args.summaryMd?.trim();
+  if (summary) {
+    out.push({
+      role: "system",
+      content: `Conversation summary so far:\n\n${summary}`
+    });
+  }
+  if (args.includeTailContext && args.tail.length > 0) {
+    const transcript = args.tail
+      .map((m) => {
+        const label =
+          m.role === "user" ? "Owner" : m.role === "assistant" ? "Coworker" : "System";
+        return `[${label}]: ${m.content}`;
+      })
+      .join("\n\n");
+    out.push({
+      role: "system",
+      content: `Recent conversation context (these are the most recent prior turns of THIS conversation, replayed for your reference because the live continuation was unavailable; respond as the assistant continuing this same thread):\n\n${transcript}`
+    });
+  }
+  out.push({ role: "user", content: args.newUserMessage });
+  return out;
 }
 
 export async function POST(request: Request) {
@@ -306,26 +379,31 @@ export async function POST(request: Request) {
     // after refresh.
     const history = await listMessages(thread.id);
     const tail = history.slice(-HISTORY_TURNS);
-    // Rolling summary (if any) is prepended as a system message so the
-    // model sees long-term context without us having to stuff older
-    // raw turns into the prompt. The summary covers everything the
-    // tail truncation would have dropped; on threads with <= 20
-    // messages there's no summary yet (summarizer below skips that
-    // case) and this prepend is a no-op.
-    const summaryPreamble: RowboatChatMessage[] =
-      thread.summary_md && thread.summary_md.trim()
-        ? [
-            {
-              role: "system",
-              content: `Conversation summary so far:\n\n${thread.summary_md.trim()}`
-            }
-          ]
-        : [];
-    const rowboatMessages: RowboatChatMessage[] = [
-      ...summaryPreamble,
-      ...tail.map((m) => ({ role: m.role, content: m.content })),
-      { role: "user", content: body.message }
-    ];
+    // Two message arrays: one for the initial (continuation-using) call
+    // and one for the stateless fallback. When a continuation is in hand
+    // Rowboat already remembers the thread server-side, so the initial
+    // call doesn't need to replay anything beyond the rolling summary
+    // preamble + new user turn. The stateless variant always carries the
+    // recent tail rendered as a system transcript — see
+    // buildRowboatChatMessages for why we never replay raw assistant
+    // rows here.
+    const hasContinuation =
+      typeof thread.rowboat_conversation_id === "string" &&
+      thread.rowboat_conversation_id.trim().length > 0;
+    const initialMessages = buildRowboatChatMessages({
+      summaryMd: thread.summary_md,
+      tail,
+      newUserMessage: body.message,
+      includeTailContext: !hasContinuation
+    });
+    const statelessMessages = hasContinuation
+      ? buildRowboatChatMessages({
+          summaryMd: thread.summary_md,
+          tail,
+          newUserMessage: body.message,
+          includeTailContext: true
+        })
+      : initialMessages;
 
     let reply: string;
     let conversationId: string | undefined;
@@ -336,7 +414,8 @@ export async function POST(request: Request) {
         businessId: body.businessId,
         projectId,
         bearer,
-        messages: rowboatMessages,
+        initialMessages,
+        statelessMessages,
         conversationId: thread.rowboat_conversation_id,
         state: thread.rowboat_state,
         threadId: thread.id

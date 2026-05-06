@@ -262,6 +262,79 @@ describe("POST /api/dashboard/chat — summary preamble", () => {
   });
 });
 
+describe("POST /api/dashboard/chat — Rowboat input contract (no plain assistant replay)", () => {
+  // Rowboat's HTTP /chat validator rejects plain
+  //   { role: "assistant", content: string }
+  // entries (it expects agent/tool-shaped rows produced by Rowboat
+  // itself). The integration spec is canonical:
+  //   tests/integration/kvm-rowboat/rowboat-chat.ts:215
+  //   "Each leg sends only the new user message; do not replay
+  //    `{ role: 'assistant', content }` — upstream Zod expects
+  //    agent/tool-shaped assistant rows, not plain text."
+  // Replaying our local tail caused every turn AFTER the first to 400
+  // in production (assistant turn 1 lived in `tail`, got replayed,
+  // Rowboat rejected it, the stateless retry sent the SAME body and
+  // 400'd again). These tests pin the contract.
+
+  const HISTORY_TAIL = [
+    { role: "user", content: "What's your purpose?" },
+    { role: "assistant", content: "My purpose is to assist you…" }
+  ];
+
+  it("never sends a { role: 'assistant' } message to Rowboat, even when tail contains an assistant turn", async () => {
+    vi.mocked(listMessages).mockResolvedValueOnce(HISTORY_TAIL as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "and now?" }));
+    const sent = vi.mocked(callRowboatChat).mock.calls[0][0].messages;
+    expect(sent.some((m) => m.role === "assistant")).toBe(false);
+  });
+
+  it("on a thread WITH continuation, omits the local tail entirely on the initial call (Rowboat already has it server-side)", async () => {
+    vi.mocked(listMessages).mockResolvedValueOnce(HISTORY_TAIL as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "and now?" }));
+    // Only the new user turn — no summary (none set), no tail
+    // transcript (continuation carries it), no prior turns replayed.
+    const sent = vi.mocked(callRowboatChat).mock.calls[0][0].messages;
+    expect(sent).toEqual([{ role: "user", content: "and now?" }]);
+  });
+
+  it("on a stateless RETRY, replays the tail as a single system transcript so the model still has continuity", async () => {
+    vi.mocked(listMessages).mockResolvedValueOnce(HISTORY_TAIL as never);
+    vi.mocked(callRowboatChat)
+      .mockRejectedValueOnce(new Error("rowboat_http_400"))
+      .mockResolvedValueOnce({
+        reply: "fresh reply",
+        conversationId: "fresh-conv",
+        state: undefined,
+        hasStateKey: false
+      } as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "and now?" }));
+    const retryMessages = vi.mocked(callRowboatChat).mock.calls[1][0].messages;
+    // Two messages: the synthesized recent-context system message,
+    // then the new user turn. No assistant role, no plain raw replay.
+    expect(retryMessages).toHaveLength(2);
+    expect(retryMessages[0].role).toBe("system");
+    expect(retryMessages[0].content).toContain("[Owner]: What's your purpose?");
+    expect(retryMessages[0].content).toContain("[Coworker]: My purpose is to assist you");
+    expect(retryMessages[1]).toEqual({ role: "user", content: "and now?" });
+    expect(retryMessages.some((m) => m.role === "assistant")).toBe(false);
+  });
+
+  it("on a fresh thread (no continuation), the FIRST call already includes the tail-as-system preamble (since there's no server-side memory to lean on)", async () => {
+    vi.mocked(getOrCreateActiveThread).mockResolvedValueOnce({
+      ...ACTIVE_THREAD,
+      rowboat_conversation_id: null,
+      rowboat_state: null
+    } as never);
+    vi.mocked(listMessages).mockResolvedValueOnce(HISTORY_TAIL as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "and now?" }));
+    const sent = vi.mocked(callRowboatChat).mock.calls[0][0].messages;
+    expect(sent).toHaveLength(2);
+    expect(sent[0].role).toBe("system");
+    expect(sent[0].content).toContain("[Coworker]:");
+    expect(sent[1]).toEqual({ role: "user", content: "and now?" });
+  });
+});
+
 describe("POST /api/dashboard/chat — summarizer trigger", () => {
   it("fires summarizeThreadAndLog when shouldSummarize returns true (fire-and-forget; doesn't await)", async () => {
     vi.mocked(shouldSummarize).mockReturnValueOnce(true);
@@ -328,8 +401,13 @@ describe("POST /api/dashboard/chat — stateless retry on stale conversation con
       // Stateless retry: continuation tokens dropped.
       expect(secondCallArgs.conversationId).toBeNull();
       expect(secondCallArgs.state).toBeNull();
-      // Same messages on both calls — local context (summary +
-      // tail + new user message) is what carries continuity now.
+      // With an empty `listMessages` tail (this test's default setup),
+      // both calls reduce to `[{ role: "user", content: "hi" }]` —
+      // there's nothing to replay either way. The shape divergence
+      // (initial call omits the tail; stateless retry replays it as
+      // a transcript-shaped system message) is covered by the
+      // dedicated suite "Rowboat input contract (no plain assistant
+      // replay)" above.
       expect(secondCallArgs.messages).toEqual(firstCallArgs.messages);
     });
   }
