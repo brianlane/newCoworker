@@ -44,8 +44,66 @@ import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
 
+// The per-tenant Ollama inside Rowboat is fast on warm prompts (~5s)
+// but routinely takes >20s for the first reply when the model has to
+// page in (documented in supabase/functions/sms-inbound-worker/index.ts
+// next to its own 60s ROWBOAT_CHAT_TIMEOUT_MS). Vercel's default
+// function timeout is 30s on Pro, which is *equal* to the Rowboat
+// fetch timeout below — without `maxDuration` the function gets reaped
+// at exactly the same moment our own AbortController fires, so the
+// catch-block that returns the friendly "took too long" envelope
+// never runs and the client sees a generic 502 / "Unexpected server
+// response". maxDuration > DASHBOARD_CHAT_ROWBOAT_BUDGET_MS gives the
+// route headroom to log, return a JSON envelope, and let the summarizer
+// fire-and-forget cleanly.
+//
+// Sized so the worst-case negative path stays well under the function
+// budget. NB: DASHBOARD_CHAT_ROWBOAT_BUDGET_MS is the *combined*
+// budget across the initial call AND the optional stateless retry —
+// callRowboatWithStatelessFallback caps the retry's per-call timeout
+// at (budget - elapsed) and skips the retry outright when too little
+// time remains, so a slow first failure can't grant the retry a
+// fresh full window:
+//
+//   pre-flight (auth, rate limit, flag/config reads, thread + history) ~ 1.5s
+//   Rowboat /chat (initial + optional retry, COMBINED hard cap)         50.0s
+//   error mapping + JSON serialization                                  ~ 0.2s
+//   ────────────────────────────────────────────────────────────────────────
+//   total                                                             ~ 51.7s   ( < maxDuration of 60s )
+export const maxDuration = 60;
+
 const MAX_MESSAGE_CHARS = 4000;
 const HISTORY_TURNS = 20;
+
+// Combined wall-clock budget for Rowboat /chat across the initial
+// continuation-using call AND the optional stateless retry.
+//
+// Why a combined (not per-call) budget: passing the full value to both
+// attempts would let a slow first failure (e.g. a 502 from Cloudflare
+// at ~30s) plus a fresh 50s retry exceed `maxDuration` and re-trigger
+// the Vercel-reaper race this route is sized to avoid (Codex P2 /
+// Cursor Bugbot Medium on PR #71). The retry helper subtracts the
+// already-elapsed wall time and aborts the retry early — or skips it
+// entirely below RETRY_MIN_BUDGET_MS — so the *sum* of both timeouts
+// stays bounded.
+//
+// Why 50s and not 30s: the previous 30s value matched Vercel's default
+// function timeout exactly, so when the model went cold the function
+// got killed before the AbortController-triggered "rowboat_timeout"
+// path could write its 502 response. 50s gives the local model the
+// same headroom it has on the SMS path while keeping us well inside
+// the function's 60s maxDuration window.
+const DASHBOARD_CHAT_ROWBOAT_BUDGET_MS = 50_000;
+
+// Floor on the post-first-call remaining budget below which we skip
+// the stateless retry entirely. Sized so the retry has a realistic
+// chance of succeeding: a Rowboat call that pages in a cold model
+// takes ~5s at minimum on a small VPS, and anything below this is
+// almost guaranteed to abort before we'd see a reply. Skipping the
+// retry surfaces the *first* error to the caller (a more honest
+// signal than burning the rest of the function on a doomed retry
+// that ends in a generic "took too long" envelope).
+const RETRY_MIN_BUDGET_MS = 5_000;
 
 const DASHBOARD_CHAT_RATE = { interval: 5 * 60 * 1000, maxRequests: 30 };
 
@@ -152,6 +210,17 @@ type RowboatRetryInput = {
   state: unknown | null;
   /** Used only for log correlation. */
   threadId: string;
+  /**
+   * COMBINED wall-clock budget across the initial call and (if it
+   * fires) the stateless retry. Sized by the caller against the
+   * route's `maxDuration` so the AbortController-driven
+   * "rowboat_timeout" path always wins over Vercel's function reaper
+   * — otherwise the client sees a generic 502 instead of our friendly
+   * envelope. The retry's per-call timeout is internally capped at
+   * (budgetMs - elapsedMs) so a slow first failure can't grant the
+   * retry a fresh full window.
+   */
+  budgetMs: number;
 };
 
 /**
@@ -192,6 +261,11 @@ async function callRowboatWithStatelessFallback(
 ): Promise<StatelessFallbackResult> {
   const hadContinuation =
     typeof input.conversationId === "string" && input.conversationId.trim().length > 0;
+  // Anchored at the start of the *combined* budget so the retry
+  // (when it fires) inherits whatever wall time is left, not a fresh
+  // full window. Single Date.now() read so the elapsed measurement
+  // below is consistent even if the system clock skews mid-call.
+  const startedAt = Date.now();
   try {
     const out = await callRowboatChat({
       businessId: input.businessId,
@@ -199,7 +273,8 @@ async function callRowboatWithStatelessFallback(
       bearer: input.bearer,
       messages: input.initialMessages,
       conversationId: input.conversationId,
-      state: input.state
+      state: input.state,
+      timeoutMs: input.budgetMs
     });
     return { ...out, retriedStateless: false };
   } catch (err) {
@@ -207,10 +282,32 @@ async function callRowboatWithStatelessFallback(
     const isStaleContinuation =
       hadContinuation && STATELESS_RETRY_ERRORS.has(message);
     if (!isStaleContinuation) throw err;
+
+    // Cap the retry against the route's COMBINED budget. If the first
+    // call burned most of the wall time before failing, the retry
+    // either gets a tiny window or — when even Ollama's cold-start
+    // floor wouldn't fit — gets skipped entirely so the original
+    // error surfaces instead of a self-inflicted "rowboat_timeout"
+    // (Codex P2 / Cursor Bugbot Medium, PR #71).
+    const elapsedMs = Date.now() - startedAt;
+    const remainingMs = input.budgetMs - elapsedMs;
+    if (remainingMs < RETRY_MIN_BUDGET_MS) {
+      logger.info("rowboat continuation stale, skipping stateless retry (insufficient remaining budget)", {
+        businessId: input.businessId,
+        threadId: input.threadId,
+        firstError: message,
+        elapsedMs,
+        remainingMs,
+        budgetMs: input.budgetMs
+      });
+      throw err;
+    }
     logger.info("rowboat continuation stale, retrying stateless", {
       businessId: input.businessId,
       threadId: input.threadId,
-      firstError: message
+      firstError: message,
+      elapsedMs,
+      retryTimeoutMs: remainingMs
     });
     const out = await callRowboatChat({
       businessId: input.businessId,
@@ -221,7 +318,8 @@ async function callRowboatWithStatelessFallback(
       // fall back on once the continuation is dropped.
       messages: input.statelessMessages,
       conversationId: null,
-      state: null
+      state: null,
+      timeoutMs: remainingMs
     });
     return { ...out, retriedStateless: true };
   }
@@ -418,7 +516,8 @@ export async function POST(request: Request) {
         statelessMessages,
         conversationId: thread.rowboat_conversation_id,
         state: thread.rowboat_state,
-        threadId: thread.id
+        threadId: thread.id,
+        budgetMs: DASHBOARD_CHAT_ROWBOAT_BUDGET_MS
       });
       reply = parsed.reply;
       conversationId = parsed.conversationId;
