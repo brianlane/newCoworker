@@ -210,15 +210,29 @@ describe("listCustomerMemories", () => {
     // The bug being pinned: a search of "Smith, LLC" or "127.0.0.1"
     // would split into multiple .or() conditions because PostgREST
     // treats commas as condition separators and dots as
-    // field/operator/value delimiters. The fix is to wrap each value
-    // in double quotes so PostgREST parses them as literals.
+    // field/operator/value delimiters. The fix wraps each value in
+    // double quotes so PostgREST parses them as literals AND
+    // backslash-escapes any embedded `"` or `\` so the quoting can't
+    // be broken by user input.
+    //
+    // Two layers of escaping run in order:
+    //   (1) SQL LIKE: %, _ → \%, \_ so a search of "100%" matches the
+    //       literal % rather than "anything starting with 100".
+    //   (2) PostgREST literal: " → \", \ → \\, applied AFTER step (1)
+    //       so the backslashes step (1) introduced get doubled (a
+    //       single backslash inside a quoted PostgREST value is the
+    //       escape character; we need it doubled to mean "literal
+    //       backslash").
     const cases: Array<{ input: string; pattern: string }> = [
       { input: "Smith, LLC", pattern: `"%Smith, LLC%"` },
       { input: "127.0.0.1", pattern: `"%127.0.0.1%"` },
       { input: 'Joe "the Plumber"', pattern: `"%Joe \\"the Plumber\\"%"` },
-      // SQL LIKE wildcards still escaped beneath the quoting layer.
-      { input: "100%", pattern: `"%100\\%%"` },
-      { input: "snake_case", pattern: `"%snake\\_case%"` },
+      // SQL LIKE escape adds a backslash; the PostgREST escape then
+      // doubles it (literal backslash inside quoted value).
+      { input: "100%", pattern: `"%100\\\\%%"` },
+      { input: "snake_case", pattern: `"%snake\\\\_case%"` },
+      // Bare backslash from the user is also doubled.
+      { input: "win\\path", pattern: `"%win\\\\path%"` },
       // Plain alphanumerics get the same quoting treatment for
       // consistency — the cost is negligible vs. the safety win.
       { input: "Joe", pattern: `"%Joe%"` }
@@ -227,7 +241,7 @@ describe("listCustomerMemories", () => {
       const { client, fromCalls } = makeClient({ fromTerminator: { data: [], error: null } });
       await listCustomerMemories(BIZ, { search: input }, client);
       const orCall = fromCalls[0]?.calls.find((c) => c.name === "or");
-      expect(orCall, `case ${input}`).toBeDefined();
+      expect(orCall, `case ${JSON.stringify(input)}`).toBeDefined();
       expect(String(orCall?.args[0])).toBe(
         `display_name.ilike.${pattern},customer_e164.ilike.${pattern}`
       );

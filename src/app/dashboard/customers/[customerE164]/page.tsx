@@ -18,6 +18,7 @@ import {
   getCustomerMemory,
   listSmsHistoryForCustomer
 } from "@/lib/customer-memory/db";
+import { listTranscriptsForCaller } from "@/lib/db/voice-transcripts";
 import { CustomerProfileEditor } from "@/components/dashboard/CustomerProfileEditor";
 
 export const dynamic = "force-dynamic";
@@ -55,9 +56,17 @@ export default async function CustomerDetailPage({ params }: Props) {
   const memory = await getCustomerMemory(business.id, customerE164);
   if (!memory) notFound();
 
-  const smsHistory = await listSmsHistoryForCustomer(business.id, customerE164, {
-    limit: 50
-  });
+  // Phase 4 + 4b: pull SMS + voice in parallel so the page hydrates in
+  // one round-trip group rather than serial. Voice list is capped at
+  // 10 — the per-call transcript page is one click away for full detail.
+  const [smsHistory, voiceTranscripts] = await Promise.all([
+    listSmsHistoryForCustomer(business.id, customerE164, { limit: 50 }),
+    // Tolerate transcript table errors here so a voice-table outage
+    // doesn't block the SMS-only customer detail page from rendering.
+    listTranscriptsForCaller(business.id, customerE164, { limit: 10 }).catch(
+      () => []
+    )
+  ]);
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -176,12 +185,62 @@ export default async function CustomerDetailPage({ params }: Props) {
             All calls →
           </Link>
         </div>
-        <p className="text-xs text-parchment/50">
-          Recent voice calls for this customer appear in the Calls dashboard.
-          Cross-linking individual transcripts here is coming with Phase 4
-          follow-up.
-        </p>
+        {voiceTranscripts.length === 0 ? (
+          <p className="text-xs text-parchment/50">
+            No voice calls from this number yet.
+          </p>
+        ) : (
+          <ul className="space-y-2">
+            {voiceTranscripts.map((t) => {
+              // Note: deep-link uses the transcript row UUID, not the
+              // Telnyx call_control_id (which contains a `:` that gets
+              // path-decoded inconsistently between Cloudflare/Vercel
+              // and Next.js — see getTranscriptById docstring).
+              const durationLabel =
+                t.started_at && t.ended_at
+                  ? formatDurationShort(t.started_at, t.ended_at)
+                  : t.status === "in_progress"
+                    ? "in progress"
+                    : null;
+              return (
+                <li key={t.id} className="border-l-2 border-parchment/10 pl-3">
+                  <Link
+                    href={`/dashboard/calls/${t.id}`}
+                    className="text-sm text-parchment/90 hover:text-parchment transition-colors"
+                  >
+                    <span className="text-[10px] uppercase tracking-wide text-parchment/40 mr-2">
+                      {t.started_at ? <LocalDateTime iso={t.started_at} /> : "—"}
+                    </span>
+                    {durationLabel && (
+                      <span className="text-xs text-parchment/60 mr-2">
+                        ({durationLabel})
+                      </span>
+                    )}
+                    <span className="text-claw-green">view transcript →</span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </Card>
     </div>
   );
+}
+
+/**
+ * Compact "1m 22s" / "47s" / "1h 3m" formatter for the voice-calls
+ * cross-link list. Lives inline because it's tiny and only consumed
+ * by this view; promote to a util if a second caller appears.
+ */
+function formatDurationShort(startedAt: string, endedAt: string): string {
+  const ms = Math.max(0, Date.parse(endedAt) - Date.parse(startedAt));
+  if (!Number.isFinite(ms) || ms === 0) return "—";
+  const totalSec = Math.round(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
 }

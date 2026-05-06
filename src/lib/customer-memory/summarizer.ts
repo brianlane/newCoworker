@@ -29,6 +29,7 @@
 import { getBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
 import { callRowboatChat, type RowboatChatMessage } from "@/lib/rowboat/chat";
+import { listVoiceTurnsForCustomer as defaultListVoiceTurns } from "@/lib/db/voice-transcripts";
 import {
   getCustomerMemory,
   listSmsHistoryForCustomer,
@@ -215,13 +216,24 @@ export async function summarizeCustomerMemory(
   let voiceTurns: VoiceTurnEntry[] = [];
   let smsHistory: SmsHistoryEntry[] = [];
   try {
-    if (deps.listVoiceTurnsForCustomer) {
-      voiceTurns = await deps.listVoiceTurnsForCustomer(
-        businessId,
-        customerE164,
-        SUMMARY_INPUT_VOICE_CALLS
-      );
-    }
+    const _listVoiceTurns =
+      deps.listVoiceTurnsForCustomer ??
+      (async (b: string, c: string, limit: number) => {
+        const turns = await defaultListVoiceTurns(b, c, { maxCalls: limit });
+        return turns.map((t) => ({
+          // Default to ISO start of epoch on missing timestamps so the
+          // summarizer prompt never embeds the literal string "null"
+          // (which the model will echo back into its summary).
+          callStartedAt: t.callStartedAt ?? "1970-01-01T00:00:00Z",
+          role: t.role,
+          content: t.content
+        }));
+      });
+    voiceTurns = await _listVoiceTurns(
+      businessId,
+      customerE164,
+      SUMMARY_INPUT_VOICE_CALLS
+    );
     smsHistory = await _listSmsHistoryForCustomer(
       businessId,
       customerE164,

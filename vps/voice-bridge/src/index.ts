@@ -141,6 +141,48 @@ function createSupabaseTranscriptAdapter(
       if (error) {
         console.error("voice-transcript: finalize failed", error.message);
       }
+
+      // Phase 3b memory write-through: bump the (business, caller_e164)
+      // customer_memories counter and timestamp at end of every voice
+      // call. Mirrors what the SMS worker does after a successful
+      // exchange. This is what makes the cross-channel memory feel
+      // continuous: the next SMS or call from this number will see
+      // an up-to-date last_channel/last_interaction_at, and the
+      // nightly summarizer sweep will re-trigger if interaction_count
+      // crossed threshold.
+      //
+      // Best-effort:
+      //   - We don't have caller_e164 on the input here; the recorder
+      //     was created with the call's callerE164 in the closure. We
+      //     re-fetch from the transcript row so this stays self-
+      //     contained even when the recorder API evolves.
+      //   - A missing customer_memories table (VPS Supabase predates
+      //     migration 20260507000000) returns a 4xx that we swallow,
+      //     same shape as the read path above.
+      try {
+        const { data: t } = await supabase
+          .from("voice_call_transcripts")
+          .select("business_id, caller_e164")
+          .eq("id", input.transcriptId)
+          .maybeSingle();
+        const row = t as { business_id?: string; caller_e164?: string | null } | null;
+        if (row?.business_id && row.caller_e164) {
+          const { error: rpcErr } = await supabase.rpc("record_customer_interaction", {
+            p_business_id: row.business_id,
+            p_customer_e164: row.caller_e164,
+            p_channel: "voice",
+            p_display_name: null
+          });
+          if (rpcErr) {
+            console.warn("voice-transcript: record_customer_interaction failed", rpcErr.message);
+          }
+        }
+      } catch (err) {
+        console.warn(
+          "voice-transcript: customer-memory write-through error (non-fatal)",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
     }
   };
 }
@@ -434,6 +476,50 @@ function main(): void {
             ? createSupabaseTranscriptAdapter(supabase)
             : undefined;
 
+          // Phase 3b: cross-channel customer memory read. If we recognize
+          // this caller from prior SMS or voice interactions, pull the
+          // rolling summary so Gemini Live can pick up where the last
+          // conversation left off. Failure is non-fatal — first-time
+          // callers (no row) and DB hiccups both fall back to the
+          // vault-only prompt that voice has always used.
+          //
+          // The customer_memories table was added in
+          // supabase/migrations/20260507000000_customer_memories.sql.
+          // On VPS instances whose Supabase still predates that
+          // migration, the call returns a 4xx error which we swallow —
+          // again, a degraded prompt is acceptable, a refused call is
+          // not.
+          let customerMemorySummary: string | undefined;
+          if (fromE164Info) {
+            try {
+              const { data: memRow } = await supabase
+                .from("customer_memories")
+                .select("summary_md, pinned_md, display_name, total_interaction_count")
+                .eq("business_id", businessId)
+                .eq("customer_e164", fromE164Info)
+                .maybeSingle();
+              if (memRow) {
+                const segments: string[] = [];
+                const name = (memRow as { display_name?: string | null }).display_name?.trim();
+                if (name) segments.push(`Caller: ${name}`);
+                const total = (memRow as { total_interaction_count?: number }).total_interaction_count ?? 0;
+                if (total > 0) {
+                  segments.push(`Prior interactions with this business: ${total}.`);
+                }
+                const pinned = (memRow as { pinned_md?: string | null }).pinned_md?.trim();
+                if (pinned) segments.push(`Owner-pinned notes: ${pinned}`);
+                const summary = (memRow as { summary_md?: string | null }).summary_md?.trim();
+                if (summary) segments.push(summary);
+                customerMemorySummary = segments.length > 0 ? segments.join("\n") : undefined;
+              }
+            } catch (memErr) {
+              console.warn("voice-bridge: customer_memories lookup failed (non-fatal)", {
+                callControlId,
+                error: memErr instanceof Error ? memErr.message : String(memErr)
+              });
+            }
+          }
+
           const bridge = await createGeminiTelnyxBridge({
             ws,
             businessId,
@@ -448,7 +534,8 @@ function main(): void {
             vault,
             callerE164: fromE164Info || "",
             voiceTools,
-            transcriptAdapter
+            transcriptAdapter,
+            customerMemorySummary
           });
           onTelnyxGemini = bridge.onTelnyxMessage;
           geminiTeardown = bridge.teardown;

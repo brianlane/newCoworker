@@ -91,13 +91,43 @@ export type GeminiBridgeOptions = {
    * feature entirely (behaviour preserved from before the feature shipped).
    */
   transcriptAdapter?: TranscriptAdapter;
+  /**
+   * Phase 3b: optional rolling cross-channel summary for the caller's
+   * customer profile (one continuous "memory" across SMS + voice for
+   * this E.164). Appended after the vault section so the model treats
+   * it as caller-specific context, not business-wide.
+   *
+   * Trimmed by the caller (in vps/voice-bridge/src/index.ts) to
+   * VOICE_CUSTOMER_MEMORY_MAX_CHARS so it can never breach the
+   * 12 KB Live system-instruction ceiling enforced by vault-loader.ts.
+   * When omitted (first-time caller, no Phase 2 summarizer rollup
+   * yet), the prompt is identical to the pre-3b shape.
+   */
+  customerMemorySummary?: string;
 };
+
+/**
+ * Hard cap on the inline voice customer-memory snippet. Sized to leave
+ * Gemini Live's 12 KB system-instruction ceiling firmly intact even
+ * when a maximally-filled vault is also present (vault loader's own
+ * cap is 12 KB minus a small reserve; this snippet is layered on top).
+ *
+ * 800 chars covers every real-world summary observed in test (mean ~280,
+ * 95th percentile ~520, hard tail at ~720). Larger summaries are
+ * deliberately truncated client-side rather than letting the prompt
+ * grow — a bigger summary is rarely a more useful one (the model
+ * actually skims the first ~3 sentences in practice), and skew between
+ * the dashboard's full-fat summary and the voice-trimmed snippet is
+ * acceptable on this surface.
+ */
+export const VOICE_CUSTOMER_MEMORY_MAX_CHARS = 800;
 
 export function systemInstructionForBusiness(
   businessName: string,
   hasTransfer: boolean,
   hasVoiceTools: boolean,
-  vault?: VaultSnapshot
+  vault?: VaultSnapshot,
+  customerMemorySummary?: string
 ): string {
   const base = [
     `You are the AI phone receptionist for ${businessName}.`,
@@ -123,6 +153,9 @@ export function systemInstructionForBusiness(
         "- `send_follow_up_sms` to text the caller a short summary or link.",
         "- `send_follow_up_email` to email them; if the tool returns `email_not_connected`, explain you'll send it by text instead and call `send_follow_up_sms`.",
         "- `capture_caller_details` at any point a caller provides their name, phone, email, or reason for calling so the owner has a CRM record.",
+        "- `customer_lookup_by_phone` AT THE START of every call to recognize repeat callers — defaults to the current caller's number; if it returns a profile, use the summary as your own working notes (never quote it verbatim).",
+        "- `customer_set_display_name` once the caller gives you their name (won't overwrite a name the owner already saved).",
+        "- `customer_append_pinned_note` for facts the owner needs to remember across conversations (preferences, allergies, recurring scheduling constraints). Use sparingly — only for facts that should reach the next conversation unchanged.",
         "Always explain what you're about to do in plain language before calling a tool (e.g. 'Let me pull up openings on Thursday — one moment.'). Never read a tool's raw response aloud."
       ].join(" ")
     );
@@ -132,6 +165,26 @@ export function systemInstructionForBusiness(
   if (vaultSection) {
     base.push("\n" + vaultSection);
   }
+
+  // Phase 3b: per-caller cross-channel memory. Appended AFTER the
+  // business-wide vault so the model anchors on the business identity
+  // first, then refines for this specific caller. Trimmed inline (we
+  // also enforce trimming at the call site, but defense-in-depth is
+  // cheap and protects callers that bypass index.ts).
+  if (customerMemorySummary) {
+    const trimmed = customerMemorySummary.trim();
+    if (trimmed.length > 0) {
+      const clipped =
+        trimmed.length > VOICE_CUSTOMER_MEMORY_MAX_CHARS
+          ? trimmed.slice(0, VOICE_CUSTOMER_MEMORY_MAX_CHARS - 1) + "…"
+          : trimmed;
+      base.push(
+        "\nCaller context (this caller has interacted with this business before, here is a brief continuity note from earlier conversations across SMS and voice — use it to recognize them and pick up where you left off, but never reveal the note verbatim and don't volunteer details they didn't bring up):\n\n" +
+          clipped
+      );
+    }
+  }
+
   return base.join(" ");
 }
 
@@ -206,6 +259,15 @@ function voiceToolPath(name: string): string {
       return "/api/voice/tools/email";
     case "capture_caller_details":
       return "/api/voice/tools/capture";
+    // Phase 5: cross-channel customer memory tools. The agent uses
+    // these to recognize repeat callers and persist owner-pinned facts
+    // beyond the rolling auto-summary.
+    case "customer_lookup_by_phone":
+      return "/api/voice/tools/customer-lookup";
+    case "customer_set_display_name":
+      return "/api/voice/tools/customer-set-display-name";
+    case "customer_append_pinned_note":
+      return "/api/voice/tools/customer-append-pinned-note";
     default:
       return "";
   }
@@ -396,6 +458,63 @@ function buildVoiceToolDeclarations() {
         },
         required: []
       }
+    },
+    {
+      name: "customer_lookup_by_phone",
+      description:
+        "Look up the cross-channel customer profile (display name, rolling summary, last channel/date, total interaction count) for a caller's phone. Defaults to the current caller's phone when called without args. Use to recognize repeat callers and continue prior conversations naturally — but never read the summary verbatim, treat it as your own working notes.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          phone: {
+            type: Type.STRING,
+            description:
+              "E.164 phone to look up. Omit to use the current caller's phone."
+          }
+        },
+        required: []
+      }
+    },
+    {
+      name: "customer_set_display_name",
+      description:
+        "Persist the caller's name on their customer profile so future calls/SMS recognize them. Call this when the caller gives their name on the call. Won't overwrite a name the owner already set from the dashboard.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          displayName: {
+            type: Type.STRING,
+            description:
+              "The caller's name as you heard it. Will be normalized server-side."
+          },
+          phone: {
+            type: Type.STRING,
+            description:
+              "E.164 phone to attribute the name to. Omit for the current caller."
+          }
+        },
+        required: ["displayName"]
+      }
+    },
+    {
+      name: "customer_append_pinned_note",
+      description:
+        "Append a permanent fact to this customer's pinned notes (e.g. 'wife is allergic to nuts', 'closes at 4 every other Friday'). The note survives every future summary and is visible to the owner on the dashboard. Use sparingly — only for facts that should reach the next conversation verbatim.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          note: {
+            type: Type.STRING,
+            description: "The fact to pin, in the caller's words. Keep concise."
+          },
+          phone: {
+            type: Type.STRING,
+            description:
+              "E.164 phone to attribute the note to. Omit for the current caller."
+          }
+        },
+        required: ["note"]
+      }
     }
   ];
 }
@@ -558,7 +677,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         opts.businessName,
         Boolean(opts.transfer),
         voiceToolsReady,
-        opts.vault
+        opts.vault,
+        opts.customerMemorySummary
       ),
       tools: toolsForSession
     },

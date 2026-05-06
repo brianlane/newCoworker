@@ -115,3 +115,105 @@ export async function listTurns(
   if (error) throw new Error(`listTurns: ${error.message}`);
   return (data as VoiceCallTranscriptTurnRow[] | null) ?? [];
 }
+
+/**
+ * Cross-link helper for the per-customer detail page (Phase 4b).
+ *
+ * Returns recent transcripts for one (business_id, caller_e164) pair,
+ * newest first, capped at MAX_LIST_LIMIT. Only `caller_e164` matches —
+ * outbound calls (caller is the business) aren't customer-attributable
+ * here.
+ *
+ * Used by /dashboard/customers/[customerE164] to render an inline
+ * "recent voice calls" section that deep-links into the per-call
+ * transcript pages, mirroring how the SMS history section works.
+ */
+export async function listTranscriptsForCaller(
+  businessId: string,
+  callerE164: string,
+  options: { limit?: number } = {},
+  client?: SupabaseClient
+): Promise<VoiceCallTranscriptRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const requested = options.limit ?? DEFAULT_LIST_LIMIT;
+  const limit = Math.min(Math.max(1, requested), MAX_LIST_LIMIT);
+  const { data, error } = await db
+    .from("voice_call_transcripts")
+    .select("*")
+    .eq("business_id", businessId)
+    .eq("caller_e164", callerE164)
+    .order("started_at", { ascending: false, nullsFirst: false })
+    .limit(limit);
+  if (error) throw new Error(`listTranscriptsForCaller: ${error.message}`);
+  return (data as VoiceCallTranscriptRow[] | null) ?? [];
+}
+
+/**
+ * All turns for the recent transcripts of one customer, joined and
+ * flattened into chronological order (oldest first). Used by the
+ * cross-channel summarizer (Phase 2) to render voice content into
+ * the summarizer prompt alongside SMS history.
+ *
+ * Capped (default 5 calls × ~30 turns each ≈ 150 rows, hard ceiling
+ * 500) so a noisy customer can't blow up the summarizer prompt
+ * budget.
+ */
+export type VoiceCustomerTurn = {
+  callStartedAt: string | null;
+  role: VoiceTranscriptTurnRole;
+  content: string;
+  transcriptId: string;
+};
+
+export async function listVoiceTurnsForCustomer(
+  businessId: string,
+  callerE164: string,
+  options: { maxCalls?: number; maxTurnsTotal?: number } = {},
+  client?: SupabaseClient
+): Promise<VoiceCustomerTurn[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const maxCalls = Math.min(Math.max(1, options.maxCalls ?? 5), 25);
+  const maxTurnsTotal = Math.min(Math.max(1, options.maxTurnsTotal ?? 150), 500);
+  const transcripts = await listTranscriptsForCaller(
+    businessId,
+    callerE164,
+    { limit: maxCalls },
+    db
+  );
+  if (transcripts.length === 0) return [];
+  // One bulk SELECT for all transcript ids — much cheaper than N
+  // round trips on the summarizer hot path.
+  const ids = transcripts.map((t) => t.id);
+  const { data, error } = await db
+    .from("voice_call_transcript_turns")
+    .select("transcript_id, role, content, started_at, turn_index")
+    .in("transcript_id", ids)
+    .order("turn_index", { ascending: true })
+    .limit(maxTurnsTotal);
+  if (error) throw new Error(`listVoiceTurnsForCustomer: ${error.message}`);
+  type Row = {
+    transcript_id: string;
+    role: VoiceTranscriptTurnRole;
+    content: string;
+    started_at: string | null;
+    turn_index: number;
+  };
+  const startedAtById = new Map(transcripts.map((t) => [t.id, t.started_at]));
+  return ((data as Row[] | null) ?? [])
+    .map((r) => ({
+      callStartedAt: r.started_at ?? startedAtById.get(r.transcript_id) ?? null,
+      role: r.role,
+      content: r.content,
+      transcriptId: r.transcript_id
+    }))
+    .sort((a, b) => {
+      // Chronological: order calls by start time, turns by turn_index
+      // within a call. The DB ordering above gives us turn_index but
+      // the SELECT crosses transcripts; this sort fixes inter-call
+      // ordering without an extra ORDER BY column.
+      const aTs = a.callStartedAt ?? "";
+      const bTs = b.callStartedAt ?? "";
+      if (aTs !== bTs) return aTs < bTs ? -1 : 1;
+      return 0;
+    });
+}
