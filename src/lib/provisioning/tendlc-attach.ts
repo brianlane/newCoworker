@@ -182,6 +182,12 @@ export async function attachBusinessDidToCampaign(
           campaignId: config.campaignId
         });
       }
+      if (isCampaignStillProcessing(err)) {
+        return persistAndReturn(input.businessId, input.dbClient, {
+          kind: "pending",
+          reason: `attach_pending: ${describeError(err)}`
+        });
+      }
       if (err.status >= 400 && err.status < 500) {
         return persistAndReturn(input.businessId, input.dbClient, {
           kind: "rejected",
@@ -232,4 +238,14 @@ function describeError(err: unknown): string {
   }
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+function isCampaignStillProcessing(err: TendlcApiError): boolean {
+  if (err.status !== 400) return false;
+  return (
+    err.body.includes('"code": "10036"') ||
+    err.body.includes('"code":"10036"') ||
+    err.body.toLowerCase().includes("campaign") &&
+      err.body.toLowerCase().includes("still pending")
+  );
 }
