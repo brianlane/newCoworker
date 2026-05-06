@@ -582,6 +582,20 @@ describe("telnyx-routes DB layer", () => {
       );
     });
 
+    it("explicit campaignId=undefined leaves the column untouched (branch coverage)", async () => {
+      const c = chain();
+      c.single.mockResolvedValue({ data: sampleSettings, error: null });
+      // Branch coverage: hit the `input.campaignId !== undefined` false
+      // path with an EXPLICITLY undefined value (not just absent). This
+      // is what the orchestrator passes when it has no campaign id yet.
+      await setBusinessMessagingCampaignStatus(
+        { businessId: "biz", status: "pending", campaignId: undefined },
+        makeDb(c) as never
+      );
+      const [row] = c.upsert.mock.calls[0];
+      expect(row).not.toHaveProperty("telnyx_messaging_campaign_id");
+    });
+
     it("explicit campaignId=null clears any existing pairing", async () => {
       const c = chain();
       c.single.mockResolvedValue({ data: sampleSettings, error: null });

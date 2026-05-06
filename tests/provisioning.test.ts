@@ -20,6 +20,7 @@ vi.mock("@/lib/provisioning/progress", () => ({
 
 import {
   describeProvisioningError,
+  formatTendlcAttachProgress,
   orchestrateProvisioning,
   runWithSshConnectRetry
 } from "@/lib/provisioning/orchestrate";
@@ -840,7 +841,11 @@ describe("provisioning/orchestrate", () => {
         )
       ).resolves.not.toThrow();
       // Reset to the default mock so subsequent tests aren't poisoned.
-      vi.mocked(setBusinessMessagingCampaignStatus).mockResolvedValue(undefined);
+      // mockResolvedValue is type-checked against the original signature,
+      // so cast through `any` — we only need the test mock to not throw.
+      vi.mocked(setBusinessMessagingCampaignStatus).mockResolvedValue(
+        undefined as never
+      );
     });
 
     it("falls back search.countryCode to 'US' when TELNYX_DEFAULT_COUNTRY is unset", async () => {
@@ -1554,6 +1559,62 @@ describe("provisioning/orchestrate", () => {
       await expect(runWithSshConnectRetry(fn, { sleep })).rejects.toBe(boom);
       expect(fn).toHaveBeenCalledTimes(1);
       expect(sleep).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("formatTendlcAttachProgress", () => {
+    it("registered: clears the thinking status so the progress UI advances", () => {
+      const out = formatTendlcAttachProgress(
+        { kind: "registered" },
+        "+15550001111"
+      );
+      expect(out).toEqual({
+        message: "SMS 10DLC registered (+15550001111)",
+        status: undefined
+      });
+    });
+
+    it("pending: keeps thinking status, surfaces the carrier reason verbatim", () => {
+      const out = formatTendlcAttachProgress(
+        { kind: "pending", reason: "campaign_status:VERIFIED" },
+        "+15550002222"
+      );
+      expect(out.message).toBe(
+        "SMS 10DLC queued (carrier vetting): campaign_status:VERIFIED"
+      );
+      expect(out.status).toBe("thinking");
+    });
+
+    it("rejected: keeps thinking, includes the retry-via-worker hint", () => {
+      const out = formatTendlcAttachProgress(
+        { kind: "rejected", reason: "10dlc/422 brand_unverified" },
+        "+15550003333"
+      );
+      expect(out.message).toBe(
+        "SMS 10DLC rejected: 10dlc/422 brand_unverified. Retrying via worker."
+      );
+      expect(out.status).toBe("thinking");
+    });
+
+    it("error (transient): keeps thinking, distinguishes 'transient failure' wording from rejected", () => {
+      const out = formatTendlcAttachProgress(
+        { kind: "error", reason: "getCampaign_failed: ETIMEDOUT" },
+        "+15550004444"
+      );
+      expect(out.message).toBe(
+        "SMS 10DLC transient failure: getCampaign_failed: ETIMEDOUT. Retrying via worker."
+      );
+      expect(out.status).toBe("thinking");
+    });
+
+    it("falls back to 'unknown' reason when the outcome shape is missing it", () => {
+      // Defence against future TendlcAttachOutcome variants that forget
+      // to populate `reason` — the progress copy must not render 'undefined'.
+      const out = formatTendlcAttachProgress(
+        { kind: "pending" },
+        "+15550005555"
+      );
+      expect(out.message).toBe("SMS 10DLC queued (carrier vetting): unknown");
     });
   });
 });

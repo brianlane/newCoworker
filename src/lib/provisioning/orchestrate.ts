@@ -413,6 +413,47 @@ type ProvisioningErrorDetail = {
   body?: unknown;
 };
 
+/**
+ * Build the user-facing progress copy for the 10DLC attach phase.
+ *
+ * Pulled out of the orchestrator body because (a) v8 was missing branch
+ * coverage on the inline ternary, and (b) when the marketing/support
+ * team inevitably wants to tweak the wording it should be one focused
+ * change with regression tests, not a 600-line file edit.
+ *
+ * `registered` is the only status that drops `status: undefined` so the
+ * progress UI can advance the phase indicator. Every other outcome
+ * stays in `thinking` because the retry worker still has work to do.
+ */
+export function formatTendlcAttachProgress(
+  outcome: { kind: "registered" | "pending" | "rejected" | "error"; reason?: string },
+  toE164: string
+): { message: string; status: "thinking" | undefined } {
+  if (outcome.kind === "registered") {
+    return {
+      message: `SMS 10DLC registered (${toE164})`,
+      status: undefined
+    };
+  }
+  const reason = outcome.reason ?? "unknown";
+  if (outcome.kind === "pending") {
+    return {
+      message: `SMS 10DLC queued (carrier vetting): ${reason}`,
+      status: "thinking"
+    };
+  }
+  if (outcome.kind === "rejected") {
+    return {
+      message: `SMS 10DLC rejected: ${reason}. Retrying via worker.`,
+      status: "thinking"
+    };
+  }
+  return {
+    message: `SMS 10DLC transient failure: ${reason}. Retrying via worker.`,
+    status: "thinking"
+  };
+}
+
 export function describeProvisioningError(err: unknown): ProvisioningErrorDetail {
   if (err instanceof Error && err.name === "HostingerApiError") {
     const e = err as Error & { endpoint?: unknown; status?: unknown; body?: unknown };
@@ -706,23 +747,17 @@ async function runOrchestrator(
             businessId,
             toE164
           });
+          const progress = formatTendlcAttachProgress(outcome, toE164);
           await recordProvisioningProgress({
             businessId,
             phase: "did_10dlc_attach",
             percent: 39,
-            message:
-              outcome.kind === "registered"
-                ? `SMS 10DLC registered (${toE164})`
-                : outcome.kind === "pending"
-                  ? `SMS 10DLC queued (carrier vetting): ${outcome.reason}`
-                  : outcome.kind === "rejected"
-                    ? `SMS 10DLC rejected: ${outcome.reason}. Retrying via worker.`
-                    : `SMS 10DLC transient failure: ${outcome.reason}. Retrying via worker.`,
+            message: progress.message,
             source: "orchestrator",
             // Always "thinking" for non-registered: a pending/rejected DID
             // doesn't fail the orchestrator (voice + inbound SMS still
             // work) and the retry worker handles the rest.
-            status: outcome.kind === "registered" ? undefined : "thinking"
+            status: progress.status
           });
         } catch (err) {
           // Including MissingTendlcConfigError — surfaces in progress log
