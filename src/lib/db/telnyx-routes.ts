@@ -266,15 +266,19 @@ export async function setBusinessMessagingCampaignStatus(
 ): Promise<BusinessTelnyxSettingsRow> {
   const db = client ?? (await createSupabaseServiceClient());
   const now = new Date().toISOString();
+  // Use ternary-spread (rather than `if (cond) { row.x = y; }`) so v8
+  // can instrument BOTH branches of the optional-column update. A bare
+  // `if` with no `else` left v8 + TS source maps reporting a synthetic
+  // uninstrumented "else" branch on the campaignId line.
   const row: Record<string, unknown> = {
     business_id: input.businessId,
     telnyx_messaging_campaign_status: input.status,
     telnyx_messaging_campaign_last_attempt_at: now,
-    updated_at: now
+    updated_at: now,
+    ...(input.campaignId !== undefined
+      ? { telnyx_messaging_campaign_id: input.campaignId }
+      : {})
   };
-  if (input.campaignId !== undefined) {
-    row.telnyx_messaging_campaign_id = input.campaignId;
-  }
   if (input.status === "registered") {
     row.telnyx_messaging_campaign_attached_at = now;
     row.telnyx_messaging_campaign_last_error = null;

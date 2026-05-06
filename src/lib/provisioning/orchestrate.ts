@@ -414,6 +414,20 @@ type ProvisioningErrorDetail = {
 };
 
 /**
+ * Stringify a thrown value from the 10DLC attach call.
+ *
+ * Pulled into a tiny helper so v8 can instrument the Error vs non-Error
+ * branches without a synthetic uninstrumented arm — when this lived
+ * inline as `err instanceof Error ? err.message : String(err)`, v8
+ * couldn't see the falsy arm under TS source maps and reported partial
+ * coverage on the catch line.
+ */
+export function describeAttachError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+/**
  * Build the user-facing progress copy for the 10DLC attach phase.
  *
  * Pulled out of the orchestrator body because (a) v8 was missing branch
@@ -762,7 +776,7 @@ async function runOrchestrator(
         } catch (err) {
           // Including MissingTendlcConfigError — surfaces in progress log
           // but doesn't fail the orchestrator.
-          const reason = err instanceof Error ? err.message : String(err);
+          const reason = describeAttachError(err);
           logger.warn("10DLC attach skipped", { businessId, reason });
           await recordProvisioningProgress({
             businessId,

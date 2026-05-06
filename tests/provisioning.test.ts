@@ -19,6 +19,7 @@ vi.mock("@/lib/provisioning/progress", () => ({
 }));
 
 import {
+  describeAttachError,
   describeProvisioningError,
   formatTendlcAttachProgress,
   orchestrateProvisioning,
@@ -1559,6 +1560,23 @@ describe("provisioning/orchestrate", () => {
       await expect(runWithSshConnectRetry(fn, { sleep })).rejects.toBe(boom);
       expect(fn).toHaveBeenCalledTimes(1);
       expect(sleep).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("describeAttachError", () => {
+    it("returns Error.message for thrown Error instances", () => {
+      expect(describeAttachError(new Error("boom"))).toBe("boom");
+    });
+
+    it("falls back to String(...) for non-Error values (string thrown)", () => {
+      expect(describeAttachError("rpc replica timeout")).toBe(
+        "rpc replica timeout"
+      );
+    });
+
+    it("falls back to String(...) for non-Error values (object thrown)", () => {
+      // Defence against libraries that throw plain objects.
+      expect(describeAttachError({ code: 503 })).toBe("[object Object]");
     });
   });
 
