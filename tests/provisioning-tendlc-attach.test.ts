@@ -293,9 +293,26 @@ describe("attachBusinessDidToCampaign", () => {
         new TendlcApiError(
           "/10dlc/phoneNumberCampaign",
           400,
-          '{ "errors": [{ "code": "10036", "detail": "Resource is being processed" }] }'
+          '{\n  "errors": [{\n    "code"\n      :\n    "10036",\n    "detail": "Resource is being processed"\n  }]\n}'
         )
       )
+    });
+    const outcome = await attachBusinessDidToCampaign({
+      businessId: "biz",
+      toE164: "+15551234567",
+      client: client as never,
+      config: CONFIG
+    });
+    expect(outcome.kind).toBe("pending");
+  });
+
+  it("pending: attach 400 / code 10036 handles non-JSON bodies with whitespace", async () => {
+    const client = makeClient({
+      createPhoneNumberCampaign: vi
+        .fn()
+        .mockRejectedValue(
+          new TendlcApiError("/10dlc/phoneNumberCampaign", 400, 'error: "code" \n : \n "10036"')
+        )
     });
     const outcome = await attachBusinessDidToCampaign({
       businessId: "biz",

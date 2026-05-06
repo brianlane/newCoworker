@@ -242,10 +242,27 @@ function describeError(err: unknown): string {
 
 function isCampaignStillProcessing(err: TendlcApiError): boolean {
   if (err.status !== 400) return false;
+  const lowerBody = err.body.toLowerCase();
   return (
-    err.body.includes('"code": "10036"') ||
-    err.body.includes('"code":"10036"') ||
-    err.body.toLowerCase().includes("campaign") &&
-      err.body.toLowerCase().includes("still pending")
+    hasTelnyxErrorCode(err.body, "10036") ||
+    (lowerBody.includes("campaign") && lowerBody.includes("still pending"))
   );
+}
+
+function hasTelnyxErrorCode(body: string, code: string): boolean {
+  try {
+    return objectContainsTelnyxCode(JSON.parse(body), code);
+  } catch {
+    return new RegExp(`"code"\\s*:\\s*"${code}"`).test(body);
+  }
+}
+
+function objectContainsTelnyxCode(value: unknown, code: string): boolean {
+  if (value === null || typeof value !== "object") return false;
+  if (Array.isArray(value)) {
+    return value.some((item) => objectContainsTelnyxCode(item, code));
+  }
+  const record = value as Record<string, unknown>;
+  if (String(record.code) === code) return true;
+  return Object.values(record).some((child) => objectContainsTelnyxCode(child, code));
 }
