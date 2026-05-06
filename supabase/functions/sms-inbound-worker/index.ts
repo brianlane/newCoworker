@@ -37,6 +37,18 @@ const NCW_IDEM_TAG_PREFIX = "ncw_idem:";
 // the model headroom while still bounding a stuck VPS.
 const ROWBOAT_CHAT_TIMEOUT_MS = 60_000;
 
+// Combined wall-clock budget across the initial Rowboat /chat call AND
+// the optional stateless retry. Sized against the pg_cron HTTP cap of
+// 90s (see migrations/20260505180000_sms_inbound_worker_cron_timeout.sql)
+// minus a 10s reserve for Telnyx send + DB writes + telemetry that
+// runs after Rowboat returns. Without this, a slow first failure
+// (~60s timeoutMs) plus a fresh full-window retry could push total
+// Rowboat wall time to ~120s — well past the 90s cron cap, so
+// pg_cron disconnects, the outbound never goes out, and the job sits
+// at 'processing' until the stale-claim recovery requeues it.
+// (Codex P1 / Cursor Bugbot Medium feedback on PR #74.)
+const ROWBOAT_RETRY_BUDGET_MS = 80_000;
+
 
 /** Best-effort: Telnyx list-messages filter may vary by API version — safe to return null. */
 async function telnyxTryRecoverOutboundMessageId(apiKey: string, idem: string): Promise<string | null> {
@@ -368,6 +380,9 @@ serve(async (req: Request) => {
           conversationId: existingConv,
           state: thread?.rowboat_state ?? null,
           timeoutMs: ROWBOAT_CHAT_TIMEOUT_MS,
+          // Cap the combined initial+retry wall time under the 90s
+          // pg_cron HTTP timeout (see ROWBOAT_RETRY_BUDGET_MS).
+          budgetMs: ROWBOAT_RETRY_BUDGET_MS,
           customerPreamble
         });
         reply = parsed.reply;
@@ -418,7 +433,18 @@ serve(async (req: Request) => {
             .eq("customer_e164", fromE164);
         }
 
-        convId = (stableConvId || parsed.conversationId || existingConv || "").trim() || undefined;
+        // When the stateless retry succeeded WITHOUT a fresh
+        // conversationId from Rowboat, the existing conversationId is
+        // known-stale (the retry just proved that by succeeding
+        // without it). Falling back to existingConv here would persist
+        // the stale ID via complete_sms_inbound_job_done, advertising
+        // a known-invalid continuation on the completed job record
+        // (Cursor Bugbot Low on PR #74). Leave convId undefined in
+        // that case so the job row's rowboat_conversation_id is set
+        // to NULL, matching the sms_rowboat_threads delete above.
+        convId = parsed.retriedStateless
+          ? (stableConvId || (parsed.conversationId ?? "").trim() || undefined)
+          : (stableConvId || (parsed.conversationId ?? "").trim() || existingConv || undefined);
 
         // Denormalize the normalized customer E.164 onto the job row
         // so the customers page (Phase 4) + nightly cross-channel

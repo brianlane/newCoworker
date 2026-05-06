@@ -47,6 +47,11 @@ export type RowboatChatCallInput = {
   userText: string;
   conversationId: string | null;
   state: unknown | null;
+  /**
+   * Per-call timeout for a single Rowboat round trip. NOTE: this is
+   * NOT the combined budget across initial + retry — that's
+   * `budgetMs` on the fallback wrapper below.
+   */
   timeoutMs: number;
   /**
    * Optional: business-level static memory (vault preamble) +
@@ -62,6 +67,39 @@ export type RowboatChatCallInput = {
    */
   customerPreamble?: string | null;
 };
+
+export type StatelessFallbackInput = RowboatChatCallInput & {
+  /**
+   * Combined wall-clock budget for the initial call AND the optional
+   * stateless retry. When omitted, falls back to `timeoutMs * 2` —
+   * preserves pre-fix behaviour for callers that haven't been
+   * updated, but new callers MUST pass an explicit budget aligned
+   * with the surrounding cron / Edge function timeout.
+   *
+   * Why it's needed: pg_cron caps the SMS worker HTTP invocation at
+   * 90s (see migrations/20260505180000_sms_inbound_worker_cron_timeout.sql).
+   * A first call that fails at the 60s `timeoutMs` ceiling plus a
+   * fresh-window retry of another 60s would put total Rowboat wall
+   * time at ~120s, well past the cron cap — pg_cron disconnects, the
+   * Telnyx outbound never goes out, the job sits at 'processing'
+   * until the stale-claim sweep requeues it (Codex P1 / Cursor
+   * Bugbot Medium feedback on PR #74). Bounding the retry at
+   * (budget − elapsed) keeps the sum bounded.
+   */
+  budgetMs?: number;
+  /**
+   * Floor on the post-first-call remaining budget below which we
+   * skip the stateless retry entirely. Same shape as the dashboard
+   * chat helper: a Rowboat call that pages in a cold model takes
+   * ~5s minimum on a small VPS, so anything below this is almost
+   * guaranteed to abort before yielding a reply. Skipping surfaces
+   * the *first* error to the caller — a more honest signal than
+   * a self-inflicted "rowboat_timeout" from a doomed retry.
+   */
+  retryMinBudgetMs?: number;
+};
+
+export const DEFAULT_RETRY_MIN_BUDGET_MS = 5_000;
 
 export type RowboatChatCallResult = {
   reply: string;
@@ -184,13 +222,28 @@ export async function callRowboatChatOnce(
  * Why ONLY one retry: if the stateless retry also fails, the problem
  * isn't conversation state and another attempt won't help. Surfacing
  * the *retry's* error gives the caller the more recent diagnostic.
+ *
+ * Budget contract: `budgetMs` (when supplied) is the COMBINED wall
+ * time across both attempts. The retry's timeoutMs is internally
+ * capped at (budgetMs − elapsedSinceEntry); the retry is skipped
+ * entirely when the remaining budget falls below
+ * `retryMinBudgetMs`. This prevents a slow first failure from
+ * granting the retry a fresh full window — exactly the race that
+ * blew past the SMS worker's 90s pg_cron cap on PR #74 (Codex P1 /
+ * Cursor Bugbot Medium).
  */
 export async function callSmsRowboatWithStatelessFallback(
-  input: RowboatChatCallInput,
+  input: StatelessFallbackInput,
   fetchImpl: typeof fetch = fetch
 ): Promise<StatelessFallbackResult> {
   const hadContinuation =
     typeof input.conversationId === "string" && input.conversationId.trim().length > 0;
+  // Default: pre-fix behaviour — both calls get the full timeoutMs
+  // independently. Callers SHOULD pass an explicit budgetMs so the
+  // sum is bounded by the surrounding cron / Edge timeout.
+  const budgetMs = input.budgetMs ?? input.timeoutMs * 2;
+  const retryMinBudgetMs = input.retryMinBudgetMs ?? DEFAULT_RETRY_MIN_BUDGET_MS;
+  const startedAt = Date.now();
   try {
     const out = await callRowboatChatOnce(input, fetchImpl);
     return { ...out, retriedStateless: false };
@@ -198,8 +251,29 @@ export async function callSmsRowboatWithStatelessFallback(
     const message = err instanceof Error ? err.message : String(err);
     const isStaleContinuation = hadContinuation && STATELESS_RETRY_ERRORS.has(message);
     if (!isStaleContinuation) throw err;
+
+    const elapsedMs = Date.now() - startedAt;
+    const remainingMs = budgetMs - elapsedMs;
+    if (remainingMs < retryMinBudgetMs) {
+      // Not enough wall time left to give the retry a realistic shot.
+      // Re-throw the FIRST error so callers see the actual diagnostic
+      // ("rowboat_http_500", say) instead of a self-inflicted
+      // "rowboat_timeout" from a doomed retry.
+      throw err;
+    }
+
     const out = await callRowboatChatOnce(
-      { ...input, conversationId: null, state: null },
+      {
+        ...input,
+        conversationId: null,
+        state: null,
+        // Cap the retry's per-call timeout at the remaining budget so
+        // a slow Rowboat that hangs near the budget edge still aborts
+        // cleanly inside the cron window. Also clamp by the original
+        // per-call timeoutMs so we never *extend* a single call past
+        // its configured ceiling.
+        timeoutMs: Math.min(input.timeoutMs, remainingMs)
+      },
       fetchImpl
     );
     return { ...out, retriedStateless: true };

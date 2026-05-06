@@ -62,7 +62,21 @@ export async function listCustomerMemories(
     .limit(limit);
   const search = options.search?.trim();
   if (search) {
-    const pattern = `%${search.replace(/[%_]/g, (m) => `\\${m}`)}%`;
+    // PostgREST `.or()` parses commas as condition separators and dots
+    // as field/operator/value delimiters inside the filter string,
+    // so a search like `"Smith, LLC"` or `"127.0"` would split into
+    // multiple malformed conditions and either error or silently
+    // match the wrong rows (Cursor Bugbot Medium on PR #74).
+    //
+    // Per PostgREST docs, values containing reserved chars must be
+    // wrapped in DOUBLE QUOTES inside the filter string, with any
+    // embedded double quotes escaped via backslash. We layer that on
+    // top of the existing SQL `LIKE` wildcard escape so a search of
+    // `100%` matches the literal `100%`, not "anything starting with
+    // 100".
+    const escapedForLike = search.replace(/[%_]/g, (m) => `\\${m}`);
+    const escapedForPostgrest = escapedForLike.replace(/"/g, '\\"');
+    const pattern = `"%${escapedForPostgrest}%"`;
     // Match either the display name or the raw E.164 — owners often
     // remember "Joe" but not the +1555… number, and vice versa.
     query = query.or(`display_name.ilike.${pattern},customer_e164.ilike.${pattern}`);

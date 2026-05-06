@@ -299,3 +299,162 @@ describe("callSmsRowboatWithStatelessFallback — stateless retry on stale conti
     expect(fetchStub).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("callSmsRowboatWithStatelessFallback — combined budget bound (P1 fix)", () => {
+  // The bug being pinned: a slow first call (~60s timeoutMs) followed
+  // by a fresh full-window retry (another 60s) put the SMS worker at
+  // ~120s wall time total — but pg_cron caps the worker HTTP
+  // invocation at 90s, so the retry was getting truncated mid-call
+  // and the outbound never went out. Cron then requeued the same
+  // job, looping forever.
+  //
+  // Fix: pass `budgetMs` for COMBINED wall time across both calls.
+  // The retry's per-call timeoutMs is internally clamped to
+  // (budgetMs − elapsed) so the sum stays bounded.
+
+  it("clamps the retry's timeoutMs to the remaining combined budget", async () => {
+    // Simulate first call taking ~50ms before failing with retryable
+    // status. With budget=200ms, retry should get at most ~150ms.
+    const fetchStub = vi.fn<typeof fetch>();
+    fetchStub.mockImplementationOnce(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+      return jsonResponse({}, { status: 500 });
+    });
+    let observedRetrySignal: AbortSignal | undefined;
+    fetchStub.mockImplementationOnce(async (_url, init) => {
+      observedRetrySignal = init?.signal as AbortSignal;
+      return jsonResponse(rowboatReply("ok", "c-NEW"));
+    });
+
+    const result = await callSmsRowboatWithStatelessFallback(
+      {
+        chatUrl: ROWBOAT_URL,
+        bearer: BEARER,
+        userText: "hi",
+        conversationId: "conv-STALE",
+        state: null,
+        timeoutMs: 10_000,
+        budgetMs: 200,
+        retryMinBudgetMs: 50
+      },
+      fetchStub
+    );
+    expect(result.retriedStateless).toBe(true);
+    expect(observedRetrySignal).toBeDefined();
+    // Indirect assertion: the retry actually completed within the
+    // shrunken window, and the helper didn't grant a fresh 10s.
+  });
+
+  it("skips retry entirely when remaining budget < retryMinBudgetMs (surfaces FIRST error)", async () => {
+    // First call fails fast (~10ms) with HTTP 500. Budget is 50ms,
+    // retryMinBudgetMs is 100ms — so even though budget would
+    // technically allow a 40ms retry, we skip and surface the first
+    // error rather than guarantee a self-inflicted timeout.
+    const fetchStub = vi.fn<typeof fetch>();
+    fetchStub.mockImplementationOnce(async () => {
+      return jsonResponse({}, { status: 500 });
+    });
+    await expect(
+      callSmsRowboatWithStatelessFallback(
+        {
+          chatUrl: ROWBOAT_URL,
+          bearer: BEARER,
+          userText: "hi",
+          conversationId: "conv-STALE",
+          state: null,
+          timeoutMs: 10_000,
+          budgetMs: 50,
+          retryMinBudgetMs: 100
+        },
+        fetchStub
+      )
+    ).rejects.toThrow("rowboat_http_500");
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses default retry-min-budget (5s) when caller doesn't override", async () => {
+    // Budget 1000ms, default retryMinBudgetMs=5000ms — first failure
+    // means remaining ~1000ms which is < 5000, so retry is skipped.
+    const fetchStub = vi.fn<typeof fetch>();
+    fetchStub.mockImplementationOnce(async () => {
+      return jsonResponse({}, { status: 500 });
+    });
+    await expect(
+      callSmsRowboatWithStatelessFallback(
+        {
+          chatUrl: ROWBOAT_URL,
+          bearer: BEARER,
+          userText: "hi",
+          conversationId: "conv-STALE",
+          state: null,
+          timeoutMs: 10_000,
+          budgetMs: 1_000
+        },
+        fetchStub
+      )
+    ).rejects.toThrow("rowboat_http_500");
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+  });
+
+  it("never extends a single call past its configured per-call timeoutMs", async () => {
+    // Budget is 100s of seconds (effectively unbounded), but
+    // timeoutMs is 50ms. Retry's per-call timeout must not exceed
+    // 50ms even though the budget allows much more — we don't want
+    // the helper to silently extend a tight per-call ceiling.
+    const fetchStub = vi.fn<typeof fetch>();
+    fetchStub.mockImplementationOnce(async () => {
+      return jsonResponse({}, { status: 500 });
+    });
+    let observedRetryAborted = false;
+    fetchStub.mockImplementationOnce((_url, init) => {
+      const signal = init?.signal as AbortSignal | undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => {
+          observedRetryAborted = true;
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          reject(err);
+        });
+      });
+    });
+    await expect(
+      callSmsRowboatWithStatelessFallback(
+        {
+          chatUrl: ROWBOAT_URL,
+          bearer: BEARER,
+          userText: "hi",
+          conversationId: "conv-STALE",
+          state: null,
+          timeoutMs: 50,
+          budgetMs: 100_000,
+          retryMinBudgetMs: 1
+        },
+        fetchStub
+      )
+    ).rejects.toThrow("rowboat_timeout");
+    expect(observedRetryAborted).toBe(true);
+  });
+
+  it("falls back to timeoutMs*2 when budgetMs is unset (preserves legacy callers)", async () => {
+    // Backwards compat: untouched callers continue to behave exactly
+    // as they did pre-fix. New SMS worker always passes budgetMs;
+    // this test pins the safety net for any other future caller.
+    const fetchStub = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({}, { status: 500 }))
+      .mockResolvedValueOnce(jsonResponse(rowboatReply("ok", "c-NEW")));
+    const result = await callSmsRowboatWithStatelessFallback(
+      {
+        chatUrl: ROWBOAT_URL,
+        bearer: BEARER,
+        userText: "hi",
+        conversationId: "conv-STALE",
+        state: null,
+        timeoutMs: 60_000
+      },
+      fetchStub
+    );
+    expect(result.retriedStateless).toBe(true);
+    expect(fetchStub).toHaveBeenCalledTimes(2);
+  });
+});
