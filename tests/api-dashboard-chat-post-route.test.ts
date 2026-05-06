@@ -355,9 +355,24 @@ describe("POST /api/dashboard/chat — Rowboat call budget", () => {
     expect(callArgs.timeoutMs).toBeLessThan(60_000);
   });
 
-  it("propagates the same timeoutMs into the stateless retry — otherwise the second attempt would silently inherit the SDK default and could outlive maxDuration", async () => {
+  // The retry budget is the COMBINED ceiling minus whatever the first
+  // call burned, NOT a fresh full window. Without this, a slow first
+  // failure (e.g. a Cloudflare-edge 502 returned ~25s into the call)
+  // plus a fresh 50s retry would push total Rowboat wall time to ~75s,
+  // outliving the 60s `maxDuration` and re-triggering the same
+  // Vercel-reaper race the per-route timeout was sized to avoid
+  // (Codex P2 / Cursor Bugbot Medium on PR #71).
+
+  it("retry's timeoutMs is bounded by remaining budget after the first call's elapsed time", async () => {
+    // Mock Date.now() to simulate the first call eating ~20s of the
+    // budget before failing. The helper reads it twice: once at entry,
+    // once after the first call's catch.
+    const dateNowSpy = vi.spyOn(Date, "now");
+    dateNowSpy
+      .mockReturnValueOnce(1_000_000) // t0 — entry into the helper
+      .mockReturnValueOnce(1_020_000); // t1 — after first call rejects (20s later)
     vi.mocked(callRowboatChat)
-      .mockRejectedValueOnce(new Error("rowboat_http_400"))
+      .mockRejectedValueOnce(new Error("rowboat_http_500"))
       .mockResolvedValueOnce({
         reply: "fresh reply",
         conversationId: "fresh-conv",
@@ -367,7 +382,60 @@ describe("POST /api/dashboard/chat — Rowboat call budget", () => {
     await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
     const firstCall = vi.mocked(callRowboatChat).mock.calls[0][0];
     const retryCall = vi.mocked(callRowboatChat).mock.calls[1][0];
-    expect(retryCall.timeoutMs).toBe(firstCall.timeoutMs);
+    expect(firstCall.timeoutMs).toBe(50_000);
+    // 50_000 (budget) - 20_000 (elapsed) = 30_000 remaining.
+    expect(retryCall.timeoutMs).toBe(30_000);
+    dateNowSpy.mockRestore();
+  });
+
+  it("skips the stateless retry entirely when remaining budget falls below the cold-start floor — surfaces the FIRST error instead of paying for a doomed retry", async () => {
+    // First call eats 49s of the 50s budget — only 1s remains, well
+    // below the 5s `RETRY_MIN_BUDGET_MS` floor. Forcing the retry
+    // anyway would either succeed in a vanishingly unlikely 1s window
+    // or fall over to "rowboat_timeout" (a generic envelope) when
+    // we have a perfectly diagnostic first error to surface.
+    const dateNowSpy = vi.spyOn(Date, "now");
+    dateNowSpy
+      .mockReturnValueOnce(1_000_000)
+      .mockReturnValueOnce(1_049_000); // 49s elapsed → 1s remaining
+    vi.mocked(callRowboatChat).mockRejectedValueOnce(new Error("rowboat_http_500"));
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    // 502 status w/ describeRowboatError mocked to echo the message:
+    expect(res.status).toBe(502);
+    const body = (await res.json()) as { error: { message: string } };
+    expect(body.error.message).toBe("rowboat_http_500");
+    // Retry was skipped — only one Rowboat call.
+    expect(vi.mocked(callRowboatChat)).toHaveBeenCalledTimes(1);
+    // Continuation row must NOT be touched: we never confirmed the
+    // continuation was actually stale (the retry would have proven
+    // that). Clearing it now would discard a possibly-still-good
+    // conversationId on a transient blip.
+    expect(updateThreadConversation).not.toHaveBeenCalled();
+    dateNowSpy.mockRestore();
+  });
+
+  it("still retries when the first call fails fast (almost the whole budget remains)", async () => {
+    // Sanity check that the budget guard doesn't accidentally suppress
+    // the common case: an immediate Rowboat 400 leaves ~50s for the
+    // retry, which proceeds normally.
+    const dateNowSpy = vi.spyOn(Date, "now");
+    dateNowSpy
+      .mockReturnValueOnce(1_000_000)
+      .mockReturnValueOnce(1_000_200); // 200ms elapsed
+    vi.mocked(callRowboatChat)
+      .mockRejectedValueOnce(new Error("rowboat_http_400"))
+      .mockResolvedValueOnce({
+        reply: "fresh reply",
+        conversationId: "fresh-conv",
+        state: undefined,
+        hasStateKey: false
+      } as never);
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(res.status).toBe(200);
+    expect(vi.mocked(callRowboatChat)).toHaveBeenCalledTimes(2);
+    const retryCall = vi.mocked(callRowboatChat).mock.calls[1][0];
+    expect(retryCall.timeoutMs).toBe(49_800); // 50_000 - 200
+    dateNowSpy.mockRestore();
   });
 });
 
