@@ -263,6 +263,116 @@ describe("attachBusinessDidToCampaign", () => {
     );
   });
 
+  it("pending: attach 400 / code 10036 means campaign is still carrier-processing", async () => {
+    const client = makeClient({
+      createPhoneNumberCampaign: vi.fn().mockRejectedValue(
+        new TendlcApiError(
+          "/10dlc/phoneNumberCampaign",
+          400,
+          '{"errors":[{"code":"10036","title":"Resource is being processed","detail":"Campaign c-1 is still pending and has not been approved yet"}]}'
+        )
+      )
+    });
+    const outcome = await attachBusinessDidToCampaign({
+      businessId: "biz",
+      toE164: "+15551234567",
+      client: client as never,
+      config: CONFIG
+    });
+    expect(outcome.kind).toBe("pending");
+    expect((outcome as { reason: string }).reason).toMatch(/attach_pending/);
+    expect(setStatusSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "pending" }),
+      undefined
+    );
+  });
+
+  it("pending: attach 400 / code 10036 also handles Telnyx's spaced JSON formatting", async () => {
+    const client = makeClient({
+      createPhoneNumberCampaign: vi.fn().mockRejectedValue(
+        new TendlcApiError(
+          "/10dlc/phoneNumberCampaign",
+          400,
+          '{\n  "errors": [{\n    "code"\n      :\n    "10036",\n    "detail": "Resource is being processed"\n  }]\n}'
+        )
+      )
+    });
+    const outcome = await attachBusinessDidToCampaign({
+      businessId: "biz",
+      toE164: "+15551234567",
+      client: client as never,
+      config: CONFIG
+    });
+    expect(outcome.kind).toBe("pending");
+  });
+
+  it("pending: attach 400 / code 10036 handles non-JSON bodies with whitespace", async () => {
+    const client = makeClient({
+      createPhoneNumberCampaign: vi
+        .fn()
+        .mockRejectedValue(
+          new TendlcApiError("/10dlc/phoneNumberCampaign", 400, 'error: "code" \n : \n "10036"')
+        )
+    });
+    const outcome = await attachBusinessDidToCampaign({
+      businessId: "biz",
+      toE164: "+15551234567",
+      client: client as never,
+      config: CONFIG
+    });
+    expect(outcome.kind).toBe("pending");
+  });
+
+  it("pending: attach 400 with pending-campaign text is treated as carrier-processing", async () => {
+    const client = makeClient({
+      createPhoneNumberCampaign: vi
+        .fn()
+        .mockRejectedValue(
+          new TendlcApiError("/10dlc/phoneNumberCampaign", 400, "Campaign c-1 is still pending")
+        )
+    });
+    const outcome = await attachBusinessDidToCampaign({
+      businessId: "biz",
+      toE164: "+15551234567",
+      client: client as never,
+      config: CONFIG
+    });
+    expect(outcome.kind).toBe("pending");
+  });
+
+  it("rejected: attach 400 without pending markers stays a hard validation rejection", async () => {
+    const client = makeClient({
+      createPhoneNumberCampaign: vi
+        .fn()
+        .mockRejectedValue(new TendlcApiError("/10dlc/phoneNumberCampaign", 400, "invalid phone"))
+    });
+    const outcome = await attachBusinessDidToCampaign({
+      businessId: "biz",
+      toE164: "+15551234567",
+      client: client as never,
+      config: CONFIG
+    });
+    expect(outcome.kind).toBe("rejected");
+  });
+
+  it.each(["null", '"10036"'])(
+    "rejected: attach 400 valid JSON primitive %s is not mistaken for Telnyx code 10036",
+    async (body) => {
+      const client = makeClient({
+        createPhoneNumberCampaign: vi
+          .fn()
+          .mockRejectedValue(new TendlcApiError("/10dlc/phoneNumberCampaign", 400, body))
+      });
+      const outcome = await attachBusinessDidToCampaign({
+        businessId: "biz",
+        toE164: "+15551234567",
+        client: client as never,
+        config: CONFIG
+      });
+      expect(outcome.kind).toBe("rejected");
+    }
+  );
+
   it("error: attach 5xx → transient error, no DB write", async () => {
     const client = makeClient({
       createPhoneNumberCampaign: vi

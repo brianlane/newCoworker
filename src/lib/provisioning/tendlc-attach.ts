@@ -182,6 +182,12 @@ export async function attachBusinessDidToCampaign(
           campaignId: config.campaignId
         });
       }
+      if (isCampaignStillProcessing(err)) {
+        return persistAndReturn(input.businessId, input.dbClient, {
+          kind: "pending",
+          reason: `attach_pending: ${describeError(err)}`
+        });
+      }
       if (err.status >= 400 && err.status < 500) {
         return persistAndReturn(input.businessId, input.dbClient, {
           kind: "rejected",
@@ -232,4 +238,31 @@ function describeError(err: unknown): string {
   }
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+function isCampaignStillProcessing(err: TendlcApiError): boolean {
+  if (err.status !== 400) return false;
+  const lowerBody = err.body.toLowerCase();
+  return (
+    hasTelnyxErrorCode(err.body, "10036") ||
+    (lowerBody.includes("campaign") && lowerBody.includes("still pending"))
+  );
+}
+
+function hasTelnyxErrorCode(body: string, code: string): boolean {
+  try {
+    return objectContainsTelnyxCode(JSON.parse(body), code);
+  } catch {
+    return new RegExp(`"code"\\s*:\\s*"${code}"`).test(body);
+  }
+}
+
+function objectContainsTelnyxCode(value: unknown, code: string): boolean {
+  if (value === null || typeof value !== "object") return false;
+  if (Array.isArray(value)) {
+    return value.some((item) => objectContainsTelnyxCode(item, code));
+  }
+  const record = value as Record<string, unknown>;
+  if (String(record.code) === code) return true;
+  return Object.values(record).some((child) => objectContainsTelnyxCode(child, code));
 }
