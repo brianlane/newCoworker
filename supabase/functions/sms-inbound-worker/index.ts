@@ -22,6 +22,7 @@ import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 import { callSmsRowboatWithStatelessFallback } from "../_shared/sms_rowboat.ts";
+import { buildCustomerPreambleForEdge, type EdgeCustomerMemoryRow } from "../_shared/customer_memory_preamble.ts";
 
 const MAX_ATTEMPTS = 8;
 const NCW_IDEM_TAG_PREFIX = "ncw_idem:";
@@ -334,6 +335,26 @@ serve(async (req: Request) => {
 
     const thread = threadRow as ThreadRow | null;
 
+    // Phase 3: customer memory preamble. Pulled from the cross-channel
+    // rollup so SMS replies see the same context as voice + dashboard.
+    // Cheap if the row doesn't exist (single indexed lookup); preamble
+    // is null when there's no summary/pinned content yet, which keeps
+    // first-contact SMS exactly as it was pre-Phase-3 (no empty
+    // "Customer profile:" header in the prompt).
+    const { data: memoryRow } = await supabase
+      .from("customer_memories")
+      .select(
+        "customer_e164, display_name, summary_md, pinned_md, " +
+          "total_interaction_count, last_channel, last_interaction_at"
+      )
+      .eq("business_id", job.business_id)
+      .eq("customer_e164", fromE164)
+      .maybeSingle();
+    const customerPreamble =
+      memoryRow == null
+        ? null
+        : buildCustomerPreambleForEdge(memoryRow as EdgeCustomerMemoryRow);
+
     let convId: string | undefined;
     let reply = (job.rowboat_reply_cached ?? "").trim();
 
@@ -346,7 +367,8 @@ serve(async (req: Request) => {
           userText,
           conversationId: existingConv,
           state: thread?.rowboat_state ?? null,
-          timeoutMs: ROWBOAT_CHAT_TIMEOUT_MS
+          timeoutMs: ROWBOAT_CHAT_TIMEOUT_MS,
+          customerPreamble
         });
         reply = parsed.reply;
 
@@ -414,6 +436,25 @@ serve(async (req: Request) => {
           .eq("id", job.id);
         if (cacheErr) {
           console.error("rowboat_reply_cached", cacheErr);
+        }
+
+        // Phase 3 write side: bump the customer memory counters in a
+        // single round trip. The summarizer is NOT invoked here —
+        // post-interaction summarization runs from the nightly cron
+        // sweep (Phase 2 batch) so it never preempts the live SMS
+        // path. Owner-confirmed gating: 3-interaction threshold +
+        // 30s debounce + low-priority queue.
+        const { error: memErr } = await supabase.rpc("record_customer_interaction", {
+          p_business_id: job.business_id,
+          p_customer_e164: fromE164,
+          p_channel: "sms",
+          p_display_name: null
+        });
+        if (memErr) {
+          // Memory tracking is best-effort — a degraded customer page
+          // is acceptable; failing the SMS reply because we couldn't
+          // bump a counter is not.
+          console.error("record_customer_interaction (sms)", memErr);
         }
 
         if (parsed.retriedStateless) {
