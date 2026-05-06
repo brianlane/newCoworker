@@ -145,6 +145,30 @@ export async function listConversationsForBusiness(
     if (!cust) continue;
     const inboundText = inboundTextFromPayload(row.payload);
     const preview = inboundText || row.rowboat_reply_cached || "(no text)";
+    // Count EXPANDED messages (matching listMessagesForCustomer), so the
+    // "5 msgs" pill on the index page agrees with the message count the
+    // user sees inside the thread. Bugbot caught this mismatch on PR #69:
+    // a job with both inbound text + outbound reply expands to TWO
+    // messages, not one. See discussion_r3192...82.
+    const expandedThisRow =
+      (inboundText ? 1 : 0) + (row.rowboat_reply_cached ? 1 : 0);
+    if (expandedThisRow === 0) {
+      // Defensive: if neither side parsed, still count one row so the
+      // conversation doesn't accidentally get pruned to zero.
+      const existing0 = byCustomer.get(cust);
+      if (!existing0) {
+        byCustomer.set(cust, {
+          customerE164: cust,
+          lastMessageAt: row.created_at,
+          lastMessage: preview,
+          lastStatus: row.status,
+          messageCount: 1
+        });
+      } else {
+        existing0.messageCount += 1;
+      }
+      continue;
+    }
     const existing = byCustomer.get(cust);
     if (!existing) {
       byCustomer.set(cust, {
@@ -152,10 +176,10 @@ export async function listConversationsForBusiness(
         lastMessageAt: row.created_at,
         lastMessage: preview,
         lastStatus: row.status,
-        messageCount: 1
+        messageCount: expandedThisRow
       });
     } else {
-      existing.messageCount += 1;
+      existing.messageCount += expandedThisRow;
     }
   }
   return Array.from(byCustomer.values())

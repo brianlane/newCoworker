@@ -12,7 +12,6 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   attachBusinessDidToCampaign,
-  isCampaignProvisioningInFlight,
   MissingTendlcConfigError,
   readTendlcConfig
 } from "@/lib/provisioning/tendlc-attach";
@@ -374,22 +373,3 @@ describe("attachBusinessDidToCampaign", () => {
   });
 });
 
-describe("isCampaignProvisioningInFlight", () => {
-  it("returns true for pending and rejected (banner should show)", () => {
-    expect(isCampaignProvisioningInFlight({ telnyx_messaging_campaign_status: "pending" })).toBe(
-      true
-    );
-    expect(isCampaignProvisioningInFlight({ telnyx_messaging_campaign_status: "rejected" })).toBe(
-      true
-    );
-  });
-
-  it("returns false for registered and unregistered", () => {
-    expect(
-      isCampaignProvisioningInFlight({ telnyx_messaging_campaign_status: "registered" })
-    ).toBe(false);
-    expect(
-      isCampaignProvisioningInFlight({ telnyx_messaging_campaign_status: "unregistered" })
-    ).toBe(false);
-  });
-});

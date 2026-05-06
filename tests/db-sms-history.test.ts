@@ -172,8 +172,11 @@ describe("listConversationsForBusiness", () => {
       "+15552222222",
       "+15551111111"
     ]);
-    expect(result[0]?.messageCount).toBe(1);
-    expect(result[1]?.messageCount).toBe(2);
+    // Counts are now EXPANDED (matches listMessagesForCustomer):
+    // each job with both inbound + outbound expands to 2 messages.
+    // +15552222222: 1 job × 2 = 2; +15551111111: 2 jobs × 2 = 4.
+    expect(result[0]?.messageCount).toBe(2);
+    expect(result[1]?.messageCount).toBe(4);
     expect(result[0]?.lastMessage).toBe("newer");
     expect(result[1]?.lastMessage).toBe("older1");
   });
@@ -235,6 +238,120 @@ describe("listConversationsForBusiness", () => {
       "+15553333333",
       "+15551111111"
     ]);
+  });
+
+  it("falls back to messageCount=1 when neither side parses (defensive: never let the row vanish from the index)", async () => {
+    // Two rows from the same customer with NEITHER inbound text NOR
+    // outbound reply (pathological — Telnyx schema drift, partial
+    // failure mid-write). Index must still surface the conversation
+    // with a stable count rather than dropping it.
+    const c = chain();
+    c.limit.mockResolvedValue({
+      data: [
+        {
+          id: "j-empty-1",
+          business_id: "biz",
+          payload: envelope({
+            from: { phone_number: "+15555555555" },
+            text: undefined
+          }),
+          status: "pending",
+          rowboat_reply_cached: null,
+          telnyx_outbound_message_id: null,
+          last_error: null,
+          created_at: "2026-05-05T00:01:00Z",
+          updated_at: "2026-05-05T00:01:00Z"
+        },
+        {
+          id: "j-empty-2",
+          business_id: "biz",
+          payload: envelope({
+            from: { phone_number: "+15555555555" },
+            text: undefined
+          }),
+          status: "pending",
+          rowboat_reply_cached: null,
+          telnyx_outbound_message_id: null,
+          last_error: null,
+          created_at: "2026-05-05T00:00:00Z",
+          updated_at: "2026-05-05T00:00:00Z"
+        }
+      ],
+      error: null
+    });
+    const result = await listConversationsForBusiness(
+      "biz",
+      {},
+      makeDb(c) as never
+    );
+    expect(result[0]?.customerE164).toBe("+15555555555");
+    // Two un-parseable rows = two defensive +1 increments.
+    expect(result[0]?.messageCount).toBe(2);
+    expect(result[0]?.lastMessage).toBe("(no text)");
+  });
+
+  it("messageCount matches what listMessagesForCustomer would expand the same rows to (bugbot regression)", async () => {
+    // PR #69 bugbot: index page showed `3 msgs` while the thread page
+    // rendered `5 messages`. Pin the contract: per-job message count
+    // === inbound-text? + outbound-reply? expanded count.
+    const c = chain();
+    c.limit.mockResolvedValue({
+      data: [
+        // Inbound only, no reply → 1 message
+        {
+          id: "j-in",
+          business_id: "biz",
+          payload: envelope({
+            from: { phone_number: "+15554444444" },
+            text: "hi"
+          }),
+          status: "pending",
+          rowboat_reply_cached: null,
+          telnyx_outbound_message_id: null,
+          last_error: null,
+          created_at: "2026-05-05T00:02:00Z",
+          updated_at: "2026-05-05T00:02:00Z"
+        },
+        // Inbound + reply → 2 messages
+        {
+          id: "j-pair",
+          business_id: "biz",
+          payload: envelope({
+            from: { phone_number: "+15554444444" },
+            text: "hello"
+          }),
+          status: "done",
+          rowboat_reply_cached: "hi back",
+          telnyx_outbound_message_id: "out-1",
+          last_error: null,
+          created_at: "2026-05-05T00:01:00Z",
+          updated_at: "2026-05-05T00:01:01Z"
+        },
+        // Reply only (rare — admin-replied with no inbound text) → 1 message
+        {
+          id: "j-out",
+          business_id: "biz",
+          payload: envelope({
+            from: { phone_number: "+15554444444" },
+            text: undefined
+          }),
+          status: "done",
+          rowboat_reply_cached: "ping",
+          telnyx_outbound_message_id: "out-2",
+          last_error: null,
+          created_at: "2026-05-05T00:00:00Z",
+          updated_at: "2026-05-05T00:00:01Z"
+        }
+      ],
+      error: null
+    });
+    const result = await listConversationsForBusiness(
+      "biz",
+      {},
+      makeDb(c) as never
+    );
+    // 1 (inbound-only) + 2 (paired) + 1 (outbound-only) = 4 expanded.
+    expect(result[0]?.messageCount).toBe(4);
   });
 
   it("uses the assistant reply as the preview when no inbound text is parseable", async () => {

@@ -33,10 +33,7 @@ import {
   TendlcApiError,
   type TendlcCampaign
 } from "@/lib/telnyx/tendlc";
-import {
-  setBusinessMessagingCampaignStatus,
-  type BusinessTelnyxSettingsRow
-} from "@/lib/db/telnyx-routes";
+import { setBusinessMessagingCampaignStatus } from "@/lib/db/telnyx-routes";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -235,17 +232,4 @@ function describeError(err: unknown): string {
   }
   if (err instanceof Error) return err.message;
   return String(err);
-}
-
-/**
- * Helper for the dashboard / banner: a row is "actively waiting on the
- * carrier" when its messaging-campaign status is `pending` (initial wait)
- * or `rejected` (last attempt failed but we'll retry). `registered` means
- * SMS is fully cleared; `unregistered` means we explicitly detached.
- */
-export function isCampaignProvisioningInFlight(
-  row: Pick<BusinessTelnyxSettingsRow, "telnyx_messaging_campaign_status">
-): boolean {
-  const s = row.telnyx_messaging_campaign_status;
-  return s === "pending" || s === "rejected";
 }
