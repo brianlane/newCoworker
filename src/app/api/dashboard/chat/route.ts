@@ -44,8 +44,43 @@ import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
 
+// The per-tenant Ollama inside Rowboat is fast on warm prompts (~5s)
+// but routinely takes >20s for the first reply when the model has to
+// page in (documented in supabase/functions/sms-inbound-worker/index.ts
+// next to its own 60s ROWBOAT_CHAT_TIMEOUT_MS). Vercel's default
+// function timeout is 30s on Pro, which is *equal* to the Rowboat
+// fetch timeout below — without `maxDuration` the function gets reaped
+// at exactly the same moment our own AbortController fires, so the
+// catch-block that returns the friendly "took too long" envelope
+// never runs and the client sees a generic 502 / "Unexpected server
+// response". maxDuration > DASHBOARD_CHAT_ROWBOAT_TIMEOUT_MS gives the
+// route headroom to log, return a JSON envelope, and let the summarizer
+// fire-and-forget cleanly.
+//
+// Sized so the worst-case negative path stays well under the function
+// budget:
+//   pre-flight (auth, rate limit, flag/config reads, thread + history) ~ 1.5s
+//   Rowboat /chat (DASHBOARD_CHAT_ROWBOAT_TIMEOUT_MS, hard cap)         50.0s
+//   error mapping + JSON serialization                                  ~ 0.2s
+//   ────────────────────────────────────────────────────────────────────────
+//   total                                                             ~ 51.7s   ( < maxDuration of 60s )
+export const maxDuration = 60;
+
 const MAX_MESSAGE_CHARS = 4000;
 const HISTORY_TURNS = 20;
+
+// Hard ceiling on a single Rowboat /chat call from the dashboard.
+// Matches the SMS worker's 60s ceiling minus a small buffer so we can
+// always return a clean envelope before maxDuration above expires
+// (50s budget + ~10s post-processing headroom < 60s function cap).
+//
+// Why 50s and not 30s: the previous 30s value matched Vercel's default
+// function timeout exactly, so when the model went cold the function
+// got killed before the AbortController-triggered "rowboat_timeout"
+// path could write its 502 response. Bumping to 50s gives the local
+// model the same headroom it has on the SMS path while keeping us
+// well inside the function's 60s maxDuration window.
+const DASHBOARD_CHAT_ROWBOAT_TIMEOUT_MS = 50_000;
 
 const DASHBOARD_CHAT_RATE = { interval: 5 * 60 * 1000, maxRequests: 30 };
 
@@ -152,6 +187,13 @@ type RowboatRetryInput = {
   state: unknown | null;
   /** Used only for log correlation. */
   threadId: string;
+  /**
+   * Per-call abort budget. Sized by the caller against the route's
+   * `maxDuration` so the AbortController-driven "rowboat_timeout"
+   * path always wins over Vercel's function reaper — otherwise the
+   * client sees a generic 502 instead of our friendly envelope.
+   */
+  timeoutMs: number;
 };
 
 /**
@@ -199,7 +241,8 @@ async function callRowboatWithStatelessFallback(
       bearer: input.bearer,
       messages: input.initialMessages,
       conversationId: input.conversationId,
-      state: input.state
+      state: input.state,
+      timeoutMs: input.timeoutMs
     });
     return { ...out, retriedStateless: false };
   } catch (err) {
@@ -221,7 +264,8 @@ async function callRowboatWithStatelessFallback(
       // fall back on once the continuation is dropped.
       messages: input.statelessMessages,
       conversationId: null,
-      state: null
+      state: null,
+      timeoutMs: input.timeoutMs
     });
     return { ...out, retriedStateless: true };
   }
@@ -418,7 +462,8 @@ export async function POST(request: Request) {
         statelessMessages,
         conversationId: thread.rowboat_conversation_id,
         state: thread.rowboat_state,
-        threadId: thread.id
+        threadId: thread.id,
+        timeoutMs: DASHBOARD_CHAT_ROWBOAT_TIMEOUT_MS
       });
       reply = parsed.reply;
       conversationId = parsed.conversationId;

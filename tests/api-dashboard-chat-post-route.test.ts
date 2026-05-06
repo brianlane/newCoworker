@@ -335,6 +335,42 @@ describe("POST /api/dashboard/chat — Rowboat input contract (no plain assistan
   });
 });
 
+describe("POST /api/dashboard/chat — Rowboat call budget", () => {
+  // The dashboard-chat route's `maxDuration` is sized so the Rowboat
+  // AbortController-driven "rowboat_timeout" path always wins the race
+  // against Vercel's function reaper. That contract is fragile — if a
+  // future change accidentally drops the per-call `timeoutMs` (or
+  // raises it past `maxDuration`), the friendly-error envelope stops
+  // being delivered and clients fall back to the cryptic
+  // `parseEnvelope` "Unexpected server response" string. Pin the
+  // budget on every call site here.
+
+  it("passes a finite, sub-maxDuration timeoutMs on the initial call", async () => {
+    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    const callArgs = vi.mocked(callRowboatChat).mock.calls[0][0];
+    expect(typeof callArgs.timeoutMs).toBe("number");
+    expect(callArgs.timeoutMs).toBeGreaterThan(0);
+    // `maxDuration` is 60s; budget must leave the route enough wall
+    // time after the abort fires to serialize a JSON envelope.
+    expect(callArgs.timeoutMs).toBeLessThan(60_000);
+  });
+
+  it("propagates the same timeoutMs into the stateless retry — otherwise the second attempt would silently inherit the SDK default and could outlive maxDuration", async () => {
+    vi.mocked(callRowboatChat)
+      .mockRejectedValueOnce(new Error("rowboat_http_400"))
+      .mockResolvedValueOnce({
+        reply: "fresh reply",
+        conversationId: "fresh-conv",
+        state: undefined,
+        hasStateKey: false
+      } as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    const firstCall = vi.mocked(callRowboatChat).mock.calls[0][0];
+    const retryCall = vi.mocked(callRowboatChat).mock.calls[1][0];
+    expect(retryCall.timeoutMs).toBe(firstCall.timeoutMs);
+  });
+});
+
 describe("POST /api/dashboard/chat — summarizer trigger", () => {
   it("fires summarizeThreadAndLog when shouldSummarize returns true (fire-and-forget; doesn't await)", async () => {
     vi.mocked(shouldSummarize).mockReturnValueOnce(true);
