@@ -226,28 +226,33 @@ describe("listCustomerMemories", () => {
     // treats commas as condition separators and dots as
     // field/operator/value delimiters. The fix wraps each value in
     // double quotes so PostgREST parses them as literals AND
-    // backslash-escapes any embedded `"` so the quoting can't be
-    // broken by user input.
+    // backslash-escapes any embedded `"` or `\` so the quoting can't
+    // be broken by user input.
     //
     // Two layers of escaping run in order:
     //   (1) SQL LIKE: %, _ → \%, \_ so a search of "100%" matches the
     //       literal % rather than "anything starting with 100".
-    //   (2) PostgREST literal: " → \" only — backslashes are NOT
-    //       special inside double-quoted PostgREST values, so the
-    //       single backslashes introduced by step (1) survive
-    //       end-to-end and reach Postgres LIKE as the escape char it
-    //       expects (Cursor Bugbot Medium followup on PR #74).
+    //   (2) PostgREST literal: " → \", \ → \\, applied AFTER step (1)
+    //       so the backslashes step (1) introduced get doubled.
+    //       PostgREST collapses every `\<c>` sequence inside double-
+    //       quoted values to `<c>` before handing the value to
+    //       Postgres LIKE, so the LIKE escape only survives end-to-end
+    //       when we double it here. Verified live against the REST
+    //       surface — leaving step (2) at "only escape quote" causes
+    //       a search for "100%" to also match "100abc" (regression
+    //       caught by CodeQL high-severity "Incomplete string
+    //       escaping" alert + a live escape test).
     const cases: Array<{ input: string; pattern: string }> = [
       { input: "Smith, LLC", pattern: `"%Smith, LLC%"` },
       { input: "127.0.0.1", pattern: `"%127.0.0.1%"` },
       { input: 'Joe "the Plumber"', pattern: `"%Joe \\"the Plumber\\"%"` },
-      // SQL LIKE escape adds ONE backslash; PostgREST passes it through
-      // unchanged because `\` isn't special inside quoted values.
-      { input: "100%", pattern: `"%100\\%%"` },
-      { input: "snake_case", pattern: `"%snake\\_case%"` },
-      // Bare backslashes from user input are passed through unchanged
-      // — there's no PostgREST-level interpretation of them.
-      { input: "win\\path", pattern: `"%win\\path%"` },
+      // SQL LIKE escape adds a backslash; the PostgREST escape then
+      // doubles it (PostgREST collapses `\\` → `\` so LIKE receives
+      // the escape sequence it needs).
+      { input: "100%", pattern: `"%100\\\\%%"` },
+      { input: "snake_case", pattern: `"%snake\\\\_case%"` },
+      // Bare backslash from the user is also doubled.
+      { input: "win\\path", pattern: `"%win\\\\path%"` },
       // Plain alphanumerics get the same quoting treatment for
       // consistency — the cost is negligible vs. the safety win.
       { input: "Joe", pattern: `"%Joe%"` }

@@ -75,16 +75,21 @@ export async function listCustomerMemories(
     // `100%` matches the literal `100%`, not "anything starting with
     // 100".
     //
-    // IMPORTANT: only `"` needs escaping for PostgREST's double-quoted
-    // value syntax — backslashes are NOT special there. We deliberately
-    // escape ONLY `"` and not `\` so the single backslash produced by
-    // the LIKE wildcard escape above survives end-to-end. If we also
-    // escaped `\`, a search like `100%` would round-trip as `100\\%` in
-    // the filter, which Postgres LIKE then reads as "literal backslash
-    // followed by wildcard" instead of "literal percent" (Cursor Bugbot
-    // Medium on PR #74).
+    // BOTH `"` AND `\` must be backslash-escaped for the PostgREST
+    // double-quoted value syntax. PostgREST collapses any `\<char>`
+    // sequence inside double-quoted values to `<char>` BEFORE the
+    // value reaches Postgres LIKE, so the single backslash that step 1
+    // injects in front of `%` / `_` would otherwise be eaten by
+    // PostgREST and never reach LIKE — turning a search for `100%`
+    // back into a wildcard match. Doubling the backslash here means
+    // PostgREST collapses `\\` → `\` and LIKE receives the escape it
+    // needs (verified end-to-end against the live REST surface; an
+    // earlier "only escape quote" fix regressed `100%` to also match
+    // `100abc`, see commit history). CodeQL flags this as
+    // "incomplete-string-escaping" precisely because BOTH chars need
+    // covering — we keep the `["\\]` class deliberately.
     const escapedForLike = search.replace(/[%_]/g, (m) => `\\${m}`);
-    const escapedForPostgrest = escapedForLike.replace(/"/g, '\\"');
+    const escapedForPostgrest = escapedForLike.replace(/["\\]/g, "\\$&");
     const pattern = `"%${escapedForPostgrest}%"`;
     // Match either the display name or the raw E.164 — owners often
     // remember "Joe" but not the +1555… number, and vice versa.
