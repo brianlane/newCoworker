@@ -797,6 +797,48 @@ describe("callRowboatChatStream", () => {
     vi.useRealTimers();
   });
 
+  it("cancels the body reader when the TTFB timer fires AFTER fetch resolved but before the first body byte — Cursor Bugbot Medium regression test from PR #76 commit abb057f: cold-tenant Ollama loads model in 25+ seconds, headers arrive fast, reader.read() blocks; pre-fix the initial TTFB callback only called abort.abort() and the generator hung", async () => {
+    // Reproduce the cold-tenant cold-model timing exactly:
+    //   1. fetch() resolves quickly with a 200 + body stream.
+    //   2. Reader is constructed.
+    //   3. Reader.read() blocks (the body stream never enqueues a byte).
+    //   4. TTFB timer fires.
+    //   5. Generator MUST yield rowboat_timeout (not hang).
+    let readerCancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      cancel() {
+        readerCancelled = true;
+      },
+      // Never enqueue. Without reader.cancel() being called from the
+      // TTFB timer, reader.read() would block indefinitely.
+      start() {}
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(stream, {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" }
+        })
+      )
+    );
+
+    const events = await collect({
+      businessId: BIZ,
+      projectId: PROJ,
+      bearer: "B",
+      messages: [{ role: "user", content: "hi" }],
+      ttfbTimeoutMs: 50,
+      idleTimeoutMs: 5_000
+    });
+    // The generator must terminate on the TTFB timeout, not hang.
+    expect(events).toEqual([{ type: "error", message: "rowboat_timeout" }]);
+    // And the reader was actually cancelled — pre-fix only abort.abort()
+    // ran, which doesn't propagate to the body stream once fetch
+    // resolved (lines 617-622 of chat.ts already document this).
+    expect(readerCancelled).toBe(true);
+  });
+
   it("yields rowboat_timeout when the stream stalls mid-flight (idle timer fires after first chunk)", async () => {
     // We deliberately don't use fake timers here because the body
     // reader's read() promise interacts oddly with vi.advanceTimers.
@@ -1275,13 +1317,18 @@ describe("callRowboatChatStream", () => {
     // the owner navigates away during that pre-stream window we MUST
     // abort the fetch (otherwise the per-tenant Ollama still gets
     // the prompt and starts generating).
-    let receivedSignal: AbortSignal | null = null;
-    let resolveFetch: ((r: Response) => void) | null = null;
+    // Refs (not `let` bindings) so TS doesn't narrow these to their
+    // initial null type after the callback assignment — a long-running
+    // quirk with async writes from inside Promise executors.
+    const signalRef: { current: AbortSignal | null } = { current: null };
+    const resolveFetchRef: { current: ((r: Response) => void) | null } = {
+      current: null
+    };
     const fetchMock = vi.fn(
       (_url: string, init: RequestInit) =>
         new Promise<Response>((resolve, reject) => {
-          receivedSignal = (init.signal as AbortSignal) ?? null;
-          resolveFetch = resolve;
+          signalRef.current = (init.signal as AbortSignal) ?? null;
+          resolveFetchRef.current = resolve;
           // Bridge the abort signal to the fetch promise: a real
           // fetch implementation rejects with AbortError when its
           // signal aborts. Without this the test would hang.
@@ -1317,9 +1364,9 @@ describe("callRowboatChatStream", () => {
     // Sanity: the abort signal was actually plumbed into fetch (so a
     // compliant fetch impl tears down the connection too, not just
     // the local generator).
-    expect(receivedSignal?.aborted).toBe(true);
+    expect(signalRef.current?.aborted).toBe(true);
     // We never got a response.
-    expect(resolveFetch).not.toBeNull();
+    expect(resolveFetchRef.current).not.toBeNull();
   });
 
   it("removes the external-signal listener on the !res.ok early-return path — non-2xx exits before the body reader exists, so the cleanup must happen at the early return (otherwise long-lived caller signals leak listeners across every failed turn)", async () => {

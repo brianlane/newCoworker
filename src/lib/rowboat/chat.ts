@@ -487,6 +487,44 @@ export async function* callRowboatChatStream(
   }
 
   const abort = new AbortController();
+  // Hoisted shared state. `reader` is null until res.body is unwrapped
+  // post-fetch; `timedOut` is the deterministic "we hit a timeout we
+  // set" signal that the post-loop code uses to surface
+  // `rowboat_timeout` (the abort signal alone isn't sufficient — see
+  // the rowboat_timeout block at the bottom). Both are referenced by
+  // the shared `fireTimeout` callback below so the TTFB and idle
+  // timers can use the same cancellation path.
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  let timedOut = false;
+
+  // Shared timeout callback used by BOTH the initial TTFB timer AND
+  // the per-chunk idle timer. Critical for the cold-tenant scenario
+  // (Cursor Bugbot Medium on PR #76 commit abb057f): when fetch()
+  // resolves quickly (Vercel/Cloudflare connection establishes in
+  // 1-2s) but the per-tenant Ollama hasn't loaded the model yet
+  // (25+ seconds for a cold model), `reader.read()` blocks waiting
+  // for the first body byte. Pre-fix the initial TTFB timer ONLY
+  // called abort.abort(), which the comment-block on lines 617-622
+  // already documents is insufficient: AbortController.abort() does
+  // NOT consistently propagate to a response body's reader once the
+  // fetch promise has resolved (Node version dependent, and our
+  // test environment specifically reproduces the leak). The result
+  // was a hung generator past the TTFB cap. Now both timers go
+  // through this single callback so reader.cancel() always fires
+  // (when the reader exists) and `timedOut` is set deterministically.
+  const fireTimeout = () => {
+    timedOut = true;
+    abort.abort();
+    if (reader) {
+      /* c8 ignore start -- the .catch() handler exists only to swallow a
+         reader.cancel() rejection that the streams spec says cannot
+         happen for our usage; covered by the same rationale as the
+         armTimer / cancelUpstream cancel-catches below. */
+      reader.cancel().catch(() => {});
+      /* c8 ignore stop */
+    }
+  };
+
   // External signal forwarding: when the caller's signal fires
   // (client browser disconnect, "New conversation" mid-generation,
   // component unmount), tear down both the in-flight fetch AND the
@@ -513,7 +551,9 @@ export async function* callRowboatChatStream(
   // Single timer reused for both phases. Started as TTFB, re-armed as
   // idle once the first chunk lands. Two separate timers were tempting
   // but make the cleanup math harder when the stream errors mid-flight.
-  let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => abort.abort(), ttfbMs);
+  // Both phases share `fireTimeout` so the TTFB callback also
+  // cancels the reader once one exists (cold-tenant fix above).
+  let timer: ReturnType<typeof setTimeout> | null = setTimeout(fireTimeout, ttfbMs);
 
   let res: Response;
   try {
@@ -565,7 +605,13 @@ export async function* callRowboatChatStream(
     return;
   }
 
-  const reader = res.body.getReader();
+  reader = res.body.getReader();
+  // Local non-null alias so closures below can reference the reader
+  // without TS narrowing tripping on the hoisted-and-reassigned outer
+  // `reader: ReadableStreamDefaultReader | null` (which is hoisted
+  // so `fireTimeout` — which runs both before and after this point
+  // — can read the latest value).
+  const activeReader = reader;
   // Upgrade `cancelUpstream` now that we have a reader: an external
   // abort fired post-fetch must also cancel the body stream, otherwise
   // the per-tenant Rowboat keeps streaming bytes into a TCP socket we
@@ -580,21 +626,13 @@ export async function* callRowboatChatStream(
        reproducing a rejection here in tests would require monkey-patching
        Node's body stream internals, which is more brittle than the value
        of the coverage. */
-    reader.cancel().catch(() => {});
+    activeReader.cancel().catch(() => {});
     /* c8 ignore stop */
   };
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
   let sawFirstChunk = false;
   let sawAnyDelta = false;
-  // Tracks whether the active timer (TTFB or idle) fired. We can't
-  // rely solely on `abort.signal.aborted` because some intermediaries
-  // (and some Node versions in tests) don't propagate the abort to a
-  // fetch response body's reader synchronously. Setting this flag in
-  // the timer callback gives us a deterministic signal that "this
-  // read failed because we hit a timeout we set", separate from any
-  // upstream-initiated cancel.
-  let timedOut = false;
   // Running metadata harvested from any event that carries it. The
   // final `done` we emit is built from the LAST seen values — Rowboat
   // may sprinkle conversationId across events (one in a meta event,
@@ -611,18 +649,10 @@ export async function* callRowboatChatStream(
        armTimer call); the null-guard is structural defense against a
        future refactor accidentally calling armTimer pre-construction. */
     if (timer) clearTimeout(timer);
-    timer = setTimeout(() => {
-      timedOut = true;
-      // Cancel the body reader so the in-flight `reader.read()`
-      // rejects. AbortController.abort() alone isn't enough — once
-      // fetch() has resolved, the response body is its own stream and
-      // aborting the controller does NOT consistently propagate to
-      // the reader (Node versions differ; test environments
-      // particularly so). reader.cancel() is the spec-compliant way
-      // to terminate body consumption from the consumer side.
-      reader.cancel().catch(/* c8 ignore next -- defensive: spec says cancel resolves; the catch only fires if the underlying source's cancel() impl rejects */ () => {});
-      abort.abort();
-    }, ms);
+    // armTimer always runs post-reader, so we can call the shared
+    // fireTimeout directly (which already handles reader.cancel()
+    // when reader is non-null). Keeps cancellation logic in one place.
+    timer = setTimeout(fireTimeout, ms);
   };
   // First chunk arms the IDLE timer for itself (the TTFB timer
   // already covered the pre-first-chunk window).
@@ -632,7 +662,7 @@ export async function* callRowboatChatStream(
     while (true) {
       let chunk: ReadableStreamReadResult<Uint8Array>;
       try {
-        chunk = await reader.read();
+        chunk = await activeReader.read();
       } catch (err) {
         if (timedOut || abort.signal.aborted) {
           yield { type: "error", message: "rowboat_timeout" };
@@ -741,7 +771,7 @@ export async function* callRowboatChatStream(
        tick); we already finished reading and any throw here would mask the
        caller-visible event we just yielded. */
     try {
-      reader.releaseLock();
+      activeReader.releaseLock();
     } catch {
       // already released by abort/cancel path
     }
