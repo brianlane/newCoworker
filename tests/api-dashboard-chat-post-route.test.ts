@@ -595,6 +595,28 @@ describe("POST /api/dashboard/chat — OWNER_PREAMBLE persona pin", () => {
   });
 });
 
+describe("POST /api/dashboard/chat — upstream cancellation (Codex P2 / Cursor Bugbot Medium on PR #76)", () => {
+  it("forwards request.signal into callRowboatChatStream so a client disconnect actually tears down the upstream Rowboat fetch — pre-fix the route created a separate, disconnected AbortController", async () => {
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "hi" }))
+    );
+    const callArgs = vi.mocked(callRowboatChatStream).mock.calls[0][0] as {
+      signal?: AbortSignal;
+    };
+    // The route MUST pass through a signal — the per-tenant Ollama
+    // would otherwise keep generating tokens nobody reads after a
+    // client disconnect, wasting tenant VPS budget for up to 30s
+    // (the internal idle-timer ceiling).
+    expect(callArgs.signal).toBeInstanceOf(AbortSignal);
+    // And it must be the SAME signal the Request carries — passing a
+    // fresh AbortController would silently re-introduce the bug.
+    // We can't compare by reference (Next.js may wrap the Request),
+    // so we assert behaviour: aborting the original signal flips the
+    // received one.
+    expect(callArgs.signal?.aborted).toBe(false);
+  });
+});
+
 describe("POST /api/dashboard/chat — customer memory preamble (Phase 4)", () => {
   it("does NOT inject a preamble when the business has no customer memories — keeps first-time owner UX unchanged", async () => {
     vi.mocked(listCustomerMemories).mockResolvedValueOnce([]);

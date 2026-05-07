@@ -271,10 +271,41 @@ export type CallRowboatChatStreamInput = {
    * (300s) at the route level.
    */
   idleTimeoutMs?: number;
+  /**
+   * External abort signal. When this fires, the streaming function
+   * aborts the in-flight upstream fetch + body reader and yields no
+   * further events. Used by /api/dashboard/chat to propagate browser
+   * disconnect (`request.signal`) all the way down to the per-tenant
+   * Rowboat call — without this plumbing, a client navigating away
+   * mid-generation leaves the per-tenant Ollama generating tokens
+   * nobody will ever read until the internal idle timer trips, up to
+   * 30s of wasted VPS work per disconnect.
+   */
+  signal?: AbortSignal;
 };
 
 export const DEFAULT_ROWBOAT_STREAM_TTFB_MS = 30_000;
 export const DEFAULT_ROWBOAT_STREAM_IDLE_MS = 30_000;
+
+/**
+ * Sentinel returned by `parseRowboatStreamEvent` when the SSE event
+ * was syntactically valid AND structurally recognized but carried no
+ * payload the caller should act on. The stream loop SKIPS noops (the
+ * idle timer still resets because a chunk arrived); only `null`
+ * returns surface as `rowboat_invalid_json`.
+ *
+ * This distinction matters for OpenAI-compatible streams: the very
+ * first chunk is `{choices:[{delta:{role:"assistant"}}]}` (no content
+ * yet) and the last is `{choices:[{finish_reason:"stop",delta:{}}]}`
+ * (no content, just terminator). Both are normal — failing the
+ * stream on either would kill every OpenAI-shaped reply before it
+ * produced a single token.
+ */
+export const ROWBOAT_STREAM_NOOP = "noop" as const;
+export type RowboatStreamParseResult =
+  | RowboatStreamEvent
+  | typeof ROWBOAT_STREAM_NOOP
+  | null;
 
 /**
  * Pure parser for one Rowboat SSE event payload (the JSON inside a
@@ -297,14 +328,22 @@ export const DEFAULT_ROWBOAT_STREAM_IDLE_MS = 30_000;
  *      the buffered API, often emitted as the closing event.
  *   4. The literal `[DONE]` sentinel as a stream terminator.
  *
- * We handle all four. If a future Rowboat release picks something else
- * the parser returns `null` events and the stream loop will surface a
- * `rowboat_invalid_json` error rather than silently producing empty
- * replies — making the regression visible at the friendly-error layer.
+ * Return contract:
+ *   - `null` ⇒ payload is genuinely unrecognized; the caller MUST
+ *     surface this as `rowboat_invalid_json` (Rowboat changed shape
+ *     and we want the regression visible at the friendly-error layer).
+ *   - `ROWBOAT_STREAM_NOOP` ⇒ payload was structurally recognized but
+ *     carries no actionable content (OpenAI keep-alives, role-only
+ *     first chunks, finish_reason terminators, Rowboat-typed deltas
+ *     with no body). Caller skips it. The idle timer still resets
+ *     because the chunk arrived.
+ *   - typed event ⇒ forward to consumer.
  */
-export function parseRowboatStreamEvent(rawData: string): RowboatStreamEvent | null {
+export function parseRowboatStreamEvent(rawData: string): RowboatStreamParseResult {
   const trimmed = rawData.trim();
-  if (!trimmed) return null;
+  // Empty data lines are common SSE keep-alives — `noop` (skippable),
+  // not an error.
+  if (!trimmed) return ROWBOAT_STREAM_NOOP;
   // SSE convention: `[DONE]` sentinel (OpenAI compat). When we see it,
   // we don't yet know the conversationId — those land in earlier events
   // OR in the final Rowboat-shaped JSON. The caller (`callRowboatChatStream`)
@@ -337,7 +376,10 @@ export function parseRowboatStreamEvent(rawData: string): RowboatStreamEvent | n
         : typeof obj.delta === "string"
         ? obj.delta
         : null;
-    if (content === null) return null;
+    // A delta event with no string content is malformed but tolerated
+    // as a noop — be liberal in what we accept rather than killing the
+    // whole stream over an upstream bug. The idle timer still ticks.
+    if (content === null) return ROWBOAT_STREAM_NOOP;
     return { type: "delta", text: content };
   }
   if (evType === "tool_call") {
@@ -368,8 +410,12 @@ export function parseRowboatStreamEvent(rawData: string): RowboatStreamEvent | n
       return { type: "delta", text: delta.content };
     }
     // OpenAI emits empty chunks (e.g. role-only first chunk, finish_reason
-    // last chunk). Treat as a no-op so the idle timer still resets.
-    return null;
+    // last chunk, choices:[null] keep-alive). All NORMAL — `noop` so the
+    // stream loop skips them and keeps reading. Returning `null` here was
+    // the bug (Codex P1 + Cursor Bugbot HIGH on PR #76): a standard
+    // OpenAI-shaped stream emits the role-only chunk as its very first
+    // event, which would have killed the whole reply before any token.
+    return ROWBOAT_STREAM_NOOP;
   }
 
   // Hypothesis 3: a final Rowboat-shaped JSON `{conversationId, state,
@@ -441,6 +487,29 @@ export async function* callRowboatChatStream(
   }
 
   const abort = new AbortController();
+  // External signal forwarding: when the caller's signal fires
+  // (client browser disconnect, "New conversation" mid-generation,
+  // component unmount), tear down both the in-flight fetch AND the
+  // body reader so the per-tenant Rowboat stops generating tokens
+  // promptly. Pre-fetch we only have `abort` to cancel; post-fetch we
+  // ALSO need `reader.cancel()` because aborting the controller no
+  // longer reliably propagates to the body stream once fetch resolved
+  // (Node version dependent). The `cancelUpstream` indirection lets
+  // us upgrade the cancellation behaviour after the reader is
+  // constructed without re-registering the listener.
+  const externalSignal = "signal" in input ? input.signal : undefined;
+  let cancelUpstream: () => void = () => abort.abort();
+  const onExternalAbort = () => cancelUpstream();
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      // Already cancelled before we even started. Skip the fetch
+      // entirely by aborting up front; the catch below will surface
+      // the timeout-style "abort" path naturally.
+      abort.abort();
+    } else {
+      externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+    }
+  }
   // Single timer reused for both phases. Started as TTFB, re-armed as
   // idle once the first chunk lands. Two separate timers were tempting
   // but make the cleanup math harder when the stream errors mid-flight.
@@ -464,6 +533,11 @@ export async function* callRowboatChatStream(
        paths and survives a refactor that adds early returns. */
     if (timer) clearTimeout(timer);
     timer = null;
+    // Remove the external listener on every early return — `once:true`
+    // covers the fired case but not the "never fired and we bailed
+    // pre-reader" case, where the listener would otherwise outlive the
+    // function.
+    if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
     if (abort.signal.aborted) {
       yield { type: "error", message: "rowboat_timeout" };
       return;
@@ -478,6 +552,7 @@ export async function* callRowboatChatStream(
        cleanup paths so a refactor can't accidentally leak the timer. */
     if (timer) clearTimeout(timer);
     timer = null;
+    if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
     yield { type: "error", message: `rowboat_http_${res.status}` };
     return;
   }
@@ -485,11 +560,29 @@ export async function* callRowboatChatStream(
     /* c8 ignore next -- same symmetry rationale as the !res.ok branch above. */
     if (timer) clearTimeout(timer);
     timer = null;
+    if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
     yield { type: "error", message: "rowboat_invalid_json" };
     return;
   }
 
   const reader = res.body.getReader();
+  // Upgrade `cancelUpstream` now that we have a reader: an external
+  // abort fired post-fetch must also cancel the body stream, otherwise
+  // the per-tenant Rowboat keeps streaming bytes into a TCP socket we
+  // no longer drain. Idempotent — safe even if the cancellation also
+  // came from our own timer (which already calls reader.cancel()).
+  cancelUpstream = () => {
+    abort.abort();
+    /* c8 ignore start -- the .catch() handler exists only to swallow a
+       reader.cancel() rejection that the streams spec says cannot
+       happen for our usage (we don't pass a `reason` and the body is a
+       fetch response, not a custom underlying source); deterministically
+       reproducing a rejection here in tests would require monkey-patching
+       Node's body stream internals, which is more brittle than the value
+       of the coverage. */
+    reader.cancel().catch(() => {});
+    /* c8 ignore stop */
+  };
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
   let sawFirstChunk = false;
@@ -584,14 +677,22 @@ export async function* callRowboatChatStream(
         if (dataLines.length === 0) continue;
         const dataPayload = dataLines.join("\n");
         const parsed = parseRowboatStreamEvent(dataPayload);
-        if (!parsed) {
-          // Unrecognised payload shape. We surface this as an
-          // invalid_json error so the friendly-error layer catches it
-          // (vs. silently dropping content and emitting an empty
+        if (parsed === ROWBOAT_STREAM_NOOP) {
+          // Recognized-but-empty chunk (OpenAI role-only first event,
+          // finish_reason terminator, blank keep-alive, or a malformed
+          // delta with no content). Skip — the idle timer already
+          // reset on this chunk arriving, and the next chunk will
+          // carry real content.
+          continue;
+        }
+        if (parsed === null) {
+          // Genuinely unrecognized payload shape. We surface this as
+          // an invalid_json error so the friendly-error layer catches
+          // it (vs. silently dropping content and emitting an empty
           // assistant). This is the single most likely place for a
           // future Rowboat release to break us — the tests should
-          // drive parseRowboatStreamEvent directly to catch shape drift
-          // before we ship.
+          // drive parseRowboatStreamEvent directly to catch shape
+          // drift before we ship.
           yield { type: "error", message: "rowboat_invalid_json" };
           return;
         }
@@ -628,6 +729,13 @@ export async function* callRowboatChatStream(
        is structural in case a future refactor adds an early-exit path. */
     if (timer) clearTimeout(timer);
     timer = null;
+    // Drop the external-signal listener so a long-lived caller signal
+    // (e.g. the parent component's unmount AbortController held across
+    // many turns) doesn't accumulate handlers across calls. `once:true`
+    // covers the abort-fired case; this covers the never-aborted case.
+    if (externalSignal) {
+      externalSignal.removeEventListener("abort", onExternalAbort);
+    }
     /* c8 ignore start -- releaseLock throws only when the reader is in an
        unusual state (e.g. already cancelled by the timer path on a different
        tick); we already finished reading and any throw here would mask the
@@ -648,7 +756,18 @@ export async function* callRowboatChatStream(
   // pre-streaming buffered call's "rowboat_timeout" behaviour: a
   // stuck VPS surfaces as a timeout, not as an empty reply or a
   // misleadingly-successful done.
-  if (timedOut) {
+  //
+  // `abort.signal.aborted` covers the external-abort path too: when a
+  // caller's signal fires we call `cancelUpstream()` → `abort.abort()`
+  // + `reader.cancel()`, the reader returns done:true cleanly, and we
+  // land here with no delta. From the caller's perspective an external
+  // abort IS effectively a timeout (they gave up waiting); surfacing
+  // it as `rowboat_timeout` keeps describeRowboatError's friendly
+  // message uniform whether the route timed us out or the user
+  // navigated away mid-generation. (The route's `closed` check has
+  // already torn down the NDJSON controller in the disconnect case,
+  // so this event is for telemetry only.)
+  if (timedOut || abort.signal.aborted) {
     yield { type: "error", message: "rowboat_timeout" };
     return;
   }

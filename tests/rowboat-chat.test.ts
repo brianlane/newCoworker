@@ -8,7 +8,8 @@ import {
   DEFAULT_ROWBOAT_CHAT_URL_TEMPLATE,
   describeRowboatError,
   parseRowboatChatJson,
-  parseRowboatStreamEvent
+  parseRowboatStreamEvent,
+  ROWBOAT_STREAM_NOOP
 } from "@/lib/rowboat/chat";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -357,9 +358,24 @@ describe("parseRowboatStreamEvent — pure parser", () => {
   // Rowboat-shaped `{conversationId, state, turn:{output:[...]}}`. If
   // upstream picks something else this test surface is the canary.
 
+  // Helper to narrow a parse result to a typed event for `.type`/
+  // `.state` accesses. The parser now returns
+  // `RowboatStreamEvent | "noop" | null` after the Codex P1 / Cursor
+  // Bugbot HIGH fix on PR #76, so `ev?.type` no longer typechecks
+  // when `ev` could be the "noop" sentinel. These tests always feed
+  // payloads that produce typed events, so narrowing is purely for
+  // TS — the runtime assertion below makes the regression visible if
+  // a future parser change starts emitting noop for inputs we expect
+  // to be typed events.
+  function asEvent(r: ReturnType<typeof parseRowboatStreamEvent>) {
+    expect(r).not.toBe(ROWBOAT_STREAM_NOOP);
+    expect(r).not.toBeNull();
+    return r as Exclude<typeof r, "noop" | null>;
+  }
+
   it("returns a `done` event for the literal `[DONE]` SSE sentinel", () => {
-    const ev = parseRowboatStreamEvent("[DONE]");
-    expect(ev?.type).toBe("done");
+    const ev = asEvent(parseRowboatStreamEvent("[DONE]"));
+    expect(ev.type).toBe("done");
   });
 
   it("parses Rowboat-native delta events {type:'delta',content:'...'}", () => {
@@ -389,9 +405,13 @@ describe("parseRowboatStreamEvent — pure parser", () => {
     expect(ev).toEqual({ type: "delta", text: "Hi" });
   });
 
-  it("returns null (no-op) for OpenAI role-only or finish_reason chunks — keeps the idle timer ticking without yielding empty deltas", () => {
-    expect(parseRowboatStreamEvent('{"choices":[{"delta":{"role":"assistant"}}]}')).toBeNull();
-    expect(parseRowboatStreamEvent('{"choices":[{"finish_reason":"stop","delta":{}}]}')).toBeNull();
+  it("returns ROWBOAT_STREAM_NOOP for OpenAI role-only and finish_reason keep-alives — caller skips them so the very first OpenAI chunk doesn't kill the whole stream (Codex P1 / Cursor Bugbot HIGH on PR #76: pre-fix these returned null, which the loop treated as fatal rowboat_invalid_json)", () => {
+    expect(parseRowboatStreamEvent('{"choices":[{"delta":{"role":"assistant"}}]}')).toBe(
+      ROWBOAT_STREAM_NOOP
+    );
+    expect(parseRowboatStreamEvent('{"choices":[{"finish_reason":"stop","delta":{}}]}')).toBe(
+      ROWBOAT_STREAM_NOOP
+    );
   });
 
   it("parses tool_call events without crashing and returns the type/name unchanged", () => {
@@ -418,16 +438,20 @@ describe("parseRowboatStreamEvent — pure parser", () => {
   });
 
   it("done events distinguish state:null from missing state — the route relies on this to know when to overwrite the stored continuation", () => {
-    const explicitNull = parseRowboatStreamEvent(
-      '{"type":"done","conversationId":"c","state":null}'
+    const explicitNull = asEvent(
+      parseRowboatStreamEvent('{"type":"done","conversationId":"c","state":null}')
     );
-    expect(explicitNull?.type).toBe("done");
-    expect(explicitNull && (explicitNull as { hasStateKey: boolean }).hasStateKey).toBe(true);
-    expect(explicitNull && (explicitNull as { state: unknown }).state).toBeNull();
+    expect(explicitNull.type).toBe("done");
+    if (explicitNull.type === "done") {
+      expect(explicitNull.hasStateKey).toBe(true);
+      expect(explicitNull.state).toBeNull();
+    }
 
-    const missing = parseRowboatStreamEvent('{"type":"done","conversationId":"c"}');
-    expect(missing?.type).toBe("done");
-    expect(missing && (missing as { hasStateKey: boolean }).hasStateKey).toBe(false);
+    const missing = asEvent(
+      parseRowboatStreamEvent('{"type":"done","conversationId":"c"}')
+    );
+    expect(missing.type).toBe("done");
+    if (missing.type === "done") expect(missing.hasStateKey).toBe(false);
   });
 
   it("parses error events", () => {
@@ -438,11 +462,13 @@ describe("parseRowboatStreamEvent — pure parser", () => {
   });
 
   it("treats a final Rowboat-shaped JSON `{turn:{output:[...]}}` as a done event with metadata", () => {
-    const ev = parseRowboatStreamEvent(
-      '{"conversationId":"c","state":{"x":1},"turn":{"output":[]}}'
+    const ev = asEvent(
+      parseRowboatStreamEvent(
+        '{"conversationId":"c","state":{"x":1},"turn":{"output":[]}}'
+      )
     );
-    expect(ev?.type).toBe("done");
-    expect(ev && (ev as { conversationId: string | undefined }).conversationId).toBe("c");
+    expect(ev.type).toBe("done");
+    if (ev.type === "done") expect(ev.conversationId).toBe("c");
   });
 
   it("hypothesis-3 path: a final JSON with conversationId but NO state key omits state from the done event (preserves the buffered API's hasStateKey=false semantics)", async () => {
@@ -450,9 +476,11 @@ describe("parseRowboatStreamEvent — pure parser", () => {
     // "Rowboat didn't echo state, don't overwrite our stored copy"
     // (the buffered code's contract). The streaming parser must
     // mirror this exactly.
-    const ev = parseRowboatStreamEvent('{"conversationId":"c","turn":{"output":[]}}');
-    expect(ev?.type).toBe("done");
-    if (ev?.type === "done") {
+    const ev = asEvent(
+      parseRowboatStreamEvent('{"conversationId":"c","turn":{"output":[]}}')
+    );
+    expect(ev.type).toBe("done");
+    if (ev.type === "done") {
       expect(ev.conversationId).toBe("c");
       expect(ev.hasStateKey).toBe(false);
       expect(ev.state).toBeUndefined();
@@ -468,13 +496,15 @@ describe("parseRowboatStreamEvent — pure parser", () => {
     expect(ev).toEqual({ type: "error", message: "rowboat_stream_error" });
   });
 
-  it("returns null for a delta-typed event that has none of {content, text, delta} populated — caller surfaces this as rowboat_invalid_json", () => {
-    // The parser tries content → text → delta as a chained fallback;
-    // if none of them are strings the parser MUST return null so the
-    // stream loop emits an invalid_json error rather than yielding a
-    // delta with `text: ""` (which would silently look like a fast-
-    // empty model reply).
-    expect(parseRowboatStreamEvent('{"type":"delta"}')).toBeNull();
+  it("returns ROWBOAT_STREAM_NOOP for a delta-typed event with no {content, text, delta} — be liberal in what we accept rather than tearing down the whole stream over a single malformed chunk (the next chunk usually carries real content)", () => {
+    // Rowboat-native shape says this IS a delta event; we just don't
+    // have content to render. Skipping is safer than killing — a brief
+    // upstream hiccup that emits one bad chunk would otherwise lose
+    // the entire reply. The idle timer still resets on the chunk
+    // arrival, and if the upstream is genuinely broken the next event
+    // will hit the unrecognised-shape path and surface invalid_json
+    // anyway.
+    expect(parseRowboatStreamEvent('{"type":"delta"}')).toBe(ROWBOAT_STREAM_NOOP);
   });
 
   it("tool_call without a name field still yields a tool_call event with name=''", () => {
@@ -493,12 +523,13 @@ describe("parseRowboatStreamEvent — pure parser", () => {
     });
   });
 
-  it("OpenAI hypothesis-1 path: tolerates `choices[0]` being null without crashing", () => {
+  it("OpenAI hypothesis-1 path: tolerates `choices[0]` being null without crashing — returns ROWBOAT_STREAM_NOOP so the stream loop skips the keep-alive without yelling invalid_json", () => {
     // Some OpenAI-compat servers emit a chunk with `choices: [null]`
     // as a final keep-alive. The parser MUST treat this as a no-op
-    // (returns null for the caller to skip) rather than throwing on
-    // a null property access.
-    expect(parseRowboatStreamEvent('{"choices":[null]}')).toBeNull();
+    // for the caller to skip rather than throwing on a null property
+    // access OR returning hard-null (which the loop would surface as
+    // rowboat_invalid_json — see Codex P1 / Cursor Bugbot HIGH on PR #76).
+    expect(parseRowboatStreamEvent('{"choices":[null]}')).toBe(ROWBOAT_STREAM_NOOP);
   });
 
   it("hypothesis-3 path: a final JSON with state but NO conversationId still yields done with conversationId=undefined and state preserved", async () => {
@@ -508,9 +539,9 @@ describe("parseRowboatStreamEvent — pure parser", () => {
     // separate meta event. The parser must still extract the state
     // metadata in that case (the route relies on hasStateKey to know
     // whether to overwrite the stored continuation).
-    const ev = parseRowboatStreamEvent('{"state":null,"turn":{"output":[]}}');
-    expect(ev?.type).toBe("done");
-    if (ev?.type === "done") {
+    const ev = asEvent(parseRowboatStreamEvent('{"state":null,"turn":{"output":[]}}'));
+    expect(ev.type).toBe("done");
+    if (ev.type === "done") {
       expect(ev.conversationId).toBeUndefined();
       expect(ev.hasStateKey).toBe(true);
       expect(ev.state).toBeNull();
@@ -521,9 +552,9 @@ describe("parseRowboatStreamEvent — pure parser", () => {
     expect(parseRowboatStreamEvent('{"weird":"shape"}')).toBeNull();
   });
 
-  it("returns null for empty / whitespace input (heartbeat lines, keep-alives)", () => {
-    expect(parseRowboatStreamEvent("")).toBeNull();
-    expect(parseRowboatStreamEvent("   ")).toBeNull();
+  it("returns ROWBOAT_STREAM_NOOP for empty / whitespace input — these are SSE heartbeat lines and would kill the stream if treated as invalid_json", () => {
+    expect(parseRowboatStreamEvent("")).toBe(ROWBOAT_STREAM_NOOP);
+    expect(parseRowboatStreamEvent("   ")).toBe(ROWBOAT_STREAM_NOOP);
   });
 
   it("returns null for invalid JSON instead of throwing — caller decides whether to surface as an error event", () => {
@@ -919,6 +950,70 @@ describe("callRowboatChatStream", () => {
     expect(events.at(-1)).toEqual({ type: "error", message: "rowboat_timeout" });
   });
 
+  it("skips OpenAI keep-alive chunks (role-only first chunk + finish_reason terminator) and still emits the real delta — Codex P1 / Cursor Bugbot HIGH regression test from PR #76: pre-fix the role-only chunk caused rowboat_invalid_json before any token", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          // OpenAI's standard first chunk: role only, no content. Pre-fix
+          // the loop killed the whole stream right here.
+          'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n',
+          // Real content.
+          'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n',
+          // OpenAI's standard last chunk: finish_reason, no content.
+          'data: {"choices":[{"finish_reason":"stop","delta":{}}]}\n\n',
+          // Final state.
+          'data: {"type":"done","conversationId":"c1","state":{"k":1}}\n\n'
+        ])
+      )
+    );
+    const events = await collect({
+      businessId: BIZ,
+      projectId: PROJ,
+      bearer: "B",
+      messages: [{ role: "user", content: "hi" }]
+    });
+    // Only the real delta and the done event should surface; both
+    // keep-alives must be silently skipped.
+    expect(events).toEqual([
+      { type: "delta", text: "Hi" },
+      {
+        type: "done",
+        conversationId: "c1",
+        state: { k: 1 },
+        hasStateKey: true
+      }
+    ]);
+  });
+
+  it("does NOT kill the stream on a malformed Rowboat-native delta (no content/text/delta) — treats it as a noop and continues so a single bad chunk doesn't lose the entire reply", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          'data: {"type":"delta"}\n\n',
+          'data: {"type":"delta","content":"Hello"}\n\n',
+          'data: {"type":"done"}\n\n'
+        ])
+      )
+    );
+    const events = await collect({
+      businessId: BIZ,
+      projectId: PROJ,
+      bearer: "B",
+      messages: [{ role: "user", content: "hi" }]
+    });
+    expect(events).toEqual([
+      { type: "delta", text: "Hello" },
+      {
+        type: "done",
+        conversationId: undefined,
+        state: undefined,
+        hasStateKey: false
+      }
+    ]);
+  });
+
   it("forwards tool_call events through the integration path (parseRowboatStreamEvent yields → caller surfaces them)", async () => {
     vi.stubGlobal(
       "fetch",
@@ -1118,6 +1213,263 @@ describe("callRowboatChatStream", () => {
       messages: [{ role: "user", content: "hi" }]
     });
     expect(events.map((e) => e.type)).toEqual(["delta", "done"]);
+  });
+
+  it("forwards an external AbortSignal into fetch and tears down the upstream stream when the caller aborts mid-generation — Codex P2 / Cursor Bugbot Medium regression test from PR #76: pre-fix the route's upstreamAbort was disconnected, so client disconnects left the per-tenant Ollama generating tokens nobody read", async () => {
+    let receivedSignal: AbortSignal | null = null;
+    let readerCancelled = false;
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      receivedSignal = (init.signal as AbortSignal) ?? null;
+      const stream = new ReadableStream<Uint8Array>({
+        cancel() {
+          readerCancelled = true;
+        },
+        // Never enqueue, never close. The generator will block on
+        // reader.read() until the external abort fires.
+        start() {}
+      });
+      return new Response(stream, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" }
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const externalAbort = new AbortController();
+    const gen = callRowboatChatStream({
+      businessId: BIZ,
+      projectId: PROJ,
+      bearer: "B",
+      messages: [{ role: "user", content: "hi" }],
+      ttfbTimeoutMs: 60_000,
+      idleTimeoutMs: 60_000,
+      signal: externalAbort.signal
+    });
+
+    // Pump the first iteration on a microtask, then trigger the
+    // external abort — the generator should yield rowboat_timeout
+    // (the abort path goes through the same AbortController as the
+    // timer path, so the message is uniform — describeRowboatError
+    // already maps rowboat_timeout to a friendly "took too long").
+    const next = gen.next();
+    // Yield to the event loop so the fetch() promise resolves and the
+    // reader is constructed before we abort.
+    await Promise.resolve();
+    await Promise.resolve();
+    externalAbort.abort();
+    const first = await next;
+    expect(first.done).toBe(false);
+    expect(first.value).toEqual({ type: "error", message: "rowboat_timeout" });
+
+    // The upstream signal was actually wired to the fetch (so an
+    // intermediary that respects request cancellation can stop too),
+    // AND the body reader was cancelled (so the per-tenant Rowboat
+    // sees its TCP socket close instead of streaming into the void).
+    expect(receivedSignal).not.toBeNull();
+    expect(readerCancelled).toBe(true);
+  });
+
+  it("aborts the in-flight fetch when the external signal fires BEFORE the response arrives — exercises the initial pre-reader cancelUpstream closure (the post-reader upgrade is covered separately above)", async () => {
+    // The pre-reader path matters because Cloudflare/llm-router
+    // sometimes takes 5-10s to start streaming on cold tenants. If
+    // the owner navigates away during that pre-stream window we MUST
+    // abort the fetch (otherwise the per-tenant Ollama still gets
+    // the prompt and starts generating).
+    let receivedSignal: AbortSignal | null = null;
+    let resolveFetch: ((r: Response) => void) | null = null;
+    const fetchMock = vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((resolve, reject) => {
+          receivedSignal = (init.signal as AbortSignal) ?? null;
+          resolveFetch = resolve;
+          // Bridge the abort signal to the fetch promise: a real
+          // fetch implementation rejects with AbortError when its
+          // signal aborts. Without this the test would hang.
+          (init.signal as AbortSignal | undefined)?.addEventListener(
+            "abort",
+            () => {
+              const err = new Error("aborted");
+              (err as Error & { name: string }).name = "AbortError";
+              reject(err);
+            },
+            { once: true }
+          );
+        })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const externalAbort = new AbortController();
+    const gen = callRowboatChatStream({
+      businessId: BIZ,
+      projectId: PROJ,
+      bearer: "B",
+      messages: [{ role: "user", content: "hi" }],
+      ttfbTimeoutMs: 60_000,
+      idleTimeoutMs: 60_000,
+      signal: externalAbort.signal
+    });
+    const next = gen.next();
+    // Yield once so the fetch promise is set up but not resolved.
+    await Promise.resolve();
+    externalAbort.abort();
+    const first = await next;
+    expect(first.value).toEqual({ type: "error", message: "rowboat_timeout" });
+    // Sanity: the abort signal was actually plumbed into fetch (so a
+    // compliant fetch impl tears down the connection too, not just
+    // the local generator).
+    expect(receivedSignal?.aborted).toBe(true);
+    // We never got a response.
+    expect(resolveFetch).not.toBeNull();
+  });
+
+  it("removes the external-signal listener on the !res.ok early-return path — non-2xx exits before the body reader exists, so the cleanup must happen at the early return (otherwise long-lived caller signals leak listeners across every failed turn)", async () => {
+    const calls: Array<{ op: "add" | "remove"; type: string }> = [];
+    const fakeSignal: AbortSignal = {
+      aborted: false,
+      reason: undefined,
+      onabort: null,
+      throwIfAborted: () => {},
+      addEventListener: (type: string) => {
+        calls.push({ op: "add", type });
+      },
+      removeEventListener: (type: string) => {
+        calls.push({ op: "remove", type });
+      },
+      dispatchEvent: () => true
+    } as unknown as AbortSignal;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("nope", { status: 500 }))
+    );
+    const events = await collect({
+      businessId: BIZ,
+      projectId: PROJ,
+      bearer: "B",
+      messages: [{ role: "user", content: "hi" }],
+      signal: fakeSignal
+    });
+    expect(events).toEqual([{ type: "error", message: "rowboat_http_500" }]);
+    const adds = calls.filter((c) => c.op === "add" && c.type === "abort").length;
+    const removes = calls.filter((c) => c.op === "remove" && c.type === "abort").length;
+    expect(adds).toBe(1);
+    expect(removes).toBe(1);
+  });
+
+  it("removes the external-signal listener on the !res.body early-return path — empty 200 response also exits pre-reader and must not leak listeners", async () => {
+    const calls: Array<{ op: "add" | "remove"; type: string }> = [];
+    const fakeSignal: AbortSignal = {
+      aborted: false,
+      reason: undefined,
+      onabort: null,
+      throwIfAborted: () => {},
+      addEventListener: (type: string) => {
+        calls.push({ op: "add", type });
+      },
+      removeEventListener: (type: string) => {
+        calls.push({ op: "remove", type });
+      },
+      dispatchEvent: () => true
+    } as unknown as AbortSignal;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(null, {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" }
+        })
+      )
+    );
+    const events = await collect({
+      businessId: BIZ,
+      projectId: PROJ,
+      bearer: "B",
+      messages: [{ role: "user", content: "hi" }],
+      signal: fakeSignal
+    });
+    expect(events).toEqual([{ type: "error", message: "rowboat_invalid_json" }]);
+    const adds = calls.filter((c) => c.op === "add" && c.type === "abort").length;
+    const removes = calls.filter((c) => c.op === "remove" && c.type === "abort").length;
+    expect(adds).toBe(1);
+    expect(removes).toBe(1);
+  });
+
+  it("aborts synchronously when the caller passes an already-aborted signal — fetch is called with an already-aborted signal so any compliant intermediary rejects immediately, surfacing as rowboat_timeout", async () => {
+    // Defensive corner: a parent that re-uses an AbortController
+    // across many turns might pass it after a prior turn already
+    // aborted it. The internal abort fires synchronously, so the
+    // outgoing fetch carries an already-aborted signal — a compliant
+    // fetch implementation rejects with AbortError immediately,
+    // landing in the `catch` block and surfacing the uniform
+    // rowboat_timeout error code (no Rowboat tokens consumed).
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const sig = init.signal as AbortSignal | undefined;
+      if (sig?.aborted) {
+        const err = new Error("aborted");
+        (err as Error & { name: string }).name = "AbortError";
+        throw err;
+      }
+      /* c8 ignore next 5 -- defensive: this branch is unreachable in
+         this test (we only call fetch with an already-aborted signal),
+         but the explicit fallback documents the contract for a future
+         maintainer reading the mock. */
+      return new Response("", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ac = new AbortController();
+    ac.abort();
+    const events = await collect({
+      businessId: BIZ,
+      projectId: PROJ,
+      bearer: "B",
+      messages: [{ role: "user", content: "hi" }],
+      signal: ac.signal
+    });
+    expect(events).toEqual([{ type: "error", message: "rowboat_timeout" }]);
+  });
+
+  it("removes the external-signal abort listener after the stream completes — long-lived caller signals (parent component AbortController held across many turns) must not accumulate listeners", async () => {
+    // We can't easily count listeners on a real AbortSignal, so use a
+    // minimal stand-in that records add/remove calls. The contract:
+    // for every addEventListener we make, there's a matching
+    // removeEventListener (either via `once: true` firing OR our
+    // explicit cleanup in finally / early-return paths).
+    const calls: Array<{ op: "add" | "remove"; type: string }> = [];
+    const fakeSignal: AbortSignal = {
+      aborted: false,
+      reason: undefined,
+      onabort: null,
+      throwIfAborted: () => {},
+      addEventListener: (type: string) => {
+        calls.push({ op: "add", type });
+      },
+      removeEventListener: (type: string) => {
+        calls.push({ op: "remove", type });
+      },
+      dispatchEvent: () => true
+    } as unknown as AbortSignal;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          'data: {"type":"delta","content":"hi"}\n\n',
+          'data: {"type":"done"}\n\n'
+        ])
+      )
+    );
+    const events = await collect({
+      businessId: BIZ,
+      projectId: PROJ,
+      bearer: "B",
+      messages: [{ role: "user", content: "hi" }],
+      signal: fakeSignal
+    });
+    expect(events.map((e) => e.type)).toEqual(["delta", "done"]);
+    const adds = calls.filter((c) => c.op === "add" && c.type === "abort").length;
+    const removes = calls.filter((c) => c.op === "remove" && c.type === "abort").length;
+    expect(adds).toBe(1);
+    expect(removes).toBe(1);
   });
 
   it("normalises CRLF line endings — some intermediaries emit `\\r\\n\\r\\n` instead of `\\n\\n` between SSE events", async () => {

@@ -651,11 +651,16 @@ function createDashboardChatStream(input: StreamPipelineInput): ReadableStream<U
         }
       }, 5_000);
 
-      // Client disconnect — abort the upstream Rowboat call so we
-      // don't keep generating tokens nobody will read.
-      const upstreamAbort = new AbortController();
+      // Client disconnect — tear down the heartbeat + NDJSON
+      // controller and let the in-flight Rowboat call see it via the
+      // request.signal we forward into callRowboatChatStream below.
+      // Pre-fix this used a SEPARATE AbortController that was never
+      // wired into the upstream fetch, so the per-tenant Ollama would
+      // happily keep generating tokens nobody read until the internal
+      // idle timer tripped 30s later (Codex P2 + Cursor Bugbot Medium
+      // on PR #76). Now `request.signal` flows straight through to
+      // `fetch()` and `reader.cancel()` inside `callRowboatChatStream`.
       const onClientAbort = () => {
-        upstreamAbort.abort();
         clearInterval(heartbeat);
         close();
       };
@@ -698,7 +703,12 @@ function createDashboardChatStream(input: StreamPipelineInput): ReadableStream<U
             bearer: input.bearer,
             messages,
             conversationId: useContinuation ? input.thread.rowboat_conversation_id : null,
-            state: useContinuation ? input.thread.rowboat_state : null
+            state: useContinuation ? input.thread.rowboat_state : null,
+            // Forward the browser's AbortSignal so a client disconnect
+            // tears down the upstream Rowboat fetch + body reader
+            // promptly instead of waiting up to 30s for the internal
+            // idle timer.
+            signal: input.requestSignal
           });
         } catch (err) {
           // Synchronous throw from the generator constructor — extremely

@@ -489,7 +489,7 @@ describe("summarizeCustomerMemoryAndLog — logging branches", () => {
   it("does not throw when the inner summarizer returns ok:false (below_threshold)", async () => {
     await expect(
       summarizeCustomerMemoryAndLog(BIZ, CUSTOMER, {
-        getCustomerMemory: (async () => memory({ interaction_count: 1 })) as never,
+        getCustomerMemory: (async () => memory({ interaction_count: 0 })) as never,
         getBusinessConfig: vi.fn() as never,
         callRowboatChat: vi.fn() as never,
         listSmsHistoryForCustomer: vi.fn() as never,
@@ -542,7 +542,7 @@ describe("summarizeCustomerMemoryAndLog — logging branches", () => {
     // dashboard chat preamble logic) — locking the values prevents
     // a stealth tightening that would silently change the gate.
     expect(SUMMARY_MAX_CHARS).toBe(2000);
-    expect(SUMMARY_INTERACTION_THRESHOLD).toBe(3);
+    expect(SUMMARY_INTERACTION_THRESHOLD).toBe(1);
     expect(SUMMARY_DEBOUNCE_MS).toBe(30_000);
   });
 });
@@ -732,9 +732,9 @@ describe("shouldSummarize — supplemental branch coverage", () => {
     ).toBe(true);
   });
 
-  it("interaction_count exactly at threshold (3) triggers summarize — gate is inclusive on the boundary", () => {
+  it("interaction_count exactly at threshold (1) triggers summarize — gate is inclusive on the boundary, ensuring a customer's first SMS/call produces a summary on the next eligible run", () => {
     expect(
-      shouldSummarize(memory({ interaction_count: 3, last_summarized_at: null }))
+      shouldSummarize(memory({ interaction_count: 1, last_summarized_at: null }))
     ).toBe(true);
   });
 });

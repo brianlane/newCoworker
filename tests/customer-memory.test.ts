@@ -109,13 +109,13 @@ describe("buildCustomerPreamble", () => {
 });
 
 describe("shouldSummarize — gating decision", () => {
-  it("false when interaction_count is below the 3-interaction threshold (avoids summarizing every single SMS)", () => {
-    expect(shouldSummarize(memory({ interaction_count: 2 }))).toBe(false);
+  it("false when interaction_count is 0 — there's literally nothing to summarize yet", () => {
+    expect(shouldSummarize(memory({ interaction_count: 0 }))).toBe(false);
   });
 
-  it("true on first eligible run when interaction_count >= 3 and no prior summary", () => {
+  it("true on first eligible run when interaction_count >= 1 and no prior summary — owners need cross-channel continuity from the very first inbound message", () => {
     expect(
-      shouldSummarize(memory({ interaction_count: 3, last_summarized_at: null }))
+      shouldSummarize(memory({ interaction_count: 1, last_summarized_at: null }))
     ).toBe(true);
   });
 
@@ -150,8 +150,8 @@ describe("shouldSummarize — gating decision", () => {
     ).toBe(true);
   });
 
-  it("constants match the gating spec — interaction threshold 3, debounce 30s, summary cap 2000", () => {
-    expect(SUMMARY_INTERACTION_THRESHOLD).toBe(3);
+  it("constants match the gating spec — interaction threshold 1 (summary on first contact), debounce 30s, summary cap 2000", () => {
+    expect(SUMMARY_INTERACTION_THRESHOLD).toBe(1);
     expect(SUMMARY_DEBOUNCE_MS).toBe(30_000);
     expect(SUMMARY_MAX_CHARS).toBe(2000);
   });
@@ -197,11 +197,11 @@ describe("summarizeCustomerMemory", () => {
     if (!result.ok) expect(result.reason).toBe("memory_not_found");
   });
 
-  it("returns below_threshold when interaction_count < 3 — even if the caller's gate let it through (guard against racing concurrent triggers)", async () => {
+  it("returns below_threshold when interaction_count < 1 — even if the caller's gate let it through (guard against racing concurrent triggers)", async () => {
     const result = await summarizeCustomerMemory(
       BIZ,
       CUSTOMER,
-      deps({ memory: memory({ interaction_count: 2 }) })
+      deps({ memory: memory({ interaction_count: 0 }) })
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("below_threshold");

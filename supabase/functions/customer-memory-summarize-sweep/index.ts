@@ -5,7 +5,7 @@
  * paths catches the live signal, but it can leak when:
  *   - the inbound worker invocation gets pre-empted before it dispatches
  *     the fire-and-forget;
- *   - the gate (interaction_count >= 3, debounce 30s) was satisfied at
+ *   - the gate (interaction_count >= 1, debounce 30s) was satisfied at
  *     interaction time but the dispatch raced with another writer that
  *     reset the counter back below threshold;
  *   - a customer was bumped via voice but the fire-and-forget hook is
@@ -14,7 +14,7 @@
  *
  * This sweep runs once per night at off-peak (default 04:00 UTC) and
  * walks every customer_memories row whose:
- *   (a) interaction_count >= SUMMARY_INTERACTION_THRESHOLD (3), AND
+ *   (a) interaction_count >= SUMMARY_INTERACTION_THRESHOLD (1), AND
  *   (b) last_summarized_at is NULL OR older than SUMMARY_DEBOUNCE_MS,
  *
  * dispatching summarizeCustomerMemoryAndLog for each. The summarizer
@@ -61,7 +61,7 @@ const BATCH_PER_BUSINESS = 5;
  * Kept in sync via tests/customer-memory-cron-contract.test.ts; the
  * inline duplication here is intentional (Edge runtime can't import
  * from src/). */
-const SUMMARY_INTERACTION_THRESHOLD = 3;
+const SUMMARY_INTERACTION_THRESHOLD = 1;
 const SUMMARY_DEBOUNCE_MS = 30_000;
 
 /**

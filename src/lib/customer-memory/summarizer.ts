@@ -13,12 +13,15 @@
  * familiar.
  *
  * Trigger gate (caller-side, fire-and-forget):
- *   memory.interaction_count >= 3 AND
+ *   memory.interaction_count >= 1 AND
  *   (last_summarized_at IS NULL OR now - last_summarized_at >= 30s)
  *
- * The 3-interaction threshold + 30s debounce was confirmed by the
- * owner: prevents this from preempting live calls/texts while still
- * keeping the rollup fresh enough for cross-channel continuity.
+ * The 1-interaction threshold + 30s debounce was confirmed by the
+ * owner: a summary needs to exist after the FIRST interaction so the
+ * dashboard preamble has cross-channel continuity from the very next
+ * turn. The 30s debounce still prevents this from preempting live
+ * calls/texts (a flurry of inbound SMS within a single conversation
+ * coalesces into one summarizer run, not three).
  *
  * Failures are swallowed and logged: a degraded summary is acceptable
  * and the next interaction's gate will retry. The summary is hard-
@@ -41,8 +44,15 @@ import type { CustomerMemoryRow } from "./types";
 /** Hard cap on persisted summary text. */
 export const SUMMARY_MAX_CHARS = 2000;
 
-/** Interactions since last summary that trigger a fresh run. */
-export const SUMMARY_INTERACTION_THRESHOLD = 3;
+/** Interactions since last summary that trigger a fresh run. Set to
+ * 1 so a customer's very first SMS or call produces a summary the
+ * dashboard chat preamble can reference on the owner's next turn —
+ * without it the preamble's "Recent customer activity" notes have no
+ * cross-channel narrative and the owner sees the AI rediscover the
+ * same customer for several turns. The 30s debounce
+ * (`SUMMARY_DEBOUNCE_MS`) is the real shield against summarizer
+ * spam, not the threshold. */
+export const SUMMARY_INTERACTION_THRESHOLD = 1;
 
 /** Debounce window — refuse to re-summarize within this many ms of the last run. */
 export const SUMMARY_DEBOUNCE_MS = 30_000;

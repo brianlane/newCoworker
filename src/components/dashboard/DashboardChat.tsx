@@ -284,6 +284,14 @@ export function DashboardChat({ businessId, businessName }: Props) {
 
     let assistantBubbleInserted = false;
     let streamErrored = false;
+    // Tracks whether we received the server's `done` event. Used to
+    // distinguish a clean stream close (done) from a connection-cut
+    // close (Vercel function reaper at maxDuration, TCP drop, server
+    // crash) — the latter MUST surface an error so the owner knows
+    // the reply may be incomplete instead of leaving them staring at
+    // a half-finished bubble that looks like the model just stopped
+    // (Cursor Bugbot Low on PR #76).
+    let streamDone = false;
     let res: Response | null = null;
 
     try {
@@ -355,6 +363,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
         // Heartbeat — server signaling "still working, don't time out".
         // Nothing to render.
       } else if (ev.type === "done") {
+        streamDone = true;
         // Replace the optimistic / in-flight pair with the server's
         // canonical message list (real DB ids, ordered by created_at,
         // any server-side normalization applied). Keeps the rendered
@@ -399,14 +408,30 @@ export function DashboardChat({ businessId, businessName }: Props) {
       // event when an intermediary clips the trailing newline).
       const { events: trailingEvents } = flushNdjsonBuffer<StreamEvent>(ndjsonState);
       for (const ev of trailingEvents) handleEvent(ev);
-      if (!streamErrored && !assistantBubbleInserted) {
-        // Server closed without emitting `meta` (and no `error`
-        // event either). Treat as a generic failure rather than
-        // leaving the optimistic user message stranded with no
-        // reply ever coming.
-        setMessages((prev) => prev.filter((m) => m.id !== optimisticUserId));
-        setInput(trimmed);
-        setError("Your coworker didn't respond. Please try again.");
+      if (!streamErrored && !streamDone) {
+        if (!assistantBubbleInserted) {
+          // Server closed without emitting `meta` (and no `error`
+          // event either). Treat as a generic failure rather than
+          // leaving the optimistic user message stranded with no
+          // reply ever coming.
+          setMessages((prev) => prev.filter((m) => m.id !== optimisticUserId));
+          setInput(trimmed);
+          setError("Your coworker didn't respond. Please try again.");
+        } else {
+          // Stream closed AFTER `meta` and one or more `delta` events
+          // but BEFORE `done` or `error`. Most likely cause: Vercel's
+          // function reaper at maxDuration, an intermediate proxy
+          // dropping the connection, or the server process crashing
+          // mid-generation. We KEEP the partial assistant bubble (the
+          // user already saw those tokens — yanking them looks like a
+          // bug) but surface a clear error so the owner knows the
+          // reply is incomplete and can resend. The textarea is NOT
+          // restored: the user's message did make it to the server
+          // (we got `meta` back), and resending would persist a
+          // duplicate user turn — better to let them retype if they
+          // want, after seeing the partial reply.
+          setError("The reply was cut off — please ask again to get the full answer.");
+        }
       }
     } catch (err) {
       if ((err as { name?: string } | null)?.name === "AbortError") {
