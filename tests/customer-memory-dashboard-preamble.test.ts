@@ -101,4 +101,112 @@ describe("buildDashboardCustomerPreamble", () => {
     // The (MAX+1)th customer was dropped.
     expect(out).not.toContain(`Customer ${DASHBOARD_PREAMBLE_MAX_CUSTOMERS}`);
   });
+
+  // ---- Branch coverage: meta tags individually droppable ----
+  // These exercise the "false" arm of each `if (...)` guard inside
+  // the meta-line builder so a future refactor that drops a guard
+  // can't silently regress preamble formatting.
+
+  it("omits 'last channel' when last_channel is null (e.g. memory exists from manual owner edit but no real interaction yet)", () => {
+    const out = buildDashboardCustomerPreamble([
+      memory({
+        last_channel: null,
+        last_interaction_at: "2026-05-06T10:00:00Z",
+        total_interaction_count: 1,
+        summary_md: "x"
+      })
+    ]);
+    expect(out).not.toBeNull();
+    expect(out!).not.toContain("last channel");
+    expect(out!).toContain("last seen");
+    expect(out!).toContain("1 prior interactions");
+  });
+
+  it("omits 'last seen' when last_interaction_at is null (owner-pinned-only customer with no interaction history yet)", () => {
+    const out = buildDashboardCustomerPreamble([
+      memory({
+        last_channel: "sms",
+        last_interaction_at: null,
+        total_interaction_count: 1,
+        summary_md: "x"
+      })
+    ]);
+    expect(out).not.toBeNull();
+    expect(out!).toContain("last channel: sms");
+    expect(out!).not.toContain("last seen");
+  });
+
+  it("omits 'N prior interactions' when total_interaction_count is 0 (qualifies via pinned_md alone — owner pre-curated a customer who hasn't called yet)", () => {
+    const out = buildDashboardCustomerPreamble([
+      memory({
+        last_channel: null,
+        last_interaction_at: null,
+        total_interaction_count: 0,
+        pinned_md: "VIP — escalate"
+      })
+    ]);
+    expect(out).not.toBeNull();
+    expect(out!).not.toContain("prior interactions");
+    expect(out!).not.toContain("last channel");
+    expect(out!).not.toContain("last seen");
+    // No meta means no parens after the header.
+    expect(out!).toContain("- +15555550123\n");
+    expect(out!).toContain("Pinned: VIP — escalate");
+  });
+
+  it("qualifies a row via summary_md alone (covers the `summary_md?.trim()` arm of the visible filter)", () => {
+    const out = buildDashboardCustomerPreamble([
+      memory({
+        summary_md: "summary only",
+        pinned_md: null,
+        total_interaction_count: 0,
+        last_channel: null,
+        last_interaction_at: null
+      })
+    ]);
+    expect(out).not.toBeNull();
+    expect(out!).toContain("summary only");
+  });
+
+  it("renders ONLY pinned_md (no summary_md) when summary_md is null or whitespace — covers the `if (summary)` false arm on line 60", () => {
+    for (const summary of [null, "", "   "]) {
+      const out = buildDashboardCustomerPreamble([
+        memory({
+          summary_md: summary,
+          pinned_md: "owner-pinned only",
+          total_interaction_count: 1
+        })
+      ]);
+      expect(out).not.toBeNull();
+      expect(out!).toContain("Pinned: owner-pinned only");
+      expect(out!).not.toContain("Summary:");
+    }
+  });
+
+  it("omits the customer entirely when display_name is null — the header degrades to bare E.164", () => {
+    const out = buildDashboardCustomerPreamble([
+      memory({
+        display_name: null,
+        summary_md: "x",
+        total_interaction_count: 1
+      })
+    ]);
+    expect(out).not.toBeNull();
+    // Just E.164 in the header (no leading name, no double space).
+    expect(out!).toContain("- +15555550123 (");
+  });
+
+  it("trims display_name whitespace — `Joe   ` should not produce `Joe   +15555550123` with double spaces", () => {
+    // The visible filter uses `m.display_name?.trim()` to decide
+    // whether to push the name; assert the trim survived.
+    const out = buildDashboardCustomerPreamble([
+      memory({
+        display_name: "   ",
+        pinned_md: "x",
+        total_interaction_count: 1
+      })
+    ]);
+    expect(out).not.toBeNull();
+    expect(out!).toContain("- +15555550123 (");
+  });
 });

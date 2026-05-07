@@ -74,8 +74,17 @@ export async function listCustomerMemories(
     // top of the existing SQL `LIKE` wildcard escape so a search of
     // `100%` matches the literal `100%`, not "anything starting with
     // 100".
+    //
+    // IMPORTANT: only `"` needs escaping for PostgREST's double-quoted
+    // value syntax — backslashes are NOT special there. We deliberately
+    // escape ONLY `"` and not `\` so the single backslash produced by
+    // the LIKE wildcard escape above survives end-to-end. If we also
+    // escaped `\`, a search like `100%` would round-trip as `100\\%` in
+    // the filter, which Postgres LIKE then reads as "literal backslash
+    // followed by wildcard" instead of "literal percent" (Cursor Bugbot
+    // Medium on PR #74).
     const escapedForLike = search.replace(/[%_]/g, (m) => `\\${m}`);
-    const escapedForPostgrest = escapedForLike.replace(/["\\]/g, "\\$&");
+    const escapedForPostgrest = escapedForLike.replace(/"/g, '\\"');
     const pattern = `"%${escapedForPostgrest}%"`;
     // Match either the display name or the raw E.164 — owners often
     // remember "Joe" but not the +1555… number, and vice versa.
@@ -86,7 +95,7 @@ export async function listCustomerMemories(
   // `.or()` widens the query result type to include
   // `GenericStringError`, so go through unknown to apply the row
   // shape we control via the explicit ALL_COLUMNS select.
-  return ((data ?? []) as unknown as CustomerMemoryRow[]) ?? [];
+  return (data ?? []) as unknown as CustomerMemoryRow[];
 }
 
 /**
@@ -165,9 +174,11 @@ export async function updateCustomerOwnerFields(
   client?: SupabaseClient
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
-  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  if (edit.displayName !== undefined) patch.display_name = edit.displayName;
-  if (edit.pinnedMd !== undefined) patch.pinned_md = edit.pinnedMd;
+  const patch: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+    ...("displayName" in edit ? { display_name: edit.displayName } : {}),
+    ...("pinnedMd" in edit ? { pinned_md: edit.pinnedMd } : {})
+  };
   const { error } = await db
     .from("customer_memories")
     .update(patch)

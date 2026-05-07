@@ -53,6 +53,28 @@ describe("parseRowboatChatJson", () => {
     expect(parseRowboatChatJson({}).reply).toBe("");
     expect(parseRowboatChatJson({ turn: { output: [] } }).reply).toBe("");
   });
+
+  it("skips non-assistant entries, missing-content entries, and whitespace-only content (covers all three short-circuits in the role/type/trim guard)", () => {
+    // Pin every short-circuit of `m.role === "assistant" &&
+    // typeof m.content === "string" && m.content.trim()` so a future
+    // refactor can't silently change which messages count as a real
+    // assistant reply.
+    const r = parseRowboatChatJson({
+      turn: {
+        output: [
+          { role: "system", content: "system message" },
+          { role: "user", content: "user message" },
+          { role: "assistant", content: null },
+          { role: "assistant" },
+          { role: "assistant", content: "" },
+          { role: "assistant", content: "   " },
+          { role: "assistant", content: "real reply" },
+          { role: "assistant", content: "second reply, never reached" }
+        ]
+      }
+    });
+    expect(r.reply).toBe("real reply");
+  });
 });
 
 describe("STATELESS_RETRY_ERRORS — deliberately bounded set", () => {
@@ -255,6 +277,55 @@ describe("callSmsRowboatWithStatelessFallback — stateless retry on stale conti
         fetchStub
       )
     ).rejects.toThrow("rowboat_timeout");
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+  });
+
+  it("coerces a non-Error throw via String() so the retry classifier can still pattern-match (defensive: vendor SDKs sometimes throw raw strings)", async () => {
+    // Pin the `err instanceof Error ? err.message : String(err)`
+    // branch in the fallback's catch. If we accidentally drop the
+    // String() coercion the retry classifier would `.has(undefined)`
+    // and silently turn every non-Error throw into a hard failure.
+    const fetchStub = vi
+      .fn<typeof fetch>()
+      // eslint-disable-next-line prefer-promise-reject-errors
+      .mockImplementationOnce(() => Promise.reject("rowboat_http_500" as unknown as Error))
+      .mockResolvedValueOnce(jsonResponse(rowboatReply("fresh", "conv-NEW")));
+    const result = await callSmsRowboatWithStatelessFallback(
+      {
+        chatUrl: ROWBOAT_URL,
+        bearer: BEARER,
+        userText: "hi",
+        conversationId: "conv-STALE",
+        state: null,
+        timeoutMs: 60_000
+      },
+      fetchStub
+    );
+    expect(result.retriedStateless).toBe(true);
+    expect(result.reply).toBe("fresh");
+  });
+
+  it("re-throws the underlying network error verbatim when fetch rejects WITHOUT an abort (e.g. DNS failure, connection refused)", async () => {
+    // Pin the line in callRowboatChatOnce that re-throws non-abort
+    // fetch errors. Without this branch a transient network blip
+    // would be silently misreported as `rowboat_timeout` and trigger
+    // the wrong retry/skip logic upstream.
+    const fetchStub = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    await expect(
+      callSmsRowboatWithStatelessFallback(
+        {
+          chatUrl: ROWBOAT_URL,
+          bearer: BEARER,
+          userText: "hi",
+          conversationId: "conv-1",
+          state: null,
+          timeoutMs: 60_000
+        },
+        fetchStub
+      )
+    ).rejects.toThrow("ECONNREFUSED");
     expect(fetchStub).toHaveBeenCalledTimes(1);
   });
 

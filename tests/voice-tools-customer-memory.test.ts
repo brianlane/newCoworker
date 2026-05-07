@@ -15,7 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/customer-memory/db", () => ({
   getCustomerMemory: vi.fn(),
-  updateCustomerOwnerFields: vi.fn()
+  updateCustomerOwnerFields: vi.fn(),
+  recordInteractionAndIncrement: vi.fn()
 }));
 
 vi.mock("@/lib/rowboat/gateway-token", () => ({
@@ -27,6 +28,7 @@ import { POST as setNamePOST } from "@/app/api/voice/tools/customer-set-display-
 import { POST as appendNotePOST } from "@/app/api/voice/tools/customer-append-pinned-note/route";
 import {
   getCustomerMemory,
+  recordInteractionAndIncrement,
   updateCustomerOwnerFields
 } from "@/lib/customer-memory/db";
 import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
@@ -234,8 +236,15 @@ describe("POST /api/voice/tools/customer-set-display-name", () => {
     });
   });
 
-  it("updates display_name when there's no row yet (UPDATE on non-existent row is a no-op, but agents can pre-record names)", async () => {
-    vi.mocked(getCustomerMemory).mockResolvedValueOnce(null);
+  it("force-creates a customer_memories row via record_customer_interaction when none exists (Bugbot Low: silent no-op)", async () => {
+    // First lookup returns null (no row) → tool MUST force-create via
+    // recordInteractionAndIncrement, then re-read to get the new row.
+    // Without this the previous UPDATE-zero-rows path silently
+    // succeeded but persisted nothing (Bugbot Low PR #74).
+    vi.mocked(getCustomerMemory)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(memory({ display_name: null }));
+    vi.mocked(recordInteractionAndIncrement).mockResolvedValueOnce(memory());
     vi.mocked(updateCustomerOwnerFields).mockResolvedValueOnce(undefined);
     const res = await setNamePOST(
       makeReq("/api/voice/tools/customer-set-display-name", {
@@ -245,7 +254,51 @@ describe("POST /api/voice/tools/customer-set-display-name", () => {
       })
     );
     expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, data: { updated: true } });
+    expect(recordInteractionAndIncrement).toHaveBeenCalledWith(BIZ, PHONE, "voice", {
+      displayName: "Joe"
+    });
     expect(updateCustomerOwnerFields).toHaveBeenCalled();
+  });
+
+  it("returns name_already_set_matches when the RPC's p_display_name already populated the new row to the same value", async () => {
+    // RPC's p_display_name path: when the row didn't exist AND we
+    // pass the agent-discovered name, the RPC sets it on the new
+    // row. The follow-up UPDATE is then unnecessary — return a
+    // distinct reason so callers can tell "redundant write" apart
+    // from "owner-curated, do not touch".
+    vi.mocked(getCustomerMemory)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(memory({ display_name: "Joe" }));
+    vi.mocked(recordInteractionAndIncrement).mockResolvedValueOnce(
+      memory({ display_name: "Joe" })
+    );
+    const res = await setNamePOST(
+      makeReq("/api/voice/tools/customer-set-display-name", {
+        businessId: BIZ,
+        callerE164: PHONE,
+        args: { displayName: "Joe" }
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      ok: true,
+      data: { updated: false, reason: "name_already_set_matches" }
+    });
+    expect(updateCustomerOwnerFields).not.toHaveBeenCalled();
+  });
+
+  it("propagates 500 when the force-create RPC itself throws (otherwise we'd silently lose the name)", async () => {
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce(null);
+    vi.mocked(recordInteractionAndIncrement).mockRejectedValueOnce(new Error("rls"));
+    const res = await setNamePOST(
+      makeReq("/api/voice/tools/customer-set-display-name", {
+        businessId: BIZ,
+        callerE164: PHONE,
+        args: { displayName: "Joe" }
+      })
+    );
+    expect(res.status).toBe(500);
   });
 
   it("returns 400 when phone is missing AND envelope.callerE164 is missing", async () => {
@@ -292,7 +345,7 @@ describe("POST /api/voice/tools/customer-append-pinned-note", () => {
     expect(res2.status).toBe(400);
   });
 
-  it("appends with a date-stamped 'via voice' header on first note (no prior pinned_md)", async () => {
+  it("appends with a date-stamped 'via voice' header on first note (no prior pinned_md) and reports truncated:false (Bugbot Low PR #74)", async () => {
     vi.mocked(getCustomerMemory).mockResolvedValueOnce(memory({ pinned_md: null }));
     vi.mocked(updateCustomerOwnerFields).mockResolvedValueOnce(undefined);
     const res = await appendNotePOST(
@@ -303,9 +356,59 @@ describe("POST /api/voice/tools/customer-append-pinned-note", () => {
       })
     );
     expect(res.status).toBe(200);
+    const body = await res.json();
+    // Bugbot Low PR #74: previous version compared `prior + 2 (separator)
+    // + newLine` against `combined`, which was wrong when prior was
+    // empty (no separator added) — always reported truncated:true on
+    // the very first pinned note. Fixed by comparing what we WANTED
+    // to write against what we actually persisted.
+    expect(body.data.truncated).toBe(false);
     const updateCall = vi.mocked(updateCustomerOwnerFields).mock.calls[0]!;
     const newPinned = (updateCall[2] as { pinnedMd: string }).pinnedMd;
     expect(newPinned).toMatch(/^\[\d{4}-\d{2}-\d{2} via voice\] wife is allergic to nuts$/);
+  });
+
+  it("force-creates a customer_memories row before appending when none exists (Bugbot Low: silent no-op write)", async () => {
+    // Same Bugbot Low fix as customer-set-display-name: previously the
+    // append would UPDATE zero rows and report success, persisting
+    // nothing. Now we record_customer_interaction first to ensure
+    // the row exists, then append.
+    vi.mocked(getCustomerMemory)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(memory({ pinned_md: null }));
+    vi.mocked(recordInteractionAndIncrement).mockResolvedValueOnce(memory());
+    vi.mocked(updateCustomerOwnerFields).mockResolvedValueOnce(undefined);
+    const res = await appendNotePOST(
+      makeReq("/api/voice/tools/customer-append-pinned-note", {
+        businessId: BIZ,
+        callerE164: PHONE,
+        args: { note: "wife is allergic to nuts" }
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(recordInteractionAndIncrement).toHaveBeenCalledWith(BIZ, PHONE, "voice", {});
+    expect(updateCustomerOwnerFields).toHaveBeenCalled();
+  });
+
+  it("force-create degrades gracefully when the second getCustomerMemory still returns null (RPC raced or RLS quirk) — still attempts the UPDATE so we don't fail closed", async () => {
+    // Defensive path: record_customer_interaction succeeded but the
+    // re-read came back null (rare race or RLS). Rather than abort,
+    // we still UPDATE — if the row really doesn't exist we'll just
+    // match zero rows again (no worse than before), and if it
+    // briefly existed the next interaction will repair things.
+    vi.mocked(getCustomerMemory)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
+    vi.mocked(recordInteractionAndIncrement).mockResolvedValueOnce(memory());
+    vi.mocked(updateCustomerOwnerFields).mockResolvedValueOnce(undefined);
+    const res = await appendNotePOST(
+      makeReq("/api/voice/tools/customer-append-pinned-note", {
+        businessId: BIZ,
+        callerE164: PHONE,
+        args: { note: "Test note" }
+      })
+    );
+    expect(res.status).toBe(200);
   });
 
   it("appends to existing pinned_md with a blank line separator (preserves human readability)", async () => {
@@ -326,6 +429,23 @@ describe("POST /api/voice/tools/customer-append-pinned-note", () => {
     expect(newPinned).toContain("Existing owner note from dashboard");
     expect(newPinned).toContain("\n\n[");
     expect(newPinned).toContain("asks for Saturday slots");
+  });
+
+  it("reports truncated:true when the combined pinned_md was clipped to fit PINNED_MAX_CHARS", async () => {
+    const prior = "OLD\n" + "x".repeat(3600);
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce(memory({ pinned_md: prior }));
+    vi.mocked(updateCustomerOwnerFields).mockResolvedValueOnce(undefined);
+    const res = await appendNotePOST(
+      makeReq("/api/voice/tools/customer-append-pinned-note", {
+        businessId: BIZ,
+        callerE164: PHONE,
+        args: { note: "y".repeat(800) }
+      })
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.truncated).toBe(true);
+    expect(body.data.pinnedChars).toBeLessThanOrEqual(4000);
   });
 
   it("truncates from the OLDEST end when combined exceeds PINNED_MAX_CHARS — most recent guidance survives", async () => {

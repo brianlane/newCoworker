@@ -1,4 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const defaultClientSpy = vi.fn();
+// Mock the default-client factory so tests calling helpers WITHOUT
+// the third `client` arg exercise the `client ?? (await
+// createSupabaseServiceClient())` fallback. Mirrors the pattern used
+// in tests/db-voice-transcripts.test.ts.
+vi.mock("@/lib/supabase/server", () => ({
+  createSupabaseServiceClient: vi.fn(async () => defaultClientSpy())
+}));
 
 /**
  * Coverage for src/lib/customer-memory/db.ts.
@@ -32,10 +41,15 @@ import {
   updateCustomerOwnerFields,
   updateCustomerSummary
 } from "../src/lib/customer-memory/db";
+import { createSupabaseServiceClient } from "../src/lib/supabase/server";
 import type { CustomerMemoryRow } from "../src/lib/customer-memory/types";
 
 const BIZ = "00000000-0000-0000-0000-000000000001";
 const CUSTOMER = "+15555550123";
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -212,27 +226,28 @@ describe("listCustomerMemories", () => {
     // treats commas as condition separators and dots as
     // field/operator/value delimiters. The fix wraps each value in
     // double quotes so PostgREST parses them as literals AND
-    // backslash-escapes any embedded `"` or `\` so the quoting can't
-    // be broken by user input.
+    // backslash-escapes any embedded `"` so the quoting can't be
+    // broken by user input.
     //
     // Two layers of escaping run in order:
     //   (1) SQL LIKE: %, _ → \%, \_ so a search of "100%" matches the
     //       literal % rather than "anything starting with 100".
-    //   (2) PostgREST literal: " → \", \ → \\, applied AFTER step (1)
-    //       so the backslashes step (1) introduced get doubled (a
-    //       single backslash inside a quoted PostgREST value is the
-    //       escape character; we need it doubled to mean "literal
-    //       backslash").
+    //   (2) PostgREST literal: " → \" only — backslashes are NOT
+    //       special inside double-quoted PostgREST values, so the
+    //       single backslashes introduced by step (1) survive
+    //       end-to-end and reach Postgres LIKE as the escape char it
+    //       expects (Cursor Bugbot Medium followup on PR #74).
     const cases: Array<{ input: string; pattern: string }> = [
       { input: "Smith, LLC", pattern: `"%Smith, LLC%"` },
       { input: "127.0.0.1", pattern: `"%127.0.0.1%"` },
       { input: 'Joe "the Plumber"', pattern: `"%Joe \\"the Plumber\\"%"` },
-      // SQL LIKE escape adds a backslash; the PostgREST escape then
-      // doubles it (literal backslash inside quoted value).
-      { input: "100%", pattern: `"%100\\\\%%"` },
-      { input: "snake_case", pattern: `"%snake\\\\_case%"` },
-      // Bare backslash from the user is also doubled.
-      { input: "win\\path", pattern: `"%win\\\\path%"` },
+      // SQL LIKE escape adds ONE backslash; PostgREST passes it through
+      // unchanged because `\` isn't special inside quoted values.
+      { input: "100%", pattern: `"%100\\%%"` },
+      { input: "snake_case", pattern: `"%snake\\_case%"` },
+      // Bare backslashes from user input are passed through unchanged
+      // — there's no PostgREST-level interpretation of them.
+      { input: "win\\path", pattern: `"%win\\path%"` },
       // Plain alphanumerics get the same quoting treatment for
       // consistency — the cost is negligible vs. the safety win.
       { input: "Joe", pattern: `"%Joe%"` }
@@ -393,6 +408,17 @@ describe("updateCustomerOwnerFields", () => {
     expect(patch).not.toHaveProperty("pinned_md");
   });
 
+  it("partial edit: providing only pinnedMd does not write display_name (avoids clobbering owner-curated names)", async () => {
+    const { client, fromCalls } = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { pinnedMd: "VIP" }, client);
+    const patch = fromCalls[0]!.calls.find((c) => c.name === "update")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(patch).toHaveProperty("pinned_md", "VIP");
+    expect(patch).not.toHaveProperty("display_name");
+  });
+
   it("propagates PostgREST errors", async () => {
     const { client } = makeClient({
       fromTerminator: { data: null, error: { message: "rls" } }
@@ -538,5 +564,62 @@ describe("listSmsHistoryForCustomer", () => {
     await expect(listSmsHistoryForCustomer(BIZ, CUSTOMER, {}, client)).rejects.toThrow(
       /listSmsHistoryForCustomer: rls/
     );
+  });
+});
+
+describe("default service-client fallback (every public helper)", () => {
+  // Each helper exposes an optional `client` arg purely so the unit
+  // tests above can swap in a stub. In production every caller goes
+  // through the `client ?? (await createSupabaseServiceClient())`
+  // branch — exercise it explicitly to keep coverage at 100% AND to
+  // notice if any helper accidentally drops the fallback.
+
+  it("getCustomerMemory falls back to createSupabaseServiceClient", async () => {
+    const { client } = makeClient({ fromTerminator: { data: null, error: null } });
+    defaultClientSpy.mockReturnValue(client);
+    await getCustomerMemory(BIZ, CUSTOMER);
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("listCustomerMemories falls back to createSupabaseServiceClient", async () => {
+    const { client } = makeClient({ fromTerminator: { data: [], error: null } });
+    defaultClientSpy.mockReturnValue(client);
+    await listCustomerMemories(BIZ);
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("recordInteractionAndIncrement falls back to createSupabaseServiceClient", async () => {
+    const { client } = makeClient({ rpcResult: { data: memory(), error: null } });
+    defaultClientSpy.mockReturnValue(client);
+    await recordInteractionAndIncrement(BIZ, CUSTOMER, "sms", {});
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("updateCustomerSummary falls back to createSupabaseServiceClient", async () => {
+    const { client } = makeClient({ fromTerminator: { data: null, error: null } });
+    defaultClientSpy.mockReturnValue(client);
+    await updateCustomerSummary(BIZ, CUSTOMER, { summaryMd: "x", resetCounter: true });
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("updateCustomerOwnerFields falls back to createSupabaseServiceClient", async () => {
+    const { client } = makeClient({ fromTerminator: { data: null, error: null } });
+    defaultClientSpy.mockReturnValue(client);
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { displayName: "x" });
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("deleteCustomerMemory falls back to createSupabaseServiceClient", async () => {
+    const { client } = makeClient({ fromTerminator: { data: null, error: null } });
+    defaultClientSpy.mockReturnValue(client);
+    await deleteCustomerMemory(BIZ, CUSTOMER);
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("listSmsHistoryForCustomer falls back to createSupabaseServiceClient", async () => {
+    const { client } = makeClient({ fromTerminator: { data: [], error: null } });
+    defaultClientSpy.mockReturnValue(client);
+    await listSmsHistoryForCustomer(BIZ, CUSTOMER);
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
   });
 });

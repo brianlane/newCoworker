@@ -42,6 +42,7 @@ import {
 } from "@/lib/voice-tools/common";
 import {
   getCustomerMemory,
+  recordInteractionAndIncrement,
   updateCustomerOwnerFields
 } from "@/lib/customer-memory/db";
 import { logger } from "@/lib/logger";
@@ -93,14 +94,31 @@ export async function POST(request: Request) {
   }
 
   try {
-    const existing = await getCustomerMemory(envelope.businessId, phone);
-    const prior = existing?.pinned_md?.trim() ?? "";
-    let combined = prior ? `${prior}\n\n${newLine}` : newLine;
-    if (combined.length > PINNED_MAX_CHARS) {
-      // Trim from the oldest end so the most recent guidance stays
-      // intact. Owner can fully audit/edit on the customers page.
-      combined = combined.slice(combined.length - PINNED_MAX_CHARS);
+    let existing = await getCustomerMemory(envelope.businessId, phone);
+    // No row yet for this customer? `updateCustomerOwnerFields` would
+    // happily fire an UPDATE matching zero rows and we'd return
+    // {appended:true} on a write that never persisted (Cursor Bugbot
+    // Low on PR #74). Force-create the row via the same RPC the
+    // inbound paths use so the agent's pin always lands.
+    if (!existing) {
+      await recordInteractionAndIncrement(envelope.businessId, phone, "voice", {});
+      existing = await getCustomerMemory(envelope.businessId, phone);
     }
+    const prior = existing?.pinned_md?.trim() ?? "";
+    // Two distinct combinations to track:
+    //  - `combined`     : what we'll persist (post-truncation).
+    //  - `wantedLength` : what we WOULD have written had we ignored
+    //                     the cap. Used to set `truncated` honestly —
+    //                     the prior buggy version compared `prior +
+    //                     separator + newLine` against `combined` even
+    //                     when `prior` was empty (no separator added),
+    //                     so the very first note always reported
+    //                     truncated:true. Cursor Bugbot Low on PR #74.
+    const wanted = prior ? `${prior}\n\n${newLine}` : newLine;
+    const combined =
+      wanted.length > PINNED_MAX_CHARS
+        ? wanted.slice(wanted.length - PINNED_MAX_CHARS)
+        : wanted;
     await updateCustomerOwnerFields(envelope.businessId, phone, {
       pinnedMd: combined
     });
@@ -109,7 +127,7 @@ export async function POST(request: Request) {
       data: {
         appended: true,
         pinnedChars: combined.length,
-        truncated: prior.length + newLine.length + 2 > combined.length
+        truncated: combined.length < wanted.length
       }
     });
   } catch (err) {

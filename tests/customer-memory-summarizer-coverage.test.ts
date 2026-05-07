@@ -126,6 +126,124 @@ describe("summarizeCustomerMemory — db_failed paths (every read/write surface)
     if (!result.ok) expect(result.reason).toBe("db_failed");
   });
 
+  it("non-Error throws (e.g. plain strings, undefined) get coerced via String() so detail is never the string 'null' or '[object Object]'", async () => {
+    // Defensive: not every layer reliably throws Error subclasses
+    // (vendor SDKs sometimes throw plain strings or numbers). The
+    // fallback `String(err)` keeps `detail` debuggable instead of
+    // "[object Object]" — exercises the falsy arm of every
+    // `err instanceof Error` ternary in summarizer.ts.
+    const stringThrow = await summarizeCustomerMemory(BIZ, CUSTOMER, {
+      // eslint-disable-next-line @typescript-eslint/only-throw-error
+      getCustomerMemory: (async () => {
+        throw "raw_string_error" as unknown as Error;
+      }) as never,
+      getBusinessConfig: vi.fn() as never,
+      callRowboatChat: vi.fn() as never,
+      listSmsHistoryForCustomer: vi.fn() as never,
+      listVoiceTurnsForCustomer: vi.fn() as never,
+      updateCustomerSummary: vi.fn() as never,
+      rowboatBearer: "tok"
+    });
+    if (stringThrow.ok === false) {
+      expect(stringThrow.reason).toBe("db_failed");
+      expect(stringThrow.detail).toBe("raw_string_error");
+    } else {
+      expect.fail("expected db_failed");
+    }
+
+    // Also for getBusinessConfig (line 246):
+    const configThrow = await summarizeCustomerMemory(BIZ, CUSTOMER, {
+      getCustomerMemory: (async () => memory({ interaction_count: 5 })) as never,
+      // eslint-disable-next-line @typescript-eslint/only-throw-error
+      getBusinessConfig: (async () => {
+        throw "raw_config_error" as unknown as Error;
+      }) as never,
+      callRowboatChat: vi.fn() as never,
+      listSmsHistoryForCustomer: vi.fn() as never,
+      listVoiceTurnsForCustomer: vi.fn() as never,
+      updateCustomerSummary: vi.fn() as never,
+      rowboatBearer: "tok"
+    });
+    if (configThrow.ok === false) {
+      expect(configThrow.detail).toBe("raw_config_error");
+    }
+
+    // Also for the Rowboat call (line 302):
+    const rowboatThrow = await summarizeCustomerMemory(BIZ, CUSTOMER, {
+      getCustomerMemory: (async () => memory({ interaction_count: 5 })) as never,
+      getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,
+      // eslint-disable-next-line @typescript-eslint/only-throw-error
+      callRowboatChat: (async () => {
+        throw 42 as unknown as Error;
+      }) as never,
+      listSmsHistoryForCustomer: (async () => [
+        {
+          jobId: "j1",
+          inboundText: "hi",
+          assistantReply: "hi",
+          receivedAt: "2026-05-05T00:00:00Z"
+        }
+      ]) as never,
+      listVoiceTurnsForCustomer: vi.fn(async () => []),
+      updateCustomerSummary: vi.fn() as never,
+      rowboatBearer: "tok"
+    });
+    if (rowboatThrow.ok === false) {
+      expect(rowboatThrow.reason).toBe("rowboat_failed");
+      expect(rowboatThrow.detail).toBe("42");
+    }
+
+    // Also for the post-write update (line 321):
+    const updateThrow = await summarizeCustomerMemory(BIZ, CUSTOMER, {
+      getCustomerMemory: (async () => memory({ interaction_count: 5 })) as never,
+      getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,
+      callRowboatChat: (async () => ({
+        reply: "ok",
+        conversationId: undefined,
+        state: undefined,
+        hasStateKey: false
+      })) as never,
+      listSmsHistoryForCustomer: (async () => [
+        {
+          jobId: "j1",
+          inboundText: "hi",
+          assistantReply: "hi",
+          receivedAt: "2026-05-05T00:00:00Z"
+        }
+      ]) as never,
+      listVoiceTurnsForCustomer: vi.fn(async () => []),
+      // eslint-disable-next-line @typescript-eslint/only-throw-error
+      updateCustomerSummary: (async () => {
+        throw { code: "PGRST123" } as unknown as Error;
+      }) as never,
+      rowboatBearer: "tok"
+    });
+    if (updateThrow.ok === false) {
+      expect(updateThrow.reason).toBe("db_failed");
+      // String({ code: "PGRST123" }) => "[object Object]" — verify
+      // we don't spuriously get "null" or undefined.
+      expect(updateThrow.detail).toBe("[object Object]");
+    }
+
+    // listSmsHistoryForCustomer raw-string throw exercises the
+    // remaining `String(err)` arm in the voice/sms try block.
+    const smsThrow = await summarizeCustomerMemory(BIZ, CUSTOMER, {
+      getCustomerMemory: (async () => memory({ interaction_count: 5 })) as never,
+      getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,
+      callRowboatChat: vi.fn() as never,
+      // eslint-disable-next-line @typescript-eslint/only-throw-error
+      listSmsHistoryForCustomer: (async () => {
+        throw "raw_sms_error" as unknown as Error;
+      }) as never,
+      listVoiceTurnsForCustomer: vi.fn(async () => []),
+      updateCustomerSummary: vi.fn() as never,
+      rowboatBearer: "tok"
+    });
+    if (smsThrow.ok === false) {
+      expect(smsThrow.detail).toBe("raw_sms_error");
+    }
+  });
+
   it("updateCustomerSummary throw AFTER successful Rowboat call -> reason: db_failed (the 'post-write fail' branch)", async () => {
     // Rowboat call succeeded → we have a valid summary in hand → DB
     // write throws. Caller needs to know the chat side ran (telemetry)
@@ -286,7 +404,7 @@ describe("summarizeCustomerMemory — input rendering shape", () => {
       listVoiceTurnsForCustomer: vi.fn(async () => [
         {
           callStartedAt: "2026-05-05T09:00:00Z",
-          role: "caller",
+          role: "caller" as const,
           content: "Hello, I need help"
         }
       ]),
@@ -426,6 +544,181 @@ describe("summarizeCustomerMemoryAndLog — logging branches", () => {
     expect(SUMMARY_MAX_CHARS).toBe(2000);
     expect(SUMMARY_INTERACTION_THRESHOLD).toBe(3);
     expect(SUMMARY_DEBOUNCE_MS).toBe(30_000);
+  });
+});
+
+describe("summarizeCustomerMemory — bearer fallback and parse-edge gates", () => {
+  it("falls back to ROWBOAT_VPS_CHAT_BEARER from env when no explicit bearer is supplied", async () => {
+    const prior = process.env.ROWBOAT_VPS_CHAT_BEARER;
+    process.env.ROWBOAT_VPS_CHAT_BEARER = "env_bearer_a";
+    try {
+      const callRowboatChat = vi.fn(async () => ({
+        reply: "ok",
+        conversationId: undefined,
+        state: undefined,
+        hasStateKey: false
+      }));
+      await summarizeCustomerMemory(BIZ, CUSTOMER, {
+        getCustomerMemory: (async () => memory({ interaction_count: 5 })) as never,
+        getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,
+        callRowboatChat: callRowboatChat as never,
+        listSmsHistoryForCustomer: (async () => [
+          {
+            jobId: "j",
+            inboundText: "hi",
+            assistantReply: "hi",
+            receivedAt: "2026-05-05T00:00:00Z"
+          }
+        ]) as never,
+        listVoiceTurnsForCustomer: vi.fn(async () => []),
+        updateCustomerSummary: vi.fn() as never
+      });
+      expect(callRowboatChat).toHaveBeenCalled();
+    } finally {
+      if (prior === undefined) delete process.env.ROWBOAT_VPS_CHAT_BEARER;
+      else process.env.ROWBOAT_VPS_CHAT_BEARER = prior;
+    }
+  });
+
+  it("falls back to ROWBOAT_GATEWAY_TOKEN env when ROWBOAT_VPS_CHAT_BEARER is also unset", async () => {
+    const priorVps = process.env.ROWBOAT_VPS_CHAT_BEARER;
+    const priorGw = process.env.ROWBOAT_GATEWAY_TOKEN;
+    delete process.env.ROWBOAT_VPS_CHAT_BEARER;
+    process.env.ROWBOAT_GATEWAY_TOKEN = "env_bearer_b";
+    try {
+      const callRowboatChat = vi.fn(async () => ({
+        reply: "ok",
+        conversationId: undefined,
+        state: undefined,
+        hasStateKey: false
+      }));
+      await summarizeCustomerMemory(BIZ, CUSTOMER, {
+        getCustomerMemory: (async () => memory({ interaction_count: 5 })) as never,
+        getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,
+        callRowboatChat: callRowboatChat as never,
+        listSmsHistoryForCustomer: (async () => [
+          {
+            jobId: "j",
+            inboundText: "hi",
+            assistantReply: "hi",
+            receivedAt: "2026-05-05T00:00:00Z"
+          }
+        ]) as never,
+        listVoiceTurnsForCustomer: vi.fn(async () => []),
+        updateCustomerSummary: vi.fn() as never
+      });
+      expect(callRowboatChat).toHaveBeenCalled();
+    } finally {
+      if (priorVps === undefined) delete process.env.ROWBOAT_VPS_CHAT_BEARER;
+      else process.env.ROWBOAT_VPS_CHAT_BEARER = priorVps;
+      if (priorGw === undefined) delete process.env.ROWBOAT_GATEWAY_TOKEN;
+      else process.env.ROWBOAT_GATEWAY_TOKEN = priorGw;
+    }
+  });
+
+  it("returns no_bearer when neither dep nor env supplies a bearer (final fallback to '' is the gate)", async () => {
+    const priorVps = process.env.ROWBOAT_VPS_CHAT_BEARER;
+    const priorGw = process.env.ROWBOAT_GATEWAY_TOKEN;
+    delete process.env.ROWBOAT_VPS_CHAT_BEARER;
+    delete process.env.ROWBOAT_GATEWAY_TOKEN;
+    try {
+      const result = await summarizeCustomerMemory(BIZ, CUSTOMER, {
+        getCustomerMemory: (async () => memory({ interaction_count: 5 })) as never,
+        getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,
+        callRowboatChat: vi.fn() as never,
+        listSmsHistoryForCustomer: vi.fn() as never,
+        listVoiceTurnsForCustomer: vi.fn() as never,
+        updateCustomerSummary: vi.fn() as never
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toBe("no_bearer");
+    } finally {
+      if (priorVps === undefined) delete process.env.ROWBOAT_VPS_CHAT_BEARER;
+      else process.env.ROWBOAT_VPS_CHAT_BEARER = priorVps;
+      if (priorGw === undefined) delete process.env.ROWBOAT_GATEWAY_TOKEN;
+      else process.env.ROWBOAT_GATEWAY_TOKEN = priorGw;
+    }
+  });
+
+  it("treats unparseable last_summarized_at as 'no debounce' rather than throwing — degraded data must not crash the summarizer", async () => {
+    // Pin the `Number.isFinite(lastMs)` false arm at line ~192. If we
+    // accidentally swapped the guard order to crash on `Date.parse`
+    // returning NaN, summarizer would erupt every time a downstream
+    // bug or DB drift wrote a non-ISO `last_summarized_at`.
+    const callRowboatChat = vi.fn(async () => ({
+      reply: "ok",
+      conversationId: undefined,
+      state: undefined,
+      hasStateKey: false
+    }));
+    const result = await summarizeCustomerMemory(BIZ, CUSTOMER, {
+      getCustomerMemory: (async () =>
+        memory({ interaction_count: 5, last_summarized_at: "not-a-real-iso" })) as never,
+      getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,
+      callRowboatChat: callRowboatChat as never,
+      listSmsHistoryForCustomer: (async () => [
+        {
+          jobId: "j",
+          inboundText: "hi",
+          assistantReply: "hi",
+          receivedAt: "2026-05-05T00:00:00Z"
+        }
+      ]) as never,
+      listVoiceTurnsForCustomer: vi.fn(async () => []),
+      updateCustomerSummary: vi.fn() as never,
+      rowboatBearer: "tok"
+    });
+    expect(result.ok).toBe(true);
+    expect(callRowboatChat).toHaveBeenCalled();
+  });
+});
+
+describe("summarizeCustomerMemory — joinSmsHistory branch coverage", () => {
+  it("renders SMS turns with NO assistant reply yet (covers the `if (r.assistantReply)` false arm in joinSmsHistory)", async () => {
+    // History rows where the customer texted but Rowboat hasn't
+    // produced a reply yet (in-flight job, retry exhausted, etc.).
+    // The summarizer prompt should still include the inbound line —
+    // omitting them would leak gaps in the customer's history.
+    const callRowboatChat = vi.fn(async () => ({
+      reply: "ok",
+      conversationId: undefined,
+      state: undefined,
+      hasStateKey: false
+    }));
+    await summarizeCustomerMemory(BIZ, CUSTOMER, {
+      getCustomerMemory: (async () => memory({ interaction_count: 5 })) as never,
+      getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,
+      callRowboatChat: callRowboatChat as never,
+      listSmsHistoryForCustomer: (async () => [
+        {
+          jobId: "j1",
+          inboundText: "First message",
+          assistantReply: null,
+          receivedAt: "2026-05-05T09:00:00Z"
+        },
+        {
+          jobId: "j2",
+          inboundText: "Follow-up message",
+          assistantReply: "Got it",
+          receivedAt: "2026-05-05T09:01:00Z"
+        }
+      ]) as never,
+      listVoiceTurnsForCustomer: vi.fn(async () => []),
+      updateCustomerSummary: vi.fn() as never,
+      rowboatBearer: "tok"
+    });
+    const args = (callRowboatChat.mock.calls as unknown as Array<[{
+      messages: Array<{ role: string; content: string }>;
+    }]>)[0]?.[0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const user = args.messages[1]?.content ?? "";
+    // Inbound rendered without an assistant follow-up line.
+    expect(user).toContain("[2026-05-05T09:00:00Z SMS Customer]: First message");
+    // The single assistant block belongs to the second turn.
+    expect(user).toContain("[2026-05-05T09:01:00Z SMS AI assistant]: Got it");
+    // Sanity check: no orphan empty assistant line emitted for j1.
+    expect(user).not.toContain("[2026-05-05T09:00:00Z SMS AI assistant]:");
   });
 });
 
