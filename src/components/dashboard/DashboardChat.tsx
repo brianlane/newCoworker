@@ -14,6 +14,11 @@ import { Textarea } from "@/components/ui/Textarea";
 import { Badge } from "@/components/ui/Badge";
 import { ChatMarkdown } from "@/components/ui/ChatMarkdown";
 import { parseEnvelope } from "@/lib/client/api-envelope";
+import {
+  consumeNdjsonChunk,
+  flushNdjsonBuffer,
+  type NdjsonBuffer
+} from "@/lib/client/ndjson-stream";
 
 type Role = "user" | "assistant" | "system";
 
@@ -34,12 +39,6 @@ type ChatGetResponse = {
   messages: ChatMessage[];
   isPaused: boolean;
   customerChannelsEnabled: boolean;
-};
-
-type ChatPostResponse = {
-  threadId: string;
-  reply: string;
-  messages: ChatMessage[];
 };
 
 type ThreadSummary = {
@@ -94,6 +93,15 @@ function formatThreadDate(ts: string): string {
   }).format(d);
 }
 
+// Stream events emitted by POST /api/dashboard/chat (NDJSON, one
+// per line). See route.ts for the canonical contract.
+type StreamEvent =
+  | { type: "meta"; threadId: string; activeThreadId: string }
+  | { type: "delta"; content: string }
+  | { type: "ping" }
+  | { type: "done"; threadId: string; messages: ChatMessage[] }
+  | { type: "error"; code: string; message: string };
+
 export function DashboardChat({ businessId, businessName }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -107,6 +115,11 @@ export function DashboardChat({ businessId, businessName }: Props) {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [loadingThread, setLoadingThread] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // Outstanding stream POST. Aborted on unmount, "New conversation",
+  // or a new send (defense-in-depth against double-submit; the submit
+  // button is disabled while `sending` so this should never trip
+  // mid-flight, but better safe than orphaned-tokens).
+  const abortRef = useRef<AbortController | null>(null);
 
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current;
@@ -165,6 +178,17 @@ export function DashboardChat({ businessId, businessName }: Props) {
   useEffect(() => {
     scrollToBottom();
   }, [messages, scrollToBottom]);
+
+  // Abort any in-flight streaming POST when the component unmounts.
+  // Without this, navigating away mid-generation leaves the server
+  // happily streaming tokens nobody will ever read; the route's
+  // request.signal.aborted check tears down the upstream Rowboat call
+  // as soon as the AbortController fires.
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   const selectThread = useCallback(
     async (threadId: string) => {
@@ -227,54 +251,270 @@ export function DashboardChat({ businessId, businessName }: Props) {
     const trimmed = input.trim();
     if (!trimmed || sending || isPaused) return;
 
-    const optimistic: ChatMessage = {
-      id: `local-${Date.now()}`,
+    // Optimistic user bubble. Stays even on error because we treat
+    // the user's typed message as committed the moment they hit Send;
+    // restoring the textarea on error makes resending a single click.
+    const optimisticUserId = `local-user-${Date.now()}`;
+    const optimisticUser: ChatMessage = {
+      id: optimisticUserId,
       role: "user",
       content: trimmed,
       createdAt: new Date().toISOString()
     };
-    setMessages((prev) => [...prev, optimistic]);
+    // Placeholder assistant bubble that will fill incrementally as
+    // deltas arrive. We insert it on the first `meta` event (NOT
+    // up front) so a slow preflight error doesn't briefly flash an
+    // empty assistant bubble.
+    const inflightAssistantId = `local-assistant-${Date.now()}`;
+
+    setMessages((prev) => [...prev, optimisticUser]);
     setInput("");
     setSending(true);
     setError(null);
 
+    // Cancel any prior in-flight stream — defensive; the Send button
+    // is disabled while sending=true, but a fast double-submit during
+    // the React batch could otherwise leak two readers.
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    // ChatGPT/Claude/Gemini-style: every thread is continuable.
+    const targetThreadId = viewingThreadId ?? activeThreadId;
+
+    let assistantBubbleInserted = false;
+    // Tracks whether the user has actually SEEN any assistant content
+    // in the bubble. Distinct from `assistantBubbleInserted`, which
+    // flips on the server's `meta` event (always sent before Rowboat
+    // is even called). Cursor Bugbot Medium on PR #76 commit 334bc4e:
+    // pre-fix the error/partial-stream branches keyed off
+    // `assistantBubbleInserted`, but since `meta` is unconditional
+    // that meant a Rowboat failure BEFORE any token still left an
+    // empty bubble on screen with no way to restore the textarea.
+    // Branching on `firstDeltaRendered` instead means: "if you saw
+    // content, we keep it; if you only saw an empty placeholder, we
+    // tear it down and let you edit-and-resend."
+    let firstDeltaRendered = false;
+    let streamErrored = false;
+    // Tracks whether we received the server's `done` event. Used to
+    // distinguish a clean stream close (done) from a connection-cut
+    // close (Vercel function reaper at maxDuration, TCP drop, server
+    // crash) — the latter MUST surface an error so the owner knows
+    // the reply may be incomplete instead of leaving them staring at
+    // a half-finished bubble that looks like the model just stopped
+    // (Cursor Bugbot Low on PR #76).
+    let streamDone = false;
+    let res: Response | null = null;
+
     try {
-      // ChatGPT/Claude/Gemini-style: every thread is continuable. We
-      // pass whichever thread the user is currently viewing as
-      // `threadId` so the server appends to it and reactivates it if
-      // it was archived. Omitting threadId falls back to the legacy
-      // "use active thread or mint a new one" path — used during the
-      // post-"New conversation" window before any thread exists yet.
-      const targetThreadId = viewingThreadId ?? activeThreadId;
-      const res = await fetch("/api/dashboard/chat", {
+      res = await fetch("/api/dashboard/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           businessId,
           message: trimmed,
           ...(targetThreadId ? { threadId: targetThreadId } : {})
-        })
+        }),
+        signal: controller.signal
       });
-      const env = await parseEnvelope<ChatPostResponse>(res);
-      if (env.ok) {
-        setMessages(env.data.messages);
-        setActiveThreadId(env.data.threadId);
-        setViewingThreadId(env.data.threadId);
+    } catch (err) {
+      // Network failure (DNS, TLS, abort). On abort we silently bail —
+      // unmount/new-conversation handlers reset their own UI. On any
+      // other failure surface a friendly error.
+      if ((err as { name?: string } | null)?.name !== "AbortError") {
+        setMessages((prev) => prev.filter((m) => m.id !== optimisticUserId));
+        setInput(trimmed);
+        setError("Network error while sending message.");
+      }
+      setSending(false);
+      if (abortRef.current === controller) abortRef.current = null;
+      return;
+    }
+
+    if (!res.body) {
+      // Server returned a response with no body — extraordinarily rare
+      // (would have to be a buggy intermediary stripping the stream).
+      setMessages((prev) => prev.filter((m) => m.id !== optimisticUserId));
+      setInput(trimmed);
+      setError("Unexpected server response.");
+      setSending(false);
+      if (abortRef.current === controller) abortRef.current = null;
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    const ndjsonState: NdjsonBuffer = { buffer: "" };
+
+    const handleEvent = (ev: StreamEvent) => {
+      if (ev.type === "meta") {
+        if (!assistantBubbleInserted) {
+          assistantBubbleInserted = true;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: inflightAssistantId,
+              role: "assistant",
+              content: "",
+              createdAt: new Date().toISOString()
+            }
+          ]);
+        }
+      } else if (ev.type === "delta") {
+        // Mark the moment the user sees MEANINGFUL content. The
+        // error / partial-stream branches below use this — NOT
+        // `assistantBubbleInserted` — to decide whether to preserve
+        // the bubble (because the owner is mid-read and yanking it
+        // is jarring) vs tear it down (because the bubble has only
+        // ever been an empty placeholder, or whitespace).
+        //
+        // Cursor Bugbot Low on PR #76 commit e722c7d: trim before
+        // testing length. Pre-fix this was `length > 0`, but a
+        // whitespace-only stream (Rowboat emits a leading "\n\n"
+        // and then errors) would flip the flag, the server's
+        // post-error friendly-message gate uses
+        // `buffered.trim().length === 0` (so it surfaces a
+        // pre-meaningful-content error), and the bubble was never
+        // persisted server-side. Mismatched gates left a whitespace
+        // bubble visible until refresh. Aligning on "trimmed
+        // non-empty == meaningful content" keeps server and client
+        // in lockstep.
+        if (ev.content.trim().length > 0) firstDeltaRendered = true;
+        // Streaming append. Find the in-flight bubble by stable local
+        // id — locating by index would race against React's reconciler
+        // batching multiple deltas in a single tick.
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === inflightAssistantId
+              ? { ...m, content: m.content + ev.content }
+              : m
+          )
+        );
+      } else if (ev.type === "ping") {
+        // Heartbeat — server signaling "still working, don't time out".
+        // Nothing to render.
+      } else if (ev.type === "done") {
+        streamDone = true;
+        // Replace the optimistic / in-flight pair with the server's
+        // canonical message list (real DB ids, ordered by created_at,
+        // any server-side normalization applied). Keeps the rendered
+        // history consistent with what a refresh would show.
+        setMessages(ev.messages);
+        setActiveThreadId(ev.threadId);
+        setViewingThreadId(ev.threadId);
         // Refresh sidebar so the (newly) active thread's bumped
         // updatedAt + new message_count + flipped isActive flag show
         // up without a hard reload.
         void fetchThreads();
-      } else {
-        setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
-        setInput(trimmed);
-        setError(env.error.message);
+      } else if (ev.type === "error") {
+        streamErrored = true;
+        // Branching mirrors the post-loop "stream closed without
+        // done/error" handler below. Both branches handle the same
+        // conceptual scenario — a stream interruption where the user
+        // has either (a) seen partial assistant content already, or
+        // (b) only seen the empty placeholder. The server has not
+        // persisted the assistant turn either way, so we never need
+        // to keep the bubble for DB-consistency reasons — only UX.
+        //
+        // Cursor Bugbot Medium on PR #76 commit 334bc4e: keying off
+        // `assistantBubbleInserted` was wrong because that flag flips
+        // on `meta`, which the server unconditionally sends BEFORE
+        // calling Rowboat. A Rowboat failure pre-token would arrive
+        // as an `error` event AFTER `meta` had already inserted the
+        // empty bubble, and the !assistantBubbleInserted check would
+        // be false — leaving an orphaned empty bubble on screen with
+        // no way to restore the textarea. Branching on
+        // `firstDeltaRendered` (set only when actual content was
+        // appended) fixes this: "did you see content?" is the right
+        // question, "did meta arrive?" is the wrong one.
+        if (!firstDeltaRendered) {
+          // The bubble (if inserted) only ever showed an empty
+          // placeholder. Safe to drop the optimistic user message +
+          // the placeholder and restore the textarea so the owner
+          // can edit-and-resend in one click. Matches the
+          // pre-streaming UX exactly.
+          setMessages((prev) =>
+            prev.filter((m) => m.id !== optimisticUserId && m.id !== inflightAssistantId)
+          );
+          setInput(trimmed);
+        }
+        // If content WAS rendered, leave the optimistic user message
+        // and the partial assistant bubble in place — the owner saw
+        // those tokens, yanking them mid-read is jarring. We do NOT
+        // restore the textarea here: the user's message is on the
+        // server (we received `meta`), and a re-send would create a
+        // duplicate user turn. Owner can re-ask if they want the
+        // full answer.
+        setError(ev.message);
       }
-    } catch {
-      setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
-      setInput(trimmed);
-      setError("Network error while sending message.");
+    };
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        const { events } = consumeNdjsonChunk<StreamEvent>(
+          ndjsonState,
+          decoder.decode(value, { stream: true })
+        );
+        for (const ev of events) handleEvent(ev);
+      }
+      // Flush any trailing partial line (shouldn't happen with a well-
+      // formed server, but tolerant parsing avoids dropping a final
+      // event when an intermediary clips the trailing newline).
+      const { events: trailingEvents } = flushNdjsonBuffer<StreamEvent>(ndjsonState);
+      for (const ev of trailingEvents) handleEvent(ev);
+      if (!streamErrored && !streamDone) {
+        if (!firstDeltaRendered) {
+          // Stream closed before any visible token reached the user.
+          // Could be: server never emitted meta (very rare), server
+          // emitted meta but Rowboat hung and the function got
+          // reaped before the first delta, or any other pre-token
+          // failure mode. Either way the user sees only an empty
+          // placeholder bubble (or no bubble) — drop it, drop the
+          // optimistic user message, and restore the textarea so
+          // they can edit-and-resend.
+          setMessages((prev) =>
+            prev.filter((m) => m.id !== optimisticUserId && m.id !== inflightAssistantId)
+          );
+          setInput(trimmed);
+          setError("Your coworker didn't respond. Please try again.");
+        } else {
+          // Stream closed AFTER one or more `delta` events but
+          // BEFORE `done` or `error`. Most likely cause: Vercel's
+          // function reaper at maxDuration, an intermediate proxy
+          // dropping the connection, or the server process crashing
+          // mid-generation. We KEEP the partial assistant bubble
+          // (the user already saw those tokens — yanking them looks
+          // like a bug) but surface a clear error so the owner knows
+          // the reply is incomplete and can resend. The textarea is
+          // NOT restored: the user's message did make it to the
+          // server (we got `meta` back), and resending would persist
+          // a duplicate user turn — better to let them retype if
+          // they want, after seeing the partial reply.
+          setError("The reply was cut off — please ask again to get the full answer.");
+        }
+      }
+    } catch (err) {
+      if ((err as { name?: string } | null)?.name === "AbortError") {
+        // Aborted by unmount / new-conversation. The respective handler
+        // already manages its own UI state.
+      } else {
+        setMessages((prev) =>
+          prev.filter((m) => m.id !== optimisticUserId && m.id !== inflightAssistantId)
+        );
+        setInput(trimmed);
+        setError("Network error while reading the reply.");
+      }
     } finally {
       setSending(false);
+      try {
+        reader.releaseLock();
+      } catch {
+        /* already released by abort */
+      }
+      if (abortRef.current === controller) abortRef.current = null;
     }
   }
 
@@ -294,6 +534,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
     ) {
       return;
     }
+    abortRef.current?.abort();
     setSending(true);
     setError(null);
     try {

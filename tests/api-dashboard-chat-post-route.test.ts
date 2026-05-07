@@ -31,8 +31,13 @@ vi.mock("@/lib/db/dashboard-chat", async () => {
   };
 });
 
+// Mock callRowboatChatStream — the streaming primitive the route now
+// calls. Each test seeds the generator with a sequence of events so we
+// can drive the route end-to-end without a real Rowboat. The mock
+// returns a fresh generator on every call so the stateless-retry path
+// can substitute a different sequence for the second attempt.
 vi.mock("@/lib/rowboat/chat", () => ({
-  callRowboatChat: vi.fn(),
+  callRowboatChatStream: vi.fn(),
   describeRowboatError: (err: unknown) =>
     err instanceof Error ? err.message : "rowboat error"
 }));
@@ -78,7 +83,7 @@ import {
   touchChatActivity,
   updateThreadConversation
 } from "@/lib/db/dashboard-chat";
-import { callRowboatChat } from "@/lib/rowboat/chat";
+import { callRowboatChatStream } from "@/lib/rowboat/chat";
 import {
   shouldSummarize,
   summarizeThreadAndLog
@@ -118,6 +123,61 @@ function jsonRequest(body: unknown): Request {
   });
 }
 
+/**
+ * Given a list of stream events, build an async generator factory that
+ * yields them one at a time. Optionally takes multiple sequences (for
+ * the stateless-retry path: first sequence fails, second succeeds).
+ */
+type RowboatStreamEvent =
+  | { type: "delta"; text: string }
+  | { type: "tool_call"; name: string; arguments: unknown }
+  | {
+      type: "done";
+      conversationId: string | undefined;
+      state: unknown | undefined;
+      hasStateKey: boolean;
+    }
+  | { type: "error"; message: string };
+
+function fakeStreamSequences(...sequences: RowboatStreamEvent[][]) {
+  let callIdx = 0;
+  return function fakeStream() {
+    const events = sequences[callIdx] ?? sequences[sequences.length - 1] ?? [];
+    callIdx += 1;
+    return (async function* () {
+      for (const ev of events) yield ev;
+    })();
+  };
+}
+
+/** Default: one delta + a done with fresh continuation tokens. */
+function defaultSuccessSequence(): RowboatStreamEvent[] {
+  return [
+    { type: "delta", text: "hi back" },
+    {
+      type: "done",
+      conversationId: "rb-conv-2",
+      state: { bar: 2 },
+      hasStateKey: true
+    }
+  ];
+}
+
+/**
+ * Read the entire NDJSON response body and return the parsed events
+ * (one per line). Streaming responses always return 200 even on
+ * mid-stream errors — the actual outcome is encoded in the events.
+ */
+async function readNdjson(res: Response) {
+  if (!res.body) return [] as Array<Record<string, unknown>>;
+  const text = await res.text();
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getAuthUser).mockResolvedValue({
@@ -155,12 +215,9 @@ beforeEach(() => {
   vi.mocked(getThreadById).mockResolvedValue(ARCHIVED_THREAD as never);
   vi.mocked(reactivateThread).mockResolvedValue(undefined as never);
   vi.mocked(listMessages).mockResolvedValue([] as never);
-  vi.mocked(callRowboatChat).mockResolvedValue({
-    reply: "hi back",
-    conversationId: "rb-conv-2",
-    state: { bar: 2 },
-    hasStateKey: true
-  } as never);
+  vi.mocked(callRowboatChatStream).mockImplementation(
+    fakeStreamSequences(defaultSuccessSequence()) as never
+  );
   vi.mocked(appendMessage).mockResolvedValue(undefined as never);
   vi.mocked(touchChatActivity).mockResolvedValue(undefined as never);
   vi.mocked(updateThreadConversation).mockResolvedValue(undefined as never);
@@ -173,10 +230,90 @@ afterEach(() => {
   delete process.env.ROWBOAT_GATEWAY_TOKEN;
 });
 
+describe("POST /api/dashboard/chat — streaming response shape (NDJSON contract)", () => {
+  it("returns NDJSON content-type and a 200 status on the success path — the actual outcome is encoded in the streamed events, not the HTTP status", async () => {
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toMatch(/x-ndjson/);
+  });
+
+  it("emits meta → delta → done in order", async () => {
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    const events = await readNdjson(res);
+    // First event is meta with the resolved threadId.
+    expect(events[0]?.type).toBe("meta");
+    expect((events[0] as { threadId: string }).threadId).toBe(ACTIVE_THREAD_ID);
+    // Some number of delta events (one for each fake delta).
+    expect(events.some((e) => e.type === "delta")).toBe(true);
+    // Last event is `done` with the canonical messages list.
+    const last = events.at(-1) as { type: string; messages: unknown[] };
+    expect(last.type).toBe("done");
+    expect(Array.isArray(last.messages)).toBe(true);
+  });
+
+  it("forwards each Rowboat delta to the client preserving content order", async () => {
+    vi.mocked(callRowboatChatStream).mockImplementation(
+      fakeStreamSequences([
+        { type: "delta", text: "Hel" },
+        { type: "delta", text: "lo " },
+        { type: "delta", text: "world" },
+        {
+          type: "done",
+          conversationId: "rb-conv-2",
+          state: undefined,
+          hasStateKey: false
+        }
+      ]) as never
+    );
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    const events = await readNdjson(res);
+    const deltas = events.filter((e) => e.type === "delta");
+    expect(deltas.map((e) => (e as { content: string }).content)).toEqual([
+      "Hel",
+      "lo ",
+      "world"
+    ]);
+  });
+
+  it("persists the user message BEFORE opening the stream — survives a mid-generation client disconnect", async () => {
+    vi.mocked(callRowboatChatStream).mockImplementation(
+      fakeStreamSequences(defaultSuccessSequence()) as never
+    );
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    await readNdjson(res);
+    const userAppendCall = vi
+      .mocked(appendMessage)
+      .mock.calls.find((c) => c[1] === "user");
+    expect(userAppendCall).toBeDefined();
+    expect(userAppendCall?.[0]).toBe(ACTIVE_THREAD_ID);
+    expect(userAppendCall?.[2]).toBe("hi");
+  });
+
+  it("persists the assistant reply ONLY after a successful done event", async () => {
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    await readNdjson(res);
+    const assistantAppendCall = vi
+      .mocked(appendMessage)
+      .mock.calls.find((c) => c[1] === "assistant");
+    expect(assistantAppendCall).toBeDefined();
+    expect(assistantAppendCall?.[2]).toBe("hi back");
+  });
+
+  it("updates the thread continuation tokens from the done event metadata", async () => {
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    await readNdjson(res);
+    expect(updateThreadConversation).toHaveBeenCalledWith(
+      ACTIVE_THREAD_ID,
+      "rb-conv-2",
+      { bar: 2 }
+    );
+  });
+});
+
 describe("POST /api/dashboard/chat — legacy path (no threadId)", () => {
   it("uses getOrCreateActiveThread and never touches reactivate when caller omits threadId", async () => {
     const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    expect(res.status).toBe(200);
+    await readNdjson(res); // drain the body
     expect(getOrCreateActiveThread).toHaveBeenCalledWith(BIZ, "hi");
     expect(getThreadById).not.toHaveBeenCalled();
     expect(reactivateThread).not.toHaveBeenCalled();
@@ -188,13 +325,15 @@ describe("POST /api/dashboard/chat — threadId path (continue any thread)", () 
     const res = await POST(
       jsonRequest({ businessId: BIZ, threadId: ARCHIVED_THREAD_ID, message: "continue" })
     );
-    expect(res.status).toBe(200);
+    await readNdjson(res);
     expect(getThreadById).toHaveBeenCalledWith(ARCHIVED_THREAD_ID);
     expect(reactivateThread).toHaveBeenCalledWith(BIZ, ARCHIVED_THREAD_ID);
     // Must NOT mint a new thread when caller targeted a specific one.
     expect(getOrCreateActiveThread).not.toHaveBeenCalled();
     // Append goes to the resolved (archived-then-reactivated) thread.
     const appendCalls = vi.mocked(appendMessage).mock.calls;
+    // First append is the user message (pre-stream); second is the
+    // assistant message (post-done). Both target the resolved thread.
     expect(appendCalls[0][0]).toBe(ARCHIVED_THREAD_ID);
     expect(appendCalls[1][0]).toBe(ARCHIVED_THREAD_ID);
   });
@@ -204,25 +343,26 @@ describe("POST /api/dashboard/chat — threadId path (continue any thread)", () 
     const res = await POST(
       jsonRequest({ businessId: BIZ, threadId: ACTIVE_THREAD_ID, message: "continue" })
     );
-    expect(res.status).toBe(200);
+    await readNdjson(res);
     expect(reactivateThread).not.toHaveBeenCalled();
   });
 
-  it("rejects with 404 when the thread doesn't exist (caller-supplied UUID is bogus)", async () => {
+  it("rejects with NDJSON 404 error when the thread doesn't exist (caller-supplied UUID is bogus)", async () => {
     vi.mocked(getThreadById).mockResolvedValueOnce(null as never);
     const res = await POST(
       jsonRequest({ businessId: BIZ, threadId: ARCHIVED_THREAD_ID, message: "x" })
     );
     expect(res.status).toBe(404);
+    const events = await readNdjson(res);
+    expect(events).toEqual([
+      { type: "error", code: "NOT_FOUND", message: "Conversation not found" }
+    ]);
     // No reactivate, no append — we never touched a real thread.
     expect(reactivateThread).not.toHaveBeenCalled();
     expect(appendMessage).not.toHaveBeenCalled();
   });
 
-  it("rejects with 404 (NOT 403) when the thread belongs to another tenant — anti-IDOR + denies existence side-channel", async () => {
-    // Thread exists, but business_id doesn't match the body — owner of
-    // BIZ is trying to reactivate another tenant's thread. Same status
-    // as missing so the caller can't probe for existence.
+  it("rejects with NDJSON 404 (NOT 403) when the thread belongs to another tenant — anti-IDOR + denies existence side-channel", async () => {
     vi.mocked(getThreadById).mockResolvedValueOnce({
       ...ARCHIVED_THREAD,
       business_id: OTHER_BIZ
@@ -250,8 +390,10 @@ describe("POST /api/dashboard/chat — summary preamble", () => {
       ...ACTIVE_THREAD,
       summary_md: "earlier: discussed pricing tiers"
     } as never);
-    await POST(jsonRequest({ businessId: BIZ, message: "and now?" }));
-    const sent = vi.mocked(callRowboatChat).mock.calls[0][0].messages;
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "and now?" }))
+    );
+    const sent = vi.mocked(callRowboatChatStream).mock.calls[0][0].messages;
     // OWNER_PREAMBLE is always first (pins the owner-vs-customer
     // persona — see route.ts). The summary is the next system slot.
     const summaryMsg = sent.find(
@@ -269,8 +411,8 @@ describe("POST /api/dashboard/chat — summary preamble", () => {
       ...ACTIVE_THREAD,
       summary_md: "   "
     } as never);
-    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    const sent = vi.mocked(callRowboatChat).mock.calls[0][0].messages;
+    await readNdjson(await POST(jsonRequest({ businessId: BIZ, message: "hi" })));
+    const sent = vi.mocked(callRowboatChatStream).mock.calls[0][0].messages;
     const summaryMsg = sent.find(
       (m) => m.role === "system" && m.content.includes("Conversation summary so far")
     );
@@ -282,15 +424,8 @@ describe("POST /api/dashboard/chat — Rowboat input contract (no plain assistan
   // Rowboat's HTTP /chat validator rejects plain
   //   { role: "assistant", content: string }
   // entries (it expects agent/tool-shaped rows produced by Rowboat
-  // itself). The integration spec is canonical:
-  //   tests/integration/kvm-rowboat/rowboat-chat.ts:215
-  //   "Each leg sends only the new user message; do not replay
-  //    `{ role: 'assistant', content }` — upstream Zod expects
-  //    agent/tool-shaped assistant rows, not plain text."
-  // Replaying our local tail caused every turn AFTER the first to 400
-  // in production (assistant turn 1 lived in `tail`, got replayed,
-  // Rowboat rejected it, the stateless retry sent the SAME body and
-  // 400'd again). These tests pin the contract.
+  // itself). Replaying our local tail caused every turn AFTER the
+  // first to 400 in production. These tests pin the contract.
 
   const HISTORY_TAIL = [
     { role: "user", content: "What's your purpose?" },
@@ -299,17 +434,19 @@ describe("POST /api/dashboard/chat — Rowboat input contract (no plain assistan
 
   it("never sends a { role: 'assistant' } message to Rowboat, even when tail contains an assistant turn", async () => {
     vi.mocked(listMessages).mockResolvedValueOnce(HISTORY_TAIL as never);
-    await POST(jsonRequest({ businessId: BIZ, message: "and now?" }));
-    const sent = vi.mocked(callRowboatChat).mock.calls[0][0].messages;
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "and now?" }))
+    );
+    const sent = vi.mocked(callRowboatChatStream).mock.calls[0][0].messages;
     expect(sent.some((m) => m.role === "assistant")).toBe(false);
   });
 
   it("on a thread WITH continuation, omits the local tail entirely on the initial call (Rowboat already has it server-side)", async () => {
     vi.mocked(listMessages).mockResolvedValueOnce(HISTORY_TAIL as never);
-    await POST(jsonRequest({ businessId: BIZ, message: "and now?" }));
-    // The OWNER_PREAMBLE system message is always first; otherwise the
-    // initial-with-continuation call carries only the new user turn.
-    const sent = vi.mocked(callRowboatChat).mock.calls[0][0].messages;
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "and now?" }))
+    );
+    const sent = vi.mocked(callRowboatChatStream).mock.calls[0][0].messages;
     const userMsgs = sent.filter((m) => m.role === "user");
     expect(userMsgs).toEqual([{ role: "user", content: "[Dashboard] and now?" }]);
     // Exactly one system msg (OWNER_PREAMBLE) — no summary (none set),
@@ -321,16 +458,27 @@ describe("POST /api/dashboard/chat — Rowboat input contract (no plain assistan
 
   it("on a stateless RETRY, replays the tail as a single system transcript so the model still has continuity", async () => {
     vi.mocked(listMessages).mockResolvedValueOnce(HISTORY_TAIL as never);
-    vi.mocked(callRowboatChat)
-      .mockRejectedValueOnce(new Error("rowboat_http_400"))
-      .mockResolvedValueOnce({
-        reply: "fresh reply",
-        conversationId: "fresh-conv",
-        state: undefined,
-        hasStateKey: false
-      } as never);
-    await POST(jsonRequest({ businessId: BIZ, message: "and now?" }));
-    const retryMessages = vi.mocked(callRowboatChat).mock.calls[1][0].messages;
+    vi.mocked(callRowboatChatStream).mockImplementation(
+      fakeStreamSequences(
+        // First attempt: 400 before any delta — triggers stateless retry.
+        [{ type: "error", message: "rowboat_http_400" }],
+        // Retry succeeds.
+        [
+          { type: "delta", text: "fresh reply" },
+          {
+            type: "done",
+            conversationId: "fresh-conv",
+            state: undefined,
+            hasStateKey: false
+          }
+        ]
+      ) as never
+    );
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "and now?" }))
+    );
+    const retryMessages = vi.mocked(callRowboatChatStream).mock.calls[1][0]
+      .messages;
     // Three messages: OWNER_PREAMBLE, the synthesized recent-context
     // system message, then the new user turn. No assistant role, no
     // plain raw replay.
@@ -354,8 +502,10 @@ describe("POST /api/dashboard/chat — Rowboat input contract (no plain assistan
       rowboat_state: null
     } as never);
     vi.mocked(listMessages).mockResolvedValueOnce(HISTORY_TAIL as never);
-    await POST(jsonRequest({ businessId: BIZ, message: "and now?" }));
-    const sent = vi.mocked(callRowboatChat).mock.calls[0][0].messages;
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "and now?" }))
+    );
+    const sent = vi.mocked(callRowboatChatStream).mock.calls[0][0].messages;
     // OWNER_PREAMBLE + tail transcript + new user turn = 3 messages.
     expect(sent).toHaveLength(3);
     expect(sent[0].role).toBe("system");
@@ -367,214 +517,113 @@ describe("POST /api/dashboard/chat — Rowboat input contract (no plain assistan
 });
 
 describe("POST /api/dashboard/chat — OWNER_PREAMBLE persona pin", () => {
-  // The bug being pinned: without an OWNER_PREAMBLE system message,
-  // the per-tenant Rowboat agent (whose persona is built for inbound
-  // customer conversations) treated dashboard chat messages as if
-  // they came from a customer — see PR #74 screenshot where the
-  // owner asked "has anyone reached out about a home?" and the
-  // agent replied with the lead-intake script ("share your contact
-  // details, property address, timeline...").
-
   it("includes OWNER_PREAMBLE as the FIRST system message on every call", async () => {
-    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    const sent = vi.mocked(callRowboatChat).mock.calls[0][0].messages;
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "hi" }))
+    );
+    const sent = vi.mocked(callRowboatChatStream).mock.calls[0][0].messages;
     expect(sent[0].role).toBe("system");
     expect(sent[0].content).toContain("OWNER MODE");
-    expect(sent[0].content).toContain(
-      "You are talking to the business OWNER"
-    );
+    expect(sent[0].content).toContain("You are talking to the business OWNER");
     expect(sent[0].content).toContain("NOT a customer");
   });
 
   it("includes [Dashboard] channel marker on the user message — defense in depth alongside OWNER_PREAMBLE", async () => {
-    await POST(jsonRequest({ businessId: BIZ, message: "what was Joe asking about?" }));
-    const sent = vi.mocked(callRowboatChat).mock.calls[0][0].messages;
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "what was Joe asking about?" }))
+    );
+    const sent = vi.mocked(callRowboatChatStream).mock.calls[0][0].messages;
     const userMsg = sent[sent.length - 1];
     expect(userMsg.role).toBe("user");
     expect(userMsg.content).toBe("[Dashboard] what was Joe asking about?");
   });
 
   it("OWNER_PREAMBLE survives a stateless retry — pins persona even when continuation is dropped", async () => {
-    vi.mocked(callRowboatChat)
-      .mockRejectedValueOnce(new Error("rowboat_http_400"))
-      .mockResolvedValueOnce({
-        reply: "fresh reply",
-        conversationId: "fresh-conv",
-        state: undefined,
-        hasStateKey: false
-      } as never);
-    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    const retryMessages = vi.mocked(callRowboatChat).mock.calls[1][0].messages;
+    vi.mocked(callRowboatChatStream).mockImplementation(
+      fakeStreamSequences(
+        [{ type: "error", message: "rowboat_http_400" }],
+        [
+          { type: "delta", text: "fresh reply" },
+          {
+            type: "done",
+            conversationId: "fresh-conv",
+            state: undefined,
+            hasStateKey: false
+          }
+        ]
+      ) as never
+    );
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "hi" }))
+    );
+    const retryMessages = vi.mocked(callRowboatChatStream).mock.calls[1][0]
+      .messages;
     expect(retryMessages[0].role).toBe("system");
     expect(retryMessages[0].content).toContain("OWNER MODE");
   });
+
+  // Pin the new "owner has full visibility" + "no fabrication" clauses
+  // added to fix the chat-refusing-to-share-phone-numbers + chat-
+  // hallucinating-customer-details bugs (PR #75 screenshots). Without
+  // these, a future innocent-looking edit to OWNER_PREAMBLE could
+  // silently regress the prompt and re-introduce the model's
+  // self-invented "privacy/compliance" refusals.
+
+  it("OWNER_PREAMBLE explicitly authorizes sharing PII (phone numbers, timestamps) with the owner — defeats the model's tendency to invent privacy refusals", async () => {
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "hi" }))
+    );
+    const sent = vi.mocked(callRowboatChatStream).mock.calls[0][0].messages;
+    const preamble = sent[0].content;
+    expect(preamble).toMatch(/full read access/i);
+    expect(preamble).toMatch(/phone numbers/i);
+    // "None of those details are private FROM the owner" — explicitly
+    // greenlights sharing PII with the owner. Without this clause the
+    // model invents privacy/compliance refusals (PR #75 screenshot).
+    expect(preamble).toMatch(/private from the owner/i);
+  });
+
+  it("OWNER_PREAMBLE forbids fabricating details — and points the owner at /dashboard/calls and /dashboard/messages for full content", async () => {
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "hi" }))
+    );
+    const sent = vi.mocked(callRowboatChatStream).mock.calls[0][0].messages;
+    const preamble = sent[0].content;
+    expect(preamble).toMatch(/no fabrication/i);
+    expect(preamble).toContain("/dashboard/calls");
+    expect(preamble).toContain("/dashboard/messages");
+  });
 });
 
-describe("POST /api/dashboard/chat — Rowboat call budget", () => {
-  // The dashboard-chat route's `maxDuration` is sized so the Rowboat
-  // AbortController-driven "rowboat_timeout" path always wins the race
-  // against Vercel's function reaper. That contract is fragile — if a
-  // future change accidentally drops the per-call `timeoutMs` (or
-  // raises it past `maxDuration`), the friendly-error envelope stops
-  // being delivered and clients fall back to the cryptic
-  // `parseEnvelope` "Unexpected server response" string. Pin the
-  // budget on every call site here.
-
-  it("passes a finite, sub-maxDuration timeoutMs on the initial call", async () => {
-    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    const callArgs = vi.mocked(callRowboatChat).mock.calls[0][0];
-    expect(typeof callArgs.timeoutMs).toBe("number");
-    expect(callArgs.timeoutMs).toBeGreaterThan(0);
-    // `maxDuration` is 300s (Vercel Pro hard cap); budget must leave
-    // the route enough wall time after the abort fires to serialize
-    // a JSON envelope and fire-and-forget the summarizer.
-    expect(callArgs.timeoutMs).toBeLessThan(300_000);
-  });
-
-  // The route's Rowboat budget is anchored at POST entry, NOT at the
-  // Rowboat call. Otherwise a slow Supabase preflight (~30s observed
-  // in production on bad days) silently grants Rowboat a fixed budget
-  // bigger than what's actually left of `maxDuration`, re-triggering
-  // the same Vercel-reaper race this PR is sized to prevent
-  // (Codex P2 / Cursor Bugbot Medium on PR #72 → fixed in this PR).
-
-  it("anchors the Rowboat budget at POST entry — slow preflight shrinks the Rowboat budget instead of overflowing maxDuration", async () => {
-    // Mock Date.now() so the route sees ~40s elapse between POST entry
-    // and the moment we compute the Rowboat budget. The handler reads
-    // Date.now() twice in the budget path: once at top-of-POST, once
-    // before the call. We then need additional reads for the helper
-    // and any nested code, so make the spy fall through to the real
-    // implementation after the controlled reads.
-    const dateNowSpy = vi.spyOn(Date, "now");
-    dateNowSpy
-      .mockReturnValueOnce(1_000_000) // POST entry
-      .mockReturnValueOnce(1_040_000); // computing budget — 40s in
-    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    const callArgs = vi.mocked(callRowboatChat).mock.calls[0][0];
-    // Route deadline 290s − preflight 40s − post-Rowboat reserve 10s
-    // = 240_000ms remaining for Rowboat. Pinned exactly so a future
-    // change to either constant breaks this test loudly.
-    expect(callArgs.timeoutMs).toBe(240_000);
-    dateNowSpy.mockRestore();
-  });
-
-  it("returns a friendly 502 envelope when preflight has already exhausted the route budget — never races Rowboat against the function reaper", async () => {
-    // Simulate preflight taking 285s (e.g. piled-up Supabase calls all
-    // hitting tail latency at once). Remaining budget after the 10s
-    // post-Rowboat reserve = 290 − 285 − 10 = -5s, well under
-    // RETRY_MIN_BUDGET_MS. The route MUST short-circuit here: a real
-    // Rowboat call with a negative or trivially-small timeoutMs would
-    // either trip an immediate AbortError or sit there until the
-    // function reaper kills it, never reaching our friendly envelope.
-    const dateNowSpy = vi.spyOn(Date, "now");
-    dateNowSpy
-      .mockReturnValueOnce(1_000_000) // POST entry
-      .mockReturnValueOnce(1_285_000); // computing budget — 285s in
-    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    expect(res.status).toBe(502);
-    expect(vi.mocked(callRowboatChat)).not.toHaveBeenCalled();
-    expect(updateThreadConversation).not.toHaveBeenCalled();
-    expect(appendMessage).not.toHaveBeenCalled();
-    dateNowSpy.mockRestore();
-  });
-
-  // The retry budget is the COMBINED ceiling minus whatever the first
-  // call burned, NOT a fresh full window. Without this, a slow first
-  // failure (e.g. a Cloudflare-edge 502 returned partway through)
-  // plus a fresh full-budget retry would push total Rowboat wall time
-  // past `maxDuration` (Codex P2 / Cursor Bugbot Medium on PR #71).
-
-  it("retry's timeoutMs is bounded by remaining budget after the first call's elapsed time", async () => {
-    // Two-stage spy: the first two reads control preflight elapsed
-    // (=0) → initial budget = 280s. Subsequent reads inside
-    // callRowboatWithStatelessFallback simulate the first call eating
-    // 120s before failing, leaving 160s for the retry.
-    const dateNowSpy = vi.spyOn(Date, "now");
-    dateNowSpy
-      .mockReturnValueOnce(1_000_000) // POST entry
-      .mockReturnValueOnce(1_000_000) // budget computation — preflight 0ms
-      .mockReturnValueOnce(2_000_000) // helper entry (startedAt)
-      .mockReturnValueOnce(2_120_000); // after first failure (120s elapsed within helper)
-    vi.mocked(callRowboatChat)
-      .mockRejectedValueOnce(new Error("rowboat_http_500"))
-      .mockResolvedValueOnce({
-        reply: "fresh reply",
-        conversationId: "fresh-conv",
-        state: undefined,
-        hasStateKey: false
-      } as never);
-    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    const firstCall = vi.mocked(callRowboatChat).mock.calls[0][0];
-    const retryCall = vi.mocked(callRowboatChat).mock.calls[1][0];
-    // Initial budget = deadline 290s − preflight 0s − reserve 10s = 280s.
-    expect(firstCall.timeoutMs).toBe(280_000);
-    // Retry: 280s budget − 120s elapsed within helper = 160s remaining.
-    expect(retryCall.timeoutMs).toBe(160_000);
-    dateNowSpy.mockRestore();
-  });
-
-  it("skips the stateless retry entirely when remaining budget falls below the cold-start floor — surfaces the FIRST error instead of paying for a doomed retry", async () => {
-    // Preflight 0s → initial budget 280s. First call burns 279s before
-    // failing → only 1s remains, well below RETRY_MIN_BUDGET_MS.
-    const dateNowSpy = vi.spyOn(Date, "now");
-    dateNowSpy
-      .mockReturnValueOnce(1_000_000) // POST entry
-      .mockReturnValueOnce(1_000_000) // budget computation
-      .mockReturnValueOnce(2_000_000) // helper entry
-      .mockReturnValueOnce(2_279_000); // 279s elapsed → 1s remaining
-    vi.mocked(callRowboatChat).mockRejectedValueOnce(new Error("rowboat_http_500"));
-    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    expect(res.status).toBe(502);
-    const body = (await res.json()) as { error: { message: string } };
-    expect(body.error.message).toBe("rowboat_http_500");
-    expect(vi.mocked(callRowboatChat)).toHaveBeenCalledTimes(1);
-    // Continuation row must NOT be touched: we never confirmed the
-    // continuation was actually stale (the retry would have proven
-    // that). Clearing it now would discard a possibly-still-good
-    // conversationId on a transient blip.
-    expect(updateThreadConversation).not.toHaveBeenCalled();
-    dateNowSpy.mockRestore();
-  });
-
-  it("still retries when the first call fails fast (almost the whole budget remains)", async () => {
-    // Sanity check that the budget guard doesn't accidentally suppress
-    // the common case: an immediate Rowboat 400 leaves ~280s for the
-    // retry, which proceeds normally.
-    const dateNowSpy = vi.spyOn(Date, "now");
-    dateNowSpy
-      .mockReturnValueOnce(1_000_000) // POST entry
-      .mockReturnValueOnce(1_000_000) // budget computation
-      .mockReturnValueOnce(2_000_000) // helper entry
-      .mockReturnValueOnce(2_000_200); // 200ms elapsed
-    vi.mocked(callRowboatChat)
-      .mockRejectedValueOnce(new Error("rowboat_http_400"))
-      .mockResolvedValueOnce({
-        reply: "fresh reply",
-        conversationId: "fresh-conv",
-        state: undefined,
-        hasStateKey: false
-      } as never);
-    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    expect(res.status).toBe(200);
-    expect(vi.mocked(callRowboatChat)).toHaveBeenCalledTimes(2);
-    const retryCall = vi.mocked(callRowboatChat).mock.calls[1][0];
-    expect(retryCall.timeoutMs).toBe(279_800); // 280_000 − 200
-    dateNowSpy.mockRestore();
+describe("POST /api/dashboard/chat — upstream cancellation (Codex P2 / Cursor Bugbot Medium on PR #76)", () => {
+  it("forwards request.signal into callRowboatChatStream so a client disconnect actually tears down the upstream Rowboat fetch — pre-fix the route created a separate, disconnected AbortController", async () => {
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "hi" }))
+    );
+    const callArgs = vi.mocked(callRowboatChatStream).mock.calls[0][0] as {
+      signal?: AbortSignal;
+    };
+    // The route MUST pass through a signal — the per-tenant Ollama
+    // would otherwise keep generating tokens nobody reads after a
+    // client disconnect, wasting tenant VPS budget for up to 30s
+    // (the internal idle-timer ceiling).
+    expect(callArgs.signal).toBeInstanceOf(AbortSignal);
+    // And it must be the SAME signal the Request carries — passing a
+    // fresh AbortController would silently re-introduce the bug.
+    // We can't compare by reference (Next.js may wrap the Request),
+    // so we assert behaviour: aborting the original signal flips the
+    // received one.
+    expect(callArgs.signal?.aborted).toBe(false);
   });
 });
 
 describe("POST /api/dashboard/chat — customer memory preamble (Phase 4)", () => {
-  // The dashboard agent needs ambient awareness of customers across SMS +
-  // voice so the owner can ask things like "what was Joe asking about?"
-  // and get a useful answer. Failure of this lookup MUST NEVER fail the
-  // chat — the route falls back to no-preamble behaviour.
-
   it("does NOT inject a preamble when the business has no customer memories — keeps first-time owner UX unchanged", async () => {
     vi.mocked(listCustomerMemories).mockResolvedValueOnce([]);
-    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    const callArgs = vi.mocked(callRowboatChat).mock.calls[0][0];
-    // No system message about customers. The thread summary message
-    // (when present) is the only system msg; here summary_md is null.
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "hi" }))
+    );
+    const callArgs = vi.mocked(callRowboatChatStream).mock.calls[0][0];
     const customerSystemMsg = callArgs.messages.find(
       (m) => m.role === "system" && m.content.includes("recent customers")
     );
@@ -599,8 +648,10 @@ describe("POST /api/dashboard/chat — customer memory preamble (Phase 4)", () =
         updated_at: "2026-05-06T10:01:00Z"
       }
     ] as never);
-    await POST(jsonRequest({ businessId: BIZ, message: "what was Joe asking about?" }));
-    const callArgs = vi.mocked(callRowboatChat).mock.calls[0][0];
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "what was Joe asking about?" }))
+    );
+    const callArgs = vi.mocked(callRowboatChatStream).mock.calls[0][0];
     const customerSystemMsg = callArgs.messages.find(
       (m) => m.role === "system" && m.content.includes("recent customers")
     );
@@ -608,8 +659,6 @@ describe("POST /api/dashboard/chat — customer memory preamble (Phase 4)", () =
     expect(customerSystemMsg!.content).toContain("Joe");
     expect(customerSystemMsg!.content).toContain("+15555550123");
     expect(customerSystemMsg!.content).toContain("Asking about garage door spring sizing");
-    // Tells the model not to volunteer customer details — keeps every
-    // chat reply from turning into an unsolicited daily-stand-up summary.
     expect(customerSystemMsg!.content).toContain(
       "Do NOT proactively volunteer customer details"
     );
@@ -620,11 +669,11 @@ describe("POST /api/dashboard/chat — customer memory preamble (Phase 4)", () =
       new Error("supabase_pgrst_500")
     );
     const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    expect(res.status).toBe(200);
-    expect(vi.mocked(callRowboatChat)).toHaveBeenCalledTimes(1);
-    const callArgs = vi.mocked(callRowboatChat).mock.calls[0][0];
-    // No customer preamble was injected (lookup failed), but the
-    // chat call still went through.
+    const events = await readNdjson(res);
+    // Stream completes successfully with a done event.
+    expect(events.at(-1)?.type).toBe("done");
+    expect(vi.mocked(callRowboatChatStream)).toHaveBeenCalledTimes(1);
+    const callArgs = vi.mocked(callRowboatChatStream).mock.calls[0][0];
     const customerSystemMsg = callArgs.messages.find(
       (m) => m.role === "system" && m.content.includes("recent customers")
     );
@@ -636,181 +685,277 @@ describe("POST /api/dashboard/chat — summarizer trigger", () => {
   it("fires summarizeThreadAndLog when shouldSummarize returns true (fire-and-forget; doesn't await)", async () => {
     vi.mocked(shouldSummarize).mockReturnValueOnce(true);
     const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    expect(res.status).toBe(200);
+    const events = await readNdjson(res);
+    expect(events.at(-1)?.type).toBe("done");
     expect(summarizeThreadAndLog).toHaveBeenCalledWith(BIZ, ACTIVE_THREAD_ID);
   });
 
   it("does NOT fire summarizer when below threshold (gate keeps logs quiet on short threads)", async () => {
     vi.mocked(shouldSummarize).mockReturnValueOnce(false);
-    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    await readNdjson(await POST(jsonRequest({ businessId: BIZ, message: "hi" })));
     expect(summarizeThreadAndLog).not.toHaveBeenCalled();
   });
 
-  it("does NOT fire summarizer if Rowboat call failed — no point summarizing a failed turn", async () => {
-    vi.mocked(callRowboatChat).mockRejectedValueOnce(new Error("rowboat_timeout"));
+  it("does NOT fire summarizer if the Rowboat stream errored — no point summarizing a failed turn", async () => {
+    vi.mocked(callRowboatChatStream).mockImplementation(
+      fakeStreamSequences([{ type: "error", message: "rowboat_timeout" }]) as never
+    );
     vi.mocked(shouldSummarize).mockReturnValue(true);
     const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    expect(res.status).toBe(502);
+    const events = await readNdjson(res);
+    expect(events.at(-1)?.type).toBe("error");
     expect(summarizeThreadAndLog).not.toHaveBeenCalled();
-    // Must also NOT have persisted any messages on a Rowboat failure.
-    expect(appendMessage).not.toHaveBeenCalled();
+    // Must also NOT have persisted the assistant reply on a stream
+    // failure (the user message persists pre-stream by design).
+    const assistantAppend = vi
+      .mocked(appendMessage)
+      .mock.calls.find((c) => c[1] === "assistant");
+    expect(assistantAppend).toBeUndefined();
   });
 });
 
-describe("POST /api/dashboard/chat — stateless retry on stale conversation continuation (Codex P1)", () => {
-  // The bug: when threadId targets an older thread, we always send the
-  // stored rowboat_conversation_id/state. Rowboat may have evicted that
-  // server-side conversation (model restart, retention expiry) — without
-  // this guard the entire archived thread becomes permanently
-  // non-continuable, regressing the "every thread is continuable"
-  // promise from the previous PR.
+describe("POST /api/dashboard/chat — stateless retry (pre-token gating)", () => {
+  // Streaming retry rule: ONLY fire the stateless fallback when ZERO
+  // delta events have reached the client. Once tokens are out, retrying
+  // would emit duplicate text — far worse UX than an honest "connection
+  // cut off" error.
 
   const STALE_ERRORS = [
     "rowboat_http_400",
     "rowboat_http_404",
+    "rowboat_http_408",
     "rowboat_http_409",
     "rowboat_http_500",
     "rowboat_http_502",
     "rowboat_http_503",
+    "rowboat_http_522",
+    "rowboat_http_524",
     "rowboat_empty_assistant"
   ] as const;
 
   for (const errMsg of STALE_ERRORS) {
-    it(`retries stateless on ${errMsg} when a stored conversationId was sent — recovery instead of hard-fail`, async () => {
-      // First call (with continuation) fails; second call (stateless)
-      // succeeds with a fresh conversationId.
-      vi.mocked(callRowboatChat)
-        .mockRejectedValueOnce(new Error(errMsg))
-        .mockResolvedValueOnce({
-          reply: "fresh reply",
-          conversationId: "fresh-conv",
-          state: undefined,
-          hasStateKey: false
-        } as never);
+    it(`retries stateless on ${errMsg} when zero deltas had been emitted — recovery instead of hard-fail`, async () => {
+      vi.mocked(callRowboatChatStream).mockImplementation(
+        fakeStreamSequences(
+          // First attempt: error before any delta.
+          [{ type: "error", message: errMsg }],
+          // Stateless retry: success.
+          [
+            { type: "delta", text: "fresh reply" },
+            {
+              type: "done",
+              conversationId: "fresh-conv",
+              state: undefined,
+              hasStateKey: false
+            }
+          ]
+        ) as never
+      );
       const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-      expect(res.status).toBe(200);
-      // Two calls: first with continuation, second without.
-      expect(callRowboatChat).toHaveBeenCalledTimes(2);
-      const firstCallArgs = vi.mocked(callRowboatChat).mock.calls[0][0];
-      const secondCallArgs = vi.mocked(callRowboatChat).mock.calls[1][0];
+      const events = await readNdjson(res);
+      expect(events.at(-1)?.type).toBe("done");
+      expect(callRowboatChatStream).toHaveBeenCalledTimes(2);
+      const firstCallArgs = vi.mocked(callRowboatChatStream).mock.calls[0][0];
+      const secondCallArgs = vi.mocked(callRowboatChatStream).mock.calls[1][0];
       expect(firstCallArgs.conversationId).toBe("rb-conv");
       expect(firstCallArgs.state).toEqual({ foo: 1 });
       // Stateless retry: continuation tokens dropped.
       expect(secondCallArgs.conversationId).toBeNull();
       expect(secondCallArgs.state).toBeNull();
-      // With an empty `listMessages` tail (this test's default setup),
-      // both calls reduce to `[{ role: "user", content: "hi" }]` —
-      // there's nothing to replay either way. The shape divergence
-      // (initial call omits the tail; stateless retry replays it as
-      // a transcript-shaped system message) is covered by the
-      // dedicated suite "Rowboat input contract (no plain assistant
-      // replay)" above.
-      expect(secondCallArgs.messages).toEqual(firstCallArgs.messages);
     });
   }
 
   it("does NOT retry on rowboat_timeout — timing out doesn't suggest stale state, retry would just double VPS load", async () => {
-    vi.mocked(callRowboatChat).mockRejectedValueOnce(new Error("rowboat_timeout"));
+    vi.mocked(callRowboatChatStream).mockImplementation(
+      fakeStreamSequences([{ type: "error", message: "rowboat_timeout" }]) as never
+    );
     const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    expect(res.status).toBe(502);
-    expect(callRowboatChat).toHaveBeenCalledTimes(1);
+    await readNdjson(res);
+    expect(callRowboatChatStream).toHaveBeenCalledTimes(1);
   });
 
   it("does NOT retry on rowboat_http_401 — auth is global, retrying with the same bearer would fail identically", async () => {
-    vi.mocked(callRowboatChat).mockRejectedValueOnce(new Error("rowboat_http_401"));
-    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    expect(res.status).toBe(502);
-    expect(callRowboatChat).toHaveBeenCalledTimes(1);
-  });
-
-  it("does NOT retry on rowboat_http_403 — same auth-failure reasoning as 401", async () => {
-    vi.mocked(callRowboatChat).mockRejectedValueOnce(new Error("rowboat_http_403"));
-    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    expect(res.status).toBe(502);
-    expect(callRowboatChat).toHaveBeenCalledTimes(1);
+    vi.mocked(callRowboatChatStream).mockImplementation(
+      fakeStreamSequences([{ type: "error", message: "rowboat_http_401" }]) as never
+    );
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "hi" }))
+    );
+    expect(callRowboatChatStream).toHaveBeenCalledTimes(1);
   });
 
   it("does NOT retry on rowboat_invalid_json — protocol-level garble, dropping continuation won't fix it", async () => {
-    vi.mocked(callRowboatChat).mockRejectedValueOnce(new Error("rowboat_invalid_json"));
-    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    expect(res.status).toBe(502);
-    expect(callRowboatChat).toHaveBeenCalledTimes(1);
+    vi.mocked(callRowboatChatStream).mockImplementation(
+      fakeStreamSequences([{ type: "error", message: "rowboat_invalid_json" }]) as never
+    );
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "hi" }))
+    );
+    expect(callRowboatChatStream).toHaveBeenCalledTimes(1);
   });
 
   it("does NOT retry when the thread had NO stored conversationId — the failure isn't 'stale state' if we never sent state", async () => {
-    // Fresh thread minted by getOrCreateActiveThread with null
-    // conversation tokens. A retryable error here means something
-    // structural (the message shape, the project, the bearer); a
-    // stateless retry sends the SAME body that just failed.
     vi.mocked(getOrCreateActiveThread).mockResolvedValueOnce({
       ...ACTIVE_THREAD,
       rowboat_conversation_id: null,
       rowboat_state: null
     } as never);
-    vi.mocked(callRowboatChat).mockRejectedValueOnce(new Error("rowboat_http_404"));
-    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    expect(res.status).toBe(502);
-    expect(callRowboatChat).toHaveBeenCalledTimes(1);
+    vi.mocked(callRowboatChatStream).mockImplementation(
+      fakeStreamSequences([{ type: "error", message: "rowboat_http_404" }]) as never
+    );
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "hi" }))
+    );
+    expect(callRowboatChatStream).toHaveBeenCalledTimes(1);
   });
 
-  it("does NOT retry when stored conversationId is whitespace-only — same 'no continuation to be stale' reasoning", async () => {
-    vi.mocked(getOrCreateActiveThread).mockResolvedValueOnce({
-      ...ACTIVE_THREAD,
-      rowboat_conversation_id: "   ",
-      rowboat_state: null
-    } as never);
-    vi.mocked(callRowboatChat).mockRejectedValueOnce(new Error("rowboat_http_500"));
+  it("does NOT retry when at least one delta has already reached the client — duplicate output would be worse than an honest mid-stream error", async () => {
+    // First attempt emits a delta then errors. The retry guard MUST
+    // gate on deltasEmitted === 0, not just on the error code being
+    // retryable — otherwise the user sees "Hello…" then "Hello world"
+    // appearing twice in their bubble.
+    vi.mocked(callRowboatChatStream).mockImplementation(
+      fakeStreamSequences([
+        { type: "delta", text: "Hello" },
+        { type: "error", message: "rowboat_http_524" }
+      ]) as never
+    );
     const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    expect(res.status).toBe(502);
-    expect(callRowboatChat).toHaveBeenCalledTimes(1);
+    const events = await readNdjson(res);
+    expect(callRowboatChatStream).toHaveBeenCalledTimes(1);
+    // Final event is an error with the post-token "connection cut off" copy.
+    const last = events.at(-1) as { type: string; message: string };
+    expect(last.type).toBe("error");
+    expect(last.message).toMatch(/cut off/i);
+    // Assistant message MUST NOT have been persisted — partial replies
+    // shouldn't be committed.
+    const assistantAppend = vi
+      .mocked(appendMessage)
+      .mock.calls.find((c) => c[1] === "assistant");
+    expect(assistantAppend).toBeUndefined();
   });
 
-  it("surfaces the RETRY error (not the first error) when the stateless fallback also fails — gives the operator the freshest signal", async () => {
-    vi.mocked(callRowboatChat)
-      .mockRejectedValueOnce(new Error("rowboat_http_404"))
-      .mockRejectedValueOnce(new Error("rowboat_http_503"));
+  it("retries stateless when the upstream generator ends without yielding a terminal event AND no content accumulated — Cursor Bugbot Low regression test from PR #76 commit 837c6e8: pre-fix the fallback hardcoded retryable:false even though rowboat_empty_assistant IS in STATELESS_RETRY_ERRORS, silently bypassing the retry that would have recovered from a stale conversation continuation", async () => {
+    vi.mocked(callRowboatChatStream).mockImplementation(
+      fakeStreamSequences(
+        // First attempt: stream ends with no events at all (mock
+        // exhausted before yielding error/done). The route's post-
+        // loop fallback should treat this as rowboat_empty_assistant
+        // AND mark it retryable so we get one more chance.
+        [],
+        // Stateless retry: success.
+        [
+          { type: "delta", text: "fresh reply" },
+          {
+            type: "done",
+            conversationId: "fresh-conv",
+            state: undefined,
+            hasStateKey: false
+          }
+        ]
+      ) as never
+    );
     const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    expect(res.status).toBe(502);
-    const body = (await res.json()) as { error: { message: string } };
-    // describeRowboatError is mocked to echo the message; the route
-    // must call it with the RETRY error, not the first one.
-    expect(body.error.message).toBe("rowboat_http_503");
-    expect(callRowboatChat).toHaveBeenCalledTimes(2);
+    const events = await readNdjson(res);
+    expect(callRowboatChatStream).toHaveBeenCalledTimes(2);
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
+  it("treats whitespace-only buffered content as empty in the post-loop fallback — uses the SAME trim-gate as the persistence path so the fallback doesn't return kind:'done' for content that would then be rejected at persistence (Cursor Bugbot Low on PR #76 commit 837c6e8: pre-fix line 799 used `buffered.length > 0` while persistence used `buffered.trim().length === 0`, creating the inconsistency)", async () => {
+    vi.mocked(callRowboatChatStream).mockImplementation(
+      fakeStreamSequences([
+        // Whitespace deltas, no terminal event. With the trim-gate
+        // fix the fallback returns kind:"error" with the
+        // pre-meaningful-content friendly message — pre-fix it
+        // returned kind:"done" and the persistence branch then
+        // surfaced the misleading "cut off" message.
+        { type: "delta", text: "   " },
+        { type: "delta", text: "\n\n" }
+      ]) as never
+    );
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    const events = await readNdjson(res);
+    // No retry: deltasEmitted > 0 (the bytes were already streamed),
+    // so the retry-safety gate denies it. That matches the inline
+    // error handler's gate.
+    expect(callRowboatChatStream).toHaveBeenCalledTimes(1);
+    // No assistant row persisted (whitespace-only never gets written).
+    const assistantAppend = vi
+      .mocked(appendMessage)
+      .mock.calls.find((c) => c[1] === "assistant");
+    expect(assistantAppend).toBeUndefined();
+    // Pre-meaningful-content friendly message — NOT "cut off".
+    const last = events.at(-1) as { type: string; message: string };
+    expect(last.type).toBe("error");
+    expect(last.message).not.toMatch(/cut off/i);
+  });
+
+  it("uses the pre-meaningful-content friendly message when the only deltas were whitespace — Cursor Bugbot Low regression test from PR #76 commit e722c7d: pre-fix the gate keyed off deltasEmitted (which counts whitespace), so a whitespace-only stream got the misleading 'connection cut off' copy AND the client retained a never-persisted whitespace bubble", async () => {
+    // First attempt emits whitespace-only deltas then errors. The
+    // friendly-message gate MUST align with the persistence gate
+    // (buffered.trim().length === 0) — otherwise the user sees a
+    // "your reply may be incomplete" warning for a reply that was
+    // actually never written to the database (and disappears on
+    // refresh).
+    vi.mocked(callRowboatChatStream).mockImplementation(
+      fakeStreamSequences([
+        { type: "delta", text: "  " },
+        { type: "delta", text: "\n" },
+        // Use a NON-retryable error so we don't trigger the stateless
+        // retry path here (that's covered by other tests). The point
+        // of this test is the friendly-message branch on the final
+        // outcome.
+        { type: "error", message: "rowboat_http_404" }
+      ]) as never
+    );
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    const events = await readNdjson(res);
+    const last = events.at(-1) as { type: string; message: string };
+    expect(last.type).toBe("error");
+    // The describeRowboatError copy for a 404, NOT the "cut off"
+    // message — because no meaningful content reached the user.
+    expect(last.message).not.toMatch(/cut off/i);
+    // No assistant row persisted (whitespace-only never gets written).
+    const assistantAppend = vi
+      .mocked(appendMessage)
+      .mock.calls.find((c) => c[1] === "assistant");
+    expect(assistantAppend).toBeUndefined();
   });
 
   it("only retries ONCE — no infinite loop when both calls fail with retryable errors", async () => {
-    vi.mocked(callRowboatChat)
-      .mockRejectedValueOnce(new Error("rowboat_http_500"))
-      .mockRejectedValueOnce(new Error("rowboat_http_500"));
-    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    expect(callRowboatChat).toHaveBeenCalledTimes(2);
+    vi.mocked(callRowboatChatStream).mockImplementation(
+      fakeStreamSequences(
+        [{ type: "error", message: "rowboat_http_500" }],
+        [{ type: "error", message: "rowboat_http_500" }]
+      ) as never
+    );
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "hi" }))
+    );
+    expect(callRowboatChatStream).toHaveBeenCalledTimes(2);
   });
 
-  // Bugbot Low (PR #66): when the stateless retry succeeds but Rowboat's
-  // response omits a fresh conversationId (the field is optional in
-  // RowboatTurnJson), the legacy guard `if (conversationId || state)` was
-  // false and the OLD known-stale rowboat_conversation_id stayed in the DB.
-  // Every subsequent message would replay the fail-then-retry cycle
-  // forever, doubling latency and API load. The fix forces an UPDATE
-  // whenever a stateless retry happened, even if the response carries
-  // no new continuation tokens.
-
-  it("force-clears stale rowboat_conversation_id after stateless retry, even when retry response omits a fresh one", async () => {
-    vi.mocked(callRowboatChat)
-      .mockRejectedValueOnce(new Error("rowboat_http_404"))
-      .mockResolvedValueOnce({
-        reply: "ok",
-        // CRUCIAL: no conversationId returned. This is the field
-        // being optional in RowboatTurnJson — Rowboat may legitimately
-        // not echo one back, especially on a bare "fresh start" call.
-        conversationId: undefined,
-        state: undefined,
-        hasStateKey: false
-      } as never);
-    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    // Critical: we still called updateThreadConversation, with both
-    // continuation tokens nulled out. This breaks the perpetual-retry
-    // loop on the next message.
+  it("force-clears stale rowboat_conversation_id after stateless retry, even when retry response omits a fresh one (Bugbot Low PR #66)", async () => {
+    vi.mocked(callRowboatChatStream).mockImplementation(
+      fakeStreamSequences(
+        [{ type: "error", message: "rowboat_http_404" }],
+        [
+          { type: "delta", text: "ok" },
+          {
+            type: "done",
+            // CRUCIAL: no conversationId returned. The retry must still
+            // overwrite the DB to break the perpetual fail-then-retry
+            // cycle (next message would re-send the same dead id).
+            conversationId: undefined,
+            state: undefined,
+            hasStateKey: false
+          }
+        ]
+      ) as never
+    );
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "hi" }))
+    );
     expect(updateThreadConversation).toHaveBeenCalledWith(
       ACTIVE_THREAD_ID,
       null,
@@ -819,15 +964,23 @@ describe("POST /api/dashboard/chat — stateless retry on stale conversation con
   });
 
   it("persists the FRESH conversationId from the stateless retry response when Rowboat does provide one", async () => {
-    vi.mocked(callRowboatChat)
-      .mockRejectedValueOnce(new Error("rowboat_http_500"))
-      .mockResolvedValueOnce({
-        reply: "ok",
-        conversationId: "rb-conv-fresh",
-        state: { regenerated: true },
-        hasStateKey: true
-      } as never);
-    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    vi.mocked(callRowboatChatStream).mockImplementation(
+      fakeStreamSequences(
+        [{ type: "error", message: "rowboat_http_500" }],
+        [
+          { type: "delta", text: "ok" },
+          {
+            type: "done",
+            conversationId: "rb-conv-fresh",
+            state: { regenerated: true },
+            hasStateKey: true
+          }
+        ]
+      ) as never
+    );
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "hi" }))
+    );
     expect(updateThreadConversation).toHaveBeenCalledWith(
       ACTIVE_THREAD_ID,
       "rb-conv-fresh",
@@ -836,13 +989,63 @@ describe("POST /api/dashboard/chat — stateless retry on stale conversation con
   });
 
   it("does NOT call updateThreadConversation when no retry happened AND Rowboat's response carries no continuation — preserves legacy 'no-op when nothing changed' semantics", async () => {
-    vi.mocked(callRowboatChat).mockResolvedValueOnce({
-      reply: "ok",
-      conversationId: undefined,
-      state: undefined,
-      hasStateKey: false
-    } as never);
-    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    vi.mocked(callRowboatChatStream).mockImplementation(
+      fakeStreamSequences([
+        { type: "delta", text: "ok" },
+        {
+          type: "done",
+          conversationId: undefined,
+          state: undefined,
+          hasStateKey: false
+        }
+      ]) as never
+    );
+    await readNdjson(
+      await POST(jsonRequest({ businessId: BIZ, message: "hi" }))
+    );
     expect(updateThreadConversation).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/dashboard/chat — pre-stream errors", () => {
+  it("returns NDJSON 401 on missing auth — error event uses the correct code so the client can branch", async () => {
+    vi.mocked(getAuthUser).mockResolvedValueOnce(null as never);
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(res.status).toBe(401);
+    const events = await readNdjson(res);
+    expect(events).toEqual([
+      { type: "error", code: "UNAUTHORIZED", message: "Authentication required" }
+    ]);
+    // Stream never opened — Rowboat MUST NOT have been called.
+    expect(callRowboatChatStream).not.toHaveBeenCalled();
+    expect(appendMessage).not.toHaveBeenCalled();
+  });
+
+  it("returns NDJSON 409 + paused message when the business is paused", async () => {
+    supabaseFlagsStub.maybeSingle.mockResolvedValueOnce({
+      data: { id: BIZ, is_paused: true, customer_channels_enabled: true },
+      error: null
+    });
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(res.status).toBe(409);
+    const events = await readNdjson(res);
+    expect(events[0]).toMatchObject({
+      type: "error",
+      code: "CONFLICT"
+    });
+    expect((events[0] as { message: string }).message).toMatch(/paused/i);
+  });
+
+  it("returns NDJSON 429 when the rate limiter rejects", async () => {
+    vi.mocked(rateLimit).mockReturnValueOnce({
+      success: false,
+      limit: 30,
+      remaining: 0,
+      reset: 0
+    });
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(res.status).toBe(429);
+    const events = await readNdjson(res);
+    expect((events[0] as { message: string }).message).toMatch(/too many/i);
   });
 });

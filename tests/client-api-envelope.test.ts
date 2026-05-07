@@ -27,7 +27,26 @@ describe("parseEnvelope", () => {
     });
   });
 
-  it("synthesises INTERNAL_SERVER_ERROR when body is not JSON", async () => {
+  it("synthesises a 'taking longer than usual' INTERNAL_SERVER_ERROR for 5xx with non-JSON body", async () => {
+    // The 502 case is the live trigger: Vercel returns an HTML error
+    // page when the function exceeds maxDuration or upstream returns a
+    // gateway error. Pre-fix the synthesised copy was the literal
+    // "Unexpected server response", which left owners staring at a
+    // dead-end string with no idea whether to retry. The new copy
+    // makes the right action (retry in a moment) obvious.
+    const r = new Response("<html>504 Gateway Timeout</html>", {
+      status: 502,
+      headers: { "Content-Type": "text/html" }
+    });
+    const parsed = await parseEnvelope(r);
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.error.code).toBe("INTERNAL_SERVER_ERROR");
+    expect(parsed.error.message).toMatch(/longer than usual/i);
+    expect(parsed.error.message).not.toMatch(/unexpected/i);
+  });
+
+  it("synthesises 'taking longer than usual' for 500 with non-JSON body — same friendly copy across the 5xx range", async () => {
     const r = new Response("not-json", {
       status: 500,
       headers: { "Content-Type": "text/plain" }
@@ -35,15 +54,32 @@ describe("parseEnvelope", () => {
     const parsed = await parseEnvelope(r);
     expect(parsed.ok).toBe(false);
     if (parsed.ok) return;
-    expect(parsed.error.code).toBe("INTERNAL_SERVER_ERROR");
-    expect(parsed.error.message).toMatch(/unexpected/i);
+    expect(parsed.error.message).toMatch(/longer than usual/i);
   });
 
-  it("synthesises INTERNAL_SERVER_ERROR when body is empty", async () => {
+  it("synthesises INTERNAL_SERVER_ERROR with the 'taking longer' copy when body is empty (still a 5xx)", async () => {
     const r = new Response("", { status: 502 });
     const parsed = await parseEnvelope(r);
     expect(parsed.ok).toBe(false);
     if (parsed.ok) return;
     expect(parsed.error.code).toBe("INTERNAL_SERVER_ERROR");
+    expect(parsed.error.message).toMatch(/longer than usual/i);
+  });
+
+  it("keeps the canonical 'Unexpected server response' copy for 4xx + non-JSON — different failure mode than a slow 5xx", async () => {
+    // 4xx + non-JSON typically means a misconfigured proxy stripped a
+    // valid JSON body, OR an upstream load balancer returned its own
+    // HTML error page. Saying "your coworker is taking longer" there
+    // would be misleading — the request is being rejected, not slow.
+    const r = new Response("<html>403 Forbidden</html>", {
+      status: 403,
+      headers: { "Content-Type": "text/html" }
+    });
+    const parsed = await parseEnvelope(r);
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.error.code).toBe("INTERNAL_SERVER_ERROR");
+    expect(parsed.error.message).toMatch(/unexpected/i);
+    expect(parsed.error.message).not.toMatch(/longer than usual/i);
   });
 });
