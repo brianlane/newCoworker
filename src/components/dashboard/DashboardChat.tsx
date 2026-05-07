@@ -283,6 +283,18 @@ export function DashboardChat({ businessId, businessName }: Props) {
     const targetThreadId = viewingThreadId ?? activeThreadId;
 
     let assistantBubbleInserted = false;
+    // Tracks whether the user has actually SEEN any assistant content
+    // in the bubble. Distinct from `assistantBubbleInserted`, which
+    // flips on the server's `meta` event (always sent before Rowboat
+    // is even called). Cursor Bugbot Medium on PR #76 commit 334bc4e:
+    // pre-fix the error/partial-stream branches keyed off
+    // `assistantBubbleInserted`, but since `meta` is unconditional
+    // that meant a Rowboat failure BEFORE any token still left an
+    // empty bubble on screen with no way to restore the textarea.
+    // Branching on `firstDeltaRendered` instead means: "if you saw
+    // content, we keep it; if you only saw an empty placeholder, we
+    // tear it down and let you edit-and-resend."
+    let firstDeltaRendered = false;
     let streamErrored = false;
     // Tracks whether we received the server's `done` event. Used to
     // distinguish a clean stream close (done) from a connection-cut
@@ -349,6 +361,19 @@ export function DashboardChat({ businessId, businessName }: Props) {
           ]);
         }
       } else if (ev.type === "delta") {
+        // Mark the moment the user sees content. The error/partial
+        // branches below use this — NOT `assistantBubbleInserted` —
+        // to decide whether to preserve the bubble (because the
+        // owner is mid-read and yanking it is jarring) vs tear it
+        // down (because the bubble has only ever been an empty
+        // placeholder).
+        //
+        // Note: ev.content can be an empty string in theory if a
+        // future Rowboat path emits a zero-length delta; only flip
+        // the flag when we've actually appended something visible
+        // so an upstream bug emitting empty deltas doesn't trick us
+        // into preserving an empty bubble on a subsequent error.
+        if (ev.content.length > 0) firstDeltaRendered = true;
         // Streaming append. Find the in-flight bubble by stable local
         // id — locating by index would race against React's reconciler
         // batching multiple deltas in a single tick.
@@ -378,34 +403,42 @@ export function DashboardChat({ businessId, businessName }: Props) {
       } else if (ev.type === "error") {
         streamErrored = true;
         // Branching mirrors the post-loop "stream closed without
-        // done/error" handler below (Cursor Bugbot Medium on PR #76
-        // commit 0a93c73): both branches handle the same conceptual
-        // scenario — a stream interruption where the user has either
-        // (a) seen partial assistant content already, or (b) hasn't.
-        // Pre-fix this handler unconditionally yanked the in-flight
-        // bubble even when deltas had already been displayed, which
-        // looked like content the owner was actively reading
-        // disappearing. The server has not persisted the assistant
-        // turn either way, so we never need to keep the bubble for
-        // database-consistency reasons — only for UX.
-        if (!assistantBubbleInserted) {
-          // No deltas were ever rendered. Safe to drop the optimistic
-          // user message + the (never-shown) in-flight assistant
-          // placeholder and restore the textarea so the owner can
-          // edit-and-resend in one click. Matches the pre-streaming
-          // UX exactly.
+        // done/error" handler below. Both branches handle the same
+        // conceptual scenario — a stream interruption where the user
+        // has either (a) seen partial assistant content already, or
+        // (b) only seen the empty placeholder. The server has not
+        // persisted the assistant turn either way, so we never need
+        // to keep the bubble for DB-consistency reasons — only UX.
+        //
+        // Cursor Bugbot Medium on PR #76 commit 334bc4e: keying off
+        // `assistantBubbleInserted` was wrong because that flag flips
+        // on `meta`, which the server unconditionally sends BEFORE
+        // calling Rowboat. A Rowboat failure pre-token would arrive
+        // as an `error` event AFTER `meta` had already inserted the
+        // empty bubble, and the !assistantBubbleInserted check would
+        // be false — leaving an orphaned empty bubble on screen with
+        // no way to restore the textarea. Branching on
+        // `firstDeltaRendered` (set only when actual content was
+        // appended) fixes this: "did you see content?" is the right
+        // question, "did meta arrive?" is the wrong one.
+        if (!firstDeltaRendered) {
+          // The bubble (if inserted) only ever showed an empty
+          // placeholder. Safe to drop the optimistic user message +
+          // the placeholder and restore the textarea so the owner
+          // can edit-and-resend in one click. Matches the
+          // pre-streaming UX exactly.
           setMessages((prev) =>
             prev.filter((m) => m.id !== optimisticUserId && m.id !== inflightAssistantId)
           );
           setInput(trimmed);
         }
-        // If deltas WERE rendered, leave the optimistic user message
+        // If content WAS rendered, leave the optimistic user message
         // and the partial assistant bubble in place — the owner saw
         // those tokens, yanking them mid-read is jarring. We do NOT
-        // restore the textarea here for the same reason as the
-        // post-loop branch: the user's message is on the server (we
-        // received `meta`), and a re-send would create a duplicate
-        // user turn. Owner can re-ask if they want the full answer.
+        // restore the textarea here: the user's message is on the
+        // server (we received `meta`), and a re-send would create a
+        // duplicate user turn. Owner can re-ask if they want the
+        // full answer.
         setError(ev.message);
       }
     };
@@ -427,27 +460,33 @@ export function DashboardChat({ businessId, businessName }: Props) {
       const { events: trailingEvents } = flushNdjsonBuffer<StreamEvent>(ndjsonState);
       for (const ev of trailingEvents) handleEvent(ev);
       if (!streamErrored && !streamDone) {
-        if (!assistantBubbleInserted) {
-          // Server closed without emitting `meta` (and no `error`
-          // event either). Treat as a generic failure rather than
-          // leaving the optimistic user message stranded with no
-          // reply ever coming.
-          setMessages((prev) => prev.filter((m) => m.id !== optimisticUserId));
+        if (!firstDeltaRendered) {
+          // Stream closed before any visible token reached the user.
+          // Could be: server never emitted meta (very rare), server
+          // emitted meta but Rowboat hung and the function got
+          // reaped before the first delta, or any other pre-token
+          // failure mode. Either way the user sees only an empty
+          // placeholder bubble (or no bubble) — drop it, drop the
+          // optimistic user message, and restore the textarea so
+          // they can edit-and-resend.
+          setMessages((prev) =>
+            prev.filter((m) => m.id !== optimisticUserId && m.id !== inflightAssistantId)
+          );
           setInput(trimmed);
           setError("Your coworker didn't respond. Please try again.");
         } else {
-          // Stream closed AFTER `meta` and one or more `delta` events
-          // but BEFORE `done` or `error`. Most likely cause: Vercel's
+          // Stream closed AFTER one or more `delta` events but
+          // BEFORE `done` or `error`. Most likely cause: Vercel's
           // function reaper at maxDuration, an intermediate proxy
           // dropping the connection, or the server process crashing
-          // mid-generation. We KEEP the partial assistant bubble (the
-          // user already saw those tokens — yanking them looks like a
-          // bug) but surface a clear error so the owner knows the
-          // reply is incomplete and can resend. The textarea is NOT
-          // restored: the user's message did make it to the server
-          // (we got `meta` back), and resending would persist a
-          // duplicate user turn — better to let them retype if they
-          // want, after seeing the partial reply.
+          // mid-generation. We KEEP the partial assistant bubble
+          // (the user already saw those tokens — yanking them looks
+          // like a bug) but surface a clear error so the owner knows
+          // the reply is incomplete and can resend. The textarea is
+          // NOT restored: the user's message did make it to the
+          // server (we got `meta` back), and resending would persist
+          // a duplicate user turn — better to let them retype if
+          // they want, after seeing the partial reply.
           setError("The reply was cut off — please ask again to get the full answer.");
         }
       }
