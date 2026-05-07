@@ -733,27 +733,28 @@ function createDashboardChatStream(input: StreamPipelineInput): ReadableStream<U
           outcome
         });
 
-        let stream: AsyncGenerator<RowboatStreamEvent>;
-        try {
-          stream = callRowboatChatStream({
-            businessId: input.businessId,
-            projectId: input.projectId,
-            bearer: input.bearer,
-            messages,
-            conversationId: useContinuation ? input.thread.rowboat_conversation_id : null,
-            state: useContinuation ? input.thread.rowboat_state : null,
-            // Forward the browser's AbortSignal so a client disconnect
-            // tears down the upstream Rowboat fetch + body reader
-            // promptly instead of waiting up to 30s for the internal
-            // idle timer.
-            signal: input.requestSignal
-          });
-        } catch (err) {
-          // Synchronous throw from the generator constructor — extremely
-          // rare (validation errors). Treat as non-retryable.
-          const m = err instanceof Error ? err.message : String(err);
-          return pack({ kind: "error", message: m, retryable: false });
-        }
+        // `callRowboatChatStream` is an `async function*` — calling it
+        // synchronously returns an AsyncGenerator object and the body
+        // does not run until iteration begins. There is therefore no
+        // synchronous throw path to catch here; any errors raised
+        // during iteration emerge through `for await` and are caught
+        // by the outer `try/catch (unexpected)` in
+        // createDashboardChatStream. (Cursor Bugbot Low on PR #76
+        // commit 7d36f3b removed an unreachable try/catch that
+        // wrapped this assignment.)
+        const stream: AsyncGenerator<RowboatStreamEvent> = callRowboatChatStream({
+          businessId: input.businessId,
+          projectId: input.projectId,
+          bearer: input.bearer,
+          messages,
+          conversationId: useContinuation ? input.thread.rowboat_conversation_id : null,
+          state: useContinuation ? input.thread.rowboat_state : null,
+          // Forward the browser's AbortSignal so a client disconnect
+          // tears down the upstream Rowboat fetch + body reader
+          // promptly instead of waiting up to 30s for the internal
+          // idle timer.
+          signal: input.requestSignal
+        });
 
         for await (const event of stream) {
           if (closed) {

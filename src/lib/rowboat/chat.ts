@@ -631,7 +631,6 @@ export async function* callRowboatChatStream(
   };
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
-  let sawFirstChunk = false;
   let sawAnyDelta = false;
   // Running metadata harvested from any event that carries it. The
   // final `done` we emit is built from the LAST seen values — Rowboat
@@ -676,9 +675,6 @@ export async function* callRowboatChatStream(
           message: err instanceof Error ? err.message : String(err)
         };
         return;
-      }
-      if (!sawFirstChunk) {
-        sawFirstChunk = true;
       }
       armTimer(idleMs);
       if (chunk.done) break;
