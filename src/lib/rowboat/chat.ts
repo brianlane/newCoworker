@@ -641,7 +641,6 @@ export async function* callRowboatChatStream(
   let lastConversationId: string | undefined;
   let lastState: unknown | undefined;
   let lastHadStateKey = false;
-  let explicitDone = false;
 
   const armTimer = (ms: number) => {
     /* c8 ignore next -- the timer is always set by the time armTimer is
@@ -745,11 +744,13 @@ export async function* callRowboatChatStream(
             lastState = parsed.state;
             lastHadStateKey = true;
           }
-          explicitDone = true;
           // Don't return yet — Rowboat sometimes emits both an explicit
           // `[DONE]` AND a final metadata JSON in either order. Keep
           // reading until the stream itself closes; we'll emit our
-          // single `done` event at the end.
+          // single `done` event at the end. Whether the upstream sent
+          // an explicit done sentinel doesn't change the empty-
+          // assistant gate below: a stream with zero delta events is
+          // empty, full stop, regardless of how it terminated.
         }
       }
     }
@@ -802,7 +803,22 @@ export async function* callRowboatChatStream(
     return;
   }
 
-  if (!sawAnyDelta && !explicitDone) {
+  // Empty assistant turn — surface as rowboat_empty_assistant
+  // REGARDLESS of whether Rowboat sent an explicit done sentinel.
+  // Cursor Bugbot Medium on PR #76 commit d6a3145: pre-fix this
+  // gate was `!sawAnyDelta && !explicitDone`, which let an explicit
+  // `[DONE]` (or done-typed event) with zero content events through
+  // as a normal `done` — the route then saw `kind: "done"` and
+  // skipped the stateless-retry gate entirely. Semantically a stream
+  // with no delta events IS empty whether or not it terminated
+  // gracefully, and the retry path (drop conversationId/state and
+  // call again) is exactly what recovers from the most likely cause:
+  // a stale conversation continuation that the per-tenant Rowboat
+  // can't resume. `rowboat_empty_assistant` is in
+  // STATELESS_RETRY_ERRORS, so surfacing it here lets the route
+  // try one more stateless turn instead of immediately telling the
+  // owner "no reply".
+  if (!sawAnyDelta) {
     yield { type: "error", message: "rowboat_empty_assistant" };
     return;
   }

@@ -712,7 +712,7 @@ describe("callRowboatChatStream", () => {
     expect(headers.Authorization).toBe("Bearer B");
   });
 
-  it("yields a single done event for the `[DONE]` sentinel — and follows the no-deltas-no-done path with rowboat_empty_assistant if no text arrived", async () => {
+  it("yields rowboat_empty_assistant for an explicit `[DONE]` sentinel with zero deltas — Cursor Bugbot Medium regression test from PR #76 commit d6a3145: pre-fix this case yielded a normal `done`, which let the route exit `kind:\"done\"` and skip the stateless retry that would have recovered from a stale conversation continuation. A stream with no delta events IS empty regardless of whether it terminated with [DONE] or a connection drop, and rowboat_empty_assistant is the entry point into STATELESS_RETRY_ERRORS.", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(sseResponse("data: [DONE]\n\n"))
@@ -723,9 +723,27 @@ describe("callRowboatChatStream", () => {
       bearer: "B",
       messages: [{ role: "user", content: "hi" }]
     });
-    // Explicit done with zero deltas — yields done (the route then
-    // detects empty buffered text and emits its own friendly error).
-    expect(events.at(-1)?.type).toBe("done");
+    expect(events).toEqual([
+      { type: "error", message: "rowboat_empty_assistant" }
+    ]);
+  });
+
+  it("yields rowboat_empty_assistant for an explicit Rowboat-native `{type:\"done\"}` event with zero deltas — same fix as the [DONE] case but exercises the Rowboat-native event shape", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse('data: {"type":"done","conversationId":"c1"}\n\n')
+      )
+    );
+    const events = await collect({
+      businessId: BIZ,
+      projectId: PROJ,
+      bearer: "B",
+      messages: [{ role: "user", content: "hi" }]
+    });
+    expect(events).toEqual([
+      { type: "error", message: "rowboat_empty_assistant" }
+    ]);
   });
 
   it("yields rowboat_empty_assistant when stream closes with no deltas and no explicit done", async () => {
