@@ -794,10 +794,34 @@ function createDashboardChatStream(input: StreamPipelineInput): ReadableStream<U
             return pack({ kind: "error", message: event.message, retryable });
           }
         }
-        // Generator ended without an explicit `done`. Treat as success
-        // if any text accumulated; otherwise an empty-assistant error.
-        if (buffered.length > 0) return pack({ kind: "done" });
-        return pack({ kind: "error", message: "rowboat_empty_assistant", retryable: false });
+        // Generator ended without yielding an explicit terminal
+        // event. Today `callRowboatChatStream` always yields error/
+        // done before returning, so this path is reachable only via
+        // test mocks that exhaust their event array; production
+        // streams never land here. Cursor Bugbot Low on PR #76
+        // commit 837c6e8: even though unreachable in prod, the
+        // fallback MUST stay correct because the architecture
+        // depends on STATELESS_RETRY_ERRORS recovery — a future
+        // generator-contract change must NOT silently bypass it.
+        //
+        // Two rules to mirror the inline branches:
+        //   1. "Did the user see meaningful content?" uses
+        //      `buffered.trim().length > 0` — same gate as
+        //      persistence and the post-error friendly message.
+        //      Whitespace-only buffered content is empty, full stop.
+        //   2. `rowboat_empty_assistant` is in
+        //      STATELESS_RETRY_ERRORS, so the retry gate here uses
+        //      the SAME conditions as the inline error handler
+        //      above (no deltas yet, haven't already retried,
+        //      thread has a continuation worth blowing away).
+        if (buffered.trim().length > 0) return pack({ kind: "done" });
+        const retryable =
+          deltasEmitted === 0 && !retriedStateless && input.hasContinuation;
+        return pack({
+          kind: "error",
+          message: "rowboat_empty_assistant",
+          retryable
+        });
       };
 
       try {

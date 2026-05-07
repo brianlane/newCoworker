@@ -835,6 +835,61 @@ describe("POST /api/dashboard/chat — stateless retry (pre-token gating)", () =
     expect(assistantAppend).toBeUndefined();
   });
 
+  it("retries stateless when the upstream generator ends without yielding a terminal event AND no content accumulated — Cursor Bugbot Low regression test from PR #76 commit 837c6e8: pre-fix the fallback hardcoded retryable:false even though rowboat_empty_assistant IS in STATELESS_RETRY_ERRORS, silently bypassing the retry that would have recovered from a stale conversation continuation", async () => {
+    vi.mocked(callRowboatChatStream).mockImplementation(
+      fakeStreamSequences(
+        // First attempt: stream ends with no events at all (mock
+        // exhausted before yielding error/done). The route's post-
+        // loop fallback should treat this as rowboat_empty_assistant
+        // AND mark it retryable so we get one more chance.
+        [],
+        // Stateless retry: success.
+        [
+          { type: "delta", text: "fresh reply" },
+          {
+            type: "done",
+            conversationId: "fresh-conv",
+            state: undefined,
+            hasStateKey: false
+          }
+        ]
+      ) as never
+    );
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    const events = await readNdjson(res);
+    expect(callRowboatChatStream).toHaveBeenCalledTimes(2);
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
+  it("treats whitespace-only buffered content as empty in the post-loop fallback — uses the SAME trim-gate as the persistence path so the fallback doesn't return kind:'done' for content that would then be rejected at persistence (Cursor Bugbot Low on PR #76 commit 837c6e8: pre-fix line 799 used `buffered.length > 0` while persistence used `buffered.trim().length === 0`, creating the inconsistency)", async () => {
+    vi.mocked(callRowboatChatStream).mockImplementation(
+      fakeStreamSequences([
+        // Whitespace deltas, no terminal event. With the trim-gate
+        // fix the fallback returns kind:"error" with the
+        // pre-meaningful-content friendly message — pre-fix it
+        // returned kind:"done" and the persistence branch then
+        // surfaced the misleading "cut off" message.
+        { type: "delta", text: "   " },
+        { type: "delta", text: "\n\n" }
+      ]) as never
+    );
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    const events = await readNdjson(res);
+    // No retry: deltasEmitted > 0 (the bytes were already streamed),
+    // so the retry-safety gate denies it. That matches the inline
+    // error handler's gate.
+    expect(callRowboatChatStream).toHaveBeenCalledTimes(1);
+    // No assistant row persisted (whitespace-only never gets written).
+    const assistantAppend = vi
+      .mocked(appendMessage)
+      .mock.calls.find((c) => c[1] === "assistant");
+    expect(assistantAppend).toBeUndefined();
+    // Pre-meaningful-content friendly message — NOT "cut off".
+    const last = events.at(-1) as { type: string; message: string };
+    expect(last.type).toBe("error");
+    expect(last.message).not.toMatch(/cut off/i);
+  });
+
   it("uses the pre-meaningful-content friendly message when the only deltas were whitespace — Cursor Bugbot Low regression test from PR #76 commit e722c7d: pre-fix the gate keyed off deltasEmitted (which counts whitespace), so a whitespace-only stream got the misleading 'connection cut off' copy AND the client retained a never-persisted whitespace bubble", async () => {
     // First attempt emits whitespace-only deltas then errors. The
     // friendly-message gate MUST align with the persistence gate
