@@ -1,34 +1,38 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-
-const spawnSyncMock = vi.hoisted(() => vi.fn());
-
-vi.mock("child_process", async (importOriginal) => {
-  const cp = await importOriginal<typeof import("child_process")>();
-  return { ...cp, spawnSync: spawnSyncMock };
-});
+import { describe, it, expect } from "vitest";
 
 import { quoteShellEnvValue } from "@/lib/provisioning/orchestrate";
 
+/**
+ * `quoteShellEnvValue` produces the canonical bash single-quoted form so the
+ * orchestrator's deploy command can carry arbitrary env values over SSH
+ * without injection risk. We previously delegated to `bash printf %q` with a
+ * pure-JS fallback; the spawn was retired (it cost ~2.5 s per orchestrator
+ * test on macOS due to per-process xprotect/dyld overhead) in favour of the
+ * JS path as the only implementation. These tests pin the exact quoting
+ * contract — same values, same output — so a future regression won't ship a
+ * subtly-different deploy command.
+ */
 describe("quoteShellEnvValue", () => {
-  beforeEach(() => {
-    spawnSyncMock.mockReset();
+  it("wraps simple values in single quotes", () => {
+    expect(quoteShellEnvValue("hello")).toBe("'hello'");
   });
 
-  it("uses printf %q output when bash succeeds", () => {
-    spawnSyncMock.mockReturnValue({ status: 0, stdout: "quoted\n" });
-    expect(quoteShellEnvValue("hello")).toBe("quoted");
-    expect(spawnSyncMock).toHaveBeenCalled();
+  it("wraps the empty string as ''", () => {
+    expect(quoteShellEnvValue("")).toBe("''");
   });
 
-  it("falls back to single quotes when spawnSync throws", () => {
-    spawnSyncMock.mockImplementation(() => {
-      throw new Error("no bash");
-    });
-    expect(quoteShellEnvValue("a'b")).toBe(`'a'\\''b'`);
+  it("escapes embedded single quotes with the '\\'' sequence", () => {
+    expect(quoteShellEnvValue("a'b")).toBe("'a'\\''b'");
   });
 
-  it("falls back when bash returns non-zero", () => {
-    spawnSyncMock.mockReturnValue({ status: 1, stdout: "" });
-    expect(quoteShellEnvValue("x")).toBe(`'x'`);
+  it("does not escape shell metacharacters inside single quotes", () => {
+    // $, `, *, & etc. are literal inside single quotes — round-tripping
+    // through bash yields the original string unchanged.
+    expect(quoteShellEnvValue("with$shell`stuff")).toBe("'with$shell`stuff'");
+  });
+
+  it("preserves whitespace and unicode literally", () => {
+    expect(quoteShellEnvValue("value with spaces")).toBe("'value with spaces'");
+    expect(quoteShellEnvValue("unicode★")).toBe("'unicode★'");
   });
 });

@@ -23,7 +23,6 @@ import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { spawnSync } from "child_process";
 import { recordProvisioningProgress } from "@/lib/provisioning/progress";
 import {
   cloudflareTunnelProvisionerFromEnv,
@@ -75,16 +74,24 @@ function loadIdentityTemplate(): string {
   }
 }
 
-/** Bash `printf %q` when available; safe single-quote fallback (testable via `child_process` mock). */
+/**
+ * Single-quote `value` for bash, escaping any embedded `'` with the canonical
+ * `'\''` end-quote / escape / start-quote sequence. Functionally equivalent to
+ * `bash printf %q` for the kinds of values this orchestrator passes (opaque
+ * tokens / URLs / JWTs / ids), and works on every platform without requiring
+ * a `bash` binary on $PATH.
+ *
+ * Previously this used `spawnSync("bash", ["-c", 'printf %q "$1"', ...])`.
+ * The orchestrator's deploy-env builder calls this once per env var (≈26
+ * vars), and on macOS each `bash` spawn costs ~80–100 ms (xprotect / dyld /
+ * amfi), so the deploy phase paid ~2.5 s of pure subprocess overhead per
+ * call — which compounded across the ~30 orchestrator tests that exercise
+ * this path and made the local `vitest run` suite take ~4 minutes vs ~45 s
+ * on Linux CI. The pure-JS path produces a bash-equivalent quoted form, so
+ * dropping the spawn fixes the macOS-vs-CI divergence without changing the
+ * shell-side semantics on the VPS.
+ */
 export function quoteShellEnvValue(value: string): string {
-  try {
-    const r = spawnSync("bash", ["-c", 'printf %q "$1"', "_", value], { encoding: "utf8" });
-    if (r.status === 0 && typeof r.stdout === "string" && r.stdout.length > 0) {
-      return r.stdout.trimEnd();
-    }
-  } catch {
-    /* e.g. Windows dev without bash */
-  }
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
