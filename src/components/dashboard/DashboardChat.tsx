@@ -328,7 +328,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
         <div>
           <h1 className="text-2xl font-bold text-parchment">Chat with your coworker</h1>
           <p className="text-sm text-parchment/50 mt-1">
-            Private chat with {businessName}&rsquo;s local AI. Runs on your own server; nothing is shared with other tenants.
+            Private chat with {businessName}&rsquo;s AI
           </p>
         </div>
         <div className="flex items-center gap-2">
