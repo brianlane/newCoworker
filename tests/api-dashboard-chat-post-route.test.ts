@@ -835,6 +835,38 @@ describe("POST /api/dashboard/chat — stateless retry (pre-token gating)", () =
     expect(assistantAppend).toBeUndefined();
   });
 
+  it("uses the pre-meaningful-content friendly message when the only deltas were whitespace — Cursor Bugbot Low regression test from PR #76 commit e722c7d: pre-fix the gate keyed off deltasEmitted (which counts whitespace), so a whitespace-only stream got the misleading 'connection cut off' copy AND the client retained a never-persisted whitespace bubble", async () => {
+    // First attempt emits whitespace-only deltas then errors. The
+    // friendly-message gate MUST align with the persistence gate
+    // (buffered.trim().length === 0) — otherwise the user sees a
+    // "your reply may be incomplete" warning for a reply that was
+    // actually never written to the database (and disappears on
+    // refresh).
+    vi.mocked(callRowboatChatStream).mockImplementation(
+      fakeStreamSequences([
+        { type: "delta", text: "  " },
+        { type: "delta", text: "\n" },
+        // Use a NON-retryable error so we don't trigger the stateless
+        // retry path here (that's covered by other tests). The point
+        // of this test is the friendly-message branch on the final
+        // outcome.
+        { type: "error", message: "rowboat_http_404" }
+      ]) as never
+    );
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    const events = await readNdjson(res);
+    const last = events.at(-1) as { type: string; message: string };
+    expect(last.type).toBe("error");
+    // The describeRowboatError copy for a 404, NOT the "cut off"
+    // message — because no meaningful content reached the user.
+    expect(last.message).not.toMatch(/cut off/i);
+    // No assistant row persisted (whitespace-only never gets written).
+    const assistantAppend = vi
+      .mocked(appendMessage)
+      .mock.calls.find((c) => c[1] === "assistant");
+    expect(assistantAppend).toBeUndefined();
+  });
+
   it("only retries ONCE — no infinite loop when both calls fail with retryable errors", async () => {
     vi.mocked(callRowboatChatStream).mockImplementation(
       fakeStreamSequences(

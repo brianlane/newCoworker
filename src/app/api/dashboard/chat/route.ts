@@ -896,19 +896,30 @@ function createDashboardChatStream(input: StreamPipelineInput): ReadableStream<U
         }
 
         if (lastError) {
-          // Pre-token errors → friendly copy from describeRowboatError.
-          // Post-token errors → tell the user the connection cut off,
-          // their reply may be incomplete, and to retry.
-          const friendly =
-            deltasEmitted === 0
-              ? describeRowboatError(new Error(lastError.message))
-              : "Connection cut off — your reply may be incomplete. Please try again.";
+          // Pre-meaningful-content errors → friendly copy from
+          // describeRowboatError ("didn't produce a reply", etc).
+          // Post-meaningful-content errors → tell the user the
+          // connection cut off, their reply may be incomplete.
+          //
+          // Cursor Bugbot Low on PR #76 commit e722c7d: pre-fix the
+          // gate was `deltasEmitted === 0`, which treated whitespace-
+          // only deltas as "user already saw content" and showed the
+          // misleading "Connection cut off" message. The persistence
+          // gate above uses `buffered.trim().length === 0` — these
+          // two gates MUST stay aligned, otherwise the user sees a
+          // "your reply may be incomplete" warning for a reply that
+          // was actually never persisted (and disappears on refresh).
+          const sawMeaningfulContent = buffered.trim().length > 0;
+          const friendly = sawMeaningfulContent
+            ? "Connection cut off — your reply may be incomplete. Please try again."
+            : describeRowboatError(new Error(lastError.message));
           logger.warn("dashboard chat: rowboat stream failed", {
             businessId: input.businessId,
             threadId: input.thread.id,
             errorMessage: lastError.message,
             retriedStateless,
-            deltasEmitted
+            deltasEmitted,
+            sawMeaningfulContent
           });
           writeLine({
             type: "error",

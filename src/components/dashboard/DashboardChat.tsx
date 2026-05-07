@@ -361,19 +361,25 @@ export function DashboardChat({ businessId, businessName }: Props) {
           ]);
         }
       } else if (ev.type === "delta") {
-        // Mark the moment the user sees content. The error/partial
-        // branches below use this — NOT `assistantBubbleInserted` —
-        // to decide whether to preserve the bubble (because the
-        // owner is mid-read and yanking it is jarring) vs tear it
-        // down (because the bubble has only ever been an empty
-        // placeholder).
+        // Mark the moment the user sees MEANINGFUL content. The
+        // error / partial-stream branches below use this — NOT
+        // `assistantBubbleInserted` — to decide whether to preserve
+        // the bubble (because the owner is mid-read and yanking it
+        // is jarring) vs tear it down (because the bubble has only
+        // ever been an empty placeholder, or whitespace).
         //
-        // Note: ev.content can be an empty string in theory if a
-        // future Rowboat path emits a zero-length delta; only flip
-        // the flag when we've actually appended something visible
-        // so an upstream bug emitting empty deltas doesn't trick us
-        // into preserving an empty bubble on a subsequent error.
-        if (ev.content.length > 0) firstDeltaRendered = true;
+        // Cursor Bugbot Low on PR #76 commit e722c7d: trim before
+        // testing length. Pre-fix this was `length > 0`, but a
+        // whitespace-only stream (Rowboat emits a leading "\n\n"
+        // and then errors) would flip the flag, the server's
+        // post-error friendly-message gate uses
+        // `buffered.trim().length === 0` (so it surfaces a
+        // pre-meaningful-content error), and the bubble was never
+        // persisted server-side. Mismatched gates left a whitespace
+        // bubble visible until refresh. Aligning on "trimmed
+        // non-empty == meaningful content" keeps server and client
+        // in lockstep.
+        if (ev.content.trim().length > 0) firstDeltaRendered = true;
         // Streaming append. Find the in-flight bubble by stable local
         // id — locating by index would race against React's reconciler
         // batching multiple deltas in a single tick.
