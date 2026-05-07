@@ -377,17 +377,35 @@ export function DashboardChat({ businessId, businessName }: Props) {
         void fetchThreads();
       } else if (ev.type === "error") {
         streamErrored = true;
-        // On error: drop the optimistic user message + the in-flight
-        // assistant bubble and restore the textarea. The server has
-        // not persisted the assistant turn (and may or may not have
-        // persisted the user turn — either way a fresh send replaces
-        // whatever it kept). Restoring the textarea matches the
-        // pre-streaming UX so the owner can edit-and-resend in one
-        // click.
-        setMessages((prev) =>
-          prev.filter((m) => m.id !== optimisticUserId && m.id !== inflightAssistantId)
-        );
-        setInput(trimmed);
+        // Branching mirrors the post-loop "stream closed without
+        // done/error" handler below (Cursor Bugbot Medium on PR #76
+        // commit 0a93c73): both branches handle the same conceptual
+        // scenario — a stream interruption where the user has either
+        // (a) seen partial assistant content already, or (b) hasn't.
+        // Pre-fix this handler unconditionally yanked the in-flight
+        // bubble even when deltas had already been displayed, which
+        // looked like content the owner was actively reading
+        // disappearing. The server has not persisted the assistant
+        // turn either way, so we never need to keep the bubble for
+        // database-consistency reasons — only for UX.
+        if (!assistantBubbleInserted) {
+          // No deltas were ever rendered. Safe to drop the optimistic
+          // user message + the (never-shown) in-flight assistant
+          // placeholder and restore the textarea so the owner can
+          // edit-and-resend in one click. Matches the pre-streaming
+          // UX exactly.
+          setMessages((prev) =>
+            prev.filter((m) => m.id !== optimisticUserId && m.id !== inflightAssistantId)
+          );
+          setInput(trimmed);
+        }
+        // If deltas WERE rendered, leave the optimistic user message
+        // and the partial assistant bubble in place — the owner saw
+        // those tokens, yanking them mid-read is jarring. We do NOT
+        // restore the textarea here for the same reason as the
+        // post-loop branch: the user's message is on the server (we
+        // received `meta`), and a re-send would create a duplicate
+        // user turn. Owner can re-ask if they want the full answer.
         setError(ev.message);
       }
     };
