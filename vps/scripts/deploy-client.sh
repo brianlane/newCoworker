@@ -443,14 +443,82 @@ WORKFLOW_JSON=$(jq -nc \
     controlType: "retain",
     model: $model,
     ragK: 3,
-    ragReturnType: "chunks"
+    ragReturnType: "chunks",
+    # Phase 5 cross-channel customer-memory tools. Declared at the agent
+    # level so the SMS dispatcher (Ollama-backed) can invoke them in the
+    # same way the voice path already does via Gemini Live (see
+    # vps/voice-bridge/src/gemini-telnyx-bridge.ts:buildVoiceToolDeclarations).
+    # The bridge advertises them to Gemini Live directly; this entry is
+    # the gating layer for the Rowboat-mediated SMS path.
+    tools: [
+      "customer_lookup_by_phone",
+      "customer_set_display_name",
+      "customer_append_pinned_note"
+    ]
   }],
   prompts: [{
     name: "baseline",
     type: "base_prompt",
     prompt: "Owner-facing assistant for \($name)."
   }],
-  tools: [],
+  # Workflow-level tool registry. Each entry maps the tool name advertised
+  # to the LLM to the platform Next.js adapter that fulfils it. Keep this
+  # in lockstep with vps/voice-bridge/src/gemini-telnyx-bridge.ts:voiceToolPath.
+  # NOTE: descriptions are deliberately apostrophe-free because the
+  # surrounding bash heredoc opens this jq filter with single quotes;
+  # any embedded apostrophe would close the literal early.
+  tools: [
+    {
+      name: "customer_lookup_by_phone",
+      description: "Look up the cross-channel customer profile (display name, rolling summary, last channel/date, total interaction count) for a caller phone number. Defaults to the current caller phone when called without args.",
+      parameters: {
+        type: "object",
+        properties: {
+          phone: {
+            type: "string",
+            description: "E.164 phone to look up. Omit to use the current caller phone."
+          }
+        },
+        required: []
+      }
+    },
+    {
+      name: "customer_set_display_name",
+      description: "Persist the caller name on their customer profile so future calls/SMS recognize them. Will not overwrite a name the owner already set from the dashboard.",
+      parameters: {
+        type: "object",
+        properties: {
+          displayName: {
+            type: "string",
+            description: "The caller name as heard. Will be normalized server-side."
+          },
+          phone: {
+            type: "string",
+            description: "E.164 phone to attribute the name to. Omit for the current caller."
+          }
+        },
+        required: ["displayName"]
+      }
+    },
+    {
+      name: "customer_append_pinned_note",
+      description: "Append a permanent fact to this customer pinned notes (e.g. allergies, scheduling constraints). The note survives every future summary. Use sparingly.",
+      parameters: {
+        type: "object",
+        properties: {
+          note: {
+            type: "string",
+            description: "The fact to pin, in the caller words. Keep concise."
+          },
+          phone: {
+            type: "string",
+            description: "E.164 phone to attribute the note to. Omit for the current caller."
+          }
+        },
+        required: ["note"]
+      }
+    }
+  ],
   startAgent: "Coworker",
   lastUpdatedAt: $now
 }')
