@@ -21,6 +21,8 @@ import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
+import { callSmsRowboatWithStatelessFallback } from "../_shared/sms_rowboat.ts";
+import { buildCustomerPreambleForEdge, type EdgeCustomerMemoryRow } from "../_shared/customer_memory_preamble.ts";
 
 const MAX_ATTEMPTS = 8;
 const NCW_IDEM_TAG_PREFIX = "ncw_idem:";
@@ -34,6 +36,19 @@ const NCW_IDEM_TAG_PREFIX = "ncw_idem:";
 // Edge-function ceiling is ~150s so we have plenty of budget; 60s gives
 // the model headroom while still bounding a stuck VPS.
 const ROWBOAT_CHAT_TIMEOUT_MS = 60_000;
+
+// Combined wall-clock budget across the initial Rowboat /chat call AND
+// the optional stateless retry. Sized against the pg_cron HTTP cap of
+// 90s (see migrations/20260505180000_sms_inbound_worker_cron_timeout.sql)
+// minus a 10s reserve for Telnyx send + DB writes + telemetry that
+// runs after Rowboat returns. Without this, a slow first failure
+// (~60s timeoutMs) plus a fresh full-window retry could push total
+// Rowboat wall time to ~120s — well past the 90s cron cap, so
+// pg_cron disconnects, the outbound never goes out, and the job sits
+// at 'processing' until the stale-claim recovery requeues it.
+// (Codex P1 / Cursor Bugbot Medium feedback on PR #74.)
+const ROWBOAT_RETRY_BUDGET_MS = 80_000;
+
 
 /** Best-effort: Telnyx list-messages filter may vary by API version — safe to return null. */
 async function telnyxTryRecoverOutboundMessageId(apiKey: string, idem: string): Promise<string | null> {
@@ -70,20 +85,6 @@ function inboundPayloadText(p: Record<string, unknown>): string {
   return "";
 }
 
-function assistantFromRowboat(json: unknown): string {
-  const o = json as {
-    turn?: { output?: Array<{ role?: string; content?: string | null }> };
-    conversationId?: string;
-  };
-  const outs = o.turn?.output ?? [];
-  for (const m of outs) {
-    if (m.role === "assistant" && typeof m.content === "string" && m.content.trim()) {
-      return m.content.trim();
-    }
-  }
-  return "";
-}
-
 async function clearJobReplyCache(
   supabase: ReturnType<typeof createClient>,
   jobId: string
@@ -92,22 +93,6 @@ async function clearJobReplyCache(
     .from("sms_inbound_jobs")
     .update({ rowboat_reply_cached: null, updated_at: new Date().toISOString() })
     .eq("id", jobId);
-}
-
-function parseRowboatChatJson(json: unknown): {
-  reply: string;
-  conversationId?: string;
-  state: unknown | undefined;
-  hasStateKey: boolean;
-} {
-  const o = json as { conversationId?: string; state?: unknown };
-  const hasStateKey = json !== null && typeof json === "object" && Object.prototype.hasOwnProperty.call(json, "state");
-  return {
-    reply: assistantFromRowboat(json),
-    conversationId: o.conversationId,
-    state: hasStateKey ? o.state : undefined,
-    hasStateKey
-  };
 }
 
 serve(async (req: Request) => {
@@ -362,57 +347,63 @@ serve(async (req: Request) => {
 
     const thread = threadRow as ThreadRow | null;
 
+    // Phase 3: customer memory preamble. Pulled from the cross-channel
+    // rollup so SMS replies see the same context as voice + dashboard.
+    // Cheap if the row doesn't exist (single indexed lookup); preamble
+    // is null when there's no summary/pinned content yet, which keeps
+    // first-contact SMS exactly as it was pre-Phase-3 (no empty
+    // "Customer profile:" header in the prompt).
+    const { data: memoryRow } = await supabase
+      .from("customer_memories")
+      .select(
+        "customer_e164, display_name, summary_md, pinned_md, " +
+          "total_interaction_count, last_channel, last_interaction_at"
+      )
+      .eq("business_id", job.business_id)
+      .eq("customer_e164", fromE164)
+      .maybeSingle();
+    const customerPreamble =
+      memoryRow == null
+        ? null
+        : buildCustomerPreambleForEdge(memoryRow as EdgeCustomerMemoryRow);
+
     let convId: string | undefined;
     let reply = (job.rowboat_reply_cached ?? "").trim();
 
     try {
       if (!reply) {
-        const chatBody: Record<string, unknown> = {
-          messages: [{ role: "user", content: `[SMS] ${userText}` }],
-          stream: false
-        };
-        const existingConv = thread?.rowboat_conversation_id?.trim();
-        if (existingConv) {
-          chatBody.conversationId = existingConv;
-          if (thread != null && thread.rowboat_state != null) {
-            chatBody.state = thread.rowboat_state;
-          }
-        }
-
-        const chatAbort = new AbortController();
-        const chatTimer = setTimeout(() => chatAbort.abort(), ROWBOAT_CHAT_TIMEOUT_MS);
-        let chatRes: Response;
-        try {
-          chatRes = await fetch(chatUrl, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${bearer}`
-            },
-            body: JSON.stringify(chatBody),
-            signal: chatAbort.signal
-          });
-        } catch (fetchErr) {
-          if (chatAbort.signal.aborted) {
-            throw new Error("rowboat_timeout");
-          }
-          throw fetchErr;
-        } finally {
-          clearTimeout(chatTimer);
-        }
-        if (!chatRes.ok) {
-          throw new Error(`rowboat_http_${chatRes.status}`);
-        }
-        const chatJson = await chatRes.json();
-        const parsed = parseRowboatChatJson(chatJson);
+        const existingConv = thread?.rowboat_conversation_id?.trim() ?? null;
+        const parsed = await callSmsRowboatWithStatelessFallback({
+          chatUrl,
+          bearer,
+          userText,
+          conversationId: existingConv,
+          state: thread?.rowboat_state ?? null,
+          timeoutMs: ROWBOAT_CHAT_TIMEOUT_MS,
+          // Cap the combined initial+retry wall time under the 90s
+          // pg_cron HTTP timeout (see ROWBOAT_RETRY_BUDGET_MS).
+          budgetMs: ROWBOAT_RETRY_BUDGET_MS,
+          customerPreamble
+        });
         reply = parsed.reply;
-        if (!reply) {
-          throw new Error("rowboat_empty_assistant");
-        }
 
-        const stableConvId = (parsed.conversationId ?? existingConv ?? "").trim();
+        // When the stateless retry fired, Rowboat treated this turn as
+        // a fresh conversation — its response carries a NEW
+        // conversationId. We must NOT preserve the stale `existingConv`
+        // here; doing so would replay the same fail-then-retry cycle
+        // on every subsequent SMS until the model evicts again.
+        // (Same-shape bug as Cursor Bugbot Low on PR #71's dashboard
+        // chat retry path.)
+        const stableConvId = parsed.retriedStateless
+          ? (parsed.conversationId ?? "").trim()
+          : (parsed.conversationId ?? existingConv ?? "").trim();
         if (stableConvId) {
-          let nextState: unknown | null = thread?.rowboat_state ?? null;
+          // On a stateless retry, drop whatever state was paired with
+          // the now-evicted continuation. Otherwise carry the existing
+          // state forward unless Rowboat returned a new value.
+          let nextState: unknown | null = parsed.retriedStateless
+            ? null
+            : thread?.rowboat_state ?? null;
           if (parsed.hasStateKey) {
             nextState = parsed.state ?? null;
           }
@@ -429,19 +420,74 @@ serve(async (req: Request) => {
           if (threadErr) {
             console.error("sms_rowboat_threads upsert", threadErr);
           }
+        } else if (parsed.retriedStateless) {
+          // Stateless retry succeeded but Rowboat didn't echo a fresh
+          // conversationId. Clear the stored row anyway — the existing
+          // conversationId is known-stale (we just proved that by
+          // succeeding without it). Leaving it would re-run the
+          // fail-then-retry on the next SMS.
+          await supabase
+            .from("sms_rowboat_threads")
+            .delete()
+            .eq("business_id", job.business_id)
+            .eq("customer_e164", fromE164);
         }
 
-        convId = (stableConvId || parsed.conversationId || existingConv || "").trim() || undefined;
+        // When the stateless retry succeeded WITHOUT a fresh
+        // conversationId from Rowboat, the existing conversationId is
+        // known-stale (the retry just proved that by succeeding
+        // without it). Falling back to existingConv here would persist
+        // the stale ID via complete_sms_inbound_job_done, advertising
+        // a known-invalid continuation on the completed job record
+        // (Cursor Bugbot Low on PR #74). Leave convId undefined in
+        // that case so the job row's rowboat_conversation_id is set
+        // to NULL, matching the sms_rowboat_threads delete above.
+        convId = parsed.retriedStateless
+          ? (stableConvId || (parsed.conversationId ?? "").trim() || undefined)
+          : (stableConvId || (parsed.conversationId ?? "").trim() || existingConv || undefined);
 
+        // Denormalize the normalized customer E.164 onto the job row
+        // so the customers page (Phase 4) + nightly cross-channel
+        // summarizer (Phase 2 batch) can query per-customer SMS
+        // history without scanning the JSONB payload. Bundled into
+        // the same UPDATE as rowboat_reply_cached to avoid an extra
+        // round-trip per job.
         const { error: cacheErr } = await supabase
           .from("sms_inbound_jobs")
           .update({
             rowboat_reply_cached: reply,
+            customer_e164: fromE164,
             updated_at: new Date().toISOString()
           })
           .eq("id", job.id);
         if (cacheErr) {
           console.error("rowboat_reply_cached", cacheErr);
+        }
+
+        // Phase 3 write side: bump the customer memory counters in a
+        // single round trip. The summarizer is NOT invoked here —
+        // post-interaction summarization runs from the nightly cron
+        // sweep (Phase 2 batch) so it never preempts the live SMS
+        // path. Owner-confirmed gating: 3-interaction threshold +
+        // 30s debounce + low-priority queue.
+        const { error: memErr } = await supabase.rpc("record_customer_interaction", {
+          p_business_id: job.business_id,
+          p_customer_e164: fromE164,
+          p_channel: "sms",
+          p_display_name: null
+        });
+        if (memErr) {
+          // Memory tracking is best-effort — a degraded customer page
+          // is acceptable; failing the SMS reply because we couldn't
+          // bump a counter is not.
+          console.error("record_customer_interaction (sms)", memErr);
+        }
+
+        if (parsed.retriedStateless) {
+          await telemetryRecord(supabase, "sms_worker_rowboat_stateless_retry", {
+            job_id: job.id,
+            business_id: job.business_id
+          });
         }
       } else {
         convId = thread?.rowboat_conversation_id;

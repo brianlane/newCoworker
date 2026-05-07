@@ -42,6 +42,15 @@ vi.mock("@/lib/dashboard-chat/summarizer", () => ({
   summarizeThreadAndLog: vi.fn()
 }));
 
+vi.mock("@/lib/customer-memory/db", () => ({
+  // listCustomerMemories is the only thing the route currently
+  // imports from this module. Default to an empty list so existing
+  // tests don't get an unexpected "recent customers" preamble in
+  // their Rowboat call assertions; tests that exercise Phase 4
+  // override per-call.
+  listCustomerMemories: vi.fn(async () => [])
+}));
+
 const supabaseFlagsStub = {
   from: vi.fn(),
   select: vi.fn(),
@@ -74,6 +83,7 @@ import {
   shouldSummarize,
   summarizeThreadAndLog
 } from "@/lib/dashboard-chat/summarizer";
+import { listCustomerMemories } from "@/lib/customer-memory/db";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const OTHER_BIZ = "22222222-2222-4222-8222-222222222222";
@@ -235,30 +245,36 @@ describe("POST /api/dashboard/chat — threadId path (continue any thread)", () 
 });
 
 describe("POST /api/dashboard/chat — summary preamble", () => {
-  it("prepends summary_md as a system message when present", async () => {
+  it("includes summary_md as a system message when present", async () => {
     vi.mocked(getOrCreateActiveThread).mockResolvedValueOnce({
       ...ACTIVE_THREAD,
       summary_md: "earlier: discussed pricing tiers"
     } as never);
     await POST(jsonRequest({ businessId: BIZ, message: "and now?" }));
     const sent = vi.mocked(callRowboatChat).mock.calls[0][0].messages;
-    // System preamble must be first so the model anchors on it before
-    // the recent-turn tail and the new user message.
-    expect(sent[0]).toEqual({
-      role: "system",
-      content: "Conversation summary so far:\n\nearlier: discussed pricing tiers"
+    // OWNER_PREAMBLE is always first (pins the owner-vs-customer
+    // persona — see route.ts). The summary is the next system slot.
+    const summaryMsg = sent.find(
+      (m) => m.role === "system" && m.content.includes("Conversation summary so far")
+    );
+    expect(summaryMsg?.content).toContain("earlier: discussed pricing tiers");
+    expect(sent[sent.length - 1]).toEqual({
+      role: "user",
+      content: "[Dashboard] and now?"
     });
-    expect(sent[sent.length - 1]).toEqual({ role: "user", content: "and now?" });
   });
 
-  it("does NOT prepend a system message when summary_md is null/empty/whitespace", async () => {
+  it("does NOT include a summary system message when summary_md is null/empty/whitespace", async () => {
     vi.mocked(getOrCreateActiveThread).mockResolvedValueOnce({
       ...ACTIVE_THREAD,
       summary_md: "   "
     } as never);
     await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
     const sent = vi.mocked(callRowboatChat).mock.calls[0][0].messages;
-    expect(sent[0].role).not.toBe("system");
+    const summaryMsg = sent.find(
+      (m) => m.role === "system" && m.content.includes("Conversation summary so far")
+    );
+    expect(summaryMsg).toBeUndefined();
   });
 });
 
@@ -291,10 +307,16 @@ describe("POST /api/dashboard/chat — Rowboat input contract (no plain assistan
   it("on a thread WITH continuation, omits the local tail entirely on the initial call (Rowboat already has it server-side)", async () => {
     vi.mocked(listMessages).mockResolvedValueOnce(HISTORY_TAIL as never);
     await POST(jsonRequest({ businessId: BIZ, message: "and now?" }));
-    // Only the new user turn — no summary (none set), no tail
-    // transcript (continuation carries it), no prior turns replayed.
+    // The OWNER_PREAMBLE system message is always first; otherwise the
+    // initial-with-continuation call carries only the new user turn.
     const sent = vi.mocked(callRowboatChat).mock.calls[0][0].messages;
-    expect(sent).toEqual([{ role: "user", content: "and now?" }]);
+    const userMsgs = sent.filter((m) => m.role === "user");
+    expect(userMsgs).toEqual([{ role: "user", content: "[Dashboard] and now?" }]);
+    // Exactly one system msg (OWNER_PREAMBLE) — no summary (none set),
+    // no tail transcript (continuation carries it), no prior turns replayed.
+    expect(sent.filter((m) => m.role === "system")).toHaveLength(1);
+    expect(sent[0]?.role).toBe("system");
+    expect(sent[0]?.content).toContain("OWNER MODE");
   });
 
   it("on a stateless RETRY, replays the tail as a single system transcript so the model still has continuity", async () => {
@@ -309,13 +331,19 @@ describe("POST /api/dashboard/chat — Rowboat input contract (no plain assistan
       } as never);
     await POST(jsonRequest({ businessId: BIZ, message: "and now?" }));
     const retryMessages = vi.mocked(callRowboatChat).mock.calls[1][0].messages;
-    // Two messages: the synthesized recent-context system message,
-    // then the new user turn. No assistant role, no plain raw replay.
-    expect(retryMessages).toHaveLength(2);
+    // Three messages: OWNER_PREAMBLE, the synthesized recent-context
+    // system message, then the new user turn. No assistant role, no
+    // plain raw replay.
+    expect(retryMessages).toHaveLength(3);
     expect(retryMessages[0].role).toBe("system");
-    expect(retryMessages[0].content).toContain("[Owner]: What's your purpose?");
-    expect(retryMessages[0].content).toContain("[Coworker]: My purpose is to assist you");
-    expect(retryMessages[1]).toEqual({ role: "user", content: "and now?" });
+    expect(retryMessages[0].content).toContain("OWNER MODE");
+    expect(retryMessages[1].role).toBe("system");
+    expect(retryMessages[1].content).toContain("[Owner]: What's your purpose?");
+    expect(retryMessages[1].content).toContain("[Coworker]: My purpose is to assist you");
+    expect(retryMessages[2]).toEqual({
+      role: "user",
+      content: "[Dashboard] and now?"
+    });
     expect(retryMessages.some((m) => m.role === "assistant")).toBe(false);
   });
 
@@ -328,10 +356,57 @@ describe("POST /api/dashboard/chat — Rowboat input contract (no plain assistan
     vi.mocked(listMessages).mockResolvedValueOnce(HISTORY_TAIL as never);
     await POST(jsonRequest({ businessId: BIZ, message: "and now?" }));
     const sent = vi.mocked(callRowboatChat).mock.calls[0][0].messages;
-    expect(sent).toHaveLength(2);
+    // OWNER_PREAMBLE + tail transcript + new user turn = 3 messages.
+    expect(sent).toHaveLength(3);
     expect(sent[0].role).toBe("system");
-    expect(sent[0].content).toContain("[Coworker]:");
-    expect(sent[1]).toEqual({ role: "user", content: "and now?" });
+    expect(sent[0].content).toContain("OWNER MODE");
+    expect(sent[1].role).toBe("system");
+    expect(sent[1].content).toContain("[Coworker]:");
+    expect(sent[2]).toEqual({ role: "user", content: "[Dashboard] and now?" });
+  });
+});
+
+describe("POST /api/dashboard/chat — OWNER_PREAMBLE persona pin", () => {
+  // The bug being pinned: without an OWNER_PREAMBLE system message,
+  // the per-tenant Rowboat agent (whose persona is built for inbound
+  // customer conversations) treated dashboard chat messages as if
+  // they came from a customer — see PR #74 screenshot where the
+  // owner asked "has anyone reached out about a home?" and the
+  // agent replied with the lead-intake script ("share your contact
+  // details, property address, timeline...").
+
+  it("includes OWNER_PREAMBLE as the FIRST system message on every call", async () => {
+    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    const sent = vi.mocked(callRowboatChat).mock.calls[0][0].messages;
+    expect(sent[0].role).toBe("system");
+    expect(sent[0].content).toContain("OWNER MODE");
+    expect(sent[0].content).toContain(
+      "You are talking to the business OWNER"
+    );
+    expect(sent[0].content).toContain("NOT a customer");
+  });
+
+  it("includes [Dashboard] channel marker on the user message — defense in depth alongside OWNER_PREAMBLE", async () => {
+    await POST(jsonRequest({ businessId: BIZ, message: "what was Joe asking about?" }));
+    const sent = vi.mocked(callRowboatChat).mock.calls[0][0].messages;
+    const userMsg = sent[sent.length - 1];
+    expect(userMsg.role).toBe("user");
+    expect(userMsg.content).toBe("[Dashboard] what was Joe asking about?");
+  });
+
+  it("OWNER_PREAMBLE survives a stateless retry — pins persona even when continuation is dropped", async () => {
+    vi.mocked(callRowboatChat)
+      .mockRejectedValueOnce(new Error("rowboat_http_400"))
+      .mockResolvedValueOnce({
+        reply: "fresh reply",
+        conversationId: "fresh-conv",
+        state: undefined,
+        hasStateKey: false
+      } as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    const retryMessages = vi.mocked(callRowboatChat).mock.calls[1][0].messages;
+    expect(retryMessages[0].role).toBe("system");
+    expect(retryMessages[0].content).toContain("OWNER MODE");
   });
 });
 
@@ -485,6 +560,75 @@ describe("POST /api/dashboard/chat — Rowboat call budget", () => {
     const retryCall = vi.mocked(callRowboatChat).mock.calls[1][0];
     expect(retryCall.timeoutMs).toBe(279_800); // 280_000 − 200
     dateNowSpy.mockRestore();
+  });
+});
+
+describe("POST /api/dashboard/chat — customer memory preamble (Phase 4)", () => {
+  // The dashboard agent needs ambient awareness of customers across SMS +
+  // voice so the owner can ask things like "what was Joe asking about?"
+  // and get a useful answer. Failure of this lookup MUST NEVER fail the
+  // chat — the route falls back to no-preamble behaviour.
+
+  it("does NOT inject a preamble when the business has no customer memories — keeps first-time owner UX unchanged", async () => {
+    vi.mocked(listCustomerMemories).mockResolvedValueOnce([]);
+    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    const callArgs = vi.mocked(callRowboatChat).mock.calls[0][0];
+    // No system message about customers. The thread summary message
+    // (when present) is the only system msg; here summary_md is null.
+    const customerSystemMsg = callArgs.messages.find(
+      (m) => m.role === "system" && m.content.includes("recent customers")
+    );
+    expect(customerSystemMsg).toBeUndefined();
+  });
+
+  it("injects a recent-customers system preamble when memories exist — agent can answer 'what was Joe asking about?'", async () => {
+    vi.mocked(listCustomerMemories).mockResolvedValueOnce([
+      {
+        id: "00000000-0000-0000-0000-0000000000aa",
+        business_id: BIZ,
+        customer_e164: "+15555550123",
+        display_name: "Joe",
+        summary_md: "Asking about garage door spring sizing",
+        pinned_md: null,
+        interaction_count: 0,
+        total_interaction_count: 4,
+        last_interaction_at: "2026-05-06T10:00:00Z",
+        last_summarized_at: "2026-05-06T10:01:00Z",
+        last_channel: "voice",
+        created_at: "2026-04-01T00:00:00Z",
+        updated_at: "2026-05-06T10:01:00Z"
+      }
+    ] as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "what was Joe asking about?" }));
+    const callArgs = vi.mocked(callRowboatChat).mock.calls[0][0];
+    const customerSystemMsg = callArgs.messages.find(
+      (m) => m.role === "system" && m.content.includes("recent customers")
+    );
+    expect(customerSystemMsg).toBeDefined();
+    expect(customerSystemMsg!.content).toContain("Joe");
+    expect(customerSystemMsg!.content).toContain("+15555550123");
+    expect(customerSystemMsg!.content).toContain("Asking about garage door spring sizing");
+    // Tells the model not to volunteer customer details — keeps every
+    // chat reply from turning into an unsolicited daily-stand-up summary.
+    expect(customerSystemMsg!.content).toContain(
+      "Do NOT proactively volunteer customer details"
+    );
+  });
+
+  it("returns a successful chat reply even when the customer memory lookup throws — degraded awareness, not a 502", async () => {
+    vi.mocked(listCustomerMemories).mockRejectedValueOnce(
+      new Error("supabase_pgrst_500")
+    );
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(res.status).toBe(200);
+    expect(vi.mocked(callRowboatChat)).toHaveBeenCalledTimes(1);
+    const callArgs = vi.mocked(callRowboatChat).mock.calls[0][0];
+    // No customer preamble was injected (lookup failed), but the
+    // chat call still went through.
+    const customerSystemMsg = callArgs.messages.find(
+      (m) => m.role === "system" && m.content.includes("recent customers")
+    );
+    expect(customerSystemMsg).toBeUndefined();
   });
 });
 

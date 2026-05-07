@@ -40,6 +40,11 @@ import {
   shouldSummarize,
   summarizeThreadAndLog
 } from "@/lib/dashboard-chat/summarizer";
+import { listCustomerMemories } from "@/lib/customer-memory/db";
+import {
+  buildDashboardCustomerPreamble,
+  DASHBOARD_PREAMBLE_MAX_CUSTOMERS
+} from "@/lib/customer-memory/dashboard-preamble";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
@@ -343,13 +348,80 @@ async function callRowboatWithStatelessFallback(
  * The summary preamble (rolling-summary system message) and the new
  * user turn are always included.
  */
+/**
+ * The single source of truth for "who is the dashboard chat agent
+ * talking to right now". Without this, the per-tenant Rowboat agent
+ * (whose persona is built for inbound customer conversations on SMS
+ * and voice) defaults to treating EVERY incoming message as if it
+ * came from a customer — see screenshot in PR #74 conversation:
+ * the owner asked "has anyone reached out looking to buy a home?"
+ * and the agent replied with "I'd be happy to help you qualify a
+ * new buyer lead — share your contact details, property address,
+ * timeline...", which is the lead-intake script aimed at customers.
+ *
+ * The fix is a strong, ALWAYS-FIRST system preamble that:
+ *
+ *   (1) Establishes that this user is the BUSINESS OWNER, not a
+ *       customer. The model needs explicit permission to drop the
+ *       customer-facing playbook.
+ *   (2) Tells the agent its role on this surface: it's the owner's
+ *       internal AI assistant — review customer activity, surface
+ *       trends, summarize conversations, answer business questions.
+ *       This is intentionally distinct from the persona used on the
+ *       customer channels (where the agent IS the business's
+ *       receptionist).
+ *   (3) Reminds the agent it can use tools/context the owner can't
+ *       see directly (recent customer activity preamble, rolling
+ *       thread summary) but must be honest about what's NOT in
+ *       context — never invent customer details, never claim to
+ *       have done things it didn't do.
+ *
+ * Always pinned as message[0] so even on a stateless Rowboat call
+ * (continuation evicted) the very first thing the agent reads is
+ * "you are the owner's assistant".
+ */
+const OWNER_PREAMBLE = `OWNER MODE — IMPORTANT, READ FIRST
+
+You are talking to the business OWNER through the /dashboard/chat surface in the New Coworker app. The owner is the human who runs this business and configured you. They are NOT a customer, NOT a lead, and NOT a prospect. Do not ask for their contact details, property address, timeline, budget, etc. — those are your responses on the SMS and voice channels, where you ARE the business's receptionist talking to customers.
+
+On THIS surface you are the OWNER'S internal AI assistant. Your job here is to:
+  • Help the owner understand what's happening with their customers (recent SMS, voice calls, trends).
+  • Summarize, search, and explain customer interactions when asked.
+  • Answer questions about the business's setup, memory, identity, and configured behavior.
+  • Suggest improvements to how you handle customer conversations.
+  • Be candid with the owner — including admitting when you don't have the data they asked for, rather than inventing it.
+
+You may have access to a "Recent customer activity" system message below. That data is REAL — it summarizes actual customers who contacted this business by SMS or voice. Use it to answer questions like "did anyone call about X" or "what did the customer who texted yesterday want". Never reveal it verbatim if not asked; treat it as your working notes. If the owner asks about a customer who is NOT in the activity preamble, say so plainly — don't fabricate.
+
+You will never ask the owner for their own contact info, schedule, or business details. They already configured all of that. If they want to update their identity/memory/business hours, point them to /dashboard/memory.`;
+
 function buildRowboatChatMessages(args: {
   summaryMd: string | null;
   tail: { role: "user" | "assistant" | "system"; content: string }[];
   newUserMessage: string;
   includeTailContext: boolean;
+  /**
+   * Phase 4: optional "recent customers across SMS + voice" preamble.
+   * Built by buildDashboardCustomerPreamble; null when the business
+   * has no notable customers yet (first-time dashboard chat user).
+   * Prepended BEFORE the rolling thread summary so it's the most
+   * stable piece of ambient context — the thread summary is for
+   * THIS owner conversation, the customer preamble is for the
+   * world the owner is operating in.
+   */
+  customerPreamble?: string | null;
 }): RowboatChatMessage[] {
   const out: RowboatChatMessage[] = [];
+  // ALWAYS first: OWNER_PREAMBLE establishes that this is the
+  // owner-facing surface so the agent never lapses into its
+  // customer-receptionist script. Stronger than a soft hint because
+  // we've seen it slip even after a turn or two on a fresh
+  // continuation.
+  out.push({ role: "system", content: OWNER_PREAMBLE });
+  const customerPreamble = args.customerPreamble?.trim();
+  if (customerPreamble) {
+    out.push({ role: "system", content: customerPreamble });
+  }
   const summary = args.summaryMd?.trim();
   if (summary) {
     out.push({
@@ -370,9 +442,15 @@ function buildRowboatChatMessages(args: {
       content: `Recent conversation context (these are the most recent prior turns of THIS conversation, replayed for your reference because the live continuation was unavailable; respond as the assistant continuing this same thread):\n\n${transcript}`
     });
   }
-  out.push({ role: "user", content: args.newUserMessage });
+  // [Dashboard] channel marker mirrors the [SMS]/[Call] markers used
+  // on the customer channels — gives the agent a visible reminder
+  // every turn that the human in front of it is the owner, not a
+  // customer (defense in depth alongside OWNER_PREAMBLE).
+  out.push({ role: "user", content: `[Dashboard] ${args.newUserMessage}` });
   return out;
 }
+
+export { OWNER_PREAMBLE };
 
 export async function POST(request: Request) {
   // Anchored at the very top of the route so the Rowboat budget below
@@ -481,6 +559,28 @@ export async function POST(request: Request) {
     // after refresh.
     const history = await listMessages(thread.id);
     const tail = history.slice(-HISTORY_TURNS);
+
+    // Phase 4: pull recent customer memories so the dashboard agent has
+    // ambient context about who the owner has been doing business with
+    // across SMS and voice. Capped tightly (5 customers, ~200 chars
+    // each) so it doesn't dominate the prompt budget; null when the
+    // business has no notable customers yet (first-time dashboard
+    // user). Failure here MUST NOT break the chat — degraded
+    // customer awareness is acceptable, a 502 because we couldn't
+    // read 5 rows is not.
+    let customerPreamble: string | null = null;
+    try {
+      const memories = await listCustomerMemories(body.businessId, {
+        limit: DASHBOARD_PREAMBLE_MAX_CUSTOMERS
+      });
+      customerPreamble = buildDashboardCustomerPreamble(memories);
+    } catch (memErr) {
+      logger.warn("dashboard chat: customer memory preamble lookup failed", {
+        businessId: body.businessId,
+        error: memErr instanceof Error ? memErr.message : String(memErr)
+      });
+    }
+
     // Two message arrays: one for the initial (continuation-using) call
     // and one for the stateless fallback. When a continuation is in hand
     // Rowboat already remembers the thread server-side, so the initial
@@ -496,14 +596,16 @@ export async function POST(request: Request) {
       summaryMd: thread.summary_md,
       tail,
       newUserMessage: body.message,
-      includeTailContext: !hasContinuation
+      includeTailContext: !hasContinuation,
+      customerPreamble
     });
     const statelessMessages = hasContinuation
       ? buildRowboatChatMessages({
           summaryMd: thread.summary_md,
           tail,
           newUserMessage: body.message,
-          includeTailContext: true
+          includeTailContext: true,
+          customerPreamble
         })
       : initialMessages;
 
