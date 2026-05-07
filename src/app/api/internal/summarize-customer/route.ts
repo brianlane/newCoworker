@@ -71,7 +71,7 @@ export async function POST(request: Request): Promise<Response> {
       businessId: body.businessId,
       customerE164: body.customerE164,
       source: body.source ?? "unknown",
-      voiceCallCount: result.voiceCallCount,
+      voiceTurnCount: result.voiceTurnCount,
       smsTurnCount: result.smsTurnCount,
       summaryChars: result.summary.length,
       durationMs
@@ -97,7 +97,7 @@ export async function POST(request: Request): Promise<Response> {
     durationMs,
     ...(result.ok
       ? {
-          voiceCallCount: result.voiceCallCount,
+          voiceTurnCount: result.voiceTurnCount,
           smsTurnCount: result.smsTurnCount,
           summaryChars: result.summary.length
         }

@@ -80,7 +80,7 @@ export type SummarizeFailureReason =
   | "db_failed";
 
 export type SummarizeResult =
-  | { ok: true; summary: string; voiceCallCount: number; smsTurnCount: number; projectId: string }
+  | { ok: true; summary: string; voiceTurnCount: number; smsTurnCount: number; projectId: string }
   | { ok: false; reason: SummarizeFailureReason; detail?: string };
 
 export type SummarizeDeps = {
@@ -325,7 +325,7 @@ export async function summarizeCustomerMemory(
   return {
     ok: true,
     summary,
-    voiceCallCount: voiceTurns.length,
+    voiceTurnCount: voiceTurns.length,
     smsTurnCount: smsHistory.length,
     projectId
   };
@@ -361,7 +361,7 @@ export async function summarizeCustomerMemoryAndLog(
       businessId,
       customerE164,
       projectId: result.projectId,
-      voiceCallCount: result.voiceCallCount,
+      voiceTurnCount: result.voiceTurnCount,
       smsTurnCount: result.smsTurnCount,
       summaryChars: result.summary.length
     });

@@ -271,7 +271,7 @@ describe("summarizeCustomerMemory", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.summary).toBe("Joe is a repeat buyer interested in garage door springs.");
-      expect(result.voiceCallCount).toBe(1);
+      expect(result.voiceTurnCount).toBe(1);
       expect(result.smsTurnCount).toBe(1);
     }
 

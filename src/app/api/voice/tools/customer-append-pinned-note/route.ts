@@ -47,10 +47,16 @@ import {
 } from "@/lib/customer-memory/db";
 import { logger } from "@/lib/logger";
 
-/** Hard cap on persisted pinned_md. Sized below the dashboard editor's
- * own cap so the agent can't fill the field on its own — owner remains
- * authoritative. */
-const PINNED_MAX_CHARS = 4000;
+/** Hard cap on persisted pinned_md. MUST match the dashboard editor's
+ * own cap (`src/components/dashboard/CustomerProfileEditor.tsx`
+ * PINNED_MAX = 2000) AND the PATCH validator
+ * (`src/app/api/dashboard/customers/[customerE164]/route.ts`
+ * `pinnedMd: z.string().max(2000)`). If the voice tool wrote past the
+ * dashboard cap, the owner would be unable to save edits to the same
+ * field through the dashboard (PATCH `.max()` rejects), making the
+ * field effectively read-only after a long enough pin sequence. Keep
+ * all three numbers in lockstep. */
+const PINNED_MAX_CHARS = 2000;
 
 const argsSchema = z.object({
   /** The new note as the agent wants it persisted. ~600 chars typical, hard 1500 cap. */

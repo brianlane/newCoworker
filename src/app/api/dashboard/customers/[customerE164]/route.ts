@@ -2,7 +2,7 @@
  * Per-customer cross-channel detail endpoint (Phase 4).
  *
  * GET    /api/dashboard/customers/:e164?businessId=<uuid>
- *          → { memory, smsHistory, voiceCallCount }
+ *          → { memory, smsHistory, voiceTurnCount }
  *
  * PATCH  /api/dashboard/customers/:e164?businessId=<uuid>
  *          body: { displayName?, pinnedMd? }

