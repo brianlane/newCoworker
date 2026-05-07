@@ -674,16 +674,38 @@ function createDashboardChatStream(input: StreamPipelineInput): ReadableStream<U
         activeThreadId: input.thread.id
       });
 
-      let buffered = "";
-      let deltasEmitted = 0;
-      let finalConversationId: string | undefined;
-      let finalState: unknown | undefined;
-      let finalHadStateKey = false;
       let retriedStateless = false;
       let lastError: { message: string } | null = null;
 
       /**
-       * Run a single Rowboat streaming call. Returns
+       * Per-attempt result returned by `runOnce`. Cursor Bugbot Low on
+       * PR #76 commit fbbbe1f: pre-fix `buffered`, `deltasEmitted`,
+       * `finalConversationId`, `finalState`, `finalHadStateKey` were
+       * declared in the outer scope and mutated by `runOnce` directly
+       * — meaning a stateless retry could in principle inherit stale
+       * metadata from the first attempt. Today the upstream generator
+       * yields errors before any metadata, so the leak doesn't trigger,
+       * but the shared mutable state across logically independent
+       * attempts is fragile. Scoping these per-attempt and returning
+       * them in the result removes the fragility entirely: the caller
+       * uses the final attempt's accumulator and the first attempt's
+       * state cannot bleed forward.
+       */
+      type RunOnceResult = {
+        buffered: string;
+        deltasEmitted: number;
+        finalConversationId: string | undefined;
+        finalState: unknown | undefined;
+        finalHadStateKey: boolean;
+        outcome:
+          | { kind: "done" }
+          | { kind: "error"; message: string; retryable: boolean };
+      };
+
+      /**
+       * Run a single Rowboat streaming call. Returns the per-attempt
+       * accumulator (buffered text, delta count, final conversation
+       * metadata) along with an outcome:
        *   - { kind: "done" } on graceful completion
        *   - { kind: "error", message, retryable } on upstream failure
        *
@@ -694,7 +716,23 @@ function createDashboardChatStream(input: StreamPipelineInput): ReadableStream<U
       const runOnce = async (
         messages: RowboatChatMessage[],
         useContinuation: boolean
-      ): Promise<{ kind: "done" } | { kind: "error"; message: string; retryable: boolean }> => {
+      ): Promise<RunOnceResult> => {
+        let buffered = "";
+        let deltasEmitted = 0;
+        let finalConversationId: string | undefined;
+        let finalState: unknown | undefined;
+        let finalHadStateKey = false;
+        const pack = (
+          outcome: RunOnceResult["outcome"]
+        ): RunOnceResult => ({
+          buffered,
+          deltasEmitted,
+          finalConversationId,
+          finalState,
+          finalHadStateKey,
+          outcome
+        });
+
         let stream: AsyncGenerator<RowboatStreamEvent>;
         try {
           stream = callRowboatChatStream({
@@ -714,7 +752,7 @@ function createDashboardChatStream(input: StreamPipelineInput): ReadableStream<U
           // Synchronous throw from the generator constructor — extremely
           // rare (validation errors). Treat as non-retryable.
           const m = err instanceof Error ? err.message : String(err);
-          return { kind: "error", message: m, retryable: false };
+          return pack({ kind: "error", message: m, retryable: false });
         }
 
         for await (const event of stream) {
@@ -726,7 +764,7 @@ function createDashboardChatStream(input: StreamPipelineInput): ReadableStream<U
             } catch {
               /* ignore */
             }
-            return { kind: "error", message: "client_disconnected", retryable: false };
+            return pack({ kind: "error", message: "client_disconnected", retryable: false });
           }
           if (event.type === "delta") {
             buffered += event.text;
@@ -746,34 +784,48 @@ function createDashboardChatStream(input: StreamPipelineInput): ReadableStream<U
               finalState = event.state;
               finalHadStateKey = true;
             }
-            return { kind: "done" };
+            return pack({ kind: "done" });
           } else if (event.type === "error") {
             const retryable =
               STATELESS_RETRY_ERRORS.has(event.message) &&
               deltasEmitted === 0 &&
               !retriedStateless &&
               input.hasContinuation;
-            return { kind: "error", message: event.message, retryable };
+            return pack({ kind: "error", message: event.message, retryable });
           }
         }
         // Generator ended without an explicit `done`. Treat as success
         // if any text accumulated; otherwise an empty-assistant error.
-        if (buffered.length > 0) return { kind: "done" };
-        return { kind: "error", message: "rowboat_empty_assistant", retryable: false };
+        if (buffered.length > 0) return pack({ kind: "done" });
+        return pack({ kind: "error", message: "rowboat_empty_assistant", retryable: false });
       };
 
       try {
         // First attempt — with continuation (if any).
-        let outcome = await runOnce(input.initialMessages, true);
-        if (outcome.kind === "error" && outcome.retryable) {
+        let result = await runOnce(input.initialMessages, true);
+        if (result.outcome.kind === "error" && result.outcome.retryable) {
           retriedStateless = true;
           logger.info("dashboard chat: retrying stateless after pre-token error", {
             businessId: input.businessId,
             threadId: input.thread.id,
-            firstError: outcome.message
+            firstError: result.outcome.message
           });
-          outcome = await runOnce(input.statelessMessages, false);
+          // Re-run with the stateless-fallback message set; result
+          // REPLACES the first-attempt result so persistence and the
+          // post-error friendly-message logic see ONLY the second
+          // attempt's accumulators. Stale metadata from the first
+          // attempt cannot bleed forward.
+          result = await runOnce(input.statelessMessages, false);
         }
+
+        const {
+          buffered,
+          deltasEmitted,
+          finalConversationId,
+          finalState,
+          finalHadStateKey,
+          outcome
+        } = result;
 
         if (outcome.kind === "error") {
           lastError = { message: outcome.message };
