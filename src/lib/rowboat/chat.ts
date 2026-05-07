@@ -457,24 +457,30 @@ export function parseRowboatStreamEvent(rawData: string): RowboatStreamParseResu
  * naturally. The route-level `maxDuration` is the only ceiling.
  */
 export async function* callRowboatChatStream(
-  input: CallRowboatChatInput | CallRowboatChatStreamInput
+  input: CallRowboatChatStreamInput
 ): AsyncGenerator<RowboatStreamEvent> {
+  // Cursor Bugbot Low on PR #76 commit 1ff78e9: pre-fix the input
+  // type was the union `CallRowboatChatInput | CallRowboatChatStreamInput`,
+  // which let a future caller pass the non-streaming shape's
+  // `timeoutMs` field — silently dropped here in favor of the 30s
+  // TTFB / 30s idle defaults. The non-streaming `callRowboatChat`
+  // and the streaming `callRowboatChatStream` have intentionally
+  // different timeout models (single hard cap vs separate TTFB +
+  // idle caps), so the union created a misleading contract. Narrow
+  // to ONLY the streaming-specific input shape so TypeScript rejects
+  // any non-streaming-shaped call at compile time.
   const {
     businessId,
     projectId,
     bearer,
     messages,
     conversationId,
-    state
+    state,
+    ttfbTimeoutMs,
+    idleTimeoutMs
   } = input;
-  const ttfbMs =
-    "ttfbTimeoutMs" in input && typeof input.ttfbTimeoutMs === "number"
-      ? input.ttfbTimeoutMs
-      : DEFAULT_ROWBOAT_STREAM_TTFB_MS;
-  const idleMs =
-    "idleTimeoutMs" in input && typeof input.idleTimeoutMs === "number"
-      ? input.idleTimeoutMs
-      : DEFAULT_ROWBOAT_STREAM_IDLE_MS;
+  const ttfbMs = ttfbTimeoutMs ?? DEFAULT_ROWBOAT_STREAM_TTFB_MS;
+  const idleMs = idleTimeoutMs ?? DEFAULT_ROWBOAT_STREAM_IDLE_MS;
 
   const url = buildRowboatChatUrl(businessId, projectId);
   const body: Record<string, unknown> = {
