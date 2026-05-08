@@ -51,6 +51,8 @@ const FAKE_STATELESS = [
   FAKE_INPUT[1]
 ];
 
+const FAKE_STATE = { agentId: "rep-1", lastTool: "search" };
+
 const ROW_FIXTURE: DashboardChatJobRow = {
   id: JOB_ID,
   business_id: BIZ,
@@ -64,6 +66,7 @@ const ROW_FIXTURE: DashboardChatJobRow = {
   input_messages: FAKE_INPUT,
   stateless_input_messages: FAKE_STATELESS,
   rowboat_conversation_id: "rb-conv",
+  rowboat_state: FAKE_STATE,
   error_code: null,
   error_detail: null,
   created_at: "2026-05-08T16:00:00Z",
@@ -87,7 +90,8 @@ describe("insertChatJob", () => {
       userMessageId: USER_MSG_ID,
       inputMessages: FAKE_INPUT,
       statelessInputMessages: FAKE_STATELESS,
-      rowboatConversationId: "rb-conv"
+      rowboatConversationId: "rb-conv",
+      rowboatState: FAKE_STATE
     });
 
     expect(row).toEqual(ROW_FIXTURE);
@@ -97,7 +101,8 @@ describe("insertChatJob", () => {
       user_message_id: USER_MSG_ID,
       input_messages: FAKE_INPUT,
       stateless_input_messages: FAKE_STATELESS,
-      rowboat_conversation_id: "rb-conv"
+      rowboat_conversation_id: "rb-conv",
+      rowboat_state: FAKE_STATE
     });
   });
 
@@ -115,12 +120,14 @@ describe("insertChatJob", () => {
       userMessageId: USER_MSG_ID,
       inputMessages: FAKE_INPUT,
       statelessInputMessages: null,
-      rowboatConversationId: null
+      rowboatConversationId: null,
+      rowboatState: null
     });
 
     const insertedPayload = c.insert.mock.calls[0][0];
     expect(insertedPayload.stateless_input_messages).toBeNull();
     expect(insertedPayload.rowboat_conversation_id).toBeNull();
+    expect(insertedPayload.rowboat_state).toBeNull();
   });
 
   it("throws when supabase returns an error — caller can rely on a thrown Error to surface as a 500", async () => {
@@ -135,7 +142,8 @@ describe("insertChatJob", () => {
         userMessageId: USER_MSG_ID,
         inputMessages: FAKE_INPUT,
         statelessInputMessages: null,
-        rowboatConversationId: null
+        rowboatConversationId: null,
+        rowboatState: null
       })
     ).rejects.toThrow(/insertChatJob.*boom/);
   });
@@ -182,6 +190,7 @@ describe("serializeChatJobStatus", () => {
     expect(out).not.toHaveProperty("claimed_at");
     expect(out).not.toHaveProperty("attempts");
     expect(out).not.toHaveProperty("rowboat_conversation_id");
+    expect(out).not.toHaveProperty("rowboat_state");
     expect(out).not.toHaveProperty("business_id");
   });
 

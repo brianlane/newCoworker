@@ -68,6 +68,19 @@
 //                                  reclaim our own in-flight job)
 //   WORKER_MAX_ATTEMPTS           (default 3 — hard cap on retries before
 //                                  marking a job permanently errored)
+//   WORKER_VERCEL_BASE_URL        (e.g. https://newcoworker.com — when set
+//                                  AND WORKER_VERCEL_BEARER is set, the
+//                                  worker fires a fire-and-forget POST to
+//                                  /api/internal/dashboard-chat-summarize
+//                                  after each successful job so the rolling
+//                                  thread summary picks up the just-written
+//                                  assistant turn. Optional: skipping this
+//                                  env pair is equivalent to "summaries
+//                                  never refresh from this worker"; the
+//                                  next turn re-evaluates shouldSummarize
+//                                  on whichever side runs the trigger.)
+//   WORKER_VERCEL_BEARER          (matches Vercel's INTERNAL_CRON_SECRET;
+//                                  see assertCronAuth in src/lib/cron-auth.ts)
 
 import { createClient } from "@supabase/supabase-js";
 
@@ -82,6 +95,15 @@ const STALE_CLAIM_MS = intEnv("WORKER_STALE_CLAIM_MS", 5 * 60 * 1000);
 const SWEEP_INTERVAL_MS = intEnv("WORKER_SWEEP_INTERVAL_MS", 30 * 1000);
 const ROWBOAT_TIMEOUT_MS = intEnv("WORKER_ROWBOAT_TIMEOUT_MS", 4 * 60 * 1000);
 const MAX_ATTEMPTS = intEnv("WORKER_MAX_ATTEMPTS", 3);
+const VERCEL_BASE_URL = (process.env.WORKER_VERCEL_BASE_URL || "").replace(/\/+$/, "");
+const VERCEL_BEARER = process.env.WORKER_VERCEL_BEARER || "";
+// Cap how long we'll let the summarizer callback hold an open
+// connection. We don't await the response, but we DO want bounded
+// resource usage if Vercel hangs — node's default fetch keeps the
+// socket open until the server closes it. 10s is well above the
+// route's typical 200-500ms shouldSummarize miss case and the 3-15s
+// summarizer hit case.
+const SUMMARIZE_CALLBACK_TIMEOUT_MS = 10_000;
 
 // Sanity check: if a worker takes longer to call Rowboat than the stale-claim
 // window allows, two workers (or this one twice) could reclaim the same job
@@ -161,10 +183,16 @@ async function loadHistoryFallback(threadId) {
   return (data || []).map((m) => ({ role: m.role, content: m.content }));
 }
 
-async function callRowboat(messages, conversationId) {
+async function callRowboat(messages, conversationId, state) {
   const url = `${ROWBOAT_BASE_URL}/api/v1/${ROWBOAT_PROJECT_ID}/chat`;
   const body = { messages, stream: false };
   if (conversationId) body.conversationId = conversationId;
+  // `state` is Rowboat's client-carried per-conversation tool/agent
+  // state from the previous turn. Forwarding it lets Rowboat resume
+  // multi-turn tool loops without re-asking. Null on fresh threads
+  // and on stateless retries (those go without conversationId AND
+  // without state by design).
+  if (state !== null && state !== undefined) body.state = state;
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), ROWBOAT_TIMEOUT_MS);
   try {
@@ -203,11 +231,62 @@ async function callRowboat(messages, conversationId) {
     if (!assistant) {
       throw new Error("rowboat_empty_assistant:no assistant content in turn.output");
     }
+    // Rowboat may omit `state` entirely on turns that didn't run a
+    // tool / change agent state. We distinguish "key absent"
+    // (preserve whatever we had) from "key present and null"
+    // (clear it) the same way src/lib/rowboat/chat.ts does — by
+    // checking own-property presence on the parsed object.
+    const stateKey =
+      parsed !== null &&
+      typeof parsed === "object" &&
+      Object.prototype.hasOwnProperty.call(parsed, "state");
     return {
       content: assistant.content,
       conversationId:
-        typeof parsed?.conversationId === "string" ? parsed.conversationId : null
+        typeof parsed?.conversationId === "string" ? parsed.conversationId : null,
+      state: stateKey ? parsed.state : undefined
     };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Fire-and-forget callback to Vercel after a job successfully
+// persists an assistant message. The endpoint runs shouldSummarize +
+// summarizeThread internally; we don't care about its return value.
+// Bounded by SUMMARIZE_CALLBACK_TIMEOUT_MS so a hung Vercel can't
+// keep a socket open. Errors are logged at warn (not failure) — the
+// next turn's callback re-evaluates shouldSummarize, so a missed
+// callback self-heals.
+async function notifyVercelSummarize(businessId, threadId) {
+  if (!VERCEL_BASE_URL || !VERCEL_BEARER) {
+    // Worker is deployed without summarizer plumbing — nothing to do.
+    return;
+  }
+  const url = `${VERCEL_BASE_URL}/api/internal/dashboard-chat-summarize`;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), SUMMARIZE_CALLBACK_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${VERCEL_BEARER}`
+      },
+      body: JSON.stringify({ businessId, threadId }),
+      signal: ctl.signal
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      log("warn", "summarize_callback_non_2xx", {
+        threadId,
+        status: res.status,
+        detail: detail.slice(0, 200)
+      });
+    }
+  } catch (err) {
+    const reason = ctl.signal.aborted ? "timeout" : err?.message || "fetch failed";
+    log("warn", "summarize_callback_failed", { threadId, reason });
   } finally {
     clearTimeout(timer);
   }
@@ -283,12 +362,20 @@ async function processJob(job) {
       ? job.stateless_input_messages
       : null;
 
-    // ATTEMPT 1: input_messages + (possibly) stored conversationId.
+    // ATTEMPT 1: input_messages + (possibly) stored conversationId
+    // + stored Rowboat state. The state is Rowboat's client-carried
+    // tool/agent state from the previous turn (see migration
+    // 20260508000004); without it, multi-turn tool loops resume blank
+    // and lose context.
     let result;
     let usedStateless = false;
     let primaryError = null;
     try {
-      result = await callRowboat(primaryMessages, job.rowboat_conversation_id);
+      result = await callRowboat(
+        primaryMessages,
+        job.rowboat_conversation_id,
+        job.rowboat_state ?? null
+      );
     } catch (err) {
       primaryError = err;
       const code = String(err?.message || "").split(":")[0];
@@ -303,13 +390,15 @@ async function processJob(job) {
         primaryErrorCode: code,
         primaryError: String(err?.message || "").slice(0, 200)
       });
-      // ATTEMPT 2: stateless input, no conversationId. Rowboat sees a
-      // brand-new conversation that already has the tail spelled out
-      // in the system message we built upstream.
-      result = await callRowboat(fallbackMessages, null);
+      // ATTEMPT 2: stateless input, no conversationId, no state.
+      // Rowboat sees a brand-new conversation that already has the
+      // tail spelled out in the system message we built upstream.
+      // Sending the old state alongside would defeat the point of
+      // the retry (it's the same broken context).
+      result = await callRowboat(fallbackMessages, null, null);
       usedStateless = true;
     }
-    const { content, conversationId } = result;
+    const { content, conversationId, state: nextState } = result;
 
     const { data: msg, error: insertErr } = await sb
       .from("dashboard_chat_messages")
@@ -328,10 +417,23 @@ async function processJob(job) {
     const threadUpdate = { updated_at: new Date().toISOString() };
     if (usedStateless) {
       // Prefer Rowboat's freshly-issued id from the stateless attempt;
-      // if it didn't return one, blank the column.
+      // if it didn't return one, blank the column. State follows
+      // the same lifecycle as conversationId — the old state went
+      // down with the rejected conversationId.
       threadUpdate.rowboat_conversation_id = conversationId || null;
+      threadUpdate.rowboat_state = nextState ?? null;
     } else if (conversationId) {
       threadUpdate.rowboat_conversation_id = conversationId;
+      // Mirrors the old streaming-route semantics
+      // (src/lib/db/dashboard-chat.ts::updateThreadConversation):
+      //   - state === undefined  -> Rowboat omitted the key, preserve
+      //                             whatever we had (skip the column).
+      //   - state === null       -> Rowboat explicitly cleared, write
+      //                             null.
+      //   - any other value      -> persist it.
+      if (nextState !== undefined) {
+        threadUpdate.rowboat_state = nextState;
+      }
     }
     const { error: tErr } = await sb
       .from("dashboard_chat_threads")
@@ -355,6 +457,15 @@ async function processJob(job) {
       log("error", "job_update_failed", { jobId: job.id, error: jobErr.message });
       return;
     }
+
+    // Fire-and-forget rolling-summary trigger. The route used to do
+    // this synchronously after streaming, but in the Option B
+    // pipeline the route returns BEFORE the assistant turn is
+    // persisted — firing from the worker is the only place that
+    // sees both turns. We DON'T await: the job is already 'done'
+    // from the user's perspective, and the next turn's callback
+    // self-heals if this one is dropped.
+    void notifyVercelSummarize(job.business_id, job.thread_id);
 
     log("info", "process_done", {
       jobId: job.id,
@@ -419,8 +530,28 @@ async function drain() {
   if (processing) return;
   processing = true;
   try {
-    await reclaimStale();
-    await processLoop();
+    try {
+      await reclaimStale();
+      await processLoop();
+    } catch (err) {
+      // Bugbot Low-severity finding on PR #79: drain() is invoked
+      // from a Realtime subscription callback and from setInterval,
+      // both of which surface unhandled rejections to the event
+      // loop. Under Node's default --unhandled-rejections=throw,
+      // an exception from processJob's catch-block DB UPDATE (e.g.
+      // a transient Supabase connectivity loss) or from
+      // reclaim_stale_chat_jobs would crash the worker.
+      //
+      // We log + swallow here. The next sweep tick (or next
+      // Realtime event) re-enters drain() and retries; any job
+      // that didn't get its terminal status update will be
+      // reclaimed by reclaim_stale_chat_jobs() once
+      // STALE_CLAIM_MS elapses.
+      log("error", "drain_failed", {
+        error: err?.message || String(err),
+        stack: err?.stack ? String(err.stack).slice(0, 500) : undefined
+      });
+    }
   } finally {
     processing = false;
   }

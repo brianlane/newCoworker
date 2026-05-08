@@ -56,6 +56,15 @@ export type DashboardChatJobRow = {
    */
   stateless_input_messages: DashboardChatJobInputMessage[] | null;
   rowboat_conversation_id: string | null;
+  /**
+   * Rowboat client-carried state for the first attempt. Null on fresh
+   * threads (Rowboat hasn't issued state yet) and on rows where the
+   * previous turn's state was invalidated by a stateless retry.
+   * Worker forwards this to Rowboat with the conversationId; the
+   * updated state from Rowboat's response is persisted back to
+   * dashboard_chat_threads.rowboat_state.
+   */
+  rowboat_state: unknown | null;
   error_code: string | null;
   error_detail: string | null;
   created_at: string;
@@ -89,6 +98,12 @@ export async function insertChatJob(
      */
     statelessInputMessages: DashboardChatJobInputMessage[] | null;
     rowboatConversationId: string | null;
+    /**
+     * Rowboat client-carried state from the previous turn. Pass null
+     * when there is none to forward (fresh thread / cleared by a
+     * prior stateless retry).
+     */
+    rowboatState: unknown | null;
   },
   client?: SupabaseClient
 ): Promise<DashboardChatJobRow> {
@@ -101,7 +116,8 @@ export async function insertChatJob(
       user_message_id: args.userMessageId,
       input_messages: args.inputMessages,
       stateless_input_messages: args.statelessInputMessages,
-      rowboat_conversation_id: args.rowboatConversationId
+      rowboat_conversation_id: args.rowboatConversationId,
+      rowboat_state: args.rowboatState
     })
     .select("*")
     .single();

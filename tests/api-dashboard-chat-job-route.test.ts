@@ -37,6 +37,7 @@ const FAKE_JOB = {
   input_messages: [{ role: "user" as const, content: "hi" }],
   stateless_input_messages: null,
   rowboat_conversation_id: "rb-conv",
+  rowboat_state: null,
   error_code: null,
   error_detail: null,
   created_at: "2026-05-08T16:00:00Z",
@@ -96,6 +97,7 @@ describe("GET /api/dashboard/chat/jobs/[jobId] — polling endpoint", () => {
     expect(env.data).not.toHaveProperty("claimed_by");
     expect(env.data).not.toHaveProperty("claimed_at");
     expect(env.data).not.toHaveProperty("rowboat_conversation_id");
+    expect(env.data).not.toHaveProperty("rowboat_state");
     expect(env.data).not.toHaveProperty("business_id");
   });
 

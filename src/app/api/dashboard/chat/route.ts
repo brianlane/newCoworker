@@ -81,10 +81,13 @@ import {
   insertChatJob,
   type DashboardChatJobInputMessage
 } from "@/lib/db/dashboard-chat-jobs";
-import {
-  shouldSummarize,
-  summarizeThreadAndLog
-} from "@/lib/dashboard-chat/summarizer";
+// NOTE: summarizer triggers used to live here. They moved to the
+// VPS chat-worker post-PR-#79 (which calls
+// /api/internal/dashboard-chat/maybe-summarize after persisting the
+// assistant message) so the summary build sees BOTH the user turn
+// AND the assistant turn. Firing from the route would summarize a
+// thread whose latest assistant turn hadn't been written yet —
+// Bugbot Medium-severity finding on PR #79.
 import { listCustomerMemories } from "@/lib/customer-memory/db";
 import {
   buildDashboardCustomerPreamble,
@@ -429,20 +432,16 @@ export async function POST(request: Request) {
       userMessageId: userMsg.id,
       inputMessages,
       statelessInputMessages,
-      rowboatConversationId: thread.rowboat_conversation_id ?? null
+      rowboatConversationId: thread.rowboat_conversation_id ?? null,
+      rowboatState: thread.rowboat_state ?? null
     });
 
-    // Rolling-summary trigger. Fires from THIS path (not the worker)
-    // because the summarizer logic lives in TypeScript on Vercel and
-    // porting it to the worker would duplicate maintenance. The trade-
-    // off is summary lag: shouldSummarize is gated on the message count
-    // BEFORE the assistant message is persisted, so the threshold trips
-    // one turn earlier than the pre-Option-B route. For 20-turn windows
-    // that's a 5% timing skew, fine.
+    // The summarizer runs on the worker side (after the assistant
+    // message is persisted) — see comment above the import block. We
+    // still need the post-user-message thread state for the response
+    // body so the client can render the user's echo + the existing
+    // history without an extra GET.
     const updated = await listMessages(thread.id);
-    if (shouldSummarize(thread, updated.length)) {
-      void summarizeThreadAndLog(body.businessId, thread.id);
-    }
 
     return successResponse({
       threadId: thread.id,

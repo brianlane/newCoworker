@@ -30,11 +30,6 @@ vi.mock("@/lib/db/dashboard-chat-jobs", () => ({
   insertChatJob: vi.fn()
 }));
 
-vi.mock("@/lib/dashboard-chat/summarizer", () => ({
-  shouldSummarize: vi.fn(),
-  summarizeThreadAndLog: vi.fn()
-}));
-
 vi.mock("@/lib/customer-memory/db", () => ({
   // listCustomerMemories is the only thing the route currently
   // imports from this module. Default to an empty list so existing
@@ -70,10 +65,6 @@ import {
   touchChatActivity
 } from "@/lib/db/dashboard-chat";
 import { insertChatJob } from "@/lib/db/dashboard-chat-jobs";
-import {
-  shouldSummarize,
-  summarizeThreadAndLog
-} from "@/lib/dashboard-chat/summarizer";
 import { listCustomerMemories } from "@/lib/customer-memory/db";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -173,8 +164,6 @@ beforeEach(() => {
     started_at: null,
     completed_at: null
   } as never);
-  vi.mocked(shouldSummarize).mockReturnValue(false);
-  vi.mocked(summarizeThreadAndLog).mockResolvedValue(undefined as never);
 });
 
 afterEach(() => {
@@ -531,16 +520,23 @@ describe("POST /api/dashboard/chat — pre-flight errors (no enqueue)", () => {
   });
 });
 
-describe("POST /api/dashboard/chat — summarizer trigger", () => {
-  it("fires summarizeThreadAndLog when shouldSummarize returns true (fire-and-forget)", async () => {
-    vi.mocked(shouldSummarize).mockReturnValueOnce(true);
-    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    expect(summarizeThreadAndLog).toHaveBeenCalledWith(BIZ, ACTIVE_THREAD_ID);
-  });
-
-  it("does NOT fire summarizer when below threshold", async () => {
-    vi.mocked(shouldSummarize).mockReturnValueOnce(false);
-    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    expect(summarizeThreadAndLog).not.toHaveBeenCalled();
+describe("POST /api/dashboard/chat — summarizer trigger has moved", () => {
+  // Bugbot Medium-severity finding on PR #79: firing the summarizer
+  // from this route in the Option B pipeline would build a summary
+  // missing the latest assistant turn (the worker hasn't written it
+  // yet). The trigger now lives on the worker side, which calls
+  // POST /api/internal/dashboard-chat-summarize after persisting
+  // the assistant message. These tests pin the contract: the route
+  // does NOT import or invoke the summarizer.
+  it("does not import the dashboard-chat summarizer module", async () => {
+    const routeSrc = await (
+      await import("node:fs/promises")
+    ).readFile(
+      new URL("../src/app/api/dashboard/chat/route.ts", import.meta.url),
+      "utf8"
+    );
+    expect(routeSrc).not.toMatch(/from\s+["']@\/lib\/dashboard-chat\/summarizer["']/);
+    expect(routeSrc).not.toMatch(/summarizeThreadAndLog\s*\(/);
+    expect(routeSrc).not.toMatch(/shouldSummarize\s*\(/);
   });
 });

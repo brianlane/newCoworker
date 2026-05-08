@@ -7,19 +7,21 @@
  *        the path that replaces the Vercel-side NDJSON stream we
  *        deleted in PR #79.
  *
- * Why polling instead of Supabase Realtime on dashboard_chat_messages:
- *   - dashboard_chat_messages has RLS enabled with no SELECT policy
- *     for `authenticated`. Wiring up Realtime needs its own RLS audit
- *     (every existing read goes through service-role server code) and
- *     would balloon this PR's review surface.
- *   - Polling at ~1.5s is indistinguishable UX-wise once Rowboat's
- *     5-30s wall-clock dominates, and is naturally resilient to
- *     websocket disconnects (browser tab backgrounded, mobile network
- *     drop) that would otherwise need explicit reconnection logic.
- *   - The cost is negligible: each poll is one indexed PK lookup
- *     (the worker writes `status` in O(1)). At one polling client per
- *     in-flight job, this is far less load than the prior streaming
- *     path which held an open Vercel function for the whole window.
+ * Polling alongside Realtime — why both:
+ *   The browser primary path is Supabase Realtime on
+ *   dashboard_chat_messages (gated by the SELECT policy added in
+ *   migration 20260508000003). This polling endpoint is the
+ *   belt-and-suspenders fallback for cases where Realtime can't
+ *   deliver:
+ *     - corporate proxies or mobile networks that block websockets,
+ *     - the rare INSERT event drop on the way to the client,
+ *     - worker error states (status='error') — Realtime fires only
+ *       on assistant-message INSERT, not on a job's error transition,
+ *     - the small race window where the user message INSERT lands
+ *       before the subscription handshake completes.
+ *   The client races both paths via Promise.race; first to settle
+ *   wins. Per-poll cost is one indexed PK lookup, dwarfed by the
+ *   prior streaming path's per-turn open Vercel function.
  *
  * Wire shape (data envelope only — error envelope is the standard
  * { ok:false, error:{ code, message } } shape):

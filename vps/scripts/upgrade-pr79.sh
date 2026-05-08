@@ -31,6 +31,14 @@
 #   CHAT_WORKER_SRC           — path to vps/chat-worker on this VPS
 #                               (default: /opt/newcoworker-repo/vps/chat-worker)
 #
+# Optional inputs (skip both → rolling-summary callbacks disabled,
+# worker logs a warn but processes jobs normally):
+#   WORKER_VERCEL_BASE_URL    — e.g. https://newcoworker.com . Worker
+#                               POSTs the rolling-summary trigger here
+#                               after each successful job.
+#   WORKER_VERCEL_BEARER      — Vercel's INTERNAL_CRON_SECRET (matched
+#                               by assertCronAuth in src/lib/cron-auth.ts)
+#
 # Inputs read from /opt/rowboat/.env automatically:
 #   BUSINESS_ID               — used as both the worker's BUSINESS_ID
 #                               and ROWBOAT_PROJECT_ID
@@ -173,6 +181,8 @@ ROWBOAT_BASE_URL=http://rowboat:3000
 ROWBOAT_PROJECT_ID=${BUSINESS_ID}
 ROWBOAT_GATEWAY_TOKEN=${ROWBOAT_GATEWAY_TOKEN}
 BUSINESS_ID=${BUSINESS_ID}
+WORKER_VERCEL_BASE_URL=${WORKER_VERCEL_BASE_URL:-}
+WORKER_VERCEL_BEARER=${WORKER_VERCEL_BEARER:-}
 CWENV_EOF
 chmod 600 "${CHAT_WORKER_DEST}/.env"
 log "  Wrote ${CHAT_WORKER_DEST}/.env"

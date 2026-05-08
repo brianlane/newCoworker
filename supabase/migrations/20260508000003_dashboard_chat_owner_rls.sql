@@ -47,6 +47,24 @@
 --   preambles the user shouldn't see). Keep that table service-only.
 
 -- ---------------------------------------------------------------------
+-- ENABLE RLS first (Codex P1 review on PR #79). The original
+-- 20260427000000_dashboard_chat_and_safe_mode migration created these
+-- tables without enabling RLS — at the time the surface was service-
+-- role-only and policies were unnecessary. As of PR #79 the browser
+-- subscribes via Realtime, so the policies BELOW must actually take
+-- effect. Without `enable row level security` Postgres ignores
+-- policies and the tables are governed only by table grants, which
+-- on the `authenticated` role would otherwise expose every tenant's
+-- chat to every signed-in user.
+--
+-- `if not exists` semantics: `enable row level security` is
+-- idempotent — running it on an already-enabled table is a no-op,
+-- not an error. Safe to re-apply.
+-- ---------------------------------------------------------------------
+alter table public.dashboard_chat_messages enable row level security;
+alter table public.dashboard_chat_threads enable row level security;
+
+-- ---------------------------------------------------------------------
 -- dashboard_chat_messages: SELECT policy for the owner.
 -- ---------------------------------------------------------------------
 drop policy if exists chat_messages_owner_select on public.dashboard_chat_messages;
