@@ -2,9 +2,11 @@ import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
+import { listCustomIntegrations } from "@/lib/db/custom-integrations";
 import { Card } from "@/components/ui/Card";
 import { IntegrationCard } from "@/components/dashboard/IntegrationCard";
 import { NangoEmailIntegrationActions } from "@/components/dashboard/NangoEmailIntegrationActions";
+import { CustomIntegrationsCard } from "@/components/dashboard/CustomIntegrationsCard";
 import { Inbox, Phone } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -30,6 +32,8 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
   const workspaceConnections =
     businessId ? await listWorkspaceOAuthConnections(businessId) : [];
   const workspaceConnected = workspaceConnections.length > 0;
+  const customIntegrations =
+    businessId ? await listCustomIntegrations(businessId) : [];
   const telnyxConfigured =
     !!process.env.TELNYX_API_KEY && !!process.env.TELNYX_MESSAGING_PROFILE_ID;
 
@@ -93,6 +97,18 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
                   }))}
                 />
               </IntegrationCard>
+            </div>
+          </section>
+
+          <section className="space-y-4">
+            <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
+              Custom integrations
+            </h2>
+            <div className="grid grid-cols-1 gap-4 max-w-xl">
+              <CustomIntegrationsCard
+                businessId={businessId}
+                initialIntegrations={customIntegrations}
+              />
             </div>
           </section>
 
