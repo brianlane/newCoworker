@@ -226,7 +226,14 @@ NODE_ENV=production
 PORT=3000
 MONGODB_CONNECTION_STRING=mongodb://mongo:27017/rowboat
 REDIS_URL=redis://redis:6379
-OPENAI_API_KEY=sk-deploy-placeholder
+# OPENAI_API_KEY is intentionally NOT set. Rowboat's PROVIDER_API_KEY
+# below takes precedence in every fallback chain (PROVIDER_API_KEY ||
+# OPENAI_API_KEY) so the placeholder never gated model calls — but the
+# OpenAI Agents SDK that Rowboat is built on auto-registered a tracing
+# exporter against platform.openai.com using whatever key was on hand,
+# generating one [non-fatal] 401 per request. OPENAI_AGENTS_DISABLE_TRACING
+# kills the exporter outright. See PR #79 / docs/runbooks/dashboard-chat-vps.md.
+OPENAI_AGENTS_DISABLE_TRACING=1
 USE_AUTH=false
 AUTH0_BASE_URL=http://127.0.0.1:3000
 AUTH0_SECRET=test_secret
@@ -841,6 +848,78 @@ VBENV_EOF
   )
 else
   log "No ${VOICE_BRIDGE_DEST}/docker-compose.yml and no source at ${VOICE_BRIDGE_SRC} — skipping voice bridge container"
+fi
+
+# ------------------------------------------------------------------
+# 7. Dashboard chat-worker (Option B): drains dashboard_chat_jobs and
+#    writes assistant messages back to Supabase.
+#
+# Replaces the in-Vercel streaming POST /api/dashboard/chat path that
+# was capped by Vercel's maxDuration ceiling and dropped messages on
+# any disconnect inside that window. See:
+#   - supabase/migrations/20260508000000_dashboard_chat_jobs.sql
+#   - vps/chat-worker/worker.mjs
+#   - PR #79 cover letter
+#
+# Same sync model as the voice-bridge above: rsync from the staged repo,
+# rewrite .env every deploy (so SUPABASE_SERVICE_KEY rotations land),
+# `--force-recreate` so a changed .env restarts the container even when
+# the image layer is cached.
+# ------------------------------------------------------------------
+CHAT_WORKER_SRC="${CHAT_WORKER_SRC:-/opt/newcoworker-repo/vps/chat-worker}"
+CHAT_WORKER_DEST="/opt/chat-worker"
+
+if [[ -d "${CHAT_WORKER_SRC}" && -f "${CHAT_WORKER_SRC}/docker-compose.yml" ]]; then
+  log "Syncing chat-worker source ${CHAT_WORKER_SRC} → ${CHAT_WORKER_DEST}..."
+  mkdir -p "${CHAT_WORKER_DEST}"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete \
+      --exclude ".env" \
+      --exclude "node_modules" \
+      "${CHAT_WORKER_SRC}/" "${CHAT_WORKER_DEST}/"
+  else
+    log "rsync not installed; falling back to cp -R (no --delete)"
+    cp -R "${CHAT_WORKER_SRC}/." "${CHAT_WORKER_DEST}/"
+  fi
+fi
+
+if [[ -f "${CHAT_WORKER_DEST}/docker-compose.yml" ]]; then
+  log "Starting chat-worker from ${CHAT_WORKER_DEST}..."
+  (
+    cd "${CHAT_WORKER_DEST}"
+
+    # ROWBOAT_PROJECT_ID == BUSINESS_ID in our deployments (the per-tenant
+    # Rowboat is keyed by the same UUID), but the worker takes them as
+    # separate env vars to keep Rowboat's identifier model decoupled.
+    # WORKER_VERCEL_BASE_URL + WORKER_VERCEL_BEARER are passed through
+    # only when both are present in the deploy environment. Missing
+    # values are equivalent to "rolling-summary callbacks disabled" —
+    # the worker logs a warn and keeps processing jobs normally.
+    # NEXT_PUBLIC_SITE_URL is the canonical source for the Vercel base
+    # URL (set on every deploy); INTERNAL_CRON_SECRET is the same
+    # secret asserted by /api/internal/* routes via assertCronAuth.
+    cat > "${CHAT_WORKER_DEST}/.env" <<CWENV_EOF
+SUPABASE_URL=${SUPABASE_URL}
+SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_KEY}
+ROWBOAT_BASE_URL=http://rowboat:3000
+ROWBOAT_PROJECT_ID=${BUSINESS_ID}
+ROWBOAT_GATEWAY_TOKEN=${ROWBOAT_GATEWAY_TOKEN}
+BUSINESS_ID=${BUSINESS_ID}
+WORKER_VERCEL_BASE_URL=${NEXT_PUBLIC_SITE_URL:-${WORKER_VERCEL_BASE_URL:-}}
+WORKER_VERCEL_BEARER=${INTERNAL_CRON_SECRET:-${WORKER_VERCEL_BEARER:-}}
+CWENV_EOF
+    chmod 600 "${CHAT_WORKER_DEST}/.env"
+
+    if docker compose up -d --build --force-recreate; then
+      report_progress 99 "chat_worker_ready" "chat-worker container started"
+      log "chat-worker started"
+    else
+      log "WARN: chat-worker compose failed (chat features will be degraded)"
+      report_progress 98 "chat_worker_compose_failed" "docker compose up failed"
+    fi
+  )
+else
+  log "No ${CHAT_WORKER_DEST}/docker-compose.yml and no source at ${CHAT_WORKER_SRC} — skipping chat-worker container (dashboard chat will not function until provisioned)"
 fi
 
 log "=== Client deployment complete: ${BUSINESS_ID} ==="

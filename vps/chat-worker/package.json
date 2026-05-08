@@ -1,0 +1,17 @@
+{
+  "name": "chat-worker",
+  "version": "1.0.0",
+  "description": "Per-tenant VPS-side worker that drains dashboard_chat_jobs, calls the local Rowboat, and writes assistant messages back to Supabase. Replaces the in-Vercel streaming chat path that was killed by the 300s maxDuration ceiling.",
+  "private": true,
+  "type": "module",
+  "main": "worker.mjs",
+  "scripts": {
+    "start": "node worker.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.45.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
