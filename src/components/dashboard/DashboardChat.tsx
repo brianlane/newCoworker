@@ -382,33 +382,65 @@ export function DashboardChat({ businessId, businessName }: Props) {
 
       async function verifyAndFinish(insertedMessageId: number | string | undefined) {
         if (settled || signal.aborted) return;
-        try {
-          const res = await fetch(
-            `/api/dashboard/chat/jobs/${encodeURIComponent(jobId)}?businessId=${encodeURIComponent(businessId)}`,
-            { cache: "no-store", signal }
-          );
-          const env = await parseEnvelope<ChatJobStatusResponse>(res);
-          if (!env.ok) return;
-          const job = env.data;
-          // status==='done' alone isn't enough: a stale job for the
-          // same thread might also be done. The discriminator is
-          // assistant_message_id matching the INSERT we just saw.
-          // Fall through (don't settle) for any mismatch — the next
-          // INSERT will re-trigger this verification.
-          if (
-            job.status === "done" &&
-            insertedMessageId !== undefined &&
-            String(job.assistantMessageId) === String(insertedMessageId)
-          ) {
-            finish({ ok: true, via: "realtime" });
-          } else if (job.status === "error") {
-            finish({ ok: false, reason: friendlyErrorMessage(job.errorCode) });
+        // The worker INSERTs the assistant message BEFORE it UPDATEs
+        // the job to status='done'. If our verification fetch lands
+        // in that gap (microseconds in the happy path), we'd see
+        // status='processing' with assistant_message_id null, fall
+        // through, and never re-fire — there's only one INSERT per
+        // job. Retry briefly to cover that gap before giving up to
+        // the polling fallback. Bugbot Medium-severity finding on
+        // PR #79 round-7.
+        const VERIFY_ATTEMPTS = 5;
+        const VERIFY_DELAY_MS = 250;
+        for (let attempt = 0; attempt < VERIFY_ATTEMPTS; attempt += 1) {
+          if (settled || signal.aborted) return;
+          try {
+            const res = await fetch(
+              `/api/dashboard/chat/jobs/${encodeURIComponent(jobId)}?businessId=${encodeURIComponent(businessId)}`,
+              { cache: "no-store", signal }
+            );
+            const env = await parseEnvelope<ChatJobStatusResponse>(res);
+            if (env.ok) {
+              const job = env.data;
+              // status==='done' alone isn't enough: a stale job for
+              // the same thread might also be done. The discriminator
+              // is assistant_message_id matching the INSERT we just
+              // saw. A mismatched-but-done job is from a different
+              // turn, ignore.
+              if (
+                job.status === "done" &&
+                insertedMessageId !== undefined &&
+                String(job.assistantMessageId) === String(insertedMessageId)
+              ) {
+                finish({ ok: true, via: "realtime" });
+                return;
+              }
+              if (job.status === "done") {
+                // This job is done, but the INSERT we observed isn't
+                // our assistant message — it's a stale write from
+                // another turn. Stop trying: our actual write is
+                // pending and our next INSERT event will re-verify.
+                return;
+              }
+              if (job.status === "error") {
+                finish({ ok: false, reason: friendlyErrorMessage(job.errorCode) });
+                return;
+              }
+              // queued | processing — the worker hasn't stamped the
+              // job yet. Brief backoff and retry; covers the
+              // INSERT-then-UPDATE gap.
+            }
+          } catch {
+            // Verification fetch failed (network blip, abort). Fall
+            // through to the retry.
           }
-        } catch {
-          // Verification fetch failed (network blip, abort). Stay
-          // subscribed — the polling path is independent and will
-          // catch the settle.
+          await sleepWithAbort(VERIFY_DELAY_MS, signal);
         }
+        // Verification ran out without observing a matching done.
+        // Stay subscribed — a later qualifying INSERT (e.g. a
+        // worker-side stateless retry that wrote a different message)
+        // will re-trigger this. The polling path is independent and
+        // unchanged.
       }
     });
   }
