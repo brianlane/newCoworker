@@ -282,18 +282,28 @@ export function DashboardChat({ businessId, businessName }: Props) {
     // ChatGPT/Claude/Gemini-style: every thread is continuable.
     const targetThreadId = viewingThreadId ?? activeThreadId;
 
+    // Tracks whether we've inserted the in-flight assistant bubble
+    // into the message list. Pre-fix this flag flipped on `meta` and
+    // the bubble showed a "Coworker • timestamp" header with empty
+    // content for the entire pre-token wait — owners reported it as
+    // "an extra message box appeared while the model was thinking
+    // that wasn't there before". The pre-streaming UX never showed a
+    // bubble until the reply arrived, so the streaming UX shouldn't
+    // either; the existing "Your coworker is thinking…" indicator
+    // below the message list is the loading affordance.
+    //
+    // Bubble is now inserted on the FIRST delta (first user-visible
+    // token), not on `meta`. `meta` still arrives — we use it to
+    // know the route is alive — but it no longer mutates the DOM.
     let assistantBubbleInserted = false;
     // Tracks whether the user has actually SEEN any assistant content
-    // in the bubble. Distinct from `assistantBubbleInserted`, which
-    // flips on the server's `meta` event (always sent before Rowboat
-    // is even called). Cursor Bugbot Medium on PR #76 commit 334bc4e:
-    // pre-fix the error/partial-stream branches keyed off
-    // `assistantBubbleInserted`, but since `meta` is unconditional
-    // that meant a Rowboat failure BEFORE any token still left an
-    // empty bubble on screen with no way to restore the textarea.
-    // Branching on `firstDeltaRendered` instead means: "if you saw
-    // content, we keep it; if you only saw an empty placeholder, we
-    // tear it down and let you edit-and-resend."
+    // in the bubble. With the bubble now inserted on first delta,
+    // this is functionally equivalent to `assistantBubbleInserted`
+    // for the success path, but the error/partial-stream branches
+    // still need to distinguish "did meaningful content render" from
+    // "was the bubble inserted at all" (whitespace deltas can flip
+    // bubble-inserted without flipping firstDeltaRendered — see
+    // Cursor Bugbot Low on PR #76 commit e722c7d).
     let firstDeltaRendered = false;
     let streamErrored = false;
     // Tracks whether we received the server's `done` event. Used to
@@ -348,18 +358,13 @@ export function DashboardChat({ businessId, businessName }: Props) {
 
     const handleEvent = (ev: StreamEvent) => {
       if (ev.type === "meta") {
-        if (!assistantBubbleInserted) {
-          assistantBubbleInserted = true;
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: inflightAssistantId,
-              role: "assistant",
-              content: "",
-              createdAt: new Date().toISOString()
-            }
-          ]);
-        }
+        // Server is alive and persisted the user's turn. We used to
+        // insert the in-flight assistant bubble here, but that gave
+        // owners "an extra empty message box appeared while the
+        // model was thinking" — the pre-streaming UX never showed a
+        // bubble until the reply arrived, so the streaming UX
+        // doesn't either. The bubble is now inserted on the first
+        // delta below.
       } else if (ev.type === "delta") {
         // Mark the moment the user sees MEANINGFUL content. The
         // error / partial-stream branches below use this — NOT
@@ -380,16 +385,34 @@ export function DashboardChat({ businessId, businessName }: Props) {
         // non-empty == meaningful content" keeps server and client
         // in lockstep.
         if (ev.content.trim().length > 0) firstDeltaRendered = true;
-        // Streaming append. Find the in-flight bubble by stable local
-        // id — locating by index would race against React's reconciler
-        // batching multiple deltas in a single tick.
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === inflightAssistantId
-              ? { ...m, content: m.content + ev.content }
-              : m
-          )
-        );
+        // Lazily insert the in-flight bubble on the FIRST delta —
+        // never on `meta`. The "Your coworker is thinking…" italic
+        // indicator below the message list is the loading
+        // affordance for the pre-token wait; the bubble only
+        // appears once the user has something to read.
+        if (!assistantBubbleInserted) {
+          assistantBubbleInserted = true;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: inflightAssistantId,
+              role: "assistant",
+              content: ev.content,
+              createdAt: new Date().toISOString()
+            }
+          ]);
+        } else {
+          // Streaming append. Find the in-flight bubble by stable
+          // local id — locating by index would race against React's
+          // reconciler batching multiple deltas in a single tick.
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === inflightAssistantId
+                ? { ...m, content: m.content + ev.content }
+                : m
+            )
+          );
+        }
       } else if (ev.type === "ping") {
         // Heartbeat — server signaling "still working, don't time out".
         // Nothing to render.
