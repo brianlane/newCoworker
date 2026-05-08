@@ -308,7 +308,17 @@ export async function POST(request: Request) {
 
     const limiter = rateLimit(`dashboard-chat:${body.businessId}`, DASHBOARD_CHAT_RATE);
     if (!limiter.success) {
-      return errorResponse("CONFLICT", "Too many messages, please wait a minute.");
+      // 429 Too Many Requests — preserved from the pre-Option-B
+      // streaming route (Bugbot Low-severity finding on PR #79).
+      // Clients/proxies may implement automatic backoff on 429
+      // semantics that 409 doesn't carry. The CONFLICT error code
+      // string is kept for backwards-compat with any error-code
+      // matching on the client.
+      return errorResponse(
+        "CONFLICT",
+        "Too many messages, please wait a minute.",
+        429
+      );
     }
 
     const flags = await loadBusinessFlags(body.businessId);

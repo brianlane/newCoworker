@@ -503,7 +503,7 @@ describe("POST /api/dashboard/chat — pre-flight errors (no enqueue)", () => {
     expect(insertChatJob).not.toHaveBeenCalled();
   });
 
-  it("returns 409 + 'too many messages' when the rate limiter rejects (legacy CONFLICT mapping)", async () => {
+  it("returns 429 + 'too many messages' when the rate limiter rejects (preserves the streaming-version status; CONFLICT error code stays for backwards compat)", async () => {
     vi.mocked(rateLimit).mockReturnValueOnce({
       success: false,
       limit: 30,
@@ -511,10 +511,13 @@ describe("POST /api/dashboard/chat — pre-flight errors (no enqueue)", () => {
       reset: 0
     });
     const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
-    // Route maps rate-limit hits to CONFLICT (preserved from streaming
-    // version for backwards compat with the client's error rendering).
-    expect(res.status).toBe(409);
+    // 429 is the protocol-correct status (clients/proxies can
+    // implement automatic backoff against it). The "CONFLICT"
+    // error code string is still emitted in the body so any
+    // existing client-side error-code matching keeps working.
+    expect(res.status).toBe(429);
     const env = await readEnvelope(res);
+    expect(env.error?.code).toBe("CONFLICT");
     expect(env.error?.message).toMatch(/too many/i);
     expect(insertChatJob).not.toHaveBeenCalled();
   });

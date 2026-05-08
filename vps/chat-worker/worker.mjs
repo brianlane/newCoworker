@@ -414,23 +414,34 @@ async function processJob(job) {
     // we had stored — the previous id is known-bad and re-sending it
     // next turn would force the same primary-fail/stateless-retry
     // cycle every time.
+    // Mirrors the pre-Option-B streaming-route semantics
+    // (src/lib/db/dashboard-chat.ts::updateThreadConversation): the
+    // conversationId and state fields are INDEPENDENT. Rowboat may
+    // return either, both, or neither on a given turn — persisting
+    // whichever it returned without coupling them prevents stale
+    // state from leaking into future turns when Rowboat omits
+    // conversationId, and prevents stale conversationId from
+    // outliving its state when Rowboat omits state.
+    //
+    //   - usedStateless: the previous (conversationId, state) pair
+    //     went down with the failed primary attempt. Write whatever
+    //     Rowboat returned this turn, defaulting to null on either
+    //     side so the next turn doesn't re-send the rotted values.
+    //   - !usedStateless: only write a column when Rowboat actually
+    //     returned a value for it (undefined = "key absent in
+    //     response, preserve what we had").
+    //
+    // Cursor Bugbot Medium-severity finding: the previous version
+    // gated rowboat_state on conversationId being present, dropping
+    // state updates when Rowboat returned only state.
     const threadUpdate = { updated_at: new Date().toISOString() };
     if (usedStateless) {
-      // Prefer Rowboat's freshly-issued id from the stateless attempt;
-      // if it didn't return one, blank the column. State follows
-      // the same lifecycle as conversationId — the old state went
-      // down with the rejected conversationId.
       threadUpdate.rowboat_conversation_id = conversationId || null;
       threadUpdate.rowboat_state = nextState ?? null;
-    } else if (conversationId) {
-      threadUpdate.rowboat_conversation_id = conversationId;
-      // Mirrors the old streaming-route semantics
-      // (src/lib/db/dashboard-chat.ts::updateThreadConversation):
-      //   - state === undefined  -> Rowboat omitted the key, preserve
-      //                             whatever we had (skip the column).
-      //   - state === null       -> Rowboat explicitly cleared, write
-      //                             null.
-      //   - any other value      -> persist it.
+    } else {
+      if (conversationId) {
+        threadUpdate.rowboat_conversation_id = conversationId;
+      }
       if (nextState !== undefined) {
         threadUpdate.rowboat_state = nextState;
       }
