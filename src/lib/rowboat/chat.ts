@@ -254,13 +254,24 @@ export type CallRowboatChatStreamInput = {
   conversationId?: string | null;
   state?: unknown | null;
   /**
-   * Hard cap on time-to-first-byte. 30s default — generous enough to
-   * absorb a cold-model paged-in startup on a small VPS, tight enough
-   * that a wedged tunnel surfaces quickly. Distinct from `idleTimeoutMs`
-   * because TTFB has wildly different latency characteristics from
-   * mid-stream tokens (TTFB is dominated by model load + first inference
-   * pass; idle is "the model paused mid-token-stream", which usually
-   * means something is genuinely broken).
+   * Hard cap on time-to-first-byte. 90s default — generous enough to
+   * absorb a cold-model paged-in startup on a small VPS PLUS the
+   * agent's pre-token planning phase (system prompt + tool selection
+   * + first-pass inference can legitimately take 30-60s on a complex
+   * query that retrieves customer history, builds the preamble, and
+   * starts generating). Tight enough that a wedged tunnel still
+   * surfaces well before Vercel's 300s maxDuration reaper.
+   *
+   * Distinct from `idleTimeoutMs` because TTFB has wildly different
+   * latency characteristics from mid-stream tokens (TTFB is dominated
+   * by model load + first inference pass; idle is "the model paused
+   * mid-token-stream", which usually means something is genuinely
+   * broken — that one stays at 30s).
+   *
+   * Bumped from 30s → 90s after production owners reported timeouts
+   * on legitimately complex queries (e.g. "summarize all recent
+   * customer activity" — Rowboat needs to fetch + summarize before
+   * emitting its first token).
    */
   ttfbTimeoutMs?: number;
   /**
@@ -278,13 +289,14 @@ export type CallRowboatChatStreamInput = {
    * disconnect (`request.signal`) all the way down to the per-tenant
    * Rowboat call — without this plumbing, a client navigating away
    * mid-generation leaves the per-tenant Ollama generating tokens
-   * nobody will ever read until the internal idle timer trips, up to
-   * 30s of wasted VPS work per disconnect.
+   * nobody will ever read until one of the internal timers trips
+   * (idle: 30s mid-stream, TTFB: 90s pre-token), wasting up to that
+   * much VPS work per disconnect.
    */
   signal?: AbortSignal;
 };
 
-export const DEFAULT_ROWBOAT_STREAM_TTFB_MS = 30_000;
+export const DEFAULT_ROWBOAT_STREAM_TTFB_MS = 90_000;
 export const DEFAULT_ROWBOAT_STREAM_IDLE_MS = 30_000;
 
 /**
