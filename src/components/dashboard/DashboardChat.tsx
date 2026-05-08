@@ -311,6 +311,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
   // on subscribe failure or abort — the caller treats those as "this
   // path didn't win, defer to polling".
   function subscribeAssistantMessage(
+    jobId: string,
     threadId: string,
     signal: AbortSignal
   ): Promise<SettleOutcome> {
@@ -342,14 +343,28 @@ export function DashboardChat({ businessId, businessName }: Props) {
             table: "dashboard_chat_messages",
             filter: `thread_id=eq.${threadId}`
           },
-          (payload: { new?: { role?: string } | null }) => {
+          (payload: { new?: { id?: number | string; role?: string } | null }) => {
             const row = payload.new ?? {};
             // We only care about the worker's assistant write. The
             // user-message INSERT also fires here (we wrote it
             // server-side just before enqueueing) but we already
             // rendered that from the POST response.
             if (row.role !== "assistant") return;
-            finish({ ok: true, via: "realtime" });
+            // Verify this assistant INSERT belongs to OUR job, not a
+            // stale prior turn that just finished writing (e.g. a
+            // reclaimed-stale job, or a previous job whose stateless
+            // retry took two full ROWBOAT_TIMEOUT_MS windows). Without
+            // this check the race could settle prematurely on the old
+            // reply and the user's actual current-turn reply would
+            // never surface — Bugbot Medium-severity finding on
+            // PR #79 round-6.
+            //
+            // Implementation: one-shot fetch of the job row's status.
+            // If the worker has stamped this job's assistant_message_id
+            // to match the INSERT we just observed, it's ours and we
+            // win the race. If not, keep listening — the next INSERT
+            // (or the polling fallback) will land us correctly.
+            void verifyAndFinish(row.id);
           }
         )
         .subscribe((status: string) => {
@@ -364,6 +379,37 @@ export function DashboardChat({ businessId, businessName }: Props) {
       signal.addEventListener("abort", () => finish({ ok: false, reason: "" }), {
         once: true
       });
+
+      async function verifyAndFinish(insertedMessageId: number | string | undefined) {
+        if (settled || signal.aborted) return;
+        try {
+          const res = await fetch(
+            `/api/dashboard/chat/jobs/${encodeURIComponent(jobId)}?businessId=${encodeURIComponent(businessId)}`,
+            { cache: "no-store", signal }
+          );
+          const env = await parseEnvelope<ChatJobStatusResponse>(res);
+          if (!env.ok) return;
+          const job = env.data;
+          // status==='done' alone isn't enough: a stale job for the
+          // same thread might also be done. The discriminator is
+          // assistant_message_id matching the INSERT we just saw.
+          // Fall through (don't settle) for any mismatch — the next
+          // INSERT will re-trigger this verification.
+          if (
+            job.status === "done" &&
+            insertedMessageId !== undefined &&
+            String(job.assistantMessageId) === String(insertedMessageId)
+          ) {
+            finish({ ok: true, via: "realtime" });
+          } else if (job.status === "error") {
+            finish({ ok: false, reason: friendlyErrorMessage(job.errorCode) });
+          }
+        } catch {
+          // Verification fetch failed (network blip, abort). Stay
+          // subscribed — the polling path is independent and will
+          // catch the settle.
+        }
+      }
     });
   }
 
@@ -575,6 +621,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
     else controller.signal.addEventListener("abort", cascade, { once: true });
 
     const realtimePromise = subscribeAssistantMessage(
+      post.jobId,
       post.threadId,
       raceController.signal
     ).then((outcome) => {
