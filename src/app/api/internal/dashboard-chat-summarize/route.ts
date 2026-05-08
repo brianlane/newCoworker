@@ -34,7 +34,11 @@
 
 import { z } from "zod";
 import { assertCronAuth } from "@/lib/cron-auth";
-import { errorResponse, successResponse } from "@/lib/api-response";
+import {
+  errorResponse,
+  handleRouteError,
+  successResponse
+} from "@/lib/api-response";
 import { logger } from "@/lib/logger";
 import { getThreadById, listMessages } from "@/lib/db/dashboard-chat";
 import {
@@ -72,70 +76,79 @@ export async function POST(request: Request): Promise<Response> {
 
   const startedAt = Date.now();
 
-  // Confirm the thread still exists and belongs to the claimed
-  // business — protects against a bogus worker payload poking at
-  // someone else's thread. shouldSummarize() and summarizeThread()
-  // both trust their (businessId, threadId) input, so we own the
-  // gating here.
-  const thread = await getThreadById(body.threadId);
-  if (!thread || thread.business_id !== body.businessId) {
-    logger.warn("dashboard-chat-summarize thread mismatch", {
-      threadId: body.threadId,
-      claimedBusinessId: body.businessId,
-      actualBusinessId: thread?.business_id ?? null
-    });
-    return errorResponse("NOT_FOUND", "Thread not found for business", 404);
-  }
+  // Wrap the entire DB+summarizer pipeline in handleRouteError so
+  // transient Supabase failures surface as the standard
+  // { ok:false, error:{ code, message } } envelope rather than an
+  // uncontrolled 500 — matches every other route handler in this
+  // PR. Bugbot Low-severity finding on PR #79 round-5.
+  try {
+    // Confirm the thread still exists and belongs to the claimed
+    // business — protects against a bogus worker payload poking at
+    // someone else's thread. shouldSummarize() and summarizeThread()
+    // both trust their (businessId, threadId) input, so we own the
+    // gating here.
+    const thread = await getThreadById(body.threadId);
+    if (!thread || thread.business_id !== body.businessId) {
+      logger.warn("dashboard-chat-summarize thread mismatch", {
+        threadId: body.threadId,
+        claimedBusinessId: body.businessId,
+        actualBusinessId: thread?.business_id ?? null
+      });
+      return errorResponse("NOT_FOUND", "Thread not found for business", 404);
+    }
 
-  const messages = await listMessages(body.threadId);
-  if (!shouldSummarize(thread, messages.length)) {
-    // Cheap gate — most worker calls land here and exit quickly.
+    const messages = await listMessages(body.threadId);
+    if (!shouldSummarize(thread, messages.length)) {
+      // Cheap gate — most worker calls land here and exit quickly.
+      return successResponse({
+        triggered: false,
+        messageCount: messages.length,
+        durationMs: Date.now() - startedAt
+      });
+    }
+
+    // Threshold tripped: regenerate the summary. summarizeThread
+    // catches its own errors and returns a discriminated result; we
+    // log either way for ops visibility but never throw.
+    const result = await summarizeThread(body.businessId, body.threadId);
+    const durationMs = Date.now() - startedAt;
+
+    if (result.ok) {
+      logger.info("dashboard-chat-summarize ok", {
+        businessId: body.businessId,
+        threadId: body.threadId,
+        messageCount: messages.length,
+        summaryChars: result.summary.length,
+        durationMs
+      });
+    } else {
+      logger.warn("dashboard-chat-summarize skipped/failed", {
+        businessId: body.businessId,
+        threadId: body.threadId,
+        reason: result.reason,
+        detail: "detail" in result ? result.detail : undefined,
+        durationMs
+      });
+    }
+
+    // Surface failure as an error envelope so the wire shape's outer
+    // `ok` field is the source of truth (no nested `ok: false` inside
+    // `data`). The worker fire-and-forgets this call, so the outcome
+    // wire shape only matters for ops/curl debugging.
+    if (!result.ok) {
+      return errorResponse(
+        "INTERNAL_SERVER_ERROR",
+        `summarize_failed:${result.reason}`,
+        500
+      );
+    }
+
     return successResponse({
-      triggered: false,
-      messageCount: messages.length,
-      durationMs: Date.now() - startedAt
-    });
-  }
-
-  // Threshold tripped: regenerate the summary. summarizeThread
-  // catches its own errors and returns a discriminated result; we
-  // log either way for ops visibility but never throw.
-  const result = await summarizeThread(body.businessId, body.threadId);
-  const durationMs = Date.now() - startedAt;
-
-  if (result.ok) {
-    logger.info("dashboard-chat-summarize ok", {
-      businessId: body.businessId,
-      threadId: body.threadId,
-      messageCount: messages.length,
+      triggered: true,
       summaryChars: result.summary.length,
       durationMs
     });
-  } else {
-    logger.warn("dashboard-chat-summarize skipped/failed", {
-      businessId: body.businessId,
-      threadId: body.threadId,
-      reason: result.reason,
-      detail: "detail" in result ? result.detail : undefined,
-      durationMs
-    });
+  } catch (err) {
+    return handleRouteError(err);
   }
-
-  // Surface failure as an error envelope so the wire shape's outer
-  // `ok` field is the source of truth (no nested `ok: false` inside
-  // `data`). The worker fire-and-forgets this call, so the outcome
-  // wire shape only matters for ops/curl debugging.
-  if (!result.ok) {
-    return errorResponse(
-      "INTERNAL_SERVER_ERROR",
-      `summarize_failed:${result.reason}`,
-      500
-    );
-  }
-
-  return successResponse({
-    triggered: true,
-    summaryChars: result.summary.length,
-    durationMs
-  });
 }

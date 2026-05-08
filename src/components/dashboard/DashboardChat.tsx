@@ -102,12 +102,17 @@ type ThreadMessagesResponse = {
 const JOB_POLL_INTERVAL_MS = 1500;
 
 // Hard cap on how long we'll wait for a worker reply before giving up
-// on a job we enqueued. Mirrors the worker-side WORKER_ROWBOAT_TIMEOUT_MS
-// (240s) plus headroom for stateless retry (one extra Rowboat call) and
-// DB writes. If we hit this, the worker is wedged or the job got stuck;
-// the user gets a clean error and can resend, and the server-side row
-// will eventually be reclaimed by reclaim_stale_chat_jobs().
-const JOB_POLL_TIMEOUT_MS = 6 * 60 * 1000;
+// on a job we enqueued. Sized to cover the worker's worst case:
+//   primary attempt:    WORKER_ROWBOAT_TIMEOUT_MS (240s)
+// + stateless retry:    WORKER_ROWBOAT_TIMEOUT_MS (240s)
+// + DB writes/headroom: ~60s
+// = 540s
+// If we hit this, the worker is wedged or the job got stuck; the user
+// gets a clean error and can resend, and the server-side row will
+// eventually be reclaimed by reclaim_stale_chat_jobs(). Pre-PR-#79
+// round-5 this was 6 minutes which would have raced the worker on
+// a legitimate double-timeout (Bugbot Medium-severity finding).
+const JOB_POLL_TIMEOUT_MS = 9 * 60 * 1000;
 
 function formatTime(ts?: string): string {
   if (!ts) return "";
