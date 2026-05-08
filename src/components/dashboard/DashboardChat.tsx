@@ -697,24 +697,28 @@ export function DashboardChat({ businessId, businessName }: Props) {
       return;
     }
 
-    // Worker reported done. Refresh the canonical message list from
-    // the server so we see the new assistant turn. We do this rather
-    // than fetching the single message by id because it also picks
-    // up any concurrent writes (e.g. summary persisted a system
-    // message) and keeps the rendered history aligned with what a
-    // refresh would show.
+    // Worker reported done. Refresh the canonical message list for
+    // OUR specific thread (post.threadId), not whatever thread the
+    // route considers active right now. The active thread can have
+    // changed during the 5-30s worker window — another browser tab,
+    // a thread archive from elsewhere — and the generic
+    // GET /api/dashboard/chat?businessId would return that other
+    // thread's messages, overwriting ours with the wrong content.
+    // Bugbot Medium-severity finding on PR #79 round-8.
     try {
       const res = await fetch(
-        `/api/dashboard/chat?businessId=${encodeURIComponent(businessId)}`,
+        `/api/dashboard/chat/threads/${encodeURIComponent(post.threadId)}/messages`,
         { cache: "no-store", signal: controller.signal }
       );
-      const env = await parseEnvelope<ChatGetResponse>(res);
+      const env = await parseEnvelope<ThreadMessagesResponse>(res);
       if (env.ok) {
         setMessages(env.data.messages);
-        setActiveThreadId(env.data.threadId);
-        setViewingThreadId(env.data.threadId);
-        setIsPaused(env.data.isPaused);
-        setSafeMode(!env.data.customerChannelsEnabled);
+        // Pin both ids to the thread we just submitted on. If a
+        // concurrent tab swapped the active thread, the user's
+        // current view stays on the thread they were chatting in
+        // (correct behavior — the user will see the active-thread
+        // change in the sidebar on the next refresh).
+        setViewingThreadId(post.threadId);
       } else {
         // GET returned an error envelope (e.g. session expired
         // mid-chat, server issue between the worker write and our
