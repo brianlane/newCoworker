@@ -433,15 +433,26 @@ export async function POST(request: Request) {
     // can retry without losing what they typed. Cheap insurance.
     const userMsg = await appendMessage(thread.id, "user", body.message);
 
-    // Hand the work off to the VPS chat-worker.
+    // Hand the work off to the VPS chat-worker. Both convId and
+    // state are gated on hasContinuation rather than blanket
+    // forwarded: if the stored convId is "" or whitespace,
+    // hasContinuation is already false and statelessInputMessages
+    // is null (no fallback). Forwarding "" anyway would have the
+    // worker call Rowboat with an invalid empty conversationId,
+    // Rowboat would reject it, and the job would fail permanently
+    // because there's no fallback to escalate to. Mirrors the
+    // pre-Option-B `useContinuation ? ... : null` gate. Bugbot
+    // Medium-severity finding on PR #79 round-9.
     const job = await insertChatJob({
       businessId: body.businessId,
       threadId: thread.id,
       userMessageId: userMsg.id,
       inputMessages,
       statelessInputMessages,
-      rowboatConversationId: thread.rowboat_conversation_id ?? null,
-      rowboatState: thread.rowboat_state ?? null
+      rowboatConversationId: hasContinuation
+        ? thread.rowboat_conversation_id
+        : null,
+      rowboatState: hasContinuation ? thread.rowboat_state ?? null : null
     });
 
     // The summarizer runs on the worker side (after the assistant
