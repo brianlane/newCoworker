@@ -254,14 +254,20 @@ export type CallRowboatChatStreamInput = {
   conversationId?: string | null;
   state?: unknown | null;
   /**
-   * Hard cap on time-to-first-byte. 480s (8 min) default. We
-   * intentionally let TTFB run nearly to the route's `maxDuration`
-   * (800s) before bailing — owners have legitimate workflows where
+   * Hard cap on time-to-first-byte. 270s default — sized to the
+   * route's `maxDuration` (300s on Vercel Hobby) minus 30s of
+   * generation budget. Owners have legitimate workflows where
    * Rowboat needs to load a cold model, retrieve a large customer
    * history, AND plan a multi-tool response before emitting its
    * first token. Production logs (May 2026) showed a query
-   * consistently taking 91s pre-token; bumping past that with room
-   * to spare while still catching truly wedged tunnels.
+   * consistently taking 91s pre-token; 270s gives 3x that headroom
+   * while still surfacing wedged tunnels before Vercel's reaper.
+   *
+   * Note: this ceiling is plan-bounded. Vercel Hobby caps
+   * `maxDuration` at 300s, so TTFB physically cannot exceed that
+   * regardless of what we set here. If the plan upgrades (Pro:
+   * 800s, Enterprise: 900s) we can lift both `maxDuration` and
+   * `ttfbTimeoutMs` proportionally.
    *
    * Distinct from `idleTimeoutMs` because TTFB has wildly different
    * latency characteristics from mid-stream tokens. TTFB is
@@ -271,9 +277,9 @@ export type CallRowboatChatStreamInput = {
    * almost always means something is genuinely broken, so the idle
    * cap stays tight at 30s regardless of how loose TTFB gets.
    *
-   * History: 30s (initial) → 90s (PR #77, May 7) → 480s (PR #77
-   * follow-up, May 7 evening) after owners reported the 90s cap
-   * still firing on the most complex queries.
+   * History: 30s (initial) → 90s (PR #77) → 270s (PR #78) after
+   * production owners reported the 90s cap still firing on the
+   * most complex queries.
    */
   ttfbTimeoutMs?: number;
   /**
@@ -281,7 +287,7 @@ export type CallRowboatChatStreamInput = {
    * catches mid-stream stalls without killing legitimate long
    * generations. There is intentionally NO total runtime cap: the model
    * takes as long as it takes, bounded only by Vercel `maxDuration`
-   * (800s) at the route level.
+   * (300s on Hobby; 800s/900s on higher plans) at the route level.
    */
   idleTimeoutMs?: number;
   /**
@@ -298,7 +304,7 @@ export type CallRowboatChatStreamInput = {
   signal?: AbortSignal;
 };
 
-export const DEFAULT_ROWBOAT_STREAM_TTFB_MS = 480_000;
+export const DEFAULT_ROWBOAT_STREAM_TTFB_MS = 270_000;
 export const DEFAULT_ROWBOAT_STREAM_IDLE_MS = 30_000;
 
 /**

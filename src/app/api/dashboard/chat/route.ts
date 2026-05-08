@@ -17,7 +17,8 @@
  * client "Unexpected server response". Streaming token-by-token keeps
  * the connection live, structurally eliminating that failure mode and
  * letting the model take as long as it needs (bounded only by Vercel
- * `maxDuration` = 800s at the route level — Vercel Pro maximum).
+ * `maxDuration` = 300s at the route level — Vercel Hobby maximum;
+ * upgrade the plan to lift this).
  *
  * Wire shape (NDJSON over the response body — one JSON object per line):
  *   {"type":"meta","threadId":"...","activeThreadId":"..."}
@@ -74,19 +75,17 @@ import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
 
-// Vercel Pro hard ceiling (max allowed: 800s on Pro). Streaming
+// Vercel Hobby plan hard ceiling — the max allowed for Hobby is 300s
+// (build fails with "Serverless Functions must have a maxDuration
+// between 1 and 300 for plan hobby" if we go higher). Streaming
 // responses don't depend on this for idle-timer survival (the
 // connection stays warm because tokens flow + we send periodic ping
 // heartbeats during the pre-token wait), but `maxDuration` still
-// bounds the absolute longest a single owner turn can take. Bumped
-// from 300s → 800s after production logs (May 7, 2026) showed
-// owners hitting both the per-tenant Rowboat 90s TTFB AND the
-// Vercel 300s reaper on legitimately complex queries (cross-channel
-// customer summaries on tenants with hundreds of records). 800s
-// gives the slowest realistic Rowboat workflow ~13 minutes of
-// headroom while still preventing a runaway from pinning a function
-// slot indefinitely.
-export const maxDuration = 800;
+// bounds the absolute longest a single owner turn can take. If a
+// future tenant routinely exceeds 300s end-to-end, the path forward
+// is upgrading the Vercel plan (Pro: 800s, Enterprise: 900s) — NOT
+// bumping this value, because that breaks the deploy.
+export const maxDuration = 300;
 
 const MAX_MESSAGE_CHARS = 4000;
 const HISTORY_TURNS = 20;
