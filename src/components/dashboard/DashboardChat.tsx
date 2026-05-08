@@ -14,11 +14,7 @@ import { Textarea } from "@/components/ui/Textarea";
 import { Badge } from "@/components/ui/Badge";
 import { ChatMarkdown } from "@/components/ui/ChatMarkdown";
 import { parseEnvelope } from "@/lib/client/api-envelope";
-import {
-  consumeNdjsonChunk,
-  flushNdjsonBuffer,
-  type NdjsonBuffer
-} from "@/lib/client/ndjson-stream";
+import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 type Role = "user" | "assistant" | "system";
 
@@ -39,6 +35,27 @@ type ChatGetResponse = {
   messages: ChatMessage[];
   isPaused: boolean;
   customerChannelsEnabled: boolean;
+};
+
+type ChatPostResponse = {
+  threadId: string;
+  activeThreadId: string;
+  jobId: string;
+  userMessageId: number;
+  messages: ChatMessage[];
+};
+
+type ChatJobStatusResponse = {
+  id: string;
+  threadId: string;
+  userMessageId: number;
+  status: "queued" | "processing" | "done" | "error";
+  assistantMessageId: number | null;
+  errorCode: string | null;
+  errorDetail: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
 };
 
 type ThreadSummary = {
@@ -62,6 +79,35 @@ type ThreadMessagesResponse = {
   updatedAt: string;
   messages: ChatMessage[];
 };
+
+// Reply delivery is a race between two parallel mechanisms:
+//
+//   (a) Supabase Realtime subscription on dashboard_chat_messages —
+//       sub-second on the happy path. Authorized via the RLS SELECT
+//       policy from migration 20260508000003 (matches owner_email
+//       against the JWT email claim).
+//
+//   (b) Polling /api/dashboard/chat/jobs/[id] — fires every
+//       JOB_POLL_INTERVAL_MS. Catches:
+//         * websocket failures (corporate proxies, mobile network),
+//         * the rare Realtime drop on the way to the client,
+//         * worker errors (status='error' surfaces the friendly
+//           message; Realtime never fires on the no-message path),
+//         * any clock-skew where the INSERT lands a few ms before the
+//           subscription handshake completes.
+//
+// First to settle wins; the loser is aborted. Both paths trigger the
+// same UI handler (a full message-list refresh from the GET endpoint),
+// so duplicate firings are harmless idempotent renders.
+const JOB_POLL_INTERVAL_MS = 1500;
+
+// Hard cap on how long we'll wait for a worker reply before giving up
+// on a job we enqueued. Mirrors the worker-side WORKER_ROWBOAT_TIMEOUT_MS
+// (240s) plus headroom for stateless retry (one extra Rowboat call) and
+// DB writes. If we hit this, the worker is wedged or the job got stuck;
+// the user gets a clean error and can resend, and the server-side row
+// will eventually be reclaimed by reclaim_stale_chat_jobs().
+const JOB_POLL_TIMEOUT_MS = 6 * 60 * 1000;
 
 function formatTime(ts?: string): string {
   if (!ts) return "";
@@ -93,14 +139,17 @@ function formatThreadDate(ts: string): string {
   }).format(d);
 }
 
-// Stream events emitted by POST /api/dashboard/chat (NDJSON, one
-// per line). See route.ts for the canonical contract.
-type StreamEvent =
-  | { type: "meta"; threadId: string; activeThreadId: string }
-  | { type: "delta"; content: string }
-  | { type: "ping" }
-  | { type: "done"; threadId: string; messages: ChatMessage[] }
-  | { type: "error"; code: string; message: string };
+// Map an opaque worker-side error_code to a user-facing string.
+// Anything we don't recognize becomes the generic "couldn't generate
+// a reply" message — better than leaking internal codes to the
+// owner, who can't do anything with rowboat_http_500 anyway.
+function friendlyErrorMessage(code: string | null): string {
+  if (!code) return "Your coworker couldn't generate a reply. Please try again.";
+  if (code === "max_attempts_exceeded") {
+    return "Your coworker couldn't generate a reply after several tries. Please try again in a moment.";
+  }
+  return "Your coworker couldn't generate a reply. Please try again.";
+}
 
 export function DashboardChat({ businessId, businessName }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -115,10 +164,9 @@ export function DashboardChat({ businessId, businessName }: Props) {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [loadingThread, setLoadingThread] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  // Outstanding stream POST. Aborted on unmount, "New conversation",
-  // or a new send (defense-in-depth against double-submit; the submit
-  // button is disabled while `sending` so this should never trip
-  // mid-flight, but better safe than orphaned-tokens).
+  // Outstanding fetch / poll lifecycle. AbortController fires on unmount,
+  // "New conversation", switching threads mid-send, or a fresh send. The
+  // poll loop checks signal.aborted each tick so it can exit cleanly.
   const abortRef = useRef<AbortController | null>(null);
 
   const scrollToBottom = useCallback(() => {
@@ -179,11 +227,10 @@ export function DashboardChat({ businessId, businessName }: Props) {
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
-  // Abort any in-flight streaming POST when the component unmounts.
-  // Without this, navigating away mid-generation leaves the server
-  // happily streaming tokens nobody will ever read; the route's
-  // request.signal.aborted check tears down the upstream Rowboat call
-  // as soon as the AbortController fires.
+  // Abort any in-flight POST or poll loop on unmount. Without this,
+  // navigating away mid-poll keeps a 1.5s tick alive against a
+  // dead component, and (worse) any setMessages it tries to call
+  // logs a "set state on unmounted component" warning.
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
@@ -246,6 +293,164 @@ export function DashboardChat({ businessId, businessName }: Props) {
     [activeThreadId, businessId, loadingThread, sending, viewingThreadId]
   );
 
+  // Settlement outcome: who delivered the assistant message, or what
+  // went wrong. Realtime and polling both produce the same `ok` shape
+  // so the caller doesn't need to know which path won — they just
+  // refresh the message list.
+  type SettleOutcome =
+    | { ok: true; via: "realtime" | "poll" }
+    | { ok: false; reason: string };
+
+  // Open a Realtime channel scoped to this thread and resolve when
+  // the worker INSERTs an assistant message. Resolves with `ok:false`
+  // on subscribe failure or abort — the caller treats those as "this
+  // path didn't win, defer to polling".
+  function subscribeAssistantMessage(
+    threadId: string,
+    signal: AbortSignal
+  ): Promise<SettleOutcome> {
+    return new Promise((resolve) => {
+      if (signal.aborted) {
+        resolve({ ok: false, reason: "" });
+        return;
+      }
+      const supabase = getSupabaseBrowserClient();
+      // Channel name carries a timestamp so re-sends don't collide
+      // with each other if the previous subscription is still in
+      // teardown. Supabase rejects duplicate channel names per client.
+      const channel = supabase.channel(`chat-msg-${threadId}-${Date.now()}`);
+      let settled = false;
+      const finish = (outcome: SettleOutcome) => {
+        if (settled) return;
+        settled = true;
+        // removeChannel is idempotent; safe to call from multiple
+        // exit paths.
+        void supabase.removeChannel(channel);
+        resolve(outcome);
+      };
+      channel
+        .on(
+          "postgres_changes",
+          {
+            event: "INSERT",
+            schema: "public",
+            table: "dashboard_chat_messages",
+            filter: `thread_id=eq.${threadId}`
+          },
+          (payload: { new?: { role?: string } | null }) => {
+            const row = payload.new ?? {};
+            // We only care about the worker's assistant write. The
+            // user-message INSERT also fires here (we wrote it
+            // server-side just before enqueueing) but we already
+            // rendered that from the POST response.
+            if (row.role !== "assistant") return;
+            finish({ ok: true, via: "realtime" });
+          }
+        )
+        .subscribe((status: string) => {
+          // CHANNEL_ERROR / TIMED_OUT / CLOSED: Realtime path is
+          // unavailable. Resolve so polling becomes the sole path.
+          // SUBSCRIBED: keep the promise pending, waiting for the
+          // INSERT.
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+            finish({ ok: false, reason: "" });
+          }
+        });
+      signal.addEventListener("abort", () => finish({ ok: false, reason: "" }), {
+        once: true
+      });
+    });
+  }
+
+  // Poll the job-status endpoint until the worker reports done/error.
+  // Returns the final assistant content (or null if errored). Caller
+  // is responsible for refreshing the message list afterwards — we
+  // don't do it here so the success path can refresh once at the end
+  // rather than racing the user message echo with the assistant write.
+  async function pollJobUntilSettled(
+    jobId: string,
+    threadId: string,
+    signal: AbortSignal
+  ): Promise<SettleOutcome> {
+    const startedAt = Date.now();
+    while (!signal.aborted) {
+      if (Date.now() - startedAt > JOB_POLL_TIMEOUT_MS) {
+        return {
+          ok: false,
+          reason: "Your coworker is taking unusually long. Please try again."
+        };
+      }
+
+      let env;
+      try {
+        const res = await fetch(
+          `/api/dashboard/chat/jobs/${encodeURIComponent(jobId)}?businessId=${encodeURIComponent(businessId)}`,
+          { cache: "no-store", signal }
+        );
+        env = await parseEnvelope<ChatJobStatusResponse>(res);
+      } catch (err) {
+        if ((err as { name?: string } | null)?.name === "AbortError") {
+          // Caller cancelled — don't surface an error, the caller
+          // already manages the UI for whatever it's switching to.
+          return { ok: false, reason: "" };
+        }
+        // One transient network failure shouldn't kill the whole
+        // poll. Wait one tick and try again — the AbortController
+        // will exit us if the user navigates away during the sleep.
+        await sleepWithAbort(JOB_POLL_INTERVAL_MS, signal);
+        continue;
+      }
+
+      if (!env.ok) {
+        // 404/UNAUTHORIZED/etc. We can't recover, surface and exit.
+        return { ok: false, reason: env.error.message };
+      }
+
+      const job = env.data;
+      // Defensive: a polled job whose threadId no longer matches the
+      // submission's threadId means something went wrong on the
+      // server (worker swapped a thread? row corrupted?). Treat as
+      // an error rather than render the wrong assistant bubble in
+      // the wrong thread.
+      if (job.threadId !== threadId) {
+        return { ok: false, reason: "Conversation state changed; please reload." };
+      }
+
+      if (job.status === "done") {
+        return { ok: true, via: "poll" };
+      }
+      if (job.status === "error") {
+        return { ok: false, reason: friendlyErrorMessage(job.errorCode) };
+      }
+      // queued | processing — keep waiting.
+      await sleepWithAbort(JOB_POLL_INTERVAL_MS, signal);
+    }
+    return { ok: false, reason: "" };
+  }
+
+  // Promise wrapper around setTimeout that resolves early on abort.
+  // Without the abort hook, an aborted poll loop would still wait the
+  // full JOB_POLL_INTERVAL_MS before checking signal.aborted on the
+  // next iteration — slow shutdown on tab navigation.
+  function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+    return new Promise((resolve) => {
+      if (signal.aborted) {
+        resolve();
+        return;
+      }
+      const timer = setTimeout(() => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
   async function handleSubmit(evt: FormEvent<HTMLFormElement>) {
     evt.preventDefault();
     const trimmed = input.trim();
@@ -261,20 +466,15 @@ export function DashboardChat({ businessId, businessName }: Props) {
       content: trimmed,
       createdAt: new Date().toISOString()
     };
-    // Placeholder assistant bubble that will fill incrementally as
-    // deltas arrive. We insert it on the first `meta` event (NOT
-    // up front) so a slow preflight error doesn't briefly flash an
-    // empty assistant bubble.
-    const inflightAssistantId = `local-assistant-${Date.now()}`;
 
     setMessages((prev) => [...prev, optimisticUser]);
     setInput("");
     setSending(true);
     setError(null);
 
-    // Cancel any prior in-flight stream — defensive; the Send button
-    // is disabled while sending=true, but a fast double-submit during
-    // the React batch could otherwise leak two readers.
+    // Cancel any prior in-flight poll. The Send button is disabled
+    // while sending=true, but defensive cleanup means a fast double-
+    // submit during a React batch can't leave two polls running.
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -282,42 +482,9 @@ export function DashboardChat({ businessId, businessName }: Props) {
     // ChatGPT/Claude/Gemini-style: every thread is continuable.
     const targetThreadId = viewingThreadId ?? activeThreadId;
 
-    // Tracks whether we've inserted the in-flight assistant bubble
-    // into the message list. Pre-fix this flag flipped on `meta` and
-    // the bubble showed a "Coworker • timestamp" header with empty
-    // content for the entire pre-token wait — owners reported it as
-    // "an extra message box appeared while the model was thinking
-    // that wasn't there before". The pre-streaming UX never showed a
-    // bubble until the reply arrived, so the streaming UX shouldn't
-    // either; the existing "Your coworker is thinking…" indicator
-    // below the message list is the loading affordance.
-    //
-    // Bubble is now inserted on the FIRST delta (first user-visible
-    // token), not on `meta`. `meta` still arrives — we use it to
-    // know the route is alive — but it no longer mutates the DOM.
-    let assistantBubbleInserted = false;
-    // Tracks whether the user has actually SEEN any assistant content
-    // in the bubble. With the bubble now inserted on first delta,
-    // this is functionally equivalent to `assistantBubbleInserted`
-    // for the success path, but the error/partial-stream branches
-    // still need to distinguish "did meaningful content render" from
-    // "was the bubble inserted at all" (whitespace deltas can flip
-    // bubble-inserted without flipping firstDeltaRendered — see
-    // Cursor Bugbot Low on PR #76 commit e722c7d).
-    let firstDeltaRendered = false;
-    let streamErrored = false;
-    // Tracks whether we received the server's `done` event. Used to
-    // distinguish a clean stream close (done) from a connection-cut
-    // close (Vercel function reaper at maxDuration, TCP drop, server
-    // crash) — the latter MUST surface an error so the owner knows
-    // the reply may be incomplete instead of leaving them staring at
-    // a half-finished bubble that looks like the model just stopped
-    // (Cursor Bugbot Low on PR #76).
-    let streamDone = false;
-    let res: Response | null = null;
-
+    let post: ChatPostResponse;
     try {
-      res = await fetch("/api/dashboard/chat", {
+      const res = await fetch("/api/dashboard/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -327,218 +494,140 @@ export function DashboardChat({ businessId, businessName }: Props) {
         }),
         signal: controller.signal
       });
-    } catch (err) {
-      // Network failure (DNS, TLS, abort). On abort we silently bail —
-      // unmount/new-conversation handlers reset their own UI. On any
-      // other failure surface a friendly error.
-      if ((err as { name?: string } | null)?.name !== "AbortError") {
+      const env = await parseEnvelope<ChatPostResponse>(res);
+      if (!env.ok) {
+        // Rate limit / paused / not found — surface the server's
+        // message verbatim, restore the textarea, drop the optimistic
+        // user bubble. The user's typed message never made it to the
+        // server, so a fresh Send is the correct retry.
         setMessages((prev) => prev.filter((m) => m.id !== optimisticUserId));
         setInput(trimmed);
-        setError("Network error while sending message.");
+        setError(env.error.message);
+        setSending(false);
+        if (abortRef.current === controller) abortRef.current = null;
+        return;
       }
-      setSending(false);
-      if (abortRef.current === controller) abortRef.current = null;
-      return;
-    }
-
-    if (!res.body) {
-      // Server returned a response with no body — extraordinarily rare
-      // (would have to be a buggy intermediary stripping the stream).
-      setMessages((prev) => prev.filter((m) => m.id !== optimisticUserId));
-      setInput(trimmed);
-      setError("Unexpected server response.");
-      setSending(false);
-      if (abortRef.current === controller) abortRef.current = null;
-      return;
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder("utf-8");
-    const ndjsonState: NdjsonBuffer = { buffer: "" };
-
-    const handleEvent = (ev: StreamEvent) => {
-      if (ev.type === "meta") {
-        // Server is alive and persisted the user's turn. We used to
-        // insert the in-flight assistant bubble here, but that gave
-        // owners "an extra empty message box appeared while the
-        // model was thinking" — the pre-streaming UX never showed a
-        // bubble until the reply arrived, so the streaming UX
-        // doesn't either. The bubble is now inserted on the first
-        // delta below.
-      } else if (ev.type === "delta") {
-        // Mark the moment the user sees MEANINGFUL content. The
-        // error / partial-stream branches below use this — NOT
-        // `assistantBubbleInserted` — to decide whether to preserve
-        // the bubble (because the owner is mid-read and yanking it
-        // is jarring) vs tear it down (because the bubble has only
-        // ever been an empty placeholder, or whitespace).
-        //
-        // Cursor Bugbot Low on PR #76 commit e722c7d: trim before
-        // testing length. Pre-fix this was `length > 0`, but a
-        // whitespace-only stream (Rowboat emits a leading "\n\n"
-        // and then errors) would flip the flag, the server's
-        // post-error friendly-message gate uses
-        // `buffered.trim().length === 0` (so it surfaces a
-        // pre-meaningful-content error), and the bubble was never
-        // persisted server-side. Mismatched gates left a whitespace
-        // bubble visible until refresh. Aligning on "trimmed
-        // non-empty == meaningful content" keeps server and client
-        // in lockstep.
-        if (ev.content.trim().length > 0) firstDeltaRendered = true;
-        // Lazily insert the in-flight bubble on the FIRST delta —
-        // never on `meta`. The "Your coworker is thinking…" italic
-        // indicator below the message list is the loading
-        // affordance for the pre-token wait; the bubble only
-        // appears once the user has something to read.
-        if (!assistantBubbleInserted) {
-          assistantBubbleInserted = true;
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: inflightAssistantId,
-              role: "assistant",
-              content: ev.content,
-              createdAt: new Date().toISOString()
-            }
-          ]);
-        } else {
-          // Streaming append. Find the in-flight bubble by stable
-          // local id — locating by index would race against React's
-          // reconciler batching multiple deltas in a single tick.
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === inflightAssistantId
-                ? { ...m, content: m.content + ev.content }
-                : m
-            )
-          );
-        }
-      } else if (ev.type === "ping") {
-        // Heartbeat — server signaling "still working, don't time out".
-        // Nothing to render.
-      } else if (ev.type === "done") {
-        streamDone = true;
-        // Replace the optimistic / in-flight pair with the server's
-        // canonical message list (real DB ids, ordered by created_at,
-        // any server-side normalization applied). Keeps the rendered
-        // history consistent with what a refresh would show.
-        setMessages(ev.messages);
-        setActiveThreadId(ev.threadId);
-        setViewingThreadId(ev.threadId);
-        // Refresh sidebar so the (newly) active thread's bumped
-        // updatedAt + new message_count + flipped isActive flag show
-        // up without a hard reload.
-        void fetchThreads();
-      } else if (ev.type === "error") {
-        streamErrored = true;
-        // Branching mirrors the post-loop "stream closed without
-        // done/error" handler below. Both branches handle the same
-        // conceptual scenario — a stream interruption where the user
-        // has either (a) seen partial assistant content already, or
-        // (b) only seen the empty placeholder. The server has not
-        // persisted the assistant turn either way, so we never need
-        // to keep the bubble for DB-consistency reasons — only UX.
-        //
-        // Cursor Bugbot Medium on PR #76 commit 334bc4e: keying off
-        // `assistantBubbleInserted` was wrong because that flag flips
-        // on `meta`, which the server unconditionally sends BEFORE
-        // calling Rowboat. A Rowboat failure pre-token would arrive
-        // as an `error` event AFTER `meta` had already inserted the
-        // empty bubble, and the !assistantBubbleInserted check would
-        // be false — leaving an orphaned empty bubble on screen with
-        // no way to restore the textarea. Branching on
-        // `firstDeltaRendered` (set only when actual content was
-        // appended) fixes this: "did you see content?" is the right
-        // question, "did meta arrive?" is the wrong one.
-        if (!firstDeltaRendered) {
-          // The bubble (if inserted) only ever showed an empty
-          // placeholder. Safe to drop the optimistic user message +
-          // the placeholder and restore the textarea so the owner
-          // can edit-and-resend in one click. Matches the
-          // pre-streaming UX exactly.
-          setMessages((prev) =>
-            prev.filter((m) => m.id !== optimisticUserId && m.id !== inflightAssistantId)
-          );
-          setInput(trimmed);
-        }
-        // If content WAS rendered, leave the optimistic user message
-        // and the partial assistant bubble in place — the owner saw
-        // those tokens, yanking them mid-read is jarring. We do NOT
-        // restore the textarea here: the user's message is on the
-        // server (we received `meta`), and a re-send would create a
-        // duplicate user turn. Owner can re-ask if they want the
-        // full answer.
-        setError(ev.message);
-      }
-    };
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (!value) continue;
-        const { events } = consumeNdjsonChunk<StreamEvent>(
-          ndjsonState,
-          decoder.decode(value, { stream: true })
-        );
-        for (const ev of events) handleEvent(ev);
-      }
-      // Flush any trailing partial line (shouldn't happen with a well-
-      // formed server, but tolerant parsing avoids dropping a final
-      // event when an intermediary clips the trailing newline).
-      const { events: trailingEvents } = flushNdjsonBuffer<StreamEvent>(ndjsonState);
-      for (const ev of trailingEvents) handleEvent(ev);
-      if (!streamErrored && !streamDone) {
-        if (!firstDeltaRendered) {
-          // Stream closed before any visible token reached the user.
-          // Could be: server never emitted meta (very rare), server
-          // emitted meta but Rowboat hung and the function got
-          // reaped before the first delta, or any other pre-token
-          // failure mode. Either way the user sees only an empty
-          // placeholder bubble (or no bubble) — drop it, drop the
-          // optimistic user message, and restore the textarea so
-          // they can edit-and-resend.
-          setMessages((prev) =>
-            prev.filter((m) => m.id !== optimisticUserId && m.id !== inflightAssistantId)
-          );
-          setInput(trimmed);
-          setError("Your coworker didn't respond. Please try again.");
-        } else {
-          // Stream closed AFTER one or more `delta` events but
-          // BEFORE `done` or `error`. Most likely cause: Vercel's
-          // function reaper at maxDuration, an intermediate proxy
-          // dropping the connection, or the server process crashing
-          // mid-generation. We KEEP the partial assistant bubble
-          // (the user already saw those tokens — yanking them looks
-          // like a bug) but surface a clear error so the owner knows
-          // the reply is incomplete and can resend. The textarea is
-          // NOT restored: the user's message did make it to the
-          // server (we got `meta` back), and resending would persist
-          // a duplicate user turn — better to let them retype if
-          // they want, after seeing the partial reply.
-          setError("The reply was cut off — please ask again to get the full answer.");
-        }
-      }
+      post = env.data;
     } catch (err) {
       if ((err as { name?: string } | null)?.name === "AbortError") {
-        // Aborted by unmount / new-conversation. The respective handler
-        // already manages its own UI state.
-      } else {
-        setMessages((prev) =>
-          prev.filter((m) => m.id !== optimisticUserId && m.id !== inflightAssistantId)
-        );
-        setInput(trimmed);
-        setError("Network error while reading the reply.");
+        // Aborted by unmount / new-conversation / thread switch. The
+        // respective handler manages its own UI state.
+        setSending(false);
+        if (abortRef.current === controller) abortRef.current = null;
+        return;
       }
-    } finally {
+      setMessages((prev) => prev.filter((m) => m.id !== optimisticUserId));
+      setInput(trimmed);
+      setError("Network error while sending message.");
       setSending(false);
-      try {
-        reader.releaseLock();
-      } catch {
-        /* already released by abort */
-      }
       if (abortRef.current === controller) abortRef.current = null;
+      return;
     }
+
+    // Server has persisted the user message and minted (or reactivated)
+    // the thread. Replace our optimistic bubble with the canonical
+    // server copy so timestamps + ids match a refresh, and remember
+    // the active thread so the next send targets it.
+    setMessages(post.messages);
+    setActiveThreadId(post.activeThreadId);
+    setViewingThreadId(post.threadId);
+    // Refresh sidebar so the (newly) active thread's bumped updatedAt +
+    // new message_count + flipped isActive flag show up without a
+    // hard reload. Fire-and-forget; sidebar is best-effort.
+    void fetchThreads();
+
+    // Wait for the worker via two parallel paths (see the JOB_POLL
+    // comment block at the top of this file for the why). The race
+    // uses a nested AbortController so we can tear down the LOSER
+    // without aborting the outer per-send `controller` (the loser
+    // signal would otherwise propagate into the post-success message-
+    // list refresh fetch and abort it).
+    const raceController = new AbortController();
+    // Outer abort cascades into the race (unmount / new conversation
+    // tears down both Realtime and poll). Race-only abort does NOT
+    // propagate back outward.
+    const cascade = () => raceController.abort();
+    if (controller.signal.aborted) raceController.abort();
+    else controller.signal.addEventListener("abort", cascade, { once: true });
+
+    const realtimePromise = subscribeAssistantMessage(
+      post.threadId,
+      raceController.signal
+    ).then((outcome) => {
+      // Realtime path that didn't win (subscribe failure / abort)
+      // shouldn't terminate the race — block forever so the poll
+      // path is the deciding voice.
+      if (outcome.ok || outcome.reason) return outcome;
+      return new Promise<SettleOutcome>(() => undefined);
+    });
+    const pollPromise = pollJobUntilSettled(
+      post.jobId,
+      post.threadId,
+      raceController.signal
+    );
+    const result: SettleOutcome = await Promise.race([realtimePromise, pollPromise]);
+    controller.signal.removeEventListener("abort", cascade);
+    // Tear down the loser. The winning path already resolved; this
+    // signals "stop polling / unsubscribe Realtime" without touching
+    // the outer signal's abort listeners.
+    raceController.abort();
+
+    // If the user navigated away mid-race the outer signal fired,
+    // which cascaded into raceController.abort() — both paths
+    // returned ok:false with empty reason. Bail silently; the
+    // navigation handler manages its own UI.
+    if (controller.signal.aborted) {
+      setSending(false);
+      if (abortRef.current === controller) abortRef.current = null;
+      return;
+    }
+
+    if (!result.ok) {
+      // No assistant message persisted server-side. Surface the error,
+      // leave the user message in place (it's on the server). DON'T
+      // restore the textarea: the user's turn is already committed,
+      // a re-send would create a duplicate. They can retype if they
+      // want to re-ask.
+      if (result.reason) setError(result.reason);
+      setSending(false);
+      if (abortRef.current === controller) abortRef.current = null;
+      return;
+    }
+
+    // Worker reported done. Refresh the canonical message list from
+    // the server so we see the new assistant turn. We do this rather
+    // than fetching the single message by id because it also picks
+    // up any concurrent writes (e.g. summary persisted a system
+    // message) and keeps the rendered history aligned with what a
+    // refresh would show.
+    try {
+      const res = await fetch(
+        `/api/dashboard/chat?businessId=${encodeURIComponent(businessId)}`,
+        { cache: "no-store", signal: controller.signal }
+      );
+      const env = await parseEnvelope<ChatGetResponse>(res);
+      if (env.ok) {
+        setMessages(env.data.messages);
+        setActiveThreadId(env.data.threadId);
+        setViewingThreadId(env.data.threadId);
+        setIsPaused(env.data.isPaused);
+        setSafeMode(!env.data.customerChannelsEnabled);
+      }
+    } catch (err) {
+      if ((err as { name?: string } | null)?.name !== "AbortError") {
+        // The assistant message IS on the server — the worker only
+        // marks the job done after the INSERT succeeds. We just
+        // failed to fetch the refreshed list. Rather than yank
+        // the user-message echo, leave the rendered state alone
+        // and surface a soft note. A page refresh will pick up
+        // the new turn.
+        setError("Reply ready — refresh to see it.");
+      }
+    }
+
+    setSending(false);
+    void fetchThreads();
+    if (abortRef.current === controller) abortRef.current = null;
   }
 
   function handleKeyDown(evt: KeyboardEvent<HTMLTextAreaElement>) {

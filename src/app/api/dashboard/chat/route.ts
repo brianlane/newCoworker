@@ -1,40 +1,63 @@
 /**
  * Owner ↔ local-model chat endpoint for /dashboard/chat.
  *
- * POST   send a message — STREAMS the reply as NDJSON (`meta` → `delta…` → `done|error`)
- * GET    hydrate the active thread + flag state for the client
- * DELETE end the active thread so the next POST starts fresh
+ * POST   ENQUEUE a job and return immediately. The actual model call runs
+ *        on the per-tenant VPS chat-worker (vps/chat-worker/) which writes
+ *        the assistant message back to dashboard_chat_messages. The browser
+ *        subscribes to that table via Supabase Realtime and renders the
+ *        reply when it lands. (Replaces the in-Vercel streaming path that
+ *        was capped by Vercel's `maxDuration` and dropped messages on any
+ *        disconnect inside that window — see PR #79.)
+ * GET    Hydrate the active thread + flag state for the client.
+ * DELETE End the active thread so the next POST starts fresh.
  *
- * Auth: getAuthUser + requireOwner(businessId). Kill switch (is_paused) soft-
- * blocks the endpoint with a 409 so the UI can show a Resume CTA; Safe Mode
- * is deliberately NOT gated (the whole point is the owner stays online while
- * customer channels forward to their cell).
+ * Auth: getAuthUser + requireOwner(businessId). Kill switch (is_paused)
+ * soft-blocks POST with a 409 so the UI can show a Resume CTA; Safe Mode
+ * is deliberately NOT gated (the whole point is the owner stays online
+ * while customer channels forward to their cell).
  *
- * Why streaming: the per-tenant Rowboat sits behind a Cloudflare Tunnel
- * whose `originRequest.idleTimeout` defaults to ~60-100s. With buffered
- * (`stream: false`) calls a 70s+ Ollama generation produced no traffic
- * before the tunnel timer tripped, surfacing as a 524 → Vercel 502 →
- * client "Unexpected server response". Streaming token-by-token keeps
- * the connection live, structurally eliminating that failure mode and
- * letting the model take as long as it needs (bounded only by Vercel
- * `maxDuration` = 300s at the route level — Vercel Hobby maximum;
- * upgrade the plan to lift this).
+ * Why we offload to a VPS worker instead of streaming on Vercel:
+ * Vercel's Hobby plan caps a single function at maxDuration=300s and
+ * Pro at 800s. Our local Rowboat sometimes takes 60-120s on the first
+ * cold-tenant turn (vault load + Ollama page-in) and another 5-30s for
+ * subsequent turns. ANY disconnect inside that window — Cloudflare
+ * Tunnel hiccup, browser tab backgrounded, function eviction — meant
+ * the assistant reply was generated on the VPS but never persisted,
+ * because the route only wrote the message after the stream closed
+ * cleanly. Three post-mortems (#76, #77, #78) couldn't close the
+ * dropping-messages bug without a different architecture.
  *
- * Wire shape (NDJSON over the response body — one JSON object per line):
- *   {"type":"meta","threadId":"...","activeThreadId":"..."}
- *   {"type":"delta","content":"Hello"}
- *   {"type":"delta","content":" world"}
- *   {"type":"ping"}                                    // 15s heartbeat (no delta)
- *   {"type":"done","messages":[...]}                   // server-canonical message list
- *                                                      // OR
- *   {"type":"error","code":"CONFLICT","message":"…"}
+ * Reliability contract (proven on srv1632631.hstgr.cloud before this
+ * PR shipped — see PR #79):
+ *   1. POST writes the user message + queues a job, both in <2s. The
+ *      Vercel function returns immediately and is gone.
+ *   2. The chat-worker (one per VPS) claims the job atomically via
+ *      claim_chat_job() (FOR UPDATE SKIP LOCKED).
+ *   3. Worker calls Rowboat in NON-streaming mode and waits for the
+ *      full reply (4-30s typical, with up to 4 min of tolerance).
+ *   4. Worker INSERTs the assistant message THEN marks the job done.
+ *      A crash between those two writes leaves the job 'processing'
+ *      with a stale claimed_at; reclaim_stale_chat_jobs() flips it
+ *      back to 'queued' on the next sweep, so a restarted worker
+ *      re-picks it up. The assistant message is never lost.
+ *   5. Browser subscribes to dashboard_chat_messages Realtime keyed
+ *      to thread_id and renders the reply the moment it lands.
  *
- * NDJSON (not text/event-stream) chosen because:
- *   - Trivial client parser (split on `\n`, JSON.parse).
- *   - Doesn't conflict with the rest of the app's `parseEnvelope` JSON
- *     contract — non-streaming endpoints are unaffected.
- *   - Vercel doesn't strip trailing newlines on the `application/x-ndjson`
- *     content type.
+ * Wire shape (POST response body — single JSON envelope):
+ *   {
+ *     "ok": true,
+ *     "data": {
+ *       "threadId": "uuid",
+ *       "activeThreadId": "uuid",
+ *       "jobId": "uuid",
+ *       "userMessageId": 123,
+ *       "messages": [{ id, role, content, createdAt }, ...]
+ *     }
+ *   }
+ *
+ * The client uses `messages` to render the user's typed message
+ * immediately (echo) and `jobId` as a polling-fallback key when
+ * Realtime can't deliver the assistant message INSERT.
  */
 
 import { z } from "zod";
@@ -42,7 +65,6 @@ import { getAuthUser, requireOwner } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { getBusinessConfig } from "@/lib/db/configs";
 import {
   appendMessage,
   deactivateActiveThread,
@@ -53,15 +75,12 @@ import {
   reactivateThread,
   serializeChatMessages,
   touchChatActivity,
-  updateThreadConversation,
   type DashboardChatThreadRow
 } from "@/lib/db/dashboard-chat";
 import {
-  callRowboatChatStream,
-  describeRowboatError,
-  type RowboatChatMessage,
-  type RowboatStreamEvent
-} from "@/lib/rowboat/chat";
+  insertChatJob,
+  type DashboardChatJobInputMessage
+} from "@/lib/db/dashboard-chat-jobs";
 import {
   shouldSummarize,
   summarizeThreadAndLog
@@ -75,72 +94,15 @@ import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
 
-// Vercel Hobby plan hard ceiling — the max allowed for Hobby is 300s
-// (build fails with "Serverless Functions must have a maxDuration
-// between 1 and 300 for plan hobby" if we go higher). Streaming
-// responses don't depend on this for idle-timer survival (the
-// connection stays warm because tokens flow + we send periodic ping
-// heartbeats during the pre-token wait), but `maxDuration` still
-// bounds the absolute longest a single owner turn can take. If a
-// future tenant routinely exceeds 300s end-to-end, the path forward
-// is upgrading the Vercel plan (Pro: 800s, Enterprise: 900s) — NOT
-// bumping this value, because that breaks the deploy.
-export const maxDuration = 300;
+// POST runs in <2s now (write-and-queue, no Rowboat call). Keep
+// maxDuration small so a misbehaving deploy can't burn function-time
+// budget — anything taking >10s on this path is a bug, not a slow model.
+export const maxDuration = 30;
 
 const MAX_MESSAGE_CHARS = 4000;
 const HISTORY_TURNS = 20;
 
 const DASHBOARD_CHAT_RATE = { interval: 5 * 60 * 1000, maxRequests: 30 };
-
-/**
- * Errors where Rowboat's response strongly suggests the *server-side*
- * conversation referenced by our stored conversationId is gone (model
- * restart, retention expiry, version skew) OR the conversation is
- * otherwise unhealthy. On these we get one stateless retry — Rowboat's
- * reply will live entirely off a fresh stateless prompt (rolling
- * summary system message + recent-tail transcript system message + new
- * user turn — see buildRowboatChatMessages), so dropping
- * conversationId/state is safe.
- *
- * Critically, the streaming retry only fires when ZERO `delta` events
- * have reached the client. Once tokens are out, retrying would emit
- * duplicate text and the client UX would look like a stuttering reply.
- *
- * 524 / 522 / 408 are infrastructure-level "no response in time"
- * signals — Cloudflare Tunnel idle timeout, origin connection timeout,
- * request timeout. They're now in the retry set because the most
- * common cause is a wedged per-tenant tunnel that recovers on a fresh
- * stateless prompt; pre-streaming they were treated as fatal because
- * the buffered path couldn't distinguish them from the model itself
- * being slow.
- *
- * 400 specifically also covers the case where the stored
- * conversationId is intact but Rowboat's input validator rejected the
- * request body for some other reason; the stateless retry sends a
- * different (continuation-free, tail-as-system) shape, which often
- * succeeds where the first call didn't.
- *
- * Deliberately excluded:
- *   - rowboat_timeout: timing out doesn't tell us anything about
- *     conversation state and a stateless retry would just double the
- *     load on a slow VPS.
- *   - rowboat_http_401 / 403: auth is global, retrying with the same
- *     bearer would fail identically.
- *   - rowboat_invalid_json: protocol-level failure; retrying without
- *     conversationId won't fix garbled bytes.
- */
-const STATELESS_RETRY_ERRORS = new Set([
-  "rowboat_http_400",
-  "rowboat_http_404",
-  "rowboat_http_408",
-  "rowboat_http_409",
-  "rowboat_http_500",
-  "rowboat_http_502",
-  "rowboat_http_503",
-  "rowboat_http_522",
-  "rowboat_http_524",
-  "rowboat_empty_assistant"
-]);
 
 const postBodySchema = z.object({
   businessId: z.string().uuid(),
@@ -248,7 +210,9 @@ You will never ask the owner for their own contact info, schedule, or business d
 export { OWNER_PREAMBLE };
 
 /**
- * Build the message array sent to Rowboat for one chat turn.
+ * Build the message array sent to Rowboat for one chat turn. Stored on
+ * the job row so the worker can call Rowboat without re-running this
+ * logic.
  *
  * Why we don't just replay the live tail of stored messages: Rowboat's
  * HTTP /chat endpoint validates the input `messages[]` with a Zod
@@ -261,8 +225,7 @@ export { OWNER_PREAMBLE };
  *
  *   - rely on Rowboat's server-side conversation memory via
  *     conversationId/state when we have it (`includeTailContext: false`);
- *   - on a fresh thread or a stateless fallback (continuation evicted
- *     and we just dropped it), render the recent-turn tail as a single
+ *   - on a fresh thread, render the recent-turn tail as a single
  *     transcript-shaped *system* message so the model still has
  *     continuity (`includeTailContext: true`).
  *
@@ -284,8 +247,8 @@ function buildRowboatChatMessages(args: {
    * world the owner is operating in.
    */
   customerPreamble?: string | null;
-}): RowboatChatMessage[] {
-  const out: RowboatChatMessage[] = [];
+}): DashboardChatJobInputMessage[] {
+  const out: DashboardChatJobInputMessage[] = [];
   // ALWAYS first: OWNER_PREAMBLE establishes that this is the
   // owner-facing surface so the agent never lapses into its
   // customer-receptionist script. Stronger than a soft hint because
@@ -324,114 +287,41 @@ function buildRowboatChatMessages(args: {
   return out;
 }
 
+export { buildRowboatChatMessages };
+
 // =====================================================================
-// NDJSON streaming response helpers
+// POST — write user message + enqueue a job + return 200
 // =====================================================================
-
-const NDJSON_HEADERS = {
-  "Content-Type": "application/x-ndjson; charset=utf-8",
-  "Cache-Control": "no-cache, no-transform",
-  // Disable Vercel's edge-cache buffering on Node functions. Without
-  // this header some intermediaries hold the response until enough
-  // bytes accumulate, undoing the entire point of streaming.
-  "X-Accel-Buffering": "no",
-  Connection: "keep-alive"
-};
-
-type NdjsonErrorEvent = {
-  type: "error";
-  /** Status family for the client (`UNAUTHORIZED`, `CONFLICT`, `NOT_FOUND`, etc.). */
-  code: string;
-  message: string;
-};
-
-/**
- * Single-event NDJSON response for preflight failures (auth, rate
- * limit, paused business, missing config). Status code on the HTTP
- * response is meaningful (the client uses it for routing) AND the
- * body carries the friendly copy the UI shows.
- *
- * Two responses on the wire (HTTP status + NDJSON event) keeps the
- * client's reader logic uniform: every POST yields NDJSON regardless
- * of preflight outcome, no hybrid `try res.json() else stream`
- * branches.
- */
-function ndjsonError(status: number, code: string, message: string): Response {
-  const ev: NdjsonErrorEvent = { type: "error", code, message };
-  return new Response(JSON.stringify(ev) + "\n", {
-    status,
-    headers: NDJSON_HEADERS
-  });
-}
 
 export async function POST(request: Request) {
-  // ---------------------------------------------------------------
-  // PREFLIGHT — auth, rate limit, kill-switch, config, thread, history.
-  // Failures here surface as a single NDJSON `error` event with a
-  // meaningful HTTP status. The streaming response is opened only
-  // once we've committed to actually calling Rowboat.
-  // ---------------------------------------------------------------
-  let body: z.infer<typeof postBodySchema>;
-  let businessIdForLog = "";
-  let threadIdForLog = "";
   try {
     const user = await getAuthUser();
     if (!user) {
-      return ndjsonError(401, "UNAUTHORIZED", "Authentication required");
+      return errorResponse("UNAUTHORIZED", "Authentication required");
     }
 
-    body = postBodySchema.parse(await request.json());
-    businessIdForLog = body.businessId;
+    const body = postBodySchema.parse(await request.json());
     if (!user.isAdmin) await requireOwner(body.businessId);
 
     const limiter = rateLimit(`dashboard-chat:${body.businessId}`, DASHBOARD_CHAT_RATE);
     if (!limiter.success) {
-      return ndjsonError(
-        429,
-        "CONFLICT",
-        "Too many messages, please wait a minute."
-      );
+      return errorResponse("CONFLICT", "Too many messages, please wait a minute.");
     }
 
     const flags = await loadBusinessFlags(body.businessId);
-    if (!flags) return ndjsonError(404, "NOT_FOUND", "Business not found");
+    if (!flags) return errorResponse("NOT_FOUND", "Business not found");
 
     if (flags.is_paused) {
-      return ndjsonError(
-        409,
+      return errorResponse(
         "CONFLICT",
         "Your coworker is paused. Resume from the dashboard to chat."
       );
     }
 
-    const projectConfig = await getBusinessConfig(body.businessId);
-    const projectId =
-      projectConfig?.rowboat_project_id?.trim() ??
-      process.env.ROWBOAT_DEFAULT_PROJECT_ID ??
-      "";
-    const bearer =
-      process.env.ROWBOAT_VPS_CHAT_BEARER ??
-      process.env.ROWBOAT_GATEWAY_TOKEN ??
-      "";
-
-    if (!projectId) {
-      return ndjsonError(
-        409,
-        "CONFLICT",
-        "Your coworker's chat service isn't ready yet. Provisioning may still be in progress."
-      );
-    }
-    if (!bearer) {
-      return ndjsonError(
-        500,
-        "INTERNAL_SERVER_ERROR",
-        "Chat bearer token is not configured"
-      );
-    }
-
-    // Activity update #1: fires before the Rowboat call so the VPS keep-warm
-    // timer stands down for this turn. The second update below (post-reply)
-    // keeps the 180s skip window anchored to the most recent exchange.
+    // Activity update fires BEFORE we enqueue so the VPS keep-warm timer
+    // stands down for this turn. The worker is the one that touches
+    // activity again on success (post-Rowboat-reply) — not us, since
+    // we're done after the enqueue.
     await touchChatActivity(body.businessId);
 
     // Thread resolution. Two paths:
@@ -448,11 +338,11 @@ export async function POST(request: Request) {
       // authenticated owner reactivate any thread on the platform by
       // pairing a guessed threadId with a businessId they own.
       const target = await getThreadById(body.threadId);
-      if (!target) return ndjsonError(404, "NOT_FOUND", "Conversation not found");
+      if (!target) return errorResponse("NOT_FOUND", "Conversation not found");
       if (target.business_id !== body.businessId) {
-        // Same-status response as a missing row so the caller can't
+        // Same response as a missing row so the caller can't
         // distinguish "not yours" from "doesn't exist" via timing.
-        return ndjsonError(404, "NOT_FOUND", "Conversation not found");
+        return errorResponse("NOT_FOUND", "Conversation not found");
       }
       if (!target.is_active) {
         await reactivateThread(body.businessId, body.threadId);
@@ -466,9 +356,8 @@ export async function POST(request: Request) {
       const title = body.message.slice(0, 140);
       thread = await getOrCreateActiveThread(body.businessId, title);
     }
-    threadIdForLog = thread.id;
 
-    // Build the Rowboat request off the *persisted* history plus the just-
+    // Build the Rowboat input off the *persisted* history plus the just-
     // received user turn.
     const history = await listMessages(thread.id);
     const tail = history.slice(-HISTORY_TURNS);
@@ -492,19 +381,33 @@ export async function POST(request: Request) {
       });
     }
 
-    // Two message arrays: one for the initial (continuation-using) call
-    // and one for the stateless fallback.
     const hasContinuation =
       typeof thread.rowboat_conversation_id === "string" &&
       thread.rowboat_conversation_id.trim().length > 0;
-    const initialMessages = buildRowboatChatMessages({
+
+    // Two message arrays:
+    //   * `inputMessages`: first attempt. When we have a Rowboat
+    //     continuation, this OMITS the tail-as-system message — Rowboat
+    //     replays its own server-side state and we'd be sending the
+    //     same context twice. On a fresh thread (no continuation) the
+    //     tail is included because Rowboat has nothing to replay.
+    //   * `statelessInputMessages`: fallback used by the worker on a
+    //     STATELESS_RETRY_ERRORS-class failure. ALWAYS includes the
+    //     tail-as-system because it's invoked WITHOUT a conversationId
+    //     and Rowboat needs the context entirely from our prompt.
+    //
+    // When `hasContinuation` is false the two are identical; we pass
+    // null for the stateless variant so the worker's "no fallback"
+    // path kicks in (a stateless call already failed; a second one
+    // wouldn't help).
+    const inputMessages = buildRowboatChatMessages({
       summaryMd: thread.summary_md,
       tail,
       newUserMessage: body.message,
       includeTailContext: !hasContinuation,
       customerPreamble
     });
-    const statelessMessages = hasContinuation
+    const statelessInputMessages = hasContinuation
       ? buildRowboatChatMessages({
           summaryMd: thread.summary_md,
           tail,
@@ -512,475 +415,45 @@ export async function POST(request: Request) {
           includeTailContext: true,
           customerPreamble
         })
-      : initialMessages;
+      : null;
 
-    // Persist the user message BEFORE opening the stream. If the
-    // browser disconnects mid-generation (or Vercel reaper kicks in
-    // at maxDuration) the owner's typed message survives — they can
-    // resend without losing anything. The cost is a possibly-orphaned
-    // user row when Rowboat fails before any token; acceptable trade
-    // for never silently dropping an owner message.
-    await appendMessage(thread.id, "user", body.message);
+    // Persist the user message BEFORE enqueueing. If the enqueue fails
+    // for any reason the user's typed message is still saved — they
+    // can retry without losing what they typed. Cheap insurance.
+    const userMsg = await appendMessage(thread.id, "user", body.message);
 
-    // ---------------------------------------------------------------
-    // STREAMING RESPONSE — preflight survived; commit to the stream.
-    // ---------------------------------------------------------------
-    const stream = createDashboardChatStream({
+    // Hand the work off to the VPS chat-worker.
+    const job = await insertChatJob({
       businessId: body.businessId,
-      projectId,
-      bearer,
-      thread,
-      initialMessages,
-      statelessMessages,
-      hasContinuation,
-      requestSignal: request.signal
+      threadId: thread.id,
+      userMessageId: userMsg.id,
+      inputMessages,
+      statelessInputMessages,
+      rowboatConversationId: thread.rowboat_conversation_id ?? null
     });
 
-    return new Response(stream, { status: 200, headers: NDJSON_HEADERS });
-  } catch (err) {
-    // Errors here are pre-stream — auth/validation/db lookup. Map to
-    // the same NDJSON error shape so the client's reader handles every
-    // failure mode uniformly.
-    logger.warn("dashboard chat: preflight failed", {
-      businessId: businessIdForLog,
-      threadId: threadIdForLog,
-      errorMessage: err instanceof Error ? err.message : String(err)
-    });
-    return preflightErrorToNdjson(err);
-  }
-}
-
-/**
- * Translate a thrown preflight error into the NDJSON envelope shape.
- * Mirrors `handleRouteError` in `lib/api-response.ts` but emits a
- * single-event NDJSON response so the client reader sees a uniform
- * format regardless of failure mode.
- */
-async function preflightErrorToNdjson(error: unknown): Promise<Response> {
-  // Re-use the standard JSON envelope for shaping (correct status
-  // codes, code mapping for ZodError / Error.status). Then re-wrap as
-  // NDJSON so the client reader doesn't need a JSON-vs-NDJSON branch.
-  const jsonRes = handleRouteError(error);
-  const status = jsonRes.status;
-  type ApiErrorEnvelope = {
-    ok?: boolean;
-    error?: { code?: string; message?: string };
-  };
-  let env: ApiErrorEnvelope = {};
-  try {
-    env = (await jsonRes.clone().json()) as ApiErrorEnvelope;
-  } catch {
-    // Falling through with empty env triggers the defaults below.
-  }
-  const code = env.error?.code ?? "INTERNAL_SERVER_ERROR";
-  const message = env.error?.message ?? "An unexpected error occurred";
-  return ndjsonError(status, code, message);
-}
-
-// =====================================================================
-// Streaming pipeline
-// =====================================================================
-
-type StreamPipelineInput = {
-  businessId: string;
-  projectId: string;
-  bearer: string;
-  thread: DashboardChatThreadRow;
-  initialMessages: RowboatChatMessage[];
-  statelessMessages: RowboatChatMessage[];
-  hasContinuation: boolean;
-  requestSignal: AbortSignal;
-};
-
-/**
- * Build the Web `ReadableStream` of NDJSON bytes that gets returned to
- * the client. Encapsulates the pipeline:
- *
- *   1. Emit `meta` — confirms the thread the server actually targeted
- *      (after archival re-resolution, etc.).
- *   2. Start `callRowboatChatStream` with the continuation, forward
- *      every `delta` to the client, buffer the full reply server-side
- *      for persistence.
- *   3. If Rowboat errors BEFORE any delta has reached the client AND
- *      the error is in `STATELESS_RETRY_ERRORS` AND we had a
- *      conversationId, retry once with the stateless message shape.
- *      Once tokens are out we MUST NOT retry — duplicate text would
- *      surface in the UI.
- *   4. Heartbeat: a 15s setInterval emits `{"type":"ping"}` whenever
- *      no delta has been forwarded in the prior 15s. Keeps Cloudflare
- *      / Vercel intermediaries from closing the *client-facing* socket
- *      while Ollama is still paging in the model on the first turn.
- *      Cleared on any error/done.
- *   5. On `done`: persist assistant message + conversation
- *      continuation, touch activity, fire-and-forget summarizer, read
- *      back canonical messages, emit `done` event with that list.
- *   6. On post-token error: emit `error` event without persisting the
- *      partial reply (we'd rather the user re-send than commit a
- *      half-finished assistant turn).
- */
-function createDashboardChatStream(input: StreamPipelineInput): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder();
-
-  return new ReadableStream<Uint8Array>({
-    async start(controller) {
-      let closed = false;
-      const writeLine = (obj: unknown) => {
-        if (closed) return;
-        try {
-          controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
-        } catch {
-          // Controller already closed (client disconnected). Mark so
-          // we don't re-attempt on subsequent events.
-          closed = true;
-        }
-      };
-      const close = () => {
-        if (closed) return;
-        closed = true;
-        try {
-          controller.close();
-        } catch {
-          // Already closed.
-        }
-      };
-
-      // Heartbeat. Reset on every delta. The 15s cadence is well under
-      // Cloudflare's ~60s idle timer but generous enough that a fast
-      // model doesn't pay for unused pings (deltas reset the clock).
-      let lastForwardedAt = Date.now();
-      const heartbeat = setInterval(() => {
-        if (closed) return;
-        if (Date.now() - lastForwardedAt >= 15_000) {
-          writeLine({ type: "ping" });
-          lastForwardedAt = Date.now();
-        }
-      }, 5_000);
-
-      // Client disconnect — tear down the heartbeat + NDJSON
-      // controller and let the in-flight Rowboat call see it via the
-      // request.signal we forward into callRowboatChatStream below.
-      // Pre-fix this used a SEPARATE AbortController that was never
-      // wired into the upstream fetch, so the per-tenant Ollama would
-      // happily keep generating tokens nobody read until the internal
-      // idle timer tripped 30s later (Codex P2 + Cursor Bugbot Medium
-      // on PR #76). Now `request.signal` flows straight through to
-      // `fetch()` and `reader.cancel()` inside `callRowboatChatStream`.
-      const onClientAbort = () => {
-        clearInterval(heartbeat);
-        close();
-      };
-      input.requestSignal.addEventListener("abort", onClientAbort, { once: true });
-
-      // Always send `meta` first. The client uses it to know the
-      // route is alive and that the user's turn has been persisted —
-      // the in-flight assistant bubble is now inserted on the FIRST
-      // delta (not on `meta`) so owners don't see an empty placeholder
-      // bubble during the pre-token wait.
-      writeLine({
-        type: "meta",
-        threadId: input.thread.id,
-        activeThreadId: input.thread.id
-      });
-
-      let retriedStateless = false;
-      let lastError: { message: string } | null = null;
-
-      /**
-       * Per-attempt result returned by `runOnce`. Cursor Bugbot Low on
-       * PR #76 commit fbbbe1f: pre-fix `buffered`, `deltasEmitted`,
-       * `finalConversationId`, `finalState`, `finalHadStateKey` were
-       * declared in the outer scope and mutated by `runOnce` directly
-       * — meaning a stateless retry could in principle inherit stale
-       * metadata from the first attempt. Today the upstream generator
-       * yields errors before any metadata, so the leak doesn't trigger,
-       * but the shared mutable state across logically independent
-       * attempts is fragile. Scoping these per-attempt and returning
-       * them in the result removes the fragility entirely: the caller
-       * uses the final attempt's accumulator and the first attempt's
-       * state cannot bleed forward.
-       */
-      type RunOnceResult = {
-        buffered: string;
-        deltasEmitted: number;
-        finalConversationId: string | undefined;
-        finalState: unknown | undefined;
-        finalHadStateKey: boolean;
-        outcome:
-          | { kind: "done" }
-          | { kind: "error"; message: string; retryable: boolean };
-      };
-
-      /**
-       * Run a single Rowboat streaming call. Returns the per-attempt
-       * accumulator (buffered text, delta count, final conversation
-       * metadata) along with an outcome:
-       *   - { kind: "done" } on graceful completion
-       *   - { kind: "error", message, retryable } on upstream failure
-       *
-       * Retryable means the error is in STATELESS_RETRY_ERRORS AND we
-       * still have permission to retry (no deltas emitted yet AND we
-       * haven't already retried).
-       */
-      const runOnce = async (
-        messages: RowboatChatMessage[],
-        useContinuation: boolean
-      ): Promise<RunOnceResult> => {
-        let buffered = "";
-        let deltasEmitted = 0;
-        let finalConversationId: string | undefined;
-        let finalState: unknown | undefined;
-        let finalHadStateKey = false;
-        const pack = (
-          outcome: RunOnceResult["outcome"]
-        ): RunOnceResult => ({
-          buffered,
-          deltasEmitted,
-          finalConversationId,
-          finalState,
-          finalHadStateKey,
-          outcome
-        });
-
-        // `callRowboatChatStream` is an `async function*` — calling it
-        // synchronously returns an AsyncGenerator object and the body
-        // does not run until iteration begins. There is therefore no
-        // synchronous throw path to catch here; any errors raised
-        // during iteration emerge through `for await` and are caught
-        // by the outer `try/catch (unexpected)` in
-        // createDashboardChatStream. (Cursor Bugbot Low on PR #76
-        // commit 7d36f3b removed an unreachable try/catch that
-        // wrapped this assignment.)
-        const stream: AsyncGenerator<RowboatStreamEvent> = callRowboatChatStream({
-          businessId: input.businessId,
-          projectId: input.projectId,
-          bearer: input.bearer,
-          messages,
-          conversationId: useContinuation ? input.thread.rowboat_conversation_id : null,
-          state: useContinuation ? input.thread.rowboat_state : null,
-          // Forward the browser's AbortSignal so a client disconnect
-          // tears down the upstream Rowboat fetch + body reader
-          // promptly instead of waiting up to 30s for the internal
-          // idle timer.
-          signal: input.requestSignal
-        });
-
-        for await (const event of stream) {
-          if (closed) {
-            // Client gave up. Drop the rest of the stream so we stop
-            // burning Rowboat budget.
-            try {
-              await stream.return?.(undefined);
-            } catch {
-              /* ignore */
-            }
-            return pack({ kind: "error", message: "client_disconnected", retryable: false });
-          }
-          if (event.type === "delta") {
-            buffered += event.text;
-            deltasEmitted += 1;
-            lastForwardedAt = Date.now();
-            writeLine({ type: "delta", content: event.text });
-          } else if (event.type === "tool_call") {
-            // v1: tool calls aren't surfaced to the dashboard UI yet.
-            // We drop them silently rather than leaking implementation
-            // detail to the owner — but the parser yields them so a
-            // future "Coworker is calling tool X" affordance is a
-            // strict additive change.
-            continue;
-          } else if (event.type === "done") {
-            if (event.conversationId !== undefined) finalConversationId = event.conversationId;
-            if (event.hasStateKey) {
-              finalState = event.state;
-              finalHadStateKey = true;
-            }
-            return pack({ kind: "done" });
-          } else if (event.type === "error") {
-            const retryable =
-              STATELESS_RETRY_ERRORS.has(event.message) &&
-              deltasEmitted === 0 &&
-              !retriedStateless &&
-              input.hasContinuation;
-            return pack({ kind: "error", message: event.message, retryable });
-          }
-        }
-        // Generator ended without yielding an explicit terminal
-        // event. Today `callRowboatChatStream` always yields error/
-        // done before returning, so this path is reachable only via
-        // test mocks that exhaust their event array; production
-        // streams never land here. Cursor Bugbot Low on PR #76
-        // commit 837c6e8: even though unreachable in prod, the
-        // fallback MUST stay correct because the architecture
-        // depends on STATELESS_RETRY_ERRORS recovery — a future
-        // generator-contract change must NOT silently bypass it.
-        //
-        // Two rules to mirror the inline branches:
-        //   1. "Did the user see meaningful content?" uses
-        //      `buffered.trim().length > 0` — same gate as
-        //      persistence and the post-error friendly message.
-        //      Whitespace-only buffered content is empty, full stop.
-        //   2. `rowboat_empty_assistant` is in
-        //      STATELESS_RETRY_ERRORS, so the retry gate here uses
-        //      the SAME conditions as the inline error handler
-        //      above (no deltas yet, haven't already retried,
-        //      thread has a continuation worth blowing away).
-        if (buffered.trim().length > 0) return pack({ kind: "done" });
-        const retryable =
-          deltasEmitted === 0 && !retriedStateless && input.hasContinuation;
-        return pack({
-          kind: "error",
-          message: "rowboat_empty_assistant",
-          retryable
-        });
-      };
-
-      try {
-        // First attempt — with continuation (if any).
-        let result = await runOnce(input.initialMessages, true);
-        if (result.outcome.kind === "error" && result.outcome.retryable) {
-          retriedStateless = true;
-          logger.info("dashboard chat: retrying stateless after pre-token error", {
-            businessId: input.businessId,
-            threadId: input.thread.id,
-            firstError: result.outcome.message
-          });
-          // Re-run with the stateless-fallback message set; result
-          // REPLACES the first-attempt result so persistence and the
-          // post-error friendly-message logic see ONLY the second
-          // attempt's accumulators. Stale metadata from the first
-          // attempt cannot bleed forward.
-          result = await runOnce(input.statelessMessages, false);
-        }
-
-        const {
-          buffered,
-          deltasEmitted,
-          finalConversationId,
-          finalState,
-          finalHadStateKey,
-          outcome
-        } = result;
-
-        if (outcome.kind === "error") {
-          lastError = { message: outcome.message };
-        }
-
-        // Done path — persist, summarize, emit final event.
-        if (outcome.kind === "done") {
-          // Defensive: an explicit `done` with zero accumulated content
-          // is functionally an empty-assistant case. Don't persist a
-          // blank assistant row — surface as an error so the client
-          // can prompt a re-send.
-          if (buffered.trim().length === 0) {
-            lastError = { message: "rowboat_empty_assistant" };
-          } else {
-            try {
-              await appendMessage(input.thread.id, "assistant", buffered);
-              // When we used the stateless fallback, the thread's
-              // stored rowboat_conversation_id is *known* stale —
-              // Rowboat had already failed with a STATELESS_RETRY_ERRORS
-              // code on it. Even if the retry's response omits a
-              // fresh conversationId, we MUST overwrite the DB with
-              // whatever the retry returned (possibly null). Otherwise
-              // the next turn re-sends the same dead id, fails,
-              // retries, and we pay 2x latency forever.
-              if (retriedStateless || finalConversationId || finalHadStateKey) {
-                await updateThreadConversation(
-                  input.thread.id,
-                  finalConversationId ?? null,
-                  finalHadStateKey ? finalState : undefined
-                );
-              }
-              await touchChatActivity(input.businessId);
-
-              const updated = await listMessages(input.thread.id);
-
-              // Rolling-summary trigger. Fire-and-forget so a slow
-              // Ollama doesn't block the chat response. Gate before
-              // invoking so we don't spam logs with "below_threshold"
-              // rejections on every short-thread turn.
-              if (shouldSummarize(input.thread, updated.length)) {
-                void summarizeThreadAndLog(input.businessId, input.thread.id);
-              }
-
-              writeLine({
-                type: "done",
-                threadId: input.thread.id,
-                messages: serializeChatMessages(updated)
-              });
-            } catch (persistErr) {
-              // Persistence failed AFTER the model already produced
-              // text. The user has seen the reply; we cannot un-send
-              // it. Log and emit an error so the UI can flag the
-              // staleness on next reload.
-              logger.error("dashboard chat: persistence failed after stream done", {
-                businessId: input.businessId,
-                threadId: input.thread.id,
-                errorMessage:
-                  persistErr instanceof Error ? persistErr.message : String(persistErr)
-              });
-              writeLine({
-                type: "error",
-                code: "INTERNAL_SERVER_ERROR",
-                message:
-                  "Saved your message but couldn't save the reply. Refresh to see the latest state."
-              });
-            }
-          }
-        }
-
-        if (lastError) {
-          // Pre-meaningful-content errors → friendly copy from
-          // describeRowboatError ("didn't produce a reply", etc).
-          // Post-meaningful-content errors → tell the user the
-          // connection cut off, their reply may be incomplete.
-          //
-          // Cursor Bugbot Low on PR #76 commit e722c7d: pre-fix the
-          // gate was `deltasEmitted === 0`, which treated whitespace-
-          // only deltas as "user already saw content" and showed the
-          // misleading "Connection cut off" message. The persistence
-          // gate above uses `buffered.trim().length === 0` — these
-          // two gates MUST stay aligned, otherwise the user sees a
-          // "your reply may be incomplete" warning for a reply that
-          // was actually never persisted (and disappears on refresh).
-          const sawMeaningfulContent = buffered.trim().length > 0;
-          const friendly = sawMeaningfulContent
-            ? "Connection cut off — your reply may be incomplete. Please try again."
-            : describeRowboatError(new Error(lastError.message));
-          logger.warn("dashboard chat: rowboat stream failed", {
-            businessId: input.businessId,
-            threadId: input.thread.id,
-            errorMessage: lastError.message,
-            retriedStateless,
-            deltasEmitted,
-            sawMeaningfulContent
-          });
-          writeLine({
-            type: "error",
-            code: "CONFLICT",
-            message: friendly
-          });
-        }
-      } catch (unexpected) {
-        // Anything we didn't anticipate — never crash the controller
-        // without emitting an error event the client can render.
-        logger.error("dashboard chat: unexpected stream error", {
-          businessId: input.businessId,
-          threadId: input.thread.id,
-          errorMessage:
-            unexpected instanceof Error ? unexpected.message : String(unexpected)
-        });
-        writeLine({
-          type: "error",
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Your coworker hit an unexpected error. Please try again."
-        });
-      } finally {
-        clearInterval(heartbeat);
-        input.requestSignal.removeEventListener("abort", onClientAbort);
-        close();
-      }
+    // Rolling-summary trigger. Fires from THIS path (not the worker)
+    // because the summarizer logic lives in TypeScript on Vercel and
+    // porting it to the worker would duplicate maintenance. The trade-
+    // off is summary lag: shouldSummarize is gated on the message count
+    // BEFORE the assistant message is persisted, so the threshold trips
+    // one turn earlier than the pre-Option-B route. For 20-turn windows
+    // that's a 5% timing skew, fine.
+    const updated = await listMessages(thread.id);
+    if (shouldSummarize(thread, updated.length)) {
+      void summarizeThreadAndLog(body.businessId, thread.id);
     }
-  });
+
+    return successResponse({
+      threadId: thread.id,
+      activeThreadId: thread.id,
+      jobId: job.id,
+      userMessageId: userMsg.id,
+      messages: serializeChatMessages(updated)
+    });
+  } catch (err) {
+    return handleRouteError(err);
+  }
 }
 
 // =====================================================================

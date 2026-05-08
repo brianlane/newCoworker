@@ -1,0 +1,29 @@
+# Per-tenant chat-worker. One instance per VPS, pinned to the same
+# Docker network as Rowboat so it can reach `http://rowboat:3000`
+# without exposing Rowboat to the internet.
+#
+# Provisioned by vps/scripts/deploy-client.sh. The .env file written
+# by that script provides BUSINESS_ID, ROWBOAT_PROJECT_ID,
+# ROWBOAT_GATEWAY_TOKEN, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY.
+
+services:
+  chat-worker:
+    build: .
+    image: chat-worker:local
+    container_name: chat-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - rowboat_default
+    # Keep logs bounded — structured JSON, ~150 bytes/line, but a busy
+    # tenant could otherwise fill disk inside a year.
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+networks:
+  rowboat_default:
+    external: true
