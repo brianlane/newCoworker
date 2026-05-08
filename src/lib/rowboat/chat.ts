@@ -254,24 +254,26 @@ export type CallRowboatChatStreamInput = {
   conversationId?: string | null;
   state?: unknown | null;
   /**
-   * Hard cap on time-to-first-byte. 90s default — generous enough to
-   * absorb a cold-model paged-in startup on a small VPS PLUS the
-   * agent's pre-token planning phase (system prompt + tool selection
-   * + first-pass inference can legitimately take 30-60s on a complex
-   * query that retrieves customer history, builds the preamble, and
-   * starts generating). Tight enough that a wedged tunnel still
-   * surfaces well before Vercel's 300s maxDuration reaper.
+   * Hard cap on time-to-first-byte. 480s (8 min) default. We
+   * intentionally let TTFB run nearly to the route's `maxDuration`
+   * (800s) before bailing — owners have legitimate workflows where
+   * Rowboat needs to load a cold model, retrieve a large customer
+   * history, AND plan a multi-tool response before emitting its
+   * first token. Production logs (May 2026) showed a query
+   * consistently taking 91s pre-token; bumping past that with room
+   * to spare while still catching truly wedged tunnels.
    *
    * Distinct from `idleTimeoutMs` because TTFB has wildly different
-   * latency characteristics from mid-stream tokens (TTFB is dominated
-   * by model load + first inference pass; idle is "the model paused
-   * mid-token-stream", which usually means something is genuinely
-   * broken — that one stays at 30s).
+   * latency characteristics from mid-stream tokens. TTFB is
+   * dominated by model load + retrieval + first inference pass
+   * (legitimately variable, can be minutes). Idle is "the model
+   * paused mid-token-stream" — once tokens are flowing, a 30s gap
+   * almost always means something is genuinely broken, so the idle
+   * cap stays tight at 30s regardless of how loose TTFB gets.
    *
-   * Bumped from 30s → 90s after production owners reported timeouts
-   * on legitimately complex queries (e.g. "summarize all recent
-   * customer activity" — Rowboat needs to fetch + summarize before
-   * emitting its first token).
+   * History: 30s (initial) → 90s (PR #77, May 7) → 480s (PR #77
+   * follow-up, May 7 evening) after owners reported the 90s cap
+   * still firing on the most complex queries.
    */
   ttfbTimeoutMs?: number;
   /**
@@ -279,7 +281,7 @@ export type CallRowboatChatStreamInput = {
    * catches mid-stream stalls without killing legitimate long
    * generations. There is intentionally NO total runtime cap: the model
    * takes as long as it takes, bounded only by Vercel `maxDuration`
-   * (300s) at the route level.
+   * (800s) at the route level.
    */
   idleTimeoutMs?: number;
   /**
@@ -296,7 +298,7 @@ export type CallRowboatChatStreamInput = {
   signal?: AbortSignal;
 };
 
-export const DEFAULT_ROWBOAT_STREAM_TTFB_MS = 90_000;
+export const DEFAULT_ROWBOAT_STREAM_TTFB_MS = 480_000;
 export const DEFAULT_ROWBOAT_STREAM_IDLE_MS = 30_000;
 
 /**

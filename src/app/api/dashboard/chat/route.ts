@@ -17,7 +17,7 @@
  * client "Unexpected server response". Streaming token-by-token keeps
  * the connection live, structurally eliminating that failure mode and
  * letting the model take as long as it needs (bounded only by Vercel
- * `maxDuration` = 300s at the route level).
+ * `maxDuration` = 800s at the route level — Vercel Pro maximum).
  *
  * Wire shape (NDJSON over the response body — one JSON object per line):
  *   {"type":"meta","threadId":"...","activeThreadId":"..."}
@@ -74,13 +74,19 @@ import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
 
-// Vercel Pro hard ceiling. Streaming responses don't depend on this for
-// idle-timer survival (the connection stays warm because tokens flow),
-// but `maxDuration` still bounds the absolute longest a single owner
-// turn can take — long enough for any realistic local model on the
-// configured tier, short enough that a runaway generation can't pin a
-// function slot indefinitely.
-export const maxDuration = 300;
+// Vercel Pro hard ceiling (max allowed: 800s on Pro). Streaming
+// responses don't depend on this for idle-timer survival (the
+// connection stays warm because tokens flow + we send periodic ping
+// heartbeats during the pre-token wait), but `maxDuration` still
+// bounds the absolute longest a single owner turn can take. Bumped
+// from 300s → 800s after production logs (May 7, 2026) showed
+// owners hitting both the per-tenant Rowboat 90s TTFB AND the
+// Vercel 300s reaper on legitimately complex queries (cross-channel
+// customer summaries on tenants with hundreds of records). 800s
+// gives the slowest realistic Rowboat workflow ~13 minutes of
+// headroom while still preventing a runaway from pinning a function
+// slot indefinitely.
+export const maxDuration = 800;
 
 const MAX_MESSAGE_CHARS = 4000;
 const HISTORY_TURNS = 20;
@@ -666,8 +672,11 @@ function createDashboardChatStream(input: StreamPipelineInput): ReadableStream<U
       };
       input.requestSignal.addEventListener("abort", onClientAbort, { once: true });
 
-      // Always send `meta` first. The client uses it to insert the
-      // in-flight assistant bubble.
+      // Always send `meta` first. The client uses it to know the
+      // route is alive and that the user's turn has been persisted —
+      // the in-flight assistant bubble is now inserted on the FIRST
+      // delta (not on `meta`) so owners don't see an empty placeholder
+      // bubble during the pre-token wait.
       writeLine({
         type: "meta",
         threadId: input.thread.id,
