@@ -57,10 +57,6 @@
 //   BUSINESS_ID                   (this worker only handles its tenant's
 //                                  jobs; multi-tenant deploys would run
 //                                  one worker container per business)
-//   WORKER_HISTORY_LIMIT          (default 40 — only used as a safety cap
-//                                  if input_messages is somehow missing;
-//                                  the Vercel route normally pre-builds
-//                                  the full message list)
 //   WORKER_STALE_CLAIM_MS         (default 300000 = 5min)
 //   WORKER_SWEEP_INTERVAL_MS      (default 30000 = 30s)
 //   WORKER_ROWBOAT_TIMEOUT_MS     (default 240000 = 4min — must be < the
@@ -90,7 +86,6 @@ const ROWBOAT_BASE_URL = process.env.ROWBOAT_BASE_URL || "http://rowboat:3000";
 const ROWBOAT_PROJECT_ID = required("ROWBOAT_PROJECT_ID");
 const ROWBOAT_GATEWAY_TOKEN = required("ROWBOAT_GATEWAY_TOKEN");
 const BUSINESS_ID = required("BUSINESS_ID");
-const HISTORY_LIMIT = intEnv("WORKER_HISTORY_LIMIT", 40);
 const STALE_CLAIM_MS = intEnv("WORKER_STALE_CLAIM_MS", 5 * 60 * 1000);
 const SWEEP_INTERVAL_MS = intEnv("WORKER_SWEEP_INTERVAL_MS", 30 * 1000);
 const ROWBOAT_TIMEOUT_MS = intEnv("WORKER_ROWBOAT_TIMEOUT_MS", 4 * 60 * 1000);
@@ -166,21 +161,6 @@ async function claimNextJob() {
     return null;
   }
   return data && data.length > 0 ? data[0] : null;
-}
-
-// Fallback path: input_messages is null (only happens on rows created by
-// the pre-PR-#79 prototype). Reload history from dashboard_chat_messages.
-// Never used in steady state — kept so a stale prototype row doesn't wedge
-// a freshly-deployed worker.
-async function loadHistoryFallback(threadId) {
-  const { data, error } = await sb
-    .from("dashboard_chat_messages")
-    .select("role, content")
-    .eq("thread_id", threadId)
-    .order("id", { ascending: true })
-    .limit(HISTORY_LIMIT);
-  if (error) throw new Error(`history_load_failed:${error.message}`);
-  return (data || []).map((m) => ({ role: m.role, content: m.content }));
 }
 
 async function callRowboat(messages, conversationId, state) {
@@ -352,12 +332,18 @@ async function processJob(job) {
   }
 
   try {
-    const primaryMessages = Array.isArray(job.input_messages)
-      ? job.input_messages
-      : await loadHistoryFallback(job.thread_id);
-    if (primaryMessages.length === 0) {
+    // input_messages is non-null for every job inserted by the
+    // post-PR-#79 route (which always pre-builds the full Rowboat
+    // input). A null here means a regression in the route or a row
+    // hand-injected for testing — fail fast rather than silently
+    // dropping the user's prompt onto a blank thread, and avoid
+    // the prior loadHistoryFallback() path that re-read raw rows
+    // from dashboard_chat_messages and forwarded role:"assistant"
+    // entries to Rowboat (which /chat rejects with a 400).
+    if (!Array.isArray(job.input_messages) || job.input_messages.length === 0) {
       throw new Error("input_empty:no messages to send to rowboat");
     }
+    const primaryMessages = job.input_messages;
     const fallbackMessages = Array.isArray(job.stateless_input_messages)
       ? job.stateless_input_messages
       : null;
@@ -604,7 +590,6 @@ async function main() {
   log("info", "worker_start", {
     businessId: BUSINESS_ID,
     rowboatBaseUrl: ROWBOAT_BASE_URL,
-    historyLimit: HISTORY_LIMIT,
     staleClaimMs: STALE_CLAIM_MS,
     sweepIntervalMs: SWEEP_INTERVAL_MS,
     rowboatTimeoutMs: ROWBOAT_TIMEOUT_MS,

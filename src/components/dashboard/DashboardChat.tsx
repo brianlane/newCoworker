@@ -373,6 +373,17 @@ export function DashboardChat({ businessId, businessName }: Props) {
     signal: AbortSignal
   ): Promise<SettleOutcome> {
     const startedAt = Date.now();
+    // Bound on consecutive transient failures so we don't keep the
+    // user staring at the thinking indicator for 6 minutes when both
+    // Realtime is silently down AND every poll hits a network error.
+    // 20 ticks × 1.5s = 30s of completely-silent failures before we
+    // surface a friendly error instead of grinding to the full
+    // JOB_POLL_TIMEOUT_MS. Any single successful poll resets the
+    // counter — slow networks where 1-in-N requests fail still
+    // succeed eventually. Bugbot Low-severity finding on PR #79
+    // round-4.
+    const MAX_CONSECUTIVE_FAILURES = 20;
+    let consecutiveFailures = 0;
     while (!signal.aborted) {
       if (Date.now() - startedAt > JOB_POLL_TIMEOUT_MS) {
         return {
@@ -397,9 +408,17 @@ export function DashboardChat({ businessId, businessName }: Props) {
         // One transient network failure shouldn't kill the whole
         // poll. Wait one tick and try again — the AbortController
         // will exit us if the user navigates away during the sleep.
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          return {
+            ok: false,
+            reason: "Network is unreachable. Please check your connection and try again."
+          };
+        }
         await sleepWithAbort(JOB_POLL_INTERVAL_MS, signal);
         continue;
       }
+      consecutiveFailures = 0;
 
       if (!env.ok) {
         // 404/UNAUTHORIZED/etc. We can't recover, surface and exit.
