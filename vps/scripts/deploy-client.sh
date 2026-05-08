@@ -895,9 +895,10 @@ if [[ -f "${CHAT_WORKER_DEST}/docker-compose.yml" ]]; then
     # only when both are present in the deploy environment. Missing
     # values are equivalent to "rolling-summary callbacks disabled" —
     # the worker logs a warn and keeps processing jobs normally.
-    # NEXT_PUBLIC_SITE_URL is the canonical source for the Vercel base
-    # URL (set on every deploy); INTERNAL_CRON_SECRET is the same
-    # secret asserted by /api/internal/* routes via assertCronAuth.
+    # APP_BASE_URL is the canonical source for the Vercel base URL —
+    # orchestrate.ts exports it by this name (see line 850 of
+    # orchestrate.ts). INTERNAL_CRON_SECRET is the same secret asserted
+    # by /api/internal/* routes via assertCronAuth in src/lib/cron-auth.ts.
     cat > "${CHAT_WORKER_DEST}/.env" <<CWENV_EOF
 SUPABASE_URL=${SUPABASE_URL}
 SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_KEY}
@@ -905,7 +906,7 @@ ROWBOAT_BASE_URL=http://rowboat:3000
 ROWBOAT_PROJECT_ID=${BUSINESS_ID}
 ROWBOAT_GATEWAY_TOKEN=${ROWBOAT_GATEWAY_TOKEN}
 BUSINESS_ID=${BUSINESS_ID}
-WORKER_VERCEL_BASE_URL=${NEXT_PUBLIC_SITE_URL:-${WORKER_VERCEL_BASE_URL:-}}
+WORKER_VERCEL_BASE_URL=${APP_BASE_URL:-${WORKER_VERCEL_BASE_URL:-}}
 WORKER_VERCEL_BEARER=${INTERNAL_CRON_SECRET:-${WORKER_VERCEL_BEARER:-}}
 CWENV_EOF
     chmod 600 "${CHAT_WORKER_DEST}/.env"
