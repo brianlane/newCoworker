@@ -91,7 +91,6 @@ export async function POST(request: Request): Promise<Response> {
   if (!shouldSummarize(thread, messages.length)) {
     // Cheap gate — most worker calls land here and exit quickly.
     return successResponse({
-      ok: true,
       triggered: false,
       messageCount: messages.length,
       durationMs: Date.now() - startedAt
@@ -122,15 +121,21 @@ export async function POST(request: Request): Promise<Response> {
     });
   }
 
+  // Surface failure as an error envelope so the wire shape's outer
+  // `ok` field is the source of truth (no nested `ok: false` inside
+  // `data`). The worker fire-and-forgets this call, so the outcome
+  // wire shape only matters for ops/curl debugging.
+  if (!result.ok) {
+    return errorResponse(
+      "INTERNAL_SERVER_ERROR",
+      `summarize_failed:${result.reason}`,
+      500
+    );
+  }
+
   return successResponse({
-    ok: result.ok,
     triggered: true,
-    durationMs,
-    ...(result.ok
-      ? { summaryChars: result.summary.length }
-      : {
-          reason: result.reason,
-          detail: "detail" in result ? result.detail : undefined
-        })
+    summaryChars: result.summary.length,
+    durationMs
   });
 }

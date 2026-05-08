@@ -290,8 +290,6 @@ function buildRowboatChatMessages(args: {
   return out;
 }
 
-export { buildRowboatChatMessages };
-
 // =====================================================================
 // POST — write user message + enqueue a job + return 200
 // =====================================================================
