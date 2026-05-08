@@ -107,10 +107,20 @@ export async function POST(request: Request): Promise<Response> {
       });
     }
 
-    // Threshold tripped: regenerate the summary. summarizeThread
-    // catches its own errors and returns a discriminated result; we
-    // log either way for ops visibility but never throw.
-    const result = await summarizeThread(body.businessId, body.threadId);
+    // Threshold tripped: regenerate the summary. Inject the already-
+    // fetched thread + messages through summarizeThread's deps so we
+    // don't pay for a second round of getThreadById/listMessages
+    // (Bugbot Low-severity finding on PR #79 round-10). Wrapping each
+    // injected dep in a constant function keeps summarizeThread's
+    // signature unchanged — it always invokes the dep with the same
+    // arguments we'd otherwise hit DB with. The result captured the
+    // moment we checked shouldSummarize is still the correct input
+    // for the summary because the user message it's keyed on has
+    // already been persisted by the time the worker called us.
+    const result = await summarizeThread(body.businessId, body.threadId, {
+      getThreadById: async () => thread,
+      listMessages: async () => messages
+    });
     const durationMs = Date.now() - startedAt;
 
     if (result.ok) {
