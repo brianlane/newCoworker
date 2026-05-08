@@ -612,15 +612,22 @@ export function DashboardChat({ businessId, businessName }: Props) {
         setViewingThreadId(env.data.threadId);
         setIsPaused(env.data.isPaused);
         setSafeMode(!env.data.customerChannelsEnabled);
+      } else {
+        // GET returned an error envelope (e.g. session expired
+        // mid-chat, server issue between the worker write and our
+        // refresh). The assistant message IS persisted — the
+        // worker only marks the job done after the INSERT — so
+        // surface a soft note rather than leaving the user staring
+        // at a thinking indicator that has stopped without
+        // explanation. Bugbot Medium-severity finding on PR #79
+        // round-2.
+        setError("Reply ready — refresh to see it.");
       }
     } catch (err) {
       if ((err as { name?: string } | null)?.name !== "AbortError") {
-        // The assistant message IS on the server — the worker only
-        // marks the job done after the INSERT succeeds. We just
-        // failed to fetch the refreshed list. Rather than yank
-        // the user-message echo, leave the rendered state alone
-        // and surface a soft note. A page refresh will pick up
-        // the new turn.
+        // Network/throw failure on the GET. Same recovery as the
+        // error-envelope path above: the message is on the server,
+        // we just couldn't fetch it.
         setError("Reply ready — refresh to see it.");
       }
     }

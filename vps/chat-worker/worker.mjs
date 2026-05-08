@@ -469,6 +469,38 @@ async function processJob(job) {
       return;
     }
 
+    // Refresh dashboard_chat_activity so the VPS keep-warm timer
+    // resets at the END of the turn (not just at the start). The
+    // pre-Option-B route had two touches per turn; only the pre-
+    // enqueue one survives in the route, so without this the
+    // keep-warm script would consider the tenant idle the moment
+    // the route returned even though the worker was still
+    // generating. Bugbot Medium-severity finding on PR #79 round-2.
+    //
+    // Upsert: if no row exists yet (first ever turn for this
+    // tenant), insert it; otherwise overwrite the timestamps.
+    // Errors here are non-fatal — keep-warm is an optimization,
+    // not a correctness requirement.
+    {
+      const nowIso = new Date().toISOString();
+      const { error: aErr } = await sb
+        .from("dashboard_chat_activity")
+        .upsert(
+          {
+            business_id: job.business_id,
+            last_user_chat_at: nowIso,
+            updated_at: nowIso
+          },
+          { onConflict: "business_id" }
+        );
+      if (aErr) {
+        log("warn", "activity_touch_failed", {
+          jobId: job.id,
+          error: aErr.message
+        });
+      }
+    }
+
     // Fire-and-forget rolling-summary trigger. The route used to do
     // this synchronously after streaming, but in the Option B
     // pipeline the route returns BEFORE the assistant turn is
