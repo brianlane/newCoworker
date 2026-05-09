@@ -62,6 +62,8 @@ beforeEach(() => {
 describe("isPrivateOrLoopbackHost", () => {
   it.each([
     ["localhost", true],
+    ["api.localhost", true],
+    ["evil.LOCALHOST", true],
     ["127.0.0.1", true],
     ["10.0.0.5", true],
     ["172.16.4.7", true],

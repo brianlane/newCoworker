@@ -233,7 +233,11 @@ export class CustomIntegrationValidationError extends Error {
  */
 export function isPrivateOrLoopbackHost(host: string): boolean {
   const h = host.toLowerCase();
-  if (h === "localhost") return true;
+  // Bare `localhost` and any `*.localhost` subdomain. The latter resolves
+  // to loopback via systemd-resolved / dnsmasq / mDNS depending on the
+  // environment; the proxy's call-time `assertSafeHostname` rejects
+  // them too, so we MUST refuse them at registration.
+  if (h === "localhost" || h.endsWith(".localhost")) return true;
   // IPv4 dotted-quad?
   const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (m) {
