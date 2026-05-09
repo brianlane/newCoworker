@@ -17,6 +17,7 @@ import {
   decryptIntegrationSecret,
   encryptIntegrationSecret
 } from "@/lib/integrations/secrets";
+import { isPrivateIpv4, isPrivateIpv6 } from "@/lib/net/ip-classification";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -230,39 +231,29 @@ export class CustomIntegrationValidationError extends Error {
  *
  * Exported so the proxy route can re-validate at call time (defense in
  * depth: a row written before this guard existed must still be blocked).
+ *
+ * IPv4 / IPv6 range classification is delegated to
+ * `@/lib/net/ip-classification` — same module `website-ingest` uses,
+ * so the two layers of defense can never drift on multicast / reserved
+ * range coverage.
  */
 /**
- * IPv4 dotted-quad in private/loopback ranges. Pulled out so the
- * IPv4-mapped IPv6 form (`::ffff:127.0.0.1`) can reuse the same logic.
+ * Strict IPv4 dotted-quad shape check. We use this as the
+ * gate before consulting the shared `isPrivateIpv4` helper, which
+ * conservatively classifies "anything that doesn't parse as four
+ * 0–255 octets" as private. That conservative behavior is correct
+ * for `website-ingest`'s post-DNS-lookup check, but here we feed in
+ * arbitrary user-supplied hostnames — `api.acme.com` would be
+ * misclassified without this regex gate.
+ *
+ * `256.256.256.256` and similar invalid-octet inputs DO match this
+ * shape regex but the shared helper still classifies them as
+ * private (defensive); that's the right answer at registration time
+ * too — refusing nonsense addresses costs nothing and removes a
+ * potential obfuscation vector.
  */
-function isPrivateIpv4(ip: string): boolean {
-  const m = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (!m) return false;
-  const o = m.slice(1).map(Number);
-  if (o.some((n) => n > 255)) return false;
-  if (o[0] === 10) return true;
-  if (o[0] === 127) return true;
-  if (o[0] === 169 && o[1] === 254) return true;
-  if (o[0] === 172 && o[1] >= 16 && o[1] <= 31) return true;
-  if (o[0] === 192 && o[1] === 168) return true;
-  if (o[0] === 0) return true;
-  return false;
-}
-
-/**
- * IPv6 loopback / link-local / unique-local + IPv4-mapped private.
- * Matches the call-time check in `website-ingest`. `host` is expected
- * to already be lowercased.
- */
-function isPrivateIpv6(host: string): boolean {
-  if (host === "::1" || host === "::") return true;
-  if (host.startsWith("fc") || host.startsWith("fd")) return true; // fc00::/7 ULA
-  if (host.startsWith("fe80:")) return true; // link-local
-  if (host.startsWith("::ffff:")) {
-    const mapped = host.slice("::ffff:".length);
-    return isPrivateIpv4(mapped);
-  }
-  return false;
+function looksLikeIpv4Literal(host: string): boolean {
+  return /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
 }
 
 export function isPrivateOrLoopbackHost(host: string): boolean {
@@ -272,7 +263,7 @@ export function isPrivateOrLoopbackHost(host: string): boolean {
   // environment; the proxy's call-time `assertSafeHostname` rejects
   // them too, so we MUST refuse them at registration.
   if (h === "localhost" || h.endsWith(".localhost")) return true;
-  if (isPrivateIpv4(h)) return true;
+  if (looksLikeIpv4Literal(h) && isPrivateIpv4(h)) return true;
   // IPv6 literals — note that `URL.hostname` strips brackets, so we see
   // e.g. "::1" not "[::1]".
   if (h.includes(":") && isPrivateIpv6(h)) return true;
@@ -538,35 +529,75 @@ function computeSecretPatch(
 }
 
 /**
- * Returns whether the stored row already has a secret on file. Used by
- * `updateCustomIntegration` to refuse a scheme→credentialed transition
- * that would leave the row with no usable credential. A missing row
- * (cross-tenant id, race) or a null `secret_encrypted` are both treated
- * as "no secret" and surface the same error to the caller.
+ * Pre-update fetch of the row's existing auth state. We need both the
+ * stored auth_scheme and a "has secret on file" boolean to decide
+ * whether the requested update is safe:
+ *
+ *   - Same-scheme update + no new secret → re-use stored secret if
+ *     present, else reject (can't have a credentialed scheme with no
+ *     credential).
+ *   - Different-scheme update + no new secret → ALWAYS reject. The
+ *     stored ciphertext was minted for the old scheme; reusing it
+ *     under, say, basic auth when it was originally a bearer token
+ *     would produce a row that the proxy can't honor. Cursor Bugbot
+ *     called this exact silent-breakage out: switching login style
+ *     from "API key" to "Username and password" with empty fields
+ *     used to keep the old bearer token as the basic-auth secret.
+ *
+ * A missing row (cross-tenant id, RLS denial, race) is surfaced as
+ * `exists=false` so the caller can refuse with `secret_required` even
+ * when nominally a same-scheme update — there's no row to inherit a
+ * scheme from.
  */
-async function storedRowHasSecret(
+async function loadRowAuthState(
   db: SupabaseClient,
   businessId: string,
   id: string
-): Promise<boolean> {
+): Promise<{
+  exists: boolean;
+  hasSecret: boolean;
+  authScheme: CustomIntegrationAuthScheme | null;
+}> {
   const { data, error } = await db
     .from("custom_integrations")
-    .select("secret_encrypted")
+    .select("secret_encrypted,auth_scheme")
     .eq("business_id", businessId)
     .eq("id", id)
     .maybeSingle();
   if (error) {
     throw new Error(`updateCustomIntegration: ${error.message}`);
   }
-  const row = data as { secret_encrypted: string | null } | null;
-  return row !== null && row.secret_encrypted !== null;
+  const row = data as {
+    secret_encrypted: string | null;
+    auth_scheme: CustomIntegrationAuthScheme;
+  } | null;
+  if (row === null) {
+    return { exists: false, hasSecret: false, authScheme: null };
+  }
+  return {
+    exists: true,
+    hasSecret: row.secret_encrypted !== null,
+    authScheme: row.auth_scheme
+  };
 }
 
 /**
- * `updateCustomIntegration` invariant guard: refuse a transition that
- * would leave the row with a credentialed scheme but no usable secret.
- * Pulled out as a free function so the logic is exhaustively branch-
- * coverable without nesting `&&` chains in the call site.
+ * `updateCustomIntegration` invariant guard. Two failure modes are
+ * collapsed into one `secret_required` error so the dashboard surfaces
+ * a single, friendly message regardless of which specific invariant
+ * the caller violated:
+ *
+ *   1. Credentialed scheme + no stored secret + no new secret. The
+ *      row would be unusable.
+ *   2. Scheme CHANGED to a different credentialed scheme + no new
+ *      secret. The stored ciphertext was minted for the OLD scheme
+ *      and silently reusing it on a different scheme breaks the
+ *      proxy in subtle ways (e.g. base64-encoding a bearer token as
+ *      if it were `user:pass`).
+ *
+ * Same-scheme updates with a stored secret on file are still allowed
+ * to omit the secret — that's the legitimate "edit the label / URL /
+ * description without rotating credentials" flow.
  */
 async function assertCredentialedSchemeHasSecret(
   input: UpsertCustomIntegrationInput & { id: string },
@@ -575,12 +606,28 @@ async function assertCredentialedSchemeHasSecret(
 ): Promise<void> {
   if (input.authScheme === "none") return;
   if (secretPatch.include) return;
-  const hasStored = await storedRowHasSecret(db, input.businessId, input.id);
-  if (hasStored) return;
-  throw new CustomIntegrationValidationError(
-    "secret_required",
-    "secret is required for this auth_scheme"
-  );
+  const state = await loadRowAuthState(db, input.businessId, input.id);
+  // Missing row → no scheme / no secret to inherit. Refuse.
+  if (!state.exists) {
+    throw new CustomIntegrationValidationError(
+      "secret_required",
+      "secret is required for this auth_scheme"
+    );
+  }
+  // Scheme changed: cannot reuse the stored ciphertext under a
+  // different scheme. Owner must supply fresh credentials.
+  if (state.authScheme !== input.authScheme) {
+    throw new CustomIntegrationValidationError(
+      "secret_required",
+      "switching login type requires a fresh credential"
+    );
+  }
+  if (!state.hasSecret) {
+    throw new CustomIntegrationValidationError(
+      "secret_required",
+      "secret is required for this auth_scheme"
+    );
+  }
 }
 
 export async function updateCustomIntegration(

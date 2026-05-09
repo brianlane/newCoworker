@@ -80,19 +80,16 @@
       "description": "Call an owner-registered REST API (custom integration) without ever seeing the credential. The owner manages these in /dashboard/integrations → Custom integrations. Pick by `label`. The platform proxy injects the credential server-side and forwards the response.",
       "transport": "webhook",
       "webhook": {
-        "url": "{{APP_BASE_URL}}/api/integrations/custom/call",
+        "_comment_url": "businessId is pinned via URL query at deploy time so the model has no input surface to influence which tenant's credentials get used. {{BUSINESS_ID}} is substituted from the per-VPS env at workflow seed time (deploy-client.sh). DO NOT move businessId into input_schema or the JSON body.",
+        "url": "{{APP_BASE_URL}}/api/integrations/custom/call?businessId={{BUSINESS_ID}}",
         "method": "POST",
         "auth": "bearer",
         "auth_token_env": "ROWBOAT_GATEWAY_TOKEN"
       },
       "input_schema": {
         "type": "object",
-        "required": ["businessId", "label"],
+        "required": ["label"],
         "properties": {
-          "businessId": {
-            "type": "string",
-            "description": "The business UUID this integration belongs to (Rowboat injects from context)."
-          },
           "label": {
             "type": "string",
             "description": "Owner's label for the custom integration (case-insensitive, e.g. 'Acme CRM')."

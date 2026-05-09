@@ -104,6 +104,15 @@ const SCHEME_OPTIONS: { value: AuthScheme; label: string }[] = [
 
 type FormState = {
   id: string | null;
+  /**
+   * The auth_scheme this row was loaded with on edit. `null` on
+   * create. Used to detect a scheme change (e.g. switching from
+   * "API key" to "Username and password") so we can require a fresh
+   * credential — silently inheriting the stored ciphertext across a
+   * scheme change leaves the row in an unusable state (the proxy
+   * would, e.g., base64-encode a bearer token as `user:pass`).
+   */
+  originalAuthScheme: AuthScheme | null;
   label: string;
   baseUrl: string;
   loginStyle: LoginStyle;
@@ -125,6 +134,7 @@ type FormState = {
 
 const EMPTY_FORM: FormState = {
   id: null,
+  originalAuthScheme: null,
   label: "",
   baseUrl: "",
   loginStyle: "key",
@@ -165,6 +175,7 @@ function rowToForm(row: CustomIntegration): FormState {
   else loginStyle = "advanced"; // header | query
   return {
     id: row.id,
+    originalAuthScheme: row.auth_scheme,
     label: row.label,
     baseUrl: row.base_url,
     loginStyle,
@@ -307,6 +318,27 @@ export function CustomIntegrationsCard({ businessId, initialIntegrations }: Prop
           secret = s;
         }
       }
+    }
+
+    // When editing, switching login type (e.g. from API key to
+    // username/password) and leaving the credential field blank used
+    // to silently inherit the stored secret under the new scheme —
+    // which the server can't honor (Bugbot: "Auth scheme change
+    // silently keeps incompatible stored secret"). The server now
+    // refuses such transitions; mirror the check here so the owner
+    // sees a friendly message instead of a wire-level error.
+    if (
+      isEdit &&
+      form.originalAuthScheme !== null &&
+      form.originalAuthScheme !== authScheme &&
+      authScheme !== "none" &&
+      secret === null
+    ) {
+      return {
+        ok: false,
+        message:
+          "You're switching how this service logs in. Please enter the new credentials so they match the new login type."
+      };
     }
 
     const payload: Record<string, unknown> = {
