@@ -76,7 +76,18 @@ describe("isPrivateOrLoopbackHost", () => {
     ["metadata.google.internal", true],
     ["api.acme.com", false],
     ["8.8.8.8", false],
-    ["256.256.256.256", false],
+    // Out-of-range octets: shape matches IPv4 dotted-quad, but the
+    // shared `isPrivateIpv4` helper conservatively classifies any
+    // input outside 0–255 as private. We adopt that conservative
+    // answer at registration time too — refusing nonsense addresses
+    // costs nothing and removes an obfuscation vector.
+    ["256.256.256.256", true],
+    // Multicast (224–239) + reserved (240–255) — the local IPv4
+    // helper used to miss these; now delegated to the shared module.
+    ["224.0.0.1", true],
+    ["239.255.255.255", true],
+    ["240.0.0.1", true],
+    ["255.255.255.255", true],
     // IPv6 — defense-in-depth so a future caller relying on this
     // function alone (without isBareIpHost) doesn't have an SSRF gap.
     ["::1", true],
@@ -527,11 +538,15 @@ describe("createCustomIntegration", () => {
  * `updateCustomIntegration`:
  *   - `db.from(t).update(...).eq(...).eq(...).select().single()` (the
  *     actual update),
- *   - `db.from(t).select("secret_encrypted").eq(...).eq(...).maybeSingle()`
+ *   - `db.from(t).select("secret_encrypted,auth_scheme").eq(...).eq(...).maybeSingle()`
  *     (the existence-check that runs when the caller selected a
  *     credentialed scheme but didn't supply a new secret).
  *
- * Tests can override either chain via the options bag.
+ * Tests can override either chain via the options bag. The default
+ * existence-check returns a row with auth_scheme="bearer" — matching
+ * the typical test input — so non-rotation updates short-circuit
+ * cleanly. Override `selectMaybeSingle` to exercise scheme-change /
+ * missing-row / DB-error branches.
  */
 type UpdateDbOptions = {
   /** Resolves the .single() at the end of the update chain. */
@@ -551,7 +566,7 @@ function buildUpdateDb(options: UpdateDbOptions = {}) {
   const maybeSingle =
     options.selectMaybeSingle ??
     vi.fn().mockResolvedValue({
-      data: { secret_encrypted: "enc:v1:existing" },
+      data: { secret_encrypted: "enc:v1:existing", auth_scheme: "bearer" },
       error: null
     });
   const eqInnerSelect = vi.fn().mockReturnValue({ maybeSingle });
@@ -636,8 +651,11 @@ describe("updateCustomIntegration", () => {
   });
 
   it("rejects update when scheme=bearer but no stored secret AND none supplied", async () => {
+    // Same-scheme update path — row's existing scheme matches the
+    // input scheme, but the stored ciphertext is null. The row would
+    // be unusable, so refuse.
     const selectMaybeSingle = vi.fn().mockResolvedValue({
-      data: { secret_encrypted: null },
+      data: { secret_encrypted: null, auth_scheme: "bearer" },
       error: null
     });
     const { db } = buildUpdateDb({ selectMaybeSingle });
@@ -653,12 +671,22 @@ describe("updateCustomIntegration", () => {
         },
         db
       )
-    ).rejects.toBeInstanceOf(CustomIntegrationValidationError);
+    ).rejects.toMatchObject({
+      validationCode: "secret_required",
+      // Same-scheme path uses the original (non-scheme-change) message.
+      message: /secret is required/i
+    });
   });
 
   it("rejects update when scheme=bearer + empty secret AND row has no stored secret", async () => {
+    // Same-scheme path: stored row's auth_scheme already matches the
+    // input scheme, so the "switching login type" branch is bypassed
+    // and this exercises the empty-secret + no-stored-secret branch
+    // (lines 625–629 in custom-integrations.ts). Without
+    // `auth_scheme: "bearer"` here the test would silently cover the
+    // wrong branch — Cursor Bugbot flagged exactly that.
     const selectMaybeSingle = vi.fn().mockResolvedValue({
-      data: { secret_encrypted: null },
+      data: { secret_encrypted: null, auth_scheme: "bearer" },
       error: null
     });
     const { db } = buildUpdateDb({ selectMaybeSingle });
@@ -676,7 +704,11 @@ describe("updateCustomIntegration", () => {
         db
       )
     ).rejects.toMatchObject({
-      validationCode: "secret_required"
+      validationCode: "secret_required",
+      // Same-scheme branch uses the original "secret is required"
+      // message (NOT the "switching login type" message), so this
+      // assertion pins us to lines 625–629.
+      message: /secret is required for this auth_scheme/i
     });
   });
 
@@ -718,6 +750,112 @@ describe("updateCustomIntegration", () => {
         db
       )
     ).rejects.toThrow(/rls denied/);
+  });
+
+  // Bugbot finding: "Auth scheme change silently keeps incompatible
+  // stored secret". Switching e.g. bearer → basic with empty fields
+  // used to silently keep the old bearer token as the basic-auth
+  // secret, producing a row the proxy can never honor (it base64s
+  // the bearer token as if it were `user:pass`). The server now
+  // refuses any scheme change that doesn't come with a fresh
+  // credential, regardless of whether the stored row has SOME
+  // secret on file.
+  it("refuses bearer→basic scheme change with empty secret (silent-breakage guard)", async () => {
+    const selectMaybeSingle = vi.fn().mockResolvedValue({
+      data: { secret_encrypted: "enc:v1:bearer-token", auth_scheme: "bearer" },
+      error: null
+    });
+    const { db } = buildUpdateDb({ selectMaybeSingle });
+
+    await expect(
+      updateCustomIntegration(
+        {
+          id: "ci-1",
+          businessId: "biz-1",
+          label: "Acme CRM",
+          baseUrl: "https://api.acme.com/v2",
+          authScheme: "basic"
+          // No secret supplied: previously the row would silently
+          // keep the bearer token as the basic-auth secret.
+        },
+        db
+      )
+    ).rejects.toMatchObject({
+      validationCode: "secret_required",
+      message: /switching login type/i
+    });
+  });
+
+  it("refuses bearer→header scheme change with empty secret", async () => {
+    const selectMaybeSingle = vi.fn().mockResolvedValue({
+      data: { secret_encrypted: "enc:v1:bearer-token", auth_scheme: "bearer" },
+      error: null
+    });
+    const { db } = buildUpdateDb({ selectMaybeSingle });
+
+    await expect(
+      updateCustomIntegration(
+        {
+          id: "ci-1",
+          businessId: "biz-1",
+          label: "Acme CRM",
+          baseUrl: "https://api.acme.com/v2",
+          authScheme: "header",
+          headerName: "X-API-Key"
+        },
+        db
+      )
+    ).rejects.toMatchObject({
+      validationCode: "secret_required",
+      message: /switching login type/i
+    });
+  });
+
+  it("allows bearer→basic scheme change when a fresh secret is supplied", async () => {
+    const selectMaybeSingle = vi.fn().mockResolvedValue({
+      data: { secret_encrypted: "enc:v1:bearer-token", auth_scheme: "bearer" },
+      error: null
+    });
+    const { db, update } = buildUpdateDb({ selectMaybeSingle });
+
+    await updateCustomIntegration(
+      {
+        id: "ci-1",
+        businessId: "biz-1",
+        label: "Acme CRM",
+        baseUrl: "https://api.acme.com/v2",
+        authScheme: "basic",
+        secret: "newuser:newpass"
+      },
+      db
+    );
+    const patch = update.mock.calls[0][0] as Record<string, string>;
+    expect(patch.auth_scheme).toBe("basic");
+    expect(patch.secret_encrypted).toMatch(/^enc:v1:/);
+  });
+
+  it("allows credentialed→none scheme change without a secret (clears stored)", async () => {
+    // Going from a credentialed scheme to "none" must NOT require a
+    // fresh secret — the patch wipes the stored ciphertext anyway.
+    const selectMaybeSingle = vi.fn().mockResolvedValue({
+      data: { secret_encrypted: "enc:v1:bearer-token", auth_scheme: "bearer" },
+      error: null
+    });
+    const { db, update } = buildUpdateDb({ selectMaybeSingle });
+
+    await updateCustomIntegration(
+      {
+        id: "ci-1",
+        businessId: "biz-1",
+        label: "Acme CRM",
+        baseUrl: "https://api.acme.com/v2",
+        authScheme: "none"
+      },
+      db
+    );
+    const patch = update.mock.calls[0][0] as Record<string, unknown>;
+    expect(patch.auth_scheme).toBe("none");
+    expect(patch.secret_encrypted).toBeNull();
   });
 });
 
@@ -890,7 +1028,13 @@ describe("createCustomIntegration extras", () => {
 
 describe("updateCustomIntegration extras", () => {
   it("preserves header_name when scheme=header on update", async () => {
-    const { db, update } = buildUpdateDb();
+    // Stored row already had scheme=header so no fresh credential is
+    // required to keep editing header_name / label / etc.
+    const selectMaybeSingle = vi.fn().mockResolvedValue({
+      data: { secret_encrypted: "enc:v1:existing", auth_scheme: "header" },
+      error: null
+    });
+    const { db, update } = buildUpdateDb({ selectMaybeSingle });
     await updateCustomIntegration(
       {
         id: "ci-1",

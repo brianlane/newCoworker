@@ -46,19 +46,45 @@ const BASE_ROW = {
 const ORIGINAL_TOKEN = process.env.ROWBOAT_GATEWAY_TOKEN;
 const ORIGINAL_FETCH = globalThis.fetch;
 
+/**
+ * Test helper. The proxy route reads `businessId` from the URL query
+ * string (NOT the JSON body) so the model has no input surface to
+ * influence which tenant's credentials get used. To keep the tests
+ * readable we accept `body.businessId` as a convenience and shuttle
+ * it into the URL — pass `options.businessId === null` to omit it
+ * entirely (used to test the "missing tenant" rejection path).
+ */
 function mkRequest(
-  body: unknown,
-  options: { token?: string | null } = {}
+  body: { businessId?: string } & Record<string, unknown>,
+  options: {
+    token?: string | null;
+    businessId?: string | null;
+    rawBody?: string;
+  } = {}
 ): Request {
   const headers: Record<string, string> = {
     "Content-Type": "application/json"
   };
   const t = options.token === undefined ? "test-gateway-token" : options.token;
   if (t !== null) headers["Authorization"] = `Bearer ${t}`;
-  return new Request("http://localhost/api/integrations/custom/call", {
+  const url = new URL("http://localhost/api/integrations/custom/call");
+  // Resolution order for businessId-on-the-URL:
+  //   1. options.businessId (explicit override; null means "omit entirely")
+  //   2. body.businessId (convenience for tests written before tenant-
+  //      binding moved to the URL)
+  //   3. nothing (caller is testing the rejection path)
+  const biz =
+    options.businessId === undefined ? body.businessId ?? null : options.businessId;
+  if (biz !== null) url.searchParams.set("businessId", biz);
+  // body.businessId is removed before serialization so a stale field
+  // can never silently authenticate a request — the route ignores it
+  // anyway, but the test surface should match the wire contract.
+  const { businessId: _ignored, ...wireBody } = body;
+  void _ignored;
+  return new Request(url.toString(), {
     method: "POST",
     headers,
-    body: JSON.stringify(body)
+    body: options.rawBody ?? JSON.stringify(wireBody)
   });
 }
 
@@ -88,22 +114,102 @@ describe("auth", () => {
   });
 });
 
+// Bugbot P1: "Bind custom integration calls to the tenant".
+// businessId comes from the URL query, NOT the JSON body. These
+// tests pin that contract so the model can never smuggle another
+// business UUID through a prompt-injection.
+describe("tenant binding (URL query)", () => {
+  it("rejects when ?businessId is missing entirely", async () => {
+    const res = await POST(
+      mkRequest({ label: "Acme" }, { businessId: null })
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.detail).toBe("invalid_args:missing_business_id");
+    // Critically: the lookup is never invoked, so we cannot leak a
+    // credential to a caller that didn't bind a tenant.
+    expect(getCustomIntegrationByLabel).not.toHaveBeenCalled();
+  });
+
+  it("rejects when ?businessId is not a valid UUID", async () => {
+    const res = await POST(
+      mkRequest({ label: "Acme" }, { businessId: "not-a-uuid" })
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.detail).toBe("invalid_args:missing_business_id");
+    expect(getCustomIntegrationByLabel).not.toHaveBeenCalled();
+  });
+
+  it("accepts UUID v7 in ?businessId (matches Zod 4.3+ semantics)", async () => {
+    // RFC 9562 introduced v6/v7/v8. The platform currently mints v4
+    // via `crypto.randomUUID()`, but if it ever adopts v7 for
+    // time-sortable IDs this route MUST keep accepting them — same
+    // semantics as `z.string().uuid()` everywhere else in the
+    // codebase. (Bugbot flagged the previous v1–5-only regex.)
+    const v7 = "01934d8b-7e8a-7c00-8123-456789abcdef";
+    vi.mocked(getCustomIntegrationByLabel).mockResolvedValueOnce({
+      ...BASE_ROW,
+      business_id: v7
+    });
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response("{}", {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        })
+    ) as never;
+    const res = await POST(
+      mkRequest({ label: "Acme", path: "/x" }, { businessId: v7 })
+    );
+    expect(res.status).toBe(200);
+    expect(getCustomIntegrationByLabel).toHaveBeenCalledWith(v7, "Acme");
+  });
+
+  it("ignores `businessId` in the JSON body (model can't override the URL)", async () => {
+    // Even if a prompt-injected agent stuffs another business UUID
+    // in the body, the route uses ONLY the URL query value. Here we
+    // smuggle a different UUID into the raw body and confirm the
+    // lookup is called with the URL value — proving the body field
+    // is dead weight.
+    const otherBiz = "22222222-2222-4222-8222-222222222222";
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response("{}", {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        })
+    ) as never;
+    await POST(
+      mkRequest(
+        {},
+        {
+          businessId: BIZ,
+          rawBody: JSON.stringify({
+            businessId: otherBiz,
+            label: "Acme",
+            path: "/x"
+          })
+        }
+      )
+    );
+    expect(getCustomIntegrationByLabel).toHaveBeenCalledWith(
+      BIZ, // ← URL query wins; body's `otherBiz` is ignored
+      "Acme"
+    );
+  });
+});
+
 describe("validation", () => {
   it("rejects malformed body", async () => {
-    const res = await POST(mkRequest({ label: "Acme" }));
+    const res = await POST(mkRequest({ businessId: BIZ }));
     expect(res.status).toBe(400);
   });
 
   it("returns 'invalid body' when JSON parse fails (non-Zod path)", async () => {
-    const req = new Request("http://localhost/api/integrations/custom/call", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: "Bearer test-gateway-token"
-      },
-      body: "this is not json"
-    });
-    const res = await POST(req);
+    const res = await POST(
+      mkRequest({ businessId: BIZ }, { rawBody: "this is not json" })
+    );
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.detail).toMatch(/invalid_args:/);

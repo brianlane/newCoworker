@@ -17,6 +17,7 @@
 
 import { promises as dns } from "node:dns";
 import { logger } from "@/lib/logger";
+import { isPrivateIpv4, isPrivateIpv6 } from "@/lib/net/ip-classification";
 
 export const WEBSITE_INGEST_MAX_PAGES = 6;
 export const WEBSITE_INGEST_PAGE_TIMEOUT_MS = 5000;
@@ -139,32 +140,6 @@ export function normalizeWebsiteUrl(raw: string): string | null {
   }
 }
 
-function isPrivateIpv4(ip: string): boolean {
-  const parts = ip.split(".").map((x) => Number(x));
-  if (parts.length !== 4 || parts.some((n) => Number.isNaN(n) || n < 0 || n > 255)) return true;
-  const [a, b] = parts;
-  if (a === 10) return true;
-  if (a === 127) return true;
-  if (a === 0) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a >= 224) return true;
-  return false;
-}
-
-function isPrivateIpv6(ip: string): boolean {
-  const normalized = ip.toLowerCase();
-  if (normalized === "::1" || normalized === "::") return true;
-  if (normalized.startsWith("fc") || normalized.startsWith("fd")) return true; // fc00::/7
-  if (normalized.startsWith("fe80:")) return true; // link-local
-  if (normalized.startsWith("::ffff:")) {
-    const ipv4 = normalized.slice("::ffff:".length);
-    return isPrivateIpv4(ipv4);
-  }
-  return false;
-}
-
 export async function assertSafeHostname(
   hostname: string,
   lookup: DnsLookup = dns.lookup
@@ -187,7 +162,15 @@ export async function assertSafeHostname(
   if (!addresses.length) throw new Error("dns_failure");
 
   for (const { address, family } of addresses) {
-    if (family === 4 ? isPrivateIpv4(address) : isPrivateIpv6(address)) {
+    // `isPrivateIpv6` expects a lowercased literal because callers
+    // typically already have one in scope; node's `dns.lookup` does
+    // already return lowercase IPv6, but a custom `lookup` injected
+    // for tests might not, so lowercase defensively.
+    const blocked =
+      family === 4
+        ? isPrivateIpv4(address)
+        : isPrivateIpv6(address.toLowerCase());
+    if (blocked) {
       throw new Error("private_address");
     }
   }

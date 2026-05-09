@@ -1,36 +1,44 @@
 /**
  * Agent-facing proxy: invoke a stored custom integration.
  *
- * The Rowboat agent's `http_api_call` tool POSTs here with
- * `{ businessId, label, method, path, query?, body?, headers? }` and the
- * Rowboat gateway bearer token. The platform resolves `label` →
- * `custom_integrations` row, decrypts the secret, builds the outbound
- * request against the row's `base_url`, injects the credential per
- * `auth_scheme`, and forwards the result back as a single envelope.
+ * The Rowboat agent's `http_api_call` tool POSTs here with the
+ * Rowboat gateway bearer token. The body is the model-supplied
+ * portion of the call (label, method, path, query, body, headers);
+ * the **businessId is NOT in the body** — it comes from the
+ * `?businessId=<uuid>` URL query parameter, which Rowboat
+ * substitutes from `BUSINESS_ID` at deploy time. That keeps the
+ * tenant binding entirely outside the model's reach: a
+ * prompt-injected user cannot smuggle another business UUID
+ * because the URL is fixed by the deployment, not the model.
  *
  * Security model — this route is the one place a stored credential ever
  * leaves the encrypted-at-rest column, so the rules are strict:
  *
  *   1. Auth is gateway-only (`ROWBOAT_GATEWAY_TOKEN`). The dashboard UI
  *      never calls this — the dashboard manages rows, not invocations.
- *   2. The outbound URL MUST resolve to the row's `base_url.origin`. The
+ *   2. The tenant (`businessId`) is bound by the URL query string,
+ *      not the JSON body. The Rowboat workflow template hardcodes
+ *      `?businessId={{BUSINESS_ID}}` so the model has no input
+ *      surface to influence which tenant's credentials are used.
+ *      Any `businessId` field present in the JSON body is ignored.
+ *   3. The outbound URL MUST resolve to the row's `base_url.origin`. The
  *      caller-supplied `path` is appended to `base_url.pathPrefix`; we
  *      reject any `path` that contains a scheme/authority or attempts
  *      to escape the prefix via `..`.
- *   3. Private and loopback hosts are re-checked at call time. A row
+ *   4. Private and loopback hosts are re-checked at call time. A row
  *      written before that guard existed must still be blocked.
- *   4. Methods restricted to the safe REST verbs. HEAD/OPTIONS/TRACE/
+ *   5. Methods restricted to the safe REST verbs. HEAD/OPTIONS/TRACE/
  *      CONNECT are refused so a clever prompt can't pivot to host
  *      probes via the stored creds.
- *   5. The agent CAN supply additional headers, but `Authorization`,
+ *   6. The agent CAN supply additional headers, but `Authorization`,
  *      `Cookie`, `Host`, `Content-Length`, and any header whose name
  *      collides with the row's configured `header_name` (when scheme is
  *      "header") are dropped. The credential is added last so the
  *      agent's headers never clobber it.
- *   6. Response body is capped at RESPONSE_MAX_BYTES so a huge payload
+ *   7. Response body is capped at RESPONSE_MAX_BYTES so a huge payload
  *      from the upstream API can't blow the model's context budget or
  *      DOS the worker.
- *   7. Outbound timeout is bounded by REQUEST_TIMEOUT_MS.
+ *   8. Outbound timeout is bounded by REQUEST_TIMEOUT_MS.
  */
 import { z } from "zod";
 import { logger } from "@/lib/logger";
@@ -61,8 +69,14 @@ export const REQUEST_TIMEOUT_MS = 20_000;
 
 const ALLOWED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
 
+/**
+ * Tenant binding lives in the URL query (`?businessId=<uuid>`), not
+ * the JSON body, so the model's input schema has no field that could
+ * be prompt-injected to point at another tenant. Any `businessId`
+ * present in the JSON body is ignored — the body schema is `passthrough`
+ * but does not declare it, and the route never reads it.
+ */
 const callSchema = z.object({
-  businessId: z.string().uuid(),
   label: z.string().min(1).max(80),
   method: z.enum(ALLOWED_METHODS).default("GET"),
   // Path is appended to base_url.pathPrefix. Must start with `/` and
@@ -192,9 +206,40 @@ function safelyJoinPath(prefix: string, path: string): string | null {
   return `${prefix}${path}`;
 }
 
+/**
+ * Tenant-id validator. We delegate to Zod's `.uuid()` instead of a
+ * hand-rolled regex so this route accepts the same set of UUIDs the
+ * rest of the codebase produces and validates — including v6/v7/v8
+ * (RFC 9562) which the previous local `[1-5]` regex would have
+ * silently rejected with a confusing `missing_business_id`. Today's
+ * `crypto.randomUUID()` returns v4, but if the platform ever adopts
+ * v7 for time-sortable IDs, this route gets it for free.
+ */
+const businessIdSchema = z.string().uuid();
+
 export async function POST(request: Request) {
   const guard = gatewayGuard(request);
   if (guard) return guard;
+
+  // Tenant binding: read from the URL query, NOT the JSON body. The
+  // Rowboat workflow template hardcodes this query at deploy time,
+  // so the model never has a chance to influence which tenant's
+  // credentials get used (Bugbot P1: "Bind custom integration calls
+  // to the tenant").
+  let businessId: string;
+  try {
+    const url = new URL(request.url);
+    const raw = url.searchParams.get("businessId");
+    const parsed = businessIdSchema.safeParse(raw);
+    if (!parsed.success) {
+      return voiceToolValidationError("missing_business_id");
+    }
+    businessId = parsed.data;
+  } catch {
+    /* c8 ignore next 2 -- WHATWG URL never throws for a request that
+       reached this handler; defensive only. */
+    return voiceToolValidationError("invalid_request_url");
+  }
 
   let parsed: CustomIntegrationCallRequest;
   try {
@@ -210,13 +255,10 @@ export async function POST(request: Request) {
 
   let integration: CustomIntegrationRow | null;
   try {
-    integration = await getCustomIntegrationByLabel(
-      parsed.businessId,
-      parsed.label
-    );
+    integration = await getCustomIntegrationByLabel(businessId, parsed.label);
   } catch (err) {
     logger.error("custom-integration call: lookup failed", {
-      businessId: parsed.businessId,
+      businessId,
       label: parsed.label,
       errorMessage: err instanceof Error ? err.message : String(err)
     });
@@ -329,7 +371,7 @@ export async function POST(request: Request) {
     clearTimeout(timeout);
     const aborted = (err as Error)?.name === "AbortError";
     logger.warn("custom-integration call: upstream failed", {
-      businessId: parsed.businessId,
+      businessId,
       label: parsed.label,
       host: outUrl.hostname,
       method: parsed.method,
@@ -384,7 +426,7 @@ export async function POST(request: Request) {
     /* c8 ignore next -- defensive: cancel() failure is always safe to ignore */
     await reader?.cancel().catch(() => {});
     logger.warn("custom-integration call: body read failed", {
-      businessId: parsed.businessId,
+      businessId,
       label: parsed.label,
       host: outUrl.hostname,
       method: parsed.method,
@@ -415,7 +457,7 @@ export async function POST(request: Request) {
   }
 
   logger.info("custom-integration call ok", {
-    businessId: parsed.businessId,
+    businessId,
     label: parsed.label,
     method: parsed.method,
     host: outUrl.hostname,
