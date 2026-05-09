@@ -679,8 +679,14 @@ describe("updateCustomIntegration", () => {
   });
 
   it("rejects update when scheme=bearer + empty secret AND row has no stored secret", async () => {
+    // Same-scheme path: stored row's auth_scheme already matches the
+    // input scheme, so the "switching login type" branch is bypassed
+    // and this exercises the empty-secret + no-stored-secret branch
+    // (lines 625–629 in custom-integrations.ts). Without
+    // `auth_scheme: "bearer"` here the test would silently cover the
+    // wrong branch — Cursor Bugbot flagged exactly that.
     const selectMaybeSingle = vi.fn().mockResolvedValue({
-      data: { secret_encrypted: null },
+      data: { secret_encrypted: null, auth_scheme: "bearer" },
       error: null
     });
     const { db } = buildUpdateDb({ selectMaybeSingle });
@@ -698,7 +704,11 @@ describe("updateCustomIntegration", () => {
         db
       )
     ).rejects.toMatchObject({
-      validationCode: "secret_required"
+      validationCode: "secret_required",
+      // Same-scheme branch uses the original "secret is required"
+      // message (NOT the "switching login type" message), so this
+      // assertion pins us to lines 625–629.
+      message: /secret is required for this auth_scheme/i
     });
   });
 
