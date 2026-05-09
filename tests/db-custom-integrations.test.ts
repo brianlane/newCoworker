@@ -349,7 +349,28 @@ describe("getCustomIntegrationByLabel", () => {
     });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     await getCustomIntegrationByLabel("biz-1", "ACME crm");
+    // `ACME crm` has no LIKE wildcards, so the escaped form is identical.
     expect(ilike).toHaveBeenCalledWith("label", "ACME crm");
+  });
+
+  it("escapes LIKE/ILIKE wildcards so '%' / '_' are treated as literal", async () => {
+    const ilike = vi.fn().mockReturnThis();
+    const db = dbStub({
+      ilike,
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    // An agent that submits `%` for the label must not match any row in
+    // the business — and definitely must not stream a credential to the
+    // first row found by collation order.
+    await getCustomIntegrationByLabel("biz-1", "%");
+    expect(ilike).toHaveBeenCalledWith("label", "\\%");
+
+    await getCustomIntegrationByLabel("biz-1", "ac_me");
+    expect(ilike).toHaveBeenCalledWith("label", "ac\\_me");
+
+    await getCustomIntegrationByLabel("biz-1", "back\\slash");
+    expect(ilike).toHaveBeenCalledWith("label", "back\\\\slash");
   });
 
   it("throws on db error", async () => {
@@ -454,19 +475,49 @@ describe("createCustomIntegration", () => {
   });
 });
 
-describe("updateCustomIntegration", () => {
-  function buildDb(updateChain: { single: ReturnType<typeof vi.fn> }) {
-    const select = vi.fn().mockReturnValue(updateChain);
-    const eqInner = vi.fn().mockReturnValue({ select });
-    const eqOuter = vi.fn().mockReturnValue({ eq: eqInner });
-    const update = vi.fn().mockReturnValue({ eq: eqOuter });
-    const from = vi.fn().mockReturnValue({ update });
-    return { db: { from } as unknown as never, update };
-  }
+/**
+ * Build a stub Supabase client that supports both call patterns inside
+ * `updateCustomIntegration`:
+ *   - `db.from(t).update(...).eq(...).eq(...).select().single()` (the
+ *     actual update),
+ *   - `db.from(t).select("secret_encrypted").eq(...).eq(...).maybeSingle()`
+ *     (the existence-check that runs when the caller selected a
+ *     credentialed scheme but didn't supply a new secret).
+ *
+ * Tests can override either chain via the options bag.
+ */
+type UpdateDbOptions = {
+  /** Resolves the .single() at the end of the update chain. */
+  updateSingle?: ReturnType<typeof vi.fn>;
+  /** Resolves the .maybeSingle() at the end of the existence-check chain. */
+  selectMaybeSingle?: ReturnType<typeof vi.fn>;
+};
 
+function buildUpdateDb(options: UpdateDbOptions = {}) {
+  const updateSingle =
+    options.updateSingle ?? vi.fn().mockResolvedValue({ data: ROW, error: null });
+  const selectAfterUpdate = vi.fn().mockReturnValue({ single: updateSingle });
+  const eqInnerUpdate = vi.fn().mockReturnValue({ select: selectAfterUpdate });
+  const eqOuterUpdate = vi.fn().mockReturnValue({ eq: eqInnerUpdate });
+  const update = vi.fn().mockReturnValue({ eq: eqOuterUpdate });
+
+  const maybeSingle =
+    options.selectMaybeSingle ??
+    vi.fn().mockResolvedValue({
+      data: { secret_encrypted: "enc:v1:existing" },
+      error: null
+    });
+  const eqInnerSelect = vi.fn().mockReturnValue({ maybeSingle });
+  const eqOuterSelect = vi.fn().mockReturnValue({ eq: eqInnerSelect });
+  const select = vi.fn().mockReturnValue({ eq: eqOuterSelect });
+
+  const from = vi.fn().mockReturnValue({ update, select });
+  return { db: { from } as unknown as never, update, maybeSingle };
+}
+
+describe("updateCustomIntegration", () => {
   it("omits secret_encrypted from patch when secret is undefined (preserves stored)", async () => {
-    const single = vi.fn().mockResolvedValue({ data: ROW, error: null });
-    const { db, update } = buildDb({ single });
+    const { db, update } = buildUpdateDb();
 
     await updateCustomIntegration(
       {
@@ -483,8 +534,7 @@ describe("updateCustomIntegration", () => {
   });
 
   it("encrypts and writes secret when caller supplies a value", async () => {
-    const single = vi.fn().mockResolvedValue({ data: ROW, error: null });
-    const { db, update } = buildDb({ single });
+    const { db, update } = buildUpdateDb();
 
     await updateCustomIntegration(
       {
@@ -502,8 +552,7 @@ describe("updateCustomIntegration", () => {
   });
 
   it("clears secret_encrypted when scheme flips to 'none'", async () => {
-    const single = vi.fn().mockResolvedValue({ data: ROW, error: null });
-    const { db, update } = buildDb({ single });
+    const { db, update } = buildUpdateDb();
 
     await updateCustomIntegration(
       {
@@ -517,6 +566,111 @@ describe("updateCustomIntegration", () => {
     );
     const patch = update.mock.calls[0][0] as Record<string, unknown>;
     expect(patch.secret_encrypted).toBeNull();
+  });
+
+  it("treats empty secret string as 'leave alone' (not 'clear')", async () => {
+    const { db, update } = buildUpdateDb();
+
+    await updateCustomIntegration(
+      {
+        id: "ci-1",
+        businessId: "biz-1",
+        label: "Acme CRM",
+        baseUrl: "https://api.acme.com/v2",
+        authScheme: "bearer",
+        secret: ""
+      },
+      db
+    );
+    const patch = update.mock.calls[0][0] as Record<string, unknown>;
+    // Empty-string must NOT clobber the stored ciphertext — that would
+    // leave the row with scheme=bearer + no credential.
+    expect(patch).not.toHaveProperty("secret_encrypted");
+  });
+
+  it("rejects update when scheme=bearer but no stored secret AND none supplied", async () => {
+    const selectMaybeSingle = vi.fn().mockResolvedValue({
+      data: { secret_encrypted: null },
+      error: null
+    });
+    const { db } = buildUpdateDb({ selectMaybeSingle });
+
+    await expect(
+      updateCustomIntegration(
+        {
+          id: "ci-1",
+          businessId: "biz-1",
+          label: "Acme CRM",
+          baseUrl: "https://api.acme.com/v2",
+          authScheme: "bearer"
+        },
+        db
+      )
+    ).rejects.toBeInstanceOf(CustomIntegrationValidationError);
+  });
+
+  it("rejects update when scheme=bearer + empty secret AND row has no stored secret", async () => {
+    const selectMaybeSingle = vi.fn().mockResolvedValue({
+      data: { secret_encrypted: null },
+      error: null
+    });
+    const { db } = buildUpdateDb({ selectMaybeSingle });
+
+    await expect(
+      updateCustomIntegration(
+        {
+          id: "ci-1",
+          businessId: "biz-1",
+          label: "Acme CRM",
+          baseUrl: "https://api.acme.com/v2",
+          authScheme: "bearer",
+          secret: ""
+        },
+        db
+      )
+    ).rejects.toMatchObject({
+      validationCode: "secret_required"
+    });
+  });
+
+  it("rejects update when row no longer exists (race / cross-tenant)", async () => {
+    const selectMaybeSingle = vi
+      .fn()
+      .mockResolvedValue({ data: null, error: null });
+    const { db } = buildUpdateDb({ selectMaybeSingle });
+
+    await expect(
+      updateCustomIntegration(
+        {
+          id: "ci-1",
+          businessId: "biz-1",
+          label: "Acme CRM",
+          baseUrl: "https://api.acme.com/v2",
+          authScheme: "bearer"
+        },
+        db
+      )
+    ).rejects.toBeInstanceOf(CustomIntegrationValidationError);
+  });
+
+  it("propagates DB error on the existence-check fetch", async () => {
+    const selectMaybeSingle = vi
+      .fn()
+      .mockResolvedValue({ data: null, error: { message: "rls denied" } });
+    const { db } = buildUpdateDb({ selectMaybeSingle });
+
+    await expect(
+      updateCustomIntegration(
+        {
+          id: "ci-1",
+          businessId: "biz-1",
+          label: "Acme CRM",
+          baseUrl: "https://api.acme.com/v2",
+          authScheme: "bearer"
+        },
+        db
+      )
+    ).rejects.toThrow(/rls denied/);
   });
 });
 
@@ -688,18 +842,8 @@ describe("createCustomIntegration extras", () => {
 });
 
 describe("updateCustomIntegration extras", () => {
-  function buildDb(updateChain: { single: ReturnType<typeof vi.fn> }) {
-    const select = vi.fn().mockReturnValue(updateChain);
-    const eqInner = vi.fn().mockReturnValue({ select });
-    const eqOuter = vi.fn().mockReturnValue({ eq: eqInner });
-    const update = vi.fn().mockReturnValue({ eq: eqOuter });
-    const from = vi.fn().mockReturnValue({ update });
-    return { db: { from } as unknown as never, update };
-  }
-
   it("preserves header_name when scheme=header on update", async () => {
-    const single = vi.fn().mockResolvedValue({ data: ROW, error: null });
-    const { db, update } = buildDb({ single });
+    const { db, update } = buildUpdateDb();
     await updateCustomIntegration(
       {
         id: "ci-1",
@@ -716,8 +860,7 @@ describe("updateCustomIntegration extras", () => {
   });
 
   it("writes is_active when caller supplies it", async () => {
-    const single = vi.fn().mockResolvedValue({ data: ROW, error: null });
-    const { db, update } = buildDb({ single });
+    const { db, update } = buildUpdateDb();
     await updateCustomIntegration(
       {
         id: "ci-1",
@@ -734,8 +877,7 @@ describe("updateCustomIntegration extras", () => {
   });
 
   it("clears stored secret when caller passes null with scheme=none", async () => {
-    const single = vi.fn().mockResolvedValue({ data: ROW, error: null });
-    const { db, update } = buildDb({ single });
+    const { db, update } = buildUpdateDb();
     await updateCustomIntegration(
       {
         id: "ci-1",
@@ -752,10 +894,10 @@ describe("updateCustomIntegration extras", () => {
   });
 
   it("throws on db error", async () => {
-    const single = vi
+    const updateSingle = vi
       .fn()
       .mockResolvedValue({ data: null, error: { message: "denied" } });
-    const { db } = buildDb({ single });
+    const { db } = buildUpdateDb({ updateSingle });
     await expect(
       updateCustomIntegration(
         {
@@ -763,7 +905,10 @@ describe("updateCustomIntegration extras", () => {
           businessId: "biz-1",
           label: "Acme",
           baseUrl: "https://api.acme.com",
-          authScheme: "bearer"
+          authScheme: "bearer",
+          // Supply secret so the existence-check is bypassed and the
+          // failing path is the actual UPDATE.
+          secret: "k"
         },
         db
       )
@@ -771,15 +916,8 @@ describe("updateCustomIntegration extras", () => {
   });
 
   it("lazily creates the service client when none is injected", async () => {
-    const single = vi.fn().mockResolvedValue({ data: ROW, error: null });
-    const select = vi.fn().mockReturnValue({ single });
-    const eqInner = vi.fn().mockReturnValue({ select });
-    const eqOuter = vi.fn().mockReturnValue({ eq: eqInner });
-    const update = vi.fn().mockReturnValue({ eq: eqOuter });
-    const from = vi.fn().mockReturnValue({ update });
-    vi.mocked(createSupabaseServiceClient).mockResolvedValue(
-      { from } as never
-    );
+    const { db: stub } = buildUpdateDb();
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(stub as never);
     await updateCustomIntegration({
       id: "ci-1",
       businessId: "biz-1",

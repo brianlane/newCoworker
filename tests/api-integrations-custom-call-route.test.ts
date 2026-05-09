@@ -1,5 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Stub DNS so the SSRF re-check (`assertSafeHostname`) doesn't hit the
+// network for unit tests. Default lookup returns a public address; tests
+// that exercise the private-IP / DNS-failure paths override this with
+// `dnsLookupMock.mockImplementationOnce(...)`. Hoisted so the
+// `vi.mock("node:dns")` factory captures the same reference.
+const { dnsLookupMock } = vi.hoisted(() => ({
+  dnsLookupMock: vi.fn(async () => [
+    { address: "93.184.216.34", family: 4 } // example.com's public IP
+  ])
+}));
+vi.mock("node:dns", () => ({
+  promises: { lookup: dnsLookupMock }
+}));
+
 vi.mock("@/lib/db/custom-integrations", async () => {
   const actual = await vi.importActual<
     typeof import("@/lib/db/custom-integrations")
@@ -705,5 +719,106 @@ describe("body forwarding", () => {
       })
     );
     expect(calls[0].init.body).toBeUndefined();
+  });
+});
+
+describe("SSRF (DNS resolution)", () => {
+  it("rejects when hostname resolves to a private IPv4", async () => {
+    // Public-looking host (`api.acme.com`) that secretly resolves to a
+    // 10.0.0.0/8 address. Without the DNS pre-check this would happily
+    // proxy a stored credential to a LAN admin panel.
+    dnsLookupMock.mockImplementationOnce(async () => [
+      { address: "10.0.0.5", family: 4 }
+    ]);
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as never;
+    const res = await POST(mkRequest({ businessId: BIZ, label: "Acme", path: "/x" }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.detail).toBe("private_host_blocked");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects when hostname resolves to a private IPv6", async () => {
+    dnsLookupMock.mockImplementationOnce(async () => [
+      { address: "fc00::1", family: 6 }
+    ]);
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as never;
+    const res = await POST(mkRequest({ businessId: BIZ, label: "Acme", path: "/x" }));
+    const body = await res.json();
+    expect(body.detail).toBe("private_host_blocked");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects when hostname resolves to a mix of public and private addresses", async () => {
+    // An attacker-controlled DNS server might serve both a public and a
+    // private record so a happy-eyeballs implementation prefers the
+    // private one. We must reject if ANY returned address is private.
+    dnsLookupMock.mockImplementationOnce(async () => [
+      { address: "8.8.8.8", family: 4 },
+      { address: "127.0.0.1", family: 4 }
+    ]);
+    const res = await POST(mkRequest({ businessId: BIZ, label: "Acme", path: "/x" }));
+    const body = await res.json();
+    expect(body.detail).toBe("private_host_blocked");
+  });
+
+  it("returns 502 + upstream_unreachable when DNS lookup itself fails", async () => {
+    dnsLookupMock.mockImplementationOnce(async () => {
+      throw new Error("ENOTFOUND");
+    });
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as never;
+    const res = await POST(mkRequest({ businessId: BIZ, label: "Acme", path: "/x" }));
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.detail).toBe("upstream_unreachable");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("body read timeout", () => {
+  // The fetch timeout must remain active during the body-read loop —
+  // an upstream that sends headers promptly but stalls mid-body would
+  // otherwise hang the worker indefinitely.
+  it("returns 502 + upstream_timeout when the body stream aborts", async () => {
+    const abortErr = new Error("aborted");
+    abortErr.name = "AbortError";
+    const stallingStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(abortErr);
+      }
+    });
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(stallingStream, {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        })
+    ) as never;
+    const res = await POST(mkRequest({ businessId: BIZ, label: "Acme", path: "/x" }));
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.detail).toBe("upstream_timeout");
+  });
+
+  it("returns 502 + upstream_body_failed on non-abort body stream errors", async () => {
+    const stallingStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new Error("network reset mid-body"));
+      }
+    });
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(stallingStream, {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        })
+    ) as never;
+    const res = await POST(mkRequest({ businessId: BIZ, label: "Acme", path: "/x" }));
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.detail).toBe("upstream_body_failed");
   });
 });

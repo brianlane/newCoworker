@@ -46,6 +46,7 @@ import {
   parseBaseUrl,
   type CustomIntegrationRow
 } from "@/lib/db/custom-integrations";
+import { assertSafeHostname } from "@/lib/website-ingest";
 
 /** Hard cap on the response body we forward back to the agent. 100 KB
  * is enough for a single CRM record / list page; anything bigger is
@@ -258,6 +259,24 @@ export async function POST(request: Request) {
   }
   /* c8 ignore stop */
 
+  // SSRF defense: a public-looking hostname can resolve to a private IP
+  // (DNS rebinding, accidental misconfig, attacker-controlled CNAMEs).
+  // `isPrivateOrLoopbackHost` only inspects the literal hostname, so we
+  // additionally resolve the name and reject if any returned address is
+  // private/loopback. Note: this still has a TOCTOU window with the
+  // subsequent `fetch()` resolving the name a second time; pinning the
+  // IP would close it but break TLS SNI for vhosted upstreams. The
+  // DNS pre-check is the same defense `website-ingest` uses for owner-
+  // submitted URLs, and it stops the high-impact bypasses.
+  try {
+    await assertSafeHostname(outUrl.hostname);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "private_address";
+    /* c8 ignore next -- defensive: assertSafeHostname only throws those two codes */
+    const detail = code === "dns_failure" ? "upstream_unreachable" : "private_host_blocked";
+    return voiceToolResponse({ ok: false, detail }, code === "dns_failure" ? 502 : 200);
+  }
+
   // Merge agent's `query` first; auth-scheme query wins via `set` below.
   if (parsed.query) {
     for (const [k, v] of Object.entries(parsed.query)) {
@@ -317,28 +336,53 @@ export async function POST(request: Request) {
       502
     );
   }
-  clearTimeout(timeout);
 
   // Cap response bytes. We read at most RESPONSE_MAX_BYTES + 1 to
   // detect overflow without buffering more than necessary.
+  //
+  // The fetch timeout (`ac` / `timeout`) stays active until the body
+  // is fully drained (or cancelled) — otherwise an upstream that sends
+  // headers promptly but stalls mid-body would hang the worker
+  // indefinitely. We only `clearTimeout` once the read loop has
+  // resolved one way or another.
   const reader = upstream.body?.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
   let truncated = false;
-  if (reader) {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      /* c8 ignore next -- streams spec: a non-done chunk always carries bytes; null guard is defensive against non-conformant polyfills */
-      if (!value) continue;
-      total += value.byteLength;
-      if (total > RESPONSE_MAX_BYTES) {
-        truncated = true;
-        await reader.cancel();
-        break;
+  try {
+    if (reader) {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        /* c8 ignore next -- streams spec: a non-done chunk always carries bytes; null guard is defensive against non-conformant polyfills */
+        if (!value) continue;
+        total += value.byteLength;
+        if (total > RESPONSE_MAX_BYTES) {
+          truncated = true;
+          await reader.cancel();
+          break;
+        }
+        chunks.push(value);
       }
-      chunks.push(value);
     }
+  } catch (err) {
+    const aborted = (err as Error)?.name === "AbortError";
+    /* c8 ignore next -- defensive: cancel() failure is always safe to ignore */
+    await reader?.cancel().catch(() => {});
+    logger.warn("custom-integration call: body read failed", {
+      businessId: parsed.businessId,
+      label: parsed.label,
+      host: outUrl.hostname,
+      method: parsed.method,
+      aborted,
+      errorMessage: err instanceof Error ? err.message : String(err)
+    });
+    return voiceToolResponse(
+      { ok: false, detail: aborted ? "upstream_timeout" : "upstream_body_failed" },
+      502
+    );
+  } finally {
+    clearTimeout(timeout);
   }
   const buf = Buffer.concat(chunks.map((c) => Buffer.from(c)));
   const text = buf.toString("utf8");

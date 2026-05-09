@@ -60,21 +60,21 @@ create table if not exists public.custom_integrations (
   -- still resolve a label to a row) but the proxy refuses calls.
   is_active boolean not null default true,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  -- One label per business. Two businesses can both have an "Acme" row.
-  unique (business_id, label)
+  updated_at timestamptz not null default now()
 );
 
 create index if not exists custom_integrations_business_id_idx
   on public.custom_integrations (business_id);
 
--- Hot path on the proxy: resolve (business_id, lower(label)) to a row.
--- The unique constraint above is case-sensitive on label; we rely on
--- app-side lower() at lookup time so "Acme" and "acme" do not silently
--- collide here, but a partial functional index keeps the lookup O(1).
-create index if not exists custom_integrations_business_label_lower_idx
-  on public.custom_integrations (business_id, lower(label))
-  where is_active = true;
+-- One label per business, case-insensitive: this is BOTH the
+-- uniqueness invariant and the hot-path lookup index for the proxy
+-- (which resolves `(business_id, lower(label))` per call).  We
+-- intentionally do NOT add a case-sensitive `unique (business_id, label)`
+-- on top: the proxy's `ilike()` lookup can return rows that differ only
+-- by case, and `maybeSingle()` would then 500. Two businesses can each
+-- have their own "Acme" row.
+create unique index if not exists custom_integrations_business_label_lower_idx
+  on public.custom_integrations (business_id, lower(label));
 
 -- updated_at maintenance.
 create or replace function public.tg_custom_integrations_touch_updated_at()

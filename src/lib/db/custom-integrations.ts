@@ -121,10 +121,27 @@ export async function listCustomIntegrations(
 }
 
 /**
+ * Escape PostgreSQL LIKE/ILIKE wildcard metacharacters so the value is
+ * treated as a literal string. We escape `\`, `%`, and `_`; that lets
+ * us use `.ilike()` as case-insensitive *equality* (since there's no
+ * `lower(col) = lower($1)` operator on the supabase-js builder).
+ *
+ * Without this, an agent sending a label of `%` would match the first
+ * row in the business and the proxy would gleefully forward whatever
+ * credential lives there.
+ */
+function escapeLikeLiteral(value: string): string {
+  return value.replace(/[\\%_]/g, (m) => `\\${m}`);
+}
+
+/**
  * Resolve a label to a single decrypted row for the proxy/tool path.
- * Case-insensitive (matches the partial functional index in the
- * migration). Returns null when no matching row exists; callers must
- * disambiguate that from "exists but is_active=false" themselves.
+ * Case-insensitive — matches the unique index on `lower(label)` in the
+ * migration; the wildcard chars are escaped so an agent cannot use
+ * `%`/`_` as a fishing pattern across the business's integrations.
+ *
+ * Returns null when no matching row exists; callers must disambiguate
+ * that from "exists but is_active=false" themselves.
  */
 export async function getCustomIntegrationByLabel(
   businessId: string,
@@ -138,7 +155,7 @@ export async function getCustomIntegrationByLabel(
     .from("custom_integrations")
     .select()
     .eq("business_id", businessId)
-    .ilike("label", trimmed)
+    .ilike("label", escapeLikeLiteral(trimmed))
     .maybeSingle();
   if (error) throw new Error(`getCustomIntegrationByLabel: ${error.message}`);
   if (!data) return null;
@@ -436,31 +453,74 @@ export async function createCustomIntegration(
 
 /**
  * Compute the secret_encrypted patch slot for an update. Three cases:
- *   - caller supplied a secret → encrypt and write it.
- *   - caller is flipping to scheme=none → clear the stored secret so a
- *     later scheme flip cannot resurrect a stale credential.
- *   - otherwise → leave the existing stored secret alone (we DO NOT
- *     include `secret_encrypted` in the patch object).
+ *   - scheme === "none" → always clear, so a later flip to a
+ *     credentialed scheme cannot resurrect a stale credential.
+ *   - non-empty secret string supplied → encrypt and write.
+ *   - otherwise (undefined / null / empty) → leave the stored secret
+ *     alone. We DO NOT include `secret_encrypted` in the patch object.
  *
- * Returned tuple is `[shouldWrite, value]` so the caller can branch on
- * the writer-vs-omitter shape without a sentinel value.
+ * Empty-string and null are folded into "leave alone" deliberately:
+ * the dashboard form sends an empty string when the owner doesn't want
+ * to rotate the credential, and we must not interpret that as "clear
+ * the secret" (the scheme would then be enabled with no credential and
+ * every agent call would 502).
  */
 function computeSecretPatch(
   input: UpsertCustomIntegrationInput
 ): { include: true; value: string | null } | { include: false } {
-  if (input.secret !== undefined) {
-    return {
-      include: true,
-      value:
-        input.authScheme === "none"
-          ? null
-          : encryptIntegrationSecret(input.secret)
-    };
-  }
   if (input.authScheme === "none") {
     return { include: true, value: null };
   }
+  if (typeof input.secret === "string" && input.secret.length > 0) {
+    return { include: true, value: encryptIntegrationSecret(input.secret) };
+  }
   return { include: false };
+}
+
+/**
+ * Returns whether the stored row already has a secret on file. Used by
+ * `updateCustomIntegration` to refuse a scheme→credentialed transition
+ * that would leave the row with no usable credential. A missing row
+ * (cross-tenant id, race) or a null `secret_encrypted` are both treated
+ * as "no secret" and surface the same error to the caller.
+ */
+async function storedRowHasSecret(
+  db: SupabaseClient,
+  businessId: string,
+  id: string
+): Promise<boolean> {
+  const { data, error } = await db
+    .from("custom_integrations")
+    .select("secret_encrypted")
+    .eq("business_id", businessId)
+    .eq("id", id)
+    .maybeSingle();
+  if (error) {
+    throw new Error(`updateCustomIntegration: ${error.message}`);
+  }
+  const row = data as { secret_encrypted: string | null } | null;
+  return row !== null && row.secret_encrypted !== null;
+}
+
+/**
+ * `updateCustomIntegration` invariant guard: refuse a transition that
+ * would leave the row with a credentialed scheme but no usable secret.
+ * Pulled out as a free function so the logic is exhaustively branch-
+ * coverable without nesting `&&` chains in the call site.
+ */
+async function assertCredentialedSchemeHasSecret(
+  input: UpsertCustomIntegrationInput & { id: string },
+  secretPatch: ReturnType<typeof computeSecretPatch>,
+  db: SupabaseClient
+): Promise<void> {
+  if (input.authScheme === "none") return;
+  if (secretPatch.include) return;
+  const hasStored = await storedRowHasSecret(db, input.businessId, input.id);
+  if (hasStored) return;
+  throw new CustomIntegrationValidationError(
+    "secret_required",
+    "secret is required for this auth_scheme"
+  );
 }
 
 export async function updateCustomIntegration(
@@ -469,10 +529,12 @@ export async function updateCustomIntegration(
 ): Promise<PublicCustomIntegrationRow> {
   validateUpsertInput(input);
   const db = client ?? (await createSupabaseServiceClient());
-  // Build patch. We omit `secret_encrypted` entirely when the caller
-  // didn't supply a new secret AND the scheme isn't being flipped to
-  // none, so we don't accidentally clobber the stored value.
   const secretPatch = computeSecretPatch(input);
+  // Defense in depth: if the caller is selecting a credentialed scheme
+  // without supplying a new secret, the stored row MUST already have a
+  // secret. Otherwise the update silently produces a row that the
+  // proxy can never honor.
+  await assertCredentialedSchemeHasSecret(input, secretPatch, db);
   const patch: Record<string, unknown> = {
     label: input.label.trim(),
     base_url: input.baseUrl.trim(),
