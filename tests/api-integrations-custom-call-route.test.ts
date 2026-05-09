@@ -10,7 +10,7 @@ vi.mock("@/lib/db/custom-integrations", async () => {
   };
 });
 
-import { POST, RESPONSE_MAX_BYTES } from "@/app/api/integrations/custom/call/route";
+import { GET, POST, RESPONSE_MAX_BYTES } from "@/app/api/integrations/custom/call/route";
 import { getCustomIntegrationByLabel } from "@/lib/db/custom-integrations";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -80,6 +80,21 @@ describe("validation", () => {
     expect(res.status).toBe(400);
   });
 
+  it("returns 'invalid body' when JSON parse fails (non-Zod path)", async () => {
+    const req = new Request("http://localhost/api/integrations/custom/call", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-gateway-token"
+      },
+      body: "this is not json"
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.detail).toMatch(/invalid_args:/);
+  });
+
   it("rejects unsupported HTTP methods", async () => {
     const res = await POST(
       mkRequest({ businessId: BIZ, label: "Acme", method: "HEAD" })
@@ -142,6 +157,14 @@ describe("integration resolution", () => {
 
   it("returns 500 with detail=lookup_failed when DB throws", async () => {
     vi.mocked(getCustomIntegrationByLabel).mockRejectedValueOnce(new Error("db down"));
+    const res = await POST(mkRequest({ businessId: BIZ, label: "Acme" }));
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.detail).toBe("lookup_failed");
+  });
+
+  it("survives a non-Error rejection from the lookup (string thrown)", async () => {
+    vi.mocked(getCustomIntegrationByLabel).mockRejectedValueOnce("non-error rejection");
     const res = await POST(mkRequest({ businessId: BIZ, label: "Acme" }));
     expect(res.status).toBe(500);
     const body = await res.json();
@@ -441,6 +464,181 @@ describe("response handling", () => {
     const body = await res.json();
     expect(body.detail).toBe("upstream_timeout");
   });
+
+  it("survives a non-Error rejection from the upstream fetch", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      // Some libraries throw POJOs / strings instead of Error subclasses;
+      // the route is expected to coerce via `String(err)` and still return
+      // upstream_unreachable.
+      throw "raw string rejection";
+    }) as never;
+    const res = await POST(mkRequest({ businessId: BIZ, label: "Acme", path: "/x" }));
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.detail).toBe("upstream_unreachable");
+  });
+});
+
+describe("auth scheme misconfiguration", () => {
+  it("returns header_name_missing when scheme=header but header_name is null", async () => {
+    vi.mocked(getCustomIntegrationByLabel).mockResolvedValueOnce({
+      ...BASE_ROW,
+      auth_scheme: "header",
+      header_name: null
+    });
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as never;
+    const res = await POST(mkRequest({ businessId: BIZ, label: "Acme", path: "/x" }));
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.detail).toBe("header_name_missing");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns header_name_missing when scheme=query but header_name is null", async () => {
+    vi.mocked(getCustomIntegrationByLabel).mockResolvedValueOnce({
+      ...BASE_ROW,
+      auth_scheme: "query",
+      header_name: null
+    });
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as never;
+    const res = await POST(mkRequest({ businessId: BIZ, label: "Acme", path: "/x" }));
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.detail).toBe("header_name_missing");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("URL composition extras", () => {
+  it("supports a row whose base_url has no path prefix (just host)", async () => {
+    vi.mocked(getCustomIntegrationByLabel).mockResolvedValueOnce({
+      ...BASE_ROW,
+      base_url: "https://api.acme.com"
+    });
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+      calls.push(String(url));
+      return new Response("{}", {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }) as never;
+    await POST(mkRequest({ businessId: BIZ, label: "Acme", path: "/contacts" }));
+    expect(calls[0]).toBe("https://api.acme.com/contacts");
+  });
+});
+
+describe("GET on call route", () => {
+  it("returns 405 with VALIDATION_ERROR envelope", async () => {
+    const res = await GET();
+    expect(res.status).toBe(405);
+    const body = await res.json();
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+});
+
+describe("response handling extras", () => {
+  it("falls back to text when upstream JSON is invalid", async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response("not json {", {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        })
+    ) as never;
+    const res = await POST(mkRequest({ businessId: BIZ, label: "Acme", path: "/x" }));
+    const body = await res.json();
+    expect(body.data.data).toBe("not json {");
+  });
+
+  it("handles upstream with no body", async () => {
+    globalThis.fetch = vi.fn(
+      async () => new Response(null, { status: 204 })
+    ) as never;
+    const res = await POST(mkRequest({ businessId: BIZ, label: "Acme", path: "/x" }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.status).toBe(204);
+  });
+});
+
+describe("body forwarding extras", () => {
+  it("forwards a string body when contentType is non-JSON", async () => {
+    const calls: { init: RequestInit }[] = [];
+    globalThis.fetch = vi.fn(async (_u: unknown, init: RequestInit) => {
+      calls.push({ init });
+      return new Response("{}", {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }) as never;
+    await POST(
+      mkRequest({
+        businessId: BIZ,
+        label: "Acme",
+        method: "POST",
+        path: "/x",
+        body: "raw=string&payload=ok",
+        contentType: "application/x-www-form-urlencoded"
+      })
+    );
+    expect(calls[0].init.body).toBe("raw=string&payload=ok");
+  });
+
+  it("JSON-stringifies a non-string body when contentType is non-JSON", async () => {
+    const calls: { init: RequestInit }[] = [];
+    globalThis.fetch = vi.fn(async (_u: unknown, init: RequestInit) => {
+      calls.push({ init });
+      return new Response("{}", {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }) as never;
+    await POST(
+      mkRequest({
+        businessId: BIZ,
+        label: "Acme",
+        method: "POST",
+        path: "/x",
+        body: { x: 1 },
+        contentType: "text/plain"
+      })
+    );
+    expect(calls[0].init.body).toBe(JSON.stringify({ x: 1 }));
+  });
+});
+
+describe("timeout (real abort)", () => {
+  it("aborts a slow upstream and returns upstream_timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      // Stand up a fetch that returns a never-resolving promise but
+      // listens to the AbortSignal so we can verify the abort path.
+      const fetchMock = vi.fn(async (_u: unknown, init: RequestInit) => {
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => {
+            const err = new Error("aborted");
+            err.name = "AbortError";
+            reject(err);
+          });
+        });
+      });
+      globalThis.fetch = fetchMock as never;
+      const promise = POST(
+        mkRequest({ businessId: BIZ, label: "Acme", path: "/x" })
+      );
+      // Advance past REQUEST_TIMEOUT_MS so the setTimeout fires.
+      await vi.advanceTimersByTimeAsync(20_001);
+      const res = await promise;
+      expect(res.status).toBe(502);
+      const body = await res.json();
+      expect(body.detail).toBe("upstream_timeout");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("body forwarding", () => {
@@ -465,6 +663,27 @@ describe("body forwarding", () => {
     expect(calls[0].init.body).toBe(JSON.stringify({ name: "Jane" }));
     const headers = calls[0].init.headers as Headers;
     expect(headers.get("Content-Type")).toBe("application/json");
+  });
+
+  it("forwards `null` body when JSON content type but body is null", async () => {
+    const calls: { init: RequestInit }[] = [];
+    globalThis.fetch = vi.fn(async (_u: unknown, init: RequestInit) => {
+      calls.push({ init });
+      return new Response("{}", {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }) as never;
+    await POST(
+      mkRequest({
+        businessId: BIZ,
+        label: "Acme",
+        method: "POST",
+        path: "/x",
+        body: null
+      })
+    );
+    expect(calls[0].init.body).toBe(JSON.stringify(null));
   });
 
   it("does not send a body on GET even if body is supplied", async () => {

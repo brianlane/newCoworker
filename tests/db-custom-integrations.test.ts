@@ -207,6 +207,38 @@ describe("validateUpsertInput", () => {
     ).toThrow(/description exceeds/);
   });
 
+  it("rejects label that is whitespace-only", () => {
+    expect(() => validateUpsertInput({ ...base, label: "   " })).toThrow(
+      /label is required/
+    );
+  });
+
+  it("rejects label that exceeds CUSTOM_LABEL_MAX after trimming", () => {
+    expect(() =>
+      validateUpsertInput({ ...base, label: `  ${"x".repeat(CUSTOM_LABEL_MAX + 1)}  ` })
+    ).toThrow(/exceeds/);
+  });
+
+  it("rejects header_name longer than max", () => {
+    expect(() =>
+      validateUpsertInput({
+        ...base,
+        authScheme: "header",
+        headerName: "X".repeat(200)
+      })
+    ).toThrow(/exceeds/);
+  });
+
+  it("rejects unknown auth_scheme cast through the type", () => {
+    expect(() =>
+      validateUpsertInput({
+        ...base,
+        // @ts-expect-error — testing runtime guard against type-cast bypass
+        authScheme: "garbage"
+      })
+    ).toThrow(/auth_scheme is invalid/);
+  });
+
   it("CUSTOM_AUTH_SCHEMES includes all five schemes", () => {
     expect(CUSTOM_AUTH_SCHEMES).toEqual([
       "bearer",
@@ -270,6 +302,13 @@ describe("listCustomIntegrations", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     await expect(listCustomIntegrations("biz-1")).rejects.toThrow(/boom/);
   });
+
+  it("returns [] when the DB returns null data without an error", async () => {
+    const order = vi.fn().mockResolvedValue({ data: null, error: null });
+    const db = dbStub({ order });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(listCustomIntegrations("biz-1")).resolves.toEqual([]);
+  });
 });
 
 describe("getCustomIntegrationByLabel", () => {
@@ -312,6 +351,18 @@ describe("getCustomIntegrationByLabel", () => {
     await getCustomIntegrationByLabel("biz-1", "ACME crm");
     expect(ilike).toHaveBeenCalledWith("label", "ACME crm");
   });
+
+  it("throws on db error", async () => {
+    const db = dbStub({
+      maybeSingle: vi
+        .fn()
+        .mockResolvedValue({ data: null, error: { message: "boom" } })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(getCustomIntegrationByLabel("biz-1", "Acme")).rejects.toThrow(
+      /boom/
+    );
+  });
 });
 
 describe("createCustomIntegration", () => {
@@ -339,7 +390,10 @@ describe("createCustomIntegration", () => {
     expect(res.has_secret).toBe(true);
     const payload = insert.mock.calls[0][0] as Record<string, string>;
     expect(payload.secret_encrypted).toMatch(/^enc:v1:/);
-    expect(payload.secret_encrypted).not.toContain("k");
+    // The cleartext is 1 char so "doesn't contain k" can collide with
+    // random base64; assert via length instead — encrypted form is far
+    // longer than the cleartext.
+    expect(payload.secret_encrypted.length).toBeGreaterThan(20);
   });
 
   it("stores null secret when scheme is 'none'", async () => {
@@ -501,5 +555,263 @@ describe("getCustomIntegrationById", () => {
     const r = await getCustomIntegrationById("biz-1", "ci-1");
     expect(r?.has_secret).toBe(true);
     expect((r as unknown as Record<string, unknown>).secret).toBeUndefined();
+  });
+
+  it("returns null when missing", async () => {
+    const db = dbStub({
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await getCustomIntegrationById("biz-1", "ci-1")).toBeNull();
+  });
+
+  it("throws on db error", async () => {
+    const db = dbStub({
+      maybeSingle: vi
+        .fn()
+        .mockResolvedValue({ data: null, error: { message: "bad" } })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(getCustomIntegrationById("biz-1", "ci-1")).rejects.toThrow(
+      /bad/
+    );
+  });
+});
+
+describe("createCustomIntegration extras", () => {
+  it("preserves header_name when scheme=query", async () => {
+    const single = vi.fn().mockResolvedValue({ data: ROW, error: null });
+    const select = vi.fn().mockReturnValue({ single });
+    const insert = vi.fn().mockReturnValue({ select });
+    const from = vi.fn().mockReturnValue({ insert });
+    const db = { from } as unknown as never;
+
+    await createCustomIntegration(
+      {
+        businessId: "biz-1",
+        label: "Acme",
+        baseUrl: "https://api.acme.com",
+        authScheme: "query",
+        headerName: "api_key",
+        secret: "k"
+      },
+      db
+    );
+    const payload = insert.mock.calls[0][0] as Record<string, string | null>;
+    expect(payload.header_name).toBe("api_key");
+  });
+
+  it("trims and stores a non-empty description", async () => {
+    const single = vi.fn().mockResolvedValue({ data: ROW, error: null });
+    const select = vi.fn().mockReturnValue({ single });
+    const insert = vi.fn().mockReturnValue({ select });
+    const from = vi.fn().mockReturnValue({ insert });
+    const db = { from } as unknown as never;
+
+    await createCustomIntegration(
+      {
+        businessId: "biz-1",
+        label: "Acme",
+        baseUrl: "https://api.acme.com",
+        authScheme: "bearer",
+        secret: "k",
+        description: "  Acme contacts  "
+      },
+      db
+    );
+    const payload = insert.mock.calls[0][0] as Record<string, string | null>;
+    expect(payload.description).toBe("Acme contacts");
+  });
+
+  it("normalizes whitespace-only description to null", async () => {
+    const single = vi.fn().mockResolvedValue({ data: ROW, error: null });
+    const select = vi.fn().mockReturnValue({ single });
+    const insert = vi.fn().mockReturnValue({ select });
+    const from = vi.fn().mockReturnValue({ insert });
+    const db = { from } as unknown as never;
+
+    await createCustomIntegration(
+      {
+        businessId: "biz-1",
+        label: "Acme",
+        baseUrl: "https://api.acme.com",
+        authScheme: "bearer",
+        secret: "k",
+        description: "   "
+      },
+      db
+    );
+    const payload = insert.mock.calls[0][0] as Record<string, string | null>;
+    expect(payload.description).toBeNull();
+  });
+
+  it("throws on db error", async () => {
+    const single = vi
+      .fn()
+      .mockResolvedValue({ data: null, error: { message: "no" } });
+    const select = vi.fn().mockReturnValue({ single });
+    const insert = vi.fn().mockReturnValue({ select });
+    const from = vi.fn().mockReturnValue({ insert });
+    const db = { from } as unknown as never;
+
+    await expect(
+      createCustomIntegration(
+        {
+          businessId: "biz-1",
+          label: "Acme",
+          baseUrl: "https://api.acme.com",
+          authScheme: "bearer",
+          secret: "k"
+        },
+        db
+      )
+    ).rejects.toThrow(/no/);
+  });
+
+  it("lazily creates the service client when none is injected", async () => {
+    const single = vi.fn().mockResolvedValue({ data: ROW, error: null });
+    const select = vi.fn().mockReturnValue({ single });
+    const insert = vi.fn().mockReturnValue({ select });
+    const from = vi.fn().mockReturnValue({ insert });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(
+      { from } as never
+    );
+    await createCustomIntegration({
+      businessId: "biz-1",
+      label: "Acme",
+      baseUrl: "https://api.acme.com",
+      authScheme: "bearer",
+      secret: "k"
+    });
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+  });
+});
+
+describe("updateCustomIntegration extras", () => {
+  function buildDb(updateChain: { single: ReturnType<typeof vi.fn> }) {
+    const select = vi.fn().mockReturnValue(updateChain);
+    const eqInner = vi.fn().mockReturnValue({ select });
+    const eqOuter = vi.fn().mockReturnValue({ eq: eqInner });
+    const update = vi.fn().mockReturnValue({ eq: eqOuter });
+    const from = vi.fn().mockReturnValue({ update });
+    return { db: { from } as unknown as never, update };
+  }
+
+  it("preserves header_name when scheme=header on update", async () => {
+    const single = vi.fn().mockResolvedValue({ data: ROW, error: null });
+    const { db, update } = buildDb({ single });
+    await updateCustomIntegration(
+      {
+        id: "ci-1",
+        businessId: "biz-1",
+        label: "Acme CRM",
+        baseUrl: "https://api.acme.com/v2",
+        authScheme: "header",
+        headerName: "X-API-Key"
+      },
+      db
+    );
+    const patch = update.mock.calls[0][0] as Record<string, string | null>;
+    expect(patch.header_name).toBe("X-API-Key");
+  });
+
+  it("writes is_active when caller supplies it", async () => {
+    const single = vi.fn().mockResolvedValue({ data: ROW, error: null });
+    const { db, update } = buildDb({ single });
+    await updateCustomIntegration(
+      {
+        id: "ci-1",
+        businessId: "biz-1",
+        label: "Acme CRM",
+        baseUrl: "https://api.acme.com/v2",
+        authScheme: "bearer",
+        isActive: false
+      },
+      db
+    );
+    const patch = update.mock.calls[0][0] as Record<string, unknown>;
+    expect(patch.is_active).toBe(false);
+  });
+
+  it("clears stored secret when caller passes null with scheme=none", async () => {
+    const single = vi.fn().mockResolvedValue({ data: ROW, error: null });
+    const { db, update } = buildDb({ single });
+    await updateCustomIntegration(
+      {
+        id: "ci-1",
+        businessId: "biz-1",
+        label: "Acme CRM",
+        baseUrl: "https://api.acme.com/v2",
+        authScheme: "none",
+        secret: null
+      },
+      db
+    );
+    const patch = update.mock.calls[0][0] as Record<string, unknown>;
+    expect(patch.secret_encrypted).toBeNull();
+  });
+
+  it("throws on db error", async () => {
+    const single = vi
+      .fn()
+      .mockResolvedValue({ data: null, error: { message: "denied" } });
+    const { db } = buildDb({ single });
+    await expect(
+      updateCustomIntegration(
+        {
+          id: "ci-1",
+          businessId: "biz-1",
+          label: "Acme",
+          baseUrl: "https://api.acme.com",
+          authScheme: "bearer"
+        },
+        db
+      )
+    ).rejects.toThrow(/denied/);
+  });
+
+  it("lazily creates the service client when none is injected", async () => {
+    const single = vi.fn().mockResolvedValue({ data: ROW, error: null });
+    const select = vi.fn().mockReturnValue({ single });
+    const eqInner = vi.fn().mockReturnValue({ select });
+    const eqOuter = vi.fn().mockReturnValue({ eq: eqInner });
+    const update = vi.fn().mockReturnValue({ eq: eqOuter });
+    const from = vi.fn().mockReturnValue({ update });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(
+      { from } as never
+    );
+    await updateCustomIntegration({
+      id: "ci-1",
+      businessId: "biz-1",
+      label: "Acme",
+      baseUrl: "https://api.acme.com",
+      authScheme: "bearer",
+      secret: "rotated"
+    });
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+  });
+});
+
+describe("listCustomIntegrations + service client", () => {
+  it("lazily creates the service client when none is injected", async () => {
+    const order = vi.fn().mockResolvedValue({ data: [], error: null });
+    const db = dbStub({ order });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await listCustomIntegrations("biz-1");
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+  });
+});
+
+describe("deleteCustomIntegration + service client", () => {
+  it("lazily creates the service client when none is injected", async () => {
+    const eqInner = vi.fn().mockResolvedValue({ error: null });
+    const eqOuter = vi.fn().mockReturnValue({ eq: eqInner });
+    const del = vi.fn().mockReturnValue({ eq: eqOuter });
+    const from = vi.fn().mockReturnValue({ delete: del });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(
+      { from } as never
+    );
+    await deleteCustomIntegration("biz-1", "ci-1");
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
   });
 });

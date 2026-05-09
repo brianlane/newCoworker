@@ -112,6 +112,18 @@ describe("api/integrations/custom GET (list)", () => {
     expect(body.data[0]).not.toHaveProperty("secret_encrypted");
     expect(body.data[0].has_secret).toBe(true);
   });
+
+  it("returns 500 when listCustomIntegrations throws non-validation error", async () => {
+    vi.mocked(listCustomIntegrations).mockRejectedValueOnce(
+      new Error("listCustomIntegrations: db down")
+    );
+    const res = await GET(
+      new Request(`http://localhost/api/integrations/custom?businessId=${BIZ}`)
+    );
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error.code).toBe("INTERNAL_SERVER_ERROR");
+  });
 });
 
 describe("api/integrations/custom POST (create)", () => {
@@ -247,6 +259,49 @@ describe("api/integrations/custom/[id] GET", () => {
     );
     expect(res.status).toBe(400);
   });
+
+  it("400s on missing businessId query", async () => {
+    const res = await GET_BY_ID(
+      new Request(`http://localhost/api/integrations/custom/${ID}`),
+      ctx(ID)
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects unauthenticated GET-by-id", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    const res = await GET_BY_ID(
+      new Request(
+        `http://localhost/api/integrations/custom/${ID}?businessId=${BIZ}`
+      ),
+      ctx(ID)
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("admin GET-by-id skips owner check", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(ADMIN as never);
+    await GET_BY_ID(
+      new Request(
+        `http://localhost/api/integrations/custom/${ID}?businessId=${BIZ}`
+      ),
+      ctx(ID)
+    );
+    expect(requireOwner).not.toHaveBeenCalled();
+  });
+
+  it("returns 500 when getCustomIntegrationById throws", async () => {
+    vi.mocked(getCustomIntegrationById).mockRejectedValueOnce(
+      new Error("getCustomIntegrationById: db died")
+    );
+    const res = await GET_BY_ID(
+      new Request(
+        `http://localhost/api/integrations/custom/${ID}?businessId=${BIZ}`
+      ),
+      ctx(ID)
+    );
+    expect(res.status).toBe(500);
+  });
 });
 
 describe("api/integrations/custom/[id] PATCH", () => {
@@ -307,6 +362,81 @@ describe("api/integrations/custom/[id] PATCH", () => {
     );
     expect(res.status).toBe(401);
   });
+
+  it("400s on invalid id", async () => {
+    const res = await PATCH(
+      new Request(`http://localhost/api/integrations/custom/not-uuid`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId: BIZ,
+          label: "Acme",
+          baseUrl: "https://api.acme.com",
+          authScheme: "bearer"
+        })
+      }),
+      ctx("not-uuid")
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("maps unique-violation to 409 CONFLICT", async () => {
+    vi.mocked(updateCustomIntegration).mockRejectedValueOnce(
+      new Error("updateCustomIntegration: duplicate key value violates unique constraint")
+    );
+    const res = await PATCH(
+      new Request(`http://localhost/api/integrations/custom/${ID}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId: BIZ,
+          label: "Acme",
+          baseUrl: "https://api.acme.com",
+          authScheme: "bearer"
+        })
+      }),
+      ctx(ID)
+    );
+    expect(res.status).toBe(409);
+  });
+
+  it("falls through to 500 on unexpected error", async () => {
+    vi.mocked(updateCustomIntegration).mockRejectedValueOnce(
+      new Error("updateCustomIntegration: random db crash")
+    );
+    const res = await PATCH(
+      new Request(`http://localhost/api/integrations/custom/${ID}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId: BIZ,
+          label: "Acme",
+          baseUrl: "https://api.acme.com",
+          authScheme: "bearer"
+        })
+      }),
+      ctx(ID)
+    );
+    expect(res.status).toBe(500);
+  });
+
+  it("admin PATCH skips owner check", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(ADMIN as never);
+    await PATCH(
+      new Request(`http://localhost/api/integrations/custom/${ID}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId: BIZ,
+          label: "Acme",
+          baseUrl: "https://api.acme.com",
+          authScheme: "bearer"
+        })
+      }),
+      ctx(ID)
+    );
+    expect(requireOwner).not.toHaveBeenCalled();
+  });
 });
 
 describe("api/integrations/custom/[id] DELETE", () => {
@@ -348,5 +478,59 @@ describe("api/integrations/custom/[id] DELETE", () => {
       ctx(ID)
     );
     expect(res.status).toBe(401);
+  });
+
+  it("returns 500 when deleteCustomIntegration throws", async () => {
+    vi.mocked(deleteCustomIntegration).mockRejectedValueOnce(
+      new Error("deleteCustomIntegration: db error")
+    );
+    const res = await DELETE(
+      new Request(`http://localhost/api/integrations/custom/${ID}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId: BIZ })
+      }),
+      ctx(ID)
+    );
+    expect(res.status).toBe(500);
+  });
+
+  it("400s on invalid body (missing businessId)", async () => {
+    const res = await DELETE(
+      new Request(`http://localhost/api/integrations/custom/${ID}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      }),
+      ctx(ID)
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("400s when body is non-JSON (json() throws and falls through to {} → invalid)", async () => {
+    // The route uses `request.json().catch(() => ({}))`; an empty object
+    // then fails the businessId required check.
+    const res = await DELETE(
+      new Request(`http://localhost/api/integrations/custom/${ID}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: "not json at all"
+      }),
+      ctx(ID)
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("admin DELETE skips owner check", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(ADMIN as never);
+    await DELETE(
+      new Request(`http://localhost/api/integrations/custom/${ID}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId: BIZ })
+      }),
+      ctx(ID)
+    );
+    expect(requireOwner).not.toHaveBeenCalled();
   });
 });

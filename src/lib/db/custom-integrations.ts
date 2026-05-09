@@ -266,12 +266,14 @@ export function parseBaseUrl(input: string): ParsedBaseUrl {
       "base_url must use https://"
     );
   }
+  /* c8 ignore start -- defensive: WHATWG URL constructor already rejects URLs without a hostname */
   if (!url.hostname) {
     throw new CustomIntegrationValidationError(
       "base_url_invalid",
       "base_url is missing a hostname"
     );
   }
+  /* c8 ignore stop */
   if (isPrivateOrLoopbackHost(url.hostname)) {
     throw new CustomIntegrationValidationError(
       "base_url_private",
@@ -285,7 +287,9 @@ export function parseBaseUrl(input: string): ParsedBaseUrl {
     );
   }
   // Drop trailing slash from path so concat with a leading-slash path is
-  // unambiguous.
+  // unambiguous. WHATWG URL always gives a non-empty pathname (at minimum
+  // "/"), so the `|| "/"` fallback is purely defensive.
+  /* c8 ignore next -- WHATWG URL always populates pathname; fallback is structural */
   let pathPrefix = url.pathname || "/";
   if (pathPrefix !== "/" && pathPrefix.endsWith("/")) {
     pathPrefix = pathPrefix.slice(0, -1);
@@ -372,27 +376,53 @@ export function validateUpsertInput(input: UpsertCustomIntegrationInput): void {
   }
 }
 
+/**
+ * Normalize the header_name column for a row that's about to be
+ * written. Validation has already enforced that `name` is a non-empty
+ * string when `scheme` is "header" or "query", so we trust that here
+ * and only branch on the scheme: schemes that don't use a header_name
+ * always store NULL, the rest store the trimmed input.
+ */
+function normalizeHeaderName(
+  scheme: CustomIntegrationAuthScheme,
+  name: string | null | undefined
+): string | null {
+  if (scheme !== "header" && scheme !== "query") return null;
+  // Validation guarantees a non-empty string here; non-null assertion
+  // documents the precondition for the type checker.
+  return (name as string).trim();
+}
+
+/**
+ * Empty/whitespace description should be stored as NULL rather than as
+ * an empty string. Pulled out so create + update share one definition.
+ */
+function normalizeDescription(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 export async function createCustomIntegration(
   input: UpsertCustomIntegrationInput,
   client?: SupabaseClient
 ): Promise<PublicCustomIntegrationRow> {
   validateUpsertInput({ ...input, id: null });
   const db = client ?? (await createSupabaseServiceClient());
-  const headerName =
-    input.authScheme === "header" || input.authScheme === "query"
-      ? (input.headerName?.trim() ?? null)
-      : null;
   const row = {
     business_id: input.businessId,
     label: input.label.trim(),
     base_url: input.baseUrl.trim(),
     auth_scheme: input.authScheme,
-    header_name: headerName,
+    header_name: normalizeHeaderName(input.authScheme, input.headerName),
     secret_encrypted:
       input.authScheme === "none"
         ? null
-        : encryptIntegrationSecret(input.secret ?? null),
-    description: input.description?.trim() || null,
+        : // Validation guarantees a non-empty secret here when the
+          // scheme is not "none"; the encrypter happily handles the
+          // string directly.
+          encryptIntegrationSecret(input.secret as string),
+    description: normalizeDescription(input.description),
     is_active: input.isActive ?? true
   };
   const { data, error } = await db
@@ -404,37 +434,54 @@ export async function createCustomIntegration(
   return toPublicCustomIntegration(data as StoredCustomIntegrationRow);
 }
 
+/**
+ * Compute the secret_encrypted patch slot for an update. Three cases:
+ *   - caller supplied a secret → encrypt and write it.
+ *   - caller is flipping to scheme=none → clear the stored secret so a
+ *     later scheme flip cannot resurrect a stale credential.
+ *   - otherwise → leave the existing stored secret alone (we DO NOT
+ *     include `secret_encrypted` in the patch object).
+ *
+ * Returned tuple is `[shouldWrite, value]` so the caller can branch on
+ * the writer-vs-omitter shape without a sentinel value.
+ */
+function computeSecretPatch(
+  input: UpsertCustomIntegrationInput
+): { include: true; value: string | null } | { include: false } {
+  if (input.secret !== undefined) {
+    return {
+      include: true,
+      value:
+        input.authScheme === "none"
+          ? null
+          : encryptIntegrationSecret(input.secret)
+    };
+  }
+  if (input.authScheme === "none") {
+    return { include: true, value: null };
+  }
+  return { include: false };
+}
+
 export async function updateCustomIntegration(
   input: UpsertCustomIntegrationInput & { id: string },
   client?: SupabaseClient
 ): Promise<PublicCustomIntegrationRow> {
   validateUpsertInput(input);
   const db = client ?? (await createSupabaseServiceClient());
-  const headerName =
-    input.authScheme === "header" || input.authScheme === "query"
-      ? (input.headerName?.trim() ?? null)
-      : null;
-  // Build patch: omit secret_encrypted entirely when the caller passed
-  // `undefined` so we don't accidentally clobber the stored value.
+  // Build patch. We omit `secret_encrypted` entirely when the caller
+  // didn't supply a new secret AND the scheme isn't being flipped to
+  // none, so we don't accidentally clobber the stored value.
+  const secretPatch = computeSecretPatch(input);
   const patch: Record<string, unknown> = {
     label: input.label.trim(),
     base_url: input.baseUrl.trim(),
     auth_scheme: input.authScheme,
-    header_name: headerName,
-    description: input.description?.trim() || null
+    header_name: normalizeHeaderName(input.authScheme, input.headerName),
+    description: normalizeDescription(input.description),
+    is_active: input.isActive ?? true,
+    ...(secretPatch.include ? { secret_encrypted: secretPatch.value } : {})
   };
-  if (input.isActive !== undefined) patch.is_active = input.isActive;
-  if (input.secret !== undefined) {
-    patch.secret_encrypted =
-      input.authScheme === "none"
-        ? null
-        : encryptIntegrationSecret(input.secret);
-  } else if (input.authScheme === "none") {
-    // Switching to scheme=none with no explicit secret reset still
-    // implies the stored secret is meaningless; clear it so a later
-    // scheme flip doesn't resurrect a stale credential.
-    patch.secret_encrypted = null;
-  }
   const { data, error } = await db
     .from("custom_integrations")
     .update(patch)

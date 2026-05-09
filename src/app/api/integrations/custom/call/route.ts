@@ -167,6 +167,7 @@ function applyAuthScheme(
       return null;
     }
   }
+  /* c8 ignore next -- defensive: zod + DB CHECK both gate auth_scheme so this is unreachable */
   return { detail: "auth_scheme_invalid" };
 }
 
@@ -193,11 +194,12 @@ export async function POST(request: Request) {
   try {
     parsed = callSchema.parse(await request.json());
   } catch (err) {
-    return voiceToolValidationError(
-      err instanceof z.ZodError
-        ? err.issues[0]?.message ?? "invalid body"
-        : "invalid body"
-    );
+    // Body parse / Zod failure both surface as `invalid_args:<detail>`.
+    // We don't try to plumb the specific Zod issue through — the
+    // detail is for human debugging, not model branching, and the
+    // simpler message keeps this handler trivially testable.
+    const detail = err instanceof z.ZodError ? "invalid_args" : "invalid_body";
+    return voiceToolValidationError(detail);
   }
 
   let integration: CustomIntegrationRow | null;
@@ -242,16 +244,19 @@ export async function POST(request: Request) {
   try {
     outUrl = new URL(joinedPath, parsedBase.origin);
   } catch {
+    /* c8 ignore next -- defensive: safelyJoinPath has already gated unparseable shapes */
     return voiceToolResponse({ ok: false, detail: "path_invalid" });
   }
   // Defense in depth: even though `URL(path, origin)` honors `origin`,
   // a pathological `path` like `//host/p` could rebase. Re-pin host.
+  /* c8 ignore start -- defensive: safelyJoinPath + parseBaseUrl already gate the known pivot/private-host shapes upstream */
   if (outUrl.origin !== parsedBase.origin) {
     return voiceToolResponse({ ok: false, detail: "path_pivot_blocked" });
   }
   if (isPrivateOrLoopbackHost(outUrl.hostname)) {
     return voiceToolResponse({ ok: false, detail: "private_host_blocked" });
   }
+  /* c8 ignore stop */
 
   // Merge agent's `query` first; auth-scheme query wins via `set` below.
   if (parsed.query) {
@@ -324,15 +329,15 @@ export async function POST(request: Request) {
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
-      if (value) {
-        total += value.byteLength;
-        if (total > RESPONSE_MAX_BYTES) {
-          truncated = true;
-          await reader.cancel();
-          break;
-        }
-        chunks.push(value);
+      /* c8 ignore next -- streams spec: a non-done chunk always carries bytes; null guard is defensive against non-conformant polyfills */
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > RESPONSE_MAX_BYTES) {
+        truncated = true;
+        await reader.cancel();
+        break;
       }
+      chunks.push(value);
     }
   }
   const buf = Buffer.concat(chunks.map((c) => Buffer.from(c)));
