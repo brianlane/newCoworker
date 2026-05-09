@@ -20,6 +20,7 @@ const PREFS = {
   dashboard_alerts: true,
   phone_number: null,
   alert_email: null,
+  unsubscribed_at: null,
   updated_at: "2026-01-01T00:00:00Z"
 };
 
@@ -354,5 +355,109 @@ describe("db/notification-preferences", () => {
     const db = { from: vi.fn().mockReturnValue(chain) };
     await getNotificationPreferences("biz-1", db as never);
     expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  it("updateNotificationPreferences accepts unsubscribed_at", async () => {
+    const selectChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: PREFS, error: null })
+    };
+    const updateChain = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({
+        data: { ...PREFS, unsubscribed_at: "2026-05-01T00:00:00Z", sms_urgent: false },
+        error: null
+      })
+    };
+    const db = {
+      from: vi.fn().mockReturnValueOnce(selectChain).mockReturnValueOnce(updateChain)
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    const row = await updateNotificationPreferences("biz-1", {
+      sms_urgent: false,
+      unsubscribed_at: "2026-05-01T00:00:00Z"
+    });
+    expect(row.unsubscribed_at).toBe("2026-05-01T00:00:00Z");
+    expect(updateChain.update).toHaveBeenCalledWith(
+      expect.objectContaining({ unsubscribed_at: "2026-05-01T00:00:00Z" })
+    );
+  });
+
+  it("updateNotificationPreferences clears unsubscribed_at when re-enabling any toggle", async () => {
+    const startingPrefs = { ...PREFS, unsubscribed_at: "2026-05-01T00:00:00Z" };
+    const selectChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: startingPrefs, error: null })
+    };
+    const updateChain = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({
+        data: { ...startingPrefs, email_urgent: true, unsubscribed_at: null },
+        error: null
+      })
+    };
+    const db = {
+      from: vi.fn().mockReturnValueOnce(selectChain).mockReturnValueOnce(updateChain)
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await updateNotificationPreferences("biz-1", { email_urgent: true });
+    expect(updateChain.update).toHaveBeenCalledWith(
+      expect.objectContaining({ email_urgent: true, unsubscribed_at: null })
+    );
+  });
+
+  it("updateNotificationPreferences does not auto-clear unsubscribed_at when only setting toggles to false", async () => {
+    const startingPrefs = { ...PREFS, unsubscribed_at: "2026-05-01T00:00:00Z" };
+    const selectChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: startingPrefs, error: null })
+    };
+    const updateChain = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({ data: startingPrefs, error: null })
+    };
+    const db = {
+      from: vi.fn().mockReturnValueOnce(selectChain).mockReturnValueOnce(updateChain)
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await updateNotificationPreferences("biz-1", { sms_urgent: false });
+    const payload = updateChain.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty("unsubscribed_at");
+  });
+
+  it("updateNotificationPreferences respects explicit unsubscribed_at over auto-clear", async () => {
+    const selectChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: PREFS, error: null })
+    };
+    const updateChain = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({
+        data: { ...PREFS, sms_urgent: true, unsubscribed_at: "2026-05-01T00:00:00Z" },
+        error: null
+      })
+    };
+    const db = {
+      from: vi.fn().mockReturnValueOnce(selectChain).mockReturnValueOnce(updateChain)
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await updateNotificationPreferences("biz-1", {
+      sms_urgent: true,
+      unsubscribed_at: "2026-05-01T00:00:00Z"
+    });
+    const payload = updateChain.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.unsubscribed_at).toBe("2026-05-01T00:00:00Z");
   });
 });

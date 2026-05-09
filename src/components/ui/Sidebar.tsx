@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
+import type { ReactNode } from "react";
 
 interface SidebarItem {
   label: string;
@@ -14,9 +15,15 @@ interface SidebarItem {
 interface SidebarProps {
   items: SidebarItem[];
   userEmail?: string | null;
+  /**
+   * Optional render slot for a per-item trailing element (e.g. an unread
+   * count badge for the Notifications bell). Returning null hides the slot
+   * for that item.
+   */
+  renderTrailing?: (item: SidebarItem) => ReactNode;
 }
 
-export function Sidebar({ items, userEmail }: SidebarProps) {
+export function Sidebar({ items, userEmail, renderTrailing }: SidebarProps) {
   const pathname = usePathname();
   const activeItem = [...items]
     .sort((a, b) => b.href.length - a.href.length)
@@ -33,6 +40,7 @@ export function Sidebar({ items, userEmail }: SidebarProps) {
         {items.map((item) => {
           const Icon = item.icon;
           const active = activeItem?.href === item.href;
+          const trailing = renderTrailing ? renderTrailing(item) : null;
           return (
             <Link
               key={item.href}
@@ -45,7 +53,8 @@ export function Sidebar({ items, userEmail }: SidebarProps) {
               ].join(" ")}
             >
               <Icon size={16} />
-              {item.label}
+              <span className="flex-1 truncate">{item.label}</span>
+              {trailing}
             </Link>
           );
         })}

@@ -1,9 +1,6 @@
 import { parseClawLog, evaluateUrgency } from "@/lib/claw/logs";
 import { insertCoworkerLog } from "@/lib/db/logs";
-import { insertNotification } from "@/lib/db/notifications";
-import { getBusiness } from "@/lib/db/businesses";
-import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
-import { sendOwnerEmail } from "@/lib/email/client";
+import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
 import { randomUUID } from "crypto";
@@ -29,56 +26,22 @@ export async function POST(request: Request) {
       log_payload: log.logPayload
     });
 
-    // Fire notifications for urgent events
+    // Fire notifications for urgent events. The dispatcher resolves per-business
+    // preferences (alert_email/phone_number, four channel toggles, unsubscribed_at)
+    // and writes one `notifications` row per channel — sent, failed, or skipped —
+    // so the dashboard "Recent notifications" list is the source of truth.
     if (urgency.shouldNotify) {
-      const business = await getBusiness(log.businessId);
-      const ownerEmail = business?.owner_email ?? process.env.ADMIN_EMAIL;
-      const ownerPhone = process.env.TELNYX_OWNER_PHONE;
-      const dashboardUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/dashboard`;
-
-      await insertNotification({
-        id: randomUUID(),
-        business_id: log.businessId,
-        delivery_channel: "dashboard",
-        status: "sent",
-        payload: { summary: urgency.summary, logId }
-      });
-
-      if (ownerEmail) {
-        try {
-          await sendOwnerEmail(
-            process.env.RESEND_API_KEY ?? "",
-            ownerEmail,
-            `Urgent: ${urgency.summary}`,
-            `Your AI Coworker flagged an urgent event: ${urgency.summary}\n\nView details: ${dashboardUrl}`
-          );
-          await insertNotification({
-            id: randomUUID(),
-            business_id: log.businessId,
-            delivery_channel: "email",
-            status: "sent",
-            payload: { summary: urgency.summary, recipient: ownerEmail }
-          });
-        } catch (err) {
-          logger.warn("Urgent email failed", { error: err instanceof Error ? err.message : String(err) });
-        }
-      }
-
-      if (ownerPhone) {
-        try {
-          const config = await getTelnyxMessagingForBusiness(log.businessId);
-          // Platform-initiated owner alert: do not consume the business monthly SMS pool (cf. customer-initiated / AI replies).
-          await sendTelnyxSms(config, ownerPhone, `Urgent from New Coworker: ${urgency.summary}`);
-          await insertNotification({
-            id: randomUUID(),
-            business_id: log.businessId,
-            delivery_channel: "sms",
-            status: "sent",
-            payload: { summary: urgency.summary, recipient: ownerPhone }
-          });
-        } catch (err) {
-          logger.warn("Urgent SMS failed", { error: err instanceof Error ? err.message : String(err) });
-        }
+      try {
+        await dispatchUrgentNotification({
+          businessId: log.businessId,
+          summary: urgency.summary,
+          kind: "urgent_alert",
+          payload: { logId, taskType: log.taskType }
+        });
+      } catch (err) {
+        logger.warn("Urgent notification dispatch failed", {
+          error: err instanceof Error ? err.message : String(err)
+        });
       }
     }
 

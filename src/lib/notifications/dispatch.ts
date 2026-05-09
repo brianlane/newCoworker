@@ -1,0 +1,321 @@
+/**
+ * Single entry point for "the AI coworker flagged something the owner should
+ * know about". Both `/api/rowboat` and the voice-tools `capture` endpoint
+ * call this; the Edge function `notifications` mirrors the logic in Deno.
+ *
+ * Behavior summary
+ * ----------------
+ * 1. Resolve recipients from `notification_preferences` first, then
+ *    `businesses.owner_email` / env `TELNYX_OWNER_PHONE` / env `ADMIN_EMAIL`
+ *    so per-business overrides win, with safe operator fallbacks.
+ * 2. Honor the four channel toggles. A toggle that's off causes a
+ *    `notifications` row with `status='skipped'` and a `reason` in `payload`
+ *    so the dashboard list still reflects what would have been sent.
+ * 3. Always write `notifications` rows (sent / failed / skipped) so the
+ *    dashboard "Recent notifications" list is complete — this was the
+ *    biggest gap before: edge-fn alerts were invisible.
+ * 4. Email sends include the `List-Unsubscribe` header + a token URL when
+ *    `NOTIFICATIONS_UNSUBSCRIBE_SECRET` is set.
+ */
+
+import { randomUUID } from "node:crypto";
+import { getBusiness } from "@/lib/db/businesses";
+import { getOrCreateNotificationPreferences } from "@/lib/db/notification-preferences";
+import {
+  insertNotification,
+  type NotificationDeliveryChannel,
+  type NotificationRow,
+  type NotificationStatus
+} from "@/lib/db/notifications";
+import { sendOwnerEmail } from "@/lib/email/client";
+import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
+import { buildUnsubscribeUrl } from "@/lib/notifications/unsubscribe-token";
+import { logger } from "@/lib/logger";
+
+export type NotificationKind = "urgent_alert" | "voice_capture" | "digest" | string;
+
+export type DispatchInput = {
+  businessId: string;
+  /** Short human-readable headline used as the subject prefix and stored in `summary`. */
+  summary: string;
+  kind: NotificationKind;
+  /** Extra context written to the `payload` jsonb on every row produced. */
+  payload?: Record<string, unknown>;
+  /** Optional override of the email body; defaults to summary + dashboard link. */
+  emailBody?: string;
+  /** Optional override of the SMS body; defaults to "New Coworker Alert: {summary}". */
+  smsBody?: string;
+  /** Optional override of the email subject; defaults to "Urgent: {summary}". */
+  emailSubject?: string;
+  /**
+   * Optional override of the dispatch timestamp (mostly for tests). Real
+   * callers should leave this unset and rely on `now`.
+   */
+  nowSec?: number;
+};
+
+export type DispatchChannelResult = {
+  channel: NotificationDeliveryChannel;
+  status: NotificationStatus;
+  reason?: string;
+  notificationId: string;
+};
+
+export type DispatchResult = {
+  results: DispatchChannelResult[];
+};
+
+export type ResolvedTargets = {
+  email: string | null;
+  phone: string | null;
+  smsUrgentEnabled: boolean;
+  emailUrgentEnabled: boolean;
+  emailDigestEnabled: boolean;
+  dashboardEnabled: boolean;
+  unsubscribed: boolean;
+};
+
+/**
+ * Resolve "where do owner alerts go?" using per-business preferences first,
+ * then the business's onboarding email, then env-level operator fallbacks.
+ *
+ * Falls back gracefully on DB errors — we never want to silently drop an
+ * urgent alert because preferences couldn't be read. The caller still gets
+ * a result with the operator-level fallbacks active.
+ */
+export async function resolveNotificationTargets(
+  businessId: string
+): Promise<ResolvedTargets> {
+  const fallbackEmail = process.env.ADMIN_EMAIL?.trim() || null;
+  const fallbackPhone = process.env.TELNYX_OWNER_PHONE?.trim() || null;
+  let prefsEmail: string | null = null;
+  let prefsPhone: string | null = null;
+  let smsUrgent = true;
+  let emailUrgent = true;
+  let emailDigest = true;
+  let dashboardAlerts = true;
+  let unsubscribed = false;
+  let ownerEmail: string | null = null;
+
+  try {
+    const prefs = await getOrCreateNotificationPreferences(businessId);
+    prefsEmail = prefs.alert_email?.trim() || null;
+    prefsPhone = prefs.phone_number?.trim() || null;
+    smsUrgent = prefs.sms_urgent;
+    emailUrgent = prefs.email_urgent;
+    emailDigest = prefs.email_digest;
+    dashboardAlerts = prefs.dashboard_alerts;
+    unsubscribed = prefs.unsubscribed_at !== null;
+  } catch (err) {
+    logger.warn("resolveNotificationTargets: preferences lookup failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+
+  try {
+    const business = await getBusiness(businessId);
+    ownerEmail = business?.owner_email?.trim() || null;
+  } catch (err) {
+    logger.warn("resolveNotificationTargets: business lookup failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+
+  return {
+    email: prefsEmail ?? ownerEmail ?? fallbackEmail,
+    phone: prefsPhone ?? fallbackPhone,
+    smsUrgentEnabled: smsUrgent,
+    emailUrgentEnabled: emailUrgent,
+    emailDigestEnabled: emailDigest,
+    dashboardEnabled: dashboardAlerts,
+    unsubscribed
+  };
+}
+
+async function recordRow(
+  businessId: string,
+  channel: NotificationDeliveryChannel,
+  status: NotificationStatus,
+  summary: string,
+  kind: NotificationKind,
+  payload: Record<string, unknown>,
+  reason?: string
+): Promise<DispatchChannelResult> {
+  const id = randomUUID();
+  try {
+    await insertNotification({
+      id,
+      business_id: businessId,
+      delivery_channel: channel,
+      status,
+      kind,
+      summary,
+      payload: reason ? { ...payload, reason } : payload
+    } as Parameters<typeof insertNotification>[0]);
+  } catch (err) {
+    logger.warn("notifications.dispatch: failed to insert history row", {
+      businessId,
+      channel,
+      status,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+  return { channel, status, reason, notificationId: id };
+}
+
+/**
+ * Send urgent owner alerts across the configured channels and write a
+ * `notifications` row for every channel attempted.
+ */
+export async function dispatchUrgentNotification(
+  input: DispatchInput
+): Promise<DispatchResult> {
+  const targets = await resolveNotificationTargets(input.businessId);
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const dashboardUrl = `${appUrl}/dashboard`;
+  const summary = input.summary;
+  const kind = input.kind;
+  const payload: Record<string, unknown> = { summary, ...(input.payload ?? {}) };
+  const results: DispatchChannelResult[] = [];
+
+  // 1) Dashboard channel — only suppressed if the toggle is off (or unsubscribed-from-all).
+  if (targets.dashboardEnabled && !targets.unsubscribed) {
+    results.push(
+      await recordRow(input.businessId, "dashboard", "sent", summary, kind, payload)
+    );
+  } else {
+    results.push(
+      await recordRow(
+        input.businessId,
+        "dashboard",
+        "skipped",
+        summary,
+        kind,
+        payload,
+        targets.unsubscribed ? "unsubscribed" : "dashboard_alerts_disabled"
+      )
+    );
+  }
+
+  // 2) Email channel.
+  if (!targets.email) {
+    results.push(
+      await recordRow(
+        input.businessId,
+        "email",
+        "skipped",
+        summary,
+        kind,
+        payload,
+        "no_email"
+      )
+    );
+  } else if (!targets.emailUrgentEnabled || targets.unsubscribed) {
+    results.push(
+      await recordRow(
+        input.businessId,
+        "email",
+        "skipped",
+        summary,
+        kind,
+        { ...payload, recipient: targets.email },
+        targets.unsubscribed ? "unsubscribed" : "email_urgent_disabled"
+      )
+    );
+  } else {
+    // Build off the app origin (not dashboardUrl, which has /dashboard appended).
+    // Otherwise the resulting link would point at /dashboard/api/notifications/unsubscribe
+    // which doesn't exist, breaking both the in-body footer and the
+    // List-Unsubscribe header.
+    const unsubscribeUrl = buildUnsubscribeUrl(input.businessId, appUrl, {
+      nowSec: input.nowSec
+    });
+    const subject = input.emailSubject ?? `Urgent: ${summary}`;
+    const body =
+      input.emailBody ??
+      `Your AI Coworker flagged an urgent event: ${summary}\n\nView details: ${dashboardUrl}`;
+    try {
+      await sendOwnerEmail(process.env.RESEND_API_KEY ?? "", targets.email, subject, {
+        text: body,
+        unsubscribeUrl
+      });
+      results.push(
+        await recordRow(input.businessId, "email", "sent", summary, kind, {
+          ...payload,
+          recipient: targets.email
+        })
+      );
+    } catch (err) {
+      logger.warn("notifications.dispatch: email send failed", {
+        businessId: input.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      results.push(
+        await recordRow(
+          input.businessId,
+          "email",
+          "failed",
+          summary,
+          kind,
+          { ...payload, recipient: targets.email },
+          err instanceof Error ? err.message : "send_failed"
+        )
+      );
+    }
+  }
+
+  // 3) SMS channel.
+  if (!targets.phone) {
+    results.push(
+      await recordRow(input.businessId, "sms", "skipped", summary, kind, payload, "no_phone")
+    );
+  } else if (!targets.smsUrgentEnabled || targets.unsubscribed) {
+    results.push(
+      await recordRow(
+        input.businessId,
+        "sms",
+        "skipped",
+        summary,
+        kind,
+        { ...payload, recipient: targets.phone },
+        targets.unsubscribed ? "unsubscribed" : "sms_urgent_disabled"
+      )
+    );
+  } else {
+    const text = input.smsBody ?? `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`;
+    try {
+      const config = await getTelnyxMessagingForBusiness(input.businessId);
+      // Platform-initiated owner alert: do not consume the business monthly SMS pool
+      // (cf. customer-initiated / AI replies).
+      await sendTelnyxSms(config, targets.phone, text);
+      results.push(
+        await recordRow(input.businessId, "sms", "sent", summary, kind, {
+          ...payload,
+          recipient: targets.phone
+        })
+      );
+    } catch (err) {
+      logger.warn("notifications.dispatch: sms send failed", {
+        businessId: input.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      results.push(
+        await recordRow(
+          input.businessId,
+          "sms",
+          "failed",
+          summary,
+          kind,
+          { ...payload, recipient: targets.phone },
+          err instanceof Error ? err.message : "send_failed"
+        )
+      );
+    }
+  }
+
+  return { results };
+}
+
+export type { NotificationRow };

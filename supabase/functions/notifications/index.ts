@@ -1,6 +1,7 @@
 // Supabase Edge Function: notifications
 // Triggered via Supabase Database Webhook on coworker_logs INSERT
-// where status = 'urgent_alert'
+// where status = 'urgent_alert', or directly by VPS heartbeat / OpenClaw
+// scripts that POST a coworker_logs-shaped payload.
 //
 // Required Edge Function Secrets:
 //   SUPABASE_URL              (auto-injected)
@@ -15,6 +16,17 @@
 //   ADMIN_EMAIL
 //   NEXT_PUBLIC_APP_URL
 //   NOTIFICATIONS_WEBHOOK_TOKEN (optional; for heartbeat script calls)
+//   NOTIFICATIONS_UNSUBSCRIBE_SECRET (optional; enables one-click email
+//                                     unsubscribe via List-Unsubscribe header)
+//
+// Behavior parity with src/lib/notifications/dispatch.ts (Vercel side):
+// recipient resolution prefers per-business preferences
+// (alert_email/phone_number) over businesses.owner_email + env fallbacks,
+// honors the four channel toggles plus `unsubscribed_at`, and writes one
+// `notifications` row per channel attempt (sent / failed / skipped) so the
+// dashboard "Recent notifications" list is the source of truth regardless
+// of whether the alert was triggered through Vercel or through this Edge
+// function.
 
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
@@ -31,6 +43,18 @@ interface WebhookPayload {
     created_at: string;
   };
 }
+
+type DeliveryChannel = "sms" | "email" | "dashboard";
+type DeliveryStatus = "queued" | "sent" | "failed" | "skipped";
+
+type ResolvedTargets = {
+  email: string | null;
+  phone: string | null;
+  smsUrgent: boolean;
+  emailUrgent: boolean;
+  dashboardAlerts: boolean;
+  unsubscribed: boolean;
+};
 
 async function sha256(input: string): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input)));
@@ -68,6 +92,109 @@ async function verifyRequest(req: Request): Promise<boolean> {
   return false;
 }
 
+// ─── Unsubscribe token (mirrors src/lib/notifications/unsubscribe-token.ts) ──
+function base64UrlEncode(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]!);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function hmacSha256(secret: string, message: string): Promise<Uint8Array> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return new Uint8Array(sig);
+}
+
+async function buildUnsubscribeUrl(businessId: string, appUrl: string): Promise<string | null> {
+  const secret = (Deno.env.get("NOTIFICATIONS_UNSUBSCRIBE_SECRET") ?? "").trim();
+  if (!secret) return null;
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const payload = `v1.${businessId}.${issuedAt}`;
+  const sig = base64UrlEncode(await hmacSha256(secret, payload));
+  const token = `${payload}.${sig}`;
+  return `${appUrl.replace(/\/$/, "")}/api/notifications/unsubscribe?token=${encodeURIComponent(token)}`;
+}
+
+type SupaClient = ReturnType<typeof createClient>;
+
+async function resolveTargets(supa: SupaClient, businessId: string): Promise<ResolvedTargets> {
+  const fallbackEmail = (Deno.env.get("ADMIN_EMAIL") ?? "").trim() || null;
+  const fallbackPhone = (Deno.env.get("TELNYX_OWNER_PHONE") ?? "").trim() || null;
+  let prefsEmail: string | null = null;
+  let prefsPhone: string | null = null;
+  let smsUrgent = true;
+  let emailUrgent = true;
+  let dashboardAlerts = true;
+  let unsubscribed = false;
+  let ownerEmail: string | null = null;
+
+  const { data: prefs } = await supa
+    .from("notification_preferences")
+    .select(
+      "alert_email, phone_number, sms_urgent, email_urgent, dashboard_alerts, unsubscribed_at"
+    )
+    .eq("business_id", businessId)
+    .maybeSingle();
+
+  if (prefs) {
+    prefsEmail = ((prefs.alert_email as string | null) ?? "").trim() || null;
+    prefsPhone = ((prefs.phone_number as string | null) ?? "").trim() || null;
+    smsUrgent = Boolean(prefs.sms_urgent);
+    emailUrgent = Boolean(prefs.email_urgent);
+    dashboardAlerts = Boolean(prefs.dashboard_alerts);
+    unsubscribed = Boolean(prefs.unsubscribed_at);
+  }
+
+  const { data: business } = await supa
+    .from("businesses")
+    .select("owner_email")
+    .eq("id", businessId)
+    .maybeSingle();
+  if (business) {
+    ownerEmail = ((business.owner_email as string | null) ?? "").trim() || null;
+  }
+
+  return {
+    email: prefsEmail ?? ownerEmail ?? fallbackEmail,
+    phone: prefsPhone ?? fallbackPhone,
+    smsUrgent,
+    emailUrgent,
+    dashboardAlerts,
+    unsubscribed
+  };
+}
+
+async function recordRow(
+  supa: SupaClient,
+  businessId: string,
+  channel: DeliveryChannel,
+  status: DeliveryStatus,
+  summary: string,
+  kind: string,
+  payload: Record<string, unknown>,
+  reason?: string
+): Promise<void> {
+  const id = crypto.randomUUID();
+  const { error } = await supa.from("notifications").insert({
+    id,
+    business_id: businessId,
+    delivery_channel: channel,
+    status,
+    kind,
+    summary,
+    payload: reason ? { ...payload, reason } : payload
+  });
+  if (error) {
+    console.error("notifications.insert", channel, status, error);
+  }
+}
+
 serve(async (req: Request) => {
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
@@ -87,49 +214,101 @@ serve(async (req: Request) => {
   const { record } = payload;
   // Provisioning progress rows use thinking/success; never notify from these.
   if (record.task_type === "provisioning") {
-    return new Response(JSON.stringify({ skipped: true, reason: "provisioning" }), { status: 200 });
+    return new Response(JSON.stringify({ skipped: true, reason: "provisioning" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
   }
   if (record.status !== "urgent_alert") {
-    return new Response(JSON.stringify({ skipped: true }), { status: 200 });
+    return new Response(JSON.stringify({ skipped: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
   }
 
   const summary = `URGENT ${record.task_type}`;
+  const kind = "urgent_alert";
   const appUrl = Deno.env.get("NEXT_PUBLIC_APP_URL") ?? "https://www.newcoworker.com";
   const dashboardUrl = `${appUrl}/dashboard`;
 
-  const errors: string[] = [];
-
-  const telnyxKey = Deno.env.get("TELNYX_API_KEY");
-  let telnyxProfile = Deno.env.get("TELNYX_MESSAGING_PROFILE_ID") ?? "";
-  let telnyxFrom = Deno.env.get("TELNYX_SMS_FROM_E164") ?? "";
-  const ownerPhone = Deno.env.get("TELNYX_OWNER_PHONE");
-
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-  const supa =
-    supabaseUrl && serviceKey && record.business_id
-      ? createClient(supabaseUrl, serviceKey)
-      : null;
-
-  if (supa) {
-    const { data: trow } = await supa
-      .from("business_telnyx_settings")
-      .select("telnyx_messaging_profile_id, telnyx_sms_from_e164")
-      .eq("business_id", record.business_id)
-      .maybeSingle();
-    if (trow?.telnyx_messaging_profile_id) {
-      telnyxProfile = String(trow.telnyx_messaging_profile_id);
-    }
-    if (trow?.telnyx_sms_from_e164) {
-      telnyxFrom = String(trow.telnyx_sms_from_e164);
-    }
+  const supa = supabaseUrl && serviceKey ? createClient(supabaseUrl, serviceKey) : null;
+  if (!supa || !record.business_id) {
+    return new Response(
+      JSON.stringify({ ok: false, error: "missing_supabase_or_business_id" }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
   }
 
-  // Platform-initiated owner alert (same class as /api/rowboat urgent SMS): not metered against the business monthly pool.
-  if (telnyxKey && telnyxProfile && ownerPhone) {
+  const targets = await resolveTargets(supa, record.business_id);
+  const basePayload: Record<string, unknown> = {
+    summary,
+    logId: record.id,
+    taskType: record.task_type
+  };
+  const errors: string[] = [];
+
+  // 1) Dashboard channel
+  if (targets.dashboardAlerts && !targets.unsubscribed) {
+    await recordRow(supa, record.business_id, "dashboard", "sent", summary, kind, basePayload);
+  } else {
+    await recordRow(
+      supa,
+      record.business_id,
+      "dashboard",
+      "skipped",
+      summary,
+      kind,
+      basePayload,
+      targets.unsubscribed ? "unsubscribed" : "dashboard_alerts_disabled"
+    );
+  }
+
+  // 2) SMS channel via Telnyx — with per-business messaging profile / from override
+  let telnyxProfile = Deno.env.get("TELNYX_MESSAGING_PROFILE_ID") ?? "";
+  let telnyxFrom = Deno.env.get("TELNYX_SMS_FROM_E164") ?? "";
+  const { data: trow } = await supa
+    .from("business_telnyx_settings")
+    .select("telnyx_messaging_profile_id, telnyx_sms_from_e164")
+    .eq("business_id", record.business_id)
+    .maybeSingle();
+  if (trow?.telnyx_messaging_profile_id) {
+    telnyxProfile = String(trow.telnyx_messaging_profile_id);
+  }
+  if (trow?.telnyx_sms_from_e164) {
+    telnyxFrom = String(trow.telnyx_sms_from_e164);
+  }
+
+  const telnyxKey = Deno.env.get("TELNYX_API_KEY");
+  if (!targets.phone) {
+    await recordRow(
+      supa,
+      record.business_id,
+      "sms",
+      "skipped",
+      summary,
+      kind,
+      basePayload,
+      "no_phone"
+    );
+  } else if (!targets.smsUrgent || targets.unsubscribed) {
+    await recordRow(
+      supa,
+      record.business_id,
+      "sms",
+      "skipped",
+      summary,
+      kind,
+      { ...basePayload, recipient: targets.phone },
+      targets.unsubscribed ? "unsubscribed" : "sms_urgent_disabled"
+    );
+  } else if (telnyxKey && telnyxProfile) {
     try {
+      // Platform-initiated owner alert (same class as /api/rowboat urgent SMS): not metered against
+      // the business monthly pool.
       const body: Record<string, string> = {
-        to: ownerPhone,
+        to: targets.phone,
         text: `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`,
         messaging_profile_id: telnyxProfile
       };
@@ -142,32 +321,159 @@ serve(async (req: Request) => {
         },
         body: JSON.stringify(body)
       });
-      if (!smsRes.ok) errors.push(`SMS failed: ${smsRes.status}`);
+      if (smsRes.ok) {
+        await recordRow(
+          supa,
+          record.business_id,
+          "sms",
+          "sent",
+          summary,
+          kind,
+          { ...basePayload, recipient: targets.phone }
+        );
+      } else {
+        const errBody = await smsRes.text().catch(() => "");
+        errors.push(`SMS failed: ${smsRes.status}`);
+        await recordRow(
+          supa,
+          record.business_id,
+          "sms",
+          "failed",
+          summary,
+          kind,
+          { ...basePayload, recipient: targets.phone },
+          `telnyx_${smsRes.status}: ${errBody.slice(0, 200)}`
+        );
+      }
     } catch (e) {
-      errors.push(`SMS error: ${e instanceof Error ? e.message : String(e)}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`SMS error: ${msg}`);
+      await recordRow(
+        supa,
+        record.business_id,
+        "sms",
+        "failed",
+        summary,
+        kind,
+        { ...basePayload, recipient: targets.phone },
+        msg
+      );
     }
+  } else {
+    await recordRow(
+      supa,
+      record.business_id,
+      "sms",
+      "skipped",
+      summary,
+      kind,
+      { ...basePayload, recipient: targets.phone },
+      "telnyx_unconfigured"
+    );
   }
 
-  // Send email via Resend
+  // 3) Email channel via Resend
   const resendKey = Deno.env.get("RESEND_API_KEY");
-  const ownerEmail = Deno.env.get("ADMIN_EMAIL");
-
-  if (resendKey && ownerEmail) {
-    const emailRes = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
+  if (!targets.email) {
+    await recordRow(
+      supa,
+      record.business_id,
+      "email",
+      "skipped",
+      summary,
+      kind,
+      basePayload,
+      "no_email"
+    );
+  } else if (!targets.emailUrgent || targets.unsubscribed) {
+    await recordRow(
+      supa,
+      record.business_id,
+      "email",
+      "skipped",
+      summary,
+      kind,
+      { ...basePayload, recipient: targets.email },
+      targets.unsubscribed ? "unsubscribed" : "email_urgent_disabled"
+    );
+  } else if (resendKey) {
+    try {
+      const unsubscribeUrl = await buildUnsubscribeUrl(record.business_id, appUrl);
+      const headers: Record<string, string> = {
         Authorization: `Bearer ${resendKey}`,
         "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        from: Deno.env.get("MAILER_EMAIL") ?? "New Coworker <contact@newcoworker.com>",
-        to: ownerEmail,
-        reply_to: Deno.env.get("CONTACT_EMAIL") ?? undefined,
-        subject: `Urgent: ${summary}`,
-        text: `Your AI Coworker flagged an urgent event.\n\nSummary: ${summary}\nBusiness ID: ${record.business_id}\n\nView details: ${dashboardUrl}`
-      })
-    });
-    if (!emailRes.ok) errors.push(`Email failed: ${emailRes.status}`);
+      };
+      const emailHeaders: Record<string, string> = {};
+      if (unsubscribeUrl) {
+        emailHeaders["List-Unsubscribe"] = `<${unsubscribeUrl}>`;
+        emailHeaders["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
+      }
+      const baseText = `Your AI Coworker flagged an urgent event.\n\nSummary: ${summary}\nBusiness ID: ${record.business_id}\n\nView details: ${dashboardUrl}`;
+      const text = unsubscribeUrl
+        ? `${baseText}\n\n---\nDon't want these alerts? Unsubscribe with one click: ${unsubscribeUrl}`
+        : baseText;
+      const emailRes = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          from:
+            Deno.env.get("MAILER_EMAIL") ?? "New Coworker <contact@newcoworker.com>",
+          to: targets.email,
+          reply_to: Deno.env.get("CONTACT_EMAIL") ?? undefined,
+          subject: `Urgent: ${summary}`,
+          text,
+          ...(Object.keys(emailHeaders).length > 0 ? { headers: emailHeaders } : {})
+        })
+      });
+      if (emailRes.ok) {
+        await recordRow(
+          supa,
+          record.business_id,
+          "email",
+          "sent",
+          summary,
+          kind,
+          { ...basePayload, recipient: targets.email }
+        );
+      } else {
+        const errBody = await emailRes.text().catch(() => "");
+        errors.push(`Email failed: ${emailRes.status}`);
+        await recordRow(
+          supa,
+          record.business_id,
+          "email",
+          "failed",
+          summary,
+          kind,
+          { ...basePayload, recipient: targets.email },
+          `resend_${emailRes.status}: ${errBody.slice(0, 200)}`
+        );
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`Email error: ${msg}`);
+      await recordRow(
+        supa,
+        record.business_id,
+        "email",
+        "failed",
+        summary,
+        kind,
+        { ...basePayload, recipient: targets.email },
+        msg
+      );
+    }
+  } else {
+    await recordRow(
+      supa,
+      record.business_id,
+      "email",
+      "skipped",
+      summary,
+      kind,
+      { ...basePayload, recipient: targets.email },
+      "resend_unconfigured"
+    );
   }
 
   return new Response(
