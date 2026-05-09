@@ -46,9 +46,9 @@
     {
       "id": "task_router",
       "type": "task",
-      "description": "Catch-all for SMS-initiated delegations (CRM updates, browser searches). Uses the SMS tier Ollama model so we don't burn Gemini tokens on background work.",
+      "description": "Catch-all for SMS-initiated delegations (CRM updates, browser searches, owner-defined HTTP integrations). Uses the SMS tier Ollama model so we don't burn Gemini tokens on background work.",
       "model": "{{OLLAMA_MODEL}}",
-      "tools": ["crm_update", "appointment_book", "browser_search"]
+      "tools": ["crm_update", "appointment_book", "browser_search", "http_api_call"]
     }
   ],
   "llm_router": {
@@ -74,6 +74,58 @@
     "provider": "lightpanda",
     "endpoint": "{{LIGHTPANDA_WSS_URL}}"
   },
+  "tools": [
+    {
+      "name": "http_api_call",
+      "description": "Call an owner-registered REST API (custom integration) without ever seeing the credential. The owner manages these in /dashboard/integrations → Custom integrations. Pick by `label`. The platform proxy injects the credential server-side and forwards the response.",
+      "transport": "webhook",
+      "webhook": {
+        "url": "{{APP_BASE_URL}}/api/integrations/custom/call",
+        "method": "POST",
+        "auth": "bearer",
+        "auth_token_env": "ROWBOAT_GATEWAY_TOKEN"
+      },
+      "input_schema": {
+        "type": "object",
+        "required": ["businessId", "label"],
+        "properties": {
+          "businessId": {
+            "type": "string",
+            "description": "The business UUID this integration belongs to (Rowboat injects from context)."
+          },
+          "label": {
+            "type": "string",
+            "description": "Owner's label for the custom integration (case-insensitive, e.g. 'Acme CRM')."
+          },
+          "method": {
+            "type": "string",
+            "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+            "default": "GET"
+          },
+          "path": {
+            "type": "string",
+            "description": "Path appended to the integration's base URL. Must start with '/'.",
+            "default": "/"
+          },
+          "query": {
+            "type": "object",
+            "description": "Query-string parameters."
+          },
+          "body": {
+            "description": "Request body (object or array; serialized as JSON unless contentType overrides)."
+          },
+          "headers": {
+            "type": "object",
+            "description": "Extra outbound headers. Authorization/Cookie/Host are stripped server-side."
+          },
+          "contentType": {
+            "type": "string",
+            "description": "Override default application/json on POST/PUT/PATCH."
+          }
+        }
+      }
+    }
+  ],
   "notification_webhook": "{{SUPABASE_URL}}/functions/v1/notifications",
   "notification_webhook_token": "{{NOTIFICATIONS_WEBHOOK_TOKEN}}",
   "compliance": {
