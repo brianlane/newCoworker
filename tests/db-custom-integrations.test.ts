@@ -8,6 +8,7 @@ import {
   deleteCustomIntegration,
   getCustomIntegrationById,
   getCustomIntegrationByLabel,
+  isBareIpHost,
   isPrivateOrLoopbackHost,
   listCustomIntegrations,
   parseBaseUrl,
@@ -118,6 +119,38 @@ describe("parseBaseUrl", () => {
   it("rejects private hosts", () => {
     expect(() => parseBaseUrl("https://localhost/x")).toThrow(/private/);
     expect(() => parseBaseUrl("https://169.254.169.254/")).toThrow(/private/);
+  });
+
+  it("rejects bare public IPv4 literals", () => {
+    // 93.184.216.34 (example.com) is public, so it would pass the
+    // private-host check. But the call-time SSRF guard always refuses
+    // bare IP literals, so the registration must refuse them too.
+    expect(() => parseBaseUrl("https://93.184.216.34/api")).toThrow(
+      /bare IP literal/
+    );
+    expect(() => parseBaseUrl("https://8.8.8.8/v1")).toThrow(/bare IP literal/);
+  });
+
+  it("rejects bare IPv6 literals", () => {
+    // URL spec strips brackets from `url.hostname`, but the colon
+    // remains and is the unmistakable signal of an IPv6 literal.
+    expect(() => parseBaseUrl("https://[2001:4860:4860::8888]/v1")).toThrow(
+      /bare IP literal/
+    );
+  });
+});
+
+describe("isBareIpHost", () => {
+  it.each([
+    ["8.8.8.8", true],
+    ["93.184.216.34", true],
+    ["256.256.256.256", false],
+    ["api.acme.com", false],
+    ["2001:4860:4860::8888", true],
+    ["::1", true],
+    ["my-host", false]
+  ])("classifies %s as bareIp=%s", (host, expected) => {
+    expect(isBareIpHost(host)).toBe(expected);
   });
 });
 

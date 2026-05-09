@@ -450,6 +450,34 @@ describe("response handling", () => {
     const res = await POST(mkRequest({ businessId: BIZ, label: "Acme", path: "/x" }));
     const body = await res.json();
     expect(body.data.truncated).toBe(true);
+    // The bytes that fit MUST be returned; previously the whole
+    // overflowing chunk was discarded and the agent got `data:""`.
+    expect(typeof body.data.data).toBe("string");
+    expect((body.data.data as string).length).toBe(RESPONSE_MAX_BYTES);
+  });
+
+  it("truncates a single oversized first chunk and still returns RESPONSE_MAX_BYTES bytes", async () => {
+    // Single chunk much larger than the cap. Without the partial-
+    // chunk fix this test would fail: chunks would stay empty and
+    // body.data.data would be "".
+    const oversized = new Uint8Array(RESPONSE_MAX_BYTES * 2).fill(0x41);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(oversized);
+        controller.close();
+      }
+    });
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(stream, {
+          status: 200,
+          headers: { "Content-Type": "text/plain" }
+        })
+    ) as never;
+    const res = await POST(mkRequest({ businessId: BIZ, label: "Acme", path: "/x" }));
+    const body = await res.json();
+    expect(body.data.truncated).toBe(true);
+    expect((body.data.data as string).length).toBe(RESPONSE_MAX_BYTES);
   });
 
   it("filters response headers to a safe allowlist", async () => {

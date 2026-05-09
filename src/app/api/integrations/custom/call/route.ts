@@ -361,13 +361,22 @@ export async function POST(request: Request) {
         if (done) break;
         /* c8 ignore next -- streams spec: a non-done chunk always carries bytes; null guard is defensive against non-conformant polyfills */
         if (!value) continue;
-        total += value.byteLength;
-        if (total > RESPONSE_MAX_BYTES) {
+        // If this chunk would push us over the cap, keep ONLY the
+        // bytes that fit (don't drop the chunk entirely — a single
+        // 110 KB chunk used to produce an empty response with
+        // `truncated:true`, which is useless to the agent).
+        const remaining = RESPONSE_MAX_BYTES - total;
+        if (value.byteLength > remaining) {
+          if (remaining > 0) {
+            chunks.push(value.slice(0, remaining));
+            total += remaining;
+          }
           truncated = true;
           await reader.cancel();
           break;
         }
         chunks.push(value);
+        total += value.byteLength;
       }
     }
   } catch (err) {

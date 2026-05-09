@@ -257,6 +257,27 @@ export function isPrivateOrLoopbackHost(host: string): boolean {
   return false;
 }
 
+/**
+ * Returns true when the host literal is a bare IP address (v4 or v6).
+ * The proxy's call-time `assertSafeHostname` rejects ALL bare IPs, so
+ * we must reject them at registration time too — otherwise an owner
+ * can register a row that simply never works at call time. Real REST
+ * APIs are vhosted and reachable by hostname; if you really need to
+ * point at an IP, do it via DNS.
+ */
+export function isBareIpHost(host: string): boolean {
+  // IPv4 dotted-quad with valid octets.
+  const m4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m4 && m4.slice(1).map(Number).every((n) => n <= 255)) {
+    return true;
+  }
+  // IPv6: any colon in the hostname disqualifies it as a registered name.
+  // (`URL` strips brackets from `url.hostname`, so we see e.g. "::1"
+  // not "[::1]".)
+  if (host.includes(":")) return true;
+  return false;
+}
+
 export type ParsedBaseUrl = {
   origin: string;
   pathPrefix: string;
@@ -295,6 +316,15 @@ export function parseBaseUrl(input: string): ParsedBaseUrl {
     throw new CustomIntegrationValidationError(
       "base_url_private",
       "base_url points at a private/loopback host"
+    );
+  }
+  // Bare IPv4/IPv6 literals are refused at registration time so the
+  // proxy's call-time bare-IP refusal in `assertSafeHostname` cannot
+  // produce silent "registered but never callable" rows.
+  if (isBareIpHost(url.hostname)) {
+    throw new CustomIntegrationValidationError(
+      "base_url_invalid",
+      "base_url must be a hostname, not a bare IP literal"
     );
   }
   if (url.username || url.password) {
