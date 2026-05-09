@@ -231,6 +231,40 @@ export class CustomIntegrationValidationError extends Error {
  * Exported so the proxy route can re-validate at call time (defense in
  * depth: a row written before this guard existed must still be blocked).
  */
+/**
+ * IPv4 dotted-quad in private/loopback ranges. Pulled out so the
+ * IPv4-mapped IPv6 form (`::ffff:127.0.0.1`) can reuse the same logic.
+ */
+function isPrivateIpv4(ip: string): boolean {
+  const m = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return false;
+  const o = m.slice(1).map(Number);
+  if (o.some((n) => n > 255)) return false;
+  if (o[0] === 10) return true;
+  if (o[0] === 127) return true;
+  if (o[0] === 169 && o[1] === 254) return true;
+  if (o[0] === 172 && o[1] >= 16 && o[1] <= 31) return true;
+  if (o[0] === 192 && o[1] === 168) return true;
+  if (o[0] === 0) return true;
+  return false;
+}
+
+/**
+ * IPv6 loopback / link-local / unique-local + IPv4-mapped private.
+ * Matches the call-time check in `website-ingest`. `host` is expected
+ * to already be lowercased.
+ */
+function isPrivateIpv6(host: string): boolean {
+  if (host === "::1" || host === "::") return true;
+  if (host.startsWith("fc") || host.startsWith("fd")) return true; // fc00::/7 ULA
+  if (host.startsWith("fe80:")) return true; // link-local
+  if (host.startsWith("::ffff:")) {
+    const mapped = host.slice("::ffff:".length);
+    return isPrivateIpv4(mapped);
+  }
+  return false;
+}
+
 export function isPrivateOrLoopbackHost(host: string): boolean {
   const h = host.toLowerCase();
   // Bare `localhost` and any `*.localhost` subdomain. The latter resolves
@@ -238,18 +272,10 @@ export function isPrivateOrLoopbackHost(host: string): boolean {
   // environment; the proxy's call-time `assertSafeHostname` rejects
   // them too, so we MUST refuse them at registration.
   if (h === "localhost" || h.endsWith(".localhost")) return true;
-  // IPv4 dotted-quad?
-  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (m) {
-    const o = m.slice(1).map(Number);
-    if (o.some((n) => n > 255)) return false;
-    if (o[0] === 10) return true;
-    if (o[0] === 127) return true;
-    if (o[0] === 169 && o[1] === 254) return true;
-    if (o[0] === 172 && o[1] >= 16 && o[1] <= 31) return true;
-    if (o[0] === 192 && o[1] === 168) return true;
-    if (o[0] === 0) return true;
-  }
+  if (isPrivateIpv4(h)) return true;
+  // IPv6 literals — note that `URL.hostname` strips brackets, so we see
+  // e.g. "::1" not "[::1]".
+  if (h.includes(":") && isPrivateIpv6(h)) return true;
   // Common cloud-metadata hostnames worth blocking explicitly.
   if (
     h === "metadata.google.internal" ||

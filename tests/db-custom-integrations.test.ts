@@ -76,7 +76,19 @@ describe("isPrivateOrLoopbackHost", () => {
     ["metadata.google.internal", true],
     ["api.acme.com", false],
     ["8.8.8.8", false],
-    ["256.256.256.256", false]
+    ["256.256.256.256", false],
+    // IPv6 — defense-in-depth so a future caller relying on this
+    // function alone (without isBareIpHost) doesn't have an SSRF gap.
+    ["::1", true],
+    ["::", true],
+    ["fc00::1", true],
+    ["fd12:3456::abcd", true],
+    ["fe80::1", true],
+    ["::ffff:127.0.0.1", true],
+    ["::ffff:10.0.0.5", true],
+    ["::ffff:8.8.8.8", false],
+    ["2001:4860:4860::8888", false],
+    ["fb00::1", false]
   ])("classifies %s as private=%s", (host, expected) => {
     expect(isPrivateOrLoopbackHost(host)).toBe(expected);
   });
