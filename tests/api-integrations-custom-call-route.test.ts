@@ -141,6 +141,31 @@ describe("tenant binding (URL query)", () => {
     expect(getCustomIntegrationByLabel).not.toHaveBeenCalled();
   });
 
+  it("accepts UUID v7 in ?businessId (matches Zod 4.3+ semantics)", async () => {
+    // RFC 9562 introduced v6/v7/v8. The platform currently mints v4
+    // via `crypto.randomUUID()`, but if it ever adopts v7 for
+    // time-sortable IDs this route MUST keep accepting them — same
+    // semantics as `z.string().uuid()` everywhere else in the
+    // codebase. (Bugbot flagged the previous v1–5-only regex.)
+    const v7 = "01934d8b-7e8a-7c00-8123-456789abcdef";
+    vi.mocked(getCustomIntegrationByLabel).mockResolvedValueOnce({
+      ...BASE_ROW,
+      business_id: v7
+    });
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response("{}", {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        })
+    ) as never;
+    const res = await POST(
+      mkRequest({ label: "Acme", path: "/x" }, { businessId: v7 })
+    );
+    expect(res.status).toBe(200);
+    expect(getCustomIntegrationByLabel).toHaveBeenCalledWith(v7, "Acme");
+  });
+
   it("ignores `businessId` in the JSON body (model can't override the URL)", async () => {
     // Even if a prompt-injected agent stuffs another business UUID
     // in the body, the route uses ONLY the URL query value. Here we

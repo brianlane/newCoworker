@@ -206,9 +206,16 @@ function safelyJoinPath(prefix: string, path: string): string | null {
   return `${prefix}${path}`;
 }
 
-/** UUID v1–v5 shape (matches `z.string().uuid()`). */
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+/**
+ * Tenant-id validator. We delegate to Zod's `.uuid()` instead of a
+ * hand-rolled regex so this route accepts the same set of UUIDs the
+ * rest of the codebase produces and validates — including v6/v7/v8
+ * (RFC 9562) which the previous local `[1-5]` regex would have
+ * silently rejected with a confusing `missing_business_id`. Today's
+ * `crypto.randomUUID()` returns v4, but if the platform ever adopts
+ * v7 for time-sortable IDs, this route gets it for free.
+ */
+const businessIdSchema = z.string().uuid();
 
 export async function POST(request: Request) {
   const guard = gatewayGuard(request);
@@ -223,10 +230,11 @@ export async function POST(request: Request) {
   try {
     const url = new URL(request.url);
     const raw = url.searchParams.get("businessId");
-    if (!raw || !UUID_RE.test(raw)) {
+    const parsed = businessIdSchema.safeParse(raw);
+    if (!parsed.success) {
       return voiceToolValidationError("missing_business_id");
     }
-    businessId = raw;
+    businessId = parsed.data;
   } catch {
     /* c8 ignore next 2 -- WHATWG URL never throws for a request that
        reached this handler; defensive only. */
