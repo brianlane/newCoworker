@@ -148,6 +148,24 @@ describe("validation", () => {
     expect(body.detail).toBe("path_invalid");
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("rejects backslash-bearing paths (WHATWG URL pivots them too)", async () => {
+    // WHATWG URL treats `\` as equivalent to `/` during authority
+    // detection for special schemes (https/http), so a path like
+    // `/\evil.example/` would resolve to `https://evil.example/`
+    // and silently pivot the host. The proxy must refuse before fetch.
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as never;
+    for (const path of ["/\\evil.example/", "/foo\\bar", "\\backslash"]) {
+      fetchMock.mockClear();
+      const res = await POST(
+        mkRequest({ businessId: BIZ, label: "Acme", path })
+      );
+      const body = await res.json();
+      expect(body.detail).toBe("path_invalid");
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  });
 });
 
 describe("integration resolution", () => {

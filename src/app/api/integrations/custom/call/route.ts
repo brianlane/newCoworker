@@ -179,10 +179,15 @@ function safelyJoinPath(prefix: string, path: string): string | null {
   // sequences differently than `URL` does, so we err on the side of
   // refusing the call.
   if (path.includes("..")) return null;
-  // Disallow embedded scheme / authority — `URL` will treat
-  // `//evil/path` as scheme-relative and pivot to a different host when
-  // we resolve it.
+  // Disallow embedded scheme / authority. WHATWG URL treats `\` as
+  // equivalent to `/` for special schemes (https) during authority
+  // detection, so both `//evil/path` and `/\evil/path` would pivot to
+  // a different host when resolved against the base origin. We
+  // additionally refuse ANY backslash anywhere in the path — REST APIs
+  // don't use `\` in URL paths and tolerating it just hands the
+  // attacker a second class of pivot strings to probe.
   if (/^\/+\/+/.test(path)) return null;
+  if (path.includes("\\")) return null;
   if (prefix === "/") return path;
   return `${prefix}${path}`;
 }
