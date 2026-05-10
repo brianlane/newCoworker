@@ -352,6 +352,24 @@ describe("notifications/dispatch", () => {
     await resolveNotificationTargets(BIZ);
   });
 
+  it("strips a trailing slash from NEXT_PUBLIC_APP_URL so no double-slash leaks into emails", async () => {
+    process.env.NEXT_PUBLIC_APP_URL = "https://app.example.com/";
+    vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+    await dispatchUrgentNotification({
+      businessId: BIZ,
+      summary: "URGENT",
+      kind: "urgent_alert"
+    });
+    const call = vi.mocked(sendOwnerEmail).mock.calls[0];
+    const opts = call[3] as { unsubscribeUrl?: string | null; text?: string };
+    expect(opts.unsubscribeUrl).toBe(
+      `https://app.example.com/api/notifications/unsubscribe?bid=${encodeURIComponent(BIZ)}`
+    );
+    expect(opts.unsubscribeUrl).not.toContain("//api/");
+    expect(opts.text).toContain("https://app.example.com/dashboard");
+    expect(opts.text).not.toContain("//dashboard");
+  });
+
   it("uses fallback dashboardUrl + empty RESEND_API_KEY when env vars unset", async () => {
     delete process.env.NEXT_PUBLIC_APP_URL;
     delete process.env.RESEND_API_KEY;

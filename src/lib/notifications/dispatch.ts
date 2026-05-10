@@ -171,7 +171,10 @@ export async function dispatchUrgentNotification(
   input: DispatchInput
 ): Promise<DispatchResult> {
   const targets = await resolveNotificationTargets(input.businessId);
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  // Strip trailing slash for parity with the Edge-function helpers and to
+  // avoid `https://example.com//dashboard` / `//api/...` if the env var was
+  // set with a stray slash.
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
   const dashboardUrl = `${appUrl}/dashboard`;
   const summary = input.summary;
   const kind = input.kind;
