@@ -16,8 +16,6 @@
 //   ADMIN_EMAIL
 //   NEXT_PUBLIC_APP_URL
 //   NOTIFICATIONS_WEBHOOK_TOKEN (optional; for heartbeat script calls)
-//   NOTIFICATIONS_UNSUBSCRIBE_SECRET (optional; enables one-click email
-//                                     unsubscribe via List-Unsubscribe header)
 //
 // Behavior parity with src/lib/notifications/dispatch.ts (Vercel side):
 // recipient resolution prefers per-business preferences
@@ -92,33 +90,13 @@ async function verifyRequest(req: Request): Promise<boolean> {
   return false;
 }
 
-// ─── Unsubscribe token (mirrors src/lib/notifications/unsubscribe-token.ts) ──
-function base64UrlEncode(bytes: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]!);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-async function hmacSha256(secret: string, message: string): Promise<Uint8Array> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
-  return new Uint8Array(sig);
-}
-
-async function buildUnsubscribeUrl(businessId: string, appUrl: string): Promise<string | null> {
-  const secret = (Deno.env.get("NOTIFICATIONS_UNSUBSCRIBE_SECRET") ?? "").trim();
-  if (!secret) return null;
-  const issuedAt = Math.floor(Date.now() / 1000);
-  const payload = `v1.${businessId}.${issuedAt}`;
-  const sig = base64UrlEncode(await hmacSha256(secret, payload));
-  const token = `${payload}.${sig}`;
-  return `${appUrl.replace(/\/$/, "")}/api/notifications/unsubscribe?token=${encodeURIComponent(token)}`;
+// ─── Unsubscribe URL ─────────────────────────────────────────────────────────
+// Plain `?bid=<businessId>` parameter — no HMAC. UUID v4 is unguessable and
+// the unsubscribe action is a one-click flag the owner can re-enable from the
+// dashboard. See src/app/api/notifications/unsubscribe/route.ts for the
+// matching handler / threat-model rationale.
+function buildUnsubscribeUrl(businessId: string, appUrl: string): string {
+  return `${appUrl.replace(/\/$/, "")}/api/notifications/unsubscribe?bid=${encodeURIComponent(businessId)}`;
 }
 
 type SupaClient = ReturnType<typeof createClient>;
@@ -398,20 +376,17 @@ serve(async (req: Request) => {
     );
   } else if (resendKey) {
     try {
-      const unsubscribeUrl = await buildUnsubscribeUrl(record.business_id, appUrl);
+      const unsubscribeUrl = buildUnsubscribeUrl(record.business_id, appUrl);
       const headers: Record<string, string> = {
         Authorization: `Bearer ${resendKey}`,
         "Content-Type": "application/json"
       };
-      const emailHeaders: Record<string, string> = {};
-      if (unsubscribeUrl) {
-        emailHeaders["List-Unsubscribe"] = `<${unsubscribeUrl}>`;
-        emailHeaders["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
-      }
+      const emailHeaders: Record<string, string> = {
+        "List-Unsubscribe": `<${unsubscribeUrl}>`,
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"
+      };
       const baseText = `Your AI Coworker flagged an urgent event.\n\nSummary: ${summary}\nBusiness ID: ${record.business_id}\n\nView details: ${dashboardUrl}`;
-      const text = unsubscribeUrl
-        ? `${baseText}\n\n---\nDon't want these alerts? Unsubscribe with one click: ${unsubscribeUrl}`
-        : baseText;
+      const text = `${baseText}\n\n---\nDon't want these alerts? Unsubscribe with one click: ${unsubscribeUrl}`;
       const emailRes = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers,
@@ -422,7 +397,7 @@ serve(async (req: Request) => {
           reply_to: Deno.env.get("CONTACT_EMAIL") ?? undefined,
           subject: `Urgent: ${summary}`,
           text,
-          ...(Object.keys(emailHeaders).length > 0 ? { headers: emailHeaders } : {})
+          headers: emailHeaders
         })
       });
       if (emailRes.ok) {

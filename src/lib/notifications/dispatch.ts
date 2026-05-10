@@ -14,8 +14,12 @@
  * 3. Always write `notifications` rows (sent / failed / skipped) so the
  *    dashboard "Recent notifications" list is complete — this was the
  *    biggest gap before: edge-fn alerts were invisible.
- * 4. Email sends include the `List-Unsubscribe` header + a token URL when
- *    `NOTIFICATIONS_UNSUBSCRIBE_SECRET` is set.
+ * 4. Email sends include the RFC 8058 `List-Unsubscribe` /
+ *    `List-Unsubscribe-Post` headers and a footer link pointing at
+ *    `/api/notifications/unsubscribe?bid=<uuid>`. The bid is the business
+ *    UUID; UUID v4 is unguessable and the unsubscribe action is a flag the
+ *    owner can re-enable from the dashboard, so this matches what most
+ *    mainstream ESPs ship and avoids an extra signing-secret env var.
  */
 
 import { randomUUID } from "node:crypto";
@@ -29,7 +33,6 @@ import {
 } from "@/lib/db/notifications";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
-import { buildUnsubscribeUrl } from "@/lib/notifications/unsubscribe-token";
 import { logger } from "@/lib/logger";
 
 export type NotificationKind = "urgent_alert" | "voice_capture" | "digest" | string;
@@ -47,11 +50,6 @@ export type DispatchInput = {
   smsBody?: string;
   /** Optional override of the email subject; defaults to "Urgent: {summary}". */
   emailSubject?: string;
-  /**
-   * Optional override of the dispatch timestamp (mostly for tests). Real
-   * callers should leave this unset and rely on `now`.
-   */
-  nowSec?: number;
 };
 
 export type DispatchChannelResult = {
@@ -225,13 +223,12 @@ export async function dispatchUrgentNotification(
       )
     );
   } else {
-    // Build off the app origin (not dashboardUrl, which has /dashboard appended).
-    // Otherwise the resulting link would point at /dashboard/api/notifications/unsubscribe
-    // which doesn't exist, breaking both the in-body footer and the
-    // List-Unsubscribe header.
-    const unsubscribeUrl = buildUnsubscribeUrl(input.businessId, appUrl, {
-      nowSec: input.nowSec
-    });
+    // Build off the app origin (not dashboardUrl, which has /dashboard appended)
+    // so the link resolves to /api/notifications/unsubscribe — the route the
+    // unsubscribe handler is mounted at.
+    const unsubscribeUrl = `${appUrl}/api/notifications/unsubscribe?bid=${encodeURIComponent(
+      input.businessId
+    )}`;
     const subject = input.emailSubject ?? `Urgent: ${summary}`;
     const body =
       input.emailBody ??

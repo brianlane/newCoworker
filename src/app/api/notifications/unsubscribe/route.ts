@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { verifyUnsubscribeToken } from "@/lib/notifications/unsubscribe-token";
 import { updateNotificationPreferences } from "@/lib/db/notification-preferences";
 import { logger } from "@/lib/logger";
 
@@ -12,26 +11,29 @@ import { logger } from "@/lib/logger";
  *        body when the user taps the native "Unsubscribe" UI. Plain 200 text
  *        response is what they expect.
  *
- * Both shapes are idempotent: re-hitting the endpoint with a still-valid
- * token just re-asserts the same state.
+ * The endpoint identifies the business via the `bid` query/form parameter,
+ * which is the business UUID. UUID v4 has 122 bits of entropy and isn't
+ * brute-forceable; if a particular UUID ever leaks (logs, support tickets,
+ * forwarded email, etc.) the worst an attacker can do is unsubscribe that
+ * one business — a flag the owner can re-enable in the dashboard with one
+ * click. That tradeoff matches what most mainstream ESPs ship.
+ *
+ * Both shapes are idempotent: re-hitting the endpoint with the same `bid`
+ * just re-asserts the same state.
  */
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type ApplyResult = "ok" | "invalid" | "expired" | "missing_secret" | "error";
+type ApplyResult = "ok" | "invalid" | "error";
 
-async function applyUnsubscribe(token: string | null): Promise<ApplyResult> {
-  if (!token) return "invalid";
-  const result = verifyUnsubscribeToken(token);
-  if (!result.ok) {
-    if (result.reason === "expired") return "expired";
-    if (result.reason === "missing_secret") return "missing_secret";
-    return "invalid";
-  }
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function applyUnsubscribe(bid: string | null): Promise<ApplyResult> {
+  if (!bid || !UUID_RE.test(bid)) return "invalid";
 
   try {
-    await updateNotificationPreferences(result.payload.businessId, {
+    await updateNotificationPreferences(bid, {
       sms_urgent: false,
       email_digest: false,
       email_urgent: false,
@@ -41,7 +43,7 @@ async function applyUnsubscribe(token: string | null): Promise<ApplyResult> {
     return "ok";
   } catch (err) {
     logger.warn("unsubscribe: update failed", {
-      businessId: result.payload.businessId,
+      businessId: bid,
       error: err instanceof Error ? err.message : String(err)
     });
     return "error";
@@ -82,8 +84,8 @@ function appUrl(): string {
 }
 
 export async function GET(request: Request) {
-  const token = new URL(request.url).searchParams.get("token");
-  const result = await applyUnsubscribe(token);
+  const bid = new URL(request.url).searchParams.get("bid");
+  const result = await applyUnsubscribe(bid);
 
   if (result === "ok") {
     return htmlPage(
@@ -91,20 +93,6 @@ export async function GET(request: Request) {
       `<p>We won't send you any more email or SMS notifications.</p>
        <p>Changed your mind? <a href="${appUrl()}/dashboard/notifications">Re-subscribe in your dashboard</a>.</p>`,
       200
-    );
-  }
-  if (result === "expired") {
-    return htmlPage(
-      "Link expired",
-      `<p>This unsubscribe link is too old. <a href="${appUrl()}/dashboard/notifications">Open the dashboard</a> and use the in-app unsubscribe button instead.</p>`,
-      410
-    );
-  }
-  if (result === "missing_secret") {
-    return htmlPage(
-      "Unsubscribe unavailable",
-      `<p>Email-link unsubscribe is not configured on this deployment. Please <a href="${appUrl()}/dashboard/notifications">manage your preferences in the dashboard</a>.</p>`,
-      503
     );
   }
   if (result === "error") {
@@ -122,27 +110,27 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  // RFC 8058 one-click flow: token may come from the query string or the
+  // RFC 8058 one-click flow: bid may come from the query string or the
   // `List-Unsubscribe-Post` form body. Accept both.
-  let token = new URL(request.url).searchParams.get("token");
-  if (!token) {
+  let bid = new URL(request.url).searchParams.get("bid");
+  if (!bid) {
     try {
       const ct = request.headers.get("content-type") ?? "";
       if (ct.includes("application/x-www-form-urlencoded")) {
         const body = await request.text();
         const params = new URLSearchParams(body);
-        token = params.get("token");
+        bid = params.get("bid");
       }
     } catch {
-      // If body parsing throws, fall through to the "no token" branch.
+      // If body parsing throws, fall through to the "no bid" branch.
     }
   }
 
-  const result = await applyUnsubscribe(token);
+  const result = await applyUnsubscribe(bid);
   const ok = result === "ok";
   // Mail clients ignore HTML for the POST flow; reply with bare text.
   return new NextResponse(ok ? "Unsubscribed" : `Failed: ${result}`, {
-    status: ok ? 200 : result === "expired" ? 410 : result === "error" ? 500 : 400,
+    status: ok ? 200 : result === "error" ? 500 : 400,
     headers: { "Content-Type": "text/plain; charset=utf-8" }
   });
 }

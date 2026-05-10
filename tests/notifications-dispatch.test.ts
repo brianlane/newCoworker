@@ -252,23 +252,20 @@ describe("notifications/dispatch", () => {
     expect((smsRow?.payload as Record<string, unknown>).reason).toBe("no_phone");
   });
 
-  it("passes unsubscribe URL anchored at the app origin (not /dashboard)", async () => {
-    process.env.NOTIFICATIONS_UNSUBSCRIBE_SECRET = "test-secret";
+  it("passes unsubscribe URL anchored at the app origin with bid=<uuid>", async () => {
     process.env.NEXT_PUBLIC_APP_URL = "https://app.example.com";
     vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
     await dispatchUrgentNotification({
       businessId: BIZ,
       summary: "URGENT",
-      kind: "urgent_alert",
-      nowSec: 1700000000
+      kind: "urgent_alert"
     });
     const call = vi.mocked(sendOwnerEmail).mock.calls[0];
     const opts = call[3] as { unsubscribeUrl?: string | null };
-    expect(typeof opts.unsubscribeUrl).toBe("string");
-    // Must point at /api/notifications/unsubscribe NOT /dashboard/api/...
-    expect(opts.unsubscribeUrl).toMatch(
-      /^https:\/\/app\.example\.com\/api\/notifications\/unsubscribe\?token=/
+    expect(opts.unsubscribeUrl).toBe(
+      `https://app.example.com/api/notifications/unsubscribe?bid=${encodeURIComponent(BIZ)}`
     );
+    // Must NOT live under /dashboard (regression for the original bot finding).
     expect(opts.unsubscribeUrl).not.toContain("/dashboard/api/");
   });
 

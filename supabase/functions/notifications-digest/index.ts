@@ -28,7 +28,6 @@
 //   CONTACT_EMAIL (optional)
 //   ADMIN_EMAIL (fallback recipient)
 //   NEXT_PUBLIC_APP_URL (for unsubscribe URL + dashboard link)
-//   NOTIFICATIONS_UNSUBSCRIBE_SECRET (optional; enables one-click unsubscribe)
 
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
@@ -48,32 +47,12 @@ type DigestTarget = {
 type LogRow = { task_type: string; status: string; created_at: string };
 type NotifSkim = { kind: string | null; status: string; created_at: string };
 
-function base64UrlEncode(bytes: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]!);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-async function hmacSha256(secret: string, message: string): Promise<Uint8Array> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
-  return new Uint8Array(sig);
-}
-
-async function buildUnsubscribeUrl(businessId: string, appUrl: string): Promise<string | null> {
-  const secret = (Deno.env.get("NOTIFICATIONS_UNSUBSCRIBE_SECRET") ?? "").trim();
-  if (!secret) return null;
-  const issuedAt = Math.floor(Date.now() / 1000);
-  const payload = `v1.${businessId}.${issuedAt}`;
-  const sig = base64UrlEncode(await hmacSha256(secret, payload));
-  const token = `${payload}.${sig}`;
-  return `${appUrl.replace(/\/$/, "")}/api/notifications/unsubscribe?token=${encodeURIComponent(token)}`;
+// Plain `?bid=<businessId>` parameter — no HMAC. UUID v4 is unguessable and
+// the unsubscribe action is a one-click flag the owner can re-enable from the
+// dashboard. See src/app/api/notifications/unsubscribe/route.ts for the
+// matching handler / threat-model rationale.
+function buildUnsubscribeUrl(businessId: string, appUrl: string): string {
+  return `${appUrl.replace(/\/$/, "")}/api/notifications/unsubscribe?bid=${encodeURIComponent(businessId)}`;
 }
 
 async function recordDigestRow(
@@ -101,7 +80,7 @@ function buildDigestText(opts: {
   logs: LogRow[];
   notifs: NotifSkim[];
   dashboardUrl: string;
-  unsubscribeUrl: string | null;
+  unsubscribeUrl: string;
 }): { subject: string; text: string; activitySummary: string } {
   const counts: Record<string, number> = {};
   for (const l of opts.logs) {
@@ -122,11 +101,11 @@ function buildDigestText(opts: {
     "",
     taskLines.length > 0 ? `Breakdown:\n${taskLines}` : "No activity to break down.",
     "",
-    `Open the dashboard: ${opts.dashboardUrl}`
+    `Open the dashboard: ${opts.dashboardUrl}`,
+    "",
+    "---",
+    `Don't want these emails? Unsubscribe with one click: ${opts.unsubscribeUrl}`
   ];
-  if (opts.unsubscribeUrl) {
-    lines.push("", "---", `Don't want these emails? Unsubscribe with one click: ${opts.unsubscribeUrl}`);
-  }
   return {
     subject,
     text: lines.join("\n"),
@@ -282,7 +261,7 @@ serve(async (req: Request) => {
       continue;
     }
 
-    const unsubscribeUrl = await buildUnsubscribeUrl(t.business_id, appUrl);
+    const unsubscribeUrl = buildUnsubscribeUrl(t.business_id, appUrl);
     const dashboardUrl = `${appUrl.replace(/\/$/, "")}/dashboard`;
     const { subject, text, activitySummary } = buildDigestText({
       businessName: t.business_name ?? "your business",
@@ -292,11 +271,10 @@ serve(async (req: Request) => {
       unsubscribeUrl
     });
 
-    const headers: Record<string, string> = {};
-    if (unsubscribeUrl) {
-      headers["List-Unsubscribe"] = `<${unsubscribeUrl}>`;
-      headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
-    }
+    const headers: Record<string, string> = {
+      "List-Unsubscribe": `<${unsubscribeUrl}>`,
+      "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"
+    };
 
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -310,7 +288,7 @@ serve(async (req: Request) => {
         subject,
         text,
         ...(replyTo ? { reply_to: replyTo } : {}),
-        ...(Object.keys(headers).length > 0 ? { headers } : {})
+        headers
       })
     });
 
