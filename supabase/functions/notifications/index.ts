@@ -96,7 +96,8 @@ async function verifyRequest(req: Request): Promise<boolean> {
 // dashboard. See src/app/api/notifications/unsubscribe/route.ts for the
 // matching handler / threat-model rationale.
 function buildUnsubscribeUrl(businessId: string, appUrl: string): string {
-  return `${appUrl.replace(/\/$/, "")}/api/notifications/unsubscribe?bid=${encodeURIComponent(businessId)}`;
+  // appUrl is normalized (trailing slash stripped) at the call site.
+  return `${appUrl}/api/notifications/unsubscribe?bid=${encodeURIComponent(businessId)}`;
 }
 
 type SupaClient = ReturnType<typeof createClient>;
@@ -206,7 +207,12 @@ serve(async (req: Request) => {
 
   const summary = `URGENT ${record.task_type}`;
   const kind = "urgent_alert";
-  const appUrl = Deno.env.get("NEXT_PUBLIC_APP_URL") ?? "https://www.newcoworker.com";
+  // Strip trailing slash so dashboardUrl never ends up as
+  // `https://example.com//dashboard` if the env var was set with one.
+  const appUrl = (Deno.env.get("NEXT_PUBLIC_APP_URL") ?? "https://www.newcoworker.com").replace(
+    /\/$/,
+    ""
+  );
   const dashboardUrl = `${appUrl}/dashboard`;
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";

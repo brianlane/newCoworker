@@ -52,7 +52,10 @@ type NotifSkim = { kind: string | null; status: string; created_at: string };
 // dashboard. See src/app/api/notifications/unsubscribe/route.ts for the
 // matching handler / threat-model rationale.
 function buildUnsubscribeUrl(businessId: string, appUrl: string): string {
-  return `${appUrl.replace(/\/$/, "")}/api/notifications/unsubscribe?bid=${encodeURIComponent(businessId)}`;
+  // appUrl is normalized at the call site (trailing slash stripped); we keep
+  // the helper signature explicit so callers can't accidentally pass a
+  // partially-formed URL.
+  return `${appUrl}/api/notifications/unsubscribe?bid=${encodeURIComponent(businessId)}`;
 }
 
 async function recordDigestRow(
@@ -135,7 +138,12 @@ serve(async (req: Request) => {
   const from = Deno.env.get("MAILER_EMAIL") ?? "New Coworker <contact@newcoworker.com>";
   const replyTo = Deno.env.get("CONTACT_EMAIL");
   const adminEmail = (Deno.env.get("ADMIN_EMAIL") ?? "").trim() || null;
-  const appUrl = Deno.env.get("NEXT_PUBLIC_APP_URL") ?? "https://www.newcoworker.com";
+  // Strip trailing slash once so every downstream URL (`${appUrl}/dashboard`,
+  // `${appUrl}/api/notifications/unsubscribe?bid=…`) is well-formed.
+  const appUrl = (Deno.env.get("NEXT_PUBLIC_APP_URL") ?? "https://www.newcoworker.com").replace(
+    /\/$/,
+    ""
+  );
 
   // Pull every business + its prefs in one shot. The RLS bypass via service
   // role makes this fine; we hand-filter `email_digest` after the join so a
@@ -262,7 +270,7 @@ serve(async (req: Request) => {
     }
 
     const unsubscribeUrl = buildUnsubscribeUrl(t.business_id, appUrl);
-    const dashboardUrl = `${appUrl.replace(/\/$/, "")}/dashboard`;
+    const dashboardUrl = `${appUrl}/dashboard`;
     const { subject, text, activitySummary } = buildDigestText({
       businessName: t.business_name ?? "your business",
       logs,
