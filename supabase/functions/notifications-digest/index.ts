@@ -242,18 +242,40 @@ serve(async (req: Request) => {
       continue;
     }
 
-    const { data: logRows } = await supa
+    // Per-business activity pulls. Both queries can fail independently
+    // (timeout, RLS misconfiguration, etc.); without surfacing the error
+    // we'd treat every failure as "no activity" and silently swallow the
+    // problem. Record a `failed` digest row instead so the dashboard
+    // shows the operator something went wrong.
+    const { data: logRows, error: logErr } = await supa
       .from("coworker_logs")
       .select("task_type, status, created_at")
       .eq("business_id", t.business_id)
       .gte("created_at", since);
-    const logs = ((logRows ?? []) as LogRow[]).filter((l) => l.task_type !== "provisioning");
-
-    const { data: notifRows } = await supa
+    const { data: notifRows, error: notifErr } = await supa
       .from("notifications")
       .select("kind, status, created_at")
       .eq("business_id", t.business_id)
       .gte("created_at", since);
+
+    if (logErr || notifErr) {
+      const reason = logErr
+        ? `coworker_logs_query_failed: ${logErr.message}`
+        : `notifications_query_failed: ${(notifErr as { message: string }).message}`;
+      console.error("digest.activity_query_failed", t.business_id, reason);
+      await recordDigestRow(
+        supa,
+        t.business_id,
+        "failed",
+        "Daily digest",
+        { recipient },
+        reason
+      );
+      failed += 1;
+      continue;
+    }
+
+    const logs = ((logRows ?? []) as LogRow[]).filter((l) => l.task_type !== "provisioning");
     const notifs = (notifRows ?? []) as NotifSkim[];
 
     if (logs.length === 0) {
@@ -284,6 +306,12 @@ serve(async (req: Request) => {
       "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"
     };
 
+    // NB: the Resend REST API uses snake_case in the JSON body
+    // (https://resend.com/docs/api-reference/emails/send-email) — `reply_to`,
+    // not `replyTo`. The Resend SDK in src/lib/email/client.ts uses the
+    // camelCase form because the SDK transforms it internally; direct REST
+    // calls (here + supabase/functions/notifications/index.ts) must stick
+    // to snake_case or the header is silently dropped.
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {
