@@ -12,8 +12,11 @@
 --   * `summary`  — short human-readable headline; cheap to render in the badge dropdown
 --                  / list view without inspecting nested JSON.
 --
--- A partial index on (business_id) WHERE read_at IS NULL keeps the unread-count
--- query O(N_unread) instead of O(N_total) per business — the badge polls this.
+-- A partial index on (business_id) WHERE status='sent' AND read_at IS NULL
+-- keeps the unread-count query O(N_unread) instead of O(N_total) per
+-- business — the badge polls this. The status filter excludes audit-only
+-- rows (skipped channels when toggles are off, failed deliveries) so an
+-- unsubscribed owner never sees their bell badge climb.
 --
 -- For RLS we add a column-locked UPDATE policy: owners can flip `read_at` on their
 -- own rows but cannot modify history (channel, status, payload). The service role
@@ -44,7 +47,7 @@ update notifications
 
 create index if not exists notifications_business_unread_idx
   on notifications (business_id, created_at desc)
-  where read_at is null;
+  where status = 'sent' and read_at is null;
 
 -- ──────────────────────────────────────────────────────────
 -- 2. RLS: owners may flip read_at on their own rows

@@ -77,6 +77,15 @@ export async function getNotifications(
  * Cheap count for the sidebar bell badge. The
  * `notifications_business_unread_idx` partial index keeps this O(N_unread)
  * per business, not O(N_total).
+ *
+ * Only counts `status='sent'` rows. The dispatcher writes audit rows for
+ * every channel attempted (`skipped` when a toggle is off / no recipient,
+ * `failed` when the upstream provider errors). Including those in the
+ * unread count would inflate the bell badge — an unsubscribed owner would
+ * see +3 every urgent event despite having opted out — so the badge tracks
+ * "things actually delivered to you" only. The full list view still shows
+ * every row regardless of status so the dashboard is the audit source of
+ * truth.
  */
 export async function getUnreadNotificationCount(
   businessId: string,
@@ -87,6 +96,7 @@ export async function getUnreadNotificationCount(
     .from("notifications")
     .select("id", { count: "exact", head: true })
     .eq("business_id", businessId)
+    .eq("status", "sent")
     .is("read_at", null);
 
   if (error) throw new Error(`getUnreadNotificationCount: ${error.message}`);

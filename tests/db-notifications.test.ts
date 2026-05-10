@@ -135,7 +135,7 @@ describe("db/notifications", () => {
     expect(limit).toHaveBeenCalledWith(20);
   });
 
-  it("getUnreadNotificationCount returns count", async () => {
+  it("getUnreadNotificationCount returns count and filters by status='sent'", async () => {
     const chain = {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
@@ -144,6 +144,10 @@ describe("db/notifications", () => {
     const db = { from: vi.fn().mockReturnValue(chain) };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     expect(await getUnreadNotificationCount("biz-uuid-1")).toBe(4);
+    // Bell badge must NOT count audit-only skipped/failed rows.
+    expect(chain.eq).toHaveBeenCalledWith("business_id", "biz-uuid-1");
+    expect(chain.eq).toHaveBeenCalledWith("status", "sent");
+    expect(chain.is).toHaveBeenCalledWith("read_at", null);
   });
 
   it("getUnreadNotificationCount returns 0 when count is null", async () => {
