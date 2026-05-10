@@ -92,14 +92,15 @@ export default async function SettingsPage() {
       <Card>
         <h2 className="text-sm font-semibold text-parchment mb-4">Notifications</h2>
         <p className="text-xs text-parchment/40">
-          SMS and email alerts are automatically sent when your coworker flags an urgent event.
-          Configure your phone number and email in your account settings.
+          Choose how your coworker reaches you when something urgent happens, and review
+          recent delivery history.
         </p>
-        <ul className="mt-4 space-y-2 text-sm text-parchment/60">
-          <li>✓ Urgent event SMS alerts</li>
-          <li>✓ Daily email digest</li>
-          <li>✓ Provisioning confirmations</li>
-        </ul>
+        <a
+          href="/dashboard/notifications"
+          className="mt-4 inline-block text-sm text-claw-green hover:underline"
+        >
+          Manage notifications →
+        </a>
       </Card>
 
       <Card>

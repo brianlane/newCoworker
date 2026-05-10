@@ -7,6 +7,7 @@ import {
   voiceToolValidationError
 } from "@/lib/voice-tools/common";
 import { insertCoworkerLog } from "@/lib/db/logs";
+import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { logger } from "@/lib/logger";
 
 /**
@@ -16,9 +17,9 @@ import { logger } from "@/lib/logger";
  * so Gemini can log a call even when no follow-up channel is available.
  *
  * Matches the bridge's declaration (`name`, `phone`, `email`, `reason`,
- * `notes`, `urgency`) — `urgency: 'high'` maps to the existing `urgent_alert`
- * status so the notification fan-out already wired to `coworker_logs` will
- * email/SMS the owner.
+ * `notes`, `urgency`) — `urgency: 'high'` triggers the shared notifications
+ * dispatcher (see `src/lib/notifications/dispatch.ts`) so the urgent path is
+ * the same whether the alert originates from Rowboat or a live voice call.
  */
 
 const argsSchema = z.object({
@@ -59,22 +60,47 @@ export async function POST(request: Request) {
 
   try {
     const logId = randomUUID();
+    const callerPhone = args.phone ?? envelope.callerE164 ?? null;
+    const logPayload = {
+      source: "voice_tool_capture",
+      callerName: args.name ?? null,
+      callerPhone,
+      callerEmail: args.email ?? null,
+      reason: args.reason ?? null,
+      notes: args.notes ?? null,
+      urgency: args.urgency ?? "normal",
+      callControlId: envelope.callControlId ?? null
+    };
     await insertCoworkerLog({
       id: logId,
       business_id: envelope.businessId,
       task_type: "call",
       status: args.urgency === "high" ? "urgent_alert" : "success",
-      log_payload: {
-        source: "voice_tool_capture",
-        callerName: args.name ?? null,
-        callerPhone: args.phone ?? envelope.callerE164 ?? null,
-        callerEmail: args.email ?? null,
-        reason: args.reason ?? null,
-        notes: args.notes ?? null,
-        urgency: args.urgency ?? "normal",
-        callControlId: envelope.callControlId ?? null
-      }
+      log_payload: logPayload
     });
+
+    if (args.urgency === "high") {
+      // High-urgency captures fan out to email/SMS via the shared dispatcher
+      // so the same code path handles preferences, recipient resolution, and
+      // history-row writes whether the alert originated from Rowboat or here.
+      // Failures are logged but do NOT fail the voice-tool call — the call
+      // log is already written, and the customer is mid-conversation.
+      try {
+        const summary = args.reason
+          ? `Urgent call: ${args.reason}`.slice(0, 200)
+          : "Urgent caller request";
+        await dispatchUrgentNotification({
+          businessId: envelope.businessId,
+          summary,
+          kind: "voice_capture",
+          payload: { logId, ...logPayload }
+        });
+      } catch (err) {
+        logger.warn("voice-tools/capture: notification dispatch failed", {
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
 
     return voiceToolResponse({ ok: true, data: { logId } });
   } catch (err) {

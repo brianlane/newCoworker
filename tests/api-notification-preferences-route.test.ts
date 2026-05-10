@@ -31,6 +31,7 @@ const PREFS = {
   dashboard_alerts: true,
   phone_number: null,
   alert_email: null,
+  unsubscribed_at: null,
   updated_at: "2026-01-01T00:00:00Z"
 };
 
@@ -97,5 +98,65 @@ describe("api/notifications/preferences route", () => {
         alert_email: null
       })
     );
+  });
+
+  it("translates unsubscribed_at:'now' into an ISO timestamp", async () => {
+    const response = await POST(
+      new Request("http://localhost/api/notifications/preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId: PREFS.business_id,
+          sms_urgent: false,
+          email_digest: false,
+          email_urgent: false,
+          dashboard_alerts: false,
+          unsubscribed_at: "now"
+        })
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(updateNotificationPreferences).toHaveBeenCalledWith(
+      PREFS.business_id,
+      expect.objectContaining({
+        sms_urgent: false,
+        email_digest: false,
+        email_urgent: false,
+        dashboard_alerts: false,
+        unsubscribed_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/)
+      })
+    );
+  });
+
+  it("translates unsubscribed_at:'clear' into null", async () => {
+    const response = await POST(
+      new Request("http://localhost/api/notifications/preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId: PREFS.business_id,
+          unsubscribed_at: "clear"
+        })
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(updateNotificationPreferences).toHaveBeenCalledWith(
+      PREFS.business_id,
+      expect.objectContaining({ unsubscribed_at: null })
+    );
+  });
+
+  it("rejects unsupported unsubscribed_at values", async () => {
+    const response = await POST(
+      new Request("http://localhost/api/notifications/preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId: PREFS.business_id,
+          unsubscribed_at: "yesterday"
+        })
+      })
+    );
+    expect(response.status).toBe(400);
   });
 });

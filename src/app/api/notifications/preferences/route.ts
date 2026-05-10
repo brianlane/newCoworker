@@ -13,7 +13,13 @@ const patchSchema = z.object({
   email_urgent: z.boolean().optional(),
   dashboard_alerts: z.boolean().optional(),
   phone_number: z.string().max(40).nullable().optional(),
-  alert_email: z.union([z.string().email(), z.literal(""), z.null()]).optional()
+  alert_email: z.union([z.string().email(), z.literal(""), z.null()]).optional(),
+  /**
+   * Set to "now" to record an "unsubscribe from all" click; null to clear
+   * the audit timestamp. Re-enabling any boolean toggle also clears it
+   * automatically (see `updateNotificationPreferences`).
+   */
+  unsubscribed_at: z.union([z.literal("now"), z.literal("clear"), z.null()]).optional()
 });
 
 export async function GET(request: Request) {
@@ -49,7 +55,13 @@ export async function POST(request: Request) {
     const body = patchSchema.parse(await request.json());
     await requireOwner(body.businessId);
 
-    const { businessId, alert_email, phone_number, ...rest } = body;
+    const { businessId, alert_email, phone_number, unsubscribed_at, ...rest } = body;
+    const resolvedUnsubAt =
+      unsubscribed_at === "now"
+        ? new Date().toISOString()
+        : unsubscribed_at === "clear" || unsubscribed_at === null
+          ? null
+          : undefined;
     const patch = {
       ...rest,
       ...(phone_number !== undefined
@@ -57,7 +69,8 @@ export async function POST(request: Request) {
         : {}),
       ...(alert_email !== undefined
         ? { alert_email: alert_email?.trim() ? alert_email.trim() : null }
-        : {})
+        : {}),
+      ...(resolvedUnsubAt !== undefined ? { unsubscribed_at: resolvedUnsubAt } : {})
     };
     const prefs = await updateNotificationPreferences(businessId, patch);
     return successResponse(prefs);

@@ -18,6 +18,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   let grace:
     | { graceEndsAt: string; reason: Parameters<typeof GraceBanner>[0]["reason"] }
     | null = null;
+  let businessId: string | null = null;
   if (user.email) {
     // Single-round-trip grace lookup. Next.js layouts re-execute on every
     // navigation under `/dashboard`, so we previously paid 2 sequential
@@ -36,6 +37,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       .order("created_at", { ascending: false })
       .limit(1);
     const business = businesses?.[0] ?? null;
+    businessId = business?.id ?? null;
     const embeddedSubs = (business?.subscriptions ?? []) as EmbeddedSubscriptionRow[];
     const subscription =
       embeddedSubs.length === 0
@@ -53,7 +55,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   return (
     <div className="flex h-screen bg-deep-ink">
-      <DashboardSidebar userEmail={user.email} />
+      <DashboardSidebar userEmail={user.email} businessId={businessId} />
       <main className="flex-1 overflow-y-auto p-6">
         {grace && (
           <div className="mb-6">

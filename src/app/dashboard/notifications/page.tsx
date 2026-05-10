@@ -4,8 +4,8 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getOrCreateNotificationPreferences } from "@/lib/db/notification-preferences";
 import { getNotifications } from "@/lib/db/notifications";
 import { Card } from "@/components/ui/Card";
-import { Badge } from "@/components/ui/Badge";
 import { NotificationPreferences } from "@/components/dashboard/NotificationPreferences";
+import { NotificationList } from "@/components/dashboard/NotificationList";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +24,7 @@ export default async function NotificationsPage() {
   const businessId = businesses?.[0]?.id ?? null;
 
   const prefs = businessId ? await getOrCreateNotificationPreferences(businessId) : null;
-  const recent = businessId ? await getNotifications(businessId, 25) : [];
+  const recent = businessId ? await getNotifications(businessId, { limit: 25 }) : [];
 
   return (
     <div className="space-y-8 max-w-3xl">
@@ -55,34 +55,10 @@ export default async function NotificationsPage() {
           </Card>
 
           <Card>
-            <h2 className="text-sm font-semibold text-parchment mb-4">Recent notifications</h2>
-            {recent.length === 0 ? (
-              <p className="text-sm text-parchment/40">No notifications yet.</p>
-            ) : (
-              <ul className="divide-y divide-parchment/10">
-                {recent.map((n) => (
-                  <li key={n.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
-                    <div>
-                      <p className="text-sm text-parchment capitalize">{n.delivery_channel}</p>
-                      <p className="text-xs text-parchment/40">
-                        {new Date(n.created_at).toLocaleString()}
-                      </p>
-                    </div>
-                    <Badge
-                      variant={
-                        n.status === "sent"
-                          ? "success"
-                          : n.status === "failed"
-                            ? "error"
-                            : "pending"
-                      }
-                    >
-                      {n.status}
-                    </Badge>
-                  </li>
-                ))}
-              </ul>
-            )}
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold text-parchment">Recent notifications</h2>
+            </div>
+            <NotificationList businessId={businessId} initial={recent} />
           </Card>
         </>
       )}

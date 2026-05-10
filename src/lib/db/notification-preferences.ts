@@ -10,6 +10,13 @@ export type NotificationPreferencesRow = {
   dashboard_alerts: boolean;
   phone_number: string | null;
   alert_email: string | null;
+  /**
+   * Set when the owner clicks "Unsubscribe from all" or hits a one-click
+   * email-link unsubscribe. Cleared automatically when any toggle is flipped
+   * back on (re-subscribing). The four boolean toggles remain the gate the
+   * dispatcher checks — this column is for audit + UI banner copy only.
+   */
+  unsubscribed_at: string | null;
   updated_at: string;
 };
 
@@ -22,6 +29,7 @@ export type NotificationPreferencesUpdate = Partial<
     | "dashboard_alerts"
     | "phone_number"
     | "alert_email"
+    | "unsubscribed_at"
   >
 >;
 
@@ -31,7 +39,8 @@ const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> =
   email_urgent: true,
   dashboard_alerts: true,
   phone_number: null,
-  alert_email: null
+  alert_email: null,
+  unsubscribed_at: null
 };
 
 export function isUniqueViolation(error: { code?: string; message?: string } | null): boolean {
@@ -102,7 +111,8 @@ export async function updateNotificationPreferences(
     "email_urgent",
     "dashboard_alerts",
     "phone_number",
-    "alert_email"
+    "alert_email",
+    "unsubscribed_at"
   ];
   const update: Record<string, unknown> = { updated_at: now };
   for (const key of keys) {
@@ -110,6 +120,20 @@ export async function updateNotificationPreferences(
     if (v !== undefined) {
       update[key] = v;
     }
+  }
+
+  // Re-subscribe ergonomics: if the caller flipped any channel back on, also
+  // clear unsubscribed_at unless they explicitly set it. Without this, an
+  // owner who hit "Unsubscribe from all" then re-enabled email_urgent would
+  // keep seeing the "you're unsubscribed" banner until a separate save.
+  const reSubscribed =
+    update.unsubscribed_at === undefined &&
+    (patch.sms_urgent === true ||
+      patch.email_digest === true ||
+      patch.email_urgent === true ||
+      patch.dashboard_alerts === true);
+  if (reSubscribed) {
+    update.unsubscribed_at = null;
   }
 
   const { data, error } = await db
