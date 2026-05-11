@@ -25,6 +25,28 @@ export const WEBSITE_INGEST_MAX_BYTES_PER_PAGE = 1_000_000;
 export const WEBSITE_INGEST_MAX_COMBINED_CHARS = 40_000;
 export const WEBSITE_INGEST_MAX_SUMMARY_CHARS = 8_000;
 
+/** Used by `/api/onboard/website-ingest` when Gemini 1.5-era IDs no longer resolve on Google's OpenAI-compatible route. */
+const WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT = "gemini-3.1-flash";
+
+/**
+ * Website summarization runs on the Next/Vercel host. Prefer a dedicated summary
+ * model so `GEMINI_ROWBOAT_MODEL` (wired for the VPS Rowboat router) cannot
+ * override with a stale value and break ingest.
+ *
+ * Gemini 1.5 model names return HTTP 404 from `v1beta/openai/chat/completions`;
+ * coerce those to {@link WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT}.
+ */
+function resolveWebsiteSummaryGeminiModel(): string {
+  const fromEnv =
+    (process.env.GEMINI_SUMMARY_MODEL ?? "").trim() ||
+    (process.env.GEMINI_ROWBOAT_MODEL ?? "").trim() ||
+    WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT;
+  if (/^gemini-1\.5/i.test(fromEnv)) {
+    return WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT;
+  }
+  return fromEnv;
+}
+
 export type WebsiteIngestError =
   | "invalid_url"
   | "private_address"
@@ -511,7 +533,7 @@ function buildSummarizationPrompt(args: {
 async function defaultGeminiSummarize(prompt: string): Promise<string> {
   const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
   if (!apiKey) throw new Error("summarizer_unavailable");
-  const model = process.env.GEMINI_ROWBOAT_MODEL ?? process.env.GEMINI_SUMMARY_MODEL ?? "gemini-3.1-flash";
+  const model = resolveWebsiteSummaryGeminiModel();
 
   const controller = new AbortController();
   /* c8 ignore next -- the 20s timer only fires when Gemini actually hangs;

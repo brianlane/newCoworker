@@ -23,9 +23,11 @@
  *     5. Poll `http://127.0.0.1:8090/` until 200 (or 40s timeout)
  *
  *   `.env`, vault markdown, Rowboat Mongo, llm-router, and Cloudflare
- *   tunnel state are all left exactly as they were. Use
- *   `syncVaultToVps` (src/lib/vps/sync-vault.ts) for vault edits and
- *   the orchestrator for full re-bootstraps.
+ *   tunnel state are all left exactly as they were. For a **full**
+ *   `deploy-client.sh` run (Mongo workflow re-seed, chat-worker, vault,
+ *   etc.), use `scripts/redeploy-deploy-client.ts`. For vault-only edits
+ *   use `syncVaultToVps` (src/lib/vps/sync-vault.ts); for buying a fresh
+ *   VM use the orchestrator.
  *
  * Usage:
  *   npx tsx scripts/redeploy-voice-bridge.ts                       # all tenant VPSes, ref=main
