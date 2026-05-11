@@ -15,7 +15,6 @@ vi.mock("@/lib/onboarding/token", () => ({
   createPendingOwnerEmail: vi.fn()
 }));
 vi.mock("@/lib/website-ingest", () => ({
-  WEBSITE_INGEST_MAX_SUMMARY_CHARS: 8_000,
   normalizeWebsiteUrl: (raw: string) => {
     const trimmed = raw.trim();
     if (!trimmed) return null;
