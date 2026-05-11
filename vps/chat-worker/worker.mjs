@@ -163,9 +163,13 @@ async function claimNextJob() {
   return data && data.length > 0 ? data[0] : null;
 }
 
-async function callRowboat(messages, conversationId, state) {
+// Optional opts.startAgent: dashboard jobs pass OwnerCoworker on fresh
+// threads and stateless retries (owner memory tool). SMS uses default
+// workflow startAgent Coworker only.
+async function callRowboat(messages, conversationId, state, opts = {}) {
   const url = `${ROWBOAT_BASE_URL}/api/v1/${ROWBOAT_PROJECT_ID}/chat`;
   const body = { messages, stream: false };
+  if (opts.startAgent) body.startAgent = opts.startAgent;
   if (conversationId) body.conversationId = conversationId;
   // `state` is Rowboat's client-carried per-conversation tool/agent
   // state from the previous turn. Forwarding it lets Rowboat resume
@@ -357,10 +361,16 @@ async function processJob(job) {
     let usedStateless = false;
     let primaryError = null;
     try {
+      const convTrim =
+        typeof job.rowboat_conversation_id === "string"
+          ? job.rowboat_conversation_id.trim()
+          : "";
+      const useOwnerStartAgent = !convTrim;
       result = await callRowboat(
         primaryMessages,
         job.rowboat_conversation_id,
-        job.rowboat_state ?? null
+        job.rowboat_state ?? null,
+        useOwnerStartAgent ? { startAgent: "OwnerCoworker" } : {}
       );
     } catch (err) {
       primaryError = err;
@@ -381,7 +391,9 @@ async function processJob(job) {
       // tail spelled out in the system message we built upstream.
       // Sending the old state alongside would defeat the point of
       // the retry (it's the same broken context).
-      result = await callRowboat(fallbackMessages, null, null);
+      result = await callRowboat(fallbackMessages, null, null, {
+        startAgent: "OwnerCoworker"
+      });
       usedStateless = true;
     }
     const { content, conversationId, state: nextState } = result;
