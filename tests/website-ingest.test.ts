@@ -19,6 +19,7 @@ import {
   normalizeWebsiteUrl,
   parseRobotsDisallows
 } from "@/lib/website-ingest";
+import { logger } from "@/lib/logger";
 
 describe("normalizeWebsiteUrl", () => {
   it("prepends https when scheme is missing", () => {
@@ -1315,6 +1316,32 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
     expect(seen[0]).toMatchObject({ model: "gemini-3.1-flash" });
   });
 
+  it("falls back to default when env is only a bare models/ prefix after strip", async () => {
+    process.env.GOOGLE_API_KEY = "test-key";
+    process.env.GEMINI_ROWBOAT_MODEL = "models/";
+    delete process.env.GEMINI_SUMMARY_MODEL;
+    const seen: unknown[] = [];
+    const globalFetch = vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (new URL(url).hostname === "generativelanguage.googleapis.com") {
+        seen.push(JSON.parse(String(init?.body ?? "{}")));
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: "## Summary\nok" } }] }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", globalFetch);
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl: pageFetchImpl(),
+      lookup: publicLookup as never
+    });
+    expect(res.ok).toBe(true);
+    expect(seen[0]).toMatchObject({ model: "gemini-3.1-flash" });
+  });
+
   it("prefers GEMINI_SUMMARY_MODEL over GEMINI_ROWBOAT_MODEL when both are set", async () => {
     process.env.GOOGLE_API_KEY = "test-key";
     process.env.GEMINI_SUMMARY_MODEL = "gemini-2.0-flash";
@@ -1339,6 +1366,38 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
     });
     expect(res.ok).toBe(true);
     expect(seen[0]).toMatchObject({ model: "gemini-2.0-flash" });
+  });
+
+  it("emits an audit log when coercing a legacy Gemini model env id", async () => {
+    process.env.GOOGLE_API_KEY = "test-key";
+    process.env.GEMINI_ROWBOAT_MODEL = "gemini-pro";
+    delete process.env.GEMINI_SUMMARY_MODEL;
+    const spy = vi.spyOn(logger, "info").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: Request | string | URL) => {
+        const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (new URL(urlStr).hostname === "generativelanguage.googleapis.com") {
+          return new Response(JSON.stringify({ choices: [{ message: { content: "## Summary\nlogged" } }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          });
+        }
+        throw new Error(`unexpected fetch: ${urlStr}`);
+      })
+    );
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl: pageFetchImpl(),
+      lookup: publicLookup as never
+    });
+
+    expect(res.ok).toBe(true);
+    expect(spy).toHaveBeenCalledWith(
+      "website-ingest: coercing legacy Gemini model id for summarizer",
+      expect.objectContaining({ from: "gemini-pro", to: "gemini-3.1-flash" })
+    );
+    spy.mockRestore();
   });
 
   it("surfaces gemini_http_<code> on a non-2xx Gemini response", async () => {

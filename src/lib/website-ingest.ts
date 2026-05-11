@@ -39,7 +39,7 @@ const WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT = "gemini-3.1-flash";
  */
 function stripGeminiModelsPrefix(raw: string): string {
   const trimmed = raw.trim();
-  if (trimmed.toLowerCase().startsWith("models/")) return trimmed.slice("models/".length);
+  if (trimmed.toLowerCase().startsWith("models/")) return trimmed.slice("models/".length).trim();
   return trimmed;
 }
 
@@ -57,14 +57,15 @@ function resolveWebsiteSummaryGeminiModel(): string {
     (process.env.GEMINI_SUMMARY_MODEL ?? "").trim() ||
     (process.env.GEMINI_ROWBOAT_MODEL ?? "").trim();
   let resolved = stripGeminiModelsPrefix(rawFromEnv || WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT);
+  if (!resolved) {
+    resolved = WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT;
+  }
 
   if (isLegacyWebsiteSummaryGeminiId(resolved)) {
-    if (resolved !== WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT && rawFromEnv) {
-      logger.info("website-ingest: coercing legacy Gemini model id for summarizer", {
-        from: stripGeminiModelsPrefix(rawFromEnv),
-        to: WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT
-      });
-    }
+    logger.info("website-ingest: coercing legacy Gemini model id for summarizer", {
+      from: stripGeminiModelsPrefix(rawFromEnv),
+      to: WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT
+    });
     resolved = WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT;
   }
 
