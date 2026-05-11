@@ -33,18 +33,43 @@ const WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT = "gemini-3.1-flash";
  * model so `GEMINI_ROWBOAT_MODEL` (wired for the VPS Rowboat router) cannot
  * override with a stale value and break ingest.
  *
- * Gemini 1.5 model names return HTTP 404 from `v1beta/openai/chat/completions`;
- * coerce those to {@link WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT}.
+ * Strips optional `models/` prefix from env values (common when copying from
+ * Google Cloud / AI Studio resource names). Retired Gemini ids (1.5 / 1.0
+ * family, bare `gemini-pro`) coerce to {@link WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT}.
  */
+function stripGeminiModelsPrefix(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.toLowerCase().startsWith("models/")) return trimmed.slice("models/".length).trim();
+  return trimmed;
+}
+
+/** Gemini ids that reliably 404 on the OpenAI-compat `chat/completions` route. */
+function isLegacyWebsiteSummaryGeminiId(id: string): boolean {
+  return (
+    /^gemini-1\.5/i.test(id) ||
+    /^gemini-1\.0/i.test(id) ||
+    /^gemini-pro$/i.test(id)
+  );
+}
+
 function resolveWebsiteSummaryGeminiModel(): string {
-  const fromEnv =
+  const rawFromEnv =
     (process.env.GEMINI_SUMMARY_MODEL ?? "").trim() ||
-    (process.env.GEMINI_ROWBOAT_MODEL ?? "").trim() ||
-    WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT;
-  if (/^gemini-1\.5/i.test(fromEnv)) {
-    return WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT;
+    (process.env.GEMINI_ROWBOAT_MODEL ?? "").trim();
+  let resolved = stripGeminiModelsPrefix(rawFromEnv || WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT);
+  if (!resolved) {
+    resolved = WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT;
   }
-  return fromEnv;
+
+  if (isLegacyWebsiteSummaryGeminiId(resolved)) {
+    logger.info("website-ingest: coercing legacy Gemini model id for summarizer", {
+      from: stripGeminiModelsPrefix(rawFromEnv),
+      to: WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT
+    });
+    resolved = WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT;
+  }
+
+  return resolved;
 }
 
 export type WebsiteIngestError =
