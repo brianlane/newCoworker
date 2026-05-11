@@ -58,6 +58,10 @@ export function SoulEditor({ businessId, initialSoul, initialIdentity }: SoulEdi
       }
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
+    } catch (err) {
+      setSaveError(
+        err instanceof Error ? err.message : "Could not save. Check your connection and try again.",
+      );
     } finally {
       setSaving(false);
     }
