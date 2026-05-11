@@ -17,6 +17,23 @@
       "tools": [
         "customer_lookup_by_phone",
         "customer_set_display_name",
+        "customer_append_pinned_note"
+      ]
+    },
+    {
+      "id": "owner_coworker",
+      "type": "conversational",
+      "description": "Owner dashboard chat: same as dispatcher plus owner_append_business_memory (startAgent override from app).",
+      "model": "{{OLLAMA_MODEL}}",
+      "knowledge_vault": {
+        "soul_md": "/opt/rowboat/vault/soul.md",
+        "identity_md": "/opt/rowboat/vault/identity.md",
+        "memory_md": "/opt/rowboat/vault/memory.md",
+        "website_md": "/opt/rowboat/vault/website.md"
+      },
+      "tools": [
+        "customer_lookup_by_phone",
+        "customer_set_display_name",
         "customer_append_pinned_note",
         "owner_append_business_memory"
       ]

@@ -3,10 +3,12 @@
  * Dashboard chat** into `business_configs.memory_md` (Rowboat vault
  * `memory.md`), then fire-and-forget VPS vault sync.
  *
- * Security: **refuse when `callerE164` is present** on the tool envelope.
- * SMS/voice Rowboat calls pass the customer or caller E.164; dashboard chat
- * does not, so customer channels cannot hit this path under normal Rowboat
- * wiring.
+ * Security (primary): this tool is registered **only** on the Rowboat agent
+ * `OwnerCoworker`. SMS uses `Coworker`, which does not list this tool, so
+ * customers cannot invoke it even if the model hallucinated a call.
+ *
+ * Defense in depth: **refuse when `callerE164` is present** on the tool
+ * envelope (voice/SMS-style tool calls that attribute a customer line).
  */
 
 import { z } from "zod";
@@ -33,7 +35,7 @@ const argsSchema = z.object({
 function normalizeBulletLines(raw: string): string[] {
   const lines = raw
     .split(/\r?\n/)
-    .map((l) => l.replace(/^[-*]\s+/, "").trim())
+    .map((l) => l.trim().replace(/^[-*]\s+/, ""))
     .filter(Boolean);
   return lines.slice(0, 25);
 }

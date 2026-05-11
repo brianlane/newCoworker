@@ -96,8 +96,24 @@ describe("POST /api/voice/tools/owner-append-business-memory", () => {
     const written = vi.mocked(patchBusinessConfig).mock.calls[0][1].memory_md as string;
     expect(written).toMatch(/### Owner chat \(\d{4}-\d{2}-\d{2}\)/);
     expect(written).toContain("- Never discuss budget.");
-    expect(written).toContain("- Always mention brokerage name.");
+    expect(written).not.toContain("- - ");
     expect(syncVaultToVpsAndLog).toHaveBeenCalledWith(BIZ);
+  });
+
+  it("strips indented markdown bullets without double-prefixing", async () => {
+    vi.mocked(getBusinessConfig).mockResolvedValue(null);
+
+    const res = await POST(
+      makeReq({
+        businessId: BIZ,
+        args: { bullets: "  - First rule.\n  * Second rule." }
+      })
+    );
+    expect(res.status).toBe(200);
+    const written = vi.mocked(patchBusinessConfig).mock.calls[0][1].memory_md as string;
+    expect(written).toContain("- First rule.");
+    expect(written).toContain("- Second rule.");
+    expect(written).not.toMatch(/- - /);
   });
 
   it("400 when bullets empty after trim", async () => {

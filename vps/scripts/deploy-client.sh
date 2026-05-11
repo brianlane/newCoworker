@@ -440,30 +440,51 @@ WORKFLOW_JSON=$(jq -nc \
   --arg model "${OLLAMA_MODEL}" \
   --arg now "${SEED_NOW}" '
 {
-  agents: [{
-    name: "Coworker",
-    type: "conversation",
-    description: "Per-tenant AI coworker",
-    disabled: false,
-    instructions: $instructions,
-    outputVisibility: "user_facing",
-    controlType: "retain",
-    model: $model,
-    ragK: 3,
-    ragReturnType: "chunks",
-    # Phase 5 cross-channel customer-memory tools. Declared at the agent
-    # level so the SMS dispatcher (Ollama-backed) can invoke them in the
-    # same way the voice path already does via Gemini Live (see
-    # vps/voice-bridge/src/gemini-telnyx-bridge.ts:buildVoiceToolDeclarations).
-    # The bridge advertises them to Gemini Live directly; this entry is
-    # the gating layer for the Rowboat-mediated SMS path.
-    tools: [
-      "customer_lookup_by_phone",
-      "customer_set_display_name",
-      "customer_append_pinned_note",
-      "owner_append_business_memory"
-    ]
-  }],
+  agents: [
+    {
+      name: "Coworker",
+      type: "conversation",
+      description: "Per-tenant AI coworker",
+      disabled: false,
+      instructions: $instructions,
+      outputVisibility: "user_facing",
+      controlType: "retain",
+      model: $model,
+      ragK: 3,
+      ragReturnType: "chunks",
+      # Phase 5 cross-channel customer-memory tools. Declared at the agent
+      # level so the SMS dispatcher (Ollama-backed) can invoke them in the
+      # same way the voice path already does via Gemini Live (see
+      # vps/voice-bridge/src/gemini-telnyx-bridge.ts:buildVoiceToolDeclarations).
+      # The bridge advertises them to Gemini Live directly; this entry is
+      # the gating layer for the Rowboat-mediated SMS path.
+      # owner_append_business_memory is NOT listed here — it is owner-dashboard
+      # only on OwnerCoworker (see second agent below).
+      tools: [
+        "customer_lookup_by_phone",
+        "customer_set_display_name",
+        "customer_append_pinned_note"
+      ]
+    },
+    {
+      name: "OwnerCoworker",
+      type: "conversation",
+      description: "Owner dashboard chat: same tool surface as Coworker plus owner_append_business_memory.",
+      disabled: false,
+      instructions: $instructions,
+      outputVisibility: "user_facing",
+      controlType: "retain",
+      model: $model,
+      ragK: 3,
+      ragReturnType: "chunks",
+      tools: [
+        "customer_lookup_by_phone",
+        "customer_set_display_name",
+        "customer_append_pinned_note",
+        "owner_append_business_memory"
+      ]
+    }
+  ],
   prompts: [{
     name: "baseline",
     type: "base_prompt",
