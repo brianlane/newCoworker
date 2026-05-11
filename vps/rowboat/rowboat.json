@@ -17,7 +17,8 @@
       "tools": [
         "customer_lookup_by_phone",
         "customer_set_display_name",
-        "customer_append_pinned_note"
+        "customer_append_pinned_note",
+        "owner_append_business_memory"
       ]
     },
     {

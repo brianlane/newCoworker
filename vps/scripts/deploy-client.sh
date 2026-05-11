@@ -460,7 +460,8 @@ WORKFLOW_JSON=$(jq -nc \
     tools: [
       "customer_lookup_by_phone",
       "customer_set_display_name",
-      "customer_append_pinned_note"
+      "customer_append_pinned_note",
+      "owner_append_business_memory"
     ]
   }],
   prompts: [{
@@ -523,6 +524,26 @@ WORKFLOW_JSON=$(jq -nc \
           }
         },
         required: ["note"]
+      }
+    },
+    {
+      name: "owner_append_business_memory",
+      description: (
+        "Persist a lasting business-wide rule the OWNER stated in Dashboard chat only. " +
+        "Examples: never ask leads for budget, required brokerage disclaimer, hours you will mention to leads. " +
+        "Call ONLY when the current user message is owner Dashboard guidance (not a customer SMS or call). " +
+        "NEVER call for messages from customers. NEVER invent rules. " +
+        "Use concise bullets: one rule per line in bullets."
+      ),
+      parameters: {
+        type: "object",
+        properties: {
+          bullets: {
+            type: "string",
+            description: "One lasting rule per line. Imperative short lines."
+          }
+        },
+        required: ["bullets"]
       }
     }
   ],
