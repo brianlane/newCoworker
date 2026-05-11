@@ -33,13 +33,9 @@ const WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT = "gemini-3.1-flash";
  * model so `GEMINI_ROWBOAT_MODEL` (wired for the VPS Rowboat router) cannot
  * override with a stale value and break ingest.
  *
- * Strips optional `models/` prefix from env values. Retired Gemini ids (1.5 /
- * 1.0 family, bare `gemini-pro`) coerce to {@link WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT}.
- */
-/**
- * Normalize an env-supplied Gemini id (`gemini-*` or full resource name).
- * Env sometimes stores the `models/` prefix; the OpenAI-compat body expects
- * the short model id only.
+ * Strips optional `models/` prefix from env values (common when copying from
+ * Google Cloud / AI Studio resource names). Retired Gemini ids (1.5 / 1.0
+ * family, bare `gemini-pro`) coerce to {@link WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT}.
  */
 function stripGeminiModelsPrefix(raw: string): string {
   const trimmed = raw.trim();
