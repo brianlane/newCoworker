@@ -1,0 +1,4 @@
+# Prevent local secrets from being uploaded with `vercel deploy` (ignored files are still merged with `.gitignore`).
+.env
+.env.*
+!.env.example
