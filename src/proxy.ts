@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { rateLimit, RATE_LIMITS, type RateLimitConfig } from "@/lib/rate-limit";
+import { assertPublicSupabaseUrlIsNotAppOrigin } from "@/lib/supabase/validate-public-url";
 
 type AuthUser = {
   id: string;
@@ -68,7 +69,7 @@ export async function proxy(request: NextRequest) {
   ) {
     const origin = request.headers.get("origin");
     const referer = request.headers.get("referer");
-    const expectedOrigin = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+    const expectedOrigin = process.env.NEXT_PUBLIC_APP_URL?.trim() || "http://localhost:3000";
     const vercelUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null;
 
     let originValid = false;
@@ -133,11 +134,13 @@ export async function proxy(request: NextRequest) {
   response.headers.set("X-RateLimit-Remaining", String(rlResult.remaining));
   response.headers.set("X-RateLimit-Reset", String(rlResult.reset));
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim();
   let user: AuthUser | null = null;
 
   if (supabaseUrl && supabaseAnonKey) {
+    assertPublicSupabaseUrlIsNotAppOrigin(supabaseUrl, appUrl);
     const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
       cookies: {
         get(name) {
@@ -156,7 +159,11 @@ export async function proxy(request: NextRequest) {
       },
     });
 
-    const { data: { user: supabaseUser } } = await supabase.auth.getUser();
+    const { data, error: userError } = await supabase.auth.getUser();
+    if (userError) {
+      console.error("[proxy] supabase.auth.getUser failed:", userError.message);
+    }
+    const supabaseUser = data?.user ?? null;
     user = supabaseUser ? { id: supabaseUser.id, email: supabaseUser.email ?? null } : null;
   }
 
