@@ -603,6 +603,17 @@ async function defaultGeminiSummarize(prompt: string): Promise<string> {
   }
 }
 
+/**
+ * Connectivity check against the same Gemini OpenAI-compat route used by
+ * website ingest (`chat/completions`). Unit-tested with mocked `fetch`; optional
+ * live run: `GEMINI_CHAT_SMOKE=1 npm run test:gemini-live`.
+ */
+export async function smokeTestGeminiOpenAiSummarizer(): Promise<string> {
+  return defaultGeminiSummarize(
+    "You are a connectivity check only. Respond with exactly the single line: OK_GEMINI_SMOKE"
+  );
+}
+
 export async function ingestWebsite(
   rawUrl: string,
   options: WebsiteIngestOptions = {}

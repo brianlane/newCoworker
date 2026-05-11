@@ -10,7 +10,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],
-    exclude: ["tests/integration/**"],
+    exclude: ["tests/integration/**", "**/gemini-openai-compat-live.test.ts"],
     // v8 coverage instrumentation slows some orchestrator tests past the
     // default 5s; give every test a generous 15s budget.
     testTimeout: 15000,

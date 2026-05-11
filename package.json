@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "test:ui": "vitest --ui --coverage",
     "test:coverage:open": "vitest run --coverage && open coverage/index.html",
+    "test:gemini-live": "GEMINI_CHAT_SMOKE=1 vitest run tests/gemini-openai-compat-live.test.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:integration:correctness": "INTEGRATION_KEEP_VOLUMES=1 INTEGRATION_SKIP_KVM2=1 vitest run --config vitest.integration.correctness.config.ts",
     "test:integration:correctness:kvm2-llama32-compare": "INTEGRATION_KEEP_VOLUMES=1 INTEGRATION_SKIP_KVM8=1 INTEGRATION_CORRECTNESS_MODEL_SEQUENCE=llama3.2:3b,llama3.2:3b-instruct-q2_K vitest run --config vitest.integration.correctness.config.ts",
