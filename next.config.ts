@@ -1,15 +1,8 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { NextConfig } from "next";
-import { assertPublicSupabaseUrlIsNotAppOrigin } from "./src/lib/supabase/validate-public-url";
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
-
-const supabasePublicUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const appPublicUrl = process.env.NEXT_PUBLIC_APP_URL;
-if (supabasePublicUrl?.trim() && appPublicUrl?.trim()) {
-  assertPublicSupabaseUrlIsNotAppOrigin(supabasePublicUrl, appPublicUrl);
-}
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,

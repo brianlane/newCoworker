@@ -6,6 +6,12 @@ import { verifyOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding
 import { normalizeWebsiteUrl } from "@/lib/website-ingest";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 import { logger } from "@/lib/logger";
+import {
+  BUSINESS_CONFIG_IDENTITY_MD_MAX_CHARS,
+  BUSINESS_CONFIG_MEMORY_MD_MAX_CHARS,
+  BUSINESS_CONFIG_SOUL_MD_MAX_CHARS,
+  BUSINESS_CONFIG_WEBSITE_MD_MAX_CHARS
+} from "@/lib/vault/business-config-markdown-limits";
 import { z } from "zod";
 
 const schema = z.object({
@@ -13,9 +19,27 @@ const schema = z.object({
   ownerEmail: z.string().email().optional(),
   onboardingToken: z.string().min(1).optional(),
   signupUserId: z.string().uuid().optional(),
-  soulMd: z.string().min(1),
-  identityMd: z.string().min(1),
-  memoryMd: z.string().optional(),
+  soulMd: z
+    .string()
+    .min(1)
+    .max(
+      BUSINESS_CONFIG_SOUL_MD_MAX_CHARS,
+      `Soul must be at most ${BUSINESS_CONFIG_SOUL_MD_MAX_CHARS.toLocaleString()} characters`
+    ),
+  identityMd: z
+    .string()
+    .min(1)
+    .max(
+      BUSINESS_CONFIG_IDENTITY_MD_MAX_CHARS,
+      `Identity must be at most ${BUSINESS_CONFIG_IDENTITY_MD_MAX_CHARS.toLocaleString()} characters`
+    ),
+  memoryMd: z
+    .string()
+    .max(
+      BUSINESS_CONFIG_MEMORY_MD_MAX_CHARS,
+      `Memory must be at most ${BUSINESS_CONFIG_MEMORY_MD_MAX_CHARS.toLocaleString()} characters`
+    )
+    .optional(),
   /**
    * Optional manual override for the website.md vault file. The dashboard
    * lets owners edit or re-crawl it; onboarding leaves it undefined so the
@@ -23,7 +47,13 @@ const schema = z.object({
    * save. When present (including empty string), we persist exactly what
    * the client sent.
    */
-  websiteMd: z.string().optional(),
+  websiteMd: z
+    .string()
+    .max(
+      BUSINESS_CONFIG_WEBSITE_MD_MAX_CHARS,
+      `Website knowledge must be at most ${BUSINESS_CONFIG_WEBSITE_MD_MAX_CHARS.toLocaleString()} characters`
+    )
+    .optional(),
   /**
    * Optional updated website URL. The dashboard lets owners edit the URL
    * input and click Save without re-crawling; previously this change was

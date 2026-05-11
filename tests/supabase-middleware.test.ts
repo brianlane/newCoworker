@@ -18,12 +18,6 @@ import { createServerClient } from "@supabase/ssr";
 import { rateLimit } from "@/lib/rate-limit";
 import { proxy } from "../src/proxy";
 
-type DeprecatedCookieMethods = {
-  get?: (name: string) => string | null | undefined;
-  set?: (name: string, value: string, options: Record<string, unknown>) => void;
-  remove?: (name: string, options: Record<string, unknown>) => void;
-};
-
 function makeRequest(
   pathname: string,
   options?: { method?: string; headers?: Record<string, string>; cookies?: Record<string, string> },
@@ -44,14 +38,12 @@ function makeRequest(
 function mockSupabaseWithUser(user: Record<string, unknown> | null) {
   const client = {
     auth: {
-      getUser: vi.fn().mockResolvedValue({ data: { user }, error: null })
-    }
+      getUser: vi.fn().mockResolvedValue({ data: { user }, error: null }),
+    },
   };
   vi.mocked(createServerClient).mockImplementation((_url, _key, options) => {
-    const cookies = options?.cookies as DeprecatedCookieMethods | undefined;
-    if (cookies) {
-      cookies.get?.("test-cookie");
-    }
+    const cookieFns = options?.cookies as { getAll?: () => unknown } | undefined;
+    cookieFns?.getAll?.();
     return client as never;
   });
   return client;
@@ -92,6 +84,35 @@ describe("proxy", () => {
     const req = makeRequest("/api/checkout", {
       method: "POST",
       headers: { origin: "http://localhost:3000" },
+    });
+    const res = await proxy(req);
+    expect(res.status).not.toBe(403);
+  });
+
+  it("allows POST when Origin matches Host even if NEXT_PUBLIC_APP_URL differs (e.g. preview)", async () => {
+    process.env.NEXT_PUBLIC_APP_URL = "https://www.newcoworker.com";
+    delete process.env.VERCEL_URL;
+    mockSupabaseWithUser(null);
+    const req = makeRequest("/api/checkout", {
+      method: "POST",
+      headers: {
+        origin: "https://preview-branch-xyz.vercel.app",
+        host: "preview-branch-xyz.vercel.app",
+        "x-forwarded-proto": "https",
+      },
+    });
+    const res = await proxy(req);
+    expect(res.status).not.toBe(403);
+  });
+
+  it("allows POST from 127.0.0.1 when Host is localhost (loopback normalization)", async () => {
+    mockSupabaseWithUser(null);
+    const req = makeRequest("/api/checkout", {
+      method: "POST",
+      headers: {
+        origin: "http://127.0.0.1:3000",
+        host: "localhost:3000",
+      },
     });
     const res = await proxy(req);
     expect(res.status).not.toBe(403);
@@ -294,40 +315,34 @@ describe("proxy", () => {
     expect(res.status).toBe(200);
   });
 
-  it("invokes cookie set handler", async () => {
-    let setCalled = false;
+  it("invokes cookie getAll and setAll handlers", async () => {
+    let getAllCalled = false;
+    let setAllCalled = false;
     vi.mocked(createServerClient).mockImplementation((_url, _key, options) => {
-      const cookies = options?.cookies as DeprecatedCookieMethods | undefined;
-      if (cookies?.set) {
-        cookies.set("sb-token", "val", {});
-        setCalled = true;
-      }
+      const cookies = options?.cookies as {
+        getAll?: () => unknown;
+        setAll?: (rows: { name: string; value: string; options?: Record<string, unknown> }[]) => void;
+      };
+      cookies?.getAll?.();
+      getAllCalled = true;
+      cookies?.setAll?.([
+        { name: "sb-token", value: "x", options: { path: "/" } },
+        { name: "sb-token", value: "", options: { path: "/", maxAge: 0 } },
+      ]);
+      setAllCalled = true;
       return {
-        auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: "u-1", email: "user@test.com" } }, error: null }) }
+        auth: {
+          getUser: vi
+            .fn()
+            .mockResolvedValue({ data: { user: { id: "u-1", email: "user@test.com" } }, error: null }),
+        },
       } as never;
     });
 
     const req = makeRequest("/dashboard");
     await proxy(req);
-    expect(setCalled).toBe(true);
-  });
-
-  it("invokes cookie remove handler", async () => {
-    let removeCalled = false;
-    vi.mocked(createServerClient).mockImplementation((_url, _key, options) => {
-      const cookies = options?.cookies as DeprecatedCookieMethods | undefined;
-      if (cookies?.remove) {
-        cookies.remove("sb-token", {});
-        removeCalled = true;
-      }
-      return {
-        auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: "u-1", email: "user@test.com" } }, error: null }) }
-      } as never;
-    });
-
-    const req = makeRequest("/dashboard");
-    await proxy(req);
-    expect(removeCalled).toBe(true);
+    expect(getAllCalled).toBe(true);
+    expect(setAllCalled).toBe(true);
   });
 
   it("handles invalid URLs in origin matching gracefully", async () => {

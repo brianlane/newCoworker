@@ -11,18 +11,24 @@ export async function createSupabaseServerClient() {
 
   const cookieStore = await cookies();
 
+  // Use getAll/setAll (not deprecated get/set/remove). The legacy API only reads
+  // a fixed small number of chunked cookies; large sessions (big JWT / metadata)
+  // span more chunks and corrupt auth storage ("Cannot create property 'user' on string").
   return createServerClient(supabaseUrl, supabaseAnonKey, {
     cookies: {
-      get(name) {
-        return cookieStore.get(name)?.value;
+      getAll() {
+        return cookieStore.getAll();
       },
-      set(name, value, options) {
-        cookieStore.set({ name, value, ...options });
+      setAll(cookiesToSet) {
+        try {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            cookieStore.set(name, value, options);
+          });
+        } catch {
+          // Server Component — cookies are read-only; ignore writes.
+        }
       },
-      remove(name, options) {
-        cookieStore.set({ name, value: "", ...options });
-      }
-    }
+    },
   });
 }
 

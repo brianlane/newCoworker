@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { rateLimit, RATE_LIMITS, type RateLimitConfig } from "@/lib/rate-limit";
-import { assertPublicSupabaseUrlIsNotAppOrigin } from "@/lib/supabase/validate-public-url";
 
 type AuthUser = {
   id: string;
@@ -44,16 +43,43 @@ function getIdentifier(request: NextRequest, configKey: keyof typeof RATE_LIMITS
   return `${ip}:${configKey.toLowerCase()}`;
 }
 
+function normalizeHostname(hostname: string): string {
+  const h = hostname.replace(/^www\./, "").toLowerCase();
+  if (h === "127.0.0.1" || h === "::1") {
+    return "localhost";
+  }
+  return h;
+}
+
 function originsMatch(urlA: string, urlB: string): boolean {
   try {
     const a = new URL(urlA);
     const b = new URL(urlB);
-    const hostA = a.hostname.replace(/^www\./, "");
-    const hostB = b.hostname.replace(/^www\./, "");
+    const hostA = normalizeHostname(a.hostname);
+    const hostB = normalizeHostname(b.hostname);
     return a.protocol === b.protocol && hostA === hostB && a.port === b.port;
   } catch {
     return false;
   }
+}
+
+/** Derive the canonical origin for this incoming request (preview/prod/local). */
+function requestOwnOrigin(request: NextRequest): string | null {
+  const host = request.headers.get("host") ?? request.nextUrl.host;
+  if (!host) return null;
+  const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  const scheme =
+    forwardedProto === "http" || forwardedProto === "https"
+      ? forwardedProto
+      : request.nextUrl.protocol.replace(":", "");
+  return `${scheme}://${host}`;
+}
+
+/** True when Origin/Referer matches this deployment's own URL (fixes Preview vs NEXT_PUBLIC_APP_URL mismatch). */
+function sourceMatchesRequestOrigin(request: NextRequest, source: string): boolean {
+  const own = requestOwnOrigin(request);
+  if (!own) return false;
+  return originsMatch(source, own);
 }
 
 export async function proxy(request: NextRequest) {
@@ -75,7 +101,10 @@ export async function proxy(request: NextRequest) {
     let originValid = false;
     const checkSource = origin || referer;
     if (checkSource) {
-      originValid = originsMatch(checkSource, expectedOrigin);
+      originValid = sourceMatchesRequestOrigin(request, checkSource);
+      if (!originValid) {
+        originValid = originsMatch(checkSource, expectedOrigin);
+      }
       if (!originValid && vercelUrl) {
         originValid = originsMatch(checkSource, vercelUrl);
       }
@@ -136,25 +165,22 @@ export async function proxy(request: NextRequest) {
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim();
   let user: AuthUser | null = null;
 
   if (supabaseUrl && supabaseAnonKey) {
-    assertPublicSupabaseUrlIsNotAppOrigin(supabaseUrl, appUrl);
     const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
       cookies: {
-        get(name) {
-          return request.cookies.get(name)?.value;
+        getAll() {
+          return request.cookies.getAll().map(({ name, value }) => ({ name, value }));
         },
-        set(name, value, options) {
-          request.cookies.set({ name, value, ...options });
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            request.cookies.set({ name, value, ...(options ?? {}) });
+          });
           response = NextResponse.next({ request });
-          response.cookies.set({ name, value, ...options });
-        },
-        remove(name, options) {
-          request.cookies.set({ name, value: "", ...options });
-          response = NextResponse.next({ request });
-          response.cookies.set({ name, value: "", ...options });
+          cookiesToSet.forEach(({ name, value, options }) => {
+            response.cookies.set({ name, value, ...(options ?? {}) });
+          });
         },
       },
     });

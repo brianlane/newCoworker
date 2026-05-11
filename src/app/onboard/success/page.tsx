@@ -7,7 +7,11 @@ import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { ONBOARD_STORAGE_KEY, type OnboardingData } from "@/lib/onboarding/storage";
-import { clearStaleSupabaseAuthCookies, getSupabaseBrowserClient } from "@/lib/supabase/browser";
+import {
+  clearStaleSupabaseAuthCookies,
+  getSupabaseBrowserClient,
+  resetSupabaseBrowserClientCache
+} from "@/lib/supabase/browser";
 import { getPasswordValidationError, PASSWORD_RULES } from "@/lib/password";
 import { CoworkerProvisioningProgress } from "@/components/dashboard/CoworkerProvisioningProgress";
 
@@ -237,30 +241,23 @@ function OnboardSuccessContent() {
         (typeof setPasswordJson?.data?.ownerEmail === "string" && setPasswordJson.data.ownerEmail) ||
         signupEmail;
 
-      // Sign the user in directly with the password they just set. The
-      // server already confirmed the email, so this is a normal login —
-      // no callback hop, no 494 risk. On success, Supabase's browser
-      // client writes the session cookies (chunked sb-*-auth-token) and
-      // subsequent /api/business/status polling will see an authenticated
-      // request.
       const supabase = getSupabaseBrowserClient();
-      const { error: signInErr } = await supabase.auth.signInWithPassword({
+      const { error: signInError } = await supabase.auth.signInWithPassword({
         email: resolvedEmail,
         password
       });
 
-      if (signInErr) {
+      if (signInError) {
         // The set-password call above already passed, so the auth user
         // exists with this password — but the immediate sign-in didn't
-        // establish a session. Most likely cause is a transient cookie/
-        // network glitch on the same browser. Steer the user to /login
-        // (via the `awaiting_confirmation` UI variant) where they can
-        // retry the sign-in with a clean cookie jar; their account is
-        // already provisioned and waiting.
+        // establish a session. Steer the user to /login (via
+        // `awaiting_confirmation`) to retry with a clean cookie jar.
         window.history.replaceState({}, "", "/onboard/success");
         setStatus("awaiting_confirmation");
         return;
       }
+
+      resetSupabaseBrowserClientCache();
 
       // Re-persist the onboarding draft so a refresh after sign-in
       // still has the locally-cached business context. We deliberately
