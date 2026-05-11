@@ -21,7 +21,7 @@
       ]
     },
     {
-      "id": "owner_coworker",
+      "id": "OwnerCoworker",
       "type": "conversational",
       "description": "Owner dashboard chat: same as dispatcher plus owner_append_business_memory (startAgent override from app).",
       "model": "{{OLLAMA_MODEL}}",
