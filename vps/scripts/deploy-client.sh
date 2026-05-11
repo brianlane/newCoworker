@@ -785,12 +785,26 @@ if [[ -f "${VOICE_BRIDGE_DEST}/docker-compose.yml" ]]; then
     fi
     effective_voice_transcription_enabled="${VOICE_TRANSCRIPTION_ENABLED:-${prev_voice_transcription_enabled:-false}}"
 
+    prev_bridge_media_wss_origin=""
+    if [[ -f "${VOICE_BRIDGE_DEST}/.env" ]]; then
+      prev_bridge_media_wss_origin=$(
+        grep -E '^BRIDGE_MEDIA_WSS_ORIGIN=' "${VOICE_BRIDGE_DEST}/.env" 2>/dev/null \
+          | tail -n 1 \
+          | cut -d= -f2- \
+          | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//"
+      ) || true
+    fi
+    # Precedence: deploy env (orchestrator / redeploy-deploy-client.ts), then
+    # value already on disk — avoids blanking wss:// on fleet redeploy when the
+    # operator shell has no per-tenant origin.
+    effective_bridge_media_wss_origin="${BRIDGE_MEDIA_WSS_ORIGIN:-${prev_bridge_media_wss_origin:-}}"
+
     cat > .env <<VBENV_EOF
 STREAM_URL_SIGNING_SECRET=${STREAM_URL_SIGNING_SECRET:-}
 SUPABASE_URL=${SUPABASE_URL:-}
 SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_KEY:-}
 BUSINESS_ID=${BUSINESS_ID:-}
-BRIDGE_MEDIA_WSS_ORIGIN=${BRIDGE_MEDIA_WSS_ORIGIN:-}
+BRIDGE_MEDIA_WSS_ORIGIN=${effective_bridge_media_wss_origin:-}
 GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
 GEMINI_LIVE_MODEL=${GEMINI_LIVE_MODEL:-gemini-3.1-flash-live-preview}
 GEMINI_LIVE_ENABLED=${effective_gemini_live_enabled}
