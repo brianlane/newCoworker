@@ -136,7 +136,7 @@ export function SafeModeToggle({
             <p className="text-xs text-parchment/50 max-w-xl">
               {compact
                 ? "Forward customer SMS and calls to the owner's cell instead of letting the AI reply."
-                : "Going on vacation or need a break? Safe mode forwards customer SMS and voice calls to your phone so you can handle them personally. Your dashboard chat stays on."}
+                : "Safe mode forwards customer SMS and voice calls to your phone so you can handle them personally. Your dashboard chat stays on."}
             </p>
           </div>
           {safeMode && <Badge variant="pending">On</Badge>}
