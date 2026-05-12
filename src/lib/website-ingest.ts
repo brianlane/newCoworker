@@ -16,6 +16,7 @@
  */
 
 import { promises as dns } from "node:dns";
+import { geminiGenerateText } from "@/lib/gemini-generate-content";
 import { logger } from "@/lib/logger";
 import { isPrivateIpv4, isPrivateIpv6 } from "@/lib/net/ip-classification";
 
@@ -25,8 +26,8 @@ export const WEBSITE_INGEST_MAX_BYTES_PER_PAGE = 1_000_000;
 export const WEBSITE_INGEST_MAX_COMBINED_CHARS = 40_000;
 export const WEBSITE_INGEST_MAX_SUMMARY_CHARS = 8_000;
 
-/** Used by `/api/onboard/website-ingest` when Gemini 1.5-era IDs no longer resolve on Google's OpenAI-compatible route. */
-const WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT = "gemini-3.1-flash";
+/** Used when env omits `GEMINI_SUMMARY_MODEL`, or carries a Gemini id unsupported on `:generateContent`. */
+const WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT = "gemini-3-flash-preview";
 
 /**
  * Website summarization runs on the Next/Vercel host. Prefer a dedicated summary
@@ -35,7 +36,8 @@ const WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT = "gemini-3.1-flash";
  *
  * Strips optional `models/` prefix from env values (common when copying from
  * Google Cloud / AI Studio resource names). Retired Gemini ids (1.5 / 1.0
- * family, bare `gemini-pro`) coerce to {@link WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT}.
+ * family, bare `gemini-pro`, gemini-3.1-era ids) coerce to
+ * {@link WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT}.
  */
 function stripGeminiModelsPrefix(raw: string): string {
   const trimmed = raw.trim();
@@ -43,12 +45,13 @@ function stripGeminiModelsPrefix(raw: string): string {
   return trimmed;
 }
 
-/** Gemini ids that reliably 404 on the OpenAI-compat `chat/completions` route. */
-function isLegacyWebsiteSummaryGeminiId(id: string): boolean {
+/** Gemini ids that reliably 404 or have been superseded on the `:generateContent` route. */
+function isStaleWebsiteSummaryGeminiId(id: string): boolean {
   return (
     /^gemini-1\.5/i.test(id) ||
     /^gemini-1\.0/i.test(id) ||
-    /^gemini-pro$/i.test(id)
+    /^gemini-pro$/i.test(id) ||
+    /^gemini-3\.1/i.test(id)
   );
 }
 
@@ -61,7 +64,7 @@ function resolveWebsiteSummaryGeminiModel(): string {
     resolved = WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT;
   }
 
-  if (isLegacyWebsiteSummaryGeminiId(resolved)) {
+  if (isStaleWebsiteSummaryGeminiId(resolved)) {
     logger.info("website-ingest: coercing legacy Gemini model id for summarizer", {
       from: stripGeminiModelsPrefix(rawFromEnv),
       to: WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT
@@ -555,58 +558,61 @@ function buildSummarizationPrompt(args: {
   return header.join("\n");
 }
 
+const WEBSITE_INGEST_SUMMARY_SYSTEM_PROMPT =
+  "You compress small-business websites into concise, accurate markdown briefings.";
+
+function remapGeminiEmptyToSummarizerEmpty(err: unknown): never {
+  if (err instanceof Error && err.message === "gemini_empty") {
+    throw new Error("summarizer_empty");
+  }
+  throw err;
+}
+
 async function defaultGeminiSummarize(prompt: string): Promise<string> {
   const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
   if (!apiKey) throw new Error("summarizer_unavailable");
-  const model = resolveWebsiteSummaryGeminiModel();
+  const resolvedModel = resolveWebsiteSummaryGeminiModel();
 
   const controller = new AbortController();
   /* c8 ignore next -- the 20s timer only fires when Gemini actually hangs;
      AbortError classification is covered by classifyGeminiError tests. */
   const timer = setTimeout(() => controller.abort(), 20_000);
   try {
-    const response = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${apiKey}`
-        },
-        signal: controller.signal,
-        body: JSON.stringify({
-          model,
-          temperature: 0.2,
-          max_tokens: 1500,
-          messages: [
-            {
-              role: "system",
-              content: "You compress small-business websites into concise, accurate markdown briefings."
-            },
-            { role: "user", content: prompt }
-          ]
-        })
+    const generate = async (model: string) =>
+      geminiGenerateText({
+        apiKey,
+        model,
+        systemInstruction: WEBSITE_INGEST_SUMMARY_SYSTEM_PROMPT,
+        userText: prompt,
+        temperature: 0.2,
+        maxOutputTokens: 1500,
+        signal: controller.signal
+      });
+
+    try {
+      return await generate(resolvedModel);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "";
+      if (
+        /^gemini_http_404(?::|$)/.test(detail) &&
+        resolvedModel.trim() !== WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT
+      ) {
+        try {
+          return await generate(WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT);
+        } catch (errFallback) {
+          remapGeminiEmptyToSummarizerEmpty(errFallback);
+        }
       }
-    );
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new Error(`gemini_http_${response.status}:${text.slice(0, 200)}`);
+      remapGeminiEmptyToSummarizerEmpty(err);
     }
-    const json = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const content = json.choices?.[0]?.message?.content?.trim();
-    if (!content) throw new Error("summarizer_empty");
-    return content;
   } finally {
     clearTimeout(timer);
   }
 }
 
 /**
- * Connectivity check against the same Gemini OpenAI-compat route used by
- * website ingest (`chat/completions`). Unit-tested with mocked `fetch`; optional
- * live run: `GEMINI_CHAT_SMOKE=1 npm run test:gemini-live`.
+ * Connectivity check against the same `:generateContent` route used by website
+ * ingest. Unit-tested with mocked `fetch`; optional live run: `npm run test:gemini-live`.
  */
 export async function smokeTestGeminiOpenAiSummarizer(): Promise<string> {
   return defaultGeminiSummarize(

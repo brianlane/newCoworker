@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { smokeTestGeminiOpenAiSummarizer } from "@/lib/website-ingest";
 
-describe("smokeTestGeminiOpenAiSummarizer (offline)", () => {
+describe("smokeTestGeminiOpenAiSummarizer (offline, generateContent)", () => {
   const OLD_ENV = process.env;
 
   beforeEach(() => {
@@ -17,9 +17,9 @@ describe("smokeTestGeminiOpenAiSummarizer (offline)", () => {
     vi.restoreAllMocks();
   });
 
-  it("POSTs to Gemini OpenAI-compatible chat completions endpoint", async () => {
+  it("POSTs to Gemini generateContent for the ingest summarizer ping", async () => {
     const fetchMock = vi.fn(async (): Promise<Response> => {
-      return new Response(JSON.stringify({ choices: [{ message: { content: " OK_GEMINI_SMOKE " } }] }), {
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: " OK_GEMINI_SMOKE " }] } }] }), {
         status: 200,
         headers: { "content-type": "application/json" }
       });
@@ -31,10 +31,10 @@ describe("smokeTestGeminiOpenAiSummarizer (offline)", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url] = fetchMock.mock.calls[0]!;
-    expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions");
+    expect(String(url)).toMatch(/generateContent$/);
     const [, init] = fetchMock.mock.calls[0]!;
     const parsed = JSON.parse(String((init as RequestInit)?.body ?? "{}"));
-    expect(parsed.messages).toHaveLength(2);
-    expect(parsed.messages?.[1]?.role).toBe("user");
+    expect(parsed.contents).toHaveLength(1);
+    expect(parsed.contents?.[0]?.role).toBe("user");
   });
 });

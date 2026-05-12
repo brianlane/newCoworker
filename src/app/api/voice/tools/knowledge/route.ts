@@ -7,6 +7,7 @@ import {
 } from "@/lib/voice-tools/common";
 import { getBusinessConfig } from "@/lib/db/configs";
 import { getBusiness } from "@/lib/db/businesses";
+import { geminiGenerateText } from "@/lib/gemini-generate-content";
 import { logger } from "@/lib/logger";
 
 /**
@@ -45,7 +46,7 @@ export function classifyGeminiError(err: unknown): string {
   const message = err.message;
   if (message === "gemini_unavailable") return "summarizer_unavailable";
   if (message === "gemini_empty") return "empty_answer";
-  const httpMatch = /^gemini_http_(\d+)$/.exec(message);
+  const httpMatch = /^gemini_http_(\d+)/.exec(message);
   if (httpMatch) {
     const status = Number(httpMatch[1]);
     if (status === 429) return "rate_limited";
@@ -56,49 +57,47 @@ export function classifyGeminiError(err: unknown): string {
   return "gemini_error";
 }
 
+const VOICE_GEMINI_LOOKUP_DEFAULT_MODEL = "gemini-3-flash-preview";
+
 async function askGemini(question: string, context: string): Promise<string> {
   const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
   if (!apiKey) throw new Error("gemini_unavailable");
-  const model = process.env.GEMINI_ROWBOAT_MODEL ?? "gemini-3.1-flash";
+  const configured = process.env.GEMINI_ROWBOAT_MODEL?.trim();
+  const primary = configured?.length ? configured : VOICE_GEMINI_LOOKUP_DEFAULT_MODEL;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 3000);
+  const sys =
+    "You answer caller questions about a specific small business using only the provided business knowledge. Reply in 1-2 short sentences meant to be read aloud. If the answer is not in the context, reply exactly: 'I don't have that handy - I'll make sure the team follows up.'";
+  const userText = `Business knowledge:\n${context}\n\nCaller question: ${question}`;
   try {
-    const response = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-      {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-          model,
+    try {
+      return await geminiGenerateText({
+        apiKey,
+        model: primary,
+        systemInstruction: sys,
+        userText,
+        temperature: 0.1,
+        maxOutputTokens: 200,
+        signal: controller.signal
+      });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "";
+      if (
+        /^gemini_http_404(?::|$)/.test(detail) &&
+        primary !== VOICE_GEMINI_LOOKUP_DEFAULT_MODEL
+      ) {
+        return await geminiGenerateText({
+          apiKey,
+          model: VOICE_GEMINI_LOOKUP_DEFAULT_MODEL,
+          systemInstruction: sys,
+          userText,
           temperature: 0.1,
-          max_tokens: 200,
-          messages: [
-            {
-              role: "system",
-              content:
-                "You answer caller questions about a specific small business using only the provided business knowledge. Reply in 1-2 short sentences meant to be read aloud. If the answer is not in the context, reply exactly: 'I don't have that handy - I'll make sure the team follows up.'"
-            },
-            {
-              role: "user",
-              content: `Business knowledge:\n${context}\n\nCaller question: ${question}`
-            }
-          ]
-        })
+          maxOutputTokens: 200,
+          signal: controller.signal
+        });
       }
-    );
-    if (!response.ok) {
-      throw new Error(`gemini_http_${response.status}`);
+      throw err;
     }
-    const json = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const content = json.choices?.[0]?.message?.content?.trim();
-    if (!content) throw new Error("gemini_empty");
-    return content;
   } finally {
     clearTimeout(timer);
   }
