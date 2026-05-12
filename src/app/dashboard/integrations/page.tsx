@@ -7,7 +7,7 @@ import { Card } from "@/components/ui/Card";
 import { IntegrationCard } from "@/components/dashboard/IntegrationCard";
 import { NangoEmailIntegrationActions } from "@/components/dashboard/NangoEmailIntegrationActions";
 import { CustomIntegrationsCard } from "@/components/dashboard/CustomIntegrationsCard";
-import { Inbox, Phone } from "lucide-react";
+import { Inbox } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -34,8 +34,6 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
   const workspaceConnected = workspaceConnections.length > 0;
   const customIntegrations =
     businessId ? await listCustomIntegrations(businessId) : [];
-  const telnyxConfigured =
-    !!process.env.TELNYX_API_KEY && !!process.env.TELNYX_MESSAGING_PROFILE_ID;
 
   return (
     <div className="space-y-8 max-w-4xl">
@@ -109,26 +107,6 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
                 businessId={businessId}
                 initialIntegrations={customIntegrations}
               />
-            </div>
-          </section>
-
-          <section className="space-y-4">
-            <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
-              Voice &amp; SMS
-            </h2>
-            <div className="grid grid-cols-1 gap-4 max-w-xl">
-              <IntegrationCard
-                title="Telnyx (platform)"
-                description="Your coworker's phone number, SMS outbound, and voice bridge."
-                icon={Phone}
-                status={telnyxConfigured ? "platform" : "disconnected"}
-                statusLabel={telnyxConfigured ? "Platform configured" : "Not configured"}
-              >
-                <p className="text-xs text-parchment/45">
-                  Number assignment and bridge health are shown on your dashboard. Contact support
-                  to change numbers.
-                </p>
-              </IntegrationCard>
             </div>
           </section>
         </>
