@@ -19,7 +19,10 @@ import {
   normalizeWebsiteUrl,
   parseRobotsDisallows
 } from "@/lib/website-ingest";
+import * as geminiGc from "@/lib/gemini-generate-content";
 import { logger } from "@/lib/logger";
+
+type FetchArgs = Parameters<typeof fetch>;
 
 describe("normalizeWebsiteUrl", () => {
   it("prepends https when scheme is missing", () => {
@@ -1126,7 +1129,7 @@ describe("ingestWebsite", () => {
       // `https://attacker.com/?generativelanguage.googleapis.com` can't match.
       if (new URL(url).hostname === "generativelanguage.googleapis.com") {
         return new Response(
-          JSON.stringify({ choices: [{ message: { content: "## Summary\nok" } }] }),
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "## Summary\nok" }] } }] }),
           { status: 200, headers: { "content-type": "application/json" } }
         );
       }
@@ -1186,6 +1189,15 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
   const richHtml = `<html><body><h1>Realty</h1><p>${"We help buyers find homes. ".repeat(30)}</p></body></html>`;
   const publicLookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
 
+  function gcModelFromFetchCall(input: Request | string | URL): string {
+    const urlObj = typeof input === "string" ? new URL(input) : input instanceof URL ? input : new URL(input.url);
+    const matched = urlObj.pathname.match(/\/models\/(.+):generateContent$/);
+    if (!matched?.[1]) {
+      throw new Error(`expected :generateContent path, got ${urlObj.pathname}`);
+    }
+    return decodeURIComponent(matched[1]);
+  }
+
   function pageFetchImpl() {
     return vi.fn(async (url: string) => {
       if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
@@ -1221,7 +1233,7 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (new URL(url).hostname === "generativelanguage.googleapis.com") {
         return new Response(
-          JSON.stringify({ choices: [{ message: { content: "## Summary\nclean" } }] }),
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "## Summary\nclean" }] } }] }),
           { status: 200, headers: { "content-type": "application/json" } }
         );
       }
@@ -1243,12 +1255,12 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
     delete process.env.GEMINI_ROWBOAT_MODEL;
     delete process.env.GEMINI_SUMMARY_MODEL;
     const seen: unknown[] = [];
-    const globalFetch = vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
+    const globalFetch = vi.fn(async (input: Request | string | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (new URL(url).hostname === "generativelanguage.googleapis.com") {
-        seen.push(JSON.parse(String(init?.body ?? "{}")));
+        seen.push(gcModelFromFetchCall(url));
         return new Response(
-          JSON.stringify({ choices: [{ message: { content: "## Summary\nok" } }] }),
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "## Summary\nok" }] } }] }),
           { status: 200, headers: { "content-type": "application/json" } }
         );
       }
@@ -1261,7 +1273,7 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
       lookup: publicLookup as never
     });
     expect(res.ok).toBe(true);
-    expect(seen[0]).toMatchObject({ model: "gemini-3.1-flash" });
+    expect(seen[0]).toBe("gemini-3-flash-preview");
   });
 
   it("coerces legacy GEMINI_ROWBOAT_MODEL gemini-1.5-* to the supported default", async () => {
@@ -1269,12 +1281,12 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
     process.env.GEMINI_ROWBOAT_MODEL = "gemini-1.5-flash";
     delete process.env.GEMINI_SUMMARY_MODEL;
     const seen: unknown[] = [];
-    const globalFetch = vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
+    const globalFetch = vi.fn(async (input: Request | string | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (new URL(url).hostname === "generativelanguage.googleapis.com") {
-        seen.push(JSON.parse(String(init?.body ?? "{}")));
+        seen.push(gcModelFromFetchCall(url));
         return new Response(
-          JSON.stringify({ choices: [{ message: { content: "## Summary\nok" } }] }),
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "## Summary\nok" }] } }] }),
           { status: 200, headers: { "content-type": "application/json" } }
         );
       }
@@ -1287,7 +1299,7 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
       lookup: publicLookup as never
     });
     expect(res.ok).toBe(true);
-    expect(seen[0]).toMatchObject({ model: "gemini-3.1-flash" });
+    expect(seen[0]).toBe("gemini-3-flash-preview");
   });
 
   it("coerces legacy GEMINI_ROWBOAT_MODEL models/gemini-1.5-* to the supported default", async () => {
@@ -1295,12 +1307,12 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
     process.env.GEMINI_ROWBOAT_MODEL = "models/gemini-1.5-flash";
     delete process.env.GEMINI_SUMMARY_MODEL;
     const seen: unknown[] = [];
-    const globalFetch = vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
+    const globalFetch = vi.fn(async (input: Request | string | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (new URL(url).hostname === "generativelanguage.googleapis.com") {
-        seen.push(JSON.parse(String(init?.body ?? "{}")));
+        seen.push(gcModelFromFetchCall(url));
         return new Response(
-          JSON.stringify({ choices: [{ message: { content: "## Summary\nok" } }] }),
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "## Summary\nok" }] } }] }),
           { status: 200, headers: { "content-type": "application/json" } }
         );
       }
@@ -1313,7 +1325,7 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
       lookup: publicLookup as never
     });
     expect(res.ok).toBe(true);
-    expect(seen[0]).toMatchObject({ model: "gemini-3.1-flash" });
+    expect(seen[0]).toBe("gemini-3-flash-preview");
   });
 
   it("falls back to default when env is only a bare models/ prefix after strip", async () => {
@@ -1321,12 +1333,12 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
     process.env.GEMINI_ROWBOAT_MODEL = "models/";
     delete process.env.GEMINI_SUMMARY_MODEL;
     const seen: unknown[] = [];
-    const globalFetch = vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
+    const globalFetch = vi.fn(async (input: Request | string | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (new URL(url).hostname === "generativelanguage.googleapis.com") {
-        seen.push(JSON.parse(String(init?.body ?? "{}")));
+        seen.push(gcModelFromFetchCall(url));
         return new Response(
-          JSON.stringify({ choices: [{ message: { content: "## Summary\nok" } }] }),
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "## Summary\nok" }] } }] }),
           { status: 200, headers: { "content-type": "application/json" } }
         );
       }
@@ -1339,7 +1351,7 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
       lookup: publicLookup as never
     });
     expect(res.ok).toBe(true);
-    expect(seen[0]).toMatchObject({ model: "gemini-3.1-flash" });
+    expect(seen[0]).toBe("gemini-3-flash-preview");
   });
 
   it("prefers GEMINI_SUMMARY_MODEL over GEMINI_ROWBOAT_MODEL when both are set", async () => {
@@ -1347,12 +1359,12 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
     process.env.GEMINI_SUMMARY_MODEL = "gemini-2.0-flash";
     process.env.GEMINI_ROWBOAT_MODEL = "gemini-3.1-flash";
     const seen: unknown[] = [];
-    const globalFetch = vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
+    const globalFetch = vi.fn(async (input: Request | string | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (new URL(url).hostname === "generativelanguage.googleapis.com") {
-        seen.push(JSON.parse(String(init?.body ?? "{}")));
+        seen.push(gcModelFromFetchCall(url));
         return new Response(
-          JSON.stringify({ choices: [{ message: { content: "## Summary\nok" } }] }),
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "## Summary\nok" }] } }] }),
           { status: 200, headers: { "content-type": "application/json" } }
         );
       }
@@ -1365,7 +1377,7 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
       lookup: publicLookup as never
     });
     expect(res.ok).toBe(true);
-    expect(seen[0]).toMatchObject({ model: "gemini-2.0-flash" });
+    expect(seen[0]).toBe("gemini-2.0-flash");
   });
 
   it("emits an audit log when coercing a legacy Gemini model env id", async () => {
@@ -1378,7 +1390,7 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
       vi.fn(async (input: Request | string | URL) => {
         const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
         if (new URL(urlStr).hostname === "generativelanguage.googleapis.com") {
-          return new Response(JSON.stringify({ choices: [{ message: { content: "## Summary\nlogged" } }] }), {
+          return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "## Summary\nlogged" }] } }] }), {
             status: 200,
             headers: { "content-type": "application/json" }
           });
@@ -1395,9 +1407,116 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
     expect(res.ok).toBe(true);
     expect(spy).toHaveBeenCalledWith(
       "website-ingest: coercing legacy Gemini model id for summarizer",
-      expect.objectContaining({ from: "gemini-pro", to: "gemini-3.1-flash" })
+      expect.objectContaining({ from: "gemini-pro", to: "gemini-3-flash-preview" })
     );
     spy.mockRestore();
+  });
+
+  it("retries with gemini-3-flash-preview when the configured summarizer model returns HTTP 404", async () => {
+    process.env.GOOGLE_API_KEY = "test-key";
+    process.env.GEMINI_SUMMARY_MODEL = "some-custom-unstable-model";
+    delete process.env.GEMINI_ROWBOAT_MODEL;
+    const models: string[] = [];
+    const globalFetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const hostname = new URL(url).hostname;
+      if (hostname !== "generativelanguage.googleapis.com") {
+        throw new Error(`unexpected fetch: ${url}`);
+      }
+      models.push(gcModelFromFetchCall(url));
+      if (models.length === 1) {
+        return new Response("{}", { status: 404 });
+      }
+      return new Response(
+        JSON.stringify({ candidates: [{ content: { parts: [{ text: "## Summary\nretried" }] } }] }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    });
+    vi.stubGlobal("fetch", globalFetch);
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl: pageFetchImpl(),
+      lookup: publicLookup as never
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.websiteMd).toMatch(/retried/);
+    expect(models).toEqual(["some-custom-unstable-model", "gemini-3-flash-preview"]);
+  });
+
+  it("treats a non-Error rejection from Gemini before remapping fails as unknown ingest detail", async () => {
+    process.env.GOOGLE_API_KEY = "test-key";
+    delete process.env.GEMINI_SUMMARY_MODEL;
+    delete process.env.GEMINI_ROWBOAT_MODEL;
+    const spy = vi.spyOn(geminiGc, "geminiGenerateText").mockRejectedValue("boom");
+    try {
+      const res = await ingestWebsite("https://example.com/", {
+        fetchImpl: pageFetchImpl(),
+        lookup: publicLookup as never
+      });
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.detail).toBe("unknown");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("maps gemini_empty from the fallback request after HTTP 404 to summarizer_empty", async () => {
+    process.env.GOOGLE_API_KEY = "test-key";
+    process.env.GEMINI_SUMMARY_MODEL = "some-custom-unstable-model";
+    delete process.env.GEMINI_ROWBOAT_MODEL;
+    let attempts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: Request | string | URL) => {
+        const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (new URL(urlStr).hostname !== "generativelanguage.googleapis.com") {
+          throw new Error(`unexpected fetch: ${urlStr}`);
+        }
+        attempts += 1;
+        if (attempts === 1) {
+          return new Response("{}", { status: 404 });
+        }
+        return new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "  \t" }] } }] }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      })
+    );
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl: pageFetchImpl(),
+      lookup: publicLookup as never
+    });
+
+    expect(attempts).toBe(2);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.detail).toBe("summarizer_empty");
+  });
+
+  it("does not retry a second HTTP 404 when already using gemini-3-flash-preview", async () => {
+    process.env.GOOGLE_API_KEY = "test-key";
+    delete process.env.GEMINI_SUMMARY_MODEL;
+    delete process.env.GEMINI_ROWBOAT_MODEL;
+    const fetchMock = vi.fn(async (): Promise<Response> => new Response("{}", { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl: pageFetchImpl(),
+      lookup: publicLookup as never
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toBe("summarizer_failed");
+      expect(res.detail).toMatch(/^gemini_http_404/);
+    }
+    const typedCalls = fetchMock.mock.calls as unknown as FetchArgs[];
+    const googleHits = typedCalls.filter((call) => {
+      const input = call[0];
+      const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      return new URL(urlStr).hostname === "generativelanguage.googleapis.com";
+    });
+    expect(googleHits).toHaveLength(1);
   });
 
   it("surfaces gemini_http_<code> on a non-2xx Gemini response", async () => {
@@ -1428,7 +1547,7 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
-        new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), {
+        new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "" }] } }] }), {
           status: 200,
           headers: { "content-type": "application/json" }
         })

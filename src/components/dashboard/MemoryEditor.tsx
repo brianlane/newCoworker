@@ -5,8 +5,15 @@ import { Card } from "@/components/ui/Card";
 import { Textarea } from "@/components/ui/Textarea";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
+import {
+  BUSINESS_CONFIG_IDENTITY_MD_MAX_CHARS,
+  BUSINESS_CONFIG_MEMORY_MD_MAX_CHARS,
+  BUSINESS_CONFIG_SOUL_MD_MAX_CHARS,
+  BUSINESS_CONFIG_WEBSITE_MD_MAX_CHARS
+} from "@/lib/vault/business-config-markdown-limits";
 import { starterVaultBudgetStatus } from "@/lib/vault/starterContextBudget";
 import { websiteIngestErrorMessage } from "@/lib/website-ingest-copy";
+import { useBusinessConfigSave } from "@/components/dashboard/useBusinessConfigSave";
 
 interface MemoryEditorProps {
   businessId: string;
@@ -51,30 +58,34 @@ export function MemoryEditor({
     // alongside soul/identity/memory, so it must factor into the KVM2 budget.
     return starterVaultBudgetStatus(soul, identity, memory, websiteMd);
   }, [tier, soul, identity, memory, websiteMd]);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const { saving, saved, saveError, clearSaveError, save } = useBusinessConfigSave();
+
+  const charLimitIssue = useMemo(() => {
+    if (soul.length > BUSINESS_CONFIG_SOUL_MD_MAX_CHARS) {
+      return `Soul exceeds ${BUSINESS_CONFIG_SOUL_MD_MAX_CHARS.toLocaleString()} characters`;
+    }
+    if (identity.length > BUSINESS_CONFIG_IDENTITY_MD_MAX_CHARS) {
+      return `Identity exceeds ${BUSINESS_CONFIG_IDENTITY_MD_MAX_CHARS.toLocaleString()} characters`;
+    }
+    if (memory.length > BUSINESS_CONFIG_MEMORY_MD_MAX_CHARS) {
+      return `Memory exceeds ${BUSINESS_CONFIG_MEMORY_MD_MAX_CHARS.toLocaleString()} characters`;
+    }
+    if (websiteMd.length > BUSINESS_CONFIG_WEBSITE_MD_MAX_CHARS) {
+      return `Website knowledge exceeds ${BUSINESS_CONFIG_WEBSITE_MD_MAX_CHARS.toLocaleString()} characters`;
+    }
+    return null;
+  }, [soul, identity, memory, websiteMd]);
 
   async function handleSave() {
-    setSaving(true);
-    try {
-      const res = await fetch("/api/business/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          businessId,
-          soulMd: soul,
-          identityMd: identity,
-          memoryMd: memory,
-          websiteMd,
-          websiteUrl
-        })
-      });
-      if (!res.ok) throw new Error("Save failed");
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
-    } finally {
-      setSaving(false);
-    }
+    if (charLimitIssue) return;
+    await save({
+      businessId,
+      soulMd: soul,
+      identityMd: identity,
+      memoryMd: memory,
+      websiteMd,
+      websiteUrl
+    });
   }
 
   async function handleRecrawl() {
@@ -146,6 +157,16 @@ export function MemoryEditor({
           landing page.
         </p>
       )}
+      {charLimitIssue && (
+        <p className="text-sm text-rose-300 border border-rose-500/40 rounded-lg px-3 py-2 bg-rose-950/30">
+          {charLimitIssue}. Trim the text before saving.
+        </p>
+      )}
+      {saveError && (
+        <p className="text-sm text-rose-300 border border-rose-500/40 rounded-lg px-3 py-2 bg-rose-950/30">
+          {saveError}
+        </p>
+      )}
       <Card>
         <h3 className="text-sm font-semibold text-parchment mb-3 flex items-center gap-2">
           <span className="inline-block w-2 h-2 rounded-full bg-claw-green" />
@@ -153,10 +174,16 @@ export function MemoryEditor({
         </h3>
         <Textarea
           value={soul}
-          onChange={(e) => setSoul(e.target.value)}
+          onChange={(e) => {
+            setSoul(e.target.value);
+            clearSaveError();
+          }}
           rows={6}
           placeholder="Core personality, ethics, and communication style..."
         />
+        <p className="mt-2 text-xs text-parchment/40">
+          {soul.length.toLocaleString()} / {BUSINESS_CONFIG_SOUL_MD_MAX_CHARS.toLocaleString()} characters
+        </p>
       </Card>
 
       <Card>
@@ -166,10 +193,17 @@ export function MemoryEditor({
         </h3>
         <Textarea
           value={identity}
-          onChange={(e) => setIdentity(e.target.value)}
+          onChange={(e) => {
+            setIdentity(e.target.value);
+            clearSaveError();
+          }}
           rows={6}
           placeholder="Business name, market, services, team info..."
         />
+        <p className="mt-2 text-xs text-parchment/40">
+          {identity.length.toLocaleString()} / {BUSINESS_CONFIG_IDENTITY_MD_MAX_CHARS.toLocaleString()}{" "}
+          characters
+        </p>
       </Card>
 
       <Card>
@@ -179,10 +213,16 @@ export function MemoryEditor({
         </h3>
         <Textarea
           value={memory}
-          onChange={(e) => setMemory(e.target.value)}
+          onChange={(e) => {
+            setMemory(e.target.value);
+            clearSaveError();
+          }}
           rows={8}
           placeholder="Accumulated business knowledge..."
         />
+        <p className="mt-2 text-xs text-parchment/40">
+          {memory.length.toLocaleString()} / {BUSINESS_CONFIG_MEMORY_MD_MAX_CHARS.toLocaleString()} characters
+        </p>
       </Card>
 
       <Card>
@@ -226,15 +266,22 @@ export function MemoryEditor({
         <div className="mt-3">
           <Textarea
             value={websiteMd}
-            onChange={(e) => setWebsiteMd(e.target.value)}
+            onChange={(e) => {
+              setWebsiteMd(e.target.value);
+              clearSaveError();
+            }}
             rows={10}
             placeholder="Website summary (markdown). Regenerated when you re-crawl; edits above can be kept if you don't re-crawl."
           />
+          <p className="mt-2 text-xs text-parchment/40">
+            {websiteMd.length.toLocaleString()} / {BUSINESS_CONFIG_WEBSITE_MD_MAX_CHARS.toLocaleString()}{" "}
+            characters
+          </p>
         </div>
       </Card>
 
       <div className="flex items-center gap-3">
-        <Button onClick={handleSave} loading={saving}>
+        <Button onClick={handleSave} loading={saving} disabled={Boolean(charLimitIssue)}>
           Save Changes
         </Button>
         {saved && <span className="text-sm text-claw-green">✓ Saved</span>}

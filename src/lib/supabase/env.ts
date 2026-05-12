@@ -5,9 +5,9 @@ type SupabaseEnv = {
 };
 
 export function readSupabaseEnv(env: NodeJS.ProcessEnv = process.env): SupabaseEnv {
-  const url = env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY;
+  const url = env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const anonKey = env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
+  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY?.trim();
 
   if (!url || !anonKey || !serviceRoleKey) {
     throw new Error("Missing Supabase environment variables");

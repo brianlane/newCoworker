@@ -43,16 +43,43 @@ function getIdentifier(request: NextRequest, configKey: keyof typeof RATE_LIMITS
   return `${ip}:${configKey.toLowerCase()}`;
 }
 
+function normalizeHostname(hostname: string): string {
+  const h = hostname.replace(/^www\./, "").toLowerCase();
+  if (h === "127.0.0.1" || h === "::1") {
+    return "localhost";
+  }
+  return h;
+}
+
 function originsMatch(urlA: string, urlB: string): boolean {
   try {
     const a = new URL(urlA);
     const b = new URL(urlB);
-    const hostA = a.hostname.replace(/^www\./, "");
-    const hostB = b.hostname.replace(/^www\./, "");
+    const hostA = normalizeHostname(a.hostname);
+    const hostB = normalizeHostname(b.hostname);
     return a.protocol === b.protocol && hostA === hostB && a.port === b.port;
   } catch {
     return false;
   }
+}
+
+/** Derive the canonical origin for this incoming request (preview/prod/local). */
+function requestOwnOrigin(request: NextRequest): string | null {
+  const host = request.headers.get("host") ?? request.nextUrl.host;
+  if (!host) return null;
+  const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  const scheme =
+    forwardedProto === "http" || forwardedProto === "https"
+      ? forwardedProto
+      : request.nextUrl.protocol.replace(":", "");
+  return `${scheme}://${host}`;
+}
+
+/** True when Origin/Referer matches this deployment's own URL (fixes Preview vs NEXT_PUBLIC_APP_URL mismatch). */
+function sourceMatchesRequestOrigin(request: NextRequest, source: string): boolean {
+  const own = requestOwnOrigin(request);
+  if (!own) return false;
+  return originsMatch(source, own);
 }
 
 export async function proxy(request: NextRequest) {
@@ -68,13 +95,16 @@ export async function proxy(request: NextRequest) {
   ) {
     const origin = request.headers.get("origin");
     const referer = request.headers.get("referer");
-    const expectedOrigin = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+    const expectedOrigin = process.env.NEXT_PUBLIC_APP_URL?.trim() || "http://localhost:3000";
     const vercelUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null;
 
     let originValid = false;
     const checkSource = origin || referer;
     if (checkSource) {
-      originValid = originsMatch(checkSource, expectedOrigin);
+      originValid = sourceMatchesRequestOrigin(request, checkSource);
+      if (!originValid) {
+        originValid = originsMatch(checkSource, expectedOrigin);
+      }
       if (!originValid && vercelUrl) {
         originValid = originsMatch(checkSource, vercelUrl);
       }
@@ -133,30 +163,33 @@ export async function proxy(request: NextRequest) {
   response.headers.set("X-RateLimit-Remaining", String(rlResult.remaining));
   response.headers.set("X-RateLimit-Reset", String(rlResult.reset));
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
   let user: AuthUser | null = null;
 
   if (supabaseUrl && supabaseAnonKey) {
     const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
       cookies: {
-        get(name) {
-          return request.cookies.get(name)?.value;
+        getAll() {
+          return request.cookies.getAll().map(({ name, value }) => ({ name, value }));
         },
-        set(name, value, options) {
-          request.cookies.set({ name, value, ...options });
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            request.cookies.set({ name, value, ...(options ?? {}) });
+          });
           response = NextResponse.next({ request });
-          response.cookies.set({ name, value, ...options });
-        },
-        remove(name, options) {
-          request.cookies.set({ name, value: "", ...options });
-          response = NextResponse.next({ request });
-          response.cookies.set({ name, value: "", ...options });
+          cookiesToSet.forEach(({ name, value, options }) => {
+            response.cookies.set({ name, value, ...(options ?? {}) });
+          });
         },
       },
     });
 
-    const { data: { user: supabaseUser } } = await supabase.auth.getUser();
+    const { data, error: userError } = await supabase.auth.getUser();
+    if (userError) {
+      console.error("[proxy] supabase.auth.getUser failed:", userError.message);
+    }
+    const supabaseUser = data?.user ?? null;
     user = supabaseUser ? { id: supabaseUser.id, email: supabaseUser.email ?? null } : null;
   }
 

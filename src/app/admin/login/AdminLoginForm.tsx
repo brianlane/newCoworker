@@ -56,21 +56,21 @@ export default function AdminLoginForm({
 
     try {
       const supabase = getSupabaseBrowserClient();
-      const { error: authError } = await supabase.auth.signInWithPassword({
+      const { error: signInError } = await supabase.auth.signInWithPassword({
         email: normalizedEmail,
         password
       });
 
-      if (authError) {
-        setError(authError.message);
-        setIsSubmitting(false);
+      if (signInError) {
+        setError(signInError.message);
         return;
       }
 
-      router.replace(getSafeNext());
       router.refresh();
+      router.replace(getSafeNext());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed");
+    } finally {
       setIsSubmitting(false);
     }
   }

@@ -10,7 +10,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],
-    exclude: ["tests/integration/**"],
+    exclude: ["tests/integration/**", "**/gemini-summarize-connectivity-live.test.ts"],
     // v8 coverage instrumentation slows some orchestrator tests past the
     // default 5s; give every test a generous 15s budget.
     testTimeout: 15000,
@@ -23,6 +23,7 @@ export default defineConfig({
       // `npm run test:coverage:open`.
       reporter: ["text", "text-summary", "html"],
       include: ["src/lib/**/*.ts", "supabase/functions/_shared/**/*.ts"],
+      exclude: ["src/lib/customer-memory/types.ts"],
       thresholds: {
         lines: 100,
         functions: 100,

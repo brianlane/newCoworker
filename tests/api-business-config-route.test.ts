@@ -59,6 +59,10 @@ import { updateBusinessWebsiteUrl } from "@/lib/db/businesses";
 import { patchBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
+import {
+  BUSINESS_CONFIG_MEMORY_MD_MAX_CHARS,
+  BUSINESS_CONFIG_SOUL_MD_MAX_CHARS
+} from "@/lib/vault/business-config-markdown-limits";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -156,6 +160,24 @@ describe("api/business/config — websiteUrl persistence", () => {
     expect(res.status).toBe(200);
     expect(updateBusinessWebsiteUrl).not.toHaveBeenCalled();
     expect(patchBusinessConfig).toHaveBeenCalled();
+  });
+});
+
+describe("api/business/config — vault markdown limits", () => {
+  it("rejects soulMd over the configured max before patching", async () => {
+    const hugeSoul = "s".repeat(BUSINESS_CONFIG_SOUL_MD_MAX_CHARS + 1);
+    const res = await POST(jsonRequest(baseBody({ soulMd: hugeSoul })));
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error.code).toBe("VALIDATION_ERROR");
+    expect(patchBusinessConfig).not.toHaveBeenCalled();
+  });
+
+  it("rejects memoryMd over the configured max before patching", async () => {
+    const hugeMemory = "m".repeat(BUSINESS_CONFIG_MEMORY_MD_MAX_CHARS + 1);
+    const res = await POST(jsonRequest(baseBody({ memoryMd: hugeMemory })));
+    expect(res.status).toBe(400);
+    expect(patchBusinessConfig).not.toHaveBeenCalled();
   });
 });
 

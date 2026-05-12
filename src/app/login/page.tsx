@@ -33,16 +33,23 @@ function LoginForm() {
     setLoading(true);
     setError(null);
 
-    const supabase = getSupabaseBrowserClient();
-    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+    try {
+      await clearStaleSupabaseAuthCookies();
+      const supabase = getSupabaseBrowserClient();
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
 
-    if (signInError) {
-      setError(signInError.message);
+      if (signInError) {
+        setError(signInError.message);
+        return;
+      }
+
+      router.refresh();
+      router.push(redirectTo);
+    } catch {
+      setError("Sign in failed");
+    } finally {
       setLoading(false);
-      return;
     }
-
-    router.push(redirectTo);
   }
 
   async function handleMagicLink() {
