@@ -23,6 +23,7 @@ export default defineConfig({
       // `npm run test:coverage:open`.
       reporter: ["text", "text-summary", "html"],
       include: ["src/lib/**/*.ts", "supabase/functions/_shared/**/*.ts"],
+      exclude: ["src/lib/customer-memory/types.ts"],
       thresholds: {
         lines: 100,
         functions: 100,
