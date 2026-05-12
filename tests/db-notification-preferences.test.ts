@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   getNotificationPreferences,
   getOrCreateNotificationPreferences,
+  initialNotificationPreferenceContactsFromSeeds,
   isUniqueViolation,
-  mergeNotificationContactDefaults,
   updateNotificationPreferences
 } from "@/lib/db/notification-preferences";
 
@@ -35,73 +35,47 @@ describe("db/notification-preferences", () => {
     );
   });
 
-  it("mergeNotificationContactDefaults fills null prefs from sources", () => {
-    const merged = mergeNotificationContactDefaults(PREFS, {
+  it("initialNotificationPreferenceContactsFromSeeds fills from user and auth phone", () => {
+    const c = initialNotificationPreferenceContactsFromSeeds({
       userEmail: "u@example.com",
       authPhone: "+1999",
       ownerEmail: "owner@biz.com",
       businessPhone: "5551112222"
     });
-    expect(merged.alert_email).toBe("u@example.com");
-    expect(merged.phone_number).toBe("+1999");
-    expect(merged.business_id).toBe("biz-1");
+    expect(c.alert_email).toBe("u@example.com");
+    expect(c.phone_number).toBe("+1999");
   });
 
-  it("mergeNotificationContactDefaults prefers stored prefs over sources", () => {
-    const row = {
-      ...PREFS,
-      alert_email: "alert@prio.com",
-      phone_number: "+1888"
-    };
-    const merged = mergeNotificationContactDefaults(row, {
-      userEmail: "u@example.com",
-      authPhone: "+1999",
-      ownerEmail: "owner@biz.com",
-      businessPhone: "5551112222"
-    });
-    expect(merged.alert_email).toBe("alert@prio.com");
-    expect(merged.phone_number).toBe("+1888");
-  });
-
-  it("mergeNotificationContactDefaults skips blank prefs and trims", () => {
-    const merged = mergeNotificationContactDefaults(
-      {
-        ...PREFS,
-        alert_email: "",
-        phone_number: "  "
-      },
-      {
+  it("initialNotificationPreferenceContactsFromSeeds skips blank and trims sources", () => {
+    expect(
+      initialNotificationPreferenceContactsFromSeeds({
         userEmail: null,
         authPhone: null,
         ownerEmail: " fallback@biz.com ",
         businessPhone: " +12225550100 "
-      }
-    );
-    expect(merged.alert_email).toBe("fallback@biz.com");
-    expect(merged.phone_number).toBe("+12225550100");
+      })
+    ).toEqual({ alert_email: "fallback@biz.com", phone_number: "+12225550100" });
+
+    expect(
+      initialNotificationPreferenceContactsFromSeeds({
+        userEmail: null,
+        authPhone: null,
+        ownerEmail: null,
+        businessPhone: null
+      })
+    ).toEqual({ alert_email: null, phone_number: null });
   });
 
-  it("mergeNotificationContactDefaults uses owner email when user email absent", () => {
-    const merged = mergeNotificationContactDefaults(PREFS, {
-      userEmail: null,
+  it("initialNotificationPreferenceContactsFromSeeds prefers user email before owner", () => {
+    const c = initialNotificationPreferenceContactsFromSeeds({
+      userEmail: "u@prio.com",
       authPhone: null,
-      ownerEmail: "only-owner@biz.com",
-      businessPhone: null
-    });
-    expect(merged.alert_email).toBe("only-owner@biz.com");
-    expect(merged.phone_number).toBeNull();
-  });
-
-  it("mergeNotificationContactDefaults uses businessPhone when auth phone absent", () => {
-    const merged = mergeNotificationContactDefaults(PREFS, {
-      userEmail: null,
-      authPhone: null,
-      ownerEmail: null,
+      ownerEmail: "owner@biz.com",
       businessPhone: "5550001111"
     });
-    expect(merged.phone_number).toBe("5550001111");
+    expect(c.alert_email).toBe("u@prio.com");
+    expect(c.phone_number).toBe("5550001111");
   });
-
   it("getNotificationPreferences returns row", async () => {
     const chain = {
       select: vi.fn().mockReturnThis(),
@@ -171,6 +145,68 @@ describe("db/notification-preferences", () => {
     const row = await getOrCreateNotificationPreferences("biz-1");
     expect(row.business_id).toBe("biz-1");
     expect(insertChain.insert).toHaveBeenCalled();
+  });
+
+  it("getOrCreateNotificationPreferences merges contactSeeds only on insert", async () => {
+    const selectChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null })
+    };
+    const insertChain = {
+      insert: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({ data: PREFS, error: null })
+    };
+    const db = {
+      from: vi.fn().mockReturnValueOnce(selectChain).mockReturnValueOnce(insertChain)
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await getOrCreateNotificationPreferences("biz-1", {
+      contactSeeds: {
+        userEmail: "dash@biz.com",
+        authPhone: "+15550001111",
+        ownerEmail: "owner@biz.com",
+        businessPhone: "Ignored when authPhone set"
+      }
+    });
+
+    expect(insertChain.insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        business_id: "biz-1",
+        alert_email: "dash@biz.com",
+        phone_number: "+15550001111"
+      })
+    );
+  });
+
+  it("getOrCreateNotificationPreferences ignores contactSeeds when row exists", async () => {
+    const seeded = {
+      ...PREFS,
+      alert_email: "already@saved.com",
+      phone_number: null
+    };
+    const chain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: seeded, error: null }),
+      insert: vi.fn().mockImplementation(() => {
+        throw new Error("unexpected insert");
+      })
+    };
+    const db = { from: vi.fn().mockReturnValue(chain) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const row = await getOrCreateNotificationPreferences("biz-1", {
+      contactSeeds: {
+        userEmail: "different@fresh.com",
+        authPhone: null,
+        ownerEmail: null,
+        businessPhone: null
+      }
+    });
+    expect(row.alert_email).toBe("already@saved.com");
   });
 
   it("getOrCreateNotificationPreferences throws on insert error", async () => {

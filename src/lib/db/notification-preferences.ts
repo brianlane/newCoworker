@@ -27,32 +27,33 @@ function trimToNull(s: string | null | undefined): string | null {
   return t.length > 0 ? t : null;
 }
 
+/** Inputs for seeding contacts on **first insert** only (never on read/update). */
+export type NotificationPreferenceContactSeeds = {
+  userEmail: string | null;
+  authPhone: string | null;
+  ownerEmail: string | null;
+  businessPhone: string | null;
+};
+
 /**
- * Fill `alert_email` / `phone_number` for the dashboard form when preference
- * rows are still null — session email, auth phone, then business onboarding fields.
- * Does not mutate the database; first Save persists merged values.
+ * Derive initial `alert_email` / `phone_number` when creating a prefs row only.
+ * Do not reuse for display merging: stored `null` must mean “cleared”, not “fill from auth”.
  */
-export function mergeNotificationContactDefaults(
-  prefs: NotificationPreferencesRow,
-  sources: {
-    userEmail: string | null;
-    authPhone: string | null;
-    ownerEmail: string | null;
-    businessPhone: string | null;
-  }
-): NotificationPreferencesRow {
+export function initialNotificationPreferenceContactsFromSeeds(
+  sources: NotificationPreferenceContactSeeds
+): Pick<NotificationPreferencesRow, "alert_email" | "phone_number"> {
   return {
-    ...prefs,
     alert_email:
-      trimToNull(prefs.alert_email) ??
-      trimToNull(sources.userEmail) ??
-      trimToNull(sources.ownerEmail),
+      trimToNull(sources.userEmail) ?? trimToNull(sources.ownerEmail),
     phone_number:
-      trimToNull(prefs.phone_number) ??
-      trimToNull(sources.authPhone) ??
-      trimToNull(sources.businessPhone)
+      trimToNull(sources.authPhone) ?? trimToNull(sources.businessPhone)
   };
 }
+
+export type GetOrCreateNotificationPreferencesOpts = {
+  client?: SupabaseClient;
+  contactSeeds?: NotificationPreferenceContactSeeds;
+};
 
 export type NotificationPreferencesUpdate = Partial<
   Pick<
@@ -103,18 +104,24 @@ export async function getNotificationPreferences(
 
 export async function getOrCreateNotificationPreferences(
   businessId: string,
-  client?: SupabaseClient
+  opts?: GetOrCreateNotificationPreferencesOpts
 ): Promise<NotificationPreferencesRow> {
+  const client = opts?.client;
   const existing = await getNotificationPreferences(businessId, client);
   if (existing) return existing;
 
   const db = client ?? (await createSupabaseServiceClient());
   const now = new Date().toISOString();
+  const contactOverrides =
+    opts?.contactSeeds !== undefined
+      ? initialNotificationPreferenceContactsFromSeeds(opts.contactSeeds)
+      : {};
   const { data, error } = await db
     .from("notification_preferences")
     .insert({
       business_id: businessId,
       ...defaults,
+      ...contactOverrides,
       updated_at: now
     })
     .select()
@@ -135,7 +142,7 @@ export async function updateNotificationPreferences(
   patch: NotificationPreferencesUpdate,
   client?: SupabaseClient
 ): Promise<NotificationPreferencesRow> {
-  await getOrCreateNotificationPreferences(businessId, client);
+  await getOrCreateNotificationPreferences(businessId, client ? { client } : undefined);
   const db = client ?? (await createSupabaseServiceClient());
   const now = new Date().toISOString();
 
