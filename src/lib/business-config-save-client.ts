@@ -2,10 +2,14 @@ export type BusinessConfigSaveResult =
   | { ok: true }
   | { ok: false; errorMessage: string };
 
-type ConfigErrorPayload = { ok?: boolean; error?: { message?: string } } | null;
+type ConfigPayload = { ok?: boolean; error?: { message?: string } } | null;
 
 /**
  * POST `/api/business/config` from the browser; normalizes JSON errors and network failures.
+ *
+ * Success is **only** `{ ok: true }` when the response is HTTP OK **and** the body matches
+ * **`{ ok: true, data }`** from `successResponse` in `@/lib/api-response`. A bare 200 with HTML, empty body, or `{}`
+ * is treated as failure so callers never show “saved” on junk responses.
  */
 export async function postBusinessConfigSave(
   body: Record<string, unknown>
@@ -16,7 +20,8 @@ export async function postBusinessConfigSave(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
     });
-    const payload = (await res.json().catch(() => null)) as ConfigErrorPayload;
+    const payload = (await res.json().catch(() => null)) as ConfigPayload;
+
     if (!res.ok) {
       const msg =
         payload?.ok === false && typeof payload.error?.message === "string"
@@ -24,6 +29,11 @@ export async function postBusinessConfigSave(
           : "Save failed";
       return { ok: false, errorMessage: msg };
     }
+
+    if (payload?.ok !== true) {
+      return { ok: false, errorMessage: "Unexpected response from server" };
+    }
+
     return { ok: true };
   } catch (err) {
     return {

@@ -5,7 +5,12 @@ describe("postBusinessConfigSave", () => {
   beforeEach(() => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } }))
+      vi.fn(async () =>
+        new Response(JSON.stringify({ ok: true, data: { updated: true } }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        })
+      )
     );
   });
 
@@ -73,6 +78,32 @@ describe("postBusinessConfigSave", () => {
     await expect(postBusinessConfigSave({})).resolves.toEqual({
       ok: false,
       errorMessage: "Save failed"
+    });
+  });
+
+  it("returns ok:false when HTTP 200 but body is not valid success JSON", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("not-json", { status: 200, headers: { "content-type": "text/html" } }))
+    );
+
+    await expect(postBusinessConfigSave({})).resolves.toEqual({
+      ok: false,
+      errorMessage: "Unexpected response from server"
+    });
+  });
+
+  it("returns ok:false when HTTP 200 but JSON omits ok:true", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({}), { status: 200, headers: { "content-type": "application/json" } })
+      )
+    );
+
+    await expect(postBusinessConfigSave({})).resolves.toEqual({
+      ok: false,
+      errorMessage: "Unexpected response from server"
     });
   });
 
