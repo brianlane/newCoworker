@@ -3,6 +3,11 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 export type AuthUser = {
   userId: string;
   email: string | null;
+  /**
+   * When present (always from `getAuthUser`), trimmed E.164 or provider format;
+   * `null` if the auth user has no phone. Optional so tests can omit the field.
+   */
+  phone?: string | null;
   isAdmin: boolean;
 };
 
@@ -21,9 +26,11 @@ export async function getAuthUser(): Promise<AuthUser | null> {
       !!data.user.email &&
       data.user.email.toLowerCase() === adminEmail.toLowerCase();
 
+    const phoneRaw = data.user.phone?.trim() ?? "";
     return {
       userId: data.user.id,
       email: data.user.email ?? null,
+      phone: phoneRaw.length > 0 ? phoneRaw : null,
       isAdmin
     };
   } catch {

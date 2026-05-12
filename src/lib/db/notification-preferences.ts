@@ -20,6 +20,41 @@ export type NotificationPreferencesRow = {
   updated_at: string;
 };
 
+/** Non-empty trimmed string, or null when missing/blank. */
+function trimToNull(s: string | null | undefined): string | null {
+  if (s == null) return null;
+  const t = s.trim();
+  return t.length > 0 ? t : null;
+}
+
+/** Inputs for seeding contacts on **first insert** only (never on read/update). */
+export type NotificationPreferenceContactSeeds = {
+  userEmail: string | null;
+  authPhone: string | null;
+  ownerEmail: string | null;
+  businessPhone: string | null;
+};
+
+/**
+ * Derive initial `alert_email` / `phone_number` when creating a prefs row only.
+ * Do not reuse for display merging: stored `null` must mean “cleared”, not “fill from auth”.
+ */
+export function initialNotificationPreferenceContactsFromSeeds(
+  sources: NotificationPreferenceContactSeeds
+): Pick<NotificationPreferencesRow, "alert_email" | "phone_number"> {
+  return {
+    alert_email:
+      trimToNull(sources.userEmail) ?? trimToNull(sources.ownerEmail),
+    phone_number:
+      trimToNull(sources.authPhone) ?? trimToNull(sources.businessPhone)
+  };
+}
+
+export type GetOrCreateNotificationPreferencesOpts = {
+  client?: SupabaseClient;
+  contactSeeds?: NotificationPreferenceContactSeeds;
+};
+
 export type NotificationPreferencesUpdate = Partial<
   Pick<
     NotificationPreferencesRow,
@@ -69,18 +104,24 @@ export async function getNotificationPreferences(
 
 export async function getOrCreateNotificationPreferences(
   businessId: string,
-  client?: SupabaseClient
+  opts?: GetOrCreateNotificationPreferencesOpts
 ): Promise<NotificationPreferencesRow> {
+  const client = opts?.client;
   const existing = await getNotificationPreferences(businessId, client);
   if (existing) return existing;
 
   const db = client ?? (await createSupabaseServiceClient());
   const now = new Date().toISOString();
+  const contactOverrides =
+    opts?.contactSeeds !== undefined
+      ? initialNotificationPreferenceContactsFromSeeds(opts.contactSeeds)
+      : {};
   const { data, error } = await db
     .from("notification_preferences")
     .insert({
       business_id: businessId,
       ...defaults,
+      ...contactOverrides,
       updated_at: now
     })
     .select()
@@ -101,7 +142,7 @@ export async function updateNotificationPreferences(
   patch: NotificationPreferencesUpdate,
   client?: SupabaseClient
 ): Promise<NotificationPreferencesRow> {
-  await getOrCreateNotificationPreferences(businessId, client);
+  await getOrCreateNotificationPreferences(businessId, client ? { client } : undefined);
   const db = client ?? (await createSupabaseServiceClient());
   const now = new Date().toISOString();
 

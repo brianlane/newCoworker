@@ -1,7 +1,9 @@
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { getOrCreateNotificationPreferences } from "@/lib/db/notification-preferences";
+import {
+  getOrCreateNotificationPreferences
+} from "@/lib/db/notification-preferences";
 import { getNotifications } from "@/lib/db/notifications";
 import { Card } from "@/components/ui/Card";
 import { NotificationPreferences } from "@/components/dashboard/NotificationPreferences";
@@ -17,13 +19,24 @@ export default async function NotificationsPage() {
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
-    .select("id")
+    .select("id, owner_email, phone")
     .eq("owner_email", user.email)
     .limit(1);
 
-  const businessId = businesses?.[0]?.id ?? null;
+  const businessRow = businesses?.[0] ?? null;
+  const businessId = businessRow?.id ?? null;
 
-  const prefs = businessId ? await getOrCreateNotificationPreferences(businessId) : null;
+  const prefs =
+    businessId && businessRow
+      ? await getOrCreateNotificationPreferences(businessId, {
+          contactSeeds: {
+            userEmail: user.email,
+            authPhone: user.phone ?? null,
+            ownerEmail: businessRow.owner_email ?? null,
+            businessPhone: businessRow.phone ?? null
+          }
+        })
+      : null;
   const recent = businessId ? await getNotifications(businessId, { limit: 25 }) : [];
 
   return (

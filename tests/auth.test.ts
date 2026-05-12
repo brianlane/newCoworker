@@ -91,6 +91,30 @@ describe("auth", () => {
     expect(result?.isAdmin).toBe(false);
   });
 
+  it("getAuthUser exposes phone when present", async () => {
+    vi.mocked(createSupabaseServerClient).mockResolvedValue(
+      mockSupabase({ id: "u-1", email: "u@test.com", phone: "+15551234567" }) as never
+    );
+    const result = await getAuthUser();
+    expect(result?.phone).toBe("+15551234567");
+  });
+
+  it("getAuthUser returns null phone when absent", async () => {
+    vi.mocked(createSupabaseServerClient).mockResolvedValue(
+      mockSupabase({ id: "u-1", email: "u@test.com" }) as never
+    );
+    const result = await getAuthUser();
+    expect(result?.phone).toBeNull();
+  });
+
+  it("getAuthUser treats blank phone as null", async () => {
+    vi.mocked(createSupabaseServerClient).mockResolvedValue(
+      mockSupabase({ id: "u-1", email: "u@test.com", phone: "   " }) as never
+    );
+    const result = await getAuthUser();
+    expect(result?.phone).toBeNull();
+  });
+
   it("requireAuth throws 401 when no user", async () => {
     vi.mocked(createSupabaseServerClient).mockResolvedValue(
       mockSupabase(null) as never

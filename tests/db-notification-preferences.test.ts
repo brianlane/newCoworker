@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   getNotificationPreferences,
   getOrCreateNotificationPreferences,
+  initialNotificationPreferenceContactsFromSeeds,
   isUniqueViolation,
   updateNotificationPreferences
 } from "@/lib/db/notification-preferences";
@@ -34,6 +35,67 @@ describe("db/notification-preferences", () => {
     );
   });
 
+  it("initialNotificationPreferenceContactsFromSeeds fills from user and auth phone", () => {
+    const c = initialNotificationPreferenceContactsFromSeeds({
+      userEmail: "u@example.com",
+      authPhone: "+1999",
+      ownerEmail: "owner@biz.com",
+      businessPhone: "5551112222"
+    });
+    expect(c.alert_email).toBe("u@example.com");
+    expect(c.phone_number).toBe("+1999");
+  });
+
+  it("initialNotificationPreferenceContactsFromSeeds skips blank and trims sources", () => {
+    expect(
+      initialNotificationPreferenceContactsFromSeeds({
+        userEmail: null,
+        authPhone: null,
+        ownerEmail: " fallback@biz.com ",
+        businessPhone: " +12225550100 "
+      })
+    ).toEqual({ alert_email: "fallback@biz.com", phone_number: "+12225550100" });
+
+    expect(
+      initialNotificationPreferenceContactsFromSeeds({
+        userEmail: null,
+        authPhone: null,
+        ownerEmail: null,
+        businessPhone: null
+      })
+    ).toEqual({ alert_email: null, phone_number: null });
+  });
+
+  it("initialNotificationPreferenceContactsFromSeeds prefers user email before owner", () => {
+    const c = initialNotificationPreferenceContactsFromSeeds({
+      userEmail: "u@prio.com",
+      authPhone: null,
+      ownerEmail: "owner@biz.com",
+      businessPhone: "5550001111"
+    });
+    expect(c.alert_email).toBe("u@prio.com");
+    expect(c.phone_number).toBe("5550001111");
+  });
+
+  it("initialNotificationPreferenceContactsFromSeeds treats blank strings like null", () => {
+    expect(
+      initialNotificationPreferenceContactsFromSeeds({
+        userEmail: " \t ",
+        authPhone: "",
+        ownerEmail: " owner@biz.com ",
+        businessPhone: " \n "
+      })
+    ).toEqual({ alert_email: "owner@biz.com", phone_number: null });
+
+    expect(
+      initialNotificationPreferenceContactsFromSeeds({
+        userEmail: "",
+        authPhone: " ",
+        ownerEmail: "",
+        businessPhone: "final-phone "
+      })
+    ).toEqual({ alert_email: null, phone_number: "final-phone" });
+  });
   it("getNotificationPreferences returns row", async () => {
     const chain = {
       select: vi.fn().mockReturnThis(),
@@ -103,6 +165,94 @@ describe("db/notification-preferences", () => {
     const row = await getOrCreateNotificationPreferences("biz-1");
     expect(row.business_id).toBe("biz-1");
     expect(insertChain.insert).toHaveBeenCalled();
+  });
+
+  it("getOrCreateNotificationPreferences merges contactSeeds only on insert", async () => {
+    const selectChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null })
+    };
+    const insertChain = {
+      insert: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({ data: PREFS, error: null })
+    };
+    const db = {
+      from: vi.fn().mockReturnValueOnce(selectChain).mockReturnValueOnce(insertChain)
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await getOrCreateNotificationPreferences("biz-1", {
+      contactSeeds: {
+        userEmail: "dash@biz.com",
+        authPhone: "+15550001111",
+        ownerEmail: "owner@biz.com",
+        businessPhone: "Ignored when authPhone set"
+      }
+    });
+
+    expect(insertChain.insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        business_id: "biz-1",
+        alert_email: "dash@biz.com",
+        phone_number: "+15550001111"
+      })
+    );
+  });
+
+  it("getOrCreateNotificationPreferences inserts defaults when opts has client but no contactSeeds", async () => {
+    const selectChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null })
+    };
+    const insertChain = {
+      insert: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({ data: PREFS, error: null })
+    };
+    const shared = {
+      from: vi.fn().mockReturnValueOnce(selectChain).mockReturnValueOnce(insertChain)
+    };
+
+    await getOrCreateNotificationPreferences("biz-1", { client: shared as never });
+
+    expect(insertChain.insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        alert_email: null,
+        phone_number: null
+      })
+    );
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  it("getOrCreateNotificationPreferences ignores contactSeeds when row exists", async () => {
+    const seeded = {
+      ...PREFS,
+      alert_email: "already@saved.com",
+      phone_number: null
+    };
+    const chain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: seeded, error: null }),
+      insert: vi.fn().mockImplementation(() => {
+        throw new Error("unexpected insert");
+      })
+    };
+    const db = { from: vi.fn().mockReturnValue(chain) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const row = await getOrCreateNotificationPreferences("biz-1", {
+      contactSeeds: {
+        userEmail: "different@fresh.com",
+        authPhone: null,
+        ownerEmail: null,
+        businessPhone: null
+      }
+    });
+    expect(row.alert_email).toBe("already@saved.com");
   });
 
   it("getOrCreateNotificationPreferences throws on insert error", async () => {
