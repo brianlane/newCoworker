@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { geminiGenerateText } from "@/lib/gemini-generate-content";
 
+type FetchArgs = Parameters<typeof fetch>;
+
 describe("geminiGenerateText", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -30,30 +32,29 @@ describe("geminiGenerateText", () => {
     expect(out).toBe("hello worlds  !");
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const [url] = fetchMock.mock.calls[0]!;
+    const tuple = fetchMock.mock.calls.at(0) as FetchArgs | undefined;
+    expect(tuple).toBeDefined();
+    const [url, init] = tuple!;
     expect(url).toBe(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-preview:generateContent"
     );
-    const [, init] = fetchMock.mock.calls[0]!;
-    const headers = new Headers((init as RequestInit).headers as HeadersInit);
+    const headers = new Headers(init?.headers ?? undefined);
     expect(headers.get("x-goog-api-key")).toBe("test-key");
-    const parsed = JSON.parse(String((init as RequestInit).body ?? "{}"));
+    const parsed = JSON.parse(String(init?.body ?? "{}"));
     expect(parsed.systemInstruction.parts[0].text).toBe("sys");
     expect(parsed.contents[0].parts[0].text).toBe("user");
     expect(parsed.generationConfig).toMatchObject({ temperature: 0.3, maxOutputTokens: 99 });
   });
 
   it("uses default generationConfig temperature and maxOutputTokens", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async (): Promise<Response> =>
-          new Response(
-            JSON.stringify({ candidates: [{ content: { parts: [{ text: "ok" }] } }] }),
-            { status: 200, headers: { "content-type": "application/json" } }
-          )
-      )
+    const fetchStub = vi.fn(
+      async (): Promise<Response> =>
+        new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "ok" }] } }] }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
     );
+    vi.stubGlobal("fetch", fetchStub);
 
     await geminiGenerateText({
       apiKey: "k",
@@ -62,8 +63,10 @@ describe("geminiGenerateText", () => {
       userText: "u"
     });
 
-    const [, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    const parsed = JSON.parse(String((init as RequestInit).body ?? "{}"));
+    const tup = fetchStub.mock.calls.at(0) as FetchArgs | undefined;
+    expect(tup).toBeDefined();
+    const [, init] = tup!;
+    const parsed = JSON.parse(String(init?.body ?? "{}"));
     expect(parsed.generationConfig).toEqual({ temperature: 0.2, maxOutputTokens: 1500 });
   });
 

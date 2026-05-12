@@ -7,6 +7,7 @@ import {
   BUSINESS_CONFIG_IDENTITY_MD_MAX_CHARS,
   BUSINESS_CONFIG_SOUL_MD_MAX_CHARS
 } from "@/lib/vault/business-config-markdown-limits";
+import { useBusinessConfigSave } from "@/components/dashboard/useBusinessConfigSave";
 
 interface SoulEditorProps {
   businessId: string;
@@ -17,9 +18,7 @@ interface SoulEditorProps {
 export function SoulEditor({ businessId, initialSoul, initialIdentity }: SoulEditorProps) {
   const [soul, setSoul] = useState(initialSoul);
   const [identity, setIdentity] = useState(initialIdentity);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const { saving, saved, saveError, clearSaveError, save } = useBusinessConfigSave();
 
   const charLimitIssue = useMemo(() => {
     if (soul.length > BUSINESS_CONFIG_SOUL_MD_MAX_CHARS) {
@@ -33,38 +32,11 @@ export function SoulEditor({ businessId, initialSoul, initialIdentity }: SoulEdi
 
   async function handleSave() {
     if (charLimitIssue) return;
-    setSaving(true);
-    setSaveError(null);
-    try {
-      const res = await fetch("/api/business/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          businessId,
-          soulMd: soul,
-          identityMd: identity
-        })
-      });
-      const payload = (await res.json().catch(() => null)) as
-        | { ok?: boolean; error?: { message?: string } }
-        | null;
-      if (!res.ok) {
-        const msg =
-          payload?.ok === false && typeof payload.error?.message === "string"
-            ? payload.error.message
-            : "Save failed";
-        setSaveError(msg);
-        return;
-      }
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
-    } catch (err) {
-      setSaveError(
-        err instanceof Error ? err.message : "Could not save. Check your connection and try again.",
-      );
-    } finally {
-      setSaving(false);
-    }
+    await save({
+      businessId,
+      soulMd: soul,
+      identityMd: identity
+    });
   }
 
   return (
@@ -85,7 +57,7 @@ export function SoulEditor({ businessId, initialSoul, initialIdentity }: SoulEdi
           value={soul}
           onChange={(e) => {
             setSoul(e.target.value);
-            setSaveError(null);
+            clearSaveError();
           }}
           rows={5}
         />
@@ -99,7 +71,7 @@ export function SoulEditor({ businessId, initialSoul, initialIdentity }: SoulEdi
           value={identity}
           onChange={(e) => {
             setIdentity(e.target.value);
-            setSaveError(null);
+            clearSaveError();
           }}
           rows={5}
         />

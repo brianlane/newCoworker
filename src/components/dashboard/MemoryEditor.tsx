@@ -13,6 +13,7 @@ import {
 } from "@/lib/vault/business-config-markdown-limits";
 import { starterVaultBudgetStatus } from "@/lib/vault/starterContextBudget";
 import { websiteIngestErrorMessage } from "@/lib/website-ingest-copy";
+import { useBusinessConfigSave } from "@/components/dashboard/useBusinessConfigSave";
 
 interface MemoryEditorProps {
   businessId: string;
@@ -57,9 +58,7 @@ export function MemoryEditor({
     // alongside soul/identity/memory, so it must factor into the KVM2 budget.
     return starterVaultBudgetStatus(soul, identity, memory, websiteMd);
   }, [tier, soul, identity, memory, websiteMd]);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const { saving, saved, saveError, clearSaveError, save } = useBusinessConfigSave();
 
   const charLimitIssue = useMemo(() => {
     if (soul.length > BUSINESS_CONFIG_SOUL_MD_MAX_CHARS) {
@@ -79,41 +78,14 @@ export function MemoryEditor({
 
   async function handleSave() {
     if (charLimitIssue) return;
-    setSaving(true);
-    setSaveError(null);
-    try {
-      const res = await fetch("/api/business/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          businessId,
-          soulMd: soul,
-          identityMd: identity,
-          memoryMd: memory,
-          websiteMd,
-          websiteUrl
-        })
-      });
-      const payload = (await res.json().catch(() => null)) as
-        | { ok?: boolean; error?: { message?: string } }
-        | null;
-      if (!res.ok) {
-        const msg =
-          payload?.ok === false && typeof payload.error?.message === "string"
-            ? payload.error.message
-            : "Save failed";
-        setSaveError(msg);
-        return;
-      }
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
-    } catch (err) {
-      setSaveError(
-        err instanceof Error ? err.message : "Could not save. Check your connection and try again.",
-      );
-    } finally {
-      setSaving(false);
-    }
+    await save({
+      businessId,
+      soulMd: soul,
+      identityMd: identity,
+      memoryMd: memory,
+      websiteMd,
+      websiteUrl
+    });
   }
 
   async function handleRecrawl() {
@@ -204,7 +176,7 @@ export function MemoryEditor({
           value={soul}
           onChange={(e) => {
             setSoul(e.target.value);
-            setSaveError(null);
+            clearSaveError();
           }}
           rows={6}
           placeholder="Core personality, ethics, and communication style..."
@@ -223,7 +195,7 @@ export function MemoryEditor({
           value={identity}
           onChange={(e) => {
             setIdentity(e.target.value);
-            setSaveError(null);
+            clearSaveError();
           }}
           rows={6}
           placeholder="Business name, market, services, team info..."
@@ -243,7 +215,7 @@ export function MemoryEditor({
           value={memory}
           onChange={(e) => {
             setMemory(e.target.value);
-            setSaveError(null);
+            clearSaveError();
           }}
           rows={8}
           placeholder="Accumulated business knowledge..."
@@ -296,7 +268,7 @@ export function MemoryEditor({
             value={websiteMd}
             onChange={(e) => {
               setWebsiteMd(e.target.value);
-              setSaveError(null);
+              clearSaveError();
             }}
             rows={10}
             placeholder="Website summary (markdown). Regenerated when you re-crawl; edits above can be kept if you don't re-crawl."

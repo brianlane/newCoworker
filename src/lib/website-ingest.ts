@@ -573,13 +573,13 @@ async function defaultGeminiSummarize(prompt: string): Promise<string> {
   if (!apiKey) throw new Error("summarizer_unavailable");
   const resolvedModel = resolveWebsiteSummaryGeminiModel();
 
-  const controller = new AbortController();
-  /* c8 ignore next -- the 20s timer only fires when Gemini actually hangs;
-     AbortError classification is covered by classifyGeminiError tests. */
-  const timer = setTimeout(() => controller.abort(), 20_000);
-  try {
-    const generate = async (model: string) =>
-      geminiGenerateText({
+  const generateWithDeadline = async (model: string) => {
+    const controller = new AbortController();
+    /* c8 ignore next -- the 20s timer only fires when Gemini actually hangs;
+       AbortError classification is covered by classifyGeminiError tests. */
+    const timer = setTimeout(() => controller.abort(), 20_000);
+    try {
+      return await geminiGenerateText({
         apiKey,
         model,
         systemInstruction: WEBSITE_INGEST_SUMMARY_SYSTEM_PROMPT,
@@ -588,25 +588,26 @@ async function defaultGeminiSummarize(prompt: string): Promise<string> {
         maxOutputTokens: 1500,
         signal: controller.signal
       });
-
-    try {
-      return await generate(resolvedModel);
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : "";
-      if (
-        /^gemini_http_404(?::|$)/.test(detail) &&
-        resolvedModel.trim() !== WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT
-      ) {
-        try {
-          return await generate(WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT);
-        } catch (errFallback) {
-          remapGeminiEmptyToSummarizerEmpty(errFallback);
-        }
-      }
-      remapGeminiEmptyToSummarizerEmpty(err);
+    } finally {
+      clearTimeout(timer);
     }
-  } finally {
-    clearTimeout(timer);
+  };
+
+  try {
+    return await generateWithDeadline(resolvedModel);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : "";
+    if (
+      /^gemini_http_404(?::|$)/.test(detail) &&
+      resolvedModel.trim() !== WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT
+    ) {
+      try {
+        return await generateWithDeadline(WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT);
+      } catch (errFallback) {
+        remapGeminiEmptyToSummarizerEmpty(errFallback);
+      }
+    }
+    remapGeminiEmptyToSummarizerEmpty(err);
   }
 }
 

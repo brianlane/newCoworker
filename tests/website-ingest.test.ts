@@ -22,6 +22,8 @@ import {
 import * as geminiGc from "@/lib/gemini-generate-content";
 import { logger } from "@/lib/logger";
 
+type FetchArgs = Parameters<typeof fetch>;
+
 describe("normalizeWebsiteUrl", () => {
   it("prepends https when scheme is missing", () => {
     expect(normalizeWebsiteUrl("example.com")).toBe("https://example.com/");
@@ -1508,8 +1510,9 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
       expect(res.error).toBe("summarizer_failed");
       expect(res.detail).toMatch(/^gemini_http_404/);
     }
-    const googleHits = fetchMock.mock.calls.filter((call) => {
-      const input = call[0] as Request | string | URL;
+    const typedCalls = fetchMock.mock.calls as unknown as FetchArgs[];
+    const googleHits = typedCalls.filter((call) => {
+      const input = call[0];
       const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       return new URL(urlStr).hostname === "generativelanguage.googleapis.com";
     });

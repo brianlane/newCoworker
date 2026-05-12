@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { smokeTestGeminiOpenAiSummarizer } from "@/lib/website-ingest";
 
+type FetchArgs = Parameters<typeof fetch>;
+
 describe("smokeTestGeminiOpenAiSummarizer (offline, generateContent)", () => {
   const OLD_ENV = process.env;
 
@@ -30,10 +32,11 @@ describe("smokeTestGeminiOpenAiSummarizer (offline, generateContent)", () => {
     expect(out).toContain("OK_GEMINI_SMOKE");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url] = fetchMock.mock.calls[0]!;
+    const tuple = fetchMock.mock.calls.at(0) as FetchArgs | undefined;
+    expect(tuple).toBeDefined();
+    const [url, init] = tuple!;
     expect(String(url)).toMatch(/generateContent$/);
-    const [, init] = fetchMock.mock.calls[0]!;
-    const parsed = JSON.parse(String((init as RequestInit)?.body ?? "{}"));
+    const parsed = JSON.parse(String(init?.body ?? "{}"));
     expect(parsed.contents).toHaveLength(1);
     expect(parsed.contents?.[0]?.role).toBe("user");
   });

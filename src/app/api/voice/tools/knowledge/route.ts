@@ -64,42 +64,39 @@ async function askGemini(question: string, context: string): Promise<string> {
   if (!apiKey) throw new Error("gemini_unavailable");
   const configured = process.env.GEMINI_ROWBOAT_MODEL?.trim();
   const primary = configured?.length ? configured : VOICE_GEMINI_LOOKUP_DEFAULT_MODEL;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 3000);
   const sys =
     "You answer caller questions about a specific small business using only the provided business knowledge. Reply in 1-2 short sentences meant to be read aloud. If the answer is not in the context, reply exactly: 'I don't have that handy - I'll make sure the team follows up.'";
   const userText = `Business knowledge:\n${context}\n\nCaller question: ${question}`;
-  try {
+
+  const runWithDeadline = async (model: string) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
     try {
       return await geminiGenerateText({
         apiKey,
-        model: primary,
+        model,
         systemInstruction: sys,
         userText,
         temperature: 0.1,
         maxOutputTokens: 200,
         signal: controller.signal
       });
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : "";
-      if (
-        /^gemini_http_404(?::|$)/.test(detail) &&
-        primary !== VOICE_GEMINI_LOOKUP_DEFAULT_MODEL
-      ) {
-        return await geminiGenerateText({
-          apiKey,
-          model: VOICE_GEMINI_LOOKUP_DEFAULT_MODEL,
-          systemInstruction: sys,
-          userText,
-          temperature: 0.1,
-          maxOutputTokens: 200,
-          signal: controller.signal
-        });
-      }
-      throw err;
+    } finally {
+      clearTimeout(timer);
     }
-  } finally {
-    clearTimeout(timer);
+  };
+
+  try {
+    return await runWithDeadline(primary);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : "";
+    if (
+      /^gemini_http_404(?::|$)/.test(detail) &&
+      primary !== VOICE_GEMINI_LOOKUP_DEFAULT_MODEL
+    ) {
+      return await runWithDeadline(VOICE_GEMINI_LOOKUP_DEFAULT_MODEL);
+    }
+    throw err;
   }
 }
 
