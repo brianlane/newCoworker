@@ -28,6 +28,7 @@
 
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { buildBrandedEmailHtml } from "../_shared/branded_email_html.ts";
 
 interface WebhookPayload {
   type: "INSERT" | "UPDATE" | "DELETE";
@@ -391,8 +392,22 @@ serve(async (req: Request) => {
         "List-Unsubscribe": `<${unsubscribeUrl}>`,
         "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"
       };
+      const subject = `Urgent: ${summary}`;
       const baseText = `Your AI Coworker flagged an urgent event.\n\nSummary: ${summary}\nBusiness ID: ${record.business_id}\n\nView details: ${dashboardUrl}`;
       const text = `${baseText}\n\n---\nDon't want these alerts? Unsubscribe with one click: ${unsubscribeUrl}`;
+      const html = buildBrandedEmailHtml({
+        siteUrl: appUrl,
+        documentTitle: subject,
+        heading: subject,
+        bodyBlocks: [
+          { kind: "text", text: "Your AI Coworker flagged an urgent event." },
+          { kind: "text", text: `Summary: ${summary}` },
+          { kind: "text", text: `Business ID: ${record.business_id}` }
+        ],
+        cta: { label: "Open dashboard", href: dashboardUrl },
+        unsubscribeUrl,
+        recipientEmail: targets.email
+      });
       const emailRes = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers,
@@ -401,8 +416,9 @@ serve(async (req: Request) => {
             Deno.env.get("MAILER_EMAIL") ?? "New Coworker <contact@newcoworker.com>",
           to: targets.email,
           reply_to: Deno.env.get("CONTACT_EMAIL") ?? undefined,
-          subject: `Urgent: ${summary}`,
+          subject,
           text,
+          html,
           headers: emailHeaders
         })
       });

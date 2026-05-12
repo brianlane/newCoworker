@@ -108,6 +108,7 @@ describe("executeLifecyclePlan refund handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.RESEND_API_KEY = "resend_test";
+    process.env.NEXT_PUBLIC_APP_URL = "https://www.example.com";
     backupBusinessDataMock.mockResolvedValue({});
     deleteBusinessBackupMock.mockResolvedValue(undefined);
     updateBusinessStatusMock.mockResolvedValue(undefined);
@@ -159,8 +160,129 @@ describe("executeLifecyclePlan refund handling", () => {
       "resend_test",
       "owner@example.com",
       expect.stringMatching(/refund/i),
-      expect.stringContaining("$25.00")
+      expect.objectContaining({
+        text: expect.stringContaining("$25.00"),
+        html: expect.stringContaining("$25.00")
+      })
     );
+  });
+
+  it("uses localhost base URL for cancel email when NEXT_PUBLIC_APP_URL is unset", async () => {
+    const prevPublic = process.env.NEXT_PUBLIC_APP_URL;
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    const send = vi.fn().mockResolvedValue(null);
+    await executeLifecyclePlan(
+      {
+        stripeOps: [],
+        hostingerOps: [],
+        sshOps: [],
+        dbUpdates: [],
+        emailsToSend: [
+          {
+            type: "send_cancel_confirmation",
+            toEmail: "owner@example.com",
+            businessId: "biz_1",
+            reason: "user_refund",
+            effectiveAt: "2026-04-01T00:00:00.000Z",
+            graceEndsAt: "2026-05-01T00:00:00.000Z"
+          }
+        ]
+      },
+      { businessId: "biz_1", vpsHost: null },
+      { stripe: {} as never, sendEmail: send }
+    );
+    expect(send).toHaveBeenCalledTimes(1);
+    expect((send.mock.calls[0][3] as { html: string }).html).toContain("http://localhost:3000");
+    if (prevPublic === undefined) delete process.env.NEXT_PUBLIC_APP_URL;
+    else process.env.NEXT_PUBLIC_APP_URL = prevPublic;
+  });
+
+  it("strips trailing slash from NEXT_PUBLIC_APP_URL in cancel email HTML", async () => {
+    process.env.NEXT_PUBLIC_APP_URL = "https://trailing.example.com/";
+    const send = vi.fn().mockResolvedValue(null);
+    await executeLifecyclePlan(
+      {
+        stripeOps: [],
+        hostingerOps: [],
+        sshOps: [],
+        dbUpdates: [],
+        emailsToSend: [
+          {
+            type: "send_cancel_confirmation",
+            toEmail: "owner@example.com",
+            businessId: "biz_1",
+            reason: "user_refund",
+            effectiveAt: "2026-04-01T00:00:00.000Z",
+            graceEndsAt: "2026-05-01T00:00:00.000Z"
+          }
+        ]
+      },
+      { businessId: "biz_1", vpsHost: null },
+      { stripe: {} as never, sendEmail: send }
+    );
+    const html = (send.mock.calls[0][3] as { html: string }).html;
+    expect(html).not.toContain("https://trailing.example.com//");
+    expect(html).toContain("https://trailing.example.com/dashboard/billing");
+  });
+
+  it("uses localhost base URL for refund email when NEXT_PUBLIC_APP_URL is unset", async () => {
+    const prevPublic = process.env.NEXT_PUBLIC_APP_URL;
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    const stripe = {
+      subscriptions: { retrieve: vi.fn().mockResolvedValue({ latest_invoice: "in_123" }) },
+      invoices: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: "in_123",
+          amount_paid: 2500,
+          payments: {
+            data: [{ payment: { payment_intent: "pi_123" } }]
+          }
+        })
+      },
+      paymentIntents: {
+        retrieve: vi.fn().mockResolvedValue({ id: "pi_123", latest_charge: "ch_123" })
+      },
+      refunds: { create: vi.fn().mockResolvedValue({ id: "re_123" }) }
+    };
+    const send = vi.fn().mockResolvedValue(null);
+    await executeLifecyclePlan(
+      refundPlan(),
+      { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
+      { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: send }
+    );
+    expect(send).toHaveBeenCalled();
+    expect((send.mock.calls[0][3] as { html: string }).html).toContain("http://localhost:3000");
+    if (prevPublic === undefined) delete process.env.NEXT_PUBLIC_APP_URL;
+    else process.env.NEXT_PUBLIC_APP_URL = prevPublic;
+  });
+
+  it("strips trailing slash from NEXT_PUBLIC_APP_URL in refund email HTML", async () => {
+    process.env.NEXT_PUBLIC_APP_URL = "https://refund-trailing.example.com/";
+    const stripe = {
+      subscriptions: { retrieve: vi.fn().mockResolvedValue({ latest_invoice: "in_slash" }) },
+      invoices: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: "in_slash",
+          amount_paid: 2500,
+          payments: {
+            data: [{ payment: { payment_intent: "pi_slash" } }]
+          }
+        })
+      },
+      paymentIntents: {
+        retrieve: vi.fn().mockResolvedValue({ id: "pi_slash", latest_charge: "ch_slash" })
+      },
+      refunds: { create: vi.fn().mockResolvedValue({ id: "re_slash" }) }
+    };
+    const send = vi.fn().mockResolvedValue(null);
+    await executeLifecyclePlan(
+      refundPlan(),
+      { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
+      { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: send }
+    );
+    const html = (send.mock.calls[0][3] as { html: string }).html;
+    expect(html).not.toContain("https://refund-trailing.example.com//");
+    expect(html).toContain("https://refund-trailing.example.com/dashboard/billing");
   });
 
   it("does not burn refund eligibility or send refund email when Stripe has no paid amount", async () => {
@@ -284,7 +406,10 @@ describe("executeLifecyclePlan refund handling", () => {
       "resend_test",
       "owner@example.com",
       expect.stringMatching(/scheduled/i),
-      expect.stringContaining("Your cancellation is scheduled")
+      expect.objectContaining({
+        text: expect.stringContaining("Your cancellation is scheduled"),
+        html: expect.stringContaining("Your cancellation is scheduled")
+      })
     );
   });
 
@@ -608,6 +733,7 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.RESEND_API_KEY = "resend_test";
+    process.env.NEXT_PUBLIC_APP_URL = "https://www.example.com";
     backupBusinessDataMock.mockResolvedValue({});
     deleteBusinessBackupMock.mockResolvedValue(undefined);
     updateBusinessStatusMock.mockResolvedValue(undefined);
@@ -731,7 +857,10 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
       "resend_test",
       "owner@example.com",
       expect.stringMatching(/refund/i),
-      expect.stringContaining("$42.00")
+      expect.objectContaining({
+        text: expect.stringContaining("$42.00"),
+        html: expect.stringContaining("$42.00")
+      })
     );
   });
 

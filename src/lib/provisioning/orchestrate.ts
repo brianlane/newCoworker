@@ -18,6 +18,7 @@ import {
 } from "@/lib/telnyx/platform-defaults";
 import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
 import { sendOwnerEmail } from "@/lib/email/client";
+import { buildProvisioningLiveEmail } from "@/lib/email/templates/provisioning-live";
 import { updateBusinessStatus } from "@/lib/db/businesses";
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
@@ -928,16 +929,17 @@ async function runOrchestrator(
 
   const notifyEmail = ownerEmail ?? process.env.ADMIN_EMAIL;
   const notifyPhone = ownerPhone ?? process.env.TELNYX_OWNER_PHONE;
-  const dashboardUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/dashboard`;
+  const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+  const dashboardUrl = `${siteUrl}/dashboard`;
 
   if (notifyEmail) {
     try {
-      await sendOwnerEmail(
-        process.env.RESEND_API_KEY ?? "",
-        notifyEmail,
-        "Your AI Coworker is live!",
-        `Your New Coworker is set up and ready. Visit your dashboard: ${dashboardUrl}`
-      );
+      const { subject, text, html } = buildProvisioningLiveEmail({
+        dashboardUrl,
+        siteUrl,
+        recipientEmail: notifyEmail
+      });
+      await sendOwnerEmail(process.env.RESEND_API_KEY ?? "", notifyEmail, subject, { text, html });
     } catch (err) {
       logger.warn("Failed to send provisioning email", {
         error: err instanceof Error ? err.message : String(err)

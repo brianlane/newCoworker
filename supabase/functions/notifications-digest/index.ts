@@ -31,6 +31,7 @@
 
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { buildBrandedEmailHtml, type BrandedBodyBlock } from "../_shared/branded_email_html.ts";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 
 type SupaClient = ReturnType<typeof createClient>;
@@ -78,13 +79,15 @@ async function recordDigestRow(
   if (error) console.error("digest.insert", status, error);
 }
 
-function buildDigestText(opts: {
+function buildDigestEmail(opts: {
   businessName: string;
   logs: LogRow[];
   notifs: NotifSkim[];
   dashboardUrl: string;
   unsubscribeUrl: string;
-}): { subject: string; text: string; activitySummary: string } {
+  appUrl: string;
+  recipientEmail: string;
+}): { subject: string; text: string; html: string; activitySummary: string } {
   const counts: Record<string, number> = {};
   for (const l of opts.logs) {
     counts[l.task_type] = (counts[l.task_type] ?? 0) + 1;
@@ -109,11 +112,38 @@ function buildDigestText(opts: {
     "---",
     `Don't want these emails? Unsubscribe with one click: ${opts.unsubscribeUrl}`
   ];
-  return {
-    subject,
-    text: lines.join("\n"),
-    activitySummary: `${opts.logs.length} events (${urgent} urgent)`
-  };
+  const text = lines.join("\n");
+  const activitySummary = `${opts.logs.length} events (${urgent} urgent)`;
+
+  const bodyBlocks: BrandedBodyBlock[] = [
+    { kind: "text", text: `Hi — here's a quick rundown from your AI Coworker over the last 24 hours.` },
+    {
+      kind: "text",
+      text: [
+        `Total events: ${opts.logs.length}`,
+        urgent > 0 ? `Urgent alerts: ${urgent}` : "Urgent alerts: 0",
+        `Notifications delivered: ${unread}`
+      ].join("\n")
+    }
+  ];
+  if (taskLines.length > 0) {
+    bodyBlocks.push({ kind: "text", text: `Breakdown:\n${taskLines}` });
+  } else {
+    bodyBlocks.push({ kind: "text", text: "No activity to break down." });
+  }
+
+  const siteUrl = opts.appUrl.replace(/\/$/, "");
+  const html = buildBrandedEmailHtml({
+    siteUrl,
+    documentTitle: subject,
+    heading: subject,
+    bodyBlocks,
+    cta: { label: "Open dashboard", href: opts.dashboardUrl },
+    unsubscribeUrl: opts.unsubscribeUrl,
+    recipientEmail: opts.recipientEmail
+  });
+
+  return { subject, text, html, activitySummary };
 }
 
 serve(async (req: Request) => {
@@ -293,12 +323,14 @@ serve(async (req: Request) => {
 
     const unsubscribeUrl = buildUnsubscribeUrl(t.business_id, appUrl);
     const dashboardUrl = `${appUrl}/dashboard`;
-    const { subject, text, activitySummary } = buildDigestText({
+    const { subject, text, html, activitySummary } = buildDigestEmail({
       businessName: t.business_name ?? "your business",
       logs,
       notifs,
       dashboardUrl,
-      unsubscribeUrl
+      unsubscribeUrl,
+      appUrl,
+      recipientEmail: recipient
     });
 
     const headers: Record<string, string> = {
@@ -323,6 +355,7 @@ serve(async (req: Request) => {
         to: [recipient],
         subject,
         text,
+        html,
         ...(replyTo ? { reply_to: replyTo } : {}),
         headers
       })

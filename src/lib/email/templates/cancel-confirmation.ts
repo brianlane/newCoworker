@@ -7,13 +7,11 @@
  * gets an accurate account of what just happened and what they can do
  * next (undo, reactivate, or just let the wipe clock run out).
  *
- * Intentionally plain-text — the surrounding mailer (`sendOwnerEmail`
- * via Resend) handles wrapping, From/Reply-To headers, and deliverability.
- *
  * Keep this file deterministic and input-pure: no DB reads, no `Date.now()`,
  * no env lookups. Easy to snapshot-test and reason about.
  */
 
+import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
 import type { CancelReason } from "@/lib/db/subscriptions";
 
 export type CancelConfirmationInput = {
@@ -22,54 +20,92 @@ export type CancelConfirmationInput = {
   effectiveAt: string;
   /** ISO timestamp when data will be wiped, or null for scheduled-period-end (grace starts after the period). */
   graceEndsAt: string | null;
+  recipientEmail: string;
+  /** App origin without trailing slash (e.g. https://www.newcoworker.com). */
+  siteUrl: string;
 };
 
 export type CancelConfirmationEmail = {
   subject: string;
   text: string;
+  html: string;
 };
+
+function envelope(
+  subject: string,
+  textLines: string[],
+  siteUrl: string,
+  recipientEmail: string,
+  cta: { label: string; href: string } | undefined
+): CancelConfirmationEmail {
+  const normalizedSite = siteUrl.replace(/\/$/, "");
+  const text = textLines.join("\n\n");
+  const html = buildBrandedEmailHtml({
+    siteUrl: normalizedSite,
+    documentTitle: subject,
+    heading: subject,
+    bodyBlocks: textLines.map((t) => ({ kind: "text" as const, text: t })),
+    ...(cta ? { cta } : {}),
+    includeFallbackLink: cta !== undefined,
+    recipientEmail
+  });
+  return { subject, text, html };
+}
 
 export function buildCancelConfirmationEmail(
   input: CancelConfirmationInput
 ): CancelConfirmationEmail {
   const effective = fmtDate(input.effectiveAt);
   const graceEnds = input.graceEndsAt ? fmtDate(input.graceEndsAt) : null;
+  const normalizedSite = input.siteUrl.replace(/\/$/, "");
+  const billingUrl = `${normalizedSite}/dashboard/billing`;
+  const dashboardUrl = `${normalizedSite}/dashboard`;
+  const billingCta = { label: "Open billing", href: billingUrl };
 
   if (input.reason === "user_period_end") {
-    return {
-      subject: "Your NewCoworker subscription is scheduled to end",
-      text: [
+    return envelope(
+      "Your NewCoworker subscription is scheduled to end",
+      [
         "Your cancellation is scheduled.",
         `Your NewCoworker subscription will end on ${effective}.`,
         "You can undo this anytime before then from your billing dashboard.",
         "After the end date, your workspace enters a 30-day data-retention window during which you can reactivate without losing any data.",
         "— The NewCoworker Team"
-      ].join("\n\n")
-    };
+      ],
+      input.siteUrl,
+      input.recipientEmail,
+      billingCta
+    );
   }
 
   if (input.reason === "payment_failed") {
-    return {
-      subject: "Your NewCoworker subscription has been paused",
-      text: [
+    return envelope(
+      "Your NewCoworker subscription has been paused",
+      [
         "We couldn't process your last payment, so your subscription has been canceled.",
         `Your data is preserved until ${graceEnds ?? "30 days from now"} so you don't lose anything while you sort things out.`,
         "Reactivate anytime from your billing dashboard to restore access — we'll run a fresh checkout and bring your workspace back online within a few minutes.",
         "— The NewCoworker Team"
-      ].join("\n\n")
-    };
+      ],
+      input.siteUrl,
+      input.recipientEmail,
+      billingCta
+    );
   }
 
   if (input.reason === "upgrade_switch") {
-    return {
-      subject: "Your NewCoworker plan change is in progress",
-      text: [
+    return envelope(
+      "Your NewCoworker plan change is in progress",
+      [
         "Your previous NewCoworker plan has been canceled as part of your plan change.",
         "We're migrating your workspace to a fresh server on the new plan — this typically takes a few minutes.",
         "You'll get a separate confirmation when the new plan is fully live.",
         "— The NewCoworker Team"
-      ].join("\n\n")
-    };
+      ],
+      input.siteUrl,
+      input.recipientEmail,
+      { label: "Open dashboard", href: dashboardUrl }
+    );
   }
 
   const leadIn =
@@ -77,26 +113,32 @@ export function buildCancelConfirmationEmail(
       ? "A NewCoworker administrator canceled your subscription."
       : "Your subscription has been canceled at your request.";
   if (input.reason === "admin_force") {
-    return {
-      subject: "Your NewCoworker account has been closed",
-      text: [
+    return envelope(
+      "Your NewCoworker account has been closed",
+      [
         leadIn,
         "Your workspace access has been disabled and account data has been scheduled for immediate wipe.",
         "Contact support if you believe this was a mistake.",
         "— The NewCoworker Team"
-      ].join("\n\n")
-    };
+      ],
+      input.siteUrl,
+      input.recipientEmail,
+      undefined
+    );
   }
 
-  return {
-    subject: "Your NewCoworker subscription has been canceled",
-    text: [
+  return envelope(
+    "Your NewCoworker subscription has been canceled",
+    [
       leadIn,
       `Your data is preserved until ${graceEnds ?? "30 days from now"}.`,
       "Reactivate anytime from your billing dashboard to restore access before the data-retention window closes.",
       "— The NewCoworker Team"
-    ].join("\n\n")
-  };
+    ],
+    input.siteUrl,
+    input.recipientEmail,
+    billingCta
+  );
 }
 
 function fmtDate(iso: string): string {
@@ -106,8 +148,6 @@ function fmtDate(iso: string): string {
       month: "long",
       day: "numeric"
     });
-  /* v8 ignore next 3 -- Intl date formatting does not throw for invalid ISO strings in supported runtimes. */
-  /* c8 ignore next 3 -- Intl date formatting does not throw for invalid ISO strings in supported runtimes. */
   } catch {
     return iso;
   }
