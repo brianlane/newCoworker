@@ -3,6 +3,7 @@ import {
   getNotificationPreferences,
   getOrCreateNotificationPreferences,
   isUniqueViolation,
+  mergeNotificationContactDefaults,
   updateNotificationPreferences
 } from "@/lib/db/notification-preferences";
 
@@ -32,6 +33,73 @@ describe("db/notification-preferences", () => {
     expect(isUniqueViolation({ message: "duplicate key value violates unique constraint" })).toBe(
       true
     );
+  });
+
+  it("mergeNotificationContactDefaults fills null prefs from sources", () => {
+    const merged = mergeNotificationContactDefaults(PREFS, {
+      userEmail: "u@example.com",
+      authPhone: "+1999",
+      ownerEmail: "owner@biz.com",
+      businessPhone: "5551112222"
+    });
+    expect(merged.alert_email).toBe("u@example.com");
+    expect(merged.phone_number).toBe("+1999");
+    expect(merged.business_id).toBe("biz-1");
+  });
+
+  it("mergeNotificationContactDefaults prefers stored prefs over sources", () => {
+    const row = {
+      ...PREFS,
+      alert_email: "alert@prio.com",
+      phone_number: "+1888"
+    };
+    const merged = mergeNotificationContactDefaults(row, {
+      userEmail: "u@example.com",
+      authPhone: "+1999",
+      ownerEmail: "owner@biz.com",
+      businessPhone: "5551112222"
+    });
+    expect(merged.alert_email).toBe("alert@prio.com");
+    expect(merged.phone_number).toBe("+1888");
+  });
+
+  it("mergeNotificationContactDefaults skips blank prefs and trims", () => {
+    const merged = mergeNotificationContactDefaults(
+      {
+        ...PREFS,
+        alert_email: "",
+        phone_number: "  "
+      },
+      {
+        userEmail: null,
+        authPhone: null,
+        ownerEmail: " fallback@biz.com ",
+        businessPhone: " +12225550100 "
+      }
+    );
+    expect(merged.alert_email).toBe("fallback@biz.com");
+    expect(merged.phone_number).toBe("+12225550100");
+  });
+
+  it("mergeNotificationContactDefaults uses owner email when user email absent", () => {
+    const merged = mergeNotificationContactDefaults(PREFS, {
+      userEmail: null,
+      authPhone: null,
+      ownerEmail: "only-owner@biz.com",
+      businessPhone: null
+    });
+    expect(merged.alert_email).toBe("only-owner@biz.com");
+    expect(merged.phone_number).toBeNull();
+  });
+
+  it("mergeNotificationContactDefaults uses businessPhone when auth phone absent", () => {
+    const merged = mergeNotificationContactDefaults(PREFS, {
+      userEmail: null,
+      authPhone: null,
+      ownerEmail: null,
+      businessPhone: "5550001111"
+    });
+    expect(merged.phone_number).toBe("5550001111");
   });
 
   it("getNotificationPreferences returns row", async () => {

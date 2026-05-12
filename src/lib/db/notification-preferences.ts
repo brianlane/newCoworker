@@ -20,6 +20,40 @@ export type NotificationPreferencesRow = {
   updated_at: string;
 };
 
+/** Non-empty trimmed string, or null when missing/blank. */
+function trimToNull(s: string | null | undefined): string | null {
+  if (s == null) return null;
+  const t = s.trim();
+  return t.length > 0 ? t : null;
+}
+
+/**
+ * Fill `alert_email` / `phone_number` for the dashboard form when preference
+ * rows are still null — session email, auth phone, then business onboarding fields.
+ * Does not mutate the database; first Save persists merged values.
+ */
+export function mergeNotificationContactDefaults(
+  prefs: NotificationPreferencesRow,
+  sources: {
+    userEmail: string | null;
+    authPhone: string | null;
+    ownerEmail: string | null;
+    businessPhone: string | null;
+  }
+): NotificationPreferencesRow {
+  return {
+    ...prefs,
+    alert_email:
+      trimToNull(prefs.alert_email) ??
+      trimToNull(sources.userEmail) ??
+      trimToNull(sources.ownerEmail),
+    phone_number:
+      trimToNull(prefs.phone_number) ??
+      trimToNull(sources.authPhone) ??
+      trimToNull(sources.businessPhone)
+  };
+}
+
 export type NotificationPreferencesUpdate = Partial<
   Pick<
     NotificationPreferencesRow,

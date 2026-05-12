@@ -1,7 +1,10 @@
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { getOrCreateNotificationPreferences } from "@/lib/db/notification-preferences";
+import {
+  getOrCreateNotificationPreferences,
+  mergeNotificationContactDefaults
+} from "@/lib/db/notification-preferences";
 import { getNotifications } from "@/lib/db/notifications";
 import { Card } from "@/components/ui/Card";
 import { NotificationPreferences } from "@/components/dashboard/NotificationPreferences";
@@ -17,13 +20,23 @@ export default async function NotificationsPage() {
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
-    .select("id")
+    .select("id, owner_email, phone")
     .eq("owner_email", user.email)
     .limit(1);
 
-  const businessId = businesses?.[0]?.id ?? null;
+  const businessRow = businesses?.[0] ?? null;
+  const businessId = businessRow?.id ?? null;
 
   const prefs = businessId ? await getOrCreateNotificationPreferences(businessId) : null;
+  const prefsForForm =
+    prefs && businessRow
+      ? mergeNotificationContactDefaults(prefs, {
+          userEmail: user.email,
+          authPhone: user.phone ?? null,
+          ownerEmail: businessRow.owner_email ?? null,
+          businessPhone: businessRow.phone ?? null
+        })
+      : null;
   const recent = businessId ? await getNotifications(businessId, { limit: 25 }) : [];
 
   return (
@@ -35,7 +48,7 @@ export default async function NotificationsPage() {
         </p>
       </div>
 
-      {!businessId || !prefs ? (
+      {!businessId || !prefsForForm ? (
         <Card>
           <p className="text-parchment/60 text-sm text-center py-6">
             Provision your coworker to configure notification preferences.
@@ -51,7 +64,7 @@ export default async function NotificationsPage() {
         <>
           <Card>
             <h2 className="text-sm font-semibold text-parchment mb-4">Preferences</h2>
-            <NotificationPreferences businessId={businessId} initial={prefs} />
+            <NotificationPreferences businessId={businessId} initial={prefsForForm} />
           </Card>
 
           <Card>
