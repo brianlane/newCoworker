@@ -167,11 +167,16 @@ export async function POST(request: Request) {
       // fail this 200.
       try {
         const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+        const siteUrl = baseUrl.replace(/\/$/, "");
         const verificationToken = createEmailVerificationToken(ownerEmail);
         const verificationUrl =
-          `${baseUrl.replace(/\/$/, "")}/verify-email?token=${encodeURIComponent(verificationToken)}`;
-        const { subject, text } = buildEmailVerificationMessage({ verificationUrl });
-        await sendOwnerEmail(process.env.RESEND_API_KEY ?? "", ownerEmail, subject, text);
+          `${siteUrl}/verify-email?token=${encodeURIComponent(verificationToken)}`;
+        const { subject, text, html } = buildEmailVerificationMessage({
+          verificationUrl,
+          siteUrl,
+          recipientEmail: ownerEmail
+        });
+        await sendOwnerEmail(process.env.RESEND_API_KEY ?? "", ownerEmail, subject, { text, html });
         logger.info("set-password: verification email dispatched", {
           sessionId: body.sessionId,
           businessId,

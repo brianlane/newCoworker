@@ -35,12 +35,17 @@ export async function POST() {
     }
 
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+    const siteUrl = baseUrl.replace(/\/$/, "");
     const token = createEmailVerificationToken(user.email);
-    const verificationUrl = `${baseUrl.replace(/\/$/, "")}/verify-email?token=${encodeURIComponent(token)}`;
-    const { subject, text } = buildEmailVerificationMessage({ verificationUrl });
+    const verificationUrl = `${siteUrl}/verify-email?token=${encodeURIComponent(token)}`;
+    const { subject, text, html } = buildEmailVerificationMessage({
+      verificationUrl,
+      siteUrl,
+      recipientEmail: user.email
+    });
 
     try {
-      await sendOwnerEmail(process.env.RESEND_API_KEY ?? "", user.email, subject, text);
+      await sendOwnerEmail(process.env.RESEND_API_KEY ?? "", user.email, subject, { text, html });
     } catch (err) {
       logger.error("send-verification: resend send failed", {
         userId: user.userId,

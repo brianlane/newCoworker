@@ -108,6 +108,7 @@ describe("executeLifecyclePlan refund handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.RESEND_API_KEY = "resend_test";
+    process.env.NEXT_PUBLIC_APP_URL = "https://www.example.com";
     backupBusinessDataMock.mockResolvedValue({});
     deleteBusinessBackupMock.mockResolvedValue(undefined);
     updateBusinessStatusMock.mockResolvedValue(undefined);
@@ -159,7 +160,10 @@ describe("executeLifecyclePlan refund handling", () => {
       "resend_test",
       "owner@example.com",
       expect.stringMatching(/refund/i),
-      expect.stringContaining("$25.00")
+      expect.objectContaining({
+        text: expect.stringContaining("$25.00"),
+        html: expect.stringContaining("$25.00")
+      })
     );
   });
 
@@ -284,7 +288,10 @@ describe("executeLifecyclePlan refund handling", () => {
       "resend_test",
       "owner@example.com",
       expect.stringMatching(/scheduled/i),
-      expect.stringContaining("Your cancellation is scheduled")
+      expect.objectContaining({
+        text: expect.stringContaining("Your cancellation is scheduled"),
+        html: expect.stringContaining("Your cancellation is scheduled")
+      })
     );
   });
 
@@ -608,6 +615,7 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.RESEND_API_KEY = "resend_test";
+    process.env.NEXT_PUBLIC_APP_URL = "https://www.example.com";
     backupBusinessDataMock.mockResolvedValue({});
     deleteBusinessBackupMock.mockResolvedValue(undefined);
     updateBusinessStatusMock.mockResolvedValue(undefined);
@@ -731,7 +739,10 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
       "resend_test",
       "owner@example.com",
       expect.stringMatching(/refund/i),
-      expect.stringContaining("$42.00")
+      expect.objectContaining({
+        text: expect.stringContaining("$42.00"),
+        html: expect.stringContaining("$42.00")
+      })
     );
   });
 

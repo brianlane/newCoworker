@@ -32,6 +32,7 @@ import {
   type NotificationStatus
 } from "@/lib/db/notifications";
 import { sendOwnerEmail } from "@/lib/email/client";
+import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
 import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
 import { logger } from "@/lib/logger";
 
@@ -236,9 +237,20 @@ export async function dispatchUrgentNotification(
     const body =
       input.emailBody ??
       `Your AI Coworker flagged an urgent event: ${summary}\n\nView details: ${dashboardUrl}`;
+    const bodyParagraphs = body.split(/\n\n+/).filter(Boolean);
+    const html = buildBrandedEmailHtml({
+      siteUrl: appUrl,
+      documentTitle: subject,
+      heading: subject,
+      bodyBlocks: bodyParagraphs.map((t) => ({ kind: "text" as const, text: t })),
+      cta: { label: "Open dashboard", href: dashboardUrl },
+      unsubscribeUrl,
+      recipientEmail: targets.email
+    });
     try {
       await sendOwnerEmail(process.env.RESEND_API_KEY ?? "", targets.email, subject, {
         text: body,
+        html,
         unsubscribeUrl
       });
       results.push(

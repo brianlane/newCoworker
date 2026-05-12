@@ -460,12 +460,15 @@ async function runEmailOp(
   }
   switch (op.type) {
     case "send_cancel_confirmation": {
-      const { subject, text } = buildCancelConfirmationEmail({
+      const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+      const { subject, text, html } = buildCancelConfirmationEmail({
         reason: op.reason,
         effectiveAt: op.effectiveAt,
-        graceEndsAt: op.graceEndsAt
+        graceEndsAt: op.graceEndsAt,
+        recipientEmail: op.toEmail,
+        siteUrl
       });
-      await send(apiKey, op.toEmail, subject, text);
+      await send(apiKey, op.toEmail, subject, { text, html });
       return;
     }
     case "send_refund_issued": {
@@ -476,8 +479,13 @@ async function runEmailOp(
         });
         return;
       }
-      const { subject, text } = buildRefundIssuedEmail({ amountCents });
-      await send(apiKey, op.toEmail, subject, text);
+      const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+      const { subject, text, html } = buildRefundIssuedEmail({
+        amountCents,
+        recipientEmail: op.toEmail,
+        siteUrl
+      });
+      await send(apiKey, op.toEmail, subject, { text, html });
       return;
     }
   }

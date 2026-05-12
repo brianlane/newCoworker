@@ -261,12 +261,14 @@ describe("notifications/dispatch", () => {
       kind: "urgent_alert"
     });
     const call = vi.mocked(sendOwnerEmail).mock.calls[0];
-    const opts = call[3] as { unsubscribeUrl?: string | null };
+    const opts = call[3] as { unsubscribeUrl?: string | null; text?: string; html?: string };
     expect(opts.unsubscribeUrl).toBe(
       `https://app.example.com/api/notifications/unsubscribe?bid=${encodeURIComponent(BIZ)}`
     );
     // Must NOT live under /dashboard (regression for the original bot finding).
     expect(opts.unsubscribeUrl).not.toContain("/dashboard/api/");
+    expect(opts.html).toContain("https://app.example.com/dashboard");
+    expect(opts.html).not.toContain("//dashboard");
   });
 
   it("does not crash when prefs lookup throws — falls through to env defaults", async () => {
@@ -361,13 +363,15 @@ describe("notifications/dispatch", () => {
       kind: "urgent_alert"
     });
     const call = vi.mocked(sendOwnerEmail).mock.calls[0];
-    const opts = call[3] as { unsubscribeUrl?: string | null; text?: string };
+    const opts = call[3] as { unsubscribeUrl?: string | null; text?: string; html?: string };
     expect(opts.unsubscribeUrl).toBe(
       `https://app.example.com/api/notifications/unsubscribe?bid=${encodeURIComponent(BIZ)}`
     );
     expect(opts.unsubscribeUrl).not.toContain("//api/");
     expect(opts.text).toContain("https://app.example.com/dashboard");
     expect(opts.text).not.toContain("//dashboard");
+    expect(opts.html).toContain("https://app.example.com/dashboard");
+    expect(opts.html).not.toContain("//dashboard");
   });
 
   it("uses fallback dashboardUrl + empty RESEND_API_KEY when env vars unset", async () => {
@@ -384,8 +388,9 @@ describe("notifications/dispatch", () => {
     // sendOwnerEmail invoked with empty apiKey (??"" branch)
     const call = vi.mocked(sendOwnerEmail).mock.calls[0];
     expect(call[0]).toBe("");
-    // dashboard URL fallback shows up in the synthesized email body.
-    const body = (call[3] as { text: string }).text;
+    const body = (call[3] as { text: string; html: string }).text;
+    const html = (call[3] as { text: string; html: string }).html;
     expect(body).toContain("http://localhost:3000/dashboard");
+    expect(html).toContain("http://localhost:3000/dashboard");
   });
 });
