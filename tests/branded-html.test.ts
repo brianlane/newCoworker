@@ -1,9 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { buildBrandedEmailHtml, escapeHtml } from "@/lib/email/branded-html";
+import {
+  buildBrandedEmailHtml,
+  escapeAttr,
+  escapeHtml,
+  type BrandedEmailHtmlInput
+} from "@/lib/email/branded-html";
+import {
+  buildBrandedEmailHtml as buildBrandedEmailHtmlEdge,
+  escapeAttr as escapeAttrEdge,
+  escapeHtml as escapeHtmlEdge
+} from "../supabase/functions/_shared/branded_email_html.ts";
 
 describe("branded-html", () => {
   it("escapeHtml neutralises HTML-sensitive characters", () => {
     expect(escapeHtml(`a & b < c > d "e"`)).toBe("a &amp; b &lt; c &gt; d &quot;e&quot;");
+  });
+
+  it("escapeAttr matches escapeHtml (attribute-safe)", () => {
+    expect(escapeAttr('&"')).toBe(escapeHtml('&"'));
+  });
+
+  it("preserves newlines in text body blocks (pre-line) for digest-style multiline stats", () => {
+    const html = buildBrandedEmailHtml({
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H",
+      bodyBlocks: [{ kind: "text", text: "Total events: 3\nUrgent alerts: 1" }],
+      recipientEmail: "u@x.y"
+    });
+    expect(html).toContain("white-space:pre-line");
+    expect(html).toMatch(/Total events: 3\s*\n\s*Urgent alerts: 1/);
   });
 
   it("buildBrandedEmailHtml includes logo, CTA href, and escaped dynamic heading", () => {
@@ -34,5 +60,171 @@ describe("branded-html", () => {
     });
     expect(html).toContain("Unsubscribe");
     expect(html).toContain("api/notifications/unsubscribe?bid=abc");
+  });
+
+  it("omits fallback link section when includeFallbackLink is false", () => {
+    const html = buildBrandedEmailHtml({
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H",
+      bodyBlocks: [{ kind: "text", text: "Hi" }],
+      cta: { label: "Go", href: "https://app.test/x" },
+      includeFallbackLink: false,
+      recipientEmail: "u@x.y"
+    });
+    expect(html).toContain("Go");
+    expect(html).not.toContain("If the button doesn't work");
+  });
+
+  it("renders fallback using fallbackHref without a CTA", () => {
+    const html = buildBrandedEmailHtml({
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H",
+      bodyBlocks: [{ kind: "text", text: "Hi" }],
+      fallbackHref: "https://app.test/only-fallback",
+      recipientEmail: "u@x.y"
+    });
+    expect(html).toContain("only-fallback");
+    expect(html).not.toContain("mso-text-raise");
+  });
+
+  it("renders html-kind body blocks and security note", () => {
+    const html = buildBrandedEmailHtml({
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H",
+      bodyBlocks: [{ kind: "html", html: "<strong style=\"color:#1BD96A\">X</strong>" }],
+      securityNote: "If this was not you, ignore.",
+      recipientEmail: "u@x.y"
+    });
+    expect(html).toContain("color:#1BD96A");
+    expect(html).toContain("If this was not you");
+  });
+
+  it("omits the body row when there are no blocks and no warning line", () => {
+    const html = buildBrandedEmailHtml({
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H only",
+      bodyBlocks: [],
+      cta: { label: "Go", href: "https://app.test/z" },
+      recipientEmail: "u@x.y"
+    });
+    expect(html).toContain("H only");
+    expect(html).not.toContain(
+      "margin:0 0 16px;font-size:16px;line-height:1.6;color:#F5F0E8"
+    );
+  });
+
+  it("renders warning line in accent color", () => {
+    const html = buildBrandedEmailHtml({
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H",
+      bodyBlocks: [{ kind: "text", text: "Hi" }],
+      warningLine: "This link expires in 1 hour.",
+      cta: { label: "Go", href: "https://app.test/w" },
+      recipientEmail: "u@x.y"
+    });
+    expect(html).toContain("#FF6B35");
+    expect(html).toContain("This link expires in 1 hour.");
+  });
+
+  it("omits unsubscribe when url is empty string", () => {
+    const html = buildBrandedEmailHtml({
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H",
+      bodyBlocks: [{ kind: "text", text: "Hi" }],
+      cta: { label: "Go", href: "https://app.test/g" },
+      unsubscribeUrl: "",
+      recipientEmail: "u@x.y"
+    });
+    expect(html).not.toContain("Don't want these emails?");
+  });
+});
+
+describe("branded_email_html (Edge parity)", () => {
+  const parityInputs: BrandedEmailHtmlInput[] = [
+    {
+      siteUrl: "https://parity.test",
+      documentTitle: "Doc",
+      heading: "Head",
+      bodyBlocks: [{ kind: "text", text: "Line" }],
+      cta: { label: "Act", href: "https://parity.test/a" },
+      recipientEmail: "r@p.t"
+    },
+    {
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H",
+      bodyBlocks: [{ kind: "text", text: "Hi" }],
+      cta: { label: "Go", href: "https://app.test/x" },
+      includeFallbackLink: false,
+      recipientEmail: "u@x.y"
+    },
+    {
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H",
+      bodyBlocks: [{ kind: "text", text: "Hi" }],
+      fallbackHref: "https://app.test/only-fallback",
+      recipientEmail: "u@x.y"
+    },
+    {
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H",
+      bodyBlocks: [{ kind: "html", html: "<strong style=\"color:#1BD96A\">X</strong>" }],
+      securityNote: "If this was not you, ignore.",
+      recipientEmail: "u@x.y"
+    },
+    {
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H only",
+      bodyBlocks: [],
+      cta: { label: "Go", href: "https://app.test/z" },
+      recipientEmail: "u@x.y"
+    },
+    {
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H",
+      bodyBlocks: [{ kind: "text", text: "Hi" }],
+      cta: { label: "Go", href: "https://app.test/d" },
+      unsubscribeUrl: "https://app.test/api/notifications/unsubscribe?bid=abc",
+      recipientEmail: "u@x.y"
+    },
+    {
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H",
+      bodyBlocks: [{ kind: "text", text: "Hi" }],
+      cta: { label: "Go", href: "https://app.test/g" },
+      unsubscribeUrl: "",
+      recipientEmail: "u@x.y"
+    },
+    {
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H",
+      bodyBlocks: [{ kind: "text", text: "Hi" }],
+      warningLine: "Watch out!",
+      cta: { label: "Go", href: "https://app.test/w" },
+      recipientEmail: "u@x.y"
+    }
+  ];
+
+  it("matches Node escapeHtml / escapeAttr for sample strings", () => {
+    expect(escapeHtmlEdge(`a & b`)).toBe(escapeHtml(`a & b`));
+    expect(escapeAttrEdge("u&")).toBe(escapeAttr("u&"));
+  });
+
+  it("matches Node buildBrandedEmailHtml for every parity input shape", () => {
+    for (const input of parityInputs) {
+      expect(buildBrandedEmailHtmlEdge(input)).toBe(buildBrandedEmailHtml(input));
+    }
   });
 });

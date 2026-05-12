@@ -49,7 +49,8 @@ function renderBodyBlocks(blocks: BrandedBodyBlock[]): string {
     .map((b) => {
       if (b.kind === "text") {
         const t = escapeHtml(b.text);
-        return `<p style="margin:0 0 16px;font-size:16px;line-height:1.6;color:#F5F0E8;">${t}</p>`;
+        // pre-line keeps intentional \n (digest stats, bullet lists); HTML collapses them otherwise.
+        return `<p style="margin:0 0 16px;font-size:16px;line-height:1.6;color:#F5F0E8;white-space:pre-line;">${t}</p>`;
       }
       return `<p style="margin:0 0 16px;font-size:16px;line-height:1.6;color:#F5F0E8;">${b.html}</p>`;
     })
