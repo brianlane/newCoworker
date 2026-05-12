@@ -76,6 +76,26 @@ describe("db/notification-preferences", () => {
     expect(c.alert_email).toBe("u@prio.com");
     expect(c.phone_number).toBe("5550001111");
   });
+
+  it("initialNotificationPreferenceContactsFromSeeds treats blank strings like null", () => {
+    expect(
+      initialNotificationPreferenceContactsFromSeeds({
+        userEmail: " \t ",
+        authPhone: "",
+        ownerEmail: " owner@biz.com ",
+        businessPhone: " \n "
+      })
+    ).toEqual({ alert_email: "owner@biz.com", phone_number: null });
+
+    expect(
+      initialNotificationPreferenceContactsFromSeeds({
+        userEmail: "",
+        authPhone: " ",
+        ownerEmail: "",
+        businessPhone: "final-phone "
+      })
+    ).toEqual({ alert_email: null, phone_number: "final-phone" });
+  });
   it("getNotificationPreferences returns row", async () => {
     const chain = {
       select: vi.fn().mockReturnThis(),
@@ -179,6 +199,32 @@ describe("db/notification-preferences", () => {
         phone_number: "+15550001111"
       })
     );
+  });
+
+  it("getOrCreateNotificationPreferences inserts defaults when opts has client but no contactSeeds", async () => {
+    const selectChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null })
+    };
+    const insertChain = {
+      insert: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({ data: PREFS, error: null })
+    };
+    const shared = {
+      from: vi.fn().mockReturnValueOnce(selectChain).mockReturnValueOnce(insertChain)
+    };
+
+    await getOrCreateNotificationPreferences("biz-1", { client: shared as never });
+
+    expect(insertChain.insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        alert_email: null,
+        phone_number: null
+      })
+    );
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
   });
 
   it("getOrCreateNotificationPreferences ignores contactSeeds when row exists", async () => {
