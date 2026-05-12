@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { smokeTestGeminiOpenAiSummarizer } from "@/lib/website-ingest";
+import { smokeTestGeminiSummarizeConnectivity } from "@/lib/website-ingest";
 
 type FetchArgs = Parameters<typeof fetch>;
 
-describe("smokeTestGeminiOpenAiSummarizer (offline, generateContent)", () => {
+describe("smokeTestGeminiSummarizeConnectivity (offline, generateContent)", () => {
   const OLD_ENV = process.env;
 
   beforeEach(() => {
@@ -28,7 +28,7 @@ describe("smokeTestGeminiOpenAiSummarizer (offline, generateContent)", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const out = await smokeTestGeminiOpenAiSummarizer();
+    const out = await smokeTestGeminiSummarizeConnectivity();
     expect(out).toContain("OK_GEMINI_SMOKE");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);

@@ -19,12 +19,13 @@ import { promises as dns } from "node:dns";
 import { geminiGenerateText } from "@/lib/gemini-generate-content";
 import { logger } from "@/lib/logger";
 import { isPrivateIpv4, isPrivateIpv6 } from "@/lib/net/ip-classification";
+import { BUSINESS_CONFIG_WEBSITE_MD_MAX_CHARS } from "@/lib/vault/business-config-markdown-limits";
 
 export const WEBSITE_INGEST_MAX_PAGES = 6;
 export const WEBSITE_INGEST_PAGE_TIMEOUT_MS = 5000;
 export const WEBSITE_INGEST_MAX_BYTES_PER_PAGE = 1_000_000;
 export const WEBSITE_INGEST_MAX_COMBINED_CHARS = 40_000;
-export const WEBSITE_INGEST_MAX_SUMMARY_CHARS = 8_000;
+export const WEBSITE_INGEST_MAX_SUMMARY_CHARS = BUSINESS_CONFIG_WEBSITE_MD_MAX_CHARS;
 
 /** Used when env omits `GEMINI_SUMMARY_MODEL`, or carries a Gemini id unsupported on `:generateContent`. */
 const WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT = "gemini-3-flash-preview";
@@ -615,7 +616,7 @@ async function defaultGeminiSummarize(prompt: string): Promise<string> {
  * Connectivity check against the same `:generateContent` route used by website
  * ingest. Unit-tested with mocked `fetch`; optional live run: `npm run test:gemini-live`.
  */
-export async function smokeTestGeminiOpenAiSummarizer(): Promise<string> {
+export async function smokeTestGeminiSummarizeConnectivity(): Promise<string> {
   return defaultGeminiSummarize(
     "You are a connectivity check only. Respond with exactly the single line: OK_GEMINI_SMOKE"
   );

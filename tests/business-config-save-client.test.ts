@@ -15,13 +15,16 @@ describe("postBusinessConfigSave", () => {
   });
 
   it("returns ok:true on HTTP 200", async () => {
-    const out = await postBusinessConfigSave({ soul_md: "hello" });
+    const out = await postBusinessConfigSave({ soulMd: "hello", businessId: "00000000-0000-4000-8000-000000000001" });
 
     expect(out).toEqual({ ok: true });
     expect(globalThis.fetch).toHaveBeenCalledWith("/api/business/config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ soul_md: "hello" })
+      body: JSON.stringify({
+        soulMd: "hello",
+        businessId: "00000000-0000-4000-8000-000000000001"
+      })
     });
   });
 

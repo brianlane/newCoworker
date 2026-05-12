@@ -13,7 +13,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["tests/gemini-openai-compat-live.test.ts"],
+    include: ["tests/gemini-summarize-connectivity-live.test.ts"],
     exclude: [],
     testTimeout: 40_000
   }
