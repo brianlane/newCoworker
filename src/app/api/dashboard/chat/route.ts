@@ -78,6 +78,7 @@ import {
   type DashboardChatThreadRow
 } from "@/lib/db/dashboard-chat";
 import {
+  getInFlightChatJobForThread,
   insertChatJob,
   type DashboardChatJobInputMessage
 } from "@/lib/db/dashboard-chat-jobs";
@@ -104,6 +105,14 @@ export const maxDuration = 30;
 
 const MAX_MESSAGE_CHARS = 4000;
 const HISTORY_TURNS = 20;
+// How many recent messages to replay verbatim as the "recent conversation
+// context" system block on EVERY turn (including continuation turns). Kept
+// small so we don't balloon CPU prefill on the per-tenant model — the box
+// is CPU-only and prefill cost tracks real prompt size — while still giving
+// the model deterministic recall of what was just said. The stateless-retry
+// fallback uses the full HISTORY_TURNS tail instead (no conversationId, so
+// it needs maximum local context). 8 messages ≈ the last ~4 turns.
+const RESEND_TAIL_MESSAGES = 8;
 
 const DASHBOARD_CHAT_RATE = { interval: 5 * 60 * 1000, maxRequests: 30 };
 
@@ -204,7 +213,9 @@ On THIS surface you are the OWNER'S internal AI assistant. Your job here is to:
 
 OWNER HAS FULL VISIBILITY. On THIS surface, the owner has full read access to every customer interaction this business has had — phone numbers, timestamps, message bodies, and call transcripts. None of those details are private FROM the owner. When the owner asks "what's the phone number" or "what time did they call", give the exact value from your "Recent customer activity" notes. Do NOT invent privacy/compliance rules; the only restriction is that you must not invent details that aren't actually in your context. Don't volunteer customer PII unprompted, but answer accurately whenever the owner asks directly.
 
-NO FABRICATION. If your "Recent customer activity" notes don't contain a specific detail the owner is asking about (a city like "Scottsdale", an exact time, the body of a message, the property they asked about), say so plainly: "I don't have that detail in my notes — check /dashboard/calls or /dashboard/messages for the full record." Never paraphrase a generic phrase like "wants to buy a home" into specifics like "3-bedroom in Scottsdale". You are working from a thin index, not a full transcript. Inventing details is worse than admitting you don't have them.
+YOUR OWN BUSINESS CONFIGURATION IS YOURS TO SHARE. Everything in YOUR OWN setup — your business memory, identity, soul, lead-routing rules, team roster and agent names, canned scripts, hours, and configured preferences — is the owner's own data. It is NOT confidential customer PII and you must NOT treat it as something you "don't have access to" or push the owner to "check their CRM." When the owner asks about it ("who do we route leads to", "what are the agents and their phone numbers", "what's our under-contract script"), answer directly and quote it from your instructions/memory. If you already stated something earlier in THIS conversation, you can and should restate it. Only call a specific value missing when it genuinely is not in your memory — and then say exactly which part you have vs. don't (e.g. "We route to Dave, Jason, and Gabby; I have Jason's number (480-703-9575) but the others haven't been provided yet"). Never refuse wholesale or deflect when the answer is sitting in your own configuration.
+
+NO FABRICATION (CUSTOMER DETAILS). If your "Recent customer activity" notes don't contain a specific CUSTOMER detail the owner is asking about (a city like "Scottsdale", an exact time, the body of a message, the property they asked about), say so plainly: "I don't have that detail in my notes — check /dashboard/calls or /dashboard/messages for the full record." Never paraphrase a generic phrase like "wants to buy a home" into specifics like "3-bedroom in Scottsdale". For customer specifics you are working from a thin index, not a full transcript. Inventing customer details is worse than admitting you don't have them. (This caution is about CUSTOMER data you weren't given — NOT about your own business configuration above, which you SHOULD share freely.)
 
 You may have access to a "Recent customer activity" system message below. That data is REAL — it summarizes actual customers who contacted this business by SMS or voice. Use it to answer questions like "did anyone call about X" or "what did the customer who texted yesterday want". Treat it as your working notes; quote the exact phone numbers and timestamps it contains when asked.
 
@@ -228,11 +239,21 @@ export { OWNER_PREAMBLE };
  * canonical contract: "Each leg sends only the new user message …
  * do not replay `{ role: 'assistant', content }`". So we instead:
  *
- *   - rely on Rowboat's server-side conversation memory via
- *     conversationId/state when we have it (`includeTailContext: false`);
- *   - on a fresh thread, render the recent-turn tail as a single
- *     transcript-shaped *system* message so the model still has
- *     continuity (`includeTailContext: true`).
+ *   - render the recent-turn tail as a single transcript-shaped *system*
+ *     message so the model always has explicit continuity
+ *     (`includeTailContext: true`).
+ *
+ * Why we now ALWAYS include the tail (vs. the old "omit on continuation,
+ * trust Rowboat's conversationId replay" design): production showed the
+ * small per-tenant model losing earlier turns on continuation — e.g. it
+ * listed the team's agent roster on turn 1 then claimed "I don't have
+ * access" two turns later (business 621a5b0d, June 2026). Root cause was
+ * a thin 4k context + zero resent history, so cross-turn recall hinged
+ * entirely on Rowboat replay the small model didn't reliably attend to.
+ * Resending a BOUNDED recent tail (see RESEND_TAIL_MESSAGES) every turn
+ * costs a little duplicate prefill but makes recall deterministic. The
+ * stateless-retry variant still carries the FULL tail (it runs without a
+ * conversationId, so it needs the maximum local context).
  *
  * The summary preamble (rolling-summary system message) and the new
  * user turn are always included.
@@ -281,7 +302,7 @@ function buildRowboatChatMessages(args: {
       .join("\n\n");
     out.push({
       role: "system",
-      content: `Recent conversation context (these are the most recent prior turns of THIS conversation, replayed for your reference because the live continuation was unavailable; respond as the assistant continuing this same thread):\n\n${transcript}`
+      content: `Recent conversation context (the most recent prior turns of THIS conversation, included for your reference so you reliably remember what was already said — including anything YOU told the owner. Treat these as ground truth for "what we discussed" and respond as the assistant continuing this same thread):\n\n${transcript}`
     });
   }
   // [Dashboard] channel marker mirrors the [SMS]/[Call] markers used
@@ -399,25 +420,25 @@ export async function POST(request: Request) {
       thread.rowboat_conversation_id.trim().length > 0;
 
     // Two message arrays:
-    //   * `inputMessages`: first attempt. When we have a Rowboat
-    //     continuation, this OMITS the tail-as-system message — Rowboat
-    //     replays its own server-side state and we'd be sending the
-    //     same context twice. On a fresh thread (no continuation) the
-    //     tail is included because Rowboat has nothing to replay.
+    //   * `inputMessages`: first attempt. ALWAYS includes a BOUNDED
+    //     recent tail (last RESEND_TAIL_MESSAGES) as a system block so
+    //     the model has deterministic recall of what was just said,
+    //     even on continuation turns where Rowboat would otherwise be
+    //     the sole keeper of history. (See buildRowboatChatMessages
+    //     doc for why we stopped trusting conversationId replay alone.)
     //   * `statelessInputMessages`: fallback used by the worker on a
-    //     STATELESS_RETRY_ERRORS-class failure. ALWAYS includes the
-    //     tail-as-system because it's invoked WITHOUT a conversationId
-    //     and Rowboat needs the context entirely from our prompt.
-    //
-    // When `hasContinuation` is false the two are identical; we pass
-    // null for the stateless variant so the worker's "no fallback"
-    // path kicks in (a stateless call already failed; a second one
-    // wouldn't help).
+    //     STATELESS_RETRY_ERRORS-class failure. Includes the FULL
+    //     HISTORY_TURNS tail because it's invoked WITHOUT a
+    //     conversationId and Rowboat needs the context entirely from
+    //     our prompt. Only built when we have a continuation to fall
+    //     back FROM; on a fresh thread the first attempt is already
+    //     stateless, so a second stateless call wouldn't help — we
+    //     pass null so the worker's "no fallback" path kicks in.
     const inputMessages = buildRowboatChatMessages({
       summaryMd: thread.summary_md,
-      tail,
+      tail: tail.slice(-RESEND_TAIL_MESSAGES),
       newUserMessage: body.message,
-      includeTailContext: !hasContinuation,
+      includeTailContext: true,
       customerPreamble
     });
     const statelessInputMessages = hasContinuation
@@ -493,12 +514,20 @@ export async function GET(request: Request) {
 
     const thread = await getActiveThread(businessId);
     const messages = thread ? await listMessages(thread.id) : [];
+    // Re-attach the "thinking…" indicator after a refresh / navigation:
+    // if the worker is still chewing on the active thread's latest turn,
+    // surface the live job id so the client can resume watching it
+    // (Realtime + poll) instead of the indicator vanishing on reload.
+    const pendingJob = thread ? await getInFlightChatJobForThread(thread.id) : null;
 
     return successResponse({
       threadId: thread?.id ?? null,
       messages: serializeChatMessages(messages),
       isPaused: flags.is_paused,
-      customerChannelsEnabled: flags.customer_channels_enabled
+      customerChannelsEnabled: flags.customer_channels_enabled,
+      pendingJob: pendingJob
+        ? { id: pendingJob.id, threadId: pendingJob.thread_id }
+        : null
     });
   } catch (err) {
     return handleRouteError(err);

@@ -90,6 +90,20 @@ const STALE_CLAIM_MS = intEnv("WORKER_STALE_CLAIM_MS", 5 * 60 * 1000);
 const SWEEP_INTERVAL_MS = intEnv("WORKER_SWEEP_INTERVAL_MS", 30 * 1000);
 const ROWBOAT_TIMEOUT_MS = intEnv("WORKER_ROWBOAT_TIMEOUT_MS", 4 * 60 * 1000);
 const MAX_ATTEMPTS = intEnv("WORKER_MAX_ATTEMPTS", 3);
+// Rowboat agent to enter on owner-dashboard turns. MUST match an agent in
+// this tenant's seeded workflow. deploy-client.sh seeds "OwnerCoworker"
+// (= Coworker's tool surface plus owner_append_business_memory), so that's
+// the default. Set CHAT_WORKER_OWNER_START_AGENT="" to omit startAgent
+// entirely — Rowboat then enters its workflow-default startAgent
+// ("Coworker"). That escape hatch matters for tenants still on an older
+// seed that predates OwnerCoworker: sending a non-existent agent name made
+// Rowboat silently fall back with no signal (observed on business
+// 621a5b0d, June 2026, whose Mongo workflow only had ["Coworker"]). Re-run
+// deploy-client.sh to seed OwnerCoworker, OR set this to "Coworker"/"".
+const OWNER_START_AGENT = (process.env.CHAT_WORKER_OWNER_START_AGENT ?? "OwnerCoworker").trim();
+const OWNER_START_AGENT_OPTS = OWNER_START_AGENT
+  ? { startAgent: OWNER_START_AGENT }
+  : {};
 const VERCEL_BASE_URL = (process.env.WORKER_VERCEL_BASE_URL || "").replace(/\/+$/, "");
 const VERCEL_BEARER = process.env.WORKER_VERCEL_BEARER || "";
 // Cap how long we'll let the summarizer callback hold an open
@@ -370,7 +384,7 @@ async function processJob(job) {
         primaryMessages,
         job.rowboat_conversation_id,
         job.rowboat_state ?? null,
-        useOwnerStartAgent ? { startAgent: "OwnerCoworker" } : {}
+        useOwnerStartAgent ? OWNER_START_AGENT_OPTS : {}
       );
     } catch (err) {
       primaryError = err;
@@ -391,9 +405,7 @@ async function processJob(job) {
       // tail spelled out in the system message we built upstream.
       // Sending the old state alongside would defeat the point of
       // the retry (it's the same broken context).
-      result = await callRowboat(fallbackMessages, null, null, {
-        startAgent: "OwnerCoworker"
-      });
+      result = await callRowboat(fallbackMessages, null, null, OWNER_START_AGENT_OPTS);
       usedStateless = true;
     }
     const { content, conversationId, state: nextState } = result;
@@ -605,7 +617,8 @@ async function main() {
     staleClaimMs: STALE_CLAIM_MS,
     sweepIntervalMs: SWEEP_INTERVAL_MS,
     rowboatTimeoutMs: ROWBOAT_TIMEOUT_MS,
-    maxAttempts: MAX_ATTEMPTS
+    maxAttempts: MAX_ATTEMPTS,
+    ownerStartAgent: OWNER_START_AGENT || "(workflow default)"
   });
 
   // CRITICAL: drain any pending work BEFORE subscribing to Realtime. If

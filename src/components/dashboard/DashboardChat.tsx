@@ -35,6 +35,10 @@ type ChatGetResponse = {
   messages: ChatMessage[];
   isPaused: boolean;
   customerChannelsEnabled: boolean;
+  // Present when the worker is still generating a reply for the active
+  // thread (survives refresh / navigation so the "thinking…" indicator
+  // can be re-attached instead of silently disappearing).
+  pendingJob?: { id: string; threadId: string } | null;
 };
 
 type ChatPostResponse = {
@@ -197,6 +201,11 @@ export function DashboardChat({ businessId, businessName }: Props) {
   // overlap, and overlapping cuts perceived load by ~50% on slow links.
   useEffect(() => {
     let cancelled = false;
+    // Track the watcher this effect run starts so cleanup can tear it
+    // down on a dependency change (e.g. businessId switch), not just on
+    // unmount. Without this, a re-run overwrites abortRef.current and
+    // orphans the previous poll loop + Realtime subscription.
+    let localController: AbortController | null = null;
     (async () => {
       try {
         const [activeRes] = await Promise.all([
@@ -214,6 +223,21 @@ export function DashboardChat({ businessId, businessName }: Props) {
           setViewingThreadId(env.data.threadId);
           setIsPaused(env.data.isPaused);
           setSafeMode(!env.data.customerChannelsEnabled);
+          // The worker may still be generating a reply for this thread
+          // (the owner refreshed / came back mid-turn). Re-attach the
+          // Realtime+poll watcher so "thinking…" reappears and the
+          // reply lands when ready, instead of vanishing on reload.
+          if (env.data.pendingJob) {
+            const controller = new AbortController();
+            localController = controller;
+            abortRef.current = controller;
+            setSending(true);
+            void watchJobUntilSettled(
+              env.data.pendingJob.id,
+              env.data.pendingJob.threadId,
+              controller
+            );
+          }
         } else {
           setError(env.error.message);
         }
@@ -225,7 +249,18 @@ export function DashboardChat({ businessId, businessName }: Props) {
     })();
     return () => {
       cancelled = true;
+      // Abort the watcher this run spawned. Guard against nuking a newer
+      // controller (e.g. one handleSubmit installed after this effect ran)
+      // by only aborting when abortRef still points at our own controller.
+      if (localController) {
+        if (abortRef.current === localController) abortRef.current = null;
+        localController.abort();
+      }
     };
+    // watchJobUntilSettled is a stable-behavior inner function (only
+    // touches refs + state setters); listing it would re-run this
+    // one-shot hydrate effect on every render. Intentionally omitted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [businessId, fetchThreads]);
 
   useEffect(() => {
@@ -273,6 +308,20 @@ export function DashboardChat({ businessId, businessName }: Props) {
             // this, viewingThreadId would point at a stale id.
             setActiveThreadId(env.data.threadId);
             setViewingThreadId(env.data.threadId);
+            // Switching back to the active thread while the worker is
+            // still generating: re-attach the watcher so the indicator
+            // and reply resume here too. selectThread early-returns
+            // when sending, so we know we're not already watching.
+            if (env.data.pendingJob) {
+              const controller = new AbortController();
+              abortRef.current = controller;
+              setSending(true);
+              void watchJobUntilSettled(
+                env.data.pendingJob.id,
+                env.data.pendingJob.threadId,
+                controller
+              );
+            }
           } else {
             setError(env.error.message);
           }
@@ -295,6 +344,10 @@ export function DashboardChat({ businessId, businessName }: Props) {
         setLoadingThread(false);
       }
     },
+    // watchJobUntilSettled is a stable-behavior inner function (refs +
+    // setters only); omitting it keeps this callback from changing
+    // identity every render. Same rationale as the hydrate effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [activeThreadId, businessId, loadingThread, sending, viewingThreadId]
   );
 
@@ -638,12 +691,29 @@ export function DashboardChat({ businessId, businessName }: Props) {
     // hard reload. Fire-and-forget; sidebar is best-effort.
     void fetchThreads();
 
-    // Wait for the worker via two parallel paths (see the JOB_POLL
-    // comment block at the top of this file for the why). The race
-    // uses a nested AbortController so we can tear down the LOSER
-    // without aborting the outer per-send `controller` (the loser
-    // signal would otherwise propagate into the post-success message-
-    // list refresh fetch and abort it).
+    // Wait for the worker and render the reply. Extracted into
+    // watchJobUntilSettled so the same Realtime+poll race can be
+    // re-attached after a refresh / navigation (see the hydrate and
+    // selectThread paths), not just on the original send.
+    await watchJobUntilSettled(post.jobId, post.threadId, controller);
+  }
+
+  // Watch an enqueued job to completion: race Supabase Realtime against
+  // the polling fallback, then refresh the canonical message list for
+  // the job's thread. Owns the `sending` flag and abortRef lifecycle so
+  // both the live-send path (handleSubmit) and the rehydrate path
+  // (mount / thread-select with a server-reported pendingJob) behave
+  // identically. `controller` is the per-watch AbortController already
+  // stored in abortRef.
+  async function watchJobUntilSettled(
+    jobId: string,
+    threadId: string,
+    controller: AbortController
+  ) {
+    // Nested AbortController so we can tear down the LOSER of the race
+    // without aborting the outer `controller` (whose signal would
+    // otherwise propagate into the post-success message-list refresh
+    // fetch and abort it).
     const raceController = new AbortController();
     // Outer abort cascades into the race (unmount / new conversation
     // tears down both Realtime and poll). Race-only abort does NOT
@@ -653,8 +723,8 @@ export function DashboardChat({ businessId, businessName }: Props) {
     else controller.signal.addEventListener("abort", cascade, { once: true });
 
     const realtimePromise = subscribeAssistantMessage(
-      post.jobId,
-      post.threadId,
+      jobId,
+      threadId,
       raceController.signal
     ).then((outcome) => {
       // Realtime path that didn't win (subscribe failure / abort)
@@ -663,11 +733,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
       if (outcome.ok || outcome.reason) return outcome;
       return new Promise<SettleOutcome>(() => undefined);
     });
-    const pollPromise = pollJobUntilSettled(
-      post.jobId,
-      post.threadId,
-      raceController.signal
-    );
+    const pollPromise = pollJobUntilSettled(jobId, threadId, raceController.signal);
     const result: SettleOutcome = await Promise.race([realtimePromise, pollPromise]);
     controller.signal.removeEventListener("abort", cascade);
     // Tear down the loser. The winning path already resolved; this
@@ -698,27 +764,27 @@ export function DashboardChat({ businessId, businessName }: Props) {
     }
 
     // Worker reported done. Refresh the canonical message list for
-    // OUR specific thread (post.threadId), not whatever thread the
-    // route considers active right now. The active thread can have
-    // changed during the 5-30s worker window — another browser tab,
-    // a thread archive from elsewhere — and the generic
+    // OUR specific thread (threadId), not whatever thread the route
+    // considers active right now. The active thread can have changed
+    // during the 5-30s worker window — another browser tab, a thread
+    // archive from elsewhere — and the generic
     // GET /api/dashboard/chat?businessId would return that other
     // thread's messages, overwriting ours with the wrong content.
     // Bugbot Medium-severity finding on PR #79 round-8.
     try {
       const res = await fetch(
-        `/api/dashboard/chat/threads/${encodeURIComponent(post.threadId)}/messages`,
+        `/api/dashboard/chat/threads/${encodeURIComponent(threadId)}/messages`,
         { cache: "no-store", signal: controller.signal }
       );
       const env = await parseEnvelope<ThreadMessagesResponse>(res);
       if (env.ok) {
         setMessages(env.data.messages);
-        // Pin both ids to the thread we just submitted on. If a
+        // Pin the view to the thread this job belongs to. If a
         // concurrent tab swapped the active thread, the user's
         // current view stays on the thread they were chatting in
         // (correct behavior — the user will see the active-thread
         // change in the sidebar on the next refresh).
-        setViewingThreadId(post.threadId);
+        setViewingThreadId(threadId);
       } else {
         // GET returned an error envelope (e.g. session expired
         // mid-chat, server issue between the worker write and our

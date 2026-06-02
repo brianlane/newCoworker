@@ -221,6 +221,19 @@ Environment="OMP_NUM_THREADS=8"
 # default-deny on the public interface still blocks external 11434 access;
 # only the loopback + docker bridge paths are reachable.
 Environment="OLLAMA_HOST=0.0.0.0:11434"
+# Default context window for every model load (qwen3:4b-instruct ships at
+# Ollama's 4096 default, which is too thin: system preamble + agent
+# instructions + owner preamble alone eat ~2.5k tokens, leaving almost no
+# room for conversation history → the model "forgot" earlier turns (observed
+# on business 621a5b0d, June 2026). 16384 gives ~4x headroom so the resent
+# recent-turn tail + rolling summary fit comfortably. This is a CEILING, not
+# a target — actual prefill cost on this CPU-only box tracks the REAL prompt
+# size (which the app caps), and with q4_0 KV cache 16384 tokens is only
+# ~0.6 GB across the 3 parallel slots, trivial on 32 GB. Applies to the
+# OpenAI-compatible /v1 path the llm-router uses (which can't pass num_ctx
+# per-request). Raise toward 20480 only if real prompts grow and you accept
+# slower CPU prefill; 16384 is the balanced default.
+Environment="OLLAMA_CONTEXT_LENGTH=16384"
 # TurboQuant KV cache — ACTIVE: reduces KV cache memory ~75% (beneficial on KVM 8 too)
 Environment="OLLAMA_KV_CACHE_TYPE=q4_0"
 # Flash Attention — ACTIVE

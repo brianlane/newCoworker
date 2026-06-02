@@ -232,23 +232,29 @@ describe("POST /api/dashboard/chat — two input variants for the worker (statel
   // job is to BUILD both variants up front and stash them on the job
   // row so the worker has zero business logic to duplicate.
 
-  it("on a thread WITH continuation, inputMessages omits the tail (Rowboat replays its own state) — and statelessInputMessages includes the tail (used if the convId is rejected)", async () => {
+  it("on a thread WITH continuation, inputMessages NOW includes a bounded recent tail (deterministic recall, not Rowboat-replay-only) — and statelessInputMessages includes the full tail (used if the convId is rejected)", async () => {
     vi.mocked(listMessages).mockResolvedValueOnce([
       { role: "user", content: "earlier user turn" },
       { role: "assistant", content: "earlier assistant turn" }
     ] as never);
     await POST(jsonRequest({ businessId: BIZ, message: "and now?" }));
     const callArgs = vi.mocked(insertChatJob).mock.calls[0][0];
-    // First-attempt input: OWNER_PREAMBLE + user turn. No tail-as-system.
+    // First-attempt input: OWNER_PREAMBLE + bounded recent tail + user turn.
+    // We deliberately resend the tail even on continuation now (the small
+    // per-tenant model lost earlier turns when recall relied on Rowboat
+    // replay alone — see route.ts buildRowboatChatMessages doc).
     const primary = callArgs.inputMessages;
     expect(primary.some((m) => m.role === "system" && m.content.includes("OWNER MODE"))).toBe(true);
-    expect(primary.some((m) => m.content.includes("[Coworker]"))).toBe(false);
+    expect(primary.some((m) => m.content.includes("[Coworker]: earlier assistant turn"))).toBe(
+      true
+    );
+    expect(primary.some((m) => m.content.includes("[Owner]: earlier user turn"))).toBe(true);
     // Last message is the new user turn with the [Dashboard] tag.
     expect(primary[primary.length - 1]).toEqual({
       role: "user",
       content: "[Dashboard] and now?"
     });
-    // Stateless variant: includes the tail-as-system reference.
+    // Stateless variant: also includes the tail-as-system reference (full tail).
     const fallback = callArgs.statelessInputMessages;
     expect(fallback).not.toBeNull();
     expect(fallback!.some((m) => m.content.includes("[Coworker]: earlier assistant turn"))).toBe(

@@ -8,6 +8,8 @@ vi.mock("@/lib/supabase/server", () => ({
 import {
   insertChatJob,
   getChatJobById,
+  getInFlightChatJobForThread,
+  IN_FLIGHT_CHAT_JOB_MAX_AGE_MS,
   serializeChatJobStatus,
   type DashboardChatJobRow
 } from "@/lib/db/dashboard-chat-jobs";
@@ -16,6 +18,10 @@ type Chain = {
   select: ReturnType<typeof vi.fn>;
   insert: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
+  in: ReturnType<typeof vi.fn>;
+  gte: ReturnType<typeof vi.fn>;
+  order: ReturnType<typeof vi.fn>;
+  limit: ReturnType<typeof vi.fn>;
   single: ReturnType<typeof vi.fn>;
   maybeSingle: ReturnType<typeof vi.fn>;
 };
@@ -25,6 +31,10 @@ function chain(): Chain {
     select: vi.fn(() => c),
     insert: vi.fn(() => c),
     eq: vi.fn(() => c),
+    in: vi.fn(() => c),
+    gte: vi.fn(() => c),
+    order: vi.fn(() => c),
+    limit: vi.fn(() => c),
     single: vi.fn(),
     maybeSingle: vi.fn()
   };
@@ -174,6 +184,49 @@ describe("getChatJobById", () => {
     defaultClientSpy.mockReturnValue(makeDb(c));
 
     await expect(getChatJobById(JOB_ID)).rejects.toThrow(/getChatJobById.*rls denied/);
+  });
+});
+
+describe("getInFlightChatJobForThread", () => {
+  it("returns the newest still-running job for the thread (default service client)", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: ROW_FIXTURE, error: null });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+
+    const row = await getInFlightChatJobForThread(THREAD);
+
+    expect(row).toEqual(ROW_FIXTURE);
+    // Only queued/processing rows for THIS thread, freshest first, capped at 1.
+    expect(c.eq).toHaveBeenCalledWith("thread_id", THREAD);
+    expect(c.in).toHaveBeenCalledWith("status", ["queued", "processing"]);
+    expect(c.order).toHaveBeenCalledWith("created_at", { ascending: false });
+    expect(c.limit).toHaveBeenCalledWith(1);
+    // The freshness floor is "now minus the max-age window".
+    const gteArg = c.gte.mock.calls[0];
+    expect(gteArg[0]).toBe("created_at");
+    const floorMs = Date.parse(gteArg[1] as string);
+    expect(Date.now() - floorMs).toBeGreaterThanOrEqual(IN_FLIGHT_CHAT_JOB_MAX_AGE_MS - 5000);
+    expect(Date.now() - floorMs).toBeLessThanOrEqual(IN_FLIGHT_CHAT_JOB_MAX_AGE_MS + 5000);
+  });
+
+  it("uses the explicit client when one is passed (no default service client created)", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+
+    const row = await getInFlightChatJobForThread(THREAD, makeDb(c) as never);
+
+    expect(row).toBeNull();
+    expect(defaultClientSpy).not.toHaveBeenCalled();
+  });
+
+  it("throws on supabase error", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: { message: "rls denied" } });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+
+    await expect(getInFlightChatJobForThread(THREAD)).rejects.toThrow(
+      /getInFlightChatJobForThread.*rls denied/
+    );
   });
 });
 
