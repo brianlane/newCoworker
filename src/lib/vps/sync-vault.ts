@@ -269,7 +269,13 @@ export function buildSyncVaultCommand(
     // silently failed to take effect on re-test. The aggregation pipeline
     // ($map + $mergeObjects) rewrites only the instructions field of each
     // agent and preserves the rest of every agent doc.
-    `const mapAgents = (p) => ({ $map: { input: { $ifNull: ["$" + p, []] }, as: "a", in: { $mergeObjects: ["$$a", { instructions: inst }] } } });`,
+    //
+    // `inst` MUST be wrapped in `$literal`: inside an aggregation expression,
+    // a string starting with `$` is interpreted as a field path/variable, so
+    // a vault whose instructions begin with `$` (e.g. memory starting with a
+    // price like "$100 minimum budget") would otherwise resolve to null and
+    // WIPE the agent prompt. $literal forces it to be treated as plain text.
+    `const mapAgents = (p) => ({ $map: { input: { $ifNull: ["$" + p, []] }, as: "a", in: { $mergeObjects: ["$$a", { instructions: { $literal: inst } }] } } });`,
     `const r = db.projects.updateOne(`,
     `  { _id: ${projectIdJson} },`,
     `  [ { $set: {`,

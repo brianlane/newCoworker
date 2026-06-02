@@ -206,7 +206,13 @@ describe("buildSyncVaultCommand", () => {
     expect(cmd).toContain('"draftWorkflow.agents": mapAgents("draftWorkflow.agents")');
     expect(cmd).toContain('"liveWorkflow.agents": mapAgents("liveWorkflow.agents")');
     expect(cmd).toContain("$map");
-    expect(cmd).toContain('$mergeObjects: ["$$a", { instructions: inst }]');
+    // `inst` MUST be wrapped in $literal: in an aggregation expression a
+    // string beginning with `$` is read as a field path, so a vault whose
+    // instructions start with `$` (e.g. "$100 minimum budget") would resolve
+    // to null and wipe the prompt. Regression guard for Codex P2 / Bugbot
+    // High on PR #93.
+    expect(cmd).toContain('$mergeObjects: ["$$a", { instructions: { $literal: inst } }]');
+    expect(cmd).not.toContain("{ instructions: inst }");
     // Must be a pipeline update (array form) for $map/$mergeObjects to work.
     expect(cmd).toContain(`[ { $set: {`);
     // The old single-field hardcode must be gone.
