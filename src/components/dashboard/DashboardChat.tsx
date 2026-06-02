@@ -201,6 +201,11 @@ export function DashboardChat({ businessId, businessName }: Props) {
   // overlap, and overlapping cuts perceived load by ~50% on slow links.
   useEffect(() => {
     let cancelled = false;
+    // Track the watcher this effect run starts so cleanup can tear it
+    // down on a dependency change (e.g. businessId switch), not just on
+    // unmount. Without this, a re-run overwrites abortRef.current and
+    // orphans the previous poll loop + Realtime subscription.
+    let localController: AbortController | null = null;
     (async () => {
       try {
         const [activeRes] = await Promise.all([
@@ -224,6 +229,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
           // reply lands when ready, instead of vanishing on reload.
           if (env.data.pendingJob) {
             const controller = new AbortController();
+            localController = controller;
             abortRef.current = controller;
             setSending(true);
             void watchJobUntilSettled(
@@ -243,6 +249,13 @@ export function DashboardChat({ businessId, businessName }: Props) {
     })();
     return () => {
       cancelled = true;
+      // Abort the watcher this run spawned. Guard against nuking a newer
+      // controller (e.g. one handleSubmit installed after this effect ran)
+      // by only aborting when abortRef still points at our own controller.
+      if (localController) {
+        if (abortRef.current === localController) abortRef.current = null;
+        localController.abort();
+      }
     };
     // watchJobUntilSettled is a stable-behavior inner function (only
     // touches refs + state setters); listing it would re-run this

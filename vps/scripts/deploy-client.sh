@@ -967,8 +967,11 @@ WORKER_VERCEL_BEARER=${INTERNAL_CRON_SECRET:-${WORKER_VERCEL_BEARER:-}}
 # Owner-dashboard entry agent. This same deploy seeds the OwnerCoworker
 # agent (above), so the worker routes owner chat to it. Override to ""
 # (omit startAgent → workflow default "Coworker") only if intentionally
-# running a workflow without OwnerCoworker.
-CHAT_WORKER_OWNER_START_AGENT=${CHAT_WORKER_OWNER_START_AGENT:-OwnerCoworker}
+# running a workflow without OwnerCoworker. NOTE the `-` (not `:-`): an
+# operator who explicitly exports CHAT_WORKER_OWNER_START_AGENT="" MUST get
+# an empty value preserved (that's the escape hatch), so only an *unset*
+# variable falls back to OwnerCoworker.
+CHAT_WORKER_OWNER_START_AGENT=${CHAT_WORKER_OWNER_START_AGENT-OwnerCoworker}
 CWENV_EOF
     chmod 600 "${CHAT_WORKER_DEST}/.env"
 
