@@ -146,6 +146,48 @@ export async function getChatJobById(
 }
 
 /**
+ * How recent an in-flight (`queued`/`processing`) job must be to count as
+ * "the owner is still waiting on this reply" when hydrating the chat UI.
+ *
+ * Sized just above the worker's absolute worst case (primary attempt +
+ * stateless retry = 2 × WORKER_ROWBOAT_TIMEOUT_MS (240s) + DB headroom).
+ * A job older than this that's STILL `queued`/`processing` is almost
+ * certainly orphaned (worker was down — see the May 11 Realtime/Supabase
+ * incident) and reclaim_stale_chat_jobs() will eventually flip or error
+ * it; we don't want such a corpse to render a permanent "thinking…"
+ * indicator on every page load.
+ */
+export const IN_FLIGHT_CHAT_JOB_MAX_AGE_MS = 10 * 60 * 1000;
+
+/**
+ * Latest still-running job for a thread, used to re-attach the
+ * "your coworker is thinking…" indicator after a refresh / navigation.
+ *
+ * Only `queued`/`processing` rows newer than {@link IN_FLIGHT_CHAT_JOB_MAX_AGE_MS}
+ * qualify — see that constant for why stale rows are excluded. Returns the
+ * newest match (a thread should only ever have one live job, but ordering
+ * newest-first is belt-and-suspenders if a reclaim race ever leaves two).
+ */
+export async function getInFlightChatJobForThread(
+  threadId: string,
+  client?: SupabaseClient
+): Promise<DashboardChatJobRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const freshSince = new Date(Date.now() - IN_FLIGHT_CHAT_JOB_MAX_AGE_MS).toISOString();
+  const { data, error } = await db
+    .from("dashboard_chat_jobs")
+    .select("*")
+    .eq("thread_id", threadId)
+    .in("status", ["queued", "processing"])
+    .gte("created_at", freshSince)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`getInFlightChatJobForThread: ${error.message}`);
+  return (data as DashboardChatJobRow | null) ?? null;
+}
+
+/**
  * Project the worker-internal job row to the JSON envelope returned to
  * the browser. We deliberately drop:
  *   - claimed_by / claimed_at        (worker-internal accounting)

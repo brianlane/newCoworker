@@ -23,6 +23,11 @@ services:
       # Keep weights loaded between Rowboat turns (integration drives back-to-back chats).
       OLLAMA_KEEP_ALIVE: "-1"
       OMP_NUM_THREADS: "8"
+      # Match the production bootstrap.sh systemd override: 4096 is too thin
+      # once system preamble + agent instructions + owner preamble are added,
+      # so continuation turns lose earlier context. 16384 (q4_0 KV ≈ 0.6 GB)
+      # gives room for the resent recent-turn tail + rolling summary.
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-16384}
       OLLAMA_KV_CACHE_TYPE: q4_0
       OLLAMA_FLASH_ATTENTION: "1"
     volumes:

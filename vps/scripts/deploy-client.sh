@@ -964,6 +964,11 @@ ROWBOAT_GATEWAY_TOKEN=${ROWBOAT_GATEWAY_TOKEN}
 BUSINESS_ID=${BUSINESS_ID}
 WORKER_VERCEL_BASE_URL=${APP_BASE_URL:-${WORKER_VERCEL_BASE_URL:-}}
 WORKER_VERCEL_BEARER=${INTERNAL_CRON_SECRET:-${WORKER_VERCEL_BEARER:-}}
+# Owner-dashboard entry agent. This same deploy seeds the OwnerCoworker
+# agent (above), so the worker routes owner chat to it. Override to ""
+# (omit startAgent → workflow default "Coworker") only if intentionally
+# running a workflow without OwnerCoworker.
+CHAT_WORKER_OWNER_START_AGENT=${CHAT_WORKER_OWNER_START_AGENT:-OwnerCoworker}
 CWENV_EOF
     chmod 600 "${CHAT_WORKER_DEST}/.env"
 
