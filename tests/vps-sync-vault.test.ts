@@ -197,10 +197,21 @@ describe("buildSyncVaultCommand", () => {
     expect(cmd).toContain("base64 -d > /opt/rowboat/vault/website.md");
   });
 
-  it("updates BOTH draftWorkflow and liveWorkflow agent instructions so the playground draft and the production tunnel stay in lockstep", () => {
+  it("updates EVERY agent (not just agents.0) across BOTH draftWorkflow and liveWorkflow so Coworker + OwnerCoworker stay in lockstep and owner-dashboard memory edits reach the agent the owner talks to", () => {
     const cmd = buildSyncVaultCommand(FULL_CONFIG, BIZ, "INSTRUCTIONS", NOW);
-    expect(cmd).toContain('"draftWorkflow.agents.0.instructions": inst');
-    expect(cmd).toContain('"liveWorkflow.agents.0.instructions": inst');
+    // Aggregation-pipeline update: $map over the agents array rewrites only
+    // the instructions field of each agent (preserving the rest via
+    // $mergeObjects). Regression guard against the old `agents.0` hardcode
+    // that left OwnerCoworker stale.
+    expect(cmd).toContain('"draftWorkflow.agents": mapAgents("draftWorkflow.agents")');
+    expect(cmd).toContain('"liveWorkflow.agents": mapAgents("liveWorkflow.agents")');
+    expect(cmd).toContain("$map");
+    expect(cmd).toContain('$mergeObjects: ["$$a", { instructions: inst }]');
+    // Must be a pipeline update (array form) for $map/$mergeObjects to work.
+    expect(cmd).toContain(`[ { $set: {`);
+    // The old single-field hardcode must be gone.
+    expect(cmd).not.toContain('"draftWorkflow.agents.0.instructions"');
+    expect(cmd).not.toContain('"liveWorkflow.agents.0.instructions"');
     // The mongo filter uses the bare `_id` shorthand (Mongo permits it
     // without quoting); just confirm the projectId reaches the script.
     expect(cmd).toContain(`{ _id: "${BIZ}" }`);

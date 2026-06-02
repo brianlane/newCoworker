@@ -5,8 +5,8 @@
  * Why this exists:
  *   The orchestrator's `vps/scripts/deploy-client.sh` writes vault files
  *   (`/opt/rowboat/vault/{soul,identity,memory,website}.md`) and seeds
- *   `db.projects.{draft,live}Workflow.agents[0].instructions` ONCE at
- *   provision time. After that, any owner-driven memory edits via the
+ *   every agent's `instructions` in `db.projects.{draft,live}Workflow`
+ *   ONCE at provision time. After that, any owner-driven memory edits via the
  *   dashboard's `/api/business/config` POST or any post-onboarding
  *   `/api/onboard/website-ingest` re-crawl would only land in Supabase —
  *   the VPS-side vault and the MongoDB agent prompt would stay frozen at
@@ -188,11 +188,14 @@ export function resolveSyncProjectId(
  * single quotes, dollar signs, and backticks that would break a heredoc
  * or `printf %s` literal.
  *
- * The mongosh script writes the FULL instructions into both
- * `draftWorkflow.agents.0.instructions` AND `liveWorkflow.agents.0.instructions`
- * so the two surfaces (draft chat in playground, live `/api/v1/{projectId}/chat`)
- * stay in lockstep. Without the live update, the production tunnel would
- * keep serving the old prompt even after a draft save.
+ * The mongosh script writes the FULL instructions into EVERY agent of both
+ * `draftWorkflow.agents` AND `liveWorkflow.agents` so the two surfaces
+ * (draft chat in playground, live `/api/v1/{projectId}/chat`) stay in
+ * lockstep AND both the Coworker (SMS/voice) and OwnerCoworker (owner
+ * dashboard) agents reflect the edit. Without the live update, the
+ * production tunnel would keep serving the old prompt even after a draft
+ * save; without the all-agents update, owner-dashboard memory edits would
+ * never reach the OwnerCoworker prompt.
  *
  * `matchedCount === 0` is treated as a hard failure (mongosh `quit(1)`)
  * so the orchestrator surfaces it as `ssh_failed` instead of silently
@@ -257,13 +260,23 @@ export function buildSyncVaultCommand(
     `cat > "$SEED_FILE" <<'MONGOSH_EOF'`,
     `const fs = require("fs");`,
     `const inst = fs.readFileSync(process.env.INST_FILE_PATH, "utf8");`,
+    // Update EVERY agent's instructions, not just agents.0. The workflow now
+    // has two vault-grounded agents (Coworker for SMS/voice + OwnerCoworker
+    // for the owner dashboard), both seeded with identical instructions by
+    // deploy-client.sh. The old `agents.0.instructions` hardcode only
+    // refreshed Coworker, so owner-dashboard memory edits never reached the
+    // OwnerCoworker prompt the owner actually talks to — a "saved" rule
+    // silently failed to take effect on re-test. The aggregation pipeline
+    // ($map + $mergeObjects) rewrites only the instructions field of each
+    // agent and preserves the rest of every agent doc.
+    `const mapAgents = (p) => ({ $map: { input: { $ifNull: ["$" + p, []] }, as: "a", in: { $mergeObjects: ["$$a", { instructions: inst }] } } });`,
     `const r = db.projects.updateOne(`,
     `  { _id: ${projectIdJson} },`,
-    `  { $set: {`,
-    `      "draftWorkflow.agents.0.instructions": inst,`,
-    `      "liveWorkflow.agents.0.instructions": inst,`,
+    `  [ { $set: {`,
+    `      "draftWorkflow.agents": mapAgents("draftWorkflow.agents"),`,
+    `      "liveWorkflow.agents": mapAgents("liveWorkflow.agents"),`,
     `      "lastUpdatedAt": ${JSON.stringify(nowIso)}`,
-    `  } }`,
+    `  } } ]`,
     `);`,
     `print("matched=" + r.matchedCount + " modified=" + r.modifiedCount + " inst.length=" + inst.length);`,
     // Hard fail when the target project doesn't exist on this VPS — see
