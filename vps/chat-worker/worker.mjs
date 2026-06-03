@@ -82,6 +82,7 @@ import { createClient } from "@supabase/supabase-js";
 import {
   extractLatestOwnerMessage,
   extractOwnerRule,
+  fitBulletsToPayload,
   formatSavedConfirmation
 } from "./memory-capture.mjs";
 
@@ -320,20 +321,21 @@ async function notifyVercelSummarize(businessId, threadId) {
   }
 }
 
-// Capture a durable business rule from the owner's latest message and persist
-// it via the platform adapter. Returns the saved bullets on success (so the
-// caller can append an honest confirmation), or null when there was nothing to
-// save / the save failed. NEVER throws — capture is best-effort and must not
-// break or fail the chat turn. Bounded latency: the extraction is meant to run
-// concurrently with the Rowboat call, and both this and the adapter POST have
-// their own timeouts.
-async function captureOwnerMemory(job) {
-  if (!MEMORY_CAPTURE_ENABLED || !OWNER_APPEND_URL) return null;
+// Extraction is READ-ONLY (just a local Ollama classification of the owner's
+// latest message) so it's safe to kick off concurrently with the Rowboat
+// reply. The actual PERSISTENCE (persistOwnerRule) is deliberately split out
+// and only invoked on the SUCCESS path — see processJob — so a turn that
+// later errors (Rowboat failure, empty assistant, message-insert failure)
+// never writes to memory_md without a corresponding reply + confirmation, and
+// a reclaimed/retried job doesn't double-write the same rule. NEVER throws.
+async function startOwnerRuleExtraction(job) {
+  const noop = { save: false, bullets: [] };
+  if (!MEMORY_CAPTURE_ENABLED || !OWNER_APPEND_URL) return noop;
 
   const ownerMessage = extractLatestOwnerMessage(job.input_messages);
-  if (!ownerMessage) return null;
+  if (!ownerMessage) return noop;
 
-  const { save, bullets } = await extractOwnerRule({
+  return extractOwnerRule({
     ownerMessage,
     model: MEMORY_CAPTURE_MODEL,
     ollamaBaseUrl: OLLAMA_BASE_URL,
@@ -341,12 +343,22 @@ async function captureOwnerMemory(job) {
     timeoutMs: MEMORY_CAPTURE_TIMEOUT_MS,
     logger: log
   });
-  if (!save || bullets.length === 0) return null;
+}
 
-  // Adapter envelope mirrors src/lib/voice/tool-envelope (voiceToolEnvelopeSchema):
-  // { businessId, args } with NO callerE164 — the adapter rejects any envelope
-  // carrying a caller as a non-owner attempt. bullets are joined one-per-line,
-  // which is what owner-append-business-memory parses into memory_md.
+// Persist extracted rule bullets via the platform owner-append adapter.
+// Returns the bullets actually saved (so the caller renders an honest
+// confirmation), or null when nothing was saved / the save failed. NEVER
+// throws. Only called once a turn has produced a real assistant reply.
+async function persistOwnerRule(job, bullets) {
+  // Bound the payload to the adapter's hard char limit so a large extraction
+  // saves the rules that fit instead of failing the whole POST with a 400.
+  const fitted = fitBulletsToPayload(bullets);
+  if (fitted.length === 0) return null;
+
+  // Adapter envelope mirrors voiceToolEnvelopeSchema: { businessId, args }
+  // with NO callerE164 — the adapter rejects any envelope carrying a caller as
+  // a non-owner attempt. bullets are joined one-per-line, which is what
+  // owner-append-business-memory parses into memory_md.
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), MEMORY_CAPTURE_CALLBACK_TIMEOUT_MS);
   try {
@@ -358,7 +370,7 @@ async function captureOwnerMemory(job) {
       },
       body: JSON.stringify({
         businessId: BUSINESS_ID,
-        args: { bullets: bullets.join("\n") }
+        args: { bullets: fitted.join("\n") }
       }),
       signal: ctl.signal
     });
@@ -371,8 +383,8 @@ async function captureOwnerMemory(job) {
       });
       return null;
     }
-    log("info", "memory_saved", { jobId: job.id, count: bullets.length });
-    return { bullets };
+    log("info", "memory_saved", { jobId: job.id, count: fitted.length });
+    return fitted;
   } catch (err) {
     const reason = ctl.signal.aborted ? "timeout" : err?.message || "fetch failed";
     log("warn", "memory_save_failed", { jobId: job.id, reason });
@@ -458,15 +470,16 @@ async function processJob(job) {
       ? job.stateless_input_messages
       : null;
 
-    // Kick off owner-rule capture NOW so the (separate) extraction LLM call
-    // overlaps the Rowboat reply generation instead of adding to it. We await
-    // it just before persisting the assistant message. It never throws.
-    const capturePromise = captureOwnerMemory(job).catch((err) => {
+    // Kick off the READ-ONLY owner-rule extraction NOW so the (separate)
+    // Ollama classification overlaps Rowboat reply generation instead of
+    // adding to it. We only PERSIST the result on the success path below, so
+    // a turn that errors never writes to memory without a reply. Never throws.
+    const extractionPromise = startOwnerRuleExtraction(job).catch((err) => {
       log("warn", "memory_capture_unexpected", {
         jobId: job.id,
         error: err?.message || String(err)
       });
-      return null;
+      return { save: false, bullets: [] };
     });
 
     // ATTEMPT 1: input_messages + (possibly) stored conversationId
@@ -513,15 +526,23 @@ async function processJob(job) {
     }
     const { content, conversationId, state: nextState } = result;
 
-    // Append an honest "saved to memory" confirmation ONLY when the owner
-    // stated a durable rule AND the platform adapter confirmed the write.
-    // This replaces the old in-agent tool path where the small model would
+    // We have a real assistant reply, so it's now safe to persist any rule
+    // the owner stated this turn. Persisting only here (not in the concurrent
+    // extraction) guarantees we never write to memory_md on a turn that errors
+    // out, and never double-write on a reclaimed/retried job. Append an honest
+    // "saved to memory" confirmation ONLY when the adapter confirmed the write
+    // — replacing the old in-agent tool path where the small model would
     // hallucinate "saved!" without anything actually persisting.
-    const captured = await capturePromise;
-    const finalContent =
-      captured && captured.bullets.length > 0
-        ? content + formatSavedConfirmation(captured.bullets)
-        : content;
+    const extraction = await extractionPromise;
+    let finalContent = content;
+    let memorySavedCount = 0;
+    if (extraction.save && extraction.bullets.length > 0) {
+      const saved = await persistOwnerRule(job, extraction.bullets);
+      if (saved && saved.length > 0) {
+        memorySavedCount = saved.length;
+        finalContent = content + formatSavedConfirmation(saved);
+      }
+    }
 
     const { data: msg, error: insertErr } = await sb
       .from("dashboard_chat_messages")
@@ -638,7 +659,7 @@ async function processJob(job) {
       msgId: msg.id,
       durationMs: Date.now() - t0,
       contentLen: finalContent.length,
-      memorySaved: captured ? captured.bullets.length : 0,
+      memorySaved: memorySavedCount,
       conversationId,
       usedStateless,
       primaryErrorCode: usedStateless

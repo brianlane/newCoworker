@@ -71,6 +71,14 @@ const CHANNEL_MARKER_RE = /^\[(?:Dashboard|SMS|Call)\]\s+/;
 const MAX_BULLETS = 10;
 const MAX_BULLET_LEN = 280;
 
+// Hard cap on the newline-joined `args.bullets` string the owner-append
+// adapter accepts (BULLETS_MAX_CHARS in
+// src/app/api/voice/tools/owner-append-business-memory/route.ts). We bound the
+// payload on this side so a large extraction degrades to "save the first N
+// rules that fit" instead of a silent HTTP 400 (which would drop the whole
+// save with no confirmation).
+export const ADAPTER_BULLETS_MAX_CHARS = 2000;
+
 /**
  * Pull the owner's most recent raw message out of a job's input_messages.
  * The route stores the live turn as the LAST role:"user" entry, prefixed
@@ -165,6 +173,34 @@ export function buildExtractionRequestBody(model, ownerMessage) {
       { role: "user", content: ownerMessage }
     ]
   };
+}
+
+/**
+ * Take the longest prefix of `bullets` whose newline-joined form fits within
+ * `maxChars`, so the adapter never rejects an over-long payload. If even the
+ * first bullet exceeds the budget it is truncated to fit. Returns the bullets
+ * actually kept (which the caller should also use for the confirmation, so the
+ * owner is only told about rules that were really saved).
+ *
+ * @param {string[]} bullets
+ * @param {number} [maxChars]
+ * @returns {string[]}
+ */
+export function fitBulletsToPayload(bullets, maxChars = ADAPTER_BULLETS_MAX_CHARS) {
+  if (!Array.isArray(bullets)) return [];
+  const kept = [];
+  let len = 0;
+  for (const b of bullets) {
+    if (typeof b !== "string") continue;
+    const addedLen = (kept.length === 0 ? 0 : 1) + b.length; // +1 for the "\n"
+    if (len + addedLen > maxChars) {
+      if (kept.length === 0) kept.push(b.slice(0, maxChars));
+      break;
+    }
+    kept.push(b);
+    len += addedLen;
+  }
+  return kept;
 }
 
 /**

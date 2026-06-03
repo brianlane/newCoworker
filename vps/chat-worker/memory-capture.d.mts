@@ -18,7 +18,11 @@ export function extractLatestOwnerMessage(
   inputMessages: Array<{ role?: string; content?: unknown }> | null | undefined
 ): string;
 
+export const ADAPTER_BULLETS_MAX_CHARS: number;
+
 export function normalizeBullets(raw: unknown): string[];
+
+export function fitBulletsToPayload(bullets: string[], maxChars?: number): string[];
 
 export function parseMemoryExtraction(content: unknown): {
   save: boolean;

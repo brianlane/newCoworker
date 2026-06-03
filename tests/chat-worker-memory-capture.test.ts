@@ -2,10 +2,12 @@ import { describe, it, expect, vi } from "vitest";
 import {
   OWNER_MEMORY_SYSTEM_PROMPT,
   MEMORY_EXTRACTION_FORMAT,
+  ADAPTER_BULLETS_MAX_CHARS,
   extractLatestOwnerMessage,
   normalizeBullets,
   parseMemoryExtraction,
   buildExtractionRequestBody,
+  fitBulletsToPayload,
   formatSavedConfirmation,
   extractOwnerRule
 } from "../vps/chat-worker/memory-capture.mjs";
@@ -133,6 +135,31 @@ describe("buildExtractionRequestBody", () => {
     });
     expect(body.messages[0]).toEqual({ role: "system", content: OWNER_MEMORY_SYSTEM_PROMPT });
     expect(body.messages[1]).toEqual({ role: "user", content: "never discuss budget" });
+  });
+});
+
+describe("fitBulletsToPayload", () => {
+  it("keeps all bullets when they fit the budget", () => {
+    const bullets = ["never discuss budget", "offer free estimates"];
+    expect(fitBulletsToPayload(bullets)).toEqual(bullets);
+  });
+
+  it("never lets the newline-joined payload exceed the adapter limit", () => {
+    const bullets = Array.from({ length: 10 }, () => "x".repeat(280));
+    const fitted = fitBulletsToPayload(bullets);
+    expect(fitted.join("\n").length).toBeLessThanOrEqual(ADAPTER_BULLETS_MAX_CHARS);
+    expect(fitted.length).toBeLessThan(bullets.length);
+  });
+
+  it("truncates a single oversized bullet to fit", () => {
+    const fitted = fitBulletsToPayload(["y".repeat(5000)], 100);
+    expect(fitted).toHaveLength(1);
+    expect(fitted[0]).toHaveLength(100);
+  });
+
+  it("skips non-string entries and returns [] for non-array input", () => {
+    expect(fitBulletsToPayload(["ok", 5 as unknown as string])).toEqual(["ok"]);
+    expect(fitBulletsToPayload(null as unknown as string[])).toEqual([]);
   });
 });
 
