@@ -972,6 +972,16 @@ WORKER_VERCEL_BEARER=${INTERNAL_CRON_SECRET:-${WORKER_VERCEL_BEARER:-}}
 # an empty value preserved (that's the escape hatch), so only an *unset*
 # variable falls back to OwnerCoworker.
 CHAT_WORKER_OWNER_START_AGENT=${CHAT_WORKER_OWNER_START_AGENT-OwnerCoworker}
+# Owner-rule memory capture. The worker runs a local-Ollama extraction over
+# each owner message and, when it states a durable business rule, POSTs to
+# WORKER_VERCEL_BASE_URL/api/voice/tools/owner-append-business-memory (bearer =
+# ROWBOAT_GATEWAY_TOKEN) to persist it. Ollama is reached via the
+# host.docker.internal extra_host wired in docker-compose.yml (same path the
+# llm-router uses). MEMORY_CAPTURE_MODEL reuses the warm per-tenant SMS model.
+MEMORY_CAPTURE_ENABLED=${MEMORY_CAPTURE_ENABLED:-true}
+OLLAMA_BASE_URL=${CHAT_WORKER_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+MEMORY_CAPTURE_MODEL=${MEMORY_CAPTURE_MODEL:-${OLLAMA_MODEL:-qwen3:4b-instruct}}
+MEMORY_CAPTURE_TIMEOUT_MS=${MEMORY_CAPTURE_TIMEOUT_MS:-30000}
 CWENV_EOF
     chmod 600 "${CHAT_WORKER_DEST}/.env"
 

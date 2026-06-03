@@ -16,6 +16,13 @@ services:
       - .env
     networks:
       - rowboat_default
+    # Owner-rule memory capture (worker.mjs) calls the host's Ollama at
+    # http://host.docker.internal:11434, exactly like the llm-router does.
+    # Ollama binds 0.0.0.0:11434 and UFW allows the docker bridge subnet
+    # (see bootstrap.sh); this extra_host resolves host.docker.internal to
+    # the docker bridge gateway so the container can reach it.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Keep logs bounded — structured JSON, ~150 bytes/line, but a busy
     # tenant could otherwise fill disk inside a year.
     logging:

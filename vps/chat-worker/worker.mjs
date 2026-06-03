@@ -79,6 +79,12 @@
 //                                  see assertCronAuth in src/lib/cron-auth.ts)
 
 import { createClient } from "@supabase/supabase-js";
+import {
+  extractLatestOwnerMessage,
+  extractOwnerRule,
+  fitBulletsToPayload,
+  formatSavedConfirmation
+} from "./memory-capture.mjs";
 
 const SUPABASE_URL = required("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = required("SUPABASE_SERVICE_ROLE_KEY");
@@ -106,6 +112,31 @@ const OWNER_START_AGENT_OPTS = OWNER_START_AGENT
   : {};
 const VERCEL_BASE_URL = (process.env.WORKER_VERCEL_BASE_URL || "").replace(/\/+$/, "");
 const VERCEL_BEARER = process.env.WORKER_VERCEL_BEARER || "";
+// Server-side owner-rule capture (see memory-capture.mjs for the why). On
+// every owner turn we run a small local-Ollama extraction over the owner's
+// message; if it's a durable business rule we POST it to the platform
+// owner-append adapter (which writes memory_md + triggers a vault sync) and
+// append an HONEST confirmation to the reply. Disabled by setting
+// MEMORY_CAPTURE_ENABLED=false, or implicitly when WORKER_VERCEL_BASE_URL is
+// unset (no adapter to POST to).
+const MEMORY_CAPTURE_ENABLED =
+  (process.env.MEMORY_CAPTURE_ENABLED ?? "true").trim().toLowerCase() !== "false";
+// Ollama is bound to 0.0.0.0:11434 on the host (see bootstrap.sh); the worker
+// container reaches it the same way the llm-router does — via the
+// host.docker.internal=host-gateway extra_host wired in docker-compose.yml.
+const OLLAMA_BASE_URL = (
+  process.env.OLLAMA_BASE_URL || "http://host.docker.internal:11434"
+).replace(/\/+$/, "");
+// Reuse the warm per-tenant SMS model for extraction so we don't pay a
+// cold-load. Overridable per tenant if a sharper model is pulled locally.
+const MEMORY_CAPTURE_MODEL = (process.env.MEMORY_CAPTURE_MODEL || "qwen3:4b-instruct").trim();
+const MEMORY_CAPTURE_TIMEOUT_MS = intEnv("MEMORY_CAPTURE_TIMEOUT_MS", 30 * 1000);
+// Platform adapter that persists owner rules. Authenticated with the same
+// ROWBOAT_GATEWAY_TOKEN the voice/SMS tool adapters use (verifyRowboatGatewayToken).
+const OWNER_APPEND_URL = VERCEL_BASE_URL
+  ? `${VERCEL_BASE_URL}/api/voice/tools/owner-append-business-memory`
+  : "";
+const MEMORY_CAPTURE_CALLBACK_TIMEOUT_MS = 10_000;
 // Cap how long we'll let the summarizer callback hold an open
 // connection. We don't await the response, but we DO want bounded
 // resource usage if Vercel hangs — node's default fetch keeps the
@@ -290,6 +321,79 @@ async function notifyVercelSummarize(businessId, threadId) {
   }
 }
 
+// Extraction is READ-ONLY (just a local Ollama classification of the owner's
+// latest message) so it's safe to kick off concurrently with the Rowboat
+// reply. The actual PERSISTENCE (persistOwnerRule) is deliberately split out
+// and only invoked on the SUCCESS path — see processJob — so a turn that
+// later errors (Rowboat failure, empty assistant, message-insert failure)
+// never writes to memory_md without a corresponding reply + confirmation, and
+// a reclaimed/retried job doesn't double-write the same rule. NEVER throws.
+async function startOwnerRuleExtraction(job) {
+  const noop = { save: false, bullets: [] };
+  if (!MEMORY_CAPTURE_ENABLED || !OWNER_APPEND_URL) return noop;
+
+  const ownerMessage = extractLatestOwnerMessage(job.input_messages);
+  if (!ownerMessage) return noop;
+
+  return extractOwnerRule({
+    ownerMessage,
+    model: MEMORY_CAPTURE_MODEL,
+    ollamaBaseUrl: OLLAMA_BASE_URL,
+    fetchImpl: fetch,
+    timeoutMs: MEMORY_CAPTURE_TIMEOUT_MS,
+    logger: log
+  });
+}
+
+// Persist extracted rule bullets via the platform owner-append adapter.
+// Returns the bullets actually saved (so the caller renders an honest
+// confirmation), or null when nothing was saved / the save failed. NEVER
+// throws. Only called once a turn has produced a real assistant reply.
+async function persistOwnerRule(job, bullets) {
+  // Bound the payload to the adapter's hard char limit so a large extraction
+  // saves the rules that fit instead of failing the whole POST with a 400.
+  const fitted = fitBulletsToPayload(bullets);
+  if (fitted.length === 0) return null;
+
+  // Adapter envelope mirrors voiceToolEnvelopeSchema: { businessId, args }
+  // with NO callerE164 — the adapter rejects any envelope carrying a caller as
+  // a non-owner attempt. bullets are joined one-per-line, which is what
+  // owner-append-business-memory parses into memory_md.
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), MEMORY_CAPTURE_CALLBACK_TIMEOUT_MS);
+  try {
+    const res = await fetch(OWNER_APPEND_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${ROWBOAT_GATEWAY_TOKEN}`
+      },
+      body: JSON.stringify({
+        businessId: BUSINESS_ID,
+        args: { bullets: fitted.join("\n") }
+      }),
+      signal: ctl.signal
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      log("warn", "memory_save_non_2xx", {
+        jobId: job.id,
+        status: res.status,
+        detail: detail.slice(0, 200)
+      });
+      return null;
+    }
+    log("info", "memory_saved", { jobId: job.id, count: fitted.length });
+    return fitted;
+  } catch (err) {
+    const reason = ctl.signal.aborted ? "timeout" : err?.message || "fetch failed";
+    log("warn", "memory_save_failed", { jobId: job.id, reason });
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Errors where it's worth retrying without Rowboat's stored conversation
 // state. Mirrors STATELESS_RETRY_ERRORS in the pre-Option-B streaming
 // route (src/lib/rowboat/chat.ts pre-PR-#79):
@@ -366,6 +470,18 @@ async function processJob(job) {
       ? job.stateless_input_messages
       : null;
 
+    // Kick off the READ-ONLY owner-rule extraction NOW so the (separate)
+    // Ollama classification overlaps Rowboat reply generation instead of
+    // adding to it. We only PERSIST the result on the success path below, so
+    // a turn that errors never writes to memory without a reply. Never throws.
+    const extractionPromise = startOwnerRuleExtraction(job).catch((err) => {
+      log("warn", "memory_capture_unexpected", {
+        jobId: job.id,
+        error: err?.message || String(err)
+      });
+      return { save: false, bullets: [] };
+    });
+
     // ATTEMPT 1: input_messages + (possibly) stored conversationId
     // + stored Rowboat state. The state is Rowboat's client-carried
     // tool/agent state from the previous turn (see migration
@@ -410,6 +526,11 @@ async function processJob(job) {
     }
     const { content, conversationId, state: nextState } = result;
 
+    // Insert the assistant reply FIRST. Owner-rule persistence happens only
+    // AFTER this succeeds (below), so a turn whose reply insert fails never
+    // writes to memory_md, and a reclaimed/retried job can't persist a rule
+    // against a reply that was never stored. Bugbot Medium-severity finding
+    // on PR #94.
     const { data: msg, error: insertErr } = await sb
       .from("dashboard_chat_messages")
       .insert({ thread_id: job.thread_id, role: "assistant", content })
@@ -417,6 +538,34 @@ async function processJob(job) {
       .single();
     if (insertErr) {
       throw new Error(`message_insert_failed:${insertErr.message}`);
+    }
+
+    // Reply is durably stored — now persist any durable business rule the
+    // owner stated this turn and append an HONEST confirmation to the stored
+    // message. A no-op / failed save just leaves the reply as-is (we never
+    // claim "saved" unless the adapter confirmed the write), and the extraction
+    // is read-only so it never had a side effect on a turn that errored. The
+    // client re-reads the message list once the job flips to 'done' (below),
+    // so the appended confirmation surfaces in the same turn — which is why
+    // this runs BEFORE the job-status update.
+    let memorySavedCount = 0;
+    const extraction = await extractionPromise;
+    if (extraction.save && extraction.bullets.length > 0) {
+      const saved = await persistOwnerRule(job, extraction.bullets);
+      if (saved && saved.length > 0) {
+        memorySavedCount = saved.length;
+        const { error: confErr } = await sb
+          .from("dashboard_chat_messages")
+          .update({ content: content + formatSavedConfirmation(saved) })
+          .eq("id", msg.id);
+        if (confErr) {
+          log("warn", "memory_confirmation_update_failed", {
+            jobId: job.id,
+            msgId: msg.id,
+            error: confErr.message
+          });
+        }
+      }
     }
 
     // Persist Rowboat's stateful conversationId for the next turn, OR,
@@ -525,6 +674,7 @@ async function processJob(job) {
       msgId: msg.id,
       durationMs: Date.now() - t0,
       contentLen: content.length,
+      memorySaved: memorySavedCount,
       conversationId,
       usedStateless,
       primaryErrorCode: usedStateless
@@ -618,7 +768,10 @@ async function main() {
     sweepIntervalMs: SWEEP_INTERVAL_MS,
     rowboatTimeoutMs: ROWBOAT_TIMEOUT_MS,
     maxAttempts: MAX_ATTEMPTS,
-    ownerStartAgent: OWNER_START_AGENT || "(workflow default)"
+    ownerStartAgent: OWNER_START_AGENT || "(workflow default)",
+    memoryCapture: MEMORY_CAPTURE_ENABLED && OWNER_APPEND_URL ? "on" : "off",
+    memoryCaptureModel: MEMORY_CAPTURE_ENABLED ? MEMORY_CAPTURE_MODEL : undefined,
+    ollamaBaseUrl: MEMORY_CAPTURE_ENABLED ? OLLAMA_BASE_URL : undefined
   });
 
   // CRITICAL: drain any pending work BEFORE subscribing to Realtime. If
