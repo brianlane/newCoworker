@@ -14,10 +14,12 @@ import {
 } from "@/lib/vault/business-config-markdown-limits";
 import { z } from "zod";
 
-// scheduleVaultSync runs the SSH vault re-seed after the response; give the
-// invocation enough runway so Vercel doesn't tear it down mid-sync.
+// scheduleVaultSync runs the SSH vault re-seed in after(), which shares this
+// invocation budget. syncVaultToVps alone permits a 60s SSH timeout plus
+// Hostinger IP lookup + DB reads before SSH, so budget above 60s to keep a
+// cold-VPS re-seed from being cut off.
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 const schema = z.object({
   businessId: z.string().uuid(),

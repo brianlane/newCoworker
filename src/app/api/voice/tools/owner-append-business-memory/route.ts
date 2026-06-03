@@ -23,10 +23,12 @@ import { scheduleVaultSync } from "@/lib/vps/schedule-vault-sync";
 import { logger } from "@/lib/logger";
 
 // The vault re-seed (scheduleVaultSync → after()) runs post-response and SSHes
-// into the tenant VPS (~5–15s, longer on a cold box). Give the invocation room
-// so Vercel doesn't tear it down before the agent prompt is refreshed.
+// into the tenant VPS. after() shares this single invocation budget, and
+// syncVaultToVps alone allows a 60s SSH timeout plus Hostinger IP lookup + DB
+// reads beforehand — so 60s would race the re-seed on a cold VPS. Budget well
+// above the sync's own ceiling.
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 /** Align with rough vault sizing; very large memory slows Rowboat prefill. */
 const MEMORY_MD_MAX_CHARS = 14_000;
