@@ -5,8 +5,8 @@ vi.mock("@/lib/db/configs", () => ({
   patchBusinessConfig: vi.fn()
 }));
 
-vi.mock("@/lib/vps/sync-vault", () => ({
-  syncVaultToVpsAndLog: vi.fn()
+vi.mock("@/lib/vps/schedule-vault-sync", () => ({
+  scheduleVaultSync: vi.fn()
 }));
 
 vi.mock("@/lib/rowboat/gateway-token", () => ({
@@ -15,7 +15,7 @@ vi.mock("@/lib/rowboat/gateway-token", () => ({
 
 import { POST } from "@/app/api/voice/tools/owner-append-business-memory/route";
 import { getBusinessConfig, patchBusinessConfig } from "@/lib/db/configs";
-import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
+import { scheduleVaultSync } from "@/lib/vps/schedule-vault-sync";
 import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -97,7 +97,7 @@ describe("POST /api/voice/tools/owner-append-business-memory", () => {
     expect(written).toMatch(/### Owner chat \(\d{4}-\d{2}-\d{2}\)/);
     expect(written).toContain("- Never discuss budget.");
     expect(written).not.toContain("- - ");
-    expect(syncVaultToVpsAndLog).toHaveBeenCalledWith(BIZ);
+    expect(scheduleVaultSync).toHaveBeenCalledWith(BIZ);
   });
 
   it("strips indented markdown bullets without double-prefixing", async () => {
@@ -191,7 +191,7 @@ describe("POST /api/voice/tools/owner-append-business-memory", () => {
     expect(json.data.savedBullets).toEqual([]);
     expect(json.data.skippedDuplicates).toBe(1);
     expect(patchBusinessConfig).not.toHaveBeenCalled();
-    expect(syncVaultToVpsAndLog).not.toHaveBeenCalled();
+    expect(scheduleVaultSync).not.toHaveBeenCalled();
   });
 
   it("rescues a restated rule whose only copy would be truncated from the head", async () => {

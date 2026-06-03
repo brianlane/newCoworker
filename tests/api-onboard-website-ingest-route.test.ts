@@ -20,8 +20,8 @@ vi.mock("@/lib/website-ingest", () => ({
 }));
 vi.mock("@/lib/auth", () => ({ getAuthUser: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
-vi.mock("@/lib/vps/sync-vault", () => ({
-  syncVaultToVpsAndLog: vi.fn(async () => undefined)
+vi.mock("@/lib/vps/schedule-vault-sync", () => ({
+  scheduleVaultSync: vi.fn()
 }));
 
 import { POST } from "@/app/api/onboard/website-ingest/route";
@@ -30,7 +30,7 @@ import { getBusiness, updateBusinessWebsiteUrl } from "@/lib/db/businesses";
 import { setBusinessWebsiteMd } from "@/lib/db/configs";
 import { ingestWebsite } from "@/lib/website-ingest";
 import { getAuthUser } from "@/lib/auth";
-import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
+import { scheduleVaultSync } from "@/lib/vps/schedule-vault-sync";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const TOKEN = "22222222-2222-4222-8222-222222222222";
@@ -235,7 +235,7 @@ describe("api/onboard/website-ingest route", () => {
     vi.mocked(getAuthUser).mockResolvedValue({ email: "admin@nc", isAdmin: true } as never);
     const res = await POST(jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/" }));
     expect(res.status).toBe(200);
-    expect(syncVaultToVpsAndLog).toHaveBeenCalledWith(BIZ);
+    expect(scheduleVaultSync).toHaveBeenCalledWith(BIZ);
   });
 
   it("does NOT trigger a vault re-seed when the ingest itself failed", async () => {
@@ -244,6 +244,6 @@ describe("api/onboard/website-ingest route", () => {
 
     const res = await POST(jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/" }));
     expect(res.status).toBe(200);
-    expect(syncVaultToVpsAndLog).not.toHaveBeenCalled();
+    expect(scheduleVaultSync).not.toHaveBeenCalled();
   });
 });

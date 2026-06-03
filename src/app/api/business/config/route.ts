@@ -4,7 +4,7 @@ import { patchBusinessConfig } from "@/lib/db/configs";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { verifyOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
 import { normalizeWebsiteUrl } from "@/lib/website-ingest";
-import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
+import { scheduleVaultSync } from "@/lib/vps/schedule-vault-sync";
 import { logger } from "@/lib/logger";
 import {
   BUSINESS_CONFIG_IDENTITY_MD_MAX_CHARS,
@@ -13,6 +13,13 @@ import {
   BUSINESS_CONFIG_WEBSITE_MD_MAX_CHARS
 } from "@/lib/vault/business-config-markdown-limits";
 import { z } from "zod";
+
+// scheduleVaultSync runs the SSH vault re-seed in after(), which shares this
+// invocation budget. syncVaultToVps alone permits a 60s SSH timeout plus
+// Hostinger IP lookup + DB reads before SSH, so budget above 60s to keep a
+// cold-VPS re-seed from being cut off.
+export const runtime = "nodejs";
+export const maxDuration = 120;
 
 const schema = z.object({
   businessId: z.string().uuid(),
@@ -169,9 +176,9 @@ export async function POST(request: Request) {
     // patched `business_configs`. Without this, owner edits in the dashboard
     // would land in Supabase but never reach the per-tenant Rowboat agent —
     // chat / SMS / voice would keep replying from the provision-time vault
-    // snapshot. Fire-and-forget: a slow or unreachable VPS MUST NOT block
-    // the API response (the Supabase write above is the source of truth).
-    void syncVaultToVpsAndLog(body.businessId);
+    // snapshot. Deferred to after() so the SSH re-seed reliably completes on
+    // Vercel without blocking the response (Supabase is the source of truth).
+    scheduleVaultSync(body.businessId);
 
     return successResponse({ updated: true });
   } catch (err) {

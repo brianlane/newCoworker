@@ -5,8 +5,16 @@ import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { getBusiness, updateBusinessWebsiteUrl } from "@/lib/db/businesses";
 import { setBusinessWebsiteMd } from "@/lib/db/configs";
 import { ingestWebsite, normalizeWebsiteUrl } from "@/lib/website-ingest";
-import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
+import { scheduleVaultSync } from "@/lib/vps/schedule-vault-sync";
 import { logger } from "@/lib/logger";
+
+// after() shares the route's max duration (it does NOT get a fresh window), so
+// this must cover the WHOLE request: the website crawl + summary (can run tens
+// of seconds) AND the post-response vault re-seed, whose own SSH timeout is
+// 60s. Budget generously so a slow crawl can't starve the re-seed and leave
+// the agent prompt stale.
+export const runtime = "nodejs";
+export const maxDuration = 300;
 
 const schema = z.object({
   businessId: z.string().uuid(),
@@ -104,8 +112,9 @@ export async function POST(request: Request) {
     // would only reach Supabase; the agent's `instructions` field on
     // the VPS would still reflect the provision-time snapshot. Skipped
     // silently when the business has no VPS yet (pre-checkout draft
-    // ingest) — `syncVaultToVpsAndLog` returns `no_vps_assigned`.
-    void syncVaultToVpsAndLog(body.businessId);
+    // ingest) — `syncVaultToVpsAndLog` returns `no_vps_assigned`. Deferred via
+    // after() so the SSH re-seed reliably completes post-response on Vercel.
+    scheduleVaultSync(body.businessId);
 
     logger.info("website-ingest: success", {
       businessId: body.businessId,
