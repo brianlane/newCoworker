@@ -174,3 +174,35 @@ export async function getActiveVpsSshKeyForBusiness(
   if (error) throw new Error(`getActiveVpsSshKeyForBusiness: ${error.message}`);
   return migrateRow((data as VpsSshKeyRow | null) ?? null);
 }
+
+/**
+ * Load every currently-active (unrotated) VPS keypair — one per provisioned
+ * tenant box. Used by fleet-wide operational tooling (e.g.
+ * `debug/update-all-vps.ts`) that needs to SSH to all running VPS instances
+ * to roll out a worker update. Ordered newest-first for stable, predictable
+ * iteration.
+ *
+ * Returns an empty array when no VPS has been provisioned. Each row is run
+ * through {@link migrateRow} so the `private_key_pem` is in ssh2-loadable
+ * OpenSSH format, exactly like the single-row getters above.
+ *
+ * NOTE: every row carries a PLAINTEXT private key — same trust model as the
+ * rest of this module. Service-role only; never expose to a client.
+ */
+export async function listActiveVpsSshKeys(
+  client?: SupabaseClient
+): Promise<VpsSshKeyRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("vps_ssh_keys")
+    .select("*")
+    .is("rotated_at", null)
+    .order("created_at", { ascending: false });
+
+  if (error) throw new Error(`listActiveVpsSshKeys: ${error.message}`);
+  const rows = (data as VpsSshKeyRow[] | null) ?? [];
+  // Each row from the query is non-null, so migrateRow never returns null
+  // here (it only short-circuits to null on a null input). Cast keeps the
+  // array element type without an unreachable null-filter branch.
+  return rows.map((row) => migrateRow(row) as VpsSshKeyRow);
+}

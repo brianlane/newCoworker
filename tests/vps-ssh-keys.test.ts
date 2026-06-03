@@ -8,7 +8,8 @@ vi.mock("@/lib/supabase/server", () => ({
 import {
   insertVpsSshKey,
   getActiveVpsSshKey,
-  getActiveVpsSshKeyForBusiness
+  getActiveVpsSshKeyForBusiness,
+  listActiveVpsSshKeys
 } from "@/lib/db/vps-ssh-keys";
 import { generateKeyPair as nodeGenKeyPair } from "node:crypto";
 import { promisify } from "node:util";
@@ -168,6 +169,53 @@ describe("vps_ssh_keys DB layer", () => {
     chain.maybeSingle.mockResolvedValue({ data: null, error: { message: "db error" } });
     const db = makeDb(chain);
     await expect(getActiveVpsSshKeyForBusiness("x", db as never)).rejects.toThrow(/db error/);
+  });
+
+  describe("listActiveVpsSshKeys", () => {
+    it("returns all active rows, filtering rotated_at IS NULL and ordering newest-first", async () => {
+      const second = { ...sample, id: "row-2", business_id: "biz-2", hostinger_vps_id: "43" };
+      const chain = makeChain();
+      chain.order.mockResolvedValue({ data: [sample, second], error: null });
+      const db = makeDb(chain);
+      const rows = await listActiveVpsSshKeys(db as never);
+      expect(rows).toEqual([sample, second]);
+      expect(db.from).toHaveBeenCalledWith("vps_ssh_keys");
+      expect(chain.is).toHaveBeenCalledWith("rotated_at", null);
+      expect(chain.order).toHaveBeenCalledWith("created_at", { ascending: false });
+    });
+
+    it("returns an empty array when no VPS has been provisioned", async () => {
+      const chain = makeChain();
+      chain.order.mockResolvedValue({ data: null, error: null });
+      const db = makeDb(chain);
+      await expect(listActiveVpsSshKeys(db as never)).resolves.toEqual([]);
+    });
+
+    it("throws on Supabase error", async () => {
+      const chain = makeChain();
+      chain.order.mockResolvedValue({ data: null, error: { message: "list boom" } });
+      const db = makeDb(chain);
+      await expect(listActiveVpsSshKeys(db as never)).rejects.toThrow(/list boom/);
+    });
+
+    it("re-encodes legacy PKCS#8 PEMs across every returned row", async () => {
+      const { privateKey } = await generateKeyPair("ed25519");
+      const pkcs8 = privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+      const legacy = { ...sample, private_key_pem: pkcs8 };
+      const chain = makeChain();
+      chain.order.mockResolvedValue({ data: [legacy], error: null });
+      const db = makeDb(chain);
+      const rows = await listActiveVpsSshKeys(db as never);
+      expect(rows[0].private_key_pem).toContain("BEGIN OPENSSH PRIVATE KEY");
+    });
+
+    it("uses the default service client when none is provided", async () => {
+      const chain = makeChain();
+      chain.order.mockResolvedValue({ data: [sample], error: null });
+      defaultClientSpy.mockReturnValueOnce(makeDb(chain));
+      await expect(listActiveVpsSshKeys()).resolves.toEqual([sample]);
+      expect(defaultClientSpy).toHaveBeenCalled();
+    });
   });
 
   describe("fallback to createSupabaseServiceClient when no client is provided", () => {

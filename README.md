@@ -62,6 +62,32 @@ npm run test:integration:correctness:kvm2-llama32-compare
 
 The integration path uses real Rowboat + Ollama stacks and writes assistant outputs to `test-results/integration-correctness-responses.json`.
 
+## Operating the VPS fleet (`debug/`)
+
+One-shot operational + diagnostic scripts for the live per-tenant VPS fleet
+live in [`debug/`](debug/README.md). They run locally with `tsx`, read
+credentials from the repo-root `.env`, and talk to the boxes over the
+Hostinger API + SSH. They are **not** part of the app bundle and **not** under
+the test coverage gate (coverage is scoped to `src/lib/**`); the reusable,
+tested primitives they build on live in `src/lib/db/vps-ssh-keys.ts` and
+`src/lib/hostinger/*`.
+
+```bash
+# Roll the latest main's chat-worker out to EVERY active VPS
+tsx debug/update-all-vps.ts --dry-run   # preview targets
+tsx debug/update-all-vps.ts             # update all (sequential)
+tsx debug/update-all-vps.ts --concurrency=4
+
+# Single tenant + diagnostics
+tsx debug/deploy-worker.ts <businessId> # update one box
+tsx debug/smoke-rule.ts  [businessId]   # e2e owner-rule memory-capture check
+tsx debug/logs.ts        [businessId]   # tail worker memory/job logs
+tsx debug/check-ollama.ts [businessId]  # verify Ollama reachable + JSON extraction
+```
+
+> ⚠️ These touch production (service-role key + plaintext VPS SSH keys, and
+> they recreate live containers). See [`debug/README.md`](debug/README.md).
+
 ## Production checklist (high level)
 
 - Set **`INTERNAL_CRON_SECRET`** for scheduled invocations of Edge functions that use `assertCronAuth` (e.g. `sms-inbound-worker`, **`voice-settlement-sweep`** — runs **`voice_run_maintenance_sweeps`** for stale settlements, zombie **`voice_active_sessions`**, stale **`voice_reservations`**, stuck **`sms_inbound_jobs`**, and expired **`stream_url_nonces`** — **`voice-low-balance-alerts`**, **`telnyx-voice-failover`**). Do **not** set **`CRON_ALLOW_SERVICE_ROLE_BEARER`** in production — that flag exists only so local dev can reuse the service role as the bearer when no dedicated cron secret is configured.
