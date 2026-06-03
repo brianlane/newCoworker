@@ -40,6 +40,34 @@ function normalizeBulletLines(raw: string): string[] {
   return lines.slice(0, 25);
 }
 
+/**
+ * Dedup key for a bullet/memory line: lowercased, list-marker- and
+ * trailing-punctuation-stripped, whitespace-collapsed. Deliberately
+ * conservative (exact-after-normalization) so we only ever drop genuine
+ * re-sends of the same line, never a distinct fact that happens to look
+ * similar.
+ */
+function dedupKey(line: string): string {
+  return line
+    .toLowerCase()
+    .replace(/^[-*•]\s+/, "")
+    .replace(/[.;,\s]+$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Dedup keys for the bullet lines already saved in memory_md. */
+function existingMemoryKeys(memoryMd: string): Set<string> {
+  const keys = new Set<string>();
+  for (const raw of memoryMd.split(/\r?\n/)) {
+    if (/^\s*[-*•]\s+/.test(raw)) {
+      const key = dedupKey(raw);
+      if (key) keys.add(key);
+    }
+  }
+  return keys;
+}
+
 export async function POST(request: Request) {
   const guard = gatewayGuard(request);
   if (guard) return guard;
@@ -67,20 +95,48 @@ export async function POST(request: Request) {
     return voiceToolValidationError("bullets must contain at least one non-empty line");
   }
 
-  const dateStamp = new Date().toISOString().slice(0, 10);
-  const blockLines = [
-    "",
-    "---",
-    "",
-    `### Owner chat (${dateStamp})`,
-    "",
-    ...bulletLines.map((b) => `- ${b}`)
-  ];
-  const block = blockLines.join("\n");
-
   try {
     const existing = await getBusinessConfig(envelope.businessId);
     const prior = existing?.memory_md?.trim() ?? "";
+
+    // Dedup: never persist a line already present in memory_md, and collapse
+    // duplicates within this same batch. Keeps repeated owner statements
+    // ("never discuss budget") from stacking up across turns/retries.
+    const existingKeys = existingMemoryKeys(prior);
+    const batchKeys = new Set<string>();
+    const savedBullets: string[] = [];
+    for (const line of bulletLines) {
+      const key = dedupKey(line);
+      if (!key || existingKeys.has(key) || batchKeys.has(key)) continue;
+      batchKeys.add(key);
+      savedBullets.push(line);
+    }
+
+    // Everything was already in memory — nothing to write. Report success with
+    // appended:false + empty savedBullets so the caller renders no (false)
+    // "saved" confirmation and we skip a redundant vault sync.
+    if (savedBullets.length === 0) {
+      logger.info("voice-tools/owner-append-business-memory: all duplicates, skipped", {
+        businessId: envelope.businessId,
+        incoming: bulletLines.length
+      });
+      return voiceToolResponse({
+        ok: true,
+        data: {
+          appended: false,
+          bulletCount: 0,
+          savedBullets: [],
+          skippedDuplicates: bulletLines.length,
+          memoryChars: prior.length,
+          truncated: false
+        }
+      });
+    }
+
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    const block = ["", "---", "", `### Owner chat (${dateStamp})`, "", ...savedBullets.map((b) => `- ${b}`)].join(
+      "\n"
+    );
     const wanted = prior ? `${prior}\n${block}` : block.trimStart();
     const next =
       wanted.length > MEMORY_MD_MAX_CHARS ? wanted.slice(wanted.length - MEMORY_MD_MAX_CHARS) : wanted;
@@ -90,7 +146,8 @@ export async function POST(request: Request) {
 
     logger.info("voice-tools/owner-append-business-memory: appended", {
       businessId: envelope.businessId,
-      bulletCount: bulletLines.length,
+      bulletCount: savedBullets.length,
+      skippedDuplicates: bulletLines.length - savedBullets.length,
       memoryChars: next.length,
       truncated: next.length < wanted.length
     });
@@ -99,7 +156,9 @@ export async function POST(request: Request) {
       ok: true,
       data: {
         appended: true,
-        bulletCount: bulletLines.length,
+        bulletCount: savedBullets.length,
+        savedBullets,
+        skippedDuplicates: bulletLines.length - savedBullets.length,
         memoryChars: next.length,
         truncated: next.length < wanted.length
       }

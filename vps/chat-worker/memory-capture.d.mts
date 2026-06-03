@@ -18,6 +18,15 @@ export function extractLatestOwnerMessage(
   inputMessages: Array<{ role?: string; content?: unknown }> | null | undefined
 ): string;
 
+export function extractExistingBullets(memoryMd: unknown): string[];
+
+export interface ExtractionInputOpts {
+  assistantReply?: string;
+  existingBullets?: string[];
+}
+
+export function composeExtractionInput(ownerMessage: string, opts?: ExtractionInputOpts): string;
+
 export const ADAPTER_BULLETS_MAX_CHARS: number;
 
 export function normalizeBullets(raw: unknown): string[];
@@ -31,7 +40,8 @@ export function parseMemoryExtraction(content: unknown): {
 
 export function buildExtractionRequestBody(
   model: string,
-  ownerMessage: string
+  ownerMessage: string,
+  opts?: ExtractionInputOpts
 ): {
   model: string;
   stream: boolean;
@@ -44,6 +54,8 @@ export function formatSavedConfirmation(bullets: string[]): string;
 
 export function extractOwnerRule(args: {
   ownerMessage: string;
+  assistantReply?: string;
+  existingBullets?: string[];
   model: string;
   ollamaBaseUrl: string;
   fetchImpl?: typeof fetch;

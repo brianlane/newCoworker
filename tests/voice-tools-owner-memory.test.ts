@@ -116,6 +116,84 @@ describe("POST /api/voice/tools/owner-append-business-memory", () => {
     expect(written).not.toMatch(/- - /);
   });
 
+  it("returns savedBullets listing exactly the appended lines", async () => {
+    vi.mocked(getBusinessConfig).mockResolvedValue(null);
+    const res = await POST(
+      makeReq({
+        businessId: BIZ,
+        args: { bullets: "Never discuss budget.\nOffer free estimates." }
+      })
+    );
+    const json = await res.json();
+    expect(json.data.savedBullets).toEqual(["Never discuss budget.", "Offer free estimates."]);
+    expect(json.data.skippedDuplicates).toBe(0);
+  });
+
+  it("skips lines already present in memory_md (normalized) and reports them", async () => {
+    vi.mocked(getBusinessConfig).mockResolvedValue({
+      business_id: BIZ,
+      soul_md: "",
+      identity_md: "",
+      memory_md: "## Owner Rules\n- Never discuss budget.",
+      website_md: "",
+      updated_at: ""
+    });
+
+    const res = await POST(
+      makeReq({
+        businessId: BIZ,
+        // First line is a re-send (differs only by case/trailing punctuation);
+        // second is genuinely new.
+        args: { bullets: "never discuss budget\nEscalate to Amy Laidlaw 602-695-1142" }
+      })
+    );
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.data.appended).toBe(true);
+    expect(json.data.savedBullets).toEqual(["Escalate to Amy Laidlaw 602-695-1142"]);
+    expect(json.data.skippedDuplicates).toBe(1);
+    const written = vi.mocked(patchBusinessConfig).mock.calls[0][1].memory_md as string;
+    expect(written).toContain("- Escalate to Amy Laidlaw 602-695-1142");
+    // The duplicate is NOT appended a second time (only the pre-existing one).
+    expect(written.match(/never discuss budget/gi)?.length).toBe(1);
+  });
+
+  it("collapses duplicates within the same batch", async () => {
+    vi.mocked(getBusinessConfig).mockResolvedValue(null);
+    const res = await POST(
+      makeReq({
+        businessId: BIZ,
+        args: { bullets: "Closed on Sundays\n- closed on sundays.\nClosed on Sundays" }
+      })
+    );
+    const json = await res.json();
+    expect(json.data.savedBullets).toEqual(["Closed on Sundays"]);
+    expect(json.data.bulletCount).toBe(1);
+  });
+
+  it("when every line is a duplicate: appended:false, no write, no vault sync", async () => {
+    vi.mocked(getBusinessConfig).mockResolvedValue({
+      business_id: BIZ,
+      soul_md: "",
+      identity_md: "",
+      memory_md: "- Never discuss budget.",
+      website_md: "",
+      updated_at: ""
+    });
+
+    const res = await POST(
+      makeReq({ businessId: BIZ, args: { bullets: "Never discuss budget." } })
+    );
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.ok).toBe(true);
+    expect(json.data.appended).toBe(false);
+    expect(json.data.savedBullets).toEqual([]);
+    expect(json.data.skippedDuplicates).toBe(1);
+    expect(patchBusinessConfig).not.toHaveBeenCalled();
+    expect(syncVaultToVpsAndLog).not.toHaveBeenCalled();
+  });
+
   it("400 when bullets empty after trim", async () => {
     const res = await POST(
       makeReq({

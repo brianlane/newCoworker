@@ -26,28 +26,38 @@
  * JSON shape enforced by MEMORY_EXTRACTION_FORMAT.
  */
 export const OWNER_MEMORY_SYSTEM_PROMPT = [
-  "You extract DURABLE, business-wide rules that a business OWNER wants their",
-  "AI receptionist to follow permanently on customer SMS and phone calls.",
+  "You extract DURABLE business knowledge that a business OWNER wants their AI",
+  "receptionist/assistant to remember and use permanently — on customer SMS,",
+  "phone calls, and when assisting the owner.",
   "",
-  "You are given the owner's latest dashboard message. Decide whether it states",
-  "such a standing rule or preference.",
+  "You are given the owner's latest dashboard message. Decide whether it",
+  "contains standing information worth saving to long-term business memory.",
   "",
-  "SAVE (save=true) only for lasting instructions about how the assistant should",
-  "behave with customers, e.g.:",
-  '  - "never discuss budget or pricing with customers"',
-  '  - "always mention we offer free estimates"',
-  '  - "we are closed on Sundays, do not book then"',
-  '  - "keep replies short and friendly"',
+  "SAVE (save=true) when the message states a durable RULE *or* durable",
+  "FACTS / CONFIGURATION, e.g.:",
+  '  - behavior rules: "never discuss budget with customers",',
+  '    "always mention we offer free estimates", "keep replies short"',
+  '  - hours / availability: "we are closed on Sundays, do not book then"',
+  "  - team roster & contacts: \"our agents are Gabrielle Mota 480-720-2013",
+  '    and Dave Lane 602-524-5719"',
+  '  - routing / escalation: "escalate urgent issues to Amy Laidlaw',
+  '    602-695-1142" (capture the NEW target; note it replaces the old one)',
+  "  - service area, required disclosures, pricing policy, etc.",
   "",
-  "DO NOT SAVE (save=false) for anything that is not a durable rule, e.g.:",
-  "  - questions or requests for information",
+  "ALSO save (save=true) whenever the owner EXPLICITLY asks you to remember or",
+  'save something — "add this to memory", "remember that…", "save the',
+  'following", "update the X to Y", "for memory". Treat that as a strong save',
+  "signal and capture the concrete facts.",
+  "",
+  "DO NOT SAVE (save=false) for anything that is not durable, e.g.:",
+  "  - questions or requests for information (\"what do you do for a new lead?\")",
   "  - greetings, small talk, venting, or thinking out loud",
   "  - one-off tasks (\"text Joe back\", \"summarize today's calls\")",
   "  - hypotheticals (\"what if we stopped doing X\")",
   "",
-  "When save=true, rewrite the rule(s) as concise, standalone, imperative lines",
-  "(one rule per bullet). When save=false, return an empty bullets array.",
-  "Respond with JSON only."
+  "When save=true, rewrite the content as concise, standalone lines (one item",
+  "per bullet), preserving names, phone numbers, and other specifics EXACTLY as",
+  "given. When save=false, return an empty bullets array. Respond with JSON only."
 ].join("\n");
 
 /**
@@ -156,13 +166,70 @@ export function parseMemoryExtraction(content) {
 }
 
 /**
+ * Pull the already-saved bullet lines out of memory_md so the extractor can be
+ * told "don't repeat these". Saved owner items render as "- <text>" (see the
+ * owner-append adapter), so we grab markdown list lines and strip the marker.
+ *
+ * @param {unknown} memoryMd
+ * @returns {string[]}
+ */
+export function extractExistingBullets(memoryMd) {
+  if (typeof memoryMd !== "string") return [];
+  const out = [];
+  for (const raw of memoryMd.split(/\r?\n/)) {
+    const m = /^\s*[-*•]\s+(.*)$/.exec(raw);
+    if (m && m[1].trim()) out.push(m[1].trim());
+  }
+  return out;
+}
+
+/**
+ * Compose the single user turn handed to the extractor. Beyond the owner's
+ * message we optionally include:
+ *   - the ASSISTANT REPLY, because the dashboard chat model often restates the
+ *     facts cleanly and announces "saved/applied to memory" — a strong signal
+ *     that the owner just stated durable info worth persisting (and a reliable
+ *     source for the exact values, e.g. phone numbers it echoed back).
+ *   - the ALREADY-SAVED bullets, so the model only emits NEW items and we don't
+ *     persist the same rule/fact twice across turns.
+ *
+ * @param {string} ownerMessage
+ * @param {{ assistantReply?: string, existingBullets?: string[] }} [opts]
+ * @returns {string}
+ */
+export function composeExtractionInput(ownerMessage, opts = {}) {
+  const parts = [`OWNER MESSAGE:\n${ownerMessage}`];
+  const reply = typeof opts.assistantReply === "string" ? opts.assistantReply.trim() : "";
+  if (reply) {
+    parts.push(
+      "ASSISTANT REPLY (context only — if it indicates it saved, applied, or " +
+        "updated business info, that is a STRONG signal to save the facts, and " +
+        "you may use it to recover the exact values):\n" +
+        reply
+    );
+  }
+  const existing = Array.isArray(opts.existingBullets)
+    ? opts.existingBullets.map((b) => String(b).trim()).filter(Boolean)
+    : [];
+  if (existing.length > 0) {
+    parts.push(
+      "ALREADY SAVED IN MEMORY (do NOT output any of these again; only output " +
+        "genuinely NEW items):\n" +
+        existing.map((b) => `- ${b}`).join("\n")
+    );
+  }
+  return parts.join("\n\n");
+}
+
+/**
  * Build the Ollama /api/chat request body for one extraction call.
  * temperature:0 for determinism; stream:false so we get a single response.
  *
  * @param {string} model
  * @param {string} ownerMessage
+ * @param {{ assistantReply?: string, existingBullets?: string[] }} [opts]
  */
-export function buildExtractionRequestBody(model, ownerMessage) {
+export function buildExtractionRequestBody(model, ownerMessage, opts = {}) {
   return {
     model,
     stream: false,
@@ -170,7 +237,7 @@ export function buildExtractionRequestBody(model, ownerMessage) {
     options: { temperature: 0 },
     messages: [
       { role: "system", content: OWNER_MEMORY_SYSTEM_PROMPT },
-      { role: "user", content: ownerMessage }
+      { role: "user", content: composeExtractionInput(ownerMessage, opts) }
     ]
   };
 }
@@ -224,6 +291,8 @@ export function formatSavedConfirmation(bullets) {
  *
  * @param {object} args
  * @param {string} args.ownerMessage
+ * @param {string} [args.assistantReply]   the dashboard reply (save signal + value source)
+ * @param {string[]} [args.existingBullets] already-saved items, so we don't repeat them
  * @param {string} args.model
  * @param {string} args.ollamaBaseUrl  e.g. http://host.docker.internal:11434
  * @param {typeof fetch} [args.fetchImpl]
@@ -233,6 +302,8 @@ export function formatSavedConfirmation(bullets) {
  */
 export async function extractOwnerRule({
   ownerMessage,
+  assistantReply,
+  existingBullets,
   model,
   ollamaBaseUrl,
   fetchImpl = fetch,
@@ -252,7 +323,9 @@ export async function extractOwnerRule({
     const res = await fetchImpl(`${base}/api/chat`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(buildExtractionRequestBody(model, ownerMessage)),
+      body: JSON.stringify(
+        buildExtractionRequestBody(model, ownerMessage, { assistantReply, existingBullets })
+      ),
       signal: controller.signal
     });
     if (!res.ok) {
