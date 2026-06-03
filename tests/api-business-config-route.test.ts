@@ -31,8 +31,8 @@ vi.mock("@/lib/website-ingest", () => ({
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
-vi.mock("@/lib/vps/sync-vault", () => ({
-  syncVaultToVpsAndLog: vi.fn(async () => undefined)
+vi.mock("@/lib/vps/schedule-vault-sync", () => ({
+  scheduleVaultSync: vi.fn()
 }));
 
 type SupabaseQueryStub = {
@@ -58,7 +58,7 @@ import { getAuthUser } from "@/lib/auth";
 import { updateBusinessWebsiteUrl } from "@/lib/db/businesses";
 import { patchBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
-import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
+import { scheduleVaultSync } from "@/lib/vps/schedule-vault-sync";
 import {
   BUSINESS_CONFIG_MEMORY_MD_MAX_CHARS,
   BUSINESS_CONFIG_SOUL_MD_MAX_CHARS
@@ -190,23 +190,22 @@ describe("api/business/config — VPS vault sync", () => {
   it("kicks off a vault re-seed on every successful save", async () => {
     const res = await POST(jsonRequest(baseBody({ websiteUrl: "https://example.com" })));
     expect(res.status).toBe(200);
-    expect(syncVaultToVpsAndLog).toHaveBeenCalledWith(BIZ);
+    expect(scheduleVaultSync).toHaveBeenCalledWith(BIZ);
   });
 
   it("does NOT trigger a vault sync when the save itself was rejected (validation error)", async () => {
     const res = await POST(jsonRequest(baseBody({ websiteUrl: "javascript:alert(1)" })));
     expect(res.status).toBe(400);
-    expect(syncVaultToVpsAndLog).not.toHaveBeenCalled();
+    expect(scheduleVaultSync).not.toHaveBeenCalled();
   });
 
-  it("returns success even if the vault sync rejects post-write (Supabase IS the source of truth)", async () => {
-    // We MUST NOT fail the API on a slow/unreachable VPS — the canonical
-    // write to Supabase has already succeeded by the time the sync fires.
-    // The route uses `void` + the helper's internal try/catch so a
-    // rejection here can't bubble; this asserts the contract.
-    vi.mocked(syncVaultToVpsAndLog).mockRejectedValueOnce(new Error("vps down"));
+  it("schedules the sync (post-response via after()) rather than blocking the write", async () => {
+    // The sync is deferred through scheduleVaultSync → after(): the response
+    // returns immediately and the SSH re-seed runs after, so a slow/unreachable
+    // VPS can never delay or fail the save (Supabase is the source of truth).
     const res = await POST(jsonRequest(baseBody()));
     expect(res.status).toBe(200);
     expect(patchBusinessConfig).toHaveBeenCalled();
+    expect(scheduleVaultSync).toHaveBeenCalledWith(BIZ);
   });
 });

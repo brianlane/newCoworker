@@ -5,8 +5,13 @@ import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { getBusiness, updateBusinessWebsiteUrl } from "@/lib/db/businesses";
 import { setBusinessWebsiteMd } from "@/lib/db/configs";
 import { ingestWebsite, normalizeWebsiteUrl } from "@/lib/website-ingest";
-import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
+import { scheduleVaultSync } from "@/lib/vps/schedule-vault-sync";
 import { logger } from "@/lib/logger";
+
+// The post-response vault re-seed (scheduleVaultSync → after()) SSHes into the
+// tenant VPS; keep the invocation alive long enough for it to finish.
+export const runtime = "nodejs";
+export const maxDuration = 60;
 
 const schema = z.object({
   businessId: z.string().uuid(),
@@ -104,8 +109,9 @@ export async function POST(request: Request) {
     // would only reach Supabase; the agent's `instructions` field on
     // the VPS would still reflect the provision-time snapshot. Skipped
     // silently when the business has no VPS yet (pre-checkout draft
-    // ingest) — `syncVaultToVpsAndLog` returns `no_vps_assigned`.
-    void syncVaultToVpsAndLog(body.businessId);
+    // ingest) — `syncVaultToVpsAndLog` returns `no_vps_assigned`. Deferred via
+    // after() so the SSH re-seed reliably completes post-response on Vercel.
+    scheduleVaultSync(body.businessId);
 
     logger.info("website-ingest: success", {
       businessId: body.businessId,
