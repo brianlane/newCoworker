@@ -25,7 +25,7 @@ const client = makeHostingerClient();
 const ip = await resolveVpsIp(client, key);
 
 const remote = `
-set -uo pipefail
+set -euo pipefail
 cd /opt/chat-worker
 grep -q '^MEMORY_CAPTURE_TIMEOUT_MS=' .env \
   && sed -i 's/^MEMORY_CAPTURE_TIMEOUT_MS=.*/MEMORY_CAPTURE_TIMEOUT_MS=${TIMEOUT_MS}/' .env \
