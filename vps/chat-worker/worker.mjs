@@ -80,6 +80,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import {
+  extractExistingBullets,
   extractLatestOwnerMessage,
   extractOwnerRule,
   fitBulletsToPayload,
@@ -328,7 +329,7 @@ async function notifyVercelSummarize(businessId, threadId) {
 // later errors (Rowboat failure, empty assistant, message-insert failure)
 // never writes to memory_md without a corresponding reply + confirmation, and
 // a reclaimed/retried job doesn't double-write the same rule. NEVER throws.
-async function startOwnerRuleExtraction(job) {
+async function startOwnerRuleExtraction(job, assistantReply, existingBullets) {
   const noop = { save: false, bullets: [] };
   if (!MEMORY_CAPTURE_ENABLED || !OWNER_APPEND_URL) return noop;
 
@@ -337,12 +338,41 @@ async function startOwnerRuleExtraction(job) {
 
   return extractOwnerRule({
     ownerMessage,
+    // The dashboard reply both signals intent ("…applied to your memory") and
+    // restates values cleanly — feed it in so the extractor catches durable
+    // facts the owner stated and recovers exact numbers/names.
+    assistantReply,
+    // Already-saved bullets so the model only emits NEW items (the adapter
+    // dedupes authoritatively too, but this keeps the model from proposing
+    // re-phrased duplicates in the first place).
+    existingBullets,
     model: MEMORY_CAPTURE_MODEL,
     ollamaBaseUrl: OLLAMA_BASE_URL,
     fetchImpl: fetch,
     timeoutMs: MEMORY_CAPTURE_TIMEOUT_MS,
     logger: log
   });
+}
+
+// Read the tenant's current saved memory bullets so the extractor can avoid
+// re-proposing them. Best-effort: a failed read just means the model isn't
+// told about existing items (the adapter still dedupes on write). NEVER throws.
+async function loadExistingBullets(businessId) {
+  try {
+    const { data, error } = await sb
+      .from("business_configs")
+      .select("memory_md")
+      .eq("business_id", businessId)
+      .maybeSingle();
+    if (error) {
+      log("warn", "memory_read_failed", { businessId, error: error.message });
+      return [];
+    }
+    return extractExistingBullets(data?.memory_md || "");
+  } catch (err) {
+    log("warn", "memory_read_failed", { businessId, error: err?.message || String(err) });
+    return [];
+  }
 }
 
 // Persist extracted rule bullets via the platform owner-append adapter.
@@ -383,8 +413,31 @@ async function persistOwnerRule(job, bullets) {
       });
       return null;
     }
-    log("info", "memory_saved", { jobId: job.id, count: fitted.length });
-    return fitted;
+    // The adapter dedupes against existing memory_md and returns the lines it
+    // ACTUALLY appended (savedBullets). Confirm only those so we never tell the
+    // owner we saved something that was already there. Fall back to `fitted`
+    // for an older adapter that predates savedBullets but reported appended.
+    let body = null;
+    try {
+      body = await res.json();
+    } catch {
+      body = null;
+    }
+    if (body && body.ok === false) {
+      log("warn", "memory_save_rejected", { jobId: job.id, detail: body.detail || "" });
+      return null;
+    }
+    const saved = Array.isArray(body?.data?.savedBullets)
+      ? body.data.savedBullets
+      : body?.data?.appended
+        ? fitted
+        : [];
+    if (saved.length === 0) {
+      log("info", "memory_no_new", { jobId: job.id });
+      return null;
+    }
+    log("info", "memory_saved", { jobId: job.id, count: saved.length });
+    return saved;
   } catch (err) {
     const reason = ctl.signal.aborted ? "timeout" : err?.message || "fetch failed";
     log("warn", "memory_save_failed", { jobId: job.id, reason });
@@ -543,7 +596,8 @@ async function processJob(job) {
     let memorySavedCount = 0;
     let extraction = { save: false, bullets: [] };
     try {
-      extraction = await startOwnerRuleExtraction(job);
+      const existingBullets = await loadExistingBullets(job.business_id);
+      extraction = await startOwnerRuleExtraction(job, content, existingBullets);
     } catch (err) {
       log("warn", "memory_capture_unexpected", {
         jobId: job.id,

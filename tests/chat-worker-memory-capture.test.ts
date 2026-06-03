@@ -4,6 +4,8 @@ import {
   MEMORY_EXTRACTION_FORMAT,
   ADAPTER_BULLETS_MAX_CHARS,
   extractLatestOwnerMessage,
+  extractExistingBullets,
+  composeExtractionInput,
   normalizeBullets,
   parseMemoryExtraction,
   buildExtractionRequestBody,
@@ -124,6 +126,54 @@ describe("parseMemoryExtraction", () => {
   });
 });
 
+describe("extractExistingBullets", () => {
+  it("pulls markdown list lines and strips the marker", () => {
+    const md = [
+      "## Owner Rules",
+      "- Never discuss budget.",
+      "* Offer free estimates",
+      "  • Closed Sundays",
+      "",
+      "Some prose that is not a bullet."
+    ].join("\n");
+    expect(extractExistingBullets(md)).toEqual([
+      "Never discuss budget.",
+      "Offer free estimates",
+      "Closed Sundays"
+    ]);
+  });
+
+  it("returns [] for empty / non-string input", () => {
+    expect(extractExistingBullets("")).toEqual([]);
+    expect(extractExistingBullets(null as unknown as string)).toEqual([]);
+  });
+});
+
+describe("composeExtractionInput", () => {
+  it("includes only the owner message when no extras are given", () => {
+    expect(composeExtractionInput("never discuss budget")).toBe(
+      "OWNER MESSAGE:\nnever discuss budget"
+    );
+  });
+
+  it("appends the assistant reply and already-saved bullets when provided", () => {
+    const out = composeExtractionInput("add Dave 602-524-5719 for memory", {
+      assistantReply: "Dave: 602-524-5719. All changes applied to your memory.",
+      existingBullets: ["Never discuss budget", "  ", 5 as unknown as string]
+    });
+    expect(out).toContain("OWNER MESSAGE:\nadd Dave 602-524-5719 for memory");
+    expect(out).toContain("ASSISTANT REPLY");
+    expect(out).toContain("Dave: 602-524-5719");
+    expect(out).toContain("ALREADY SAVED IN MEMORY");
+    expect(out).toContain("- Never discuss budget");
+  });
+
+  it("omits empty assistant reply and empty existing-bullets sections", () => {
+    const out = composeExtractionInput("hello", { assistantReply: "   ", existingBullets: [] });
+    expect(out).toBe("OWNER MESSAGE:\nhello");
+  });
+});
+
 describe("buildExtractionRequestBody", () => {
   it("produces a deterministic, structured-output Ollama request", () => {
     const body = buildExtractionRequestBody("qwen3:4b-instruct", "never discuss budget");
@@ -134,7 +184,18 @@ describe("buildExtractionRequestBody", () => {
       options: { temperature: 0 }
     });
     expect(body.messages[0]).toEqual({ role: "system", content: OWNER_MEMORY_SYSTEM_PROMPT });
-    expect(body.messages[1]).toEqual({ role: "user", content: "never discuss budget" });
+    expect(body.messages[1].role).toBe("user");
+    expect(body.messages[1].content).toContain("never discuss budget");
+  });
+
+  it("threads assistant reply + existing bullets into the user turn", () => {
+    const body = buildExtractionRequestBody("m", "remember Dave 602-524-5719", {
+      assistantReply: "Saved Dave to memory.",
+      existingBullets: ["Never discuss budget"]
+    });
+    expect(body.messages[1].content).toContain("remember Dave 602-524-5719");
+    expect(body.messages[1].content).toContain("Saved Dave to memory.");
+    expect(body.messages[1].content).toContain("Never discuss budget");
   });
 });
 
@@ -216,8 +277,27 @@ describe("extractOwnerRule", () => {
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toBe(`${base}/api/chat`);
     expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body).messages[1].content).toBe("from now on never discuss budget");
+    expect(JSON.parse(init.body).messages[1].content).toContain("from now on never discuss budget");
     expect(init.signal).toBeDefined();
+  });
+
+  it("threads assistantReply + existingBullets through to the request body", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ message: { content: JSON.stringify({ save: true, bullets: ["x"] }) } })
+    });
+    await extractOwnerRule({
+      ownerMessage: "remember Dave 602-524-5719",
+      assistantReply: "Saved Dave to your memory.",
+      existingBullets: ["Never discuss budget"],
+      model: "qwen3:4b-instruct",
+      ollamaBaseUrl: base,
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    const content = JSON.parse(fetchImpl.mock.calls[0][1].body).messages[1].content;
+    expect(content).toContain("remember Dave 602-524-5719");
+    expect(content).toContain("Saved Dave to your memory.");
+    expect(content).toContain("Never discuss budget");
   });
 
   it("returns a no-op and logs on a non-2xx response", async () => {
