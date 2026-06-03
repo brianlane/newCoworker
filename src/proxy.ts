@@ -91,6 +91,13 @@ export async function proxy(request: NextRequest) {
     pathname.startsWith("/api/") &&
     !pathname.startsWith("/api/webhooks/") &&
     !pathname.startsWith("/api/rowboat") &&
+    // /api/voice/tools/* are server-to-server tool adapters authenticated
+    // solely by `Authorization: Bearer ROWBOAT_GATEWAY_TOKEN` (gatewayGuard),
+    // never by a session cookie. CSRF only defends cookie-authed browser
+    // requests, so it adds no protection here and instead 403s legitimate
+    // callers that send no Origin (the VPS voice-bridge and chat-worker).
+    // Same rationale as the /api/rowboat and /api/webhooks exemptions above.
+    !pathname.startsWith("/api/voice/tools/") &&
     ["POST", "PUT", "DELETE", "PATCH"].includes(method)
   ) {
     const origin = request.headers.get("origin");

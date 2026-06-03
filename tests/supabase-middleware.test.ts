@@ -143,6 +143,13 @@ describe("proxy", () => {
     expect(res.status).not.toBe(403);
   });
 
+  it("allows POST to /api/voice/tools without origin (bearer-authed VPS tool adapter)", async () => {
+    mockSupabaseWithUser(null);
+    const req = makeRequest("/api/voice/tools/owner-append-business-memory", { method: "POST" });
+    const res = await proxy(req);
+    expect(res.status).not.toBe(403);
+  });
+
   it("allows GET to /api without origin (CSRF only for state-changing)", async () => {
     mockSupabaseWithUser(null);
     const req = makeRequest("/api/business/status");
