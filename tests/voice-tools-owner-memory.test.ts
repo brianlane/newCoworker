@@ -194,6 +194,38 @@ describe("POST /api/voice/tools/owner-append-business-memory", () => {
     expect(syncVaultToVpsAndLog).not.toHaveBeenCalled();
   });
 
+  it("rescues a restated rule whose only copy would be truncated from the head", async () => {
+    // Head rule, then enough filler that appending the restated rule overflows
+    // the cap and tail-truncation would drop the head copy.
+    const headRule = "- Always greet customers by name.";
+    const filler = Array.from({ length: 400 }, (_, i) => `- Filler rule number ${i} padding text.`).join(
+      "\n"
+    );
+    const big = `${headRule}\n${filler}`;
+    expect(big.length).toBeGreaterThan(14_000);
+
+    vi.mocked(getBusinessConfig).mockResolvedValue({
+      business_id: BIZ,
+      soul_md: "",
+      identity_md: "",
+      memory_md: big,
+      website_md: "",
+      updated_at: ""
+    });
+
+    const res = await POST(
+      makeReq({ businessId: BIZ, args: { bullets: "Always greet customers by name." } })
+    );
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    // Not dropped as a duplicate: re-appended so it survives truncation.
+    expect(json.data.appended).toBe(true);
+    expect(json.data.savedBullets).toEqual(["Always greet customers by name."]);
+    expect(json.data.truncated).toBe(true);
+    const written = vi.mocked(patchBusinessConfig).mock.calls[0][1].memory_md as string;
+    expect(written).toContain("- Always greet customers by name.");
+  });
+
   it("400 when bullets empty after trim", async () => {
     const res = await POST(
       makeReq({
