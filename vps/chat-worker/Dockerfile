@@ -17,7 +17,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 
-COPY worker.mjs ./
+COPY worker.mjs memory-capture.mjs ./
 
 # Run as the unprivileged `node` user that comes with the base image.
 # The container talks only to: localhost (Rowboat over the rowboat_default
