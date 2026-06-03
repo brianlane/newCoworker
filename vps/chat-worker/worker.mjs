@@ -526,31 +526,46 @@ async function processJob(job) {
     }
     const { content, conversationId, state: nextState } = result;
 
-    // We have a real assistant reply, so it's now safe to persist any rule
-    // the owner stated this turn. Persisting only here (not in the concurrent
-    // extraction) guarantees we never write to memory_md on a turn that errors
-    // out, and never double-write on a reclaimed/retried job. Append an honest
-    // "saved to memory" confirmation ONLY when the adapter confirmed the write
-    // — replacing the old in-agent tool path where the small model would
-    // hallucinate "saved!" without anything actually persisting.
-    const extraction = await extractionPromise;
-    let finalContent = content;
-    let memorySavedCount = 0;
-    if (extraction.save && extraction.bullets.length > 0) {
-      const saved = await persistOwnerRule(job, extraction.bullets);
-      if (saved && saved.length > 0) {
-        memorySavedCount = saved.length;
-        finalContent = content + formatSavedConfirmation(saved);
-      }
-    }
-
+    // Insert the assistant reply FIRST. Owner-rule persistence happens only
+    // AFTER this succeeds (below), so a turn whose reply insert fails never
+    // writes to memory_md, and a reclaimed/retried job can't persist a rule
+    // against a reply that was never stored. Bugbot Medium-severity finding
+    // on PR #94.
     const { data: msg, error: insertErr } = await sb
       .from("dashboard_chat_messages")
-      .insert({ thread_id: job.thread_id, role: "assistant", content: finalContent })
+      .insert({ thread_id: job.thread_id, role: "assistant", content })
       .select("id")
       .single();
     if (insertErr) {
       throw new Error(`message_insert_failed:${insertErr.message}`);
+    }
+
+    // Reply is durably stored — now persist any durable business rule the
+    // owner stated this turn and append an HONEST confirmation to the stored
+    // message. A no-op / failed save just leaves the reply as-is (we never
+    // claim "saved" unless the adapter confirmed the write), and the extraction
+    // is read-only so it never had a side effect on a turn that errored. The
+    // client re-reads the message list once the job flips to 'done' (below),
+    // so the appended confirmation surfaces in the same turn — which is why
+    // this runs BEFORE the job-status update.
+    let memorySavedCount = 0;
+    const extraction = await extractionPromise;
+    if (extraction.save && extraction.bullets.length > 0) {
+      const saved = await persistOwnerRule(job, extraction.bullets);
+      if (saved && saved.length > 0) {
+        memorySavedCount = saved.length;
+        const { error: confErr } = await sb
+          .from("dashboard_chat_messages")
+          .update({ content: content + formatSavedConfirmation(saved) })
+          .eq("id", msg.id);
+        if (confErr) {
+          log("warn", "memory_confirmation_update_failed", {
+            jobId: job.id,
+            msgId: msg.id,
+            error: confErr.message
+          });
+        }
+      }
     }
 
     // Persist Rowboat's stateful conversationId for the next turn, OR,
@@ -658,7 +673,7 @@ async function processJob(job) {
       jobId: job.id,
       msgId: msg.id,
       durationMs: Date.now() - t0,
-      contentLen: finalContent.length,
+      contentLen: content.length,
       memorySaved: memorySavedCount,
       conversationId,
       usedStateless,
