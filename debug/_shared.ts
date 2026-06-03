@@ -59,9 +59,17 @@ export async function resolveVpsIp(
  * the docker-compose extra_hosts wiring, and rebuild/recreate the container.
  * Idempotent and safe to re-run. Shared by deploy-worker.ts and
  * update-all-vps.ts so a single source of truth defines "update a worker".
+ *
+ * `set -euo pipefail` — `-e` is critical: without it a failed `git fetch`,
+ * `rsync`, or `docker compose up` would NOT stop the script, the final
+ * `docker logs … | tail` would exit 0, and sshExec (plus the fleet rollout
+ * summary in update-all-vps.ts) would falsely report success while the worker
+ * was never refreshed. The two `grep` probes below are deliberately non-fatal
+ * and are explicitly guarded with `|| …` so errexit doesn't trip on an
+ * expected "no match".
  */
 export const UPDATE_WORKER_REMOTE = `
-set -uo pipefail
+set -euo pipefail
 REPO=/opt/newcoworker-repo
 echo "== refreshing repo =="
 git -C "$REPO" fetch --depth=1 origin main && git -C "$REPO" reset --hard FETCH_HEAD
