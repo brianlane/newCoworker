@@ -8,10 +8,13 @@ import { ingestWebsite, normalizeWebsiteUrl } from "@/lib/website-ingest";
 import { scheduleVaultSync } from "@/lib/vps/schedule-vault-sync";
 import { logger } from "@/lib/logger";
 
-// The post-response vault re-seed (scheduleVaultSync → after()) SSHes into the
-// tenant VPS; keep the invocation alive long enough for it to finish.
+// after() shares the route's max duration (it does NOT get a fresh window), so
+// this must cover the WHOLE request: the website crawl + summary (can run tens
+// of seconds) AND the post-response vault re-seed, whose own SSH timeout is
+// 60s. Budget generously so a slow crawl can't starve the re-seed and leave
+// the agent prompt stale.
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 const schema = z.object({
   businessId: z.string().uuid(),

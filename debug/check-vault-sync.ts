@@ -73,6 +73,26 @@ const res = await sshExec({
 console.log("\n[check] VPS Mongo agent instructions:");
 console.log(buf.trim());
 
-const inSync = probe.length > 0 && /LIVE .*OwnerCoworker.* hasProbe=true/.test(buf);
+if (res.exitCode !== 0) {
+  console.log("\n[check] ERROR — could not read the VPS Mongo project (ssh/mongosh failed)");
+  process.exit(2);
+}
+if (buf.includes("NO_PROJECT")) {
+  console.log("\n[check] ERROR — no Rowboat project on the VPS for this id");
+  process.exit(2);
+}
+if (probe.length === 0) {
+  console.log("\n[check] no saved memory bullets to probe — nothing to verify");
+  process.exit(0);
+}
+
+// In sync only when EVERY live agent (Coworker, OwnerCoworker, …) carries the
+// probe. Some tenants have only a Coworker agent, so don't hard-require
+// OwnerCoworker; instead require all present live agents to be current.
+const liveLines = buf
+  .split(/\r?\n/)
+  .map((l) => l.trim())
+  .filter((l) => l.startsWith("LIVE agent="));
+const inSync = liveLines.length > 0 && liveLines.every((l) => l.includes("hasProbe=true"));
 console.log(`\n[check] ${inSync ? "IN SYNC" : "DRIFT — agent prompt is stale; run debug/resync-vault.ts"}`);
-process.exit(res.exitCode === 0 ? 0 : 1);
+process.exit(inSync ? 0 : 1);
