@@ -130,7 +130,7 @@ const OLLAMA_BASE_URL = (
 // Reuse the warm per-tenant SMS model for extraction so we don't pay a
 // cold-load. Overridable per tenant if a sharper model is pulled locally.
 const MEMORY_CAPTURE_MODEL = (process.env.MEMORY_CAPTURE_MODEL || "qwen3:4b-instruct").trim();
-const MEMORY_CAPTURE_TIMEOUT_MS = intEnv("MEMORY_CAPTURE_TIMEOUT_MS", 30 * 1000);
+const MEMORY_CAPTURE_TIMEOUT_MS = intEnv("MEMORY_CAPTURE_TIMEOUT_MS", 60 * 1000);
 // Platform adapter that persists owner rules. Authenticated with the same
 // ROWBOAT_GATEWAY_TOKEN the voice/SMS tool adapters use (verifyRowboatGatewayToken).
 const OWNER_APPEND_URL = VERCEL_BASE_URL
@@ -470,18 +470,6 @@ async function processJob(job) {
       ? job.stateless_input_messages
       : null;
 
-    // Kick off the READ-ONLY owner-rule extraction NOW so the (separate)
-    // Ollama classification overlaps Rowboat reply generation instead of
-    // adding to it. We only PERSIST the result on the success path below, so
-    // a turn that errors never writes to memory without a reply. Never throws.
-    const extractionPromise = startOwnerRuleExtraction(job).catch((err) => {
-      log("warn", "memory_capture_unexpected", {
-        jobId: job.id,
-        error: err?.message || String(err)
-      });
-      return { save: false, bullets: [] };
-    });
-
     // ATTEMPT 1: input_messages + (possibly) stored conversationId
     // + stored Rowboat state. The state is Rowboat's client-carried
     // tool/agent state from the previous turn (see migration
@@ -540,16 +528,28 @@ async function processJob(job) {
       throw new Error(`message_insert_failed:${insertErr.message}`);
     }
 
-    // Reply is durably stored — now persist any durable business rule the
-    // owner stated this turn and append an HONEST confirmation to the stored
-    // message. A no-op / failed save just leaves the reply as-is (we never
-    // claim "saved" unless the adapter confirmed the write), and the extraction
-    // is read-only so it never had a side effect on a turn that errored. The
-    // client re-reads the message list once the job flips to 'done' (below),
-    // so the appended confirmation surfaces in the same turn — which is why
-    // this runs BEFORE the job-status update.
+    // Reply is durably stored — now run the owner-rule extraction and persist.
+    // Extraction is done SEQUENTIALLY here (not concurrently with the Rowboat
+    // call) on purpose: Rowboat and this extraction share the single
+    // CPU-bound Ollama, so overlapping them just makes both slower and starved
+    // the extraction past its timeout in testing. Running it after the reply
+    // means Ollama is free, so the classification returns in a few seconds.
+    // A no-op / failed save just leaves the reply as-is (we never claim
+    // "saved" unless the adapter confirmed the write), and extraction is
+    // read-only so a turn that errored before this point never had a side
+    // effect. The client re-reads the message list once the job flips to
+    // 'done' (below), so the appended confirmation surfaces in the same turn —
+    // which is why this runs BEFORE the job-status update.
     let memorySavedCount = 0;
-    const extraction = await extractionPromise;
+    let extraction = { save: false, bullets: [] };
+    try {
+      extraction = await startOwnerRuleExtraction(job);
+    } catch (err) {
+      log("warn", "memory_capture_unexpected", {
+        jobId: job.id,
+        error: err?.message || String(err)
+      });
+    }
     if (extraction.save && extraction.bullets.length > 0) {
       const saved = await persistOwnerRule(job, extraction.bullets);
       if (saved && saved.length > 0) {
