@@ -376,13 +376,29 @@ async function recordOwnerChatSpend(job, inputMessages, replyContent, usedAgent,
   if (!OWNER_CHAT_SPEND_METERING_ENABLED) return;
   // Local Qwen turns cost nothing; only meter the Gemini agent.
   if (usedAgent && usedAgent === OWNER_CHAT_LOCAL_AGENT) return;
+
+  // Release a previously-claimed metering slot back to null so a later reclaim
+  // can retry. Used when the spend RPC fails AFTER we claimed metered_at, so a
+  // failed RPC never permanently loses this turn's spend. Best-effort.
+  const releaseMeterClaim = async () => {
+    const { error: relErr } = await sb
+      .from("dashboard_chat_jobs")
+      .update({ metered_at: null })
+      .eq("id", job.id);
+    if (relErr) {
+      log("warn", "owner_chat_spend_meter_release_failed", { jobId: job.id, error: relErr.message });
+    }
+  };
+
+  let claimed = false;
   try {
     // Exactly-once metering: atomically claim the right to meter this job by
     // stamping metered_at, but only if it is still null. If a prior run already
     // metered (e.g. the worker crashed after recording spend but before marking
     // the job 'done', and reclaim_stale_chat_jobs re-queued it), this update
     // matches zero rows and we skip — so a reclaimed re-run never double-counts
-    // period spend or trips the fuse early.
+    // period spend or trips the fuse early. We claim BEFORE the RPC (so concurrent
+    // reclaims can't both meter) and release the claim if the RPC fails/throws.
     const { data: claim, error: claimErr } = await sb
       .from("dashboard_chat_jobs")
       .update({ metered_at: new Date().toISOString() })
@@ -398,6 +414,7 @@ async function recordOwnerChatSpend(job, inputMessages, replyContent, usedAgent,
       log("info", "owner_chat_spend_already_metered", { jobId: job.id });
       return;
     }
+    claimed = true;
     // Reuse the period resolved at the start of the turn when available so we
     // don't re-query subscriptions; fall back to resolving it if absent.
     const ps = periodStart ?? (await resolveOwnerChatPeriodStart());
@@ -409,7 +426,9 @@ async function recordOwnerChatSpend(job, inputMessages, replyContent, usedAgent,
       p_cap_micros: OWNER_CHAT_SPEND_CAP_MICROS
     });
     if (error) {
+      // RPC failed after we claimed — release so a reclaim can retry metering.
       log("warn", "owner_chat_spend_record_failed", { jobId: job.id, error: error.message });
+      await releaseMeterClaim();
       return;
     }
     const row = Array.isArray(data) ? data[0] : data;
@@ -430,6 +449,15 @@ async function recordOwnerChatSpend(job, inputMessages, replyContent, usedAgent,
       jobId: job.id,
       error: err?.message || String(err)
     });
+    // If we claimed metered_at before the throw, release it so the spend isn't
+    // permanently lost — a reclaim can retry metering.
+    if (claimed) {
+      try {
+        await releaseMeterClaim();
+      } catch {
+        // Best-effort; releaseMeterClaim already logs its own failures.
+      }
+    }
   }
 }
 
