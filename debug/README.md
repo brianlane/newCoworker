@@ -32,6 +32,8 @@ Run from the repo root, e.g. `tsx debug/<script>.ts`.
 | `update-all-vps.ts` | **Fleet rollout.** Updates the chat-worker on **every** active VPS to the latest `origin/main`. `--concurrency=N` to fan out, `--dry-run` to list targets. Exits non-zero if any box fails. |
 | `deploy-worker.ts` | Same worker update for a **single** tenant: `tsx debug/deploy-worker.ts <businessId>`. |
 | `smoke-rule.ts` | End-to-end check of owner-rule memory capture: enqueues a rule, waits for the worker, asserts `memory_md` grew + the reply carries the honest "Saved to your business memory" confirmation. |
+| `smoke-owner-chat.ts` | End-to-end owner-chat queue smoke: `tsx debug/smoke-owner-chat.ts [businessId] ["question"]`. Enqueues a real `dashboard_chat_jobs` row, waits for the worker → Rowboat (→ Gemini) → reply, and prints owner-perceived latency + the reply. |
+| `probe-gemini-owner.ts` | Direct Rowboat probe for the `OwnerCoworker` agent: `tsx debug/probe-gemini-owner.ts [businessId] [model] [reps] [--revert]`. Temporarily sets the agent's model in Mongo and times the chat turn through the llm-router. `--revert` restores the local model. |
 | `logs.ts` | Tails the chat-worker's recent memory-capture / job logs: `tsx debug/logs.ts [businessId] [grepPattern]`. |
 | `check-ollama.ts` | Verifies Ollama is reachable from inside the worker container and the extraction model returns valid structured JSON. |
 | `bump-timeout.ts` | Debug aid: overrides `MEMORY_CAPTURE_TIMEOUT_MS` on a tenant's worker `.env` and recreates the container. |

@@ -514,6 +514,30 @@ WORKFLOW_JSON=$(jq -nc \
         "customer_append_pinned_note",
         "owner_append_business_memory"
       ]
+    },
+    {
+      name: "OwnerCoworkerLocal",
+      type: "conversation",
+      # Spend-cap fallback twin of OwnerCoworker. Identical tool surface and
+      # instructions, but pinned to the LOCAL Ollama model ($0 marginal cost).
+      # The owner-chat enqueue route flips a job to startAgent=OwnerCoworkerLocal
+      # once a business crosses its per-period owner-chat spend cap; the worker
+      # honors the per-job startAgent. Slower (CPU prefill) but free, so a
+      # runaway loop degrades to local instead of billing unbounded Gemini.
+      description: "Owner dashboard chat spend-cap fallback: identical to OwnerCoworker but on the local model.",
+      disabled: false,
+      instructions: $instructions,
+      outputVisibility: "user_facing",
+      controlType: "retain",
+      model: $model,
+      ragK: 3,
+      ragReturnType: "chunks",
+      tools: [
+        "customer_lookup_by_phone",
+        "customer_set_display_name",
+        "customer_append_pinned_note",
+        "owner_append_business_memory"
+      ]
     }
   ],
   prompts: [{

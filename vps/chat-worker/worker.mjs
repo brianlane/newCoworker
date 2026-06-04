@@ -111,6 +111,28 @@ const OWNER_START_AGENT = (process.env.CHAT_WORKER_OWNER_START_AGENT ?? "OwnerCo
 const OWNER_START_AGENT_OPTS = OWNER_START_AGENT
   ? { startAgent: OWNER_START_AGENT }
   : {};
+
+// --- Owner-chat spend cap ("runaway fuse") --------------------------------
+// The Gemini-backed OwnerCoworker agent bills per token. We meter estimated
+// per-turn cost into owner_chat_model_spend (period-keyed) and the enqueue
+// route flips jobs to the local Qwen agent once the period cap is hit. This
+// is the metering half; it estimates cost from message text at Gemini list
+// price (a safety fuse, not an invoice — approximate is fine) and records it.
+// The local-agent name MUST match the agent deploy-client.sh seeds for the
+// Qwen fallback; turns on it are $0 and skip metering.
+const OWNER_CHAT_LOCAL_AGENT = (process.env.CHAT_WORKER_OWNER_LOCAL_AGENT ?? "OwnerCoworkerLocal").trim();
+const OWNER_CHAT_SPEND_CAP_MICROS = intEnv("OWNER_CHAT_SPEND_CAP_MICROS", 10_000_000); // $10
+// Gemini 2.5 Flash-Lite list price, USD per 1M tokens (see debug/bench-cloud.ts).
+const OWNER_CHAT_PRICE_IN_PER_1M = Number(process.env.OWNER_CHAT_PRICE_IN_PER_1M ?? 0.1);
+const OWNER_CHAT_PRICE_OUT_PER_1M = Number(process.env.OWNER_CHAT_PRICE_OUT_PER_1M ?? 0.4);
+// Rowboat prepends the OwnerCoworker agent instructions (synced memory +
+// persona) that aren't in the worker's input_messages, so a text-only estimate
+// undercounts the true prompt. Add a flat token overhead so the fuse isn't
+// grossly optimistic. Tunable; ~1500 tokens approximates a typical seeded
+// instruction block.
+const OWNER_CHAT_PROMPT_OVERHEAD_TOKENS = intEnv("OWNER_CHAT_PROMPT_OVERHEAD_TOKENS", 1500);
+const OWNER_CHAT_SPEND_METERING_ENABLED =
+  (process.env.OWNER_CHAT_SPEND_METERING_ENABLED ?? "true").trim().toLowerCase() !== "false";
 const VERCEL_BASE_URL = (process.env.WORKER_VERCEL_BASE_URL || "").replace(/\/+$/, "");
 const VERCEL_BEARER = process.env.WORKER_VERCEL_BEARER || "";
 // Server-side owner-rule capture (see memory-capture.mjs for the why). On
@@ -278,6 +300,164 @@ async function callRowboat(messages, conversationId, state, opts = {}) {
     };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+// Billing-period key for owner-chat spend: the subscription's current Stripe
+// period start, so the fuse resets each month. Falls back to the start of the
+// current UTC month when there's no subscription row. Never throws.
+async function resolveOwnerChatPeriodStart() {
+  try {
+    const { data } = await sb
+      .from("subscriptions")
+      .select("stripe_current_period_start")
+      .eq("business_id", BUSINESS_ID)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (data?.stripe_current_period_start) return data.stripe_current_period_start;
+  } catch {
+    // fall through to month-start
+  }
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+}
+
+// Current period spend (micro-USD) for this tenant. Throws on a hard read
+// error so the caller can fail open. 0 when no row exists yet.
+async function readOwnerChatSpendMicros(periodStart) {
+  const { data, error } = await sb
+    .from("owner_chat_model_spend")
+    .select("spend_micros")
+    .eq("business_id", BUSINESS_ID)
+    .eq("period_start", periodStart)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return Number(data?.spend_micros ?? 0);
+}
+
+// Resolve the spend-cap decision for the turn about to run: the billing-period
+// key + whether the tenant is already at/over the cap. Never throws — on any
+// read failure it returns overCap=false (fail open to the Gemini agent), and
+// returns the period it resolved so the post-turn metering can reuse it.
+async function resolveOwnerChatCap() {
+  if (!OWNER_CHAT_SPEND_METERING_ENABLED) return { periodStart: null, overCap: false };
+  try {
+    const periodStart = await resolveOwnerChatPeriodStart();
+    const spent = await readOwnerChatSpendMicros(periodStart);
+    return { periodStart, overCap: spent >= OWNER_CHAT_SPEND_CAP_MICROS };
+  } catch (err) {
+    log("warn", "owner_chat_cap_read_failed", { error: err?.message || String(err) });
+    return { periodStart: null, overCap: false };
+  }
+}
+
+// Estimate the Gemini cost of one owner-chat turn (micro-USD) from the message
+// text. tokens ~ chars/4; add a flat overhead for the agent instructions
+// Rowboat prepends that aren't in our input_messages. cost_micros simplifies
+// to inTokens*priceIn + outTokens*priceOut because price is per-1M-tokens and
+// 1 USD = 1e6 micros (the 1e6 factors cancel).
+function estimateOwnerChatCostMicros(inputMessages, replyContent) {
+  let inputChars = 0;
+  for (const m of inputMessages ?? []) {
+    if (m && typeof m.content === "string") inputChars += m.content.length;
+  }
+  const outputChars = typeof replyContent === "string" ? replyContent.length : 0;
+  const inTokens = inputChars / 4 + OWNER_CHAT_PROMPT_OVERHEAD_TOKENS;
+  const outTokens = outputChars / 4;
+  return Math.ceil(inTokens * OWNER_CHAT_PRICE_IN_PER_1M + outTokens * OWNER_CHAT_PRICE_OUT_PER_1M);
+}
+
+// Record estimated owner-chat model spend for a successful Gemini turn and
+// trip the period fuse on first cap crossing. No-op for local-agent turns
+// ($0) and when metering is disabled. NEVER throws — metering must never block
+// or fail a turn whose reply is already persisted.
+async function recordOwnerChatSpend(job, inputMessages, replyContent, usedAgent, periodStart) {
+  if (!OWNER_CHAT_SPEND_METERING_ENABLED) return;
+  // Local Qwen turns cost nothing; only meter the Gemini agent.
+  if (usedAgent && usedAgent === OWNER_CHAT_LOCAL_AGENT) return;
+
+  // Release a previously-claimed metering slot back to null so a later reclaim
+  // can retry. Used when the spend RPC fails AFTER we claimed metered_at, so a
+  // failed RPC never permanently loses this turn's spend. Best-effort.
+  const releaseMeterClaim = async () => {
+    const { error: relErr } = await sb
+      .from("dashboard_chat_jobs")
+      .update({ metered_at: null })
+      .eq("id", job.id);
+    if (relErr) {
+      log("warn", "owner_chat_spend_meter_release_failed", { jobId: job.id, error: relErr.message });
+    }
+  };
+
+  let claimed = false;
+  try {
+    // Exactly-once metering: atomically claim the right to meter this job by
+    // stamping metered_at, but only if it is still null. If a prior run already
+    // metered (e.g. the worker crashed after recording spend but before marking
+    // the job 'done', and reclaim_stale_chat_jobs re-queued it), this update
+    // matches zero rows and we skip — so a reclaimed re-run never double-counts
+    // period spend or trips the fuse early. We claim BEFORE the RPC (so concurrent
+    // reclaims can't both meter) and release the claim if the RPC fails/throws.
+    const { data: claim, error: claimErr } = await sb
+      .from("dashboard_chat_jobs")
+      .update({ metered_at: new Date().toISOString() })
+      .eq("id", job.id)
+      .is("metered_at", null)
+      .select("id");
+    if (claimErr) {
+      log("warn", "owner_chat_spend_meter_claim_failed", { jobId: job.id, error: claimErr.message });
+      return;
+    }
+    if (!claim || claim.length === 0) {
+      // Already metered by an earlier (crashed/reclaimed) run — do not re-meter.
+      log("info", "owner_chat_spend_already_metered", { jobId: job.id });
+      return;
+    }
+    claimed = true;
+    // Reuse the period resolved at the start of the turn when available so we
+    // don't re-query subscriptions; fall back to resolving it if absent.
+    const ps = periodStart ?? (await resolveOwnerChatPeriodStart());
+    const costMicros = estimateOwnerChatCostMicros(inputMessages, replyContent);
+    const { data, error } = await sb.rpc("owner_chat_record_spend", {
+      p_business_id: job.business_id,
+      p_period_start: ps,
+      p_cost_micros: costMicros,
+      p_cap_micros: OWNER_CHAT_SPEND_CAP_MICROS
+    });
+    if (error) {
+      // RPC failed after we claimed — release so a reclaim can retry metering.
+      log("warn", "owner_chat_spend_record_failed", { jobId: job.id, error: error.message });
+      await releaseMeterClaim();
+      return;
+    }
+    const row = Array.isArray(data) ? data[0] : data;
+    if (row?.fuse_newly_tripped) {
+      // Operator alert: this turn pushed the business over the period cap; all
+      // subsequent owner-chat turns this period route to the local Qwen model
+      // until the next billing period resets the meter.
+      log("error", "owner_chat_spend_cap_tripped", {
+        businessId: job.business_id,
+        periodStart: ps,
+        spendUsd: (Number(row.spend_micros) / 1_000_000).toFixed(4),
+        capUsd: (OWNER_CHAT_SPEND_CAP_MICROS / 1_000_000).toFixed(2),
+        turnCount: row.turn_count
+      });
+    }
+  } catch (err) {
+    log("warn", "owner_chat_spend_record_unexpected", {
+      jobId: job.id,
+      error: err?.message || String(err)
+    });
+    // If we claimed metered_at before the throw, release it so the spend isn't
+    // permanently lost — a reclaim can retry metering.
+    if (claimed) {
+      try {
+        await releaseMeterClaim();
+      } catch {
+        // Best-effort; releaseMeterClaim already logs its own failures.
+      }
+    }
   }
 }
 
@@ -523,6 +703,26 @@ async function processJob(job) {
       ? job.stateless_input_messages
       : null;
 
+    // Spend-cap routing is decided HERE, authoritatively, from LIVE period
+    // spend at claim time — not at enqueue. Claim-time evaluation means a burst
+    // of jobs queued before the fuse tripped still downgrade to local once it
+    // has, and the cap lives in exactly one place (this worker + the RPC) so
+    // there's no route/worker divergence. Fails open to the Gemini agent on a
+    // read error (quality over fuse on a transient DB blip). Routing to local
+    // requires a seeded local agent (OWNER_CHAT_LOCAL_AGENT); without one the
+    // turn stays on Gemini but still meters + alerts.
+    const { periodStart: capPeriodStart, overCap } = await resolveOwnerChatCap();
+    const jobStartAgent =
+      overCap && OWNER_CHAT_LOCAL_AGENT ? OWNER_CHAT_LOCAL_AGENT : OWNER_START_AGENT;
+    const jobStartAgentOpts = jobStartAgent ? { startAgent: jobStartAgent } : {};
+    // A capped (local) turn MUST force its agent: resuming a stored
+    // (Gemini-bound) conversationId would make Rowboat ignore startAgent and
+    // keep billing Gemini, and metering would wrongly skip it as "local". So a
+    // capped turn runs stateless with startAgent=local and clears the stored
+    // conversationId/state below so a local-bound id never carries into a later
+    // (Gemini) turn.
+    const capForceLocal = !!OWNER_CHAT_LOCAL_AGENT && jobStartAgent === OWNER_CHAT_LOCAL_AGENT;
+
     // ATTEMPT 1: input_messages + (possibly) stored conversationId
     // + stored Rowboat state. The state is Rowboat's client-carried
     // tool/agent state from the previous turn (see migration
@@ -532,17 +732,29 @@ async function processJob(job) {
     let usedStateless = false;
     let primaryError = null;
     try {
-      const convTrim =
-        typeof job.rowboat_conversation_id === "string"
-          ? job.rowboat_conversation_id.trim()
-          : "";
-      const useOwnerStartAgent = !convTrim;
-      result = await callRowboat(
-        primaryMessages,
-        job.rowboat_conversation_id,
-        job.rowboat_state ?? null,
-        useOwnerStartAgent ? OWNER_START_AGENT_OPTS : {}
-      );
+      if (capForceLocal) {
+        // Force the local agent on a fresh, stateless turn (fuller tail when we
+        // have it) so Rowboat starts OwnerCoworkerLocal rather than resuming a
+        // Gemini-bound conversation. No conversationId/state on purpose.
+        result = await callRowboat(
+          fallbackMessages ?? primaryMessages,
+          null,
+          null,
+          jobStartAgentOpts
+        );
+      } else {
+        const convTrim =
+          typeof job.rowboat_conversation_id === "string"
+            ? job.rowboat_conversation_id.trim()
+            : "";
+        const useOwnerStartAgent = !convTrim;
+        result = await callRowboat(
+          primaryMessages,
+          job.rowboat_conversation_id,
+          job.rowboat_state ?? null,
+          useOwnerStartAgent ? jobStartAgentOpts : {}
+        );
+      }
     } catch (err) {
       primaryError = err;
       const code = String(err?.message || "").split(":")[0];
@@ -562,10 +774,16 @@ async function processJob(job) {
       // tail spelled out in the system message we built upstream.
       // Sending the old state alongside would defeat the point of
       // the retry (it's the same broken context).
-      result = await callRowboat(fallbackMessages, null, null, OWNER_START_AGENT_OPTS);
+      result = await callRowboat(fallbackMessages, null, null, jobStartAgentOpts);
       usedStateless = true;
     }
     const { content, conversationId, state: nextState } = result;
+    // The stateless retry always passes the owner start-agent opts; the
+    // primary attempt only does on fresh threads (no conversationId). When the
+    // primary ran a continuation WITHOUT a start-agent, Rowboat resumes the
+    // agent already bound to the conversation — which for owner threads is the
+    // same OwnerCoworker/Local agent, so metering against jobStartAgent is correct.
+    const usedAgent = jobStartAgent;
 
     // Insert the assistant reply FIRST. Owner-rule persistence happens only
     // AFTER this succeeds (below), so a turn whose reply insert fails never
@@ -580,6 +798,18 @@ async function processJob(job) {
     if (insertErr) {
       throw new Error(`message_insert_failed:${insertErr.message}`);
     }
+
+    // Reply is durably stored — meter the (Gemini) model spend for this turn
+    // and trip the period fuse if it crosses the cap. Awaited but non-fatal:
+    // recordOwnerChatSpend never throws. Estimate from the messages actually
+    // sent to Rowboat this turn (stateless fallback resends a fuller tail).
+    await recordOwnerChatSpend(
+      job,
+      usedStateless ? fallbackMessages : primaryMessages,
+      content,
+      usedAgent,
+      capPeriodStart
+    );
 
     // Reply is durably stored — now run the owner-rule extraction and persist.
     // Extraction is done SEQUENTIALLY here (not concurrently with the Rowboat
@@ -648,7 +878,14 @@ async function processJob(job) {
     // gated rowboat_state on conversationId being present, dropping
     // state updates when Rowboat returned only state.
     const threadUpdate = { updated_at: new Date().toISOString() };
-    if (usedStateless) {
+    if (capForceLocal) {
+      // Capped (local) turn: never carry a conversationId/state forward. Keeps
+      // the thread stateless while capped, and guarantees the next non-capped
+      // turn starts fresh on the (Gemini) agent rather than resuming a
+      // local-bound conversation that would run local but meter as Gemini.
+      threadUpdate.rowboat_conversation_id = null;
+      threadUpdate.rowboat_state = null;
+    } else if (usedStateless) {
       threadUpdate.rowboat_conversation_id = conversationId || null;
       threadUpdate.rowboat_state = nextState ?? null;
     } else {
@@ -823,6 +1060,9 @@ async function main() {
     rowboatTimeoutMs: ROWBOAT_TIMEOUT_MS,
     maxAttempts: MAX_ATTEMPTS,
     ownerStartAgent: OWNER_START_AGENT || "(workflow default)",
+    ownerSpendMetering: OWNER_CHAT_SPEND_METERING_ENABLED ? "on" : "off",
+    ownerSpendCapUsd: (OWNER_CHAT_SPEND_CAP_MICROS / 1_000_000).toFixed(2),
+    ownerLocalAgent: OWNER_CHAT_LOCAL_AGENT,
     memoryCapture: MEMORY_CAPTURE_ENABLED && OWNER_APPEND_URL ? "on" : "off",
     memoryCaptureModel: MEMORY_CAPTURE_ENABLED ? MEMORY_CAPTURE_MODEL : undefined,
     ollamaBaseUrl: MEMORY_CAPTURE_ENABLED ? OLLAMA_BASE_URL : undefined

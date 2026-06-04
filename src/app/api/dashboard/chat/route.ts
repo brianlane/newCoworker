@@ -492,6 +492,11 @@ export async function POST(request: Request) {
     // because there's no fallback to escalate to. Mirrors the
     // pre-Option-B `useContinuation ? ... : null` gate. Bugbot
     // Medium-severity finding on PR #79 round-9.
+    // NOTE: owner-chat spend-cap routing (Gemini vs local Qwen) is decided
+    // authoritatively by the VPS chat-worker at claim time from live period
+    // spend — NOT here. Deciding at enqueue would let a burst of quick POSTs
+    // queue Gemini jobs before the fuse trips, and would split the cap across
+    // two runtimes. See vps/chat-worker/worker.mjs (resolveOwnerChatCap).
     const job = await insertChatJob({
       businessId: body.businessId,
       threadId: thread.id,
