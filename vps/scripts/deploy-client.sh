@@ -214,6 +214,20 @@ GEMINI_ROWBOAT_MODEL_DEFAULT="gemini-3.1-flash"
 OWNER_CHAT_MODEL_DEFAULT="gemini-2.5-flash-lite"
 OWNER_CHAT_MODEL=${OWNER_CHAT_MODEL:-${OWNER_CHAT_MODEL_DEFAULT}}
 
+# Safety fallback: a gemini-* OwnerCoworker model is only reachable when
+# GOOGLE_API_KEY is set — the llm-router returns 503 for gemini-* routes with
+# no key. Seeding Gemini on a keyless host would break owner dashboard chat on
+# every turn (worse than the slow-but-working local model), so degrade to the
+# local Ollama tag instead. Tenants with a key keep Gemini.
+case "${OWNER_CHAT_MODEL}" in
+  gemini-*)
+    if [[ -z "${GOOGLE_API_KEY:-}" ]]; then
+      log "WARNING: OWNER_CHAT_MODEL=${OWNER_CHAT_MODEL} requires GOOGLE_API_KEY but none is set; falling back to local ${OLLAMA_MODEL} for OwnerCoworker."
+      OWNER_CHAT_MODEL="${OLLAMA_MODEL}"
+    fi
+    ;;
+esac
+
 cat > /opt/rowboat/.env <<RENV_EOF
 # Rowboat runtime configuration for business: ${BUSINESS_ID}
 ROWBOAT_GATEWAY_TOKEN=${ROWBOAT_GATEWAY_TOKEN}
