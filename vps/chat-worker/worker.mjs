@@ -377,6 +377,27 @@ async function recordOwnerChatSpend(job, inputMessages, replyContent, usedAgent,
   // Local Qwen turns cost nothing; only meter the Gemini agent.
   if (usedAgent && usedAgent === OWNER_CHAT_LOCAL_AGENT) return;
   try {
+    // Exactly-once metering: atomically claim the right to meter this job by
+    // stamping metered_at, but only if it is still null. If a prior run already
+    // metered (e.g. the worker crashed after recording spend but before marking
+    // the job 'done', and reclaim_stale_chat_jobs re-queued it), this update
+    // matches zero rows and we skip — so a reclaimed re-run never double-counts
+    // period spend or trips the fuse early.
+    const { data: claim, error: claimErr } = await sb
+      .from("dashboard_chat_jobs")
+      .update({ metered_at: new Date().toISOString() })
+      .eq("id", job.id)
+      .is("metered_at", null)
+      .select("id");
+    if (claimErr) {
+      log("warn", "owner_chat_spend_meter_claim_failed", { jobId: job.id, error: claimErr.message });
+      return;
+    }
+    if (!claim || claim.length === 0) {
+      // Already metered by an earlier (crashed/reclaimed) run — do not re-meter.
+      log("info", "owner_chat_spend_already_metered", { jobId: job.id });
+      return;
+    }
     // Reuse the period resolved at the start of the turn when available so we
     // don't re-query subscriptions; fall back to resolving it if absent.
     const ps = periodStart ?? (await resolveOwnerChatPeriodStart());

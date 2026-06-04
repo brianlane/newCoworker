@@ -116,3 +116,20 @@ comment on function owner_chat_record_spend is
 
 revoke all on function owner_chat_record_spend(uuid, timestamptz, bigint, bigint) from public;
 grant execute on function owner_chat_record_spend(uuid, timestamptz, bigint, bigint) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Exactly-once metering marker.
+--
+-- The worker records spend BEFORE marking a job 'done' (so a crash biases the
+-- fuse toward over-counting rather than missing spend). But if the worker dies
+-- between recording and 'done', reclaim_stale_chat_jobs re-queues the job and
+-- processJob re-runs the whole turn — which would meter the SAME job twice.
+-- The worker atomically claims this column (UPDATE ... WHERE metered_at IS NULL)
+-- before calling owner_chat_record_spend, so a reclaimed re-run skips metering.
+-- Null = not yet metered.
+-- ---------------------------------------------------------------------------
+alter table dashboard_chat_jobs
+  add column if not exists metered_at timestamptz;
+
+comment on column dashboard_chat_jobs.metered_at is
+  'Set once by the chat-worker when it records this job''s owner-chat (Gemini) spend, claimed atomically (WHERE metered_at IS NULL) so a reclaimed/retried run does not double-count spend against the period fuse.';
