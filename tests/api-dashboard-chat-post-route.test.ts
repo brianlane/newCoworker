@@ -53,7 +53,7 @@ vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
 
-import { POST } from "@/app/api/dashboard/chat/route";
+import { POST, renderTailTranscript } from "@/app/api/dashboard/chat/route";
 import { getAuthUser, requireOwner } from "@/lib/auth";
 import { rateLimit } from "@/lib/rate-limit";
 import {
@@ -547,5 +547,55 @@ describe("POST /api/dashboard/chat — summarizer trigger has moved", () => {
     expect(routeSrc).not.toMatch(/from\s+["']@\/lib\/dashboard-chat\/summarizer["']/);
     expect(routeSrc).not.toMatch(/summarizeThreadAndLog\s*\(/);
     expect(routeSrc).not.toMatch(/shouldSummarize\s*\(/);
+  });
+});
+
+describe("renderTailTranscript — bounds CPU-only prefill cost", () => {
+  it("labels roles as Owner/Coworker/System and preserves chronological order", () => {
+    const out = renderTailTranscript([
+      { role: "user", content: "first" },
+      { role: "assistant", content: "second" },
+      { role: "system", content: "third" }
+    ]);
+    expect(out).toBe("[Owner]: first\n\n[Coworker]: second\n\n[System]: third");
+  });
+
+  it("truncates a single over-long message to the per-message cap", () => {
+    const long = "x".repeat(5000);
+    const out = renderTailTranscript([{ role: "assistant", content: long }]);
+    expect(out).toContain("… (truncated)");
+    // 700-char body + label + ellipsis marker — far below the raw 5000.
+    expect(out.length).toBeLessThan(800);
+  });
+
+  it("drops oldest messages to respect the total transcript budget, keeping newest", () => {
+    // 10 messages of ~700 chars each (post-cap) would be ~7k chars; the
+    // 3500-char budget can only fit a few, and the newest must survive.
+    const tail = Array.from({ length: 10 }, (_, i) => ({
+      role: "assistant" as const,
+      content: `msg${i}-${"y".repeat(700)}`
+    }));
+    const out = renderTailTranscript(tail);
+    expect(out.length).toBeLessThanOrEqual(3500 + 720); // budget + one final line slack
+    expect(out).toContain("msg9-"); // newest always kept
+    expect(out).not.toContain("msg0-"); // oldest dropped
+  });
+
+  it("always includes the newest message even if it alone exceeds the budget", () => {
+    const huge = "z".repeat(10000);
+    const out = renderTailTranscript([{ role: "user", content: huge }]);
+    expect(out).toContain("[Owner]:");
+    expect(out).toContain("… (truncated)");
+  });
+
+  it("returns empty string for an empty tail", () => {
+    expect(renderTailTranscript([])).toBe("");
+  });
+
+  it("tolerates a missing content field", () => {
+    const out = renderTailTranscript([
+      { role: "user", content: undefined as unknown as string }
+    ]);
+    expect(out).toBe("[Owner]: ");
   });
 });

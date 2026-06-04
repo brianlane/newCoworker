@@ -114,6 +114,49 @@ const HISTORY_TURNS = 20;
 // it needs maximum local context). 8 messages ≈ the last ~4 turns.
 const RESEND_TAIL_MESSAGES = 8;
 
+// Character caps on the verbatim recent-tail transcript. The tail is bounded
+// by message COUNT above, but a few long turns (e.g. a multi-bullet "saved to
+// your business memory" recap, which can run ~1.8k chars) still balloon the
+// prompt — and on the CPU-only per-tenant model, prefill time tracks REAL
+// prompt size. That is what pushed a live job past the 4-minute Rowboat
+// timeout (twice, incl. the 20-message stateless retry) in June 2026. Capping
+// characters preserves recall of WHAT was just said while bounding cost; the
+// rolling thread summary (a separate system block) carries older/longer
+// context. Applied to BOTH the primary and stateless-retry variants.
+const TAIL_MESSAGE_MAX_CHARS = 700;
+const TAIL_TRANSCRIPT_MAX_CHARS = 3500;
+
+/**
+ * Render the recent-turn tail as a single transcript string, bounded by both
+ * a per-message cap (TAIL_MESSAGE_MAX_CHARS) and a total cap
+ * (TAIL_TRANSCRIPT_MAX_CHARS). Walks newest→oldest so the most recent turns
+ * always survive the budget, then restores chronological order. The single
+ * newest message is always included (already per-message capped) even if it
+ * alone exceeds the total budget.
+ */
+export function renderTailTranscript(
+  tail: { role: "user" | "assistant" | "system"; content: string }[]
+): string {
+  const labelFor = (role: "user" | "assistant" | "system"): string =>
+    role === "user" ? "Owner" : role === "assistant" ? "Coworker" : "System";
+  const picked: string[] = [];
+  let used = 0;
+  for (let i = tail.length - 1; i >= 0; i--) {
+    const m = tail[i];
+    let content = m.content ?? "";
+    if (content.length > TAIL_MESSAGE_MAX_CHARS) {
+      content = `${content.slice(0, TAIL_MESSAGE_MAX_CHARS)}… (truncated)`;
+    }
+    const line = `[${labelFor(m.role)}]: ${content}`;
+    if (picked.length > 0 && used + line.length > TAIL_TRANSCRIPT_MAX_CHARS) {
+      break;
+    }
+    picked.push(line);
+    used += line.length + 2;
+  }
+  return picked.reverse().join("\n\n");
+}
+
 const DASHBOARD_CHAT_RATE = { interval: 5 * 60 * 1000, maxRequests: 30 };
 
 const postBodySchema = z.object({
@@ -293,13 +336,7 @@ function buildRowboatChatMessages(args: {
     });
   }
   if (args.includeTailContext && args.tail.length > 0) {
-    const transcript = args.tail
-      .map((m) => {
-        const label =
-          m.role === "user" ? "Owner" : m.role === "assistant" ? "Coworker" : "System";
-        return `[${label}]: ${m.content}`;
-      })
-      .join("\n\n");
+    const transcript = renderTailTranscript(args.tail);
     out.push({
       role: "system",
       content: `Recent conversation context (the most recent prior turns of THIS conversation, included for your reference so you reliably remember what was already said — including anything YOU told the owner. Treat these as ground truth for "what we discussed" and respond as the assistant continuing this same thread):\n\n${transcript}`
