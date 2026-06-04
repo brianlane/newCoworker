@@ -9,6 +9,7 @@ import {
   OWNER_CHAT_SPEND_CAP_MICROS,
   OWNER_CHAT_AGENT_GEMINI,
   OWNER_CHAT_AGENT_LOCAL,
+  resolveOwnerChatSpendCapMicros,
   getOwnerChatPeriodStart,
   getOwnerChatSpendMicros,
   chooseOwnerChatStartAgent
@@ -42,6 +43,23 @@ const PERIOD = "2026-06-01T00:00:00.000Z";
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe("resolveOwnerChatSpendCapMicros", () => {
+  it("defaults to $10 (10_000_000 micro-USD) when unset", () => {
+    expect(resolveOwnerChatSpendCapMicros(undefined)).toBe(10_000_000);
+    expect(OWNER_CHAT_SPEND_CAP_MICROS).toBe(10_000_000);
+  });
+
+  it("honors a valid positive override (keeps route in lockstep with the worker env)", () => {
+    expect(resolveOwnerChatSpendCapMicros("20000000")).toBe(20_000_000);
+  });
+
+  it("falls back to the default on a non-numeric or non-positive value", () => {
+    expect(resolveOwnerChatSpendCapMicros("")).toBe(10_000_000);
+    expect(resolveOwnerChatSpendCapMicros("nope")).toBe(10_000_000);
+    expect(resolveOwnerChatSpendCapMicros("-5")).toBe(10_000_000);
+  });
 });
 
 describe("getOwnerChatPeriodStart", () => {

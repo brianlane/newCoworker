@@ -20,8 +20,21 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-/** $10/period, expressed in micro-USD (1 USD = 1_000_000). */
-export const OWNER_CHAT_SPEND_CAP_MICROS = 10_000_000;
+/**
+ * Per-period owner-chat spend cap in micro-USD (1 USD = 1_000_000). Default
+ * $10. Read from OWNER_CHAT_SPEND_CAP_MICROS so it stays in lockstep with the
+ * VPS chat-worker, which trips the fuse via the SAME env var name + default
+ * (see vps/chat-worker/worker.mjs). Operators changing the cap MUST set the
+ * env in both places; the default keeps routing (here) and fuse-tripping
+ * (worker) consistent out of the box.
+ */
+export function resolveOwnerChatSpendCapMicros(
+  raw: string | undefined = process.env.OWNER_CHAT_SPEND_CAP_MICROS
+): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 10_000_000;
+}
+export const OWNER_CHAT_SPEND_CAP_MICROS = resolveOwnerChatSpendCapMicros();
 
 /** Gemini-backed owner-chat agent (normal path). */
 export const OWNER_CHAT_AGENT_GEMINI = "OwnerCoworker";

@@ -634,6 +634,14 @@ async function processJob(job) {
         ? job.start_agent.trim()
         : OWNER_START_AGENT;
     const jobStartAgentOpts = jobStartAgent ? { startAgent: jobStartAgent } : {};
+    // Spend cap routing: the enqueue route stamps start_agent=OwnerCoworkerLocal
+    // once the period cap is hit. We MUST force that agent — resuming a stored
+    // (Gemini-bound) conversationId would make Rowboat ignore startAgent and
+    // keep billing Gemini, and metering would wrongly skip the turn as "local".
+    // So a capped turn always runs stateless with startAgent=local and clears
+    // the stored conversationId/state below so a local-bound id never carries
+    // into a later (Gemini) turn.
+    const capForceLocal = !!OWNER_CHAT_LOCAL_AGENT && jobStartAgent === OWNER_CHAT_LOCAL_AGENT;
 
     // ATTEMPT 1: input_messages + (possibly) stored conversationId
     // + stored Rowboat state. The state is Rowboat's client-carried
@@ -644,17 +652,29 @@ async function processJob(job) {
     let usedStateless = false;
     let primaryError = null;
     try {
-      const convTrim =
-        typeof job.rowboat_conversation_id === "string"
-          ? job.rowboat_conversation_id.trim()
-          : "";
-      const useOwnerStartAgent = !convTrim;
-      result = await callRowboat(
-        primaryMessages,
-        job.rowboat_conversation_id,
-        job.rowboat_state ?? null,
-        useOwnerStartAgent ? jobStartAgentOpts : {}
-      );
+      if (capForceLocal) {
+        // Force the local agent on a fresh, stateless turn (fuller tail when we
+        // have it) so Rowboat starts OwnerCoworkerLocal rather than resuming a
+        // Gemini-bound conversation. No conversationId/state on purpose.
+        result = await callRowboat(
+          fallbackMessages ?? primaryMessages,
+          null,
+          null,
+          jobStartAgentOpts
+        );
+      } else {
+        const convTrim =
+          typeof job.rowboat_conversation_id === "string"
+            ? job.rowboat_conversation_id.trim()
+            : "";
+        const useOwnerStartAgent = !convTrim;
+        result = await callRowboat(
+          primaryMessages,
+          job.rowboat_conversation_id,
+          job.rowboat_state ?? null,
+          useOwnerStartAgent ? jobStartAgentOpts : {}
+        );
+      }
     } catch (err) {
       primaryError = err;
       const code = String(err?.message || "").split(":")[0];
@@ -777,7 +797,14 @@ async function processJob(job) {
     // gated rowboat_state on conversationId being present, dropping
     // state updates when Rowboat returned only state.
     const threadUpdate = { updated_at: new Date().toISOString() };
-    if (usedStateless) {
+    if (capForceLocal) {
+      // Capped (local) turn: never carry a conversationId/state forward. Keeps
+      // the thread stateless while capped, and guarantees the next non-capped
+      // turn starts fresh on the (Gemini) agent rather than resuming a
+      // local-bound conversation that would run local but meter as Gemini.
+      threadUpdate.rowboat_conversation_id = null;
+      threadUpdate.rowboat_state = null;
+    } else if (usedStateless) {
       threadUpdate.rowboat_conversation_id = conversationId || null;
       threadUpdate.rowboat_state = nextState ?? null;
     } else {
