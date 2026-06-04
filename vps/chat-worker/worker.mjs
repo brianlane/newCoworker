@@ -305,9 +305,7 @@ async function callRowboat(messages, conversationId, state, opts = {}) {
 
 // Billing-period key for owner-chat spend: the subscription's current Stripe
 // period start, so the fuse resets each month. Falls back to the start of the
-// current UTC month when there's no subscription row. Mirrors
-// src/lib/db/owner-chat-spend.ts:getOwnerChatPeriodStart so the route's read
-// and the worker's write hit the same period bucket. Never throws.
+// current UTC month when there's no subscription row. Never throws.
 async function resolveOwnerChatPeriodStart() {
   try {
     const { data } = await sb
@@ -323,6 +321,35 @@ async function resolveOwnerChatPeriodStart() {
   }
   const now = new Date();
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+}
+
+// Current period spend (micro-USD) for this tenant. Throws on a hard read
+// error so the caller can fail open. 0 when no row exists yet.
+async function readOwnerChatSpendMicros(periodStart) {
+  const { data, error } = await sb
+    .from("owner_chat_model_spend")
+    .select("spend_micros")
+    .eq("business_id", BUSINESS_ID)
+    .eq("period_start", periodStart)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return Number(data?.spend_micros ?? 0);
+}
+
+// Resolve the spend-cap decision for the turn about to run: the billing-period
+// key + whether the tenant is already at/over the cap. Never throws — on any
+// read failure it returns overCap=false (fail open to the Gemini agent), and
+// returns the period it resolved so the post-turn metering can reuse it.
+async function resolveOwnerChatCap() {
+  if (!OWNER_CHAT_SPEND_METERING_ENABLED) return { periodStart: null, overCap: false };
+  try {
+    const periodStart = await resolveOwnerChatPeriodStart();
+    const spent = await readOwnerChatSpendMicros(periodStart);
+    return { periodStart, overCap: spent >= OWNER_CHAT_SPEND_CAP_MICROS };
+  } catch (err) {
+    log("warn", "owner_chat_cap_read_failed", { error: err?.message || String(err) });
+    return { periodStart: null, overCap: false };
+  }
 }
 
 // Estimate the Gemini cost of one owner-chat turn (micro-USD) from the message
@@ -345,16 +372,18 @@ function estimateOwnerChatCostMicros(inputMessages, replyContent) {
 // trip the period fuse on first cap crossing. No-op for local-agent turns
 // ($0) and when metering is disabled. NEVER throws — metering must never block
 // or fail a turn whose reply is already persisted.
-async function recordOwnerChatSpend(job, inputMessages, replyContent, usedAgent) {
+async function recordOwnerChatSpend(job, inputMessages, replyContent, usedAgent, periodStart) {
   if (!OWNER_CHAT_SPEND_METERING_ENABLED) return;
   // Local Qwen turns cost nothing; only meter the Gemini agent.
   if (usedAgent && usedAgent === OWNER_CHAT_LOCAL_AGENT) return;
   try {
-    const periodStart = await resolveOwnerChatPeriodStart();
+    // Reuse the period resolved at the start of the turn when available so we
+    // don't re-query subscriptions; fall back to resolving it if absent.
+    const ps = periodStart ?? (await resolveOwnerChatPeriodStart());
     const costMicros = estimateOwnerChatCostMicros(inputMessages, replyContent);
     const { data, error } = await sb.rpc("owner_chat_record_spend", {
       p_business_id: job.business_id,
-      p_period_start: periodStart,
+      p_period_start: ps,
       p_cost_micros: costMicros,
       p_cap_micros: OWNER_CHAT_SPEND_CAP_MICROS
     });
@@ -369,7 +398,7 @@ async function recordOwnerChatSpend(job, inputMessages, replyContent, usedAgent)
       // until the next billing period resets the meter.
       log("error", "owner_chat_spend_cap_tripped", {
         businessId: job.business_id,
-        periodStart,
+        periodStart: ps,
         spendUsd: (Number(row.spend_micros) / 1_000_000).toFixed(4),
         capUsd: (OWNER_CHAT_SPEND_CAP_MICROS / 1_000_000).toFixed(2),
         turnCount: row.turn_count
@@ -625,22 +654,24 @@ async function processJob(job) {
       ? job.stateless_input_messages
       : null;
 
-    // Per-job startAgent override (spend-cap routing). The enqueue route
-    // stamps OwnerCoworker (Gemini) normally or OwnerCoworkerLocal (Qwen) once
-    // the period cap is hit. Fall back to the env default for pre-spend-cap
-    // rows (start_agent IS NULL) so older queued jobs still work.
+    // Spend-cap routing is decided HERE, authoritatively, from LIVE period
+    // spend at claim time — not at enqueue. Claim-time evaluation means a burst
+    // of jobs queued before the fuse tripped still downgrade to local once it
+    // has, and the cap lives in exactly one place (this worker + the RPC) so
+    // there's no route/worker divergence. Fails open to the Gemini agent on a
+    // read error (quality over fuse on a transient DB blip). Routing to local
+    // requires a seeded local agent (OWNER_CHAT_LOCAL_AGENT); without one the
+    // turn stays on Gemini but still meters + alerts.
+    const { periodStart: capPeriodStart, overCap } = await resolveOwnerChatCap();
     const jobStartAgent =
-      typeof job.start_agent === "string" && job.start_agent.trim()
-        ? job.start_agent.trim()
-        : OWNER_START_AGENT;
+      overCap && OWNER_CHAT_LOCAL_AGENT ? OWNER_CHAT_LOCAL_AGENT : OWNER_START_AGENT;
     const jobStartAgentOpts = jobStartAgent ? { startAgent: jobStartAgent } : {};
-    // Spend cap routing: the enqueue route stamps start_agent=OwnerCoworkerLocal
-    // once the period cap is hit. We MUST force that agent — resuming a stored
+    // A capped (local) turn MUST force its agent: resuming a stored
     // (Gemini-bound) conversationId would make Rowboat ignore startAgent and
-    // keep billing Gemini, and metering would wrongly skip the turn as "local".
-    // So a capped turn always runs stateless with startAgent=local and clears
-    // the stored conversationId/state below so a local-bound id never carries
-    // into a later (Gemini) turn.
+    // keep billing Gemini, and metering would wrongly skip it as "local". So a
+    // capped turn runs stateless with startAgent=local and clears the stored
+    // conversationId/state below so a local-bound id never carries into a later
+    // (Gemini) turn.
     const capForceLocal = !!OWNER_CHAT_LOCAL_AGENT && jobStartAgent === OWNER_CHAT_LOCAL_AGENT;
 
     // ATTEMPT 1: input_messages + (possibly) stored conversationId
@@ -727,7 +758,8 @@ async function processJob(job) {
       job,
       usedStateless ? fallbackMessages : primaryMessages,
       content,
-      usedAgent
+      usedAgent,
+      capPeriodStart
     );
 
     // Reply is durably stored — now run the owner-rule extraction and persist.

@@ -77,7 +77,6 @@ const ROW_FIXTURE: DashboardChatJobRow = {
   stateless_input_messages: FAKE_STATELESS,
   rowboat_conversation_id: "rb-conv",
   rowboat_state: FAKE_STATE,
-  start_agent: null,
   error_code: null,
   error_detail: null,
   created_at: "2026-05-08T16:00:00Z",
@@ -102,8 +101,7 @@ describe("insertChatJob", () => {
       inputMessages: FAKE_INPUT,
       statelessInputMessages: FAKE_STATELESS,
       rowboatConversationId: "rb-conv",
-      rowboatState: FAKE_STATE,
-      startAgent: "OwnerCoworker"
+      rowboatState: FAKE_STATE
     });
 
     expect(row).toEqual(ROW_FIXTURE);
@@ -114,8 +112,7 @@ describe("insertChatJob", () => {
       input_messages: FAKE_INPUT,
       stateless_input_messages: FAKE_STATELESS,
       rowboat_conversation_id: "rb-conv",
-      rowboat_state: FAKE_STATE,
-      start_agent: "OwnerCoworker"
+      rowboat_state: FAKE_STATE
     });
   });
 

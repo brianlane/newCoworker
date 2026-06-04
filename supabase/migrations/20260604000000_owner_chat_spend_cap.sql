@@ -5,10 +5,13 @@
 -- long per-turn prompt). Gemini bills per token (~$0.0003/turn), so a runaway
 -- loop / abusive thread could rack up cost. This adds a per-business, per
 -- billing-period spend meter and a hard fuse: once a business crosses
--- OWNER_CHAT_SPEND_CAP for the period, the enqueue route routes owner chat to
+-- OWNER_CHAT_SPEND_CAP for the period, the VPS chat-worker routes owner chat to
 -- the LOCAL Qwen agent (OwnerCoworkerLocal, $0 marginal cost) instead of
--- Gemini. The fuse auto-resets at the next billing period because spend is
--- keyed by stripe_current_period_start — a fresh period gets a fresh row at 0.
+-- Gemini. The worker decides this authoritatively at claim time from live
+-- spend (so a burst of queued jobs still downgrades once the fuse trips, and
+-- the cap lives in exactly one place). The fuse auto-resets at the next billing
+-- period because spend is keyed by stripe_current_period_start — a fresh period
+-- gets a fresh row at 0.
 --
 -- Mirrors the voice metering shape (voice_billing_period_usage): period-keyed
 -- table + an atomic increment RPC. No floats: spend is stored in micro-USD
@@ -113,19 +116,3 @@ comment on function owner_chat_record_spend is
 
 revoke all on function owner_chat_record_spend(uuid, timestamptz, bigint, bigint) from public;
 grant execute on function owner_chat_record_spend(uuid, timestamptz, bigint, bigint) to service_role;
-
--- ---------------------------------------------------------------------------
--- Per-job start-agent override.
---
--- The enqueue route stamps each owner-chat job with the agent the worker
--- should start: 'OwnerCoworker' (Gemini, normal) or 'OwnerCoworkerLocal'
--- (Qwen, when the period spend cap is reached). claim_chat_job returns the
--- whole row (`returning *`), so the worker reads this column with no RPC
--- change. Null = worker falls back to its CHAT_WORKER_OWNER_START_AGENT env
--- default (backwards compatible with jobs queued before this migration).
--- ---------------------------------------------------------------------------
-alter table dashboard_chat_jobs
-  add column if not exists start_agent text;
-
-comment on column dashboard_chat_jobs.start_agent is
-  'Optional Rowboat startAgent override for this job. Set by /api/dashboard/chat to OwnerCoworker (Gemini) normally or OwnerCoworkerLocal (Qwen) once the per-period spend cap is hit. Null = worker uses its env default.';
