@@ -16,11 +16,12 @@
  *   4. From inside chat-worker, curl Rowboat /chat with the worker's real
  *      message shape, timing each rep; capture reply + correctness.
  *
- * Pass [businessId] [model] [--revert]. Default model gemini-2.5-flash-lite.
- * With --revert it restores the snapshot model instead of leaving Gemini on
- * (use after a dry run; omit to keep Gemini for the rollout).
+ * Pass [businessId] [model] [reps] [--revert]. Default model
+ * gemini-2.5-flash-lite. With --revert it sets OwnerCoworker BACK to the local
+ * model (qwen3:4b-instruct) — actively rolling back a prior Gemini switch —
+ * then runs the chat test against that local model.
  *
- * Usage: tsx debug/probe-gemini-owner.ts [businessId] [model] [--revert]
+ * Usage: tsx debug/probe-gemini-owner.ts [businessId] [model] [reps] [--revert]
  */
 import { loadEnv, makeHostingerClient, resolveVpsIp } from "./_shared.ts";
 import { buildWorkerMessages, EXPECTED_ANSWERS, QUESTION } from "./bench-prompts.ts";
@@ -33,6 +34,11 @@ const positional = args.filter((a) => !a.startsWith("--"));
 const BUSINESS_ID = positional[0] ?? "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
 const TARGET_MODEL = positional[1] ?? "gemini-2.5-flash-lite";
 const REPS = Number(positional[2] ?? 2);
+// Local fallback model used when rolling back (--revert). Matches deploy's
+// OLLAMA_MODEL default for KVM8. The probe ALWAYS sets a concrete model so
+// --revert genuinely restores local instead of leaving a prior switch in place.
+const REVERT_MODEL = "qwen3:4b-instruct";
+const EFFECTIVE_MODEL = REVERT ? REVERT_MODEL : TARGET_MODEL;
 
 const messages = buildWorkerMessages();
 const messagesJson = JSON.stringify(messages);
@@ -54,18 +60,13 @@ const p=db.projects.findOne({});
 const a=(p.liveWorkflow.agents||[]).find(x=>x.name=="OwnerCoworker");
 print(a ? a.model : "NO_AGENT");
 ' 2>/dev/null || echo "ERR"
-echo "===SET_MODEL==="
-TARGET='${REVERT ? "" : TARGET_MODEL}'
-if [ -n "$TARGET" ]; then
+echo "===SET_MODEL (target=${EFFECTIVE_MODEL})==="
 docker compose -f /opt/rowboat/docker-compose.yml exec -T mongo mongosh --quiet rowboat --eval '
-const target="${TARGET_MODEL}";
-const setModel=(p)=>({ \$map:{ input:{\$ifNull:["\$"+p,[]]}, as:"a", in:{ \$cond:[{\$eq:["\$\$a.name","OwnerCoworker"]},{\$mergeObjects:["\$\$a",{model:target}]},"\$\$a"] } } });
-const r=db.projects.updateMany({},[{\$set:{"liveWorkflow.agents":setModel("liveWorkflow.agents"),"draftWorkflow.agents":setModel("draftWorkflow.agents")}}]);
+const target="${EFFECTIVE_MODEL}";
+const setModel=(p)=>({ $map:{ input:{$ifNull:["$"+p,[]]}, as:"a", in:{ $cond:[{$eq:["$$a.name","OwnerCoworker"]},{$mergeObjects:["$$a",{model:target}]},"$$a"] } } });
+const r=db.projects.updateMany({},[{$set:{"liveWorkflow.agents":setModel("liveWorkflow.agents"),"draftWorkflow.agents":setModel("draftWorkflow.agents")}}]);
 print("matched="+r.matchedCount+" modified="+r.modifiedCount);
 ' 2>/dev/null || echo "ERR set"
-else
-echo "(skipped — revert mode handled below)"
-fi
 echo "===VERIFY_MODEL==="
 docker compose -f /opt/rowboat/docker-compose.yml exec -T mongo mongosh --quiet rowboat --eval '
 const p=db.projects.findOne({});
@@ -119,7 +120,7 @@ const client = makeHostingerClient();
 const ip = await resolveVpsIp(client, key);
 
 console.log(`== Gemini owner-chat e2e probe ==`);
-console.log(`vps=${ip} business=${BUSINESS_ID} target=${REVERT ? "(revert)" : TARGET_MODEL}`);
+console.log(`vps=${ip} business=${BUSINESS_ID} model=${EFFECTIVE_MODEL}${REVERT ? " (revert→local)" : ""}`);
 console.log(`question: "${QUESTION}"`);
 
 const res = await sshExec({
