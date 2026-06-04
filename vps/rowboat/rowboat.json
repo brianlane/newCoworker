@@ -39,6 +39,24 @@
       ]
     },
     {
+      "id": "OwnerCoworkerLocal",
+      "type": "conversational",
+      "description": "Owner dashboard chat spend-cap fallback: identical to OwnerCoworker but pinned to the local Ollama model ($0). The owner-chat enqueue route flips a job to startAgent=OwnerCoworkerLocal once a business crosses its per-period owner-chat spend cap; the worker honors the per-job startAgent. Free but slower (CPU prefill), so a runaway loop degrades to local instead of billing unbounded Gemini.",
+      "model": "{{OLLAMA_MODEL}}",
+      "knowledge_vault": {
+        "soul_md": "/opt/rowboat/vault/soul.md",
+        "identity_md": "/opt/rowboat/vault/identity.md",
+        "memory_md": "/opt/rowboat/vault/memory.md",
+        "website_md": "/opt/rowboat/vault/website.md"
+      },
+      "tools": [
+        "customer_lookup_by_phone",
+        "customer_set_display_name",
+        "customer_append_pinned_note",
+        "owner_append_business_memory"
+      ]
+    },
+    {
       "id": "voice_task",
       "type": "task",
       "description": "Proxy agent for voice tool calls originating from the Telnyx <-> Gemini Live media bridge. Runs on Gemini so it can reason over the full vault and emit structured tool invocations. The bridge calls this agent's /chat endpoint; Rowboat in turn posts to the platform Next.js /api/voice/tools/* adapters for Nango / Telnyx / CRM work.",

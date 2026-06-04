@@ -111,6 +111,28 @@ const OWNER_START_AGENT = (process.env.CHAT_WORKER_OWNER_START_AGENT ?? "OwnerCo
 const OWNER_START_AGENT_OPTS = OWNER_START_AGENT
   ? { startAgent: OWNER_START_AGENT }
   : {};
+
+// --- Owner-chat spend cap ("runaway fuse") --------------------------------
+// The Gemini-backed OwnerCoworker agent bills per token. We meter estimated
+// per-turn cost into owner_chat_model_spend (period-keyed) and the enqueue
+// route flips jobs to the local Qwen agent once the period cap is hit. This
+// is the metering half; it estimates cost from message text at Gemini list
+// price (a safety fuse, not an invoice — approximate is fine) and records it.
+// The local-agent name MUST match the agent deploy-client.sh seeds for the
+// Qwen fallback; turns on it are $0 and skip metering.
+const OWNER_CHAT_LOCAL_AGENT = (process.env.CHAT_WORKER_OWNER_LOCAL_AGENT ?? "OwnerCoworkerLocal").trim();
+const OWNER_CHAT_SPEND_CAP_MICROS = intEnv("OWNER_CHAT_SPEND_CAP_MICROS", 10_000_000); // $10
+// Gemini 2.5 Flash-Lite list price, USD per 1M tokens (see debug/bench-cloud.ts).
+const OWNER_CHAT_PRICE_IN_PER_1M = Number(process.env.OWNER_CHAT_PRICE_IN_PER_1M ?? 0.1);
+const OWNER_CHAT_PRICE_OUT_PER_1M = Number(process.env.OWNER_CHAT_PRICE_OUT_PER_1M ?? 0.4);
+// Rowboat prepends the OwnerCoworker agent instructions (synced memory +
+// persona) that aren't in the worker's input_messages, so a text-only estimate
+// undercounts the true prompt. Add a flat token overhead so the fuse isn't
+// grossly optimistic. Tunable; ~1500 tokens approximates a typical seeded
+// instruction block.
+const OWNER_CHAT_PROMPT_OVERHEAD_TOKENS = intEnv("OWNER_CHAT_PROMPT_OVERHEAD_TOKENS", 1500);
+const OWNER_CHAT_SPEND_METERING_ENABLED =
+  (process.env.OWNER_CHAT_SPEND_METERING_ENABLED ?? "true").trim().toLowerCase() !== "false";
 const VERCEL_BASE_URL = (process.env.WORKER_VERCEL_BASE_URL || "").replace(/\/+$/, "");
 const VERCEL_BEARER = process.env.WORKER_VERCEL_BEARER || "";
 // Server-side owner-rule capture (see memory-capture.mjs for the why). On
@@ -278,6 +300,86 @@ async function callRowboat(messages, conversationId, state, opts = {}) {
     };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+// Billing-period key for owner-chat spend: the subscription's current Stripe
+// period start, so the fuse resets each month. Falls back to the start of the
+// current UTC month when there's no subscription row. Mirrors
+// src/lib/db/owner-chat-spend.ts:getOwnerChatPeriodStart so the route's read
+// and the worker's write hit the same period bucket. Never throws.
+async function resolveOwnerChatPeriodStart() {
+  try {
+    const { data } = await sb
+      .from("subscriptions")
+      .select("stripe_current_period_start")
+      .eq("business_id", BUSINESS_ID)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (data?.stripe_current_period_start) return data.stripe_current_period_start;
+  } catch {
+    // fall through to month-start
+  }
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+}
+
+// Estimate the Gemini cost of one owner-chat turn (micro-USD) from the message
+// text. tokens ~ chars/4; add a flat overhead for the agent instructions
+// Rowboat prepends that aren't in our input_messages. cost_micros simplifies
+// to inTokens*priceIn + outTokens*priceOut because price is per-1M-tokens and
+// 1 USD = 1e6 micros (the 1e6 factors cancel).
+function estimateOwnerChatCostMicros(inputMessages, replyContent) {
+  let inputChars = 0;
+  for (const m of inputMessages ?? []) {
+    if (m && typeof m.content === "string") inputChars += m.content.length;
+  }
+  const outputChars = typeof replyContent === "string" ? replyContent.length : 0;
+  const inTokens = inputChars / 4 + OWNER_CHAT_PROMPT_OVERHEAD_TOKENS;
+  const outTokens = outputChars / 4;
+  return Math.ceil(inTokens * OWNER_CHAT_PRICE_IN_PER_1M + outTokens * OWNER_CHAT_PRICE_OUT_PER_1M);
+}
+
+// Record estimated owner-chat model spend for a successful Gemini turn and
+// trip the period fuse on first cap crossing. No-op for local-agent turns
+// ($0) and when metering is disabled. NEVER throws — metering must never block
+// or fail a turn whose reply is already persisted.
+async function recordOwnerChatSpend(job, inputMessages, replyContent, usedAgent) {
+  if (!OWNER_CHAT_SPEND_METERING_ENABLED) return;
+  // Local Qwen turns cost nothing; only meter the Gemini agent.
+  if (usedAgent && usedAgent === OWNER_CHAT_LOCAL_AGENT) return;
+  try {
+    const periodStart = await resolveOwnerChatPeriodStart();
+    const costMicros = estimateOwnerChatCostMicros(inputMessages, replyContent);
+    const { data, error } = await sb.rpc("owner_chat_record_spend", {
+      p_business_id: job.business_id,
+      p_period_start: periodStart,
+      p_cost_micros: costMicros,
+      p_cap_micros: OWNER_CHAT_SPEND_CAP_MICROS
+    });
+    if (error) {
+      log("warn", "owner_chat_spend_record_failed", { jobId: job.id, error: error.message });
+      return;
+    }
+    const row = Array.isArray(data) ? data[0] : data;
+    if (row?.fuse_newly_tripped) {
+      // Operator alert: this turn pushed the business over the period cap; all
+      // subsequent owner-chat turns this period route to the local Qwen model
+      // until the next billing period resets the meter.
+      log("error", "owner_chat_spend_cap_tripped", {
+        businessId: job.business_id,
+        periodStart,
+        spendUsd: (Number(row.spend_micros) / 1_000_000).toFixed(4),
+        capUsd: (OWNER_CHAT_SPEND_CAP_MICROS / 1_000_000).toFixed(2),
+        turnCount: row.turn_count
+      });
+    }
+  } catch (err) {
+    log("warn", "owner_chat_spend_record_unexpected", {
+      jobId: job.id,
+      error: err?.message || String(err)
+    });
   }
 }
 
@@ -523,6 +625,16 @@ async function processJob(job) {
       ? job.stateless_input_messages
       : null;
 
+    // Per-job startAgent override (spend-cap routing). The enqueue route
+    // stamps OwnerCoworker (Gemini) normally or OwnerCoworkerLocal (Qwen) once
+    // the period cap is hit. Fall back to the env default for pre-spend-cap
+    // rows (start_agent IS NULL) so older queued jobs still work.
+    const jobStartAgent =
+      typeof job.start_agent === "string" && job.start_agent.trim()
+        ? job.start_agent.trim()
+        : OWNER_START_AGENT;
+    const jobStartAgentOpts = jobStartAgent ? { startAgent: jobStartAgent } : {};
+
     // ATTEMPT 1: input_messages + (possibly) stored conversationId
     // + stored Rowboat state. The state is Rowboat's client-carried
     // tool/agent state from the previous turn (see migration
@@ -541,7 +653,7 @@ async function processJob(job) {
         primaryMessages,
         job.rowboat_conversation_id,
         job.rowboat_state ?? null,
-        useOwnerStartAgent ? OWNER_START_AGENT_OPTS : {}
+        useOwnerStartAgent ? jobStartAgentOpts : {}
       );
     } catch (err) {
       primaryError = err;
@@ -562,10 +674,16 @@ async function processJob(job) {
       // tail spelled out in the system message we built upstream.
       // Sending the old state alongside would defeat the point of
       // the retry (it's the same broken context).
-      result = await callRowboat(fallbackMessages, null, null, OWNER_START_AGENT_OPTS);
+      result = await callRowboat(fallbackMessages, null, null, jobStartAgentOpts);
       usedStateless = true;
     }
     const { content, conversationId, state: nextState } = result;
+    // The stateless retry always passes the owner start-agent opts; the
+    // primary attempt only does on fresh threads (no conversationId). When the
+    // primary ran a continuation WITHOUT a start-agent, Rowboat resumes the
+    // agent already bound to the conversation — which for owner threads is the
+    // same OwnerCoworker/Local agent, so metering against jobStartAgent is correct.
+    const usedAgent = jobStartAgent;
 
     // Insert the assistant reply FIRST. Owner-rule persistence happens only
     // AFTER this succeeds (below), so a turn whose reply insert fails never
@@ -580,6 +698,17 @@ async function processJob(job) {
     if (insertErr) {
       throw new Error(`message_insert_failed:${insertErr.message}`);
     }
+
+    // Reply is durably stored — meter the (Gemini) model spend for this turn
+    // and trip the period fuse if it crosses the cap. Awaited but non-fatal:
+    // recordOwnerChatSpend never throws. Estimate from the messages actually
+    // sent to Rowboat this turn (stateless fallback resends a fuller tail).
+    await recordOwnerChatSpend(
+      job,
+      usedStateless ? fallbackMessages : primaryMessages,
+      content,
+      usedAgent
+    );
 
     // Reply is durably stored — now run the owner-rule extraction and persist.
     // Extraction is done SEQUENTIALLY here (not concurrently with the Rowboat
@@ -823,6 +952,9 @@ async function main() {
     rowboatTimeoutMs: ROWBOAT_TIMEOUT_MS,
     maxAttempts: MAX_ATTEMPTS,
     ownerStartAgent: OWNER_START_AGENT || "(workflow default)",
+    ownerSpendMetering: OWNER_CHAT_SPEND_METERING_ENABLED ? "on" : "off",
+    ownerSpendCapUsd: (OWNER_CHAT_SPEND_CAP_MICROS / 1_000_000).toFixed(2),
+    ownerLocalAgent: OWNER_CHAT_LOCAL_AGENT,
     memoryCapture: MEMORY_CAPTURE_ENABLED && OWNER_APPEND_URL ? "on" : "off",
     memoryCaptureModel: MEMORY_CAPTURE_ENABLED ? MEMORY_CAPTURE_MODEL : undefined,
     ollamaBaseUrl: MEMORY_CAPTURE_ENABLED ? OLLAMA_BASE_URL : undefined

@@ -65,6 +65,13 @@ export type DashboardChatJobRow = {
    * dashboard_chat_threads.rowboat_state.
    */
   rowboat_state: unknown | null;
+  /**
+   * Rowboat startAgent override for this job: "OwnerCoworker" (Gemini) on the
+   * normal path, "OwnerCoworkerLocal" (Qwen) once the per-period owner-chat
+   * spend cap is reached. Null = the worker uses its CHAT_WORKER_OWNER_START_AGENT
+   * env default (backwards compatible with pre-spend-cap rows).
+   */
+  start_agent: string | null;
   error_code: string | null;
   error_detail: string | null;
   created_at: string;
@@ -104,6 +111,11 @@ export async function insertChatJob(
      * prior stateless retry).
      */
     rowboatState: unknown | null;
+    /**
+     * Rowboat startAgent override for this job (spend-cap routing). Pass null
+     * to let the worker use its env default. See {@link DashboardChatJobRow.start_agent}.
+     */
+    startAgent?: string | null;
   },
   client?: SupabaseClient
 ): Promise<DashboardChatJobRow> {
@@ -117,7 +129,8 @@ export async function insertChatJob(
       input_messages: args.inputMessages,
       stateless_input_messages: args.statelessInputMessages,
       rowboat_conversation_id: args.rowboatConversationId,
-      rowboat_state: args.rowboatState
+      rowboat_state: args.rowboatState,
+      start_agent: args.startAgent ?? null
     })
     .select("*")
     .single();

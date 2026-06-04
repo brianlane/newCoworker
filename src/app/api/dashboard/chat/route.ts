@@ -82,6 +82,7 @@ import {
   insertChatJob,
   type DashboardChatJobInputMessage
 } from "@/lib/db/dashboard-chat-jobs";
+import { chooseOwnerChatStartAgent } from "@/lib/db/owner-chat-spend";
 // NOTE: summarizer triggers used to live here. They moved to the
 // VPS chat-worker post-PR-#79 (which calls
 // /api/internal/dashboard-chat/maybe-summarize after persisting the
@@ -492,6 +493,21 @@ export async function POST(request: Request) {
     // because there's no fallback to escalate to. Mirrors the
     // pre-Option-B `useContinuation ? ... : null` gate. Bugbot
     // Medium-severity finding on PR #79 round-9.
+    // Spend-cap routing: pick the Gemini owner agent normally, or the local
+    // Qwen agent once this business has crossed the per-period spend cap. The
+    // worker meters actual cost after the turn (owner_chat_record_spend); the
+    // fuse auto-resets next billing period. Fails open to Gemini on read error.
+    const { startAgent, capReached, spendMicros } = await chooseOwnerChatStartAgent(
+      body.businessId
+    );
+    if (capReached) {
+      logger.warn("owner_chat_spend_cap_active", {
+        businessId: body.businessId,
+        spendUsd: (spendMicros / 1_000_000).toFixed(4),
+        routedTo: startAgent
+      });
+    }
+
     const job = await insertChatJob({
       businessId: body.businessId,
       threadId: thread.id,
@@ -501,7 +517,8 @@ export async function POST(request: Request) {
       rowboatConversationId: hasContinuation
         ? thread.rowboat_conversation_id
         : null,
-      rowboatState: hasContinuation ? thread.rowboat_state ?? null : null
+      rowboatState: hasContinuation ? thread.rowboat_state ?? null : null,
+      startAgent
     });
 
     // The summarizer runs on the worker side (after the assistant
