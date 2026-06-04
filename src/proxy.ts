@@ -98,6 +98,14 @@ export async function proxy(request: NextRequest) {
     // callers that send no Origin (the VPS voice-bridge and chat-worker).
     // Same rationale as the /api/rowboat and /api/webhooks exemptions above.
     !pathname.startsWith("/api/voice/tools/") &&
+    // /api/internal/* are server-to-server cron/worker endpoints
+    // authenticated solely by `Authorization: Bearer INTERNAL_CRON_SECRET`
+    // (assertCronAuth), never by a session cookie. The VPS chat-worker's
+    // rolling-summary callback (/api/internal/dashboard-chat-summarize)
+    // sends no Origin header, so CSRF was 403ing it on every turn and
+    // silently disabling thread summarization. Same rationale as the
+    // /api/voice/tools, /api/rowboat, and /api/webhooks exemptions above.
+    !pathname.startsWith("/api/internal/") &&
     ["POST", "PUT", "DELETE", "PATCH"].includes(method)
   ) {
     const origin = request.headers.get("origin");
