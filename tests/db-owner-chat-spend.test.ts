@@ -111,3 +111,34 @@ describe("chooseOwnerChatStartAgent", () => {
     expect(out.capReached).toBe(false);
   });
 });
+
+describe("default service client (no explicit client passed)", () => {
+  it("getOwnerChatPeriodStart constructs the service client when none is given", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: { stripe_current_period_start: PERIOD }, error: null });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    const out = await getOwnerChatPeriodStart(BIZ);
+    expect(out).toBe(PERIOD);
+    expect(defaultClientSpy).toHaveBeenCalled();
+  });
+
+  it("getOwnerChatSpendMicros constructs the service client when none is given", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: { spend_micros: 42 }, error: null });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    const out = await getOwnerChatSpendMicros(BIZ, PERIOD);
+    expect(out).toBe(42);
+    expect(defaultClientSpy).toHaveBeenCalled();
+  });
+
+  it("chooseOwnerChatStartAgent constructs the service client when none is given", async () => {
+    const c = chain();
+    c.maybeSingle
+      .mockResolvedValueOnce({ data: { stripe_current_period_start: PERIOD }, error: null })
+      .mockResolvedValueOnce({ data: { spend_micros: 0 }, error: null });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    const out = await chooseOwnerChatStartAgent(BIZ);
+    expect(out.startAgent).toBe(OWNER_CHAT_AGENT_GEMINI);
+    expect(defaultClientSpy).toHaveBeenCalled();
+  });
+});
