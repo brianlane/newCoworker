@@ -23,8 +23,8 @@
     {
       "id": "OwnerCoworker",
       "type": "conversational",
-      "description": "Owner dashboard chat: same as dispatcher plus owner_append_business_memory (startAgent override from app).",
-      "model": "{{OLLAMA_MODEL}}",
+      "description": "Owner dashboard chat: same as dispatcher plus owner_append_business_memory (startAgent override from app). Gemini-backed (gemini-* routes to Google via the llm-router) — the interactive owner surface sends a long prompt every turn and the CPU-only local model's cold prefill timed out.",
+      "model": "{{OWNER_CHAT_MODEL}}",
       "knowledge_vault": {
         "soul_md": "/opt/rowboat/vault/soul.md",
         "identity_md": "/opt/rowboat/vault/identity.md",

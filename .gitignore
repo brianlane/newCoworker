@@ -40,3 +40,4 @@ supabase/config.toml
 .testconvo
 test-results/
 .vercel
+debug/.bench-*.json
