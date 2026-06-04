@@ -844,6 +844,11 @@ async function runOrchestrator(
     // Model name Rowboat uses for the voice_task agent via the llm-router
     // sidecar. Falls back to the deploy-client.sh default when unset.
     ["GEMINI_ROWBOAT_MODEL", process.env.GEMINI_ROWBOAT_MODEL ?? ""],
+    // Model Rowboat's OwnerCoworker (owner dashboard chat) agent uses via the
+    // llm-router. Mirrors GEMINI_ROWBOAT_MODEL so setting it on Vercel actually
+    // reaches the VPS seed; blank lets deploy-client.sh apply its default
+    // (gemini-2.5-flash-lite, which itself falls back to local without a key).
+    ["OWNER_CHAT_MODEL", process.env.OWNER_CHAT_MODEL ?? ""],
     // Public origin of the platform app so Rowboat's voice_task agent and
     // the voice-bridge tool dispatcher can POST to /api/voice/tools/* with
     // the shared gateway token. Falls back to NEXT_PUBLIC_APP_URL so local

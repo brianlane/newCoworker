@@ -89,6 +89,7 @@ function buildDeployEnvPrefix(
     ["GEMINI_LIVE_ENABLED", process.env.GEMINI_LIVE_ENABLED ?? ""],
     ["VOICE_TRANSCRIPTION_ENABLED", process.env.VOICE_TRANSCRIPTION_ENABLED ?? ""],
     ["GEMINI_ROWBOAT_MODEL", process.env.GEMINI_ROWBOAT_MODEL ?? ""],
+    ["OWNER_CHAT_MODEL", process.env.OWNER_CHAT_MODEL ?? ""],
     ["APP_BASE_URL", process.env.APP_BASE_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? ""],
     ["VOICE_BRIDGE_SRC", process.env.VOICE_BRIDGE_SRC ?? ""],
     ["CLOUDFLARE_TUNNEL_TOKEN", process.env.CLOUDFLARE_TUNNEL_TOKEN ?? ""],

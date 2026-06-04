@@ -201,6 +201,33 @@ fi
 LLM_ROUTER_PORT="${LLM_ROUTER_PORT:-11435}"
 GEMINI_ROWBOAT_MODEL_DEFAULT="gemini-3.1-flash"
 
+# Owner-dashboard chat model (OwnerCoworker agent only — SMS's Coworker agent
+# stays on the local Ollama model for $0 marginal cost). The owner surface
+# sends a long prompt every turn (agent instructions + OWNER_PREAMBLE + synced
+# memory + recent tail) and is interactive, so the CPU-only local model's cold
+# prompt prefill (~27 tok/s ⇒ ~100s+ on a fresh turn, growing with thread age)
+# blew past the worker's Rowboat timeout. Routing OwnerCoworker through the
+# llm-router to Gemini (gemini-* ⇒ Google) measured ~2.8s end-to-end and 100%
+# correct vs ~100s+ on qwen, for ~$0.0003/turn (see debug/bench-* + the
+# dashboard-chat-model-benchmark canvas). Override to a local tag (e.g.
+# qwen3:4b-instruct) to fall back to fully-local owner chat.
+OWNER_CHAT_MODEL_DEFAULT="gemini-2.5-flash-lite"
+OWNER_CHAT_MODEL=${OWNER_CHAT_MODEL:-${OWNER_CHAT_MODEL_DEFAULT}}
+
+# Safety fallback: a gemini-* OwnerCoworker model is only reachable when
+# GOOGLE_API_KEY is set — the llm-router returns 503 for gemini-* routes with
+# no key. Seeding Gemini on a keyless host would break owner dashboard chat on
+# every turn (worse than the slow-but-working local model), so degrade to the
+# local Ollama tag instead. Tenants with a key keep Gemini.
+case "${OWNER_CHAT_MODEL}" in
+  gemini-*)
+    if [[ -z "${GOOGLE_API_KEY:-}" ]]; then
+      log "WARNING: OWNER_CHAT_MODEL=${OWNER_CHAT_MODEL} requires GOOGLE_API_KEY but none is set; falling back to local ${OLLAMA_MODEL} for OwnerCoworker."
+      OWNER_CHAT_MODEL="${OLLAMA_MODEL}"
+    fi
+    ;;
+esac
+
 cat > /opt/rowboat/.env <<RENV_EOF
 # Rowboat runtime configuration for business: ${BUSINESS_ID}
 ROWBOAT_GATEWAY_TOKEN=${ROWBOAT_GATEWAY_TOKEN}
@@ -438,6 +465,7 @@ WORKFLOW_JSON=$(jq -nc \
   --arg name "${BUSINESS_NAME:-AI Coworker}" \
   --arg instructions "${ROWBOAT_INSTRUCTIONS}" \
   --arg model "${OLLAMA_MODEL}" \
+  --arg ownerModel "${OWNER_CHAT_MODEL}" \
   --arg now "${SEED_NOW}" '
 {
   agents: [
@@ -474,7 +502,10 @@ WORKFLOW_JSON=$(jq -nc \
       instructions: $instructions,
       outputVisibility: "user_facing",
       controlType: "retain",
-      model: $model,
+      # Gemini via the llm-router (gemini-* ⇒ Google) — see OWNER_CHAT_MODEL
+      # above. The interactive owner surface needs sub-second-class latency the
+      # CPU-only local model cannot give on its long per-turn prompt.
+      model: $ownerModel,
       ragK: 3,
       ragReturnType: "chunks",
       tools: [

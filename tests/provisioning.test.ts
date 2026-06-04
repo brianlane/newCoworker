@@ -297,6 +297,7 @@ describe("provisioning/orchestrate", () => {
     delete process.env.GEMINI_LIVE_MODEL;
     delete process.env.GEMINI_LIVE_ENABLED;
     delete process.env.GEMINI_ROWBOAT_MODEL;
+    delete process.env.OWNER_CHAT_MODEL;
     delete process.env.APP_BASE_URL;
     delete process.env.NEXT_PUBLIC_APP_URL;
     delete process.env.VOICE_BRIDGE_SRC;
@@ -318,6 +319,7 @@ describe("provisioning/orchestrate", () => {
     expect(cmd).toContain("GEMINI_LIVE_MODEL=''");
     expect(cmd).toContain("GEMINI_LIVE_ENABLED=''");
     expect(cmd).toContain("GEMINI_ROWBOAT_MODEL=''");
+    expect(cmd).toContain("OWNER_CHAT_MODEL=''");
     expect(cmd).toContain("APP_BASE_URL=''");
     expect(cmd).toContain("VOICE_BRIDGE_SRC=''");
     expect(cmd).toContain("SUPABASE_SERVICE_KEY=''");
