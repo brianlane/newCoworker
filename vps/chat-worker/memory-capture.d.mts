@@ -50,6 +50,32 @@ export function buildExtractionRequestBody(
   messages: Array<{ role: string; content: string }>;
 };
 
+export const MEMORY_EXTRACTION_JSON_SCHEMA: {
+  name: string;
+  strict: boolean;
+  schema: {
+    type: "object";
+    additionalProperties: false;
+    properties: {
+      save: { type: "boolean" };
+      bullets: { type: "array"; items: { type: "string" } };
+    };
+    required: string[];
+  };
+};
+
+export function buildExtractionRequestBodyOpenAI(
+  model: string,
+  ownerMessage: string,
+  opts?: ExtractionInputOpts
+): {
+  model: string;
+  stream: boolean;
+  temperature: number;
+  response_format: { type: "json_schema"; json_schema: typeof MEMORY_EXTRACTION_JSON_SCHEMA };
+  messages: Array<{ role: string; content: string }>;
+};
+
 export function formatSavedConfirmation(bullets: string[]): string;
 
 export function extractOwnerRule(args: {
@@ -57,7 +83,8 @@ export function extractOwnerRule(args: {
   assistantReply?: string;
   existingBullets?: string[];
   model: string;
-  ollamaBaseUrl: string;
+  ollamaBaseUrl?: string;
+  routerBaseUrl?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   logger?: (level: string, event: string, data?: object) => void;

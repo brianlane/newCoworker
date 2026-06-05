@@ -3,14 +3,18 @@
  *
  * Enqueues a `dashboard_chat_jobs` row exactly like /api/dashboard/chat does
  * (OWNER_PREAMBLE + a "[Dashboard] <rule>" user turn), waits for the tenant's
- * VPS worker to process it, then verifies: (1) business_configs.memory_md
- * gained the rule, and (2) the assistant message carries the honest
- * "Saved to your business memory" confirmation.
+ * VPS worker to process it, then verifies business_configs.memory_md gained the
+ * rule.
+ *
+ * NOTE: capture is now SILENT and FULLY DECOUPLED — it runs on a background
+ * queue AFTER the job is marked 'done', and it no longer appends any
+ * confirmation to the reply. So job status='done' does NOT mean capture has
+ * finished; we poll memory_md for a while AFTER 'done' for the rule to land.
  *
  * Usage:
  *   tsx debug/smoke-rule.ts [businessId]
  *
- * Exit code 0 = PASS (memory grew + rule present + honest confirmation).
+ * Exit code 0 = PASS (memory grew + rule present).
  */
 import { loadEnv } from "./_shared.ts";
 
@@ -100,26 +104,36 @@ if (final.status === "error") {
 
 const messages = await listMessages(thread.id);
 const assistant = messages.find((m) => m.id === final!.assistant_message_id);
-const after = await readMemory();
 
 console.log("\n========== ASSISTANT REPLY ==========");
 console.log(assistant?.content ?? "(assistant message not found)");
 console.log("========== END REPLY ==========\n");
 
+// Capture is async (background queue, after 'done'). Poll memory_md for the
+// rule to land for up to ~90s past the reply.
+const ruleMatches = (md: string) =>
+  md.includes("wait-time") || md.toLowerCase().includes(`smoke ${STAMP}`.toLowerCase());
+
+let after = await readMemory();
+const memDeadline = Date.now() + 90 * 1000;
+while (Date.now() < memDeadline && !(after.length > before.length && ruleMatches(after))) {
+  process.stdout.write(`\r[smoke] waiting for background capture… memory_md=${after.length} chars   `);
+  await new Promise((r) => setTimeout(r, 4000));
+  after = await readMemory();
+}
+console.log("");
+
 const memGrew = after.length > before.length;
-const ruleInMemory =
-  after.includes("wait-time") || after.toLowerCase().includes(`smoke ${STAMP}`.toLowerCase());
-const confirmed = (assistant?.content ?? "").includes("Saved to your business memory");
+const ruleInMemory = ruleMatches(after);
 
 console.log(`[smoke] memory_md after: ${after.length} chars (before ${before.length})`);
 console.log(`[smoke] memory grew:            ${memGrew}`);
 console.log(`[smoke] rule present in memory: ${ruleInMemory}`);
-console.log(`[smoke] honest confirmation:    ${confirmed}`);
 if (memGrew) {
   console.log("\n--- memory_md tail (last 600 chars) ---");
   console.log(after.slice(-600));
 }
 
-const pass = memGrew && ruleInMemory && confirmed;
+const pass = memGrew && ruleInMemory;
 console.log(`\n[smoke] RESULT: ${pass ? "PASS" : "FAIL"}`);
 process.exit(pass ? 0 : 1);

@@ -243,6 +243,50 @@ export function buildExtractionRequestBody(model, ownerMessage, opts = {}) {
 }
 
 /**
+ * OpenAI-compatible structured-output JSON schema (wraps MEMORY_EXTRACTION_FORMAT
+ * for the `response_format: { type: "json_schema" }` shape Gemini's
+ * OpenAI-compat endpoint expects). `strict` + `additionalProperties:false` make
+ * the model return exactly { save, bullets }.
+ */
+export const MEMORY_EXTRACTION_JSON_SCHEMA = {
+  name: "owner_memory_extraction",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      save: { type: "boolean" },
+      bullets: { type: "array", items: { type: "string" } }
+    },
+    required: ["save", "bullets"]
+  }
+};
+
+/**
+ * Build the OpenAI-compatible /v1/chat/completions request body for one
+ * extraction call, routed to Gemini through the llm-router sidecar (gemini-*
+ * models ⇒ Google). Mirrors buildExtractionRequestBody but in the OpenAI shape:
+ * temperature:0 for determinism, stream:false for a single response, and a
+ * json_schema response_format instead of Ollama's `format` field.
+ *
+ * @param {string} model
+ * @param {string} ownerMessage
+ * @param {{ assistantReply?: string, existingBullets?: string[] }} [opts]
+ */
+export function buildExtractionRequestBodyOpenAI(model, ownerMessage, opts = {}) {
+  return {
+    model,
+    stream: false,
+    temperature: 0,
+    response_format: { type: "json_schema", json_schema: MEMORY_EXTRACTION_JSON_SCHEMA },
+    messages: [
+      { role: "system", content: OWNER_MEMORY_SYSTEM_PROMPT },
+      { role: "user", content: composeExtractionInput(ownerMessage, opts) }
+    ]
+  };
+}
+
+/**
  * Take the longest prefix of `bullets` whose newline-joined form fits within
  * `maxChars`, so the adapter never rejects an over-long payload. If even the
  * first bullet exceeds the budget it is truncated to fit. Returns the bullets
@@ -289,12 +333,22 @@ export function formatSavedConfirmation(bullets) {
  * response, or unparseable output all resolve to { save:false, bullets:[] }
  * so capture can never break or delay the chat reply beyond `timeoutMs`.
  *
+ * The upstream is chosen from the MODEL NAME, mirroring the llm-router's own
+ * rule: a `gemini-*` model is sent OpenAI-style to the llm-router sidecar
+ * (`routerBaseUrl` + `/chat/completions`, which forwards to Google and injects
+ * the API key); anything else (qwen/llama) keeps the legacy local-Ollama
+ * `/api/chat` path against `ollamaBaseUrl`. Routing capture through Gemini gets
+ * a functional, ~sub-second classification that uses ZERO local CPU, so it can
+ * never starve the latency-sensitive Gemini chat turns the way the CPU-bound
+ * local model does.
+ *
  * @param {object} args
  * @param {string} args.ownerMessage
  * @param {string} [args.assistantReply]   the dashboard reply (save signal + value source)
  * @param {string[]} [args.existingBullets] already-saved items, so we don't repeat them
- * @param {string} args.model
- * @param {string} args.ollamaBaseUrl  e.g. http://host.docker.internal:11434
+ * @param {string} args.model              gemini-* ⇒ llm-router/Gemini; else ⇒ Ollama
+ * @param {string} [args.ollamaBaseUrl]    e.g. http://host.docker.internal:11434 (non-gemini)
+ * @param {string} [args.routerBaseUrl]    e.g. http://llm-router:11435/v1 (gemini-*)
  * @param {typeof fetch} [args.fetchImpl]
  * @param {number} [args.timeoutMs]
  * @param {(level: string, event: string, data?: object) => void} [args.logger]
@@ -306,6 +360,7 @@ export async function extractOwnerRule({
   existingBullets,
   model,
   ollamaBaseUrl,
+  routerBaseUrl,
   fetchImpl = fetch,
   timeoutMs = 30000,
   logger
@@ -314,18 +369,25 @@ export async function extractOwnerRule({
   if (typeof ownerMessage !== "string" || ownerMessage.trim() === "") {
     return noop;
   }
-  const base = String(ollamaBaseUrl || "").replace(/\/+$/, "");
+
+  // Mirror pickUpstream() in the llm-router: gemini-* ⇒ OpenAI-compat via the
+  // router, everything else ⇒ local Ollama's native /api/chat.
+  const useOpenAI = /^gemini[-_.]/i.test(String(model || ""));
+  const base = String((useOpenAI ? routerBaseUrl : ollamaBaseUrl) || "").replace(/\/+$/, "");
   if (!base) return noop;
+
+  const url = useOpenAI ? `${base}/chat/completions` : `${base}/api/chat`;
+  const body = useOpenAI
+    ? buildExtractionRequestBodyOpenAI(model, ownerMessage, { assistantReply, existingBullets })
+    : buildExtractionRequestBody(model, ownerMessage, { assistantReply, existingBullets });
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetchImpl(`${base}/api/chat`, {
+    const res = await fetchImpl(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(
-        buildExtractionRequestBody(model, ownerMessage, { assistantReply, existingBullets })
-      ),
+      body: JSON.stringify(body),
       signal: controller.signal
     });
     if (!res.ok) {
@@ -333,7 +395,8 @@ export async function extractOwnerRule({
       return noop;
     }
     const data = await res.json();
-    const content = data?.message?.content;
+    // OpenAI-compat: choices[0].message.content; Ollama native: message.content.
+    const content = useOpenAI ? data?.choices?.[0]?.message?.content : data?.message?.content;
     return parseMemoryExtraction(content);
   } catch (err) {
     logger?.("warn", "memory_extract_failed", {

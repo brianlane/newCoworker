@@ -146,13 +146,24 @@ const MEMORY_CAPTURE_ENABLED =
 // Ollama is bound to 0.0.0.0:11434 on the host (see bootstrap.sh); the worker
 // container reaches it the same way the llm-router does — via the
 // host.docker.internal=host-gateway extra_host wired in docker-compose.yml.
+// Only used when MEMORY_CAPTURE_MODEL is a LOCAL (non-gemini) tag.
 const OLLAMA_BASE_URL = (
   process.env.OLLAMA_BASE_URL || "http://host.docker.internal:11434"
 ).replace(/\/+$/, "");
-// Reuse the warm per-tenant SMS model for extraction so we don't pay a
-// cold-load. Overridable per tenant if a sharper model is pulled locally.
-const MEMORY_CAPTURE_MODEL = (process.env.MEMORY_CAPTURE_MODEL || "qwen3:4b-instruct").trim();
-const MEMORY_CAPTURE_TIMEOUT_MS = intEnv("MEMORY_CAPTURE_TIMEOUT_MS", 60 * 1000);
+// llm-router sidecar (OpenAI-compatible). A gemini-* MEMORY_CAPTURE_MODEL is
+// sent here and the router forwards it to Google (injecting GOOGLE_API_KEY);
+// the worker reaches it on the compose network the same way it reaches Rowboat.
+const MEMORY_CAPTURE_ROUTER_URL = (
+  process.env.MEMORY_CAPTURE_ROUTER_URL || "http://llm-router:11435/v1"
+).replace(/\/+$/, "");
+// Extraction model. Defaults to Gemini (gemini-2.5-flash-lite) via the
+// llm-router: a functional, ~sub-second classification that uses ZERO local
+// CPU, so it can't starve the latency-sensitive Gemini chat turns. The
+// CPU-bound local qwen path it replaces always timed out (~30s) AND inflated
+// concurrent owner turns from ~7s to ~50s. Override to a local Ollama tag
+// (e.g. qwen3:4b-instruct) to run capture fully locally on a keyless host.
+const MEMORY_CAPTURE_MODEL = (process.env.MEMORY_CAPTURE_MODEL || "gemini-2.5-flash-lite").trim();
+const MEMORY_CAPTURE_TIMEOUT_MS = intEnv("MEMORY_CAPTURE_TIMEOUT_MS", 30 * 1000);
 // Platform adapter that persists owner rules. Authenticated with the same
 // ROWBOAT_GATEWAY_TOKEN the voice/SMS tool adapters use (verifyRowboatGatewayToken).
 const OWNER_APPEND_URL = VERCEL_BASE_URL
@@ -525,8 +536,11 @@ async function startOwnerRuleExtraction(job, assistantReply, existingBullets) {
     // dedupes authoritatively too, but this keeps the model from proposing
     // re-phrased duplicates in the first place).
     existingBullets,
+    // Upstream is picked from the model name inside extractOwnerRule: gemini-*
+    // ⇒ routerBaseUrl (llm-router → Gemini), else ⇒ ollamaBaseUrl (local).
     model: MEMORY_CAPTURE_MODEL,
     ollamaBaseUrl: OLLAMA_BASE_URL,
+    routerBaseUrl: MEMORY_CAPTURE_ROUTER_URL,
     fetchImpl: fetch,
     timeoutMs: MEMORY_CAPTURE_TIMEOUT_MS,
     logger: log
@@ -1043,7 +1057,11 @@ async function main() {
     ownerLocalAgent: OWNER_CHAT_LOCAL_AGENT,
     memoryCapture: MEMORY_CAPTURE_ENABLED && OWNER_APPEND_URL ? "on" : "off",
     memoryCaptureModel: MEMORY_CAPTURE_ENABLED ? MEMORY_CAPTURE_MODEL : undefined,
-    ollamaBaseUrl: MEMORY_CAPTURE_ENABLED ? OLLAMA_BASE_URL : undefined
+    memoryCaptureUpstream: MEMORY_CAPTURE_ENABLED
+      ? /^gemini[-_.]/i.test(MEMORY_CAPTURE_MODEL)
+        ? `gemini@${MEMORY_CAPTURE_ROUTER_URL}`
+        : `ollama@${OLLAMA_BASE_URL}`
+      : undefined
   });
 
   // CRITICAL: drain any pending work BEFORE subscribing to Realtime. If

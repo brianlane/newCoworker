@@ -1027,15 +1027,35 @@ WORKER_VERCEL_BEARER=${INTERNAL_CRON_SECRET:-${WORKER_VERCEL_BEARER:-}}
 # an empty value preserved (that's the escape hatch), so only an *unset*
 # variable falls back to OwnerCoworker.
 CHAT_WORKER_OWNER_START_AGENT=${CHAT_WORKER_OWNER_START_AGENT-OwnerCoworker}
-# Owner-rule memory capture. The worker runs a local-Ollama extraction over
-# each owner message and, when it states a durable business rule, POSTs to
-# WORKER_VERCEL_BASE_URL/api/voice/tools/owner-append-business-memory (bearer =
-# ROWBOAT_GATEWAY_TOKEN) to persist it. Ollama is reached via the
-# host.docker.internal extra_host wired in docker-compose.yml (same path the
-# llm-router uses). MEMORY_CAPTURE_MODEL reuses the warm per-tenant SMS model.
+# Owner-rule memory capture. After each owner turn the worker runs a background
+# extraction over the owner message and, when it states a durable business rule,
+# POSTs to WORKER_VERCEL_BASE_URL/api/voice/tools/owner-append-business-memory
+# (bearer = ROWBOAT_GATEWAY_TOKEN) to persist it.
+#
+# Extraction runs on Gemini (gemini-2.5-flash-lite) via the llm-router sidecar
+# by default: the CPU-only local model always timed out (~30s, saving nothing)
+# AND its CPU load inflated concurrent Gemini chat turns from ~7s to ~50s.
+# Gemini is functional, ~sub-second, and uses zero local CPU (~$0.0001/turn,
+# under the owner-chat spend cap). A gemini-* model needs GOOGLE_API_KEY (the
+# router 503s gemini-* with no key), so on a keyless host degrade capture to the
+# local Ollama tag instead — same fallback policy as OWNER_CHAT_MODEL above.
+MEMORY_CAPTURE_MODEL_DEFAULT="gemini-2.5-flash-lite"
+MEMORY_CAPTURE_MODEL=${MEMORY_CAPTURE_MODEL:-${MEMORY_CAPTURE_MODEL_DEFAULT}}
+case "${MEMORY_CAPTURE_MODEL}" in
+  gemini-*)
+    if [[ -z "${GOOGLE_API_KEY:-}" ]]; then
+      log "WARNING: MEMORY_CAPTURE_MODEL=${MEMORY_CAPTURE_MODEL} requires GOOGLE_API_KEY but none is set; falling back to local ${OLLAMA_MODEL} for owner-rule capture."
+      MEMORY_CAPTURE_MODEL="${OLLAMA_MODEL}"
+    fi
+    ;;
+esac
 MEMORY_CAPTURE_ENABLED=${MEMORY_CAPTURE_ENABLED:-true}
+# Local Ollama (used only when MEMORY_CAPTURE_MODEL is a non-gemini tag) reached
+# via the host.docker.internal extra_host wired in docker-compose.yml.
 OLLAMA_BASE_URL=${CHAT_WORKER_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-MEMORY_CAPTURE_MODEL=${MEMORY_CAPTURE_MODEL:-${OLLAMA_MODEL:-qwen3:4b-instruct}}
+# llm-router sidecar (used for gemini-* capture models), same compose-network
+# alias Rowboat points PROVIDER_BASE_URL at.
+MEMORY_CAPTURE_ROUTER_URL=${MEMORY_CAPTURE_ROUTER_URL:-http://llm-router:${LLM_ROUTER_PORT}/v1}
 MEMORY_CAPTURE_TIMEOUT_MS=${MEMORY_CAPTURE_TIMEOUT_MS:-30000}
 CWENV_EOF
     chmod 600 "${CHAT_WORKER_DEST}/.env"
