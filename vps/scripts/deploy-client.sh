@@ -1010,6 +1010,25 @@ if [[ -f "${CHAT_WORKER_DEST}/docker-compose.yml" ]]; then
     # orchestrate.ts exports it by this name (see line 850 of
     # orchestrate.ts). INTERNAL_CRON_SECRET is the same secret asserted
     # by /api/internal/* routes via assertCronAuth in src/lib/cron-auth.ts.
+    # Resolve the owner-rule capture model BEFORE writing .env — the heredoc
+    # below only EMITS values, so shell control flow placed inside it would be
+    # written to .env as literal text and never run. Defaults to Gemini via the
+    # llm-router; the CPU-only local model always timed out (~30s, saving
+    # nothing) AND its CPU load inflated concurrent Gemini chat turns from ~7s to
+    # ~50s. A gemini-* model needs GOOGLE_API_KEY (the router 503s gemini-*
+    # without one), so on a keyless host degrade capture to the local Ollama tag
+    # — same fallback policy as OWNER_CHAT_MODEL above.
+    MEMORY_CAPTURE_MODEL_DEFAULT="gemini-2.5-flash-lite"
+    MEMORY_CAPTURE_MODEL="${MEMORY_CAPTURE_MODEL:-${MEMORY_CAPTURE_MODEL_DEFAULT}}"
+    case "${MEMORY_CAPTURE_MODEL}" in
+      gemini-*)
+        if [[ -z "${GOOGLE_API_KEY:-}" ]]; then
+          log "WARNING: MEMORY_CAPTURE_MODEL=${MEMORY_CAPTURE_MODEL} requires GOOGLE_API_KEY but none is set; falling back to local ${OLLAMA_MODEL} for owner-rule capture."
+          MEMORY_CAPTURE_MODEL="${OLLAMA_MODEL}"
+        fi
+        ;;
+    esac
+
     cat > "${CHAT_WORKER_DEST}/.env" <<CWENV_EOF
 SUPABASE_URL=${SUPABASE_URL}
 SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_KEY}
@@ -1030,26 +1049,10 @@ CHAT_WORKER_OWNER_START_AGENT=${CHAT_WORKER_OWNER_START_AGENT-OwnerCoworker}
 # Owner-rule memory capture. After each owner turn the worker runs a background
 # extraction over the owner message and, when it states a durable business rule,
 # POSTs to WORKER_VERCEL_BASE_URL/api/voice/tools/owner-append-business-memory
-# (bearer = ROWBOAT_GATEWAY_TOKEN) to persist it.
-#
-# Extraction runs on Gemini (gemini-2.5-flash-lite) via the llm-router sidecar
-# by default: the CPU-only local model always timed out (~30s, saving nothing)
-# AND its CPU load inflated concurrent Gemini chat turns from ~7s to ~50s.
-# Gemini is functional, ~sub-second, and uses zero local CPU (~$0.0001/turn,
-# under the owner-chat spend cap). A gemini-* model needs GOOGLE_API_KEY (the
-# router 503s gemini-* with no key), so on a keyless host degrade capture to the
-# local Ollama tag instead — same fallback policy as OWNER_CHAT_MODEL above.
-MEMORY_CAPTURE_MODEL_DEFAULT="gemini-2.5-flash-lite"
-MEMORY_CAPTURE_MODEL=${MEMORY_CAPTURE_MODEL:-${MEMORY_CAPTURE_MODEL_DEFAULT}}
-case "${MEMORY_CAPTURE_MODEL}" in
-  gemini-*)
-    if [[ -z "${GOOGLE_API_KEY:-}" ]]; then
-      log "WARNING: MEMORY_CAPTURE_MODEL=${MEMORY_CAPTURE_MODEL} requires GOOGLE_API_KEY but none is set; falling back to local ${OLLAMA_MODEL} for owner-rule capture."
-      MEMORY_CAPTURE_MODEL="${OLLAMA_MODEL}"
-    fi
-    ;;
-esac
+# (bearer = ROWBOAT_GATEWAY_TOKEN) to persist it. The capture model is resolved
+# above (Gemini via the llm-router by default, with keyless fallback to local).
 MEMORY_CAPTURE_ENABLED=${MEMORY_CAPTURE_ENABLED:-true}
+MEMORY_CAPTURE_MODEL=${MEMORY_CAPTURE_MODEL}
 # Local Ollama (used only when MEMORY_CAPTURE_MODEL is a non-gemini tag) reached
 # via the host.docker.internal extra_host wired in docker-compose.yml.
 OLLAMA_BASE_URL=${CHAT_WORKER_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
