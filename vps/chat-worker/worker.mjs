@@ -824,26 +824,27 @@ async function processJob(job) {
       .eq("id", job.id);
     if (jobErr) {
       // The assistant message is already persisted (the user will see it).
-      // The job row being stuck in 'processing' is much less bad than a
-      // duplicate write on retry, so we surface the bookkeeping error
-      // without re-throwing.
+      // We DON'T return here: best-effort owner-rule extraction still runs
+      // below, and we deliberately fall through rather than skip it. The job
+      // row stays 'processing', so the reclaimer re-runs the turn and capture
+      // is retried (and deduped against existing bullets) even if this pass is
+      // cut short — a failed status flip never silently drops rule capture
+      // (Bugbot finding on PR #106). The success-only bookkeeping below
+      // (keep-warm touch, summary trigger, done log) is skipped on this path.
       log("error", "job_update_failed", { jobId: job.id, error: jobErr.message });
-      return;
-    }
-
-    // Refresh dashboard_chat_activity so the VPS keep-warm timer
-    // resets at the END of the turn (not just at the start). The
-    // pre-Option-B route had two touches per turn; only the pre-
-    // enqueue one survives in the route, so without this the
-    // keep-warm script would consider the tenant idle the moment
-    // the route returned even though the worker was still
-    // generating. Bugbot Medium-severity finding on PR #79 round-2.
-    //
-    // Upsert: if no row exists yet (first ever turn for this
-    // tenant), insert it; otherwise overwrite the timestamps.
-    // Errors here are non-fatal — keep-warm is an optimization,
-    // not a correctness requirement.
-    {
+    } else {
+      // Refresh dashboard_chat_activity so the VPS keep-warm timer
+      // resets at the END of the turn (not just at the start). The
+      // pre-Option-B route had two touches per turn; only the pre-
+      // enqueue one survives in the route, so without this the
+      // keep-warm script would consider the tenant idle the moment
+      // the route returned even though the worker was still
+      // generating. Bugbot Medium-severity finding on PR #79 round-2.
+      //
+      // Upsert: if no row exists yet (first ever turn for this
+      // tenant), insert it; otherwise overwrite the timestamps.
+      // Errors here are non-fatal — keep-warm is an optimization,
+      // not a correctness requirement.
       const nowIso = new Date().toISOString();
       const { error: aErr } = await sb
         .from("dashboard_chat_activity")
@@ -861,25 +862,25 @@ async function processJob(job) {
           error: aErr.message
         });
       }
+
+      // Fire-and-forget rolling-summary trigger. The route used to do
+      // this synchronously after streaming, but in the Option B
+      // pipeline the route returns BEFORE the assistant turn is
+      // persisted — firing from the worker is the only place that
+      // sees both turns. We DON'T await: the job is already 'done'
+      // from the user's perspective, and the next turn's callback
+      // self-heals if this one is dropped.
+      void notifyVercelSummarize(job.business_id, job.thread_id);
+
+      log("info", "process_done", {
+        jobId: job.id,
+        msgId: msg.id,
+        durationMs: Date.now() - t0,
+        contentLen: content.length,
+        conversationId,
+        agent: usedAgent
+      });
     }
-
-    // Fire-and-forget rolling-summary trigger. The route used to do
-    // this synchronously after streaming, but in the Option B
-    // pipeline the route returns BEFORE the assistant turn is
-    // persisted — firing from the worker is the only place that
-    // sees both turns. We DON'T await: the job is already 'done'
-    // from the user's perspective, and the next turn's callback
-    // self-heals if this one is dropped.
-    void notifyVercelSummarize(job.business_id, job.thread_id);
-
-    log("info", "process_done", {
-      jobId: job.id,
-      msgId: msg.id,
-      durationMs: Date.now() - t0,
-      contentLen: content.length,
-      conversationId,
-      agent: usedAgent
-    });
 
     // === Owner-rule extraction — best-effort, runs AFTER the job is 'done' ===
     //
