@@ -9,6 +9,8 @@ import {
   normalizeBullets,
   parseMemoryExtraction,
   buildExtractionRequestBody,
+  buildExtractionRequestBodyOpenAI,
+  MEMORY_EXTRACTION_JSON_SCHEMA,
   fitBulletsToPayload,
   formatSavedConfirmation,
   extractOwnerRule
@@ -199,6 +201,31 @@ describe("buildExtractionRequestBody", () => {
   });
 });
 
+describe("buildExtractionRequestBodyOpenAI", () => {
+  it("produces a deterministic, json_schema OpenAI request", () => {
+    const body = buildExtractionRequestBodyOpenAI("gemini-2.5-flash-lite", "never discuss budget");
+    expect(body).toMatchObject({
+      model: "gemini-2.5-flash-lite",
+      stream: false,
+      temperature: 0,
+      response_format: { type: "json_schema", json_schema: MEMORY_EXTRACTION_JSON_SCHEMA }
+    });
+    expect(body.messages[0]).toEqual({ role: "system", content: OWNER_MEMORY_SYSTEM_PROMPT });
+    expect(body.messages[1].role).toBe("user");
+    expect(body.messages[1].content).toContain("never discuss budget");
+  });
+
+  it("threads assistant reply + existing bullets into the user turn", () => {
+    const body = buildExtractionRequestBodyOpenAI("gemini-2.5-flash-lite", "remember Dave", {
+      assistantReply: "Saved Dave to memory.",
+      existingBullets: ["Never discuss budget"]
+    });
+    expect(body.messages[1].content).toContain("remember Dave");
+    expect(body.messages[1].content).toContain("Saved Dave to memory.");
+    expect(body.messages[1].content).toContain("Never discuss budget");
+  });
+});
+
 describe("fitBulletsToPayload", () => {
   it("keeps all bullets when they fit the budget", () => {
     const bullets = ["never discuss budget", "offer free estimates"];
@@ -330,5 +357,46 @@ describe("extractOwnerRule", () => {
       "memory_extract_failed",
       expect.objectContaining({ error: "boom" })
     );
+  });
+
+  // --- gemini-* models route OpenAI-style through the llm-router ---
+  const router = "http://llm-router:11435/v1";
+
+  it("POSTs gemini-* to the router's /chat/completions and parses choices[].message", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [
+          { message: { content: JSON.stringify({ save: true, bullets: ["never discuss budget"] }) } }
+        ]
+      })
+    });
+    const res = await extractOwnerRule({
+      ownerMessage: "from now on never discuss budget",
+      model: "gemini-2.5-flash-lite",
+      ollamaBaseUrl: base,
+      routerBaseUrl: `${router}/`,
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(res).toEqual({ save: true, bullets: ["never discuss budget"] });
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toBe(`${router}/chat/completions`);
+    expect(init.method).toBe("POST");
+    const body = JSON.parse(init.body);
+    expect(body.model).toBe("gemini-2.5-flash-lite");
+    expect(body.response_format.type).toBe("json_schema");
+    expect(body.messages[1].content).toContain("from now on never discuss budget");
+  });
+
+  it("returns a no-op for a gemini-* model when no router base URL is given", async () => {
+    const fetchImpl = vi.fn();
+    const res = await extractOwnerRule({
+      ownerMessage: "never discuss budget",
+      model: "gemini-2.5-flash-lite",
+      ollamaBaseUrl: base,
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(res).toEqual({ save: false, bullets: [] });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
