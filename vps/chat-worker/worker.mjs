@@ -627,8 +627,8 @@ async function persistOwnerRule(job, bullets) {
   }
 }
 
-// Errors where it's worth retrying without Rowboat's stored conversation
-// state. Mirrors STATELESS_RETRY_ERRORS in the pre-Option-B streaming
+// Transient error codes worth a single immediate retry of the (stateless)
+// owner turn. Mirrors STATELESS_RETRY_ERRORS in the pre-Option-B streaming
 // route (src/lib/rowboat/chat.ts pre-PR-#79):
 //   * HTTP 4xx that suggest the conversationId was rejected (400 bad
 //     request / 404 not found / 408 timeout / 409 conflict / 422
@@ -703,86 +703,60 @@ async function processJob(job) {
       ? job.stateless_input_messages
       : null;
 
+    // === Owner-turn agent routing — ALWAYS forced, ALWAYS stateless ===
+    //
     // Spend-cap routing is decided HERE, authoritatively, from LIVE period
-    // spend at claim time — not at enqueue. Claim-time evaluation means a burst
-    // of jobs queued before the fuse tripped still downgrade to local once it
-    // has, and the cap lives in exactly one place (this worker + the RPC) so
-    // there's no route/worker divergence. Fails open to the Gemini agent on a
-    // read error (quality over fuse on a transient DB blip). Routing to local
-    // requires a seeded local agent (OWNER_CHAT_LOCAL_AGENT); without one the
-    // turn stays on Gemini but still meters + alerts.
+    // spend at claim time (not at enqueue): a burst of jobs queued before the
+    // fuse tripped still downgrade once it has, and the cap lives in exactly
+    // one place (this worker + the RPC). Fails open to the Gemini agent on a
+    // read error (quality over fuse on a transient DB blip).
     const { periodStart: capPeriodStart, overCap } = await resolveOwnerChatCap();
     const jobStartAgent =
       overCap && OWNER_CHAT_LOCAL_AGENT ? OWNER_CHAT_LOCAL_AGENT : OWNER_START_AGENT;
     const jobStartAgentOpts = jobStartAgent ? { startAgent: jobStartAgent } : {};
-    // A capped (local) turn MUST force its agent: resuming a stored
-    // (Gemini-bound) conversationId would make Rowboat ignore startAgent and
-    // keep billing Gemini, and metering would wrongly skip it as "local". So a
-    // capped turn runs stateless with startAgent=local and clears the stored
-    // conversationId/state below so a local-bound id never carries into a later
-    // (Gemini) turn.
-    const capForceLocal = !!OWNER_CHAT_LOCAL_AGENT && jobStartAgent === OWNER_CHAT_LOCAL_AGENT;
 
-    // ATTEMPT 1: input_messages + (possibly) stored conversationId
-    // + stored Rowboat state. The state is Rowboat's client-carried
-    // tool/agent state from the previous turn (see migration
-    // 20260508000004); without it, multi-turn tool loops resume blank
-    // and lose context.
+    // Why every owner turn runs stateless with an EXPLICIT startAgent and NEVER
+    // resumes a stored conversationId:
+    //
+    //   Rowboat IGNORES startAgent whenever a conversationId is supplied — it
+    //   resumes the agent the conversation was first BOUND to. Owner threads
+    //   created via the SMS/workflow default (or before OwnerCoworker existed)
+    //   are bound to the local-qwen `Coworker` agent. Resuming them ran EVERY
+    //   owner turn on the CPU-only model (~100s+ prefill) and never reached
+    //   Gemini, while the meter still billed the turn as Gemini. (Observed
+    //   live, June 2026: a continued owner thread answered via agentName
+    //   "Coworker" in ~103s — exactly the latency this Gemini migration was
+    //   meant to eliminate.)
+    //
+    // So we never resume. Each owner turn is a fresh Rowboat call with an
+    // explicit startAgent (OwnerCoworker = Gemini under cap; OwnerCoworkerLocal
+    // over cap) and no conversationId/state. The enqueue route replays the
+    // rolling summary + recent tail in input_messages every turn, so dropping
+    // Rowboat's server-side state loses no conversational context. The fuller
+    // stateless tail (stateless_input_messages) is preferred when present.
+    const turnMessages = fallbackMessages ?? primaryMessages;
     let result;
-    let usedStateless = false;
-    let primaryError = null;
     try {
-      if (capForceLocal) {
-        // Force the local agent on a fresh, stateless turn (fuller tail when we
-        // have it) so Rowboat starts OwnerCoworkerLocal rather than resuming a
-        // Gemini-bound conversation. No conversationId/state on purpose.
-        result = await callRowboat(
-          fallbackMessages ?? primaryMessages,
-          null,
-          null,
-          jobStartAgentOpts
-        );
-      } else {
-        const convTrim =
-          typeof job.rowboat_conversation_id === "string"
-            ? job.rowboat_conversation_id.trim()
-            : "";
-        const useOwnerStartAgent = !convTrim;
-        result = await callRowboat(
-          primaryMessages,
-          job.rowboat_conversation_id,
-          job.rowboat_state ?? null,
-          useOwnerStartAgent ? jobStartAgentOpts : {}
-        );
-      }
+      result = await callRowboat(turnMessages, null, null, jobStartAgentOpts);
     } catch (err) {
-      primaryError = err;
       const code = String(err?.message || "").split(":")[0];
-      const canRetry = isRetryableErrorCode(code) && fallbackMessages !== null;
-      if (!canRetry) {
-        // Either the error class isn't worth retrying, or we have no
-        // stateless variant to fall back to (fresh thread).
-        throw err;
-      }
-      log("warn", "stateless_retry", {
+      // Non-retryable (auth, malformed input, etc.) — surface it so the outer
+      // catch marks the job 'error'.
+      if (!isRetryableErrorCode(code)) throw err;
+      // Transient Rowboat 5xx / I/O blip. Both attempts are identical stateless
+      // calls (there is no conversationId to vary), so a single retry simply
+      // re-issues the request — enough to ride out a transient failure without
+      // failing the owner's turn.
+      log("warn", "owner_turn_retry", {
         jobId: job.id,
-        primaryErrorCode: code,
-        primaryError: String(err?.message || "").slice(0, 200)
+        code,
+        detail: String(err?.message || "").slice(0, 200)
       });
-      // ATTEMPT 2: stateless input, no conversationId, no state.
-      // Rowboat sees a brand-new conversation that already has the
-      // tail spelled out in the system message we built upstream.
-      // Sending the old state alongside would defeat the point of
-      // the retry (it's the same broken context).
-      result = await callRowboat(fallbackMessages, null, null, jobStartAgentOpts);
-      usedStateless = true;
+      result = await callRowboat(turnMessages, null, null, jobStartAgentOpts);
     }
     const { content, conversationId, state: nextState } = result;
-    // The stateless retry always passes the owner start-agent opts; the
-    // primary attempt only does on fresh threads (no conversationId). When the
-    // primary ran a continuation WITHOUT a start-agent, Rowboat resumes the
-    // agent already bound to the conversation — which for owner threads is the
-    // same OwnerCoworker/Local agent, so metering against jobStartAgent is correct.
+    // We always ran the forced agent (no resume), so metering against
+    // jobStartAgent is exact: Gemini turns meter, local (capped) turns are $0.
     const usedAgent = jobStartAgent;
 
     // Insert the assistant reply FIRST. Owner-rule persistence happens only
@@ -801,100 +775,29 @@ async function processJob(job) {
 
     // Reply is durably stored — meter the (Gemini) model spend for this turn
     // and trip the period fuse if it crosses the cap. Awaited but non-fatal:
-    // recordOwnerChatSpend never throws. Estimate from the messages actually
-    // sent to Rowboat this turn (stateless fallback resends a fuller tail).
-    await recordOwnerChatSpend(
-      job,
-      usedStateless ? fallbackMessages : primaryMessages,
-      content,
-      usedAgent,
-      capPeriodStart
-    );
+    // recordOwnerChatSpend never throws. Estimate from the exact messages sent
+    // to Rowboat this turn (turnMessages).
+    await recordOwnerChatSpend(job, turnMessages, content, usedAgent, capPeriodStart);
 
-    // Reply is durably stored — now run the owner-rule extraction and persist.
-    // Extraction is done SEQUENTIALLY here (not concurrently with the Rowboat
-    // call) on purpose: Rowboat and this extraction share the single
-    // CPU-bound Ollama, so overlapping them just makes both slower and starved
-    // the extraction past its timeout in testing. Running it after the reply
-    // means Ollama is free, so the classification returns in a few seconds.
-    // A no-op / failed save just leaves the reply as-is (we never claim
-    // "saved" unless the adapter confirmed the write), and extraction is
-    // read-only so a turn that errored before this point never had a side
-    // effect. The client re-reads the message list once the job flips to
-    // 'done' (below), so the appended confirmation surfaces in the same turn —
-    // which is why this runs BEFORE the job-status update.
-    let memorySavedCount = 0;
-    let extraction = { save: false, bullets: [] };
-    try {
-      const existingBullets = await loadExistingBullets(job.business_id);
-      extraction = await startOwnerRuleExtraction(job, content, existingBullets);
-    } catch (err) {
-      log("warn", "memory_capture_unexpected", {
-        jobId: job.id,
-        error: err?.message || String(err)
-      });
-    }
-    if (extraction.save && extraction.bullets.length > 0) {
-      const saved = await persistOwnerRule(job, extraction.bullets);
-      if (saved && saved.length > 0) {
-        memorySavedCount = saved.length;
-        const { error: confErr } = await sb
-          .from("dashboard_chat_messages")
-          .update({ content: content + formatSavedConfirmation(saved) })
-          .eq("id", msg.id);
-        if (confErr) {
-          log("warn", "memory_confirmation_update_failed", {
-            jobId: job.id,
-            msgId: msg.id,
-            error: confErr.message
-          });
-        }
-      }
-    }
-
-    // Persist Rowboat's stateful conversationId for the next turn, OR,
-    // if we just succeeded via the stateless retry, NULL out whatever
-    // we had stored — the previous id is known-bad and re-sending it
-    // next turn would force the same primary-fail/stateless-retry
-    // cycle every time.
-    // Mirrors the pre-Option-B streaming-route semantics
-    // (src/lib/db/dashboard-chat.ts::updateThreadConversation): the
-    // conversationId and state fields are INDEPENDENT. Rowboat may
-    // return either, both, or neither on a given turn — persisting
-    // whichever it returned without coupling them prevents stale
-    // state from leaking into future turns when Rowboat omits
-    // conversationId, and prevents stale conversationId from
-    // outliving its state when Rowboat omits state.
+    // Persist whatever Rowboat returned this turn. We never RESUME this id —
+    // every owner turn is stateless-forced above — so it is NOT used to
+    // continue a Rowboat conversation. It functions only as the enqueue route's
+    // "this thread has prior Rowboat history" marker, which makes the route
+    // replay the FULL history tail (stateless_input_messages) on later turns
+    // instead of the bounded short tail.
     //
-    //   - usedStateless: the previous (conversationId, state) pair
-    //     went down with the failed primary attempt. Write whatever
-    //     Rowboat returned this turn, defaulting to null on either
-    //     side so the next turn doesn't re-send the rotted values.
-    //   - !usedStateless: only write a column when Rowboat actually
-    //     returned a value for it (undefined = "key absent in
-    //     response, preserve what we had").
-    //
-    // Cursor Bugbot Medium-severity finding: the previous version
-    // gated rowboat_state on conversationId being present, dropping
-    // state updates when Rowboat returned only state.
+    // The marker must be STICKY: only refresh it when Rowboat actually returned
+    // a value, NEVER clear it on a successful turn. A stateless call usually
+    // mints a fresh conversationId, but if Rowboat omits one, overwriting with
+    // null would wipe the marker and make the route fall back to the short tail
+    // next turn (Bugbot Medium-severity finding on PR #106). Since the id is
+    // only a has-history flag now, keeping any prior non-null value is correct.
     const threadUpdate = { updated_at: new Date().toISOString() };
-    if (capForceLocal) {
-      // Capped (local) turn: never carry a conversationId/state forward. Keeps
-      // the thread stateless while capped, and guarantees the next non-capped
-      // turn starts fresh on the (Gemini) agent rather than resuming a
-      // local-bound conversation that would run local but meter as Gemini.
-      threadUpdate.rowboat_conversation_id = null;
-      threadUpdate.rowboat_state = null;
-    } else if (usedStateless) {
-      threadUpdate.rowboat_conversation_id = conversationId || null;
-      threadUpdate.rowboat_state = nextState ?? null;
-    } else {
-      if (conversationId) {
-        threadUpdate.rowboat_conversation_id = conversationId;
-      }
-      if (nextState !== undefined) {
-        threadUpdate.rowboat_state = nextState;
-      }
+    if (conversationId) {
+      threadUpdate.rowboat_conversation_id = conversationId;
+    }
+    if (nextState !== undefined) {
+      threadUpdate.rowboat_state = nextState;
     }
     const { error: tErr } = await sb
       .from("dashboard_chat_threads")
@@ -902,6 +805,15 @@ async function processJob(job) {
       .eq("id", job.thread_id);
     if (tErr) log("warn", "thread_update_failed", { error: tErr.message });
 
+    // Mark the job DONE now — as soon as the reply is durably stored, metered,
+    // and the thread updated — and BEFORE owner-rule extraction below.
+    // Extraction is a second, CPU-bound local-Ollama (qwen) classification that
+    // can take tens of seconds (and hits its own timeout). It used to run
+    // before this status flip, so the dashboard "thinking…" indicator (which
+    // clears on status='done' / the reply INSERT) stayed up for the WHOLE
+    // extraction even though the Gemini reply was ready in ~seconds. Flipping
+    // to 'done' here lets the owner see the reply immediately; extraction is a
+    // best-effort post-step that runs after (see below).
     const { error: jobErr } = await sb
       .from("dashboard_chat_jobs")
       .update({
@@ -912,26 +824,27 @@ async function processJob(job) {
       .eq("id", job.id);
     if (jobErr) {
       // The assistant message is already persisted (the user will see it).
-      // The job row being stuck in 'processing' is much less bad than a
-      // duplicate write on retry, so we surface the bookkeeping error
-      // without re-throwing.
+      // We DON'T return here: best-effort owner-rule extraction still runs
+      // below, and we deliberately fall through rather than skip it. The job
+      // row stays 'processing', so the reclaimer re-runs the turn and capture
+      // is retried (and deduped against existing bullets) even if this pass is
+      // cut short — a failed status flip never silently drops rule capture
+      // (Bugbot finding on PR #106). The success-only bookkeeping below
+      // (keep-warm touch, summary trigger, done log) is skipped on this path.
       log("error", "job_update_failed", { jobId: job.id, error: jobErr.message });
-      return;
-    }
-
-    // Refresh dashboard_chat_activity so the VPS keep-warm timer
-    // resets at the END of the turn (not just at the start). The
-    // pre-Option-B route had two touches per turn; only the pre-
-    // enqueue one survives in the route, so without this the
-    // keep-warm script would consider the tenant idle the moment
-    // the route returned even though the worker was still
-    // generating. Bugbot Medium-severity finding on PR #79 round-2.
-    //
-    // Upsert: if no row exists yet (first ever turn for this
-    // tenant), insert it; otherwise overwrite the timestamps.
-    // Errors here are non-fatal — keep-warm is an optimization,
-    // not a correctness requirement.
-    {
+    } else {
+      // Refresh dashboard_chat_activity so the VPS keep-warm timer
+      // resets at the END of the turn (not just at the start). The
+      // pre-Option-B route had two touches per turn; only the pre-
+      // enqueue one survives in the route, so without this the
+      // keep-warm script would consider the tenant idle the moment
+      // the route returned even though the worker was still
+      // generating. Bugbot Medium-severity finding on PR #79 round-2.
+      //
+      // Upsert: if no row exists yet (first ever turn for this
+      // tenant), insert it; otherwise overwrite the timestamps.
+      // Errors here are non-fatal — keep-warm is an optimization,
+      // not a correctness requirement.
       const nowIso = new Date().toISOString();
       const { error: aErr } = await sb
         .from("dashboard_chat_activity")
@@ -949,29 +862,74 @@ async function processJob(job) {
           error: aErr.message
         });
       }
+
+      // Fire-and-forget rolling-summary trigger. The route used to do
+      // this synchronously after streaming, but in the Option B
+      // pipeline the route returns BEFORE the assistant turn is
+      // persisted — firing from the worker is the only place that
+      // sees both turns. We DON'T await: the job is already 'done'
+      // from the user's perspective, and the next turn's callback
+      // self-heals if this one is dropped.
+      void notifyVercelSummarize(job.business_id, job.thread_id);
+
+      log("info", "process_done", {
+        jobId: job.id,
+        msgId: msg.id,
+        durationMs: Date.now() - t0,
+        contentLen: content.length,
+        conversationId,
+        agent: usedAgent
+      });
     }
 
-    // Fire-and-forget rolling-summary trigger. The route used to do
-    // this synchronously after streaming, but in the Option B
-    // pipeline the route returns BEFORE the assistant turn is
-    // persisted — firing from the worker is the only place that
-    // sees both turns. We DON'T await: the job is already 'done'
-    // from the user's perspective, and the next turn's callback
-    // self-heals if this one is dropped.
-    void notifyVercelSummarize(job.business_id, job.thread_id);
-
-    log("info", "process_done", {
-      jobId: job.id,
-      msgId: msg.id,
-      durationMs: Date.now() - t0,
-      contentLen: content.length,
-      memorySaved: memorySavedCount,
-      conversationId,
-      usedStateless,
-      primaryErrorCode: usedStateless
-        ? String(primaryError?.message || "").split(":")[0]
-        : null
-    });
+    // === Owner-rule extraction — best-effort, runs AFTER the job is 'done' ===
+    //
+    // The job is already 'done' and the owner already has the reply; this is a
+    // non-blocking post-step that no longer delays the user-visible turn. It
+    // runs a small local-Ollama (qwen) classifier over the owner's message +
+    // reply to decide whether the turn stated a durable business rule/fact; if
+    // so it persists it (memory_md + vault sync) and appends an HONEST
+    // "Saved to your business memory" confirmation to the stored reply.
+    //
+    // Because the client already settled this turn (it stops watching once the
+    // reply INSERT lands / the job is 'done'), the confirmation is
+    // eventually-consistent: it surfaces on the NEXT message-list refresh
+    // (next turn / reload), and ONLY after the save actually succeeded — never
+    // a premature "saved" claim. A crash here loses only this turn's capture
+    // (reply + spend are already committed); capture is best-effort by design
+    // (it also times out to a no-op). The whole block is wrapped so an
+    // unexpected throw can never flip the already-'done' job to 'error'.
+    try {
+      const existingBullets = await loadExistingBullets(job.business_id);
+      const extraction = await startOwnerRuleExtraction(job, content, existingBullets);
+      if (extraction.save && extraction.bullets.length > 0) {
+        const saved = await persistOwnerRule(job, extraction.bullets);
+        if (saved && saved.length > 0) {
+          const { error: confErr } = await sb
+            .from("dashboard_chat_messages")
+            .update({ content: content + formatSavedConfirmation(saved) })
+            .eq("id", msg.id);
+          if (confErr) {
+            log("warn", "memory_confirmation_update_failed", {
+              jobId: job.id,
+              msgId: msg.id,
+              error: confErr.message
+            });
+          } else {
+            log("info", "memory_saved", {
+              jobId: job.id,
+              msgId: msg.id,
+              count: saved.length
+            });
+          }
+        }
+      }
+    } catch (err) {
+      log("warn", "memory_capture_unexpected", {
+        jobId: job.id,
+        error: err?.message || String(err)
+      });
+    }
   } catch (err) {
     const msg = String(err?.message || "unknown_error");
     const code = msg.split(":")[0];
