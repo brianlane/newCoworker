@@ -1020,8 +1020,14 @@ if [[ -f "${CHAT_WORKER_DEST}/docker-compose.yml" ]]; then
     # — same fallback policy as OWNER_CHAT_MODEL above.
     MEMORY_CAPTURE_MODEL_DEFAULT="gemini-2.5-flash-lite"
     MEMORY_CAPTURE_MODEL="${MEMORY_CAPTURE_MODEL:-${MEMORY_CAPTURE_MODEL_DEFAULT}}"
-    case "${MEMORY_CAPTURE_MODEL}" in
-      gemini-*)
+    # Match the worker's OWN gemini detection (extractOwnerRule uses
+    # /^gemini[-_.]/i — case-insensitive, with -, _, or . as the separator), so
+    # any model the worker would route to the router (e.g. "Gemini-…",
+    # "gemini_…") also trips the keyless fallback here. Lowercase first, then
+    # match the three separators.
+    memory_capture_model_lc="$(printf '%s' "${MEMORY_CAPTURE_MODEL}" | tr '[:upper:]' '[:lower:]')"
+    case "${memory_capture_model_lc}" in
+      gemini-*|gemini_*|gemini.*)
         if [[ -z "${GOOGLE_API_KEY:-}" ]]; then
           log "WARNING: MEMORY_CAPTURE_MODEL=${MEMORY_CAPTURE_MODEL} requires GOOGLE_API_KEY but none is set; falling back to local ${OLLAMA_MODEL} for owner-rule capture."
           MEMORY_CAPTURE_MODEL="${OLLAMA_MODEL}"
