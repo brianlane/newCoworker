@@ -83,8 +83,7 @@ import {
   extractExistingBullets,
   extractLatestOwnerMessage,
   extractOwnerRule,
-  fitBulletsToPayload,
-  formatSavedConfirmation
+  fitBulletsToPayload
 } from "./memory-capture.mjs";
 
 const SUPABASE_URL = required("SUPABASE_URL");
@@ -627,6 +626,65 @@ async function persistOwnerRule(job, bullets) {
   }
 }
 
+// === Background owner-rule extraction queue ===
+//
+// Memory capture is a CPU-bound local-qwen classification (~tens of seconds,
+// and it can hit its own timeout) that must be COMPLETELY DECOUPLED from job
+// processing: processJob() enqueues a task and returns immediately, so
+// processLoop() never waits on extraction before claiming the next job, and a
+// back-to-back owner message is never stuck behind a prior turn's tail. The
+// queue drains SEQUENTIALLY (concurrency 1) so overlapping extractions can't
+// thrash the single local Ollama.
+//
+// Capture is silent and best-effort: it persists durable rules to business
+// memory in the background and edits nothing the owner sees — no reply is
+// updated, no confirmation is appended. A task that fails/throws is logged and
+// dropped (the job is already 'done' and the spend already metered); tasks
+// still queued when the worker is told to shut down are abandoned, which is an
+// acceptable loss for capture (the owner can simply restate the rule).
+const extractionQueue = [];
+let extractionDraining = false;
+
+function enqueueOwnerRuleExtraction(job, assistantReply) {
+  // Mirror startOwnerRuleExtraction's own guard so we don't queue no-op work
+  // (and don't grow the queue) when capture is disabled or unconfigured.
+  if (!MEMORY_CAPTURE_ENABLED || !OWNER_APPEND_URL) return;
+  extractionQueue.push({ job, assistantReply });
+  // Fire-and-forget: kick the drainer if it isn't already running. drainer is
+  // self-guarded against concurrent runs, so multiple enqueues collapse into
+  // one sequential drain.
+  void drainExtractionQueue();
+}
+
+async function drainExtractionQueue() {
+  if (extractionDraining) return;
+  extractionDraining = true;
+  try {
+    while (extractionQueue.length > 0) {
+      const task = extractionQueue.shift();
+      await runOwnerRuleExtraction(task);
+    }
+  } finally {
+    extractionDraining = false;
+  }
+}
+
+async function runOwnerRuleExtraction({ job, assistantReply }) {
+  try {
+    const existingBullets = await loadExistingBullets(job.business_id);
+    const extraction = await startOwnerRuleExtraction(job, assistantReply, existingBullets);
+    if (extraction.save && extraction.bullets.length > 0) {
+      // persistOwnerRule logs its own memory_saved / memory_no_new outcome.
+      await persistOwnerRule(job, extraction.bullets);
+    }
+  } catch (err) {
+    log("warn", "memory_capture_unexpected", {
+      jobId: job.id,
+      error: err?.message || String(err)
+    });
+  }
+}
+
 // Transient error codes worth a single immediate retry of the (stateless)
 // owner turn. Mirrors STATELESS_RETRY_ERRORS in the pre-Option-B streaming
 // route (src/lib/rowboat/chat.ts pre-PR-#79):
@@ -824,12 +882,12 @@ async function processJob(job) {
       .eq("id", job.id);
     if (jobErr) {
       // The assistant message is already persisted (the user will see it).
-      // We DON'T return here: best-effort owner-rule extraction still runs
-      // below, and we deliberately fall through rather than skip it. The job
-      // row stays 'processing', so the reclaimer re-runs the turn and capture
-      // is retried (and deduped against existing bullets) even if this pass is
-      // cut short — a failed status flip never silently drops rule capture
-      // (Bugbot finding on PR #106). The success-only bookkeeping below
+      // We DON'T return here: best-effort owner-rule extraction is still
+      // enqueued below, and we deliberately fall through rather than skip it.
+      // The job row stays 'processing', so the reclaimer re-runs the turn and
+      // capture is retried (and deduped against existing bullets) even if this
+      // pass is cut short — a failed status flip never silently drops rule
+      // capture (Bugbot finding on PR #106). The success-only bookkeeping below
       // (keep-warm touch, summary trigger, done log) is skipped on this path.
       log("error", "job_update_failed", { jobId: job.id, error: jobErr.message });
     } else {
@@ -882,54 +940,16 @@ async function processJob(job) {
       });
     }
 
-    // === Owner-rule extraction — best-effort, runs AFTER the job is 'done' ===
+    // === Owner-rule extraction — fully DECOUPLED background work ===
     //
-    // The job is already 'done' and the owner already has the reply; this is a
-    // non-blocking post-step that no longer delays the user-visible turn. It
-    // runs a small local-Ollama (qwen) classifier over the owner's message +
-    // reply to decide whether the turn stated a durable business rule/fact; if
-    // so it persists it (memory_md + vault sync) and appends an HONEST
-    // "Saved to your business memory" confirmation to the stored reply.
-    //
-    // Because the client already settled this turn (it stops watching once the
-    // reply INSERT lands / the job is 'done'), the confirmation is
-    // eventually-consistent: it surfaces on the NEXT message-list refresh
-    // (next turn / reload), and ONLY after the save actually succeeded — never
-    // a premature "saved" claim. A crash here loses only this turn's capture
-    // (reply + spend are already committed); capture is best-effort by design
-    // (it also times out to a no-op). The whole block is wrapped so an
-    // unexpected throw can never flip the already-'done' job to 'error'.
-    try {
-      const existingBullets = await loadExistingBullets(job.business_id);
-      const extraction = await startOwnerRuleExtraction(job, content, existingBullets);
-      if (extraction.save && extraction.bullets.length > 0) {
-        const saved = await persistOwnerRule(job, extraction.bullets);
-        if (saved && saved.length > 0) {
-          const { error: confErr } = await sb
-            .from("dashboard_chat_messages")
-            .update({ content: content + formatSavedConfirmation(saved) })
-            .eq("id", msg.id);
-          if (confErr) {
-            log("warn", "memory_confirmation_update_failed", {
-              jobId: job.id,
-              msgId: msg.id,
-              error: confErr.message
-            });
-          } else {
-            log("info", "memory_saved", {
-              jobId: job.id,
-              msgId: msg.id,
-              count: saved.length
-            });
-          }
-        }
-      }
-    } catch (err) {
-      log("warn", "memory_capture_unexpected", {
-        jobId: job.id,
-        error: err?.message || String(err)
-      });
-    }
+    // Hand capture off to the background queue and return immediately. This is
+    // intentionally NOT awaited: processLoop() claims the next job the moment
+    // processJob() returns, so a back-to-back owner message is never stuck
+    // behind the prior turn's CPU-bound (~tens of seconds) extraction. Capture
+    // runs invisibly — no message is edited, the owner never waits for it and
+    // never sees it — it just silently persists durable rules to business
+    // memory in the background (see runOwnerRuleExtraction / the queue).
+    enqueueOwnerRuleExtraction(job, content);
   } catch (err) {
     const msg = String(err?.message || "unknown_error");
     const code = msg.split(":")[0];
