@@ -1062,9 +1062,12 @@ MEMORY_CAPTURE_MODEL=${MEMORY_CAPTURE_MODEL}
 # Local Ollama (used only when MEMORY_CAPTURE_MODEL is a non-gemini tag) reached
 # via the host.docker.internal extra_host wired in docker-compose.yml.
 OLLAMA_BASE_URL=${CHAT_WORKER_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-# llm-router sidecar (used for gemini-* capture models), same compose-network
-# alias Rowboat points PROVIDER_BASE_URL at.
-MEMORY_CAPTURE_ROUTER_URL=${MEMORY_CAPTURE_ROUTER_URL:-http://llm-router:${LLM_ROUTER_PORT}/v1}
+# Google's OpenAI-compatible endpoint + key for a gemini-* capture model. The
+# worker calls Google DIRECTLY here (it can reach Google in <1s) rather than via
+# the llm-router: POSTing to the router from the worker container hangs (the
+# worker is on a different docker network — small GETs pass, POST bodies stall).
+GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+MEMORY_CAPTURE_GEMINI_BASE_URL=${MEMORY_CAPTURE_GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
 MEMORY_CAPTURE_TIMEOUT_MS=${MEMORY_CAPTURE_TIMEOUT_MS:-30000}
 CWENV_EOF
     chmod 600 "${CHAT_WORKER_DEST}/.env"

@@ -333,22 +333,30 @@ export function formatSavedConfirmation(bullets) {
  * response, or unparseable output all resolve to { save:false, bullets:[] }
  * so capture can never break or delay the chat reply beyond `timeoutMs`.
  *
- * The upstream is chosen from the MODEL NAME, mirroring the llm-router's own
- * rule: a `gemini-*` model is sent OpenAI-style to the llm-router sidecar
- * (`routerBaseUrl` + `/chat/completions`, which forwards to Google and injects
- * the API key); anything else (qwen/llama) keeps the legacy local-Ollama
- * `/api/chat` path against `ollamaBaseUrl`. Routing capture through Gemini gets
- * a functional, ~sub-second classification that uses ZERO local CPU, so it can
- * never starve the latency-sensitive Gemini chat turns the way the CPU-bound
+ * The upstream is chosen from the MODEL NAME: a `gemini-*` model is sent
+ * OpenAI-style DIRECTLY to Google's OpenAI-compatible endpoint (`geminiBaseUrl`
+ * + `/chat/completions`, authenticated with `geminiApiKey`); anything else
+ * (qwen/llama) keeps the legacy local-Ollama `/api/chat` path against
+ * `ollamaBaseUrl`.
+ *
+ * NOTE: extraction calls Google directly rather than via the per-tenant
+ * llm-router sidecar. The worker reaches Google directly in <1s, but POSTing to
+ * the llm-router from the worker container hangs (the worker is on a different
+ * docker network than the router; small GETs like /health pass but POST bodies
+ * black-hole). The chat path is unaffected because it goes worker → Rowboat →
+ * router, and Rowboat is co-located with the router. Calling Google directly
+ * gives a functional, ~sub-second classification that uses ZERO local CPU, so
+ * it can never starve the latency-sensitive chat turns the way the CPU-bound
  * local model does.
  *
  * @param {object} args
  * @param {string} args.ownerMessage
  * @param {string} [args.assistantReply]   the dashboard reply (save signal + value source)
  * @param {string[]} [args.existingBullets] already-saved items, so we don't repeat them
- * @param {string} args.model              gemini-* ⇒ llm-router/Gemini; else ⇒ Ollama
+ * @param {string} args.model              gemini-* ⇒ Google direct; else ⇒ Ollama
  * @param {string} [args.ollamaBaseUrl]    e.g. http://host.docker.internal:11434 (non-gemini)
- * @param {string} [args.routerBaseUrl]    e.g. http://llm-router:11435/v1 (gemini-*)
+ * @param {string} [args.geminiBaseUrl]    Google OpenAI-compat base (gemini-*)
+ * @param {string} [args.geminiApiKey]     GOOGLE_API_KEY (gemini-*)
  * @param {typeof fetch} [args.fetchImpl]
  * @param {number} [args.timeoutMs]
  * @param {(level: string, event: string, data?: object) => void} [args.logger]
@@ -360,7 +368,8 @@ export async function extractOwnerRule({
   existingBullets,
   model,
   ollamaBaseUrl,
-  routerBaseUrl,
+  geminiBaseUrl,
+  geminiApiKey,
   fetchImpl = fetch,
   timeoutMs = 30000,
   logger
@@ -370,23 +379,36 @@ export async function extractOwnerRule({
     return noop;
   }
 
-  // Mirror pickUpstream() in the llm-router: gemini-* ⇒ OpenAI-compat via the
-  // router, everything else ⇒ local Ollama's native /api/chat.
-  const useOpenAI = /^gemini[-_.]/i.test(String(model || ""));
-  const base = String((useOpenAI ? routerBaseUrl : ollamaBaseUrl) || "").replace(/\/+$/, "");
-  if (!base) return noop;
+  // gemini-* ⇒ Google's OpenAI-compat endpoint (direct, authenticated);
+  // everything else ⇒ local Ollama's native /api/chat.
+  const useGemini = /^gemini[-_.]/i.test(String(model || ""));
 
-  const url = useOpenAI ? `${base}/chat/completions` : `${base}/api/chat`;
-  const body = useOpenAI
-    ? buildExtractionRequestBodyOpenAI(model, ownerMessage, { assistantReply, existingBullets })
-    : buildExtractionRequestBody(model, ownerMessage, { assistantReply, existingBullets });
+  let url;
+  let headers;
+  let body;
+  if (useGemini) {
+    const base = String(geminiBaseUrl || "").replace(/\/+$/, "");
+    // No key ⇒ Google 400s on every call; treat as "capture unavailable" rather
+    // than burning a request per turn. (deploy degrades to a local model when
+    // GOOGLE_API_KEY is unset, so this is a belt-and-suspenders guard.)
+    if (!base || !geminiApiKey) return noop;
+    url = `${base}/chat/completions`;
+    headers = { "content-type": "application/json", authorization: `Bearer ${geminiApiKey}` };
+    body = buildExtractionRequestBodyOpenAI(model, ownerMessage, { assistantReply, existingBullets });
+  } else {
+    const base = String(ollamaBaseUrl || "").replace(/\/+$/, "");
+    if (!base) return noop;
+    url = `${base}/api/chat`;
+    headers = { "content-type": "application/json" };
+    body = buildExtractionRequestBody(model, ownerMessage, { assistantReply, existingBullets });
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetchImpl(url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers,
       body: JSON.stringify(body),
       signal: controller.signal
     });
@@ -396,7 +418,7 @@ export async function extractOwnerRule({
     }
     const data = await res.json();
     // OpenAI-compat: choices[0].message.content; Ollama native: message.content.
-    const content = useOpenAI ? data?.choices?.[0]?.message?.content : data?.message?.content;
+    const content = useGemini ? data?.choices?.[0]?.message?.content : data?.message?.content;
     return parseMemoryExtraction(content);
   } catch (err) {
     logger?.("warn", "memory_extract_failed", {
