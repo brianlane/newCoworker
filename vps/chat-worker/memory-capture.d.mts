@@ -84,7 +84,8 @@ export function extractOwnerRule(args: {
   existingBullets?: string[];
   model: string;
   ollamaBaseUrl?: string;
-  routerBaseUrl?: string;
+  geminiBaseUrl?: string;
+  geminiApiKey?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   logger?: (level: string, event: string, data?: object) => void;

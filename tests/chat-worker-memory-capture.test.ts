@@ -359,10 +359,10 @@ describe("extractOwnerRule", () => {
     );
   });
 
-  // --- gemini-* models route OpenAI-style through the llm-router ---
-  const router = "http://llm-router:11435/v1";
+  // --- gemini-* models call Google's OpenAI-compat endpoint DIRECTLY ---
+  const gemini = "https://generativelanguage.googleapis.com/v1beta/openai";
 
-  it("POSTs gemini-* to the router's /chat/completions and parses choices[].message", async () => {
+  it("POSTs gemini-* directly to Google with auth and parses choices[].message", async () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -375,25 +375,40 @@ describe("extractOwnerRule", () => {
       ownerMessage: "from now on never discuss budget",
       model: "gemini-2.5-flash-lite",
       ollamaBaseUrl: base,
-      routerBaseUrl: `${router}/`,
+      geminiBaseUrl: `${gemini}/`,
+      geminiApiKey: "test-key",
       fetchImpl: fetchImpl as unknown as typeof fetch
     });
     expect(res).toEqual({ save: true, bullets: ["never discuss budget"] });
     const [url, init] = fetchImpl.mock.calls[0];
-    expect(url).toBe(`${router}/chat/completions`);
+    expect(url).toBe(`${gemini}/chat/completions`);
     expect(init.method).toBe("POST");
+    expect(init.headers.authorization).toBe("Bearer test-key");
     const body = JSON.parse(init.body);
     expect(body.model).toBe("gemini-2.5-flash-lite");
     expect(body.response_format.type).toBe("json_schema");
     expect(body.messages[1].content).toContain("from now on never discuss budget");
   });
 
-  it("returns a no-op for a gemini-* model when no router base URL is given", async () => {
+  it("returns a no-op for a gemini-* model when the API key is missing", async () => {
     const fetchImpl = vi.fn();
     const res = await extractOwnerRule({
       ownerMessage: "never discuss budget",
       model: "gemini-2.5-flash-lite",
       ollamaBaseUrl: base,
+      geminiBaseUrl: gemini,
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(res).toEqual({ save: false, bullets: [] });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("returns a no-op for a gemini-* model when the base URL is missing", async () => {
+    const fetchImpl = vi.fn();
+    const res = await extractOwnerRule({
+      ownerMessage: "never discuss budget",
+      model: "gemini-2.5-flash-lite",
+      geminiApiKey: "test-key",
       fetchImpl: fetchImpl as unknown as typeof fetch
     });
     expect(res).toEqual({ save: false, bullets: [] });

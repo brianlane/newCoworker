@@ -150,15 +150,20 @@ const MEMORY_CAPTURE_ENABLED =
 const OLLAMA_BASE_URL = (
   process.env.OLLAMA_BASE_URL || "http://host.docker.internal:11434"
 ).replace(/\/+$/, "");
-// llm-router sidecar (OpenAI-compatible). A gemini-* MEMORY_CAPTURE_MODEL is
-// sent here and the router forwards it to Google (injecting GOOGLE_API_KEY);
-// the worker reaches it on the compose network the same way it reaches Rowboat.
-const MEMORY_CAPTURE_ROUTER_URL = (
-  process.env.MEMORY_CAPTURE_ROUTER_URL || "http://llm-router:11435/v1"
+// Google's OpenAI-compatible endpoint + key for a gemini-* MEMORY_CAPTURE_MODEL.
+// Extraction calls Google DIRECTLY (not via the per-tenant llm-router sidecar):
+// the worker reaches Google in <1s, but POSTing to the llm-router from the
+// worker container hangs (different docker network — small GETs like /health
+// pass, POST bodies black-hole). The owner-chat path is unaffected (it goes
+// worker → Rowboat → router, and Rowboat is co-located with the router).
+const MEMORY_CAPTURE_GEMINI_BASE_URL = (
+  process.env.MEMORY_CAPTURE_GEMINI_BASE_URL ||
+  "https://generativelanguage.googleapis.com/v1beta/openai"
 ).replace(/\/+$/, "");
-// Extraction model. Defaults to Gemini (gemini-2.5-flash-lite) via the
-// llm-router: a functional, ~sub-second classification that uses ZERO local
-// CPU, so it can't starve the latency-sensitive Gemini chat turns. The
+const GOOGLE_API_KEY = (process.env.GOOGLE_API_KEY || "").trim();
+// Extraction model. Defaults to Gemini (gemini-2.5-flash-lite) called directly:
+// a functional, ~sub-second classification (measured ~870ms) that uses ZERO
+// local CPU, so it can't starve the latency-sensitive Gemini chat turns. The
 // CPU-bound local qwen path it replaces always timed out (~30s) AND inflated
 // concurrent owner turns from ~7s to ~50s. Override to a local Ollama tag
 // (e.g. qwen3:4b-instruct) to run capture fully locally on a keyless host.
@@ -537,10 +542,11 @@ async function startOwnerRuleExtraction(job, assistantReply, existingBullets) {
     // re-phrased duplicates in the first place).
     existingBullets,
     // Upstream is picked from the model name inside extractOwnerRule: gemini-*
-    // ⇒ routerBaseUrl (llm-router → Gemini), else ⇒ ollamaBaseUrl (local).
+    // ⇒ Google direct (geminiBaseUrl + geminiApiKey), else ⇒ ollamaBaseUrl.
     model: MEMORY_CAPTURE_MODEL,
     ollamaBaseUrl: OLLAMA_BASE_URL,
-    routerBaseUrl: MEMORY_CAPTURE_ROUTER_URL,
+    geminiBaseUrl: MEMORY_CAPTURE_GEMINI_BASE_URL,
+    geminiApiKey: GOOGLE_API_KEY,
     fetchImpl: fetch,
     timeoutMs: MEMORY_CAPTURE_TIMEOUT_MS,
     logger: log
@@ -1059,7 +1065,7 @@ async function main() {
     memoryCaptureModel: MEMORY_CAPTURE_ENABLED ? MEMORY_CAPTURE_MODEL : undefined,
     memoryCaptureUpstream: MEMORY_CAPTURE_ENABLED
       ? /^gemini[-_.]/i.test(MEMORY_CAPTURE_MODEL)
-        ? `gemini@${MEMORY_CAPTURE_ROUTER_URL}`
+        ? `gemini-direct@${MEMORY_CAPTURE_GEMINI_BASE_URL}${GOOGLE_API_KEY ? "" : " (NO KEY)"}`
         : `ollama@${OLLAMA_BASE_URL}`
       : undefined
   });
