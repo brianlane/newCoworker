@@ -783,14 +783,22 @@ async function processJob(job) {
     // every owner turn is stateless-forced above — so it is NOT used to
     // continue a Rowboat conversation. It functions only as the enqueue route's
     // "this thread has prior Rowboat history" marker, which makes the route
-    // replay the FULL history tail (stateless_input_messages) next turn instead
-    // of the bounded short tail. Default to null so a turn where Rowboat
-    // returned neither value doesn't leave a stale one behind.
-    const threadUpdate = {
-      updated_at: new Date().toISOString(),
-      rowboat_conversation_id: conversationId || null,
-      rowboat_state: nextState ?? null
-    };
+    // replay the FULL history tail (stateless_input_messages) on later turns
+    // instead of the bounded short tail.
+    //
+    // The marker must be STICKY: only refresh it when Rowboat actually returned
+    // a value, NEVER clear it on a successful turn. A stateless call usually
+    // mints a fresh conversationId, but if Rowboat omits one, overwriting with
+    // null would wipe the marker and make the route fall back to the short tail
+    // next turn (Bugbot Medium-severity finding on PR #106). Since the id is
+    // only a has-history flag now, keeping any prior non-null value is correct.
+    const threadUpdate = { updated_at: new Date().toISOString() };
+    if (conversationId) {
+      threadUpdate.rowboat_conversation_id = conversationId;
+    }
+    if (nextState !== undefined) {
+      threadUpdate.rowboat_state = nextState;
+    }
     const { error: tErr } = await sb
       .from("dashboard_chat_threads")
       .update(threadUpdate)
