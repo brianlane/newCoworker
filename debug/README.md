@@ -34,6 +34,7 @@ Run from the repo root, e.g. `tsx debug/<script>.ts`.
 | `smoke-rule.ts` | End-to-end check of owner-rule memory capture: enqueues a rule, waits for the worker, then polls `memory_md` until the rule lands. Capture is silent + async (background queue after the job is `done`, no reply confirmation), so this polls past `done`. |
 | `smoke-owner-chat.ts` | End-to-end owner-chat queue smoke: `tsx debug/smoke-owner-chat.ts [businessId] ["question"]`. Enqueues a real `dashboard_chat_jobs` row, waits for the worker → Rowboat (→ Gemini) → reply, and prints owner-perceived latency + the reply. |
 | `probe-gemini-owner.ts` | Direct Rowboat probe for the `OwnerCoworker` agent: `tsx debug/probe-gemini-owner.ts [businessId] [model] [reps] [--revert]`. Temporarily sets the agent's model in Mongo and times the chat turn through the llm-router. `--revert` restores the local model. |
+| `reseed-workflow-agent.ts` | **Repoint a workflow agent's model** on already-provisioned tenants without a full re-provision. `--agent=NAME --model=MODEL` patches the agent's `model` in the Mongo `liveWorkflow`+`draftWorkflow`; targets one tenant (`--business=ID`) or the whole fleet (default). Idempotent, keyless-safe (`gemini-*` degrades to local on a keyless box), `--dry-run`/`--concurrency=N`. See below. |
 | `logs.ts` | Tails the chat-worker's recent memory-capture / job logs: `tsx debug/logs.ts [businessId] [grepPattern]`. |
 | `check-ollama.ts` | Verifies Ollama is reachable from inside the worker container and the extraction model returns valid structured JSON. |
 | `bump-timeout.ts` | Debug aid: overrides `MEMORY_CAPTURE_TIMEOUT_MS` on a tenant's worker `.env` and recreates the container. |
@@ -83,3 +84,38 @@ now re-derives the **managed** capture vars before recreating the container:
 Only those keys are touched; every other `.env` line is left as-is. A routine
 `update-all-vps` is therefore enough to bring the whole fleet's capture env into
 the desired state — no manual SSH.
+
+## Repointing a workflow agent's model
+
+`deploy-client.sh` only seeds the Rowboat workflow on first provision, so when we
+change which model an agent runs on, existing tenants keep the old model until
+their Mongo workflow is rewritten. `reseed-workflow-agent.ts` does that one-field
+patch in place — no container churn, no `.env` rewrite, no memory reseed:
+
+```bash
+# Preview: move the SMS Coworker onto a Gemini tag across the whole fleet
+tsx debug/reseed-workflow-agent.ts --agent=Coworker \
+  --model=gemini-2.5-flash-lite --dry-run
+
+# Apply to a single tenant
+tsx debug/reseed-workflow-agent.ts --agent=OwnerCoworker \
+  --model=gemini-2.5-flash --business=621a5b0d-...
+
+# Roll an agent back to local Qwen across all tenants, 4 at a time
+tsx debug/reseed-workflow-agent.ts --agent=Coworker \
+  --model=qwen3:4b-instruct --concurrency=4
+```
+
+- **Idempotent** — a project already on the target reports `unchanged`; a project
+  missing the named agent reports `missing` and is skipped (the script repoints
+  an existing agent, it never creates one).
+- **Keyless-safe** — a `gemini-*` target needs `GOOGLE_API_KEY` in
+  `/opt/rowboat/.env` (the llm-router 503s gemini-* without one), so on a keyless
+  box the target degrades to the box's `OLLAMA_MODEL` and the run warns.
+- **Effect timing** — Rowboat reads the patched model for **new** conversations;
+  threads already bound to the agent keep the model they were first bound to
+  (Rowboat resumes the bound agent/model and ignores `startAgent` on resume).
+  Clear the relevant thread table if existing conversations must re-bind.
+
+For the bespoke "also stand up a local fallback twin" case (the PR #111 SMS
+spend-cap rollout), see the historical one-off `reseed-sms-workflow.ts`.
