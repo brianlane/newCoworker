@@ -60,4 +60,26 @@ tsx debug/update-all-vps.ts --concurrency=4
 ```
 
 The remote sequence is idempotent (fetch+reset `origin/main`, rsync the worker
-source, rebuild/recreate the container) and safe to re-run.
+source, reconcile the managed capture-env vars, rebuild/recreate the container)
+and safe to re-run.
+
+### Capture-env self-heal
+
+The rsync excludes `.env`, so code-only roll-outs never touched the worker's
+environment — when capture moved to a direct Google call, existing boxes were
+missing `GOOGLE_API_KEY` (and still carried a dead `MEMORY_CAPTURE_ROUTER_URL`),
+so capture silently no-op'd until each box was hand-patched. `UPDATE_WORKER_REMOTE`
+now re-derives the **managed** capture vars before recreating the container:
+
+- `GOOGLE_API_KEY` is synced from the authoritative `/opt/rowboat/.env`.
+- `MEMORY_CAPTURE_MODEL` is resolved with the same keyless fallback
+  `deploy-client.sh` uses (a `gemini-*` tag degrades to the local Ollama tag on a
+  keyless host).
+- `MEMORY_CAPTURE_ENABLED` / `MEMORY_CAPTURE_GEMINI_BASE_URL` /
+  `MEMORY_CAPTURE_TIMEOUT_MS` / `OLLAMA_BASE_URL` are ensured present (explicit
+  overrides preserved).
+- the dead `MEMORY_CAPTURE_ROUTER_URL` is removed.
+
+Only those keys are touched; every other `.env` line is left as-is. A routine
+`update-all-vps` is therefore enough to bring the whole fleet's capture env into
+the desired state — no manual SSH.
