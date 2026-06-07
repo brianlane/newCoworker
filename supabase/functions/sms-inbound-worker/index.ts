@@ -573,7 +573,13 @@ serve(async (req: Request) => {
         // that is already cached and about to be sent. Cost is estimated from
         // the text we sent (preamble + user line) + the reply; resumed-thread
         // history Rowboat prepends is approximated by the flat overhead.
-        if (turnPlan.meter) {
+        //
+        // Only meter when the reply was durably cached (invariant: metered ⟺
+        // cached). If the cache write failed, this turn is not final — a retry
+        // re-runs Rowboat with an empty cache and will meter the redone turn.
+        // Stamping metered_at now would make that retry's billed Gemini turn
+        // return already_metered and under-count the fuse.
+        if (turnPlan.meter && !cacheErr) {
           const meterRes = await recordSmsChatSpend(supabase, {
             jobId: job.id,
             businessId: job.business_id,
