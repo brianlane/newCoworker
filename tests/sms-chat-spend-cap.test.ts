@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   estimateChatCostMicros,
+  markSmsTurnMetered,
   monthStartIso,
   pickSmsTurn,
   readChatSpendMicros,
@@ -367,6 +368,26 @@ describe("recordSmsChatSpend", () => {
     expect(stub._calls.meteredAtSet).toHaveLength(2);
     expect(stub._calls.meteredAtSet[0]).toBeTypeOf("string");
     expect(stub._calls.meteredAtSet[1]).toBeNull();
+  });
+});
+
+describe("markSmsTurnMetered", () => {
+  it("returns true when it claims the marker", async () => {
+    const stub = makeStub({ claimRows: [{ id: "job-1" }] });
+    expect(await markSmsTurnMetered(stub, "job-1")).toBe(true);
+    expect(stub._calls.meteredAtSet[0]).toBeTypeOf("string");
+  });
+  it("returns false when already settled (0 rows)", async () => {
+    const stub = makeStub({ claimRows: [] });
+    expect(await markSmsTurnMetered(stub, "job-1")).toBe(false);
+  });
+  it("returns false on a non-array result", async () => {
+    const stub = makeStub({ claimDataNonArray: true });
+    expect(await markSmsTurnMetered(stub, "job-1")).toBe(false);
+  });
+  it("returns false on error", async () => {
+    const stub = makeStub({ claimError: "boom" });
+    expect(await markSmsTurnMetered(stub, "job-1")).toBe(false);
   });
 });
 

@@ -24,6 +24,7 @@ import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts
 import { callSmsRowboatWithStatelessFallback } from "../_shared/sms_rowboat.ts";
 import { buildCustomerPreambleForEdge, type EdgeCustomerMemoryRow } from "../_shared/customer_memory_preamble.ts";
 import {
+  markSmsTurnMetered,
   pickSmsTurn,
   recordSmsChatSpend,
   resolveSmsChatCap
@@ -573,9 +574,38 @@ serve(async (req: Request) => {
               spend_micros: meterRes.spendMicros ?? null
             });
           }
+        } else if (SMS_CHAT_SPEND_METERING_ENABLED) {
+          // Over-cap local ($0) turn: settle metering (stamp metered_at without
+          // recording spend) so a cached re-send below is not later mistaken for
+          // an unmetered Gemini turn.
+          await markSmsTurnMetered(supabase, job.id);
         }
       } else {
         convId = thread?.rowboat_conversation_id;
+        // Cached-reply re-send (Telnyx retry, or a crash after caching): the
+        // turn already ran, so metering normally happened then and this is a
+        // no-op (metered_at already set → already_metered). But if a crash or a
+        // failed spend RPC left metered_at null, meter it now. Local turns stamp
+        // metered_at above, so a null marker here implies an UNMETERED Gemini
+        // turn — safe to charge. Exactly-once via metered_at; never throws.
+        if (SMS_CHAT_SPEND_METERING_ENABLED) {
+          const meterRes = await recordSmsChatSpend(supabase, {
+            jobId: job.id,
+            businessId: job.business_id,
+            periodStart: null,
+            inputChars: (customerPreamble?.length ?? 0) + userText.length,
+            outputChars: reply.length,
+            capMicros: SMS_CHAT_SPEND_CAP_MICROS,
+            enabled: SMS_CHAT_SPEND_METERING_ENABLED
+          });
+          if (meterRes.fuseNewlyTripped) {
+            await telemetryRecord(supabase, "sms_chat_spend_cap_tripped", {
+              job_id: job.id,
+              business_id: job.business_id,
+              spend_micros: meterRes.spendMicros ?? null
+            });
+          }
+        }
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

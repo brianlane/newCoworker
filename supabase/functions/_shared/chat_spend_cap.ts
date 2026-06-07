@@ -176,6 +176,28 @@ export async function resolveSmsChatCap(
   }
 }
 
+/**
+ * Settle metering for a $0 (over-cap local) turn by claiming
+ * `sms_inbound_jobs.metered_at` WITHOUT recording any spend. This makes a null
+ * marker on a cached re-send unambiguously mean "an unmetered Gemini turn" — so
+ * the cached path can safely meter a null marker without mistaking a free local
+ * turn for a billable one. Idempotent (claims WHERE metered_at IS NULL) and
+ * never throws. Returns whether this call set the marker.
+ */
+export async function markSmsTurnMetered(
+  supabase: SpendSupabase,
+  jobId: string
+): Promise<boolean> {
+  const res = await supabase
+    .from("sms_inbound_jobs")
+    .update({ metered_at: new Date().toISOString() })
+    .eq("id", jobId)
+    .is("metered_at", null)
+    .select("id");
+  if (res.error) return false;
+  return Array.isArray(res.data) && res.data.length > 0;
+}
+
 export type MeterResult = {
   metered: boolean;
   reason?: "disabled" | "already_metered" | "claim_failed" | "rpc_failed";
