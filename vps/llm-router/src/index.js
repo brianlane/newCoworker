@@ -45,8 +45,8 @@ const ROUTED_PATHS = new Set([
   "/v1/embeddings"
 ]);
 
-import { pickUpstream } from "./routing.js";
-export { pickUpstream };
+import { pickUpstream, filterUpstreamHeaders } from "./routing.js";
+export { pickUpstream, filterUpstreamHeaders };
 
 function buildUpstreamTarget(upstream, pathname) {
   if (upstream === "gemini") {
@@ -141,16 +141,12 @@ async function handleRoutedRequest(req, res) {
     return;
   }
 
-  // Pass upstream headers through unchanged so streaming (text/event-stream)
-  // and content-length align exactly. Filter out hop-by-hop headers that
-  // Node's http module re-adds.
-  const outHeaders = {};
-  upstreamResp.headers.forEach((value, key) => {
-    const k = key.toLowerCase();
-    if (k === "transfer-encoding" || k === "connection" || k === "keep-alive") return;
-    outHeaders[k] = value;
-  });
-  res.writeHead(upstreamResp.status, outHeaders);
+  // Forward upstream headers, dropping hop-by-hop framing AND the body-encoding
+  // headers (content-encoding/content-length): undici's fetch already decoded
+  // the body we're about to re-stream, so those headers would describe bytes
+  // that no longer exist (see filterUpstreamHeaders). Node re-frames the
+  // decoded body as chunked.
+  res.writeHead(upstreamResp.status, filterUpstreamHeaders(upstreamResp.headers));
 
   if (!upstreamResp.body) {
     res.end();
