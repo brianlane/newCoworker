@@ -66,6 +66,15 @@ export type RowboatChatCallInput = {
    * the helper to look it up and apply it indiscriminately.
    */
   customerPreamble?: string | null;
+  /**
+   * Optional Rowboat agent to enter for this turn (the SMS spend cap passes the
+   * local Qwen agent over cap, otherwise the Gemini `Coworker`). NOTE: Rowboat
+   * IGNORES startAgent whenever a conversationId is supplied — it resumes the
+   * agent the thread was bound to — so a startAgent override only takes effect on
+   * a STATELESS call (conversationId = null). The caller is responsible for
+   * dropping the continuation when it needs the override honored.
+   */
+  startAgent?: string | null;
 };
 
 export type StatelessFallbackInput = RowboatChatCallInput & {
@@ -174,6 +183,10 @@ export async function callRowboatChatOnce(
   messages.push({ role: "user", content: `[SMS] ${input.userText}` });
 
   const chatBody: Record<string, unknown> = { messages, stream: false };
+  const startAgent = input.startAgent?.trim();
+  if (startAgent) {
+    chatBody.startAgent = startAgent;
+  }
   const conv = input.conversationId?.trim();
   if (conv) {
     chatBody.conversationId = conv;

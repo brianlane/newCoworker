@@ -23,6 +23,11 @@ import { telemetryRecord } from "../_shared/telemetry.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 import { callSmsRowboatWithStatelessFallback } from "../_shared/sms_rowboat.ts";
 import { buildCustomerPreambleForEdge, type EdgeCustomerMemoryRow } from "../_shared/customer_memory_preamble.ts";
+import {
+  pickSmsTurn,
+  recordSmsChatSpend,
+  resolveSmsChatCap
+} from "../_shared/chat_spend_cap.ts";
 
 const MAX_ATTEMPTS = 8;
 const NCW_IDEM_TAG_PREFIX = "ncw_idem:";
@@ -48,6 +53,24 @@ const ROWBOAT_CHAT_TIMEOUT_MS = 60_000;
 // at 'processing' until the stale-claim recovery requeues it.
 // (Codex P1 / Cursor Bugbot Medium feedback on PR #74.)
 const ROWBOAT_RETRY_BUDGET_MS = 80_000;
+
+// --- SMS chat spend cap (shared fuse with owner-dashboard chat) -------------
+// Inbound SMS now runs on Gemini (the `Coworker` agent was repointed off local
+// Qwen). Gemini bills per token, so SMS shares the SAME monthly fuse as owner
+// chat: we meter each Gemini turn into owner_chat_model_spend and, once the
+// COMBINED spend crosses the cap for the billing period, fall back to the local
+// Qwen agent (`CoworkerLocal`) until the next period. See _shared/chat_spend_cap.ts.
+const SMS_CHAT_SPEND_METERING_ENABLED =
+  (Deno.env.get("SMS_CHAT_SPEND_METERING_ENABLED") ?? "true").trim().toLowerCase() !== "false";
+// $10 shared cap (micro-USD; 1 USD = 1_000_000). Matches OWNER_CHAT_SPEND_CAP_MICROS.
+const SMS_CHAT_SPEND_CAP_MICROS = (() => {
+  const n = Number(Deno.env.get("SMS_CHAT_SPEND_CAP_MICROS"));
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 10_000_000;
+})();
+// Agent names MUST match the workflow deploy-client.sh seeds: `Coworker` is the
+// Gemini-backed SMS startAgent, `CoworkerLocal` its $0 Qwen fallback twin.
+const SMS_CHAT_GEMINI_AGENT = (Deno.env.get("SMS_CHAT_GEMINI_AGENT") ?? "Coworker").trim();
+const SMS_CHAT_LOCAL_AGENT = (Deno.env.get("SMS_CHAT_LOCAL_AGENT") ?? "CoworkerLocal").trim();
 
 
 /** Best-effort: Telnyx list-messages filter may vary by API version — safe to return null. */
@@ -373,12 +396,31 @@ serve(async (req: Request) => {
     try {
       if (!reply) {
         const existingConv = thread?.rowboat_conversation_id?.trim() ?? null;
+
+        // Shared spend-cap decision for this turn. Under cap → Gemini
+        // (`Coworker`), stateful resume of the bound thread, metered. Over cap →
+        // local Qwen (`CoworkerLocal`), forced stateless so Rowboat honors the
+        // startAgent override (it ignores startAgent when a conversationId is
+        // supplied), $0 and not metered. Fails open to Gemini on any read error.
+        const cap = await resolveSmsChatCap(supabase, job.business_id, {
+          capMicros: SMS_CHAT_SPEND_CAP_MICROS,
+          enabled: SMS_CHAT_SPEND_METERING_ENABLED
+        });
+        const turnPlan = pickSmsTurn({
+          overCap: cap.overCap,
+          geminiAgent: SMS_CHAT_GEMINI_AGENT,
+          localAgent: SMS_CHAT_LOCAL_AGENT
+        });
+
         const parsed = await callSmsRowboatWithStatelessFallback({
           chatUrl,
           bearer,
           userText,
-          conversationId: existingConv,
-          state: thread?.rowboat_state ?? null,
+          // Over cap we drop the continuation so the local-agent override takes
+          // effect; under cap we resume the (Gemini-bound) thread as before.
+          conversationId: turnPlan.stateless ? null : existingConv,
+          state: turnPlan.stateless ? null : (thread?.rowboat_state ?? null),
+          startAgent: turnPlan.startAgent,
           timeoutMs: ROWBOAT_CHAT_TIMEOUT_MS,
           // Cap the combined initial+retry wall time under the 90s
           // pg_cron HTTP timeout (see ROWBOAT_RETRY_BUDGET_MS).
@@ -387,64 +429,81 @@ serve(async (req: Request) => {
         });
         reply = parsed.reply;
 
-        // When the stateless retry fired, Rowboat treated this turn as
-        // a fresh conversation — its response carries a NEW
-        // conversationId. We must NOT preserve the stale `existingConv`
-        // here; doing so would replay the same fail-then-retry cycle
-        // on every subsequent SMS until the model evicts again.
-        // (Same-shape bug as Cursor Bugbot Low on PR #71's dashboard
-        // chat retry path.)
-        const stableConvId = parsed.retriedStateless
-          ? (parsed.conversationId ?? "").trim()
-          : (parsed.conversationId ?? existingConv ?? "").trim();
-        if (stableConvId) {
-          // On a stateless retry, drop whatever state was paired with
-          // the now-evicted continuation. Otherwise carry the existing
-          // state forward unless Rowboat returned a new value.
-          let nextState: unknown | null = parsed.retriedStateless
-            ? null
-            : thread?.rowboat_state ?? null;
-          if (parsed.hasStateKey) {
-            nextState = parsed.state ?? null;
-          }
-          const { error: threadErr } = await supabase.from("sms_rowboat_threads").upsert(
-            {
-              business_id: job.business_id,
-              customer_e164: fromE164,
-              rowboat_conversation_id: stableConvId,
-              rowboat_state: nextState,
-              updated_at: new Date().toISOString()
-            },
-            { onConflict: "business_id,customer_e164" }
-          );
-          if (threadErr) {
-            console.error("sms_rowboat_threads upsert", threadErr);
-          }
-        } else if (parsed.retriedStateless) {
-          // Stateless retry succeeded but Rowboat didn't echo a fresh
-          // conversationId. Clear the stored row anyway — the existing
-          // conversationId is known-stale (we just proved that by
-          // succeeding without it). Leaving it would re-run the
-          // fail-then-retry on the next SMS.
-          await supabase
-            .from("sms_rowboat_threads")
-            .delete()
-            .eq("business_id", job.business_id)
-            .eq("customer_e164", fromE164);
+        if (cap.overCap) {
+          await telemetryRecord(supabase, "sms_chat_spend_over_cap_local", {
+            job_id: job.id,
+            business_id: job.business_id
+          });
         }
 
-        // When the stateless retry succeeded WITHOUT a fresh
-        // conversationId from Rowboat, the existing conversationId is
-        // known-stale (the retry just proved that by succeeding
-        // without it). Falling back to existingConv here would persist
-        // the stale ID via complete_sms_inbound_job_done, advertising
-        // a known-invalid continuation on the completed job record
-        // (Cursor Bugbot Low on PR #74). Leave convId undefined in
-        // that case so the job row's rowboat_conversation_id is set
-        // to NULL, matching the sms_rowboat_threads delete above.
-        convId = parsed.retriedStateless
-          ? (stableConvId || (parsed.conversationId ?? "").trim() || undefined)
-          : (stableConvId || (parsed.conversationId ?? "").trim() || existingConv || undefined);
+        if (turnPlan.stateless) {
+          // Over-cap local ($0) turn: we forced a stateless call so Rowboat
+          // would honor startAgent=CoworkerLocal. Do NOT bind the thread to the
+          // local agent — leave the stored (Gemini-bound) thread untouched so it
+          // resumes on Gemini once the period resets. The returned (local)
+          // conversationId is intentionally discarded. Keep the existing
+          // continuation on the completed job row for bookkeeping.
+          convId = existingConv ?? undefined;
+        } else {
+          // When the stateless retry fired, Rowboat treated this turn as
+          // a fresh conversation — its response carries a NEW
+          // conversationId. We must NOT preserve the stale `existingConv`
+          // here; doing so would replay the same fail-then-retry cycle
+          // on every subsequent SMS until the model evicts again.
+          // (Same-shape bug as Cursor Bugbot Low on PR #71's dashboard
+          // chat retry path.)
+          const stableConvId = parsed.retriedStateless
+            ? (parsed.conversationId ?? "").trim()
+            : (parsed.conversationId ?? existingConv ?? "").trim();
+          if (stableConvId) {
+            // On a stateless retry, drop whatever state was paired with
+            // the now-evicted continuation. Otherwise carry the existing
+            // state forward unless Rowboat returned a new value.
+            let nextState: unknown | null = parsed.retriedStateless
+              ? null
+              : thread?.rowboat_state ?? null;
+            if (parsed.hasStateKey) {
+              nextState = parsed.state ?? null;
+            }
+            const { error: threadErr } = await supabase.from("sms_rowboat_threads").upsert(
+              {
+                business_id: job.business_id,
+                customer_e164: fromE164,
+                rowboat_conversation_id: stableConvId,
+                rowboat_state: nextState,
+                updated_at: new Date().toISOString()
+              },
+              { onConflict: "business_id,customer_e164" }
+            );
+            if (threadErr) {
+              console.error("sms_rowboat_threads upsert", threadErr);
+            }
+          } else if (parsed.retriedStateless) {
+            // Stateless retry succeeded but Rowboat didn't echo a fresh
+            // conversationId. Clear the stored row anyway — the existing
+            // conversationId is known-stale (we just proved that by
+            // succeeding without it). Leaving it would re-run the
+            // fail-then-retry on the next SMS.
+            await supabase
+              .from("sms_rowboat_threads")
+              .delete()
+              .eq("business_id", job.business_id)
+              .eq("customer_e164", fromE164);
+          }
+
+          // When the stateless retry succeeded WITHOUT a fresh
+          // conversationId from Rowboat, the existing conversationId is
+          // known-stale (the retry just proved that by succeeding
+          // without it). Falling back to existingConv here would persist
+          // the stale ID via complete_sms_inbound_job_done, advertising
+          // a known-invalid continuation on the completed job record
+          // (Cursor Bugbot Low on PR #74). Leave convId undefined in
+          // that case so the job row's rowboat_conversation_id is set
+          // to NULL, matching the sms_rowboat_threads delete above.
+          convId = parsed.retriedStateless
+            ? (stableConvId || (parsed.conversationId ?? "").trim() || undefined)
+            : (stableConvId || (parsed.conversationId ?? "").trim() || existingConv || undefined);
+        }
 
         // Denormalize the normalized customer E.164 onto the job row
         // so the customers page (Phase 4) + nightly cross-channel
@@ -488,6 +547,32 @@ serve(async (req: Request) => {
             job_id: job.id,
             business_id: job.business_id
           });
+        }
+
+        // Meter the Gemini turn into the shared spend fuse (no-op for the
+        // over-cap local turn, which sets meter=false). Exactly-once via
+        // sms_inbound_jobs.metered_at, so a cached-reply re-send (Telnyx retry)
+        // never double-counts. Never throws — metering must not fail a reply
+        // that is already cached and about to be sent. Cost is estimated from
+        // the text we sent (preamble + user line) + the reply; resumed-thread
+        // history Rowboat prepends is approximated by the flat overhead.
+        if (turnPlan.meter) {
+          const meterRes = await recordSmsChatSpend(supabase, {
+            jobId: job.id,
+            businessId: job.business_id,
+            periodStart: cap.periodStart,
+            inputChars: (customerPreamble?.length ?? 0) + userText.length,
+            outputChars: reply.length,
+            capMicros: SMS_CHAT_SPEND_CAP_MICROS,
+            enabled: SMS_CHAT_SPEND_METERING_ENABLED
+          });
+          if (meterRes.fuseNewlyTripped) {
+            await telemetryRecord(supabase, "sms_chat_spend_cap_tripped", {
+              job_id: job.id,
+              business_id: job.business_id,
+              spend_micros: meterRes.spendMicros ?? null
+            });
+          }
         }
       } else {
         convId = thread?.rowboat_conversation_id;

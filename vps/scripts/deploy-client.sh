@@ -20,6 +20,15 @@
 #   GEMINI_ROWBOAT_MODEL     — optional; Gemini model used by Rowboat's voice_task
 #                               agent via the llm-router sidecar. Defaults to
 #                               gemini-3.1-flash.
+#   OWNER_CHAT_MODEL         — optional; model for the OwnerCoworker (owner
+#                               dashboard chat) agent. Defaults to
+#                               gemini-2.5-flash-lite; degrades to OLLAMA_MODEL
+#                               on a keyless host.
+#   SMS_CHAT_MODEL           — optional; model for the Coworker (inbound SMS)
+#                               agent. Defaults to gemini-2.5-flash-lite (shares
+#                               the owner-chat spend cap; falls back to the
+#                               CoworkerLocal/Qwen twin once tripped); degrades
+#                               to OLLAMA_MODEL on a keyless host.
 #   LLM_ROUTER_PORT          — optional; loopback port for the llm-router
 #                               sidecar (default 11435).
 #   GEMINI_LIVE_ENABLED      — optional secondary rollout kill switch for the
@@ -224,6 +233,26 @@ case "${OWNER_CHAT_MODEL}" in
     if [[ -z "${GOOGLE_API_KEY:-}" ]]; then
       log "WARNING: OWNER_CHAT_MODEL=${OWNER_CHAT_MODEL} requires GOOGLE_API_KEY but none is set; falling back to local ${OLLAMA_MODEL} for OwnerCoworker."
       OWNER_CHAT_MODEL="${OLLAMA_MODEL}"
+    fi
+    ;;
+esac
+
+# Inbound-SMS chat model (the `Coworker` startAgent). Repointed off local Qwen
+# to Gemini 2.5 Flash-Lite for the same latency/quality win owner chat got — the
+# CPU-only local model routinely took >20s for the first SMS reply. Gemini bills
+# per token, so the SMS Edge worker shares the owner-chat $10/period fuse and
+# falls back to the `CoworkerLocal` (Qwen) twin once the COMBINED spend trips the
+# cap. Same keyless safety fallback as OWNER_CHAT_MODEL: a gemini-* tag needs
+# GOOGLE_API_KEY (the llm-router 503s gemini-* without one), so degrade to the
+# local tag on a keyless host. Override SMS_CHAT_MODEL to a local tag to keep SMS
+# fully local.
+SMS_CHAT_MODEL_DEFAULT="gemini-2.5-flash-lite"
+SMS_CHAT_MODEL=${SMS_CHAT_MODEL:-${SMS_CHAT_MODEL_DEFAULT}}
+case "${SMS_CHAT_MODEL}" in
+  gemini-*)
+    if [[ -z "${GOOGLE_API_KEY:-}" ]]; then
+      log "WARNING: SMS_CHAT_MODEL=${SMS_CHAT_MODEL} requires GOOGLE_API_KEY but none is set; falling back to local ${OLLAMA_MODEL} for the SMS Coworker agent."
+      SMS_CHAT_MODEL="${OLLAMA_MODEL}"
     fi
     ;;
 esac
@@ -466,18 +495,24 @@ WORKFLOW_JSON=$(jq -nc \
   --arg instructions "${ROWBOAT_INSTRUCTIONS}" \
   --arg model "${OLLAMA_MODEL}" \
   --arg ownerModel "${OWNER_CHAT_MODEL}" \
+  --arg smsModel "${SMS_CHAT_MODEL}" \
   --arg now "${SEED_NOW}" '
 {
   agents: [
     {
       name: "Coworker",
       type: "conversation",
-      description: "Per-tenant AI coworker",
+      description: "Per-tenant AI coworker (inbound SMS startAgent)",
       disabled: false,
       instructions: $instructions,
       outputVisibility: "user_facing",
       controlType: "retain",
-      model: $model,
+      # Gemini via the llm-router (gemini-* => Google) — see SMS_CHAT_MODEL
+      # above. Repointed off local Qwen: the CPU-only model routinely took
+      # >20s for the first SMS reply. The SMS Edge worker meters Gemini turns
+      # into the shared owner-chat fuse and, once the COMBINED period spend
+      # crosses the cap, forces a stateless turn on CoworkerLocal (below).
+      model: $smsModel,
       ragK: 3,
       ragReturnType: "chunks",
       # Phase 5 cross-channel customer-memory tools. Declared at the agent
@@ -488,6 +523,30 @@ WORKFLOW_JSON=$(jq -nc \
       # the gating layer for the Rowboat-mediated SMS path.
       # owner_append_business_memory is NOT listed here — it is owner-dashboard
       # only on OwnerCoworker (see second agent below).
+      tools: [
+        "customer_lookup_by_phone",
+        "customer_set_display_name",
+        "customer_append_pinned_note"
+      ]
+    },
+    {
+      name: "CoworkerLocal",
+      type: "conversation",
+      # SMS spend-cap fallback twin of Coworker. Identical tool surface and
+      # instructions, but pinned to the LOCAL Ollama model ($0 marginal cost).
+      # The SMS Edge worker forces startAgent=CoworkerLocal on a STATELESS turn
+      # once a business crosses the shared owner+SMS spend cap for the period
+      # (Rowboat ignores startAgent when a conversationId is supplied, so the
+      # switch only takes effect statelessly). Free but slower (CPU prefill), so
+      # a runaway burst degrades to local instead of billing unbounded Gemini.
+      description: "Inbound-SMS spend-cap fallback: identical to Coworker but on the local model.",
+      disabled: false,
+      instructions: $instructions,
+      outputVisibility: "user_facing",
+      controlType: "retain",
+      model: $model,
+      ragK: 3,
+      ragReturnType: "chunks",
       tools: [
         "customer_lookup_by_phone",
         "customer_set_display_name",
