@@ -537,7 +537,18 @@ serve(async (req: Request) => {
           .update(cachePatch)
           .eq("id", job.id);
         if (cacheErr) {
+          // Caching the reply is a PREREQUISITE for sending: the cached reply is
+          // what lets a Telnyx-send retry re-deliver without re-running Rowboat.
+          // If we can't persist it, abort the turn (→ catch → retry/dead-letter)
+          // instead of sending. Sending now would (a) risk a double-SMS on retry
+          // — with no cached reply the retry re-runs Rowboat and sends again —
+          // and (b) leave metering inconsistent (meter-now double-counts the
+          // retry's billed turn; skip-now under-counts a delivered Gemini turn).
+          // Aborting keeps it simple and correct: the retry re-runs, re-caches,
+          // meters, and sends exactly once. Cache failures are a rare DB-write
+          // error, so the wasted re-run is acceptable.
           console.error("rowboat_reply_cached", cacheErr);
+          throw new Error(`rowboat_reply_cache_failed: ${cacheErr.message}`);
         }
 
         // Phase 3 write side: bump the customer memory counters in a
@@ -567,19 +578,15 @@ serve(async (req: Request) => {
         }
 
         // Meter the Gemini turn into the shared spend fuse (no-op for the
-        // over-cap local turn, which sets meter=false). Exactly-once via
+        // over-cap local turn, which sets meter=false). We only reach here once
+        // the reply is durably cached (cacheErr throws above), so the invariant
+        // holds: metered ⟺ cached ⟺ (about to be) sent. Exactly-once via
         // sms_inbound_jobs.metered_at, so a cached-reply re-send (Telnyx retry)
-        // never double-counts. Never throws — metering must not fail a reply
-        // that is already cached and about to be sent. Cost is estimated from
-        // the text we sent (preamble + user line) + the reply; resumed-thread
-        // history Rowboat prepends is approximated by the flat overhead.
-        //
-        // Only meter when the reply was durably cached (invariant: metered ⟺
-        // cached). If the cache write failed, this turn is not final — a retry
-        // re-runs Rowboat with an empty cache and will meter the redone turn.
-        // Stamping metered_at now would make that retry's billed Gemini turn
-        // return already_metered and under-count the fuse.
-        if (turnPlan.meter && !cacheErr) {
+        // never double-counts. Never throws — metering must not fail a reply that
+        // is already cached and about to be sent. Cost is estimated from the text
+        // we sent (preamble + user line) + the reply; resumed-thread history
+        // Rowboat prepends is approximated by the flat overhead.
+        if (turnPlan.meter) {
           const meterRes = await recordSmsChatSpend(supabase, {
             jobId: job.id,
             businessId: job.business_id,
