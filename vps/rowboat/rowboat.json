@@ -1,13 +1,13 @@
 {
-  "_comment": "Base Rowboat config template. deploy-client.sh writes the live .env with real values. The llm-router sidecar routes gemini-* traffic to Google and llama*/qwen* traffic to Ollama, so a single Rowboat can run both agents below.",
+  "_comment": "Base Rowboat config template (documentation only — the live per-tenant workflow is seeded by deploy-client.sh's WORKFLOW_JSON, not this file). The llm-router sidecar routes gemini-* traffic to Google and llama*/qwen* traffic to Ollama, so a single Rowboat runs the Gemini-backed SMS + owner agents alongside their local Qwen spend-cap fallback twins.",
   "version": "1",
   "gateway_token": "{{ROWBOAT_GATEWAY_TOKEN}}",
   "agents": [
     {
       "id": "dispatcher",
       "type": "conversational",
-      "description": "Primary agent for inbound SMS. Handles greetings, FAQs, and lead qualification. Ollama-backed for cost and latency.",
-      "model": "{{OLLAMA_MODEL}}",
+      "description": "Primary agent for inbound SMS (seeded as `Coworker`). Handles greetings, FAQs, and lead qualification. Gemini-backed (gemini-* routes to Google via the llm-router) for sub-second-class first replies; the SMS Edge worker meters spend into the shared owner+SMS fuse and falls back to the local Qwen twin (`CoworkerLocal`) once the period cap trips.",
+      "model": "{{SMS_CHAT_MODEL}}",
       "knowledge_vault": {
         "soul_md": "/opt/rowboat/vault/soul.md",
         "identity_md": "/opt/rowboat/vault/identity.md",
