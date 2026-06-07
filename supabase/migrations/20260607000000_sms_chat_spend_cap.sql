@@ -43,3 +43,22 @@ comment on table owner_chat_model_spend is
 
 comment on function owner_chat_record_spend is
   'Atomically add chat-model cost (micro-USD) to the shared per-business/period meter (owner chat + SMS both call this), bump the turn count, and trip the fuse on first cap crossing. Returns new total + whether this call tripped the fuse.';
+
+-- ---------------------------------------------------------------------------
+-- One-time: drop existing SMS thread continuations so every thread re-binds to
+-- the now-Gemini `Coworker` agent.
+--
+-- Rowboat ignores startAgent when a conversationId is supplied and resumes the
+-- agent/model the thread was FIRST bound to. Threads created before this change
+-- were bound to `Coworker` on the local Qwen model; after the reseed repoints
+-- `Coworker` to Gemini, those resumed threads would keep answering on Qwen while
+-- the worker meters them at Gemini list price — over-counting the shared fuse and
+-- forcing early local fallback. Clearing the continuations makes each customer's
+-- next inbound SMS start a fresh, correctly-metered Gemini conversation. The only
+-- loss is in-thread continuity for any mid-conversation customer at deploy time;
+-- cross-turn context still comes from the synced customer-memory preamble.
+--
+-- Rollout ordering matters: reseed (`Coworker` -> Gemini) BEFORE deploying the
+-- metering worker so no post-clear thread can be created on the old model while
+-- metering is live. See the PR rollout checklist.
+delete from sms_rowboat_threads;
