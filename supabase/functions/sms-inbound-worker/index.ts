@@ -24,7 +24,6 @@ import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts
 import { callSmsRowboatWithStatelessFallback } from "../_shared/sms_rowboat.ts";
 import { buildCustomerPreambleForEdge, type EdgeCustomerMemoryRow } from "../_shared/customer_memory_preamble.ts";
 import {
-  markSmsTurnMetered,
   pickSmsTurn,
   recordSmsChatSpend,
   resolveSmsChatCap
@@ -63,9 +62,13 @@ const ROWBOAT_RETRY_BUDGET_MS = 80_000;
 // Qwen agent (`CoworkerLocal`) until the next period. See _shared/chat_spend_cap.ts.
 const SMS_CHAT_SPEND_METERING_ENABLED =
   (Deno.env.get("SMS_CHAT_SPEND_METERING_ENABLED") ?? "true").trim().toLowerCase() !== "false";
-// $10 shared cap (micro-USD; 1 USD = 1_000_000). Matches OWNER_CHAT_SPEND_CAP_MICROS.
-const SMS_CHAT_SPEND_CAP_MICROS = (() => {
-  const n = Number(Deno.env.get("SMS_CHAT_SPEND_CAP_MICROS"));
+// SHARED cap (micro-USD; 1 USD = 1_000_000). SMS deliberately reads the SAME env
+// var as owner chat (OWNER_CHAT_SPEND_CAP_MICROS, default $10) — both surfaces
+// meter into the same owner_chat_model_spend row and pass p_cap_micros to the
+// same RPC, so a single cap value keeps the fuse consistent. Using a separate
+// SMS_* var risked the two surfaces tripping/falling back at different totals.
+const CHAT_SPEND_CAP_MICROS = (() => {
+  const n = Number(Deno.env.get("OWNER_CHAT_SPEND_CAP_MICROS"));
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 10_000_000;
 })();
 // Agent names MUST match the workflow deploy-client.sh seeds: `Coworker` is the
@@ -404,7 +407,7 @@ serve(async (req: Request) => {
         // startAgent override (it ignores startAgent when a conversationId is
         // supplied), $0 and not metered. Fails open to Gemini on any read error.
         const cap = await resolveSmsChatCap(supabase, job.business_id, {
-          capMicros: SMS_CHAT_SPEND_CAP_MICROS,
+          capMicros: CHAT_SPEND_CAP_MICROS,
           enabled: SMS_CHAT_SPEND_METERING_ENABLED
         });
         const turnPlan = pickSmsTurn({
@@ -512,13 +515,26 @@ serve(async (req: Request) => {
         // history without scanning the JSONB payload. Bundled into
         // the same UPDATE as rowboat_reply_cached to avoid an extra
         // round-trip per job.
+        //
+        // For the over-cap LOCAL ($0) turn we also settle metering in this SAME
+        // UPDATE (metered_at = now). Doing it atomically with the reply cache
+        // closes the window where a crash between "cache" and "stamp" would
+        // leave a cached local reply with metered_at null — which a Telnyx retry
+        // (cached path below) would then mis-charge as an unmetered Gemini turn.
+        // Gemini turns deliberately leave metered_at null here; they are metered
+        // separately via recordSmsChatSpend so a failed/crashed meter can be
+        // retried from the cached path.
+        const cachePatch: Record<string, unknown> = {
+          rowboat_reply_cached: reply,
+          customer_e164: fromE164,
+          updated_at: new Date().toISOString()
+        };
+        if (!turnPlan.meter && SMS_CHAT_SPEND_METERING_ENABLED) {
+          cachePatch.metered_at = new Date().toISOString();
+        }
         const { error: cacheErr } = await supabase
           .from("sms_inbound_jobs")
-          .update({
-            rowboat_reply_cached: reply,
-            customer_e164: fromE164,
-            updated_at: new Date().toISOString()
-          })
+          .update(cachePatch)
           .eq("id", job.id);
         if (cacheErr) {
           console.error("rowboat_reply_cached", cacheErr);
@@ -564,7 +580,7 @@ serve(async (req: Request) => {
             periodStart: cap.periodStart,
             inputChars: (customerPreamble?.length ?? 0) + userText.length,
             outputChars: reply.length,
-            capMicros: SMS_CHAT_SPEND_CAP_MICROS,
+            capMicros: CHAT_SPEND_CAP_MICROS,
             enabled: SMS_CHAT_SPEND_METERING_ENABLED
           });
           if (meterRes.fuseNewlyTripped) {
@@ -574,12 +590,9 @@ serve(async (req: Request) => {
               spend_micros: meterRes.spendMicros ?? null
             });
           }
-        } else if (SMS_CHAT_SPEND_METERING_ENABLED) {
-          // Over-cap local ($0) turn: settle metering (stamp metered_at without
-          // recording spend) so a cached re-send below is not later mistaken for
-          // an unmetered Gemini turn.
-          await markSmsTurnMetered(supabase, job.id);
         }
+        // Over-cap local ($0) turns need no metering call: metered_at was set
+        // atomically with the reply cache above.
       } else {
         convId = thread?.rowboat_conversation_id;
         // Cached-reply re-send (Telnyx retry, or a crash after caching): the
@@ -595,7 +608,7 @@ serve(async (req: Request) => {
             periodStart: null,
             inputChars: (customerPreamble?.length ?? 0) + userText.length,
             outputChars: reply.length,
-            capMicros: SMS_CHAT_SPEND_CAP_MICROS,
+            capMicros: CHAT_SPEND_CAP_MICROS,
             enabled: SMS_CHAT_SPEND_METERING_ENABLED
           });
           if (meterRes.fuseNewlyTripped) {
