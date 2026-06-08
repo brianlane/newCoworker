@@ -82,9 +82,9 @@
     {
       "id": "task_router",
       "type": "task",
-      "description": "Catch-all for SMS-initiated delegations (CRM updates, browser searches, owner-defined HTTP integrations). Uses the SMS tier Ollama model so we don't burn Gemini tokens on background work.",
+      "description": "Catch-all for SMS-initiated delegations (CRM updates, owner-defined HTTP integrations). Uses the SMS tier Ollama model so we don't burn Gemini tokens on background work.",
       "model": "{{OLLAMA_MODEL}}",
-      "tools": ["crm_update", "appointment_book", "browser_search", "http_api_call"]
+      "tools": ["crm_update", "appointment_book", "http_api_call"]
     }
   ],
   "llm_router": {
@@ -105,10 +105,6 @@
     "api_key": "{{TELNYX_API_KEY}}",
     "messaging_profile_id": "{{TELNYX_MESSAGING_PROFILE_ID}}",
     "sms_from_e164": "{{TELNYX_SMS_FROM_E164}}"
-  },
-  "browser": {
-    "provider": "lightpanda",
-    "endpoint": "{{LIGHTPANDA_WSS_URL}}"
   },
   "tools": [
     {

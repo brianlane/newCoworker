@@ -61,7 +61,7 @@
   - Flash Attention — **ACTIVE** via `OLLAMA_FLASH_ATTENTION=1`. Memory-efficient attention computation; prerequisite for Dynamic VRAM / Weight Streaming on the llama.cpp backend.
   - ComfyUI Dynamic VRAM + Weight Streaming: just-in-time NVMe weight loading. Enabled at the llama.cpp layer via Flash Attention.
 - **Storage:** PostgreSQL (Supabase) for logs/metadata, subscriptions, daily usage tracking; Rowboat internal MongoDB for agent state.
-- **Browsing:** Lightpanda Cloud WSS (Zig-based, low RAM overhead).
+- **Browsing:** Self-hosted Playwright render service (`vps/aiflow-render`) for AiFlows credentialed/SPA browse.
 
 **Performance Targets:**
 
@@ -120,7 +120,7 @@
 - [ ] Create Supabase project (DB + Auth + Edge Functions).
 - [ ] Build Docker Gold Images (Ubuntu + Ollama + Rowboat). Two images: KVM 2 (Starter) + KVM 8 (Standard).
 - [ ] Configure **Telnyx** API key, messaging profile, public key for webhooks, and (per environment) voice routes + bridge secrets; validate VPS bridge heartbeat and stream URL signing.
-- [ ] Verify Lightpanda WSS connectivity.
+- [ ] Verify AiFlow render service (Playwright) connectivity.
 - [ ] Setup Cloudflare Tunnel for secure remote management.
 - [ ] Create 6 Stripe Price IDs (2 tiers × 3 periods).
 - [ ] Create the first `soul.md` for a Real Estate client.

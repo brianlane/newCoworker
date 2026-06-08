@@ -55,6 +55,8 @@ IPv6-literal / `*.internal` / metadata hosts.
 | `AIFLOW_GATEWAY_TOKEN` | Bearer for the platform credentials endpoint (`ROWBOAT_GATEWAY_TOKEN`). |
 | `AIFLOW_SESSION_TTL_MS` | Idle context eviction (default `1800000` = 30m). |
 | `AIFLOW_MAX_SESSIONS` | Max cached contexts (default `50`). |
+| `AIFLOW_RATE_WINDOW_MS` | Rate-limit window (default `60000`). |
+| `AIFLOW_RATE_MAX` | Max requests per window per IP (default `120`). |
 
 ## Enable
 

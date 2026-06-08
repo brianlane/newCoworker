@@ -93,7 +93,6 @@ function buildDeployEnvPrefix(
     ["APP_BASE_URL", process.env.APP_BASE_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? ""],
     ["VOICE_BRIDGE_SRC", process.env.VOICE_BRIDGE_SRC ?? ""],
     ["CLOUDFLARE_TUNNEL_TOKEN", process.env.CLOUDFLARE_TUNNEL_TOKEN ?? ""],
-    ["LIGHTPANDA_WSS_URL", process.env.LIGHTPANDA_WSS_URL ?? "wss://cdn.lightpanda.io/ws"],
     ["PROVISIONING_PROGRESS_URL", progressUrl],
     ["PROVISIONING_PROGRESS_TOKEN", progressToken],
     ["INTERNAL_CRON_SECRET", process.env.INTERNAL_CRON_SECRET ?? ""]

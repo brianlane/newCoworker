@@ -34,6 +34,7 @@
  *   AIFLOW_MAX_SESSIONS        max cached contexts, default 50
  */
 import express from "express";
+import rateLimit from "express-rate-limit";
 import { chromium } from "playwright";
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -78,6 +79,20 @@ function safeUrl(raw) {
 
 const app = express();
 app.use(express.json({ limit: "256kb" }));
+
+// Rate-limit every request (before auth) so a leaked/guessed bearer can't be
+// brute-forced and a single caller can't exhaust the headless-Chromium pool.
+// Each render spins up a browser page, so the ceiling is deliberately modest.
+const RATE_WINDOW_MS = Number(process.env.AIFLOW_RATE_WINDOW_MS ?? 60_000);
+const RATE_MAX = Number(process.env.AIFLOW_RATE_MAX ?? 120);
+app.use(
+  rateLimit({
+    windowMs: RATE_WINDOW_MS,
+    max: RATE_MAX,
+    standardHeaders: true,
+    legacyHeaders: false
+  })
+);
 
 let browserPromise = null;
 function getBrowser() {
