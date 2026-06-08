@@ -47,6 +47,24 @@ describe("planStep: browse_extract", () => {
       error: 'browse_extract: urlVar "lead_url" is not set'
     });
   });
+  it("carries an auth config into the browse action", () => {
+    const authed: FlowStep = {
+      id: "b",
+      type: "browse_extract",
+      urlVar: "lead_url",
+      fields: [{ name: "seller_phone" }],
+      auth: { integrationLabel: "Referral Exchange", login: { usernameSelector: "#email" } }
+    };
+    expect(planStep(authed, { vars: { lead_url: "https://rfrl.to/x" } })).toEqual({
+      ok: true,
+      action: {
+        kind: "browse",
+        url: "https://rfrl.to/x",
+        fields: [{ name: "seller_phone" }],
+        auth: { integrationLabel: "Referral Exchange", login: { usernameSelector: "#email" } }
+      }
+    });
+  });
 });
 
 describe("planStep: send_sms", () => {

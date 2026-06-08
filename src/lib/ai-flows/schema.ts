@@ -74,6 +74,23 @@ const extractFieldSchema = z.object({
   description: z.string().max(300).optional()
 });
 
+/**
+ * Optional credentialed-browse config. `integrationLabel` names a stored custom
+ * integration whose credentials the render service uses to log in before reading
+ * the page (so a flow can read a login-gated lead). The selector overrides are
+ * for non-standard login forms; sensible email/password defaults apply otherwise.
+ */
+const browseAuthSchema = z.object({
+  integrationLabel: z.string().min(1).max(80),
+  login: z
+    .object({
+      usernameSelector: z.string().min(1).max(300).optional(),
+      passwordSelector: z.string().min(1).max(300).optional(),
+      submitSelector: z.string().min(1).max(300).optional()
+    })
+    .optional()
+});
+
 const stepId = z.string().min(1).max(60);
 
 const stepSchema = z.discriminatedUnion("type", [
@@ -82,7 +99,8 @@ const stepSchema = z.discriminatedUnion("type", [
     id: stepId,
     type: z.literal("browse_extract"),
     urlVar: varName,
-    fields: z.array(extractFieldSchema).min(1).max(15)
+    fields: z.array(extractFieldSchema).min(1).max(15),
+    auth: browseAuthSchema.optional()
   }),
   z.object({
     id: stepId,

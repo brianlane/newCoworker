@@ -9,7 +9,7 @@
  * dispatcher that switches on `action.kind`.
  */
 import { firstUrlInText, renderTemplate } from "./engine.ts";
-import type { ExtractField, FlowStep } from "./types.ts";
+import type { BrowseAuth, ExtractField, FlowStep } from "./types.ts";
 
 export type StepScope = {
   vars?: Record<string, unknown>;
@@ -18,7 +18,7 @@ export type StepScope = {
 
 export type StepAction =
   | { kind: "set_vars"; vars: Record<string, string> }
-  | { kind: "browse"; url: string; fields: ExtractField[] }
+  | { kind: "browse"; url: string; fields: ExtractField[]; auth?: BrowseAuth }
   | { kind: "send_sms"; to: string; body: string }
   | { kind: "notify_owner"; message: string }
   | { kind: "await_approval"; prompt: string }
@@ -61,7 +61,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       if (typeof url !== "string" || !url) {
         return { ok: false, error: `browse_extract: urlVar "${step.urlVar}" is not set` };
       }
-      return { ok: true, action: { kind: "browse", url, fields: step.fields } };
+      return { ok: true, action: { kind: "browse", url, fields: step.fields, auth: step.auth } };
     }
     case "send_sms": {
       const to = renderTemplate(step.to, scope).trim();
