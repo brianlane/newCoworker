@@ -157,6 +157,24 @@ describe("proxy", () => {
     expect(res.status).not.toBe(403);
   });
 
+  it("allows POST to /api/integrations/custom/credentials without origin (bearer-authed render service)", async () => {
+    mockSupabaseWithUser(null);
+    const req = makeRequest("/api/integrations/custom/credentials?businessId=00000000-0000-0000-0000-000000000000", {
+      method: "POST"
+    });
+    const res = await proxy(req);
+    expect(res.status).not.toBe(403);
+  });
+
+  it("still enforces CSRF on other /api/integrations POSTs (dashboard, cookie-authed)", async () => {
+    mockSupabaseWithUser(null);
+    const req = makeRequest("/api/integrations/custom", { method: "POST" });
+    const res = await proxy(req);
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.message).toBe("CSRF validation failed");
+  });
+
   it("allows GET to /api without origin (CSRF only for state-changing)", async () => {
     mockSupabaseWithUser(null);
     const req = makeRequest("/api/business/status");
