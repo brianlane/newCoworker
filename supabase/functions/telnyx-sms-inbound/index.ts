@@ -643,29 +643,14 @@ serve(async (req: Request) => {
       console.error("ai_flow trigger eval", e);
     }
 
-    const { error } = await supabase.from("sms_inbound_jobs").insert({
-      business_id: businessId,
-      telnyx_event_id: eventId,
-      payload: envelope as unknown as Record<string, unknown>,
-      status: "pending",
-      suppress_reply: aiFlowEval.suppress,
-      outbound_idempotency_key: crypto.randomUUID()
-    });
-
-    if (error) {
-      if ((error as { code?: string }).code === "23505") {
-        return new Response(JSON.stringify({ ok: true, duplicate_job: true }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" }
-        });
-      }
-      console.error("sms queue insert", error);
-      return new Response("Queue error", { status: 500 });
-    }
-
-    // Enqueue one ai_flow_run per matched flow. dedupe_key=eventId makes this
-    // exactly-once per source event (unique index on (flow_id, dedupe_key)).
-    // Failure-isolated: a run-enqueue error must not fail the webhook.
+    // Enqueue one ai_flow_run per matched flow FIRST, so we only suppress the
+    // default Coworker reply when an automation is actually queued to handle it.
+    // Otherwise a run-insert failure would silence the customer with no flow
+    // running. dedupe_key=eventId makes this exactly-once per source event
+    // (unique index on (flow_id, dedupe_key)); 23505 means a prior webhook
+    // already queued it, which still counts as "queued". Failure-isolated: a
+    // run-enqueue error must not fail the webhook.
+    let suppressingRunQueued = false;
     if (aiFlowEval.matched.length > 0) {
       try {
         for (const m of aiFlowEval.matched) {
@@ -685,19 +670,44 @@ serve(async (req: Request) => {
             current_step: 0,
             dedupe_key: eventId
           });
+          const queued = !runErr || (runErr as { code?: string }).code === "23505";
           if (runErr && (runErr as { code?: string }).code !== "23505") {
             console.error("ai_flow_runs insert", runErr);
+          }
+          if (queued && m.def.options?.suppressDefaultReply === true) {
+            suppressingRunQueued = true;
           }
         }
         await telemetryRecord(supabase, "ai_flow_runs_enqueued", {
           business_id: businessId,
           event_id: eventId,
           count: aiFlowEval.matched.length,
-          suppressed_reply: aiFlowEval.suppress
+          suppressed_reply: suppressingRunQueued
         });
       } catch (e) {
         console.error("ai_flow_runs enqueue", e);
       }
+    }
+
+    const { error } = await supabase.from("sms_inbound_jobs").insert({
+      business_id: businessId,
+      telnyx_event_id: eventId,
+      payload: envelope as unknown as Record<string, unknown>,
+      status: "pending",
+      // Only suppress when a flow that requested it actually has a queued run.
+      suppress_reply: suppressingRunQueued,
+      outbound_idempotency_key: crypto.randomUUID()
+    });
+
+    if (error) {
+      if ((error as { code?: string }).code === "23505") {
+        return new Response(JSON.stringify({ ok: true, duplicate_job: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      console.error("sms queue insert", error);
+      return new Response("Queue error", { status: 500 });
     }
 
     await telemetryRecord(supabase, "sms_inbound_enqueued", { business_id: businessId, event_id: eventId });

@@ -25,6 +25,7 @@ export function AiFlowRunsManager({
   const [expanded, setExpanded] = useState<string | null>(null);
   const [steps, setSteps] = useState<Record<string, AiFlowRunStepRow[]>>({});
   const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const reload = async () => {
     const res = await fetch(`/api/aiflows/runs?businessId=${encodeURIComponent(businessId)}`, {
@@ -52,12 +53,22 @@ export function AiFlowRunsManager({
 
   const decide = async (runId: string, decision: "approve" | "deny") => {
     setBusy(runId);
+    setError(null);
     try {
-      await fetch(`/api/aiflows/runs/${runId}/decision`, {
+      const res = await fetch(`/api/aiflows/runs/${runId}/decision`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ businessId, decision })
       });
+      if (!res.ok) {
+        // A 409 (already decided) or other failure must NOT imply success.
+        const detail = await res
+          .json()
+          .then((j: { error?: string }) => j.error)
+          .catch(() => null);
+        setError(detail || `Could not ${decision} this run (${res.status}). It may have already been decided.`);
+      }
+      // Always refresh so the list reflects the true server state.
       await reload();
     } finally {
       setBusy(null);
@@ -68,6 +79,11 @@ export function AiFlowRunsManager({
 
   return (
     <div className="space-y-6">
+      {error && (
+        <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+          {error}
+        </div>
+      )}
       {pending.length > 0 && (
         <section className="space-y-3">
           <h2 className="text-xs font-semibold uppercase tracking-wider text-spark-orange">

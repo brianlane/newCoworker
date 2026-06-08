@@ -18,6 +18,7 @@ export default async function AiFlowRunsPage() {
     .from("businesses")
     .select("id")
     .eq("owner_email", user.email)
+    .order("created_at", { ascending: false })
     .limit(1);
   const businessId = businesses?.[0]?.id ?? null;
 

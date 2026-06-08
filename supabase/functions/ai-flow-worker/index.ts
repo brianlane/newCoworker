@@ -449,6 +449,14 @@ async function recordStep(
   if (upErr) console.error("ai_flow_run_steps upsert", upErr);
 }
 
+/**
+ * Persist a run-state patch. THROWS on failure so the caller (executeRun) does
+ * not march on assuming a current_step/context/status write landed — a swallowed
+ * error here desyncs the run from its real progress and fights stale-run reclaim.
+ * A thrown error propagates to handleRunThrow, which re-queues for retry. The
+ * terminal/recovery callers (failRun, handleRunThrow) wrap this best-effort so a
+ * persistence failure there can never crash the worker loop.
+ */
 async function updateRun(
   supabase: Supabase,
   id: string,
@@ -458,7 +466,7 @@ async function updateRun(
     .from("ai_flow_runs")
     .update({ ...patch, updated_at: new Date().toISOString() })
     .eq("id", id);
-  if (error) console.error("ai_flow_runs update", error);
+  if (error) throw new Error(`ai_flow_runs update: ${error.message}`);
 }
 
 async function failRun(
@@ -468,12 +476,17 @@ async function failRun(
   scope?: Scope,
   approval?: Record<string, unknown>
 ): Promise<void> {
-  await updateRun(supabase, run.id, {
-    status: "failed",
-    last_error: error.slice(0, 2000),
-    claimed_at: null,
-    ...(scope && approval ? { context: buildContext(scope, approval) } : {})
-  });
+  // Best-effort terminal write; if it fails, stale-run reclaim recovers the run.
+  try {
+    await updateRun(supabase, run.id, {
+      status: "failed",
+      last_error: error.slice(0, 2000),
+      claimed_at: null,
+      ...(scope && approval ? { context: buildContext(scope, approval) } : {})
+    });
+  } catch (e) {
+    console.error("failRun updateRun", e);
+  }
   await telemetryRecord(supabase, "ai_flow_run_failed", {
     run_id: run.id,
     business_id: run.business_id,
@@ -488,11 +501,16 @@ async function handleRunThrow(supabase: Supabase, run: RunRow, e: unknown): Prom
     await failRun(supabase, run, `max attempts: ${message}`);
     return;
   }
-  await updateRun(supabase, run.id, {
-    status: "queued",
-    last_error: message.slice(0, 2000),
-    claimed_at: null
-  });
+  // Best-effort re-queue; if it fails, stale-run reclaim recovers the run.
+  try {
+    await updateRun(supabase, run.id, {
+      status: "queued",
+      last_error: message.slice(0, 2000),
+      claimed_at: null
+    });
+  } catch (e) {
+    console.error("handleRunThrow updateRun", e);
+  }
   await telemetryRecord(supabase, "ai_flow_run_retry", {
     run_id: run.id,
     business_id: run.business_id,
