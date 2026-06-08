@@ -728,6 +728,20 @@ serve(async (req: Request) => {
 
     if (error) {
       if ((error as { code?: string }).code === "23505") {
+        // Duplicate event: the first delivery already created the job. If THIS
+        // delivery is the one that managed to queue a suppressing flow (e.g. the
+        // first delivery's run insert failed and stamped suppress_reply=false),
+        // promote the existing still-pending job to suppressed so it doesn't get
+        // a normal Coworker reply alongside the AiFlow. Only touch pending rows
+        // so we never race the worker after it has claimed the job.
+        if (suppressingRunQueued) {
+          await supabase
+            .from("sms_inbound_jobs")
+            .update({ suppress_reply: true })
+            .eq("business_id", businessId)
+            .eq("telnyx_event_id", eventId)
+            .eq("status", "pending");
+        }
         return new Response(JSON.stringify({ ok: true, duplicate_job: true }), {
           status: 200,
           headers: { "Content-Type": "application/json" }

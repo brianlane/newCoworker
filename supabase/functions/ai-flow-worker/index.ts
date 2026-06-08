@@ -107,7 +107,14 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     .maybeSingle();
   if ((bizRow as { is_paused?: boolean } | null)?.is_paused) {
     try {
-      await updateRun(supabase, run.id, { status: "queued", claimed_at: null });
+      // claim_ai_flow_runs already bumped attempt_count when it leased this run;
+      // give it back so deferring while paused doesn't drain the retry budget
+      // (otherwise a transient failure right after unpause could dead-letter).
+      await updateRun(supabase, run.id, {
+        status: "queued",
+        claimed_at: null,
+        attempt_count: Math.max(0, run.attempt_count - 1)
+      });
     } catch (e) {
       console.error("executeRun defer-paused updateRun", e);
     }
