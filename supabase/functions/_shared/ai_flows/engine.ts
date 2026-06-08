@@ -13,6 +13,7 @@ import type {
   AiFlowDefinition,
   CorrelationMessage,
   SmsTrigger,
+  StepCondition,
   TriggerCondition,
   TriggerContext,
   TriggerResult
@@ -142,6 +143,37 @@ export function renderTemplate(template: string, scope: Record<string, unknown>)
     if (typeof v === "number" || typeof v === "boolean") return String(v);
     return "";
   });
+}
+
+/**
+ * Evaluate a per-step `when` guard against the run vars. Returns true when the
+ * step should RUN. `equals` is a whole-value match, `contains` is a substring;
+ * both are case-insensitive unless `caseInsensitive === false`. A missing /
+ * non-scalar var resolves to "" so an absent value never accidentally matches a
+ * non-empty needle. When neither `equals` nor `contains` is set (the schema
+ * normally forbids this), the guard is a presence check: pass iff the var is
+ * non-empty.
+ */
+export function evaluateStepCondition(
+  cond: StepCondition,
+  scope: { vars?: Record<string, unknown> }
+): boolean {
+  const raw = scope.vars?.[cond.var];
+  const value =
+    typeof raw === "string"
+      ? raw
+      : typeof raw === "number" || typeof raw === "boolean"
+        ? String(raw)
+        : "";
+  const ci = cond.caseInsensitive !== false;
+  const hay = ci ? value.toLowerCase() : value;
+  if (cond.equals !== undefined) {
+    return hay === (ci ? cond.equals.toLowerCase() : cond.equals);
+  }
+  if (cond.contains !== undefined) {
+    return hay.includes(ci ? cond.contains.toLowerCase() : cond.contains);
+  }
+  return value.length > 0;
 }
 
 /** True when a template still has unresolved placeholders against `scope`. */

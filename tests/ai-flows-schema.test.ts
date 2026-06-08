@@ -190,6 +190,70 @@ describe("validateDefinitionSemantics", () => {
   });
 });
 
+describe("step `when` guard", () => {
+  const branchedInput = {
+    version: 1,
+    trigger: { channel: "sms", conditions: [{ type: "has_url" }] },
+    steps: [
+      { id: "u", type: "extract_url", saveAs: "lead_url" },
+      {
+        id: "b",
+        type: "browse_extract",
+        urlVar: "lead_url",
+        fields: [{ name: "lead_type" }, { name: "lead_phone" }]
+      },
+      {
+        id: "buyer",
+        type: "send_sms",
+        to: "{{vars.lead_phone}}",
+        body: "buyer copy",
+        when: { var: "lead_type", contains: "buyer" }
+      }
+    ]
+  };
+
+  it("parses and preserves a `when` guard (zod does not strip it)", () => {
+    const def = parseAiFlowDefinition(JSON.parse(JSON.stringify(branchedInput)));
+    const step = def.steps[2];
+    expect(step.when).toEqual({ var: "lead_type", contains: "buyer" });
+  });
+
+  it("rejects a `when` with both equals and contains set", () => {
+    const bad = JSON.parse(JSON.stringify(branchedInput));
+    bad.steps[2].when = { var: "lead_type", equals: "buyer", contains: "buyer" };
+    expect(() => parseAiFlowDefinition(bad)).toThrow(AiFlowValidationError);
+  });
+
+  it("rejects a `when` with neither equals nor contains set", () => {
+    const bad = JSON.parse(JSON.stringify(branchedInput));
+    bad.steps[2].when = { var: "lead_type" };
+    expect(() => parseAiFlowDefinition(bad)).toThrow(AiFlowValidationError);
+  });
+
+  it("flags a `when.var` that no earlier step produces", () => {
+    const def: AiFlowDefinition = {
+      version: 1,
+      trigger: { channel: "sms", conditions: [] },
+      steps: [
+        {
+          id: "n",
+          type: "notify_owner",
+          message: "hi",
+          when: { var: "lead_type", contains: "buyer" }
+        }
+      ]
+    };
+    expect(
+      validateDefinitionSemantics(def).some((i) => i.includes('"when" condition on {{vars.lead_type}}'))
+    ).toBe(true);
+  });
+
+  it("accepts a `when.var` produced by an earlier step", () => {
+    const def = parseAiFlowDefinition(JSON.parse(JSON.stringify(branchedInput)));
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+});
+
 describe("summarizeDefinition", () => {
   it("summarizes a conditionless trigger", () => {
     const def: AiFlowDefinition = {

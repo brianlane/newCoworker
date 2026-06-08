@@ -101,6 +101,19 @@ describe("planStep: send_sms", () => {
       error: "send_sms: body is empty after templating"
     });
   });
+  it("still plans normally when the step carries a `when` guard (guard is the worker's job)", () => {
+    const gated: FlowStep = {
+      id: "x",
+      type: "send_sms",
+      to: "{{vars.lead_phone}}",
+      body: "buyer copy",
+      when: { var: "lead_type", contains: "buyer" }
+    };
+    expect(planStep(gated, { vars: { lead_phone: "+16026866672", lead_type: "buyer" } })).toEqual({
+      ok: true,
+      action: { kind: "send_sms", to: "+16026866672", body: "buyer copy" }
+    });
+  });
 });
 
 describe("planStep: notify_owner", () => {

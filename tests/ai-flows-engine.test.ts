@@ -3,6 +3,7 @@ import {
   allUrlsInText,
   buildExtractionPrompt,
   evaluateSmsTrigger,
+  evaluateStepCondition,
   extractPhones,
   firstUrlInText,
   hasUnresolvedPlaceholders,
@@ -184,6 +185,43 @@ describe("hasUnresolvedPlaceholders", () => {
   it("is false with no placeholders (and resets between calls)", () => {
     expect(hasUnresolvedPlaceholders("plain", {})).toBe(false);
     expect(hasUnresolvedPlaceholders("plain", {})).toBe(false);
+  });
+});
+
+describe("evaluateStepCondition", () => {
+  it("equals matches case-insensitively by default", () => {
+    expect(evaluateStepCondition({ var: "t", equals: "Buyer" }, { vars: { t: "buyer" } })).toBe(true);
+    expect(evaluateStepCondition({ var: "t", equals: "buyer" }, { vars: { t: "seller" } })).toBe(false);
+  });
+  it("equals respects caseInsensitive=false", () => {
+    expect(
+      evaluateStepCondition({ var: "t", equals: "Buyer", caseInsensitive: false }, { vars: { t: "buyer" } })
+    ).toBe(false);
+    expect(
+      evaluateStepCondition({ var: "t", equals: "buyer", caseInsensitive: false }, { vars: { t: "buyer" } })
+    ).toBe(true);
+  });
+  it("contains matches substrings (e.g. '30% Buyer')", () => {
+    expect(evaluateStepCondition({ var: "t", contains: "buyer" }, { vars: { t: "30% Buyer" } })).toBe(true);
+    expect(evaluateStepCondition({ var: "t", contains: "seller" }, { vars: { t: "30% Buyer" } })).toBe(false);
+  });
+  it("contains respects caseInsensitive=false", () => {
+    expect(
+      evaluateStepCondition({ var: "t", contains: "Buyer", caseInsensitive: false }, { vars: { t: "30% buyer" } })
+    ).toBe(false);
+  });
+  it("stringifies numeric/boolean vars before matching", () => {
+    expect(evaluateStepCondition({ var: "n", equals: "42" }, { vars: { n: 42 } })).toBe(true);
+    expect(evaluateStepCondition({ var: "b", contains: "ru" }, { vars: { b: true } })).toBe(true);
+  });
+  it("treats missing/non-scalar vars as empty (never matches a non-empty needle)", () => {
+    expect(evaluateStepCondition({ var: "t", contains: "buyer" }, { vars: {} })).toBe(false);
+    expect(evaluateStepCondition({ var: "t", equals: "buyer" }, {})).toBe(false);
+    expect(evaluateStepCondition({ var: "t", contains: "x" }, { vars: { t: { a: 1 } } })).toBe(false);
+  });
+  it("falls back to a presence check when neither equals nor contains is set", () => {
+    expect(evaluateStepCondition({ var: "t" }, { vars: { t: "anything" } })).toBe(true);
+    expect(evaluateStepCondition({ var: "t" }, { vars: { t: "" } })).toBe(false);
   });
 });
 

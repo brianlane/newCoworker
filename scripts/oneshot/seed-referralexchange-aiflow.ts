@@ -8,9 +8,10 @@
  *   trigger : inbound SMS that contains a URL (and, by default, mentions the
  *             lead source) within a correlation window — handles the common
  *             "text then link" two-message case.
- *   steps   : extract_url -> browse_extract (seller contact/details) ->
- *             approval_gate -> send_sms (to the extracted seller phone) ->
- *             notify_owner.
+ *   steps   : extract_url -> browse_extract (lead type + contact/details) ->
+ *             approval_gate -> two gated send_sms steps (buyer copy when
+ *             lead_type contains "buyer", seller copy when it contains
+ *             "seller"; only the matching one fires) -> notify_owner.
  *   options : suppressDefaultReply so the lead-source message does NOT also
  *             get a normal Coworker reply.
  *
@@ -41,7 +42,8 @@
  *   # override the lead-source match text / outbound copy without editing code
  *   AIFLOW_SEED_BUSINESS_ID=<uuid> \
  *   AIFLOW_SEED_MATCH_TEXT="ReferralExchange" \
- *   AIFLOW_SEED_OUTBOUND_TEMPLATE="Hi {{vars.seller_name}}, ..." \
+ *   AIFLOW_SEED_BUYER_TEMPLATE="Hi {{vars.lead_name}}, ..." \
+ *   AIFLOW_SEED_SELLER_TEMPLATE="Hi {{vars.lead_name}}, ..." \
  *     npx tsx scripts/oneshot/seed-referralexchange-aiflow.ts --apply
  *
  * Required env:
@@ -51,7 +53,8 @@
  * Optional env:
  *   AIFLOW_SEED_NAME                   (default "ReferralExchange lead")
  *   AIFLOW_SEED_MATCH_TEXT             (default "ReferralExchange"; "" = URL only)
- *   AIFLOW_SEED_OUTBOUND_TEMPLATE      (the prepared SMS body)
+ *   AIFLOW_SEED_BUYER_TEMPLATE         (SMS body sent when lead_type=buyer)
+ *   AIFLOW_SEED_SELLER_TEMPLATE        (SMS body sent when lead_type=seller)
  *   AIFLOW_SEED_CORRELATION_MINUTES    (default 15)
  *
  * Exit codes:
@@ -85,13 +88,19 @@ function parseArgs(argv: readonly string[]): Args {
   return args;
 }
 
-const DEFAULT_OUTBOUND =
-  "Hi {{vars.seller_name}}, I saw your listing and I'd love to help you sell. " +
-  "Are you still looking for an agent? — reply here and I'll be in touch.";
+const DEFAULT_BUYER =
+  "Hi {{vars.lead_name}}, I saw you're looking to buy in {{vars.location}} " +
+  "(around {{vars.price}}). Are you still searching for a home? " +
+  "I'd love to help — reply here.";
+
+const DEFAULT_SELLER =
+  "Hi {{vars.lead_name}}, I saw your {{vars.location}} listing. " +
+  "Are you still looking for an agent to help you sell? — reply here.";
 
 function buildDefinition(opts: {
   matchText: string;
-  outboundTemplate: string;
+  buyerTemplate: string;
+  sellerTemplate: string;
   correlationMinutes: number;
   integrationLabel: string;
 }): unknown {
@@ -113,10 +122,15 @@ function buildDefinition(opts: {
         type: "browse_extract",
         urlVar: "leadUrl",
         fields: [
-          { name: "seller_phone", description: "The seller's phone number in E.164 if possible" },
-          { name: "seller_name", description: "The seller's first name, if shown" },
-          { name: "location", description: "City/area of the listing" },
-          { name: "price", description: "Asking price, if shown" }
+          {
+            name: "lead_type",
+            description:
+              "Is this lead a buyer or a seller? Answer exactly 'buyer' or 'seller'."
+          },
+          { name: "lead_name", description: "The lead's first name, if shown" },
+          { name: "lead_phone", description: "The lead's phone number in E.164 if possible" },
+          { name: "location", description: "City/area of the lead" },
+          { name: "price", description: "Asking/target price, if shown" }
         ],
         // ReferralExchange lead pages are behind the agent's login, so browse via
         // the per-tenant render service using the stored "Referral Exchange"
@@ -127,21 +141,32 @@ function buildDefinition(opts: {
         id: "approve",
         type: "approval_gate",
         prompt:
-          "New lead: {{vars.seller_name}} in {{vars.location}} ({{vars.price}}). " +
-          "Send the intro text to {{vars.seller_phone}}?"
+          "New {{vars.lead_type}} lead: {{vars.lead_name}} in {{vars.location}} " +
+          "({{vars.price}}). Send the intro text to {{vars.lead_phone}}?"
+      },
+      // Branch on lead_type: only the matching send_sms fires (the other is
+      // skipped via its `when` guard). `contains` so "30% Buyer"-style phrasings
+      // still match.
+      {
+        id: "send_buyer",
+        type: "send_sms",
+        to: "{{vars.lead_phone}}",
+        body: opts.buyerTemplate,
+        when: { var: "lead_type", contains: "buyer" }
       },
       {
-        id: "send",
+        id: "send_seller",
         type: "send_sms",
-        to: "{{vars.seller_phone}}",
-        body: opts.outboundTemplate
+        to: "{{vars.lead_phone}}",
+        body: opts.sellerTemplate,
+        when: { var: "lead_type", contains: "seller" }
       },
       {
         id: "notify",
         type: "notify_owner",
         message:
-          "AiFlow sent an intro to {{vars.seller_name}} ({{vars.seller_phone}}) " +
-          "in {{vars.location}}."
+          "AiFlow sent the {{vars.lead_type}} intro to {{vars.lead_name}} " +
+          "({{vars.lead_phone}}) in {{vars.location}}."
       }
     ],
     options: { suppressDefaultReply: true }
@@ -176,7 +201,8 @@ async function main(): Promise<void> {
   const name = process.env.AIFLOW_SEED_NAME ?? "ReferralExchange lead";
   const definitionInput = buildDefinition({
     matchText: process.env.AIFLOW_SEED_MATCH_TEXT ?? "ReferralExchange",
-    outboundTemplate: process.env.AIFLOW_SEED_OUTBOUND_TEMPLATE ?? DEFAULT_OUTBOUND,
+    buyerTemplate: process.env.AIFLOW_SEED_BUYER_TEMPLATE ?? DEFAULT_BUYER,
+    sellerTemplate: process.env.AIFLOW_SEED_SELLER_TEMPLATE ?? DEFAULT_SELLER,
     correlationMinutes: Number(process.env.AIFLOW_SEED_CORRELATION_MINUTES ?? "15"),
     integrationLabel: process.env.AIFLOW_SEED_INTEGRATION_LABEL ?? "Referral Exchange"
   });
