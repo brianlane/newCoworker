@@ -289,7 +289,7 @@ async function browseStep(
     // fail the run instead of letting it throw into the retry path.
     if (e instanceof BrowseLoginError) {
       const which = action.auth ? ` for integration "${action.auth.integrationLabel}"` : "";
-      return { kind: "fail", error: `browse: login failed${which}` };
+      return { kind: "fail", error: `browse: ${e.message}${which}` };
     }
     throw e;
   }
@@ -349,7 +349,12 @@ async function fetchPage(
         } catch {
           /* non-JSON error body — treat as transient below */
         }
-        if (errCode === "login_failed") throw new BrowseLoginError("render login failed");
+        // login_failed (bad creds/MFA) and auth_config_error (missing platform
+        // config, integration not found, wrong selectors) are permanent setup
+        // failures — fail the run rather than retrying transiently.
+        if (errCode === "login_failed" || errCode === "auth_config_error") {
+          throw new BrowseLoginError(errCode);
+        }
         throw new Error(`render service ${res.status}`);
       }
       const parsed = parseRenderResponse(await res.json(), url);

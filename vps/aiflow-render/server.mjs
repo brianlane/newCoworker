@@ -137,42 +137,46 @@ function evictStale() {
   }
 }
 
-/** Acquire (creating if needed) the per-tenant context, bumping its refcount. */
+/**
+ * Acquire (creating if needed) the per-tenant session, bumping its refcount, and
+ * return the entry itself (so release/finish operate on the shared object even
+ * after a poisoned session is removed from the map).
+ */
 async function acquireSession(key) {
   let s = sessions.get(key);
   if (!s) {
     const browser = await getBrowser();
-    s = { ctx: browser.newContext({ userAgent: UA }), lastUsed: Date.now(), inUse: 0 };
+    s = { ctx: browser.newContext({ userAgent: UA }), lastUsed: Date.now(), inUse: 0, doomed: false };
     sessions.set(key, s);
   }
   s.inUse++;
   s.lastUsed = Date.now();
   evictStale();
   try {
-    return await s.ctx;
+    s.context = await s.ctx;
+    return s;
   } catch (e) {
     // Context creation failed — drop the poisoned entry so we retry cleanly.
     s.inUse--;
-    sessions.delete(key);
+    if (sessions.get(key) === s) sessions.delete(key);
     throw e;
   }
 }
 
-function releaseSession(key) {
-  const s = sessions.get(key);
-  if (s) {
-    s.inUse = Math.max(0, s.inUse - 1);
-    s.lastUsed = Date.now();
+/**
+ * Release a session after a request finishes. On `poisoned` (bad login / render
+ * error) the entry is removed from the map so no NEW request reuses it, but the
+ * underlying context is only closed once the LAST in-flight request releases it
+ * (inUse === 0) — never yanked out from under a concurrent authed browse.
+ */
+function finishSession(key, s, poisoned) {
+  s.inUse = Math.max(0, s.inUse - 1);
+  s.lastUsed = Date.now();
+  if (poisoned) {
+    s.doomed = true;
+    if (sessions.get(key) === s) sessions.delete(key);
   }
-}
-
-/** Drop + close a poisoned session (bad login / render error). */
-function dropSession(key) {
-  const s = sessions.get(key);
-  if (s) {
-    sessions.delete(key);
-    closeEntry(s);
-  }
+  if (s.doomed && s.inUse === 0) closeEntry(s);
 }
 
 function attachSsrfGuard(page) {
@@ -297,9 +301,9 @@ app.post("/render", async (req, res) => {
   if (!businessId || !label) return res.status(400).json({ error: "missing_business_or_label" });
   const key = `${businessId}:${label}`;
 
-  let context;
+  let session;
   try {
-    context = await acquireSession(key);
+    session = await acquireSession(key);
   } catch (e) {
     return res.status(502).json({ error: "render_failed", detail: String(e).slice(0, 300) });
   }
@@ -307,15 +311,27 @@ app.post("/render", async (req, res) => {
   let page;
   let poisoned = false;
   try {
-    page = await context.newPage();
+    page = await session.context.newPage();
     await attachSsrfGuard(page);
     await page.goto(safe, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
 
     if (await looksLikeLogin(page, auth?.login)) {
-      const creds = await fetchCredentials(businessId, label);
-      await performLogin(page, creds, auth?.login);
+      // Credential lookup / login-form failures are permanent SETUP errors
+      // (missing AIFLOW_PLATFORM_URL/token, integration not found, wrong
+      // selectors). Report them as `auth_config_error` so the worker fails the
+      // run immediately instead of retrying as transient IO.
+      let creds;
+      try {
+        creds = await fetchCredentials(businessId, label);
+        await performLogin(page, creds, auth?.login);
+      } catch (e) {
+        poisoned = true;
+        return res
+          .status(502)
+          .json({ error: "auth_config_error", detail: String(e).slice(0, 200) });
+      }
       await page.goto(safe, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
-      // Login can fail (bad creds / MFA / captcha). Surface it AND drop the now
+      // Login can still fail (bad creds / MFA / captcha). Surface it AND drop the
       // logged-out session so the next call doesn't reuse a poisoned context and
       // hand the extractor a login page.
       if (await looksLikeLogin(page, auth?.login)) {
@@ -332,8 +348,7 @@ app.post("/render", async (req, res) => {
     return res.status(502).json({ error: "render_failed", detail: String(e).slice(0, 300) });
   } finally {
     if (page) await page.close().catch(() => {});
-    if (poisoned) dropSession(key);
-    else releaseSession(key);
+    finishSession(key, session, poisoned);
   }
 });
 
