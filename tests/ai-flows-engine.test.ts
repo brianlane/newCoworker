@@ -282,9 +282,11 @@ describe("htmlToText", () => {
     expect(htmlToText(html)).toBe('Call Bob & <Co> "now" it\'s open');
   });
 
-  it("strips script/style end tags that contain whitespace", () => {
+  it("strips script/style end tags with whitespace or trailing junk", () => {
     expect(htmlToText("<script >evil()</script >keep")).toBe("keep");
     expect(htmlToText("<style >.a{}</style >keep")).toBe("keep");
+    // CodeQL bad-tag-filter case: end tag with trailing whitespace/junk.
+    expect(htmlToText("<script>evil()</script\t\n bar>keep")).toBe("keep");
   });
 
   it("decodes &amp; last so it does not double-unescape", () => {
