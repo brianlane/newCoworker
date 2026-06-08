@@ -36,14 +36,29 @@ import {
 import { planStep, type StepAction } from "../_shared/ai_flows/steps.ts";
 import { normalizeBrowseUrl, parseRenderResponse } from "../_shared/ai_flows/browse.ts";
 import { ensureStopLanguage, isRecipientOptedOut } from "../_shared/ai_flows/compliance.ts";
-import type { AiFlowDefinition, ExtractField, FlowStep } from "../_shared/ai_flows/types.ts";
+import type { AiFlowDefinition, BrowseAuth, ExtractField, FlowStep } from "../_shared/ai_flows/types.ts";
 
 type Supabase = ReturnType<typeof createClient>;
 
 const MAX_ATTEMPTS = 4;
 const CLAIM_LIMIT = 3;
 const FETCH_TIMEOUT_MS = 20_000;
+// Render-service calls can run several navigations plus a login, so they need a
+// far larger budget than a static fetch. Must exceed the render service's
+// per-navigation timeout (AIFLOW_RENDER_TIMEOUT_MS, default 30s) times the
+// worst-case nav count (initial + login + re-nav) or the worker aborts a render
+// that would have succeeded.
+const RENDER_FETCH_TIMEOUT_MS = Number(
+  Deno.env.get("AIFLOW_RENDER_FETCH_TIMEOUT_MS") ?? "120000"
+);
 const MAX_REDIRECTS = 5;
+
+/**
+ * Thrown when the render service reports a login failure (bad creds / MFA /
+ * captcha). That is a permanent setup error, so the worker fails the run rather
+ * than retrying it up to MAX_ATTEMPTS.
+ */
+class BrowseLoginError extends Error {}
 const GEMINI_MODEL = Deno.env.get("AIFLOW_EXTRACT_MODEL") ?? "gemini-2.5-flash-lite";
 
 type RunRow = {
@@ -233,7 +248,7 @@ async function runStep(
       Object.assign(scope.vars, action.vars);
       return { kind: "ok", result: { vars: action.vars } };
     case "browse":
-      return browseStep(scope, action);
+      return browseStep(run, scope, action);
     case "send_sms":
       return sendSmsStep(supabase, run, index, action);
     case "notify_owner":
@@ -246,13 +261,38 @@ async function runStep(
 }
 
 async function browseStep(
+  run: RunRow,
   scope: Scope,
   action: Extract<StepAction, { kind: "browse" }>
 ): Promise<StepOutcome> {
   const safe = normalizeBrowseUrl(action.url);
   if (!safe) return { kind: "fail", error: `browse: unsafe or invalid URL ${action.url}` };
 
-  const page = await fetchPage(safe);
+  // A login-gated browse can only be performed by the headless render service
+  // (a static fetch can't drive a login form). Missing config is a permanent
+  // setup error, not a transient one — fail without burning retries.
+  if (action.auth && !Deno.env.get("AIFLOW_RENDER_URL")) {
+    return {
+      kind: "fail",
+      error: "browse: authenticated browse requires the AIFLOW_RENDER_URL render service"
+    };
+  }
+
+  let page: { finalUrl: string; text: string; html: string };
+  try {
+    page = await fetchPage(
+      safe,
+      action.auth ? { businessId: run.business_id, auth: action.auth } : undefined
+    );
+  } catch (e) {
+    // A render login failure is permanent (bad creds / MFA), not transient IO —
+    // fail the run instead of letting it throw into the retry path.
+    if (e instanceof BrowseLoginError) {
+      const which = action.auth ? ` for integration "${action.auth.integrationLabel}"` : "";
+      return { kind: "fail", error: `browse: ${e.message}${which}` };
+    }
+    throw e;
+  }
   const pageText = page.text || htmlToText(page.html);
   const extracted = await extractFields(action.fields, pageText);
 
@@ -268,20 +308,55 @@ async function browseStep(
   return { kind: "ok", result: { vars: out, finalUrl: page.finalUrl } };
 }
 
-/** Fetch a page via the optional render service, else a static GET. */
-async function fetchPage(url: string): Promise<{ finalUrl: string; text: string; html: string }> {
+/**
+ * Fetch a page via the optional render service, else a static GET.
+ *
+ * When `authCtx` is supplied the render service logs in with the named custom
+ * integration's stored credentials before reading the page (credentialed
+ * browse). The render service is network-reachable, so calls carry a bearer
+ * token (AIFLOW_RENDER_TOKEN) when configured.
+ */
+async function fetchPage(
+  url: string,
+  authCtx?: { businessId: string; auth: BrowseAuth }
+): Promise<{ finalUrl: string; text: string; html: string }> {
   const renderUrl = Deno.env.get("AIFLOW_RENDER_URL");
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  // Render calls (multi-nav + login) get a much larger budget than a static GET.
+  const timer = setTimeout(
+    () => ctrl.abort(),
+    renderUrl ? RENDER_FETCH_TIMEOUT_MS : FETCH_TIMEOUT_MS
+  );
   try {
     if (renderUrl) {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      const renderToken = Deno.env.get("AIFLOW_RENDER_TOKEN");
+      if (renderToken) headers.Authorization = `Bearer ${renderToken}`;
       const res = await fetch(renderUrl, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
+        headers,
+        body: JSON.stringify(
+          authCtx ? { url, businessId: authCtx.businessId, auth: authCtx.auth } : { url }
+        ),
         signal: ctrl.signal
       });
-      if (!res.ok) throw new Error(`render service ${res.status}`);
+      if (!res.ok) {
+        // Distinguish a permanent login failure from transient render errors so
+        // the caller can fail fast instead of retrying bad credentials.
+        let errCode = "";
+        try {
+          errCode = ((await res.json()) as { error?: string })?.error ?? "";
+        } catch {
+          /* non-JSON error body — treat as transient below */
+        }
+        // login_failed (bad creds/MFA) and auth_config_error (missing platform
+        // config, integration not found, wrong selectors) are permanent setup
+        // failures — fail the run rather than retrying transiently.
+        if (errCode === "login_failed" || errCode === "auth_config_error") {
+          throw new BrowseLoginError(errCode);
+        }
+        throw new Error(`render service ${res.status}`);
+      }
       const parsed = parseRenderResponse(await res.json(), url);
       if (!parsed) throw new Error("render service returned an invalid body");
       return parsed;

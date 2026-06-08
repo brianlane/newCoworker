@@ -1,10 +1,14 @@
-# Optional AiFlow render service (headless Chromium). Deploy only when SPA lead
-# pages need JS rendering; otherwise the worker's static fetch is sufficient.
-FROM mcr.microsoft.com/playwright:v1.48.0-jammy
+# AiFlow render service (headless Chromium). Deploy when lead pages are JS SPAs
+# or login-gated; otherwise the worker's static fetch is sufficient.
+#
+# The base image tag MUST match the Playwright version pinned in package-lock.json
+# (currently 1.60.0) so the bundled browsers match the installed library — a
+# mismatch is the classic "Executable doesn't exist" container failure.
+FROM mcr.microsoft.com/playwright:v1.60.0-jammy
 
 WORKDIR /app
-COPY package.json ./
-RUN npm install --omit=dev
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 COPY server.mjs ./
 
 ENV PORT=8080

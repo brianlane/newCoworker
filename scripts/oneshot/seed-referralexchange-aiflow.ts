@@ -93,6 +93,7 @@ function buildDefinition(opts: {
   matchText: string;
   outboundTemplate: string;
   correlationMinutes: number;
+  integrationLabel: string;
 }): unknown {
   const conditions: Array<Record<string, unknown>> = [{ type: "has_url" }];
   if (opts.matchText.trim()) {
@@ -116,7 +117,11 @@ function buildDefinition(opts: {
           { name: "seller_name", description: "The seller's first name, if shown" },
           { name: "location", description: "City/area of the listing" },
           { name: "price", description: "Asking price, if shown" }
-        ]
+        ],
+        // ReferralExchange lead pages are behind the agent's login, so browse via
+        // the render service using the stored "Referral Exchange" integration
+        // credentials. Requires AIFLOW_RENDER_URL on the worker.
+        auth: { integrationLabel: opts.integrationLabel }
       },
       {
         id: "approve",
@@ -172,7 +177,8 @@ async function main(): Promise<void> {
   const definitionInput = buildDefinition({
     matchText: process.env.AIFLOW_SEED_MATCH_TEXT ?? "ReferralExchange",
     outboundTemplate: process.env.AIFLOW_SEED_OUTBOUND_TEMPLATE ?? DEFAULT_OUTBOUND,
-    correlationMinutes: Number(process.env.AIFLOW_SEED_CORRELATION_MINUTES ?? "15")
+    correlationMinutes: Number(process.env.AIFLOW_SEED_CORRELATION_MINUTES ?? "15"),
+    integrationLabel: process.env.AIFLOW_SEED_INTEGRATION_LABEL ?? "Referral Exchange"
   });
 
   let definition;

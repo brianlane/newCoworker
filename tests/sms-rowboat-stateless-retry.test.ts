@@ -286,9 +286,7 @@ describe("callSmsRowboatWithStatelessFallback — stateless retry on stale conti
     // String() coercion the retry classifier would `.has(undefined)`
     // and silently turn every non-Error throw into a hard failure.
     const fetchStub = vi
-      .fn<typeof fetch>()
-      // eslint-disable-next-line prefer-promise-reject-errors
-      .mockImplementationOnce(() => Promise.reject("rowboat_http_500" as unknown as Error))
+      .fn<typeof fetch>()      .mockImplementationOnce(() => Promise.reject("rowboat_http_500" as unknown as Error))
       .mockResolvedValueOnce(jsonResponse(rowboatReply("fresh", "conv-NEW")));
     const result = await callSmsRowboatWithStatelessFallback(
       {

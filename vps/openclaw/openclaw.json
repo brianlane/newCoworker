@@ -1,11 +1,10 @@
 {
   "version": "1",
-  "_comment": "OpenClaw agent template. Use OPENCLAW_GATEWAY_TOKEN for this agent’s gateway auth (separate from Rowboat’s ROWBOAT_GATEWAY_TOKEN). Also substitute SUPABASE_URL, NOTIFICATIONS_WEBHOOK_TOKEN, Telnyx keys (same names as vps/scripts/deploy-client.sh where shared). Override browser.endpoint if LIGHTPANDA_WSS_URL differs from the default below.",
+  "_comment": "OpenClaw agent template. Use OPENCLAW_GATEWAY_TOKEN for this agent’s gateway auth (separate from Rowboat’s ROWBOAT_GATEWAY_TOKEN). Also substitute SUPABASE_URL, NOTIFICATIONS_WEBHOOK_TOKEN, Telnyx keys (same names as vps/scripts/deploy-client.sh where shared).",
   "gateway_token": "{{OPENCLAW_GATEWAY_TOKEN}}",
   "features": {
     "chatCompletions": true,
-    "losslessClaw": true,
-    "browserSkills": true
+    "losslessClaw": true
   },
   "models": {
     "fast": "llama3.2:3b",
@@ -19,10 +18,6 @@
     "provider": "lossless_claw",
     "path": "/var/openclaw/memory",
     "max_tokens": 8192
-  },
-  "browser": {
-    "provider": "lightpanda",
-    "endpoint": "wss://cdn.lightpanda.io/ws"
   },
   "notification_webhook": "{{SUPABASE_URL}}/functions/v1/notifications",
   "notification_webhook_token": "{{NOTIFICATIONS_WEBHOOK_TOKEN}}",
@@ -39,11 +34,6 @@
     ]
   },
   "skills": [
-    {
-      "id": "browser_search",
-      "enabled": true,
-      "description": "Headless browser automation via Lightpanda Cloud"
-    },
     {
       "id": "lossless_memory",
       "enabled": true,

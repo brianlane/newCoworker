@@ -6,9 +6,10 @@
  * Phase-0 spike decision: the default browse backend is a STATIC fetch of the
  * (public) lead page. The contract here also describes an optional external
  * render service (`AIFLOW_RENDER_URL`) so a heavier headless backend
- * (Playwright/Lightpanda on the VPS) can be swapped in later for SPA pages
- * WITHOUT touching the engine — the worker just POSTs `{ url }` and gets back
- * `{ finalUrl, text, html }`.
+ * (the self-hosted Playwright service in vps/aiflow-render) can be swapped in
+ * for SPA / login-gated pages WITHOUT touching the engine — the worker just
+ * POSTs `{ url }` (plus `businessId`+`auth` for credentialed browse) and gets
+ * back `{ finalUrl, text, html }`.
  *
  * Every URL the worker fetches (directly or via the render service) MUST pass
  * `normalizeBrowseUrl` first so a malicious lead link can't point the fetcher at

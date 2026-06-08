@@ -67,6 +67,25 @@ describe("parseAiFlowDefinition", () => {
     expect(def.options?.suppressDefaultReply).toBe(true);
   });
 
+  it("accepts a browse_extract with an auth (credentialed-browse) block", () => {
+    const withAuth = JSON.parse(JSON.stringify(validInput));
+    withAuth.steps[1].auth = {
+      integrationLabel: "Referral Exchange",
+      login: { usernameSelector: "#email", passwordSelector: "#password" }
+    };
+    const def = parseAiFlowDefinition(withAuth);
+    const browse = def.steps[1];
+    expect(browse.type === "browse_extract" && browse.auth?.integrationLabel).toBe(
+      "Referral Exchange"
+    );
+  });
+
+  it("rejects an auth block missing integrationLabel", () => {
+    const bad = JSON.parse(JSON.stringify(validInput));
+    bad.steps[1].auth = { login: { usernameSelector: "#email" } };
+    expect(() => parseAiFlowDefinition(bad)).toThrow(AiFlowValidationError);
+  });
+
   it("throws with a (root) issue for a non-object", () => {
     try {
       parseAiFlowDefinition("not an object");

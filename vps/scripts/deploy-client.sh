@@ -51,7 +51,6 @@
 #                               Operator is responsible for syncing the repo to
 #                               this path (e.g. via git clone in bootstrap.sh or
 #                               a rsync from the orchestrator).
-#   LIGHTPANDA_WSS_URL       — Lightpanda browser endpoint
 #   PROVISIONING_PROGRESS_URL — optional; POST JSON progress to app (see report_progress)
 #   PROVISIONING_PROGRESS_TOKEN — Bearer token for progress API
 
@@ -333,9 +332,6 @@ BRIDGE_MEDIA_WSS_ORIGIN=${BRIDGE_MEDIA_WSS_ORIGIN:-}
 # Supabase notifications
 NOTIFICATION_WEBHOOK=${SUPABASE_URL}/functions/v1/notifications
 NOTIFICATION_WEBHOOK_TOKEN=${NOTIFICATIONS_WEBHOOK_TOKEN:-${SUPABASE_SERVICE_KEY}}
-
-# Browser skills
-LIGHTPANDA_WSS_URL=${LIGHTPANDA_WSS_URL:-wss://cdn.lightpanda.io/ws}
 
 # Paths inside the Rowboat container (see bootstrap docker-compose volume mounts)
 ROWBOAT_VAULT_PATH=/vault

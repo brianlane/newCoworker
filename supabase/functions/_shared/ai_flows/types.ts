@@ -40,9 +40,35 @@ export type ExtractField = {
   description?: string;
 };
 
+/**
+ * Optional credentialed-browse config for a `browse_extract` step. When set, the
+ * worker routes the fetch through the headless render service, which logs in with
+ * the named custom integration's stored credentials before reading the page. This
+ * is what lets a flow read a login-gated lead page (e.g. a ReferralExchange match
+ * behind the agent's account). Requires AIFLOW_RENDER_URL — a static fetch cannot
+ * perform a login. The render service only READS the page; it never clicks
+ * accept/confirm-style actions.
+ */
+export type BrowseAuth = {
+  /** Custom-integration label whose stored credentials are used to log in. */
+  integrationLabel: string;
+  /** Optional CSS selector overrides; defaults suit a standard email/password form. */
+  login?: {
+    usernameSelector?: string;
+    passwordSelector?: string;
+    submitSelector?: string;
+  };
+};
+
 export type FlowStep =
   | { id: string; type: "extract_url"; saveAs: string }
-  | { id: string; type: "browse_extract"; urlVar: string; fields: ExtractField[] }
+  | {
+      id: string;
+      type: "browse_extract";
+      urlVar: string;
+      fields: ExtractField[];
+      auth?: BrowseAuth;
+    }
   | { id: string; type: "send_sms"; to: string; body: string }
   | { id: string; type: "approval_gate"; prompt: string }
   | { id: string; type: "notify_owner"; message: string }

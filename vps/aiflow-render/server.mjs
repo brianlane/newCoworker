@@ -1,24 +1,52 @@
 /**
- * AiFlow render service (OPTIONAL, deferred per the Phase-0 spike).
+ * AiFlow render service — headless-Chromium browse backend for AiFlows.
  *
- * The default AiFlows browse backend is a static fetch performed inside the
- * ai-flow-worker. For JS-rendered (SPA) lead pages that a static fetch can't
- * read, deploy this small headless-Chromium service on the VPS Docker host and
+ * The default AiFlows browse backend is a static fetch inside the ai-flow-worker.
+ * For JS-rendered (SPA) pages a static fetch can't read, AND for LOGIN-GATED
+ * pages a static fetch can't authenticate, deploy this service on the VPS and
  * point the worker at it with:
  *
- *   AIFLOW_RENDER_URL=http://aiflow-render:8080/render
+ *   AIFLOW_RENDER_URL=https://<vps-host>/render      (worker secret)
+ *   AIFLOW_RENDER_TOKEN=<shared-bearer>              (worker + this service)
  *
  * Contract (matches supabase/functions/_shared/ai_flows/browse.ts):
- *   POST /render { "url": "https://..." }  ->  { finalUrl, text, html }
+ *   POST /render { url }                              -> { finalUrl, text, html }
+ *   POST /render { url, businessId, auth }            -> { finalUrl, text, html }
+ *
+ * When `auth` is present the service logs in first using the named custom
+ * integration's stored credentials (fetched from the platform's gateway-guarded
+ * /api/integrations/custom/credentials endpoint), reusing a per-tenant browser
+ * context so the session cookie is cached across calls. It only READS the page —
+ * it fills + submits the login form and never clicks lead-page action buttons
+ * (accept/call/email), which can create binding agreements.
  *
  * SSRF guard mirrors the worker's normalizeBrowseUrl: only http(s), no
- * localhost / private IPv4 / IPv6-literal / *.internal / metadata hosts.
+ * localhost / private IPv4 / IPv6-literal / *.internal / metadata hosts. Every
+ * browser request (initial nav, redirects, subresources) is re-validated.
+ *
+ * Env:
+ *   PORT                       default 8080
+ *   AIFLOW_RENDER_TIMEOUT_MS   per-navigation timeout, default 30000
+ *   AIFLOW_RENDER_TOKEN        if set, required as `Authorization: Bearer` on /render
+ *   AIFLOW_PLATFORM_URL        platform base URL for credential lookups (auth mode)
+ *   AIFLOW_GATEWAY_TOKEN       bearer for the platform credentials endpoint
+ *   AIFLOW_SESSION_TTL_MS      idle context eviction, default 1800000 (30m)
+ *   AIFLOW_MAX_SESSIONS        max cached contexts, default 50
  */
 import express from "express";
+import rateLimit from "express-rate-limit";
 import { chromium } from "playwright";
 
 const PORT = Number(process.env.PORT ?? 8080);
-const NAV_TIMEOUT_MS = Number(process.env.AIFLOW_RENDER_TIMEOUT_MS ?? 20000);
+const NAV_TIMEOUT_MS = Number(process.env.AIFLOW_RENDER_TIMEOUT_MS ?? 30000);
+const RENDER_TOKEN = process.env.AIFLOW_RENDER_TOKEN ?? "";
+const PLATFORM_URL = (process.env.AIFLOW_PLATFORM_URL ?? "").replace(/\/+$/, "");
+const GATEWAY_TOKEN = process.env.AIFLOW_GATEWAY_TOKEN ?? "";
+const SESSION_TTL_MS = Number(process.env.AIFLOW_SESSION_TTL_MS ?? 30 * 60 * 1000);
+const MAX_SESSIONS = Number(process.env.AIFLOW_MAX_SESSIONS ?? 50);
+const UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+  "(KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 
 function isPrivateIpv4(host) {
   const parts = host.split(".").map(Number);
@@ -52,38 +80,275 @@ function safeUrl(raw) {
 const app = express();
 app.use(express.json({ limit: "256kb" }));
 
+// Rate-limit every request (before auth) so a leaked/guessed bearer can't be
+// brute-forced and a single caller can't exhaust the headless-Chromium pool.
+// Each render spins up a browser page, so the ceiling is deliberately modest.
+const RATE_WINDOW_MS = Number(process.env.AIFLOW_RATE_WINDOW_MS ?? 60_000);
+const RATE_MAX = Number(process.env.AIFLOW_RATE_MAX ?? 120);
+app.use(
+  rateLimit({
+    windowMs: RATE_WINDOW_MS,
+    max: RATE_MAX,
+    standardHeaders: true,
+    legacyHeaders: false
+  })
+);
+
 let browserPromise = null;
 function getBrowser() {
   if (!browserPromise) browserPromise = chromium.launch({ args: ["--no-sandbox"] });
   return browserPromise;
 }
 
+/**
+ * Per-tenant browser contexts keyed by `${businessId}:${label}`, so a logged-in
+ * session cookie is reused across calls instead of re-logging in every time.
+ *
+ * Each entry stores a context PROMISE (so concurrent first-callers dedupe to one
+ * context instead of leaking duplicates) plus an `inUse` refcount. Only idle
+ * entries (`inUse === 0`) are ever evicted/closed, so we never yank a context out
+ * from under an in-flight request. Eviction is best-effort and never awaited.
+ */
+const sessions = new Map(); // key -> { ctx: Promise<BrowserContext>, lastUsed, inUse }
+
+function closeEntry(s) {
+  Promise.resolve(s.ctx)
+    .then((c) => c.close())
+    .catch(() => {});
+}
+
+function evictStale() {
+  const now = Date.now();
+  for (const [key, s] of sessions) {
+    if (s.inUse === 0 && now - s.lastUsed > SESSION_TTL_MS) {
+      sessions.delete(key);
+      closeEntry(s);
+    }
+  }
+  if (sessions.size > MAX_SESSIONS) {
+    const idle = [...sessions.entries()]
+      .filter(([, s]) => s.inUse === 0)
+      .sort((a, b) => a[1].lastUsed - b[1].lastUsed);
+    while (sessions.size > MAX_SESSIONS && idle.length) {
+      const [key, s] = idle.shift();
+      sessions.delete(key);
+      closeEntry(s);
+    }
+  }
+}
+
+/**
+ * Acquire (creating if needed) the per-tenant session, bumping its refcount, and
+ * return the entry itself (so release/finish operate on the shared object even
+ * after a poisoned session is removed from the map).
+ */
+async function acquireSession(key) {
+  let s = sessions.get(key);
+  if (!s) {
+    const browser = await getBrowser();
+    s = { ctx: browser.newContext({ userAgent: UA }), lastUsed: Date.now(), inUse: 0, doomed: false };
+    sessions.set(key, s);
+  }
+  s.inUse++;
+  s.lastUsed = Date.now();
+  evictStale();
+  try {
+    s.context = await s.ctx;
+    return s;
+  } catch (e) {
+    // Context creation failed — drop the poisoned entry so we retry cleanly.
+    s.inUse--;
+    if (sessions.get(key) === s) sessions.delete(key);
+    throw e;
+  }
+}
+
+/**
+ * Release a session after a request finishes. On `poisoned` (bad login / render
+ * error) the entry is removed from the map so no NEW request reuses it, but the
+ * underlying context is only closed once the LAST in-flight request releases it
+ * (inUse === 0) — never yanked out from under a concurrent authed browse.
+ */
+function finishSession(key, s, poisoned) {
+  s.inUse = Math.max(0, s.inUse - 1);
+  s.lastUsed = Date.now();
+  if (poisoned) {
+    s.doomed = true;
+    if (sessions.get(key) === s) sessions.delete(key);
+  }
+  if (s.doomed && s.inUse === 0) closeEntry(s);
+}
+
+function attachSsrfGuard(page) {
+  return page.route("**/*", (route) => {
+    if (safeUrl(route.request().url())) route.continue();
+    else route.abort("blockedbyclient");
+  });
+}
+
+/** Fetch decrypted credentials for a custom integration from the platform. */
+async function fetchCredentials(businessId, label) {
+  if (!PLATFORM_URL || !GATEWAY_TOKEN) throw new Error("credentials_endpoint_not_configured");
+  const res = await fetch(
+    `${PLATFORM_URL}/api/integrations/custom/credentials?businessId=${encodeURIComponent(businessId)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${GATEWAY_TOKEN}` },
+      body: JSON.stringify({ label })
+    }
+  );
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body?.ok) throw new Error(`credentials_lookup_failed:${body?.detail ?? res.status}`);
+  return { username: body.data?.username ?? "", password: body.data?.password ?? "" };
+}
+
+/** First selector in `candidates` that matches an element on the page, else null. */
+async function firstSelector(page, candidates) {
+  for (const sel of candidates) {
+    if (!sel) continue;
+    if (await page.locator(sel).count().catch(() => 0)) return sel;
+  }
+  return null;
+}
+
+const USERNAME_SELECTORS = [
+  'input[type="email"]',
+  'input[autocomplete="username"]',
+  'input[name*="email" i]',
+  'input[name*="login" i]',
+  'input[name*="user" i]'
+];
+
+/**
+ * True only when the page looks like an actual login FORM: a password field AND a
+ * username/email field. Requiring both avoids treating an authenticated page that
+ * merely embeds a stray password input (e.g. a "change password" widget) as a
+ * logout, which would otherwise trigger a pointless re-login loop.
+ */
+async function looksLikeLogin(page, login) {
+  const hasPass =
+    (await page
+      .locator(login?.passwordSelector ?? 'input[type="password"]')
+      .count()
+      .catch(() => 0)) > 0;
+  if (!hasPass) return false;
+  const userSel = login?.usernameSelector
+    ? [login.usernameSelector]
+    : USERNAME_SELECTORS;
+  return (await firstSelector(page, userSel)) !== null;
+}
+
+async function performLogin(page, creds, login) {
+  const userSel = await firstSelector(page, [
+    login?.usernameSelector,
+    ...USERNAME_SELECTORS,
+    'input[type="text"]'
+  ]);
+  const passSel = await firstSelector(page, [login?.passwordSelector, 'input[type="password"]']);
+  if (!userSel || !passSel) throw new Error("login_form_not_found");
+  await page.fill(userSel, creds.username);
+  await page.fill(passSel, creds.password);
+  const submitSel = await firstSelector(page, [
+    login?.submitSelector,
+    'button[type="submit"]',
+    'input[type="submit"]',
+    'button:has-text("Log in")',
+    'button:has-text("Sign in")',
+    'button:has-text("Login")'
+  ]);
+  if (submitSel) await page.locator(submitSel).first().click().catch(() => {});
+  else await page.locator(passSel).press("Enter");
+  await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
+}
+
+app.use((req, res, next) => {
+  if (!RENDER_TOKEN) return next();
+  if (req.path === "/health") return next();
+  const auth = req.headers.authorization ?? "";
+  if (auth === `Bearer ${RENDER_TOKEN}`) return next();
+  return res.status(401).json({ error: "unauthorized" });
+});
+
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.post("/render", async (req, res) => {
   const safe = safeUrl(String(req.body?.url ?? ""));
   if (!safe) return res.status(400).json({ error: "invalid_or_unsafe_url" });
-  let context;
+  const auth = req.body?.auth;
+  const businessId = req.body?.businessId;
+
+  // --- Unauthenticated render: stateless context, no session reuse. ---
+  if (!auth) {
+    let context;
+    try {
+      const browser = await getBrowser();
+      context = await browser.newContext({ userAgent: UA });
+      const page = await context.newPage();
+      await attachSsrfGuard(page);
+      await page.goto(safe, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
+      const html = await page.content();
+      const text = await page.evaluate(() => document.body?.innerText ?? "");
+      return res.json({ finalUrl: page.url(), text, html });
+    } catch (e) {
+      return res.status(502).json({ error: "render_failed", detail: String(e).slice(0, 300) });
+    } finally {
+      if (context) await context.close().catch(() => {});
+    }
+  }
+
+  // --- Authenticated render: per-tenant session, login on demand. ---
+  const label = auth?.integrationLabel;
+  if (!businessId || !label) return res.status(400).json({ error: "missing_business_or_label" });
+  const key = `${businessId}:${label}`;
+
+  let session;
   try {
-    const browser = await getBrowser();
-    context = await browser.newContext({ userAgent: "NewCoworker-AiFlow/1.0" });
-    const page = await context.newPage();
-    // Re-validate EVERY request (initial nav, redirect hops, and subresources)
-    // against the SSRF guard so a public lead URL cannot redirect to a
-    // loopback/metadata/private host. An aborted main navigation makes
-    // page.goto throw, which the catch below turns into a 502.
-    await page.route("**/*", (route) => {
-      if (safeUrl(route.request().url())) route.continue();
-      else route.abort("blockedbyclient");
-    });
+    session = await acquireSession(key);
+  } catch (e) {
+    return res.status(502).json({ error: "render_failed", detail: String(e).slice(0, 300) });
+  }
+
+  let page;
+  let poisoned = false;
+  try {
+    page = await session.context.newPage();
+    await attachSsrfGuard(page);
     await page.goto(safe, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
+
+    if (await looksLikeLogin(page, auth?.login)) {
+      // Credential lookup / login-form failures are permanent SETUP errors
+      // (missing AIFLOW_PLATFORM_URL/token, integration not found, wrong
+      // selectors). Report them as `auth_config_error` so the worker fails the
+      // run immediately instead of retrying as transient IO.
+      let creds;
+      try {
+        creds = await fetchCredentials(businessId, label);
+        await performLogin(page, creds, auth?.login);
+      } catch (e) {
+        poisoned = true;
+        return res
+          .status(502)
+          .json({ error: "auth_config_error", detail: String(e).slice(0, 200) });
+      }
+      await page.goto(safe, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
+      // Login can still fail (bad creds / MFA / captcha). Surface it AND drop the
+      // logged-out session so the next call doesn't reuse a poisoned context and
+      // hand the extractor a login page.
+      if (await looksLikeLogin(page, auth?.login)) {
+        poisoned = true;
+        return res.status(502).json({ error: "login_failed" });
+      }
+    }
+
     const html = await page.content();
     const text = await page.evaluate(() => document.body?.innerText ?? "");
     return res.json({ finalUrl: page.url(), text, html });
   } catch (e) {
+    poisoned = true;
     return res.status(502).json({ error: "render_failed", detail: String(e).slice(0, 300) });
   } finally {
-    if (context) await context.close().catch(() => {});
+    if (page) await page.close().catch(() => {});
+    finishSession(key, session, poisoned);
   }
 });
 

@@ -132,9 +132,7 @@ describe("summarizeCustomerMemory — db_failed paths (every read/write surface)
     // fallback `String(err)` keeps `detail` debuggable instead of
     // "[object Object]" — exercises the falsy arm of every
     // `err instanceof Error` ternary in summarizer.ts.
-    const stringThrow = await summarizeCustomerMemory(BIZ, CUSTOMER, {
-      // eslint-disable-next-line @typescript-eslint/only-throw-error
-      getCustomerMemory: (async () => {
+    const stringThrow = await summarizeCustomerMemory(BIZ, CUSTOMER, {      getCustomerMemory: (async () => {
         throw "raw_string_error" as unknown as Error;
       }) as never,
       getBusinessConfig: vi.fn() as never,
@@ -153,9 +151,7 @@ describe("summarizeCustomerMemory — db_failed paths (every read/write surface)
 
     // Also for getBusinessConfig (line 246):
     const configThrow = await summarizeCustomerMemory(BIZ, CUSTOMER, {
-      getCustomerMemory: (async () => memory({ interaction_count: 5 })) as never,
-      // eslint-disable-next-line @typescript-eslint/only-throw-error
-      getBusinessConfig: (async () => {
+      getCustomerMemory: (async () => memory({ interaction_count: 5 })) as never,      getBusinessConfig: (async () => {
         throw "raw_config_error" as unknown as Error;
       }) as never,
       callRowboatChat: vi.fn() as never,
@@ -171,9 +167,7 @@ describe("summarizeCustomerMemory — db_failed paths (every read/write surface)
     // Also for the Rowboat call (line 302):
     const rowboatThrow = await summarizeCustomerMemory(BIZ, CUSTOMER, {
       getCustomerMemory: (async () => memory({ interaction_count: 5 })) as never,
-      getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,
-      // eslint-disable-next-line @typescript-eslint/only-throw-error
-      callRowboatChat: (async () => {
+      getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,      callRowboatChat: (async () => {
         throw 42 as unknown as Error;
       }) as never,
       listSmsHistoryForCustomer: (async () => [
@@ -211,9 +205,7 @@ describe("summarizeCustomerMemory — db_failed paths (every read/write surface)
           receivedAt: "2026-05-05T00:00:00Z"
         }
       ]) as never,
-      listVoiceTurnsForCustomer: vi.fn(async () => []),
-      // eslint-disable-next-line @typescript-eslint/only-throw-error
-      updateCustomerSummary: (async () => {
+      listVoiceTurnsForCustomer: vi.fn(async () => []),      updateCustomerSummary: (async () => {
         throw { code: "PGRST123" } as unknown as Error;
       }) as never,
       rowboatBearer: "tok"
@@ -230,9 +222,7 @@ describe("summarizeCustomerMemory — db_failed paths (every read/write surface)
     const smsThrow = await summarizeCustomerMemory(BIZ, CUSTOMER, {
       getCustomerMemory: (async () => memory({ interaction_count: 5 })) as never,
       getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,
-      callRowboatChat: vi.fn() as never,
-      // eslint-disable-next-line @typescript-eslint/only-throw-error
-      listSmsHistoryForCustomer: (async () => {
+      callRowboatChat: vi.fn() as never,      listSmsHistoryForCustomer: (async () => {
         throw "raw_sms_error" as unknown as Error;
       }) as never,
       listVoiceTurnsForCustomer: vi.fn(async () => []),
