@@ -125,7 +125,8 @@ function buildDefinition(opts: {
           {
             name: "lead_type",
             description:
-              "Is this lead a buyer or a seller? Answer exactly 'buyer' or 'seller'."
+              "Is this lead a buyer or a seller? Answer with exactly one lowercase " +
+              "word and nothing else: buyer or seller."
           },
           { name: "lead_name", description: "The lead's first name, if shown" },
           { name: "lead_phone", description: "The lead's phone number in E.164 if possible" },
@@ -145,27 +146,33 @@ function buildDefinition(opts: {
           "({{vars.price}}). Send the intro text to {{vars.lead_phone}}?"
       },
       // Branch on lead_type: only the matching send_sms fires (the other is
-      // skipped via its `when` guard). `contains` so "30% Buyer"-style phrasings
-      // still match.
+      // skipped via its `when` guard). `equals` (not `contains`) keeps the two
+      // guards mutually exclusive — a normalized "buyer"/"seller" value can
+      // satisfy at most one, so a lead is never double-texted. Matching is
+      // case-insensitive, and the extraction prompt normalizes lead_type to a
+      // single lowercase word.
       {
         id: "send_buyer",
         type: "send_sms",
         to: "{{vars.lead_phone}}",
         body: opts.buyerTemplate,
-        when: { var: "lead_type", contains: "buyer" }
+        when: { var: "lead_type", equals: "buyer" }
       },
       {
         id: "send_seller",
         type: "send_sms",
         to: "{{vars.lead_phone}}",
         body: opts.sellerTemplate,
-        when: { var: "lead_type", contains: "seller" }
+        when: { var: "lead_type", equals: "seller" }
       },
+      // Ungated so the owner is always told a lead came in; worded as "processed"
+      // (not "sent") because if lead_type matched neither branch both sends are
+      // skipped and no intro went out.
       {
         id: "notify",
         type: "notify_owner",
         message:
-          "AiFlow sent the {{vars.lead_type}} intro to {{vars.lead_name}} " +
+          "AiFlow processed a {{vars.lead_type}} lead: {{vars.lead_name}} " +
           "({{vars.lead_phone}}) in {{vars.location}}."
       }
     ],
