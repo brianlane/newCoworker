@@ -3,7 +3,27 @@
 Headless-Chromium HTTP service for the AiFlows `browse_extract` step. Deploy it
 when a lead page is a JavaScript SPA whose data isn't in the static HTML, **or
 when the page is login-gated** (the worker's static fetch can't authenticate).
-When `AIFLOW_RENDER_URL` is unset the worker falls back to a static `fetch`.
+When the worker has no render URL configured it falls back to a static `fetch`.
+
+## Deployment model — per-tenant
+
+This runs as a **per-tenant sidecar**, one container on each business's own VPS
+(same model as the voice bridge and chat-worker), so a tenant's stored
+credentials, login cookies, and rendered lead data never leave that tenant's
+host. `vps/scripts/deploy-client.sh` builds and starts it from the staged repo,
+and the per-tenant Cloudflare Tunnel publishes it at
+`https://render-<businessId>.<zone>/render` → `127.0.0.1:8080`
+(see `src/lib/cloudflare/tunnel.ts`).
+
+The shared `ai-flow-worker` (Supabase Edge) reaches the right tenant by
+templating the businessId into `AIFLOW_RENDER_URL_TEMPLATE`
+(e.g. `https://render-{businessId}.newcoworker.com/render`) — exactly like
+`ROWBOAT_CHAT_URL_TEMPLATE` does for per-tenant Rowboat.
+
+> **Tier gating:** the render sidecar is **not** deployed on the starter/KVM2
+> tier (Chromium would compete with Ollama + Rowboat for the box's ~2 GB).
+> `deploy-client.sh` skips/tears it down there, and the orchestrator omits the
+> `render-<businessId>` hostname for starter tenants.
 
 ## Contract
 
@@ -60,20 +80,30 @@ IPv6-literal / `*.internal` / metadata hosts.
 
 ## Enable
 
-1. Build & run on the VPS Docker host (add as a compose service):
+Production deploy is automatic via the orchestrator + `deploy-client.sh` on
+every non-starter tenant. You only need to set the secrets:
+
+1. Supabase Edge secrets (the shared worker):
    ```
-   docker build -t aiflow-render vps/aiflow-render
-   docker run -d --name aiflow-render -p 8080:8080 \
-     -e AIFLOW_RENDER_TOKEN=... -e AIFLOW_PLATFORM_URL=https://<app> \
-     -e AIFLOW_GATEWAY_TOKEN=... aiflow-render
+   AIFLOW_RENDER_URL_TEMPLATE=https://render-{businessId}.newcoworker.com/render
+   AIFLOW_RENDER_TOKEN=<shared bearer>
    ```
-2. Point the worker at it (Supabase Edge secrets):
+2. Orchestrator env (Vercel) so each VPS `.env` gets the matching bearer:
    ```
-   AIFLOW_RENDER_URL=https://<vps-host>/render
    AIFLOW_RENDER_TOKEN=<same shared bearer>
    ```
+   `AIFLOW_PLATFORM_URL` and `AIFLOW_GATEWAY_TOKEN` on the VPS are derived from
+   the platform origin (`APP_BASE_URL`) and `ROWBOAT_GATEWAY_TOKEN` already in
+   the stack — see the render block in `deploy-client.sh`.
+
+Local / single-host testing (no tunnel) — run the container and point the worker
+at a static URL (no `{businessId}` placeholder is accepted too):
+```
+docker compose -f vps/aiflow-render/docker-compose.yml up --build
+# then: AIFLOW_RENDER_URL_TEMPLATE=http://localhost:8080/render
+```
 
 > The service is network-reachable from Supabase Edge, so always set
-> `AIFLOW_RENDER_TOKEN` in production. Credentials never leave the VPS process —
-> they're used in-page to drive the login form and are never persisted or
-> returned.
+> `AIFLOW_RENDER_TOKEN` in production. Credentials never leave the tenant's VPS
+> process — they're used in-page to drive the login form and are never persisted
+> or returned.

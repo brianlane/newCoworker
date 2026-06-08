@@ -119,8 +119,8 @@ function buildDefinition(opts: {
           { name: "price", description: "Asking price, if shown" }
         ],
         // ReferralExchange lead pages are behind the agent's login, so browse via
-        // the render service using the stored "Referral Exchange" integration
-        // credentials. Requires AIFLOW_RENDER_URL on the worker.
+        // the per-tenant render service using the stored "Referral Exchange"
+        // integration credentials. Requires AIFLOW_RENDER_URL_TEMPLATE on the worker.
         auth: { integrationLabel: opts.integrationLabel }
       },
       {

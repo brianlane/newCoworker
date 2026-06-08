@@ -32,10 +32,24 @@ export type ProvisionedTunnel = {
   hostname: string;
   /** Public hostname forwarding to `voiceServiceUrl` (voice bridge on :8090). */
   voiceHostname: string;
+  /**
+   * Public hostname forwarding to `renderServiceUrl` (AiFlow render service on
+   * :8080). Only present when `renderEnabled` was passed for this tenant — the
+   * render sidecar is gated to larger tiers (NOT the starter/KVM2 box), so the
+   * ingress rule + CNAME are created only where the container actually runs.
+   */
+  renderHostname?: string;
 };
 
 export type CloudflareTunnelProvisioner = (input: {
   businessId: string;
+  /**
+   * Whether to publish the AiFlow render-service hostname for this tenant.
+   * The render sidecar (headless Chromium) is intentionally NOT deployed on
+   * the starter/KVM2 tier, so callers pass `false` there to avoid creating a
+   * public hostname that would resolve to a non-existent backend.
+   */
+  renderEnabled?: boolean;
 }) => Promise<ProvisionedTunnel>;
 
 export type CloudflareTunnelConfig = {
@@ -84,6 +98,20 @@ export type CloudflareTunnelConfig = {
    */
   voiceHostnamePrefix?: string;
   /**
+   * Local AiFlow render-service URL (default "http://127.0.0.1:8080"). When a
+   * tenant has the render sidecar (non-starter tiers), the tunnel publishes it
+   * behind a dedicated public hostname so Supabase Edge (the ai-flow-worker)
+   * can reach it with a CF-issued cert — same pattern as the voice bridge.
+   */
+  renderServiceUrl?: string;
+  /**
+   * Hostname prefix for the render-service public URL. The resulting public
+   * hostname is `${renderHostnamePrefix}${businessId}.${hostnameSuffix}`
+   * (default "render-"). Like the voice prefix, staying inside the existing
+   * delegated zone keeps everything under the one free Universal SSL wildcard.
+   */
+  renderHostnamePrefix?: string;
+  /**
    * Pre-known zone id. When supplied we skip the `GET /zones?name=…` lookup,
    * which removes one round-trip and avoids relying on the API token having
    * the zone-list scope (Zone:DNS:Edit is enough on a specific zone).
@@ -126,6 +154,8 @@ export function createCloudflareTunnelProvisioner(
     hostnameSuffix: rawHostnameSuffix,
     voiceServiceUrl: rawVoiceServiceUrl,
     voiceHostnamePrefix: rawVoiceHostnamePrefix,
+    renderServiceUrl: rawRenderServiceUrl,
+    renderHostnamePrefix: rawRenderHostnamePrefix,
     tunnelNamePrefix = "nc",
     fetchImpl = fetch
   } = config;
@@ -151,6 +181,15 @@ export function createCloudflareTunnelProvisioner(
     typeof rawVoiceHostnamePrefix === "string" && rawVoiceHostnamePrefix.trim().length > 0
       ? rawVoiceHostnamePrefix.trim()
       : "voice-";
+  // Same empty-string coercion as the voice equivalents above.
+  const renderServiceUrl =
+    typeof rawRenderServiceUrl === "string" && rawRenderServiceUrl.trim().length > 0
+      ? rawRenderServiceUrl.trim()
+      : "http://127.0.0.1:8080";
+  const renderHostnamePrefix =
+    typeof rawRenderHostnamePrefix === "string" && rawRenderHostnamePrefix.trim().length > 0
+      ? rawRenderHostnamePrefix.trim()
+      : "render-";
 
   /**
    * Cloudflare API caller. The `tokenOverride` parameter lets specific
@@ -286,11 +325,19 @@ export function createCloudflareTunnelProvisioner(
     }
   }
 
-  return async function provisionBusinessTunnel({ businessId }): Promise<ProvisionedTunnel> {
+  return async function provisionBusinessTunnel({
+    businessId,
+    renderEnabled = false
+  }): Promise<ProvisionedTunnel> {
     if (!businessId) throw new Error("businessId required");
     const tunnelName = `${tunnelNamePrefix}-${businessId}`;
     const hostname = `${businessId}.${hostnameSuffix}`;
     const voiceHostname = `${voiceHostnamePrefix}${businessId}.${hostnameSuffix}`;
+    // Only materialized on render-capable tiers; left undefined on starter/KVM2
+    // so no public hostname points at a backend that isn't running there.
+    const renderHostname = renderEnabled
+      ? `${renderHostnamePrefix}${businessId}.${hostnameSuffix}`
+      : undefined;
 
     // 1. Reuse an existing tunnel by name, otherwise create one. CF accepts the
     //    "config_src=cloudflare" mode which lets us manage ingress via API
@@ -325,17 +372,18 @@ export function createCloudflareTunnelProvisioner(
     //    right loopback port based on the incoming Host header. The catch-all
     //    404 entry is required by CF: ingress arrays must terminate with a
     //    rule that has no `hostname`.
+    const ingress: Array<{ hostname?: string; service: string }> = [
+      { hostname, service: serviceUrl },
+      { hostname: voiceHostname, service: voiceServiceUrl }
+    ];
+    if (renderHostname) {
+      ingress.push({ hostname: renderHostname, service: renderServiceUrl });
+    }
+    // CF requires the ingress array to terminate with a hostname-less catch-all.
+    ingress.push({ service: "http_status:404" });
     await api(`/accounts/${accountId}/cfd_tunnel/${tunnelId}/configurations`, {
       method: "PUT",
-      body: JSON.stringify({
-        config: {
-          ingress: [
-            { hostname, service: serviceUrl },
-            { hostname: voiceHostname, service: voiceServiceUrl },
-            { service: "http_status:404" }
-          ]
-        }
-      })
+      body: JSON.stringify({ config: { ingress } })
     });
 
     // 4. Ensure both public hostname CNAMEs exist in the delegated zone. We
@@ -365,6 +413,15 @@ export function createCloudflareTunnelProvisioner(
       cnameTarget,
       role: "voice"
     });
+    if (renderHostname) {
+      await ensureCnameRecord({
+        businessId,
+        zoneId,
+        hostname: renderHostname,
+        cnameTarget,
+        role: "render"
+      });
+    }
 
     // 5. Best-effort Total TLS opt-in. With our default one-wildcard-level
     //    hostname pattern (`<biz>.<zone>`), free Universal SSL already
@@ -375,7 +432,7 @@ export function createCloudflareTunnelProvisioner(
     //    `ensureZoneTotalTls` for why we swallow API errors here.
     await ensureZoneTotalTls(zoneId, businessId);
 
-    return { tunnelId, token, hostname, voiceHostname };
+    return { tunnelId, token, hostname, voiceHostname, renderHostname };
   };
 }
 
@@ -411,6 +468,8 @@ export function cloudflareTunnelProvisionerFromEnv(
     zoneId: blankToUndefined(env.CLOUDFLARE_ZONE_ID),
     hostnameSuffix: blankToUndefined(env.CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX),
     voiceServiceUrl: blankToUndefined(env.CLOUDFLARE_TUNNEL_VOICE_SERVICE_URL),
-    voiceHostnamePrefix: blankToUndefined(env.CLOUDFLARE_TUNNEL_VOICE_HOSTNAME_PREFIX)
+    voiceHostnamePrefix: blankToUndefined(env.CLOUDFLARE_TUNNEL_VOICE_HOSTNAME_PREFIX),
+    renderServiceUrl: blankToUndefined(env.CLOUDFLARE_TUNNEL_RENDER_SERVICE_URL),
+    renderHostnamePrefix: blankToUndefined(env.CLOUDFLARE_TUNNEL_RENDER_HOSTNAME_PREFIX)
   });
 }

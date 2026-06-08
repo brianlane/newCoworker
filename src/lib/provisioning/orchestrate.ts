@@ -660,9 +660,14 @@ async function runOrchestrator(
   let tunnelHostname = `${businessId}.${tunnelZone}`;
   let cloudflareTunnelToken = process.env.CLOUDFLARE_TUNNEL_TOKEN ?? "";
   let bridgeMediaWssOrigin = process.env.BRIDGE_MEDIA_WSS_ORIGIN ?? "";
+  // The AiFlow render sidecar (headless Chromium) is only deployed on
+  // render-capable tiers — never the starter/KVM2 box, which is already
+  // memory-constrained by Ollama + Rowboat. Gate the public render hostname to
+  // match where the container actually runs.
+  const renderEnabled = narrowTier !== "starter";
   if (tunnelProvisioner) {
     try {
-      const p = await tunnelProvisioner({ businessId });
+      const p = await tunnelProvisioner({ businessId, renderEnabled });
       tunnelHostname = p.hostname;
       cloudflareTunnelToken = p.token;
       bridgeMediaWssOrigin = `wss://${p.voiceHostname}`;
@@ -855,6 +860,11 @@ async function runOrchestrator(
     // and preview deployments work without a separate knob.
     ["APP_BASE_URL", process.env.APP_BASE_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? ""],
     ["VOICE_BRIDGE_SRC", process.env.VOICE_BRIDGE_SRC ?? ""],
+    // Shared bearer the ai-flow-worker (Supabase Edge) sends to this tenant's
+    // render sidecar. deploy-client.sh only stands the sidecar up on non-starter
+    // tiers; the render→platform credential lookup reuses APP_BASE_URL +
+    // ROWBOAT_GATEWAY_TOKEN, so only this one extra secret needs to flow here.
+    ["AIFLOW_RENDER_TOKEN", process.env.AIFLOW_RENDER_TOKEN ?? ""],
     ["CLOUDFLARE_TUNNEL_TOKEN", cloudflareTunnelToken],
     ["PROVISIONING_PROGRESS_URL", progressUrl],
     ["PROVISIONING_PROGRESS_TOKEN", progressToken]

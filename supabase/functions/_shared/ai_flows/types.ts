@@ -45,9 +45,9 @@ export type ExtractField = {
  * worker routes the fetch through the headless render service, which logs in with
  * the named custom integration's stored credentials before reading the page. This
  * is what lets a flow read a login-gated lead page (e.g. a ReferralExchange match
- * behind the agent's account). Requires AIFLOW_RENDER_URL — a static fetch cannot
- * perform a login. The render service only READS the page; it never clicks
- * accept/confirm-style actions.
+ * behind the agent's account). Requires the per-tenant render service
+ * (AIFLOW_RENDER_URL_TEMPLATE) — a static fetch cannot perform a login. The
+ * render service only READS the page; it never clicks accept/confirm-style actions.
  */
 export type BrowseAuth = {
   /** Custom-integration label whose stored credentials are used to log in. */

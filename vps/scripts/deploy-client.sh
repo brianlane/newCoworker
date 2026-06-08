@@ -1139,4 +1139,66 @@ else
   log "No ${CHAT_WORKER_DEST}/docker-compose.yml and no source at ${CHAT_WORKER_SRC} — skipping chat-worker container (dashboard chat will not function until provisioned)"
 fi
 
+# ------------------------------------------------------------------
+# AiFlow render service (headless Chromium) — per-tenant sidecar.
+#
+# Gated to render-capable tiers: the starter/KVM2 box is already memory-bound
+# by Ollama + Rowboat, so Chromium must NOT run there (operator directive). On
+# starter we proactively tear any stale container down in case the tenant was
+# downgraded.
+#
+# Same sync model as voice-bridge / chat-worker: rsync the staged repo source,
+# rewrite .env every deploy (so AIFLOW_RENDER_TOKEN rotations land), and
+# `--force-recreate` so a changed .env restarts the container. The Cloudflare
+# Tunnel publishes it at render-${BUSINESS_ID}.<zone> → 127.0.0.1:8080.
+# ------------------------------------------------------------------
+AIFLOW_RENDER_SRC="${AIFLOW_RENDER_SRC:-/opt/newcoworker-repo/vps/aiflow-render}"
+AIFLOW_RENDER_DEST="/opt/aiflow-render"
+
+if [[ "${TIER}" == "starter" ]]; then
+  if [[ -f "${AIFLOW_RENDER_DEST}/docker-compose.yml" ]]; then
+    log "TIER=starter: tearing down aiflow-render (not supported on KVM2)..."
+    ( cd "${AIFLOW_RENDER_DEST}" && docker compose down --remove-orphans ) || true
+  else
+    log "TIER=starter: skipping aiflow-render (headless Chromium not deployed on KVM2)"
+  fi
+elif [[ -d "${AIFLOW_RENDER_SRC}" ]]; then
+  log "Syncing aiflow-render source ${AIFLOW_RENDER_SRC} → ${AIFLOW_RENDER_DEST}..."
+  mkdir -p "${AIFLOW_RENDER_DEST}"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete \
+      --exclude ".env" \
+      --exclude "node_modules" \
+      "${AIFLOW_RENDER_SRC}/" "${AIFLOW_RENDER_DEST}/"
+  else
+    log "rsync not installed; falling back to cp -R (no --delete)"
+    cp -R "${AIFLOW_RENDER_SRC}/." "${AIFLOW_RENDER_DEST}/"
+  fi
+
+  (
+    cd "${AIFLOW_RENDER_DEST}"
+    # AIFLOW_PLATFORM_URL / AIFLOW_GATEWAY_TOKEN reuse the platform origin +
+    # shared gateway bearer the rest of the stack already uses for
+    # /api/integrations/custom/* — the render service calls
+    # /api/integrations/custom/credentials to fetch the tenant's stored login.
+    cat > .env <<AIRENV_EOF
+PORT=8080
+AIFLOW_RENDER_TOKEN=${AIFLOW_RENDER_TOKEN:-}
+AIFLOW_PLATFORM_URL=${APP_BASE_URL:-}
+AIFLOW_GATEWAY_TOKEN=${ROWBOAT_GATEWAY_TOKEN:-}
+AIRENV_EOF
+    chmod 600 .env
+
+    if docker compose up -d --build --force-recreate; then
+      report_progress 99 "aiflow_render_ready" "aiflow-render container started"
+      log "aiflow-render started"
+    else
+      log "WARN: aiflow-render compose failed (credentialed/SPA browse will be degraded)"
+      report_progress 98 "aiflow_render_compose_failed" "docker compose up failed"
+    fi
+  )
+else
+  log "No aiflow-render source at ${AIFLOW_RENDER_SRC} — skipping render sidecar"
+fi
+
 log "=== Client deployment complete: ${BUSINESS_ID} ==="

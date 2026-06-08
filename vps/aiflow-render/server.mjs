@@ -3,11 +3,11 @@
  *
  * The default AiFlows browse backend is a static fetch inside the ai-flow-worker.
  * For JS-rendered (SPA) pages a static fetch can't read, AND for LOGIN-GATED
- * pages a static fetch can't authenticate, deploy this service on the VPS and
- * point the worker at it with:
+ * pages a static fetch can't authenticate, this service is deployed PER-TENANT
+ * (one sidecar per business VPS). The shared worker resolves it via:
  *
- *   AIFLOW_RENDER_URL=https://<vps-host>/render      (worker secret)
- *   AIFLOW_RENDER_TOKEN=<shared-bearer>              (worker + this service)
+ *   AIFLOW_RENDER_URL_TEMPLATE=https://render-{businessId}.<zone>/render  (worker secret)
+ *   AIFLOW_RENDER_TOKEN=<shared-bearer>                                   (worker + this service)
  *
  * Contract (matches supabase/functions/_shared/ai_flows/browse.ts):
  *   POST /render { url }                              -> { finalUrl, text, html }

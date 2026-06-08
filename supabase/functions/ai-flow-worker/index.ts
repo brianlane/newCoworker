@@ -54,6 +54,26 @@ const RENDER_FETCH_TIMEOUT_MS = Number(
 const MAX_REDIRECTS = 5;
 
 /**
+ * Resolve the render-service URL for a given tenant.
+ *
+ * The render service is deployed PER-TENANT (one headless-Chromium sidecar on
+ * each business's own VPS, exposed at `render-<businessId>.<zone>`), so the
+ * shared worker templates the businessId into the URL — exactly like
+ * ROWBOAT_CHAT_URL_TEMPLATE does for per-tenant Rowboat. A static
+ * `AIFLOW_RENDER_URL` (no `{businessId}` placeholder) still works for
+ * single-host / local setups: the substitution is then a no-op.
+ *
+ * Returns null when neither var is configured (browse falls back to a static
+ * fetch, which cannot drive a login form — see browseStep).
+ */
+function resolveRenderUrl(businessId: string): string | null {
+  const tmpl =
+    Deno.env.get("AIFLOW_RENDER_URL_TEMPLATE") ?? Deno.env.get("AIFLOW_RENDER_URL");
+  if (!tmpl) return null;
+  return tmpl.replace(/\{businessId\}/g, encodeURIComponent(businessId));
+}
+
+/**
  * Thrown when the render service reports a login failure (bad creds / MFA /
  * captcha). That is a permanent setup error, so the worker fails the run rather
  * than retrying it up to MAX_ATTEMPTS.
@@ -268,13 +288,16 @@ async function browseStep(
   const safe = normalizeBrowseUrl(action.url);
   if (!safe) return { kind: "fail", error: `browse: unsafe or invalid URL ${action.url}` };
 
-  // A login-gated browse can only be performed by the headless render service
-  // (a static fetch can't drive a login form). Missing config is a permanent
-  // setup error, not a transient one — fail without burning retries.
-  if (action.auth && !Deno.env.get("AIFLOW_RENDER_URL")) {
+  // The render service is resolved per-tenant from the run's business_id
+  // (this tenant's own VPS sidecar). A login-gated browse can only be
+  // performed by that headless service — a static fetch can't drive a login
+  // form — so missing config is a permanent setup error, not a transient one;
+  // fail without burning retries.
+  const renderUrl = resolveRenderUrl(run.business_id);
+  if (action.auth && !renderUrl) {
     return {
       kind: "fail",
-      error: "browse: authenticated browse requires the AIFLOW_RENDER_URL render service"
+      error: "browse: authenticated browse requires the AIFLOW_RENDER_URL_TEMPLATE render service"
     };
   }
 
@@ -282,6 +305,7 @@ async function browseStep(
   try {
     page = await fetchPage(
       safe,
+      renderUrl,
       action.auth ? { businessId: run.business_id, auth: action.auth } : undefined
     );
   } catch (e) {
@@ -309,58 +333,65 @@ async function browseStep(
 }
 
 /**
- * Fetch a page via the optional render service, else a static GET.
+ * Fetch a page via the render service.
  *
  * When `authCtx` is supplied the render service logs in with the named custom
  * integration's stored credentials before reading the page (credentialed
  * browse). The render service is network-reachable, so calls carry a bearer
  * token (AIFLOW_RENDER_TOKEN) when configured.
  */
-async function fetchPage(
+async function fetchViaRender(
   url: string,
+  renderUrl: string,
   authCtx?: { businessId: string; auth: BrowseAuth }
 ): Promise<{ finalUrl: string; text: string; html: string }> {
-  const renderUrl = Deno.env.get("AIFLOW_RENDER_URL");
   const ctrl = new AbortController();
   // Render calls (multi-nav + login) get a much larger budget than a static GET.
-  const timer = setTimeout(
-    () => ctrl.abort(),
-    renderUrl ? RENDER_FETCH_TIMEOUT_MS : FETCH_TIMEOUT_MS
-  );
+  const timer = setTimeout(() => ctrl.abort(), RENDER_FETCH_TIMEOUT_MS);
   try {
-    if (renderUrl) {
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      const renderToken = Deno.env.get("AIFLOW_RENDER_TOKEN");
-      if (renderToken) headers.Authorization = `Bearer ${renderToken}`;
-      const res = await fetch(renderUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(
-          authCtx ? { url, businessId: authCtx.businessId, auth: authCtx.auth } : { url }
-        ),
-        signal: ctrl.signal
-      });
-      if (!res.ok) {
-        // Distinguish a permanent login failure from transient render errors so
-        // the caller can fail fast instead of retrying bad credentials.
-        let errCode = "";
-        try {
-          errCode = ((await res.json()) as { error?: string })?.error ?? "";
-        } catch {
-          /* non-JSON error body — treat as transient below */
-        }
-        // login_failed (bad creds/MFA) and auth_config_error (missing platform
-        // config, integration not found, wrong selectors) are permanent setup
-        // failures — fail the run rather than retrying transiently.
-        if (errCode === "login_failed" || errCode === "auth_config_error") {
-          throw new BrowseLoginError(errCode);
-        }
-        throw new Error(`render service ${res.status}`);
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const renderToken = Deno.env.get("AIFLOW_RENDER_TOKEN");
+    if (renderToken) headers.Authorization = `Bearer ${renderToken}`;
+    const res = await fetch(renderUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(
+        authCtx ? { url, businessId: authCtx.businessId, auth: authCtx.auth } : { url }
+      ),
+      signal: ctrl.signal
+    });
+    if (!res.ok) {
+      // Distinguish a permanent login failure from transient render errors so
+      // the caller can fail fast instead of retrying bad credentials.
+      let errCode = "";
+      try {
+        errCode = ((await res.json()) as { error?: string })?.error ?? "";
+      } catch {
+        /* non-JSON error body — treat as transient below */
       }
-      const parsed = parseRenderResponse(await res.json(), url);
-      if (!parsed) throw new Error("render service returned an invalid body");
-      return parsed;
+      // login_failed (bad creds/MFA) and auth_config_error (missing platform
+      // config, integration not found, wrong selectors) are permanent setup
+      // failures — fail the run rather than retrying transiently.
+      if (errCode === "login_failed" || errCode === "auth_config_error") {
+        throw new BrowseLoginError(errCode);
+      }
+      throw new Error(`render service ${res.status}`);
     }
+    const parsed = parseRenderResponse(await res.json(), url);
+    if (!parsed) throw new Error("render service returned an invalid body");
+    return parsed;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Static GET with manual, SSRF-revalidated redirect following. */
+async function fetchStatic(
+  url: string
+): Promise<{ finalUrl: string; text: string; html: string }> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  try {
     // Follow redirects manually so each hop's host is re-validated against the
     // SSRF guard — a public URL must not be able to redirect to a private /
     // loopback / cloud-metadata host (CodeQL/Bugbot: unsafe redirect).
@@ -387,6 +418,34 @@ async function fetchPage(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Fetch a page via the per-tenant render service, falling back to a static GET.
+ *
+ * Credentialed browse (`authCtx`) MUST use the render service — a static fetch
+ * can't drive a login form — so its errors propagate. A NON-credentialed browse
+ * falls back to a static fetch when the render service is unreachable: per-tenant
+ * render only exists on render-capable tiers, so a starter/KVM2 tenant has no
+ * `render-*` hostname/sidecar and must still read public/SPA pages statically
+ * rather than failing against a non-existent backend.
+ */
+async function fetchPage(
+  url: string,
+  renderUrl: string | null,
+  authCtx?: { businessId: string; auth: BrowseAuth }
+): Promise<{ finalUrl: string; text: string; html: string }> {
+  if (renderUrl) {
+    try {
+      return await fetchViaRender(url, renderUrl, authCtx);
+    } catch (e) {
+      // Credentialed browse can't fall back to a static fetch (no login),
+      // so surface the error (incl. BrowseLoginError) to the caller.
+      if (authCtx) throw e;
+      // Non-credentialed: fall through to the static fetch below.
+    }
+  }
+  return await fetchStatic(url);
 }
 
 /** Gemini structured extraction; empty map when no API key (regex fallback covers it). */
