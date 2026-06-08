@@ -1007,10 +1007,15 @@ describe("cloudflareTunnelProvisioner", () => {
       serviceUrl: "http://localhost:3000",
       voiceServiceUrl: "http://127.0.0.1:9090",
       voiceHostnamePrefix: "vb-",
+      // Also exercise the render override branch (non-empty after trim) — the
+      // counterpart to the whitespace-coercion test below.
+      renderServiceUrl: "http://127.0.0.1:9091",
+      renderHostnamePrefix: "rb-",
       fetchImpl
     });
-    const result = await provisioner({ businessId: "biz-v" });
+    const result = await provisioner({ businessId: "biz-v", renderEnabled: true });
     expect(result.voiceHostname).toBe("vb-biz-v.tunnel.newcoworker.com");
+    expect(result.renderHostname).toBe("rb-biz-v.tunnel.newcoworker.com");
     const ingress = calls.find(
       (c) => c.method === "PUT" && c.url.endsWith("/configurations")
     );
@@ -1021,6 +1026,10 @@ describe("cloudflareTunnelProvisioner", () => {
           {
             hostname: "vb-biz-v.tunnel.newcoworker.com",
             service: "http://127.0.0.1:9090"
+          },
+          {
+            hostname: "rb-biz-v.tunnel.newcoworker.com",
+            service: "http://127.0.0.1:9091"
           },
           { service: "http_status:404" }
         ]
@@ -1219,15 +1228,19 @@ describe("cloudflareTunnelProvisionerFromEnv", () => {
       zoneId: "zone-w",
       hostnameSuffix: "   ",
       // Also exercise the whitespace-coercion path for the new voice-bridge
-      // knobs: a padded prefix should trim to the documented default.
+      // and render knobs: a padded prefix should trim to the documented default.
       voiceServiceUrl: "   ",
       voiceHostnamePrefix: "   ",
+      renderServiceUrl: "   ",
+      renderHostnamePrefix: "   ",
       serviceUrl: "http://localhost:3000",
       fetchImpl
     });
-    const result = await provisioner({ businessId: "biz-ws" });
+    const result = await provisioner({ businessId: "biz-ws", renderEnabled: true });
     expect(result.hostname).toBe("biz-ws.tunnel.newcoworker.com");
     expect(result.voiceHostname).toBe("voice-biz-ws.tunnel.newcoworker.com");
+    // Whitespace render knobs collapse to the documented defaults.
+    expect(result.renderHostname).toBe("render-biz-ws.tunnel.newcoworker.com");
     const appCreate = calls.find(
       (c) =>
         c.method === "POST" &&
