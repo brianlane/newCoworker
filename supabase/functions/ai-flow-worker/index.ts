@@ -127,11 +127,31 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
 
   const { data: flowRow, error: flowErr } = await supabase
     .from("ai_flows")
-    .select("definition")
+    .select("definition, enabled")
     .eq("id", run.flow_id)
     .maybeSingle();
   if (flowErr) throw new Error(`load flow: ${flowErr.message}`);
-  const definition = (flowRow as { definition?: unknown } | null)?.definition;
+  const flow = flowRow as { definition?: unknown; enabled?: boolean } | null;
+  // Owner disabled the flow after this run was queued (or mid-flight): stop.
+  // Disabling must halt already-queued/approval-resumed runs, not just new
+  // triggers, so they can't keep sending SMS / browsing / calling integrations.
+  if (!flow?.enabled) {
+    try {
+      await updateRun(supabase, run.id, {
+        status: "canceled",
+        last_error: "flow disabled",
+        claimed_at: null
+      });
+    } catch (e) {
+      console.error("executeRun cancel-disabled updateRun", e);
+    }
+    await telemetryRecord(supabase, "ai_flow_run_canceled_disabled", {
+      run_id: run.id,
+      business_id: run.business_id
+    });
+    return;
+  }
+  const definition = flow.definition;
   if (!isExecutableDefinition(definition)) {
     await failRun(supabase, run, "flow definition is missing or invalid");
     return;
