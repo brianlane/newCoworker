@@ -95,6 +95,29 @@ serve(async (req: Request): Promise<Response> => {
 
 /** Run as many steps as possible; persist terminal/paused state. */
 async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
+  // Kill switch: if the owner paused the business, do NOT execute side-effecting
+  // steps (send_sms / notify_owner / http_call) — including for runs that were
+  // already queued or are resuming after approval. Defer by re-queuing without
+  // burning an attempt so the run resumes cleanly once they unpause. Best-effort
+  // so a transient write failure here just leaves the run for stale reclaim.
+  const { data: bizRow } = await supabase
+    .from("businesses")
+    .select("is_paused")
+    .eq("id", run.business_id)
+    .maybeSingle();
+  if ((bizRow as { is_paused?: boolean } | null)?.is_paused) {
+    try {
+      await updateRun(supabase, run.id, { status: "queued", claimed_at: null });
+    } catch (e) {
+      console.error("executeRun defer-paused updateRun", e);
+    }
+    await telemetryRecord(supabase, "ai_flow_run_deferred_paused", {
+      run_id: run.id,
+      business_id: run.business_id
+    });
+    return;
+  }
+
   const { data: flowRow, error: flowErr } = await supabase
     .from("ai_flows")
     .select("definition")

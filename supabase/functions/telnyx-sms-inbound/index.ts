@@ -118,6 +118,73 @@ async function evaluateAiFlows(
   return { suppress, matched };
 }
 
+/**
+ * Evaluate AiFlow triggers and enqueue one ai_flow_run per matched flow.
+ * Runs FIRST (before stamping the inbound job) so the default Coworker reply is
+ * only suppressed when an automation is actually queued to handle it. Returns
+ * whether a flow that requested suppression has a queued run. Fully
+ * failure-isolated: never throws, so the inbound SMS path is never broken.
+ * Called from BOTH the normal enqueue path and the Safe-Mode forward path, so a
+ * lead automation still starts even when the customer reply is handled manually.
+ */
+async function evaluateAndEnqueueAiFlows(
+  supabase: ReturnType<typeof createClient>,
+  businessId: string,
+  ctx: { from: string | null; to: string; eventId: string; bodyText: string }
+): Promise<{ suppressingRunQueued: boolean }> {
+  let evalRes: AiFlowEval = { suppress: false, matched: [] };
+  try {
+    evalRes = await evaluateAiFlows(supabase, businessId, {
+      from: ctx.from ?? "",
+      text: ctx.bodyText,
+      nowMs: Date.now()
+    });
+  } catch (e) {
+    console.error("ai_flow trigger eval", e);
+    return { suppressingRunQueued: false };
+  }
+  if (evalRes.matched.length === 0) return { suppressingRunQueued: false };
+
+  let suppressingRunQueued = false;
+  try {
+    for (const m of evalRes.matched) {
+      const { error: runErr } = await supabase.from("ai_flow_runs").insert({
+        flow_id: m.id,
+        business_id: businessId,
+        status: "queued",
+        context: {
+          trigger: {
+            url: m.url,
+            windowText: m.windowText,
+            from: ctx.from ?? "",
+            to: ctx.to,
+            event_id: ctx.eventId
+          }
+        },
+        current_step: 0,
+        dedupe_key: ctx.eventId
+      });
+      // 23505 = a prior webhook already queued it, which still counts as queued.
+      const queued = !runErr || (runErr as { code?: string }).code === "23505";
+      if (runErr && (runErr as { code?: string }).code !== "23505") {
+        console.error("ai_flow_runs insert", runErr);
+      }
+      if (queued && m.def.options?.suppressDefaultReply === true) {
+        suppressingRunQueued = true;
+      }
+    }
+    await telemetryRecord(supabase, "ai_flow_runs_enqueued", {
+      business_id: businessId,
+      event_id: ctx.eventId,
+      count: evalRes.matched.length,
+      suppressed_reply: suppressingRunQueued
+    });
+  } catch (e) {
+    console.error("ai_flow_runs enqueue", e);
+  }
+  return { suppressingRunQueued };
+}
+
 const HELP_REPLY_TEXT =
   "New Coworker: For help, use your business dashboard or contact support. Msg&data rates may apply. Reply STOP to opt out.";
 const STOP_REPLY_TEXT =
@@ -600,6 +667,17 @@ serve(async (req: Request) => {
             event_id: eventId,
             forwarded: true
           });
+          // Safe Mode only changes how the CUSTOMER reply is handled (owner does
+          // it manually); owner-configured lead automations must still start, so
+          // enqueue any matched AiFlow runs before returning. The kill switch
+          // (is_paused) above already stopped everything, and the worker
+          // re-checks is_paused before any side effect.
+          await evaluateAndEnqueueAiFlows(supabase, businessId, {
+            from,
+            to,
+            eventId,
+            bodyText: inboundSmsBody(payload)
+          });
           return new Response(
             JSON.stringify({ ok: true, skip: "safe_mode_forwarded" }),
             { status: 200, headers: { "Content-Type": "application/json" } }
@@ -629,65 +707,14 @@ serve(async (req: Request) => {
       }
     }
 
-    // AiFlow trigger evaluation (failure-isolated): decide up front whether a
-    // matched flow should suppress the normal Coworker reply, so we can stamp
-    // the job before the worker can claim it. Never blocks/breaks the inbound.
-    let aiFlowEval: AiFlowEval = { suppress: false, matched: [] };
-    try {
-      aiFlowEval = await evaluateAiFlows(supabase, businessId, {
-        from: from ?? "",
-        text: inboundSmsBody(payload),
-        nowMs: Date.now()
-      });
-    } catch (e) {
-      console.error("ai_flow trigger eval", e);
-    }
-
-    // Enqueue one ai_flow_run per matched flow FIRST, so we only suppress the
+    // Evaluate AiFlow triggers + enqueue runs up front so we only suppress the
     // default Coworker reply when an automation is actually queued to handle it.
-    // Otherwise a run-insert failure would silence the customer with no flow
-    // running. dedupe_key=eventId makes this exactly-once per source event
-    // (unique index on (flow_id, dedupe_key)); 23505 means a prior webhook
-    // already queued it, which still counts as "queued". Failure-isolated: a
-    // run-enqueue error must not fail the webhook.
-    let suppressingRunQueued = false;
-    if (aiFlowEval.matched.length > 0) {
-      try {
-        for (const m of aiFlowEval.matched) {
-          const { error: runErr } = await supabase.from("ai_flow_runs").insert({
-            flow_id: m.id,
-            business_id: businessId,
-            status: "queued",
-            context: {
-              trigger: {
-                url: m.url,
-                windowText: m.windowText,
-                from: from ?? "",
-                to,
-                event_id: eventId
-              }
-            },
-            current_step: 0,
-            dedupe_key: eventId
-          });
-          const queued = !runErr || (runErr as { code?: string }).code === "23505";
-          if (runErr && (runErr as { code?: string }).code !== "23505") {
-            console.error("ai_flow_runs insert", runErr);
-          }
-          if (queued && m.def.options?.suppressDefaultReply === true) {
-            suppressingRunQueued = true;
-          }
-        }
-        await telemetryRecord(supabase, "ai_flow_runs_enqueued", {
-          business_id: businessId,
-          event_id: eventId,
-          count: aiFlowEval.matched.length,
-          suppressed_reply: suppressingRunQueued
-        });
-      } catch (e) {
-        console.error("ai_flow_runs enqueue", e);
-      }
-    }
+    const { suppressingRunQueued } = await evaluateAndEnqueueAiFlows(supabase, businessId, {
+      from,
+      to,
+      eventId,
+      bodyText: inboundSmsBody(payload)
+    });
 
     const { error } = await supabase.from("sms_inbound_jobs").insert({
       business_id: businessId,

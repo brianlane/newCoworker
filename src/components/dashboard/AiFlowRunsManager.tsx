@@ -62,9 +62,11 @@ export function AiFlowRunsManager({
       });
       if (!res.ok) {
         // A 409 (already decided) or other failure must NOT imply success.
+        // The API shape is { ok:false, error:{ code, message } } — read the
+        // message string, never the object (which renders as [object Object]).
         const detail = await res
           .json()
-          .then((j: { error?: string }) => j.error)
+          .then((j: { error?: { message?: string } }) => j.error?.message)
           .catch(() => null);
         setError(detail || `Could not ${decision} this run (${res.status}). It may have already been decided.`);
       }
