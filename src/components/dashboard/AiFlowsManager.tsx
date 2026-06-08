@@ -638,6 +638,10 @@ function WhenEditor({
     const val = over.value ?? value;
     const base: StepCondition =
       op === "equals" ? { var: v, equals: val } : { var: v, contains: val };
+    // Carry through a non-default caseInsensitive flag set elsewhere (e.g. AI
+    // authoring or a hand-edited definition); the editor doesn't surface it, so
+    // rebuilding the object would otherwise silently reset it to the default.
+    if (when?.caseInsensitive !== undefined) base.caseInsensitive = when.caseInsensitive;
     return base;
   };
 
