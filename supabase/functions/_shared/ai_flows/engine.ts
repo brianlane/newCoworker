@@ -148,11 +148,13 @@ export function renderTemplate(template: string, scope: Record<string, unknown>)
 /**
  * Evaluate a per-step `when` guard against the run vars. Returns true when the
  * step should RUN. `equals` is a whole-value match, `contains` is a substring;
- * both are case-insensitive unless `caseInsensitive === false`. A missing /
- * non-scalar var resolves to "" so an absent value never accidentally matches a
- * non-empty needle. When neither `equals` nor `contains` is set (the schema
- * normally forbids this), the guard is a presence check: pass iff the var is
- * non-empty.
+ * both are case-insensitive unless `caseInsensitive === false`. String values
+ * are trimmed first, since LLM-extracted vars often carry surrounding whitespace
+ * or newlines that would otherwise make an `equals` guard silently miss. A
+ * missing / non-scalar var resolves to "" so an absent value never accidentally
+ * matches a non-empty needle. When neither `equals` nor `contains` is set (the
+ * schema normally forbids this), the guard is a presence check: pass iff the var
+ * is non-empty.
  */
 export function evaluateStepCondition(
   cond: StepCondition,
@@ -161,7 +163,7 @@ export function evaluateStepCondition(
   const raw = scope.vars?.[cond.var];
   const value =
     typeof raw === "string"
-      ? raw
+      ? raw.trim()
       : typeof raw === "number" || typeof raw === "boolean"
         ? String(raw)
         : "";

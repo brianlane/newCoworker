@@ -214,6 +214,10 @@ describe("evaluateStepCondition", () => {
     expect(evaluateStepCondition({ var: "n", equals: "42" }, { vars: { n: 42 } })).toBe(true);
     expect(evaluateStepCondition({ var: "b", contains: "ru" }, { vars: { b: true } })).toBe(true);
   });
+  it("trims surrounding whitespace/newlines from string vars before matching", () => {
+    expect(evaluateStepCondition({ var: "t", equals: "buyer" }, { vars: { t: "  buyer\n" } })).toBe(true);
+    expect(evaluateStepCondition({ var: "t" }, { vars: { t: "   " } })).toBe(false);
+  });
   it("treats missing/non-scalar vars as empty (never matches a non-empty needle)", () => {
     expect(evaluateStepCondition({ var: "t", contains: "buyer" }, { vars: {} })).toBe(false);
     expect(evaluateStepCondition({ var: "t", equals: "buyer" }, {})).toBe(false);
