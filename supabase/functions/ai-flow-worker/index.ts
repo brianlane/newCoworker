@@ -43,7 +43,22 @@ type Supabase = ReturnType<typeof createClient>;
 const MAX_ATTEMPTS = 4;
 const CLAIM_LIMIT = 3;
 const FETCH_TIMEOUT_MS = 20_000;
+// Render-service calls can run several navigations plus a login, so they need a
+// far larger budget than a static fetch. Must exceed the render service's
+// per-navigation timeout (AIFLOW_RENDER_TIMEOUT_MS, default 30s) times the
+// worst-case nav count (initial + login + re-nav) or the worker aborts a render
+// that would have succeeded.
+const RENDER_FETCH_TIMEOUT_MS = Number(
+  Deno.env.get("AIFLOW_RENDER_FETCH_TIMEOUT_MS") ?? "120000"
+);
 const MAX_REDIRECTS = 5;
+
+/**
+ * Thrown when the render service reports a login failure (bad creds / MFA /
+ * captcha). That is a permanent setup error, so the worker fails the run rather
+ * than retrying it up to MAX_ATTEMPTS.
+ */
+class BrowseLoginError extends Error {}
 const GEMINI_MODEL = Deno.env.get("AIFLOW_EXTRACT_MODEL") ?? "gemini-2.5-flash-lite";
 
 type RunRow = {
@@ -263,10 +278,21 @@ async function browseStep(
     };
   }
 
-  const page = await fetchPage(
-    safe,
-    action.auth ? { businessId: run.business_id, auth: action.auth } : undefined
-  );
+  let page: { finalUrl: string; text: string; html: string };
+  try {
+    page = await fetchPage(
+      safe,
+      action.auth ? { businessId: run.business_id, auth: action.auth } : undefined
+    );
+  } catch (e) {
+    // A render login failure is permanent (bad creds / MFA), not transient IO —
+    // fail the run instead of letting it throw into the retry path.
+    if (e instanceof BrowseLoginError) {
+      const which = action.auth ? ` for integration "${action.auth.integrationLabel}"` : "";
+      return { kind: "fail", error: `browse: login failed${which}` };
+    }
+    throw e;
+  }
   const pageText = page.text || htmlToText(page.html);
   const extracted = await extractFields(action.fields, pageText);
 
@@ -296,7 +322,11 @@ async function fetchPage(
 ): Promise<{ finalUrl: string; text: string; html: string }> {
   const renderUrl = Deno.env.get("AIFLOW_RENDER_URL");
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  // Render calls (multi-nav + login) get a much larger budget than a static GET.
+  const timer = setTimeout(
+    () => ctrl.abort(),
+    renderUrl ? RENDER_FETCH_TIMEOUT_MS : FETCH_TIMEOUT_MS
+  );
   try {
     if (renderUrl) {
       const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -310,7 +340,18 @@ async function fetchPage(
         ),
         signal: ctrl.signal
       });
-      if (!res.ok) throw new Error(`render service ${res.status}`);
+      if (!res.ok) {
+        // Distinguish a permanent login failure from transient render errors so
+        // the caller can fail fast instead of retrying bad credentials.
+        let errCode = "";
+        try {
+          errCode = ((await res.json()) as { error?: string })?.error ?? "";
+        } catch {
+          /* non-JSON error body — treat as transient below */
+        }
+        if (errCode === "login_failed") throw new BrowseLoginError("render login failed");
+        throw new Error(`render service ${res.status}`);
+      }
       const parsed = parseRenderResponse(await res.json(), url);
       if (!parsed) throw new Error("render service returned an invalid body");
       return parsed;

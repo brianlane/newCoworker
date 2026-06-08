@@ -103,37 +103,76 @@ function getBrowser() {
 /**
  * Per-tenant browser contexts keyed by `${businessId}:${label}`, so a logged-in
  * session cookie is reused across calls instead of re-logging in every time.
- * Idle contexts are evicted by TTL; the map is capped at MAX_SESSIONS.
+ *
+ * Each entry stores a context PROMISE (so concurrent first-callers dedupe to one
+ * context instead of leaking duplicates) plus an `inUse` refcount. Only idle
+ * entries (`inUse === 0`) are ever evicted/closed, so we never yank a context out
+ * from under an in-flight request. Eviction is best-effort and never awaited.
  */
-const sessions = new Map(); // key -> { context, lastUsed }
+const sessions = new Map(); // key -> { ctx: Promise<BrowserContext>, lastUsed, inUse }
 
-async function evictStale() {
+function closeEntry(s) {
+  Promise.resolve(s.ctx)
+    .then((c) => c.close())
+    .catch(() => {});
+}
+
+function evictStale() {
   const now = Date.now();
   for (const [key, s] of sessions) {
-    if (now - s.lastUsed > SESSION_TTL_MS) {
+    if (s.inUse === 0 && now - s.lastUsed > SESSION_TTL_MS) {
       sessions.delete(key);
-      await s.context.close().catch(() => {});
+      closeEntry(s);
     }
   }
-  while (sessions.size > MAX_SESSIONS) {
-    const oldest = [...sessions.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed)[0];
-    if (!oldest) break;
-    sessions.delete(oldest[0]);
-    await oldest[1].context.close().catch(() => {});
+  if (sessions.size > MAX_SESSIONS) {
+    const idle = [...sessions.entries()]
+      .filter(([, s]) => s.inUse === 0)
+      .sort((a, b) => a[1].lastUsed - b[1].lastUsed);
+    while (sessions.size > MAX_SESSIONS && idle.length) {
+      const [key, s] = idle.shift();
+      sessions.delete(key);
+      closeEntry(s);
+    }
   }
 }
 
-async function getSessionContext(key) {
-  const existing = sessions.get(key);
-  if (existing) {
-    existing.lastUsed = Date.now();
-    return existing.context;
+/** Acquire (creating if needed) the per-tenant context, bumping its refcount. */
+async function acquireSession(key) {
+  let s = sessions.get(key);
+  if (!s) {
+    const browser = await getBrowser();
+    s = { ctx: browser.newContext({ userAgent: UA }), lastUsed: Date.now(), inUse: 0 };
+    sessions.set(key, s);
   }
-  const browser = await getBrowser();
-  const context = await browser.newContext({ userAgent: UA });
-  sessions.set(key, { context, lastUsed: Date.now() });
-  await evictStale();
-  return context;
+  s.inUse++;
+  s.lastUsed = Date.now();
+  evictStale();
+  try {
+    return await s.ctx;
+  } catch (e) {
+    // Context creation failed — drop the poisoned entry so we retry cleanly.
+    s.inUse--;
+    sessions.delete(key);
+    throw e;
+  }
+}
+
+function releaseSession(key) {
+  const s = sessions.get(key);
+  if (s) {
+    s.inUse = Math.max(0, s.inUse - 1);
+    s.lastUsed = Date.now();
+  }
+}
+
+/** Drop + close a poisoned session (bad login / render error). */
+function dropSession(key) {
+  const s = sessions.get(key);
+  if (s) {
+    sessions.delete(key);
+    closeEntry(s);
+  }
 }
 
 function attachSsrfGuard(page) {
@@ -168,19 +207,37 @@ async function firstSelector(page, candidates) {
   return null;
 }
 
-/** True when the current page looks like a login form (a password field exists). */
-async function looksLikeLogin(page) {
-  return (await page.locator('input[type="password"]').count().catch(() => 0)) > 0;
+const USERNAME_SELECTORS = [
+  'input[type="email"]',
+  'input[autocomplete="username"]',
+  'input[name*="email" i]',
+  'input[name*="login" i]',
+  'input[name*="user" i]'
+];
+
+/**
+ * True only when the page looks like an actual login FORM: a password field AND a
+ * username/email field. Requiring both avoids treating an authenticated page that
+ * merely embeds a stray password input (e.g. a "change password" widget) as a
+ * logout, which would otherwise trigger a pointless re-login loop.
+ */
+async function looksLikeLogin(page, login) {
+  const hasPass =
+    (await page
+      .locator(login?.passwordSelector ?? 'input[type="password"]')
+      .count()
+      .catch(() => 0)) > 0;
+  if (!hasPass) return false;
+  const userSel = login?.usernameSelector
+    ? [login.usernameSelector]
+    : USERNAME_SELECTORS;
+  return (await firstSelector(page, userSel)) !== null;
 }
 
 async function performLogin(page, creds, login) {
   const userSel = await firstSelector(page, [
     login?.usernameSelector,
-    'input[type="email"]',
-    'input[autocomplete="username"]',
-    'input[name*="email" i]',
-    'input[name*="login" i]',
-    'input[name*="user" i]',
+    ...USERNAME_SELECTORS,
     'input[type="text"]'
   ]);
   const passSel = await firstSelector(page, [login?.passwordSelector, 'input[type="password"]']);
@@ -239,20 +296,30 @@ app.post("/render", async (req, res) => {
   const label = auth?.integrationLabel;
   if (!businessId || !label) return res.status(400).json({ error: "missing_business_or_label" });
   const key = `${businessId}:${label}`;
-  let page;
+
+  let context;
   try {
-    const context = await getSessionContext(key);
+    context = await acquireSession(key);
+  } catch (e) {
+    return res.status(502).json({ error: "render_failed", detail: String(e).slice(0, 300) });
+  }
+
+  let page;
+  let poisoned = false;
+  try {
     page = await context.newPage();
     await attachSsrfGuard(page);
     await page.goto(safe, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
 
-    if (await looksLikeLogin(page)) {
+    if (await looksLikeLogin(page, auth?.login)) {
       const creds = await fetchCredentials(businessId, label);
       await performLogin(page, creds, auth?.login);
       await page.goto(safe, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
-      // Login can fail (bad creds / MFA / captcha) — surface it instead of
-      // returning a useless login page the extractor would silently mis-read.
-      if (await looksLikeLogin(page)) {
+      // Login can fail (bad creds / MFA / captcha). Surface it AND drop the now
+      // logged-out session so the next call doesn't reuse a poisoned context and
+      // hand the extractor a login page.
+      if (await looksLikeLogin(page, auth?.login)) {
+        poisoned = true;
         return res.status(502).json({ error: "login_failed" });
       }
     }
@@ -261,15 +328,12 @@ app.post("/render", async (req, res) => {
     const text = await page.evaluate(() => document.body?.innerText ?? "");
     return res.json({ finalUrl: page.url(), text, html });
   } catch (e) {
-    // Drop a poisoned session so the next call starts clean.
-    const s = sessions.get(key);
-    if (s) {
-      sessions.delete(key);
-      await s.context.close().catch(() => {});
-    }
+    poisoned = true;
     return res.status(502).json({ error: "render_failed", detail: String(e).slice(0, 300) });
   } finally {
     if (page) await page.close().catch(() => {});
+    if (poisoned) dropSession(key);
+    else releaseSession(key);
   }
 });
 
