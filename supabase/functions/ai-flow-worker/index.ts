@@ -43,6 +43,7 @@ type Supabase = ReturnType<typeof createClient>;
 const MAX_ATTEMPTS = 4;
 const CLAIM_LIMIT = 3;
 const FETCH_TIMEOUT_MS = 20_000;
+const MAX_REDIRECTS = 5;
 const GEMINI_MODEL = Deno.env.get("AIFLOW_EXTRACT_MODEL") ?? "gemini-2.5-flash-lite";
 
 type RunRow = {
@@ -188,7 +189,7 @@ async function runStep(
     case "notify_owner":
       return notifyOwnerStep(supabase, run, action);
     case "http_call":
-      return httpCallStep(scope, action);
+      return httpCallStep(run, scope, action);
     case "await_approval":
       return approvalStep(approval, index, action);
   }
@@ -235,14 +236,29 @@ async function fetchPage(url: string): Promise<{ finalUrl: string; text: string;
       if (!parsed) throw new Error("render service returned an invalid body");
       return parsed;
     }
-    const res = await fetch(url, {
-      redirect: "follow",
-      headers: { "User-Agent": "NewCoworker-AiFlow/1.0" },
-      signal: ctrl.signal
-    });
-    if (!res.ok) throw new Error(`fetch ${res.status}`);
-    const html = await res.text();
-    return { finalUrl: res.url || url, text: "", html };
+    // Follow redirects manually so each hop's host is re-validated against the
+    // SSRF guard — a public URL must not be able to redirect to a private /
+    // loopback / cloud-metadata host (CodeQL/Bugbot: unsafe redirect).
+    let current = url;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      const res = await fetch(current, {
+        redirect: "manual",
+        headers: { "User-Agent": "NewCoworker-AiFlow/1.0" },
+        signal: ctrl.signal
+      });
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get("location");
+        if (!location) throw new Error(`fetch ${res.status} without location`);
+        const next = normalizeBrowseUrl(new URL(location, current).toString());
+        if (!next) throw new Error("fetch: redirect to unsafe or invalid URL");
+        current = next;
+        continue;
+      }
+      if (!res.ok) throw new Error(`fetch ${res.status}`);
+      const html = await res.text();
+      return { finalUrl: current, text: "", html };
+    }
+    throw new Error("fetch: too many redirects");
   } finally {
     clearTimeout(timer);
   }
@@ -365,12 +381,15 @@ async function notifyOwnerStep(
 }
 
 async function httpCallStep(
+  run: RunRow,
   scope: Scope,
   action: Extract<StepAction, { kind: "http_call" }>
 ): Promise<StepOutcome> {
   const base = Deno.env.get("AIFLOW_PLATFORM_URL") ?? "";
   const token = Deno.env.get("ROWBOAT_GATEWAY_TOKEN") ?? "";
-  const businessId = String(scope.trigger.business_id ?? "");
+  // The run row is the authoritative tenant id; the trigger context does not
+  // carry business_id, so reading it from scope.trigger would send an empty id.
+  const businessId = run.business_id;
   if (!base || !token) return { kind: "fail", error: "http_call: platform proxy not configured" };
   const res = await fetch(`${base}/api/integrations/custom/call`, {
     method: "POST",

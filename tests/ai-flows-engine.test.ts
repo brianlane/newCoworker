@@ -281,6 +281,16 @@ describe("htmlToText", () => {
       "<body><p>Call&nbsp;Bob &amp; &lt;Co&gt; &quot;now&quot; it&#39;s open</p></body></html>";
     expect(htmlToText(html)).toBe('Call Bob & <Co> "now" it\'s open');
   });
+
+  it("strips script/style end tags that contain whitespace", () => {
+    expect(htmlToText("<script >evil()</script >keep")).toBe("keep");
+    expect(htmlToText("<style >.a{}</style >keep")).toBe("keep");
+  });
+
+  it("decodes &amp; last so it does not double-unescape", () => {
+    // "&amp;lt;" must become the literal "&lt;", not "<".
+    expect(htmlToText("a &amp;lt; b")).toBe("a &lt; b");
+  });
 });
 
 describe("isExecutableDefinition", () => {

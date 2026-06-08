@@ -73,12 +73,18 @@ async function evaluateAiFlows(
   }
 
   const messages: CorrelationMessage[] = [];
+  // Bound the read by the widest window any flow asks for (the cutoff was
+  // computed but previously unused), and raise the row cap so a single sender's
+  // earlier "text then link" message isn't pushed out of the slice by other
+  // senders' traffic before we filter to this sender below.
+  const cutoffIso = new Date(current.nowMs - maxWindow * 60_000).toISOString();
   const { data: recentRows } = await supabase
     .from("sms_inbound_jobs")
     .select("payload, created_at")
     .eq("business_id", businessId)
+    .gte("created_at", cutoffIso)
     .order("created_at", { ascending: false })
-    .limit(20);
+    .limit(200);
   const recent = (recentRows ?? []) as Array<{
     payload: Record<string, unknown>;
     created_at: string;
