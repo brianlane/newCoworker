@@ -11,7 +11,8 @@ import {
   Plug,
   Settings,
   Bell,
-  Users
+  Users,
+  Workflow
 } from "lucide-react";
 
 const ownerNavItems = [
@@ -27,6 +28,7 @@ const ownerNavItems = [
   { label: "Customers", href: "/dashboard/customers", icon: Users },
   { label: "Memory", href: "/dashboard/memory", icon: Brain },
   { label: "Integrations", href: "/dashboard/integrations", icon: Plug },
+  { label: "AiFlows", href: "/dashboard/aiflows", icon: Workflow },
   { label: "Settings", href: "/dashboard/settings", icon: Settings },
   { label: "Notifications", href: "/dashboard/notifications", icon: Bell }
 ];

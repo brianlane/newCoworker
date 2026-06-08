@@ -21,8 +21,169 @@ import {
   telnyxWebhookRateAllow
 } from "../_shared/telnyx_edge_guard.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
+import { evaluateSmsTrigger, isExecutableDefinition } from "../_shared/ai_flows/engine.ts";
+import type {
+  AiFlowDefinition,
+  CorrelationMessage
+} from "../_shared/ai_flows/types.ts";
 
 const MAX_BODY = 256 * 1024;
+
+/** A matched AiFlow plus the trigger-extracted vars for the enqueued run. */
+type MatchedAiFlow = {
+  id: string;
+  def: AiFlowDefinition;
+  url: string | null;
+  windowText: string;
+};
+
+type AiFlowEval = { suppress: boolean; matched: MatchedAiFlow[] };
+
+/**
+ * Evaluate enabled AiFlow triggers for a business against the inbound message
+ * plus a correlation window of the sender's recent messages (so a "text then
+ * link" two-SMS lead still matches). Pure matching is delegated to the tested
+ * engine; this only does the DB reads. NEVER throws — the caller treats any
+ * failure as "no flows matched" so the inbound SMS path is never broken.
+ */
+async function evaluateAiFlows(
+  supabase: ReturnType<typeof createClient>,
+  businessId: string,
+  current: { from: string; text: string; nowMs: number }
+): Promise<AiFlowEval> {
+  const { data: flowRows, error: flowErr } = await supabase
+    .from("ai_flows")
+    .select("id, definition")
+    .eq("business_id", businessId)
+    .eq("enabled", true);
+  if (flowErr) {
+    console.error("ai_flows load", flowErr);
+    return { suppress: false, matched: [] };
+  }
+  const flows = (flowRows ?? []) as Array<{ id: string; definition: unknown }>;
+  if (flows.length === 0) return { suppress: false, matched: [] };
+
+  // Widest correlation window any flow asks for (default 10), so a single jobs
+  // read serves them all; each flow still filters to its own window in-engine.
+  let maxWindow = 10;
+  for (const f of flows) {
+    const cw = (f.definition as { trigger?: { correlationWindowMinutes?: number } })?.trigger
+      ?.correlationWindowMinutes;
+    if (typeof cw === "number" && cw > maxWindow) maxWindow = cw;
+  }
+
+  const messages: CorrelationMessage[] = [];
+  // Bound the read by the widest window any flow asks for (the cutoff was
+  // computed but previously unused), and raise the row cap so a single sender's
+  // earlier "text then link" message isn't pushed out of the slice by other
+  // senders' traffic before we filter to this sender below.
+  const cutoffIso = new Date(current.nowMs - maxWindow * 60_000).toISOString();
+  const { data: recentRows } = await supabase
+    .from("sms_inbound_jobs")
+    .select("payload, created_at")
+    .eq("business_id", businessId)
+    .gte("created_at", cutoffIso)
+    .order("created_at", { ascending: false })
+    .limit(200);
+  const recent = (recentRows ?? []) as Array<{
+    payload: Record<string, unknown>;
+    created_at: string;
+  }>;
+  // Oldest-first so the engine's windowText reads in chronological order.
+  for (const row of [...recent].reverse()) {
+    const env = row.payload as { data?: { payload?: Record<string, unknown> } };
+    const p = env?.data?.payload ?? {};
+    const rFrom = normalizeE164(telnyxMessagingPhoneString(p, "from"));
+    if (rFrom !== current.from) continue;
+    const atMs = Date.parse(row.created_at);
+    messages.push({
+      text: inboundSmsBody(p),
+      from: rFrom,
+      atMs: Number.isFinite(atMs) ? atMs : current.nowMs
+    });
+  }
+  // The current inbound is newest (it isn't in sms_inbound_jobs yet).
+  messages.push({ text: current.text, from: current.from, atMs: current.nowMs });
+
+  const matched: MatchedAiFlow[] = [];
+  for (const f of flows) {
+    if (!isExecutableDefinition(f.definition)) continue;
+    const def = f.definition;
+    const res = evaluateSmsTrigger(def.trigger, { messages, nowMs: current.nowMs });
+    if (res.matched) {
+      matched.push({ id: f.id, def, url: res.url, windowText: res.windowText });
+    }
+  }
+  const suppress = matched.some((m) => m.def.options?.suppressDefaultReply === true);
+  return { suppress, matched };
+}
+
+/**
+ * Evaluate AiFlow triggers and enqueue one ai_flow_run per matched flow.
+ * Runs FIRST (before stamping the inbound job) so the default Coworker reply is
+ * only suppressed when an automation is actually queued to handle it. Returns
+ * whether a flow that requested suppression has a queued run. Fully
+ * failure-isolated: never throws, so the inbound SMS path is never broken.
+ * Called from BOTH the normal enqueue path and the Safe-Mode forward path, so a
+ * lead automation still starts even when the customer reply is handled manually.
+ */
+async function evaluateAndEnqueueAiFlows(
+  supabase: ReturnType<typeof createClient>,
+  businessId: string,
+  ctx: { from: string | null; to: string; eventId: string; bodyText: string }
+): Promise<{ suppressingRunQueued: boolean }> {
+  let evalRes: AiFlowEval = { suppress: false, matched: [] };
+  try {
+    evalRes = await evaluateAiFlows(supabase, businessId, {
+      from: ctx.from ?? "",
+      text: ctx.bodyText,
+      nowMs: Date.now()
+    });
+  } catch (e) {
+    console.error("ai_flow trigger eval", e);
+    return { suppressingRunQueued: false };
+  }
+  if (evalRes.matched.length === 0) return { suppressingRunQueued: false };
+
+  let suppressingRunQueued = false;
+  try {
+    for (const m of evalRes.matched) {
+      const { error: runErr } = await supabase.from("ai_flow_runs").insert({
+        flow_id: m.id,
+        business_id: businessId,
+        status: "queued",
+        context: {
+          trigger: {
+            url: m.url,
+            windowText: m.windowText,
+            from: ctx.from ?? "",
+            to: ctx.to,
+            event_id: ctx.eventId
+          }
+        },
+        current_step: 0,
+        dedupe_key: ctx.eventId
+      });
+      // 23505 = a prior webhook already queued it, which still counts as queued.
+      const queued = !runErr || (runErr as { code?: string }).code === "23505";
+      if (runErr && (runErr as { code?: string }).code !== "23505") {
+        console.error("ai_flow_runs insert", runErr);
+      }
+      if (queued && m.def.options?.suppressDefaultReply === true) {
+        suppressingRunQueued = true;
+      }
+    }
+    await telemetryRecord(supabase, "ai_flow_runs_enqueued", {
+      business_id: businessId,
+      event_id: ctx.eventId,
+      count: evalRes.matched.length,
+      suppressed_reply: suppressingRunQueued
+    });
+  } catch (e) {
+    console.error("ai_flow_runs enqueue", e);
+  }
+  return { suppressingRunQueued };
+}
 
 const HELP_REPLY_TEXT =
   "New Coworker: For help, use your business dashboard or contact support. Msg&data rates may apply. Reply STOP to opt out.";
@@ -506,6 +667,35 @@ serve(async (req: Request) => {
             event_id: eventId,
             forwarded: true
           });
+          // Safe Mode only changes how the CUSTOMER reply is handled (owner does
+          // it manually); owner-configured lead automations must still start, so
+          // enqueue any matched AiFlow runs. Evaluate BEFORE persisting the job
+          // below (the engine appends the current message itself, so persisting
+          // first would double-count it in the correlation window). The kill
+          // switch (is_paused) above already stopped everything, and the worker
+          // re-checks is_paused before any side effect.
+          await evaluateAndEnqueueAiFlows(supabase, businessId, {
+            from,
+            to,
+            eventId,
+            bodyText: inboundSmsBody(payload)
+          });
+          // Persist the inbound as an already-`done` job so it still appears in
+          // the AiFlow correlation window + audit trail for FUTURE messages
+          // (a multi-message "text then link" flow must see this part later).
+          // status='done' means the sms-inbound-worker never claims it, so there
+          // is no double-forward and no AI reply.
+          const { error: smJobErr } = await supabase.from("sms_inbound_jobs").insert({
+            business_id: businessId,
+            telnyx_event_id: eventId,
+            payload: envelope as unknown as Record<string, unknown>,
+            status: "done",
+            suppress_reply: true,
+            outbound_idempotency_key: crypto.randomUUID()
+          });
+          if (smJobErr && (smJobErr as { code?: string }).code !== "23505") {
+            console.error("safe mode inbound persist", smJobErr);
+          }
           return new Response(
             JSON.stringify({ ok: true, skip: "safe_mode_forwarded" }),
             { status: 200, headers: { "Content-Type": "application/json" } }
@@ -535,16 +725,41 @@ serve(async (req: Request) => {
       }
     }
 
+    // Evaluate AiFlow triggers + enqueue runs up front so we only suppress the
+    // default Coworker reply when an automation is actually queued to handle it.
+    const { suppressingRunQueued } = await evaluateAndEnqueueAiFlows(supabase, businessId, {
+      from,
+      to,
+      eventId,
+      bodyText: inboundSmsBody(payload)
+    });
+
     const { error } = await supabase.from("sms_inbound_jobs").insert({
       business_id: businessId,
       telnyx_event_id: eventId,
       payload: envelope as unknown as Record<string, unknown>,
       status: "pending",
+      // Only suppress when a flow that requested it actually has a queued run.
+      suppress_reply: suppressingRunQueued,
       outbound_idempotency_key: crypto.randomUUID()
     });
 
     if (error) {
       if ((error as { code?: string }).code === "23505") {
+        // Duplicate event: the first delivery already created the job. If THIS
+        // delivery is the one that managed to queue a suppressing flow (e.g. the
+        // first delivery's run insert failed and stamped suppress_reply=false),
+        // promote the existing still-pending job to suppressed so it doesn't get
+        // a normal Coworker reply alongside the AiFlow. Only touch pending rows
+        // so we never race the worker after it has claimed the job.
+        if (suppressingRunQueued) {
+          await supabase
+            .from("sms_inbound_jobs")
+            .update({ suppress_reply: true })
+            .eq("business_id", businessId)
+            .eq("telnyx_event_id", eventId)
+            .eq("status", "pending");
+        }
         return new Response(JSON.stringify({ ok: true, duplicate_job: true }), {
           status: 200,
           headers: { "Content-Type": "application/json" }
