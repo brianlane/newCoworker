@@ -68,6 +68,14 @@ app.post("/render", async (req, res) => {
     const browser = await getBrowser();
     context = await browser.newContext({ userAgent: "NewCoworker-AiFlow/1.0" });
     const page = await context.newPage();
+    // Re-validate EVERY request (initial nav, redirect hops, and subresources)
+    // against the SSRF guard so a public lead URL cannot redirect to a
+    // loopback/metadata/private host. An aborted main navigation makes
+    // page.goto throw, which the catch below turns into a 502.
+    await page.route("**/*", (route) => {
+      if (safeUrl(route.request().url())) route.continue();
+      else route.abort("blockedbyclient");
+    });
     await page.goto(safe, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
     const html = await page.content();
     const text = await page.evaluate(() => document.body?.innerText ?? "");

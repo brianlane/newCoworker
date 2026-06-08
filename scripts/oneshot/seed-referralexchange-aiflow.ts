@@ -86,7 +86,7 @@ function parseArgs(argv: readonly string[]): Args {
 }
 
 const DEFAULT_OUTBOUND =
-  "Hi{{vars.seller_name}}, I saw your listing and I'd love to help you sell. " +
+  "Hi {{vars.seller_name}}, I saw your listing and I'd love to help you sell. " +
   "Are you still looking for an agent? — reply here and I'll be in touch.";
 
 function buildDefinition(opts: {
