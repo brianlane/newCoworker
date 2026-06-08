@@ -669,8 +669,10 @@ serve(async (req: Request) => {
           });
           // Safe Mode only changes how the CUSTOMER reply is handled (owner does
           // it manually); owner-configured lead automations must still start, so
-          // enqueue any matched AiFlow runs before returning. The kill switch
-          // (is_paused) above already stopped everything, and the worker
+          // enqueue any matched AiFlow runs. Evaluate BEFORE persisting the job
+          // below (the engine appends the current message itself, so persisting
+          // first would double-count it in the correlation window). The kill
+          // switch (is_paused) above already stopped everything, and the worker
           // re-checks is_paused before any side effect.
           await evaluateAndEnqueueAiFlows(supabase, businessId, {
             from,
@@ -678,6 +680,22 @@ serve(async (req: Request) => {
             eventId,
             bodyText: inboundSmsBody(payload)
           });
+          // Persist the inbound as an already-`done` job so it still appears in
+          // the AiFlow correlation window + audit trail for FUTURE messages
+          // (a multi-message "text then link" flow must see this part later).
+          // status='done' means the sms-inbound-worker never claims it, so there
+          // is no double-forward and no AI reply.
+          const { error: smJobErr } = await supabase.from("sms_inbound_jobs").insert({
+            business_id: businessId,
+            telnyx_event_id: eventId,
+            payload: envelope as unknown as Record<string, unknown>,
+            status: "done",
+            suppress_reply: true,
+            outbound_idempotency_key: crypto.randomUUID()
+          });
+          if (smJobErr && (smJobErr as { code?: string }).code !== "23505") {
+            console.error("safe mode inbound persist", smJobErr);
+          }
           return new Response(
             JSON.stringify({ ok: true, skip: "safe_mode_forwarded" }),
             { status: 200, headers: { "Content-Type": "application/json" } }
