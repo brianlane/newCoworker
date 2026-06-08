@@ -1,0 +1,15 @@
+{
+  "name": "aiflow-render",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Optional headless-Chromium render service for AiFlows browse_extract (SPA pages).",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "playwright": "^1.48.0"
+  }
+}

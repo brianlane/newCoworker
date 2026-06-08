@@ -21,8 +21,96 @@ import {
   telnyxWebhookRateAllow
 } from "../_shared/telnyx_edge_guard.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
+import { evaluateSmsTrigger, isExecutableDefinition } from "../_shared/ai_flows/engine.ts";
+import type {
+  AiFlowDefinition,
+  CorrelationMessage
+} from "../_shared/ai_flows/types.ts";
 
 const MAX_BODY = 256 * 1024;
+
+/** A matched AiFlow plus the trigger-extracted vars for the enqueued run. */
+type MatchedAiFlow = {
+  id: string;
+  def: AiFlowDefinition;
+  url: string | null;
+  windowText: string;
+};
+
+type AiFlowEval = { suppress: boolean; matched: MatchedAiFlow[] };
+
+/**
+ * Evaluate enabled AiFlow triggers for a business against the inbound message
+ * plus a correlation window of the sender's recent messages (so a "text then
+ * link" two-SMS lead still matches). Pure matching is delegated to the tested
+ * engine; this only does the DB reads. NEVER throws — the caller treats any
+ * failure as "no flows matched" so the inbound SMS path is never broken.
+ */
+async function evaluateAiFlows(
+  supabase: ReturnType<typeof createClient>,
+  businessId: string,
+  current: { from: string; text: string; nowMs: number }
+): Promise<AiFlowEval> {
+  const { data: flowRows, error: flowErr } = await supabase
+    .from("ai_flows")
+    .select("id, definition")
+    .eq("business_id", businessId)
+    .eq("enabled", true);
+  if (flowErr) {
+    console.error("ai_flows load", flowErr);
+    return { suppress: false, matched: [] };
+  }
+  const flows = (flowRows ?? []) as Array<{ id: string; definition: unknown }>;
+  if (flows.length === 0) return { suppress: false, matched: [] };
+
+  // Widest correlation window any flow asks for (default 10), so a single jobs
+  // read serves them all; each flow still filters to its own window in-engine.
+  let maxWindow = 10;
+  for (const f of flows) {
+    const cw = (f.definition as { trigger?: { correlationWindowMinutes?: number } })?.trigger
+      ?.correlationWindowMinutes;
+    if (typeof cw === "number" && cw > maxWindow) maxWindow = cw;
+  }
+
+  const messages: CorrelationMessage[] = [];
+  const { data: recentRows } = await supabase
+    .from("sms_inbound_jobs")
+    .select("payload, created_at")
+    .eq("business_id", businessId)
+    .order("created_at", { ascending: false })
+    .limit(20);
+  const recent = (recentRows ?? []) as Array<{
+    payload: Record<string, unknown>;
+    created_at: string;
+  }>;
+  // Oldest-first so the engine's windowText reads in chronological order.
+  for (const row of [...recent].reverse()) {
+    const env = row.payload as { data?: { payload?: Record<string, unknown> } };
+    const p = env?.data?.payload ?? {};
+    const rFrom = normalizeE164(telnyxMessagingPhoneString(p, "from"));
+    if (rFrom !== current.from) continue;
+    const atMs = Date.parse(row.created_at);
+    messages.push({
+      text: inboundSmsBody(p),
+      from: rFrom,
+      atMs: Number.isFinite(atMs) ? atMs : current.nowMs
+    });
+  }
+  // The current inbound is newest (it isn't in sms_inbound_jobs yet).
+  messages.push({ text: current.text, from: current.from, atMs: current.nowMs });
+
+  const matched: MatchedAiFlow[] = [];
+  for (const f of flows) {
+    if (!isExecutableDefinition(f.definition)) continue;
+    const def = f.definition;
+    const res = evaluateSmsTrigger(def.trigger, { messages, nowMs: current.nowMs });
+    if (res.matched) {
+      matched.push({ id: f.id, def, url: res.url, windowText: res.windowText });
+    }
+  }
+  const suppress = matched.some((m) => m.def.options?.suppressDefaultReply === true);
+  return { suppress, matched };
+}
 
 const HELP_REPLY_TEXT =
   "New Coworker: For help, use your business dashboard or contact support. Msg&data rates may apply. Reply STOP to opt out.";
@@ -535,11 +623,26 @@ serve(async (req: Request) => {
       }
     }
 
+    // AiFlow trigger evaluation (failure-isolated): decide up front whether a
+    // matched flow should suppress the normal Coworker reply, so we can stamp
+    // the job before the worker can claim it. Never blocks/breaks the inbound.
+    let aiFlowEval: AiFlowEval = { suppress: false, matched: [] };
+    try {
+      aiFlowEval = await evaluateAiFlows(supabase, businessId, {
+        from: from ?? "",
+        text: inboundSmsBody(payload),
+        nowMs: Date.now()
+      });
+    } catch (e) {
+      console.error("ai_flow trigger eval", e);
+    }
+
     const { error } = await supabase.from("sms_inbound_jobs").insert({
       business_id: businessId,
       telnyx_event_id: eventId,
       payload: envelope as unknown as Record<string, unknown>,
       status: "pending",
+      suppress_reply: aiFlowEval.suppress,
       outbound_idempotency_key: crypto.randomUUID()
     });
 
@@ -552,6 +655,43 @@ serve(async (req: Request) => {
       }
       console.error("sms queue insert", error);
       return new Response("Queue error", { status: 500 });
+    }
+
+    // Enqueue one ai_flow_run per matched flow. dedupe_key=eventId makes this
+    // exactly-once per source event (unique index on (flow_id, dedupe_key)).
+    // Failure-isolated: a run-enqueue error must not fail the webhook.
+    if (aiFlowEval.matched.length > 0) {
+      try {
+        for (const m of aiFlowEval.matched) {
+          const { error: runErr } = await supabase.from("ai_flow_runs").insert({
+            flow_id: m.id,
+            business_id: businessId,
+            status: "queued",
+            context: {
+              trigger: {
+                url: m.url,
+                windowText: m.windowText,
+                from: from ?? "",
+                to,
+                event_id: eventId
+              }
+            },
+            current_step: 0,
+            dedupe_key: eventId
+          });
+          if (runErr && (runErr as { code?: string }).code !== "23505") {
+            console.error("ai_flow_runs insert", runErr);
+          }
+        }
+        await telemetryRecord(supabase, "ai_flow_runs_enqueued", {
+          business_id: businessId,
+          event_id: eventId,
+          count: aiFlowEval.matched.length,
+          suppressed_reply: aiFlowEval.suppress
+        });
+      } catch (e) {
+        console.error("ai_flow_runs enqueue", e);
+      }
     }
 
     await telemetryRecord(supabase, "sms_inbound_enqueued", { business_id: businessId, event_id: eventId });

@@ -97,6 +97,8 @@ type JobRow = {
   outbound_idempotency_key: string | null;
   attempt_count: number;
   rowboat_reply_cached?: string | null;
+  /** Set by the AiFlow trigger hook: skip the normal Coworker reply for this job. */
+  suppress_reply?: boolean | null;
 };
 
 type ThreadRow = {
@@ -160,6 +162,27 @@ serve(async (req: Request) => {
   const defaultProjectId = Deno.env.get("ROWBOAT_DEFAULT_PROJECT_ID") ?? "";
 
   for (const job of list) {
+    // AiFlow suppression: a matched flow with options.suppressDefaultReply owns
+    // the response to this inbound, so skip the normal Coworker reply entirely
+    // (no Rowboat call, no outbound send). The job is still marked done for the
+    // audit trail; the AiFlow run was enqueued separately by the webhook.
+    if (job.suppress_reply) {
+      await supabase.rpc("complete_sms_inbound_job", {
+        p_job_id: job.id,
+        p_status: "done",
+        p_telnyx_outbound_message_id: null,
+        p_rowboat_conversation_id: null,
+        p_last_error: "suppressed_by_ai_flow"
+      });
+      await clearJobReplyCache(supabase, job.id);
+      await telemetryRecord(supabase, "sms_worker_suppressed_ai_flow", {
+        job_id: job.id,
+        business_id: job.business_id
+      });
+      processed += 1;
+      continue;
+    }
+
     const envelope = job.payload as { data?: { payload?: Record<string, unknown> } };
     const payload = envelope?.data?.payload ?? {};
     const fromRaw = telnyxMessagingPhoneString(payload, "from");
