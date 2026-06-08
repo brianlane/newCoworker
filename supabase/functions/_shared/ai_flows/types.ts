@@ -60,18 +60,38 @@ export type BrowseAuth = {
   };
 };
 
+/**
+ * Optional per-step guard. When present, the step only runs if the condition
+ * holds against the current run vars (a var produced by an EARLIER step);
+ * otherwise the worker SKIPS the step (records "skipped") and continues. Two
+ * gated steps give simple branching (e.g. a buyer vs. seller `send_sms`) without
+ * nested control flow. Exactly one of `equals`/`contains` is set; matching is
+ * case-insensitive unless `caseInsensitive` is false.
+ */
+export type StepCondition = {
+  /** Name of a var produced by an earlier step (e.g. "lead_type"). */
+  var: string;
+  /** Whole-value (case-insensitive) equality. */
+  equals?: string;
+  /** Substring match. */
+  contains?: string;
+  /** Default true. Set false for case-sensitive matching. */
+  caseInsensitive?: boolean;
+};
+
 export type FlowStep =
-  | { id: string; type: "extract_url"; saveAs: string }
+  | { id: string; type: "extract_url"; saveAs: string; when?: StepCondition }
   | {
       id: string;
       type: "browse_extract";
       urlVar: string;
       fields: ExtractField[];
       auth?: BrowseAuth;
+      when?: StepCondition;
     }
-  | { id: string; type: "send_sms"; to: string; body: string }
-  | { id: string; type: "approval_gate"; prompt: string }
-  | { id: string; type: "notify_owner"; message: string }
+  | { id: string; type: "send_sms"; to: string; body: string; when?: StepCondition }
+  | { id: string; type: "approval_gate"; prompt: string; when?: StepCondition }
+  | { id: string; type: "notify_owner"; message: string; when?: StepCondition }
   | {
       id: string;
       type: "http_call";
@@ -80,6 +100,7 @@ export type FlowStep =
       path?: string;
       bodyTemplate?: string;
       saveAs?: string;
+      when?: StepCondition;
     };
 
 export type FlowStepType = FlowStep["type"];

@@ -93,23 +93,53 @@ const browseAuthSchema = z.object({
 
 const stepId = z.string().min(1).max(60);
 
+/**
+ * Optional per-step guard. The step only runs when the condition holds against a
+ * var produced by an EARLIER step; otherwise the worker skips it. Exactly one of
+ * `equals`/`contains` must be set (XOR), so two gated steps give simple branching
+ * (e.g. a buyer vs. seller `send_sms`). MUST be part of the schema so the
+ * dashboard editor's save round-trips it instead of zod stripping it.
+ */
+const whenSchema = z
+  .object({
+    var: varName,
+    equals: z.string().min(1).max(200).optional(),
+    contains: z.string().min(1).max(200).optional(),
+    caseInsensitive: z.boolean().optional()
+  })
+  .refine((w) => (w.equals === undefined) !== (w.contains === undefined), {
+    message: "set exactly one of equals/contains"
+  });
+
 const stepSchema = z.discriminatedUnion("type", [
-  z.object({ id: stepId, type: z.literal("extract_url"), saveAs: varName }),
+  z.object({ id: stepId, type: z.literal("extract_url"), saveAs: varName, when: whenSchema.optional() }),
   z.object({
     id: stepId,
     type: z.literal("browse_extract"),
     urlVar: varName,
     fields: z.array(extractFieldSchema).min(1).max(15),
-    auth: browseAuthSchema.optional()
+    auth: browseAuthSchema.optional(),
+    when: whenSchema.optional()
   }),
   z.object({
     id: stepId,
     type: z.literal("send_sms"),
     to: z.string().min(1).max(200),
-    body: z.string().min(1).max(1600)
+    body: z.string().min(1).max(1600),
+    when: whenSchema.optional()
   }),
-  z.object({ id: stepId, type: z.literal("approval_gate"), prompt: z.string().min(1).max(500) }),
-  z.object({ id: stepId, type: z.literal("notify_owner"), message: z.string().min(1).max(1000) }),
+  z.object({
+    id: stepId,
+    type: z.literal("approval_gate"),
+    prompt: z.string().min(1).max(500),
+    when: whenSchema.optional()
+  }),
+  z.object({
+    id: stepId,
+    type: z.literal("notify_owner"),
+    message: z.string().min(1).max(1000),
+    when: whenSchema.optional()
+  }),
   z.object({
     id: stepId,
     type: z.literal("http_call"),
@@ -117,7 +147,8 @@ const stepSchema = z.discriminatedUnion("type", [
     method: z.enum(HTTP_METHODS).optional(),
     path: z.string().max(500).optional(),
     bodyTemplate: z.string().max(4000).optional(),
-    saveAs: varName.optional()
+    saveAs: varName.optional(),
+    when: whenSchema.optional()
   })
 ]);
 
@@ -132,6 +163,7 @@ export const aiFlowDefinitionSchema = z.object({
 
 export type TriggerCondition = z.infer<typeof conditionSchema>;
 export type FlowStep = z.infer<typeof stepSchema>;
+export type StepCondition = z.infer<typeof whenSchema>;
 export type AiFlowDefinition = z.infer<typeof aiFlowDefinitionSchema>;
 
 export class AiFlowValidationError extends Error {
@@ -218,6 +250,15 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
 
     if (step.type === "browse_extract" && !vars.has(step.urlVar)) {
       issues.push(`Step "${step.id}" browses urlVar "${step.urlVar}" which no earlier step produces.`);
+    }
+
+    // A `when` guard may only reference a var an EARLIER step produced (same
+    // scope rule as urlVar/templates — checked before this step's own vars are
+    // registered below).
+    if (step.when && !vars.has(step.when.var)) {
+      issues.push(
+        `Step "${step.id}" has a "when" condition on {{vars.${step.when.var}}} which no earlier step produces.`
+      );
     }
 
     // Register the vars this step produces (visible to LATER steps only).

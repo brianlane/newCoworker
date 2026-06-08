@@ -10,6 +10,7 @@ import {
   summarizeDefinition,
   type AiFlowDefinition,
   type FlowStep,
+  type StepCondition,
   type TriggerCondition
 } from "@/lib/ai-flows/schema";
 import type { AiFlowRow } from "@/lib/ai-flows/db";
@@ -69,6 +70,29 @@ function newStep(type: FlowStep["type"]): FlowStep {
     case "http_call":
       return { id, type, label: "", method: "POST", path: "", bodyTemplate: "", saveAs: "" };
   }
+}
+
+/** Vars a single step produces (visible to LATER steps). Mirrors schema scope. */
+function varsProducedByStep(step: FlowStep): string[] {
+  if (step.type === "extract_url") return [step.saveAs];
+  if (step.type === "browse_extract") return step.fields.map((f) => f.name).filter(Boolean);
+  if (step.type === "http_call" && step.saveAs) return [step.saveAs];
+  return [];
+}
+
+/** All vars produced by steps BEFORE `index` — the legal targets for a `when`. */
+function varsProducedBefore(steps: FlowStep[], index: number): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < index; i++) {
+    for (const v of varsProducedByStep(steps[i])) {
+      if (!seen.has(v)) {
+        seen.add(v);
+        out.push(v);
+      }
+    }
+  }
+  return out;
 }
 
 function toDefinition(s: EditorState): AiFlowDefinition {
@@ -362,6 +386,12 @@ export function AiFlowsManager({
                 </div>
               </div>
               <StepFields step={step} index={i} patchStep={patchStep} />
+              <WhenEditor
+                step={step}
+                index={i}
+                earlierVars={varsProducedBefore(editor.steps, i)}
+                patchStep={patchStep}
+              />
             </div>
           ))}
           <div className="flex flex-wrap gap-2">
@@ -575,6 +605,93 @@ function StepFields({
         value={step.saveAs ?? ""}
         onChange={(v) => patchStep(index, { saveAs: v })}
       />
+    </div>
+  );
+}
+
+/**
+ * Optional "Only run when" guard per step. Lets the author gate a step on a var
+ * an EARLIER step produced (e.g. run the buyer SMS only when lead_type contains
+ * "buyer"). Writes `when` straight onto the step so the zod schema round-trips
+ * it; toggling off clears it (undefined → dropped on JSON save).
+ */
+function WhenEditor({
+  step,
+  index,
+  earlierVars,
+  patchStep
+}: {
+  step: FlowStep;
+  index: number;
+  earlierVars: string[];
+  patchStep: (index: number, patch: Record<string, unknown>) => void;
+}) {
+  const when = step.when;
+  const operator: "contains" | "equals" = when?.equals !== undefined ? "equals" : "contains";
+  const value = when?.equals ?? when?.contains ?? "";
+
+  const setWhen = (next: StepCondition) => patchStep(index, { when: next });
+
+  const buildWhen = (over: Partial<{ var: string; operator: "contains" | "equals"; value: string }>) => {
+    const v = over.var ?? when?.var ?? earlierVars[0] ?? "";
+    const op = over.operator ?? operator;
+    const val = over.value ?? value;
+    const base: StepCondition =
+      op === "equals" ? { var: v, equals: val } : { var: v, contains: val };
+    // Carry through a non-default caseInsensitive flag set elsewhere (e.g. AI
+    // authoring or a hand-edited definition); the editor doesn't surface it, so
+    // rebuilding the object would otherwise silently reset it to the default.
+    if (when?.caseInsensitive !== undefined) base.caseInsensitive = when.caseInsensitive;
+    return base;
+  };
+
+  return (
+    <div className="rounded-md border border-parchment/10 bg-deep-ink/30 px-3 py-2">
+      <label className="flex items-center gap-2 text-xs text-parchment/70">
+        <input
+          type="checkbox"
+          checked={Boolean(when)}
+          onChange={(ev) =>
+            patchStep(index, { when: ev.target.checked ? buildWhen({}) : undefined })
+          }
+        />
+        Only run when…
+      </label>
+      {when && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <select
+            className={`${inputClass} w-auto`}
+            value={when.var}
+            onChange={(ev) => setWhen(buildWhen({ var: ev.target.value }))}
+          >
+            {earlierVars.length === 0 && <option value="">(no earlier variables)</option>}
+            {!earlierVars.includes(when.var) && when.var !== "" && (
+              <option value={when.var}>{when.var}</option>
+            )}
+            {earlierVars.map((v) => (
+              <option key={v} value={v}>
+                {v}
+              </option>
+            ))}
+          </select>
+          <select
+            className={`${inputClass} w-auto`}
+            value={operator}
+            onChange={(ev) =>
+              setWhen(buildWhen({ operator: ev.target.value as "contains" | "equals" }))
+            }
+          >
+            <option value="contains">contains</option>
+            <option value="equals">equals</option>
+          </select>
+          <input
+            className={`${inputClass} flex-1`}
+            value={value}
+            placeholder="buyer"
+            onChange={(ev) => setWhen(buildWhen({ value: ev.target.value }))}
+          />
+        </div>
+      )}
     </div>
   );
 }

@@ -28,6 +28,7 @@ import { telemetryRecord } from "../_shared/telemetry.ts";
 import { telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
 import {
   buildExtractionPrompt,
+  evaluateStepCondition,
   extractPhones,
   htmlToText,
   isExecutableDefinition,
@@ -258,6 +259,13 @@ async function runStep(
   scope: Scope,
   approval: Record<string, unknown>
 ): Promise<StepOutcome> {
+  // Per-step `when` guard: skip (don't run) when the condition is unmet. This is
+  // how a flow branches — e.g. a buyer vs. seller send_sms, only one of which
+  // fires. Evaluated before recording "running" so a skipped step is never shown
+  // as having started.
+  if (step.when && !evaluateStepCondition(step.when, scope)) {
+    return { kind: "ok", skipped: true, result: { skipped: "when_unmet", when: step.when } };
+  }
   await recordStep(supabase, run, index, step, "running");
   const plan = planStep(step, scope);
   if (!plan.ok) return { kind: "fail", error: plan.error };
