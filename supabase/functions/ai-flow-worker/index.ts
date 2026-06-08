@@ -54,6 +54,26 @@ const RENDER_FETCH_TIMEOUT_MS = Number(
 const MAX_REDIRECTS = 5;
 
 /**
+ * Resolve the render-service URL for a given tenant.
+ *
+ * The render service is deployed PER-TENANT (one headless-Chromium sidecar on
+ * each business's own VPS, exposed at `render-<businessId>.<zone>`), so the
+ * shared worker templates the businessId into the URL — exactly like
+ * ROWBOAT_CHAT_URL_TEMPLATE does for per-tenant Rowboat. A static
+ * `AIFLOW_RENDER_URL` (no `{businessId}` placeholder) still works for
+ * single-host / local setups: the substitution is then a no-op.
+ *
+ * Returns null when neither var is configured (browse falls back to a static
+ * fetch, which cannot drive a login form — see browseStep).
+ */
+function resolveRenderUrl(businessId: string): string | null {
+  const tmpl =
+    Deno.env.get("AIFLOW_RENDER_URL_TEMPLATE") ?? Deno.env.get("AIFLOW_RENDER_URL");
+  if (!tmpl) return null;
+  return tmpl.replace(/\{businessId\}/g, encodeURIComponent(businessId));
+}
+
+/**
  * Thrown when the render service reports a login failure (bad creds / MFA /
  * captcha). That is a permanent setup error, so the worker fails the run rather
  * than retrying it up to MAX_ATTEMPTS.
@@ -268,13 +288,16 @@ async function browseStep(
   const safe = normalizeBrowseUrl(action.url);
   if (!safe) return { kind: "fail", error: `browse: unsafe or invalid URL ${action.url}` };
 
-  // A login-gated browse can only be performed by the headless render service
-  // (a static fetch can't drive a login form). Missing config is a permanent
-  // setup error, not a transient one — fail without burning retries.
-  if (action.auth && !Deno.env.get("AIFLOW_RENDER_URL")) {
+  // The render service is resolved per-tenant from the run's business_id
+  // (this tenant's own VPS sidecar). A login-gated browse can only be
+  // performed by that headless service — a static fetch can't drive a login
+  // form — so missing config is a permanent setup error, not a transient one;
+  // fail without burning retries.
+  const renderUrl = resolveRenderUrl(run.business_id);
+  if (action.auth && !renderUrl) {
     return {
       kind: "fail",
-      error: "browse: authenticated browse requires the AIFLOW_RENDER_URL render service"
+      error: "browse: authenticated browse requires the AIFLOW_RENDER_URL_TEMPLATE render service"
     };
   }
 
@@ -282,6 +305,7 @@ async function browseStep(
   try {
     page = await fetchPage(
       safe,
+      renderUrl,
       action.auth ? { businessId: run.business_id, auth: action.auth } : undefined
     );
   } catch (e) {
@@ -318,9 +342,9 @@ async function browseStep(
  */
 async function fetchPage(
   url: string,
+  renderUrl: string | null,
   authCtx?: { businessId: string; auth: BrowseAuth }
 ): Promise<{ finalUrl: string; text: string; html: string }> {
-  const renderUrl = Deno.env.get("AIFLOW_RENDER_URL");
   const ctrl = new AbortController();
   // Render calls (multi-nav + login) get a much larger budget than a static GET.
   const timer = setTimeout(

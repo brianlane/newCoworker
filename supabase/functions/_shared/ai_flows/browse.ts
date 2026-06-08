@@ -5,8 +5,8 @@
  *
  * Phase-0 spike decision: the default browse backend is a STATIC fetch of the
  * (public) lead page. The contract here also describes an optional external
- * render service (`AIFLOW_RENDER_URL`) so a heavier headless backend
- * (the self-hosted Playwright service in vps/aiflow-render) can be swapped in
+ * render service (`AIFLOW_RENDER_URL_TEMPLATE`, resolved per-tenant) so a heavier
+ * headless backend (the self-hosted Playwright service in vps/aiflow-render) can be swapped in
  * for SPA / login-gated pages WITHOUT touching the engine — the worker just
  * POSTs `{ url }` (plus `businessId`+`auth` for credentialed browse) and gets
  * back `{ finalUrl, text, html }`.

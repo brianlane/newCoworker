@@ -1,0 +1,36 @@
+# Per-tenant AiFlow render service (headless Chromium).
+#
+# Deployed by vps/scripts/deploy-client.sh ONLY on render-capable tiers — never
+# the starter/KVM2 box, whose RAM is already committed to Ollama + Rowboat.
+#
+# Exposed to the internet by the per-tenant Cloudflare Tunnel at
+# `render-<businessId>.<zone>` (see src/lib/cloudflare/tunnel.ts). cloudflared
+# runs on the host via systemd, so the container publishes to 127.0.0.1:8080
+# and the tunnel forwards that public hostname to it. Nothing else on the VPS
+# binds a public port (UFW closes 80/443).
+#
+# The .env written by deploy-client.sh provides AIFLOW_RENDER_TOKEN,
+# AIFLOW_PLATFORM_URL, AIFLOW_GATEWAY_TOKEN.
+
+services:
+  aiflow-render:
+    build: .
+    image: aiflow-render:local
+    container_name: aiflow-render
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8080:8080"
+    # Chromium is memory-hungry; bound it so a runaway render can't OOM the
+    # whole VPS. The session cache (AIFLOW_MAX_SESSIONS) keeps contexts around,
+    # so give it real headroom on the larger tiers this runs on.
+    mem_limit: 1536m
+    # Headless Chromium needs a larger /dev/shm than Docker's 64MB default or
+    # tabs crash with "Target closed" under memory pressure.
+    shm_size: 1gb
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

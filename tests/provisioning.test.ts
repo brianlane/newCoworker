@@ -634,11 +634,36 @@ describe("provisioning/orchestrate", () => {
         cloudflareTunnel: cfStub
       }
     );
-    expect(cfStub).toHaveBeenCalledWith({ businessId: "biz-cf" });
+    // Starter tier: render sidecar is NOT deployed, so the tunnel must not
+    // publish a render hostname for it.
+    expect(cfStub).toHaveBeenCalledWith({ businessId: "biz-cf", renderEnabled: false });
     expect(result.tunnelUrl).toBe("https://biz-cf.newcoworker.com");
     const cmd = deployCallArg(remoteExec).command;
     expectDeployHasEnv(cmd, "CLOUDFLARE_TUNNEL_TOKEN", "PER_TENANT_TOKEN");
     expectDeployHasEnv(cmd, "BRIDGE_MEDIA_WSS_ORIGIN", "wss://voice-biz-cf.newcoworker.com");
+  });
+
+  it("per-tenant tunnel: enables the render hostname on non-starter (standard) tiers", async () => {
+    process.env.AIFLOW_RENDER_TOKEN = "RENDER_BEARER";
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    const cfStub = vi.fn().mockResolvedValue({
+      tunnelId: "tun-43",
+      token: "PER_TENANT_TOKEN_STD",
+      hostname: "biz-std.newcoworker.com",
+      voiceHostname: "voice-biz-std.newcoworker.com",
+      renderHostname: "render-biz-std.newcoworker.com"
+    });
+    await orchestrateProvisioning(
+      { businessId: "biz-std", tier: "standard" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec,
+        cloudflareTunnel: cfStub
+      }
+    );
+    expect(cfStub).toHaveBeenCalledWith({ businessId: "biz-std", renderEnabled: true });
+    // The shared render bearer must reach the VPS deploy command.
+    expectDeployHasEnv(deployCallArg(remoteExec).command, "AIFLOW_RENDER_TOKEN", "RENDER_BEARER");
   });
 
   it("per-tenant tunnel: falls back to env CLOUDFLARE_TUNNEL_TOKEN when provisioner throws", async () => {
