@@ -70,8 +70,13 @@ export async function POST(request: Request) {
       { emailRedirectTo: `${origin}/api/auth/callback?redirectTo=/dashboard/settings` }
     );
     if (updErr) {
-      // Clear the row we just wrote so a rejected change leaves no stale record.
-      await service.from("pending_email_changes").delete().eq("user_id", user.userId);
+      // Deliberately DO NOT delete the pending row here. Supabase can return an
+      // error to us yet still have accepted the change and sent the confirmation
+      // email; deleting would then strand the confirmed email with no row for the
+      // reconciler to sync. A pending row for a genuinely-rejected change is
+      // harmless — the reconciler only acts once the live auth email equals
+      // new_email (which never happens for a rejected change), and the next
+      // attempt upserts over it.
       return errorResponse("CONFLICT", updErr.message || "Could not start the email change");
     }
 
