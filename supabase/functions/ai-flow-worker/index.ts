@@ -437,12 +437,17 @@ async function browseStep(
 
   // Best-effort screenshot persistence: a storage failure must not fail a
   // browse that already extracted its fields — downstream attachScreenshot
-  // steps just run without the attachment.
-  if (action.screenshot && page.screenshotBase64) {
-    try {
-      out.screenshot_path = await storeScreenshot(supabase, run, index, page.screenshotBase64);
-    } catch (e) {
-      console.error("browse screenshot store failed", e);
+  // steps just run without the attachment. The path is cleared FIRST so a
+  // failed capture/upload can never leave a stale screenshot_path from an
+  // earlier browse in scope (attachments must show THIS page or nothing).
+  if (action.screenshot) {
+    out.screenshot_path = "";
+    if (page.screenshotBase64) {
+      try {
+        out.screenshot_path = await storeScreenshot(supabase, run, index, page.screenshotBase64);
+      } catch (e) {
+        console.error("browse screenshot store failed", e);
+      }
     }
   }
 
