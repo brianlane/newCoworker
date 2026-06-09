@@ -42,6 +42,23 @@ export async function POST(request: Request) {
       .maybeSingle();
     if (!biz) return errorResponse("NOT_FOUND", "No business found for this account");
 
+    // Record the pending change BEFORE asking Supabase to send the confirmation
+    // email. Ordering matters for lockout-safety: if the confirmation went out
+    // first and this insert then failed, the user could confirm with no row for
+    // the callback to sync, stranding owner_email on the old address. A pending
+    // row written when updateUser later fails is harmless — the callback only
+    // acts once the auth email actually equals new_email (which never happens
+    // for a rejected change), and the next attempt upserts over it.
+    const { error: pendErr } = await service.from("pending_email_changes").upsert({
+      user_id: user.userId,
+      business_id: (biz as { id: string }).id,
+      old_email: user.email,
+      new_email: newEmail
+    });
+    if (pendErr) {
+      return errorResponse("DB_ERROR", "Could not record the email change");
+    }
+
     // Supabase is the source of truth for email uniqueness — updateUser rejects
     // a taken address. Performed via the cookie-session client so it runs as the
     // user and triggers the confirmation email; the auth email stays put until
@@ -53,17 +70,9 @@ export async function POST(request: Request) {
       { emailRedirectTo: `${origin}/api/auth/callback?redirectTo=/dashboard/settings` }
     );
     if (updErr) {
+      // Clear the row we just wrote so a rejected change leaves no stale record.
+      await service.from("pending_email_changes").delete().eq("user_id", user.userId);
       return errorResponse("CONFLICT", updErr.message || "Could not start the email change");
-    }
-
-    const { error: pendErr } = await service.from("pending_email_changes").upsert({
-      user_id: user.userId,
-      business_id: (biz as { id: string }).id,
-      old_email: user.email,
-      new_email: newEmail
-    });
-    if (pendErr) {
-      return errorResponse("DB_ERROR", "Could not record the email change");
     }
 
     return successResponse({ pending: newEmail });
