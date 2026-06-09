@@ -13,25 +13,39 @@ function makeDb(opts: {
   pending?: PendingRow | null;
   selectError?: { message: string } | null;
   updateError?: { message: string } | null;
+  updatedRows?: Array<{ id: string }> | null;
+  alreadySynced?: { id: string } | null;
 }) {
-  const maybeSingle = vi
+  // pending_email_changes.select().eq().maybeSingle()
+  const pendingMaybeSingle = vi
     .fn()
     .mockResolvedValue({ data: opts.pending ?? null, error: opts.selectError ?? null });
-  const selectEq = vi.fn().mockReturnValue({ maybeSingle });
-  const select = vi.fn().mockReturnValue({ eq: selectEq });
+  const pendingSelectEq = vi.fn().mockReturnValue({ maybeSingle: pendingMaybeSingle });
+  const pendingSelect = vi.fn().mockReturnValue({ eq: pendingSelectEq });
 
+  // pending_email_changes.delete().eq()
   const deleteEq = vi.fn().mockResolvedValue({ error: null });
   const del = vi.fn().mockReturnValue({ eq: deleteEq });
 
-  const updateEq = vi.fn().mockResolvedValue({ error: opts.updateError ?? null });
+  // businesses.update().eq().select()
+  const updateSelect = vi
+    .fn()
+    .mockResolvedValue({ data: opts.updatedRows ?? [], error: opts.updateError ?? null });
+  const updateEq = vi.fn().mockReturnValue({ select: updateSelect });
   const update = vi.fn().mockReturnValue({ eq: updateEq });
 
+  // businesses.select().eq().limit().maybeSingle()  (already-synced probe)
+  const alreadyMaybeSingle = vi.fn().mockResolvedValue({ data: opts.alreadySynced ?? null, error: null });
+  const alreadyLimit = vi.fn().mockReturnValue({ maybeSingle: alreadyMaybeSingle });
+  const alreadyEq = vi.fn().mockReturnValue({ limit: alreadyLimit });
+  const bizSelect = vi.fn().mockReturnValue({ eq: alreadyEq });
+
   const from = vi.fn((table: string) => {
-    if (table === "pending_email_changes") return { select, delete: del };
-    return { update };
+    if (table === "pending_email_changes") return { select: pendingSelect, delete: del };
+    return { update, select: bizSelect };
   });
 
-  return { db: { from }, from, update, updateEq, deleteEq };
+  return { db: { from }, from, update, updateEq, bizSelect, deleteEq };
 }
 
 const PENDING: PendingRow = {
@@ -82,15 +96,31 @@ describe("reconcilePendingEmailChange", () => {
   });
 
   it("updates every business under the old email and deletes the pending row on success", async () => {
-    const { db, update, updateEq, deleteEq } = makeDb({ pending: PENDING });
+    const { db, update, updateEq, deleteEq } = makeDb({
+      pending: PENDING,
+      updatedRows: [{ id: "biz-1" }, { id: "biz-2" }]
+    });
     await reconcilePendingEmailChange("user-1", "new@test.com", db as never);
     expect(update).toHaveBeenCalledWith({ owner_email: "new@test.com" });
     expect(updateEq).toHaveBeenCalledWith("owner_email", "old@test.com");
     expect(deleteEq).toHaveBeenCalledWith("user_id", "user-1");
   });
 
+  it("keeps the pending row when zero businesses matched and none are on the new email yet", async () => {
+    const { db, deleteEq, bizSelect } = makeDb({ pending: PENDING, updatedRows: [], alreadySynced: null });
+    await reconcilePendingEmailChange("user-1", "new@test.com", db as never);
+    expect(bizSelect).toHaveBeenCalled();
+    expect(deleteEq).not.toHaveBeenCalled();
+  });
+
+  it("clears the pending row when a prior run already synced businesses to the new email", async () => {
+    const { db, deleteEq } = makeDb({ pending: PENDING, updatedRows: [], alreadySynced: { id: "biz-1" } });
+    await reconcilePendingEmailChange("user-1", "new@test.com", db as never);
+    expect(deleteEq).toHaveBeenCalledWith("user_id", "user-1");
+  });
+
   it("falls back to the service client when none is provided", async () => {
-    const { db, update, deleteEq } = makeDb({ pending: PENDING });
+    const { db, update, deleteEq } = makeDb({ pending: PENDING, updatedRows: [{ id: "biz-1" }] });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     await reconcilePendingEmailChange("user-1", "new@test.com");
     expect(createSupabaseServiceClient).toHaveBeenCalled();

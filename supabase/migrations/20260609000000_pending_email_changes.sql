@@ -9,24 +9,26 @@
 -- they confirm (or if they never confirm).
 --
 -- Flow:
---   1. /api/account/email records a pending row {user_id, business_id,
---      old_email, new_email} and calls supabase.auth.updateUser({ email }),
---      which sends Supabase's confirmation email(s). Auth email is unchanged.
---   2. When the user confirms, the link lands on /api/auth/callback. After the
---      code exchange the session's email == new_email. The callback then syncs
---      businesses.owner_email = new_email for the stored business_id and deletes
---      the pending row. owner_email therefore only ever changes once the auth
---      email has genuinely changed — no lockout window.
+--   1. /api/account/email records a pending row {user_id, old_email, new_email}
+--      and calls supabase.auth.updateUser({ email }), which sends Supabase's
+--      confirmation email(s). Auth email is unchanged until the link is clicked.
+--   2. Once the live auth email == new_email (confirmed), reconciliation runs
+--      from /api/auth/callback AND every dashboard render: it moves EVERY
+--      business still keyed to `old_email` onto the new email, then deletes the
+--      pending row. owner_email therefore only ever changes once the auth email
+--      has genuinely changed — no lockout window.
 --
 -- One pending change per user (PK on user_id): requesting a new change replaces
--- any prior unconfirmed one.
+-- any prior unconfirmed one. Reconciliation is keyed off `old_email` (not a
+-- single business id) so an owner with multiple businesses under the same email
+-- has all of them follow the new login — and so we avoid a business_id FK whose
+-- ON DELETE CASCADE could wipe an in-flight change.
 --
 -- Service-role only: written/read exclusively by Next.js routes using the
 -- service client. RLS is enabled with NO policies so the anon/authenticated
 -- roles can never see another owner's in-flight email change.
 create table if not exists public.pending_email_changes (
   user_id uuid primary key,
-  business_id uuid not null references public.businesses(id) on delete cascade,
   old_email text not null,
   new_email text not null,
   created_at timestamptz not null default now()

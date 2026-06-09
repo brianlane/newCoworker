@@ -46,12 +46,29 @@ export async function reconcilePendingEmailChange(
   // runs again once the pending row is gone). Match on the pre-change `old_email`
   // (businesses still hold it at this point) and write the authoritative Supabase
   // email (exact case) so requireOwner's `owner_email = auth.email()` keeps
-  // matching.
-  const { error: updateError } = await db
+  // matching. `.select("id")` returns the affected rows so we can tell a real
+  // update from a zero-row no-op.
+  const { data: updated, error: updateError } = await db
     .from("businesses")
     .update({ owner_email: email })
-    .eq("owner_email", pending.old_email);
+    .eq("owner_email", pending.old_email)
+    .select("id");
   if (updateError) return;
+
+  if (!updated || updated.length === 0) {
+    // Nothing was still on the old email. Only retire the pending row if the
+    // businesses are already on the NEW email (a prior run updated them but
+    // crashed before deleting the row) — that's a genuine, idempotent success.
+    // Otherwise KEEP the pending row so a later render can retry rather than
+    // clearing it on a silent no-op and stranding owner_email.
+    const { data: alreadySynced } = await db
+      .from("businesses")
+      .select("id")
+      .eq("owner_email", email)
+      .limit(1)
+      .maybeSingle();
+    if (!alreadySynced) return;
+  }
 
   await db.from("pending_email_changes").delete().eq("user_id", pending.user_id);
 }

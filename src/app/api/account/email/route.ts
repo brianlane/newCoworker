@@ -51,7 +51,6 @@ export async function POST(request: Request) {
     // for a rejected change), and the next attempt upserts over it.
     const { error: pendErr } = await service.from("pending_email_changes").upsert({
       user_id: user.userId,
-      business_id: (biz as { id: string }).id,
       old_email: user.email,
       new_email: newEmail
     });
