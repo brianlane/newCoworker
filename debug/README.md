@@ -41,6 +41,10 @@ Run from the repo root, e.g. `tsx debug/<script>.ts`.
 | `probe-extraction.ts` | Read-only: runs the current repo extraction prompt through a tenant's live Ollama for a set of scenarios and prints save/bullets + PASS/FAIL vs expectation. |
 | `check-vault-sync.ts` | **Drift check.** Compares Supabase `memory_md` against the VPS Rowboat agent prompt (Mongo `instructions`); reports whether the latest saved bullet reached the live agent. Read-only. |
 | `resync-vault.ts` | **Recovery.** Forces a vault → VPS re-seed for one tenant (`<businessId>`) or `--all`. Use when `check-vault-sync.ts` reports drift. |
+| `redeploy-aiflow-render.ts` | **Targeted aiflow-render rollout.** Refreshes `/opt/aiflow-render` (rsync + `docker compose up --build`) on every render-capable tenant VPS (or one with `--business <uuid>`) without re-running the full `deploy-client.sh` provisioner, so the box's `.env` secrets are preserved. `--ref`, `--json`. |
+| `update-amy-aiflow-screenshot-email.ts` | One-shot AiFlow definition patch for a tenant's "ReferralExchange lead" flow: browse screenshot, gated owner emails (BS/QT/BS QT subject codes), and gated MMS `route_to_team` steps. Dry-run by default; `--apply` to write. Prints the previous definition for rollback. |
+| `update-amy-aiflow-text-gate.ts` | One-shot AiFlow patch: adds a `sms_lead_type` browse field ("none" when the lead page shows no TEXT contact option) and re-points the approval_gate/send_sms `when` guards at it, so un-textable leads skip the SMS-to-lead branch while emails and routing still run. Dry-run by default; `--apply` to write. |
+| `smoke-aiflow-screenshot.ts` | **Contained smoke test** of the screenshot pipeline: render-service capture over VPS localhost, `aiflow-screenshots` bucket upload → signed-URL round-trip → delete, and ai-flow-worker liveness (401 without cron auth). Sends no SMS/MMS/email. |
 
 `_shared.ts` holds the common helpers (`loadEnv`, `makeHostingerClient`,
 `resolveVpsIp`) and the canonical `UPDATE_WORKER_REMOTE` shell snippet that
