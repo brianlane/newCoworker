@@ -85,6 +85,28 @@ describe("parseRenderResponse", () => {
       html: "<p>x</p>"
     });
   });
+  it("carries a screenshotBase64 through when present", () => {
+    expect(
+      parseRenderResponse({ text: "hi", screenshotBase64: "aGVsbG8=" }, "https://x.com/req")
+    ).toEqual({
+      finalUrl: "https://x.com/req",
+      text: "hi",
+      html: "",
+      screenshotBase64: "aGVsbG8="
+    });
+  });
+  it("drops an empty or non-string screenshotBase64", () => {
+    expect(parseRenderResponse({ text: "hi", screenshotBase64: "" }, "u")).toEqual({
+      finalUrl: "u",
+      text: "hi",
+      html: ""
+    });
+    expect(parseRenderResponse({ text: "hi", screenshotBase64: 42 }, "u")).toEqual({
+      finalUrl: "u",
+      text: "hi",
+      html: ""
+    });
+  });
   it("rejects non-object or empty bodies", () => {
     expect(parseRenderResponse(null, "u")).toBeNull();
     expect(parseRenderResponse("nope", "u")).toBeNull();

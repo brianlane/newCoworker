@@ -35,19 +35,24 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   "",
   "Step types (each needs a unique \"id\"):",
   '  {"id":"s1","type":"extract_url","saveAs":"lead_url"}',
-  '  {"id":"s2","type":"browse_extract","urlVar":"lead_url","fields":[{"name":"seller_phone","description":"..."}]}',
+  '  {"id":"s2","type":"browse_extract","urlVar":"lead_url","fields":[{"name":"seller_phone","description":"..."}],"screenshot":true}',
   '  {"id":"s3","type":"send_sms","to":"{{vars.seller_phone}}","body":"...{{trigger.from}}"}',
+  '  {"id":"s3b","type":"send_email","to":"owner@example.com","subject":"{{vars.lead_name}} lead","body":"...","attachScreenshot":true}',
   '  {"id":"s4","type":"approval_gate","prompt":"..."}',
   '  {"id":"s5","type":"notify_owner","message":"..."}',
   '  {"id":"s6","type":"http_call","label":"crm","method":"POST","path":"/x","bodyTemplate":"...","saveAs":"resp"}',
-  '  {"id":"s7","type":"route_to_team","offerTemplate":"New lead {{vars.lead_name}}, reply 1 to claim or 2 to pass","responseMinutes":10,"ownerFallbackTemplate":"No agent claimed {{vars.lead_name}}","claimedNotifyTemplate":"{{agent.name}} claimed {{vars.lead_name}}"}',
+  '  {"id":"s7","type":"route_to_team","offerTemplate":"New lead {{vars.lead_name}}, reply 1 to claim or 2 to pass","responseMinutes":10,"ownerFallbackTemplate":"No agent claimed {{vars.lead_name}}","claimedNotifyTemplate":"{{agent.name}} claimed {{vars.lead_name}}","attachScreenshot":true}',
   "",
   "Rules: a step may only reference {{vars.X}} produced by an EARLIER step, or",
   "{{trigger.url}}, {{trigger.windowText}}, {{trigger.from}}. Prefer an",
   "approval_gate before any send_sms to a scraped number. A route_to_team step",
   "offers the lead to team members one at a time (reply 1=claim, 2=pass) with",
   "timed escalation and an owner fallback; only its templates may use",
-  "{{agent.name}} / {{agent.phone}} (the offered team member)."
+  "{{agent.name}} / {{agent.phone}} (the offered team member). A browse_extract",
+  'with "screenshot":true also captures a screenshot of the page; a later',
+  'send_email or route_to_team with "attachScreenshot":true attaches it (as an',
+  "email attachment / agent-offer MMS). attachScreenshot requires an earlier",
+  'browse_extract with "screenshot":true.'
 ].join("\n");
 
 export function buildFlowCompileUserText(description: string): string {

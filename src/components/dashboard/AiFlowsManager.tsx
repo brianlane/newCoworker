@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Card } from "@/components/ui/Card";
-import { Plus, Trash2, ArrowUp, ArrowDown, Sparkles, Pencil } from "lucide-react";
+import { Plus, Trash2, ArrowUp, ArrowDown, Sparkles, Pencil, Copy } from "lucide-react";
 import {
   FLOW_STEP_TYPES,
   TRIGGER_CONDITION_TYPES,
@@ -54,8 +54,12 @@ function editorFromRow(row: AiFlowRow): EditorState {
   };
 }
 
+function freshStepId(): string {
+  return `s_${(crypto.randomUUID?.() ?? String(Date.now())).slice(0, 8)}`;
+}
+
 function newStep(type: FlowStep["type"]): FlowStep {
-  const id = `s_${(crypto.randomUUID?.() ?? String(Date.now())).slice(0, 8)}`;
+  const id = freshStepId();
   switch (type) {
     case "extract_url":
       return { id, type, saveAs: "lead_url" };
@@ -63,6 +67,8 @@ function newStep(type: FlowStep["type"]): FlowStep {
       return { id, type, urlVar: "lead_url", fields: [{ name: "seller_phone", description: "" }] };
     case "send_sms":
       return { id, type, to: "{{vars.seller_phone}}", body: "" };
+    case "send_email":
+      return { id, type, to: "", subject: "", body: "" };
     case "approval_gate":
       return { id, type, prompt: "Send this message?" };
     case "notify_owner":
@@ -91,6 +97,11 @@ function varsProducedByStep(step: FlowStep): string[] {
   if (step.type === "browse_extract") return step.fields.map((f) => f.name).filter(Boolean);
   if (step.type === "http_call" && step.saveAs) return [step.saveAs];
   return [];
+}
+
+/** Deep-clone a step with a fresh id, for the per-step duplicate button. */
+function duplicateOf(step: FlowStep): FlowStep {
+  return { ...(JSON.parse(JSON.stringify(step)) as FlowStep), id: freshStepId() };
 }
 
 /** All vars produced by steps BEFORE `index` — the legal targets for a `when`. */
@@ -390,6 +401,22 @@ export function AiFlowsManager({
                   </button>
                   <button
                     onClick={() =>
+                      setEditor({
+                        ...editor,
+                        steps: [
+                          ...editor.steps.slice(0, i + 1),
+                          duplicateOf(step),
+                          ...editor.steps.slice(i + 1)
+                        ]
+                      })
+                    }
+                    aria-label="Duplicate step"
+                    title="Duplicate step"
+                  >
+                    <Copy className="h-4 w-4 hover:text-signal-teal" />
+                  </button>
+                  <button
+                    onClick={() =>
                       setEditor({ ...editor, steps: editor.steps.filter((_, xi) => xi !== i) })
                     }
                     aria-label="Remove step"
@@ -563,6 +590,17 @@ function StepFields({
         >
           + field
         </button>
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={step.screenshot ?? false}
+            onChange={(ev) =>
+              // Optional: round-trip false as undefined so it's dropped on save.
+              patchStep(index, { screenshot: ev.target.checked ? true : undefined })
+            }
+          />
+          Capture a screenshot of the page (attachable in route_to_team MMS and send_email)
+        </label>
       </div>
     );
   }
@@ -571,6 +609,33 @@ function StepFields({
       <div className="space-y-2">
         <Field label="Recipient" value={step.to} onChange={(v) => patchStep(index, { to: v })} />
         <Field label="Message" value={step.body} onChange={(v) => patchStep(index, { body: v })} textarea />
+      </div>
+    );
+  }
+  if (step.type === "send_email") {
+    return (
+      <div className="space-y-2">
+        <Field
+          label="Recipient email"
+          value={step.to}
+          onChange={(v) => patchStep(index, { to: v })}
+        />
+        <Field
+          label="Subject (e.g. {{vars.lead_name}} BS RX)"
+          value={step.subject}
+          onChange={(v) => patchStep(index, { subject: v })}
+        />
+        <Field label="Body" value={step.body} onChange={(v) => patchStep(index, { body: v })} textarea />
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={step.attachScreenshot ?? false}
+            onChange={(ev) =>
+              patchStep(index, { attachScreenshot: ev.target.checked ? true : undefined })
+            }
+          />
+          Attach the screenshot from an earlier browse step
+        </label>
       </div>
     );
   }
@@ -622,6 +687,16 @@ function StepFields({
           }
           textarea
         />
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={step.attachScreenshot ?? false}
+            onChange={(ev) =>
+              patchStep(index, { attachScreenshot: ev.target.checked ? true : undefined })
+            }
+          />
+          Attach the screenshot from an earlier browse step to each agent offer (MMS)
+        </label>
       </div>
     );
   }

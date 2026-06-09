@@ -254,6 +254,49 @@ describe("_shared/telnyx_sms_compliance", () => {
     expect(init.headers).not.toHaveProperty("Idempotency-Key");
   });
 
+  it("telnyxSendSms includes media_urls when mediaUrls is non-empty (MMS)", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "{}"
+    });
+    await telnyxSendSms({
+      apiKey: "KEY",
+      messagingProfileId: "mp",
+      fromE164: "+15550001111",
+      toE164: "+15550002222",
+      text: "lead attached",
+      mediaUrls: ["https://example.com/shot.jpg"],
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toMatchObject({
+      media_urls: ["https://example.com/shot.jpg"]
+    });
+  });
+
+  it("telnyxSendSms omits media_urls when mediaUrls is absent or empty", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "{}"
+    });
+    for (const mediaVal of [undefined, [] as string[]]) {
+      fetchImpl.mockClear();
+      await telnyxSendSms({
+        apiKey: "KEY",
+        messagingProfileId: "mp",
+        fromE164: "+15550001111",
+        toE164: "+15550002222",
+        text: "hi",
+        mediaUrls: mediaVal,
+        fetchImpl: fetchImpl as unknown as typeof fetch
+      });
+      const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(init.body as string)).not.toHaveProperty("media_urls");
+    }
+  });
+
   it("telnyxSendSms omits `from` when fromE164 is empty/whitespace/undefined (profile-pool send)", async () => {
     // When a tenant relies on the messaging profile's number pool (no
     // dedicated TELNYX_SMS_FROM_E164), we must NOT send from:"" — Telnyx

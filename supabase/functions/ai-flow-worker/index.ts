@@ -64,6 +64,15 @@ const RENDER_FETCH_TIMEOUT_MS = Number(
 );
 const MAX_REDIRECTS = 5;
 
+// Storage bucket (private) for browse_extract screenshots; the worker writes
+// `${businessId}/${runId}/step-${index}.jpg`, the send_email step downloads it
+// by path to attach, and route_to_team signs a short-lived URL so Telnyx can
+// fetch it as MMS media. Created by 20260609020000_aiflow_screenshots_bucket.sql.
+const SCREENSHOT_BUCKET = "aiflow-screenshots";
+// MMS signed-URL lifetime: Telnyx fetches the media at send time (plus carrier
+// retries), so an hour is generous. Never templated into user-visible copy.
+const SCREENSHOT_MMS_URL_TTL_S = 60 * 60;
+
 /**
  * Resolve the render-service URL for a given tenant.
  *
@@ -275,7 +284,14 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       // to the next agent at the deadline rather than stranding the lead — so we
       // log and stop instead of unwinding the durable parked state.
       try {
-        await sendOfferSms(supabase, run, outcome.e164, outcome.offerText, outcome.idempotencyKey);
+        await sendOfferSms(
+          supabase,
+          run,
+          outcome.e164,
+          outcome.offerText,
+          outcome.idempotencyKey,
+          outcome.mediaUrls
+        );
       } catch (e) {
         console.error("route_to_team offer send failed after park", e);
       }
@@ -320,6 +336,8 @@ type StepOutcome =
       // durably persisted, so an inbound 1/2 reply can always match the run.
       offerText: string;
       idempotencyKey: string;
+      // Signed screenshot URL(s) to ride along as MMS media, when configured.
+      mediaUrls?: string[];
     };
 
 /** Execute one step's side effect. Throws on transient IO errors (→ retry). */
@@ -349,9 +367,11 @@ async function runStep(
       Object.assign(scope.vars, action.vars);
       return { kind: "ok", result: { vars: action.vars } };
     case "browse":
-      return browseStep(run, scope, action);
+      return browseStep(supabase, run, index, scope, action);
     case "send_sms":
       return sendSmsStep(supabase, run, index, action);
+    case "send_email":
+      return sendEmailStep(supabase, run, index, scope, action);
     case "notify_owner":
       return notifyOwnerStep(supabase, run, action);
     case "http_call":
@@ -364,7 +384,9 @@ async function runStep(
 }
 
 async function browseStep(
+  supabase: Supabase,
   run: RunRow,
+  index: number,
   scope: Scope,
   action: Extract<StepAction, { kind: "browse" }>
 ): Promise<StepOutcome> {
@@ -384,12 +406,13 @@ async function browseStep(
     };
   }
 
-  let page: { finalUrl: string; text: string; html: string };
+  let page: { finalUrl: string; text: string; html: string; screenshotBase64?: string };
   try {
     page = await fetchPage(
       safe,
       renderUrl,
-      action.auth ? { businessId: run.business_id, auth: action.auth } : undefined
+      action.auth ? { businessId: run.business_id, auth: action.auth } : undefined,
+      action.screenshot === true
     );
   } catch (e) {
     // A render login failure is permanent (bad creds / MFA), not transient IO —
@@ -411,8 +434,66 @@ async function browseStep(
     }
     out[f.name] = val;
   }
+
+  // Best-effort screenshot persistence: a storage failure must not fail a
+  // browse that already extracted its fields — downstream attachScreenshot
+  // steps just run without the attachment. The path is cleared FIRST so a
+  // failed capture/upload can never leave a stale screenshot_path from an
+  // earlier browse in scope (attachments must show THIS page or nothing).
+  if (action.screenshot) {
+    out.screenshot_path = "";
+    if (page.screenshotBase64) {
+      try {
+        out.screenshot_path = await storeScreenshot(supabase, run, index, page.screenshotBase64);
+      } catch (e) {
+        console.error("browse screenshot store failed", e);
+      }
+    }
+  }
+
   Object.assign(scope.vars, out);
   return { kind: "ok", result: { vars: out, finalUrl: page.finalUrl } };
+}
+
+/**
+ * Upload a captured screenshot to the private screenshots bucket and return its
+ * storage path. Later steps consume it by path: send_email downloads it to
+ * attach, route_to_team signs a short-lived URL for Telnyx MMS media.
+ */
+async function storeScreenshot(
+  supabase: Supabase,
+  run: RunRow,
+  index: number,
+  base64: string
+): Promise<string> {
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  const path = `${run.business_id}/${run.id}/step-${index}.jpg`;
+  const { error: upErr } = await supabase.storage
+    .from(SCREENSHOT_BUCKET)
+    .upload(path, new Blob([bytes], { type: "image/jpeg" }), {
+      contentType: "image/jpeg",
+      upsert: true
+    });
+  if (upErr) throw new Error(`screenshot upload: ${upErr.message}`);
+  return path;
+}
+
+/**
+ * Best-effort: sign a short-lived URL for the run's stored screenshot so it can
+ * ride along as MMS media. Returns null (and logs) when there is no stored
+ * screenshot or signing fails — an offer without the image still routes the lead.
+ */
+async function screenshotMmsUrl(supabase: Supabase, scope: Scope): Promise<string | null> {
+  const path = typeof scope.vars.screenshot_path === "string" ? scope.vars.screenshot_path : "";
+  if (!path) return null;
+  const { data: signed, error } = await supabase.storage
+    .from(SCREENSHOT_BUCKET)
+    .createSignedUrl(path, SCREENSHOT_MMS_URL_TTL_S);
+  if (error || !signed?.signedUrl) {
+    console.error("screenshot MMS sign failed", error?.message ?? "no signed url");
+    return null;
+  }
+  return signed.signedUrl;
 }
 
 /**
@@ -426,8 +507,9 @@ async function browseStep(
 async function fetchViaRender(
   url: string,
   renderUrl: string,
-  authCtx?: { businessId: string; auth: BrowseAuth }
-): Promise<{ finalUrl: string; text: string; html: string }> {
+  authCtx?: { businessId: string; auth: BrowseAuth },
+  screenshot = false
+): Promise<{ finalUrl: string; text: string; html: string; screenshotBase64?: string }> {
   const ctrl = new AbortController();
   // Render calls (multi-nav + login) get a much larger budget than a static GET.
   const timer = setTimeout(() => ctrl.abort(), RENDER_FETCH_TIMEOUT_MS);
@@ -438,9 +520,11 @@ async function fetchViaRender(
     const res = await fetch(renderUrl, {
       method: "POST",
       headers,
-      body: JSON.stringify(
-        authCtx ? { url, businessId: authCtx.businessId, auth: authCtx.auth } : { url }
-      ),
+      body: JSON.stringify({
+        url,
+        ...(authCtx ? { businessId: authCtx.businessId, auth: authCtx.auth } : {}),
+        ...(screenshot ? { screenshot: true } : {})
+      }),
       signal: ctrl.signal
     });
     if (!res.ok) {
@@ -516,11 +600,12 @@ async function fetchStatic(
 async function fetchPage(
   url: string,
   renderUrl: string | null,
-  authCtx?: { businessId: string; auth: BrowseAuth }
-): Promise<{ finalUrl: string; text: string; html: string }> {
+  authCtx?: { businessId: string; auth: BrowseAuth },
+  screenshot = false
+): Promise<{ finalUrl: string; text: string; html: string; screenshotBase64?: string }> {
   if (renderUrl) {
     try {
-      return await fetchViaRender(url, renderUrl, authCtx);
+      return await fetchViaRender(url, renderUrl, authCtx, screenshot);
     } catch (e) {
       // Credentialed browse can't fall back to a static fetch (no login),
       // so surface the error (incl. BrowseLoginError) to the caller.
@@ -612,6 +697,82 @@ async function sendSmsStep(
     await release();
     throw e;
   }
+}
+
+/** Chunked base64 encode (btoa on a giant string blows the call stack). */
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(bin);
+}
+
+/**
+ * send_email: deliver a templated email via Resend, optionally attaching the
+ * screenshot a prior browse_extract stored (downloaded from the private bucket
+ * by path — never by fetching a templatable URL). Missing RESEND_API_KEY is a
+ * permanent setup error; a Resend/storage IO failure throws so the run retries.
+ */
+async function sendEmailStep(
+  supabase: Supabase,
+  run: RunRow,
+  index: number,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "send_email" }>
+): Promise<StepOutcome> {
+  const apiKey = Deno.env.get("RESEND_API_KEY") ?? "";
+  if (!apiKey) return { kind: "fail", error: "send_email: RESEND_API_KEY is not configured" };
+
+  let attachment: { filename: string; content: string } | null = null;
+  if (action.attachScreenshot) {
+    const path = typeof scope.vars.screenshot_path === "string" ? scope.vars.screenshot_path : "";
+    if (path) {
+      const { data, error } = await supabase.storage.from(SCREENSHOT_BUCKET).download(path);
+      if (error || !data) {
+        throw new Error(`send_email: screenshot download failed: ${error?.message ?? "no data"}`);
+      }
+      attachment = {
+        filename: "lead-screenshot.jpg",
+        content: bytesToBase64(new Uint8Array(await data.arrayBuffer()))
+      };
+    }
+    // No screenshot in scope (static-fetch fallback or capture failure): send
+    // without the attachment rather than stranding the lead email.
+  }
+
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      // Resend de-duplicates on retry, mirroring the Telnyx idempotency keys.
+      "Idempotency-Key": `aiflow-email/${run.id}/${index}`
+    },
+    body: JSON.stringify({
+      from: Deno.env.get("MAILER_EMAIL") ?? "New Coworker <contact@newcoworker.com>",
+      to: action.to,
+      reply_to: Deno.env.get("CONTACT_EMAIL") ?? undefined,
+      subject: action.subject,
+      text: action.body,
+      ...(attachment ? { attachments: [attachment] } : {})
+    })
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`send_email: resend ${res.status}: ${body.slice(0, 200)}`);
+  }
+  let emailId: string | null = null;
+  try {
+    emailId = ((await res.json()) as { id?: string })?.id ?? null;
+  } catch {
+    emailId = null;
+  }
+  return {
+    kind: "ok",
+    result: { to: action.to, emailId, attached: attachment !== null }
+  };
 }
 
 async function notifyOwnerStep(
@@ -761,13 +922,16 @@ async function routeToTeamStep(
     routing.offered_name = agent.name;
     // The offer SMS itself is sent by executeRun AFTER the awaiting_agent state
     // is persisted (state before side effect); we only carry the rendered body
-    // and a per-agent idempotency key here.
+    // and a per-agent idempotency key here. The MMS URL is signed fresh per
+    // offer so an escalation hours later never carries an expired link.
+    const mmsUrl = action.attachScreenshot ? await screenshotMmsUrl(supabase, scope) : null;
     return {
       kind: "pause_agent",
       e164: agent.phone,
       respondByMs: action.responseMinutes * 60_000,
       offerText: renderTemplate(action.offerTemplate, agentScope(scope, agent)),
-      idempotencyKey: `aiflow-offer:${run.id}:${tried.length}`
+      idempotencyKey: `aiflow-offer:${run.id}:${tried.length}`,
+      ...(mmsUrl ? { mediaUrls: [mmsUrl] } : {})
     };
   }
 
@@ -871,7 +1035,8 @@ async function sendOfferSms(
   run: RunRow,
   to: string,
   text: string,
-  idempotencyKey: string
+  idempotencyKey: string,
+  mediaUrls?: string[]
 ): Promise<void> {
   const cfg = await messagingConfig(supabase, run.business_id);
   if (!cfg) throw new Error("route_to_team: Telnyx messaging is not configured");
@@ -892,6 +1057,7 @@ async function sendOfferSms(
       fromE164: cfg.from,
       toE164: to,
       text: body,
+      mediaUrls,
       idempotencyKey
     });
     if (!send.ok) throw new Error(`telnyx ${send.status}: ${send.body.slice(0, 200)}`);

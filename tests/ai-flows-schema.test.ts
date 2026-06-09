@@ -254,6 +254,91 @@ describe("step `when` guard", () => {
   });
 });
 
+describe("browse_extract screenshot + send_email step", () => {
+  const emailInput = {
+    version: 1,
+    trigger: { channel: "sms", conditions: [{ type: "has_url" }] },
+    steps: [
+      { id: "u", type: "extract_url", saveAs: "lead_url" },
+      {
+        id: "b",
+        type: "browse_extract",
+        urlVar: "lead_url",
+        fields: [{ name: "lead_name" }, { name: "lead_type" }],
+        screenshot: true
+      },
+      {
+        id: "email_buyer",
+        type: "send_email",
+        to: "amy@amylaidlaw.com",
+        subject: "{{vars.lead_name}} BS RX",
+        body: "New buyer lead {{vars.lead_name}}, screenshot attached.",
+        attachScreenshot: true,
+        when: { var: "lead_type", equals: "buyer" }
+      }
+    ]
+  };
+
+  it("parses and preserves screenshot + send_email (incl. attachScreenshot and when)", () => {
+    const def = parseAiFlowDefinition(JSON.parse(JSON.stringify(emailInput)));
+    const browse = def.steps[1];
+    expect(browse.type === "browse_extract" && browse.screenshot).toBe(true);
+    const email = def.steps[2];
+    expect(email.type).toBe("send_email");
+    if (email.type === "send_email") {
+      expect(email.attachScreenshot).toBe(true);
+      expect(email.when).toEqual({ var: "lead_type", equals: "buyer" });
+    }
+  });
+
+  it("flags a send_email attachScreenshot when no earlier browse_extract captures one", () => {
+    const bad = JSON.parse(JSON.stringify(emailInput));
+    delete bad.steps[1].screenshot;
+    const def = aiFlowDefinitionSchema.parse(bad);
+    expect(
+      validateDefinitionSemantics(def).some((i) =>
+        i.includes("attaches a screenshot but no earlier browse_extract")
+      )
+    ).toBe(true);
+  });
+
+  it("accepts and flags a route_to_team attachScreenshot the same way", () => {
+    const routed = JSON.parse(JSON.stringify(emailInput));
+    routed.steps.push({
+      id: "route",
+      type: "route_to_team",
+      offerTemplate: "New lead {{vars.lead_name}}, reply 1/2",
+      ownerFallbackTemplate: "No one claimed {{vars.lead_name}}",
+      attachScreenshot: true
+    });
+    // With the screenshot captured earlier: valid.
+    expect(validateDefinitionSemantics(parseAiFlowDefinition(routed))).toEqual([]);
+    // Without it: flagged.
+    const bad = JSON.parse(JSON.stringify(routed));
+    delete bad.steps[1].screenshot;
+    delete bad.steps[2].attachScreenshot;
+    const def = aiFlowDefinitionSchema.parse(bad);
+    expect(
+      validateDefinitionSemantics(def).some(
+        (i) => i.includes('"route"') && i.includes("attaches a screenshot")
+      )
+    ).toBe(true);
+  });
+
+  it("validates {{vars.x}} ordering inside send_email to/subject/body", () => {
+    const bad = JSON.parse(JSON.stringify(emailInput));
+    bad.steps[2].subject = "{{vars.ghost}} BS RX";
+    const def = aiFlowDefinitionSchema.parse(bad);
+    expect(validateDefinitionSemantics(def).some((i) => i.includes("{{vars.ghost}}"))).toBe(true);
+  });
+
+  it("rejects a send_email missing its subject", () => {
+    const bad = JSON.parse(JSON.stringify(emailInput));
+    delete bad.steps[2].subject;
+    expect(() => parseAiFlowDefinition(bad)).toThrow(AiFlowValidationError);
+  });
+});
+
 describe("route_to_team step", () => {
   const routedInput = {
     version: 1,
