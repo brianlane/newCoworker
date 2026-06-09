@@ -552,6 +552,34 @@ serve(async (req: Request) => {
     if (from) {
       const replyBody = inboundSmsBody(payload).trim();
       if (replyBody === "1" || replyBody === "2") {
+        // AiFlow agent/owner acks must reply from the business's OWN number (the
+        // per-tenant DID the worker also sends prompts from), NOT the global
+        // TELNYX_SMS_FROM_E164 — otherwise the ack lands in a separate thread
+        // from the prompt. Mirror the worker's messagingConfig: per-tenant
+        // settings override env, and the DID the message arrived on (`to`) is
+        // the safest final fallback (it's always a valid sender on the profile).
+        const { data: bizSettingsRow } = await supabase
+          .from("business_telnyx_settings")
+          .select("forward_to_e164, telnyx_messaging_profile_id, telnyx_sms_from_e164")
+          .eq("business_id", businessId)
+          .maybeSingle();
+        const bizSettings = bizSettingsRow as
+          | {
+              forward_to_e164?: string | null;
+              telnyx_messaging_profile_id?: string | null;
+              telnyx_sms_from_e164?: string | null;
+            }
+          | null;
+        const ackProfile =
+          (bizSettings?.telnyx_messaging_profile_id &&
+            bizSettings.telnyx_messaging_profile_id.trim()) ||
+          messagingProfileId;
+        const ackFrom =
+          (bizSettings?.telnyx_sms_from_e164 && bizSettings.telnyx_sms_from_e164.trim()) ||
+          to ||
+          smsFromE164;
+        const canAck = Boolean(telnyxApiKey && ackProfile && from);
+
         const { data: offerRow } = await supabase
           .from("ai_flow_runs")
           .select("id, context")
@@ -598,11 +626,11 @@ serve(async (req: Request) => {
           const ack = claimed
             ? "Got it — you've claimed this lead. We'll send you the details."
             : "Okay — routing this lead to the next agent. Thanks!";
-          if (canAutoReply) {
+          if (canAck) {
             const send = await telnyxSendSms({
               apiKey: telnyxApiKey,
-              messagingProfileId,
-              fromE164: smsFromE164,
+              messagingProfileId: ackProfile,
+              fromE164: ackFrom,
               toE164: from,
               text: ack,
               idempotencyKey: `${eventId}:agent-ack`
@@ -632,14 +660,7 @@ serve(async (req: Request) => {
         // most recently updated one — the owner can always use the dashboard to
         // disambiguate.
         if (businessId) {
-          const { data: stRow } = await supabase
-            .from("business_telnyx_settings")
-            .select("forward_to_e164")
-            .eq("business_id", businessId)
-            .maybeSingle();
-          const ownerForward = normalizeE164(
-            (stRow as { forward_to_e164?: string | null } | null)?.forward_to_e164 ?? ""
-          );
+          const ownerForward = normalizeE164(bizSettings?.forward_to_e164 ?? "");
           if (ownerForward && from === ownerForward) {
             const { data: apprRow } = await supabase
               .from("ai_flow_runs")
@@ -692,11 +713,11 @@ serve(async (req: Request) => {
                 : approved
                   ? "Approved — sending it now."
                   : "Declined — I won't send that.";
-              if (canAutoReply) {
+              if (canAck) {
                 const send = await telnyxSendSms({
                   apiKey: telnyxApiKey,
-                  messagingProfileId,
-                  fromE164: smsFromE164,
+                  messagingProfileId: ackProfile,
+                  fromE164: ackFrom,
                   toE164: from,
                   text: ack,
                   idempotencyKey: `${eventId}:approval-ack`
