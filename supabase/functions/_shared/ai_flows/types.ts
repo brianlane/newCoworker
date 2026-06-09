@@ -94,6 +94,23 @@ export type FlowStep =
   | { id: string; type: "notify_owner"; message: string; when?: StepCondition }
   | {
       id: string;
+      type: "route_to_team";
+      /**
+       * SMS sent to the chosen team agent. Templated against run vars plus the
+       * resolved agent (`{{agent.name}}`). Should tell them to reply 1 to claim
+       * or 2 to reject within `responseMinutes`, or it goes to the next agent.
+       */
+      offerTemplate: string;
+      /** Minutes an agent has to claim before the offer escalates. Default 10. */
+      responseMinutes?: number;
+      /** SMS sent to the owner when every agent has rejected / timed out. */
+      ownerFallbackTemplate: string;
+      /** Optional SMS sent to the owner once an agent claims the lead. */
+      claimedNotifyTemplate?: string;
+      when?: StepCondition;
+    }
+  | {
+      id: string;
       type: "http_call";
       label: string;
       method?: string;

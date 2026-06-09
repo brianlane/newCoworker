@@ -10,8 +10,10 @@ import {
   htmlToText,
   isExecutableDefinition,
   messagesInWindow,
+  isE164,
   normalizeNanpToE164,
   parseExtractionJson,
+  parseRoutedAgent,
   renderTemplate,
   resolvePath,
   safeRegexTest
@@ -369,5 +371,51 @@ describe("isExecutableDefinition", () => {
     expect(isExecutableDefinition({ ...valid, steps: [null] })).toBe(false);
     expect(isExecutableDefinition({ ...valid, steps: [{ id: "s1" }] })).toBe(false);
     expect(isExecutableDefinition({ ...valid, steps: [{ type: "send_sms" }] })).toBe(false);
+  });
+});
+
+describe("isE164", () => {
+  it("accepts valid E.164 numbers", () => {
+    expect(isE164("+16026866672")).toBe(true);
+    expect(isE164("+447911123456")).toBe(true);
+  });
+  it("rejects malformed numbers", () => {
+    expect(isE164("6026866672")).toBe(false);
+    expect(isE164("+0123456789")).toBe(false);
+    expect(isE164("+1")).toBe(false);
+    expect(isE164("+1602686667a")).toBe(false);
+  });
+});
+
+describe("parseRoutedAgent", () => {
+  it("parses a name/phone object", () => {
+    expect(parseRoutedAgent('{"name":"Dana","phone":"+16026866672"}')).toEqual({
+      name: "Dana",
+      phone: "+16026866672"
+    });
+  });
+  it("tolerates fenced/prose-wrapped JSON", () => {
+    const raw = 'Here you go:\n```json\n{"name":"Dana","phone":"+16026866672"}\n```';
+    expect(parseRoutedAgent(raw)).toEqual({ name: "Dana", phone: "+16026866672" });
+  });
+  it("normalizes a loose North-American phone and trims the name", () => {
+    expect(parseRoutedAgent('{"name":"  Dana  ","phone":"(602) 686-6672"}')).toEqual({
+      name: "Dana",
+      phone: "+16026866672"
+    });
+  });
+  it("defaults a missing name to empty string", () => {
+    expect(parseRoutedAgent('{"phone":"+16026866672"}')).toEqual({
+      name: "",
+      phone: "+16026866672"
+    });
+  });
+  it("returns null for {none:true}", () => {
+    expect(parseRoutedAgent('{"none":true}')).toBeNull();
+  });
+  it("returns null when no JSON / no usable phone is present", () => {
+    expect(parseRoutedAgent("sorry, nobody is free")).toBeNull();
+    expect(parseRoutedAgent('{"name":"Dana"}')).toBeNull();
+    expect(parseRoutedAgent('{"name":"Dana","phone":"not-a-number"}')).toBeNull();
   });
 });

@@ -269,6 +269,34 @@ export function parseExtractionJson(
   return result;
 }
 
+export type RoutedAgent = { name: string; phone: string };
+
+/** True for a syntactically valid E.164 number (+ then 7-15 digits, no leading 0). */
+export function isE164(value: string): boolean {
+  return /^\+[1-9]\d{6,14}$/.test(value);
+}
+
+/**
+ * Parse Rowboat's next-agent reply for a `route_to_team` step. Rowboat is asked
+ * to answer with ONLY `{"name","phone"}` for the next agent to offer, or
+ * `{"none":true}` when the roster is exhausted. Tolerates fenced code blocks /
+ * surrounding prose (scans for the first JSON object) and accepts either an
+ * already-E.164 phone or a loose North-American number. Returns null when the
+ * reply signals "none", is unparseable, or lacks a usable phone — the worker
+ * treats null as "no agent available" and falls back to the owner.
+ */
+export function parseRoutedAgent(raw: string): RoutedAgent | null {
+  const obj = extractFirstJsonObject(raw);
+  if (!obj) return null;
+  if (obj.none === true) return null;
+  const phoneRaw = typeof obj.phone === "string" ? obj.phone.trim() : "";
+  if (!phoneRaw) return null;
+  const phone = isE164(phoneRaw) ? phoneRaw : normalizeNanpToE164(phoneRaw);
+  if (!phone) return null;
+  const name = typeof obj.name === "string" ? obj.name.trim() : "";
+  return { name, phone };
+}
+
 /** Find and parse the first balanced JSON object in a string. Null on failure. */
 function extractFirstJsonObject(raw: string): Record<string, unknown> | null {
   const start = raw.indexOf("{");

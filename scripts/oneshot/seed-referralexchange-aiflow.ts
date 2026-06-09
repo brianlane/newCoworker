@@ -9,9 +9,11 @@
  *             lead source) within a correlation window — handles the common
  *             "text then link" two-message case.
  *   steps   : extract_url -> browse_extract (lead type + contact/details) ->
- *             two gated approval_gate+send_sms branches (buyer copy when
- *             lead_type equals "buyer", seller copy when it equals "seller";
- *             only the matching branch is approved + sent) -> notify_owner.
+ *             three gated approval_gate+send_sms branches (buyer copy when
+ *             lead_type equals "buyer", seller copy when "seller", buy-and-sell
+ *             copy when "both"; only the matching branch is approved + sent) ->
+ *             route_to_team (offer the lead to a team agent over SMS with timed
+ *             escalation + owner fallback) -> notify_owner.
  *   options : suppressDefaultReply so the lead-source message does NOT also
  *             get a normal Coworker reply.
  *
@@ -55,6 +57,10 @@
  *   AIFLOW_SEED_MATCH_TEXT             (default "ReferralExchange"; "" = URL only)
  *   AIFLOW_SEED_BUYER_TEMPLATE         (SMS body sent when lead_type=buyer)
  *   AIFLOW_SEED_SELLER_TEMPLATE        (SMS body sent when lead_type=seller)
+ *   AIFLOW_SEED_BOTH_TEMPLATE          (SMS body sent when lead_type=both)
+ *   AIFLOW_SEED_OFFER_TEMPLATE         (SMS offering the lead to a team agent)
+ *   AIFLOW_SEED_OWNER_FALLBACK_TEMPLATE (SMS to owner when no agent claims)
+ *   AIFLOW_SEED_CLAIMED_NOTIFY_TEMPLATE (SMS to owner when an agent claims)
  *   AIFLOW_SEED_CORRELATION_MINUTES    (default 15)
  *
  * Exit codes:
@@ -97,10 +103,32 @@ const DEFAULT_SELLER =
   "Hi {{vars.lead_name}}, I saw your {{vars.location}} listing. " +
   "Are you still looking for an agent to help you sell? — reply here.";
 
+const DEFAULT_BOTH =
+  "Hi {{vars.lead_name}}, I saw you're looking to both buy and sell in " +
+  "{{vars.location}}. I'd love to help with both sides of your move — " +
+  "are you still looking for an agent? Reply here.";
+
+const DEFAULT_OFFER =
+  "New {{vars.lead_type}} lead: {{vars.lead_name}} ({{vars.lead_phone}}) in " +
+  "{{vars.location}}, around {{vars.price}}. Reply 1 to claim or 2 to pass " +
+  "within 10 minutes, or it goes to the next agent.";
+
+const DEFAULT_OWNER_FALLBACK =
+  "No agent claimed the {{vars.lead_type}} lead {{vars.lead_name}} " +
+  "({{vars.lead_phone}}) in {{vars.location}}. It's back to you.";
+
+const DEFAULT_CLAIMED_NOTIFY =
+  "{{agent.name}} claimed the {{vars.lead_type}} lead {{vars.lead_name}} " +
+  "({{vars.lead_phone}}).";
+
 function buildDefinition(opts: {
   matchText: string;
   buyerTemplate: string;
   sellerTemplate: string;
+  bothTemplate: string;
+  offerTemplate: string;
+  ownerFallbackTemplate: string;
+  claimedNotifyTemplate: string;
   correlationMinutes: number;
   integrationLabel: string;
 }): unknown {
@@ -125,8 +153,9 @@ function buildDefinition(opts: {
           {
             name: "lead_type",
             description:
-              "Is this lead a buyer or a seller? Answer with exactly one lowercase " +
-              "word and nothing else: buyer or seller."
+              "Is this lead a buyer, a seller, or both? Answer with exactly one " +
+              "lowercase word and nothing else: buyer, seller, or both. Use 'both' " +
+              "only when the lead is explicitly looking to both buy and sell."
           },
           { name: "lead_name", description: "The lead's first name, if shown" },
           { name: "lead_phone", description: "The lead's phone number in E.164 if possible" },
@@ -176,6 +205,33 @@ function buildDefinition(opts: {
         body: opts.sellerTemplate,
         when: { var: "lead_type", equals: "seller" }
       },
+      {
+        id: "approve_both",
+        type: "approval_gate",
+        prompt:
+          "New buyer+seller lead: {{vars.lead_name}} in {{vars.location}} " +
+          "({{vars.price}}). Send the buy-and-sell intro to {{vars.lead_phone}}?",
+        when: { var: "lead_type", equals: "both" }
+      },
+      {
+        id: "send_both",
+        type: "send_sms",
+        to: "{{vars.lead_phone}}",
+        body: opts.bothTemplate,
+        when: { var: "lead_type", equals: "both" }
+      },
+      // After the intro is sent, hand the lead to a team agent. Rowboat picks
+      // the next agent from its roster/rotation memory; the engine offers them
+      // the lead over SMS (reply 1=claim, 2=pass), escalates to the next agent
+      // on reject/timeout, and falls back to the owner if no one claims.
+      {
+        id: "route",
+        type: "route_to_team",
+        offerTemplate: opts.offerTemplate,
+        responseMinutes: 10,
+        ownerFallbackTemplate: opts.ownerFallbackTemplate,
+        claimedNotifyTemplate: opts.claimedNotifyTemplate
+      },
       // Ungated so the owner is always told a lead came in; worded as "processed"
       // (not "sent") because if lead_type matched neither branch both sends are
       // skipped and no intro went out.
@@ -221,6 +277,12 @@ async function main(): Promise<void> {
     matchText: process.env.AIFLOW_SEED_MATCH_TEXT ?? "ReferralExchange",
     buyerTemplate: process.env.AIFLOW_SEED_BUYER_TEMPLATE ?? DEFAULT_BUYER,
     sellerTemplate: process.env.AIFLOW_SEED_SELLER_TEMPLATE ?? DEFAULT_SELLER,
+    bothTemplate: process.env.AIFLOW_SEED_BOTH_TEMPLATE ?? DEFAULT_BOTH,
+    offerTemplate: process.env.AIFLOW_SEED_OFFER_TEMPLATE ?? DEFAULT_OFFER,
+    ownerFallbackTemplate:
+      process.env.AIFLOW_SEED_OWNER_FALLBACK_TEMPLATE ?? DEFAULT_OWNER_FALLBACK,
+    claimedNotifyTemplate:
+      process.env.AIFLOW_SEED_CLAIMED_NOTIFY_TEMPLATE ?? DEFAULT_CLAIMED_NOTIFY,
     correlationMinutes: Number(process.env.AIFLOW_SEED_CORRELATION_MINUTES ?? "15"),
     integrationLabel: process.env.AIFLOW_SEED_INTEGRATION_LABEL ?? "Referral Exchange"
   });

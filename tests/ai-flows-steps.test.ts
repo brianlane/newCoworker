@@ -143,6 +143,60 @@ describe("planStep: approval_gate", () => {
   });
 });
 
+describe("planStep: route_to_team", () => {
+  const base: FlowStep = {
+    id: "r",
+    type: "route_to_team",
+    offerTemplate: "New lead {{vars.lead_name}}, reply 1/2",
+    ownerFallbackTemplate: "No one claimed {{vars.lead_name}}",
+    claimedNotifyTemplate: "{{agent.name}} claimed it"
+  };
+  it("passes templates through UNRENDERED (agent is resolved by the worker)", () => {
+    expect(planStep(base, { vars: { lead_name: "Pat" } })).toEqual({
+      ok: true,
+      action: {
+        kind: "route_to_team",
+        offerTemplate: "New lead {{vars.lead_name}}, reply 1/2",
+        responseMinutes: 10,
+        ownerFallbackTemplate: "No one claimed {{vars.lead_name}}",
+        claimedNotifyTemplate: "{{agent.name}} claimed it"
+      }
+    });
+  });
+  it("defaults responseMinutes to 10 and rounds/clamps a provided value", () => {
+    const r1 = planStep({ ...base, responseMinutes: 3 }, {});
+    expect(r1.ok && r1.action.kind === "route_to_team" && r1.action.responseMinutes).toBe(3);
+    const r2 = planStep({ ...base, responseMinutes: 0 }, {});
+    // min(1) clamp
+    expect(r2.ok && r2.action.kind === "route_to_team" && r2.action.responseMinutes).toBe(1);
+  });
+  it("drops an empty claimedNotifyTemplate to undefined", () => {
+    const r = planStep({ ...base, claimedNotifyTemplate: "   " }, {});
+    expect(r.ok && r.action.kind === "route_to_team" && r.action.claimedNotifyTemplate).toBeUndefined();
+  });
+  it("omits claimedNotifyTemplate entirely (optional)", () => {
+    const { claimedNotifyTemplate: _omit, ...noClaim } = base as Extract<
+      FlowStep,
+      { type: "route_to_team" }
+    >;
+    void _omit;
+    const r = planStep(noClaim, {});
+    expect(r.ok && r.action.kind === "route_to_team" && r.action.claimedNotifyTemplate).toBeUndefined();
+  });
+  it("fails when offerTemplate is blank", () => {
+    expect(planStep({ ...base, offerTemplate: "   " }, {})).toEqual({
+      ok: false,
+      error: "route_to_team: offerTemplate is empty"
+    });
+  });
+  it("fails when ownerFallbackTemplate is blank", () => {
+    expect(planStep({ ...base, ownerFallbackTemplate: "" }, {})).toEqual({
+      ok: false,
+      error: "route_to_team: ownerFallbackTemplate is empty"
+    });
+  });
+});
+
 describe("planStep: http_call", () => {
   it("defaults method to GET and templates path/body", () => {
     const step: FlowStep = {

@@ -29,6 +29,15 @@ export type StepAction =
       path: string;
       body: string;
       saveAs?: string;
+    }
+  | {
+      // Templates are passed through UNRENDERED: the offer/claimed copy reference
+      // {{agent.*}}, which only the worker knows after Rowboat selects an agent.
+      kind: "route_to_team";
+      offerTemplate: string;
+      responseMinutes: number;
+      ownerFallbackTemplate: string;
+      claimedNotifyTemplate?: string;
     };
 
 export type StepPlan =
@@ -88,6 +97,28 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       return {
         ok: true,
         action: { kind: "http_call", label: step.label, method, path, body, saveAs: step.saveAs }
+      };
+    }
+    case "route_to_team": {
+      const offerTemplate = step.offerTemplate.trim();
+      const ownerFallbackTemplate = step.ownerFallbackTemplate.trim();
+      if (!offerTemplate) {
+        return { ok: false, error: "route_to_team: offerTemplate is empty" };
+      }
+      if (!ownerFallbackTemplate) {
+        return { ok: false, error: "route_to_team: ownerFallbackTemplate is empty" };
+      }
+      const responseMinutes = Math.max(1, Math.round(step.responseMinutes ?? 10));
+      const claimed = step.claimedNotifyTemplate?.trim();
+      return {
+        ok: true,
+        action: {
+          kind: "route_to_team",
+          offerTemplate,
+          responseMinutes,
+          ownerFallbackTemplate,
+          claimedNotifyTemplate: claimed ? claimed : undefined
+        }
       };
     }
   }

@@ -9,6 +9,7 @@ const STATUS_STYLES: Record<string, string> = {
   queued: "bg-parchment/10 text-parchment/60",
   running: "bg-signal-teal/15 text-signal-teal",
   awaiting_approval: "bg-spark-orange/15 text-spark-orange",
+  awaiting_agent: "bg-spark-orange/15 text-spark-orange",
   done: "bg-claw-green/15 text-claw-green",
   failed: "bg-red-500/15 text-red-400",
   canceled: "bg-parchment/10 text-parchment/40"
@@ -78,6 +79,7 @@ export function AiFlowRunsManager({
   };
 
   const pending = runs.filter((r) => r.status === "awaiting_approval");
+  const routing = runs.filter((r) => r.status === "awaiting_agent");
 
   return (
     <div className="space-y-6">
@@ -114,6 +116,35 @@ export function AiFlowRunsManager({
                     Deny
                   </button>
                 </div>
+              </Card>
+            );
+          })}
+        </section>
+      )}
+
+      {routing.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-spark-orange">
+            Routing to team ({routing.length})
+          </h2>
+          {routing.map((r) => {
+            const deadline = r.respond_by_at ? new Date(r.respond_by_at) : null;
+            return (
+              <Card key={r.id} className="border-spark-orange/30 bg-spark-orange/5">
+                <p className="text-sm text-parchment">
+                  Offered to{" "}
+                  <span className="font-semibold">{r.awaiting_agent_e164 ?? "an agent"}</span>
+                  {deadline && (
+                    <span className="text-parchment/60">
+                      {" "}
+                      — replies by {deadline.toLocaleString()}
+                    </span>
+                  )}
+                </p>
+                <p className="mt-1 text-xs text-parchment/50">
+                  Waiting for the agent to reply 1 (claim) or 2 (pass). Escalates
+                  automatically if they don&apos;t respond in time.
+                </p>
               </Card>
             );
           })}
