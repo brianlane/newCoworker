@@ -20,6 +20,7 @@ export default async function SettingsPage() {
     .from("businesses")
     .select("id, name, tier, enterprise_limits")
     .eq("owner_email", user.email)
+    .order("created_at", { ascending: false })
     .limit(1);
 
   const business = businesses?.[0] ?? null;

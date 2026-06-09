@@ -23,10 +23,15 @@ export async function POST(request: Request) {
     const { name } = schema.parse(await request.json());
 
     const db = await createSupabaseServiceClient();
+    // Target the newest business, matching how the dashboard layout, billing
+    // routes, and the Settings page resolve "the" business for an owner who has
+    // more than one row under the same owner_email — so the rename hits the row
+    // the user is actually looking at.
     const { data: biz } = await db
       .from("businesses")
       .select("id")
       .eq("owner_email", user.email)
+      .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
     if (!biz) return errorResponse("NOT_FOUND", "No business found for this account");
