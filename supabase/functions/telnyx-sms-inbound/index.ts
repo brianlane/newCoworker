@@ -622,6 +622,102 @@ serve(async (req: Request) => {
             { status: 200, headers: { "Content-Type": "application/json" } }
           );
         }
+
+        // Owner approval via SMS: the same 1 (approve) / 2 (decline) convention
+        // resolves an awaiting_approval run, mirroring the dashboard Approve/Deny
+        // buttons (decideAiFlowApproval). Only honored when the reply comes from
+        // the business's configured owner forward number, and only after no agent
+        // offer matched above (an owner who is also a roster agent claims/rejects
+        // their own offer first). With multiple pending approvals 1/2 resolves the
+        // most recently updated one — the owner can always use the dashboard to
+        // disambiguate.
+        if (businessId) {
+          const { data: stRow } = await supabase
+            .from("business_telnyx_settings")
+            .select("forward_to_e164")
+            .eq("business_id", businessId)
+            .maybeSingle();
+          const ownerForward = normalizeE164(
+            (stRow as { forward_to_e164?: string | null } | null)?.forward_to_e164 ?? ""
+          );
+          if (ownerForward && from === ownerForward) {
+            const { data: apprRow } = await supabase
+              .from("ai_flow_runs")
+              .select("id, context")
+              .eq("business_id", businessId)
+              .eq("status", "awaiting_approval")
+              .order("updated_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+            const appr = apprRow as
+              | { id: string; context: Record<string, unknown> | null }
+              | null;
+            if (appr) {
+              const approved = replyBody === "1";
+              // Replace context.approval wholesale (dropping any stale `consumed`
+              // flag left by an earlier gate) so the worker resumes past THIS gate
+              // — exactly what decideAiFlowApproval does for the dashboard path.
+              const nextContext = {
+                ...(appr.context ?? {}),
+                approval: {
+                  decision: approved ? "approve" : "deny",
+                  decided_by: `sms:${from}`,
+                  note: null,
+                  decided_at: new Date().toISOString()
+                }
+              };
+              const { data: updatedRows, error: decideErr } = await supabase
+                .from("ai_flow_runs")
+                .update({
+                  status: approved ? "queued" : "canceled",
+                  context: nextContext,
+                  claimed_at: null,
+                  updated_at: new Date().toISOString()
+                })
+                .eq("id", appr.id)
+                .eq("status", "awaiting_approval")
+                .select("id");
+              if (decideErr) {
+                console.error("ai_flow_runs approve from owner sms", decideErr);
+                return new Response(
+                  JSON.stringify({ ok: false, error: "approval_resume_failed" }),
+                  { status: 503, headers: { "Content-Type": "application/json" } }
+                );
+              }
+              // An owner's approval reply is NEVER a customer message: short-circuit
+              // regardless of whether the guarded update raced the dashboard.
+              const applied = (updatedRows ?? []).length > 0;
+              const ack = !applied
+                ? "That request was already handled — no change made."
+                : approved
+                  ? "Approved — sending it now."
+                  : "Declined — I won't send that.";
+              if (canAutoReply) {
+                const send = await telnyxSendSms({
+                  apiKey: telnyxApiKey,
+                  messagingProfileId,
+                  fromE164: smsFromE164,
+                  toE164: from,
+                  text: ack,
+                  idempotencyKey: `${eventId}:approval-ack`
+                });
+                if (!send.ok) {
+                  console.error("approval ack reply", send.status, send.body.slice(0, 300));
+                }
+              }
+              await telemetryRecord(supabase, "ai_flow_approval_sms_reply", {
+                business_id: businessId,
+                run_id: appr.id,
+                event_id: eventId,
+                decision: applied ? (approved ? "approve" : "deny") : "noop"
+              });
+              return new Response(
+                JSON.stringify({ ok: true, approval: applied ? (approved ? "approved" : "declined") : "noop" }),
+                { status: 200, headers: { "Content-Type": "application/json" } }
+              );
+            }
+          }
+        }
       }
     }
 

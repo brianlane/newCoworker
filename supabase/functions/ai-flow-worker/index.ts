@@ -233,6 +233,25 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         context: buildContext(scope, approval, routing),
         claimed_at: null
       });
+      // Offer the owner an SMS approval path (reply 1 = approve, 2 = decline)
+      // alongside the dashboard buttons. Best-effort + idempotent: a send failure
+      // must not unwind the parked state (that would re-run the gate on retry),
+      // and the idempotency key dedupes resends if the run is ever re-queued and
+      // re-pauses at this same gate.
+      const approvalPrompt =
+        typeof approval.prompt === "string" && approval.prompt.trim()
+          ? approval.prompt
+          : "This automation step is waiting for your approval.";
+      try {
+        await sendOwnerSms(
+          supabase,
+          run,
+          `${approvalPrompt}\n\nReply 1 to approve or 2 to decline.`,
+          `aiflow-approval:${run.id}:${index}`
+        );
+      } catch (e) {
+        console.error("approval prompt SMS failed after park", e);
+      }
       await telemetryRecord(supabase, "ai_flow_run_awaiting_approval", {
         run_id: run.id,
         business_id: run.business_id,

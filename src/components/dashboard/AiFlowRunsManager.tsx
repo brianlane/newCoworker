@@ -116,6 +116,10 @@ export function AiFlowRunsManager({
                     Deny
                   </button>
                 </div>
+                <p className="mt-2 text-xs text-parchment/50">
+                  You can also reply <span className="text-parchment/70">1</span> to approve or{" "}
+                  <span className="text-parchment/70">2</span> to decline by text.
+                </p>
               </Card>
             );
           })}
