@@ -538,6 +538,93 @@ serve(async (req: Request) => {
       });
     }
 
+    // route_to_team agent reply: a teammate currently being offered a lead texts
+    // back 1 (claim) or 2 (reject). Intercept BEFORE the customer path so their
+    // reply is never treated as a customer message or given a Coworker reply.
+    //
+    // Match on context.routing.offered (the agent the worker is currently
+    // offering) rather than awaiting_agent_e164 alone: the escalation sweep can
+    // re-queue the run (clearing awaiting_agent_e164) in the same window the
+    // agent replies, but it leaves routing.offered set until the worker retires
+    // it — so matching on routing.offered across both 'awaiting_agent' and
+    // 'queued' avoids dropping a raced claim into the customer path. 1/2 don't
+    // collide with STOP/HELP/START keywords (handled above).
+    if (from) {
+      const replyBody = inboundSmsBody(payload).trim();
+      if (replyBody === "1" || replyBody === "2") {
+        const { data: offerRow } = await supabase
+          .from("ai_flow_runs")
+          .select("id, context")
+          .eq("business_id", businessId)
+          .in("status", ["awaiting_agent", "queued"])
+          .eq("context->routing->>offered", from)
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        const offer = offerRow as
+          | { id: string; context: Record<string, unknown> | null }
+          | null;
+        if (offer) {
+          const claimed = replyBody === "1";
+          const prevRouting =
+            offer.context?.routing && typeof offer.context.routing === "object"
+              ? { ...(offer.context.routing as Record<string, unknown>) }
+              : {};
+          prevRouting.last_event = claimed ? "claim" : "reject";
+          prevRouting.reply_from = from;
+          const nextContext = { ...(offer.context ?? {}), routing: prevRouting };
+          // Only block terminal rows; 'awaiting_agent' and 'queued' are both
+          // valid to resume (the latter covers the sweep-raced window above).
+          const { error: resumeErr } = await supabase
+            .from("ai_flow_runs")
+            .update({
+              status: "queued",
+              awaiting_agent_e164: null,
+              respond_by_at: null,
+              context: nextContext,
+              updated_at: new Date().toISOString()
+            })
+            .eq("id", offer.id)
+            .in("status", ["awaiting_agent", "queued"]);
+          if (resumeErr) {
+            console.error("ai_flow_runs resume from agent reply", resumeErr);
+            return new Response(
+              JSON.stringify({ ok: false, error: "agent_resume_failed" }),
+              { status: 503, headers: { "Content-Type": "application/json" } }
+            );
+          }
+          // A teammate's offer reply is NEVER a customer message: short-circuit
+          // regardless of how many rows the guarded update touched.
+          const ack = claimed
+            ? "Got it — you've claimed this lead. We'll send you the details."
+            : "Okay — routing this lead to the next agent. Thanks!";
+          if (canAutoReply) {
+            const send = await telnyxSendSms({
+              apiKey: telnyxApiKey,
+              messagingProfileId,
+              fromE164: smsFromE164,
+              toE164: from,
+              text: ack,
+              idempotencyKey: `${eventId}:agent-ack`
+            });
+            if (!send.ok) {
+              console.error("agent offer ack reply", send.status, send.body.slice(0, 300));
+            }
+          }
+          await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
+            business_id: businessId,
+            run_id: offer.id,
+            event_id: eventId,
+            decision: claimed ? "claim" : "reject"
+          });
+          return new Response(
+            JSON.stringify({ ok: true, agent_offer: claimed ? "claimed" : "rejected" }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+      }
+    }
+
     // CTIA compliance gate: refuse to enqueue (and therefore refuse to auto-reply via
     // Rowboat) for senders who have already sent STOP. This is a hard-stop; no job row
     // is created so the worker never attempts an outbound reply.

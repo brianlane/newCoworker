@@ -29,8 +29,12 @@ export const FLOW_STEP_TYPES = [
   "send_sms",
   "approval_gate",
   "notify_owner",
-  "http_call"
+  "http_call",
+  "route_to_team"
 ] as const;
+
+/** Keys available as `{{agent.x}}` inside a route_to_team step's templates. */
+export const AGENT_SCOPE_KEYS = ["name", "phone"] as const;
 
 export const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
 
@@ -149,6 +153,15 @@ const stepSchema = z.discriminatedUnion("type", [
     bodyTemplate: z.string().max(4000).optional(),
     saveAs: varName.optional(),
     when: whenSchema.optional()
+  }),
+  z.object({
+    id: stepId,
+    type: z.literal("route_to_team"),
+    offerTemplate: z.string().min(1).max(1600),
+    responseMinutes: z.number().int().min(1).max(1440).optional(),
+    ownerFallbackTemplate: z.string().min(1).max(1600),
+    claimedNotifyTemplate: z.string().min(1).max(1600).optional(),
+    when: whenSchema.optional()
   })
 ]);
 
@@ -202,6 +215,8 @@ function templateStringsForStep(step: FlowStep): string[] {
       return [step.prompt];
     case "http_call":
       return [step.path ?? "", step.bodyTemplate ?? ""];
+    case "route_to_team":
+      return [step.offerTemplate, step.ownerFallbackTemplate, step.claimedNotifyTemplate ?? ""];
     case "extract_url":
     case "browse_extract":
       return [];
@@ -209,6 +224,7 @@ function templateStringsForStep(step: FlowStep): string[] {
 }
 
 const TRIGGER_KEYS = new Set<string>(TRIGGER_SCOPE_KEYS);
+const AGENT_KEYS = new Set<string>(AGENT_SCOPE_KEYS);
 
 /**
  * Cross-step invariants zod cannot express:
@@ -241,6 +257,16 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
             issues.push(
               `Step "${step.id}" uses {{vars.${ref.key}}} before any step produces it.`
             );
+          }
+        } else if (ref.scope === "agent") {
+          // {{agent.name}}/{{agent.phone}} is the offered team member, resolved at
+          // run time — only meaningful inside a route_to_team step's templates.
+          if (step.type !== "route_to_team") {
+            issues.push(
+              `Step "${step.id}" uses {{agent.${ref.key}}} but only a route_to_team step has an agent.`
+            );
+          } else if (!AGENT_KEYS.has(ref.key)) {
+            issues.push(`Step "${step.id}" references unknown agent field "${ref.key}".`);
           }
         } else {
           issues.push(`Step "${step.id}" uses unknown template scope "${ref.scope}".`);

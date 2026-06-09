@@ -12,6 +12,7 @@ const RUN_STATUSES = [
   "queued",
   "running",
   "awaiting_approval",
+  "awaiting_agent",
   "done",
   "failed",
   "canceled"

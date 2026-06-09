@@ -38,6 +38,7 @@ export type AiFlowRunStatus =
   | "queued"
   | "running"
   | "awaiting_approval"
+  | "awaiting_agent"
   | "done"
   | "failed"
   | "canceled";
@@ -53,6 +54,8 @@ export type AiFlowRunRow = {
   last_error: string | null;
   claimed_at: string | null;
   dedupe_key: string | null;
+  awaiting_agent_e164: string | null;
+  respond_by_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -73,7 +76,7 @@ export type AiFlowRunStepRow = {
 const FLOW_COLS =
   "id,business_id,name,enabled,definition,created_by,created_at,updated_at";
 const RUN_COLS =
-  "id,flow_id,business_id,status,context,current_step,attempt_count,last_error,claimed_at,dedupe_key,created_at,updated_at";
+  "id,flow_id,business_id,status,context,current_step,attempt_count,last_error,claimed_at,dedupe_key,awaiting_agent_e164,respond_by_at,created_at,updated_at";
 const STEP_COLS =
   "id,run_id,business_id,step_index,step_type,status,result,error,created_at,updated_at";
 

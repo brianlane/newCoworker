@@ -32,8 +32,12 @@ import {
   extractPhones,
   htmlToText,
   isExecutableDefinition,
-  parseExtractionJson
+  parseExtractionJson,
+  parseRoutedAgent,
+  renderTemplate,
+  type RoutedAgent
 } from "../_shared/ai_flows/engine.ts";
+import { callRowboatChatOnce } from "../_shared/sms_rowboat.ts";
 import { planStep, type StepAction } from "../_shared/ai_flows/steps.ts";
 import { normalizeBrowseUrl, parseRenderResponse } from "../_shared/ai_flows/browse.ts";
 import { ensureStopLanguage, isRecipientOptedOut } from "../_shared/ai_flows/compliance.ts";
@@ -44,6 +48,12 @@ type Supabase = ReturnType<typeof createClient>;
 const MAX_ATTEMPTS = 4;
 const CLAIM_LIMIT = 3;
 const FETCH_TIMEOUT_MS = 20_000;
+// route_to_team: how many times one step entry will ask Rowboat for a sendable
+// next agent (skipping opted-out picks) before giving up to the owner fallback.
+const ROUTE_MAX_LOOKUPS = 6;
+const ROWBOAT_ROUTE_TIMEOUT_MS = Number(
+  Deno.env.get("AIFLOW_ROUTE_ROWBOAT_TIMEOUT_MS") ?? "30000"
+);
 // Render-service calls can run several navigations plus a login, so they need a
 // far larger budget than a static fetch. Must exceed the render service's
 // per-navigation timeout (AIFLOW_RENDER_TIMEOUT_MS, default 30s) times the
@@ -106,6 +116,9 @@ serve(async (req: Request): Promise<Response> => {
   const supabase = createClient(supabaseUrl, serviceKey);
 
   await supabase.rpc("reclaim_stale_ai_flow_runs", { p_stale_minutes: 15 });
+  // Re-queue route_to_team runs whose agent offer deadline lapsed so the next
+  // claim escalates them to the following agent (status-driven, like reclaim).
+  await supabase.rpc("escalate_overdue_agent_offers");
 
   const { data: claimed, error: claimErr } = await supabase.rpc("claim_ai_flow_runs", {
     p_limit: CLAIM_LIMIT
@@ -199,14 +212,17 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     trigger: asRecord(run.context.trigger)
   };
   const approval = asRecord(run.context.approval);
+  // route_to_team state: tried[], the currently-offered agent, and last_event
+  // (claim/reject/timeout) stamped by the inbound webhook / escalation sweep.
+  const routing = asRecord(run.context.routing);
 
   let index = run.current_step;
   while (index < def.steps.length) {
     const step = def.steps[index];
-    const outcome = await runStep(supabase, run, step, index, scope, approval);
+    const outcome = await runStep(supabase, run, step, index, scope, approval, routing);
     if (outcome.kind === "fail") {
       await recordStep(supabase, run, index, step, "failed", undefined, outcome.error);
-      await failRun(supabase, run, outcome.error, scope, approval);
+      await failRun(supabase, run, outcome.error, scope, approval, routing);
       return;
     }
     if (outcome.kind === "pause") {
@@ -214,7 +230,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       await updateRun(supabase, run.id, {
         status: "awaiting_approval",
         current_step: index,
-        context: buildContext(scope, approval),
+        context: buildContext(scope, approval, routing),
         claimed_at: null
       });
       await telemetryRecord(supabase, "ai_flow_run_awaiting_approval", {
@@ -224,18 +240,46 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       });
       return;
     }
+    if (outcome.kind === "pause_agent") {
+      await recordStep(supabase, run, index, step, "pending");
+      // Persist the parked state BEFORE sending the offer so an inbound 1/2
+      // reply can always be matched to this run (state before side effect).
+      await updateRun(supabase, run.id, {
+        status: "awaiting_agent",
+        current_step: index,
+        context: buildContext(scope, approval, routing),
+        awaiting_agent_e164: outcome.e164,
+        respond_by_at: new Date(Date.now() + outcome.respondByMs).toISOString(),
+        claimed_at: null
+      });
+      // A send failure here leaves the run parked; the escalation sweep moves on
+      // to the next agent at the deadline rather than stranding the lead — so we
+      // log and stop instead of unwinding the durable parked state.
+      try {
+        await sendOfferSms(supabase, run, outcome.e164, outcome.offerText, outcome.idempotencyKey);
+      } catch (e) {
+        console.error("route_to_team offer send failed after park", e);
+      }
+      await telemetryRecord(supabase, "ai_flow_run_awaiting_agent", {
+        run_id: run.id,
+        business_id: run.business_id,
+        step_index: index,
+        agent: outcome.e164
+      });
+      return;
+    }
     await recordStep(supabase, run, index, step, outcome.skipped ? "skipped" : "done", outcome.result);
     index += 1;
     await updateRun(supabase, run.id, {
       current_step: index,
-      context: buildContext(scope, approval)
+      context: buildContext(scope, approval, routing)
     });
   }
 
   await updateRun(supabase, run.id, {
     status: "done",
     current_step: index,
-    context: buildContext(scope, approval),
+    context: buildContext(scope, approval, routing),
     claimed_at: null
   });
   await telemetryRecord(supabase, "ai_flow_run_done", {
@@ -248,7 +292,16 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
 type StepOutcome =
   | { kind: "ok"; result?: Record<string, unknown>; skipped?: boolean }
   | { kind: "fail"; error: string }
-  | { kind: "pause" };
+  | { kind: "pause" }
+  | {
+      kind: "pause_agent";
+      e164: string;
+      respondByMs: number;
+      // The offer SMS is sent by executeRun AFTER the awaiting_agent state is
+      // durably persisted, so an inbound 1/2 reply can always match the run.
+      offerText: string;
+      idempotencyKey: string;
+    };
 
 /** Execute one step's side effect. Throws on transient IO errors (→ retry). */
 async function runStep(
@@ -257,7 +310,8 @@ async function runStep(
   step: FlowStep,
   index: number,
   scope: Scope,
-  approval: Record<string, unknown>
+  approval: Record<string, unknown>,
+  routing: Record<string, unknown>
 ): Promise<StepOutcome> {
   // Per-step `when` guard: skip (don't run) when the condition is unmet. This is
   // how a flow branches — e.g. a buyer vs. seller send_sms, only one of which
@@ -285,6 +339,8 @@ async function runStep(
       return httpCallStep(run, scope, action);
     case "await_approval":
       return approvalStep(approval, index, action);
+    case "route_to_team":
+      return routeToTeamStep(supabase, run, scope, action, routing);
   }
 }
 
@@ -614,6 +670,254 @@ function approvalStep(
   return { kind: "pause" };
 }
 
+/**
+ * route_to_team: offer the lead to one team agent at a time over SMS, escalating
+ * on reject/timeout, and falling back to the owner when the roster is exhausted.
+ *
+ * Re-entrant via `routing` (persisted in context.routing): the inbound webhook
+ * stamps last_event='claim'|'reject' on an agent's 1/2 reply and the escalation
+ * sweep stamps 'timeout'; this handler resumes accordingly. Rowboat owns agent
+ * SELECTION (its vault memory holds the roster + rotation); the engine owns the
+ * ORCHESTRATION (offer SMS, deadline, escalation, owner fallback).
+ */
+async function routeToTeamStep(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "route_to_team" }>,
+  routing: Record<string, unknown>
+): Promise<StepOutcome> {
+  const tried: string[] = Array.isArray(routing.tried)
+    ? (routing.tried as unknown[]).filter((x): x is string => typeof x === "string")
+    : [];
+  routing.tried = tried;
+
+  // An agent claimed (inbound '1'): finalize and optionally tell the owner.
+  if (routing.last_event === "claim") {
+    const claimedBy =
+      typeof routing.reply_from === "string" && routing.reply_from
+        ? routing.reply_from
+        : typeof routing.offered === "string"
+          ? routing.offered
+          : "";
+    const claimedName = typeof routing.offered_name === "string" ? routing.offered_name : "";
+    routing.claimed_by = claimedBy;
+    routing.claimed_name = claimedName;
+    delete routing.last_event;
+    delete routing.reply_from;
+    delete routing.offered;
+    delete routing.offered_name;
+    if (action.claimedNotifyTemplate) {
+      const body = renderTemplate(
+        action.claimedNotifyTemplate,
+        agentScope(scope, { name: claimedName, phone: claimedBy })
+      );
+      await sendOwnerSms(supabase, run, body, `aiflow-claimed:${run.id}`);
+    }
+    return { kind: "ok", result: { routed: "claimed", claimed_by: claimedBy } };
+  }
+
+  // First entry, reject ('2'), or timeout: retire the agent we last offered, then
+  // ask Rowboat for the next one.
+  const prevOffered = typeof routing.offered === "string" ? routing.offered : "";
+  if (prevOffered && !tried.includes(prevOffered)) tried.push(prevOffered);
+  delete routing.offered;
+  delete routing.offered_name;
+  delete routing.last_event;
+  delete routing.reply_from;
+
+  for (let i = 0; i < ROUTE_MAX_LOOKUPS; i++) {
+    const agent = await pickNextAgent(supabase, run, scope, tried);
+    // No agent at all (none / parse fail / unconfigured): roster is exhausted.
+    if (!agent) break;
+    // Rowboat repeated an agent we already tried: don't end routing on one bad
+    // pick — consume another lookup and ask again (bounded by ROUTE_MAX_LOOKUPS).
+    if (tried.includes(agent.phone)) continue;
+    // A teammate who texted STOP is opted out: skip them and ask for the next.
+    if (await isRecipientOptedOut(supabase, run.business_id, agent.phone)) {
+      tried.push(agent.phone);
+      continue;
+    }
+    routing.offered = agent.phone;
+    routing.offered_name = agent.name;
+    // The offer SMS itself is sent by executeRun AFTER the awaiting_agent state
+    // is persisted (state before side effect); we only carry the rendered body
+    // and a per-agent idempotency key here.
+    return {
+      kind: "pause_agent",
+      e164: agent.phone,
+      respondByMs: action.responseMinutes * 60_000,
+      offerText: renderTemplate(action.offerTemplate, agentScope(scope, agent)),
+      idempotencyKey: `aiflow-offer:${run.id}:${tried.length}`
+    };
+  }
+
+  // Roster exhausted: hand the lead to the owner so it is never dropped.
+  const body = renderTemplate(action.ownerFallbackTemplate, scope);
+  await sendOwnerSms(supabase, run, body, `aiflow-owner-fallback:${run.id}`);
+  return { kind: "ok", result: { routed: "owner_fallback", tried: tried.length } };
+}
+
+/** Scope for templating an agent-facing SMS: run vars/trigger plus {{agent.*}}. */
+function agentScope(scope: Scope, agent: RoutedAgent): Record<string, unknown> {
+  return {
+    vars: scope.vars,
+    trigger: scope.trigger,
+    agent: { name: agent.name, phone: agent.phone }
+  };
+}
+
+/**
+ * Ask the tenant's Rowboat agent for the next team member to offer the lead to,
+ * excluding `tried`. Returns null when the roster is exhausted, the reply is
+ * unparseable, or Rowboat isn't configured (→ owner fallback). THROWS on a
+ * Rowboat transport error so the run retries rather than prematurely escalating.
+ */
+async function pickNextAgent(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  tried: string[]
+): Promise<RoutedAgent | null> {
+  const template =
+    Deno.env.get("ROWBOAT_CHAT_URL_TEMPLATE") ??
+    "https://{businessId}.newcoworker.com/api/v1/{projectId}/chat";
+  const bearer =
+    Deno.env.get("ROWBOAT_VPS_CHAT_BEARER") ?? Deno.env.get("ROWBOAT_GATEWAY_TOKEN") ?? "";
+  const defaultProjectId = Deno.env.get("ROWBOAT_DEFAULT_PROJECT_ID") ?? "";
+  const { data: cfgRow } = await supabase
+    .from("business_configs")
+    .select("rowboat_project_id")
+    .eq("business_id", run.business_id)
+    .maybeSingle();
+  const cfg = cfgRow as { rowboat_project_id?: string | null } | null;
+  const projectId =
+    cfg?.rowboat_project_id && String(cfg.rowboat_project_id).length > 0
+      ? String(cfg.rowboat_project_id)
+      : defaultProjectId;
+  if (!projectId || !bearer) {
+    console.error("route_to_team: Rowboat not configured; falling back to owner");
+    return null;
+  }
+  const chatUrl = template
+    .replace(/\{businessId\}/g, run.business_id)
+    .replace(/\{projectId\}/g, projectId);
+
+  const lead = {
+    name: typeof scope.vars.lead_name === "string" ? scope.vars.lead_name : "",
+    phone: typeof scope.vars.lead_phone === "string" ? scope.vars.lead_phone : "",
+    location: typeof scope.vars.location === "string" ? scope.vars.location : "",
+    price: typeof scope.vars.price === "string" ? scope.vars.price : "",
+    type: typeof scope.vars.lead_type === "string" ? scope.vars.lead_type : ""
+  };
+  const preamble = [
+    "You are routing a new real-estate lead to your team.",
+    "Pick the single NEXT team agent to offer this lead to, using the team",
+    "roster and rotation rules in your memory.",
+    "Do NOT pick any agent whose phone is in the alreadyTried list.",
+    "Reply with ONLY a compact JSON object and nothing else: either",
+    '{"name":"<agent name>","phone":"<E.164 phone>"} for the next agent, or',
+    '{"none":true} if every eligible agent has already been tried.'
+  ].join(" ");
+  const userText = JSON.stringify({ lead, alreadyTried: tried });
+
+  try {
+    const res = await callRowboatChatOnce({
+      chatUrl,
+      bearer,
+      userText,
+      conversationId: null,
+      state: null,
+      timeoutMs: ROWBOAT_ROUTE_TIMEOUT_MS,
+      customerPreamble: preamble
+    });
+    return parseRoutedAgent(res.reply);
+  } catch (e) {
+    throw new Error(
+      `route_to_team: Rowboat next-agent call failed: ${
+        e instanceof Error ? e.message : String(e)
+      }`
+    );
+  }
+}
+
+/**
+ * Send an agent-offer SMS. Unlike send_sms this never silently skips: the caller
+ * has already screened opt-out, and a quota/Telnyx failure THROWS so the run
+ * retries instead of stranding the lead. Reserves a quota slot and releases it
+ * on failure.
+ */
+async function sendOfferSms(
+  supabase: Supabase,
+  run: RunRow,
+  to: string,
+  text: string,
+  idempotencyKey: string
+): Promise<void> {
+  const cfg = await messagingConfig(supabase, run.business_id);
+  if (!cfg) throw new Error("route_to_team: Telnyx messaging is not configured");
+  const body = ensureStopLanguage(text).slice(0, 1600);
+  const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
+    "try_reserve_sms_outbound_slot",
+    { p_business_id: run.business_id }
+  );
+  if (reserveErr) throw new Error(`reserve slot: ${reserveErr.message}`);
+  const reserve = reserveRaw as { ok?: boolean; reason?: string } | null;
+  if (!reserve?.ok) {
+    throw new Error(`route_to_team: outbound quota unavailable (${reserve?.reason ?? "quota"})`);
+  }
+  try {
+    const send = await telnyxSendSms({
+      apiKey: cfg.apiKey,
+      messagingProfileId: cfg.profile,
+      fromE164: cfg.from,
+      toE164: to,
+      text: body,
+      idempotencyKey
+    });
+    if (!send.ok) throw new Error(`telnyx ${send.status}: ${send.body.slice(0, 200)}`);
+  } catch (e) {
+    const { error } = await supabase.rpc("release_sms_outbound_slot", {
+      p_business_id: run.business_id
+    });
+    if (error) console.error("release_sms_outbound_slot", error);
+    throw e;
+  }
+}
+
+/**
+ * Send an owner-facing SMS (claim notice / roster-exhausted fallback) to the
+ * configured forward number. No-op when the owner has no forward number set —
+ * there is nowhere to route, so we log rather than throw and stall the run.
+ */
+async function sendOwnerSms(
+  supabase: Supabase,
+  run: RunRow,
+  text: string,
+  idempotencyKey: string
+): Promise<void> {
+  const { data: settingsRow } = await supabase
+    .from("business_telnyx_settings")
+    .select("forward_to_e164")
+    .eq("business_id", run.business_id)
+    .maybeSingle();
+  const forward = (settingsRow as { forward_to_e164?: string | null } | null)?.forward_to_e164 ?? "";
+  const cfg = await messagingConfig(supabase, run.business_id);
+  if (!forward || !cfg) {
+    console.error("route_to_team: owner forward not configured; cannot notify owner");
+    return;
+  }
+  const send = await telnyxSendSms({
+    apiKey: cfg.apiKey,
+    messagingProfileId: cfg.profile,
+    fromE164: cfg.from,
+    toE164: forward,
+    text: `[AiFlow] ${text}`.slice(0, 1600),
+    idempotencyKey
+  });
+  if (!send.ok) throw new Error(`route_to_team owner sms telnyx ${send.status}`);
+}
+
 // --- persistence helpers -----------------------------------------------------
 
 async function recordStep(
@@ -666,7 +970,8 @@ async function failRun(
   run: RunRow,
   error: string,
   scope?: Scope,
-  approval?: Record<string, unknown>
+  approval?: Record<string, unknown>,
+  routing?: Record<string, unknown>
 ): Promise<void> {
   // Best-effort terminal write; if it fails, stale-run reclaim recovers the run.
   try {
@@ -674,7 +979,7 @@ async function failRun(
       status: "failed",
       last_error: error.slice(0, 2000),
       claimed_at: null,
-      ...(scope && approval ? { context: buildContext(scope, approval) } : {})
+      ...(scope && approval ? { context: buildContext(scope, approval, routing) } : {})
     });
   } catch (e) {
     console.error("failRun updateRun", e);
@@ -737,9 +1042,14 @@ function asRecord(v: unknown): Record<string, unknown> {
   return v && typeof v === "object" ? { ...(v as Record<string, unknown>) } : {};
 }
 
-function buildContext(scope: Scope, approval: Record<string, unknown>): Record<string, unknown> {
+function buildContext(
+  scope: Scope,
+  approval: Record<string, unknown>,
+  routing?: Record<string, unknown>
+): Record<string, unknown> {
   const ctx: Record<string, unknown> = { vars: scope.vars, trigger: scope.trigger };
   if (Object.keys(approval).length > 0) ctx.approval = approval;
+  if (routing && Object.keys(routing).length > 0) ctx.routing = routing;
   return ctx;
 }
 

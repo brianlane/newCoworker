@@ -69,6 +69,19 @@ function newStep(type: FlowStep["type"]): FlowStep {
       return { id, type, message: "" };
     case "http_call":
       return { id, type, label: "", method: "POST", path: "", bodyTemplate: "", saveAs: "" };
+    case "route_to_team":
+      return {
+        id,
+        type,
+        offerTemplate:
+          "New lead {{vars.lead_name}} ({{vars.lead_phone}}) in {{vars.location}}. " +
+          "Reply 1 to claim or 2 to pass within 10 min.",
+        responseMinutes: 10,
+        ownerFallbackTemplate:
+          "No agent claimed {{vars.lead_name}} ({{vars.lead_phone}}). It's back to you."
+        // claimedNotifyTemplate is optional and omitted by default — an empty
+        // string would fail the schema's min(1)-when-present rule on save.
+      };
   }
 }
 
@@ -574,6 +587,42 @@ function StepFields({
         onChange={(v) => patchStep(index, { message: v })}
         textarea
       />
+    );
+  }
+  if (step.type === "route_to_team") {
+    return (
+      <div className="space-y-2">
+        <Field
+          label="Agent offer SMS (use {{agent.name}}, reply 1=claim / 2=pass)"
+          value={step.offerTemplate}
+          onChange={(v) => patchStep(index, { offerTemplate: v })}
+          textarea
+        />
+        <Field
+          label="Minutes to respond before escalating"
+          value={String(step.responseMinutes ?? 10)}
+          onChange={(v) => {
+            const n = Number(v);
+            patchStep(index, { responseMinutes: Number.isFinite(n) && n > 0 ? Math.round(n) : 10 });
+          }}
+        />
+        <Field
+          label="Owner fallback SMS (when no agent claims)"
+          value={step.ownerFallbackTemplate}
+          onChange={(v) => patchStep(index, { ownerFallbackTemplate: v })}
+          textarea
+        />
+        <Field
+          label="Owner notice when claimed (optional)"
+          value={step.claimedNotifyTemplate ?? ""}
+          onChange={(v) =>
+            // Optional: an empty value must round-trip as undefined, not "",
+            // since the schema requires min(1) when the key is present.
+            patchStep(index, { claimedNotifyTemplate: v.trim() ? v : undefined })
+          }
+          textarea
+        />
+      </div>
     );
   }
   return (

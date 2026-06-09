@@ -254,6 +254,81 @@ describe("step `when` guard", () => {
   });
 });
 
+describe("route_to_team step", () => {
+  const routedInput = {
+    version: 1,
+    trigger: { channel: "sms", conditions: [{ type: "has_url" }] },
+    steps: [
+      { id: "u", type: "extract_url", saveAs: "lead_url" },
+      {
+        id: "b",
+        type: "browse_extract",
+        urlVar: "lead_url",
+        fields: [{ name: "lead_name" }, { name: "lead_phone" }]
+      },
+      {
+        id: "r",
+        type: "route_to_team",
+        offerTemplate: "Offer {{vars.lead_name}} to {{agent.name}} ({{agent.phone}})",
+        responseMinutes: 10,
+        ownerFallbackTemplate: "No one took {{vars.lead_name}}",
+        claimedNotifyTemplate: "{{agent.name}} claimed {{vars.lead_name}}"
+      }
+    ]
+  };
+
+  it("parses and preserves the route_to_team templates", () => {
+    const def = parseAiFlowDefinition(JSON.parse(JSON.stringify(routedInput)));
+    const step = def.steps[2];
+    expect(step.type).toBe("route_to_team");
+    expect(step.type === "route_to_team" && step.responseMinutes).toBe(10);
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("allows {{agent.name}}/{{agent.phone}} only inside route_to_team", () => {
+    const bad = JSON.parse(JSON.stringify(routedInput));
+    // notify_owner cannot reference an agent — no agent in scope there.
+    bad.steps.push({ id: "n", type: "notify_owner", message: "by {{agent.name}}" });
+    const def = aiFlowDefinitionSchema.parse(bad);
+    expect(
+      validateDefinitionSemantics(def).some((i) => i.includes("only a route_to_team step has an agent"))
+    ).toBe(true);
+  });
+
+  it("flags an unknown agent field even inside route_to_team", () => {
+    const bad = JSON.parse(JSON.stringify(routedInput));
+    bad.steps[2].offerTemplate = "Hello {{agent.email}}";
+    const def = aiFlowDefinitionSchema.parse(bad);
+    expect(
+      validateDefinitionSemantics(def).some((i) => i.includes('unknown agent field "email"'))
+    ).toBe(true);
+  });
+
+  it("still validates {{vars.x}} ordering inside an offer template", () => {
+    const bad = JSON.parse(JSON.stringify(routedInput));
+    bad.steps[2].offerTemplate = "Offer {{vars.ghost}} to {{agent.name}}";
+    const def = aiFlowDefinitionSchema.parse(bad);
+    expect(
+      validateDefinitionSemantics(def).some((i) => i.includes("{{vars.ghost}}"))
+    ).toBe(true);
+  });
+
+  it("rejects a route_to_team missing required templates", () => {
+    const bad = JSON.parse(JSON.stringify(routedInput));
+    delete bad.steps[2].ownerFallbackTemplate;
+    expect(() => parseAiFlowDefinition(bad)).toThrow(AiFlowValidationError);
+  });
+
+  it("accepts a route_to_team with no claimedNotifyTemplate (optional)", () => {
+    const noClaim = JSON.parse(JSON.stringify(routedInput));
+    delete noClaim.steps[2].claimedNotifyTemplate;
+    const def = parseAiFlowDefinition(noClaim);
+    const step = def.steps[2];
+    expect(step.type === "route_to_team" && step.claimedNotifyTemplate).toBeUndefined();
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+});
+
 describe("summarizeDefinition", () => {
   it("summarizes a conditionless trigger", () => {
     const def: AiFlowDefinition = {
