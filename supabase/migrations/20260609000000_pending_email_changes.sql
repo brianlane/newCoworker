@@ -12,11 +12,14 @@
 --   1. /api/account/email records a pending row {user_id, old_email, new_email}
 --      and calls supabase.auth.updateUser({ email }), which sends Supabase's
 --      confirmation email(s). Auth email is unchanged until the link is clicked.
---   2. Once the live auth email == new_email (confirmed), reconciliation runs
---      from /api/auth/callback AND every dashboard render: it moves EVERY
---      business still keyed to `old_email` onto the new email, then deletes the
---      pending row. owner_email therefore only ever changes once the auth email
---      has genuinely changed — no lockout window.
+--   2. Once the live auth email has moved OFF `old_email` (a confirmed change),
+--      reconciliation runs from /api/auth/callback AND every dashboard render:
+--      it moves EVERY business still keyed to `old_email` onto the live email,
+--      then deletes the pending row. owner_email therefore only ever changes
+--      once the auth email has genuinely changed — no lockout window. We key off
+--      `old_email` (not the recorded `new_email`) so that if the user supersedes
+--      a request, whichever confirmation link they actually complete still syncs.
+--      `new_email` is retained for diagnostics only.
 --
 -- One pending change per user (PK on user_id): requesting a new change replaces
 -- any prior unconfirmed one. Reconciliation is keyed off `old_email` (not a

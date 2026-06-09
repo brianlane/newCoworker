@@ -7,7 +7,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
-type PendingRow = { user_id: string; old_email: string; new_email: string };
+type PendingRow = { user_id: string; old_email: string };
 
 function makeDb(opts: {
   pending?: PendingRow | null;
@@ -50,8 +50,7 @@ function makeDb(opts: {
 
 const PENDING: PendingRow = {
   user_id: "user-1",
-  old_email: "old@test.com",
-  new_email: "new@test.com"
+  old_email: "old@test.com"
 };
 
 describe("reconcilePendingEmailChange", () => {
@@ -81,11 +80,25 @@ describe("reconcilePendingEmailChange", () => {
     expect(update).not.toHaveBeenCalled();
   });
 
-  it("does not update or delete when the live email does not match new_email yet", async () => {
+  it("does not update or delete when the live email still equals old_email (unconfirmed)", async () => {
     const { db, update, deleteEq } = makeDb({ pending: PENDING });
     await reconcilePendingEmailChange("user-1", "old@test.com", db as never);
     expect(update).not.toHaveBeenCalled();
     expect(deleteEq).not.toHaveBeenCalled();
+  });
+
+  it("syncs to whatever confirmed email differs from old_email, even if not the latest new_email", async () => {
+    // User superseded A->B with A->C, then confirmed the older B link; the live
+    // email (B) is neither old_email (A) nor the latest recorded target, but the
+    // business must still follow it.
+    const { db, update, updateEq, deleteEq } = makeDb({
+      pending: PENDING,
+      updatedRows: [{ id: "biz-1" }]
+    });
+    await reconcilePendingEmailChange("user-1", "superseded@test.com", db as never);
+    expect(update).toHaveBeenCalledWith({ owner_email: "superseded@test.com" });
+    expect(updateEq).toHaveBeenCalledWith("owner_email", "old@test.com");
+    expect(deleteEq).toHaveBeenCalledWith("user_id", "user-1");
   });
 
   it("keeps the pending row when the owner_email update fails", async () => {

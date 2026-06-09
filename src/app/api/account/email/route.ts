@@ -45,9 +45,9 @@ export async function POST(request: Request) {
     // Record the pending change BEFORE asking Supabase to send the confirmation
     // email. Ordering matters for lockout-safety: if the confirmation went out
     // first and this insert then failed, the user could confirm with no row for
-    // the callback to sync, stranding owner_email on the old address. A pending
-    // row written when updateUser later fails is harmless — the callback only
-    // acts once the auth email actually equals new_email (which never happens
+    // the reconciler to sync, stranding owner_email on the old address. A pending
+    // row written when updateUser later fails is harmless — the reconciler only
+    // acts once the auth email actually moves off old_email (which never happens
     // for a rejected change), and the next attempt upserts over it.
     const { error: pendErr } = await service.from("pending_email_changes").upsert({
       user_id: user.userId,

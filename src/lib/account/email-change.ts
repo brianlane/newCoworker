@@ -32,13 +32,20 @@ export async function reconcilePendingEmailChange(
   const db = client ?? (await createSupabaseServiceClient());
   const { data: pendingRow, error: selectError } = await db
     .from("pending_email_changes")
-    .select("user_id, old_email, new_email")
+    .select("user_id, old_email")
     .eq("user_id", userId)
     .maybeSingle();
   if (selectError || !pendingRow) return;
 
-  const pending = pendingRow as { user_id: string; old_email: string; new_email: string };
-  if (email.toLowerCase() !== pending.new_email.toLowerCase()) return;
+  const pending = pendingRow as { user_id: string; old_email: string };
+  // Not confirmed yet: the live auth email still equals the pre-change address.
+  // We deliberately key off `old_email` rather than a recorded `new_email`: a
+  // user can supersede an earlier change request, yet an earlier confirmation
+  // link may still resolve, so the live email may equal a target OTHER than the
+  // latest `new_email`. Whichever address they actually confirm, the business
+  // must follow the login — so we act the moment the auth email moves off
+  // `old_email`, regardless of which new address it landed on.
+  if (email.toLowerCase() === pending.old_email.toLowerCase()) return;
 
   // Move EVERY business that was keyed to the old email — an owner can have more
   // than one `businesses` row under the same `owner_email`, and all of them must
