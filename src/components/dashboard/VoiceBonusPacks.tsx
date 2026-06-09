@@ -36,10 +36,6 @@ const currency = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2
 });
 
-function formatRatePerMinute(usdPerMinute: number): string {
-  return `from ${currency.format(usdPerMinute)} / min`;
-}
-
 export function VoiceBonusPacks({ packs, usdPerMinute, canPurchase, disabledReason }: Props) {
   const [loadingPackId, setLoadingPackId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -91,9 +87,6 @@ export function VoiceBonusPacks({ packs, usdPerMinute, canPurchase, disabledReas
         <h2 className="text-sm font-semibold text-parchment uppercase tracking-wider">
           Buy more voice minutes
         </h2>
-        <span className="text-xs font-mono text-parchment/60">
-          {formatRatePerMinute(usdPerMinute)}
-        </span>
       </div>
       <p className="mt-1 text-xs text-parchment/50">
         Packs add to your bonus balance on top of your plan&apos;s included minutes. Bonus minutes
