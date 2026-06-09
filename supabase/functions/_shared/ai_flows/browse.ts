@@ -67,6 +67,8 @@ export type RenderResult = {
   finalUrl: string;
   text: string;
   html: string;
+  /** Base64 JPEG page screenshot, present when the request asked for one. */
+  screenshotBase64?: string;
 };
 
 /**
@@ -81,5 +83,7 @@ export function parseRenderResponse(body: unknown, requestedUrl: string): Render
   const html = typeof b.html === "string" ? b.html : "";
   if (!text && !html) return null;
   const finalUrl = typeof b.finalUrl === "string" && b.finalUrl ? b.finalUrl : requestedUrl;
-  return { finalUrl, text, html };
+  const screenshotBase64 =
+    typeof b.screenshotBase64 === "string" && b.screenshotBase64 ? b.screenshotBase64 : undefined;
+  return { finalUrl, text, html, ...(screenshotBase64 ? { screenshotBase64 } : {}) };
 }

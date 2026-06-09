@@ -12,6 +12,7 @@
  * Contract (matches supabase/functions/_shared/ai_flows/browse.ts):
  *   POST /render { url }                              -> { finalUrl, text, html }
  *   POST /render { url, businessId, auth }            -> { finalUrl, text, html }
+ *   ... + { screenshot: true }                        -> adds screenshotBase64 (JPEG)
  *
  * When `auth` is present the service logs in first using the named custom
  * integration's stored credentials (fetched from the platform's gateway-guarded
@@ -271,11 +272,41 @@ app.use((req, res, next) => {
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
+// Full-page screenshots of long lead pages can run to many MB; cap the height
+// so the JPEG stays small enough to store, sign, and email as an attachment.
+const SCREENSHOT_MAX_HEIGHT = Number(process.env.AIFLOW_SCREENSHOT_MAX_HEIGHT ?? 4000);
+const SCREENSHOT_QUALITY = Number(process.env.AIFLOW_SCREENSHOT_QUALITY ?? 60);
+
+/** Capture a height-capped full-width JPEG of the page as base64, or null. */
+async function captureScreenshot(page) {
+  try {
+    const size = await page.evaluate(() => ({
+      width: Math.min(document.documentElement.scrollWidth || 1280, 1920),
+      height: document.documentElement.scrollHeight || 720
+    }));
+    const buf = await page.screenshot({
+      type: "jpeg",
+      quality: SCREENSHOT_QUALITY,
+      clip: {
+        x: 0,
+        y: 0,
+        width: Math.max(size.width, 320),
+        height: Math.max(Math.min(size.height, SCREENSHOT_MAX_HEIGHT), 240)
+      }
+    });
+    return buf.toString("base64");
+  } catch {
+    // A failed screenshot must not fail the browse — text/html still flow.
+    return null;
+  }
+}
+
 app.post("/render", async (req, res) => {
   const safe = safeUrl(String(req.body?.url ?? ""));
   if (!safe) return res.status(400).json({ error: "invalid_or_unsafe_url" });
   const auth = req.body?.auth;
   const businessId = req.body?.businessId;
+  const wantScreenshot = req.body?.screenshot === true;
 
   // --- Unauthenticated render: stateless context, no session reuse. ---
   if (!auth) {
@@ -288,7 +319,13 @@ app.post("/render", async (req, res) => {
       await page.goto(safe, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
       const html = await page.content();
       const text = await page.evaluate(() => document.body?.innerText ?? "");
-      return res.json({ finalUrl: page.url(), text, html });
+      const screenshotBase64 = wantScreenshot ? await captureScreenshot(page) : null;
+      return res.json({
+        finalUrl: page.url(),
+        text,
+        html,
+        ...(screenshotBase64 ? { screenshotBase64 } : {})
+      });
     } catch (e) {
       return res.status(502).json({ error: "render_failed", detail: String(e).slice(0, 300) });
     } finally {
@@ -342,7 +379,13 @@ app.post("/render", async (req, res) => {
 
     const html = await page.content();
     const text = await page.evaluate(() => document.body?.innerText ?? "");
-    return res.json({ finalUrl: page.url(), text, html });
+    const screenshotBase64 = wantScreenshot ? await captureScreenshot(page) : null;
+    return res.json({
+      finalUrl: page.url(),
+      text,
+      html,
+      ...(screenshotBase64 ? { screenshotBase64 } : {})
+    });
   } catch (e) {
     poisoned = true;
     return res.status(502).json({ error: "render_failed", detail: String(e).slice(0, 300) });

@@ -87,9 +87,33 @@ export type FlowStep =
       urlVar: string;
       fields: ExtractField[];
       auth?: BrowseAuth;
+      /**
+       * When true, the render service also captures a screenshot of the page.
+       * The worker uploads it to private storage; later steps attach it via
+       * `route_to_team.attachScreenshot` (MMS) or `send_email.attachScreenshot`.
+       * Requires the render service — a static fetch cannot screenshot.
+       */
+      screenshot?: boolean;
       when?: StepCondition;
     }
   | { id: string; type: "send_sms"; to: string; body: string; when?: StepCondition }
+  | {
+      id: string;
+      type: "send_email";
+      /** Recipient address (templatable, e.g. a fixed owner address). */
+      to: string;
+      /** Subject template, e.g. "{{vars.lead_name}} BS RX". */
+      subject: string;
+      /** Plain-text body template. */
+      body: string;
+      /**
+       * Attach the screenshot captured by an earlier `browse_extract` with
+       * `screenshot: true`. Silently sends without an attachment when no
+       * screenshot was captured.
+       */
+      attachScreenshot?: boolean;
+      when?: StepCondition;
+    }
   | { id: string; type: "approval_gate"; prompt: string; when?: StepCondition }
   | { id: string; type: "notify_owner"; message: string; when?: StepCondition }
   | {
@@ -107,6 +131,12 @@ export type FlowStep =
       ownerFallbackTemplate: string;
       /** Optional SMS sent to the owner once an agent claims the lead. */
       claimedNotifyTemplate?: string;
+      /**
+       * Attach the screenshot captured by an earlier `browse_extract` with
+       * `screenshot: true` to each agent offer as MMS media. Silently offers
+       * without media when no screenshot was captured.
+       */
+      attachScreenshot?: boolean;
       when?: StepCondition;
     }
   | {

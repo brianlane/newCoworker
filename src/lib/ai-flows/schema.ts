@@ -27,6 +27,7 @@ export const FLOW_STEP_TYPES = [
   "extract_url",
   "browse_extract",
   "send_sms",
+  "send_email",
   "approval_gate",
   "notify_owner",
   "http_call",
@@ -123,6 +124,7 @@ const stepSchema = z.discriminatedUnion("type", [
     urlVar: varName,
     fields: z.array(extractFieldSchema).min(1).max(15),
     auth: browseAuthSchema.optional(),
+    screenshot: z.boolean().optional(),
     when: whenSchema.optional()
   }),
   z.object({
@@ -130,6 +132,15 @@ const stepSchema = z.discriminatedUnion("type", [
     type: z.literal("send_sms"),
     to: z.string().min(1).max(200),
     body: z.string().min(1).max(1600),
+    when: whenSchema.optional()
+  }),
+  z.object({
+    id: stepId,
+    type: z.literal("send_email"),
+    to: z.string().min(3).max(320),
+    subject: z.string().min(1).max(300),
+    body: z.string().min(1).max(8000),
+    attachScreenshot: z.boolean().optional(),
     when: whenSchema.optional()
   }),
   z.object({
@@ -161,6 +172,7 @@ const stepSchema = z.discriminatedUnion("type", [
     responseMinutes: z.number().int().min(1).max(1440).optional(),
     ownerFallbackTemplate: z.string().min(1).max(1600),
     claimedNotifyTemplate: z.string().min(1).max(1600).optional(),
+    attachScreenshot: z.boolean().optional(),
     when: whenSchema.optional()
   })
 ]);
@@ -209,6 +221,8 @@ function templateStringsForStep(step: FlowStep): string[] {
   switch (step.type) {
     case "send_sms":
       return [step.to, step.body];
+    case "send_email":
+      return [step.to, step.subject, step.body];
     case "notify_owner":
       return [step.message];
     case "approval_gate":
@@ -239,6 +253,9 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
   const issues: string[] = [];
   const seenIds = new Set<string>();
   const vars = new Set<string>();
+  // True once an earlier browse_extract has `screenshot: true` — the
+  // prerequisite for any later step's attachScreenshot.
+  let screenshotCaptured = false;
 
   for (const step of def.steps) {
     if (seenIds.has(step.id)) {
@@ -278,6 +295,18 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       issues.push(`Step "${step.id}" browses urlVar "${step.urlVar}" which no earlier step produces.`);
     }
 
+    // attachScreenshot needs a screenshot: an EARLIER browse_extract with
+    // `screenshot: true` (which is what stores the image the worker attaches).
+    if (
+      (step.type === "send_email" || step.type === "route_to_team") &&
+      step.attachScreenshot &&
+      !screenshotCaptured
+    ) {
+      issues.push(
+        `Step "${step.id}" attaches a screenshot but no earlier browse_extract step captures one.`
+      );
+    }
+
     // A `when` guard may only reference a var an EARLIER step produced (same
     // scope rule as urlVar/templates — checked before this step's own vars are
     // registered below).
@@ -292,6 +321,7 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       vars.add(step.saveAs);
     } else if (step.type === "browse_extract") {
       for (const f of step.fields) vars.add(f.name);
+      if (step.screenshot) screenshotCaptured = true;
     } else if (step.type === "http_call" && step.saveAs) {
       vars.add(step.saveAs);
     }

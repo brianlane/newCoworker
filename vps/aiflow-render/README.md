@@ -39,7 +39,11 @@ POST /render
                        "passwordSelector": "...",
                        "submitSelector": "..." } } }
 
-200 -> { "finalUrl": "https://...", "text": "<innerText>", "html": "<html>" }
+# either shape may add "screenshot": true to also capture a height-capped
+# full-width JPEG of the page (returned as base64 "screenshotBase64")
+
+200 -> { "finalUrl": "https://...", "text": "<innerText>", "html": "<html>",
+         "screenshotBase64": "<base64 jpeg, only when requested>" }
 400 -> { "error": "invalid_or_unsafe_url" | "missing_business_or_label" }
 401 -> { "error": "unauthorized" }                              # bad/no bearer
 502 -> { "error": "render_failed" | "login_failed", "detail": "..." }

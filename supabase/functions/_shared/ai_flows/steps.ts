@@ -18,8 +18,9 @@ export type StepScope = {
 
 export type StepAction =
   | { kind: "set_vars"; vars: Record<string, string> }
-  | { kind: "browse"; url: string; fields: ExtractField[]; auth?: BrowseAuth }
+  | { kind: "browse"; url: string; fields: ExtractField[]; auth?: BrowseAuth; screenshot?: boolean }
   | { kind: "send_sms"; to: string; body: string }
+  | { kind: "send_email"; to: string; subject: string; body: string; attachScreenshot: boolean }
   | { kind: "notify_owner"; message: string }
   | { kind: "await_approval"; prompt: string }
   | {
@@ -38,6 +39,8 @@ export type StepAction =
       responseMinutes: number;
       ownerFallbackTemplate: string;
       claimedNotifyTemplate?: string;
+      /** Attach the stored browse screenshot to each agent offer as MMS. */
+      attachScreenshot: boolean;
     };
 
 export type StepPlan =
@@ -70,7 +73,16 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       if (typeof url !== "string" || !url) {
         return { ok: false, error: `browse_extract: urlVar "${step.urlVar}" is not set` };
       }
-      return { ok: true, action: { kind: "browse", url, fields: step.fields, auth: step.auth } };
+      return {
+        ok: true,
+        action: {
+          kind: "browse",
+          url,
+          fields: step.fields,
+          auth: step.auth,
+          screenshot: step.screenshot
+        }
+      };
     }
     case "send_sms": {
       const to = renderTemplate(step.to, scope).trim();
@@ -78,6 +90,18 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       if (!to) return { ok: false, error: "send_sms: recipient is empty after templating" };
       if (!body) return { ok: false, error: "send_sms: body is empty after templating" };
       return { ok: true, action: { kind: "send_sms", to, body } };
+    }
+    case "send_email": {
+      const to = renderTemplate(step.to, scope).trim();
+      const subject = renderTemplate(step.subject, scope).trim();
+      const body = renderTemplate(step.body, scope).trim();
+      if (!to) return { ok: false, error: "send_email: recipient is empty after templating" };
+      if (!subject) return { ok: false, error: "send_email: subject is empty after templating" };
+      if (!body) return { ok: false, error: "send_email: body is empty after templating" };
+      return {
+        ok: true,
+        action: { kind: "send_email", to, subject, body, attachScreenshot: step.attachScreenshot === true }
+      };
     }
     case "notify_owner": {
       const message = renderTemplate(step.message, scope).trim();
@@ -117,7 +141,8 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           offerTemplate,
           responseMinutes,
           ownerFallbackTemplate,
-          claimedNotifyTemplate: claimed ? claimed : undefined
+          claimedNotifyTemplate: claimed ? claimed : undefined,
+          attachScreenshot: step.attachScreenshot === true
         }
       };
     }

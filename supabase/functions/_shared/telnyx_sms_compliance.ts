@@ -37,6 +37,12 @@ export async function telnyxSendSms(params: {
   fromE164?: string;
   toE164: string;
   text: string;
+  /**
+   * Optional public/signed media URLs. When non-empty the message is sent as
+   * MMS (Telnyx fetches each URL at send time). The from-number must be
+   * MMS-enabled or Telnyx rejects the request.
+   */
+  mediaUrls?: string[];
   fetchImpl?: typeof fetch;
   /**
    * Optional Telnyx `Idempotency-Key`. Set this on compliance auto-replies (STOP/HELP/START)
@@ -60,6 +66,7 @@ export async function telnyxSendSms(params: {
   };
   const fromTrimmed = (params.fromE164 ?? "").trim();
   if (fromTrimmed) body.from = fromTrimmed;
+  if (params.mediaUrls && params.mediaUrls.length > 0) body.media_urls = params.mediaUrls;
   const res = await fetchImpl("https://api.telnyx.com/v2/messages", {
     method: "POST",
     headers,

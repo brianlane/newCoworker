@@ -47,6 +47,17 @@ describe("planStep: browse_extract", () => {
       error: 'browse_extract: urlVar "lead_url" is not set'
     });
   });
+  it("carries the screenshot flag into the browse action", () => {
+    const withShot: FlowStep = {
+      id: "b",
+      type: "browse_extract",
+      urlVar: "lead_url",
+      fields: [{ name: "seller_phone" }],
+      screenshot: true
+    };
+    const r = planStep(withShot, { vars: { lead_url: "https://rfrl.to/x" } });
+    expect(r.ok && r.action.kind === "browse" && r.action.screenshot).toBe(true);
+  });
   it("carries an auth config into the browse action", () => {
     const authed: FlowStep = {
       id: "b",
@@ -116,6 +127,50 @@ describe("planStep: send_sms", () => {
   });
 });
 
+describe("planStep: send_email", () => {
+  const step: FlowStep = {
+    id: "e",
+    type: "send_email",
+    to: "amy@amylaidlaw.com",
+    subject: "{{vars.lead_name}} BS RX",
+    body: "New buyer lead {{vars.lead_name}}."
+  };
+  it("templates subject + body and defaults attachScreenshot to false", () => {
+    expect(planStep(step, { vars: { lead_name: "Jane Doe" } })).toEqual({
+      ok: true,
+      action: {
+        kind: "send_email",
+        to: "amy@amylaidlaw.com",
+        subject: "Jane Doe BS RX",
+        body: "New buyer lead Jane Doe.",
+        attachScreenshot: false
+      }
+    });
+  });
+  it("carries attachScreenshot through", () => {
+    const r = planStep({ ...step, attachScreenshot: true }, { vars: { lead_name: "Jane" } });
+    expect(r.ok && r.action.kind === "send_email" && r.action.attachScreenshot).toBe(true);
+  });
+  it("fails when the recipient resolves empty", () => {
+    expect(planStep({ ...step, to: "{{vars.owner_email}}" }, { vars: { lead_name: "J" } })).toEqual({
+      ok: false,
+      error: "send_email: recipient is empty after templating"
+    });
+  });
+  it("fails when the subject resolves empty", () => {
+    expect(planStep({ ...step, subject: "{{vars.ghost}}" }, { vars: { lead_name: "J" } })).toEqual({
+      ok: false,
+      error: "send_email: subject is empty after templating"
+    });
+  });
+  it("fails when the body resolves empty", () => {
+    expect(planStep({ ...step, body: "{{vars.ghost}}" }, { vars: { lead_name: "J" } })).toEqual({
+      ok: false,
+      error: "send_email: body is empty after templating"
+    });
+  });
+});
+
 describe("planStep: notify_owner", () => {
   it("templates the message", () => {
     const step: FlowStep = { id: "n", type: "notify_owner", message: "New lead {{vars.seller_phone}}" };
@@ -159,9 +214,14 @@ describe("planStep: route_to_team", () => {
         offerTemplate: "New lead {{vars.lead_name}}, reply 1/2",
         responseMinutes: 10,
         ownerFallbackTemplate: "No one claimed {{vars.lead_name}}",
-        claimedNotifyTemplate: "{{agent.name}} claimed it"
+        claimedNotifyTemplate: "{{agent.name}} claimed it",
+        attachScreenshot: false
       }
     });
+  });
+  it("carries attachScreenshot through (defaults false)", () => {
+    const r = planStep({ ...base, attachScreenshot: true }, {});
+    expect(r.ok && r.action.kind === "route_to_team" && r.action.attachScreenshot).toBe(true);
   });
   it("defaults responseMinutes to 10 and rounds/clamps a provided value", () => {
     const r1 = planStep({ ...base, responseMinutes: 3 }, {});
