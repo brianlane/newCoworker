@@ -2,7 +2,8 @@ import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
-  getOrCreateNotificationPreferences
+  getOrCreateNotificationPreferences,
+  mergeNotificationContactsForDisplay
 } from "@/lib/db/notification-preferences";
 import { getNotifications } from "@/lib/db/notifications";
 import { Card } from "@/components/ui/Card";
@@ -37,6 +38,22 @@ export default async function NotificationsPage() {
           }
         })
       : null;
+  // Display-only autofill: prefill the alert phone/email inputs from the
+  // owner's account + business contact info when the stored prefs are still
+  // empty. The DB row is untouched until the owner clicks Save.
+  const prefsForDisplay =
+    prefs && businessRow
+      ? {
+          ...prefs,
+          ...mergeNotificationContactsForDisplay(prefs, {
+            userEmail: user.email,
+            authPhone: user.phone ?? null,
+            ownerEmail: businessRow.owner_email ?? null,
+            businessPhone: businessRow.phone ?? null
+          })
+        }
+      : prefs;
+
   const recent = businessId ? await getNotifications(businessId, { limit: 25 }) : [];
 
   return (
@@ -48,7 +65,7 @@ export default async function NotificationsPage() {
         </p>
       </div>
 
-      {!businessId || !prefs ? (
+      {!businessId || !prefsForDisplay ? (
         <Card>
           <p className="text-parchment/60 text-sm text-center py-6">
             Provision your coworker to configure notification preferences.
@@ -64,7 +81,7 @@ export default async function NotificationsPage() {
         <>
           <Card>
             <h2 className="text-sm font-semibold text-parchment mb-4">Preferences</h2>
-            <NotificationPreferences businessId={businessId} initial={prefs} />
+            <NotificationPreferences businessId={businessId} initial={prefsForDisplay} />
           </Card>
 
           <Card>

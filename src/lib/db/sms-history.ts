@@ -28,12 +28,40 @@ export type SmsJobRow = {
   business_id: string;
   payload: Record<string, unknown>;
   status: "pending" | "processing" | "done" | "dead_letter";
+  /**
+   * Durable outbound reply text. Written by the worker at send time and never
+   * cleared — the canonical source for the dashboard thread.
+   */
+  assistant_reply_text: string | null;
+  /**
+   * Transient Telnyx-retry buffer. Nulled after a successful send, so it only
+   * carries text for in-flight / failed jobs. Used as a fallback for legacy
+   * rows that pre-date `assistant_reply_text`.
+   */
   rowboat_reply_cached: string | null;
   telnyx_outbound_message_id: string | null;
   last_error: string | null;
   created_at: string;
   updated_at: string;
 };
+
+/**
+ * The assistant's outbound reply for a job. Prefer the durable
+ * `assistant_reply_text`; fall back to the transient `rowboat_reply_cached`
+ * for legacy rows (or jobs still mid-flight before the durable copy existed).
+ */
+export function outboundReplyFromRow(
+  row: Pick<SmsJobRow, "assistant_reply_text" | "rowboat_reply_cached">
+): string | null {
+  const durable = row.assistant_reply_text;
+  if (typeof durable === "string" && durable.trim().length > 0) return durable;
+  const cached = row.rowboat_reply_cached;
+  if (typeof cached === "string" && cached.trim().length > 0) return cached;
+  return null;
+}
+
+const SMS_JOB_SELECT =
+  "id, business_id, payload, status, assistant_reply_text, rowboat_reply_cached, telnyx_outbound_message_id, last_error, created_at, updated_at";
 
 export type SmsMessageDirection = "inbound" | "outbound";
 
@@ -129,9 +157,7 @@ export async function listConversationsForBusiness(
   // the requested conversation count and dedupe in JS.
   const { data, error } = await db
     .from("sms_inbound_jobs")
-    .select(
-      "id, business_id, payload, status, rowboat_reply_cached, telnyx_outbound_message_id, last_error, created_at, updated_at"
-    )
+    .select(SMS_JOB_SELECT)
     .eq("business_id", businessId)
     .order("created_at", { ascending: false })
     .limit(Math.min(limit * 4, MAX_LIST_LIMIT * 4));
@@ -144,14 +170,15 @@ export async function listConversationsForBusiness(
     const cust = customerE164FromPayload(row.payload);
     if (!cust) continue;
     const inboundText = inboundTextFromPayload(row.payload);
-    const preview = inboundText || row.rowboat_reply_cached || "(no text)";
+    const outboundText = outboundReplyFromRow(row);
+    const preview = inboundText || outboundText || "(no text)";
     // Count EXPANDED messages (matching listMessagesForCustomer), so the
     // "5 msgs" pill on the index page agrees with the message count the
     // user sees inside the thread. Bugbot caught this mismatch on PR #69:
     // a job with both inbound text + outbound reply expands to TWO
     // messages, not one. See discussion_r3192...82.
     const expandedThisRow =
-      (inboundText ? 1 : 0) + (row.rowboat_reply_cached ? 1 : 0);
+      (inboundText ? 1 : 0) + (outboundText ? 1 : 0);
     if (expandedThisRow === 0) {
       // Defensive: if neither side parsed, still count one row so the
       // conversation doesn't accidentally get pruned to zero.
@@ -209,9 +236,7 @@ export async function listMessagesForCustomer(
   // also uses `ascending: false` for the same reason.
   const { data, error } = await db
     .from("sms_inbound_jobs")
-    .select(
-      "id, business_id, payload, status, rowboat_reply_cached, telnyx_outbound_message_id, last_error, created_at, updated_at"
-    )
+    .select(SMS_JOB_SELECT)
     .eq("business_id", businessId)
     .order("created_at", { ascending: false })
     .limit(Math.min(limit * 4, MAX_LIST_LIMIT * 4));
@@ -239,12 +264,13 @@ export async function listMessagesForCustomer(
         lastError: null
       });
     }
-    if (row.rowboat_reply_cached) {
+    const outboundText = outboundReplyFromRow(row);
+    if (outboundText) {
       messages.push({
         id: `${row.id}:outbound`,
         jobId: row.id,
         direction: "outbound",
-        content: row.rowboat_reply_cached,
+        content: outboundText,
         // Outbound timestamp tracks when the worker finished — falls back
         // to created_at on legacy rows that pre-date the updated_at stamp.
         timestamp: row.updated_at || row.created_at,

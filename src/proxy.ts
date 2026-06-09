@@ -208,12 +208,21 @@ export async function proxy(request: NextRequest) {
       },
     });
 
-    const { data, error: userError } = await supabase.auth.getUser();
-    if (userError) {
-      console.error("[proxy] supabase.auth.getUser failed:", userError.message);
+    // Use getClaims() instead of getUser() here. getClaims verifies the JWT
+    // locally (against the project's asymmetric signing keys) when possible,
+    // avoiding a network round-trip to Supabase Auth on EVERY matched request
+    // — the single biggest middleware TTFB cost. It still refreshes the
+    // session via the cookie setAll above when the token is near expiry. The
+    // claims carry the same `sub` (user id) and `email` we need for the
+    // admin / protected-route gates below.
+    const { data, error: claimsError } = await supabase.auth.getClaims();
+    if (claimsError) {
+      console.error("[proxy] supabase.auth.getClaims failed:", claimsError.message);
     }
-    const supabaseUser = data?.user ?? null;
-    user = supabaseUser ? { id: supabaseUser.id, email: supabaseUser.email ?? null } : null;
+    const claims = data?.claims ?? null;
+    const claimSub = typeof claims?.sub === "string" ? claims.sub : null;
+    const claimEmail = typeof claims?.email === "string" ? claims.email : null;
+    user = claimSub ? { id: claimSub, email: claimEmail } : null;
   }
 
   // --- Admin route protection ---

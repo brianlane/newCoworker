@@ -234,7 +234,7 @@ export async function listSmsHistoryForCustomer(
   );
   const { data, error } = await db
     .from("sms_inbound_jobs")
-    .select("id, payload, rowboat_reply_cached, created_at")
+    .select("id, payload, assistant_reply_text, rowboat_reply_cached, created_at")
     .eq("business_id", businessId)
     .eq("customer_e164", customerE164)
     .order("created_at", { ascending: false })
@@ -246,16 +246,22 @@ export async function listSmsHistoryForCustomer(
   const rows = ((data as Array<{
     id: string;
     payload: Record<string, unknown>;
+    assistant_reply_text: string | null;
     rowboat_reply_cached: string | null;
     created_at: string;
   }> | null) ?? []).slice().reverse();
+  // Prefer the durable `assistant_reply_text` (never cleared); fall back to the
+  // transient `rowboat_reply_cached` for legacy rows whose reply was already
+  // wiped after a successful send.
+  const resolveReply = (durable: string | null, cached: string | null): string | null => {
+    if (typeof durable === "string" && durable.trim().length > 0) return durable;
+    if (typeof cached === "string" && cached.trim().length > 0) return cached;
+    return null;
+  };
   return rows.map((r) => ({
     jobId: r.id,
     inboundText: extractInboundText(r.payload),
-    assistantReply:
-      typeof r.rowboat_reply_cached === "string" && r.rowboat_reply_cached.trim().length > 0
-        ? r.rowboat_reply_cached
-        : null,
+    assistantReply: resolveReply(r.assistant_reply_text, r.rowboat_reply_cached),
     receivedAt: r.created_at
   }));
 }

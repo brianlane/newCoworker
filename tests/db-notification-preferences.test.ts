@@ -3,6 +3,7 @@ import {
   getNotificationPreferences,
   getOrCreateNotificationPreferences,
   initialNotificationPreferenceContactsFromSeeds,
+  mergeNotificationContactsForDisplay,
   isUniqueViolation,
   updateNotificationPreferences
 } from "@/lib/db/notification-preferences";
@@ -96,6 +97,54 @@ describe("db/notification-preferences", () => {
       })
     ).toEqual({ alert_email: null, phone_number: "final-phone" });
   });
+  it("mergeNotificationContactsForDisplay fills null stored fields from account seeds", () => {
+    const merged = mergeNotificationContactsForDisplay(
+      { alert_email: null, phone_number: null },
+      {
+        userEmail: "u@example.com",
+        authPhone: "+15551112222",
+        ownerEmail: "owner@biz.com",
+        businessPhone: "+15553334444"
+      }
+    );
+    expect(merged).toEqual({
+      alert_email: "u@example.com",
+      phone_number: "+15551112222"
+    });
+  });
+
+  it("mergeNotificationContactsForDisplay keeps a real stored value over seeds", () => {
+    const merged = mergeNotificationContactsForDisplay(
+      { alert_email: "kept@stored.com", phone_number: "+19998887777" },
+      {
+        userEmail: "u@example.com",
+        authPhone: "+15551112222",
+        ownerEmail: "owner@biz.com",
+        businessPhone: "+15553334444"
+      }
+    );
+    expect(merged).toEqual({
+      alert_email: "kept@stored.com",
+      phone_number: "+19998887777"
+    });
+  });
+
+  it("mergeNotificationContactsForDisplay treats blank stored values as empty and refills", () => {
+    const merged = mergeNotificationContactsForDisplay(
+      { alert_email: "   ", phone_number: "" },
+      {
+        userEmail: null,
+        authPhone: null,
+        ownerEmail: "owner@biz.com",
+        businessPhone: "+15553334444"
+      }
+    );
+    expect(merged).toEqual({
+      alert_email: "owner@biz.com",
+      phone_number: "+15553334444"
+    });
+  });
+
   it("getNotificationPreferences returns row", async () => {
     const chain = {
       select: vi.fn().mockReturnThis(),

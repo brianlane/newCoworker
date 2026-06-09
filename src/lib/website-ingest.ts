@@ -132,6 +132,24 @@ export interface WebsiteIngestOptions {
    * URLs the user did not explicitly provide.
    */
   ignoreRobots?: boolean;
+  /**
+   * When true, and the direct crawl recovers zero pages (e.g. the site
+   * is behind Cloudflare bot mitigation returning HTTP 403 to every
+   * non-browser client), fall back to the Jina Reader service
+   * (`https://r.jina.ai/<url>`) to fetch a rendered, readable markdown
+   * version of the homepage. Jina runs a real browser pool server-side,
+   * so it clears active JS challenges that header/UA/TLS spoofing can't.
+   *
+   * This is far lighter than running a headless browser per VPS — it's a
+   * single outbound HTTP GET that already returns summarization-ready
+   * markdown. Tradeoff: it sends the (owner-provided, public) URL to a
+   * third party and adds a few seconds of latency, so it's gated to the
+   * owner-consented persist/preview paths and only fires when the direct
+   * crawl fails. Set `JINA_API_KEY` to lift the free-tier rate limit.
+   *
+   * Default off; only the website-ingest / website-preview routes opt in.
+   */
+  readerFallback?: boolean;
 }
 
 /**
@@ -509,6 +527,62 @@ async function fetchWithLimit(
   }
 }
 
+/** Jina Reader endpoint: GET `https://r.jina.ai/<absolute url>` → readable markdown. */
+export const JINA_READER_BASE = "https://r.jina.ai/";
+/**
+ * Reader fetches go through a server-side browser pool, so they're slower than
+ * a raw fetch. Give them a generous standalone budget (the per-page 5s cap is
+ * far too tight) — the route's `maxDuration` (300s) comfortably covers it.
+ */
+export const WEBSITE_INGEST_READER_TIMEOUT_MS = 25_000;
+
+/**
+ * Fetch a WAF-blocked page via the Jina Reader proxy. Returns the readable
+ * markdown body (already extracted by Jina, so callers should NOT run it back
+ * through {@link extractReadableText}). Throws on non-2xx or transport errors;
+ * the caller treats any failure as "fallback unavailable" and keeps the
+ * original crawl error.
+ *
+ * The embedded target URL has already passed `assertSafeHostname` upstream, so
+ * we are not widening the SSRF surface — the only new outbound host is the
+ * fixed, public `r.jina.ai`.
+ */
+async function fetchViaJinaReader(
+  targetUrl: string,
+  fetchImpl: FetchImpl,
+  timeoutMs: number,
+  maxBytes: number
+): Promise<{ text: string; bytes: number }> {
+  const controller = new AbortController();
+  /* c8 ignore next -- timer only fires on a real Jina hang; covered indirectly. */
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    // URL-encode the target so its own query string / reserved chars aren't
+    // parsed as part of the r.jina.ai request URL. normalizeWebsiteUrl keeps
+    // query params, and an unencoded `?` would otherwise be swallowed as the
+    // reader's query, fetching the wrong page. Jina decodes the encoded form.
+    const readerUrl = `${JINA_READER_BASE}${encodeURIComponent(targetUrl)}`;
+    const apiKey = process.env.JINA_API_KEY?.trim();
+    const headers: Record<string, string> = {
+      accept: "text/plain",
+      // Ask Jina for markdown explicitly; default is already markdown-ish but
+      // pinning the format keeps the corpus stable across Jina changes.
+      "x-return-format": "markdown"
+    };
+    if (apiKey) headers["authorization"] = `Bearer ${apiKey}`;
+
+    const res = await fetchImpl(readerUrl, { headers, signal: controller.signal });
+    if (!res.ok) throw new Error(`reader_status_${res.status}`);
+
+    const buffer = await res.arrayBuffer();
+    const capped = new Uint8Array(buffer).slice(0, maxBytes);
+    const text = new TextDecoder("utf-8", { fatal: false }).decode(capped);
+    return { text, bytes: Math.min(buffer.byteLength, maxBytes) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchRobots(
   origin: string,
   fetchImpl: FetchImpl,
@@ -738,6 +812,40 @@ export async function ingestWebsite(
       /* c8 ignore next -- non-homepage branch fires only on partial-success crawls (homepage OK + N sub-pages 5xx); covered by integration tests, not unit tests */
       if (isHomepage) homepageErrorDetail = humanizeFetchError(errorMessage);
       continue;
+    }
+  }
+
+  if (pages.length === 0 && options.readerFallback) {
+    // The direct crawl recovered nothing — almost always Cloudflare (or a
+    // similar WAF) returning a 403 JS-challenge to our non-browser fetch.
+    // Header/UA/TLS spoofing can't clear an active challenge, but the Jina
+    // Reader proxy runs a real browser server-side and returns clean
+    // markdown. This is the light alternative to a per-VPS headless browser.
+    try {
+      const { text, bytes } = await fetchViaJinaReader(
+        normalized,
+        fetchImpl,
+        WEBSITE_INGEST_READER_TIMEOUT_MS,
+        WEBSITE_INGEST_MAX_BYTES_PER_PAGE
+      );
+      const cleaned = text.trim();
+      if (cleaned.length > 0) {
+        bytesDownloaded += bytes;
+        // Jina already returns extracted markdown — do NOT re-run
+        // extractReadableText (it's an HTML stripper and would mangle
+        // markdown links / headings). Feed it straight to the summarizer.
+        pages.push({ url: normalized, text: cleaned });
+        logger.info("website-ingest: recovered via Jina reader fallback", {
+          url: normalized,
+          chars: cleaned.length
+        });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn("website-ingest: reader fallback failed", {
+        url: normalized,
+        error: message
+      });
     }
   }
 

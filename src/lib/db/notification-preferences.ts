@@ -50,6 +50,30 @@ export function initialNotificationPreferenceContactsFromSeeds(
   };
 }
 
+/**
+ * Display-time contact merge for the notifications form.
+ *
+ * Unlike {@link initialNotificationPreferenceContactsFromSeeds} (first-insert
+ * only), this is safe to call on every render: it never writes to the DB. It
+ * fills `alert_email` / `phone_number` from account info ONLY when the stored
+ * value is null/blank, so the form is pre-populated from the owner's email +
+ * business phone the first time they visit — answering "why isn't this
+ * autofilled?" — while a real stored value always wins.
+ *
+ * Tradeoff: because the merge is display-only, the stored row is unchanged
+ * until the owner clicks Save, at which point the shown value is persisted.
+ */
+export function mergeNotificationContactsForDisplay(
+  stored: Pick<NotificationPreferencesRow, "alert_email" | "phone_number">,
+  seeds: NotificationPreferenceContactSeeds
+): Pick<NotificationPreferencesRow, "alert_email" | "phone_number"> {
+  const seeded = initialNotificationPreferenceContactsFromSeeds(seeds);
+  return {
+    alert_email: trimToNull(stored.alert_email) ?? seeded.alert_email,
+    phone_number: trimToNull(stored.phone_number) ?? seeded.phone_number
+  };
+}
+
 export type GetOrCreateNotificationPreferencesOpts = {
   client?: SupabaseClient;
   contactSeeds?: NotificationPreferenceContactSeeds;

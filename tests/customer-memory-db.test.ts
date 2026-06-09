@@ -460,12 +460,14 @@ describe("listSmsHistoryForCustomer", () => {
   function jobRow(overrides: Partial<{
     id: string;
     payload: Record<string, unknown>;
+    assistant_reply_text: string | null;
     rowboat_reply_cached: string | null;
     created_at: string;
   }> = {}) {
     return {
       id: "j-1",
       payload: { data: { payload: { text: "hi" } } },
+      assistant_reply_text: null,
       rowboat_reply_cached: "hello",
       created_at: "2026-05-01T00:00:00Z",
       ...overrides
@@ -533,6 +535,26 @@ describe("listSmsHistoryForCustomer", () => {
     expect(result.find((r) => r.jobId === "a")?.inboundText).toBe("from text key");
     expect(result.find((r) => r.jobId === "b")?.inboundText).toBe("from body key");
     expect(result.find((r) => r.jobId === "c")?.inboundText).toBe("");
+  });
+
+  it("prefers the durable assistant_reply_text over the transient cache, and falls back when it's blank", async () => {
+    const { client } = makeClient({
+      fromTerminator: {
+        data: [
+          // Durable copy present → used even when the retry cache was cleared.
+          jobRow({ id: "durable", assistant_reply_text: "durable reply", rowboat_reply_cached: null }),
+          // Durable present AND a stale cache → durable still wins.
+          jobRow({ id: "both", assistant_reply_text: "durable wins", rowboat_reply_cached: "stale" }),
+          // Durable is whitespace-only → treated as empty, falls back to cache.
+          jobRow({ id: "blank", assistant_reply_text: "   ", rowboat_reply_cached: "cache fallback" })
+        ],
+        error: null
+      }
+    });
+    const result = await listSmsHistoryForCustomer(BIZ, CUSTOMER, {}, client);
+    expect(result.find((r) => r.jobId === "durable")?.assistantReply).toBe("durable reply");
+    expect(result.find((r) => r.jobId === "both")?.assistantReply).toBe("durable wins");
+    expect(result.find((r) => r.jobId === "blank")?.assistantReply).toBe("cache fallback");
   });
 
   it("normalizes assistantReply: empty/whitespace-only strings become null (so consumers can `?? '[no reply]'`)", async () => {

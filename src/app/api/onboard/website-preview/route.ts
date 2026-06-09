@@ -117,7 +117,12 @@ export async function POST(request: Request) {
     const result = await ingestWebsite(normalized, {
       businessName: body.businessName,
       businessType: body.businessType,
-      ignoreRobots: ownerConsented
+      ignoreRobots: ownerConsented,
+      // Same owner-consent gate as the robots bypass: only fall back to the
+      // Jina Reader proxy for WAF-blocked sites when the request demonstrably
+      // came from our own questionnaire UI (so this stateless endpoint can't
+      // be abused as a generic reader proxy for arbitrary URLs).
+      readerFallback: ownerConsented
     });
 
     if (!result.ok) {

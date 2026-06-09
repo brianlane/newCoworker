@@ -454,6 +454,210 @@ describe("ingestWebsite", () => {
     if (!res.ok) expect(res.error).toBe("fetch_failed");
   });
 
+  it("readerFallback recovers content via Jina when the direct crawl is 403-blocked (Cloudflare)", async () => {
+    // The production case: Cloudflare returns a 403 JS challenge to our
+    // non-browser fetch, so the direct crawl yields zero pages. With the
+    // reader fallback enabled we GET r.jina.ai/<url>, which returns clean
+    // markdown from a server-side browser pool, and summarize that instead.
+    const markdown = `# Realty\n\n${"We help buyers across Phoenix. ".repeat(20)}`;
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.startsWith("https://r.jina.ai/")) {
+        return new Response(markdown, {
+          status: 200,
+          headers: { "content-type": "text/plain; charset=utf-8" }
+        });
+      }
+      // Everything on the origin (incl. robots not fetched due to ignoreRobots)
+      // is blocked by the CDN.
+      return new Response("blocked", {
+        status: 403,
+        headers: { "content-type": "text/html" }
+      });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nRealty helps buyers.");
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize,
+      ignoreRobots: true,
+      readerFallback: true
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.websiteMd).toMatch(/Realty helps buyers/);
+      expect(res.pagesCrawled).toBe(1);
+    }
+    // The reader endpoint must have actually been hit with the (encoded) target URL.
+    expect(
+      (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.some(([u]) =>
+        String(u) === `https://r.jina.ai/${encodeURIComponent("https://example.com/")}`
+      )
+    ).toBe(true);
+    expect(summarize).toHaveBeenCalledOnce();
+  });
+
+  it("URL-encodes the target so query strings survive the Jina reader hop", async () => {
+    const markdown = `# Listings\n\n${"We help buyers. ".repeat(20)}`;
+    let readerUrl: string | undefined;
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.startsWith("https://r.jina.ai/")) {
+        readerUrl = url;
+        return new Response(markdown, {
+          status: 200,
+          headers: { "content-type": "text/plain; charset=utf-8" }
+        });
+      }
+      return new Response("blocked", { status: 403, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+
+    const res = await ingestWebsite("https://example.com/search?q=homes&page=2", {
+      fetchImpl,
+      lookup,
+      summarize: async () => "## Summary\nListings.",
+      ignoreRobots: true,
+      readerFallback: true
+    });
+
+    expect(res.ok).toBe(true);
+    // The encoded target must carry the full query; decoding it back yields the
+    // original URL (no dropped params).
+    expect(readerUrl).toBe(
+      `https://r.jina.ai/${encodeURIComponent("https://example.com/search?q=homes&page=2")}`
+    );
+    expect(decodeURIComponent(readerUrl!.slice("https://r.jina.ai/".length))).toBe(
+      "https://example.com/search?q=homes&page=2"
+    );
+  });
+
+  it("does NOT call the Jina reader when readerFallback is off (default)", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response("blocked", { status: 403, headers: { "content-type": "text/html" } })
+    ) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize: async () => "unused",
+      ignoreRobots: true
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe("fetch_failed");
+    expect(
+      (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.some(([u]) =>
+        String(u).startsWith("https://r.jina.ai/")
+      )
+    ).toBe(false);
+  });
+
+  it("keeps the original fetch_failed error when the Jina reader also fails", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.startsWith("https://r.jina.ai/")) {
+        return new Response("nope", { status: 502, headers: { "content-type": "text/plain" } });
+      }
+      return new Response("blocked", { status: 403, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize: async () => "unused",
+      ignoreRobots: true,
+      readerFallback: true
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toBe("fetch_failed");
+      // Homepage 403 detail is still surfaced for the owner.
+      expect(res.detail).toMatch(/403/);
+    }
+  });
+
+  it("sends an Authorization header to Jina when JINA_API_KEY is set", async () => {
+    const prevKey = process.env.JINA_API_KEY;
+    process.env.JINA_API_KEY = "jina-test-key";
+    try {
+      const markdown = `# Realty\n\n${"We help buyers. ".repeat(20)}`;
+      let readerHeaders: Record<string, string> | undefined;
+      const fetchImpl = vi.fn(async (url: string, init?: { headers?: Record<string, string> }) => {
+        if (url.startsWith("https://r.jina.ai/")) {
+          readerHeaders = init?.headers;
+          return new Response(markdown, {
+            status: 200,
+            headers: { "content-type": "text/plain; charset=utf-8" }
+          });
+        }
+        return new Response("blocked", { status: 403, headers: { "content-type": "text/html" } });
+      }) as unknown as typeof fetch;
+      const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+
+      const res = await ingestWebsite("https://example.com/", {
+        fetchImpl,
+        lookup,
+        summarize: async () => "## Summary\nRealty.",
+        ignoreRobots: true,
+        readerFallback: true
+      });
+
+      expect(res.ok).toBe(true);
+      expect(readerHeaders?.authorization).toBe("Bearer jina-test-key");
+    } finally {
+      if (prevKey === undefined) delete process.env.JINA_API_KEY;
+      else process.env.JINA_API_KEY = prevKey;
+    }
+  });
+
+  it("ignores an empty/whitespace-only Jina response and reports fetch_failed", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.startsWith("https://r.jina.ai/")) {
+        return new Response("   \n  ", {
+          status: 200,
+          headers: { "content-type": "text/plain" }
+        });
+      }
+      return new Response("blocked", { status: 403, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize: async () => "unused",
+      ignoreRobots: true,
+      readerFallback: true
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe("fetch_failed");
+  });
+
+  it("tolerates a non-Error rejection from the Jina fetch", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.startsWith("https://r.jina.ai/")) {
+        // Reject with a non-Error value to exercise the String(err) branch.
+        return Promise.reject("jina network blip");
+      }
+      return new Response("blocked", { status: 403, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize: async () => "unused",
+      ignoreRobots: true,
+      readerFallback: true
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe("fetch_failed");
+  });
+
   it("summarizes crawled content on the happy path", async () => {
     const html = `<html><body><h1>Sunrise Realty</h1><p>${"We help buyers. ".repeat(40)}</p></body></html>`;
     const fetchImpl = vi.fn(async (url: string) => {

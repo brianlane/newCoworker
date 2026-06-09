@@ -77,7 +77,12 @@ export async function POST(request: Request) {
       // Disallow: /` block that would otherwise prevent the owner's
       // own assistant from learning their own business. SSRF /
       // private-IP / size / redirect defenses still apply.
-      ignoreRobots: true
+      ignoreRobots: true,
+      // If the direct crawl is blocked (e.g. Cloudflare bot mitigation
+      // returns a 403 challenge), fall back to the Jina Reader proxy. The
+      // owner explicitly provided this URL, so fetching a rendered copy of
+      // their own public site is consented.
+      readerFallback: true
     });
 
     if (!result.ok) {
