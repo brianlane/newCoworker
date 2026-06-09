@@ -124,6 +124,32 @@ async function clearJobReplyCache(
     .eq("id", jobId);
 }
 
+/**
+ * Called ONLY after a confirmed successful outbound delivery. Clears the
+ * transient retry buffer AND writes the durable `assistant_reply_text` that
+ * powers the dashboard SMS thread / customer history.
+ *
+ * Writing the durable copy here (delivery time) rather than at cache time is
+ * deliberate: paths that cache a reply but never deliver it (opt-out
+ * suppression, monthly-cap reservation failure, dead-letter, missing Telnyx
+ * env) call `clearJobReplyCache` instead, leaving `assistant_reply_text` null
+ * so the dashboard never shows an outbound message that was never sent.
+ */
+async function finalizeDeliveredReply(
+  supabase: ReturnType<typeof createClient>,
+  jobId: string,
+  replyText: string
+): Promise<void> {
+  await supabase
+    .from("sms_inbound_jobs")
+    .update({
+      rowboat_reply_cached: null,
+      assistant_reply_text: replyText,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", jobId);
+}
+
 serve(async (req: Request) => {
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
@@ -551,14 +577,6 @@ serve(async (req: Request) => {
         // retried from the cached path.
         const cachePatch: Record<string, unknown> = {
           rowboat_reply_cached: reply,
-          // Durable copy of the assistant's outbound reply for the dashboard
-          // SMS thread / customer history. `rowboat_reply_cached` is a
-          // transient Telnyx-retry buffer that gets nulled by
-          // clearJobReplyCache() after a successful send, so reading it for
-          // history silently drops every delivered reply. assistant_reply_text
-          // is written here and NEVER cleared, giving the dashboard a stable
-          // outbound record.
-          assistant_reply_text: reply,
           customer_e164: fromE164,
           updated_at: new Date().toISOString()
         };
@@ -831,7 +849,9 @@ serve(async (req: Request) => {
       if (doneErr) {
         throw new Error(`done:${doneErr.message}`);
       }
-      await clearJobReplyCache(supabase, job.id);
+      // Delivered: persist the durable reply for dashboard history and clear
+      // the transient retry buffer in one update.
+      await finalizeDeliveredReply(supabase, job.id, reply);
       await telemetryRecord(supabase, "sms_inbound_worker_sent", {
         job_id: job.id,
         business_id: job.business_id
@@ -851,8 +871,9 @@ serve(async (req: Request) => {
             p_rowboat_conversation_id: convId ?? null
           });
           if (!recErr) {
-            // Reconciled: the outbound DID go out, so keep the metered slot.
-            await clearJobReplyCache(supabase, job.id);
+            // Reconciled: the outbound DID go out, so keep the metered slot
+            // and persist the durable reply for dashboard history.
+            await finalizeDeliveredReply(supabase, job.id, reply);
             processed += 1;
             continue;
           }
