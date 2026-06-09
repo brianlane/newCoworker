@@ -78,8 +78,9 @@ function newStep(type: FlowStep["type"]): FlowStep {
           "Reply 1 to claim or 2 to pass within 10 min.",
         responseMinutes: 10,
         ownerFallbackTemplate:
-          "No agent claimed {{vars.lead_name}} ({{vars.lead_phone}}). It's back to you.",
-        claimedNotifyTemplate: ""
+          "No agent claimed {{vars.lead_name}} ({{vars.lead_phone}}). It's back to you."
+        // claimedNotifyTemplate is optional and omitted by default — an empty
+        // string would fail the schema's min(1)-when-present rule on save.
       };
   }
 }
@@ -614,7 +615,11 @@ function StepFields({
         <Field
           label="Owner notice when claimed (optional)"
           value={step.claimedNotifyTemplate ?? ""}
-          onChange={(v) => patchStep(index, { claimedNotifyTemplate: v })}
+          onChange={(v) =>
+            // Optional: an empty value must round-trip as undefined, not "",
+            // since the schema requires min(1) when the key is present.
+            patchStep(index, { claimedNotifyTemplate: v.trim() ? v : undefined })
+          }
           textarea
         />
       </div>

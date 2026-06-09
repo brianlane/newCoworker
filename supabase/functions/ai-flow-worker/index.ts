@@ -242,6 +242,8 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     }
     if (outcome.kind === "pause_agent") {
       await recordStep(supabase, run, index, step, "pending");
+      // Persist the parked state BEFORE sending the offer so an inbound 1/2
+      // reply can always be matched to this run (state before side effect).
       await updateRun(supabase, run.id, {
         status: "awaiting_agent",
         current_step: index,
@@ -250,6 +252,14 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         respond_by_at: new Date(Date.now() + outcome.respondByMs).toISOString(),
         claimed_at: null
       });
+      // A send failure here leaves the run parked; the escalation sweep moves on
+      // to the next agent at the deadline rather than stranding the lead — so we
+      // log and stop instead of unwinding the durable parked state.
+      try {
+        await sendOfferSms(supabase, run, outcome.e164, outcome.offerText, outcome.idempotencyKey);
+      } catch (e) {
+        console.error("route_to_team offer send failed after park", e);
+      }
       await telemetryRecord(supabase, "ai_flow_run_awaiting_agent", {
         run_id: run.id,
         business_id: run.business_id,
@@ -283,7 +293,15 @@ type StepOutcome =
   | { kind: "ok"; result?: Record<string, unknown>; skipped?: boolean }
   | { kind: "fail"; error: string }
   | { kind: "pause" }
-  | { kind: "pause_agent"; e164: string; respondByMs: number };
+  | {
+      kind: "pause_agent";
+      e164: string;
+      respondByMs: number;
+      // The offer SMS is sent by executeRun AFTER the awaiting_agent state is
+      // durably persisted, so an inbound 1/2 reply can always match the run.
+      offerText: string;
+      idempotencyKey: string;
+    };
 
 /** Execute one step's side effect. Throws on transient IO errors (→ retry). */
 async function runStep(
@@ -710,22 +728,27 @@ async function routeToTeamStep(
 
   for (let i = 0; i < ROUTE_MAX_LOOKUPS; i++) {
     const agent = await pickNextAgent(supabase, run, scope, tried);
-    // No agent (none/parse fail/unconfigured) or Rowboat repeated a tried pick →
-    // stop looking and fall back to the owner.
-    if (!agent || tried.includes(agent.phone)) break;
+    // No agent at all (none / parse fail / unconfigured): roster is exhausted.
+    if (!agent) break;
+    // Rowboat repeated an agent we already tried: don't end routing on one bad
+    // pick — consume another lookup and ask again (bounded by ROUTE_MAX_LOOKUPS).
+    if (tried.includes(agent.phone)) continue;
     // A teammate who texted STOP is opted out: skip them and ask for the next.
     if (await isRecipientOptedOut(supabase, run.business_id, agent.phone)) {
       tried.push(agent.phone);
       continue;
     }
-    const body = renderTemplate(action.offerTemplate, agentScope(scope, agent));
-    await sendOfferSms(supabase, run, agent.phone, body, `aiflow-offer:${run.id}:${tried.length}`);
     routing.offered = agent.phone;
     routing.offered_name = agent.name;
+    // The offer SMS itself is sent by executeRun AFTER the awaiting_agent state
+    // is persisted (state before side effect); we only carry the rendered body
+    // and a per-agent idempotency key here.
     return {
       kind: "pause_agent",
       e164: agent.phone,
-      respondByMs: action.responseMinutes * 60_000
+      respondByMs: action.responseMinutes * 60_000,
+      offerText: renderTemplate(action.offerTemplate, agentScope(scope, agent)),
+      idempotencyKey: `aiflow-offer:${run.id}:${tried.length}`
     };
   }
 
