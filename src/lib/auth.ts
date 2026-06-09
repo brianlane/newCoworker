@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export type AuthUser = {
@@ -11,7 +12,19 @@ export type AuthUser = {
   isAdmin: boolean;
 };
 
-export async function getAuthUser(): Promise<AuthUser | null> {
+/**
+ * Resolve the signed-in auth user from the request cookies.
+ *
+ * Wrapped in React `cache()` so that within a single server request (the
+ * dashboard layout + the page + any nested server components, or a route
+ * handler that calls both `getAuthUser` and `requireOwner`) we make ONE
+ * `auth.getUser()` round-trip instead of 2-3 sequential ones. Each
+ * `/auth/v1/user` call is a network hop to Supabase Auth that validates the
+ * JWT server-side, so collapsing the duplicates is the biggest per-render
+ * TTFB win. Outside of a request scope (e.g. unit tests) `cache` is a
+ * pass-through and does not memoize, so per-test mocks still apply.
+ */
+export const getAuthUser = cache(async function getAuthUser(): Promise<AuthUser | null> {
   try {
     const supabase = await createSupabaseServerClient();
     const { data, error } = await supabase.auth.getUser();
@@ -36,7 +49,7 @@ export async function getAuthUser(): Promise<AuthUser | null> {
   } catch {
     return null;
   }
-}
+});
 
 export async function requireAuth(): Promise<AuthUser> {
   const user = await getAuthUser();

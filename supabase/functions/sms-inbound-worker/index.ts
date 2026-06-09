@@ -551,6 +551,14 @@ serve(async (req: Request) => {
         // retried from the cached path.
         const cachePatch: Record<string, unknown> = {
           rowboat_reply_cached: reply,
+          // Durable copy of the assistant's outbound reply for the dashboard
+          // SMS thread / customer history. `rowboat_reply_cached` is a
+          // transient Telnyx-retry buffer that gets nulled by
+          // clearJobReplyCache() after a successful send, so reading it for
+          // history silently drops every delivered reply. assistant_reply_text
+          // is written here and NEVER cleared, giving the dashboard a stable
+          // outbound record.
+          assistant_reply_text: reply,
           customer_e164: fromE164,
           updated_at: new Date().toISOString()
         };

@@ -518,6 +518,83 @@ describe("listMessagesForCustomer", () => {
     ]);
   });
 
+  it("surfaces a delivered reply from assistant_reply_text even after the retry cache was cleared", async () => {
+    // The core bug: after a successful Telnyx send the worker nulls
+    // rowboat_reply_cached, so reading only that column dropped every
+    // delivered reply. assistant_reply_text is the durable copy.
+    const c = chain();
+    c.limit.mockResolvedValue({
+      data: [
+        {
+          id: "j1",
+          business_id: "biz",
+          payload: envelope({ from: { phone_number: "+15551111111" }, text: "hi" }),
+          status: "done",
+          assistant_reply_text: "hello back",
+          rowboat_reply_cached: null,
+          telnyx_outbound_message_id: "out-1",
+          last_error: null,
+          created_at: "2026-05-05T00:00:00Z",
+          updated_at: "2026-05-05T00:00:01Z"
+        }
+      ],
+      error: null
+    });
+    const result = await listMessagesForCustomer("biz", "+15551111111", {}, makeDb(c) as never);
+    expect(result.map((m) => `${m.direction}:${m.content}`)).toEqual([
+      "inbound:hi",
+      "outbound:hello back"
+    ]);
+  });
+
+  it("prefers assistant_reply_text over a stale rowboat_reply_cached", async () => {
+    const c = chain();
+    c.limit.mockResolvedValue({
+      data: [
+        {
+          id: "j1",
+          business_id: "biz",
+          payload: envelope({ from: { phone_number: "+15551111111" }, text: "hi" }),
+          status: "done",
+          assistant_reply_text: "durable reply",
+          rowboat_reply_cached: "stale cache",
+          telnyx_outbound_message_id: "out-1",
+          last_error: null,
+          created_at: "2026-05-05T00:00:00Z",
+          updated_at: "2026-05-05T00:00:01Z"
+        }
+      ],
+      error: null
+    });
+    const result = await listMessagesForCustomer("biz", "+15551111111", {}, makeDb(c) as never);
+    const outbound = result.find((m) => m.direction === "outbound");
+    expect(outbound?.content).toBe("durable reply");
+  });
+
+  it("falls back to rowboat_reply_cached for legacy rows lacking assistant_reply_text", async () => {
+    const c = chain();
+    c.limit.mockResolvedValue({
+      data: [
+        {
+          id: "j1",
+          business_id: "biz",
+          payload: envelope({ from: { phone_number: "+15551111111" }, text: "hi" }),
+          status: "pending",
+          assistant_reply_text: null,
+          rowboat_reply_cached: "in-flight reply",
+          telnyx_outbound_message_id: null,
+          last_error: null,
+          created_at: "2026-05-05T00:00:00Z",
+          updated_at: "2026-05-05T00:00:01Z"
+        }
+      ],
+      error: null
+    });
+    const result = await listMessagesForCustomer("biz", "+15551111111", {}, makeDb(c) as never);
+    const outbound = result.find((m) => m.direction === "outbound");
+    expect(outbound?.content).toBe("in-flight reply");
+  });
+
   it("queries with ascending=false so a business with >limit rows still surfaces RECENT messages (bugbot regression)", async () => {
     const c = chain();
     c.limit.mockResolvedValue({ data: [], error: null });

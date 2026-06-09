@@ -454,6 +454,98 @@ describe("ingestWebsite", () => {
     if (!res.ok) expect(res.error).toBe("fetch_failed");
   });
 
+  it("readerFallback recovers content via Jina when the direct crawl is 403-blocked (Cloudflare)", async () => {
+    // The production case: Cloudflare returns a 403 JS challenge to our
+    // non-browser fetch, so the direct crawl yields zero pages. With the
+    // reader fallback enabled we GET r.jina.ai/<url>, which returns clean
+    // markdown from a server-side browser pool, and summarize that instead.
+    const markdown = `# Realty\n\n${"We help buyers across Phoenix. ".repeat(20)}`;
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.startsWith("https://r.jina.ai/")) {
+        return new Response(markdown, {
+          status: 200,
+          headers: { "content-type": "text/plain; charset=utf-8" }
+        });
+      }
+      // Everything on the origin (incl. robots not fetched due to ignoreRobots)
+      // is blocked by the CDN.
+      return new Response("blocked", {
+        status: 403,
+        headers: { "content-type": "text/html" }
+      });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nRealty helps buyers.");
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize,
+      ignoreRobots: true,
+      readerFallback: true
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.websiteMd).toMatch(/Realty helps buyers/);
+      expect(res.pagesCrawled).toBe(1);
+    }
+    // The reader endpoint must have actually been hit with the target URL.
+    expect(
+      (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.some(([u]) =>
+        String(u).startsWith("https://r.jina.ai/https://example.com/")
+      )
+    ).toBe(true);
+    expect(summarize).toHaveBeenCalledOnce();
+  });
+
+  it("does NOT call the Jina reader when readerFallback is off (default)", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response("blocked", { status: 403, headers: { "content-type": "text/html" } })
+    ) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize: async () => "unused",
+      ignoreRobots: true
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe("fetch_failed");
+    expect(
+      (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.some(([u]) =>
+        String(u).startsWith("https://r.jina.ai/")
+      )
+    ).toBe(false);
+  });
+
+  it("keeps the original fetch_failed error when the Jina reader also fails", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.startsWith("https://r.jina.ai/")) {
+        return new Response("nope", { status: 502, headers: { "content-type": "text/plain" } });
+      }
+      return new Response("blocked", { status: 403, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize: async () => "unused",
+      ignoreRobots: true,
+      readerFallback: true
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toBe("fetch_failed");
+      // Homepage 403 detail is still surfaced for the owner.
+      expect(res.detail).toMatch(/403/);
+    }
+  });
+
   it("summarizes crawled content on the happy path", async () => {
     const html = `<html><body><h1>Sunrise Realty</h1><p>${"We help buyers. ".repeat(40)}</p></body></html>`;
     const fetchImpl = vi.fn(async (url: string) => {

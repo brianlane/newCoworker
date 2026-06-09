@@ -53,7 +53,9 @@ function useUnreadNotificationCount(businessId: string | null): number {
       return;
     }
     let cancelled = false;
+    let lastFetchedAt = 0;
     const fetchCount = async () => {
+      lastFetchedAt = Date.now();
       try {
         const res = await fetch(
           `/api/notifications/unread-count?businessId=${encodeURIComponent(businessId)}`,
@@ -71,7 +73,16 @@ function useUnreadNotificationCount(businessId: string | null): number {
     void fetchCount();
     // Re-fetch on focus so a user who marked something read in another tab
     // doesn't have to wait the full poll interval to see the badge update.
-    const onFocus = () => void fetchCount();
+    // Debounced: each poll hits getClaims (proxy) + getAuthUser + requireOwner
+    // + the count query, so an owner who keeps many dashboard tabs open and
+    // alt-tabs between them would otherwise fire a burst of 4-call cycles on
+    // every focus. Skip the focus refetch if we polled within the last 15s.
+    const FOCUS_REFETCH_MIN_GAP_MS = 15_000;
+    const onFocus = () => {
+      if (Date.now() - lastFetchedAt >= FOCUS_REFETCH_MIN_GAP_MS) {
+        void fetchCount();
+      }
+    };
     window.addEventListener("focus", onFocus);
     const handle = window.setInterval(fetchCount, POLL_INTERVAL_MS);
     return () => {

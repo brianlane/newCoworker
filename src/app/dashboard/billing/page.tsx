@@ -19,6 +19,7 @@ import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getSubscription } from "@/lib/db/subscriptions";
+import { resolveActiveRenewalDate } from "@/lib/billing/renewal";
 import { getVoiceBillingSnapshotForBusiness } from "@/lib/db/voice-usage";
 import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
@@ -162,6 +163,15 @@ export default async function BillingPage(props: {
       ? "Your 30-day money-back window has passed."
       : null;
 
+  // "Next renewal" is the live Stripe current_period_end for active subs
+  // (rolls forward each cycle), falling back to the cached value / renewal_at.
+  // The resolver only hits Stripe when the cached period end is missing or
+  // already elapsed, so the common case stays a zero-network-call render.
+  const renewalAt =
+    planStatus === "active"
+      ? await resolveActiveRenewalDate(subscription)
+      : (subscription?.renewal_at ?? null);
+
   const lifetimeCount = profile?.lifetime_subscription_count ?? 0;
   const capReached = lifetimeCount >= LIFETIME_SUBSCRIPTION_CAP;
   const canChangePlan = planStatus === "active" && !capReached;
@@ -212,7 +222,7 @@ export default async function BillingPage(props: {
         tier={(business?.tier ?? null) as PlanTier | null}
         billingPeriod={subscription?.billing_period ?? null}
         status={planStatus}
-        renewalAt={subscription?.renewal_at ?? null}
+        renewalAt={renewalAt}
         periodEnd={subscription?.stripe_current_period_end ?? null}
         graceEndsAt={subscription?.grace_ends_at ?? null}
         canRefund={canRefund}

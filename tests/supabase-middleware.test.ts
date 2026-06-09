@@ -36,9 +36,15 @@ function makeRequest(
 }
 
 function mockSupabaseWithUser(user: Record<string, unknown> | null) {
+  // proxy.ts now gates on getClaims() (local JWT verification, no network hop).
+  // Mirror the user shape into claims so existing expectations hold.
+  const claims = user
+    ? { sub: user.id as string, email: (user.email as string | undefined) ?? null }
+    : null;
   const client = {
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user }, error: null }),
+      getClaims: vi.fn().mockResolvedValue({ data: claims ? { claims } : null, error: null }),
     },
   };
   vi.mocked(createServerClient).mockImplementation((_url, _key, options) => {
@@ -367,6 +373,9 @@ describe("proxy", () => {
           getUser: vi
             .fn()
             .mockResolvedValue({ data: { user: { id: "u-1", email: "user@test.com" } }, error: null }),
+          getClaims: vi
+            .fn()
+            .mockResolvedValue({ data: { claims: { sub: "u-1", email: "user@test.com" } }, error: null }),
         },
       } as never;
     });
