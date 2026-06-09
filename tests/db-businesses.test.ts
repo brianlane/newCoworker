@@ -5,6 +5,7 @@ import {
   listBusinesses,
   setBusinessPaused,
   setCustomerChannelsEnabled,
+  updateBusinessName,
   updateBusinessOwnerEmail,
   updateBusinessOwnerEmailIfPending,
   updateBusinessStatus,
@@ -222,6 +223,22 @@ describe("db/businesses", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     await expect(updateBusinessOwnerEmail("uuid-biz-1", "paid@test.com")).rejects.toThrow("updateBusinessOwnerEmail");
+  });
+
+  it("updateBusinessName updates the business name", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await updateBusinessName("uuid-biz-1", "New Name LLC");
+    expect(db.update).toHaveBeenCalledWith({ name: "New Name LLC" });
+    expect(db.eq).toHaveBeenCalledWith("id", "uuid-biz-1");
+  });
+
+  it("updateBusinessName throws on error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(updateBusinessName("uuid-biz-1", "New Name LLC")).rejects.toThrow("updateBusinessName");
   });
 
   it("updateBusinessOwnerEmailIfPending updates when the business is still pending", async () => {

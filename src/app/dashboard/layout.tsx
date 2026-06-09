@@ -5,6 +5,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { isCanceledInGrace } from "@/lib/db/subscriptions";
 import type { CancelReason, SubscriptionRow } from "@/lib/db/subscriptions";
 import { GraceBanner } from "@/components/billing/GraceBanner";
+import { reconcilePendingEmailChange } from "@/lib/account/email-change";
 
 type EmbeddedSubscriptionRow = Pick<
   SubscriptionRow,
@@ -30,6 +31,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
     // same response. We then pick the most recent subscription on the
     // server before deciding whether to render `<GraceBanner />`.
     const db = await createSupabaseServiceClient();
+    // If the owner just confirmed an account-email change (possibly on another
+    // device, or via a plain password sign-in that never hit /api/auth/callback),
+    // mirror the new email onto their business BEFORE the owner_email lookup
+    // below — otherwise that lookup would miss and the dashboard would render as
+    // if they had no business. No-op (one cheap PK read) when nothing is pending.
+    await reconcilePendingEmailChange(user.userId, user.email, db);
     const { data: businesses } = await db
       .from("businesses")
       .select("id, subscriptions(status, grace_ends_at, wiped_at, cancel_reason, created_at)")

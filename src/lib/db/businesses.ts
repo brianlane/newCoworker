@@ -179,6 +179,16 @@ export async function updateBusinessOwnerEmail(
   if (error) throw new Error(`updateBusinessOwnerEmail: ${error.message}`);
 }
 
+export async function updateBusinessName(
+  id: string,
+  name: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("businesses").update({ name }).eq("id", id);
+  if (error) throw new Error(`updateBusinessName: ${error.message}`);
+}
+
 export async function setBusinessCustomerProfile(
   id: string,
   customerProfileId: string,

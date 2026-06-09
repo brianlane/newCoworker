@@ -27,6 +27,7 @@ function LoginForm() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [magicSent, setMagicSent] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
 
   async function handleSignIn(e: FormEvent) {
     e.preventDefault();
@@ -80,6 +81,26 @@ function LoginForm() {
     }
   }
 
+  async function handleForgotPassword() {
+    if (!email) {
+      setError("Enter your email first");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    await clearStaleSupabaseAuthCookies();
+    const supabase = getSupabaseBrowserClient();
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/api/auth/callback?redirectTo=/reset-password`
+    });
+    setLoading(false);
+    if (resetError) {
+      setError(resetError.message);
+    } else {
+      setResetSent(true);
+    }
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-deep-ink px-4">
       <div className="w-full max-w-sm space-y-6">
@@ -93,6 +114,13 @@ function LoginForm() {
           <Card>
             <p className="text-center text-sm text-signal-teal">
               ✓ Magic link sent to <strong>{email}</strong>. Check your inbox.
+            </p>
+          </Card>
+        ) : resetSent ? (
+          <Card>
+            <p className="text-center text-sm text-signal-teal">
+              ✓ Password reset link sent to <strong>{email}</strong>. Check your inbox to set a new
+              password.
             </p>
           </Card>
         ) : (
@@ -115,6 +143,16 @@ function LoginForm() {
                 placeholder="••••••••"
                 autoComplete="current-password"
               />
+
+              <div className="flex justify-end -mt-2">
+                <button
+                  type="button"
+                  onClick={handleForgotPassword}
+                  className="text-xs text-parchment/50 hover:text-signal-teal"
+                >
+                  Forgot password?
+                </button>
+              </div>
 
               {error && <p className="text-xs text-spark-orange">{error}</p>}
 

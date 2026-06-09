@@ -6,6 +6,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getSubscription } from "@/lib/db/subscriptions";
 import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
+import { AccountSettingsForms } from "@/components/dashboard/AccountSettingsForms";
 
 export const dynamic = "force-dynamic";
 
@@ -17,8 +18,9 @@ export default async function SettingsPage() {
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
-    .select("id, tier, enterprise_limits")
+    .select("id, name, tier, enterprise_limits")
     .eq("owner_email", user.email)
+    .order("created_at", { ascending: false })
     .limit(1);
 
   const business = businesses?.[0] ?? null;
@@ -88,6 +90,8 @@ export default async function SettingsPage() {
           </form>
         )}
       </Card>
+
+      <AccountSettingsForms businessName={business?.name ?? ""} email={user.email} />
 
       <Card>
         <h2 className="text-sm font-semibold text-parchment mb-4">Notifications</h2>
