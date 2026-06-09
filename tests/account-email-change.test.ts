@@ -7,7 +7,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
-type PendingRow = { user_id: string; business_id: string; new_email: string };
+type PendingRow = { user_id: string; old_email: string; new_email: string };
 
 function makeDb(opts: {
   pending?: PendingRow | null;
@@ -36,7 +36,7 @@ function makeDb(opts: {
 
 const PENDING: PendingRow = {
   user_id: "user-1",
-  business_id: "biz-1",
+  old_email: "old@test.com",
   new_email: "new@test.com"
 };
 
@@ -81,10 +81,11 @@ describe("reconcilePendingEmailChange", () => {
     expect(deleteEq).not.toHaveBeenCalled();
   });
 
-  it("updates owner_email and deletes the pending row on success", async () => {
-    const { db, update, deleteEq } = makeDb({ pending: PENDING });
+  it("updates every business under the old email and deletes the pending row on success", async () => {
+    const { db, update, updateEq, deleteEq } = makeDb({ pending: PENDING });
     await reconcilePendingEmailChange("user-1", "new@test.com", db as never);
     expect(update).toHaveBeenCalledWith({ owner_email: "new@test.com" });
+    expect(updateEq).toHaveBeenCalledWith("owner_email", "old@test.com");
     expect(deleteEq).toHaveBeenCalledWith("user_id", "user-1");
   });
 

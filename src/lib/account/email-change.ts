@@ -32,20 +32,25 @@ export async function reconcilePendingEmailChange(
   const db = client ?? (await createSupabaseServiceClient());
   const { data: pendingRow, error: selectError } = await db
     .from("pending_email_changes")
-    .select("user_id, business_id, new_email")
+    .select("user_id, old_email, new_email")
     .eq("user_id", userId)
     .maybeSingle();
   if (selectError || !pendingRow) return;
 
-  const pending = pendingRow as { user_id: string; business_id: string; new_email: string };
+  const pending = pendingRow as { user_id: string; old_email: string; new_email: string };
   if (email.toLowerCase() !== pending.new_email.toLowerCase()) return;
 
-  // Store the authoritative Supabase email (exact case) so requireOwner's
-  // `owner_email = auth.email()` comparison keeps matching.
+  // Move EVERY business that was keyed to the old email — an owner can have more
+  // than one `businesses` row under the same `owner_email`, and all of them must
+  // follow the login or the extras become inaccessible (and reconciliation never
+  // runs again once the pending row is gone). Match on the pre-change `old_email`
+  // (businesses still hold it at this point) and write the authoritative Supabase
+  // email (exact case) so requireOwner's `owner_email = auth.email()` keeps
+  // matching.
   const { error: updateError } = await db
     .from("businesses")
     .update({ owner_email: email })
-    .eq("id", pending.business_id);
+    .eq("owner_email", pending.old_email);
   if (updateError) return;
 
   await db.from("pending_email_changes").delete().eq("user_id", pending.user_id);
