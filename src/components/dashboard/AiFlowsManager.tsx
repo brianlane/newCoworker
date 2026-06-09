@@ -217,6 +217,32 @@ export function AiFlowsManager({
     }
   };
 
+  /** Create a disabled copy of an existing flow ("Name (copy)"). */
+  const duplicateFlow = async (row: AiFlowRow) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/aiflows`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId,
+          name: `${row.name} (copy)`.slice(0, 120),
+          enabled: false,
+          definition: row.definition
+        })
+      });
+      const json = (await res.json()) as { ok: boolean; error?: { message: string } };
+      if (!json.ok) {
+        setError(json.error?.message ?? "Duplicate failed");
+        return;
+      }
+      await reload();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const toggleEnabled = async (row: AiFlowRow) => {
     await fetch(`/api/aiflows/${row.id}`, {
       method: "PATCH",
@@ -481,6 +507,11 @@ export function AiFlowsManager({
 
   return (
     <div className="space-y-4">
+      {error && (
+        <p className="rounded-md border border-spark-orange/40 bg-spark-orange/5 px-3 py-2 text-sm text-spark-orange">
+          {error}
+        </p>
+      )}
       <div className="flex justify-end">
         <button
           onClick={() => setEditor(emptyEditor())}
@@ -521,6 +552,14 @@ export function AiFlowsManager({
               </button>
               <button onClick={() => setEditor(editorFromRow(row))} aria-label="Edit">
                 <Pencil className="h-4 w-4 hover:text-signal-teal" />
+              </button>
+              <button
+                onClick={() => duplicateFlow(row)}
+                aria-label="Duplicate AiFlow"
+                title="Duplicate AiFlow"
+                disabled={busy}
+              >
+                <Copy className="h-4 w-4 hover:text-signal-teal" />
               </button>
               <button onClick={() => remove(row.id)} aria-label="Delete" disabled={busy}>
                 <Trash2 className="h-4 w-4 hover:text-spark-orange" />
@@ -599,7 +638,7 @@ function StepFields({
               patchStep(index, { screenshot: ev.target.checked ? true : undefined })
             }
           />
-          Capture a screenshot of the page (attachable in route_to_team MMS and send_email)
+          Capture a screenshot of the page
         </label>
       </div>
     );
