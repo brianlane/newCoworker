@@ -490,13 +490,47 @@ describe("ingestWebsite", () => {
       expect(res.websiteMd).toMatch(/Realty helps buyers/);
       expect(res.pagesCrawled).toBe(1);
     }
-    // The reader endpoint must have actually been hit with the target URL.
+    // The reader endpoint must have actually been hit with the (encoded) target URL.
     expect(
       (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.some(([u]) =>
-        String(u).startsWith("https://r.jina.ai/https://example.com/")
+        String(u) === `https://r.jina.ai/${encodeURIComponent("https://example.com/")}`
       )
     ).toBe(true);
     expect(summarize).toHaveBeenCalledOnce();
+  });
+
+  it("URL-encodes the target so query strings survive the Jina reader hop", async () => {
+    const markdown = `# Listings\n\n${"We help buyers. ".repeat(20)}`;
+    let readerUrl: string | undefined;
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.startsWith("https://r.jina.ai/")) {
+        readerUrl = url;
+        return new Response(markdown, {
+          status: 200,
+          headers: { "content-type": "text/plain; charset=utf-8" }
+        });
+      }
+      return new Response("blocked", { status: 403, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+
+    const res = await ingestWebsite("https://example.com/search?q=homes&page=2", {
+      fetchImpl,
+      lookup,
+      summarize: async () => "## Summary\nListings.",
+      ignoreRobots: true,
+      readerFallback: true
+    });
+
+    expect(res.ok).toBe(true);
+    // The encoded target must carry the full query; decoding it back yields the
+    // original URL (no dropped params).
+    expect(readerUrl).toBe(
+      `https://r.jina.ai/${encodeURIComponent("https://example.com/search?q=homes&page=2")}`
+    );
+    expect(decodeURIComponent(readerUrl!.slice("https://r.jina.ai/".length))).toBe(
+      "https://example.com/search?q=homes&page=2"
+    );
   });
 
   it("does NOT call the Jina reader when readerFallback is off (default)", async () => {

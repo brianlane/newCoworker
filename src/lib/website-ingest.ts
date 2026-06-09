@@ -557,7 +557,11 @@ async function fetchViaJinaReader(
   /* c8 ignore next -- timer only fires on a real Jina hang; covered indirectly. */
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const readerUrl = `${JINA_READER_BASE}${targetUrl}`;
+    // URL-encode the target so its own query string / reserved chars aren't
+    // parsed as part of the r.jina.ai request URL. normalizeWebsiteUrl keeps
+    // query params, and an unencoded `?` would otherwise be swallowed as the
+    // reader's query, fetching the wrong page. Jina decodes the encoded form.
+    const readerUrl = `${JINA_READER_BASE}${encodeURIComponent(targetUrl)}`;
     const apiKey = process.env.JINA_API_KEY?.trim();
     const headers: Record<string, string> = {
       accept: "text/plain",
