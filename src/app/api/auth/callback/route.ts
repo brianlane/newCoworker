@@ -36,7 +36,18 @@ async function syncPendingEmailChange(ssr: SupabaseClient): Promise<void> {
 
     // Store the authoritative Supabase email (exact case) so requireOwner's
     // `owner_email = auth.email()` comparison continues to match.
-    await service.from("businesses").update({ owner_email: user.email }).eq("id", pending.business_id);
+    const { error: updateError } = await service
+      .from("businesses")
+      .update({ owner_email: user.email })
+      .eq("id", pending.business_id);
+    // Only retire the pending row once owner_email is actually updated. If the
+    // update failed, KEEP the row: the auth email is already new while
+    // owner_email is stale (a lockout), so a later callback must be able to
+    // retry the sync rather than losing the record forever.
+    if (updateError) {
+      console.error("syncPendingEmailChange owner_email update failed", updateError);
+      return;
+    }
     await service.from("pending_email_changes").delete().eq("user_id", pending.user_id);
   } catch (e) {
     console.error("syncPendingEmailChange", e);
