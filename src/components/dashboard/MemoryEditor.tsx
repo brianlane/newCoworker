@@ -149,10 +149,10 @@ export function MemoryEditor({
         pages: inner.pagesCrawled ?? 0,
         preview: inner.websiteMdPreview ?? ""
       });
-      if (sourceHtml) {
-        setPasteOpen(false);
-        setPastedHtml("");
-      }
+      // Any success — crawled or pasted — means the escape hatch is no
+      // longer needed; don't leave a stale paste panel open.
+      setPasteOpen(false);
+      setPastedHtml("");
     } catch (err) {
       setRecrawl({
         status: "error",
