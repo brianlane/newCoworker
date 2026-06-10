@@ -140,12 +140,28 @@ function printRow(r: LogRow): void {
   );
 }
 
+/** Current max id in system_logs — the follow cursor when the initial query is empty. */
+async function newestId(): Promise<number> {
+  const { data, error } = await sb
+    .from("system_logs")
+    .select("id")
+    .order("id", { ascending: false })
+    .limit(1);
+  if (error) {
+    console.error(`query failed: ${error.message}`);
+    process.exit(1);
+  }
+  return (data?.[0] as { id: number } | undefined)?.id ?? 0;
+}
+
 async function main(): Promise<void> {
   let rows = await fetchRows(null);
   rows.forEach(printRow);
   if (!follow) return;
 
-  let lastId = rows.at(-1)?.id ?? 0;
+  // Seed from the newest existing row when nothing matched, so follow mode
+  // only prints rows created after start instead of replaying history.
+  let lastId = rows.at(-1)?.id ?? (await newestId());
   console.error(`-- following (poll 5s), Ctrl-C to stop --`);
   for (;;) {
     await new Promise((r) => setTimeout(r, 5000));
