@@ -22,7 +22,7 @@ export const WEBSITE_INGEST_ERROR_COPY: Record<WebsiteIngestError, string> = {
   blocked_by_robots:
     "The site's robots.txt blocks crawlers. Update robots.txt or enter the summary manually.",
   fetch_failed:
-    "We couldn't reach any pages on that site. Check the URL, SSL, or firewall and retry.",
+    "We couldn't reach any pages on that site. Check the URL, SSL, or firewall and retry — or open your homepage, right-click → View Page Source, copy everything, and paste it below.",
   empty_content:
     "We reached the site but couldn't extract enough text. Try a different landing page.",
   summarizer_unavailable: "Our summarizer is offline. Try again in a minute.",

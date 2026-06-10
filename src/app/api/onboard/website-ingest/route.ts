@@ -4,7 +4,12 @@ import { getAuthUser } from "@/lib/auth";
 import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { getBusiness, updateBusinessWebsiteUrl } from "@/lib/db/businesses";
 import { setBusinessWebsiteMd } from "@/lib/db/configs";
-import { ingestWebsite, normalizeWebsiteUrl } from "@/lib/website-ingest";
+import {
+  ingestWebsite,
+  ingestWebsiteFromHtml,
+  normalizeWebsiteUrl,
+  WEBSITE_INGEST_MAX_PASTED_HTML_CHARS
+} from "@/lib/website-ingest";
 import { scheduleVaultSync } from "@/lib/vps/schedule-vault-sync";
 import { logger } from "@/lib/logger";
 
@@ -21,7 +26,17 @@ const schema = z.object({
   websiteUrl: z.string().min(1),
   draftToken: z.string().uuid().optional(),
   businessName: z.string().optional(),
-  businessType: z.string().optional()
+  businessType: z.string().optional(),
+  /**
+   * Manual escape hatch for WAF-blocked sites: the owner's pasted
+   * "View Page Source" HTML. When present (non-blank), we skip the crawl
+   * entirely and run the pasted markup through the same extraction +
+   * summarization pipeline. See `ingestWebsiteFromHtml`.
+   */
+  pastedHtml: z
+    .string()
+    .max(WEBSITE_INGEST_MAX_PASTED_HTML_CHARS, "Pasted page source is too large")
+    .optional()
 });
 
 async function isAuthorized(
@@ -66,29 +81,39 @@ export async function POST(request: Request) {
       return errorResponse("FORBIDDEN", auth.reason, 403);
     }
 
-    const result = await ingestWebsite(normalized, {
-      businessName: body.businessName,
-      businessType: body.businessType,
-      // Owner-consented bypass: this route is invoked post-checkout
-      // with a URL the business owner explicitly provided during
-      // onboarding. robots.txt expresses third-party-crawler
-      // preferences, not first-party-agent prohibitions, and many
-      // small-business sites ship a default-deny `User-agent: * /
-      // Disallow: /` block that would otherwise prevent the owner's
-      // own assistant from learning their own business. SSRF /
-      // private-IP / size / redirect defenses still apply.
-      ignoreRobots: true,
-      // If the direct crawl is blocked (e.g. Cloudflare bot mitigation
-      // returns a 403 challenge), fall back to the Jina Reader proxy. The
-      // owner explicitly provided this URL, so fetching a rendered copy of
-      // their own public site is consented.
-      readerFallback: true
-    });
+    const usePastedHtml = Boolean(body.pastedHtml && body.pastedHtml.trim().length > 0);
+    const result = usePastedHtml
+      ? // WAF escape hatch: the owner pasted their homepage's page source
+        // because every server-side fetch path is challenge-blocked. No
+        // crawl, no SSRF surface — same extraction/summarization pipeline.
+        await ingestWebsiteFromHtml(normalized, body.pastedHtml as string, {
+          businessName: body.businessName,
+          businessType: body.businessType
+        })
+      : await ingestWebsite(normalized, {
+          businessName: body.businessName,
+          businessType: body.businessType,
+          // Owner-consented bypass: this route is invoked post-checkout
+          // with a URL the business owner explicitly provided during
+          // onboarding. robots.txt expresses third-party-crawler
+          // preferences, not first-party-agent prohibitions, and many
+          // small-business sites ship a default-deny `User-agent: * /
+          // Disallow: /` block that would otherwise prevent the owner's
+          // own assistant from learning their own business. SSRF /
+          // private-IP / size / redirect defenses still apply.
+          ignoreRobots: true,
+          // If the direct crawl is blocked (e.g. Cloudflare bot mitigation
+          // returns a 403 challenge), fall back to the Jina Reader proxy. The
+          // owner explicitly provided this URL, so fetching a rendered copy of
+          // their own public site is consented.
+          readerFallback: true
+        });
 
     if (!result.ok) {
       logger.warn("website-ingest: failed", {
         businessId: body.businessId,
         websiteUrl: normalized,
+        source: usePastedHtml ? "pasted_html" : "crawl",
         error: result.error,
         detail: result.detail
       });
@@ -123,6 +148,7 @@ export async function POST(request: Request) {
 
     logger.info("website-ingest: success", {
       businessId: body.businessId,
+      source: usePastedHtml ? "pasted_html" : "crawl",
       pagesCrawled: result.pagesCrawled,
       bytesDownloaded: result.bytesDownloaded
     });

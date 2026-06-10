@@ -167,7 +167,7 @@ export interface WebsiteIngestOptions {
  */
 export function humanizeFetchError(message: string): string {
   if (message === "status_403" || message === "status_401") {
-    return "Your site blocked our crawler (HTTP 403/401). This usually means a CDN like Cloudflare has bot protection enabled — allowlist our crawler or paste a manual summary below.";
+    return "Your site blocked our crawler (HTTP 403/401). This usually means a CDN like Cloudflare has bot protection enabled — open your homepage, right-click → View Page Source, copy everything, and paste it below so we can summarize it for you.";
   }
   if (message === "status_429") {
     return "Your site rate-limited our crawler (HTTP 429). Wait a minute and click Re-crawl, or paste a manual summary below.";
@@ -527,6 +527,37 @@ async function fetchWithLimit(
   }
 }
 
+/**
+ * Detect a bot-challenge / WAF-block page masquerading as content. Jina's
+ * Reader returns HTTP 200 even when the *target* site answered with a
+ * Cloudflare challenge — the markdown body then carries explicit markers:
+ * a `Warning: Target URL returned error NNN` metadata line and/or a
+ * challenge-page `Title:` ("Just a moment...", "Attention Required! |
+ * Cloudflare", …). Without this check the fallback "succeeded" and we
+ * summarized the challenge page into website.md — a garbage summary that
+ * looked like a clean crawl to the owner.
+ *
+ * Only the head of the body is inspected: every marker Jina/Cloudflare emits
+ * sits in the metadata preamble or above-the-fold copy, and scanning the
+ * whole corpus would risk false positives on sites that merely *write about*
+ * bot protection.
+ */
+export function looksLikeWafChallenge(text: string): boolean {
+  const head = text.slice(0, 2000);
+  if (/^Warning:\s*Target URL returned error\s+\d+/im.test(head)) return true;
+  const title = /^Title:\s*(.+)$/im.exec(head)?.[1]?.trim() ?? "";
+  if (
+    /^(just a moment|attention required|access denied|security check|verifying you are human|please wait)/i.test(
+      title
+    )
+  ) {
+    return true;
+  }
+  return /enable javascript and cookies to continue|checking your browser before accessing|verify you are human by completing/i.test(
+    head
+  );
+}
+
 /** Jina Reader endpoint: GET `https://r.jina.ai/<absolute url>` → readable markdown. */
 export const JINA_READER_BASE = "https://r.jina.ai/";
 /**
@@ -829,7 +860,15 @@ export async function ingestWebsite(
         WEBSITE_INGEST_MAX_BYTES_PER_PAGE
       );
       const cleaned = text.trim();
-      if (cleaned.length > 0) {
+      if (cleaned.length > 0 && looksLikeWafChallenge(cleaned)) {
+        // Jina answered 200 but the body is the WAF's challenge page, not the
+        // site. Summarizing it would persist garbage AND hide the real
+        // failure — keep the honest homepage error (403 + paste-source hint)
+        // instead.
+        logger.warn("website-ingest: reader fallback returned a WAF challenge page; rejecting", {
+          url: normalized
+        });
+      } else if (cleaned.length > 0) {
         bytesDownloaded += bytes;
         // Jina already returns extracted markdown — do NOT re-run
         // extractReadableText (it's an HTML stripper and would mangle
@@ -863,20 +902,51 @@ export async function ingestWebsite(
     .join("\n\n")
     .slice(0, WEBSITE_INGEST_MAX_COMBINED_CHARS);
 
-  if (combined.trim().length < 200) {
+  const summarized = await summarizeCorpusToWebsiteMd({
+    url: normalized,
+    corpus: combined,
+    businessName: options.businessName,
+    businessType: options.businessType,
+    summarize
+  });
+  if (!summarized.ok) return summarized;
+
+  return {
+    ok: true,
+    websiteMd: summarized.websiteMd,
+    pagesCrawled: pages.length,
+    bytesDownloaded,
+    finalUrl: pages[0].url
+  };
+}
+
+/**
+ * Shared tail of both ingest paths: minimum-signal check → Gemini summary →
+ * website.md assembly. Splitting it out keeps the crawl path and the
+ * pasted-source path byte-identical in their output format and error
+ * mapping, so the dashboard renders both through the same copy.
+ */
+async function summarizeCorpusToWebsiteMd(args: {
+  url: string;
+  corpus: string;
+  businessName?: string;
+  businessType?: string;
+  summarize: GeminiSummarizer;
+}): Promise<{ ok: true; websiteMd: string } | WebsiteIngestFailure> {
+  if (args.corpus.trim().length < 200) {
     return { ok: false, error: "empty_content" };
   }
 
   const prompt = buildSummarizationPrompt({
-    url: normalized,
-    businessName: options.businessName,
-    businessType: options.businessType,
-    corpus: combined
+    url: args.url,
+    businessName: args.businessName,
+    businessType: args.businessType,
+    corpus: args.corpus
   });
 
   let summary: string;
   try {
-    summary = await summarize(prompt);
+    summary = await args.summarize(prompt);
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown";
     if (message === "summarizer_unavailable") {
@@ -889,17 +959,68 @@ export async function ingestWebsite(
   const trimmedSummary = summary.trim().slice(0, WEBSITE_INGEST_MAX_SUMMARY_CHARS);
   const websiteMd = [
     `# website.md`,
-    `Source: ${normalized}`,
+    `Source: ${args.url}`,
     `Ingested: ${new Date().toISOString()}`,
     "",
     trimmedSummary
   ].join("\n");
 
+  return { ok: true, websiteMd };
+}
+
+/**
+ * Hard cap on owner-pasted page source. Generous (real homepages are
+ * usually < 500 KB of HTML) but bounded so a misbehaving client can't make
+ * the route buffer tens of megabytes. The route ALSO enforces this via zod;
+ * the slice here is defense-in-depth for non-route callers.
+ */
+export const WEBSITE_INGEST_MAX_PASTED_HTML_CHARS = 2_000_000;
+
+/**
+ * Build website.md from owner-pasted page source instead of a crawl.
+ *
+ * This is the manual escape hatch for WAF-blocked sites: when Cloudflare
+ * (or similar) serves a JS challenge to every non-browser client, no
+ * server-side fetch — direct, header-spoofed, or proxied through a
+ * browser-pool reader — can see the real page. The owner's browser already
+ * can, so we ask them to right-click → View Page Source and paste it. The
+ * HTML runs through the exact same extraction + summarization pipeline as
+ * a crawled page, so the resulting website.md is indistinguishable from a
+ * successful crawl.
+ *
+ * No SSRF surface: nothing is fetched. The URL is only normalized for the
+ * `Source:` header and the summarizer prompt.
+ */
+export async function ingestWebsiteFromHtml(
+  rawUrl: string,
+  html: string,
+  options: Pick<WebsiteIngestOptions, "summarize" | "businessName" | "businessType"> = {}
+): Promise<WebsiteIngestResult> {
+  const normalized = normalizeWebsiteUrl(rawUrl);
+  if (!normalized) return { ok: false, error: "invalid_url" };
+  const summarize = options.summarize ?? defaultGeminiSummarize;
+
+  const clipped =
+    html.length > WEBSITE_INGEST_MAX_PASTED_HTML_CHARS
+      ? html.slice(0, WEBSITE_INGEST_MAX_PASTED_HTML_CHARS)
+      : html;
+  const text = extractReadableText(clipped);
+  const corpus = `### ${normalized}\n${text}`.slice(0, WEBSITE_INGEST_MAX_COMBINED_CHARS);
+
+  const summarized = await summarizeCorpusToWebsiteMd({
+    url: normalized,
+    corpus,
+    businessName: options.businessName,
+    businessType: options.businessType,
+    summarize
+  });
+  if (!summarized.ok) return summarized;
+
   return {
     ok: true,
-    websiteMd,
-    pagesCrawled: pages.length,
-    bytesDownloaded,
-    finalUrl: pages[0].url
+    websiteMd: summarized.websiteMd,
+    pagesCrawled: 1,
+    bytesDownloaded: Buffer.byteLength(clipped, "utf8"),
+    finalUrl: normalized
   };
 }
