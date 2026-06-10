@@ -45,8 +45,8 @@ const ROUTED_PATHS = new Set([
   "/v1/embeddings"
 ]);
 
-import { pickUpstream, filterUpstreamHeaders } from "./routing.js";
-export { pickUpstream, filterUpstreamHeaders };
+import { pickUpstream, filterUpstreamHeaders, mergeSystemMessages } from "./routing.js";
+export { pickUpstream, filterUpstreamHeaders, mergeSystemMessages };
 
 function buildUpstreamTarget(upstream, pathname) {
   if (upstream === "gemini") {
@@ -110,6 +110,18 @@ async function handleRoutedRequest(req, res) {
   }
 
   const upstream = pickUpstream(parsed?.model);
+
+  // Gemini's OpenAI-compat endpoint keeps only the LAST system message, which
+  // silently dropped Rowboat's vault-grounded agent instructions whenever a
+  // second system message (ensureSystemMessage default / caller preamble) was
+  // present. Collapse them into one before forwarding — see routing.js.
+  if (parsed && Array.isArray(parsed.messages)) {
+    const mergedBody = mergeSystemMessages(parsed);
+    if (mergedBody !== parsed) {
+      bodyBuf = Buffer.from(JSON.stringify(mergedBody), "utf8");
+    }
+  }
+
   if (upstream === "gemini" && !GOOGLE_API_KEY) {
     writeJson(res, 503, {
       error: {

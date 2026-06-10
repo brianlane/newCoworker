@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — sidecar is plain JS without types; importing the pure
 // helper module avoids booting the HTTP server that index.js binds at load.
-import { pickUpstream, filterUpstreamHeaders } from "../vps/llm-router/src/routing.js";
+import { pickUpstream, filterUpstreamHeaders, mergeSystemMessages } from "../vps/llm-router/src/routing.js";
 
 describe("llm-router pickUpstream", () => {
   it("routes gemini-* models to Gemini", () => {
@@ -88,5 +88,84 @@ describe("llm-router filterUpstreamHeaders", () => {
     expect(filterUpstreamHeaders(null)).toEqual({});
     expect(filterUpstreamHeaders(undefined)).toEqual({});
     expect(filterUpstreamHeaders(42)).toEqual({});
+  });
+});
+
+describe("llm-router mergeSystemMessages", () => {
+  it("collapses two system messages into one, instructions first (the Gemini last-system-wins fix)", () => {
+    const body = {
+      model: "gemini-2.5-flash-lite",
+      messages: [
+        { role: "system", content: "AGENT INSTRUCTIONS with the roster" },
+        { role: "system", content: "You are a helpful assistant." },
+        { role: "user", content: "Who is on the team?" }
+      ]
+    };
+    const out = mergeSystemMessages(body);
+    expect(out).not.toBe(body);
+    expect(out.messages).toHaveLength(2);
+    expect(out.messages[0]).toEqual({
+      role: "system",
+      content: "AGENT INSTRUCTIONS with the roster\n\nYou are a helpful assistant."
+    });
+    expect(out.messages[1]).toEqual({ role: "user", content: "Who is on the team?" });
+    // Original body untouched (callers may reuse it).
+    expect(body.messages).toHaveLength(3);
+  });
+
+  it("keeps the merged system message at the first system's position and preserves other message order", () => {
+    const body = {
+      messages: [
+        { role: "user", content: "u1" },
+        { role: "system", content: "s1" },
+        { role: "assistant", content: "a1" },
+        { role: "system", content: "s2" },
+        { role: "user", content: "u2" }
+      ]
+    };
+    const out = mergeSystemMessages(body);
+    expect(out.messages.map((m: { role: string }) => m.role)).toEqual([
+      "user",
+      "system",
+      "assistant",
+      "user"
+    ]);
+    expect(out.messages[1].content).toBe("s1\n\ns2");
+  });
+
+  it("skips blank system contents when joining", () => {
+    const body = {
+      messages: [
+        { role: "system", content: "real instructions" },
+        { role: "system", content: "   " },
+        { role: "user", content: "hi" }
+      ]
+    };
+    const out = mergeSystemMessages(body);
+    expect(out.messages[0].content).toBe("real instructions");
+  });
+
+  it("is a no-op (same reference) for zero or one system message", () => {
+    const single = { messages: [{ role: "system", content: "s" }, { role: "user", content: "u" }] };
+    expect(mergeSystemMessages(single)).toBe(single);
+    const none = { messages: [{ role: "user", content: "u" }] };
+    expect(mergeSystemMessages(none)).toBe(none);
+  });
+
+  it("is a no-op for non-string system content (OpenAI content-parts arrays pass through)", () => {
+    const body = {
+      messages: [
+        { role: "system", content: [{ type: "text", text: "part" }] },
+        { role: "system", content: "plain" },
+        { role: "user", content: "u" }
+      ]
+    };
+    expect(mergeSystemMessages(body)).toBe(body);
+  });
+
+  it("is a no-op for bodies without a messages array", () => {
+    expect(mergeSystemMessages(null)).toBe(null);
+    const noMessages = { model: "gemini-3.1-flash" };
+    expect(mergeSystemMessages(noMessages)).toBe(noMessages);
   });
 });
