@@ -13,10 +13,15 @@ vi.mock("@/lib/rowboat/gateway-token", () => ({
   verifyRowboatGatewayToken: vi.fn().mockReturnValue(true)
 }));
 
+vi.mock("@/lib/db/agent-tool-settings", () => ({
+  isAgentToolEnabled: vi.fn()
+}));
+
 import { POST } from "@/app/api/voice/tools/owner-append-business-memory/route";
 import { getBusinessConfig, patchBusinessConfig } from "@/lib/db/configs";
 import { scheduleVaultSync } from "@/lib/vps/schedule-vault-sync";
 import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
+import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -34,6 +39,8 @@ function makeReq(body: unknown, token = "gw"): Request {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(verifyRowboatGatewayToken).mockReturnValue(true);
+  // Registry default: dashboard memory_capture is ON unless toggled off.
+  vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -62,6 +69,20 @@ describe("POST /api/voice/tools/owner-append-business-memory", () => {
     );
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: false, detail: "owner_dashboard_only" });
+    expect(patchBusinessConfig).not.toHaveBeenCalled();
+  });
+
+  it("returns tool_disabled when the owner turned memory capture off (Settings → Coworker tools)", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(false);
+    const res = await POST(
+      makeReq({
+        businessId: BIZ,
+        args: { bullets: "Never ask for budget." }
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: false, detail: "tool_disabled" });
+    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenCalledWith(BIZ, "dashboard", "memory_capture");
     expect(patchBusinessConfig).not.toHaveBeenCalled();
   });
 

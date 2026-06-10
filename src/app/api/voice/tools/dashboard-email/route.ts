@@ -1,3 +1,24 @@
+/**
+ * `send_email` (dashboard chat) — sends an email from the owner's connected
+ * mailbox on behalf of the **owner Dashboard chat**. Called by the VPS
+ * chat-worker after it parses a structured EMAIL_SEND block out of the
+ * assistant reply (vps/chat-worker/email-tool.mjs).
+ *
+ * Lives under /api/voice/tools/ because that prefix is the established home
+ * for ALL gateway-token-authenticated platform tool adapters (CSRF-exempt in
+ * src/proxy.ts) — the chat-worker's owner-append-business-memory adapter
+ * already lives here for the same reason.
+ *
+ * Authorization layers:
+ *   1. ROWBOAT_GATEWAY_TOKEN bearer (gatewayGuard) — only the tenant
+ *      VPS/Rowboat can call.
+ *   2. The owner's Settings → Coworker tools toggle (`dashboard.send_email`,
+ *      default OFF). Checked here authoritatively so a stale worker or a
+ *      hallucinated block can never send mail the owner didn't opt into.
+ *   3. Defense in depth: refuse envelopes carrying `callerE164` — this tool
+ *      is owner-dashboard-only, never a customer voice/SMS surface.
+ */
+
 import { z } from "zod";
 import {
   gatewayGuard,
@@ -8,20 +29,6 @@ import {
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import { logger } from "@/lib/logger";
-
-/**
- * `send_follow_up_email` — sends a short email from the owner's connected
- * Google or Microsoft account. We deliberately only allow plain text here so
- * a runaway model can't inject markup/scripts; the voice agent is expected
- * to dictate a 1-3 sentence follow-up, not a newsletter. The actual provider
- * call lives in src/lib/email/owner-mailbox.ts (shared with the dashboard
- * chat email adapter).
- *
- * Per product decision: if no Nango email connection exists we return
- * `email_not_connected` so Gemini Live switches to an SMS follow-up path.
- * If the owner disabled the tool (Settings → Coworker tools) we return
- * `tool_disabled` for the same graceful-degradation reason.
- */
 
 const argsSchema = z.object({
   toEmail: z.string().email(),
@@ -42,6 +49,10 @@ export async function POST(request: Request) {
     );
   }
 
+  if ((envelope.callerE164 ?? "").trim() !== "") {
+    return voiceToolResponse({ ok: false, detail: "owner_dashboard_only" });
+  }
+
   const parsed = argsSchema.safeParse(envelope.args);
   if (!parsed.success) {
     return voiceToolValidationError(parsed.error.issues[0]?.message ?? "invalid args");
@@ -49,7 +60,7 @@ export async function POST(request: Request) {
   const args = parsed.data;
 
   try {
-    const enabled = await isAgentToolEnabled(envelope.businessId, "voice", "send_follow_up_email");
+    const enabled = await isAgentToolEnabled(envelope.businessId, "dashboard", "send_email");
     if (!enabled) {
       return voiceToolResponse({ ok: false, detail: "tool_disabled" });
     }
@@ -62,12 +73,17 @@ export async function POST(request: Request) {
     if (!result.ok) {
       return voiceToolResponse({ ok: false, detail: result.detail });
     }
+
+    logger.info("voice-tools/dashboard-email: sent", {
+      businessId: envelope.businessId,
+      provider: result.provider
+    });
     return voiceToolResponse({
       ok: true,
       data: { messageId: result.messageId, provider: result.provider }
     });
   } catch (err) {
-    logger.warn("voice-tools/email failed", {
+    logger.warn("voice-tools/dashboard-email failed", {
       businessId: envelope.businessId,
       error: err instanceof Error ? err.message : String(err)
     });

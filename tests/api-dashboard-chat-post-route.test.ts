@@ -53,7 +53,14 @@ vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
 
+vi.mock("@/lib/db/agent-tool-settings", () => ({
+  // Registry default for dashboard send_email is OFF; tests that exercise
+  // the enabled path override per-call.
+  isAgentToolEnabled: vi.fn(async () => false)
+}));
+
 import { POST, renderTailTranscript } from "@/app/api/dashboard/chat/route";
+import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import { getAuthUser, requireOwner } from "@/lib/auth";
 import { rateLimit } from "@/lib/rate-limit";
 import {
@@ -119,6 +126,7 @@ beforeEach(() => {
     isAdmin: false
   } as never);
   vi.mocked(requireOwner).mockResolvedValue(undefined as never);
+  vi.mocked(isAgentToolEnabled).mockResolvedValue(false);
   vi.mocked(rateLimit).mockReturnValue({
     success: true,
     limit: 30,
@@ -293,6 +301,46 @@ describe("POST /api/dashboard/chat — two input variants for the worker (statel
     const { inputMessages, statelessInputMessages } = vi.mocked(insertChatJob).mock.calls[0][0];
     expect(inputMessages.some((m) => m.role === "assistant")).toBe(false);
     expect((statelessInputMessages ?? []).some((m) => m.role === "assistant")).toBe(false);
+  });
+});
+
+describe("POST /api/dashboard/chat — email tool preamble (Settings → Coworker tools)", () => {
+  it("injects the DISABLED block by default — the model is told to never pretend to send", async () => {
+    await POST(jsonRequest({ businessId: BIZ, message: "send an email to bob@x.co" }));
+    const { inputMessages } = vi.mocked(insertChatJob).mock.calls[0][0];
+    const emailBlock = inputMessages.find(
+      (m) => m.role === "system" && m.content.includes("EMAIL TOOL")
+    );
+    expect(emailBlock?.content).toContain("EMAIL TOOL — DISABLED");
+    expect(emailBlock?.content).toContain("Settings → Coworker tools");
+    expect(inputMessages.some((m) => m.content.includes("EMAIL TOOL — ENABLED"))).toBe(false);
+    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenCalledWith(BIZ, "dashboard", "send_email");
+  });
+
+  it("injects the ENABLED protocol block (with the EMAIL_SEND sentinels) when the owner enabled the tool", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    vi.mocked(listMessages).mockResolvedValueOnce([
+      { role: "user", content: "earlier" }
+    ] as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "send an email to bob@x.co" }));
+    const { inputMessages, statelessInputMessages } = vi.mocked(insertChatJob).mock.calls[0][0];
+    for (const variant of [inputMessages, statelessInputMessages!]) {
+      const emailBlock = variant.find(
+        (m) => m.role === "system" && m.content.includes("EMAIL TOOL — ENABLED")
+      );
+      expect(emailBlock).toBeDefined();
+      expect(emailBlock!.content).toContain("<<EMAIL_SEND>>");
+      expect(emailBlock!.content).toContain("<<END_EMAIL_SEND>>");
+      expect(emailBlock!.content).toContain("Do NOT claim the email was sent");
+    }
+  });
+
+  it("keeps OWNER_PREAMBLE first — the email block rides second", async () => {
+    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    const { inputMessages } = vi.mocked(insertChatJob).mock.calls[0][0];
+    expect(inputMessages[0].content).toContain("OWNER MODE");
+    expect(inputMessages[1].role).toBe("system");
+    expect(inputMessages[1].content).toContain("EMAIL TOOL");
   });
 });
 

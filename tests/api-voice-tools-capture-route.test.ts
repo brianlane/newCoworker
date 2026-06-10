@@ -12,10 +12,15 @@ vi.mock("@/lib/notifications/dispatch", () => ({
   dispatchUrgentNotification: vi.fn()
 }));
 
+vi.mock("@/lib/db/agent-tool-settings", () => ({
+  isAgentToolEnabled: vi.fn()
+}));
+
 import { POST } from "@/app/api/voice/tools/capture/route";
 import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
 import { insertCoworkerLog } from "@/lib/db/logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
+import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -36,6 +41,7 @@ describe("api/voice/tools/capture route", () => {
     vi.clearAllMocks();
     process.env = { ...original, ROWBOAT_GATEWAY_TOKEN: "gw" };
     vi.mocked(verifyRowboatGatewayToken).mockReturnValue(true);
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
   });
   afterEach(() => {
     process.env = original;
@@ -45,6 +51,19 @@ describe("api/voice/tools/capture route", () => {
     vi.mocked(verifyRowboatGatewayToken).mockReturnValue(false);
     const r = await POST(req({ businessId: BIZ, args: { name: "Alex" } }));
     expect(r.status).toBe(401);
+  });
+
+  it("returns tool_disabled when the owner turned the tool off (Settings → Coworker tools)", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(false);
+    const r = await POST(req({ businessId: BIZ, args: { name: "Alex" } }));
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ ok: false, detail: "tool_disabled" });
+    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenCalledWith(
+      BIZ,
+      "voice",
+      "capture_caller_details"
+    );
+    expect(insertCoworkerLog).not.toHaveBeenCalled();
   });
 
   it("logs but does not dispatch for non-urgent capture", async () => {

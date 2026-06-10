@@ -7,6 +7,8 @@ import { getSubscription } from "@/lib/db/subscriptions";
 import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { AccountSettingsForms } from "@/components/dashboard/AccountSettingsForms";
+import { CoworkerToolsManager } from "@/components/dashboard/CoworkerToolsManager";
+import { resolveAgentTools } from "@/lib/db/agent-tool-settings";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +27,7 @@ export default async function SettingsPage() {
 
   const business = businesses?.[0] ?? null;
   const subscription = business ? await getSubscription(business.id) : null;
+  const agents = business ? await resolveAgentTools(business.id) : null;
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -92,6 +95,10 @@ export default async function SettingsPage() {
       </Card>
 
       <AccountSettingsForms businessName={business?.name ?? ""} email={user.email} />
+
+      {business && agents && (
+        <CoworkerToolsManager businessId={business.id} initialAgents={agents} />
+      )}
 
       <Card>
         <h2 className="text-sm font-semibold text-parchment mb-4">Notifications</h2>
