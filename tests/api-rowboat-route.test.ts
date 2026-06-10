@@ -1,9 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// `after()` from `next/server` requires the Next.js work-units context
+// (only present inside the actual Next runtime). In tests we run the
+// route handler bare, so polyfill it to run the callback inline.
+// (Mirrors the polyfill in `tests/api-billing-cancel-route.test.ts`.)
+vi.mock("next/server", async () => {
+  const actual = await vi.importActual<typeof import("next/server")>("next/server");
+  return {
+    ...actual,
+    after: (cb: () => void | Promise<void>) => {
+      void cb();
+    }
+  };
+});
 vi.mock("@/lib/rowboat/gateway-token", () => ({
   verifyRowboatGatewayToken: vi.fn().mockReturnValue(true)
 }));
 vi.mock("@/lib/db/logs", () => ({ insertCoworkerLog: vi.fn() }));
+vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
 vi.mock("@/lib/notifications/dispatch", () => ({
   dispatchUrgentNotification: vi.fn()
 }));
@@ -11,6 +25,7 @@ vi.mock("@/lib/notifications/dispatch", () => ({
 import { POST } from "@/app/api/rowboat/route";
 import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
 import { insertCoworkerLog } from "@/lib/db/logs";
+import { recordSystemLog } from "@/lib/db/system-logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -57,6 +72,19 @@ describe("api/rowboat route", () => {
     expect(res.status).toBe(200);
     expect(insertCoworkerLog).toHaveBeenCalledTimes(1);
     expect(dispatchUrgentNotification).not.toHaveBeenCalled();
+  });
+
+  it("mirrors the claw log into system_logs after the response", async () => {
+    const res = await POST(makeReq(payload("error")));
+    expect(res.status).toBe(200);
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: BIZ,
+        source: "rowboat",
+        level: "error",
+        event: "rowboat_call_error"
+      })
+    );
   });
 
   it("dispatches the urgent notification on urgent_alert", async () => {

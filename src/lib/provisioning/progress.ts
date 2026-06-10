@@ -49,9 +49,19 @@ export async function recordProvisioningProgress(params: {
   };
   const status = resolveStatus(percent, params.status);
 
+  // The coworker_logs row is the authoritative deploy timeline — write it
+  // first so the unified stream below can never show an event the timeline
+  // doesn't have (recordSystemLog itself never throws).
+  const row = await insertCoworkerLog({
+    id: randomUUID(),
+    business_id: params.businessId,
+    task_type: "provisioning",
+    status,
+    log_payload: payload as unknown as Record<string, unknown>
+  });
+
   // Mirror into the unified system_logs stream so provisioning/deploy failures
   // also surface in the fleet-wide error feed alongside runtime AI failures.
-  // The dedicated coworker_logs row below remains the detailed deploy timeline.
   await recordSystemLog({
     businessId: params.businessId,
     source: "provisioning",
@@ -61,13 +71,7 @@ export async function recordProvisioningProgress(params: {
     payload: { phase: params.phase, percent, source: params.source }
   });
 
-  return insertCoworkerLog({
-    id: randomUUID(),
-    business_id: params.businessId,
-    task_type: "provisioning",
-    status,
-    log_payload: payload as unknown as Record<string, unknown>
-  });
+  return row;
 }
 
 export type LatestProvisioningStatus = {

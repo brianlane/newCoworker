@@ -926,6 +926,15 @@ serve(async (req: Request) => {
             // Reconciled: the outbound DID go out, so keep the metered slot
             // and persist the durable reply for dashboard history.
             await finalizeDeliveredReply(supabase, job.id, reply);
+            await systemLog(supabase, {
+              businessId: job.business_id,
+              source: "sms_worker",
+              level: "info",
+              event: "sms_reply_sent",
+              message:
+                "Inbound SMS answered (Telnyx send reconciled via idempotency key)",
+              payload: { job_id: job.id, telnyx_message_id: recovered, reconciled: true }
+            });
             processed += 1;
             continue;
           }
