@@ -1269,11 +1269,19 @@ async function recordStep(
   if (upErr) console.error("ai_flow_run_steps upsert", upErr);
   // Every step transition lands in system_logs so the admin view can replay a
   // run without joining tables: failed steps are errors, parked steps info,
-  // everything else debug-level trace.
+  // everything else debug-level trace. If the durable ai_flow_run_steps upsert
+  // failed, escalate to error and carry the upsert failure in the payload so
+  // the trace can't silently diverge from what the run table actually shows.
   await systemLog(supabase, {
     businessId: run.business_id,
     source: "aiflow",
-    level: status === "failed" ? "error" : status === "pending" ? "info" : "debug",
+    level: upErr
+      ? "error"
+      : status === "failed"
+        ? "error"
+        : status === "pending"
+          ? "info"
+          : "debug",
     event: `ai_flow_step_${status}`,
     message: error ?? `${step.type} step ${status}`,
     payload: {
@@ -1282,7 +1290,8 @@ async function recordStep(
       step_index: index,
       step_type: step.type,
       attempt: run.attempt_count,
-      ...(result ? { result } : {})
+      ...(result ? { result } : {}),
+      ...(upErr ? { step_row_persist_error: upErr.message } : {})
     }
   });
 }
