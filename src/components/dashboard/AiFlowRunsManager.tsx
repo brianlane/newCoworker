@@ -27,17 +27,28 @@ export function AiFlowRunsManager({
   flows: AiFlowRef[];
 }) {
   const [runs, setRuns] = useState<AiFlowRunRow[]>(initialRuns);
+  const [flowList, setFlowList] = useState<AiFlowRef[]>(flows);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [steps, setSteps] = useState<Record<string, AiFlowRunStepRow[]>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const reload = async () => {
-    const res = await fetch(`/api/aiflows/runs?businessId=${encodeURIComponent(businessId)}`, {
-      cache: "no-store"
-    });
-    const json = (await res.json()) as { ok: boolean; data?: AiFlowRunRow[] };
-    if (json.ok && json.data) setRuns(json.data);
+    // Refresh runs AND flows together: grouping/labels join runs to flow names,
+    // so refreshing only runs could file a newly created flow's runs under
+    // "Deleted flow" (the server-rendered flows snapshot wouldn't know it yet).
+    const [runsRes, flowsRes] = await Promise.all([
+      fetch(`/api/aiflows/runs?businessId=${encodeURIComponent(businessId)}`, {
+        cache: "no-store"
+      }),
+      fetch(`/api/aiflows?businessId=${encodeURIComponent(businessId)}`, { cache: "no-store" })
+    ]);
+    const runsJson = (await runsRes.json()) as { ok: boolean; data?: AiFlowRunRow[] };
+    if (runsJson.ok && runsJson.data) setRuns(runsJson.data);
+    const flowsJson = (await flowsRes.json()) as { ok: boolean; data?: AiFlowRef[] };
+    if (flowsJson.ok && flowsJson.data) {
+      setFlowList(flowsJson.data.map((f) => ({ id: f.id, name: f.name })));
+    }
   };
 
   const toggle = async (runId: string) => {
@@ -86,7 +97,7 @@ export function AiFlowRunsManager({
   const routing = runs.filter((r) => r.status === "awaiting_agent");
 
   const flowName = (flowId: string) =>
-    flows.find((f) => f.id === flowId)?.name ?? "Deleted flow";
+    flowList.find((f) => f.id === flowId)?.name ?? "Deleted flow";
 
   // Group run history per AiFlow. Groups follow the flows list order (newest
   // flow first, matching the AiFlows page); runs within a group stay
@@ -100,7 +111,7 @@ export function AiFlowRunsManager({
     if (list) list.push(r);
     else byFlow.set(r.flow_id, [r]);
   }
-  for (const f of flows) {
+  for (const f of flowList) {
     const list = byFlow.get(f.id);
     if (list) {
       grouped.push({ id: f.id, name: f.name, runs: list });
