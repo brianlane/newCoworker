@@ -107,6 +107,21 @@ describe("db/system-logs", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("recordSystemLog stringifies non-Error failures", async () => {
+    vi.mocked(createSupabaseServiceClient).mockRejectedValue("string blowup");
+    await expect(
+      recordSystemLog({ source: "app", level: "info", event: "x" })
+    ).resolves.toBeUndefined();
+  });
+
+  it("insertSystemLog falls back to the service client when none is passed", async () => {
+    const db = mockDb();
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await insertSystemLog({ source: "app", level: "info", event: "x" });
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+    expect(db.insert).toHaveBeenCalled();
+  });
+
   it("listSystemLogs scopes to business and applies exact level", async () => {
     const db = mockDb();
     const rows = await listSystemLogs("biz-uuid-1", { level: "error" }, db as never);
@@ -121,6 +136,27 @@ describe("db/system-logs", () => {
     expect(db.in).toHaveBeenCalledWith("level", ["warn", "error"]);
   });
 
+  it("listSystemLogs treats minLevel=debug as no level filter", async () => {
+    const db = mockDb();
+    await listSystemLogs("biz-uuid-1", { minLevel: "debug" }, db as never);
+    expect(db.in).not.toHaveBeenCalled();
+    expect(db.eq).toHaveBeenCalledTimes(1); // business_id only
+  });
+
+  it("listSystemLogs skips the search clause when it sanitizes to nothing", async () => {
+    const db = mockDb();
+    await listSystemLogs("biz-uuid-1", { search: "%_,()" }, db as never);
+    expect(db.or).not.toHaveBeenCalled();
+  });
+
+  it("listSystemLogs falls back to the service client when none is passed", async () => {
+    const db = mockDb();
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    const rows = await listSystemLogs("biz-uuid-1");
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+    expect(rows).toEqual([MOCK_ROW]);
+  });
+
   it("listSystemLogs applies source, sanitized search, and before", async () => {
     const db = mockDb();
     await listSystemLogs(
@@ -131,6 +167,11 @@ describe("db/system-logs", () => {
     expect(db.eq).toHaveBeenCalledWith("source", "aiflow");
     expect(db.or).toHaveBeenCalledWith("event.ilike.%telnyx%,message.ilike.%telnyx%");
     expect(db.lt).toHaveBeenCalledWith("created_at", "2026-06-09T00:00:00Z");
+  });
+
+  it("listSystemLogs returns [] when the query yields null data", async () => {
+    const db = mockDb({ limit: vi.fn().mockResolvedValue({ data: null, error: null }) });
+    await expect(listSystemLogs("biz-uuid-1", {}, db as never)).resolves.toEqual([]);
   });
 
   it("listSystemLogs throws on query error", async () => {
@@ -149,6 +190,20 @@ describe("db/system-logs", () => {
     expect(rows[0].businesses?.name).toBe("Acme");
     expect(db.eq).toHaveBeenCalledWith("level", "error");
     expect(db.select).toHaveBeenCalledWith(expect.stringContaining("businesses(name)"));
+  });
+
+  it("listSystemLogErrorsAll falls back to the service client and default limit", async () => {
+    const db = mockDb();
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    const rows = await listSystemLogErrorsAll();
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+    expect(db.limit).toHaveBeenCalledWith(30);
+    expect(rows).toEqual([MOCK_ROW]);
+  });
+
+  it("listSystemLogErrorsAll returns [] when the query yields null data", async () => {
+    const db = mockDb({ limit: vi.fn().mockResolvedValue({ data: null, error: null }) });
+    await expect(listSystemLogErrorsAll(5, db as never)).resolves.toEqual([]);
   });
 
   it("listSystemLogErrorsAll throws on error", async () => {
