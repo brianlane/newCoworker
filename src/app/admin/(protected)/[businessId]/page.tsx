@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { getBusiness } from "@/lib/db/businesses";
 import { getRecentLogs } from "@/lib/db/logs";
+import { listSystemLogs } from "@/lib/db/system-logs";
 import { getProvisioningLogs, type ProvisioningLogPayload } from "@/lib/provisioning/progress";
 import { getBusinessConfig } from "@/lib/db/configs";
 import { getSubscription } from "@/lib/db/subscriptions";
@@ -22,6 +23,8 @@ import { SafeModeToggle } from "@/components/dashboard/SafeModeToggle";
 import { getTierLimits } from "@/lib/plans/limits";
 import { parseEnterpriseLimitsOverride } from "@/lib/plans/enterprise-limits";
 import { EnterpriseLimitsEditor } from "@/components/admin/EnterpriseLimitsEditor";
+import { SystemLogViewer } from "@/components/admin/SystemLogViewer";
+import { AiFlowRunsCard } from "@/components/admin/AiFlowRunsCard";
 
 export const dynamic = "force-dynamic";
 
@@ -31,18 +34,36 @@ export default async function BusinessDetailPage({
   params: Promise<{ businessId: string }>;
 }) {
   const { businessId } = await params;
-  const [business, logs, provisioningLogs, config, subscription, telnyxRoute, telnyxSettings] =
-    await Promise.all([
-      getBusiness(businessId),
-      getRecentLogs(businessId, 20, undefined, { excludeProvisioning: true }),
-      getProvisioningLogs(businessId, 50),
-      getBusinessConfig(businessId),
-      getSubscription(businessId),
-      getTelnyxVoiceRouteForBusiness(businessId),
-      getBusinessTelnyxSettings(businessId)
-    ]);
+  const [
+    business,
+    logs,
+    recentSystemLogs,
+    problemSystemLogs,
+    provisioningLogs,
+    config,
+    subscription,
+    telnyxRoute,
+    telnyxSettings
+  ] = await Promise.all([
+    getBusiness(businessId),
+    getRecentLogs(businessId, 20, undefined, { excludeProvisioning: true }),
+    listSystemLogs(businessId, { limit: 200 }),
+    // Fetched separately so chatty debug/info traffic can never push the
+    // latest warnings/errors out of the 200-row window the viewer gets.
+    listSystemLogs(businessId, { minLevel: "warn", limit: 100 }),
+    getProvisioningLogs(businessId, 50),
+    getBusinessConfig(businessId),
+    getSubscription(businessId),
+    getTelnyxVoiceRouteForBusiness(businessId),
+    getBusinessTelnyxSettings(businessId)
+  ]);
 
   if (!business) notFound();
+
+  const systemLogById = new Map(
+    [...recentSystemLogs, ...problemSystemLogs].map((row) => [row.id, row])
+  );
+  const systemLogs = [...systemLogById.values()].sort((a, b) => b.id - a.id);
 
   const needsPayment = !subscription || subscription.status === "pending";
 
@@ -197,6 +218,17 @@ export default async function BusinessDetailPage({
           />
         </Card>
       )}
+
+      {/* Unified system logs: rowboat / ollama / gemini / telnyx / aiflow / workers */}
+      <Card>
+        <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+          System Logs
+        </h2>
+        <SystemLogViewer logs={systemLogs} />
+      </Card>
+
+      {/* AiFlow runs with per-step failure detail */}
+      <AiFlowRunsCard businessId={businessId} />
 
       {/* Provisioning / deploy pipeline (admin-only detail) */}
       {provisioningLogs.length > 0 && (

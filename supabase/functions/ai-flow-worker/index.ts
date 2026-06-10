@@ -25,6 +25,7 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
+import { systemLog } from "../_shared/system_log.ts";
 import { telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
 import {
   buildExtractionPrompt,
@@ -183,6 +184,14 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       run_id: run.id,
       business_id: run.business_id
     });
+    await systemLog(supabase, {
+      businessId: run.business_id,
+      source: "aiflow",
+      level: "info",
+      event: "ai_flow_run_deferred_paused",
+      message: "Run deferred: business is paused (kill switch)",
+      payload: { run_id: run.id, flow_id: run.flow_id }
+    });
     return;
   }
 
@@ -209,6 +218,14 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     await telemetryRecord(supabase, "ai_flow_run_canceled_disabled", {
       run_id: run.id,
       business_id: run.business_id
+    });
+    await systemLog(supabase, {
+      businessId: run.business_id,
+      source: "aiflow",
+      level: "info",
+      event: "ai_flow_run_canceled_disabled",
+      message: "Run canceled: flow was disabled after the run was queued",
+      payload: { run_id: run.id, flow_id: run.flow_id }
     });
     return;
   }
@@ -263,11 +280,27 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         );
       } catch (e) {
         console.error("approval prompt SMS failed after park", e);
+        await systemLog(supabase, {
+          businessId: run.business_id,
+          source: "aiflow",
+          level: "warn",
+          event: "ai_flow_approval_sms_failed",
+          message: `Approval prompt SMS failed after park: ${e instanceof Error ? e.message : String(e)}`,
+          payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
+        });
       }
       await telemetryRecord(supabase, "ai_flow_run_awaiting_approval", {
         run_id: run.id,
         business_id: run.business_id,
         step_index: index
+      });
+      await systemLog(supabase, {
+        businessId: run.business_id,
+        source: "aiflow",
+        level: "info",
+        event: "ai_flow_run_awaiting_approval",
+        message: "Run parked: waiting for owner approval",
+        payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
       });
       return;
     }
@@ -297,12 +330,28 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         );
       } catch (e) {
         console.error("route_to_team offer send failed after park", e);
+        await systemLog(supabase, {
+          businessId: run.business_id,
+          source: "aiflow",
+          level: "warn",
+          event: "ai_flow_offer_sms_failed",
+          message: `route_to_team offer send failed after park: ${e instanceof Error ? e.message : String(e)}`,
+          payload: { run_id: run.id, flow_id: run.flow_id, step_index: index, agent: outcome.e164 }
+        });
       }
       await telemetryRecord(supabase, "ai_flow_run_awaiting_agent", {
         run_id: run.id,
         business_id: run.business_id,
         step_index: index,
         agent: outcome.e164
+      });
+      await systemLog(supabase, {
+        businessId: run.business_id,
+        source: "aiflow",
+        level: "info",
+        event: "ai_flow_run_awaiting_agent",
+        message: `Run parked: lead offered to team agent ${outcome.e164}`,
+        payload: { run_id: run.id, flow_id: run.flow_id, step_index: index, agent: outcome.e164 }
       });
       return;
     }
@@ -324,6 +373,14 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     run_id: run.id,
     business_id: run.business_id,
     steps: index
+  });
+  await systemLog(supabase, {
+    businessId: run.business_id,
+    source: "aiflow",
+    level: "info",
+    event: "ai_flow_run_done",
+    message: `Run completed (${index} steps)`,
+    payload: { run_id: run.id, flow_id: run.flow_id, steps: index }
   });
 }
 
@@ -450,6 +507,14 @@ async function browseStep(
         out.screenshot_path = await storeScreenshot(supabase, run, index, page.screenshotBase64);
       } catch (e) {
         console.error("browse screenshot store failed", e);
+        await systemLog(supabase, {
+          businessId: run.business_id,
+          source: "aiflow",
+          level: "warn",
+          event: "ai_flow_screenshot_store_failed",
+          message: `browse screenshot store failed: ${e instanceof Error ? e.message : String(e)}`,
+          payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
+        });
       }
     }
   }
@@ -1038,6 +1103,14 @@ async function pickNextAgent(
       : defaultProjectId;
   if (!projectId || !bearer) {
     console.error("route_to_team: Rowboat not configured; falling back to owner");
+    await systemLog(supabase, {
+      businessId: run.business_id,
+      source: "aiflow",
+      level: "warn",
+      event: "ai_flow_rowboat_not_configured",
+      message: "route_to_team: Rowboat not configured; falling back to owner",
+      payload: { run_id: run.id, flow_id: run.flow_id }
+    });
     return null;
   }
   const chatUrl = template
@@ -1148,6 +1221,14 @@ async function sendOwnerSms(
   const cfg = await messagingConfig(supabase, run.business_id);
   if (!forward || !cfg) {
     console.error("route_to_team: owner forward not configured; cannot notify owner");
+    await systemLog(supabase, {
+      businessId: run.business_id,
+      source: "aiflow",
+      level: "warn",
+      event: "ai_flow_owner_forward_missing",
+      message: "Owner SMS skipped: no forward number / Telnyx messaging configured",
+      payload: { run_id: run.id, flow_id: run.flow_id }
+    });
     return;
   }
   const send = await telnyxSendSms({
@@ -1186,6 +1267,33 @@ async function recordStep(
     { onConflict: "run_id,step_index" }
   );
   if (upErr) console.error("ai_flow_run_steps upsert", upErr);
+  // Every step transition lands in system_logs so the admin view can replay a
+  // run without joining tables: failed steps are errors, parked steps info,
+  // everything else debug-level trace. If the durable ai_flow_run_steps upsert
+  // failed, escalate to error and carry the upsert failure in the payload so
+  // the trace can't silently diverge from what the run table actually shows.
+  await systemLog(supabase, {
+    businessId: run.business_id,
+    source: "aiflow",
+    level: upErr
+      ? "error"
+      : status === "failed"
+        ? "error"
+        : status === "pending"
+          ? "info"
+          : "debug",
+    event: `ai_flow_step_${status}`,
+    message: error ?? `${step.type} step ${status}`,
+    payload: {
+      run_id: run.id,
+      flow_id: run.flow_id,
+      step_index: index,
+      step_type: step.type,
+      attempt: run.attempt_count,
+      ...(result ? { result } : {}),
+      ...(upErr ? { step_row_persist_error: upErr.message } : {})
+    }
+  });
 }
 
 /**
@@ -1232,6 +1340,19 @@ async function failRun(
     business_id: run.business_id,
     error: error.slice(0, 300)
   });
+  await systemLog(supabase, {
+    businessId: run.business_id,
+    source: "aiflow",
+    level: "error",
+    event: "ai_flow_run_failed",
+    message: error,
+    payload: {
+      run_id: run.id,
+      flow_id: run.flow_id,
+      step_index: run.current_step,
+      attempt: run.attempt_count
+    }
+  });
 }
 
 /** Transient throw → re-queue until attempts exhausted, then dead-letter. */
@@ -1256,6 +1377,20 @@ async function handleRunThrow(supabase: Supabase, run: RunRow, e: unknown): Prom
     business_id: run.business_id,
     attempt: run.attempt_count,
     error: message.slice(0, 300)
+  });
+  await systemLog(supabase, {
+    businessId: run.business_id,
+    source: "aiflow",
+    level: "warn",
+    event: "ai_flow_run_retry",
+    message,
+    payload: {
+      run_id: run.id,
+      flow_id: run.flow_id,
+      step_index: run.current_step,
+      attempt: run.attempt_count,
+      max_attempts: MAX_ATTEMPTS
+    }
   });
 }
 

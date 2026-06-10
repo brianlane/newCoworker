@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { insertCoworkerLog, type LogRow } from "@/lib/db/logs";
+import { recordSystemLog } from "@/lib/db/system-logs";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { CoworkerLog } from "@/lib/db/schema";
 
@@ -48,13 +49,29 @@ export async function recordProvisioningProgress(params: {
   };
   const status = resolveStatus(percent, params.status);
 
-  return insertCoworkerLog({
+  // The coworker_logs row is the authoritative deploy timeline — write it
+  // first so the unified stream below can never show an event the timeline
+  // doesn't have (recordSystemLog itself never throws).
+  const row = await insertCoworkerLog({
     id: randomUUID(),
     business_id: params.businessId,
     task_type: "provisioning",
     status,
     log_payload: payload as unknown as Record<string, unknown>
   });
+
+  // Mirror into the unified system_logs stream so provisioning/deploy failures
+  // also surface in the fleet-wide error feed alongside runtime AI failures.
+  await recordSystemLog({
+    businessId: params.businessId,
+    source: "provisioning",
+    level: status === "error" ? "error" : status === "success" ? "info" : "debug",
+    event: `provisioning_${status}`,
+    message: `[${params.phase} ${percent}%] ${params.message}`,
+    payload: { phase: params.phase, percent, source: params.source }
+  });
+
+  return row;
 }
 
 export type LatestProvisioningStatus = {

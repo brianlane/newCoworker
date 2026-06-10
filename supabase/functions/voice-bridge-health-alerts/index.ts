@@ -14,6 +14,7 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
+import { systemLog } from "../_shared/system_log.ts";
 import {
   DEFAULT_BRIDGE_STALE_SECONDS,
   DEFAULT_SETTLEMENT_STUCK_SECONDS,
@@ -122,6 +123,37 @@ serve(async (req: Request) => {
     settlement_stuck_seconds: settlementStuckSeconds,
     summary: formatAlertSummary(alert)
   });
+
+  // Per-tenant rows so a dead bridge shows up on that client's admin page,
+  // not just in the fleet-wide webhook. Re-emitted each 5-min sweep while the
+  // condition persists; retention prunes the history.
+  for (const bridge of staleBridges) {
+    await systemLog(supabase, {
+      businessId: bridge.business_id,
+      source: "voice",
+      level: "error",
+      event: "voice_bridge_stale",
+      message: `Voice bridge heartbeat stale (last: ${bridge.bridge_last_heartbeat_at ?? "never"}) — inbound calls will fail`,
+      payload: {
+        last_heartbeat_at: bridge.bridge_last_heartbeat_at,
+        threshold_seconds: bridgeStaleSeconds
+      }
+    });
+  }
+  for (const settlement of stuckSettlements) {
+    await systemLog(supabase, {
+      businessId: settlement.business_id,
+      source: "voice",
+      level: "warn",
+      event: "voice_settlement_stuck",
+      message: `Voice settlement unfinalized since ${settlement.first_signal_at ?? "unknown"}`,
+      payload: {
+        call_control_id: settlement.call_control_id,
+        first_signal_at: settlement.first_signal_at,
+        threshold_seconds: settlementStuckSeconds
+      }
+    });
+  }
 
   const hasIssue = staleBridges.length > 0 || stuckSettlements.length > 0;
   const webhookUrl = Deno.env.get("ALERT_WEBHOOK_URL") ?? "";

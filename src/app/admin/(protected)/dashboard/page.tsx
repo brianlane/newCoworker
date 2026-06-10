@@ -1,6 +1,7 @@
 import { listBusinesses } from "@/lib/db/businesses";
 import { listSubscriptionsByBusinessIds } from "@/lib/db/subscriptions";
 import { getRecentAlertsAll, getRecentLogsAll } from "@/lib/db/logs";
+import { listSystemLogErrorsAll } from "@/lib/db/system-logs";
 import { getPeriodPricing } from "@/lib/plans/tier";
 import type { BillingPeriod } from "@/lib/plans/tier";
 import { formatAdminLabel, getLogBadgeVariant, getMonthLabel } from "@/lib/admin/dashboard";
@@ -26,10 +27,11 @@ function timeAgo(dateStr: string): string {
 }
 
 export default async function AdminDashboardPage() {
-  const [businesses, alerts, recentLogs] = await Promise.all([
+  const [businesses, alerts, recentLogs, systemErrors] = await Promise.all([
     listBusinesses(),
     getRecentAlertsAll(10),
-    getRecentLogsAll(8)
+    getRecentLogsAll(8),
+    listSystemLogErrorsAll(15)
   ]);
 
   const subscriptionMap = await listSubscriptionsByBusinessIds(businesses.map((b) => b.id));
@@ -206,6 +208,50 @@ export default async function AdminDashboardPage() {
           </div>
         </Card>
       </div>
+
+      {/* ── Fleet-wide system errors (rowboat / ollama / telnyx / aiflow / workers) ── */}
+      <Card>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
+            System Errors — All Clients
+          </h2>
+          {systemErrors.length > 0 && <Badge variant="error">{systemErrors.length}</Badge>}
+        </div>
+        {systemErrors.length === 0 ? (
+          <p className="text-sm text-parchment/40 text-center py-4">
+            No system errors — all clear.
+          </p>
+        ) : (
+          <ul className="divide-y divide-parchment/8">
+            {systemErrors.map((log) => (
+              <li key={log.id} className="py-2.5 space-y-0.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  {log.business_id ? (
+                    <a
+                      href={`/admin/${log.business_id}`}
+                      className="text-xs text-parchment font-medium hover:text-signal-teal truncate"
+                    >
+                      {log.businesses?.name ?? `${log.business_id.slice(0, 8)}…`}
+                    </a>
+                  ) : (
+                    <span className="text-xs text-parchment/60 font-medium">platform</span>
+                  )}
+                  <Badge variant="neutral" className="text-[10px]">
+                    {log.source}
+                  </Badge>
+                  <span className="text-xs text-parchment/60 font-mono">{log.event}</span>
+                  <span className="text-xs text-parchment/30 ml-auto shrink-0">
+                    {timeAgo(log.created_at)}
+                  </span>
+                </div>
+                {log.message && (
+                  <p className="text-xs text-parchment/50 truncate">{log.message}</p>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
 
       {/* ── Bottom row: alerts + recent activity ── */}
       <div className="grid grid-cols-2 gap-4">
