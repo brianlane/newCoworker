@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { listAiFlowRuns } from "@/lib/ai-flows/db";
+import { listAiFlowRuns, listAiFlows } from "@/lib/ai-flows/db";
 import { Card } from "@/components/ui/Card";
 import { AiFlowRunsManager } from "@/components/dashboard/AiFlowRunsManager";
 
@@ -22,7 +22,12 @@ export default async function AiFlowRunsPage() {
     .limit(1);
   const businessId = businesses?.[0]?.id ?? null;
 
-  const runs = businessId ? await listAiFlowRuns(businessId, { limit: 100 }) : [];
+  const [runs, flows] = businessId
+    ? await Promise.all([
+        listAiFlowRuns(businessId, { limit: 100 }),
+        listAiFlows(businessId)
+      ])
+    : [[], []];
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -43,7 +48,11 @@ export default async function AiFlowRunsPage() {
           <p className="py-6 text-center text-sm text-parchment/60">No business found.</p>
         </Card>
       ) : (
-        <AiFlowRunsManager businessId={businessId} initialRuns={runs} />
+        <AiFlowRunsManager
+          businessId={businessId}
+          initialRuns={runs}
+          flows={flows.map((f) => ({ id: f.id, name: f.name }))}
+        />
       )}
     </div>
   );
