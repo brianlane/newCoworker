@@ -740,8 +740,37 @@ async function drainExtractionQueue() {
   }
 }
 
+// Settings → Coworker tools: the owner can disable automatic business-memory
+// capture (dashboard / memory_capture, default ON). The owner-append adapter
+// enforces this authoritatively on every write; this pre-check just avoids
+// burning a Gemini/Ollama extraction call on a turn whose save would be
+// rejected anyway. Fail-open on any read error (capture defaults ON).
+async function isMemoryCaptureToolEnabled() {
+  try {
+    const { data, error } = await sb
+      .from("agent_tool_settings")
+      .select("enabled")
+      .eq("business_id", BUSINESS_ID)
+      .eq("agent_key", "dashboard")
+      .eq("tool_key", "memory_capture")
+      .maybeSingle();
+    if (error) {
+      log("warn", "memory_capture_setting_read_failed", { error: error.message });
+      return true;
+    }
+    return data && typeof data.enabled === "boolean" ? data.enabled : true;
+  } catch (err) {
+    log("warn", "memory_capture_setting_read_failed", { error: err?.message || String(err) });
+    return true;
+  }
+}
+
 async function runOwnerRuleExtraction({ job, assistantReply }) {
   try {
+    if (!(await isMemoryCaptureToolEnabled())) {
+      log("info", "memory_capture_tool_disabled", { jobId: job.id });
+      return;
+    }
     const existingBullets = await loadExistingBullets(job.business_id);
     const extraction = await startOwnerRuleExtraction(job, assistantReply, existingBullets);
     if (extraction.save && extraction.bullets.length > 0) {

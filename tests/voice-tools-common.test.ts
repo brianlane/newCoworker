@@ -1,5 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/db/agent-tool-settings", () => ({
+  isAgentToolEnabled: vi.fn()
+}));
+
 import {
+  agentToolDisabledResponse,
   gatewayGuard,
   parseVoiceToolRequest,
   voiceToolEnvelopeSchema,
@@ -7,6 +13,7 @@ import {
   voiceToolUnauthorized,
   voiceToolValidationError
 } from "@/lib/voice-tools/common";
+import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 
 function makeRequest(body: unknown, token?: string): Request {
   const headers: Record<string, string> = { "content-type": "application/json" };
@@ -86,6 +93,30 @@ describe("gatewayGuard + response helpers", () => {
     const res = voiceToolUnauthorized();
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ ok: false, detail: "unauthorized" });
+  });
+});
+
+describe("agentToolDisabledResponse", () => {
+  const businessId = "11111111-1111-4111-8111-111111111111";
+
+  it("returns null when the tool is enabled", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    await expect(
+      agentToolDisabledResponse(businessId, "voice", "send_follow_up_sms")
+    ).resolves.toBeNull();
+    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenCalledWith(
+      businessId,
+      "voice",
+      "send_follow_up_sms"
+    );
+  });
+
+  it("returns a 200 tool_disabled body when the owner turned the tool off", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(false);
+    const res = await agentToolDisabledResponse(businessId, "voice", "send_follow_up_sms");
+    expect(res).not.toBeNull();
+    expect(res!.status).toBe(200);
+    expect(await res!.json()).toEqual({ ok: false, detail: "tool_disabled" });
   });
 });
 

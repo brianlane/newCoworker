@@ -23,6 +23,10 @@ vi.mock("@/lib/rowboat/gateway-token", () => ({
   verifyRowboatGatewayToken: vi.fn().mockReturnValue(true)
 }));
 
+vi.mock("@/lib/db/agent-tool-settings", () => ({
+  isAgentToolEnabled: vi.fn()
+}));
+
 import { POST as lookupPOST } from "@/app/api/voice/tools/customer-lookup/route";
 import { POST as setNamePOST } from "@/app/api/voice/tools/customer-set-display-name/route";
 import { POST as appendNotePOST } from "@/app/api/voice/tools/customer-append-pinned-note/route";
@@ -32,6 +36,7 @@ import {
   updateCustomerOwnerFields
 } from "@/lib/customer-memory/db";
 import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
+import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import type { CustomerMemoryRow } from "@/lib/customer-memory/types";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -70,6 +75,8 @@ function memory(overrides: Partial<CustomerMemoryRow> = {}): CustomerMemoryRow {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(verifyRowboatGatewayToken).mockReturnValue(true);
+  // Registry default: the customer-memory voice tools are ON unless toggled.
+  vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -84,6 +91,21 @@ describe("POST /api/voice/tools/customer-lookup", () => {
     );
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ ok: false, detail: "unauthorized" });
+  });
+
+  it("returns tool_disabled when the owner turned the tool off (Settings → Coworker tools)", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(false);
+    const res = await lookupPOST(
+      makeReq("/api/voice/tools/customer-lookup", { businessId: BIZ, callerE164: PHONE })
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: false, detail: "tool_disabled" });
+    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenCalledWith(
+      BIZ,
+      "voice",
+      "customer_lookup_by_phone"
+    );
+    expect(getCustomerMemory).not.toHaveBeenCalled();
   });
 
   it("returns 400 when phone arg is malformed (envelope.callerE164 also missing)", async () => {
@@ -186,6 +208,25 @@ describe("POST /api/voice/tools/customer-set-display-name", () => {
       })
     );
     expect(res.status).toBe(401);
+  });
+
+  it("returns tool_disabled when the owner turned the tool off (Settings → Coworker tools)", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(false);
+    const res = await setNamePOST(
+      makeReq("/api/voice/tools/customer-set-display-name", {
+        businessId: BIZ,
+        callerE164: PHONE,
+        args: { displayName: "Joe" }
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: false, detail: "tool_disabled" });
+    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenCalledWith(
+      BIZ,
+      "voice",
+      "customer_set_display_name"
+    );
+    expect(updateCustomerOwnerFields).not.toHaveBeenCalled();
   });
 
   it("rejects empty / missing displayName via zod", async () => {
@@ -323,6 +364,25 @@ describe("POST /api/voice/tools/customer-append-pinned-note", () => {
       })
     );
     expect(res.status).toBe(401);
+  });
+
+  it("returns tool_disabled when the owner turned the tool off (Settings → Coworker tools)", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(false);
+    const res = await appendNotePOST(
+      makeReq("/api/voice/tools/customer-append-pinned-note", {
+        businessId: BIZ,
+        callerE164: PHONE,
+        args: { note: "wife is allergic to nuts" }
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: false, detail: "tool_disabled" });
+    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenCalledWith(
+      BIZ,
+      "voice",
+      "customer_append_pinned_note"
+    );
+    expect(updateCustomerOwnerFields).not.toHaveBeenCalled();
   });
 
   it("rejects empty notes (zod) and over-long notes (1500 char cap)", async () => {

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  agentToolDisabledResponse,
   gatewayGuard,
   parseVoiceToolRequest,
   voiceToolResponse,
@@ -36,6 +37,13 @@ export async function POST(request: Request) {
       err instanceof z.ZodError ? err.issues[0]?.message ?? "invalid envelope" : "invalid body"
     );
   }
+
+  const disabled = await agentToolDisabledResponse(
+    envelope.businessId,
+    "voice",
+    "send_follow_up_sms"
+  );
+  if (disabled) return disabled;
 
   const parsed = argsSchema.safeParse(envelope.args);
   if (!parsed.success) {

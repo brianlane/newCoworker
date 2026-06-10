@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import {
+  agentToolDisabledResponse,
   gatewayGuard,
   parseVoiceToolRequest,
   voiceToolResponse,
@@ -44,6 +45,13 @@ export async function POST(request: Request) {
       err instanceof z.ZodError ? err.issues[0]?.message ?? "invalid envelope" : "invalid body"
     );
   }
+
+  const disabled = await agentToolDisabledResponse(
+    envelope.businessId,
+    "voice",
+    "capture_caller_details"
+  );
+  if (disabled) return disabled;
 
   const parsed = argsSchema.safeParse(envelope.args);
   if (!parsed.success) {

@@ -13,6 +13,7 @@
 
 import { z } from "zod";
 import {
+  agentToolDisabledResponse,
   gatewayGuard,
   parseVoiceToolRequest,
   voiceToolResponse,
@@ -92,6 +93,17 @@ export async function POST(request: Request) {
   if ((envelope.callerE164 ?? "").trim() !== "") {
     return voiceToolResponse({ ok: false, detail: "owner_dashboard_only" });
   }
+
+  // Settings → Coworker tools: owners can turn off automatic business-memory
+  // capture for dashboard chat. Enforced here (the platform chokepoint every
+  // capture write goes through) so a worker that predates the toggle can't
+  // persist rules the owner opted out of.
+  const disabled = await agentToolDisabledResponse(
+    envelope.businessId,
+    "dashboard",
+    "memory_capture"
+  );
+  if (disabled) return disabled;
 
   const parsed = argsSchema.safeParse(envelope.args);
   if (!parsed.success) {

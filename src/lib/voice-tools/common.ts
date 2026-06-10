@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { NextResponse } from "next/server";
 import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
+import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
+import type { AgentKey } from "@/lib/agent-tools/registry";
 
 /**
  * Shared request envelope for all `/api/voice/tools/*` adapters.
@@ -55,4 +57,26 @@ export function gatewayGuard(request: Request): NextResponse | null {
 export async function parseVoiceToolRequest(request: Request): Promise<VoiceToolEnvelope> {
   const body = await request.json().catch(() => ({}));
   return voiceToolEnvelopeSchema.parse(body);
+}
+
+/**
+ * Settings → Coworker tools enforcement for tool adapters. Returns a
+ * `tool_disabled` response when the owner turned the tool off, null when the
+ * call may proceed. `isAgentToolEnabled` resolves read errors to the
+ * registry default, so a transient DB blip never breaks a live call for
+ * default-on tools.
+ *
+ * Returned with HTTP 200 (not 4xx) deliberately: the caller is a model
+ * runtime (Gemini Live bridge / chat-worker) that forwards the `{ ok,
+ * detail }` body as a tool result — a 200 with ok:false lets it degrade
+ * gracefully instead of treating the turn as an infrastructure failure.
+ */
+export async function agentToolDisabledResponse(
+  businessId: string,
+  agentKey: AgentKey,
+  toolKey: string
+): Promise<NextResponse | null> {
+  const enabled = await isAgentToolEnabled(businessId, agentKey, toolKey);
+  if (enabled) return null;
+  return voiceToolResponse({ ok: false, detail: "tool_disabled" });
 }
