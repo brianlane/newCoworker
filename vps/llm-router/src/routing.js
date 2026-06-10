@@ -17,6 +17,42 @@ export function pickUpstream(model) {
   return "ollama";
 }
 
+/**
+ * Collapse multiple `system` messages in an OpenAI chat-completions body into
+ * a single one (contents joined with a blank line, placed at the position of
+ * the first system message; all other messages keep their relative order).
+ *
+ * Why: Google's Gemini OpenAI-compat endpoint honors only the LAST `system`
+ * message in `messages[]`. Rowboat's agents runtime sends the agent
+ * instructions as one system message, and its `ensureSystemMessage` (or a
+ * caller-supplied preamble, e.g. the AiFlow route_to_team selection call)
+ * contributes a SECOND one — so the entire vault-grounded agent prompt
+ * (identity/soul/website/memory) was silently dropped on every Gemini turn
+ * and agents answered as a bare base model (hallucinated team rosters,
+ * "I am a large language model" replies). Merging preserves both prompts for
+ * every upstream; Ollama templates also behave better with a single system.
+ *
+ * Returns the ORIGINAL body object when there is nothing to merge (zero or
+ * one system message) or when any system content is not a plain string
+ * (OpenAI content-parts arrays are passed through untouched rather than
+ * risk mangling them).
+ */
+export function mergeSystemMessages(body) {
+  if (!body || !Array.isArray(body.messages)) return body;
+  const systems = body.messages.filter((m) => m && m.role === "system");
+  if (systems.length <= 1) return body;
+  if (!systems.every((m) => typeof m.content === "string")) return body;
+
+  const merged = systems
+    .map((m) => m.content)
+    .filter((s) => s.trim().length > 0)
+    .join("\n\n");
+  const firstIdx = body.messages.findIndex((m) => m && m.role === "system");
+  const messages = body.messages.filter((m) => !(m && m.role === "system"));
+  messages.splice(firstIdx, 0, { ...systems[0], content: merged });
+  return { ...body, messages };
+}
+
 // Headers we must NOT copy from the upstream response onto our own response.
 //
 //   - transfer-encoding / connection / keep-alive: hop-by-hop framing that

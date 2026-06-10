@@ -31,9 +31,12 @@ import {
   evaluateStepCondition,
   extractPhones,
   htmlToText,
+  isE164,
   isExecutableDefinition,
+  normalizeNanpToE164,
   parseExtractionJson,
   parseRoutedAgent,
+  pickRosterAgent,
   renderTemplate,
   type RoutedAgent
 } from "../_shared/ai_flows/engine.ts";
@@ -906,6 +909,7 @@ async function routeToTeamStep(
   delete routing.last_event;
   delete routing.reply_from;
 
+  const leadPhone = leadPhoneE164(scope);
   for (let i = 0; i < ROUTE_MAX_LOOKUPS; i++) {
     const agent = await pickNextAgent(supabase, run, scope, tried);
     // No agent at all (none / parse fail / unconfigured): roster is exhausted.
@@ -913,6 +917,12 @@ async function routeToTeamStep(
     // Rowboat repeated an agent we already tried: don't end routing on one bad
     // pick — consume another lookup and ask again (bounded by ROUTE_MAX_LOOKUPS).
     if (tried.includes(agent.phone)) continue;
+    // Never offer the lead their own number: a hallucinated Rowboat pick (or a
+    // corrupt roster row) must not text the lead an agent "offer".
+    if (leadPhone && agent.phone === leadPhone) {
+      tried.push(agent.phone);
+      continue;
+    }
     // A teammate who texted STOP is opted out: skip them and ask for the next.
     if (await isRecipientOptedOut(supabase, run.business_id, agent.phone)) {
       tried.push(agent.phone);
@@ -950,11 +960,26 @@ function agentScope(scope: Scope, agent: RoutedAgent): Record<string, unknown> {
   };
 }
 
+/** The lead's own phone (from vars.lead_phone) normalized to E.164, or null. */
+function leadPhoneE164(scope: Scope): string | null {
+  const raw = typeof scope.vars.lead_phone === "string" ? scope.vars.lead_phone.trim() : "";
+  if (!raw) return null;
+  return isE164(raw) ? raw : normalizeNanpToE164(raw);
+}
+
 /**
- * Ask the tenant's Rowboat agent for the next team member to offer the lead to,
- * excluding `tried`. Returns null when the roster is exhausted, the reply is
- * unparseable, or Rowboat isn't configured (→ owner fallback). THROWS on a
- * Rowboat transport error so the run retries rather than prematurely escalating.
+ * Pick the next team member to offer the lead to, excluding `tried`.
+ *
+ * Selection is deterministic when the business has an `ai_flow_team_members`
+ * roster: active members in `last_offered_at` order (nulls first), and the
+ * picked row's cursor is stamped so rotation stays fair ACROSS runs — the
+ * "least recently received a lead" rule computed instead of remembered.
+ *
+ * Only when no roster rows exist does the legacy path ask the tenant's
+ * Rowboat agent (memory-grounded LLM pick). Returns null when the roster is
+ * exhausted, the reply is unparseable, or Rowboat isn't configured (→ owner
+ * fallback). THROWS on a roster query / Rowboat transport error so the run
+ * retries rather than prematurely escalating.
  */
 async function pickNextAgent(
   supabase: Supabase,
@@ -962,6 +987,39 @@ async function pickNextAgent(
   scope: Scope,
   tried: string[]
 ): Promise<RoutedAgent | null> {
+  // --- Deterministic roster path -------------------------------------------
+  const { data: rosterRows, error: rosterErr } = await supabase
+    .from("ai_flow_team_members")
+    .select("id, name, phone_e164")
+    .eq("business_id", run.business_id)
+    .eq("active", true)
+    .order("last_offered_at", { ascending: true, nullsFirst: true })
+    .order("created_at", { ascending: true });
+  if (rosterErr) {
+    throw new Error(`route_to_team: roster query failed: ${rosterErr.message}`);
+  }
+  const roster = (rosterRows ?? []) as { id: string; name: string; phone_e164: string }[];
+  if (roster.length > 0) {
+    const pick = pickRosterAgent(
+      roster.map((r) => ({ name: r.name, phone: r.phone_e164 })),
+      tried,
+      leadPhoneE164(scope)
+    );
+    if (!pick) return null;
+    // Stamp the rotation cursor at pick time (not claim time) so concurrent
+    // runs don't all offer to the same member. A failed offer simply rotates
+    // that member to the back, which is acceptable.
+    const { error: stampErr } = await supabase
+      .from("ai_flow_team_members")
+      .update({ last_offered_at: new Date().toISOString() })
+      .eq("id", roster[pick.index].id);
+    if (stampErr) {
+      console.error(`route_to_team: rotation stamp failed: ${stampErr.message}`);
+    }
+    return pick.agent;
+  }
+
+  // --- Legacy Rowboat memory path ------------------------------------------
   const template =
     Deno.env.get("ROWBOAT_CHAT_URL_TEMPLATE") ??
     "https://{businessId}.newcoworker.com/api/v1/{projectId}/chat";

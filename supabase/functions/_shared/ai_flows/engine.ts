@@ -297,6 +297,39 @@ export function parseRoutedAgent(raw: string): RoutedAgent | null {
   return { name, phone };
 }
 
+/** A persisted `ai_flow_team_members` roster row, as the worker selects from it. */
+export type RosterMember = { name: string; phone: string };
+
+/**
+ * Deterministic `route_to_team` selection from a persisted roster. `members`
+ * must already be in rotation-priority order (least recently offered first —
+ * the worker's SQL orders by `last_offered_at` nulls-first). Picks the first
+ * member whose phone normalizes to E.164, isn't in `tried`, and isn't the
+ * lead's own phone (a corrupt roster row must never text the lead an offer).
+ *
+ * Returns the member's index (so the caller can stamp that row's rotation
+ * cursor) plus the normalized agent, or null when the roster is exhausted.
+ *
+ * This replaces the LLM in the selection hot path: Rowboat's stateless chat
+ * cannot track "least recently received a lead" across runs, and an LLM pick
+ * is only as trustworthy as its grounding. A table scan is both.
+ */
+export function pickRosterAgent(
+  members: RosterMember[],
+  tried: string[],
+  leadPhone?: string | null
+): { index: number; agent: RoutedAgent } | null {
+  for (let i = 0; i < members.length; i++) {
+    const m = members[i];
+    const phone = isE164(m.phone) ? m.phone : normalizeNanpToE164(m.phone);
+    if (!phone) continue;
+    if (tried.includes(phone)) continue;
+    if (leadPhone && phone === leadPhone) continue;
+    return { index: i, agent: { name: m.name, phone } };
+  }
+  return null;
+}
+
 /** Find and parse the first balanced JSON object in a string. Null on failure. */
 function extractFirstJsonObject(raw: string): Record<string, unknown> | null {
   const start = raw.indexOf("{");

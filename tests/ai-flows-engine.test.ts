@@ -14,6 +14,7 @@ import {
   normalizeNanpToE164,
   parseExtractionJson,
   parseRoutedAgent,
+  pickRosterAgent,
   renderTemplate,
   resolvePath,
   safeRegexTest
@@ -417,5 +418,55 @@ describe("parseRoutedAgent", () => {
     expect(parseRoutedAgent("sorry, nobody is free")).toBeNull();
     expect(parseRoutedAgent('{"name":"Dana"}')).toBeNull();
     expect(parseRoutedAgent('{"name":"Dana","phone":"not-a-number"}')).toBeNull();
+  });
+});
+
+describe("pickRosterAgent", () => {
+  const roster = [
+    { name: "Jason", phone: "+14807039575" },
+    { name: "Gabby", phone: "+14807202013" },
+    { name: "Dave", phone: "+16025245719" }
+  ];
+
+  it("picks the first member (callers pass rotation-ordered rows)", () => {
+    expect(pickRosterAgent(roster, [])).toEqual({
+      index: 0,
+      agent: { name: "Jason", phone: "+14807039575" }
+    });
+  });
+
+  it("skips members already tried for this run", () => {
+    expect(pickRosterAgent(roster, ["+14807039575", "+14807202013"])).toEqual({
+      index: 2,
+      agent: { name: "Dave", phone: "+16025245719" }
+    });
+  });
+
+  it("returns null when every member has been tried (owner fallback)", () => {
+    expect(
+      pickRosterAgent(roster, ["+14807039575", "+14807202013", "+16025245719"])
+    ).toBeNull();
+  });
+
+  it("normalizes loose NANP phones and skips unusable ones", () => {
+    const loose = [
+      { name: "Broken", phone: "12" },
+      { name: "Jason", phone: "480 703 9575" }
+    ];
+    expect(pickRosterAgent(loose, [])).toEqual({
+      index: 1,
+      agent: { name: "Jason", phone: "+14807039575" }
+    });
+  });
+
+  it("never offers the lead their own number", () => {
+    expect(pickRosterAgent(roster, [], "+14807039575")).toEqual({
+      index: 1,
+      agent: { name: "Gabby", phone: "+14807202013" }
+    });
+  });
+
+  it("returns null for an empty roster", () => {
+    expect(pickRosterAgent([], [])).toBeNull();
   });
 });
