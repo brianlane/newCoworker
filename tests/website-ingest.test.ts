@@ -15,9 +15,12 @@ import {
   extractSameOriginLinks,
   humanizeFetchError,
   ingestWebsite,
+  ingestWebsiteFromHtml,
   isPathAllowed,
+  looksLikeWafChallenge,
   normalizeWebsiteUrl,
-  parseRobotsDisallows
+  parseRobotsDisallows,
+  WEBSITE_INGEST_MAX_PASTED_HTML_CHARS
 } from "@/lib/website-ingest";
 import * as geminiGc from "@/lib/gemini-generate-content";
 import { logger } from "@/lib/logger";
@@ -46,11 +49,11 @@ describe("humanizeFetchError", () => {
   // helper, the dashboard rendered the canned "Check the URL, SSL, or
   // firewall and retry" — which was actively misleading. These tests
   // pin the actionable copy.
-  it("maps 403 to a CDN-blocking explanation that mentions Cloudflare and the manual-paste fallback", () => {
+  it("maps 403 to a CDN-blocking explanation that mentions Cloudflare and the paste-source fallback", () => {
     const msg = humanizeFetchError("status_403");
     expect(msg).toMatch(/HTTP 403/);
     expect(msg).toMatch(/Cloudflare|CDN|bot/i);
-    expect(msg).toMatch(/manual summary/i);
+    expect(msg).toMatch(/View Page Source/i);
   });
 
   it("maps 401 the same way (auth-walled site behaves identically from the crawler's perspective)", () => {
@@ -635,6 +638,52 @@ describe("ingestWebsite", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe("fetch_failed");
+  });
+
+  it("rejects a Jina 200 whose body is a WAF challenge page and keeps the honest 403 detail", async () => {
+    // The production false-success: Cloudflare blocks the direct crawl AND
+    // serves Jina's browser pool the challenge page. Jina returns it with
+    // HTTP 200, so before the looksLikeWafChallenge guard we summarized the
+    // challenge copy into website.md and reported success.
+    const challengeBody = [
+      "Title: Just a moment...",
+      "",
+      "URL Source: https://example.com/",
+      "",
+      "Warning: Target URL returned error 403: Forbidden",
+      "",
+      "Markdown Content:",
+      "Just a moment...",
+      "Enable JavaScript and cookies to continue"
+    ].join("\n");
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.startsWith("https://r.jina.ai/")) {
+        return new Response(challengeBody, {
+          status: 200,
+          headers: { "content-type": "text/plain; charset=utf-8" }
+        });
+      }
+      return new Response("blocked", { status: 403, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn();
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize,
+      ignoreRobots: true,
+      readerFallback: true
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toBe("fetch_failed");
+      // The owner sees the real story (403 + paste-source hint), not a
+      // garbage summary of "Just a moment...".
+      expect(res.detail).toMatch(/403/);
+    }
+    expect(summarize).not.toHaveBeenCalled();
   });
 
   it("tolerates a non-Error rejection from the Jina fetch", async () => {
@@ -1785,6 +1834,147 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
     if (!res.ok) {
       expect(res.error).toBe("summarizer_failed");
       expect(res.detail).toMatch(/^gemini_http_500:/);
+    }
+  });
+});
+
+describe("looksLikeWafChallenge", () => {
+  it("flags Jina's explicit target-error warning line", () => {
+    expect(
+      looksLikeWafChallenge("Title: Some Site\n\nWarning: Target URL returned error 403: Forbidden\n\nbody")
+    ).toBe(true);
+  });
+
+  it("flags well-known challenge-page titles regardless of error warnings", () => {
+    expect(looksLikeWafChallenge("Title: Just a moment...\n\nMarkdown Content:\nhi")).toBe(true);
+    expect(looksLikeWafChallenge("Title: Attention Required! | Cloudflare\n\nbody")).toBe(true);
+    expect(looksLikeWafChallenge("Title: Access denied\n\nbody")).toBe(true);
+  });
+
+  it("flags challenge body copy when no metadata lines are present", () => {
+    expect(looksLikeWafChallenge("Please Enable JavaScript and cookies to continue viewing")).toBe(true);
+    expect(looksLikeWafChallenge("Checking your browser before accessing example.com")).toBe(true);
+  });
+
+  it("does not flag a normal business page that merely mentions security topics", () => {
+    expect(
+      looksLikeWafChallenge(
+        "Title: Acme Locksmiths\n\nMarkdown Content:\nWe install access control and security checks for offices."
+      )
+    ).toBe(false);
+  });
+
+  it("only inspects the head of the body (a deep mention cannot false-positive)", () => {
+    const deep = `Title: Acme Realty\n\n${"We help buyers find homes. ".repeat(100)}\nWarning: Target URL returned error 403`;
+    expect(looksLikeWafChallenge(deep)).toBe(false);
+  });
+});
+
+describe("ingestWebsiteFromHtml", () => {
+  const richHtml = `<html><head><title>Realty</title></head><body><h1>Phoenix Realty</h1><p>${"We help buyers and sellers across the valley. ".repeat(20)}</p></body></html>`;
+
+  it("summarizes pasted page source through the same pipeline (no fetches at all)", async () => {
+    const summarize = vi.fn().mockResolvedValue("## Summary\nPhoenix Realty helps buyers.");
+    const res = await ingestWebsiteFromHtml("https://example.com/", richHtml, { summarize });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.websiteMd).toMatch(/^# website\.md\nSource: https:\/\/example\.com\//);
+      expect(res.websiteMd).toMatch(/Phoenix Realty helps buyers/);
+      expect(res.pagesCrawled).toBe(1);
+      expect(res.finalUrl).toBe("https://example.com/");
+      expect(res.bytesDownloaded).toBe(Buffer.byteLength(richHtml, "utf8"));
+    }
+    // The summarizer received extracted TEXT, not raw markup.
+    const prompt = summarize.mock.calls[0][0] as string;
+    expect(prompt).toContain("Phoenix Realty");
+    expect(prompt).not.toContain("<html>");
+  });
+
+  it("normalizes a scheme-less URL for the Source header", async () => {
+    const summarize = vi.fn().mockResolvedValue("## Summary\nok");
+    const res = await ingestWebsiteFromHtml("example.com", richHtml, { summarize });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.websiteMd).toContain("Source: https://example.com/");
+  });
+
+  it("rejects garbage URLs with invalid_url", async () => {
+    const res = await ingestWebsiteFromHtml("not a url", richHtml, {
+      summarize: async () => "unused"
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe("invalid_url");
+  });
+
+  it("returns empty_content when the pasted markup carries too little text", async () => {
+    const res = await ingestWebsiteFromHtml("https://example.com/", "<html><body>hi</body></html>", {
+      summarize: async () => "unused"
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe("empty_content");
+  });
+
+  it("clips oversized pasted HTML to the hard cap before extraction", async () => {
+    const summarize = vi.fn().mockResolvedValue("## Summary\nok");
+    const oversized =
+      `<p>${"We sell things to nice people. ".repeat(50)}</p>` +
+      "x".repeat(WEBSITE_INGEST_MAX_PASTED_HTML_CHARS);
+    const res = await ingestWebsiteFromHtml("https://example.com/", oversized, { summarize });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      // bytesDownloaded reflects the CLIPPED size, proving the cap applied.
+      expect(res.bytesDownloaded).toBe(WEBSITE_INGEST_MAX_PASTED_HTML_CHARS);
+    }
+  });
+
+  it("maps summarizer failures the same way the crawl path does", async () => {
+    const unavailable = await ingestWebsiteFromHtml("https://example.com/", richHtml, {
+      summarize: async () => {
+        throw new Error("summarizer_unavailable");
+      }
+    });
+    expect(unavailable.ok).toBe(false);
+    if (!unavailable.ok) expect(unavailable.error).toBe("summarizer_unavailable");
+
+    const failed = await ingestWebsiteFromHtml("https://example.com/", richHtml, {
+      summarize: async () => {
+        throw new Error("gemini_http_500:boom");
+      }
+    });
+    expect(failed.ok).toBe(false);
+    if (!failed.ok) {
+      expect(failed.error).toBe("summarizer_failed");
+      expect(failed.detail).toBe("gemini_http_500:boom");
+    }
+  });
+
+  it("maps a non-Error summarizer throw to detail 'unknown'", async () => {
+    const res = await ingestWebsiteFromHtml("https://example.com/", richHtml, {
+      summarize: async () => {
+        throw "string throw";
+      }
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toBe("summarizer_failed");
+      expect(res.detail).toBe("unknown");
+    }
+  });
+
+  it("uses defaultGeminiSummarize when no summarizer is injected (summarizer_unavailable without keys)", async () => {
+    const prevGoogle = process.env.GOOGLE_API_KEY;
+    const prevGemini = process.env.GEMINI_API_KEY;
+    delete process.env.GOOGLE_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+    try {
+      const res = await ingestWebsiteFromHtml("https://example.com/", richHtml);
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toBe("summarizer_unavailable");
+    } finally {
+      if (prevGoogle === undefined) delete process.env.GOOGLE_API_KEY;
+      else process.env.GOOGLE_API_KEY = prevGoogle;
+      if (prevGemini === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = prevGemini;
     }
   });
 });

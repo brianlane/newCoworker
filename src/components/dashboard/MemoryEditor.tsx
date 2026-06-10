@@ -51,6 +51,12 @@ export function MemoryEditor({
   const [websiteUrl, setWebsiteUrl] = useState(initialWebsiteUrl);
   const [websiteMd, setWebsiteMd] = useState(initialWebsiteMd);
   const [recrawl, setRecrawl] = useState<RecrawlState>({ status: "idle" });
+  // WAF escape hatch: when a crawl fails (typically Cloudflare bot
+  // protection blocking every server-side fetch), we open a box where the
+  // owner can paste their homepage's "View Page Source" HTML and have it
+  // summarized through the same pipeline.
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pastedHtml, setPastedHtml] = useState("");
 
   const starterBudget = useMemo(() => {
     if (tier !== "starter") return null;
@@ -88,7 +94,7 @@ export function MemoryEditor({
     });
   }
 
-  async function handleRecrawl() {
+  async function runIngest(sourceHtml?: string) {
     if (!websiteUrl.trim()) {
       setRecrawl({ status: "error", message: "Enter a website URL first." });
       return;
@@ -102,7 +108,8 @@ export function MemoryEditor({
           businessId,
           websiteUrl: websiteUrl.trim(),
           businessName,
-          businessType
+          businessType,
+          ...(sourceHtml ? { pastedHtml: sourceHtml } : {})
         })
       });
       const json = (await res.json().catch(() => null)) as
@@ -129,6 +136,9 @@ export function MemoryEditor({
           status: "error",
           message: websiteIngestErrorMessage(inner.error, inner.detail)
         });
+        // A failed crawl is exactly when the paste-source escape hatch is
+        // needed — surface it without another click.
+        setPasteOpen(true);
         return;
       }
       if (typeof inner.websiteMd === "string") {
@@ -139,12 +149,29 @@ export function MemoryEditor({
         pages: inner.pagesCrawled ?? 0,
         preview: inner.websiteMdPreview ?? ""
       });
+      if (sourceHtml) {
+        setPasteOpen(false);
+        setPastedHtml("");
+      }
     } catch (err) {
       setRecrawl({
         status: "error",
         message: err instanceof Error ? err.message : "Re-crawl failed"
       });
+      setPasteOpen(true);
     }
+  }
+
+  async function handleRecrawl() {
+    await runIngest();
+  }
+
+  async function handleSummarizePasted() {
+    if (!pastedHtml.trim()) {
+      setRecrawl({ status: "error", message: "Paste your page source first." });
+      return;
+    }
+    await runIngest(pastedHtml);
   }
 
   return (
@@ -255,6 +282,15 @@ export function MemoryEditor({
             Re-crawl
           </Button>
         </div>
+        {!pasteOpen && (
+          <button
+            type="button"
+            onClick={() => setPasteOpen(true)}
+            className="mt-2 text-xs text-parchment/40 underline underline-offset-2 hover:text-parchment/70"
+          >
+            Site blocks crawlers? Paste your page source instead
+          </button>
+        )}
         {recrawl.status === "success" && (
           <p className="mt-2 text-xs text-claw-green">
             Refreshed from {recrawl.pages} page{recrawl.pages === 1 ? "" : "s"}.
@@ -262,6 +298,39 @@ export function MemoryEditor({
         )}
         {recrawl.status === "error" && (
           <p className="mt-2 text-xs text-rose-300">{recrawl.message}</p>
+        )}
+        {pasteOpen && (
+          <div className="mt-3 rounded-lg border border-parchment/15 bg-ink/40 p-3">
+            <p className="text-xs text-parchment/60">
+              Site blocking our crawler? Open your homepage in a new tab, right-click →{" "}
+              <span className="text-parchment/80">View Page Source</span>, select all, copy, and
+              paste it here. We&apos;ll extract and summarize it exactly like a normal crawl.
+            </p>
+            <div className="mt-2">
+              <Textarea
+                value={pastedHtml}
+                onChange={(e) => setPastedHtml(e.target.value)}
+                rows={6}
+                placeholder="<!DOCTYPE html>… paste your homepage's page source here"
+              />
+            </div>
+            <div className="mt-2 flex items-center gap-3">
+              <Button
+                onClick={handleSummarizePasted}
+                loading={recrawl.status === "running"}
+                variant="secondary"
+              >
+                Summarize pasted source
+              </Button>
+              <button
+                type="button"
+                onClick={() => setPasteOpen(false)}
+                className="text-xs text-parchment/40 hover:text-parchment/70"
+              >
+                Hide
+              </button>
+            </div>
+          </div>
         )}
         <div className="mt-3">
           <Textarea

@@ -10,6 +10,8 @@ vi.mock("@/lib/db/configs", () => ({
 }));
 vi.mock("@/lib/website-ingest", () => ({
   ingestWebsite: vi.fn(),
+  ingestWebsiteFromHtml: vi.fn(),
+  WEBSITE_INGEST_MAX_PASTED_HTML_CHARS: 2_000_000,
   normalizeWebsiteUrl: (raw: string) => {
     try {
       return new URL(raw).toString();
@@ -28,7 +30,7 @@ import { POST } from "@/app/api/onboard/website-ingest/route";
 import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { getBusiness, updateBusinessWebsiteUrl } from "@/lib/db/businesses";
 import { setBusinessWebsiteMd } from "@/lib/db/configs";
-import { ingestWebsite } from "@/lib/website-ingest";
+import { ingestWebsite, ingestWebsiteFromHtml } from "@/lib/website-ingest";
 import { getAuthUser } from "@/lib/auth";
 import { scheduleVaultSync } from "@/lib/vps/schedule-vault-sync";
 
@@ -116,6 +118,81 @@ describe("api/onboard/website-ingest route", () => {
       "https://example.com/",
       expect.objectContaining({ ignoreRobots: true })
     );
+  });
+
+  it("routes pastedHtml through ingestWebsiteFromHtml instead of crawling (WAF escape hatch)", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ email: "owner@example.com", isAdmin: false } as never);
+    vi.mocked(getBusiness).mockResolvedValue({ owner_email: "owner@example.com" } as never);
+    vi.mocked(ingestWebsiteFromHtml).mockResolvedValue({
+      ...INGEST_OK,
+      pagesCrawled: 1
+    });
+
+    const res = await POST(
+      jsonRequest({
+        businessId: BIZ,
+        websiteUrl: "https://example.com/",
+        businessName: "Acme",
+        pastedHtml: "<html><body>Acme sells anvils</body></html>"
+      })
+    );
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.data.ok).toBe(true);
+    expect(ingestWebsiteFromHtml).toHaveBeenCalledWith(
+      "https://example.com/",
+      "<html><body>Acme sells anvils</body></html>",
+      expect.objectContaining({ businessName: "Acme" })
+    );
+    // No crawl when source is pasted — the site is known to block us.
+    expect(ingestWebsite).not.toHaveBeenCalled();
+    // Pasted ingests persist exactly like crawled ones.
+    expect(setBusinessWebsiteMd).toHaveBeenCalledWith(BIZ, INGEST_OK.websiteMd);
+    expect(scheduleVaultSync).toHaveBeenCalledWith(BIZ);
+  });
+
+  it("treats a blank pastedHtml as a normal crawl request", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ email: "owner@example.com", isAdmin: false } as never);
+    vi.mocked(getBusiness).mockResolvedValue({ owner_email: "owner@example.com" } as never);
+
+    const res = await POST(
+      jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/", pastedHtml: "   " })
+    );
+    expect(res.status).toBe(200);
+    expect(ingestWebsite).toHaveBeenCalled();
+    expect(ingestWebsiteFromHtml).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a pasted-source ingest failure as data.ok=false with the error code", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ email: "owner@example.com", isAdmin: false } as never);
+    vi.mocked(getBusiness).mockResolvedValue({ owner_email: "owner@example.com" } as never);
+    vi.mocked(ingestWebsiteFromHtml).mockResolvedValue({ ok: false, error: "empty_content" });
+
+    const res = await POST(
+      jsonRequest({
+        businessId: BIZ,
+        websiteUrl: "https://example.com/",
+        pastedHtml: "<html></html>"
+      })
+    );
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.data.ok).toBe(false);
+    expect(json.data.error).toBe("empty_content");
+    expect(setBusinessWebsiteMd).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized pastedHtml with VALIDATION_ERROR before any ingest work", async () => {
+    const res = await POST(
+      jsonRequest({
+        businessId: BIZ,
+        websiteUrl: "https://example.com/",
+        pastedHtml: "x".repeat(2_000_001)
+      })
+    );
+    expect(res.status).toBe(400);
+    expect(ingestWebsite).not.toHaveBeenCalled();
+    expect(ingestWebsiteFromHtml).not.toHaveBeenCalled();
   });
 
   it("authorizes admin users without checking business ownership", async () => {
