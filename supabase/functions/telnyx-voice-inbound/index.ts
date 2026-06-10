@@ -30,6 +30,7 @@ import {
 } from "../_shared/voice_messages.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
+import { systemLog } from "../_shared/system_log.ts";
 import {
   answerThenSpeak,
   telnyxAnswerWithStream,
@@ -395,6 +396,14 @@ serve(async (req: Request) => {
           call_control_id: callControlId,
           http_status: transferRes.status
         });
+        await systemLog(supabase, {
+          businessId,
+          source: "voice",
+          level: "error",
+          event: "voice_safe_mode_forward_failed",
+          message: `Safe-mode transfer refused by Telnyx (HTTP ${transferRes.status}): ${errText.slice(0, 300)}`,
+          payload: { call_control_id: callControlId, http_status: transferRes.status }
+        });
         // The call has already been answered (we spoke "Connecting you now.")
         // and Telnyx refused the bridge. Without an explicit recovery the
         // caller sits on silent answered audio until Telnyx times the call
@@ -552,6 +561,14 @@ serve(async (req: Request) => {
     } else {
       console.error("voice inbound: jit_stripe_fail_block", { businessId });
       await telemetryRecord(supabase, "jit_stripe_fail_block", { business_id: businessId });
+      await systemLog(supabase, {
+        businessId,
+        source: "voice",
+        level: "error",
+        event: "voice_jit_stripe_fail_block",
+        message: "Call blocked: Stripe period lookup failed and no valid cached quota",
+        payload: { call_control_id: callControlId }
+      });
       await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SYSTEM_ERROR);
       return new Response(JSON.stringify({ ok: true, path: "jit_stripe_fail_block" }), {
         status: 200,
@@ -624,6 +641,14 @@ serve(async (req: Request) => {
     } else {
       await answerThenSpeak(apiKey, callControlId, VOICE_MSG_QUOTA_EXHAUSTED);
     }
+    await systemLog(supabase, {
+      businessId,
+      source: "voice",
+      level: "warn",
+      event: "voice_call_blocked",
+      message: `Inbound call refused: ${res?.reason ?? "blocked"}`,
+      payload: { call_control_id: callControlId, reason: res?.reason ?? "blocked" }
+    });
     return new Response(JSON.stringify({ ok: true, path: res?.reason ?? "blocked" }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
@@ -768,6 +793,14 @@ serve(async (req: Request) => {
       business_id: businessId,
       http_status: answerRes.status
     });
+    await systemLog(supabase, {
+      businessId,
+      source: "voice",
+      level: "error",
+      event: "voice_answer_failed",
+      message: `Telnyx answer failed (HTTP ${answerRes.status}): ${errText.slice(0, 300)}`,
+      payload: { call_control_id: callControlId, http_status: answerRes.status }
+    });
     const { error: relAnsErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
       p_call_control_id: callControlId
     });
@@ -815,6 +848,14 @@ serve(async (req: Request) => {
   await telemetryRecord(supabase, "voice_inbound_stream_answered", {
     business_id: businessId,
     call_control_id: callControlId
+  });
+  await systemLog(supabase, {
+    businessId,
+    source: "voice",
+    level: "info",
+    event: "voice_call_answered",
+    message: "Inbound call answered with media stream to the voice bridge",
+    payload: { call_control_id: callControlId }
   });
 
   if (Date.now() > deadline) {

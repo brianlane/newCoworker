@@ -228,11 +228,51 @@ function log(level, event, data = {}) {
       ...data
     })
   );
+  shipSystemLog(level, event, data);
 }
 
 const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false }
 });
+
+// Mirror every structured log line into the platform's system_logs table so
+// the admin business page (and debug/system-logs.ts) can show this tenant's
+// Rowboat/Ollama/Gemini failures without SSH-ing into the VPS. Fire-and-forget:
+// a logging insert must never block or fail the job path, and console output
+// (docker logs) remains the complete source of truth if Supabase is down.
+// "fatal" maps onto error — the table's level enum is debug|info|warn|error.
+function shipSystemLog(level, event, data = {}) {
+  const dbLevel =
+    level === "fatal" ? "error" : ["debug", "info", "warn", "error"].includes(level) ? level : "info";
+  const { error: errMsg, reason, ...rest } = data;
+  const message = [errMsg, reason].filter(Boolean).join(" — ");
+  sb.from("system_logs")
+    .insert({
+      business_id: BUSINESS_ID,
+      source: "chat_worker",
+      level: dbLevel,
+      event,
+      message: (message || event).slice(0, 4000),
+      payload: { worker: WORKER_ID, ...rest }
+    })
+    .then(({ error }) => {
+      if (error) {
+        // console only — recursing into log() would loop on persistent failure.
+        console.error(
+          JSON.stringify({ level: "warn", event: "system_log_ship_failed", error: error.message })
+        );
+      }
+    })
+    .catch((e) => {
+      console.error(
+        JSON.stringify({
+          level: "warn",
+          event: "system_log_ship_failed",
+          error: e?.message || String(e)
+        })
+      );
+    });
+}
 
 async function claimNextJob() {
   const { data, error } = await sb.rpc("claim_chat_job", {
@@ -1112,5 +1152,6 @@ async function main() {
 
 main().catch((err) => {
   log("error", "fatal", { error: err?.message || String(err), stack: err?.stack });
-  process.exit(1);
+  // Brief grace so the fire-and-forget system_logs insert can flush before exit.
+  setTimeout(() => process.exit(1), 1500).unref();
 });

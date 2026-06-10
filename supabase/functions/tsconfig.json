@@ -1,0 +1,21 @@
+{
+  // Dedicated TS project for the Deno Edge functions. The repo-root
+  // tsconfig.json EXCLUDES this folder (the app's `tsc --noEmit` would choke
+  // on remote URL imports), which previously left the IDE type-checking these
+  // files in a config-less inferred project and flagging every `Deno` /
+  // https-import usage. This project + deno-shims.d.ts resolves them instead.
+  // Deploy-time behavior is unaffected (the Supabase CLI bundles with Deno).
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "DOM.AsyncIterable"],
+    "strict": true,
+    "noEmit": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "types": []
+  },
+  "include": ["./**/*.ts"]
+}

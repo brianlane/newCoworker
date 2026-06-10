@@ -20,6 +20,7 @@ import { telnyxMessagingPhoneString } from "../_shared/telnyx_messaging_payload.
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
+import { systemLog } from "../_shared/system_log.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 import { callSmsRowboatWithStatelessFallback } from "../_shared/sms_rowboat.ts";
 import { buildCustomerPreambleForEdge, type EdgeCustomerMemoryRow } from "../_shared/customer_memory_preamble.ts";
@@ -358,6 +359,14 @@ serve(async (req: Request) => {
               business_id: job.business_id,
               error: msg
             });
+            await systemLog(supabase, {
+              businessId: job.business_id,
+              source: "sms_worker",
+              level: job.attempt_count >= MAX_ATTEMPTS ? "error" : "warn",
+              event: "sms_safe_mode_forward_failed",
+              message: msg,
+              payload: { job_id: job.id, attempt: job.attempt_count }
+            });
           }
           processed += 1;
           continue;
@@ -408,6 +417,14 @@ serve(async (req: Request) => {
         p_last_error: "missing_rowboat_project_or_bearer"
       });
       await clearJobReplyCache(supabase, job.id);
+      await systemLog(supabase, {
+        businessId: job.business_id,
+        source: "sms_worker",
+        level: "error",
+        event: "sms_rowboat_not_configured",
+        message: "Inbound SMS dead-lettered: Rowboat project id / bearer missing",
+        payload: { job_id: job.id }
+      });
       processed += 1;
       continue;
     }
@@ -686,7 +703,8 @@ serve(async (req: Request) => {
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (job.attempt_count >= MAX_ATTEMPTS) {
+      const deadLetter = job.attempt_count >= MAX_ATTEMPTS;
+      if (deadLetter) {
         await supabase.rpc("complete_sms_inbound_job", {
           p_job_id: job.id,
           p_status: "dead_letter",
@@ -706,6 +724,16 @@ serve(async (req: Request) => {
           })
           .eq("id", job.id);
       }
+      // The Rowboat turn (→ llm-router → Gemini/Ollama) failed: this is THE
+      // "client texted the AI and got silence" diagnostic.
+      await systemLog(supabase, {
+        businessId: job.business_id,
+        source: "sms_worker",
+        level: deadLetter ? "error" : "warn",
+        event: deadLetter ? "sms_rowboat_dead_letter" : "sms_rowboat_retry",
+        message: msg,
+        payload: { job_id: job.id, attempt: job.attempt_count, max_attempts: MAX_ATTEMPTS }
+      });
       processed += 1;
       continue;
     }
@@ -738,6 +766,14 @@ serve(async (req: Request) => {
         p_last_error: "missing_telnyx_messaging_env"
       });
       await clearJobReplyCache(supabase, job.id);
+      await systemLog(supabase, {
+        businessId: job.business_id,
+        source: "sms_worker",
+        level: "error",
+        event: "sms_telnyx_not_configured",
+        message: "Reply dead-lettered: Telnyx API key / messaging profile missing",
+        payload: { job_id: job.id }
+      });
       processed += 1;
       continue;
     }
@@ -799,6 +835,14 @@ serve(async (req: Request) => {
         p_last_error: reserve?.reason ?? "monthly_sms_limit"
       });
       await clearJobReplyCache(supabase, job.id);
+      await systemLog(supabase, {
+        businessId: job.business_id,
+        source: "sms_worker",
+        level: "warn",
+        event: "sms_quota_exhausted",
+        message: `Reply suppressed: ${reserve?.reason ?? "monthly_sms_limit"} (customer sees silence)`,
+        payload: { job_id: job.id }
+      });
       processed += 1;
       continue;
     }
@@ -856,6 +900,14 @@ serve(async (req: Request) => {
         job_id: job.id,
         business_id: job.business_id
       });
+      await systemLog(supabase, {
+        businessId: job.business_id,
+        source: "sms_worker",
+        level: "info",
+        event: "sms_reply_sent",
+        message: "Inbound SMS answered (Rowboat reply delivered via Telnyx)",
+        payload: { job_id: job.id, telnyx_message_id: mid || null }
+      });
     } catch (e) {
       if (idem) {
         const recovered = await telnyxTryRecoverOutboundMessageId(apiKey, idem);
@@ -884,7 +936,8 @@ serve(async (req: Request) => {
       // consume monthly quota. Done BEFORE status update so a retry can re-reserve cleanly.
       await releaseReservedSlot();
       const msg = e instanceof Error ? e.message : String(e);
-      if (job.attempt_count >= MAX_ATTEMPTS) {
+      const deadLetter = job.attempt_count >= MAX_ATTEMPTS;
+      if (deadLetter) {
         await supabase.rpc("complete_sms_inbound_job", {
           p_job_id: job.id,
           p_status: "dead_letter",
@@ -904,6 +957,14 @@ serve(async (req: Request) => {
           })
           .eq("id", job.id);
       }
+      await systemLog(supabase, {
+        businessId: job.business_id,
+        source: "sms_worker",
+        level: deadLetter ? "error" : "warn",
+        event: deadLetter ? "sms_telnyx_send_dead_letter" : "sms_telnyx_send_retry",
+        message: msg,
+        payload: { job_id: job.id, attempt: job.attempt_count, max_attempts: MAX_ATTEMPTS }
+      });
     }
     processed += 1;
   }

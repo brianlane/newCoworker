@@ -7,6 +7,7 @@ import {
   voiceToolValidationError
 } from "@/lib/voice-tools/common";
 import { insertCoworkerLog } from "@/lib/db/logs";
+import { recordSystemLog } from "@/lib/db/system-logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { logger } from "@/lib/logger";
 
@@ -99,6 +100,14 @@ export async function POST(request: Request) {
         logger.warn("voice-tools/capture: notification dispatch failed", {
           error: err instanceof Error ? err.message : String(err)
         });
+        await recordSystemLog({
+          businessId: envelope.businessId,
+          source: "voice",
+          level: "warn",
+          event: "voice_urgent_notification_failed",
+          message: err instanceof Error ? err.message : String(err),
+          payload: { log_id: logId, call_control_id: envelope.callControlId ?? null }
+        });
       }
     }
 
@@ -106,6 +115,14 @@ export async function POST(request: Request) {
   } catch (err) {
     logger.warn("voice-tools/capture failed", {
       error: err instanceof Error ? err.message : String(err)
+    });
+    await recordSystemLog({
+      businessId: envelope.businessId,
+      source: "voice",
+      level: "error",
+      event: "voice_tool_capture_failed",
+      message: err instanceof Error ? err.message : String(err),
+      payload: { call_control_id: envelope.callControlId ?? null }
     });
     return voiceToolResponse({ ok: false, detail: "internal_error" }, 500);
   }
