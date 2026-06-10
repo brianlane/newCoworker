@@ -37,7 +37,8 @@ export default async function BusinessDetailPage({
   const [
     business,
     logs,
-    systemLogs,
+    recentSystemLogs,
+    problemSystemLogs,
     provisioningLogs,
     config,
     subscription,
@@ -47,6 +48,9 @@ export default async function BusinessDetailPage({
     getBusiness(businessId),
     getRecentLogs(businessId, 20, undefined, { excludeProvisioning: true }),
     listSystemLogs(businessId, { limit: 200 }),
+    // Fetched separately so chatty debug/info traffic can never push the
+    // latest warnings/errors out of the 200-row window the viewer gets.
+    listSystemLogs(businessId, { minLevel: "warn", limit: 100 }),
     getProvisioningLogs(businessId, 50),
     getBusinessConfig(businessId),
     getSubscription(businessId),
@@ -55,6 +59,11 @@ export default async function BusinessDetailPage({
   ]);
 
   if (!business) notFound();
+
+  const systemLogById = new Map(
+    [...recentSystemLogs, ...problemSystemLogs].map((row) => [row.id, row])
+  );
+  const systemLogs = [...systemLogById.values()].sort((a, b) => b.id - a.id);
 
   const needsPayment = !subscription || subscription.status === "pending";
 

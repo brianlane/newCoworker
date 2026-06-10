@@ -61,6 +61,10 @@ if (level && !LEVELS.includes(level as (typeof LEVELS)[number])) {
   console.error(`--level must be one of: ${LEVELS.join(", ")}`);
   process.exit(1);
 }
+if (minLevel && !LEVELS.includes(minLevel as (typeof LEVELS)[number])) {
+  console.error(`--min-level must be one of: ${LEVELS.join(", ")}`);
+  process.exit(1);
+}
 
 /** "90m" / "2h" / "7d" → ISO timestamp that long ago. */
 function sinceToIso(raw: string): string {
@@ -93,7 +97,17 @@ async function fetchRows(afterId: number | null): Promise<LogRow[]> {
     if (safe) q = q.or(`event.ilike.%${safe}%,message.ilike.%${safe}%`);
   }
   if (sinceIso) q = q.gte("created_at", sinceIso);
-  if (afterId !== null) q = q.gt("id", afterId);
+  if (afterId !== null) {
+    // Follow mode: ascending from the last printed id so a burst larger than
+    // `limit` is drained page by page instead of silently dropping rows.
+    q = q.gt("id", afterId);
+    const { data, error } = await q.order("id", { ascending: true }).limit(limit);
+    if (error) {
+      console.error(`query failed: ${error.message}`);
+      process.exit(1);
+    }
+    return (data ?? []) as LogRow[];
+  }
   const { data, error } = await q.order("id", { ascending: false }).limit(limit);
   if (error) {
     console.error(`query failed: ${error.message}`);
@@ -135,9 +149,12 @@ async function main(): Promise<void> {
   console.error(`-- following (poll 5s), Ctrl-C to stop --`);
   for (;;) {
     await new Promise((r) => setTimeout(r, 5000));
-    rows = await fetchRows(lastId);
-    rows.forEach(printRow);
-    if (rows.length > 0) lastId = rows.at(-1)!.id;
+    // Drain every full page before sleeping again so bursts aren't dropped.
+    do {
+      rows = await fetchRows(lastId);
+      rows.forEach(printRow);
+      if (rows.length > 0) lastId = rows.at(-1)!.id;
+    } while (rows.length === limit);
   }
 }
 
