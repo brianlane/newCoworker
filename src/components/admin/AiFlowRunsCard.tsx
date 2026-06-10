@@ -37,10 +37,15 @@ export async function AiFlowRunsCard({ businessId }: { businessId: string }) {
 
   const flowNames = new Map(flows.map((f) => [f.id, f.name]));
 
+  // The worker keeps last_error from transient retries even after a run
+  // recovers, so on a `done` run it's stale noise rather than a failure.
+  const isRelevantError = (r: { status: string; last_error: string | null }) =>
+    Boolean(r.last_error) && r.status !== "done";
+
   // Pull step detail for runs that need explaining (failed, or stuck with an
   // error), newest first, capped.
   const problemRuns = runs
-    .filter((r) => r.status === "failed" || r.last_error)
+    .filter((r) => r.status === "failed" || isRelevantError(r))
     .slice(0, MAX_RUNS_WITH_STEPS);
   const stepsByRun = new Map<string, AiFlowRunStepRow[]>(
     await Promise.all(
@@ -83,7 +88,7 @@ export async function AiFlowRunsCard({ businessId }: { businessId: string }) {
                     </Badge>
                   </div>
                 </div>
-                {run.last_error && (
+                {isRelevantError(run) && (
                   <p className="text-xs text-spark-orange/90 whitespace-pre-wrap break-words">
                     {run.last_error}
                   </p>
