@@ -15,25 +15,40 @@ const STATUS_STYLES: Record<string, string> = {
   canceled: "bg-parchment/10 text-parchment/40"
 };
 
+export type AiFlowRef = { id: string; name: string };
+
 export function AiFlowRunsManager({
   businessId,
-  initialRuns
+  initialRuns,
+  flows
 }: {
   businessId: string;
   initialRuns: AiFlowRunRow[];
+  flows: AiFlowRef[];
 }) {
   const [runs, setRuns] = useState<AiFlowRunRow[]>(initialRuns);
+  const [flowList, setFlowList] = useState<AiFlowRef[]>(flows);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [steps, setSteps] = useState<Record<string, AiFlowRunStepRow[]>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const reload = async () => {
-    const res = await fetch(`/api/aiflows/runs?businessId=${encodeURIComponent(businessId)}`, {
-      cache: "no-store"
-    });
-    const json = (await res.json()) as { ok: boolean; data?: AiFlowRunRow[] };
-    if (json.ok && json.data) setRuns(json.data);
+    // Refresh runs AND flows together: grouping/labels join runs to flow names,
+    // so refreshing only runs could file a newly created flow's runs under
+    // "Deleted flow" (the server-rendered flows snapshot wouldn't know it yet).
+    const [runsRes, flowsRes] = await Promise.all([
+      fetch(`/api/aiflows/runs?businessId=${encodeURIComponent(businessId)}`, {
+        cache: "no-store"
+      }),
+      fetch(`/api/aiflows?businessId=${encodeURIComponent(businessId)}`, { cache: "no-store" })
+    ]);
+    const runsJson = (await runsRes.json()) as { ok: boolean; data?: AiFlowRunRow[] };
+    if (runsJson.ok && runsJson.data) setRuns(runsJson.data);
+    const flowsJson = (await flowsRes.json()) as { ok: boolean; data?: AiFlowRef[] };
+    if (flowsJson.ok && flowsJson.data) {
+      setFlowList(flowsJson.data.map((f) => ({ id: f.id, name: f.name })));
+    }
   };
 
   const toggle = async (runId: string) => {
@@ -81,6 +96,32 @@ export function AiFlowRunsManager({
   const pending = runs.filter((r) => r.status === "awaiting_approval");
   const routing = runs.filter((r) => r.status === "awaiting_agent");
 
+  const flowName = (flowId: string) =>
+    flowList.find((f) => f.id === flowId)?.name ?? "Deleted flow";
+
+  // Group run history per AiFlow. Groups follow the flows list order (newest
+  // flow first, matching the AiFlows page); runs within a group stay
+  // newest-first as the API returns them. Runs whose flow no longer appears in
+  // the list (deleted between fetches — FK cascade removes them on the next
+  // load) are collected into trailing "Deleted flow" groups rather than dropped.
+  const grouped: Array<{ id: string; name: string; runs: AiFlowRunRow[] }> = [];
+  const byFlow = new Map<string, AiFlowRunRow[]>();
+  for (const r of runs) {
+    const list = byFlow.get(r.flow_id);
+    if (list) list.push(r);
+    else byFlow.set(r.flow_id, [r]);
+  }
+  for (const f of flowList) {
+    const list = byFlow.get(f.id);
+    if (list) {
+      grouped.push({ id: f.id, name: f.name, runs: list });
+      byFlow.delete(f.id);
+    }
+  }
+  for (const [id, list] of byFlow) {
+    grouped.push({ id, name: "Deleted flow", runs: list });
+  }
+
   return (
     <div className="space-y-6">
       {error && (
@@ -97,7 +138,10 @@ export function AiFlowRunsManager({
             const approval = (r.context.approval ?? {}) as { prompt?: string };
             return (
               <Card key={r.id} className="border-spark-orange/30 bg-spark-orange/5">
-                <p className="text-sm text-parchment">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-parchment/40">
+                  {flowName(r.flow_id)}
+                </p>
+                <p className="mt-1 text-sm text-parchment">
                   {approval.prompt || "This automation is waiting for your approval."}
                 </p>
                 <div className="mt-3 flex gap-2">
@@ -135,7 +179,10 @@ export function AiFlowRunsManager({
             const deadline = r.respond_by_at ? new Date(r.respond_by_at) : null;
             return (
               <Card key={r.id} className="border-spark-orange/30 bg-spark-orange/5">
-                <p className="text-sm text-parchment">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-parchment/40">
+                  {flowName(r.flow_id)}
+                </p>
+                <p className="mt-1 text-sm text-parchment">
                   Offered to{" "}
                   <span className="font-semibold">{r.awaiting_agent_e164 ?? "an agent"}</span>
                   {deadline && (
@@ -164,49 +211,59 @@ export function AiFlowRunsManager({
             <p className="py-6 text-center text-sm text-parchment/60">No runs yet.</p>
           </Card>
         ) : (
-          runs.map((r) => (
-            <Card key={r.id} className="space-y-2">
-              <button
-                onClick={() => toggle(r.id)}
-                className="flex w-full items-center justify-between text-left"
-              >
-                <span className="flex items-center gap-2">
-                  {expanded === r.id ? (
-                    <ChevronDown className="h-4 w-4 text-parchment/40" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 text-parchment/40" />
-                  )}
-                  <span className="text-sm text-parchment/80">
-                    {new Date(r.created_at).toLocaleString()}
-                  </span>
+          grouped.map((group) => (
+            <div key={group.id} className="space-y-2">
+              <h3 className="flex items-baseline gap-2 pt-1 text-sm font-semibold text-parchment">
+                {group.name}
+                <span className="text-xs font-normal text-parchment/40">
+                  {group.runs.length} run{group.runs.length === 1 ? "" : "s"}
                 </span>
-                <span
-                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                    STATUS_STYLES[r.status] ?? "bg-parchment/10 text-parchment/50"
-                  }`}
-                >
-                  {r.status.toUpperCase()}
-                </span>
-              </button>
-              {expanded === r.id && (
-                <div className="space-y-1 border-t border-parchment/10 pt-2">
-                  {r.last_error && (
-                    <p className="text-xs text-red-400">Error: {r.last_error}</p>
-                  )}
-                  {(steps[r.id] ?? []).map((s) => (
-                    <div key={s.id} className="flex items-center justify-between text-xs">
-                      <span className="text-parchment/70">
-                        {s.step_index + 1}. {s.step_type}
+              </h3>
+              {group.runs.map((r) => (
+                <Card key={r.id} className="space-y-2">
+                  <button
+                    onClick={() => toggle(r.id)}
+                    className="flex w-full items-center justify-between text-left"
+                  >
+                    <span className="flex items-center gap-2">
+                      {expanded === r.id ? (
+                        <ChevronDown className="h-4 w-4 text-parchment/40" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 text-parchment/40" />
+                      )}
+                      <span className="text-sm text-parchment/80">
+                        {new Date(r.created_at).toLocaleString()}
                       </span>
-                      <span className="text-parchment/40">{s.status}</span>
+                    </span>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                        STATUS_STYLES[r.status] ?? "bg-parchment/10 text-parchment/50"
+                      }`}
+                    >
+                      {r.status.toUpperCase()}
+                    </span>
+                  </button>
+                  {expanded === r.id && (
+                    <div className="space-y-1 border-t border-parchment/10 pt-2">
+                      {r.last_error && (
+                        <p className="text-xs text-red-400">Error: {r.last_error}</p>
+                      )}
+                      {(steps[r.id] ?? []).map((s) => (
+                        <div key={s.id} className="flex items-center justify-between text-xs">
+                          <span className="text-parchment/70">
+                            {s.step_index + 1}. {s.step_type}
+                          </span>
+                          <span className="text-parchment/40">{s.status}</span>
+                        </div>
+                      ))}
+                      {(steps[r.id] ?? []).length === 0 && (
+                        <p className="text-xs text-parchment/40">No steps recorded.</p>
+                      )}
                     </div>
-                  ))}
-                  {(steps[r.id] ?? []).length === 0 && (
-                    <p className="text-xs text-parchment/40">No steps recorded.</p>
                   )}
-                </div>
-              )}
-            </Card>
+                </Card>
+              ))}
+            </div>
           ))
         )}
       </section>
