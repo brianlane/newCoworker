@@ -25,7 +25,7 @@ import {
   voiceToolResponse,
   voiceToolValidationError
 } from "@/lib/voice-tools/common";
-import { getCustomerMemory } from "@/lib/customer-memory/db";
+import { lookupCustomerByPhone } from "@/lib/customer-tools/handlers";
 import { logger } from "@/lib/logger";
 
 const argsSchema = z.object({
@@ -61,35 +61,12 @@ export async function POST(request: Request) {
   if (!phone) {
     return voiceToolValidationError("missing phone (and no callerE164 in envelope)");
   }
-  // Even when callerE164 came from the envelope, validate the shape
-  // — Telnyx has been observed to deliver "anonymous" / "" / "unknown"
-  // there in spotty CNAM cases.
-  if (!/^\+[1-9]\d{6,15}$/.test(phone)) {
-    return voiceToolResponse({ ok: true, data: { found: false } });
-  }
 
   try {
-    const memory = await getCustomerMemory(envelope.businessId, phone);
-    if (!memory) {
-      return voiceToolResponse({ ok: true, data: { found: false } });
-    }
-    return voiceToolResponse({
-      ok: true,
-      data: {
-        found: true,
-        customer: {
-          displayName: memory.display_name,
-          customerE164: memory.customer_e164,
-          // Voice-safe summary only — owner notes (pinned_md) stay
-          // server-side; the agent uses them for steering but doesn't
-          // read them back to the customer on a phone call.
-          summary: memory.summary_md,
-          lastChannel: memory.last_channel,
-          lastInteractionAt: memory.last_interaction_at,
-          totalInteractionCount: memory.total_interaction_count
-        }
-      }
-    });
+    // Shape validation (including spotty-CNAM "anonymous" caller ids)
+    // happens inside the shared core, which reports found:false for
+    // malformed phones rather than erroring.
+    return voiceToolResponse(await lookupCustomerByPhone(envelope.businessId, phone));
   } catch (err) {
     logger.warn("voice-tools/customer-lookup failed", {
       businessId: envelope.businessId,

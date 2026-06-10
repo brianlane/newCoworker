@@ -9,10 +9,13 @@
  * means "use `defaultEnabled` from this registry".
  *
  * `configurable: false` marks tools we surface for visibility but cannot
- * toggle from the platform — e.g. the SMS agent's customer-memory tools are
- * declared inside the per-tenant Rowboat workflow (vps/scripts/
- * deploy-client.sh) and have no platform-side chokepoint, so flipping a row
+ * toggle from the platform (no platform-side chokepoint), so flipping a row
  * here would be a lie. The API route refuses writes for them.
+ *
+ * Rowboat-mediated tools (texting coworker + the dashboard coworker's
+ * Rowboat-declared tools) execute through /api/rowboat/tool-call — the
+ * per-tenant Rowboat project's tool webhook — which enforces these settings
+ * per call, so they ARE configurable.
  */
 
 export type AgentKey = "dashboard" | "voice" | "sms";
@@ -46,9 +49,15 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         label: "Send email",
         description:
           "Send an email from your connected mailbox (Integrations → Workspace) when you ask for it in chat.",
-        // OFF by default: sending mail on the owner's behalf is a real-world
-        // side effect they should opt into deliberately.
-        defaultEnabled: false,
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "send_sms",
+        label: "Send text message",
+        description:
+          "Text any number from your business line when you ask for it in chat.",
+        defaultEnabled: true,
         configurable: true
       },
       {
@@ -140,25 +149,25 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "customer_lookup_by_phone",
         label: "Recognize repeat customers",
         description:
-          "Declared inside the per-tenant agent runtime; managed by the platform, not toggleable here.",
+          "Look up a texter's cross-channel history so they're greeted as a known customer. Also covers the dashboard coworker's lookups.",
         defaultEnabled: true,
-        configurable: false
+        configurable: true
       },
       {
         toolKey: "customer_set_display_name",
         label: "Save customer names",
         description:
-          "Declared inside the per-tenant agent runtime; managed by the platform, not toggleable here.",
+          "Remember a texter's name on their customer profile. Also covers the dashboard coworker.",
         defaultEnabled: true,
-        configurable: false
+        configurable: true
       },
       {
         toolKey: "customer_append_pinned_note",
         label: "Pin customer notes",
         description:
-          "Declared inside the per-tenant agent runtime; managed by the platform, not toggleable here.",
+          "Pin permanent facts (preferences, constraints) to a customer's profile. Also covers the dashboard coworker.",
         defaultEnabled: true,
-        configurable: false
+        configurable: true
       }
     ]
   }

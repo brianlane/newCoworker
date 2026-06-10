@@ -41,23 +41,8 @@ import {
   voiceToolResponse,
   voiceToolValidationError
 } from "@/lib/voice-tools/common";
-import {
-  getCustomerMemory,
-  recordInteractionAndIncrement,
-  updateCustomerOwnerFields
-} from "@/lib/customer-memory/db";
+import { appendCustomerPinnedNote } from "@/lib/customer-tools/handlers";
 import { logger } from "@/lib/logger";
-
-/** Hard cap on persisted pinned_md. MUST match the dashboard editor's
- * own cap (`src/components/dashboard/CustomerProfileEditor.tsx`
- * PINNED_MAX = 2000) AND the PATCH validator
- * (`src/app/api/dashboard/customers/[customerE164]/route.ts`
- * `pinnedMd: z.string().max(2000)`). If the voice tool wrote past the
- * dashboard cap, the owner would be unable to save edits to the same
- * field through the dashboard (PATCH `.max()` rejects), making the
- * field effectively read-only after a long enough pin sequence. Keep
- * all three numbers in lockstep. */
-const PINNED_MAX_CHARS = 2000;
 
 const argsSchema = z.object({
   /** The new note as the agent wants it persisted. ~600 chars typical, hard 1500 cap. */
@@ -98,52 +83,14 @@ export async function POST(request: Request) {
   if (!note) {
     return voiceToolValidationError("note cannot be empty after trim");
   }
-  // Stamp every agent-pinned line with the call control id so the
-  // owner can audit/delete it later. ISO date is human-readable;
-  // call_control_id makes it traceable to a specific transcript.
-  const stamp = `[${new Date().toISOString().slice(0, 10)} via voice]`;
-  const newLine = `${stamp} ${note}`;
-  if (newLine.length > PINNED_MAX_CHARS) {
-    return voiceToolResponse({ ok: false, detail: "note_too_long" });
-  }
 
   try {
-    let existing = await getCustomerMemory(envelope.businessId, phone);
-    // No row yet for this customer? `updateCustomerOwnerFields` would
-    // happily fire an UPDATE matching zero rows and we'd return
-    // {appended:true} on a write that never persisted (Cursor Bugbot
-    // Low on PR #74). Force-create the row via the same RPC the
-    // inbound paths use so the agent's pin always lands.
-    if (!existing) {
-      await recordInteractionAndIncrement(envelope.businessId, phone, "voice", {});
-      existing = await getCustomerMemory(envelope.businessId, phone);
-    }
-    const prior = existing?.pinned_md?.trim() ?? "";
-    // Two distinct combinations to track:
-    //  - `combined`     : what we'll persist (post-truncation).
-    //  - `wantedLength` : what we WOULD have written had we ignored
-    //                     the cap. Used to set `truncated` honestly —
-    //                     the prior buggy version compared `prior +
-    //                     separator + newLine` against `combined` even
-    //                     when `prior` was empty (no separator added),
-    //                     so the very first note always reported
-    //                     truncated:true. Cursor Bugbot Low on PR #74.
-    const wanted = prior ? `${prior}\n\n${newLine}` : newLine;
-    const combined =
-      wanted.length > PINNED_MAX_CHARS
-        ? wanted.slice(wanted.length - PINNED_MAX_CHARS)
-        : wanted;
-    await updateCustomerOwnerFields(envelope.businessId, phone, {
-      pinnedMd: combined
-    });
-    return voiceToolResponse({
-      ok: true,
-      data: {
-        appended: true,
-        pinnedChars: combined.length,
-        truncated: combined.length < wanted.length
-      }
-    });
+    // Shared core: date-stamps the line, force-creates the row when
+    // missing, and truncates oldest-first at the pinned_md cap (see
+    // src/lib/customer-tools/handlers.ts).
+    return voiceToolResponse(
+      await appendCustomerPinnedNote(envelope.businessId, phone, note, "voice", "voice")
+    );
   } catch (err) {
     logger.warn("voice-tools/customer-append-pinned-note failed", {
       businessId: envelope.businessId,

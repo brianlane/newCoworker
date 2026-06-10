@@ -47,15 +47,19 @@ describe("registry invariants", () => {
     }
   });
 
-  it("dashboard send_email defaults OFF (sending mail is opt-in)", () => {
-    const def = findAgentToolDefinition("dashboard", "send_email");
-    expect(def?.tool.defaultEnabled).toBe(false);
-    expect(def?.tool.configurable).toBe(true);
+  it("every tool defaults ON and is toggleable (owner opts OUT, not in)", () => {
+    for (const agent of AGENT_TOOL_REGISTRY) {
+      for (const tool of agent.tools) {
+        expect(tool.defaultEnabled, `${agent.key}.${tool.toolKey}`).toBe(true);
+        expect(tool.configurable, `${agent.key}.${tool.toolKey}`).toBe(true);
+      }
+    }
   });
 
-  it("voice tools default ON so existing call behavior is unchanged", () => {
-    const voice = AGENT_TOOL_REGISTRY.find((a) => a.key === "voice")!;
-    expect(voice.tools.every((t) => t.defaultEnabled)).toBe(true);
+  it("dashboard declares the full side-effect toolset (email, sms, memory)", () => {
+    expect(findAgentToolDefinition("dashboard", "send_email")?.tool.defaultEnabled).toBe(true);
+    expect(findAgentToolDefinition("dashboard", "send_sms")?.tool.defaultEnabled).toBe(true);
+    expect(findAgentToolDefinition("dashboard", "memory_capture")?.tool.defaultEnabled).toBe(true);
   });
 
   it("findAgentToolDefinition returns null for unknown keys", () => {
@@ -69,7 +73,8 @@ describe("resolveAgentTools", () => {
     supabaseStub.from.mockReturnValue(makeBuilder({ data: [], error: null }));
     const agents = await resolveAgentTools(BIZ);
     const dashboard = agents.find((a) => a.key === "dashboard")!;
-    expect(dashboard.tools.find((t) => t.toolKey === "send_email")?.enabled).toBe(false);
+    expect(dashboard.tools.find((t) => t.toolKey === "send_email")?.enabled).toBe(true);
+    expect(dashboard.tools.find((t) => t.toolKey === "send_sms")?.enabled).toBe(true);
     expect(dashboard.tools.find((t) => t.toolKey === "memory_capture")?.enabled).toBe(true);
   });
 
@@ -77,28 +82,14 @@ describe("resolveAgentTools", () => {
     supabaseStub.from.mockReturnValue(makeBuilder({ data: null, error: null }));
     const agents = await resolveAgentTools(BIZ);
     const dashboard = agents.find((a) => a.key === "dashboard")!;
-    expect(dashboard.tools.find((t) => t.toolKey === "send_email")?.enabled).toBe(false);
+    expect(dashboard.tools.find((t) => t.toolKey === "send_email")?.enabled).toBe(true);
   });
 
   it("applies overrides for configurable tools", async () => {
     supabaseStub.from.mockReturnValue(
       makeBuilder({
         data: [
-          { business_id: BIZ, agent_key: "dashboard", tool_key: "send_email", enabled: true, updated_at: "now" }
-        ],
-        error: null
-      })
-    );
-    const agents = await resolveAgentTools(BIZ);
-    const dashboard = agents.find((a) => a.key === "dashboard")!;
-    expect(dashboard.tools.find((t) => t.toolKey === "send_email")?.enabled).toBe(true);
-  });
-
-  it("ignores stale rows for unknown tools and overrides on non-configurable tools", async () => {
-    supabaseStub.from.mockReturnValue(
-      makeBuilder({
-        data: [
-          { business_id: BIZ, agent_key: "dashboard", tool_key: "removed_tool", enabled: true, updated_at: "now" },
+          { business_id: BIZ, agent_key: "dashboard", tool_key: "send_email", enabled: false, updated_at: "now" },
           { business_id: BIZ, agent_key: "sms", tool_key: "customer_lookup_by_phone", enabled: false, updated_at: "now" }
         ],
         error: null
@@ -106,10 +97,25 @@ describe("resolveAgentTools", () => {
     );
     const agents = await resolveAgentTools(BIZ);
     const dashboard = agents.find((a) => a.key === "dashboard")!;
-    expect(dashboard.tools.some((t) => t.toolKey === "removed_tool")).toBe(false);
+    expect(dashboard.tools.find((t) => t.toolKey === "send_email")?.enabled).toBe(false);
+    // The texting coworker's tools are enforced through /api/rowboat/tool-call
+    // so their toggles are honored too.
     const sms = agents.find((a) => a.key === "sms")!;
-    // Non-configurable ⇒ default wins regardless of the stale row.
-    expect(sms.tools.find((t) => t.toolKey === "customer_lookup_by_phone")?.enabled).toBe(true);
+    expect(sms.tools.find((t) => t.toolKey === "customer_lookup_by_phone")?.enabled).toBe(false);
+  });
+
+  it("ignores stale rows for tools the registry no longer knows", async () => {
+    supabaseStub.from.mockReturnValue(
+      makeBuilder({
+        data: [
+          { business_id: BIZ, agent_key: "dashboard", tool_key: "removed_tool", enabled: true, updated_at: "now" }
+        ],
+        error: null
+      })
+    );
+    const agents = await resolveAgentTools(BIZ);
+    const dashboard = agents.find((a) => a.key === "dashboard")!;
+    expect(dashboard.tools.some((t) => t.toolKey === "removed_tool")).toBe(false);
   });
 
   it("throws on a read error (the settings page should fail loudly, not render lies)", async () => {
@@ -126,8 +132,13 @@ describe("isAgentToolEnabled", () => {
 
   it("returns the registry default when no row exists", async () => {
     supabaseStub.from.mockReturnValue(makeBuilder({ data: null, error: null }));
-    await expect(isAgentToolEnabled(BIZ, "dashboard", "send_email")).resolves.toBe(false);
+    await expect(isAgentToolEnabled(BIZ, "dashboard", "send_email")).resolves.toBe(true);
     await expect(isAgentToolEnabled(BIZ, "voice", "send_follow_up_email")).resolves.toBe(true);
+  });
+
+  it("honors an explicit OFF override", async () => {
+    supabaseStub.from.mockReturnValue(makeBuilder({ data: { enabled: false }, error: null }));
+    await expect(isAgentToolEnabled(BIZ, "dashboard", "send_sms")).resolves.toBe(false);
   });
 
   it("fails closed for unknown tools", async () => {
@@ -137,15 +148,10 @@ describe("isAgentToolEnabled", () => {
 
   it("resolves read errors to the registry default (DB blip must not flip behavior)", async () => {
     supabaseStub.from.mockReturnValue(makeBuilder({ data: null, error: { message: "boom" } }));
-    // send_email defaults OFF → stays off on error.
-    await expect(isAgentToolEnabled(BIZ, "dashboard", "send_email")).resolves.toBe(false);
-    // voice follow-up email defaults ON → stays usable mid-call on error.
+    // Every tool defaults ON → a transient read error keeps it usable
+    // rather than silently disabling a live surface.
+    await expect(isAgentToolEnabled(BIZ, "dashboard", "send_email")).resolves.toBe(true);
     await expect(isAgentToolEnabled(BIZ, "voice", "send_follow_up_email")).resolves.toBe(true);
-  });
-
-  it("does not read the DB for non-configurable tools", async () => {
-    await expect(isAgentToolEnabled(BIZ, "sms", "customer_lookup_by_phone")).resolves.toBe(true);
-    expect(supabaseStub.from).not.toHaveBeenCalled();
   });
 });
 

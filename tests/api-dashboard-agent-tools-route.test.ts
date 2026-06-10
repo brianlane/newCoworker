@@ -10,9 +10,18 @@ vi.mock("@/lib/db/agent-tool-settings", () => ({
   upsertAgentToolSetting: vi.fn()
 }));
 
+// Keep the real registry but allow individual tests to stub lookups (the
+// live registry has no non-configurable tools anymore, so the 400 branch
+// needs a synthetic display-only definition).
+vi.mock("@/lib/agent-tools/registry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/agent-tools/registry")>();
+  return { ...actual, findAgentToolDefinition: vi.fn(actual.findAgentToolDefinition) };
+});
+
 import { GET, PUT } from "@/app/api/dashboard/agent-tools/route";
 import { getAuthUser, requireOwner } from "@/lib/auth";
 import { resolveAgentTools, upsertAgentToolSetting } from "@/lib/db/agent-tool-settings";
+import { findAgentToolDefinition } from "@/lib/agent-tools/registry";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -115,8 +124,18 @@ describe("PUT /api/dashboard/agent-tools", () => {
   });
 
   it("400s for non-configurable tools (no platform enforcement point)", async () => {
+    vi.mocked(findAgentToolDefinition).mockReturnValueOnce({
+      agent: { key: "sms", label: "Texting coworker", description: "t", tools: [] },
+      tool: {
+        toolKey: "platform_managed_tool",
+        label: "Platform-managed tool",
+        description: "Display-only.",
+        defaultEnabled: true,
+        configurable: false
+      }
+    });
     const res = await PUT(
-      putRequest({ businessId: BIZ, agentKey: "sms", toolKey: "customer_lookup_by_phone", enabled: false })
+      putRequest({ businessId: BIZ, agentKey: "sms", toolKey: "platform_managed_tool", enabled: false })
     );
     expect(res.status).toBe(400);
     expect(vi.mocked(upsertAgentToolSetting)).not.toHaveBeenCalled();
