@@ -4,6 +4,7 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getSubscription } from "@/lib/db/subscriptions";
+import { resolveActiveRenewalDate } from "@/lib/billing/renewal";
 import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { AccountSettingsForms } from "@/components/dashboard/AccountSettingsForms";
@@ -11,6 +12,19 @@ import { CoworkerToolsManager } from "@/components/dashboard/CoworkerToolsManage
 import { resolveAgentTools } from "@/lib/db/agent-tool-settings";
 
 export const dynamic = "force-dynamic";
+
+function formatDate(iso: string | null): string | null {
+  if (!iso) return null;
+  try {
+    return new Date(iso).toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric"
+    });
+  } catch {
+    return iso;
+  }
+}
 
 export default async function SettingsPage() {
   const user = await getAuthUser();
@@ -28,6 +42,12 @@ export default async function SettingsPage() {
   const business = businesses?.[0] ?? null;
   const subscription = business ? await getSubscription(business.id) : null;
   const agents = business ? await resolveAgentTools(business.id) : null;
+  // Same rolling next-charge date the Billing page shows (Stripe's
+  // current_period_end, cached and webhook-advanced; see resolveActiveRenewalDate).
+  const nextBillingAt =
+    subscription?.status === "active" && !subscription.cancel_at_period_end
+      ? formatDate(await resolveActiveRenewalDate(subscription))
+      : null;
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -75,6 +95,12 @@ export default async function SettingsPage() {
               </Badge>
             </dd>
           </div>
+          {nextBillingAt && (
+            <div className="flex justify-between">
+              <dt className="text-parchment/50">Next billing date</dt>
+              <dd className="text-parchment font-mono">{nextBillingAt}</dd>
+            </div>
+          )}
         </dl>
         <a
           href="/dashboard/billing"

@@ -1,5 +1,74 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type Stripe from "stripe";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { getStripe } from "@/lib/stripe/client";
+import { logger } from "@/lib/logger";
+
+type StripeCustomersClient = Pick<Stripe, "customers">;
+
+/**
+ * Mirror a confirmed account-email change onto Stripe.
+ *
+ * The Stripe customer's `email` drives the billing portal, receipts, and
+ * invoice emails; without this sync they keep going to the abandoned address
+ * after a self-serve email change. Looks up every Stripe customer attached to
+ * the owner's subscriptions (businesses are already on the NEW email by the
+ * time this runs) and updates each one.
+ *
+ * Best-effort by design: a Stripe outage must not fail reconciliation (the
+ * login/business linkage is the critical invariant; billing email is
+ * cosmetic-but-important). Failures are logged, and the update is idempotent
+ * so a duplicate run is harmless.
+ */
+export async function syncStripeCustomerEmails(
+  email: string,
+  db: SupabaseClient,
+  stripe?: StripeCustomersClient
+): Promise<void> {
+  try {
+    const { data: bizRows, error: bizError } = await db
+      .from("businesses")
+      .select("id")
+      .eq("owner_email", email);
+    if (bizError) {
+      logger.warn("email-change: stripe sync business lookup failed", {
+        error: bizError.message
+      });
+      return;
+    }
+    const businessIds = ((bizRows ?? []) as Array<{ id: string }>).map((r) => r.id);
+    if (businessIds.length === 0) return;
+
+    const { data: subRows, error: subError } = await db
+      .from("subscriptions")
+      .select("stripe_customer_id")
+      .in("business_id", businessIds)
+      .not("stripe_customer_id", "is", null);
+    if (subError) {
+      logger.warn("email-change: stripe sync subscription lookup failed", {
+        error: subError.message
+      });
+      return;
+    }
+    const customerIds = [
+      ...new Set(
+        ((subRows ?? []) as Array<{ stripe_customer_id: string | null }>)
+          .map((r) => r.stripe_customer_id)
+          .filter((id): id is string => Boolean(id))
+      )
+    ];
+    if (customerIds.length === 0) return;
+
+    const client = stripe ?? getStripe();
+    for (const customerId of customerIds) {
+      await client.customers.update(customerId, { email });
+    }
+  } catch (err) {
+    logger.warn("email-change: stripe customer email sync failed", {
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
 
 /**
  * Reconcile `businesses.owner_email` with a confirmed account-email change.
@@ -25,7 +94,8 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 export async function reconcilePendingEmailChange(
   userId: string | null | undefined,
   email: string | null | undefined,
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  stripe?: StripeCustomersClient
 ): Promise<void> {
   if (!userId || !email) return;
 
@@ -78,4 +148,10 @@ export async function reconcilePendingEmailChange(
   }
 
   await db.from("pending_email_changes").delete().eq("user_id", pending.user_id);
+
+  // Follow-through: point the Stripe customer(s) at the new email so the
+  // billing portal / receipts stop referencing the abandoned address. Runs on
+  // both success paths (fresh sync above, or a prior run's crash-recovered
+  // sync) and never fails reconciliation — see syncStripeCustomerEmails.
+  await syncStripeCustomerEmails(email, db, stripe);
 }
