@@ -94,6 +94,7 @@ import {
   buildDashboardCustomerPreamble,
   DASHBOARD_PREAMBLE_MAX_CUSTOMERS
 } from "@/lib/customer-memory/dashboard-preamble";
+import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
@@ -258,6 +259,42 @@ PERSISTING RULES. When the owner states a durable preference or fact, the system
 export { OWNER_PREAMBLE };
 
 /**
+ * Email tool protocol for the dashboard chat agent.
+ *
+ * Why a structured text block instead of a Rowboat workflow tool: the
+ * owner-chat path executes NO Rowboat tool calls (the worker calls /chat
+ * non-streaming and reads `turn.output`'s assistant text; tool fulfilment
+ * only exists on the voice-bridge path). Teaching the model a deterministic
+ * sentinel block and having the VPS chat-worker parse + fulfil it mirrors
+ * the existing worker-side owner-memory capture design, works identically
+ * on the Gemini agent and its local Qwen spend-cap twin, and needs no
+ * workflow re-seed.
+ *
+ * MUST stay in lockstep with the parser in vps/chat-worker/email-tool.mjs
+ * (EMAIL_SEND_OPEN / EMAIL_SEND_CLOSE + field caps, which themselves match
+ * the zod schema in /api/voice/tools/dashboard-email).
+ */
+export const EMAIL_SEND_OPEN = "<<EMAIL_SEND>>";
+export const EMAIL_SEND_CLOSE = "<<END_EMAIL_SEND>>";
+
+export const EMAIL_TOOL_ENABLED_PREAMBLE = `EMAIL TOOL — ENABLED.
+
+You can send email from the owner's connected mailbox. The platform sends it on your behalf; the "from" address is always the owner's connected account and cannot be changed. When the owner asks you to send an email, compose it and include this EXACT block in your reply, on its own lines:
+
+${EMAIL_SEND_OPEN}
+{"to": "recipient@example.com", "subject": "Subject line", "body": "Plain-text body"}
+${EMAIL_SEND_CLOSE}
+
+Rules:
+- Only include the block when the owner explicitly asks, in this conversation, for an email to be sent. Never invent recipients — use addresses the owner gave you.
+- Exactly one valid JSON object per block. Plain-text body only (use \\n for line breaks). Subject at most 150 characters; body at most 4000 characters. At most 3 such blocks per reply.
+- Do NOT claim the email was sent. The platform sends it after your reply and appends the actual delivery result for the owner. Phrase your reply as "sending it now".`;
+
+export const EMAIL_TOOL_DISABLED_PREAMBLE = `EMAIL TOOL — DISABLED.
+
+You cannot send emails on this surface. If the owner asks you to send an email, do NOT pretend to send one and do NOT output any tool-call syntax — tell them plainly that email sending is turned off, and that they can enable the "Send email" tool under Settings → Coworker tools on the dashboard.`;
+
+/**
  * Build the message array sent to Rowboat for one chat turn. Stored on
  * the job row so the worker can call Rowboat without re-running this
  * logic.
@@ -305,6 +342,15 @@ function buildRowboatChatMessages(args: {
    * world the owner is operating in.
    */
   customerPreamble?: string | null;
+  /**
+   * Whether the owner enabled the dashboard `send_email` tool (Settings →
+   * Coworker tools). Drives WHICH email-tool system block is injected —
+   * enabled teaches the EMAIL_SEND protocol; disabled explicitly forbids
+   * pretending to send (the exact hallucination observed before this
+   * existed: the model emitted fake tool_code JSON then claimed the email
+   * was sent).
+   */
+  emailToolEnabled: boolean;
 }): DashboardChatJobInputMessage[] {
   const out: DashboardChatJobInputMessage[] = [];
   // ALWAYS first: OWNER_PREAMBLE establishes that this is the
@@ -313,6 +359,10 @@ function buildRowboatChatMessages(args: {
   // we've seen it slip even after a turn or two on a fresh
   // continuation.
   out.push({ role: "system", content: OWNER_PREAMBLE });
+  out.push({
+    role: "system",
+    content: args.emailToolEnabled ? EMAIL_TOOL_ENABLED_PREAMBLE : EMAIL_TOOL_DISABLED_PREAMBLE
+  });
   const customerPreamble = args.customerPreamble?.trim();
   if (customerPreamble) {
     out.push({ role: "system", content: customerPreamble });
@@ -445,6 +495,17 @@ export async function POST(request: Request) {
       typeof thread.rowboat_conversation_id === "string" &&
       thread.rowboat_conversation_id.trim().length > 0;
 
+    // Settings → Coworker tools: decides which email-tool system block the
+    // model sees this turn. Default OFF (registry); isAgentToolEnabled
+    // resolves read errors to that default, so a DB blip degrades to "tool
+    // disabled" rather than failing the turn. The adapter the worker calls
+    // re-checks authoritatively before any mail leaves.
+    const emailToolEnabled = await isAgentToolEnabled(
+      body.businessId,
+      "dashboard",
+      "send_email"
+    );
+
     // Two message arrays:
     //   * `inputMessages`: first attempt. ALWAYS includes a BOUNDED
     //     recent tail (last RESEND_TAIL_MESSAGES) as a system block so
@@ -465,7 +526,8 @@ export async function POST(request: Request) {
       tail: tail.slice(-RESEND_TAIL_MESSAGES),
       newUserMessage: body.message,
       includeTailContext: true,
-      customerPreamble
+      customerPreamble,
+      emailToolEnabled
     });
     const statelessInputMessages = hasContinuation
       ? buildRowboatChatMessages({
@@ -473,7 +535,8 @@ export async function POST(request: Request) {
           tail,
           newUserMessage: body.message,
           includeTailContext: true,
-          customerPreamble
+          customerPreamble,
+          emailToolEnabled
         })
       : null;
 

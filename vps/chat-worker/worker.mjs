@@ -85,6 +85,7 @@ import {
   extractOwnerRule,
   fitBulletsToPayload
 } from "./memory-capture.mjs";
+import { fulfillEmailSends } from "./email-tool.mjs";
 
 const SUPABASE_URL = required("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = required("SUPABASE_SERVICE_ROLE_KEY");
@@ -174,6 +175,16 @@ const MEMORY_CAPTURE_TIMEOUT_MS = intEnv("MEMORY_CAPTURE_TIMEOUT_MS", 30 * 1000)
 const OWNER_APPEND_URL = VERCEL_BASE_URL
   ? `${VERCEL_BASE_URL}/api/voice/tools/owner-append-business-memory`
   : "";
+// Platform adapter that sends dashboard-chat emails from the owner's
+// connected mailbox. Same auth as OWNER_APPEND_URL (gateway token). The
+// adapter authoritatively re-checks the owner's Settings → Coworker tools
+// toggle before any mail leaves, so this worker never needs its own
+// settings read. Empty when the worker is deployed without Vercel plumbing
+// — EMAIL_SEND blocks then resolve to an honest "not configured" line.
+const EMAIL_TOOL_URL = VERCEL_BASE_URL
+  ? `${VERCEL_BASE_URL}/api/voice/tools/dashboard-email`
+  : "";
+const EMAIL_TOOL_TIMEOUT_MS = intEnv("EMAIL_TOOL_TIMEOUT_MS", 15_000);
 const MEMORY_CAPTURE_CALLBACK_TIMEOUT_MS = 10_000;
 // Cap how long we'll let the summarizer callback hold an open
 // connection. We don't await the response, but we DO want bounded
@@ -877,6 +888,26 @@ async function processJob(job) {
     // jobStartAgent is exact: Gemini turns meter, local (capped) turns are $0.
     const usedAgent = jobStartAgent;
 
+    // === Dashboard email tool ===
+    // The enqueue route teaches the model an EMAIL_SEND sentinel-block
+    // protocol when the owner enabled Settings → Coworker tools → Send
+    // email. Extract any blocks from the reply, send them via the platform
+    // adapter (which re-checks the toggle authoritatively), strip the raw
+    // blocks, and append HONEST per-email delivery results. Runs BEFORE the
+    // reply insert so the stored message is the cleaned reply + outcomes —
+    // the owner never sees raw protocol JSON or an unconfirmed "sent" claim.
+    // fulfillEmailSends never throws; a reply without blocks passes through
+    // untouched.
+    const emailOutcome = await fulfillEmailSends({
+      content,
+      url: EMAIL_TOOL_URL,
+      bearer: ROWBOAT_GATEWAY_TOKEN,
+      businessId: BUSINESS_ID,
+      timeoutMs: EMAIL_TOOL_TIMEOUT_MS,
+      logger: (level, event, data) => log(level, event, { jobId: job.id, ...data })
+    });
+    const finalContent = emailOutcome.content;
+
     // Insert the assistant reply FIRST. Owner-rule persistence happens only
     // AFTER this succeeds (below), so a turn whose reply insert fails never
     // writes to memory_md, and a reclaimed/retried job can't persist a rule
@@ -884,7 +915,7 @@ async function processJob(job) {
     // on PR #94.
     const { data: msg, error: insertErr } = await sb
       .from("dashboard_chat_messages")
-      .insert({ thread_id: job.thread_id, role: "assistant", content })
+      .insert({ thread_id: job.thread_id, role: "assistant", content: finalContent })
       .select("id")
       .single();
     if (insertErr) {
@@ -1009,7 +1040,9 @@ async function processJob(job) {
     // runs invisibly — no message is edited, the owner never waits for it and
     // never sees it — it just silently persists durable rules to business
     // memory in the background (see runOwnerRuleExtraction / the queue).
-    enqueueOwnerRuleExtraction(job, content);
+    // Uses the CLEANED reply so raw EMAIL_SEND protocol JSON never feeds the
+    // rule extractor.
+    enqueueOwnerRuleExtraction(job, finalContent);
   } catch (err) {
     const msg = String(err?.message || "unknown_error");
     const code = msg.split(":")[0];

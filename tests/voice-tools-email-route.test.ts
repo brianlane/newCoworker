@@ -12,10 +12,15 @@ vi.mock("@/lib/rowboat/gateway-token", () => ({
   verifyRowboatGatewayToken: vi.fn().mockReturnValue(true)
 }));
 
+vi.mock("@/lib/db/agent-tool-settings", () => ({
+  isAgentToolEnabled: vi.fn()
+}));
+
 import { POST } from "@/app/api/voice/tools/email/route";
 import { resolveEmailConnection } from "@/lib/voice-tools/connections";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
 import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
+import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 
 const businessId = "11111111-1111-4111-8111-111111111111";
 
@@ -37,6 +42,8 @@ describe("POST /api/voice/tools/email", () => {
     vi.clearAllMocks();
     process.env = { ...OLD, ROWBOAT_GATEWAY_TOKEN: "gw" };
     vi.mocked(verifyRowboatGatewayToken).mockReturnValue(true);
+    // Registry default: voice send_follow_up_email is ON unless toggled off.
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -56,6 +63,24 @@ describe("POST /api/voice/tools/email", () => {
     const body = await res.json();
     expect(body.ok).toBe(false);
     expect(body.detail).toMatch(/^invalid_args:/);
+  });
+
+  it("returns tool_disabled when the owner turned the voice email tool off in Settings → Coworker tools", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(false);
+    const res = await POST(
+      makeRequest({
+        businessId,
+        args: { toEmail: "lead@example.com", subject: "Follow-up", bodyText: "Thanks." }
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: false, detail: "tool_disabled" });
+    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenCalledWith(
+      businessId,
+      "voice",
+      "send_follow_up_email"
+    );
+    expect(nangoProxyForBusiness).not.toHaveBeenCalled();
   });
 
   it("returns email_not_connected when no Nango connection exists (per require_nango product rule)", async () => {
