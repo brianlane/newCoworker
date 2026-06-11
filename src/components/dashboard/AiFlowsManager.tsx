@@ -767,7 +767,7 @@ function StepFields({
                 })
               }
             />
-            Quiet hours — never text the lead overnight
+            Quiet hours
           </label>
           {qh && (
             <div className="space-y-2">
