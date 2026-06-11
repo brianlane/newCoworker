@@ -1,22 +1,29 @@
 // Supabase Edge Function: notifications-digest
 //
-// Daily digest sender. Scheduled by pg_cron (see migration
-// 20260509000001_schedule_notifications_digest_cron.sql) and authenticated
-// with INTERNAL_CRON_SECRET via the shared `_shared/cron_auth` helper.
+// Daily + weekly digest sender. Scheduled by pg_cron (see migrations
+// 20260509000001_schedule_notifications_digest_cron.sql and
+// 20260612000000_weekly_digest.sql) and authenticated with
+// INTERNAL_CRON_SECRET via the shared `_shared/cron_auth` helper. The cron
+// body carries `{"window":"daily"}` or `{"window":"weekly"}` (missing =
+// daily, for backward compatibility with the original schedule).
 //
-// For every business where notification_preferences.email_digest is true and
-// a resolvable email exists (preferences.alert_email > businesses.owner_email
-// > ADMIN_EMAIL), build a 24h activity digest from coworker_logs +
-// notifications and send via Resend. One `notifications` row per business
-// (kind=digest, channel=email) is recorded with sent/failed/skipped status so
-// the dashboard reflects the digest delivery state.
+// For every business where the matching notification_preferences toggle
+// (email_digest / email_digest_weekly) is true and a resolvable email exists
+// (preferences.alert_email > businesses.owner_email > ADMIN_EMAIL), build an
+// activity digest and send via Resend. Activity is aggregated from the REAL
+// activity tables — dashboard_chat_jobs, sms_inbound_jobs,
+// daily_usage.sms_sent, voice_call_transcripts, ai_flow_runs,
+// customer_memories — plus coworker_logs (urgent alerts) and notifications
+// (delivered count). The original implementation counted only coworker_logs,
+// which nothing but voice captures writes to, so every digest skipped with
+// "no_activity". One `notifications` row per business (kind=digest,
+// channel=email) is recorded with sent/failed/skipped status.
 //
 // Skipped reasons:
-//   - email_digest_disabled: toggle is off
+//   - email_digest_disabled / email_digest_weekly_disabled: toggle is off
 //   - unsubscribed: notification_preferences.unsubscribed_at is set
 //   - no_email: no recipient could be resolved
-//   - no_activity: nothing happened in the last 24h, suppress to keep the
-//     digest meaningful
+//   - no_activity: nothing happened in the window
 //   - resend_unconfigured: RESEND_API_KEY missing
 //
 // Required Edge Function Secrets:
@@ -33,6 +40,16 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { buildBrandedEmailHtml, type BrandedBodyBlock } from "../_shared/branded_email_html.ts";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
+import {
+  buildDigestEmailModel,
+  hasDigestActivity,
+  windowLabel,
+  type DigestActivity,
+  type DigestAiFlowRun,
+  type DigestCallRow,
+  type DigestCustomerRow,
+  type DigestWindow
+} from "../_shared/digest_builder.ts";
 
 type SupaClient = ReturnType<typeof createClient>;
 
@@ -42,20 +59,15 @@ type DigestTarget = {
   owner_email: string | null;
   alert_email: string | null;
   email_digest: boolean;
+  email_digest_weekly: boolean;
   unsubscribed_at: string | null;
 };
-
-type LogRow = { task_type: string; status: string; created_at: string };
-type NotifSkim = { kind: string | null; status: string; created_at: string };
 
 // Plain `?bid=<businessId>` parameter — no HMAC. UUID v4 is unguessable and
 // the unsubscribe action is a one-click flag the owner can re-enable from the
 // dashboard. See src/app/api/notifications/unsubscribe/route.ts for the
 // matching handler / threat-model rationale.
 function buildUnsubscribeUrl(businessId: string, appUrl: string): string {
-  // appUrl is normalized at the call site (trailing slash stripped); we keep
-  // the helper signature explicit so callers can't accidentally pass a
-  // partially-formed URL.
   return `${appUrl}/api/notifications/unsubscribe?bid=${encodeURIComponent(businessId)}`;
 }
 
@@ -79,71 +91,116 @@ async function recordDigestRow(
   if (error) console.error("digest.insert", status, error);
 }
 
-function buildDigestEmail(opts: {
-  businessName: string;
-  logs: LogRow[];
-  notifs: NotifSkim[];
-  dashboardUrl: string;
-  unsubscribeUrl: string;
-  appUrl: string;
-  recipientEmail: string;
-}): { subject: string; text: string; html: string; activitySummary: string } {
-  const counts: Record<string, number> = {};
-  for (const l of opts.logs) {
-    counts[l.task_type] = (counts[l.task_type] ?? 0) + 1;
-  }
-  const urgent = opts.logs.filter((l) => l.status === "urgent_alert").length;
-  const taskLines = Object.entries(counts)
-    .map(([k, v]) => `  • ${k}: ${v}`)
-    .join("\n");
-  const unread = opts.notifs.filter((n) => n.status === "sent").length;
-  const subject = `Daily summary — ${opts.businessName} (${opts.logs.length} events)`;
-  const lines = [
-    `Hi — here's a quick rundown from your AI Coworker over the last 24 hours.`,
-    "",
-    `Total events: ${opts.logs.length}`,
-    urgent > 0 ? `Urgent alerts: ${urgent}` : "Urgent alerts: 0",
-    `Notifications delivered: ${unread}`,
-    "",
-    taskLines.length > 0 ? `Breakdown:\n${taskLines}` : "No activity to break down.",
-    "",
-    `Open the dashboard: ${opts.dashboardUrl}`,
-    "",
-    "---",
-    `Don't want these emails? Unsubscribe with one click: ${opts.unsubscribeUrl}`
-  ];
-  const text = lines.join("\n");
-  const activitySummary = `${opts.logs.length} events (${urgent} urgent)`;
+/**
+ * Aggregate one business's activity for the window from the real tables.
+ * Returns the activity plus the first query error encountered (if any) so
+ * the caller records a `failed` digest row instead of silently treating a
+ * broken query as "no activity".
+ */
+async function fetchActivity(
+  supa: SupaClient,
+  businessId: string,
+  sinceIso: string
+): Promise<{ activity: DigestActivity; error: string | null }> {
+  const sinceDate = sinceIso.slice(0, 10);
 
-  const bodyBlocks: BrandedBodyBlock[] = [
-    { kind: "text", text: `Hi — here's a quick rundown from your AI Coworker over the last 24 hours.` },
-    {
-      kind: "text",
-      text: [
-        `Total events: ${opts.logs.length}`,
-        urgent > 0 ? `Urgent alerts: ${urgent}` : "Urgent alerts: 0",
-        `Notifications delivered: ${unread}`
-      ].join("\n")
-    }
-  ];
-  if (taskLines.length > 0) {
-    bodyBlocks.push({ kind: "text", text: `Breakdown:\n${taskLines}` });
-  } else {
-    bodyBlocks.push({ kind: "text", text: "No activity to break down." });
-  }
+  const [chatRes, smsInRes, usageRes, callsRes, flowsRes, custRes, logRes, notifRes] =
+    await Promise.all([
+      supa
+        .from("dashboard_chat_jobs")
+        .select("id", { count: "exact", head: true })
+        .eq("business_id", businessId)
+        .gte("created_at", sinceIso),
+      supa
+        .from("sms_inbound_jobs")
+        .select("id", { count: "exact", head: true })
+        .eq("business_id", businessId)
+        .gte("created_at", sinceIso),
+      supa
+        .from("daily_usage")
+        .select("sms_sent")
+        .eq("business_id", businessId)
+        .gte("usage_date", sinceDate),
+      supa
+        .from("voice_call_transcripts")
+        .select("caller_e164, status, started_at")
+        .eq("business_id", businessId)
+        .gte("started_at", sinceIso)
+        .order("started_at", { ascending: false })
+        .limit(50),
+      supa
+        .from("ai_flow_runs")
+        .select("status, created_at, context, ai_flows(name)")
+        .eq("business_id", businessId)
+        .gte("created_at", sinceIso)
+        .order("created_at", { ascending: false })
+        .limit(25),
+      supa
+        .from("customer_memories")
+        .select("display_name, customer_e164")
+        .eq("business_id", businessId)
+        .gte("created_at", sinceIso)
+        .order("created_at", { ascending: false })
+        .limit(25),
+      supa
+        .from("coworker_logs")
+        .select("id", { count: "exact", head: true })
+        .eq("business_id", businessId)
+        .eq("status", "urgent_alert")
+        .gte("created_at", sinceIso),
+      supa
+        .from("notifications")
+        .select("id", { count: "exact", head: true })
+        .eq("business_id", businessId)
+        .eq("status", "sent")
+        .gte("created_at", sinceIso)
+    ]);
 
-  const siteUrl = opts.appUrl.replace(/\/$/, "");
-  const html = buildBrandedEmailHtml({
-    siteUrl,
-    documentTitle: subject,
-    heading: subject,
-    bodyBlocks,
-    cta: { label: "Open dashboard", href: opts.dashboardUrl },
-    unsubscribeUrl: opts.unsubscribeUrl,
-    recipientEmail: opts.recipientEmail
+  const firstError =
+    (chatRes.error && `dashboard_chat_jobs: ${chatRes.error.message}`) ||
+    (smsInRes.error && `sms_inbound_jobs: ${smsInRes.error.message}`) ||
+    (usageRes.error && `daily_usage: ${usageRes.error.message}`) ||
+    (callsRes.error && `voice_call_transcripts: ${callsRes.error.message}`) ||
+    (flowsRes.error && `ai_flow_runs: ${flowsRes.error.message}`) ||
+    (custRes.error && `customer_memories: ${custRes.error.message}`) ||
+    (logRes.error && `coworker_logs: ${logRes.error.message}`) ||
+    (notifRes.error && `notifications: ${notifRes.error.message}`) ||
+    null;
+
+  const smsOutbound = ((usageRes.data ?? []) as Array<{ sms_sent: number | null }>).reduce(
+    (sum, row) => sum + (row.sms_sent ?? 0),
+    0
+  );
+
+  const aiFlowRuns: DigestAiFlowRun[] = (
+    (flowsRes.data ?? []) as Array<{
+      status: string;
+      created_at: string;
+      context: Record<string, unknown> | null;
+      ai_flows: { name: string } | { name: string }[] | null;
+    }>
+  ).map((r) => {
+    const flow = Array.isArray(r.ai_flows) ? r.ai_flows[0] : r.ai_flows;
+    return {
+      flowName: flow?.name ?? "AiFlow",
+      status: r.status,
+      created_at: r.created_at,
+      context: r.context ?? {}
+    };
   });
 
-  return { subject, text, html, activitySummary };
+  const activity: DigestActivity = {
+    chatTurns: chatRes.count ?? 0,
+    smsInbound: smsInRes.count ?? 0,
+    smsOutbound,
+    calls: (callsRes.data ?? []) as DigestCallRow[],
+    aiFlowRuns,
+    newCustomers: (custRes.data ?? []) as DigestCustomerRow[],
+    urgentAlerts: logRes.count ?? 0,
+    notificationsDelivered: notifRes.count ?? 0
+  };
+
+  return { activity, error: firstError };
 }
 
 serve(async (req: Request) => {
@@ -156,6 +213,15 @@ serve(async (req: Request) => {
       headers: { "Content-Type": "application/json" }
     });
   }
+
+  let window: DigestWindow = "daily";
+  try {
+    const body = await req.json();
+    if (body && body.window === "weekly") window = "weekly";
+  } catch {
+    // Empty / non-JSON body — the original daily cron posts '{}'.
+  }
+  const digestLabel = window === "weekly" ? "Weekly digest" : "Daily digest";
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -176,8 +242,8 @@ serve(async (req: Request) => {
   );
 
   // Pull every business + its prefs in one shot. The RLS bypass via service
-  // role makes this fine; we hand-filter `email_digest` after the join so a
-  // business without a prefs row defaults-on (matches the
+  // role makes this fine; we hand-filter the digest toggle after the join so
+  // a business without a prefs row defaults-on (matches the
   // `notification_preferences` schema defaults).
   const { data: businessRows, error: bizErr } = await supa
     .from("businesses")
@@ -196,7 +262,7 @@ serve(async (req: Request) => {
   const liveBusinesses = businesses.filter((b) => b.status !== "wiped");
   if (liveBusinesses.length === 0) {
     return new Response(
-      JSON.stringify({ ok: true, sent: 0, skipped: 0, failed: 0, total: 0 }),
+      JSON.stringify({ ok: true, window, sent: 0, skipped: 0, failed: 0, total: 0 }),
       { status: 200, headers: { "Content-Type": "application/json" } }
     );
   }
@@ -204,18 +270,28 @@ serve(async (req: Request) => {
   const ids = liveBusinesses.map((b) => b.id);
   const { data: prefsRows } = await supa
     .from("notification_preferences")
-    .select("business_id, alert_email, email_digest, unsubscribed_at")
+    .select("business_id, alert_email, email_digest, email_digest_weekly, unsubscribed_at")
     .in("business_id", ids);
-  const prefsByBiz = new Map<string, { alert_email: string | null; email_digest: boolean; unsubscribed_at: string | null }>();
+  const prefsByBiz = new Map<
+    string,
+    {
+      alert_email: string | null;
+      email_digest: boolean;
+      email_digest_weekly: boolean;
+      unsubscribed_at: string | null;
+    }
+  >();
   for (const row of (prefsRows ?? []) as Array<{
     business_id: string;
     alert_email: string | null;
     email_digest: boolean;
+    email_digest_weekly: boolean;
     unsubscribed_at: string | null;
   }>) {
     prefsByBiz.set(row.business_id, {
       alert_email: row.alert_email,
       email_digest: row.email_digest,
+      email_digest_weekly: row.email_digest_weekly,
       unsubscribed_at: row.unsubscribed_at
     });
   }
@@ -228,26 +304,33 @@ serve(async (req: Request) => {
       owner_email: b.owner_email,
       // Default-on when no prefs row exists (matches table defaults).
       email_digest: prefs ? prefs.email_digest : true,
+      email_digest_weekly: prefs ? prefs.email_digest_weekly : true,
       alert_email: prefs?.alert_email ?? null,
       unsubscribed_at: prefs?.unsubscribed_at ?? null
     };
   });
 
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const windowMs = window === "weekly" ? 7 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+  const since = new Date(Date.now() - windowMs).toISOString();
 
   let sent = 0;
   let failed = 0;
   let skipped = 0;
 
   for (const t of targets) {
-    if (!t.email_digest || t.unsubscribed_at) {
+    const toggleOn = window === "weekly" ? t.email_digest_weekly : t.email_digest;
+    if (!toggleOn || t.unsubscribed_at) {
       await recordDigestRow(
         supa,
         t.business_id,
         "skipped",
-        "Daily digest",
-        { recipient: t.alert_email ?? t.owner_email ?? adminEmail },
-        t.unsubscribed_at ? "unsubscribed" : "email_digest_disabled"
+        digestLabel,
+        { window, recipient: t.alert_email ?? t.owner_email ?? adminEmail },
+        t.unsubscribed_at
+          ? "unsubscribed"
+          : window === "weekly"
+            ? "email_digest_weekly_disabled"
+            : "email_digest_disabled"
       );
       skipped += 1;
       continue;
@@ -255,7 +338,7 @@ serve(async (req: Request) => {
 
     const recipient = (t.alert_email ?? t.owner_email ?? adminEmail ?? "").trim();
     if (!recipient) {
-      await recordDigestRow(supa, t.business_id, "skipped", "Daily digest", {}, "no_email");
+      await recordDigestRow(supa, t.business_id, "skipped", digestLabel, { window }, "no_email");
       skipped += 1;
       continue;
     }
@@ -264,57 +347,36 @@ serve(async (req: Request) => {
         supa,
         t.business_id,
         "skipped",
-        "Daily digest",
-        { recipient },
+        digestLabel,
+        { window, recipient },
         "resend_unconfigured"
       );
       skipped += 1;
       continue;
     }
 
-    // Per-business activity pulls. Both queries can fail independently
-    // (timeout, RLS misconfiguration, etc.); without surfacing the error
-    // we'd treat every failure as "no activity" and silently swallow the
-    // problem. Record a `failed` digest row instead so the dashboard
-    // shows the operator something went wrong.
-    const { data: logRows, error: logErr } = await supa
-      .from("coworker_logs")
-      .select("task_type, status, created_at")
-      .eq("business_id", t.business_id)
-      .gte("created_at", since);
-    const { data: notifRows, error: notifErr } = await supa
-      .from("notifications")
-      .select("kind, status, created_at")
-      .eq("business_id", t.business_id)
-      .gte("created_at", since);
-
-    if (logErr || notifErr) {
-      const reason = logErr
-        ? `coworker_logs_query_failed: ${logErr.message}`
-        : `notifications_query_failed: ${(notifErr as { message: string }).message}`;
-      console.error("digest.activity_query_failed", t.business_id, reason);
+    const { activity, error: activityErr } = await fetchActivity(supa, t.business_id, since);
+    if (activityErr) {
+      console.error("digest.activity_query_failed", t.business_id, activityErr);
       await recordDigestRow(
         supa,
         t.business_id,
         "failed",
-        "Daily digest",
-        { recipient },
-        reason
+        digestLabel,
+        { window, recipient },
+        `activity_query_failed: ${activityErr}`
       );
       failed += 1;
       continue;
     }
 
-    const logs = ((logRows ?? []) as LogRow[]).filter((l) => l.task_type !== "provisioning");
-    const notifs = (notifRows ?? []) as NotifSkim[];
-
-    if (logs.length === 0) {
+    if (!hasDigestActivity(activity)) {
       await recordDigestRow(
         supa,
         t.business_id,
         "skipped",
-        "Daily digest",
-        { recipient },
+        digestLabel,
+        { window, recipient },
         "no_activity"
       );
       skipped += 1;
@@ -323,13 +385,36 @@ serve(async (req: Request) => {
 
     const unsubscribeUrl = buildUnsubscribeUrl(t.business_id, appUrl);
     const dashboardUrl = `${appUrl}/dashboard`;
-    const { subject, text, html, activitySummary } = buildDigestEmail({
+    const model = buildDigestEmailModel({
+      window,
       businessName: t.business_name ?? "your business",
-      logs,
-      notifs,
-      dashboardUrl,
+      activity
+    });
+
+    const textLines: string[] = [model.intro, ""];
+    const bodyBlocks: BrandedBodyBlock[] = [{ kind: "text", text: model.intro }];
+    for (const section of model.sections) {
+      textLines.push(`${section.heading}:`);
+      for (const line of section.lines) textLines.push(`  • ${line}`);
+      textLines.push("");
+      bodyBlocks.push({
+        kind: "text",
+        text: [`${section.heading}:`, ...section.lines.map((l) => `• ${l}`)].join("\n")
+      });
+    }
+    textLines.push(`Open the dashboard: ${dashboardUrl}`);
+    textLines.push("");
+    textLines.push("---");
+    textLines.push(`Don't want these emails? Unsubscribe with one click: ${unsubscribeUrl}`);
+    const text = textLines.join("\n");
+
+    const html = buildBrandedEmailHtml({
+      siteUrl: appUrl,
+      documentTitle: model.subject,
+      heading: `${windowLabel(window).title} — ${t.business_name ?? "your business"}`,
+      bodyBlocks,
+      cta: { label: "Open dashboard", href: dashboardUrl },
       unsubscribeUrl,
-      appUrl,
       recipientEmail: recipient
     });
 
@@ -353,7 +438,7 @@ serve(async (req: Request) => {
       body: JSON.stringify({
         from,
         to: [recipient],
-        subject,
+        subject: model.subject,
         text,
         html,
         ...(replyTo ? { reply_to: replyTo } : {}),
@@ -362,9 +447,10 @@ serve(async (req: Request) => {
     });
 
     if (res.ok) {
-      await recordDigestRow(supa, t.business_id, "sent", subject, {
+      await recordDigestRow(supa, t.business_id, "sent", model.subject, {
+        window,
         recipient,
-        activitySummary
+        activitySummary: model.activitySummary
       });
       sent += 1;
     } else {
@@ -374,8 +460,8 @@ serve(async (req: Request) => {
         supa,
         t.business_id,
         "failed",
-        subject,
-        { recipient, activitySummary },
+        model.subject,
+        { window, recipient, activitySummary: model.activitySummary },
         `resend_${res.status}`
       );
       failed += 1;
@@ -383,7 +469,7 @@ serve(async (req: Request) => {
   }
 
   return new Response(
-    JSON.stringify({ ok: failed === 0, sent, skipped, failed, total: targets.length }),
+    JSON.stringify({ ok: failed === 0, window, sent, skipped, failed, total: targets.length }),
     { status: 200, headers: { "Content-Type": "application/json" } }
   );
 });

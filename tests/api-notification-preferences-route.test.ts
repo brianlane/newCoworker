@@ -27,6 +27,7 @@ const PREFS = {
   business_id: "11111111-1111-4111-8111-111111111111",
   sms_urgent: true,
   email_digest: true,
+  email_digest_weekly: true,
   email_urgent: true,
   dashboard_alerts: true,
   phone_number: null,
@@ -97,6 +98,24 @@ describe("api/notifications/preferences route", () => {
         phone_number: null,
         alert_email: null
       })
+    );
+  });
+
+  it("passes email_digest_weekly through to the update", async () => {
+    const response = await POST(
+      new Request("http://localhost/api/notifications/preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId: PREFS.business_id,
+          email_digest_weekly: false
+        })
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(updateNotificationPreferences).toHaveBeenCalledWith(
+      PREFS.business_id,
+      expect.objectContaining({ email_digest_weekly: false })
     );
   });
 

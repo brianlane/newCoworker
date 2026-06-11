@@ -10,6 +10,7 @@ const patchSchema = z.object({
   businessId: z.string().uuid(),
   sms_urgent: z.boolean().optional(),
   email_digest: z.boolean().optional(),
+  email_digest_weekly: z.boolean().optional(),
   email_urgent: z.boolean().optional(),
   dashboard_alerts: z.boolean().optional(),
   phone_number: z.string().max(40).nullable().optional(),
