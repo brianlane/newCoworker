@@ -26,11 +26,7 @@ import {
   voiceToolResponse,
   voiceToolValidationError
 } from "@/lib/voice-tools/common";
-import {
-  getCustomerMemory,
-  recordInteractionAndIncrement,
-  updateCustomerOwnerFields
-} from "@/lib/customer-memory/db";
+import { setCustomerDisplayName } from "@/lib/customer-tools/handlers";
 import { logger } from "@/lib/logger";
 
 const argsSchema = z.object({
@@ -78,41 +74,11 @@ export async function POST(request: Request) {
   }
 
   try {
-    let existing = await getCustomerMemory(envelope.businessId, phone);
-    // No row yet for this customer? `updateCustomerOwnerFields` would
-    // UPDATE zero rows and silently report success (Cursor Bugbot Low
-    // on PR #74). Force-create via the inbound-path RPC so the
-    // agent-discovered name always lands on a real row. Idempotent:
-    // if a parallel `record_customer_interaction` raced us, the RPC
-    // simply increments the counter on the existing row.
-    if (!existing) {
-      await recordInteractionAndIncrement(envelope.businessId, phone, "voice", {
-        displayName
-      });
-      existing = await getCustomerMemory(envelope.businessId, phone);
-    }
-    // Avoid clobbering owner-curated names. Agent-discovered names are
-    // useful but never authoritative — if the owner went to the
-    // customers page and named the customer, that wins forever. Note:
-    // we re-check after the create above because the RPC's
-    // `p_display_name` will have already populated display_name on a
-    // brand-new row, in which case no follow-up UPDATE is needed.
-    if (existing?.display_name?.trim()) {
-      return voiceToolResponse({
-        ok: true,
-        data: {
-          updated: false,
-          reason:
-            existing.display_name.trim() === displayName
-              ? "name_already_set_matches"
-              : "name_already_set"
-        }
-      });
-    }
-    await updateCustomerOwnerFields(envelope.businessId, phone, {
-      displayName
-    });
-    return voiceToolResponse({ ok: true, data: { updated: true } });
+    // Shared core: force-creates the row when missing and never clobbers
+    // an owner-curated name (see src/lib/customer-tools/handlers.ts).
+    return voiceToolResponse(
+      await setCustomerDisplayName(envelope.businessId, phone, displayName, "voice")
+    );
   } catch (err) {
     logger.warn("voice-tools/customer-set-display-name failed", {
       businessId: envelope.businessId,

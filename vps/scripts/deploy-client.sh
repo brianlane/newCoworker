@@ -486,13 +486,28 @@ ROWBOAT_INSTRUCTIONS=${ROWBOAT_INSTRUCTIONS:-"You are a professional AI coworker
 # Write the seed script. We embed the project + key docs as Mongo extended
 # JSON so booleans, dates, and special chars round-trip cleanly.
 SEED_NOW=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+# Project tool webhook: when APP_BASE_URL is known, workflow tools are
+# marked isWebhook and Rowboat POSTs tool calls to the platform dispatcher
+# (/api/rowboat/tool-call) which fulfils them for real and enforces the
+# owner's Settings → Coworker tools toggles. Without APP_BASE_URL the
+# tools stay placeholder (LLM-mocked) — the pre-webhook behavior — because
+# isWebhook tools with no webhookUrl make Rowboat throw mid-turn.
+ROWBOAT_TOOL_WEBHOOK_URL=""
+if [[ -n "${APP_BASE_URL:-}" ]]; then
+  ROWBOAT_TOOL_WEBHOOK_URL="${APP_BASE_URL%/}/api/rowboat/tool-call"
+else
+  log "WARN: APP_BASE_URL unset — Rowboat workflow tools stay mocked (no tool webhook)"
+fi
+
 WORKFLOW_JSON=$(jq -nc \
   --arg name "${BUSINESS_NAME:-AI Coworker}" \
   --arg instructions "${ROWBOAT_INSTRUCTIONS}" \
   --arg model "${OLLAMA_MODEL}" \
   --arg ownerModel "${OWNER_CHAT_MODEL}" \
   --arg smsModel "${SMS_CHAT_MODEL}" \
+  --arg webhookUrl "${ROWBOAT_TOOL_WEBHOOK_URL}" \
   --arg now "${SEED_NOW}" '
+($webhookUrl != "") as $toolsAreReal |
 {
   agents: [
     {
@@ -563,11 +578,16 @@ WORKFLOW_JSON=$(jq -nc \
       model: $ownerModel,
       ragK: 3,
       ragReturnType: "chunks",
+      # Dashboard surface declares its own customer-tool names so the
+      # platform dispatcher can attribute the call (the Rowboat webhook
+      # payload has no agent context) — distinct Settings toggles and an
+      # honest interaction channel ("dashboard", not "sms").
       tools: [
-        "customer_lookup_by_phone",
-        "customer_set_display_name",
-        "customer_append_pinned_note",
-        "owner_append_business_memory"
+        "dashboard_customer_lookup_by_phone",
+        "dashboard_customer_set_display_name",
+        "dashboard_customer_append_pinned_note",
+        "owner_append_business_memory",
+        "send_sms"
       ]
     },
     {
@@ -588,10 +608,11 @@ WORKFLOW_JSON=$(jq -nc \
       ragK: 3,
       ragReturnType: "chunks",
       tools: [
-        "customer_lookup_by_phone",
-        "customer_set_display_name",
-        "customer_append_pinned_note",
-        "owner_append_business_memory"
+        "dashboard_customer_lookup_by_phone",
+        "dashboard_customer_set_display_name",
+        "dashboard_customer_append_pinned_note",
+        "owner_append_business_memory",
+        "send_sms"
       ]
     }
   ],
@@ -606,55 +627,138 @@ WORKFLOW_JSON=$(jq -nc \
   # NOTE: descriptions are deliberately apostrophe-free because the
   # surrounding bash heredoc opens this jq filter with single quotes;
   # any embedded apostrophe would close the literal early.
+  # `isWebhook: $toolsAreReal` routes these through the project tool
+  # webhook (/api/rowboat/tool-call) for REAL fulfilment + per-tool
+  # Settings enforcement. The webhook payload carries no caller context,
+  # so `phone` is REQUIRED on this path (the voice bridge keeps its own
+  # tool declarations with optional phone — see
+  # vps/voice-bridge/src/gemini-telnyx-bridge.ts).
   tools: [
     {
       name: "customer_lookup_by_phone",
-      description: "Look up the cross-channel customer profile (display name, rolling summary, last channel/date, total interaction count) for a caller phone number. Defaults to the current caller phone when called without args.",
+      description: "Look up the cross-channel customer profile (display name, rolling summary, last channel/date, total interaction count) for a customer phone number.",
+      isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
         properties: {
           phone: {
             type: "string",
-            description: "E.164 phone to look up. Omit to use the current caller phone."
+            description: "E.164 phone to look up, e.g. +15551234567."
           }
         },
-        required: []
+        required: ["phone"]
       }
     },
     {
       name: "customer_set_display_name",
-      description: "Persist the caller name on their customer profile so future calls/SMS recognize them. Will not overwrite a name the owner already set from the dashboard.",
+      description: "Persist the customer name on their profile so future calls/SMS recognize them. Will not overwrite a name the owner already set from the dashboard.",
+      isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
         properties: {
           displayName: {
             type: "string",
-            description: "The caller name as heard. Will be normalized server-side."
+            description: "The customer name. Will be normalized server-side."
           },
           phone: {
             type: "string",
-            description: "E.164 phone to attribute the name to. Omit for the current caller."
+            description: "E.164 phone to attribute the name to."
           }
         },
-        required: ["displayName"]
+        required: ["displayName", "phone"]
       }
     },
     {
       name: "customer_append_pinned_note",
       description: "Append a permanent fact to this customer pinned notes (e.g. allergies, scheduling constraints). The note survives every future summary. Use sparingly.",
+      isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
         properties: {
           note: {
             type: "string",
-            description: "The fact to pin, in the caller words. Keep concise."
+            description: "The fact to pin, in the customer words. Keep concise."
           },
           phone: {
             type: "string",
-            description: "E.164 phone to attribute the note to. Omit for the current caller."
+            description: "E.164 phone to attribute the note to."
           }
         },
-        required: ["note"]
+        required: ["note", "phone"]
+      }
+    },
+    {
+      name: "send_sms",
+      description: "Send a text message from the business number to any phone number. Use ONLY when the owner explicitly asks in dashboard chat for a text to be sent. Never invent recipients.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          toE164: {
+            type: "string",
+            description: "Recipient phone in E.164, e.g. +15551234567."
+          },
+          body: {
+            type: "string",
+            description: "Plain-text message body, at most 1600 characters."
+          }
+        },
+        required: ["toE164", "body"]
+      }
+    },
+    # Dashboard-surface twins of the customer tools (see the OwnerCoworker
+    # comment above). Same dispatcher cores, separate toggle + channel.
+    {
+      name: "dashboard_customer_lookup_by_phone",
+      description: "Look up the cross-channel customer profile (display name, rolling summary, last channel/date, total interaction count) for a customer phone number the owner asks about.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          phone: {
+            type: "string",
+            description: "E.164 phone to look up, e.g. +15551234567."
+          }
+        },
+        required: ["phone"]
+      }
+    },
+    {
+      name: "dashboard_customer_set_display_name",
+      description: "Persist a customer name on their profile when the owner states it in dashboard chat. Will not overwrite a name the owner already set from the customers page.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          displayName: {
+            type: "string",
+            description: "The customer name. Will be normalized server-side."
+          },
+          phone: {
+            type: "string",
+            description: "E.164 phone to attribute the name to."
+          }
+        },
+        required: ["displayName", "phone"]
+      }
+    },
+    {
+      name: "dashboard_customer_append_pinned_note",
+      description: "Append a permanent fact to a customer pinned notes when the owner states it in dashboard chat. The note survives every future summary. Use sparingly.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          note: {
+            type: "string",
+            description: "The fact to pin, in the owner words. Keep concise."
+          },
+          phone: {
+            type: "string",
+            description: "E.164 phone to attribute the note to."
+          }
+        },
+        required: ["note", "phone"]
       }
     },
     {
@@ -693,7 +797,15 @@ db.projects.insertOne({
   name: "${BUSINESS_NAME:-AI Coworker}",
   createdAt: now,
   createdByUserId: "newcoworker-orchestrator",
-  secret: "deploy-${BUSINESS_ID}",
+  // Signs the x-signature-jwt on tool-webhook POSTs. Uses the same shared
+  // gateway token the platform already holds (ROWBOAT_GATEWAY_TOKEN) so
+  // /api/rowboat/tool-call can verify with one env var. Falls back to the
+  // legacy per-deploy string when the token is absent (webhook tools are
+  // also disabled in that case — see ROWBOAT_TOOL_WEBHOOK_URL above).
+  secret: "${ROWBOAT_GATEWAY_TOKEN:-deploy-${BUSINESS_ID}}",
+  // Project-level tool webhook: Rowboat POSTs isWebhook tool calls here.
+  // Empty string when APP_BASE_URL is unknown (tools stay mocked).
+  webhookUrl: "${ROWBOAT_TOOL_WEBHOOK_URL}",
   draftWorkflow: workflow,
   liveWorkflow: workflow
 });
