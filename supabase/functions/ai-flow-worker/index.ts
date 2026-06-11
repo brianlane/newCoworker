@@ -1005,8 +1005,9 @@ async function sendSmsStep(
 ): Promise<StepOutcome> {
   // Lead-contact quiet hours: inside the configured overnight window the lead
   // is never texted. With an extracted lead email we email the same message
-  // INSTEAD (immediately, email is not time-gated); without one the whole run
-  // parks until the morning resume time via earliest_claim_at.
+  // right away (email is not time-gated) AND still defer the run so the text
+  // also goes out at the morning resume time; without an email the run just
+  // parks until then via earliest_claim_at.
   if (action.quiet) {
     const decision = smsQuietDecision(Date.now(), {
       timezone: action.quiet.timezone,
@@ -1014,7 +1015,11 @@ async function sendSmsStep(
       resumeAt: action.quiet.resumeAt
     });
     if (!decision.allowed) {
-      if (action.quiet.emailTo) {
+      // Defer re-runs this same step in the morning, so the email send must be
+      // once-only across re-claims. The marker rides in scope.vars, which the
+      // defer path persists into ai_flow_runs.context.
+      const emailedMarker = `_after_hours_emailed_${index}`;
+      if (action.quiet.emailTo && !scope.vars[emailedMarker]) {
         const sent = await deliverFlowEmail(supabase, run, index, scope, {
           to: action.quiet.emailTo,
           subject: action.quiet.emailSubject || "Following up on your inquiry",
@@ -1023,13 +1028,18 @@ async function sendSmsStep(
           fromConnectionId: action.quiet.emailFromConnectionId
         });
         if (sent.kind !== "ok") return sent;
-        appendActionTaken(scope, `emailed the lead at ${action.quiet.emailTo} (after-hours, instead of texting)`);
-        return {
-          kind: "ok",
-          result: { sent_via: "email_after_hours", ...(sent.result ?? {}) }
-        };
+        scope.vars[emailedMarker] = true;
+        appendActionTaken(
+          scope,
+          `emailed the lead at ${action.quiet.emailTo} (after-hours; text scheduled for ` +
+            `${formatInTimeZone(decision.resumeAtMs, action.quiet.timezone)})`
+        );
       }
-      return { kind: "defer", resumeAtMs: decision.resumeAtMs, reason: "sms_quiet_hours" };
+      return {
+        kind: "defer",
+        resumeAtMs: decision.resumeAtMs,
+        reason: scope.vars[emailedMarker] ? "sms_quiet_hours_emailed" : "sms_quiet_hours"
+      };
     }
   }
   if (await isRecipientOptedOut(supabase, run.business_id, action.to)) {

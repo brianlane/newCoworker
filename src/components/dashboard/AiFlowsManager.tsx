@@ -789,7 +789,7 @@ function StepFields({
                 />
               </div>
               <Field
-                label="After-hours email fallback — variable holding the lead's email (optional; otherwise the text waits until morning)"
+                label="After-hours email — variable holding the lead's email (optional; emailed right away while the text waits until morning)"
                 value={qh.emailFallbackVar ?? ""}
                 onChange={(v) =>
                   patchStep(index, {

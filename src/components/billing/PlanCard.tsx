@@ -247,7 +247,7 @@ export function PlanCard(props: PlanCardProps) {
           <h3 className="text-sm font-semibold text-parchment">Change plan</h3>
           <p className="text-xs text-parchment/50">
             Upgrade, downgrade, or switch your billing period. Current plan is canceled
-            immediately with no proration; your workspace data migrates to a new VPS at the
+            immediately with no proration; your workspace data migrates to a new server at the
             new tier.
           </p>
           <ChangePlanSelector

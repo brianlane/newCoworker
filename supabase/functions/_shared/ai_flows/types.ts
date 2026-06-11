@@ -81,10 +81,11 @@ export type StepCondition = {
 
 /**
  * Quiet hours for a `send_sms` step that texts the LEAD. Inside the
- * [noSendAfter, resumeAt) local window the worker never sends the SMS; it
- * either emails the same body to the lead instead (when `emailFallbackVar`
- * names a var holding a lead email) or defers the whole run until `resumeAt`
- * via ai_flow_runs.earliest_claim_at.
+ * [noSendAfter, resumeAt) local window the worker never sends the SMS: the
+ * whole run defers until `resumeAt` via ai_flow_runs.earliest_claim_at (and
+ * then texts). When `emailFallbackVar` names a var holding a lead email, the
+ * same body is additionally emailed right away — the lead hears back
+ * overnight AND still gets the morning text.
  */
 export type SendSmsQuietHours = {
   /** IANA zone, e.g. "America/Phoenix". */
@@ -93,7 +94,7 @@ export type SendSmsQuietHours = {
   noSendAfter: string;
   /** Local time texting resumes, 24h "HH:MM" (e.g. "08:30"). */
   resumeAt: string;
-  /** Var holding the lead's email; when non-empty the worker emails INSTEAD of deferring. */
+  /** Var holding the lead's email; when non-empty the worker emails immediately while the text waits for morning. */
   emailFallbackVar?: string;
   /** Subject template for the fallback email. Default "Following up on your inquiry". */
   emailSubject?: string;
