@@ -96,6 +96,7 @@ import {
 } from "@/lib/customer-memory/dashboard-preamble";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import { logger } from "@/lib/logger";
+import { currentDateTimeLine } from "../../../../../supabase/functions/_shared/datetime_line";
 
 export const dynamic = "force-dynamic";
 
@@ -359,6 +360,9 @@ function buildRowboatChatMessages(args: {
   // we've seen it slip even after a turn or two on a fresh
   // continuation.
   out.push({ role: "system", content: OWNER_PREAMBLE });
+  // Date awareness: without this the model cannot resolve "tomorrow at 2pm"
+  // into the ISO times the calendar tools require.
+  out.push({ role: "system", content: currentDateTimeLine() });
   out.push({
     role: "system",
     content: args.emailToolEnabled ? EMAIL_TOOL_ENABLED_PREAMBLE : EMAIL_TOOL_DISABLED_PREAMBLE

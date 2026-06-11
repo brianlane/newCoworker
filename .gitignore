@@ -41,3 +41,4 @@ supabase/config.toml
 test-results/
 .vercel
 debug/.bench-*.json
+vps/voice-bridge/dist/

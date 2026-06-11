@@ -122,6 +122,34 @@ export type GeminiBridgeOptions = {
  */
 export const VOICE_CUSTOMER_MEMORY_MAX_CHARS = 800;
 
+const WEEKDAYS_UTC = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday"
+] as const;
+
+/**
+ * Date awareness for the voice surface. Mirrors
+ * `supabase/functions/_shared/datetime_line.ts` (the bridge is rsynced to
+ * the VPS standalone, so it can't import across the repo) — keep the two in
+ * sync. Without this the model can't resolve "tomorrow at 2pm" into the ISO
+ * times the calendar tools require. UTC-pinned: businesses don't store a
+ * timezone yet.
+ */
+export function currentDateTimeLine(now: Date = new Date()): string {
+  const iso = now.toISOString();
+  const weekday = WEEKDAYS_UTC[now.getUTCDay()];
+  return (
+    `Current date/time: ${iso} (${weekday}, UTC). ` +
+    `Resolve relative dates like "today", "tomorrow", or "next Tuesday" against this ` +
+    `timestamp when calling calendar or scheduling tools, and pass ISO 8601 times.`
+  );
+}
+
 export function systemInstructionForBusiness(
   businessName: string,
   hasTransfer: boolean,
@@ -133,7 +161,8 @@ export function systemInstructionForBusiness(
     `You are the AI phone receptionist for ${businessName}.`,
     "You are on a live phone call with a human caller. Keep replies concise, natural, and spoken (not bulleted).",
     "Be warm and professional. If you don't know something specific to this business, say you'll have someone follow up.",
-    "Do not mention APIs, models, tokens, or internal session limits to the caller unless a coordinator message explicitly tells you what to say."
+    "Do not mention APIs, models, tokens, or internal session limits to the caller unless a coordinator message explicitly tells you what to say.",
+    currentDateTimeLine()
   ];
   if (hasTransfer) {
     base.push(
