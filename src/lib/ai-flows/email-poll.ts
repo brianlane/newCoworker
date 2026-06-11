@@ -8,9 +8,12 @@
  * subject + body, and enqueues a queued ai_flow_run per match.
  *
  * Exactly-once: the run's dedupe_key is `email:<provider message id>` and
- * ai_flow_runs has a unique (flow_id, dedupe_key) index, so the fixed
- * LOOKBACK window re-reading the same messages on every tick never
- * double-enqueues — no cursor state to persist or lose.
+ * ai_flow_runs has a unique (flow_id, dedupe_key) index, so re-reading the
+ * same messages never double-enqueues. Read efficiency: ai_flow_email_seen
+ * markers record every (flow, message) evaluation — match or not — so the
+ * per-poll read cap is only spent on unevaluated mail; the markers are an
+ * optimization, not a correctness dependency (losing them just re-reads, and
+ * the dedupe keys absorb that).
  *
  * Failure isolation: one mailbox failing (revoked grant, missing read scope,
  * provider 5xx) logs to system_logs and moves on; it can never block other
@@ -40,21 +43,25 @@ export const EMAIL_POLL_PAGE_SIZE = 25;
 
 /**
  * Hard cap on messages READ (bodies fetched + conditions evaluated) per
- * mailbox per poll. Messages that already have a run (dedupe key) are
+ * mailbox per poll. Messages every flow on the mailbox has already evaluated
+ * (per ai_flow_email_seen markers, written for matches AND non-matches) are
  * filtered out BEFORE the cap is applied — neither provider guarantees list
  * order, so the cap must never be allowed to repeatedly select the same
- * already-handled subset and starve the rest. With the handled filter, each
- * poll reads up to 100 new messages, so a burst drains at ~100/minute and
- * only a burst that outruns that for the whole lookback window loses mail
- * (the poller logs an overflow warning whenever a poll can't cover the
- * remainder, so that is visible instead of silent).
+ * already-read subset and starve the rest. With that filter, each poll reads
+ * up to 100 unevaluated messages, so a burst drains at ~100/minute and only
+ * a burst that outruns that for the whole lookback window loses mail (the
+ * poller logs an overflow warning whenever a poll can't cover the remainder,
+ * so that is visible instead of silent).
  */
 export const EMAIL_POLL_MAX_MESSAGES = 100;
 
 /** Runaway-chain guard on provider list pagination per mailbox per poll. */
 export const EMAIL_POLL_MAX_LIST_PAGES = 20;
 
-/** Resolves which of these provider message ids already have a run enqueued. */
+/** How long evaluation markers are kept (≫ lookback, so never re-read). */
+export const EMAIL_SEEN_RETENTION_MINUTES = 24 * 60;
+
+/** Resolves which message ids every flow on the mailbox has already evaluated. */
 type HandledLookup = (messageIds: string[]) => Promise<Set<string>>;
 
 type EmailFlow = {
@@ -147,7 +154,7 @@ async function fetchGmailMessages(
     pages += 1;
   } while (pageToken && pages < EMAIL_POLL_MAX_LIST_PAGES);
   let overflowed = pageToken !== undefined;
-  // Already-enqueued messages must not consume the read budget, so a burst
+  // Already-evaluated messages must not consume the read budget, so a burst
   // larger than one poll's cap still drains across subsequent ticks.
   const handled = await alreadyHandled(ids);
   const pending = ids.filter((id) => !handled.has(id));
@@ -168,14 +175,18 @@ async function fetchGmailMessages(
       internalDate?: string;
     };
     const headers = msg.payload?.headers;
+    // internalDate is epoch-ms-as-string; a malformed value must degrade to
+    // "no timestamp", not throw and abort the whole mailbox poll.
+    const internalMs = Number(msg.internalDate);
     out.push({
       id,
       fromEmail: parseFromAddress(gmailHeader(headers, "From")),
       subject: gmailHeader(headers, "Subject"),
       bodyText: gmailBodyText(msg.payload),
-      receivedAt: msg.internalDate
-        ? new Date(Number(msg.internalDate)).toISOString()
-        : undefined
+      receivedAt:
+        msg.internalDate && Number.isFinite(internalMs)
+          ? new Date(internalMs).toISOString()
+          : undefined
     });
   }
   return { messages: out, overflowed };
@@ -300,6 +311,13 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
   const result: EmailPollResult = { flows: flows.length, mailboxes: 0, messages: 0, enqueued: 0 };
   if (flows.length === 0) return result;
 
+  // Evaluation markers only matter inside the lookback window; prune old
+  // ones so the table can't grow unboundedly (best-effort — a failed prune
+  // just leaves rows for the next tick).
+  const cutoff = new Date(Date.now() - EMAIL_SEEN_RETENTION_MINUTES * 60_000).toISOString();
+  const { error: pruneErr } = await db.from("ai_flow_email_seen").delete().lt("seen_at", cutoff);
+  if (pruneErr) console.error("ai_flow_email_seen prune", pruneErr.message);
+
   const byMailbox = new Map<string, EmailFlow[]>();
   for (const f of flows) {
     const key = `${f.business_id}:${f.connectionId}`;
@@ -319,25 +337,31 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
         connectionId: conn.connection_id,
         providerConfigKey: conn.provider_config_key
       };
-      // A message counts as handled once ANY flow on this mailbox has a run
-      // for it: the tick that enqueued that run evaluated every flow in the
-      // group against the message (conditions are deterministic), so nothing
-      // is left to do. This is what lets a >cap burst drain across ticks —
-      // handled messages stop consuming the per-poll read budget.
+      // A message counts as handled once EVERY flow on this mailbox has an
+      // evaluation marker for it (markers are written for matches and
+      // non-matches alike, below). This is what lets a >cap burst drain
+      // across ticks — already-read messages stop consuming the per-poll
+      // read budget — while a freshly added flow (no markers yet) still gets
+      // the in-window backlog re-read and evaluated for it; existing flows'
+      // re-evaluations are absorbed by the run dedupe keys.
       const flowIds = group.map((f) => f.id);
       const alreadyHandled: HandledLookup = async (messageIds) => {
-        const handled = new Set<string>();
+        const counts = new Map<string, number>();
         for (let i = 0; i < messageIds.length; i += 100) {
-          const keys = messageIds.slice(i, i + 100).map((id) => `email:${id}`);
+          const chunk = messageIds.slice(i, i + 100);
           const { data, error } = await db
-            .from("ai_flow_runs")
-            .select("dedupe_key")
+            .from("ai_flow_email_seen")
+            .select("message_id")
             .in("flow_id", flowIds)
-            .in("dedupe_key", keys);
-          if (error) throw new Error(`run lookup: ${error.message}`);
-          for (const row of (data ?? []) as Array<{ dedupe_key: string | null }>) {
-            if (row.dedupe_key?.startsWith("email:")) handled.add(row.dedupe_key.slice(6));
+            .in("message_id", chunk);
+          if (error) throw new Error(`seen lookup: ${error.message}`);
+          for (const row of (data ?? []) as Array<{ message_id: string }>) {
+            counts.set(row.message_id, (counts.get(row.message_id) ?? 0) + 1);
           }
+        }
+        const handled = new Set<string>();
+        for (const [id, n] of counts) {
+          if (n >= flowIds.length) handled.add(id);
         }
         return handled;
       };
@@ -360,9 +384,11 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
         });
       }
       result.messages += messages.length;
+      const seenRows: Array<{ flow_id: string; message_id: string }> = [];
       for (const msg of messages) {
         const scope = emailTriggerScope(msg);
         for (const flow of group) {
+          seenRows.push({ flow_id: flow.id, message_id: msg.id });
           if (!evaluateTriggerConditions(flow.conditions, scope.windowText, scope.from)) continue;
           const run = await enqueueAiFlowRun(
             {
@@ -384,6 +410,16 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
             payload: { flow_id: flow.id, message_id: msg.id, subject: scope.subject }
           });
         }
+      }
+      if (seenRows.length > 0) {
+        // Mark every (flow, message) pair evaluated — match or not — so the
+        // next poll's read budget only goes to genuinely new mail. Written
+        // after the whole batch: a crash mid-batch re-reads it next tick and
+        // the run dedupe keys absorb the repeat enqueues.
+        const { error: seenErr } = await db
+          .from("ai_flow_email_seen")
+          .upsert(seenRows, { onConflict: "flow_id,message_id", ignoreDuplicates: true });
+        if (seenErr) throw new Error(`seen record: ${seenErr.message}`);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

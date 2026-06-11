@@ -36,32 +36,45 @@ function flowRow(id: string, trigger: unknown) {
   return { id, business_id: BIZ, definition: { version: 1, trigger, steps: [] } };
 }
 
-type RunsLookup = {
-  rows?: Array<{ dedupe_key: string | null }> | null;
+type SeenTable = {
+  /** Rows every seen-lookup chunk returns (one row = one flow's marker). */
+  rows?: Array<{ message_id: string }> | null;
   error?: { message: string };
+  upsertError?: { message: string };
+  pruneError?: { message: string };
+  /** Captures upsert payloads for assertions. */
+  upserts?: unknown[];
 };
 
 /**
  * Chainable service-client stub serving the (paged) ai_flows listing and the
- * ai_flow_runs dedupe lookup (`runs.rows` = what every lookup returns).
+ * ai_flow_email_seen marker table (lookup / upsert / prune).
  */
-function dbWithRange(range: ReturnType<typeof vi.fn>, runs: RunsLookup = {}) {
+function dbWithRange(range: ReturnType<typeof vi.fn>, seen: SeenTable = {}) {
   const order = vi.fn(() => ({ range }));
   const eq2 = vi.fn(() => ({ order }));
   const eq1 = vi.fn(() => ({ eq: eq2 }));
   const flowsSelect = vi.fn(() => ({ eq: eq1 }));
-  const runsIn2 = vi.fn(() =>
+  const seenIn2 = vi.fn(() =>
     Promise.resolve(
-      runs.error
-        ? { data: null, error: runs.error }
-        : { data: runs.rows === undefined ? [] : runs.rows, error: null }
+      seen.error
+        ? { data: null, error: seen.error }
+        : { data: seen.rows === undefined ? [] : seen.rows, error: null }
     )
   );
-  const runsIn1 = vi.fn(() => ({ in: runsIn2 }));
-  const runsSelect = vi.fn(() => ({ in: runsIn1 }));
+  const seenIn1 = vi.fn(() => ({ in: seenIn2 }));
+  const seenSelect = vi.fn(() => ({ in: seenIn1 }));
+  const seenUpsert = vi.fn((rows: unknown) => {
+    seen.upserts?.push(rows);
+    return Promise.resolve({ error: seen.upsertError ?? null });
+  });
+  const lt = vi.fn(() => Promise.resolve({ error: seen.pruneError ?? null }));
+  const seenDelete = vi.fn(() => ({ lt }));
   return {
     from: vi.fn((table: string) =>
-      table === "ai_flow_runs" ? { select: runsSelect } : { select: flowsSelect }
+      table === "ai_flow_email_seen"
+        ? { select: seenSelect, upsert: seenUpsert, delete: seenDelete }
+        : { select: flowsSelect }
     )
   } as never;
 }
@@ -70,9 +83,9 @@ function dbWithRange(range: ReturnType<typeof vi.fn>, runs: RunsLookup = {}) {
 function dbWith(
   rows: unknown[] | null,
   error: { message: string } | null = null,
-  runs: RunsLookup = {}
+  seen: SeenTable = {}
 ) {
-  return dbWithRange(vi.fn().mockResolvedValue({ data: rows, error }), runs);
+  return dbWithRange(vi.fn().mockResolvedValue({ data: rows, error }), seen);
 }
 
 const emailTrigger = (conditions: unknown[] = []) => ({
@@ -463,7 +476,7 @@ describe("pollEmailTriggers", () => {
       };
     }) as never);
     const res = await pollEmailTriggers(
-      dbWith([flowRow("f1", emailTrigger())], null, { rows: [{ dedupe_key: "email:m1" }] })
+      dbWith([flowRow("f1", emailTrigger())], null, { rows: [{ message_id: "m1" }] })
     );
     expect(res.messages).toBe(1);
     expect(res.enqueued).toBe(1);
@@ -473,21 +486,77 @@ describe("pollEmailTriggers", () => {
     );
   });
 
-  it("ignores non-email and null dedupe keys in the handled lookup", async () => {
+  it("only skips a message once EVERY flow on the mailbox has evaluated it", async () => {
+    vi.mocked(nangoProxyForBusiness).mockImplementation((async (
+      _biz: string,
+      _link: unknown,
+      cfg: { endpoint: string }
+    ) => {
+      if (cfg.endpoint.includes("users/me/messages?")) {
+        return { data: { messages: [{ id: "m1" }, { id: "m2" }] } };
+      }
+      return {
+        data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
+      };
+    }) as never);
+    // Two flows; both already evaluated m1, neither evaluated m2.
+    const res = await pollEmailTriggers(
+      dbWith([flowRow("f1", emailTrigger()), flowRow("f2", emailTrigger())], null, {
+        rows: [{ message_id: "m1" }, { message_id: "m1" }]
+      })
+    );
+    expect(res.messages).toBe(1);
+    expect(res.enqueued).toBe(2); // m2 evaluated (and enqueued) for both flows
+  });
+
+  it("keeps reading a message that only SOME flows have evaluated", async () => {
+    vi.mocked(nangoProxyForBusiness).mockImplementation((async (
+      _biz: string,
+      _link: unknown,
+      cfg: { endpoint: string }
+    ) => {
+      if (cfg.endpoint.includes("users/me/messages?")) {
+        return { data: { messages: [{ id: "m1" }] } };
+      }
+      return {
+        data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
+      };
+    }) as never);
+    // Two flows but only one marker — e.g. f2 was added after m1 arrived.
+    const res = await pollEmailTriggers(
+      dbWith([flowRow("f1", emailTrigger()), flowRow("f2", emailTrigger())], null, {
+        rows: [{ message_id: "m1" }]
+      })
+    );
+    expect(res.messages).toBe(1); // m1 re-read so f2 gets to evaluate it
+  });
+
+  it("records evaluation markers for matching AND non-matching flows", async () => {
     vi.mocked(nangoProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
       } as never);
-    const res = await pollEmailTriggers(
-      dbWith([flowRow("f1", emailTrigger())], null, {
-        rows: [{ dedupe_key: "sched:d:2026-06-11T08:30" }, { dedupe_key: null }]
-      })
+    const upserts: unknown[] = [];
+    await pollEmailTriggers(
+      dbWith(
+        [
+          flowRow("f-match", emailTrigger()),
+          flowRow("f-miss", emailTrigger([{ type: "contains", value: "no-match" }]))
+        ],
+        null,
+        { upserts }
+      )
     );
-    expect(res.messages).toBe(1); // neither row marks m1 as handled
+    expect(upserts).toEqual([
+      [
+        { flow_id: "f-match", message_id: "m1" },
+        { flow_id: "f-miss", message_id: "m1" }
+      ]
+    ]);
   });
 
-  it("routes a dedupe-lookup failure into the per-mailbox error path", async () => {
+  it("routes a seen-lookup failure into the per-mailbox error path", async () => {
     vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
       data: { messages: [{ id: "m1" }] }
     } as never);
@@ -498,9 +567,57 @@ describe("pollEmailTriggers", () => {
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "ai_flow_email_poll_failed",
-        message: expect.stringContaining("run lookup: db down")
+        message: expect.stringContaining("seen lookup: db down")
       })
     );
+  });
+
+  it("routes a marker-write failure into the per-mailbox error path", async () => {
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
+      } as never);
+    await pollEmailTriggers(
+      dbWith([flowRow("f1", emailTrigger())], null, { upsertError: { message: "boom" } })
+    );
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_email_poll_failed",
+        message: expect.stringContaining("seen record: boom")
+      })
+    );
+  });
+
+  it("logs but survives a failed marker prune", async () => {
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = await pollEmailTriggers(
+        dbWith([flowRow("f1", emailTrigger())], null, { pruneError: { message: "locked" } })
+      );
+      expect(res.mailboxes).toBe(1); // the poll itself proceeded
+      expect(err).toHaveBeenCalledWith("ai_flow_email_seen prune", "locked");
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  it("omits received_at for a malformed Gmail internalDate instead of throwing", async () => {
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: {
+          internalDate: "not-a-number",
+          payload: { mimeType: "text/plain", body: { data: b64url("hello") } }
+        }
+      } as never);
+    const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
+    expect(res.enqueued).toBe(1);
+    const trigger = vi.mocked(enqueueAiFlowRun).mock.calls[0][0].trigger as {
+      received_at?: string;
+    };
+    expect(trigger.received_at).toBeUndefined();
   });
 
   it("enforces the message cap exactly when a Microsoft page overshoots it", async () => {
@@ -573,7 +690,7 @@ describe("pollEmailTriggers", () => {
       }
     } as never);
     const res = await pollEmailTriggers(
-      dbWith([flowRow("f1", emailTrigger())], null, { rows: [{ dedupe_key: "email:ms-old" }] })
+      dbWith([flowRow("f1", emailTrigger())], null, { rows: [{ message_id: "ms-old" }] })
     );
     expect(res.messages).toBe(1);
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
@@ -598,7 +715,7 @@ describe("pollEmailTriggers", () => {
       };
     }) as never);
     const res = await pollEmailTriggers(
-      dbWith([flowRow("f1", emailTrigger())], null, { rows: [{ dedupe_key: "email:ms-seen" }] })
+      dbWith([flowRow("f1", emailTrigger())], null, { rows: [{ message_id: "ms-seen" }] })
     );
     expect(res.messages).toBe(0);
     expect(call).toBe(EMAIL_POLL_MAX_LIST_PAGES);
