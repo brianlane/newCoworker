@@ -253,11 +253,31 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   // triggers, so they can't keep sending SMS / browsing / calling integrations.
   if (!flow?.enabled) {
     try {
+      // Free the trigger's dedupe slot before canceling: if the owner
+      // re-enables the flow while the scheduled occurrence is still due or
+      // the email message is still inside the poll lookback, it can fire
+      // again instead of being silently swallowed by the unique
+      // (flow_id, dedupe_key) index. Email runs also leave an evaluation
+      // marker that would skip the message on later polls — clear it too.
+      const { data: dkRow } = await supabase
+        .from("ai_flow_runs")
+        .select("dedupe_key")
+        .eq("id", run.id)
+        .maybeSingle();
+      const dedupeKey = (dkRow as { dedupe_key?: string | null } | null)?.dedupe_key;
       await updateRun(supabase, run.id, {
         status: "canceled",
         last_error: "flow disabled",
-        claimed_at: null
+        claimed_at: null,
+        dedupe_key: null
       });
+      if (dedupeKey?.startsWith("email:")) {
+        await supabase
+          .from("ai_flow_email_seen")
+          .delete()
+          .eq("flow_id", run.flow_id)
+          .eq("message_id", dedupeKey.slice("email:".length));
+      }
     } catch (e) {
       console.error("executeRun cancel-disabled updateRun", e);
     }
