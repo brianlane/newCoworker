@@ -24,6 +24,19 @@ vi.mock("@/lib/telnyx/messaging", () => ({
   sendTelnyxSms: vi.fn()
 }));
 
+vi.mock("@/lib/email/owner-mailbox", () => ({
+  sendFromOwnerMailbox: vi.fn()
+}));
+
+vi.mock("@/lib/knowledge-tools/handlers", () => ({
+  lookupBusinessKnowledge: vi.fn()
+}));
+
+vi.mock("@/lib/calendar-tools/handlers", () => ({
+  findCalendarSlots: vi.fn(),
+  bookCalendarAppointment: vi.fn()
+}));
+
 import { POST } from "@/app/api/rowboat/tool-call/route";
 import { verifyRowboatWebhookJwt } from "@/lib/rowboat/webhook-jwt";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
@@ -33,6 +46,9 @@ import {
   setCustomerDisplayName
 } from "@/lib/customer-tools/handlers";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
+import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
+import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
+import { findCalendarSlots, bookCalendarAppointment } from "@/lib/calendar-tools/handlers";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -319,6 +335,156 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
     const res = await POST(makeRequest(content));
     expect((await res.json()).detail).toMatch(/^invalid_args:/);
     expect(vi.mocked(sendTelnyxSms)).not.toHaveBeenCalled();
+  });
+
+  it("dispatches business_knowledge_lookup on the sms toggle", async () => {
+    vi.mocked(lookupBusinessKnowledge).mockResolvedValue({
+      ok: true,
+      data: { answer: "Open 9-5 weekdays." }
+    });
+    const content = makeContent("business_knowledge_lookup", { question: "What are your hours?" });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect(await res.json()).toEqual({ ok: true, data: { answer: "Open 9-5 weekdays." } });
+    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenCalledWith(
+      BIZ,
+      "sms",
+      "business_knowledge_lookup"
+    );
+    expect(vi.mocked(lookupBusinessKnowledge)).toHaveBeenCalledWith(BIZ, "What are your hours?");
+  });
+
+  it("rejects invalid business_knowledge_lookup args", async () => {
+    const content = makeContent("business_knowledge_lookup", {});
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect((await res.json()).detail).toMatch(/^invalid_args:/);
+    expect(vi.mocked(lookupBusinessKnowledge)).not.toHaveBeenCalled();
+  });
+
+  it("dispatches calendar_find_slots with a defaulted duration", async () => {
+    vi.mocked(findCalendarSlots).mockResolvedValue({ ok: true, data: { slots: [] } });
+    const content = makeContent("calendar_find_slots", { purpose: "estimate" });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect((await res.json()).ok).toBe(true);
+    expect(vi.mocked(findCalendarSlots)).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ purpose: "estimate", durationMinutes: 30 })
+    );
+  });
+
+  it("rejects invalid calendar_find_slots args", async () => {
+    const content = makeContent("calendar_find_slots", { durationMinutes: 2 });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect((await res.json()).detail).toMatch(/^invalid_args:/);
+    expect(vi.mocked(findCalendarSlots)).not.toHaveBeenCalled();
+  });
+
+  it("dispatches calendar_book_appointment with no caller-phone fallback", async () => {
+    vi.mocked(bookCalendarAppointment).mockResolvedValue({
+      ok: true,
+      data: { eventId: "ev-1", htmlLink: null, provider: "google" }
+    });
+    const args = {
+      startIso: "2026-06-12T17:00:00.000Z",
+      endIso: "2026-06-12T17:30:00.000Z",
+      summary: "Estimate",
+      attendeeName: "Joe Plumber"
+    };
+    const content = makeContent("calendar_book_appointment", args);
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect((await res.json()).ok).toBe(true);
+    expect(vi.mocked(bookCalendarAppointment)).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining(args),
+      null
+    );
+  });
+
+  it("rejects invalid calendar_book_appointment args", async () => {
+    const content = makeContent("calendar_book_appointment", { summary: "Estimate" });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect((await res.json()).detail).toMatch(/^invalid_args:/);
+    expect(vi.mocked(bookCalendarAppointment)).not.toHaveBeenCalled();
+  });
+
+  it("sends email through the owner mailbox on the sms toggle", async () => {
+    vi.mocked(sendFromOwnerMailbox).mockResolvedValue({
+      ok: true,
+      messageId: "m-1",
+      provider: "google"
+    } as never);
+    const content = makeContent("send_email", {
+      toEmail: "joe@example.com",
+      subject: "Your estimate",
+      bodyText: "Here are the details we discussed."
+    });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect(await res.json()).toEqual({
+      ok: true,
+      data: { messageId: "m-1", provider: "google" }
+    });
+    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenCalledWith(BIZ, "sms", "send_email");
+    expect(vi.mocked(sendFromOwnerMailbox)).toHaveBeenCalledWith(BIZ, {
+      toEmail: "joe@example.com",
+      subject: "Your estimate",
+      bodyText: "Here are the details we discussed."
+    });
+  });
+
+  it("propagates owner-mailbox failure details (e.g. email_not_connected)", async () => {
+    vi.mocked(sendFromOwnerMailbox).mockResolvedValue({
+      ok: false,
+      detail: "email_not_connected"
+    } as never);
+    const content = makeContent("send_email", {
+      toEmail: "joe@example.com",
+      subject: "Hi",
+      bodyText: "Body"
+    });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect(await res.json()).toEqual({ ok: false, detail: "email_not_connected" });
+  });
+
+  it("rejects invalid send_email args", async () => {
+    const content = makeContent("send_email", { toEmail: "not-an-email", subject: "s", bodyText: "b" });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect((await res.json()).detail).toMatch(/^invalid_args:/);
+    expect(vi.mocked(sendFromOwnerMailbox)).not.toHaveBeenCalled();
+  });
+
+  it("gates the dashboard_ knowledge/calendar twins on dashboard toggles", async () => {
+    vi.mocked(lookupBusinessKnowledge).mockResolvedValue({ ok: true, data: { answer: "a" } });
+    vi.mocked(findCalendarSlots).mockResolvedValue({ ok: true, data: { slots: [] } });
+    vi.mocked(bookCalendarAppointment).mockResolvedValue({ ok: true, data: { eventId: "e" } });
+
+    for (const [name, args, toolKey] of [
+      ["dashboard_business_knowledge_lookup", { question: "hours?" }, "business_knowledge_lookup"],
+      ["dashboard_calendar_find_slots", {}, "calendar_find_slots"],
+      [
+        "dashboard_calendar_book_appointment",
+        {
+          startIso: "2026-06-12T17:00:00.000Z",
+          endIso: "2026-06-12T17:30:00.000Z",
+          summary: "Estimate",
+          attendeeName: "Joe"
+        },
+        "calendar_book_appointment"
+      ]
+    ] as const) {
+      const content = makeContent(name, args);
+      vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+      const res = await POST(makeRequest(content));
+      expect((await res.json()).ok, name).toBe(true);
+      expect(vi.mocked(isAgentToolEnabled)).toHaveBeenLastCalledWith(BIZ, "dashboard", toolKey);
+    }
   });
 
   it("returns internal_error (HTTP 200) when a handler throws", async () => {

@@ -537,7 +537,11 @@ WORKFLOW_JSON=$(jq -nc \
       tools: [
         "customer_lookup_by_phone",
         "customer_set_display_name",
-        "customer_append_pinned_note"
+        "customer_append_pinned_note",
+        "business_knowledge_lookup",
+        "calendar_find_slots",
+        "calendar_book_appointment",
+        "send_email"
       ]
     },
     {
@@ -561,7 +565,11 @@ WORKFLOW_JSON=$(jq -nc \
       tools: [
         "customer_lookup_by_phone",
         "customer_set_display_name",
-        "customer_append_pinned_note"
+        "customer_append_pinned_note",
+        "business_knowledge_lookup",
+        "calendar_find_slots",
+        "calendar_book_appointment",
+        "send_email"
       ]
     },
     {
@@ -587,7 +595,10 @@ WORKFLOW_JSON=$(jq -nc \
         "dashboard_customer_set_display_name",
         "dashboard_customer_append_pinned_note",
         "owner_append_business_memory",
-        "send_sms"
+        "send_sms",
+        "dashboard_business_knowledge_lookup",
+        "dashboard_calendar_find_slots",
+        "dashboard_calendar_book_appointment"
       ]
     },
     {
@@ -612,7 +623,10 @@ WORKFLOW_JSON=$(jq -nc \
         "dashboard_customer_set_display_name",
         "dashboard_customer_append_pinned_note",
         "owner_append_business_memory",
-        "send_sms"
+        "send_sms",
+        "dashboard_business_knowledge_lookup",
+        "dashboard_calendar_find_slots",
+        "dashboard_calendar_book_appointment"
       ]
     }
   ],
@@ -704,6 +718,131 @@ WORKFLOW_JSON=$(jq -nc \
           }
         },
         required: ["toE164", "body"]
+      }
+    },
+    {
+      name: "send_email",
+      description: "Send a short plain-text follow-up email to a customer from the owner connected mailbox. Use ONLY when the customer asks for information by email or agrees to receive one. Never invent recipients.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          toEmail: {
+            type: "string",
+            description: "Recipient email address."
+          },
+          subject: {
+            type: "string",
+            description: "Short subject line, at most 150 characters."
+          },
+          bodyText: {
+            type: "string",
+            description: "Plain-text body, 1-3 short paragraphs, at most 4000 characters."
+          }
+        },
+        required: ["toEmail", "subject", "bodyText"]
+      }
+    },
+    {
+      name: "business_knowledge_lookup",
+      description: "Answer a business-specific question (hours, services, pricing, policies) from the business knowledge base and website summary. Use when the answer is not already in your instructions.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          question: {
+            type: "string",
+            description: "The question to answer, in plain words."
+          }
+        },
+        required: ["question"]
+      }
+    },
+    {
+      name: "calendar_find_slots",
+      description: "Find up to 3 free time ranges on the owner connected calendar. Use before proposing appointment times.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          purpose: { type: "string", description: "What the appointment is for." },
+          earliest: { type: "string", description: "Earliest acceptable start, ISO 8601. Defaults to now." },
+          latest: { type: "string", description: "Latest acceptable end, ISO 8601. Defaults to 7 days out." },
+          durationMinutes: { type: "number", description: "Appointment length in minutes. Defaults to 30." },
+          timezone: { type: "string", description: "IANA timezone of the requester, if known." }
+        },
+        required: []
+      }
+    },
+    {
+      name: "calendar_book_appointment",
+      description: "Book an appointment on the owner connected calendar. Confirm the time with the customer before booking. Times must be ISO 8601 with timezone offset.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          startIso: { type: "string", description: "Start time, ISO 8601." },
+          endIso: { type: "string", description: "End time, ISO 8601." },
+          summary: { type: "string", description: "Short event title." },
+          attendeeName: { type: "string", description: "Customer name for the event." },
+          attendeeEmail: { type: "string", description: "Customer email, if provided." },
+          attendeePhone: { type: "string", description: "Customer phone, if known." },
+          notes: { type: "string", description: "Extra context for the event description." },
+          timezone: { type: "string", description: "IANA timezone for the event times." }
+        },
+        required: ["startIso", "endIso", "summary", "attendeeName"]
+      }
+    },
+    # Dashboard-surface twins (see the OwnerCoworker comment above). Same
+    # dispatcher cores, separate Settings toggle per surface.
+    {
+      name: "dashboard_business_knowledge_lookup",
+      description: "Answer an owner question from the business knowledge base and website summary when the answer is not already in your instructions.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          question: {
+            type: "string",
+            description: "The question to answer, in plain words."
+          }
+        },
+        required: ["question"]
+      }
+    },
+    {
+      name: "dashboard_calendar_find_slots",
+      description: "Find up to 3 free time ranges on the owner connected calendar when the owner asks about availability.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          purpose: { type: "string", description: "What the appointment is for." },
+          earliest: { type: "string", description: "Earliest acceptable start, ISO 8601. Defaults to now." },
+          latest: { type: "string", description: "Latest acceptable end, ISO 8601. Defaults to 7 days out." },
+          durationMinutes: { type: "number", description: "Appointment length in minutes. Defaults to 30." },
+          timezone: { type: "string", description: "IANA timezone, if known." }
+        },
+        required: []
+      }
+    },
+    {
+      name: "dashboard_calendar_book_appointment",
+      description: "Book an appointment on the owner connected calendar when the owner asks for it in dashboard chat. Times must be ISO 8601 with timezone offset.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          startIso: { type: "string", description: "Start time, ISO 8601." },
+          endIso: { type: "string", description: "End time, ISO 8601." },
+          summary: { type: "string", description: "Short event title." },
+          attendeeName: { type: "string", description: "Attendee name for the event." },
+          attendeeEmail: { type: "string", description: "Attendee email, if provided." },
+          attendeePhone: { type: "string", description: "Attendee phone, if known." },
+          notes: { type: "string", description: "Extra context for the event description." },
+          timezone: { type: "string", description: "IANA timezone for the event times." }
+        },
+        required: ["startIso", "endIso", "summary", "attendeeName"]
       }
     },
     # Dashboard-surface twins of the customer tools (see the OwnerCoworker

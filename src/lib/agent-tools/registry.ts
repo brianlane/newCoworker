@@ -69,6 +69,27 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         configurable: true
       },
       {
+        toolKey: "business_knowledge_lookup",
+        label: "Business knowledge lookup",
+        description: "Answer your questions from your business knowledge and website summary.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "calendar_find_slots",
+        label: "Find calendar openings",
+        description: "Look up free slots on your connected calendar from chat.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "calendar_book_appointment",
+        label: "Book appointments",
+        description: "Book appointments on your connected calendar from chat.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
         toolKey: "customer_lookup_by_phone",
         label: "Recognize repeat customers",
         description: "Look up a customer's cross-channel history when you ask about them in chat.",
@@ -166,6 +187,34 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
     label: "Texting coworker",
     description: "Replies to inbound customer texts on your business number.",
     tools: [
+      {
+        toolKey: "business_knowledge_lookup",
+        label: "Business knowledge lookup",
+        description: "Answer texter questions from your business knowledge and website summary.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "calendar_find_slots",
+        label: "Find calendar openings",
+        description: "Look up free slots on your connected calendar for a texter.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "calendar_book_appointment",
+        label: "Book appointments",
+        description: "Book appointments on your connected calendar for a texter.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "send_email",
+        label: "Send follow-up email",
+        description: "Email a follow-up to a texter from your connected mailbox.",
+        defaultEnabled: true,
+        configurable: true
+      },
       {
         toolKey: "customer_lookup_by_phone",
         label: "Recognize repeat customers",

@@ -11,6 +11,9 @@ import {
   E164_RE
 } from "@/lib/customer-tools/handlers";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
+import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
+import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
+import { findCalendarSlots, bookCalendarAppointment } from "@/lib/calendar-tools/handlers";
 import { logger } from "@/lib/logger";
 
 /**
@@ -71,6 +74,29 @@ const sendSmsArgsSchema = z.object({
   toE164: phoneSchema,
   body: z.string().min(1).max(1600)
 });
+const sendEmailArgsSchema = z.object({
+  toEmail: z.string().email(),
+  subject: z.string().min(1).max(150),
+  bodyText: z.string().min(1).max(4000)
+});
+const knowledgeArgsSchema = z.object({ question: z.string().min(1).max(500) });
+const findSlotsArgsSchema = z.object({
+  purpose: z.string().max(200).optional(),
+  earliest: z.string().optional(),
+  latest: z.string().optional(),
+  durationMinutes: z.number().int().min(5).max(480).default(30),
+  timezone: z.string().optional()
+});
+const bookAppointmentArgsSchema = z.object({
+  startIso: z.string().datetime(),
+  endIso: z.string().datetime(),
+  summary: z.string().min(1).max(200),
+  attendeeName: z.string().min(1).max(200),
+  attendeeEmail: z.string().email().optional(),
+  attendeePhone: z.string().max(32).optional(),
+  notes: z.string().max(2000).optional(),
+  timezone: z.string().optional()
+});
 
 type ToolResult = { ok: boolean; detail?: string; data?: unknown };
 
@@ -99,6 +125,22 @@ function baseToolKey(name: string): string {
 
 const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }> = {
   send_sms: { agentKey: "dashboard", toolKey: "send_sms" },
+  // Marketplace parity (all tools on all workers): the texting coworker
+  // declares the bare names, the dashboard coworker its `dashboard_` twins —
+  // same cores, separate Settings toggles.
+  send_email: { agentKey: "sms", toolKey: "send_email" },
+  business_knowledge_lookup: { agentKey: "sms", toolKey: "business_knowledge_lookup" },
+  calendar_find_slots: { agentKey: "sms", toolKey: "calendar_find_slots" },
+  calendar_book_appointment: { agentKey: "sms", toolKey: "calendar_book_appointment" },
+  dashboard_business_knowledge_lookup: {
+    agentKey: "dashboard",
+    toolKey: "business_knowledge_lookup"
+  },
+  dashboard_calendar_find_slots: { agentKey: "dashboard", toolKey: "calendar_find_slots" },
+  dashboard_calendar_book_appointment: {
+    agentKey: "dashboard",
+    toolKey: "calendar_book_appointment"
+  },
   ...Object.fromEntries(
     Object.entries(CUSTOMER_TOOL_SURFACES).map(([name, surface]) => [
       name,
@@ -140,6 +182,44 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
         surface.channel,
         surface.stamp
       );
+    }
+    case "business_knowledge_lookup": {
+      const parsed = knowledgeArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return lookupBusinessKnowledge(businessId, parsed.data.question);
+    }
+    case "calendar_find_slots": {
+      const parsed = findSlotsArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return findCalendarSlots(businessId, parsed.data);
+    }
+    case "calendar_book_appointment": {
+      const parsed = bookAppointmentArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      // No caller context on the webhook path — the model must supply any
+      // attendee phone explicitly.
+      return bookCalendarAppointment(businessId, parsed.data, null);
+    }
+    case "send_email": {
+      const parsed = sendEmailArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      const result = await sendFromOwnerMailbox(businessId, {
+        toEmail: parsed.data.toEmail,
+        subject: parsed.data.subject,
+        bodyText: parsed.data.bodyText
+      });
+      if (!result.ok) {
+        return { ok: false, detail: result.detail };
+      }
+      return { ok: true, data: { messageId: result.messageId, provider: result.provider } };
     }
     case "send_sms": {
       const parsed = sendSmsArgsSchema.safeParse(args);
