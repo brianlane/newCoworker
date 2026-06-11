@@ -686,6 +686,15 @@ async function browseActionStep(
 
   const parsed = parseActionResponse(body, safe);
   if (!parsed) throw new Error("browse_action: render service returned an invalid body");
+  // The render service fails fast on the first broken action, so a 200 with a
+  // short count means the contract was violated somewhere — never mark the
+  // step done unless every planned action actually ran.
+  if (parsed.actionsCompleted < action.actions.length) {
+    return {
+      kind: "fail",
+      error: `browse_action: only ${parsed.actionsCompleted} of ${action.actions.length} actions completed`
+    };
+  }
 
   // Best-effort audit screenshot of the page AFTER the actions; a storage
   // failure must not fail an update that already posted.
@@ -705,7 +714,9 @@ async function browseActionStep(
       });
     }
   }
-  if (action.screenshot) scope.vars.screenshot_path = screenshotPath;
+  // Only publish a CAPTURED screenshot: writing "" here would clobber a valid
+  // path an earlier browse_extract stored for later attachScreenshot steps.
+  if (screenshotPath) scope.vars.screenshot_path = screenshotPath;
 
   return {
     kind: "ok",
@@ -1475,9 +1486,10 @@ async function pickNextAgent(
   let roster = (rosterRows ?? []) as { id: string; name: string; phone_e164: string }[];
   // Pinned routing (step.agentName): this lead type goes to ONE named member
   // (e.g. every seller lead straight to the broker). Restrict the roster to
-  // that member; if they're missing/renamed the offer falls through to the
-  // owner fallback — never silently to a different teammate.
-  if (pinnedAgentName && roster.length > 0) {
+  // that member; if they're missing/renamed — or there is no roster at all —
+  // the offer falls through to the owner fallback, never to the legacy
+  // Rowboat picker, which could offer the lead to a different teammate.
+  if (pinnedAgentName) {
     const want = pinnedAgentName.trim().toLowerCase();
     roster = roster.filter((r) => r.name.trim().toLowerCase() === want);
     if (roster.length === 0) {
@@ -1553,16 +1565,13 @@ async function pickNextAgent(
     price: typeof scope.vars.price === "string" ? scope.vars.price : "",
     type: typeof scope.vars.lead_type === "string" ? scope.vars.lead_type : ""
   };
+  // NOTE: a pinned step never reaches this legacy path — the pin guard above
+  // either restricted the roster or already returned the owner fallback, so
+  // the model can never be asked to (mis)pick a pinned lead's agent.
   const preamble = [
     "You are routing a new real-estate lead to your team.",
     "Pick the single NEXT team agent to offer this lead to, using the team",
     "roster and rotation rules in your memory.",
-    ...(pinnedAgentName
-      ? [
-          `This lead type is pinned: you MUST pick the agent named "${pinnedAgentName}"`,
-          'or reply {"none":true} if they are unavailable or already tried.'
-        ]
-      : []),
     "Do NOT pick any agent whose phone is in the alreadyTried list.",
     "Reply with ONLY a compact JSON object and nothing else: either",
     '{"name":"<agent name>","phone":"<E.164 phone>"} for the next agent, or',

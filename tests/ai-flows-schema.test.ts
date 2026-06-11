@@ -291,13 +291,35 @@ describe("browse_extract screenshot + send_email step", () => {
     }
   });
 
-  it("flags a send_email attachScreenshot when no earlier browse_extract captures one", () => {
+  it("flags a send_email attachScreenshot when no earlier browse step captures one", () => {
     const bad = JSON.parse(JSON.stringify(emailInput));
     delete bad.steps[1].screenshot;
     const def = aiFlowDefinitionSchema.parse(bad);
     expect(
       validateDefinitionSemantics(def).some((i) =>
-        i.includes("attaches a screenshot but no earlier browse_extract")
+        i.includes("attaches a screenshot but no earlier browse step")
+      )
+    ).toBe(true);
+  });
+
+  it("a browse_action screenshot also satisfies a later attachScreenshot", () => {
+    const viaAction = JSON.parse(JSON.stringify(emailInput));
+    delete viaAction.steps[1].screenshot;
+    viaAction.steps.splice(2, 0, {
+      id: "act",
+      type: "browse_action",
+      urlVar: "lead_url",
+      actions: [{ kind: "click_text", target: "Leave an update" }],
+      screenshot: true
+    });
+    expect(validateDefinitionSemantics(parseAiFlowDefinition(viaAction))).toEqual([]);
+    // ...but a browse_action WITHOUT a screenshot does not.
+    const noShot = JSON.parse(JSON.stringify(viaAction));
+    delete noShot.steps[2].screenshot;
+    const def = aiFlowDefinitionSchema.parse(noShot);
+    expect(
+      validateDefinitionSemantics(def).some((i) =>
+        i.includes("attaches a screenshot but no earlier browse step")
       )
     ).toBe(true);
   });

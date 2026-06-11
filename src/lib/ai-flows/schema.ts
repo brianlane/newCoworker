@@ -330,8 +330,8 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
   const issues: string[] = [];
   const seenIds = new Set<string>();
   const vars = new Set<string>();
-  // True once an earlier browse_extract has `screenshot: true` — the
-  // prerequisite for any later step's attachScreenshot.
+  // True once an earlier browse step (browse_extract or browse_action) has
+  // `screenshot: true` — the prerequisite for any later step's attachScreenshot.
   let screenshotCaptured = false;
 
   for (const step of def.steps) {
@@ -403,7 +403,7 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       );
     }
 
-    // attachScreenshot needs a screenshot: an EARLIER browse_extract with
+    // attachScreenshot needs a screenshot: an EARLIER browse step with
     // `screenshot: true` (which is what stores the image the worker attaches).
     if (
       (step.type === "send_email" || step.type === "route_to_team") &&
@@ -411,7 +411,7 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       !screenshotCaptured
     ) {
       issues.push(
-        `Step "${step.id}" attaches a screenshot but no earlier browse_extract step captures one.`
+        `Step "${step.id}" attaches a screenshot but no earlier browse step captures one.`
       );
     }
 
@@ -429,6 +429,8 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       vars.add(step.saveAs);
     } else if (step.type === "browse_extract") {
       for (const f of step.fields) vars.add(f.name);
+      if (step.screenshot) screenshotCaptured = true;
+    } else if (step.type === "browse_action") {
       if (step.screenshot) screenshotCaptured = true;
     } else if (step.type === "http_call" && step.saveAs) {
       vars.add(step.saveAs);
