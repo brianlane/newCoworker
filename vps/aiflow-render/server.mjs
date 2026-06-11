@@ -13,13 +13,21 @@
  *   POST /render { url }                              -> { finalUrl, text, html }
  *   POST /render { url, businessId, auth }            -> { finalUrl, text, html }
  *   ... + { screenshot: true }                        -> adds screenshotBase64 (JPEG)
+ *   ... + { actions: [...] }                          -> ACTION mode (below)
  *
  * When `auth` is present the service logs in first using the named custom
  * integration's stored credentials (fetched from the platform's gateway-guarded
  * /api/integrations/custom/credentials endpoint), reusing a per-tenant browser
- * context so the session cookie is cached across calls. It only READS the page —
- * it fills + submits the login form and never clicks lead-page action buttons
- * (accept/call/email), which can create binding agreements.
+ * context so the session cookie is cached across calls.
+ *
+ * EXTRACT mode (no `actions`) only READS the page — it fills + submits the
+ * login form and never clicks lead-page buttons. ACTION mode (the worker's
+ * browse_action step) performs an owner-authored ordered click/fill sequence —
+ * e.g. posting a "still trying to contact" update on a lead timeline — and
+ * returns { finalUrl, actionsCompleted } (+ screenshotBase64 when asked). Each
+ * action is { kind: click_text | click_selector | fill_selector |
+ * fill_placeholder, target, value? }; the FIRST failing action aborts with
+ * { error: "action_failed", detail, actionsCompleted }.
  *
  * SSRF guard mirrors the worker's normalizeBrowseUrl: only http(s), no
  * localhost / private IPv4 / IPv6-literal / *.internal / metadata hosts. Every
@@ -277,6 +285,61 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 const SCREENSHOT_MAX_HEIGHT = Number(process.env.AIFLOW_SCREENSHOT_MAX_HEIGHT ?? 4000);
 const SCREENSHOT_QUALITY = Number(process.env.AIFLOW_SCREENSHOT_QUALITY ?? 60);
 
+// ACTION mode: per-action click/fill timeout and a hard cap on sequence length
+// (mirrors the worker-side schema cap so a hand-crafted request can't loop).
+const ACTION_TIMEOUT_MS = Number(process.env.AIFLOW_ACTION_TIMEOUT_MS ?? 10_000);
+const MAX_ACTIONS = 15;
+const ACTION_KINDS = new Set(["click_text", "click_selector", "fill_selector", "fill_placeholder"]);
+
+/** Normalize + validate the request's actions array, or null when malformed. */
+function parseActions(raw) {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_ACTIONS) return null;
+  const out = [];
+  for (const a of raw) {
+    const kind = String(a?.kind ?? "");
+    const target = String(a?.target ?? "");
+    const value = String(a?.value ?? "");
+    if (!ACTION_KINDS.has(kind) || !target) return null;
+    out.push({ kind, target, value });
+  }
+  return out;
+}
+
+/**
+ * Run the ordered click/fill sequence. Stops at the FIRST failing action and
+ * reports how far it got, so the worker can surface exactly which action broke
+ * (a changed page is a permanent error, not a retry). After every action we
+ * wait for network idle (best-effort) so a click that opens a dialog / posts a
+ * form settles before the next action targets the new DOM.
+ */
+async function performActions(page, actions) {
+  let completed = 0;
+  for (const a of actions) {
+    try {
+      if (a.kind === "click_text") {
+        await page.getByText(a.target, { exact: false }).first().click({ timeout: ACTION_TIMEOUT_MS });
+      } else if (a.kind === "click_selector") {
+        await page.locator(a.target).first().click({ timeout: ACTION_TIMEOUT_MS });
+      } else if (a.kind === "fill_selector") {
+        await page.locator(a.target).first().fill(a.value, { timeout: ACTION_TIMEOUT_MS });
+      } else {
+        await page
+          .getByPlaceholder(a.target, { exact: false })
+          .first()
+          .fill(a.value, { timeout: ACTION_TIMEOUT_MS });
+      }
+      await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
+      completed++;
+    } catch (e) {
+      return {
+        completed,
+        error: `${a.kind} "${a.target}": ${String(e?.message ?? e)}`.slice(0, 300)
+      };
+    }
+  }
+  return { completed };
+}
+
 /** Capture a height-capped full-width JPEG of the page as base64, or null. */
 async function captureScreenshot(page) {
   try {
@@ -301,12 +364,40 @@ async function captureScreenshot(page) {
   }
 }
 
+/**
+ * Respond for ACTION mode: run the sequence and reply with how far it got.
+ * Returns true (response sent). An action failure is reported as
+ * `action_failed` so the worker fails the run permanently instead of retrying
+ * a selector that no longer matches.
+ */
+async function respondWithActions(page, res, actions, wantScreenshot) {
+  const acted = await performActions(page, actions);
+  if (acted.error) {
+    return res.status(502).json({
+      error: "action_failed",
+      detail: acted.error,
+      actionsCompleted: acted.completed
+    });
+  }
+  const screenshotBase64 = wantScreenshot ? await captureScreenshot(page) : null;
+  return res.json({
+    finalUrl: page.url(),
+    actionsCompleted: acted.completed,
+    ...(screenshotBase64 ? { screenshotBase64 } : {})
+  });
+}
+
 app.post("/render", async (req, res) => {
   const safe = safeUrl(String(req.body?.url ?? ""));
   if (!safe) return res.status(400).json({ error: "invalid_or_unsafe_url" });
   const auth = req.body?.auth;
   const businessId = req.body?.businessId;
   const wantScreenshot = req.body?.screenshot === true;
+  const rawActions = req.body?.actions;
+  const actions = rawActions === undefined ? null : parseActions(rawActions);
+  if (rawActions !== undefined && !actions) {
+    return res.status(400).json({ error: "invalid_actions" });
+  }
 
   // --- Unauthenticated render: stateless context, no session reuse. ---
   if (!auth) {
@@ -317,6 +408,7 @@ app.post("/render", async (req, res) => {
       const page = await context.newPage();
       await attachSsrfGuard(page);
       await page.goto(safe, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
+      if (actions) return await respondWithActions(page, res, actions, wantScreenshot);
       const html = await page.content();
       const text = await page.evaluate(() => document.body?.innerText ?? "");
       const screenshotBase64 = wantScreenshot ? await captureScreenshot(page) : null;
@@ -376,6 +468,10 @@ app.post("/render", async (req, res) => {
         return res.status(502).json({ error: "login_failed" });
       }
     }
+
+    // ACTION mode runs after any login. An action failure does NOT poison the
+    // session — the login is still good; only the page/selectors disagreed.
+    if (actions) return await respondWithActions(page, res, actions, wantScreenshot);
 
     const html = await page.content();
     const text = await page.evaluate(() => document.body?.innerText ?? "");

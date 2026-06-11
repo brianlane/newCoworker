@@ -48,7 +48,26 @@ export async function sendFromOwnerMailbox(
 ): Promise<OwnerMailboxSendResult> {
   const conn = await resolveEmailConnection(businessId);
   if (!conn) return { ok: false, detail: "email_not_connected" };
+  return sendFromMailboxConnection(businessId, conn, args);
+}
 
+export type MailboxConnectionRef = {
+  provider: "google" | "microsoft";
+  providerConfigKey: string;
+  connectionId: string;
+};
+
+/**
+ * Send from a SPECIFIC connected mailbox (caller already resolved which
+ * connection to use — e.g. an AiFlow step pinned to one of several accounts).
+ * `nangoProxyForBusiness` re-verifies the connection belongs to the business,
+ * so a stale/foreign id degrades to `email_not_connected` rather than sending.
+ */
+export async function sendFromMailboxConnection(
+  businessId: string,
+  conn: MailboxConnectionRef,
+  args: OwnerMailboxSendArgs
+): Promise<OwnerMailboxSendResult> {
   if (conn.provider === "google") {
     const raw = encodeRfc2822(args.toEmail, args.subject, args.bodyText);
     const res = await nangoProxyForBusiness(

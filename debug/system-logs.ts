@@ -124,6 +124,17 @@ const COLOR: Record<string, string> = {
 };
 const RESET = "\x1b[0m";
 
+/** Local wall-clock "YYYY-MM-DD HH:MM:SS" — server timestamps read wrong in UTC. */
+function localStamp(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  );
+}
+
 function printRow(r: LogRow): void {
   if (asJson) {
     console.log(JSON.stringify(r));
@@ -136,7 +147,7 @@ function printRow(r: LogRow): void {
     ? ` ${JSON.stringify(r.payload)}`
     : "";
   console.log(
-    `${r.created_at}${biz} ${c}${r.level.toUpperCase().padEnd(5)}${RESET} [${r.source}] ${r.event}${msg}${extras}`
+    `${localStamp(r.created_at)}${biz} ${c}${r.level.toUpperCase().padEnd(5)}${RESET} [${r.source}] ${r.event}${msg}${extras}`
   );
 }
 

@@ -1,9 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { Plus, Trash2, ArrowUp, ArrowDown, Sparkles, Pencil, Copy } from "lucide-react";
 import {
+  BROWSE_ACTION_KINDS,
+  ENGINE_PROVIDED_VARS,
   FLOW_STEP_TYPES,
   TRIGGER_CONDITION_TYPES,
   HTTP_METHODS,
@@ -14,6 +16,14 @@ import {
   type TriggerCondition
 } from "@/lib/ai-flows/schema";
 import type { AiFlowRow } from "@/lib/ai-flows/db";
+
+// Mirrors EMAIL_PROVIDER_CONFIG_KEYS in src/lib/voice-tools/connections.ts —
+// that module is server-only (it pulls in the service-role Supabase client),
+// so the client bundle keeps its own copy of these three string keys.
+const EMAIL_CONNECTION_KEYS = ["google-mail", "gmail", "outlook"];
+
+/** A connected owner mailbox the editor can offer as an email "From". */
+export type EmailConnectionOption = { id: string; label: string };
 
 const inputClass =
   "w-full rounded-md border border-parchment/15 bg-deep-ink/40 px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:border-signal-teal focus:outline-none";
@@ -81,12 +91,19 @@ function newStep(type: FlowStep["type"]): FlowStep {
         type,
         offerTemplate:
           "New lead {{vars.lead_name}} ({{vars.lead_phone}}) in {{vars.location}}. " +
-          "Reply 1 to claim or 2 to pass within 10 min.",
+          "Reply 1 to claim or 2 to pass by {{offer.deadline}}.",
         responseMinutes: 10,
         ownerFallbackTemplate:
           "No agent claimed {{vars.lead_name}} ({{vars.lead_phone}}). It's back to you."
         // claimedNotifyTemplate is optional and omitted by default — an empty
         // string would fail the schema's min(1)-when-present rule on save.
+      };
+    case "browse_action":
+      return {
+        id,
+        type,
+        urlVar: "lead_url",
+        actions: [{ kind: "click_text", target: "" }]
       };
   }
 }
@@ -145,6 +162,48 @@ export function AiFlowsManager({
   const [error, setError] = useState<string | null>(null);
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
+  const [emailConns, setEmailConns] = useState<EmailConnectionOption[]>([]);
+
+  // Connected owner mailboxes for the send_email "From" dropdown (and the
+  // quiet-hours email fallback). Best-effort: on any failure the dropdown
+  // simply offers only the platform sender.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/integrations/workspace?businessId=${encodeURIComponent(businessId)}`,
+          { cache: "no-store" }
+        );
+        const json = (await res.json()) as {
+          ok: boolean;
+          data?: Array<{
+            id: string;
+            providerConfigKey: string;
+            connectionId: string;
+            metadata?: Record<string, unknown>;
+          }>;
+        };
+        if (cancelled || !json.ok || !json.data) return;
+        setEmailConns(
+          json.data
+            .filter((c) => EMAIL_CONNECTION_KEYS.includes(c.providerConfigKey))
+            .map((c) => {
+              const email = typeof c.metadata?.email === "string" ? c.metadata.email : "";
+              return {
+                id: c.id,
+                label: email ? `${c.providerConfigKey} — ${email}` : c.providerConfigKey
+              };
+            })
+        );
+      } catch {
+        /* options stay empty; the dropdown still offers the platform sender */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [businessId]);
 
   const patchStep = (index: number, patch: Record<string, unknown>) => {
     setEditor((e) =>
@@ -451,11 +510,11 @@ export function AiFlowsManager({
                   </button>
                 </div>
               </div>
-              <StepFields step={step} index={i} patchStep={patchStep} />
+              <StepFields step={step} index={i} patchStep={patchStep} emailConns={emailConns} />
               <WhenEditor
                 step={step}
                 index={i}
-                earlierVars={varsProducedBefore(editor.steps, i)}
+                earlierVars={[...varsProducedBefore(editor.steps, i), ...ENGINE_PROVIDED_VARS]}
                 patchStep={patchStep}
               />
             </div>
@@ -572,14 +631,56 @@ export function AiFlowsManager({
   );
 }
 
+/**
+ * "From" mailbox picker shared by send_email and the send_sms quiet-hours
+ * fallback: "" = platform sender, otherwise a workspace_oauth_connections.id.
+ * A stored id that no longer resolves to a connection is still shown (as
+ * "connected mailbox (disconnected?)") so saving doesn't silently reset it.
+ */
+function FromMailboxSelect({
+  value,
+  onChange,
+  emailConns
+}: {
+  value: string;
+  onChange: (connectionId: string | undefined) => void;
+  emailConns: EmailConnectionOption[];
+}) {
+  return (
+    <div>
+      <label className={labelClass}>From</label>
+      <select
+        className={inputClass}
+        value={value}
+        onChange={(ev) => onChange(ev.target.value || undefined)}
+      >
+        <option value="">New Coworker (platform sender)</option>
+        {value && !emailConns.some((c) => c.id === value) && (
+          <option value={value}>connected mailbox (disconnected?)</option>
+        )}
+        {emailConns.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.label}
+          </option>
+        ))}
+      </select>
+      <p className="mt-1 text-[11px] text-parchment/40">
+        Connect another mailbox under Settings → Integrations to see it here.
+      </p>
+    </div>
+  );
+}
+
 function StepFields({
   step,
   index,
-  patchStep
+  patchStep,
+  emailConns
 }: {
   step: FlowStep;
   index: number;
   patchStep: (index: number, patch: Record<string, unknown>) => void;
+  emailConns: EmailConnectionOption[];
 }) {
   if (step.type === "extract_url") {
     return (
@@ -644,10 +745,83 @@ function StepFields({
     );
   }
   if (step.type === "send_sms") {
+    const qh = step.quietHours;
     return (
       <div className="space-y-2">
         <Field label="Recipient" value={step.to} onChange={(v) => patchStep(index, { to: v })} />
         <Field label="Message" value={step.body} onChange={(v) => patchStep(index, { body: v })} textarea />
+        <div className="rounded-md border border-parchment/10 bg-deep-ink/30 px-3 py-2 space-y-2">
+          <label className="flex items-center gap-2 text-xs text-parchment/70">
+            <input
+              type="checkbox"
+              checked={Boolean(qh)}
+              onChange={(ev) =>
+                patchStep(index, {
+                  quietHours: ev.target.checked
+                    ? {
+                        timezone: "America/Phoenix",
+                        noSendAfter: "22:00",
+                        resumeAt: "08:30"
+                      }
+                    : undefined
+                })
+              }
+            />
+            Quiet hours — never text the lead overnight
+          </label>
+          {qh && (
+            <div className="space-y-2">
+              <div className="flex flex-wrap gap-2">
+                <Field
+                  label="Time zone"
+                  value={qh.timezone}
+                  onChange={(v) => patchStep(index, { quietHours: { ...qh, timezone: v } })}
+                />
+                <Field
+                  label="No texts after"
+                  value={qh.noSendAfter}
+                  onChange={(v) => patchStep(index, { quietHours: { ...qh, noSendAfter: v } })}
+                />
+                <Field
+                  label="Resume texting at"
+                  value={qh.resumeAt}
+                  onChange={(v) => patchStep(index, { quietHours: { ...qh, resumeAt: v } })}
+                />
+              </div>
+              <Field
+                label="After-hours email fallback — variable holding the lead's email (optional; otherwise the text waits until morning)"
+                value={qh.emailFallbackVar ?? ""}
+                onChange={(v) =>
+                  patchStep(index, {
+                    quietHours: { ...qh, emailFallbackVar: v.trim() ? v.trim() : undefined }
+                  })
+                }
+              />
+              {qh.emailFallbackVar && (
+                <>
+                  <Field
+                    label="Fallback email subject"
+                    value={qh.emailSubject ?? ""}
+                    onChange={(v) =>
+                      patchStep(index, {
+                        quietHours: { ...qh, emailSubject: v.trim() ? v : undefined }
+                      })
+                    }
+                  />
+                  <FromMailboxSelect
+                    value={qh.emailFromConnectionId ?? ""}
+                    onChange={(connectionId) =>
+                      patchStep(index, {
+                        quietHours: { ...qh, emailFromConnectionId: connectionId }
+                      })
+                    }
+                    emailConns={emailConns}
+                  />
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     );
   }
@@ -659,8 +833,13 @@ function StepFields({
           value={step.to}
           onChange={(v) => patchStep(index, { to: v })}
         />
+        <FromMailboxSelect
+          value={step.fromConnectionId ?? ""}
+          onChange={(connectionId) => patchStep(index, { fromConnectionId: connectionId })}
+          emailConns={emailConns}
+        />
         <Field
-          label="Subject (e.g. {{vars.lead_name}} BS RX)"
+          label="Subject (e.g. {{vars.lead_name}} BS RE)"
           value={step.subject}
           onChange={(v) => patchStep(index, { subject: v })}
         />
@@ -673,7 +852,7 @@ function StepFields({
               patchStep(index, { attachScreenshot: ev.target.checked ? true : undefined })
             }
           />
-          Attach the screenshot from an earlier browse step
+          Attach the screenshot from an earlier browse step (platform sender only)
         </label>
       </div>
     );
@@ -694,10 +873,11 @@ function StepFields({
     );
   }
   if (step.type === "route_to_team") {
+    const ow = step.offerWindow;
     return (
       <div className="space-y-2">
         <Field
-          label="Agent offer SMS (use {{agent.name}}, reply 1=claim / 2=pass)"
+          label="Agent offer SMS (use {{agent.name}} / {{offer.deadline}}, reply 1=claim / 2=pass)"
           value={step.offerTemplate}
           onChange={(v) => patchStep(index, { offerTemplate: v })}
           textarea
@@ -709,6 +889,11 @@ function StepFields({
             const n = Number(v);
             patchStep(index, { responseMinutes: Number.isFinite(n) && n > 0 ? Math.round(n) : 10 });
           }}
+        />
+        <Field
+          label="Pin to one team member by name (optional — e.g. all seller leads to one agent)"
+          value={step.agentName ?? ""}
+          onChange={(v) => patchStep(index, { agentName: v.trim() ? v : undefined })}
         />
         <Field
           label="Owner fallback SMS (when no agent claims)"
@@ -726,6 +911,59 @@ function StepFields({
           }
           textarea
         />
+        <div className="rounded-md border border-parchment/10 bg-deep-ink/30 px-3 py-2 space-y-2">
+          <label className="flex items-center gap-2 text-xs text-parchment/70">
+            <input
+              type="checkbox"
+              checked={Boolean(ow)}
+              onChange={(ev) =>
+                patchStep(index, {
+                  offerWindow: ev.target.checked
+                    ? {
+                        timezone: "America/Phoenix",
+                        quietStart: "21:00",
+                        quietEnd: "08:30",
+                        graceMinutes: 10
+                      }
+                    : undefined
+                })
+              }
+            />
+            After-hours offers — the claim countdown starts in the morning
+          </label>
+          {ow && (
+            <div className="flex flex-wrap gap-2">
+              <Field
+                label="Time zone"
+                value={ow.timezone}
+                onChange={(v) => patchStep(index, { offerWindow: { ...ow, timezone: v } })}
+              />
+              <Field
+                label="Quiet from"
+                value={ow.quietStart}
+                onChange={(v) => patchStep(index, { offerWindow: { ...ow, quietStart: v } })}
+              />
+              <Field
+                label="Until"
+                value={ow.quietEnd}
+                onChange={(v) => patchStep(index, { offerWindow: { ...ow, quietEnd: v } })}
+              />
+              <Field
+                label="Grace minutes"
+                value={String(ow.graceMinutes ?? 10)}
+                onChange={(v) => {
+                  const n = Number(v);
+                  patchStep(index, {
+                    offerWindow: {
+                      ...ow,
+                      graceMinutes: Number.isFinite(n) && n >= 0 ? Math.round(n) : 10
+                    }
+                  });
+                }}
+              />
+            </div>
+          )}
+        </div>
         <label className="flex items-center gap-2 text-xs text-parchment/70">
           <input
             type="checkbox"
@@ -735,6 +973,101 @@ function StepFields({
             }
           />
           Attach the screenshot from an earlier browse step to each agent offer (MMS)
+        </label>
+      </div>
+    );
+  }
+  if (step.type === "browse_action") {
+    return (
+      <div className="space-y-2">
+        <Field label="URL variable" value={step.urlVar} onChange={(v) => patchStep(index, { urlVar: v })} />
+        <Field
+          label="Login integration label (optional — for pages behind the owner's account)"
+          value={step.auth?.integrationLabel ?? ""}
+          onChange={(v) =>
+            patchStep(index, { auth: v.trim() ? { integrationLabel: v } : undefined })
+          }
+        />
+        <label className={labelClass}>
+          Page actions, in order (use {"{{vars.actions_taken}}"} in a fill value to describe what this flow did)
+        </label>
+        {step.actions.map((a, ai) => (
+          <div key={ai} className="flex flex-wrap items-center gap-2">
+            <select
+              className={`${inputClass} w-auto`}
+              value={a.kind}
+              onChange={(ev) =>
+                patchStep(index, {
+                  actions: step.actions.map((x, xi) =>
+                    xi === ai ? { ...x, kind: ev.target.value as (typeof BROWSE_ACTION_KINDS)[number] } : x
+                  )
+                })
+              }
+            >
+              {BROWSE_ACTION_KINDS.map((k) => (
+                <option key={k} value={k}>
+                  {k}
+                </option>
+              ))}
+            </select>
+            <input
+              className={`${inputClass} flex-1`}
+              value={a.target}
+              placeholder={a.kind.endsWith("_selector") ? "CSS selector" : "visible text / placeholder"}
+              onChange={(ev) =>
+                patchStep(index, {
+                  actions: step.actions.map((x, xi) =>
+                    xi === ai ? { ...x, target: ev.target.value } : x
+                  )
+                })
+              }
+            />
+            {a.kind.startsWith("fill") && (
+              <input
+                className={`${inputClass} flex-1`}
+                value={a.valueTemplate ?? ""}
+                placeholder="value to type"
+                onChange={(ev) =>
+                  patchStep(index, {
+                    actions: step.actions.map((x, xi) =>
+                      xi === ai
+                        ? { ...x, valueTemplate: ev.target.value ? ev.target.value : undefined }
+                        : x
+                    )
+                  })
+                }
+              />
+            )}
+            <button
+              onClick={() =>
+                patchStep(index, { actions: step.actions.filter((_, xi) => xi !== ai) })
+              }
+              className="text-parchment/40 hover:text-spark-orange"
+              aria-label="Remove action"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
+        ))}
+        <button
+          onClick={() =>
+            patchStep(index, {
+              actions: [...step.actions, { kind: "click_text", target: "" }]
+            })
+          }
+          className="text-xs text-signal-teal hover:underline"
+        >
+          + action
+        </button>
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={step.screenshot ?? false}
+            onChange={(ev) =>
+              patchStep(index, { screenshot: ev.target.checked ? true : undefined })
+            }
+          />
+          Capture a screenshot after the actions (audit trail)
         </label>
       </div>
     );

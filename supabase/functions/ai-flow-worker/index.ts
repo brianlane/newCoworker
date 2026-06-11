@@ -43,8 +43,23 @@ import {
 } from "../_shared/ai_flows/engine.ts";
 import { callRowboatChatOnce } from "../_shared/sms_rowboat.ts";
 import { planStep, type StepAction } from "../_shared/ai_flows/steps.ts";
-import { normalizeBrowseUrl, parseRenderResponse } from "../_shared/ai_flows/browse.ts";
+import {
+  normalizeBrowseUrl,
+  parseActionResponse,
+  parseRenderResponse
+} from "../_shared/ai_flows/browse.ts";
 import { ensureStopLanguage, isRecipientOptedOut } from "../_shared/ai_flows/compliance.ts";
+import {
+  formatInTimeZone,
+  offerRespondByMs,
+  smsQuietDecision
+} from "../_shared/ai_flows/quiet_hours.ts";
+import {
+  estimateChatCostMicros,
+  readChatSpendMicros,
+  resolveChatPeriodStart,
+  type SpendSupabase
+} from "../_shared/chat_spend_cap.ts";
 import type { AiFlowDefinition, BrowseAuth, ExtractField, FlowStep } from "../_shared/ai_flows/types.ts";
 
 type Supabase = ReturnType<typeof createClient>;
@@ -103,7 +118,23 @@ function resolveRenderUrl(businessId: string): string | null {
  * than retrying it up to MAX_ATTEMPTS.
  */
 class BrowseLoginError extends Error {}
+/**
+ * Thrown when the tenant's shared AI budget (owner chat + SMS + AiFlows) is
+ * exhausted for the period — a permanent, owner-actionable state, so the run
+ * fails immediately instead of burning retries.
+ */
+class SpendCapError extends Error {}
 const GEMINI_MODEL = Deno.env.get("AIFLOW_EXTRACT_MODEL") ?? "gemini-2.5-flash-lite";
+
+// AiFlow Gemini/Rowboat usage meters into the SAME owner_chat_model_spend pool
+// (and the same cap env var) as dashboard chat + SMS, so one fuse covers every
+// metered AI surface. See _shared/chat_spend_cap.ts for the rationale.
+const AIFLOW_SPEND_METERING_ENABLED =
+  (Deno.env.get("AIFLOW_SPEND_METERING_ENABLED") ?? "true").trim().toLowerCase() !== "false";
+const CHAT_SPEND_CAP_MICROS = (() => {
+  const n = Number(Deno.env.get("OWNER_CHAT_SPEND_CAP_MICROS"));
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 10_000_000;
+})();
 
 type RunRow = {
   id: string;
@@ -113,6 +144,7 @@ type RunRow = {
   context: Record<string, unknown>;
   current_step: number;
   attempt_count: number;
+  error_retry_count: number;
 };
 
 type Scope = { vars: Record<string, unknown>; trigger: Record<string, unknown> };
@@ -355,6 +387,40 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       });
       return;
     }
+    if (outcome.kind === "defer") {
+      const resumeIso = new Date(outcome.resumeAtMs).toISOString();
+      await recordStep(supabase, run, index, step, "pending", {
+        deferred_until: resumeIso,
+        reason: outcome.reason
+      });
+      // Park the whole run until the resume time: the claim RPC skips queued
+      // runs whose earliest_claim_at is in the future. Give back the attempt
+      // the claim charged (same as the paused-business defer) — waiting out
+      // quiet hours is not a failure and must not drain any budget.
+      await updateRun(supabase, run.id, {
+        status: "queued",
+        current_step: index,
+        context: buildContext(scope, approval, routing),
+        earliest_claim_at: resumeIso,
+        claimed_at: null,
+        attempt_count: Math.max(0, run.attempt_count - 1)
+      });
+      await telemetryRecord(supabase, "ai_flow_run_deferred_quiet_hours", {
+        run_id: run.id,
+        business_id: run.business_id,
+        step_index: index,
+        resume_at: resumeIso
+      });
+      await systemLog(supabase, {
+        businessId: run.business_id,
+        source: "aiflow",
+        level: "info",
+        event: "ai_flow_run_deferred_quiet_hours",
+        message: `Run deferred until ${resumeIso} (${outcome.reason})`,
+        payload: { run_id: run.id, flow_id: run.flow_id, step_index: index, resume_at: resumeIso }
+      });
+      return;
+    }
     await recordStep(supabase, run, index, step, outcome.skipped ? "skipped" : "done", outcome.result);
     index += 1;
     await updateRun(supabase, run.id, {
@@ -398,7 +464,11 @@ type StepOutcome =
       idempotencyKey: string;
       // Signed screenshot URL(s) to ride along as MMS media, when configured.
       mediaUrls?: string[];
-    };
+    }
+  // Quiet hours: this step (and the rest of the run) must wait until
+  // resumeAtMs. executeRun re-queues the run with earliest_claim_at so the
+  // claim RPC skips it until then — no attempt burned, nothing sent.
+  | { kind: "defer"; resumeAtMs: number; reason: string };
 
 /** Execute one step's side effect. Throws on transient IO errors (→ retry). */
 async function runStep(
@@ -429,7 +499,7 @@ async function runStep(
     case "browse":
       return browseStep(supabase, run, index, scope, action);
     case "send_sms":
-      return sendSmsStep(supabase, run, index, action);
+      return sendSmsStep(supabase, run, index, scope, action);
     case "send_email":
       return sendEmailStep(supabase, run, index, scope, action);
     case "notify_owner":
@@ -440,7 +510,19 @@ async function runStep(
       return approvalStep(approval, index, action);
     case "route_to_team":
       return routeToTeamStep(supabase, run, scope, action, routing);
+    case "browse_action":
+      return browseActionStep(supabase, run, index, scope, action);
   }
+}
+
+/**
+ * Append a human description of an outbound contact to the engine-maintained
+ * `vars.actions_taken`, so a later step (the ReferralExchange timeline note)
+ * can template "what did this flow actually do" via {{vars.actions_taken}}.
+ */
+function appendActionTaken(scope: Scope, description: string): void {
+  const prev = typeof scope.vars.actions_taken === "string" ? scope.vars.actions_taken : "";
+  scope.vars.actions_taken = prev ? `${prev}; ${description}` : description;
 }
 
 async function browseStep(
@@ -484,7 +566,15 @@ async function browseStep(
     throw e;
   }
   const pageText = page.text || htmlToText(page.html);
-  const extracted = await extractFields(action.fields, pageText);
+  let extracted: Record<string, string>;
+  try {
+    extracted = await extractFields(supabase, run, action.fields, pageText);
+  } catch (e) {
+    // The shared AI budget being exhausted is a permanent, owner-actionable
+    // state for this period — fail the run instead of retrying into the cap.
+    if (e instanceof SpendCapError) return { kind: "fail", error: `browse: ${e.message}` };
+    throw e;
+  }
 
   const out: Record<string, string> = {};
   for (const f of action.fields) {
@@ -521,6 +611,121 @@ async function browseStep(
 
   Object.assign(scope.vars, out);
   return { kind: "ok", result: { vars: out, finalUrl: page.finalUrl } };
+}
+
+/**
+ * browse_action: drive an ordered click/fill sequence on a page via the
+ * per-tenant render service (e.g. posting a "still trying to contact" update
+ * on the ReferralExchange lead timeline). Unlike browse_extract there is no
+ * static-fetch fallback — actions need a real browser — so missing render
+ * config is a permanent setup error. The render service reports how many
+ * actions completed; a selector that no longer matches fails the run (the
+ * page changed; retrying won't fix it) with the failing action in the error.
+ */
+async function browseActionStep(
+  supabase: Supabase,
+  run: RunRow,
+  index: number,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "browse_action" }>
+): Promise<StepOutcome> {
+  const safe = normalizeBrowseUrl(action.url);
+  if (!safe) return { kind: "fail", error: `browse_action: unsafe or invalid URL ${action.url}` };
+  const renderUrl = resolveRenderUrl(run.business_id);
+  if (!renderUrl) {
+    return {
+      kind: "fail",
+      error: "browse_action: requires the AIFLOW_RENDER_URL_TEMPLATE render service"
+    };
+  }
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), RENDER_FETCH_TIMEOUT_MS);
+  let body: unknown;
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const renderToken = Deno.env.get("AIFLOW_RENDER_TOKEN");
+    if (renderToken) headers.Authorization = `Bearer ${renderToken}`;
+    const res = await fetch(renderUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        url: safe,
+        businessId: run.business_id,
+        ...(action.auth ? { auth: action.auth } : {}),
+        actions: action.actions,
+        ...(action.screenshot ? { screenshot: true } : {})
+      }),
+      signal: ctrl.signal
+    });
+    if (!res.ok) {
+      let errCode = "";
+      let detail = "";
+      try {
+        const errBody = (await res.json()) as { error?: string; detail?: string };
+        errCode = errBody?.error ?? "";
+        detail = errBody?.detail ?? "";
+      } catch {
+        /* non-JSON error body — treat as transient below */
+      }
+      // Permanent setup/page errors: bad creds, missing platform config, or a
+      // selector that no longer matches. Retrying cannot fix any of these.
+      if (errCode === "login_failed" || errCode === "auth_config_error") {
+        const which = action.auth ? ` for integration "${action.auth.integrationLabel}"` : "";
+        return { kind: "fail", error: `browse_action: ${errCode}${which}` };
+      }
+      if (errCode === "action_failed") {
+        return { kind: "fail", error: `browse_action: ${detail || "a page action failed"}` };
+      }
+      throw new Error(`browse_action: render service ${res.status}`);
+    }
+    body = await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const parsed = parseActionResponse(body, safe);
+  if (!parsed) throw new Error("browse_action: render service returned an invalid body");
+  // The render service fails fast on the first broken action, so a 200 with a
+  // short count means the contract was violated somewhere — never mark the
+  // step done unless every planned action actually ran.
+  if (parsed.actionsCompleted < action.actions.length) {
+    return {
+      kind: "fail",
+      error: `browse_action: only ${parsed.actionsCompleted} of ${action.actions.length} actions completed`
+    };
+  }
+
+  // Best-effort audit screenshot of the page AFTER the actions; a storage
+  // failure must not fail an update that already posted.
+  let screenshotPath = "";
+  if (action.screenshot && parsed.screenshotBase64) {
+    try {
+      screenshotPath = await storeScreenshot(supabase, run, index, parsed.screenshotBase64);
+    } catch (e) {
+      console.error("browse_action screenshot store failed", e);
+      await systemLog(supabase, {
+        businessId: run.business_id,
+        source: "aiflow",
+        level: "warn",
+        event: "ai_flow_screenshot_store_failed",
+        message: `browse_action screenshot store failed: ${e instanceof Error ? e.message : String(e)}`,
+        payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
+      });
+    }
+  }
+  // Only publish a CAPTURED screenshot: writing "" here would clobber a valid
+  // path an earlier browse_extract stored for later attachScreenshot steps.
+  if (screenshotPath) scope.vars.screenshot_path = screenshotPath;
+
+  return {
+    kind: "ok",
+    result: {
+      finalUrl: parsed.finalUrl,
+      actionsCompleted: parsed.actionsCompleted,
+      ...(screenshotPath ? { screenshot_path: screenshotPath } : {})
+    }
+  };
 }
 
 /**
@@ -684,13 +889,92 @@ async function fetchPage(
   return await fetchStatic(url);
 }
 
+/**
+ * True when this tenant's shared AI spend (owner chat + SMS + AiFlows) has
+ * crossed the period cap. Fails OPEN on any read error — a metering blip must
+ * never block a lead flow.
+ */
+async function aiFlowSpendOverCap(supabase: Supabase, businessId: string): Promise<boolean> {
+  if (!AIFLOW_SPEND_METERING_ENABLED) return false;
+  const spend = supabase as unknown as SpendSupabase;
+  try {
+    const periodStart = await resolveChatPeriodStart(spend, businessId);
+    const spent = await readChatSpendMicros(spend, businessId, periodStart);
+    return spent >= CHAT_SPEND_CAP_MICROS;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Meter one AiFlow model call (Gemini extraction or the legacy Rowboat
+ * agent-pick) into the shared owner_chat_model_spend pool. Best-effort and
+ * never throws — the reply/extraction already happened, so a metering failure
+ * only under-counts the fuse. A retried run can re-meter the same call (there
+ * is no per-step claim like the SMS worker's metered_at); the cap is a safety
+ * fuse, not an invoice, so a rare over-count errs on the safe side.
+ */
+async function meterAiFlowSpend(
+  supabase: Supabase,
+  run: RunRow,
+  surface: string,
+  inputChars: number,
+  outputChars: number
+): Promise<void> {
+  if (!AIFLOW_SPEND_METERING_ENABLED) return;
+  try {
+    const spend = supabase as unknown as SpendSupabase;
+    const periodStart = await resolveChatPeriodStart(spend, run.business_id);
+    const costMicros = estimateChatCostMicros(inputChars, outputChars, {
+      promptOverheadTokens: 0
+    });
+    const { data, error } = await supabase.rpc("owner_chat_record_spend", {
+      p_business_id: run.business_id,
+      p_period_start: periodStart,
+      p_cost_micros: costMicros,
+      p_cap_micros: CHAT_SPEND_CAP_MICROS
+    });
+    if (error) throw new Error(error.message);
+    const row = (Array.isArray(data) ? data[0] : data) as
+      | { fuse_newly_tripped?: boolean }
+      | null
+      | undefined;
+    if (row?.fuse_newly_tripped) {
+      await telemetryRecord(supabase, "ai_flow_spend_cap_tripped", {
+        run_id: run.id,
+        business_id: run.business_id,
+        surface
+      });
+      await systemLog(supabase, {
+        businessId: run.business_id,
+        source: "aiflow",
+        level: "warn",
+        event: "ai_flow_spend_cap_tripped",
+        message: `Shared AI spend cap reached (${surface}); further extractions will fail until the period resets`,
+        payload: { run_id: run.id, flow_id: run.flow_id, surface, cost_micros: costMicros }
+      });
+    }
+  } catch (e) {
+    console.error("meterAiFlowSpend", e);
+  }
+}
+
 /** Gemini structured extraction; empty map when no API key (regex fallback covers it). */
 async function extractFields(
+  supabase: Supabase,
+  run: RunRow,
   fields: ExtractField[],
   pageText: string
 ): Promise<Record<string, string>> {
   const apiKey = Deno.env.get("GOOGLE_API_KEY") ?? "";
   if (!apiKey) return {};
+  // Spend gate: AiFlow extraction bills per token into the shared pool, so an
+  // exhausted budget blocks the Gemini call (throws SpendCapError → run fails).
+  if (await aiFlowSpendOverCap(supabase, run.business_id)) {
+    throw new SpendCapError(
+      "the shared AI budget for this billing period is used up; extraction is paused until it resets"
+    );
+  }
   const prompt = buildExtractionPrompt(fields, pageText);
   const url =
     `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=` +
@@ -708,6 +992,7 @@ async function extractFields(
     candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
   };
   const text = body.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+  await meterAiFlowSpend(supabase, run, "extract", prompt.length, text.length);
   return parseExtractionJson(text, fields);
 }
 
@@ -715,8 +1000,38 @@ async function sendSmsStep(
   supabase: Supabase,
   run: RunRow,
   index: number,
+  scope: Scope,
   action: Extract<StepAction, { kind: "send_sms" }>
 ): Promise<StepOutcome> {
+  // Lead-contact quiet hours: inside the configured overnight window the lead
+  // is never texted. With an extracted lead email we email the same message
+  // INSTEAD (immediately, email is not time-gated); without one the whole run
+  // parks until the morning resume time via earliest_claim_at.
+  if (action.quiet) {
+    const decision = smsQuietDecision(Date.now(), {
+      timezone: action.quiet.timezone,
+      noSendAfter: action.quiet.noSendAfter,
+      resumeAt: action.quiet.resumeAt
+    });
+    if (!decision.allowed) {
+      if (action.quiet.emailTo) {
+        const sent = await deliverFlowEmail(supabase, run, index, scope, {
+          to: action.quiet.emailTo,
+          subject: action.quiet.emailSubject || "Following up on your inquiry",
+          body: action.body,
+          attachScreenshot: false,
+          fromConnectionId: action.quiet.emailFromConnectionId
+        });
+        if (sent.kind !== "ok") return sent;
+        appendActionTaken(scope, `emailed the lead at ${action.quiet.emailTo} (after-hours, instead of texting)`);
+        return {
+          kind: "ok",
+          result: { sent_via: "email_after_hours", ...(sent.result ?? {}) }
+        };
+      }
+      return { kind: "defer", resumeAtMs: decision.resumeAtMs, reason: "sms_quiet_hours" };
+    }
+  }
   if (await isRecipientOptedOut(supabase, run.business_id, action.to)) {
     return { kind: "ok", skipped: true, result: { skipped: "recipient_opted_out", to: action.to } };
   }
@@ -760,6 +1075,7 @@ async function sendSmsStep(
     } catch {
       messageId = null;
     }
+    appendActionTaken(scope, `texted the lead at ${action.to}`);
     return { kind: "ok", result: { to: action.to, messageId } };
   } catch (e) {
     await release();
@@ -778,10 +1094,9 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 /**
- * send_email: deliver a templated email via Resend, optionally attaching the
- * screenshot a prior browse_extract stored (downloaded from the private bucket
- * by path — never by fetching a templatable URL). Missing RESEND_API_KEY is a
- * permanent setup error; a Resend/storage IO failure throws so the run retries.
+ * send_email: deliver a templated email and note it in vars.actions_taken.
+ * Delivery itself lives in deliverFlowEmail (shared with the send_sms
+ * quiet-hours email fallback).
  */
 async function sendEmailStep(
   supabase: Supabase,
@@ -790,6 +1105,43 @@ async function sendEmailStep(
   scope: Scope,
   action: Extract<StepAction, { kind: "send_email" }>
 ): Promise<StepOutcome> {
+  const sent = await deliverFlowEmail(supabase, run, index, scope, action);
+  if (sent.kind === "ok") appendActionTaken(scope, `emailed ${action.to}`);
+  return sent;
+}
+
+type FlowEmailArgs = {
+  to: string;
+  subject: string;
+  body: string;
+  attachScreenshot: boolean;
+  fromConnectionId?: string;
+};
+
+/**
+ * Deliver one flow email.
+ *
+ * Default path: platform Resend sender, optionally attaching the screenshot a
+ * prior browse_extract stored (downloaded from the private bucket by path —
+ * never by fetching a templatable URL). Missing RESEND_API_KEY is a permanent
+ * setup error; a Resend/storage IO failure throws so the run retries.
+ *
+ * `fromConnectionId` path: the owner chose "send as me" — the worker calls the
+ * app's gateway-guarded /api/aiflows/send-owner-email, which sends through the
+ * owner's connected Gmail/Outlook via Nango (plain text only). A 200 ok:false
+ * means the connection is missing/wrong — a permanent setup error; transport /
+ * 5xx failures throw so the run retries.
+ */
+async function deliverFlowEmail(
+  supabase: Supabase,
+  run: RunRow,
+  index: number,
+  scope: Scope,
+  action: FlowEmailArgs
+): Promise<StepOutcome> {
+  if (action.fromConnectionId) {
+    return deliverOwnerMailboxEmail(run, action);
+  }
   const apiKey = Deno.env.get("RESEND_API_KEY") ?? "";
   if (!apiKey) return { kind: "fail", error: "send_email: RESEND_API_KEY is not configured" };
 
@@ -840,6 +1192,57 @@ async function sendEmailStep(
   return {
     kind: "ok",
     result: { to: action.to, emailId, attached: attachment !== null }
+  };
+}
+
+/** Send via the owner's connected mailbox through the platform adapter. */
+async function deliverOwnerMailboxEmail(
+  run: RunRow,
+  action: FlowEmailArgs
+): Promise<StepOutcome> {
+  const base = Deno.env.get("AIFLOW_PLATFORM_URL") ?? "";
+  const token = Deno.env.get("ROWBOAT_GATEWAY_TOKEN") ?? "";
+  if (!base || !token) {
+    return { kind: "fail", error: "send_email: platform proxy not configured for owner-mailbox send" };
+  }
+  const res = await fetch(`${base}/api/aiflows/send-owner-email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      businessId: run.business_id,
+      connectionId: action.fromConnectionId,
+      toEmail: action.to,
+      subject: action.subject,
+      bodyText: action.body
+    })
+  });
+  // 5xx = provider/transport fault → throw so the run retries. 2xx/4xx carry a
+  // { ok, detail } body: ok:false there is a permanent setup error (connection
+  // missing / not an email connection / bad args) → fail without retries.
+  if (res.status >= 500) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`send_email: owner-mailbox send ${res.status}: ${body.slice(0, 200)}`);
+  }
+  let parsed: { ok?: boolean; detail?: string; data?: { messageId?: string | null; provider?: string } };
+  try {
+    parsed = (await res.json()) as typeof parsed;
+  } catch {
+    throw new Error("send_email: owner-mailbox send returned an invalid body");
+  }
+  if (!parsed.ok) {
+    return {
+      kind: "fail",
+      error: `send_email: owner-mailbox send failed (${parsed.detail ?? `http ${res.status}`})`
+    };
+  }
+  return {
+    kind: "ok",
+    result: {
+      to: action.to,
+      emailId: parsed.data?.messageId ?? null,
+      provider: parsed.data?.provider ?? null,
+      sent_from: "owner_mailbox"
+    }
   };
 }
 
@@ -962,6 +1365,7 @@ async function routeToTeamStep(
       );
       await sendOwnerSms(supabase, run, body, `aiflow-claimed:${run.id}`);
     }
+    appendActionTaken(scope, `lead claimed by ${claimedName || claimedBy}`);
     return { kind: "ok", result: { routed: "claimed", claimed_by: claimedBy } };
   }
 
@@ -976,8 +1380,9 @@ async function routeToTeamStep(
 
   const leadPhone = leadPhoneE164(scope);
   for (let i = 0; i < ROUTE_MAX_LOOKUPS; i++) {
-    const agent = await pickNextAgent(supabase, run, scope, tried);
-    // No agent at all (none / parse fail / unconfigured): roster is exhausted.
+    const agent = await pickNextAgent(supabase, run, scope, tried, action.agentName);
+    // No agent at all (none / parse fail / unconfigured / pinned agent missing):
+    // roster is exhausted.
     if (!agent) break;
     // Rowboat repeated an agent we already tried: don't end routing on one bad
     // pick — consume another lookup and ask again (bounded by ROUTE_MAX_LOOKUPS).
@@ -995,6 +1400,12 @@ async function routeToTeamStep(
     }
     routing.offered = agent.phone;
     routing.offered_name = agent.name;
+    // After-hours offer window: the offer SMS still goes out now, but inside
+    // the quiet window the claim deadline extends to quietEnd + grace so the
+    // countdown effectively starts in the morning. The resolved deadline is
+    // exposed to the template as {{offer.deadline}} in the owner's zone.
+    const nowMs = Date.now();
+    const deadlineMs = offerRespondByMs(nowMs, action.responseMinutes, action.offerWindow);
     // The offer SMS itself is sent by executeRun AFTER the awaiting_agent state
     // is persisted (state before side effect); we only carry the rendered body
     // and a per-agent idempotency key here. The MMS URL is signed fresh per
@@ -1003,8 +1414,11 @@ async function routeToTeamStep(
     return {
       kind: "pause_agent",
       e164: agent.phone,
-      respondByMs: action.responseMinutes * 60_000,
-      offerText: renderTemplate(action.offerTemplate, agentScope(scope, agent)),
+      respondByMs: Math.max(60_000, deadlineMs - nowMs),
+      offerText: renderTemplate(
+        action.offerTemplate,
+        agentScope(scope, agent, formatInTimeZone(deadlineMs, action.offerWindow?.timezone ?? "UTC"))
+      ),
       idempotencyKey: `aiflow-offer:${run.id}:${tried.length}`,
       ...(mmsUrl ? { mediaUrls: [mmsUrl] } : {})
     };
@@ -1013,15 +1427,20 @@ async function routeToTeamStep(
   // Roster exhausted: hand the lead to the owner so it is never dropped.
   const body = renderTemplate(action.ownerFallbackTemplate, scope);
   await sendOwnerSms(supabase, run, body, `aiflow-owner-fallback:${run.id}`);
+  appendActionTaken(scope, "no agent claimed the lead; handed back to the owner");
   return { kind: "ok", result: { routed: "owner_fallback", tried: tried.length } };
 }
 
-/** Scope for templating an agent-facing SMS: run vars/trigger plus {{agent.*}}. */
-function agentScope(scope: Scope, agent: RoutedAgent): Record<string, unknown> {
+/**
+ * Scope for templating an agent-facing SMS: run vars/trigger plus {{agent.*}}
+ * and (when resolved) the {{offer.deadline}} claim deadline.
+ */
+function agentScope(scope: Scope, agent: RoutedAgent, deadline?: string): Record<string, unknown> {
   return {
     vars: scope.vars,
     trigger: scope.trigger,
-    agent: { name: agent.name, phone: agent.phone }
+    agent: { name: agent.name, phone: agent.phone },
+    ...(deadline ? { offer: { deadline } } : {})
   };
 }
 
@@ -1050,7 +1469,8 @@ async function pickNextAgent(
   supabase: Supabase,
   run: RunRow,
   scope: Scope,
-  tried: string[]
+  tried: string[],
+  pinnedAgentName?: string
 ): Promise<RoutedAgent | null> {
   // --- Deterministic roster path -------------------------------------------
   const { data: rosterRows, error: rosterErr } = await supabase
@@ -1063,7 +1483,28 @@ async function pickNextAgent(
   if (rosterErr) {
     throw new Error(`route_to_team: roster query failed: ${rosterErr.message}`);
   }
-  const roster = (rosterRows ?? []) as { id: string; name: string; phone_e164: string }[];
+  let roster = (rosterRows ?? []) as { id: string; name: string; phone_e164: string }[];
+  // Pinned routing (step.agentName): this lead type goes to ONE named member
+  // (e.g. every seller lead straight to the broker). Restrict the roster to
+  // that member; if they're missing/renamed — or there is no roster at all —
+  // the offer falls through to the owner fallback, never to the legacy
+  // Rowboat picker, which could offer the lead to a different teammate.
+  if (pinnedAgentName) {
+    const want = pinnedAgentName.trim().toLowerCase();
+    roster = roster.filter((r) => r.name.trim().toLowerCase() === want);
+    if (roster.length === 0) {
+      console.error(`route_to_team: pinned agent "${pinnedAgentName}" not on the active roster`);
+      await systemLog(supabase, {
+        businessId: run.business_id,
+        source: "aiflow",
+        level: "warn",
+        event: "ai_flow_pinned_agent_missing",
+        message: `route_to_team: pinned agent "${pinnedAgentName}" is not on the active roster; falling back to the owner`,
+        payload: { run_id: run.id, flow_id: run.flow_id, agent_name: pinnedAgentName }
+      });
+      return null;
+    }
+  }
   if (roster.length > 0) {
     const pick = pickRosterAgent(
       roster.map((r) => ({ name: r.name, phone: r.phone_e164 })),
@@ -1124,6 +1565,9 @@ async function pickNextAgent(
     price: typeof scope.vars.price === "string" ? scope.vars.price : "",
     type: typeof scope.vars.lead_type === "string" ? scope.vars.lead_type : ""
   };
+  // NOTE: a pinned step never reaches this legacy path — the pin guard above
+  // either restricted the roster or already returned the owner fallback, so
+  // the model can never be asked to (mis)pick a pinned lead's agent.
   const preamble = [
     "You are routing a new real-estate lead to your team.",
     "Pick the single NEXT team agent to offer this lead to, using the team",
@@ -1145,6 +1589,16 @@ async function pickNextAgent(
       timeoutMs: ROWBOAT_ROUTE_TIMEOUT_MS,
       customerPreamble: preamble
     });
+    // The legacy agent-pick is a billed Gemini turn on the tenant's Rowboat —
+    // meter it into the shared pool (not gated: routing a live lead must not
+    // be blocked by the fuse; it just counts toward it).
+    await meterAiFlowSpend(
+      supabase,
+      run,
+      "route_pick",
+      preamble.length + userText.length,
+      res.reply.length
+    );
     return parseRoutedAgent(res.reply);
   } catch (e) {
     throw new Error(
@@ -1355,11 +1809,19 @@ async function failRun(
   });
 }
 
-/** Transient throw → re-queue until attempts exhausted, then dead-letter. */
+/**
+ * Transient throw → re-queue until the ERROR retry budget is exhausted, then
+ * dead-letter. Keyed off error_retry_count, NOT attempt_count: attempt_count
+ * is bumped on every claim, including benign re-claims (route_to_team offer
+ * escalations, approval resumes, quiet-hour deferrals), so using it here let a
+ * healthy multi-agent routing run eat the whole retry budget without a single
+ * error.
+ */
 async function handleRunThrow(supabase: Supabase, run: RunRow, e: unknown): Promise<void> {
   const message = e instanceof Error ? e.message : String(e);
-  if (run.attempt_count >= MAX_ATTEMPTS) {
-    await failRun(supabase, run, `max attempts: ${message}`);
+  const retries = run.error_retry_count ?? 0;
+  if (retries >= MAX_ATTEMPTS) {
+    await failRun(supabase, run, `max retries: ${message}`);
     return;
   }
   // Best-effort re-queue; if it fails, stale-run reclaim recovers the run.
@@ -1367,6 +1829,7 @@ async function handleRunThrow(supabase: Supabase, run: RunRow, e: unknown): Prom
     await updateRun(supabase, run.id, {
       status: "queued",
       last_error: message.slice(0, 2000),
+      error_retry_count: retries + 1,
       claimed_at: null
     });
   } catch (e) {
@@ -1375,7 +1838,7 @@ async function handleRunThrow(supabase: Supabase, run: RunRow, e: unknown): Prom
   await telemetryRecord(supabase, "ai_flow_run_retry", {
     run_id: run.id,
     business_id: run.business_id,
-    attempt: run.attempt_count,
+    retry: retries + 1,
     error: message.slice(0, 300)
   });
   await systemLog(supabase, {
@@ -1388,8 +1851,8 @@ async function handleRunThrow(supabase: Supabase, run: RunRow, e: unknown): Prom
       run_id: run.id,
       flow_id: run.flow_id,
       step_index: run.current_step,
-      attempt: run.attempt_count,
-      max_attempts: MAX_ATTEMPTS
+      retry: retries + 1,
+      max_retries: MAX_ATTEMPTS
     }
   });
 }

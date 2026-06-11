@@ -8,7 +8,7 @@ vi.mock("@/lib/nango/workspace", () => ({
   nangoProxyForBusiness: vi.fn()
 }));
 
-import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
+import { sendFromMailboxConnection, sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { resolveEmailConnection } from "@/lib/voice-tools/connections";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
 
@@ -119,5 +119,21 @@ describe("sendFromOwnerMailbox", () => {
     });
     vi.mocked(nangoProxyForBusiness).mockRejectedValue(new Error("gmail 500"));
     await expect(sendFromOwnerMailbox(BIZ, ARGS)).rejects.toThrow("gmail 500");
+  });
+});
+
+describe("sendFromMailboxConnection", () => {
+  it("sends through an explicitly chosen connection (no implicit resolution)", async () => {
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "gmail-2" } } as never);
+    await expect(
+      sendFromMailboxConnection(
+        BIZ,
+        { provider: "google", providerConfigKey: "gmail", connectionId: "cx-picked" },
+        ARGS
+      )
+    ).resolves.toEqual({ ok: true, provider: "google", messageId: "gmail-2" });
+    expect(resolveEmailConnection).not.toHaveBeenCalled();
+    const call = vi.mocked(nangoProxyForBusiness).mock.calls[0];
+    expect(call[1]).toMatchObject({ providerConfigKey: "gmail", connectionId: "cx-picked" });
   });
 });

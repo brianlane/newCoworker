@@ -127,6 +127,70 @@ describe("planStep: send_sms", () => {
   });
 });
 
+describe("planStep: send_sms quietHours", () => {
+  const base: FlowStep = {
+    id: "x",
+    type: "send_sms",
+    to: "{{vars.lead_phone}}",
+    body: "hi",
+    quietHours: {
+      timezone: "America/Phoenix",
+      noSendAfter: "22:00",
+      resumeAt: "08:30",
+      emailFallbackVar: "lead_email",
+      emailSubject: "Re: {{vars.lead_name}}",
+      emailFromConnectionId: "22222222-2222-4222-8222-222222222222"
+    }
+  };
+  it("resolves the email fallback var and renders the subject", () => {
+    const r = planStep(base, {
+      vars: { lead_phone: "+16025550100", lead_email: " lead@x.com ", lead_name: "Pat" }
+    });
+    expect(r).toEqual({
+      ok: true,
+      action: {
+        kind: "send_sms",
+        to: "+16025550100",
+        body: "hi",
+        quiet: {
+          timezone: "America/Phoenix",
+          noSendAfter: "22:00",
+          resumeAt: "08:30",
+          emailTo: "lead@x.com",
+          emailSubject: "Re: Pat",
+          emailFromConnectionId: "22222222-2222-4222-8222-222222222222"
+        }
+      }
+    });
+  });
+  it("uses an empty emailTo when the fallback var is missing or non-string", () => {
+    const r = planStep(base, { vars: { lead_phone: "+16025550100", lead_email: 42 } });
+    expect(r.ok && r.action.kind === "send_sms" && r.action.quiet?.emailTo).toBe("");
+  });
+  it("defaults the email subject and omits the connection id when unset", () => {
+    const noExtras: FlowStep = {
+      id: "x",
+      type: "send_sms",
+      to: "+16025550100",
+      body: "hi",
+      quietHours: { timezone: "America/Phoenix", noSendAfter: "22:00", resumeAt: "08:30" }
+    };
+    const r = planStep(noExtras, { vars: {} });
+    expect(r.ok && r.action.kind === "send_sms" && r.action.quiet).toEqual({
+      timezone: "America/Phoenix",
+      noSendAfter: "22:00",
+      resumeAt: "08:30",
+      emailTo: "",
+      emailSubject: "Following up on your inquiry"
+    });
+  });
+  it("omits quiet entirely when the step has no quietHours", () => {
+    const plain: FlowStep = { id: "x", type: "send_sms", to: "+16025550100", body: "hi" };
+    const r = planStep(plain, {});
+    expect(r.ok && r.action.kind === "send_sms" && "quiet" in r.action).toBe(false);
+  });
+});
+
 describe("planStep: send_email", () => {
   const step: FlowStep = {
     id: "e",
@@ -168,6 +232,15 @@ describe("planStep: send_email", () => {
       ok: false,
       error: "send_email: body is empty after templating"
     });
+  });
+  it("carries fromConnectionId through (owner-mailbox send)", () => {
+    const r = planStep(
+      { ...step, fromConnectionId: "33333333-3333-4333-8333-333333333333" },
+      { vars: { lead_name: "Jane" } }
+    );
+    expect(r.ok && r.action.kind === "send_email" && r.action.fromConnectionId).toBe(
+      "33333333-3333-4333-8333-333333333333"
+    );
   });
 });
 
@@ -253,6 +326,73 @@ describe("planStep: route_to_team", () => {
     expect(planStep({ ...base, ownerFallbackTemplate: "" }, {})).toEqual({
       ok: false,
       error: "route_to_team: ownerFallbackTemplate is empty"
+    });
+  });
+  it("carries agentName + offerWindow through, dropping a blank agentName", () => {
+    const window = {
+      timezone: "America/Phoenix",
+      quietStart: "21:00",
+      quietEnd: "08:30",
+      graceMinutes: 10
+    };
+    const r = planStep({ ...base, agentName: " Dave ", offerWindow: window }, {});
+    expect(r.ok && r.action.kind === "route_to_team" && r.action.agentName).toBe("Dave");
+    expect(r.ok && r.action.kind === "route_to_team" && r.action.offerWindow).toEqual(window);
+    const blank = planStep({ ...base, agentName: "   " }, {});
+    expect(blank.ok && blank.action.kind === "route_to_team" && "agentName" in blank.action).toBe(
+      false
+    );
+  });
+});
+
+describe("planStep: browse_action", () => {
+  const base: FlowStep = {
+    id: "u",
+    type: "browse_action",
+    urlVar: "lead_url",
+    actions: [
+      { kind: "click_text", target: "Leave an update" },
+      { kind: "click_text", target: "No interaction yet" },
+      { kind: "fill_placeholder", target: "Add an update", valueTemplate: "AI: {{vars.actions_taken}}" }
+    ]
+  };
+  it("renders fill values and defaults click values to empty strings", () => {
+    const r = planStep(base, { vars: { lead_url: "https://rfrl.to/x", actions_taken: "texted lead" } });
+    expect(r).toEqual({
+      ok: true,
+      action: {
+        kind: "browse_action",
+        url: "https://rfrl.to/x",
+        auth: undefined,
+        actions: [
+          { kind: "click_text", target: "Leave an update", value: "" },
+          { kind: "click_text", target: "No interaction yet", value: "" },
+          { kind: "fill_placeholder", target: "Add an update", value: "AI: texted lead" }
+        ],
+        screenshot: false
+      }
+    });
+  });
+  it("carries auth + screenshot through", () => {
+    const r = planStep(
+      { ...base, auth: { integrationLabel: "Referral Exchange" }, screenshot: true },
+      { vars: { lead_url: "https://rfrl.to/x" } }
+    );
+    expect(r.ok && r.action.kind === "browse_action" && r.action.screenshot).toBe(true);
+    expect(
+      r.ok && r.action.kind === "browse_action" && r.action.auth?.integrationLabel
+    ).toBe("Referral Exchange");
+  });
+  it("fails when the urlVar is missing", () => {
+    expect(planStep(base, { vars: {} })).toEqual({
+      ok: false,
+      error: 'browse_action: urlVar "lead_url" is not set'
+    });
+  });
+  it("fails when no actions are configured", () => {
+    expect(planStep({ ...base, actions: [] }, { vars: { lead_url: "https://rfrl.to/x" } })).toEqual({
+      ok: false,
+      error: "browse_action: no actions configured"
     });
   });
 });
