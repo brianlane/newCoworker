@@ -31,11 +31,31 @@ export const FLOW_STEP_TYPES = [
   "approval_gate",
   "notify_owner",
   "http_call",
-  "route_to_team"
+  "route_to_team",
+  "browse_action"
 ] as const;
 
 /** Keys available as `{{agent.x}}` inside a route_to_team step's templates. */
 export const AGENT_SCOPE_KEYS = ["name", "phone"] as const;
+
+/** Keys available as `{{offer.x}}` inside a route_to_team step's templates. */
+export const OFFER_SCOPE_KEYS = ["deadline"] as const;
+
+/**
+ * Vars the ENGINE itself maintains (not produced by any step): the worker
+ * appends a human description of each outbound contact (SMS / email / routing)
+ * to `actions_taken`, so a later step — e.g. a browse_action timeline note —
+ * can template "what did this flow actually do". Always in scope.
+ */
+export const ENGINE_PROVIDED_VARS = ["actions_taken"] as const;
+
+/** The UI action kinds a browse_action step may perform. */
+export const BROWSE_ACTION_KINDS = [
+  "click_text",
+  "click_selector",
+  "fill_selector",
+  "fill_placeholder"
+] as const;
 
 export const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
 
@@ -98,6 +118,46 @@ const browseAuthSchema = z.object({
 
 const stepId = z.string().min(1).max(60);
 
+/** 24h wall-clock "HH:MM" (quiet-hour boundaries). */
+const hhmm = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):([0-5]\d)$/, 'must be a 24h time like "21:00"');
+
+/** IANA zone name; validity is enforced at runtime (helpers fail open). */
+const timezone = z.string().min(1).max(60);
+
+/**
+ * Lead-contact quiet hours on a send_sms step: never text inside
+ * [noSendAfter, resumeAt) local time — email instead (when the flow extracted
+ * a lead email into `emailFallbackVar`) or defer the run to resumeAt.
+ */
+const sendSmsQuietHoursSchema = z.object({
+  timezone,
+  noSendAfter: hhmm,
+  resumeAt: hhmm,
+  emailFallbackVar: varName.optional(),
+  emailSubject: z.string().min(1).max(300).optional(),
+  emailFromConnectionId: z.string().uuid().optional()
+});
+
+/**
+ * After-hours agent-offer window on a route_to_team step: offers inside
+ * [quietStart, quietEnd) still send immediately but their claim deadline is
+ * quietEnd + graceMinutes (the countdown starts in the morning).
+ */
+const routeOfferWindowSchema = z.object({
+  timezone,
+  quietStart: hhmm,
+  quietEnd: hhmm,
+  graceMinutes: z.number().int().min(0).max(720).optional()
+});
+
+const browseActionItemSchema = z.object({
+  kind: z.enum(BROWSE_ACTION_KINDS),
+  target: z.string().min(1).max(300),
+  valueTemplate: z.string().max(2000).optional()
+});
+
 /**
  * Optional per-step guard. The step only runs when the condition holds against a
  * var produced by an EARLIER step; otherwise the worker skips it. Exactly one of
@@ -132,6 +192,7 @@ const stepSchema = z.discriminatedUnion("type", [
     type: z.literal("send_sms"),
     to: z.string().min(1).max(200),
     body: z.string().min(1).max(1600),
+    quietHours: sendSmsQuietHoursSchema.optional(),
     when: whenSchema.optional()
   }),
   z.object({
@@ -141,6 +202,7 @@ const stepSchema = z.discriminatedUnion("type", [
     subject: z.string().min(1).max(300),
     body: z.string().min(1).max(8000),
     attachScreenshot: z.boolean().optional(),
+    fromConnectionId: z.string().uuid().optional(),
     when: whenSchema.optional()
   }),
   z.object({
@@ -172,7 +234,18 @@ const stepSchema = z.discriminatedUnion("type", [
     responseMinutes: z.number().int().min(1).max(1440).optional(),
     ownerFallbackTemplate: z.string().min(1).max(1600),
     claimedNotifyTemplate: z.string().min(1).max(1600).optional(),
+    agentName: z.string().min(1).max(120).optional(),
+    offerWindow: routeOfferWindowSchema.optional(),
     attachScreenshot: z.boolean().optional(),
+    when: whenSchema.optional()
+  }),
+  z.object({
+    id: stepId,
+    type: z.literal("browse_action"),
+    urlVar: varName,
+    auth: browseAuthSchema.optional(),
+    actions: z.array(browseActionItemSchema).min(1).max(15),
+    screenshot: z.boolean().optional(),
     when: whenSchema.optional()
   })
 ]);
@@ -220,7 +293,7 @@ export function collectTemplateRefs(text: string): { scope: string; key: string 
 function templateStringsForStep(step: FlowStep): string[] {
   switch (step.type) {
     case "send_sms":
-      return [step.to, step.body];
+      return [step.to, step.body, step.quietHours?.emailSubject ?? ""];
     case "send_email":
       return [step.to, step.subject, step.body];
     case "notify_owner":
@@ -231,6 +304,8 @@ function templateStringsForStep(step: FlowStep): string[] {
       return [step.path ?? "", step.bodyTemplate ?? ""];
     case "route_to_team":
       return [step.offerTemplate, step.ownerFallbackTemplate, step.claimedNotifyTemplate ?? ""];
+    case "browse_action":
+      return step.actions.map((a) => a.valueTemplate ?? "");
     case "extract_url":
     case "browse_extract":
       return [];
@@ -239,6 +314,8 @@ function templateStringsForStep(step: FlowStep): string[] {
 
 const TRIGGER_KEYS = new Set<string>(TRIGGER_SCOPE_KEYS);
 const AGENT_KEYS = new Set<string>(AGENT_SCOPE_KEYS);
+const OFFER_KEYS = new Set<string>(OFFER_SCOPE_KEYS);
+const ENGINE_VARS = new Set<string>(ENGINE_PROVIDED_VARS);
 
 /**
  * Cross-step invariants zod cannot express:
@@ -270,7 +347,7 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
             issues.push(`Step "${step.id}" references unknown trigger field "${ref.key}".`);
           }
         } else if (ref.scope === "vars") {
-          if (!vars.has(ref.key)) {
+          if (!vars.has(ref.key) && !ENGINE_VARS.has(ref.key)) {
             issues.push(
               `Step "${step.id}" uses {{vars.${ref.key}}} before any step produces it.`
             );
@@ -285,14 +362,45 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
           } else if (!AGENT_KEYS.has(ref.key)) {
             issues.push(`Step "${step.id}" references unknown agent field "${ref.key}".`);
           }
+        } else if (ref.scope === "offer") {
+          // {{offer.deadline}} is the resolved claim deadline, only known when a
+          // route_to_team step sends an offer.
+          if (step.type !== "route_to_team") {
+            issues.push(
+              `Step "${step.id}" uses {{offer.${ref.key}}} but only a route_to_team step has an offer.`
+            );
+          } else if (!OFFER_KEYS.has(ref.key)) {
+            issues.push(`Step "${step.id}" references unknown offer field "${ref.key}".`);
+          }
         } else {
           issues.push(`Step "${step.id}" uses unknown template scope "${ref.scope}".`);
         }
       }
     }
 
-    if (step.type === "browse_extract" && !vars.has(step.urlVar)) {
+    if ((step.type === "browse_extract" || step.type === "browse_action") && !vars.has(step.urlVar)) {
       issues.push(`Step "${step.id}" browses urlVar "${step.urlVar}" which no earlier step produces.`);
+    }
+
+    // The owner-mailbox send path is plain text (Nango Gmail/Outlook); the
+    // screenshot attachment only exists on the platform Resend path.
+    if (step.type === "send_email" && step.attachScreenshot && step.fromConnectionId) {
+      issues.push(
+        `Step "${step.id}" attaches a screenshot but sends from a connected mailbox — attachments are only supported from the platform sender.`
+      );
+    }
+
+    // The quiet-hours email fallback reads the lead email from a var an
+    // EARLIER step must have produced (same scope rule as urlVar / when).
+    if (
+      step.type === "send_sms" &&
+      step.quietHours?.emailFallbackVar &&
+      !vars.has(step.quietHours.emailFallbackVar) &&
+      !ENGINE_VARS.has(step.quietHours.emailFallbackVar)
+    ) {
+      issues.push(
+        `Step "${step.id}" falls back to {{vars.${step.quietHours.emailFallbackVar}}} after hours, which no earlier step produces.`
+      );
     }
 
     // attachScreenshot needs a screenshot: an EARLIER browse_extract with
@@ -310,7 +418,7 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     // A `when` guard may only reference a var an EARLIER step produced (same
     // scope rule as urlVar/templates — checked before this step's own vars are
     // registered below).
-    if (step.when && !vars.has(step.when.var)) {
+    if (step.when && !vars.has(step.when.var) && !ENGINE_VARS.has(step.when.var)) {
       issues.push(
         `Step "${step.id}" has a "when" condition on {{vars.${step.when.var}}} which no earlier step produces.`
       );

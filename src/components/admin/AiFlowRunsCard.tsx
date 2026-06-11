@@ -6,7 +6,9 @@ import {
 } from "@/lib/ai-flows/db";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { LocalTime } from "@/components/LocalTime";
 import { formatAdminLabel } from "@/lib/admin/dashboard";
+import { routingSummary } from "@/lib/ai-flows/run-stats";
 
 const RUN_LIMIT = 15;
 // Bound the per-run step queries so a failure-heavy page stays cheap.
@@ -68,6 +70,7 @@ export async function AiFlowRunsCard({ businessId }: { businessId: string }) {
           {runs.map((run) => {
             const steps = stepsByRun.get(run.id);
             const failedSteps = (steps ?? []).filter((s) => s.status === "failed");
+            const routing = routingSummary(run.context);
             return (
               <li key={run.id} className="py-3 space-y-1.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -76,18 +79,26 @@ export async function AiFlowRunsCard({ businessId }: { businessId: string }) {
                       {flowNames.get(run.flow_id) ?? "(deleted flow)"}
                     </p>
                     <span className="text-[11px] text-parchment/35 font-mono shrink-0">
-                      step {run.current_step} · attempt {run.attempt_count}
+                      step {run.current_step}
+                      {run.error_retry_count > 0 ? ` · ${run.error_retry_count} retr${run.error_retry_count === 1 ? "y" : "ies"}` : ""}
                     </span>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <span className="text-xs text-parchment/45 font-mono">
-                      {new Date(run.created_at).toLocaleString()}
-                    </span>
+                    <LocalTime iso={run.created_at} className="text-xs text-parchment/45 font-mono" />
                     <Badge variant={runBadgeVariant(run.status)}>
                       {formatAdminLabel(run.status)}
                     </Badge>
                   </div>
                 </div>
+                {routing && (
+                  <p className="text-xs text-parchment/50">{routing}</p>
+                )}
+                {run.status === "queued" && run.earliest_claim_at && (
+                  <p className="text-xs text-parchment/50">
+                    Quiet hours — resumes at{" "}
+                    <LocalTime iso={run.earliest_claim_at} className="text-parchment/70" />
+                  </p>
+                )}
                 {isRelevantError(run) && (
                   <p className="text-xs text-spark-orange/90 whitespace-pre-wrap break-words">
                     {run.last_error}

@@ -9,18 +9,48 @@
  * dispatcher that switches on `action.kind`.
  */
 import { firstUrlInText, renderTemplate } from "./engine.ts";
-import type { BrowseAuth, ExtractField, FlowStep } from "./types.ts";
+import type { BrowseAuth, ExtractField, FlowStep, RouteOfferWindow } from "./types.ts";
 
 export type StepScope = {
   vars?: Record<string, unknown>;
   trigger?: Record<string, unknown>;
 };
 
+/**
+ * A send_sms step's quiet-hours plan with templates already resolved: the
+ * email-fallback recipient comes from the configured var ("" when absent) and
+ * the subject is rendered, so the worker only has to pick a branch.
+ */
+export type SendSmsQuietPlan = {
+  timezone: string;
+  noSendAfter: string;
+  resumeAt: string;
+  /** Resolved lead email for the email-instead branch; "" → defer instead. */
+  emailTo: string;
+  emailSubject: string;
+  emailFromConnectionId?: string;
+};
+
+/** One resolved browse_action UI action (valueTemplate already rendered). */
+export type BrowseActionPlanned = {
+  kind: "click_text" | "click_selector" | "fill_selector" | "fill_placeholder";
+  target: string;
+  value: string;
+};
+
 export type StepAction =
   | { kind: "set_vars"; vars: Record<string, string> }
   | { kind: "browse"; url: string; fields: ExtractField[]; auth?: BrowseAuth; screenshot?: boolean }
-  | { kind: "send_sms"; to: string; body: string }
-  | { kind: "send_email"; to: string; subject: string; body: string; attachScreenshot: boolean }
+  | { kind: "send_sms"; to: string; body: string; quiet?: SendSmsQuietPlan }
+  | {
+      kind: "send_email";
+      to: string;
+      subject: string;
+      body: string;
+      attachScreenshot: boolean;
+      /** Send via the owner's connected mailbox instead of platform Resend. */
+      fromConnectionId?: string;
+    }
   | { kind: "notify_owner"; message: string }
   | { kind: "await_approval"; prompt: string }
   | {
@@ -33,14 +63,26 @@ export type StepAction =
     }
   | {
       // Templates are passed through UNRENDERED: the offer/claimed copy reference
-      // {{agent.*}}, which only the worker knows after Rowboat selects an agent.
+      // {{agent.*}} / {{offer.*}}, which only the worker knows after it selects
+      // an agent and resolves the offer deadline.
       kind: "route_to_team";
       offerTemplate: string;
       responseMinutes: number;
       ownerFallbackTemplate: string;
       claimedNotifyTemplate?: string;
+      /** Pin offers to the single roster member with this name. */
+      agentName?: string;
+      /** After-hours claim-deadline extension. */
+      offerWindow?: RouteOfferWindow;
       /** Attach the stored browse screenshot to each agent offer as MMS. */
       attachScreenshot: boolean;
+    }
+  | {
+      kind: "browse_action";
+      url: string;
+      auth?: BrowseAuth;
+      actions: BrowseActionPlanned[];
+      screenshot: boolean;
     };
 
 export type StepPlan =
@@ -89,7 +131,23 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       const body = renderTemplate(step.body, scope).trim();
       if (!to) return { ok: false, error: "send_sms: recipient is empty after templating" };
       if (!body) return { ok: false, error: "send_sms: body is empty after templating" };
-      return { ok: true, action: { kind: "send_sms", to, body } };
+      let quiet: SendSmsQuietPlan | undefined;
+      if (step.quietHours) {
+        const q = step.quietHours;
+        const emailRaw = q.emailFallbackVar ? scope.vars?.[q.emailFallbackVar] : "";
+        quiet = {
+          timezone: q.timezone,
+          noSendAfter: q.noSendAfter,
+          resumeAt: q.resumeAt,
+          emailTo: typeof emailRaw === "string" ? emailRaw.trim() : "",
+          emailSubject: renderTemplate(
+            q.emailSubject ?? "Following up on your inquiry",
+            scope
+          ).trim(),
+          ...(q.emailFromConnectionId ? { emailFromConnectionId: q.emailFromConnectionId } : {})
+        };
+      }
+      return { ok: true, action: { kind: "send_sms", to, body, ...(quiet ? { quiet } : {}) } };
     }
     case "send_email": {
       const to = renderTemplate(step.to, scope).trim();
@@ -100,7 +158,14 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       if (!body) return { ok: false, error: "send_email: body is empty after templating" };
       return {
         ok: true,
-        action: { kind: "send_email", to, subject, body, attachScreenshot: step.attachScreenshot === true }
+        action: {
+          kind: "send_email",
+          to,
+          subject,
+          body,
+          attachScreenshot: step.attachScreenshot === true,
+          ...(step.fromConnectionId ? { fromConnectionId: step.fromConnectionId } : {})
+        }
       };
     }
     case "notify_owner": {
@@ -134,6 +199,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       }
       const responseMinutes = Math.max(1, Math.round(step.responseMinutes ?? 10));
       const claimed = step.claimedNotifyTemplate?.trim();
+      const agentName = step.agentName?.trim();
       return {
         ok: true,
         action: {
@@ -142,7 +208,33 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           responseMinutes,
           ownerFallbackTemplate,
           claimedNotifyTemplate: claimed ? claimed : undefined,
+          ...(agentName ? { agentName } : {}),
+          ...(step.offerWindow ? { offerWindow: step.offerWindow } : {}),
           attachScreenshot: step.attachScreenshot === true
+        }
+      };
+    }
+    case "browse_action": {
+      const url = scope.vars?.[step.urlVar];
+      if (typeof url !== "string" || !url) {
+        return { ok: false, error: `browse_action: urlVar "${step.urlVar}" is not set` };
+      }
+      if (step.actions.length === 0) {
+        return { ok: false, error: "browse_action: no actions configured" };
+      }
+      const actions: BrowseActionPlanned[] = step.actions.map((a) => ({
+        kind: a.kind,
+        target: a.target,
+        value: a.valueTemplate ? renderTemplate(a.valueTemplate, scope).trim() : ""
+      }));
+      return {
+        ok: true,
+        action: {
+          kind: "browse_action",
+          url,
+          auth: step.auth,
+          actions,
+          screenshot: step.screenshot === true
         }
       };
     }

@@ -6,6 +6,8 @@ vi.mock("@/lib/db/workspace-oauth-connections", () => ({
 
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
 import {
+  isEmailProviderConfigKey,
+  providerFromKey,
   resolveCalendarConnection,
   resolveEmailConnection,
   resolveVoiceConnection
@@ -65,5 +67,20 @@ describe("resolveVoiceConnection", () => {
     const res = await resolveCalendarConnection(businessId);
     expect(res?.provider).toBe("google");
     expect(res?.providerConfigKey).toBe("google-calendar");
+  });
+});
+
+describe("isEmailProviderConfigKey / providerFromKey", () => {
+  it("recognizes exactly the sendable mailbox keys", () => {
+    expect(isEmailProviderConfigKey("google-mail")).toBe(true);
+    expect(isEmailProviderConfigKey("gmail")).toBe(true);
+    expect(isEmailProviderConfigKey("outlook")).toBe(true);
+    expect(isEmailProviderConfigKey("google-calendar")).toBe(false);
+    expect(isEmailProviderConfigKey("slack")).toBe(false);
+  });
+  it("maps keys to providers", () => {
+    expect(providerFromKey("google-mail")).toBe("google");
+    expect(providerFromKey("gmail")).toBe("google");
+    expect(providerFromKey("outlook")).toBe("microsoft");
   });
 });

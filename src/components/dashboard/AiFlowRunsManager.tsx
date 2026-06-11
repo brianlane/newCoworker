@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { retrySummary, routingSummary } from "@/lib/ai-flows/run-stats";
 import type { AiFlowRunRow, AiFlowRunStepRow } from "@/lib/ai-flows/db";
 
 const STATUS_STYLES: Record<string, string> = {
@@ -234,6 +235,11 @@ export function AiFlowRunsManager({
                       <span className="text-sm text-parchment/80">
                         {new Date(r.created_at).toLocaleString()}
                       </span>
+                      {retrySummary(r.error_retry_count) && (
+                        <span className="text-[10px] text-spark-orange/80">
+                          {retrySummary(r.error_retry_count)}
+                        </span>
+                      )}
                     </span>
                     <span
                       className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
@@ -243,9 +249,18 @@ export function AiFlowRunsManager({
                       {r.status.toUpperCase()}
                     </span>
                   </button>
+                  {routingSummary(r.context) && (
+                    <p className="text-xs text-parchment/50">{routingSummary(r.context)}</p>
+                  )}
+                  {r.status === "queued" && r.earliest_claim_at && (
+                    <p className="text-xs text-parchment/50">
+                      Quiet hours — resumes at{" "}
+                      {new Date(r.earliest_claim_at).toLocaleString()}
+                    </p>
+                  )}
                   {expanded === r.id && (
                     <div className="space-y-1 border-t border-parchment/10 pt-2">
-                      {r.last_error && (
+                      {r.last_error && r.status !== "done" && (
                         <p className="text-xs text-red-400">Error: {r.last_error}</p>
                       )}
                       {(steps[r.id] ?? []).map((s) => (

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isUnsafeBrowseHost,
   normalizeBrowseUrl,
+  parseActionResponse,
   parseRenderResponse
 } from "../supabase/functions/_shared/ai_flows/browse";
 
@@ -112,5 +113,44 @@ describe("parseRenderResponse", () => {
     expect(parseRenderResponse("nope", "u")).toBeNull();
     expect(parseRenderResponse({}, "u")).toBeNull();
     expect(parseRenderResponse({ finalUrl: "x" }, "u")).toBeNull();
+  });
+});
+
+describe("parseActionResponse", () => {
+  it("accepts a full action-mode body", () => {
+    expect(
+      parseActionResponse(
+        { finalUrl: "https://x.com/final", actionsCompleted: 3, screenshotBase64: "aGVsbG8=" },
+        "https://x.com/req"
+      )
+    ).toEqual({
+      finalUrl: "https://x.com/final",
+      actionsCompleted: 3,
+      screenshotBase64: "aGVsbG8="
+    });
+  });
+  it("falls back to requestedUrl and floors a fractional count", () => {
+    expect(parseActionResponse({ actionsCompleted: 2.7 }, "https://x.com/req")).toEqual({
+      finalUrl: "https://x.com/req",
+      actionsCompleted: 2
+    });
+  });
+  it("drops empty/non-string screenshots", () => {
+    expect(parseActionResponse({ actionsCompleted: 1, screenshotBase64: "" }, "u")).toEqual({
+      finalUrl: "u",
+      actionsCompleted: 1
+    });
+    expect(parseActionResponse({ actionsCompleted: 1, screenshotBase64: 42 }, "u")).toEqual({
+      finalUrl: "u",
+      actionsCompleted: 1
+    });
+  });
+  it("rejects bodies without a valid actionsCompleted", () => {
+    expect(parseActionResponse(null, "u")).toBeNull();
+    expect(parseActionResponse("nope", "u")).toBeNull();
+    expect(parseActionResponse({}, "u")).toBeNull();
+    expect(parseActionResponse({ actionsCompleted: "3" }, "u")).toBeNull();
+    expect(parseActionResponse({ actionsCompleted: -1 }, "u")).toBeNull();
+    expect(parseActionResponse({ actionsCompleted: Number.NaN }, "u")).toBeNull();
   });
 });

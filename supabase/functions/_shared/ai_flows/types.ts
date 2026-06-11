@@ -79,6 +79,58 @@ export type StepCondition = {
   caseInsensitive?: boolean;
 };
 
+/**
+ * Quiet hours for a `send_sms` step that texts the LEAD. Inside the
+ * [noSendAfter, resumeAt) local window the worker never sends the SMS; it
+ * either emails the same body to the lead instead (when `emailFallbackVar`
+ * names a var holding a lead email) or defers the whole run until `resumeAt`
+ * via ai_flow_runs.earliest_claim_at.
+ */
+export type SendSmsQuietHours = {
+  /** IANA zone, e.g. "America/Phoenix". */
+  timezone: string;
+  /** Last sendable local time, 24h "HH:MM" (e.g. "22:00"). */
+  noSendAfter: string;
+  /** Local time texting resumes, 24h "HH:MM" (e.g. "08:30"). */
+  resumeAt: string;
+  /** Var holding the lead's email; when non-empty the worker emails INSTEAD of deferring. */
+  emailFallbackVar?: string;
+  /** Subject template for the fallback email. Default "Following up on your inquiry". */
+  emailSubject?: string;
+  /** Send the fallback email from this connected owner mailbox (workspace_oauth_connections.id). */
+  emailFromConnectionId?: string;
+};
+
+/**
+ * Quiet hours for a `route_to_team` step's agent offers. The offer SMS still
+ * goes out immediately, but inside the [quietStart, quietEnd) local window the
+ * claim deadline becomes quietEnd + graceMinutes (countdown starts in the
+ * morning) instead of now + responseMinutes. Offer templates may render the
+ * resolved deadline via `{{offer.deadline}}`.
+ */
+export type RouteOfferWindow = {
+  timezone: string;
+  /** Window start, 24h "HH:MM" (e.g. "21:00"). */
+  quietStart: string;
+  /** Window end / morning resume, 24h "HH:MM" (e.g. "08:30"). */
+  quietEnd: string;
+  /** Countdown minutes granted after quietEnd. Default 10. */
+  graceMinutes?: number;
+};
+
+/**
+ * One UI action a `browse_action` step performs on the (optionally logged-in)
+ * page, in order. `valueTemplate` is rendered against run vars before the
+ * action runs (only meaningful for fill kinds).
+ */
+export type BrowseActionItem = {
+  kind: "click_text" | "click_selector" | "fill_selector" | "fill_placeholder";
+  /** Visible text (click_text / fill_placeholder) or CSS selector (the _selector kinds). */
+  target: string;
+  /** Fill value template, e.g. "AI assistant: {{vars.actions_taken}}". */
+  valueTemplate?: string;
+};
+
 export type FlowStep =
   | { id: string; type: "extract_url"; saveAs: string; when?: StepCondition }
   | {
@@ -96,22 +148,38 @@ export type FlowStep =
       screenshot?: boolean;
       when?: StepCondition;
     }
-  | { id: string; type: "send_sms"; to: string; body: string; when?: StepCondition }
+  | {
+      id: string;
+      type: "send_sms";
+      to: string;
+      body: string;
+      /** Lead-contact quiet hours; see SendSmsQuietHours. */
+      quietHours?: SendSmsQuietHours;
+      when?: StepCondition;
+    }
   | {
       id: string;
       type: "send_email";
       /** Recipient address (templatable, e.g. a fixed owner address). */
       to: string;
-      /** Subject template, e.g. "{{vars.lead_name}} BS RX". */
+      /** Subject template, e.g. "{{vars.lead_name}} BS RE". */
       subject: string;
       /** Plain-text body template. */
       body: string;
       /**
        * Attach the screenshot captured by an earlier `browse_extract` with
        * `screenshot: true`. Silently sends without an attachment when no
-       * screenshot was captured.
+       * screenshot was captured. Platform (Resend) sends only — not combinable
+       * with `fromConnectionId` (the owner-mailbox path is plain text).
        */
       attachScreenshot?: boolean;
+      /**
+       * Send from the owner's connected mailbox (workspace_oauth_connections.id,
+       * via Nango Gmail/Outlook) instead of the platform Resend sender. The
+       * worker calls back into the app's /api/aiflows/send-owner-email, which
+       * verifies the connection belongs to this business.
+       */
+      fromConnectionId?: string;
       when?: StepCondition;
     }
   | { id: string; type: "approval_gate"; prompt: string; when?: StepCondition }
@@ -121,8 +189,9 @@ export type FlowStep =
       type: "route_to_team";
       /**
        * SMS sent to the chosen team agent. Templated against run vars plus the
-       * resolved agent (`{{agent.name}}`). Should tell them to reply 1 to claim
-       * or 2 to reject within `responseMinutes`, or it goes to the next agent.
+       * resolved agent (`{{agent.name}}`) and `{{offer.deadline}}`. Should tell
+       * them to reply 1 to claim or 2 to reject within `responseMinutes`, or it
+       * goes to the next agent.
        */
       offerTemplate: string;
       /** Minutes an agent has to claim before the offer escalates. Default 10. */
@@ -132,11 +201,32 @@ export type FlowStep =
       /** Optional SMS sent to the owner once an agent claims the lead. */
       claimedNotifyTemplate?: string;
       /**
+       * Pin the offer to the single roster member with this name (e.g. all
+       * seller leads go straight to one agent). Falls back to the owner when
+       * that member is missing/opted out — never silently to someone else.
+       */
+      agentName?: string;
+      /** After-hours claim-deadline extension; see RouteOfferWindow. */
+      offerWindow?: RouteOfferWindow;
+      /**
        * Attach the screenshot captured by an earlier `browse_extract` with
        * `screenshot: true` to each agent offer as MMS media. Silently offers
        * without media when no screenshot was captured.
        */
       attachScreenshot?: boolean;
+      when?: StepCondition;
+    }
+  | {
+      id: string;
+      type: "browse_action";
+      /** Var holding the page URL (usually the same lead URL a browse used). */
+      urlVar: string;
+      /** Credentialed session config (required for login-gated pages). */
+      auth?: BrowseAuth;
+      /** UI actions performed in order; the FIRST failure fails the step. */
+      actions: BrowseActionItem[];
+      /** Capture a screenshot AFTER the actions complete (audit trail). */
+      screenshot?: boolean;
       when?: StepCondition;
     }
   | {

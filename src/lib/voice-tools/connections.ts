@@ -8,7 +8,8 @@ import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connecti
  * email) we prefer Google if connected, otherwise fall back to Microsoft.
  */
 const CALENDAR_KEYS = ["google-calendar", "outlook-calendar"] as const;
-const EMAIL_KEYS = ["google-mail", "gmail", "outlook"] as const;
+export const EMAIL_PROVIDER_CONFIG_KEYS = ["google-mail", "gmail", "outlook"] as const;
+const EMAIL_KEYS = EMAIL_PROVIDER_CONFIG_KEYS;
 
 export type ResolvedVoiceConnection = {
   provider: "google" | "microsoft";
@@ -16,8 +17,13 @@ export type ResolvedVoiceConnection = {
   connectionId: string;
 };
 
-function providerFromKey(key: string): "google" | "microsoft" {
+export function providerFromKey(key: string): "google" | "microsoft" {
   return key.startsWith("google") || key === "gmail" ? "google" : "microsoft";
+}
+
+/** True when a stored provider_config_key is a sendable email mailbox. */
+export function isEmailProviderConfigKey(key: string): boolean {
+  return (EMAIL_PROVIDER_CONFIG_KEYS as readonly string[]).includes(key);
 }
 
 /**

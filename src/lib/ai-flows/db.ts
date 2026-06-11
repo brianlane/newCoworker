@@ -50,7 +50,12 @@ export type AiFlowRunRow = {
   status: AiFlowRunStatus;
   context: Record<string, unknown>;
   current_step: number;
+  /** Total worker claims, including benign re-claims (escalation/resume/defer). */
   attempt_count: number;
+  /** Transient-ERROR retries only — what dead-lettering and the UI key off. */
+  error_retry_count: number;
+  /** Quiet-hour deferral: the claim RPC skips the run until this passes. */
+  earliest_claim_at: string | null;
   last_error: string | null;
   claimed_at: string | null;
   dedupe_key: string | null;
@@ -76,7 +81,7 @@ export type AiFlowRunStepRow = {
 const FLOW_COLS =
   "id,business_id,name,enabled,definition,created_by,created_at,updated_at";
 const RUN_COLS =
-  "id,flow_id,business_id,status,context,current_step,attempt_count,last_error,claimed_at,dedupe_key,awaiting_agent_e164,respond_by_at,created_at,updated_at";
+  "id,flow_id,business_id,status,context,current_step,attempt_count,error_retry_count,earliest_claim_at,last_error,claimed_at,dedupe_key,awaiting_agent_e164,respond_by_at,created_at,updated_at";
 const STEP_COLS =
   "id,run_id,business_id,step_index,step_type,status,result,error,created_at,updated_at";
 

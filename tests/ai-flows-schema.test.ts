@@ -414,6 +414,214 @@ describe("route_to_team step", () => {
   });
 });
 
+describe("route_to_team offerWindow + agentName + {{offer.deadline}}", () => {
+  const routedInput = {
+    version: 1,
+    trigger: { channel: "sms", conditions: [{ type: "has_url" }] },
+    steps: [
+      { id: "u", type: "extract_url", saveAs: "lead_url" },
+      {
+        id: "b",
+        type: "browse_extract",
+        urlVar: "lead_url",
+        fields: [{ name: "lead_name" }]
+      },
+      {
+        id: "r",
+        type: "route_to_team",
+        offerTemplate: "Offer {{vars.lead_name}} to {{agent.name}} by {{offer.deadline}}",
+        ownerFallbackTemplate: "No one took {{vars.lead_name}}",
+        agentName: "Dave",
+        offerWindow: {
+          timezone: "America/Phoenix",
+          quietStart: "21:00",
+          quietEnd: "08:30",
+          graceMinutes: 10
+        }
+      }
+    ]
+  };
+
+  it("parses agentName + offerWindow and allows {{offer.deadline}} in the offer", () => {
+    const def = parseAiFlowDefinition(JSON.parse(JSON.stringify(routedInput)));
+    const step = def.steps[2];
+    expect(step.type === "route_to_team" && step.agentName).toBe("Dave");
+    expect(step.type === "route_to_team" && step.offerWindow?.quietEnd).toBe("08:30");
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects malformed quiet-hour times", () => {
+    const bad = JSON.parse(JSON.stringify(routedInput));
+    bad.steps[2].offerWindow.quietStart = "9pm";
+    expect(() => parseAiFlowDefinition(bad)).toThrow(AiFlowValidationError);
+  });
+
+  it("allows {{offer.x}} only inside route_to_team", () => {
+    const bad = JSON.parse(JSON.stringify(routedInput));
+    bad.steps.push({ id: "n", type: "notify_owner", message: "due {{offer.deadline}}" });
+    const def = aiFlowDefinitionSchema.parse(bad);
+    expect(
+      validateDefinitionSemantics(def).some((i) =>
+        i.includes("only a route_to_team step has an offer")
+      )
+    ).toBe(true);
+  });
+
+  it("flags an unknown offer field even inside route_to_team", () => {
+    const bad = JSON.parse(JSON.stringify(routedInput));
+    bad.steps[2].offerTemplate = "by {{offer.expiry}}";
+    const def = aiFlowDefinitionSchema.parse(bad);
+    expect(
+      validateDefinitionSemantics(def).some((i) => i.includes('unknown offer field "expiry"'))
+    ).toBe(true);
+  });
+});
+
+describe("send_sms quietHours semantics", () => {
+  function smsDef(quietHours: Record<string, unknown>) {
+    return {
+      version: 1,
+      trigger: { channel: "sms", conditions: [{ type: "has_url" }] },
+      steps: [
+        { id: "u", type: "extract_url", saveAs: "lead_url" },
+        {
+          id: "b",
+          type: "browse_extract",
+          urlVar: "lead_url",
+          fields: [{ name: "lead_phone" }, { name: "lead_email" }]
+        },
+        { id: "s", type: "send_sms", to: "{{vars.lead_phone}}", body: "hi", quietHours }
+      ]
+    };
+  }
+  const goodQuiet = {
+    timezone: "America/Phoenix",
+    noSendAfter: "22:00",
+    resumeAt: "08:30",
+    emailFallbackVar: "lead_email",
+    emailSubject: "Re: your inquiry",
+    emailFromConnectionId: "22222222-2222-4222-8222-222222222222"
+  };
+
+  it("accepts a full quietHours config", () => {
+    const def = parseAiFlowDefinition(smsDef(goodQuiet));
+    const step = def.steps[2];
+    expect(step.type === "send_sms" && step.quietHours?.emailFallbackVar).toBe("lead_email");
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects a malformed HH:MM boundary", () => {
+    expect(() => parseAiFlowDefinition(smsDef({ ...goodQuiet, noSendAfter: "10pm" }))).toThrow(
+      AiFlowValidationError
+    );
+  });
+
+  it("flags an emailFallbackVar no earlier step produces", () => {
+    const def = aiFlowDefinitionSchema.parse(smsDef({ ...goodQuiet, emailFallbackVar: "ghost" }));
+    expect(
+      validateDefinitionSemantics(def).some((i) =>
+        i.includes("falls back to {{vars.ghost}} after hours")
+      )
+    ).toBe(true);
+  });
+});
+
+describe("engine-provided vars + send_email fromConnectionId", () => {
+  it("allows {{vars.actions_taken}} (and a when guard on it) with no producing step", () => {
+    const def = aiFlowDefinitionSchema.parse({
+      version: 1,
+      trigger: { channel: "sms", conditions: [] },
+      steps: [
+        {
+          id: "n",
+          type: "notify_owner",
+          message: "did: {{vars.actions_taken}}",
+          when: { var: "actions_taken", contains: "texted" }
+        }
+      ]
+    });
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("accepts fromConnectionId and rejects combining it with attachScreenshot", () => {
+    const mk = (extra: Record<string, unknown>) =>
+      aiFlowDefinitionSchema.parse({
+        version: 1,
+        trigger: { channel: "sms", conditions: [] },
+        steps: [
+          {
+            id: "e",
+            type: "send_email",
+            to: "a@b.com",
+            subject: "s",
+            body: "b",
+            fromConnectionId: "22222222-2222-4222-8222-222222222222",
+            ...extra
+          }
+        ]
+      });
+    expect(validateDefinitionSemantics(mk({}))).toEqual([]);
+    expect(
+      validateDefinitionSemantics(mk({ attachScreenshot: true })).some((i) =>
+        i.includes("attachments are only supported from the platform sender")
+      )
+    ).toBe(true);
+  });
+});
+
+describe("browse_action step", () => {
+  const actionInput = {
+    version: 1,
+    trigger: { channel: "sms", conditions: [{ type: "has_url" }] },
+    steps: [
+      { id: "u", type: "extract_url", saveAs: "lead_url" },
+      {
+        id: "act",
+        type: "browse_action",
+        urlVar: "lead_url",
+        auth: { integrationLabel: "Referral Exchange" },
+        actions: [
+          { kind: "click_text", target: "Leave an update" },
+          { kind: "fill_placeholder", target: "Add an update", valueTemplate: "{{vars.actions_taken}}" }
+        ],
+        screenshot: true
+      }
+    ]
+  };
+
+  it("parses a valid browse_action and validates its templates", () => {
+    const def = parseAiFlowDefinition(JSON.parse(JSON.stringify(actionInput)));
+    const step = def.steps[1];
+    expect(step.type === "browse_action" && step.actions).toHaveLength(2);
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("flags a urlVar no earlier step produces", () => {
+    const bad = JSON.parse(JSON.stringify(actionInput));
+    bad.steps[1].urlVar = "ghost_url";
+    const def = aiFlowDefinitionSchema.parse(bad);
+    expect(
+      validateDefinitionSemantics(def).some((i) => i.includes('urlVar "ghost_url"'))
+    ).toBe(true);
+  });
+
+  it("validates {{vars.x}} ordering inside fill values", () => {
+    const bad = JSON.parse(JSON.stringify(actionInput));
+    bad.steps[1].actions[1].valueTemplate = "{{vars.ghost}}";
+    const def = aiFlowDefinitionSchema.parse(bad);
+    expect(validateDefinitionSemantics(def).some((i) => i.includes("{{vars.ghost}}"))).toBe(true);
+  });
+
+  it("rejects an empty actions array and unknown kinds", () => {
+    const empty = JSON.parse(JSON.stringify(actionInput));
+    empty.steps[1].actions = [];
+    expect(() => parseAiFlowDefinition(empty)).toThrow(AiFlowValidationError);
+    const badKind = JSON.parse(JSON.stringify(actionInput));
+    badKind.steps[1].actions[0].kind = "hover";
+    expect(() => parseAiFlowDefinition(badKind)).toThrow(AiFlowValidationError);
+  });
+});
+
 describe("summarizeDefinition", () => {
   it("summarizes a conditionless trigger", () => {
     const def: AiFlowDefinition = {

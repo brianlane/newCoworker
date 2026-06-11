@@ -87,3 +87,32 @@ export function parseRenderResponse(body: unknown, requestedUrl: string): Render
     typeof b.screenshotBase64 === "string" && b.screenshotBase64 ? b.screenshotBase64 : undefined;
   return { finalUrl, text, html, ...(screenshotBase64 ? { screenshotBase64 } : {}) };
 }
+
+export type ActionRenderResult = {
+  finalUrl: string;
+  /** How many of the requested UI actions the service completed, in order. */
+  actionsCompleted: number;
+  /** Base64 JPEG captured AFTER the actions, when the request asked for one. */
+  screenshotBase64?: string;
+};
+
+/**
+ * Coerce a render-service ACTION-mode JSON body (`POST /render` with
+ * `actions[]`) into an `ActionRenderResult`, or null when it doesn't match the
+ * contract. `actionsCompleted` must be a non-negative number — it is how the
+ * worker proves the click sequence actually ran.
+ */
+export function parseActionResponse(body: unknown, requestedUrl: string): ActionRenderResult | null {
+  if (!body || typeof body !== "object") return null;
+  const b = body as Record<string, unknown>;
+  const completed = b.actionsCompleted;
+  if (typeof completed !== "number" || !Number.isFinite(completed) || completed < 0) return null;
+  const finalUrl = typeof b.finalUrl === "string" && b.finalUrl ? b.finalUrl : requestedUrl;
+  const screenshotBase64 =
+    typeof b.screenshotBase64 === "string" && b.screenshotBase64 ? b.screenshotBase64 : undefined;
+  return {
+    finalUrl,
+    actionsCompleted: Math.floor(completed),
+    ...(screenshotBase64 ? { screenshotBase64 } : {})
+  };
+}
