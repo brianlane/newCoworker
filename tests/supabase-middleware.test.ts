@@ -172,6 +172,22 @@ describe("proxy", () => {
     expect(res.status).not.toBe(403);
   });
 
+  it("allows POST to /api/aiflows/send-owner-email without origin (bearer-authed ai-flow-worker)", async () => {
+    mockSupabaseWithUser(null);
+    const req = makeRequest("/api/aiflows/send-owner-email", { method: "POST" });
+    const res = await proxy(req);
+    expect(res.status).not.toBe(403);
+  });
+
+  it("still enforces CSRF on other /api/aiflows POSTs (dashboard, cookie-authed)", async () => {
+    mockSupabaseWithUser(null);
+    const req = makeRequest("/api/aiflows/compile", { method: "POST" });
+    const res = await proxy(req);
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.message).toBe("CSRF validation failed");
+  });
+
   it("still enforces CSRF on other /api/integrations POSTs (dashboard, cookie-authed)", async () => {
     mockSupabaseWithUser(null);
     const req = makeRequest("/api/integrations/custom", { method: "POST" });

@@ -114,6 +114,13 @@ export async function proxy(request: NextRequest) {
     // rationale as the /api/voice/tools, /api/internal, /api/rowboat, and
     // /api/webhooks exemptions above.
     pathname !== "/api/integrations/custom/credentials" &&
+    // /api/aiflows/send-owner-email is a server-to-server endpoint authenticated
+    // solely by `Authorization: Bearer ROWBOAT_GATEWAY_TOKEN` (gatewayGuard) — the
+    // ai-flow-worker Edge Function POSTs it to send email from an owner's
+    // Nango-connected mailbox (send_email.fromConnectionId / SMS quiet-hours
+    // email fallback). It sends no Origin header, so CSRF would 403 every send.
+    // Same rationale as the exemptions above.
+    pathname !== "/api/aiflows/send-owner-email" &&
     ["POST", "PUT", "DELETE", "PATCH"].includes(method)
   ) {
     const origin = request.headers.get("origin");
