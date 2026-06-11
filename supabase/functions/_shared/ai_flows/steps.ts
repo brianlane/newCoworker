@@ -135,11 +135,15 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       if (step.quietHours) {
         const q = step.quietHours;
         const emailRaw = q.emailFallbackVar ? scope.vars?.[q.emailFallbackVar] : "";
+        // The fallback address comes from page EXTRACTION, which answers "none"
+        // (or other prose) when the lead has no email — only an @-bearing value
+        // may select the email-instead branch; anything else means defer.
+        const emailTo = typeof emailRaw === "string" ? emailRaw.trim() : "";
         quiet = {
           timezone: q.timezone,
           noSendAfter: q.noSendAfter,
           resumeAt: q.resumeAt,
-          emailTo: typeof emailRaw === "string" ? emailRaw.trim() : "",
+          emailTo: emailTo.includes("@") ? emailTo : "",
           emailSubject: renderTemplate(
             q.emailSubject ?? "Following up on your inquiry",
             scope
