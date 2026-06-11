@@ -4,6 +4,7 @@ import { parsePcmRateFromMime, resamplePCM16Mono } from "./audio-resample.js";
 import { parseTelnyxFrame, telnyxMediaMessageFromPcmBase64 } from "./telnyx-media-json.js";
 import { decodeTelnyxMediaPayload, RtpEncoder } from "./rtp-frame.js";
 import { composeVaultPromptSection, type VaultSnapshot } from "./vault-loader.js";
+import { currentDateTimeLine } from "./datetime-line.js";
 import {
   createTranscriptRecorder,
   type TranscriptAdapter,
@@ -121,34 +122,6 @@ export type GeminiBridgeOptions = {
  * acceptable on this surface.
  */
 export const VOICE_CUSTOMER_MEMORY_MAX_CHARS = 800;
-
-const WEEKDAYS_UTC = [
-  "Sunday",
-  "Monday",
-  "Tuesday",
-  "Wednesday",
-  "Thursday",
-  "Friday",
-  "Saturday"
-] as const;
-
-/**
- * Date awareness for the voice surface. Mirrors
- * `supabase/functions/_shared/datetime_line.ts` (the bridge is rsynced to
- * the VPS standalone, so it can't import across the repo) — keep the two in
- * sync. Without this the model can't resolve "tomorrow at 2pm" into the ISO
- * times the calendar tools require. UTC-pinned: businesses don't store a
- * timezone yet.
- */
-export function currentDateTimeLine(now: Date = new Date()): string {
-  const iso = now.toISOString();
-  const weekday = WEEKDAYS_UTC[now.getUTCDay()];
-  return (
-    `Current date/time: ${iso} (${weekday}, UTC). ` +
-    `Resolve relative dates like "today", "tomorrow", or "next Tuesday" against this ` +
-    `timestamp when calling calendar or scheduling tools, and pass ISO 8601 times.`
-  );
-}
 
 export function systemInstructionForBusiness(
   businessName: string,

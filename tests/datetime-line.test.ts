@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { currentDateTimeLine } from "../supabase/functions/_shared/datetime_line.ts";
-import { currentDateTimeLine as currentDateTimeLineVoice } from "../vps/voice-bridge/src/gemini-telnyx-bridge";
+import { currentDateTimeLine as currentDateTimeLineVoice } from "../vps/voice-bridge/src/datetime-line";
 
 describe("currentDateTimeLine", () => {
   it("renders the ISO timestamp, UTC weekday, and tool guidance", () => {
