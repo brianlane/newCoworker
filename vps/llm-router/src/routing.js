@@ -53,6 +53,82 @@ export function mergeSystemMessages(body) {
   return { ...body, messages };
 }
 
+/**
+ * Inject the `index` field into streamed `choices[].delta.tool_calls[]`
+ * entries when the upstream omitted it.
+ *
+ * Why: the OpenAI streaming spec marks `index` REQUIRED on tool-call deltas
+ * (it's how clients stitch fragmented arguments back together), and Rowboat's
+ * AI SDK openai-compatible provider hard-fails chunk schema validation
+ * without it — every Gemini tool call turned into a 500 even though the
+ * model called the function correctly. Gemini's OpenAI-compat endpoint sends
+ * each tool call complete in a single chunk, so the array position is the
+ * correct index.
+ *
+ * Mutates `payload` in place; returns true when anything was added.
+ */
+export function addToolCallIndices(payload) {
+  if (!payload || !Array.isArray(payload.choices)) return false;
+  let changed = false;
+  for (const choice of payload.choices) {
+    const calls = choice?.delta?.tool_calls;
+    if (!Array.isArray(calls)) continue;
+    calls.forEach((tc, i) => {
+      if (tc && typeof tc === "object" && typeof tc.index !== "number") {
+        tc.index = i;
+        changed = true;
+      }
+    });
+  }
+  return changed;
+}
+
+/**
+ * Stateful line-buffered SSE rewriter that applies `addToolCallIndices` to
+ * every `data: {...}` event in a chat-completions stream. Handles events
+ * split across network chunks (buffers up to the last newline) and passes
+ * non-JSON lines (`data: [DONE]`, comments, blank keep-alives) through
+ * untouched.
+ *
+ * Usage: feed decoded text via transform(), then call flush() once at
+ * end-of-stream for any trailing unterminated line.
+ */
+export function createSseToolCallIndexNormalizer() {
+  let buf = "";
+
+  const fixLine = (line) => {
+    const hadCr = line.endsWith("\r");
+    const bare = hadCr ? line.slice(0, -1) : line;
+    if (!bare.startsWith("data:")) return line;
+    const data = bare.slice(5).trimStart();
+    if (!data || data === "[DONE]") return line;
+    let parsed;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      return line;
+    }
+    if (!addToolCallIndices(parsed)) return line;
+    return `data: ${JSON.stringify(parsed)}${hadCr ? "\r" : ""}`;
+  };
+
+  return {
+    transform(text) {
+      buf += text;
+      const lastNl = buf.lastIndexOf("\n");
+      if (lastNl === -1) return "";
+      const complete = buf.slice(0, lastNl);
+      buf = buf.slice(lastNl + 1);
+      return complete.split("\n").map(fixLine).join("\n") + "\n";
+    },
+    flush() {
+      const rest = buf;
+      buf = "";
+      return rest ? fixLine(rest) : "";
+    }
+  };
+}
+
 // Headers we must NOT copy from the upstream response onto our own response.
 //
 //   - transfer-encoding / connection / keep-alive: hop-by-hop framing that

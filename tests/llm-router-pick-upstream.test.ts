@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — sidecar is plain JS without types; importing the pure
 // helper module avoids booting the HTTP server that index.js binds at load.
-import { pickUpstream, filterUpstreamHeaders, mergeSystemMessages } from "../vps/llm-router/src/routing.js";
+import {
+  pickUpstream,
+  filterUpstreamHeaders,
+  mergeSystemMessages,
+  addToolCallIndices,
+  createSseToolCallIndexNormalizer
+} from "../vps/llm-router/src/routing.js";
 
 describe("llm-router pickUpstream", () => {
   it("routes gemini-* models to Gemini", () => {
@@ -167,5 +173,109 @@ describe("llm-router mergeSystemMessages", () => {
     expect(mergeSystemMessages(null)).toBe(null);
     const noMessages = { model: "gemini-3.1-flash" };
     expect(mergeSystemMessages(noMessages)).toBe(noMessages);
+  });
+});
+
+describe("llm-router addToolCallIndices", () => {
+  // Real shape from Gemini's OpenAI-compat streaming: tool_calls delta with
+  // NO index field, which the OpenAI spec requires and the AI SDK enforces.
+  function geminiToolCallChunk() {
+    return {
+      choices: [
+        {
+          delta: {
+            role: "assistant",
+            tool_calls: [
+              {
+                function: { arguments: '{"toE164":"+15551234567"}', name: "send_sms" },
+                id: "function-call-123",
+                type: "function"
+              }
+            ]
+          },
+          finish_reason: "tool_calls",
+          index: 0
+        }
+      ],
+      model: "gemini-2.5-flash-lite",
+      object: "chat.completion.chunk"
+    };
+  }
+
+  it("injects array-position index into tool_calls deltas missing it", () => {
+    const chunk = geminiToolCallChunk();
+    chunk.choices[0].delta.tool_calls.push({
+      function: { arguments: "{}", name: "second_tool" },
+      id: "function-call-456",
+      type: "function"
+    } as never);
+    expect(addToolCallIndices(chunk)).toBe(true);
+    expect(chunk.choices[0].delta.tool_calls.map((t: { index?: number }) => t.index)).toEqual([
+      0, 1
+    ]);
+  });
+
+  it("leaves existing indices alone and reports no change", () => {
+    const chunk = geminiToolCallChunk();
+    (chunk.choices[0].delta.tool_calls[0] as { index?: number }).index = 0;
+    expect(addToolCallIndices(chunk)).toBe(false);
+  });
+
+  it("is a no-op for text deltas and malformed payloads", () => {
+    expect(addToolCallIndices({ choices: [{ delta: { content: "hi" } }] })).toBe(false);
+    expect(addToolCallIndices({ choices: [{}] })).toBe(false);
+    expect(addToolCallIndices({})).toBe(false);
+    expect(addToolCallIndices(null)).toBe(false);
+  });
+});
+
+describe("llm-router createSseToolCallIndexNormalizer", () => {
+  const toolCallEvent =
+    'data: {"choices":[{"delta":{"role":"assistant","tool_calls":[{"function":{"arguments":"{}","name":"send_sms"},"id":"fc-1","type":"function"}]},"finish_reason":"tool_calls","index":0}],"object":"chat.completion.chunk"}';
+
+  it("rewrites tool-call events to include index", () => {
+    const n = createSseToolCallIndexNormalizer();
+    const out = n.transform(toolCallEvent + "\n\n") + n.flush();
+    const data = JSON.parse(out.split("\n")[0].slice(6));
+    expect(data.choices[0].delta.tool_calls[0].index).toBe(0);
+  });
+
+  it("passes text deltas, [DONE], comments and blank lines through verbatim", () => {
+    const n = createSseToolCallIndexNormalizer();
+    const input =
+      'data: {"choices":[{"delta":{"content":"Hello"},"index":0}]}\n\n: keep-alive\n\ndata: [DONE]\n\n';
+    expect(n.transform(input) + n.flush()).toBe(input);
+  });
+
+  it("handles events split across network chunks", () => {
+    const n = createSseToolCallIndexNormalizer();
+    const mid = Math.floor(toolCallEvent.length / 2);
+    let out = n.transform(toolCallEvent.slice(0, mid));
+    out += n.transform(toolCallEvent.slice(mid) + "\n\n");
+    out += n.flush();
+    const data = JSON.parse(out.split("\n")[0].slice(6));
+    expect(data.choices[0].delta.tool_calls[0].index).toBe(0);
+  });
+
+  it("flushes a trailing unterminated event at end-of-stream", () => {
+    const n = createSseToolCallIndexNormalizer();
+    expect(n.transform(toolCallEvent)).toBe("");
+    const out = n.flush();
+    const data = JSON.parse(out.slice(6));
+    expect(data.choices[0].delta.tool_calls[0].index).toBe(0);
+  });
+
+  it("preserves CRLF line endings", () => {
+    const n = createSseToolCallIndexNormalizer();
+    const out = n.transform(toolCallEvent + "\r\n\r\n") + n.flush();
+    expect(out.split("\r\n")[0].endsWith("\r")).toBe(false); // content before \r\n
+    const data = JSON.parse(out.split("\r\n")[0].slice(6));
+    expect(data.choices[0].delta.tool_calls[0].index).toBe(0);
+  });
+
+  it("passes malformed JSON data lines through untouched", () => {
+    const n = createSseToolCallIndexNormalizer();
+    const input = "data: {not json}\n";
+    expect(n.transform(input)).toBe(input);
   });
 });

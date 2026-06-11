@@ -45,8 +45,20 @@ const ROUTED_PATHS = new Set([
   "/v1/embeddings"
 ]);
 
-import { pickUpstream, filterUpstreamHeaders, mergeSystemMessages } from "./routing.js";
-export { pickUpstream, filterUpstreamHeaders, mergeSystemMessages };
+import {
+  pickUpstream,
+  filterUpstreamHeaders,
+  mergeSystemMessages,
+  addToolCallIndices,
+  createSseToolCallIndexNormalizer
+} from "./routing.js";
+export {
+  pickUpstream,
+  filterUpstreamHeaders,
+  mergeSystemMessages,
+  addToolCallIndices,
+  createSseToolCallIndexNormalizer
+};
 
 function buildUpstreamTarget(upstream, pathname) {
   if (upstream === "gemini") {
@@ -167,12 +179,31 @@ async function handleRoutedRequest(req, res) {
 
   // Stream in chunks using the Web ReadableStream reader. Works for both the
   // SSE stream case (model=gpt-..., stream:true) and the plain JSON case.
+  //
+  // SSE streams get rewritten through the tool-call index normalizer: Gemini
+  // omits the REQUIRED `index` on streamed tool_calls deltas, which made
+  // Rowboat's AI SDK reject every function call (see routing.js).
+  const contentType = upstreamResp.headers.get("content-type") || "";
+  const isSse = contentType.includes("text/event-stream");
+  const normalizer = isSse ? createSseToolCallIndexNormalizer() : null;
+  const decoder = isSse ? new TextDecoder("utf-8") : null;
+
   const reader = upstreamResp.body.getReader();
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (value) res.write(Buffer.from(value));
+      if (!value) continue;
+      if (normalizer) {
+        const out = normalizer.transform(decoder.decode(value, { stream: true }));
+        if (out) res.write(out);
+      } else {
+        res.write(Buffer.from(value));
+      }
+    }
+    if (normalizer) {
+      const tail = normalizer.transform(decoder.decode()) + normalizer.flush();
+      if (tail) res.write(tail);
     }
   } catch (err) {
     // Client likely disconnected mid-stream. Nothing useful to send.
