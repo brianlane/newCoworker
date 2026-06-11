@@ -55,8 +55,17 @@ export const EMAIL_POLL_PAGE_SIZE = 25;
  */
 export const EMAIL_POLL_MAX_MESSAGES = 100;
 
-/** Runaway-chain guard on provider list pagination per mailbox per poll. */
-export const EMAIL_POLL_MAX_LIST_PAGES = 20;
+/**
+ * Runaway-chain guard on provider list pagination per mailbox per poll.
+ * Sized so it never binds before read throughput does: mail stays in the
+ * lookback window for LOOKBACK minutes and the poller evaluates up to
+ * MAX_MESSAGES per minute-tick, so LOOKBACK × MAX_MESSAGES is the most a
+ * mailbox can ever drain before mail ages out — and this many pages lists
+ * exactly that volume. It therefore only stops buggy or looping pagination
+ * chains, never a drainable backlog.
+ */
+export const EMAIL_POLL_MAX_LIST_PAGES =
+  (EMAIL_POLL_LOOKBACK_MINUTES * EMAIL_POLL_MAX_MESSAGES) / EMAIL_POLL_PAGE_SIZE;
 
 /** How long evaluation markers are kept (≫ lookback, so never re-read). */
 export const EMAIL_SEEN_RETENTION_MINUTES = 24 * 60;
@@ -152,6 +161,9 @@ async function fetchGmailMessages(
     }
     pageToken = d?.nextPageToken;
     pages += 1;
+    // The page guard lists more ids than the lookback window can ever drain
+    // (see EMAIL_POLL_MAX_LIST_PAGES), so hitting it means mail is arriving
+    // faster than it can possibly be evaluated — flagged as overflow below.
   } while (pageToken && pages < EMAIL_POLL_MAX_LIST_PAGES);
   let overflowed = pageToken !== undefined;
   // Already-evaluated messages must not consume the read budget, so a burst
@@ -233,6 +245,10 @@ async function fetchMicrosoftMessages(
     pages += 1;
     const next = d?.["@odata.nextLink"];
     if (!next) break;
+    // The page guard spans more mail than the lookback window can ever
+    // drain (see EMAIL_POLL_MAX_LIST_PAGES), so even an all-handled backlog
+    // (e.g. right after adding a new flow) never hides reachable mail —
+    // hitting either bound means the remainder genuinely can't be read yet.
     if (rows.length >= EMAIL_POLL_MAX_MESSAGES || pages >= EMAIL_POLL_MAX_LIST_PAGES) {
       overflowed = true;
       break;
@@ -370,17 +386,19 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
           ? await fetchGmailMessages(businessId, link, sinceMs, alreadyHandled)
           : await fetchMicrosoftMessages(businessId, link, sinceMs, alreadyHandled);
       if (overflowed) {
-        // More unprocessed mail in the lookback window than one poll may
-        // read. Later ticks keep draining it (handled messages don't count
-        // against the budget), but a burst that outruns ~cap/minute for the
-        // whole window loses mail — surface it rather than dropping silently.
+        // This poll could not cover every in-window message (read cap hit,
+        // or the listing guard cut a pathological page chain). Later ticks
+        // keep draining (evaluated messages don't count against the budget),
+        // but a burst that outruns ~cap/minute for the whole lookback window
+        // loses mail — surface it rather than dropping silently.
         await recordSystemLog({
           businessId,
           source: "aiflow",
           level: "warn",
           event: "ai_flow_email_poll_overflow",
-          message: `Mailbox has more than ${EMAIL_POLL_MAX_MESSAGES} unprocessed messages in one poll; remainder deferred to the next tick`,
-          payload: { connection_id: connectionId }
+          message:
+            "Email poll could not cover every in-window message this tick; remainder deferred to later polls",
+          payload: { connection_id: connectionId, messages_read: messages.length }
         });
       }
       result.messages += messages.length;
