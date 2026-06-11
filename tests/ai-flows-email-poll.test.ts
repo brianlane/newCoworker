@@ -13,6 +13,7 @@ vi.mock("@/lib/ai-flows/db", () => ({ enqueueAiFlowRun: vi.fn() }));
 vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
 
 import {
+  EMAIL_POLL_MAX_LIST_PAGES,
   gmailBodyText,
   gmailHeader,
   parseFromAddress,
@@ -35,18 +36,43 @@ function flowRow(id: string, trigger: unknown) {
   return { id, business_id: BIZ, definition: { version: 1, trigger, steps: [] } };
 }
 
-/** Chainable service-client stub serving the (paged) ai_flows listing. */
-function dbWithRange(range: ReturnType<typeof vi.fn>) {
+type RunsLookup = {
+  rows?: Array<{ dedupe_key: string | null }> | null;
+  error?: { message: string };
+};
+
+/**
+ * Chainable service-client stub serving the (paged) ai_flows listing and the
+ * ai_flow_runs dedupe lookup (`runs.rows` = what every lookup returns).
+ */
+function dbWithRange(range: ReturnType<typeof vi.fn>, runs: RunsLookup = {}) {
   const order = vi.fn(() => ({ range }));
   const eq2 = vi.fn(() => ({ order }));
   const eq1 = vi.fn(() => ({ eq: eq2 }));
-  const select = vi.fn(() => ({ eq: eq1 }));
-  return { from: vi.fn(() => ({ select })) } as never;
+  const flowsSelect = vi.fn(() => ({ eq: eq1 }));
+  const runsIn2 = vi.fn(() =>
+    Promise.resolve(
+      runs.error
+        ? { data: null, error: runs.error }
+        : { data: runs.rows === undefined ? [] : runs.rows, error: null }
+    )
+  );
+  const runsIn1 = vi.fn(() => ({ in: runsIn2 }));
+  const runsSelect = vi.fn(() => ({ in: runsIn1 }));
+  return {
+    from: vi.fn((table: string) =>
+      table === "ai_flow_runs" ? { select: runsSelect } : { select: flowsSelect }
+    )
+  } as never;
 }
 
 /** Single-page convenience stub (fewer rows than one page ends the loop). */
-function dbWith(rows: unknown[] | null, error: { message: string } | null = null) {
-  return dbWithRange(vi.fn().mockResolvedValue({ data: rows, error }));
+function dbWith(
+  rows: unknown[] | null,
+  error: { message: string } | null = null,
+  runs: RunsLookup = {}
+) {
+  return dbWithRange(vi.fn().mockResolvedValue({ data: rows, error }), runs);
 }
 
 const emailTrigger = (conditions: unknown[] = []) => ({
@@ -240,7 +266,8 @@ describe("pollEmailTriggers", () => {
         data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
       } as never);
     vi.mocked(enqueueAiFlowRun).mockResolvedValue(null);
-    const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
+    // rows: null also exercises a null data payload from the dedupe lookup.
+    const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())], null, { rows: null }));
     expect(res.enqueued).toBe(0);
     expect(recordSystemLog).not.toHaveBeenCalled();
   });
@@ -381,13 +408,15 @@ describe("pollEmailTriggers", () => {
     );
     expect(res.messages).toBe(100);
     expect(res.enqueued).toBe(0);
-    expect(page).toBe(4); // stopped at the cap, not the (infinite) page chain
+    // Listing stops at the page guard, not the (infinite) token chain; reads
+    // stop at the message cap.
+    expect(page).toBe(EMAIL_POLL_MAX_LIST_PAGES);
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({ event: "ai_flow_email_poll_overflow", level: "warn" })
     );
   });
 
-  it("enforces the message cap exactly when a Gmail page overshoots it", async () => {
+  it("enforces the message cap exactly when the pending Gmail set overshoots it", async () => {
     let page = 0;
     vi.mocked(nangoProxyForBusiness).mockImplementation((async (
       _biz: string,
@@ -399,7 +428,8 @@ describe("pollEmailTriggers", () => {
         return {
           data: {
             messages: Array.from({ length: 40 }, (_, i) => ({ id: `p${page}-${i}` })),
-            nextPageToken: `tok${page}`
+            // Finite 3-page listing: 120 ids, all pending → truncated reads.
+            ...(page < 3 ? { nextPageToken: `tok${page}` } : {})
           }
         };
       }
@@ -410,8 +440,67 @@ describe("pollEmailTriggers", () => {
     const res = await pollEmailTriggers(
       dbWith([flowRow("f1", emailTrigger([{ type: "contains", value: "no-match" }]))])
     );
-    expect(res.messages).toBe(100); // 3 pages of 40 truncated to the cap
+    expect(res.messages).toBe(100); // 120 listed, reads truncated to the cap
     expect(page).toBe(3);
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_email_poll_overflow" })
+    );
+  });
+
+  it("skips already-handled Gmail messages without consuming the read budget", async () => {
+    vi.mocked(nangoProxyForBusiness).mockImplementation((async (
+      _biz: string,
+      _link: unknown,
+      cfg: { endpoint: string }
+    ) => {
+      if (cfg.endpoint.includes("users/me/messages?")) {
+        return { data: { messages: [{ id: "m1" }, { id: "m2" }] } };
+      }
+      // Only the unhandled message may be detail-fetched.
+      expect(cfg.endpoint).toContain("/messages/m2?");
+      return {
+        data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
+      };
+    }) as never);
+    const res = await pollEmailTriggers(
+      dbWith([flowRow("f1", emailTrigger())], null, { rows: [{ dedupe_key: "email:m1" }] })
+    );
+    expect(res.messages).toBe(1);
+    expect(res.enqueued).toBe(1);
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({ dedupeKey: "email:m2" }),
+      expect.anything()
+    );
+  });
+
+  it("ignores non-email and null dedupe keys in the handled lookup", async () => {
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
+      } as never);
+    const res = await pollEmailTriggers(
+      dbWith([flowRow("f1", emailTrigger())], null, {
+        rows: [{ dedupe_key: "sched:d:2026-06-11T08:30" }, { dedupe_key: null }]
+      })
+    );
+    expect(res.messages).toBe(1); // neither row marks m1 as handled
+  });
+
+  it("routes a dedupe-lookup failure into the per-mailbox error path", async () => {
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+      data: { messages: [{ id: "m1" }] }
+    } as never);
+    const res = await pollEmailTriggers(
+      dbWith([flowRow("f1", emailTrigger())], null, { error: { message: "db down" } })
+    );
+    expect(res.enqueued).toBe(0);
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_email_poll_failed",
+        message: expect.stringContaining("run lookup: db down")
+      })
+    );
   });
 
   it("enforces the message cap exactly when a Microsoft page overshoots it", async () => {
@@ -468,6 +557,75 @@ describe("pollEmailTriggers", () => {
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({ event: "ai_flow_email_poll_overflow" })
     );
+  });
+
+  it("filters already-handled Microsoft messages out of the read budget", async () => {
+    vi.mocked(getWorkspaceOAuthConnection).mockResolvedValue({
+      ...googleConn,
+      provider_config_key: "outlook"
+    } as never);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+      data: {
+        value: [
+          { id: "ms-old", body: { contentType: "text", content: "seen" } },
+          { id: "ms-new", body: { contentType: "text", content: "fresh" } }
+        ]
+      }
+    } as never);
+    const res = await pollEmailTriggers(
+      dbWith([flowRow("f1", emailTrigger())], null, { rows: [{ dedupe_key: "email:ms-old" }] })
+    );
+    expect(res.messages).toBe(1);
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({ dedupeKey: "email:ms-new" }),
+      expect.anything()
+    );
+  });
+
+  it("stops an all-handled Microsoft chain at the page guard", async () => {
+    vi.mocked(getWorkspaceOAuthConnection).mockResolvedValue({
+      ...googleConn,
+      provider_config_key: "outlook"
+    } as never);
+    let call = 0;
+    vi.mocked(nangoProxyForBusiness).mockImplementation((async () => {
+      call += 1;
+      return {
+        data: {
+          value: [{ id: "ms-seen", body: { contentType: "text", content: "x" } }],
+          "@odata.nextLink": `https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$skip=${call}`
+        }
+      };
+    }) as never);
+    const res = await pollEmailTriggers(
+      dbWith([flowRow("f1", emailTrigger())], null, { rows: [{ dedupe_key: "email:ms-seen" }] })
+    );
+    expect(res.messages).toBe(0);
+    expect(call).toBe(EMAIL_POLL_MAX_LIST_PAGES);
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_email_poll_overflow" })
+    );
+  });
+
+  it("keeps already-listed flows when a later listing page fails", async () => {
+    const page1 = Array.from({ length: 100 }, (_, i) => flowRow(`f${i}`, emailTrigger()));
+    const range = vi
+      .fn()
+      .mockResolvedValueOnce({ data: page1, error: null })
+      .mockResolvedValueOnce({ data: null, error: { message: "page 2 boom" } });
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = await pollEmailTriggers(dbWithRange(range));
+      expect(res.flows).toBe(100);
+      expect(res.mailboxes).toBe(1); // all page-1 flows share one mailbox → still polled
+      expect(err).toHaveBeenCalledWith(
+        "pollEmailTriggers flow listing page",
+        "page 2 boom"
+      );
+    } finally {
+      err.mockRestore();
+    }
   });
 
   it("handles a Gmail list without a messages array", async () => {

@@ -39,12 +39,23 @@ export const EMAIL_POLL_LOOKBACK_MINUTES = 15;
 export const EMAIL_POLL_PAGE_SIZE = 25;
 
 /**
- * Hard cap on messages fetched per mailbox per poll (across pages). Both
- * providers list newest-first, so past this cap the OLDEST messages are the
- * ones at risk; the poller logs an overflow warning when it hits the cap so
- * a sustained >100/poll burst is visible instead of silent.
+ * Hard cap on messages READ (bodies fetched + conditions evaluated) per
+ * mailbox per poll. Messages that already have a run (dedupe key) are
+ * filtered out BEFORE the cap is applied — neither provider guarantees list
+ * order, so the cap must never be allowed to repeatedly select the same
+ * already-handled subset and starve the rest. With the handled filter, each
+ * poll reads up to 100 new messages, so a burst drains at ~100/minute and
+ * only a burst that outruns that for the whole lookback window loses mail
+ * (the poller logs an overflow warning whenever a poll can't cover the
+ * remainder, so that is visible instead of silent).
  */
 export const EMAIL_POLL_MAX_MESSAGES = 100;
+
+/** Runaway-chain guard on provider list pagination per mailbox per poll. */
+export const EMAIL_POLL_MAX_LIST_PAGES = 20;
+
+/** Resolves which of these provider message ids already have a run enqueued. */
+type HandledLookup = (messageIds: string[]) => Promise<Set<string>>;
 
 type EmailFlow = {
   id: string;
@@ -110,12 +121,16 @@ type MailboxFetch = { messages: InboundEmailMessage[]; overflowed: boolean };
 async function fetchGmailMessages(
   businessId: string,
   link: { connectionId: string; providerConfigKey: string },
-  sinceMs: number
+  sinceMs: number,
+  alreadyHandled: HandledLookup
 ): Promise<MailboxFetch> {
   const q = encodeURIComponent(`in:inbox after:${Math.floor(sinceMs / 1000)}`);
+  // List the whole lookback window first (id-only pages are cheap) — Gmail's
+  // list order is NOT guaranteed, so capping mid-listing could repeatedly
+  // keep the same arbitrary subset and starve the rest across ticks.
   const ids: string[] = [];
   let pageToken: string | undefined;
-  let overflowed = false;
+  let pages = 0;
   do {
     const page = await nangoProxyForBusiness(businessId, link, {
       endpoint:
@@ -129,15 +144,19 @@ async function fetchGmailMessages(
       if (typeof m.id === "string") ids.push(m.id);
     }
     pageToken = d?.nextPageToken;
-    if (pageToken && ids.length >= EMAIL_POLL_MAX_MESSAGES) {
-      overflowed = true;
-      break;
-    }
-  } while (pageToken);
-  // A partial last page can overshoot the cap; enforce it exactly.
-  if (ids.length > EMAIL_POLL_MAX_MESSAGES) ids.length = EMAIL_POLL_MAX_MESSAGES;
+    pages += 1;
+  } while (pageToken && pages < EMAIL_POLL_MAX_LIST_PAGES);
+  let overflowed = pageToken !== undefined;
+  // Already-enqueued messages must not consume the read budget, so a burst
+  // larger than one poll's cap still drains across subsequent ticks.
+  const handled = await alreadyHandled(ids);
+  const pending = ids.filter((id) => !handled.has(id));
+  if (pending.length > EMAIL_POLL_MAX_MESSAGES) {
+    overflowed = true;
+    pending.length = EMAIL_POLL_MAX_MESSAGES;
+  }
   const out: InboundEmailMessage[] = [];
-  for (const id of ids) {
+  for (const id of pending) {
     const res = await nangoProxyForBusiness(businessId, link, {
       endpoint: `/gmail/v1/users/me/messages/${id}?format=full`,
       method: "GET"
@@ -173,7 +192,8 @@ type GraphMessage = {
 async function fetchMicrosoftMessages(
   businessId: string,
   link: { connectionId: string; providerConfigKey: string },
-  sinceMs: number
+  sinceMs: number,
+  alreadyHandled: HandledLookup
 ): Promise<MailboxFetch> {
   const sinceIso = new Date(sinceMs).toISOString();
   const params =
@@ -184,16 +204,25 @@ async function fetchMicrosoftMessages(
   // mailFolders/inbox only — /me/messages spans Sent/Drafts too, and a flow
   // must never trigger on mail the owner sent.
   let endpoint = `/v1.0/me/mailFolders/inbox/messages?${params}`;
-  const rows: GraphMessage[] = [];
+  const rows: Array<GraphMessage & { id: string }> = [];
   let overflowed = false;
+  let pages = 0;
   for (;;) {
     const res = await nangoProxyForBusiness(businessId, link, { endpoint, method: "GET" });
     if (!res) throw new Error("email_not_connected");
     const d = res.data as { value?: GraphMessage[]; "@odata.nextLink"?: string };
-    rows.push(...(d?.value ?? []));
+    // Graph pages carry full bodies, so the budget is enforced while paging —
+    // but only NEW messages count against it, letting later ticks page past
+    // the already-handled head of a burst down to the unprocessed remainder.
+    const pageRows = (d?.value ?? []).filter(
+      (r): r is GraphMessage & { id: string } => typeof r.id === "string"
+    );
+    const handled = await alreadyHandled(pageRows.map((r) => r.id));
+    rows.push(...pageRows.filter((r) => !handled.has(r.id)));
+    pages += 1;
     const next = d?.["@odata.nextLink"];
     if (!next) break;
-    if (rows.length >= EMAIL_POLL_MAX_MESSAGES) {
+    if (rows.length >= EMAIL_POLL_MAX_MESSAGES || pages >= EMAIL_POLL_MAX_LIST_PAGES) {
       overflowed = true;
       break;
     }
@@ -202,10 +231,11 @@ async function fetchMicrosoftMessages(
     endpoint = u.pathname + u.search;
   }
   // A partial last page can overshoot the cap; enforce it exactly.
-  if (rows.length > EMAIL_POLL_MAX_MESSAGES) rows.length = EMAIL_POLL_MAX_MESSAGES;
-  const messages = rows
-    .filter((r): r is GraphMessage & { id: string } => typeof r.id === "string")
-    .map((r) => ({
+  if (rows.length > EMAIL_POLL_MAX_MESSAGES) {
+    rows.length = EMAIL_POLL_MAX_MESSAGES;
+    overflowed = true;
+  }
+  const messages = rows.map((r) => ({
       id: r.id,
       fromEmail: r.from?.emailAddress?.address ?? "",
       subject: r.subject ?? "",
@@ -253,7 +283,14 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
       .eq("definition->trigger->>channel", "email")
       .order("id", { ascending: true })
       .range(offset, offset + EMAIL_POLL_FLOW_PAGE - 1);
-    if (error) throw new Error(`pollEmailTriggers: ${error.message}`);
+    if (error) {
+      // Nothing listed yet → surface the failure. A LATER page failing must
+      // not discard the flows already in hand — poll those mailboxes this
+      // tick and let the next tick retry the full listing.
+      if (flowRows.length === 0) throw new Error(`pollEmailTriggers: ${error.message}`);
+      console.error("pollEmailTriggers flow listing page", error.message);
+      break;
+    }
     const batch = (data ?? []) as typeof flowRows;
     flowRows.push(...batch);
     if (batch.length < EMAIL_POLL_FLOW_PAGE) break;
@@ -282,20 +319,43 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
         connectionId: conn.connection_id,
         providerConfigKey: conn.provider_config_key
       };
+      // A message counts as handled once ANY flow on this mailbox has a run
+      // for it: the tick that enqueued that run evaluated every flow in the
+      // group against the message (conditions are deterministic), so nothing
+      // is left to do. This is what lets a >cap burst drain across ticks —
+      // handled messages stop consuming the per-poll read budget.
+      const flowIds = group.map((f) => f.id);
+      const alreadyHandled: HandledLookup = async (messageIds) => {
+        const handled = new Set<string>();
+        for (let i = 0; i < messageIds.length; i += 100) {
+          const keys = messageIds.slice(i, i + 100).map((id) => `email:${id}`);
+          const { data, error } = await db
+            .from("ai_flow_runs")
+            .select("dedupe_key")
+            .in("flow_id", flowIds)
+            .in("dedupe_key", keys);
+          if (error) throw new Error(`run lookup: ${error.message}`);
+          for (const row of (data ?? []) as Array<{ dedupe_key: string | null }>) {
+            if (row.dedupe_key?.startsWith("email:")) handled.add(row.dedupe_key.slice(6));
+          }
+        }
+        return handled;
+      };
       const { messages, overflowed } =
         providerFromKey(conn.provider_config_key) === "google"
-          ? await fetchGmailMessages(businessId, link, sinceMs)
-          : await fetchMicrosoftMessages(businessId, link, sinceMs);
+          ? await fetchGmailMessages(businessId, link, sinceMs, alreadyHandled)
+          : await fetchMicrosoftMessages(businessId, link, sinceMs, alreadyHandled);
       if (overflowed) {
-        // More than the per-poll cap arrived inside the lookback window. The
-        // newest are processed; older ones are at risk of aging out — surface
-        // it rather than dropping silently.
+        // More unprocessed mail in the lookback window than one poll may
+        // read. Later ticks keep draining it (handled messages don't count
+        // against the budget), but a burst that outruns ~cap/minute for the
+        // whole window loses mail — surface it rather than dropping silently.
         await recordSystemLog({
           businessId,
           source: "aiflow",
           level: "warn",
           event: "ai_flow_email_poll_overflow",
-          message: `Mailbox returned more than ${EMAIL_POLL_MAX_MESSAGES} messages in one poll; oldest may be skipped`,
+          message: `Mailbox has more than ${EMAIL_POLL_MAX_MESSAGES} unprocessed messages in one poll; remainder deferred to the next tick`,
           payload: { connection_id: connectionId }
         });
       }

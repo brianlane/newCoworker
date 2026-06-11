@@ -1905,7 +1905,11 @@ async function enqueueDueScheduledRuns(supabase: Supabase): Promise<void> {
         .range(offset, offset + PAGE - 1);
       if (error) {
         console.error("schedule sweep list", error);
-        return;
+        // A later page failing must not discard the flows already listed —
+        // sweep those now; the next tick retries the full listing (dedupe
+        // keys make any overlap benign).
+        if (rows.length === 0) return;
+        break;
       }
       const batch = (data ?? []) as typeof rows;
       rows.push(...batch);
