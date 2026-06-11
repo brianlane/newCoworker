@@ -35,8 +35,16 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 /** How far back each poll looks. Must exceed the poll interval (~1 min). */
 export const EMAIL_POLL_LOOKBACK_MINUTES = 15;
 
-/** Max messages fetched per mailbox per poll. */
-export const EMAIL_POLL_MAX_MESSAGES = 20;
+/** Provider page size per list request. */
+export const EMAIL_POLL_PAGE_SIZE = 25;
+
+/**
+ * Hard cap on messages fetched per mailbox per poll (across pages). Both
+ * providers list newest-first, so past this cap the OLDEST messages are the
+ * ones at risk; the poller logs an overflow warning when it hits the cap so
+ * a sustained >100/poll burst is visible instead of silent.
+ */
+export const EMAIL_POLL_MAX_MESSAGES = 100;
 
 type EmailFlow = {
   id: string;
@@ -97,20 +105,35 @@ export function gmailHeader(headers: GmailHeader[] | undefined, name: string): s
   return h?.value ?? "";
 }
 
+type MailboxFetch = { messages: InboundEmailMessage[]; overflowed: boolean };
+
 async function fetchGmailMessages(
   businessId: string,
   link: { connectionId: string; providerConfigKey: string },
   sinceMs: number
-): Promise<InboundEmailMessage[]> {
+): Promise<MailboxFetch> {
   const q = encodeURIComponent(`in:inbox after:${Math.floor(sinceMs / 1000)}`);
-  const list = await nangoProxyForBusiness(businessId, link, {
-    endpoint: `/gmail/v1/users/me/messages?maxResults=${EMAIL_POLL_MAX_MESSAGES}&q=${q}`,
-    method: "GET"
-  });
-  if (!list) throw new Error("email_not_connected");
-  const ids = ((list.data as { messages?: Array<{ id?: string }> })?.messages ?? [])
-    .map((m) => m.id)
-    .filter((id): id is string => typeof id === "string");
+  const ids: string[] = [];
+  let pageToken: string | undefined;
+  let overflowed = false;
+  do {
+    const page = await nangoProxyForBusiness(businessId, link, {
+      endpoint:
+        `/gmail/v1/users/me/messages?maxResults=${EMAIL_POLL_PAGE_SIZE}&q=${q}` +
+        (pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""),
+      method: "GET"
+    });
+    if (!page) throw new Error("email_not_connected");
+    const d = page.data as { messages?: Array<{ id?: string }>; nextPageToken?: string };
+    for (const m of d?.messages ?? []) {
+      if (typeof m.id === "string") ids.push(m.id);
+    }
+    pageToken = d?.nextPageToken;
+    if (pageToken && ids.length >= EMAIL_POLL_MAX_MESSAGES) {
+      overflowed = true;
+      break;
+    }
+  } while (pageToken);
   const out: InboundEmailMessage[] = [];
   for (const id of ids) {
     const res = await nangoProxyForBusiness(businessId, link, {
@@ -134,38 +157,50 @@ async function fetchGmailMessages(
         : undefined
     });
   }
-  return out;
+  return { messages: out, overflowed };
 }
+
+type GraphMessage = {
+  id?: string;
+  subject?: string;
+  from?: { emailAddress?: { address?: string } };
+  body?: { contentType?: string; content?: string };
+  receivedDateTime?: string;
+};
 
 async function fetchMicrosoftMessages(
   businessId: string,
   link: { connectionId: string; providerConfigKey: string },
   sinceMs: number
-): Promise<InboundEmailMessage[]> {
+): Promise<MailboxFetch> {
   const sinceIso = new Date(sinceMs).toISOString();
   const params =
     `$filter=${encodeURIComponent(`receivedDateTime ge ${sinceIso}`)}` +
     `&$orderby=${encodeURIComponent("receivedDateTime desc")}` +
-    `&$top=${EMAIL_POLL_MAX_MESSAGES}` +
+    `&$top=${EMAIL_POLL_PAGE_SIZE}` +
     `&$select=id,subject,from,body,receivedDateTime`;
   // mailFolders/inbox only — /me/messages spans Sent/Drafts too, and a flow
   // must never trigger on mail the owner sent.
-  const res = await nangoProxyForBusiness(businessId, link, {
-    endpoint: `/v1.0/me/mailFolders/inbox/messages?${params}`,
-    method: "GET"
-  });
-  if (!res) throw new Error("email_not_connected");
-  const rows = (res.data as {
-    value?: Array<{
-      id?: string;
-      subject?: string;
-      from?: { emailAddress?: { address?: string } };
-      body?: { contentType?: string; content?: string };
-      receivedDateTime?: string;
-    }>;
-  })?.value ?? [];
-  return rows
-    .filter((r): r is typeof r & { id: string } => typeof r.id === "string")
+  let endpoint = `/v1.0/me/mailFolders/inbox/messages?${params}`;
+  const rows: GraphMessage[] = [];
+  let overflowed = false;
+  for (;;) {
+    const res = await nangoProxyForBusiness(businessId, link, { endpoint, method: "GET" });
+    if (!res) throw new Error("email_not_connected");
+    const d = res.data as { value?: GraphMessage[]; "@odata.nextLink"?: string };
+    rows.push(...(d?.value ?? []));
+    const next = d?.["@odata.nextLink"];
+    if (!next) break;
+    if (rows.length >= EMAIL_POLL_MAX_MESSAGES) {
+      overflowed = true;
+      break;
+    }
+    // nextLink is an absolute Graph URL; the proxy wants the path + query.
+    const u = new URL(next);
+    endpoint = u.pathname + u.search;
+  }
+  const messages = rows
+    .filter((r): r is GraphMessage & { id: string } => typeof r.id === "string")
     .map((r) => ({
       id: r.id,
       fromEmail: r.from?.emailAddress?.address ?? "",
@@ -176,6 +211,7 @@ async function fetchMicrosoftMessages(
           : (r.body?.content ?? ""),
       receivedAt: r.receivedDateTime
     }));
+  return { messages, overflowed };
 }
 
 function emailFlowsFrom(
@@ -234,10 +270,23 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
         connectionId: conn.connection_id,
         providerConfigKey: conn.provider_config_key
       };
-      const messages =
+      const { messages, overflowed } =
         providerFromKey(conn.provider_config_key) === "google"
           ? await fetchGmailMessages(businessId, link, sinceMs)
           : await fetchMicrosoftMessages(businessId, link, sinceMs);
+      if (overflowed) {
+        // More than the per-poll cap arrived inside the lookback window. The
+        // newest are processed; older ones are at risk of aging out — surface
+        // it rather than dropping silently.
+        await recordSystemLog({
+          businessId,
+          source: "aiflow",
+          level: "warn",
+          event: "ai_flow_email_poll_overflow",
+          message: `Mailbox returned more than ${EMAIL_POLL_MAX_MESSAGES} messages in one poll; oldest may be skipped`,
+          payload: { connection_id: connectionId }
+        });
+      }
       result.messages += messages.length;
       for (const msg of messages) {
         const scope = emailTriggerScope(msg);

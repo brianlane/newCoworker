@@ -306,6 +306,99 @@ describe("pollEmailTriggers", () => {
     );
   });
 
+  it("follows Gmail pagination across pages", async () => {
+    vi.mocked(nangoProxyForBusiness).mockImplementation((async (
+      _biz: string,
+      _link: unknown,
+      cfg: { endpoint: string }
+    ) => {
+      if (cfg.endpoint.includes("users/me/messages?")) {
+        return cfg.endpoint.includes("pageToken=")
+          ? { data: { messages: [{ id: "g2" }] } }
+          : { data: { messages: [{ id: "g1" }], nextPageToken: "tok&1" } };
+      }
+      return {
+        data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
+      };
+    }) as never);
+    const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
+    expect(res.messages).toBe(2);
+    expect(res.enqueued).toBe(2);
+    const listCalls = vi
+      .mocked(nangoProxyForBusiness)
+      .mock.calls.filter((c) => (c[2] as { endpoint: string }).endpoint.includes("messages?"));
+    expect(listCalls).toHaveLength(2);
+    expect((listCalls[1][2] as { endpoint: string }).endpoint).toContain(
+      `pageToken=${encodeURIComponent("tok&1")}`
+    );
+    expect(recordSystemLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_email_poll_overflow" })
+    );
+  });
+
+  it("caps a Gmail burst at the per-poll max and logs an overflow warning", async () => {
+    let page = 0;
+    vi.mocked(nangoProxyForBusiness).mockImplementation((async (
+      _biz: string,
+      _link: unknown,
+      cfg: { endpoint: string }
+    ) => {
+      if (cfg.endpoint.includes("users/me/messages?")) {
+        page += 1;
+        return {
+          data: {
+            messages: Array.from({ length: 25 }, (_, i) => ({ id: `p${page}-${i}` })),
+            nextPageToken: `tok${page}`
+          }
+        };
+      }
+      return {
+        data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
+      };
+    }) as never);
+    // A no-match condition keeps the assertion about fetching, not enqueueing.
+    const res = await pollEmailTriggers(
+      dbWith([flowRow("f1", emailTrigger([{ type: "contains", value: "no-match" }]))])
+    );
+    expect(res.messages).toBe(100);
+    expect(res.enqueued).toBe(0);
+    expect(page).toBe(4); // stopped at the cap, not the (infinite) page chain
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_email_poll_overflow", level: "warn" })
+    );
+  });
+
+  it("follows Microsoft @odata.nextLink pagination and caps runaway chains", async () => {
+    vi.mocked(getWorkspaceOAuthConnection).mockResolvedValue({
+      ...googleConn,
+      provider_config_key: "outlook"
+    } as never);
+    let call = 0;
+    vi.mocked(nangoProxyForBusiness).mockImplementation((async () => {
+      call += 1;
+      return {
+        data: {
+          value: Array.from({ length: 25 }, (_, i) => ({
+            id: `ms${call}-${i}`,
+            body: { contentType: "text", content: "hi" }
+          })),
+          "@odata.nextLink": `https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$skip=${call * 25}`
+        }
+      };
+    }) as never);
+    const res = await pollEmailTriggers(
+      dbWith([flowRow("f1", emailTrigger([{ type: "contains", value: "no-match" }]))])
+    );
+    expect(res.messages).toBe(100);
+    expect(call).toBe(4);
+    // The follow-up call used the nextLink's path + query, not the seed params.
+    const second = vi.mocked(nangoProxyForBusiness).mock.calls[1][2] as { endpoint: string };
+    expect(second.endpoint).toBe("/v1.0/me/mailFolders/inbox/messages?$skip=25");
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_email_poll_overflow" })
+    );
+  });
+
   it("handles a Gmail list without a messages array", async () => {
     vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
     const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
