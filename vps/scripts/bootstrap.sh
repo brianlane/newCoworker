@@ -21,7 +21,7 @@ LOG_FILE="/var/log/newcoworker-bootstrap.log"
 # Override via env if you ever need to bump (test on a fresh VPS first):
 #   ROWBOAT_GIT_URL=... ROWBOAT_GIT_REF=... bash bootstrap.sh
 ROWBOAT_GIT_URL="${ROWBOAT_GIT_URL:-https://github.com/brianlane/rowboat.git}"
-ROWBOAT_GIT_REF="${ROWBOAT_GIT_REF:-f7e6f783baa98a929880ce1f537481bc7d4f3415}"
+ROWBOAT_GIT_REF="${ROWBOAT_GIT_REF:-7a73f37118a4b71fbef932d30ef7a18a3dcb4bcc}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
 
