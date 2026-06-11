@@ -128,8 +128,9 @@ const timezone = z.string().min(1).max(60);
 
 /**
  * Lead-contact quiet hours on a send_sms step: never text inside
- * [noSendAfter, resumeAt) local time — email instead (when the flow extracted
- * a lead email into `emailFallbackVar`) or defer the run to resumeAt.
+ * [noSendAfter, resumeAt) local time — the run defers to resumeAt and texts
+ * then; when the flow extracted a lead email into `emailFallbackVar` the same
+ * body is also emailed immediately.
  */
 const sendSmsQuietHoursSchema = z.object({
   timezone,
