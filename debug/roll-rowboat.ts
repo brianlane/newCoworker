@@ -20,6 +20,7 @@
  * ROWBOAT_HTTP_OK / ROWBOAT_HTTP_FAIL at the end.
  */
 import { loadEnv, makeHostingerClient, resolveVpsIp } from "./_shared.ts";
+import { assertSafeGitRef } from "../scripts/lib/redeploy-tenant-vps.ts";
 
 loadEnv();
 
@@ -30,6 +31,9 @@ if (!REF) {
   console.error("usage: tsx debug/roll-rowboat.ts <sha-or-branch> [businessId]");
   process.exit(1);
 }
+// The ref is interpolated into a root shell on the tenant box — reject
+// anything with shell metacharacters before it gets near SSH.
+assertSafeGitRef(REF);
 
 const { getActiveVpsSshKeyForBusiness } = await import("../src/lib/db/vps-ssh-keys.ts");
 const { sshExec } = await import("../src/lib/hostinger/ssh.ts");
@@ -42,17 +46,19 @@ const res = await sshExec({
   host: ip,
   username: key.ssh_username || "root",
   privateKeyPem: key.private_key_pem,
-  command: `set -e
+  // pipefail: without it a failed `docker compose build | tail` exits 0 and
+  // the script would happily `up -d` the previous image while looking green.
+  command: `set -euo pipefail
 cd /opt/rowboat/src
-git fetch origin ${REF}
-git checkout --detach ${REF} 2>/dev/null || git checkout --detach FETCH_HEAD
+git fetch origin '${REF}'
+git checkout --detach '${REF}' 2>/dev/null || git checkout --detach FETCH_HEAD
 git log --oneline -1
 cd /opt/rowboat
 docker compose -f docker-compose.yml build rowboat 2>&1 | tail -5
 docker compose -f docker-compose.yml up -d rowboat 2>&1 | tail -3
 sleep 20
 docker compose -f docker-compose.yml ps rowboat
-curl -sf --max-time 15 http://127.0.0.1:3000/ >/dev/null && echo ROWBOAT_HTTP_OK || echo ROWBOAT_HTTP_FAIL`,
+curl -sf --max-time 15 http://127.0.0.1:3000/ >/dev/null && echo ROWBOAT_HTTP_OK || { echo ROWBOAT_HTTP_FAIL; exit 1; }`,
   timeoutMs: 30 * 60 * 1000,
   onStdout: (c) => process.stdout.write(c),
   onStderr: (c) => process.stderr.write(c)
