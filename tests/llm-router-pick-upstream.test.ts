@@ -1,13 +1,8 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — sidecar is plain JS without types; importing the pure
 // helper module avoids booting the HTTP server that index.js binds at load.
-import {
-  pickUpstream,
-  filterUpstreamHeaders,
-  mergeSystemMessages,
-  addToolCallIndices,
-  createSseToolCallIndexNormalizer
-} from "../vps/llm-router/src/routing.js";
+// prettier-ignore — single line so the ts-expect-error covers the untyped import
+import { pickUpstream, filterUpstreamHeaders, mergeSystemMessages, addToolCallIndices, createSseToolCallIndexNormalizer } from "../vps/llm-router/src/routing.js";
 
 describe("llm-router pickUpstream", () => {
   it("routes gemini-* models to Gemini", () => {
@@ -210,9 +205,9 @@ describe("llm-router addToolCallIndices", () => {
       type: "function"
     } as never);
     expect(addToolCallIndices(chunk)).toBe(true);
-    expect(chunk.choices[0].delta.tool_calls.map((t: { index?: number }) => t.index)).toEqual([
-      0, 1
-    ]);
+    expect(
+      chunk.choices[0].delta.tool_calls.map((t) => (t as { index?: number }).index)
+    ).toEqual([0, 1]);
   });
 
   it("leaves existing indices alone and reports no change", () => {
