@@ -12,6 +12,7 @@ import {
   summarizeDefinition,
   type AiFlowDefinition,
   type FlowStep,
+  type FlowTrigger,
   type StepCondition,
   type TriggerCondition
 } from "@/lib/ai-flows/schema";
@@ -29,15 +30,38 @@ const inputClass =
   "w-full rounded-md border border-parchment/15 bg-deep-ink/40 px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:border-signal-teal focus:outline-none";
 const labelClass = "block text-xs font-medium text-parchment/60 mb-1";
 
+/** How the workflow starts. Mirrors TRIGGER_CHANNELS in the schema. */
+const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
+  sms: "Inbound text (SMS)",
+  manual: "Manual — Run now button",
+  schedule: "On a schedule",
+  email: "Inbound email"
+};
+
 type EditorState = {
   id: string | null;
   name: string;
   enabled: boolean;
   suppressDefaultReply: boolean;
+  channel: FlowTrigger["channel"];
   correlationWindowMinutes: number;
   conditions: TriggerCondition[];
+  scheduleMode: "daily" | "every";
+  scheduleTime: string;
+  scheduleTimezone: string;
+  scheduleDays: number[];
+  scheduleEvery: number;
+  emailConnectionId: string;
   steps: FlowStep[];
 };
+
+function browserTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Phoenix";
+  } catch {
+    return "America/Phoenix";
+  }
+}
 
 function emptyEditor(): EditorState {
   return {
@@ -45,10 +69,69 @@ function emptyEditor(): EditorState {
     name: "",
     enabled: false,
     suppressDefaultReply: false,
+    channel: "sms",
     correlationWindowMinutes: 10,
     conditions: [{ type: "has_url" }],
+    scheduleMode: "daily",
+    scheduleTime: "08:30",
+    scheduleTimezone: browserTimezone(),
+    scheduleDays: [],
+    scheduleEvery: 60,
+    emailConnectionId: "",
     steps: []
   };
+}
+
+/** Trigger-derived editor fields (shared by editorFromRow + the AI generator). */
+function triggerToEditorFields(trigger: FlowTrigger): Pick<
+  EditorState,
+  | "channel"
+  | "correlationWindowMinutes"
+  | "conditions"
+  | "scheduleMode"
+  | "scheduleTime"
+  | "scheduleTimezone"
+  | "scheduleDays"
+  | "scheduleEvery"
+  | "emailConnectionId"
+> {
+  const base = {
+    channel: trigger.channel,
+    correlationWindowMinutes: 10,
+    conditions: [] as TriggerCondition[],
+    scheduleMode: "daily" as const,
+    scheduleTime: "08:30",
+    scheduleTimezone: browserTimezone(),
+    scheduleDays: [] as number[],
+    scheduleEvery: 60,
+    emailConnectionId: ""
+  };
+  switch (trigger.channel) {
+    case "sms":
+      return {
+        ...base,
+        correlationWindowMinutes: trigger.correlationWindowMinutes ?? 10,
+        conditions: trigger.conditions
+      };
+    case "manual":
+      return base;
+    case "schedule":
+      if (trigger.everyMinutes !== undefined) {
+        return { ...base, scheduleMode: "every", scheduleEvery: trigger.everyMinutes };
+      }
+      return {
+        ...base,
+        scheduleTime: trigger.time ?? "08:30",
+        scheduleTimezone: trigger.timezone ?? browserTimezone(),
+        scheduleDays: trigger.daysOfWeek ?? []
+      };
+    case "email":
+      return {
+        ...base,
+        conditions: trigger.conditions,
+        emailConnectionId: trigger.connectionId
+      };
+  }
 }
 
 function editorFromRow(row: AiFlowRow): EditorState {
@@ -58,8 +141,7 @@ function editorFromRow(row: AiFlowRow): EditorState {
     name: row.name,
     enabled: row.enabled,
     suppressDefaultReply: def.options?.suppressDefaultReply ?? false,
-    correlationWindowMinutes: def.trigger.correlationWindowMinutes ?? 10,
-    conditions: def.trigger.conditions,
+    ...triggerToEditorFields(def.trigger),
     steps: def.steps
   };
 }
@@ -136,14 +218,34 @@ function varsProducedBefore(steps: FlowStep[], index: number): string[] {
   return out;
 }
 
+function editorTrigger(s: EditorState): FlowTrigger {
+  switch (s.channel) {
+    case "sms":
+      return {
+        channel: "sms",
+        correlationWindowMinutes: s.correlationWindowMinutes,
+        conditions: s.conditions
+      };
+    case "manual":
+      return { channel: "manual" };
+    case "schedule":
+      return s.scheduleMode === "every"
+        ? { channel: "schedule", everyMinutes: s.scheduleEvery }
+        : {
+            channel: "schedule",
+            time: s.scheduleTime,
+            timezone: s.scheduleTimezone,
+            ...(s.scheduleDays.length > 0 ? { daysOfWeek: [...s.scheduleDays].sort() } : {})
+          };
+    case "email":
+      return { channel: "email", connectionId: s.emailConnectionId, conditions: s.conditions };
+  }
+}
+
 function toDefinition(s: EditorState): AiFlowDefinition {
   return {
     version: 1,
-    trigger: {
-      channel: "sms",
-      correlationWindowMinutes: s.correlationWindowMinutes,
-      conditions: s.conditions
-    },
+    trigger: editorTrigger(s),
     steps: s.steps,
     options: { suppressDefaultReply: s.suppressDefaultReply }
   };
@@ -163,6 +265,10 @@ export function AiFlowsManager({
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
   const [emailConns, setEmailConns] = useState<EmailConnectionOption[]>([]);
+  // Run-now panel: which flow's panel is open, its input, and the last outcome.
+  const [runFor, setRunFor] = useState<string | null>(null);
+  const [runInput, setRunInput] = useState("");
+  const [runNotice, setRunNotice] = useState<string | null>(null);
 
   // Connected owner mailboxes for the send_email "From" dropdown (and the
   // quiet-hours email fallback). Best-effort: on any failure the dropdown
@@ -302,6 +408,29 @@ export function AiFlowsManager({
     }
   };
 
+  /** Start one manual run (any trigger channel; the flow must be enabled). */
+  const runNow = async (row: AiFlowRow) => {
+    setBusy(true);
+    setRunNotice(null);
+    try {
+      const res = await fetch(`/api/aiflows/${row.id}/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId, input: runInput.trim() || undefined })
+      });
+      const json = (await res.json()) as { ok: boolean; error?: { message: string } };
+      if (!json.ok) {
+        setRunNotice(json.error?.message ?? "Run failed to start");
+        return;
+      }
+      setRunNotice("Run queued — see View runs for progress.");
+      setRunInput("");
+      setRunFor(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const toggleEnabled = async (row: AiFlowRow) => {
     await fetch(`/api/aiflows/${row.id}`, {
       method: "PATCH",
@@ -336,8 +465,7 @@ export function AiFlowsManager({
         name: e?.name || "New automation",
         enabled: e?.enabled ?? false,
         suppressDefaultReply: def.options?.suppressDefaultReply ?? false,
-        correlationWindowMinutes: def.trigger.correlationWindowMinutes ?? 10,
-        conditions: def.trigger.conditions,
+        ...triggerToEditorFields(def.trigger),
         steps: def.steps
       }));
     } finally {
@@ -400,17 +528,136 @@ export function AiFlowsManager({
         <section className="space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">Trigger</h3>
           <div>
-            <label className={labelClass}>Correlation window (minutes)</label>
-            <input
-              type="number"
+            <label className={labelClass}>Starts when</label>
+            <select
               className={inputClass}
-              value={editor.correlationWindowMinutes}
+              value={editor.channel}
               onChange={(ev) =>
-                setEditor({ ...editor, correlationWindowMinutes: Number(ev.target.value) || 0 })
+                setEditor({ ...editor, channel: ev.target.value as FlowTrigger["channel"] })
               }
-            />
+            >
+              {(Object.keys(CHANNEL_LABELS) as FlowTrigger["channel"][]).map((c) => (
+                <option key={c} value={c}>
+                  {CHANNEL_LABELS[c]}
+                </option>
+              ))}
+            </select>
           </div>
-          {editor.conditions.map((c, i) => (
+          {editor.channel === "manual" && (
+            <p className="text-xs text-parchment/50">
+              This workflow only starts from the Run now button on the AiFlows list (you can
+              pass it a link or text when starting it).
+            </p>
+          )}
+          {editor.channel === "schedule" && (
+            <div className="space-y-2">
+              <select
+                className={inputClass}
+                value={editor.scheduleMode}
+                onChange={(ev) =>
+                  setEditor({ ...editor, scheduleMode: ev.target.value as "daily" | "every" })
+                }
+              >
+                <option value="daily">Daily at a time</option>
+                <option value="every">Every N minutes</option>
+              </select>
+              {editor.scheduleMode === "daily" ? (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className={labelClass}>Time (24h HH:MM)</label>
+                    <input
+                      className={inputClass}
+                      value={editor.scheduleTime}
+                      onChange={(ev) => setEditor({ ...editor, scheduleTime: ev.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className={labelClass}>Time zone</label>
+                    <input
+                      className={inputClass}
+                      value={editor.scheduleTimezone}
+                      onChange={(ev) => setEditor({ ...editor, scheduleTimezone: ev.target.value })}
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <label className={labelClass}>Days (default: every day)</label>
+                    <div className="flex flex-wrap gap-2">
+                      {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d, di) => (
+                        <label key={d} className="flex items-center gap-1 text-xs text-parchment/70">
+                          <input
+                            type="checkbox"
+                            checked={editor.scheduleDays.includes(di)}
+                            onChange={(ev) =>
+                              setEditor({
+                                ...editor,
+                                scheduleDays: ev.target.checked
+                                  ? [...editor.scheduleDays, di]
+                                  : editor.scheduleDays.filter((x) => x !== di)
+                              })
+                            }
+                          />
+                          {d}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <label className={labelClass}>Every N minutes (min 15)</label>
+                  <input
+                    type="number"
+                    className={inputClass}
+                    value={editor.scheduleEvery}
+                    onChange={(ev) =>
+                      setEditor({ ...editor, scheduleEvery: Number(ev.target.value) || 60 })
+                    }
+                  />
+                </div>
+              )}
+            </div>
+          )}
+          {editor.channel === "email" && (
+            <div>
+              <label className={labelClass}>Watch mailbox</label>
+              <select
+                className={inputClass}
+                value={editor.emailConnectionId}
+                onChange={(ev) => setEditor({ ...editor, emailConnectionId: ev.target.value })}
+              >
+                <option value="">Select a connected mailbox…</option>
+                {emailConns.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label}
+                  </option>
+                ))}
+                {editor.emailConnectionId &&
+                  !emailConns.some((c) => c.id === editor.emailConnectionId) && (
+                    <option value={editor.emailConnectionId}>
+                      connected mailbox (disconnected?)
+                    </option>
+                  )}
+              </select>
+              <p className="mt-1 text-[11px] text-parchment/40">
+                Connect another mailbox under Settings → Integrations to see it here.
+              </p>
+            </div>
+          )}
+          {editor.channel === "sms" && (
+            <div>
+              <label className={labelClass}>Correlation window (minutes)</label>
+              <input
+                type="number"
+                className={inputClass}
+                value={editor.correlationWindowMinutes}
+                onChange={(ev) =>
+                  setEditor({ ...editor, correlationWindowMinutes: Number(ev.target.value) || 0 })
+                }
+              />
+            </div>
+          )}
+          {(editor.channel === "sms" || editor.channel === "email") &&
+            editor.conditions.map((c, i) => (
             <div key={i} className="flex items-center gap-2">
               <select
                 className={inputClass}
@@ -459,14 +706,16 @@ export function AiFlowsManager({
               </button>
             </div>
           ))}
-          <button
-            onClick={() =>
-              setEditor({ ...editor, conditions: [...editor.conditions, { type: "contains", value: "" }] })
-            }
-            className="inline-flex items-center gap-1 text-sm text-signal-teal hover:underline"
-          >
-            <Plus className="h-3 w-3" /> Add condition
-          </button>
+          {(editor.channel === "sms" || editor.channel === "email") && (
+            <button
+              onClick={() =>
+                setEditor({ ...editor, conditions: [...editor.conditions, { type: "contains", value: "" }] })
+              }
+              className="inline-flex items-center gap-1 text-sm text-signal-teal hover:underline"
+            >
+              <Plus className="h-3 w-3" /> Add condition
+            </button>
+          )}
         </section>
 
         <section className="space-y-3">
@@ -533,14 +782,16 @@ export function AiFlowsManager({
         </section>
 
         <section className="space-y-2">
-          <label className="flex items-center gap-2 text-sm text-parchment/70">
-            <input
-              type="checkbox"
-              checked={editor.suppressDefaultReply}
-              onChange={(ev) => setEditor({ ...editor, suppressDefaultReply: ev.target.checked })}
-            />
-            Suppress the normal Coworker reply when this flow matches
-          </label>
+          {editor.channel === "sms" && (
+            <label className="flex items-center gap-2 text-sm text-parchment/70">
+              <input
+                type="checkbox"
+                checked={editor.suppressDefaultReply}
+                onChange={(ev) => setEditor({ ...editor, suppressDefaultReply: ev.target.checked })}
+              />
+              Suppress the normal Coworker reply when this flow matches
+            </label>
+          )}
           <label className="flex items-center gap-2 text-sm text-parchment/70">
             <input
               type="checkbox"
@@ -579,51 +830,88 @@ export function AiFlowsManager({
           <Plus className="h-4 w-4" /> New AiFlow
         </button>
       </div>
+      {runNotice && (
+        <p className="rounded-md border border-signal-teal/40 bg-signal-teal/5 px-3 py-2 text-sm text-signal-teal">
+          {runNotice}
+        </p>
+      )}
       {flows.length === 0 ? (
         <Card>
           <p className="py-6 text-center text-sm text-parchment/60">
-            No AiFlows yet. Create one to automate actions on inbound texts.
+            No AiFlows yet. Create one to automate a workflow — start it from a text, an
+            email, a schedule, or run it on demand.
           </p>
         </Card>
       ) : (
         flows.map((row) => (
-          <Card key={row.id} className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h3 className="truncate font-semibold text-parchment">{row.name}</h3>
-                <span
-                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                    row.enabled
-                      ? "bg-claw-green/15 text-claw-green"
-                      : "bg-parchment/10 text-parchment/50"
-                  }`}
-                >
-                  {row.enabled ? "ENABLED" : "OFF"}
-                </span>
+          <Card key={row.id} className="space-y-3">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <h3 className="truncate font-semibold text-parchment">{row.name}</h3>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                      row.enabled
+                        ? "bg-claw-green/15 text-claw-green"
+                        : "bg-parchment/10 text-parchment/50"
+                    }`}
+                  >
+                    {row.enabled ? "ENABLED" : "OFF"}
+                  </span>
+                </div>
+                <p className="mt-1 truncate text-xs text-parchment/50">
+                  {summarizeDefinition(row.definition)}
+                </p>
               </div>
-              <p className="mt-1 truncate text-xs text-parchment/50">
-                {summarizeDefinition(row.definition)}
-              </p>
+              <div className="flex shrink-0 items-center gap-3 text-parchment/50">
+                {row.enabled && (
+                  <button
+                    onClick={() => {
+                      setRunNotice(null);
+                      setRunInput("");
+                      setRunFor(runFor === row.id ? null : row.id);
+                    }}
+                    className="text-xs text-signal-teal hover:underline"
+                  >
+                    Run now
+                  </button>
+                )}
+                <button onClick={() => toggleEnabled(row)} className="text-xs hover:text-parchment">
+                  {row.enabled ? "Disable" : "Enable"}
+                </button>
+                <button onClick={() => setEditor(editorFromRow(row))} aria-label="Edit">
+                  <Pencil className="h-4 w-4 hover:text-signal-teal" />
+                </button>
+                <button
+                  onClick={() => duplicateFlow(row)}
+                  aria-label="Duplicate AiFlow"
+                  title="Duplicate AiFlow"
+                  disabled={busy}
+                >
+                  <Copy className="h-4 w-4 hover:text-signal-teal" />
+                </button>
+                <button onClick={() => remove(row.id)} aria-label="Delete" disabled={busy}>
+                  <Trash2 className="h-4 w-4 hover:text-spark-orange" />
+                </button>
+              </div>
             </div>
-            <div className="flex shrink-0 items-center gap-3 text-parchment/50">
-              <button onClick={() => toggleEnabled(row)} className="text-xs hover:text-parchment">
-                {row.enabled ? "Disable" : "Enable"}
-              </button>
-              <button onClick={() => setEditor(editorFromRow(row))} aria-label="Edit">
-                <Pencil className="h-4 w-4 hover:text-signal-teal" />
-              </button>
-              <button
-                onClick={() => duplicateFlow(row)}
-                aria-label="Duplicate AiFlow"
-                title="Duplicate AiFlow"
-                disabled={busy}
-              >
-                <Copy className="h-4 w-4 hover:text-signal-teal" />
-              </button>
-              <button onClick={() => remove(row.id)} aria-label="Delete" disabled={busy}>
-                <Trash2 className="h-4 w-4 hover:text-spark-orange" />
-              </button>
-            </div>
+            {runFor === row.id && (
+              <div className="flex items-center gap-2 border-t border-parchment/10 pt-3">
+                <input
+                  className={inputClass}
+                  value={runInput}
+                  onChange={(ev) => setRunInput(ev.target.value)}
+                  placeholder="Optional input — paste a link or message text for {{trigger.url}} / {{trigger.windowText}}"
+                />
+                <button
+                  onClick={() => runNow(row)}
+                  disabled={busy}
+                  className="shrink-0 rounded-md bg-spark-orange px-3 py-2 text-sm font-semibold text-deep-ink hover:bg-spark-orange/90 disabled:opacity-50"
+                >
+                  {busy ? "Starting…" : "Start run"}
+                </button>
+              </div>
+            )}
           </Card>
         ))
       )}

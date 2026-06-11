@@ -356,13 +356,59 @@ describe("isExecutableDefinition", () => {
   it("rejects a wrong version", () => {
     expect(isExecutableDefinition({ ...valid, version: 2 })).toBe(false);
   });
-  it("rejects a bad trigger (missing / wrong channel / non-array conditions)", () => {
+  it("rejects a bad trigger (missing / unknown channel / non-array conditions)", () => {
     expect(isExecutableDefinition({ ...valid, trigger: undefined })).toBe(false);
+    expect(
+      isExecutableDefinition({ ...valid, trigger: { channel: "carrier_pigeon", conditions: [] } })
+    ).toBe(false);
+    expect(
+      isExecutableDefinition({ ...valid, trigger: { channel: "sms", conditions: "x" } })
+    ).toBe(false);
+  });
+  it("accepts the non-SMS trigger channels", () => {
+    expect(isExecutableDefinition({ ...valid, trigger: { channel: "manual" } })).toBe(true);
+    expect(
+      isExecutableDefinition({
+        ...valid,
+        trigger: { channel: "schedule", time: "08:30", timezone: "America/Phoenix" }
+      })
+    ).toBe(true);
+    expect(
+      isExecutableDefinition({ ...valid, trigger: { channel: "schedule", everyMinutes: 60 } })
+    ).toBe(true);
+    expect(
+      isExecutableDefinition({
+        ...valid,
+        trigger: { channel: "email", connectionId: "abc", conditions: [] }
+      })
+    ).toBe(true);
+  });
+  it("rejects malformed schedule / email triggers", () => {
+    // schedule: neither mode, both modes, or a half-configured daily mode
+    expect(isExecutableDefinition({ ...valid, trigger: { channel: "schedule" } })).toBe(false);
+    expect(
+      isExecutableDefinition({
+        ...valid,
+        trigger: {
+          channel: "schedule",
+          time: "08:30",
+          timezone: "America/Phoenix",
+          everyMinutes: 60
+        }
+      })
+    ).toBe(false);
+    expect(
+      isExecutableDefinition({ ...valid, trigger: { channel: "schedule", time: "08:30" } })
+    ).toBe(false);
+    // email: missing connectionId / non-array conditions
     expect(
       isExecutableDefinition({ ...valid, trigger: { channel: "email", conditions: [] } })
     ).toBe(false);
     expect(
-      isExecutableDefinition({ ...valid, trigger: { channel: "sms", conditions: "x" } })
+      isExecutableDefinition({
+        ...valid,
+        trigger: { channel: "email", connectionId: "abc", conditions: "x" }
+      })
     ).toBe(false);
   });
   it("rejects non-array steps", () => {

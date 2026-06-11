@@ -397,7 +397,27 @@ export function isExecutableDefinition(def: unknown): def is AiFlowDefinition {
   const d = def as Record<string, unknown>;
   if (d.version !== AI_FLOW_DEFINITION_VERSION) return false;
   const trigger = d.trigger as Record<string, unknown> | undefined;
-  if (!trigger || trigger.channel !== "sms" || !Array.isArray(trigger.conditions)) return false;
+  if (!trigger) return false;
+  switch (trigger.channel) {
+    case "sms":
+      if (!Array.isArray(trigger.conditions)) return false;
+      break;
+    case "email":
+      if (typeof trigger.connectionId !== "string" || !Array.isArray(trigger.conditions)) {
+        return false;
+      }
+      break;
+    case "schedule": {
+      const daily = typeof trigger.time === "string" && typeof trigger.timezone === "string";
+      const interval = typeof trigger.everyMinutes === "number";
+      if (daily === interval) return false; // exactly one mode
+      break;
+    }
+    case "manual":
+      break;
+    default:
+      return false;
+  }
   if (!Array.isArray(d.steps)) return false;
   for (const s of d.steps) {
     if (!s || typeof s !== "object") return false;

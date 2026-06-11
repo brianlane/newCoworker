@@ -6,11 +6,15 @@
  * Rowboat saw them.
  *
  * Usage:
- *   tsx debug/rowboat-logs.ts [businessId] [grepPattern] [--since=15m] [--tail=40]
+ *   tsx debug/rowboat-logs.ts [businessId] [grepPattern] [--since=15m] [--tail=40] [--raw]
  *
  * Defaults to business 621a5b0d and a pattern covering tool/webhook/send_sms
  * traffic. Pass a custom pattern to chase a specific conversation id, e.g.
  *   tsx debug/rowboat-logs.ts 621a5b0d-... "conv_abc123|error" --since=1h
+ *
+ * --raw skips the grep filter entirely and dumps the last ~200KB of the window
+ * uncolored — IMPORTANT when you don't yet know what string to grep for (e.g.
+ * an unexplained 500 where the relevant line matches no known keyword).
  */
 import { loadEnv, makeHostingerClient, resolveVpsIp } from "./_shared.ts";
 
@@ -23,6 +27,7 @@ const sinceArg = process.argv.find((a) => a.startsWith("--since="));
 const SINCE = sinceArg ? sinceArg.split("=")[1] : "15m";
 const tailArg = process.argv.find((a) => a.startsWith("--tail="));
 const TAIL = tailArg ? Number(tailArg.split("=")[1]) : 40;
+const RAW = process.argv.includes("--raw");
 
 const { getActiveVpsSshKeyForBusiness } = await import("../src/lib/db/vps-ssh-keys.ts");
 const { sshExec } = await import("../src/lib/hostinger/ssh.ts");
@@ -35,9 +40,10 @@ const res = await sshExec({
   host: ip,
   username: key.ssh_username || "root",
   privateKeyPem: key.private_key_pem,
-  command:
-    `docker compose -f /opt/rowboat/docker-compose.yml logs --since ${SINCE} rowboat 2>/dev/null` +
-    ` | grep -iE "${PATTERN}" | tail -${TAIL}`,
+  command: RAW
+    ? `docker compose -f /opt/rowboat/docker-compose.yml logs --since ${SINCE} --no-color rowboat 2>&1 | tail -c 200000`
+    : `docker compose -f /opt/rowboat/docker-compose.yml logs --since ${SINCE} rowboat 2>/dev/null` +
+      ` | grep -iE "${PATTERN}" | tail -${TAIL}`,
   timeoutMs: 120000,
   onStdout: (c) => process.stdout.write(c),
   onStderr: (c) => process.stderr.write(c)

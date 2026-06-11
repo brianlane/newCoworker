@@ -54,6 +54,7 @@ import {
   offerRespondByMs,
   smsQuietDecision
 } from "../_shared/ai_flows/quiet_hours.ts";
+import { scheduleDue } from "../_shared/ai_flows/schedule.ts";
 import {
   estimateChatCostMicros,
   readChatSpendMicros,
@@ -67,6 +68,9 @@ type Supabase = ReturnType<typeof createClient>;
 const MAX_ATTEMPTS = 4;
 const CLAIM_LIMIT = 3;
 const FETCH_TIMEOUT_MS = 20_000;
+// /api/internal/aiflow-email-poll declares maxDuration = 60; give the kick
+// headroom beyond that so the worker never aborts a still-running poll.
+const EMAIL_POLL_KICK_TIMEOUT_MS = 75_000;
 // route_to_team: how many times one step entry will ask Rowboat for a sendable
 // next agent (skipping opted-out picks) before giving up to the owner fallback.
 const ROUTE_MAX_LOOKUPS = 6;
@@ -165,11 +169,20 @@ serve(async (req: Request): Promise<Response> => {
   // claim escalates them to the following agent (status-driven, like reclaim).
   await supabase.rpc("escalate_overdue_agent_offers");
 
+  // Non-SMS trigger sources, both failure-isolated so a bad schedule or a
+  // mailbox outage never stalls run processing below. The email poll is
+  // started here but awaited after the run loop: a busy mailbox can take the
+  // route most of its 60s budget, and overlapping it with run execution keeps
+  // the tick from stretching by that long (kickEmailTriggerPoll never throws).
+  await enqueueDueScheduledRuns(supabase);
+  const emailPoll = kickEmailTriggerPoll();
+
   const { data: claimed, error: claimErr } = await supabase.rpc("claim_ai_flow_runs", {
     p_limit: CLAIM_LIMIT
   });
   if (claimErr) {
     console.error("claim_ai_flow_runs", claimErr);
+    await emailPoll;
     return new Response("Claim failed", { status: 500 });
   }
 
@@ -184,6 +197,7 @@ serve(async (req: Request): Promise<Response> => {
     processed += 1;
   }
 
+  await emailPoll;
   return json({ ok: true, processed });
 });
 
@@ -239,11 +253,31 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   // triggers, so they can't keep sending SMS / browsing / calling integrations.
   if (!flow?.enabled) {
     try {
+      // Free the trigger's dedupe slot before canceling: if the owner
+      // re-enables the flow while the scheduled occurrence is still due or
+      // the email message is still inside the poll lookback, it can fire
+      // again instead of being silently swallowed by the unique
+      // (flow_id, dedupe_key) index. Email runs also leave an evaluation
+      // marker that would skip the message on later polls — clear it too.
+      const { data: dkRow } = await supabase
+        .from("ai_flow_runs")
+        .select("dedupe_key")
+        .eq("id", run.id)
+        .maybeSingle();
+      const dedupeKey = (dkRow as { dedupe_key?: string | null } | null)?.dedupe_key;
       await updateRun(supabase, run.id, {
         status: "canceled",
         last_error: "flow disabled",
-        claimed_at: null
+        claimed_at: null,
+        dedupe_key: null
       });
+      if (dedupeKey?.startsWith("email:")) {
+        await supabase
+          .from("ai_flow_email_seen")
+          .delete()
+          .eq("flow_id", run.flow_id)
+          .eq("message_id", dedupeKey.slice("email:".length));
+      }
     } catch (e) {
       console.error("executeRun cancel-disabled updateRun", e);
     }
@@ -1865,6 +1899,126 @@ async function handleRunThrow(supabase: Supabase, run: RunRow, e: unknown): Prom
       max_retries: MAX_ATTEMPTS
     }
   });
+}
+
+// --- non-SMS trigger sources ---------------------------------------------------
+
+/**
+ * Schedule sweep: enqueue a run for every enabled schedule-triggered flow that
+ * is due this tick. Exactly-once per occurrence via dedupe_key (the unique
+ * (flow_id, dedupe_key) index turns repeat ticks inside the due window into
+ * benign 23505s). Never throws — a bad flow just logs and is skipped.
+ */
+async function enqueueDueScheduledRuns(supabase: Supabase): Promise<void> {
+  try {
+    // Paged listing so a fleet with many scheduled flows never silently
+    // skips the ones past an arbitrary limit.
+    const PAGE = 200;
+    const rows: { id: string; business_id: string; definition: unknown }[] = [];
+    for (let offset = 0; ; offset += PAGE) {
+      const { data, error } = await supabase
+        .from("ai_flows")
+        .select("id, business_id, definition")
+        .eq("enabled", true)
+        .eq("definition->trigger->>channel", "schedule")
+        .order("id", { ascending: true })
+        .range(offset, offset + PAGE - 1);
+      if (error) {
+        console.error("schedule sweep list", error);
+        // A later page failing must not discard the flows already listed —
+        // sweep those now; the next tick retries the full listing (dedupe
+        // keys make any overlap benign).
+        if (rows.length === 0) return;
+        break;
+      }
+      const batch = (data ?? []) as typeof rows;
+      rows.push(...batch);
+      if (batch.length < PAGE) break;
+    }
+    const nowMs = Date.now();
+    for (const row of rows) {
+      if (!isExecutableDefinition(row.definition)) continue;
+      const trig = row.definition.trigger;
+      if (trig.channel !== "schedule") continue;
+      const due = scheduleDue(nowMs, trig);
+      if (!due) continue;
+      const { error: insErr } = await supabase.from("ai_flow_runs").insert({
+        flow_id: row.id,
+        business_id: row.business_id,
+        status: "queued",
+        context: {
+          trigger: {
+            channel: "schedule",
+            scheduled_for: due.scheduledForIso,
+            url: null,
+            windowText: "",
+            from: ""
+          }
+        },
+        current_step: 0,
+        dedupe_key: `sched:${due.key}`
+      });
+      // 23505 = this occurrence is already enqueued (earlier tick) — expected.
+      if (insErr && (insErr as { code?: string }).code !== "23505") {
+        console.error("schedule enqueue", insErr);
+        continue;
+      }
+      if (!insErr) {
+        await telemetryRecord(supabase, "ai_flow_run_enqueued_schedule", {
+          business_id: row.business_id,
+          flow_id: row.id,
+          scheduled_for: due.scheduledForIso
+        });
+        await systemLog(supabase, {
+          businessId: row.business_id,
+          source: "aiflow",
+          level: "info",
+          event: "ai_flow_run_enqueued_schedule",
+          message: `Scheduled run enqueued (${due.scheduledForIso})`,
+          payload: { flow_id: row.id, dedupe_key: `sched:${due.key}` }
+        });
+      }
+    }
+  } catch (e) {
+    console.error("enqueueDueScheduledRuns", e);
+  }
+}
+
+/**
+ * Email triggers: the mailbox polling needs the app's Nango credentials, so
+ * the actual work lives in the Next.js /api/internal/aiflow-email-poll route
+ * (cron-secret authed, same contract as this worker's own auth); this just
+ * kicks it once per tick. The route is a cheap no-op when no enabled flow has
+ * an email trigger. Failures only log — mailbox trouble must never stall SMS
+ * or scheduled runs.
+ */
+async function kickEmailTriggerPoll(): Promise<void> {
+  const base = Deno.env.get("AIFLOW_PLATFORM_URL") ?? "";
+  const secret = Deno.env.get("INTERNAL_CRON_SECRET") ?? "";
+  if (!base || !secret) return;
+  const ctl = new AbortController();
+  // The poll route legitimately runs up to its 60s maxDuration on a busy
+  // mailbox; aborting sooner can cut the work short on some hosts and logs
+  // spurious failures, so wait past that ceiling (the caller overlaps this
+  // wait with run processing rather than blocking on it).
+  const timer = setTimeout(() => ctl.abort(), EMAIL_POLL_KICK_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${base.replace(/\/$/, "")}/api/internal/aiflow-email-poll`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" },
+      body: "{}",
+      signal: ctl.signal
+    });
+    if (!res.ok) {
+      console.error("aiflow-email-poll", res.status, (await res.text()).slice(0, 200));
+    } else {
+      await res.body?.cancel();
+    }
+  } catch (e) {
+    console.error("kickEmailTriggerPoll", e);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // --- misc helpers ------------------------------------------------------------

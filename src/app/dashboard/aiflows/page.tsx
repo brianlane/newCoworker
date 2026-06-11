@@ -30,8 +30,9 @@ export default async function AiFlowsPage() {
         <div>
           <h1 className="text-2xl font-bold text-parchment">AiFlows</h1>
           <p className="mt-1 text-sm text-parchment/50">
-            Automate actions on inbound texts: detect a message, browse a link, extract details,
-            ask for approval, and send a reply.
+            Automate multi-step workflows: start from an inbound text or email, on a
+            schedule, or on demand — browse links, extract details, ask for approval, and
+            send texts or emails.
           </p>
         </div>
         {businessId && (
