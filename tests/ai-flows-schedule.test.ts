@@ -47,6 +47,30 @@ describe("scheduleDue — daily mode", () => {
   it("respects daysOfWeek (2026-06-09 is a Tuesday = 2)", () => {
     expect(scheduleDue(phx(8, 45), { ...cfg, daysOfWeek: [2] })).not.toBeNull();
     expect(scheduleDue(phx(8, 45), { ...cfg, daysOfWeek: [0, 6] })).toBeNull();
+    // An empty list means "every day", same as omitting it.
+    expect(scheduleDue(phx(8, 45), { ...cfg, daysOfWeek: [] })).not.toBeNull();
+  });
+  it("stays due across local midnight for a near-midnight target", () => {
+    const nearMidnight = { timezone: PHX, time: "23:30" };
+    // 2026-06-10 00:15 Phoenix is 45 minutes past 2026-06-09 23:30 — inside
+    // the catch-up window, keyed to the occurrence's (previous) local date.
+    const due = scheduleDue(phx(24, 15, 5), nearMidnight);
+    expect(due).not.toBeNull();
+    expect(due!.key).toBe("d:2026-06-09T23:30");
+    expect(due!.scheduledForIso).toBe(new Date(phx(23, 30)).toISOString());
+    // ...but not once the window has fully elapsed.
+    expect(scheduleDue(phx(24, 30), nearMidnight)).toBeNull();
+  });
+  it("post-midnight catch-up honors the occurrence day's weekday, not today's", () => {
+    const nearMidnight = { timezone: PHX, time: "23:30" };
+    // 00:15 Wednesday belongs to Tuesday's 23:30 occurrence (weekday 2).
+    expect(scheduleDue(phx(24, 15), { ...nearMidnight, daysOfWeek: [2] })).not.toBeNull();
+    expect(scheduleDue(phx(24, 15), { ...nearMidnight, daysOfWeek: [3] })).toBeNull();
+  });
+  it("an early-morning target is not due just after midnight", () => {
+    // 00:10 with an 00:30 target: today's occurrence hasn't happened and
+    // yesterday's was a full day ago — neither branch may fire.
+    expect(scheduleDue(phx(24, 10), { timezone: PHX, time: "00:30" })).toBeNull();
   });
   it("fails closed on malformed time or zone", () => {
     expect(scheduleDue(phx(8, 45), { timezone: PHX, time: "8:30" })).toBeNull();

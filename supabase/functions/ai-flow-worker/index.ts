@@ -68,6 +68,9 @@ type Supabase = ReturnType<typeof createClient>;
 const MAX_ATTEMPTS = 4;
 const CLAIM_LIMIT = 3;
 const FETCH_TIMEOUT_MS = 20_000;
+// /api/internal/aiflow-email-poll declares maxDuration = 60; give the kick
+// headroom beyond that so the worker never aborts a still-running poll.
+const EMAIL_POLL_KICK_TIMEOUT_MS = 75_000;
 // route_to_team: how many times one step entry will ask Rowboat for a sendable
 // next agent (skipping opted-out picks) before giving up to the owner fallback.
 const ROUTE_MAX_LOOKUPS = 6;
@@ -167,15 +170,19 @@ serve(async (req: Request): Promise<Response> => {
   await supabase.rpc("escalate_overdue_agent_offers");
 
   // Non-SMS trigger sources, both failure-isolated so a bad schedule or a
-  // mailbox outage never stalls run processing below.
+  // mailbox outage never stalls run processing below. The email poll is
+  // started here but awaited after the run loop: a busy mailbox can take the
+  // route most of its 60s budget, and overlapping it with run execution keeps
+  // the tick from stretching by that long (kickEmailTriggerPoll never throws).
   await enqueueDueScheduledRuns(supabase);
-  await kickEmailTriggerPoll();
+  const emailPoll = kickEmailTriggerPoll();
 
   const { data: claimed, error: claimErr } = await supabase.rpc("claim_ai_flow_runs", {
     p_limit: CLAIM_LIMIT
   });
   if (claimErr) {
     console.error("claim_ai_flow_runs", claimErr);
+    await emailPoll;
     return new Response("Claim failed", { status: 500 });
   }
 
@@ -190,6 +197,7 @@ serve(async (req: Request): Promise<Response> => {
     processed += 1;
   }
 
+  await emailPoll;
   return json({ ok: true, processed });
 });
 
@@ -1965,7 +1973,11 @@ async function kickEmailTriggerPoll(): Promise<void> {
   const secret = Deno.env.get("INTERNAL_CRON_SECRET") ?? "";
   if (!base || !secret) return;
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
+  // The poll route legitimately runs up to its 60s maxDuration on a busy
+  // mailbox; aborting sooner can cut the work short on some hosts and logs
+  // spurious failures, so wait past that ceiling (the caller overlaps this
+  // wait with run processing rather than blocking on it).
+  const timer = setTimeout(() => ctl.abort(), EMAIL_POLL_KICK_TIMEOUT_MS);
   try {
     const res = await fetch(`${base.replace(/\/$/, "")}/api/internal/aiflow-email-poll`, {
       method: "POST",

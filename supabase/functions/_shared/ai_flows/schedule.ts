@@ -10,8 +10,10 @@
  * Two modes (exactly one is configured, enforced by the authoring schema):
  *   - daily: `time` ("HH:MM") in `timezone`, optionally limited to
  *     `daysOfWeek` (0=Sunday..6=Saturday). Due for DAILY_CATCHUP_MINUTES
- *     after the wall-clock time passes, so up to an hour of cron downtime
- *     still triggers that day's run (the occurrence key is the local date).
+ *     after the wall-clock time passes — including across local midnight for
+ *     near-midnight targets — so up to an hour of cron downtime still
+ *     triggers that day's run (the occurrence key is the occurrence's local
+ *     date).
  *   - interval: `everyMinutes`. Each interval bucket of the epoch clock is
  *     one occurrence.
  *
@@ -101,14 +103,32 @@ export function scheduleDue(nowMs: number, cfg: ScheduleConfig): ScheduleOccurre
   const clock = zonedClock(nowMs, cfg.timezone);
   const date = zonedDate(nowMs, cfg.timezone);
   if (!clock || !date) return null;
-  if (Array.isArray(cfg.daysOfWeek) && cfg.daysOfWeek.length > 0) {
-    if (!cfg.daysOfWeek.includes(date.weekday)) return null;
-  }
-  const sinceTarget = clock.minutesOfDay - targetMin;
-  if (sinceTarget < 0 || sinceTarget >= DAILY_CATCHUP_MINUTES) return null;
-  const occurrenceMs = nowMs - sinceTarget * 60_000 - clock.seconds * 1000 - (nowMs % 1000);
-  return {
-    key: `d:${date.isoDate}T${cfg.time}`,
-    scheduledForIso: new Date(occurrenceMs).toISOString()
+
+  const dayAllowed = (weekday: number): boolean =>
+    !Array.isArray(cfg.daysOfWeek) || cfg.daysOfWeek.length === 0 || cfg.daysOfWeek.includes(weekday);
+  const occurrence = (isoDate: string, minutesSince: number): ScheduleOccurrence => {
+    const occurrenceMs = nowMs - minutesSince * 60_000 - clock.seconds * 1000 - (nowMs % 1000);
+    return {
+      key: `d:${isoDate}T${cfg.time}`,
+      scheduledForIso: new Date(occurrenceMs).toISOString()
+    };
   };
+
+  const sinceTarget = clock.minutesOfDay - targetMin;
+  if (sinceTarget >= 0 && sinceTarget < DAILY_CATCHUP_MINUTES) {
+    return dayAllowed(date.weekday) ? occurrence(date.isoDate, sinceTarget) : null;
+  }
+
+  // Post-midnight catch-up: a target near midnight (e.g. 23:30) can still be
+  // inside the window after the local date rolls over, and yesterday's
+  // occurrence must use yesterday's date for its dedupe key and weekday
+  // check. The 1440-minute day assumption is off by ±60 on DST-transition
+  // days, which only matters for near-midnight schedules on those two days a
+  // year — and the dedupe key keeps any double-fire to a benign 23505.
+  const sincePrev = clock.minutesOfDay + 1440 - targetMin;
+  if (sincePrev >= DAILY_CATCHUP_MINUTES) return null;
+  const prevDate = zonedDate(nowMs - (clock.minutesOfDay + 1) * 60_000, cfg.timezone);
+  /* c8 ignore next -- the zone was already validated by the lookups above */
+  if (!prevDate) return null;
+  return dayAllowed(prevDate.weekday) ? occurrence(prevDate.isoDate, sincePrev) : null;
 }
