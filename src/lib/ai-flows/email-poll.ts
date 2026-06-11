@@ -134,6 +134,8 @@ async function fetchGmailMessages(
       break;
     }
   } while (pageToken);
+  // A partial last page can overshoot the cap; enforce it exactly.
+  if (ids.length > EMAIL_POLL_MAX_MESSAGES) ids.length = EMAIL_POLL_MAX_MESSAGES;
   const out: InboundEmailMessage[] = [];
   for (const id of ids) {
     const res = await nangoProxyForBusiness(businessId, link, {
@@ -199,6 +201,8 @@ async function fetchMicrosoftMessages(
     const u = new URL(next);
     endpoint = u.pathname + u.search;
   }
+  // A partial last page can overshoot the cap; enforce it exactly.
+  if (rows.length > EMAIL_POLL_MAX_MESSAGES) rows.length = EMAIL_POLL_MAX_MESSAGES;
   const messages = rows
     .filter((r): r is GraphMessage & { id: string } => typeof r.id === "string")
     .map((r) => ({
@@ -234,20 +238,28 @@ function emailFlowsFrom(
   return out;
 }
 
+/** Page size for the flow listing — paged so no flow is silently skipped. */
+export const EMAIL_POLL_FLOW_PAGE = 100;
+
 /** Poll every watched mailbox once and enqueue runs for matching messages. */
 export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailPollResult> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { data, error } = await db
-    .from("ai_flows")
-    .select("id, business_id, definition")
-    .eq("enabled", true)
-    .eq("definition->trigger->>channel", "email")
-    .limit(100);
-  if (error) throw new Error(`pollEmailTriggers: ${error.message}`);
+  const flowRows: Array<{ id: string; business_id: string; definition: unknown }> = [];
+  for (let offset = 0; ; offset += EMAIL_POLL_FLOW_PAGE) {
+    const { data, error } = await db
+      .from("ai_flows")
+      .select("id, business_id, definition")
+      .eq("enabled", true)
+      .eq("definition->trigger->>channel", "email")
+      .order("id", { ascending: true })
+      .range(offset, offset + EMAIL_POLL_FLOW_PAGE - 1);
+    if (error) throw new Error(`pollEmailTriggers: ${error.message}`);
+    const batch = (data ?? []) as typeof flowRows;
+    flowRows.push(...batch);
+    if (batch.length < EMAIL_POLL_FLOW_PAGE) break;
+  }
 
-  const flows = emailFlowsFrom(
-    (data ?? []) as Array<{ id: string; business_id: string; definition: unknown }>
-  );
+  const flows = emailFlowsFrom(flowRows);
   const result: EmailPollResult = { flows: flows.length, mailboxes: 0, messages: 0, enqueued: 0 };
   if (flows.length === 0) return result;
 

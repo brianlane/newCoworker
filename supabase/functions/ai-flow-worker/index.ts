@@ -1883,18 +1883,27 @@ async function handleRunThrow(supabase: Supabase, run: RunRow, e: unknown): Prom
  */
 async function enqueueDueScheduledRuns(supabase: Supabase): Promise<void> {
   try {
-    const { data, error } = await supabase
-      .from("ai_flows")
-      .select("id, business_id, definition")
-      .eq("enabled", true)
-      .eq("definition->trigger->>channel", "schedule")
-      .limit(200);
-    if (error) {
-      console.error("schedule sweep list", error);
-      return;
+    // Paged listing so a fleet with many scheduled flows never silently
+    // skips the ones past an arbitrary limit.
+    const PAGE = 200;
+    const rows: { id: string; business_id: string; definition: unknown }[] = [];
+    for (let offset = 0; ; offset += PAGE) {
+      const { data, error } = await supabase
+        .from("ai_flows")
+        .select("id, business_id, definition")
+        .eq("enabled", true)
+        .eq("definition->trigger->>channel", "schedule")
+        .order("id", { ascending: true })
+        .range(offset, offset + PAGE - 1);
+      if (error) {
+        console.error("schedule sweep list", error);
+        return;
+      }
+      const batch = (data ?? []) as typeof rows;
+      rows.push(...batch);
+      if (batch.length < PAGE) break;
     }
     const nowMs = Date.now();
-    const rows = (data ?? []) as { id: string; business_id: string; definition: unknown }[];
     for (const row of rows) {
       if (!isExecutableDefinition(row.definition)) continue;
       const trig = row.definition.trigger;

@@ -35,13 +35,18 @@ function flowRow(id: string, trigger: unknown) {
   return { id, business_id: BIZ, definition: { version: 1, trigger, steps: [] } };
 }
 
-/** Chainable service-client stub returning `rows` from the ai_flows query. */
-function dbWith(rows: unknown[], error: { message: string } | null = null) {
-  const limit = vi.fn().mockResolvedValue({ data: rows, error });
-  const eq2 = vi.fn(() => ({ limit }));
+/** Chainable service-client stub serving the (paged) ai_flows listing. */
+function dbWithRange(range: ReturnType<typeof vi.fn>) {
+  const order = vi.fn(() => ({ range }));
+  const eq2 = vi.fn(() => ({ order }));
   const eq1 = vi.fn(() => ({ eq: eq2 }));
   const select = vi.fn(() => ({ eq: eq1 }));
   return { from: vi.fn(() => ({ select })) } as never;
+}
+
+/** Single-page convenience stub (fewer rows than one page ends the loop). */
+function dbWith(rows: unknown[] | null, error: { message: string } | null = null) {
+  return dbWithRange(vi.fn().mockResolvedValue({ data: rows, error }));
 }
 
 const emailTrigger = (conditions: unknown[] = []) => ({
@@ -122,6 +127,20 @@ describe("pollEmailTriggers", () => {
   it("tolerates a null data payload from the flows query", async () => {
     const res = await pollEmailTriggers(dbWith(null as never));
     expect(res.flows).toBe(0);
+  });
+
+  it("pages through the flow listing so flows past one page are not skipped", async () => {
+    const page1 = Array.from({ length: 100 }, (_, i) => flowRow(`f${i}`, emailTrigger()));
+    const page2 = [flowRow("f-last", emailTrigger())];
+    const range = vi
+      .fn()
+      .mockResolvedValueOnce({ data: page1, error: null })
+      .mockResolvedValueOnce({ data: page2, error: null });
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    const res = await pollEmailTriggers(dbWithRange(range));
+    expect(res.flows).toBe(101);
+    expect(range).toHaveBeenCalledTimes(2);
+    expect(range).toHaveBeenNthCalledWith(2, 100, 199);
   });
 
   it("stringifies a non-Error mailbox failure", async () => {
@@ -366,6 +385,58 @@ describe("pollEmailTriggers", () => {
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({ event: "ai_flow_email_poll_overflow", level: "warn" })
     );
+  });
+
+  it("enforces the message cap exactly when a Gmail page overshoots it", async () => {
+    let page = 0;
+    vi.mocked(nangoProxyForBusiness).mockImplementation((async (
+      _biz: string,
+      _link: unknown,
+      cfg: { endpoint: string }
+    ) => {
+      if (cfg.endpoint.includes("users/me/messages?")) {
+        page += 1;
+        return {
+          data: {
+            messages: Array.from({ length: 40 }, (_, i) => ({ id: `p${page}-${i}` })),
+            nextPageToken: `tok${page}`
+          }
+        };
+      }
+      return {
+        data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
+      };
+    }) as never);
+    const res = await pollEmailTriggers(
+      dbWith([flowRow("f1", emailTrigger([{ type: "contains", value: "no-match" }]))])
+    );
+    expect(res.messages).toBe(100); // 3 pages of 40 truncated to the cap
+    expect(page).toBe(3);
+  });
+
+  it("enforces the message cap exactly when a Microsoft page overshoots it", async () => {
+    vi.mocked(getWorkspaceOAuthConnection).mockResolvedValue({
+      ...googleConn,
+      provider_config_key: "outlook"
+    } as never);
+    let call = 0;
+    vi.mocked(nangoProxyForBusiness).mockImplementation((async () => {
+      call += 1;
+      return {
+        data: {
+          value: Array.from({ length: 40 }, (_, i) => ({
+            id: `ms${call}-${i}`,
+            body: { contentType: "text", content: "hi" }
+          })),
+          "@odata.nextLink": `https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$skip=${call * 40}`
+        }
+      };
+    }) as never);
+    const res = await pollEmailTriggers(
+      dbWith([flowRow("f1", emailTrigger([{ type: "contains", value: "no-match" }]))])
+    );
+    expect(res.messages).toBe(100);
+    expect(call).toBe(3);
   });
 
   it("follows Microsoft @odata.nextLink pagination and caps runaway chains", async () => {
