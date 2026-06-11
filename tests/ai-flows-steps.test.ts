@@ -167,6 +167,10 @@ describe("planStep: send_sms quietHours", () => {
     const r = planStep(base, { vars: { lead_phone: "+16025550100", lead_email: 42 } });
     expect(r.ok && r.action.kind === "send_sms" && r.action.quiet?.emailTo).toBe("");
   });
+  it('rejects a non-address fallback value (extraction answers like "none")', () => {
+    const r = planStep(base, { vars: { lead_phone: "+16025550100", lead_email: "none" } });
+    expect(r.ok && r.action.kind === "send_sms" && r.action.quiet?.emailTo).toBe("");
+  });
   it("defaults the email subject and omits the connection id when unset", () => {
     const noExtras: FlowStep = {
       id: "x",
