@@ -578,10 +578,14 @@ WORKFLOW_JSON=$(jq -nc \
       model: $ownerModel,
       ragK: 3,
       ragReturnType: "chunks",
+      # Dashboard surface declares its own customer-tool names so the
+      # platform dispatcher can attribute the call (the Rowboat webhook
+      # payload has no agent context) — distinct Settings toggles and an
+      # honest interaction channel ("dashboard", not "sms").
       tools: [
-        "customer_lookup_by_phone",
-        "customer_set_display_name",
-        "customer_append_pinned_note",
+        "dashboard_customer_lookup_by_phone",
+        "dashboard_customer_set_display_name",
+        "dashboard_customer_append_pinned_note",
         "owner_append_business_memory",
         "send_sms"
       ]
@@ -604,9 +608,9 @@ WORKFLOW_JSON=$(jq -nc \
       ragK: 3,
       ragReturnType: "chunks",
       tools: [
-        "customer_lookup_by_phone",
-        "customer_set_display_name",
-        "customer_append_pinned_note",
+        "dashboard_customer_lookup_by_phone",
+        "dashboard_customer_set_display_name",
+        "dashboard_customer_append_pinned_note",
         "owner_append_business_memory",
         "send_sms"
       ]
@@ -700,6 +704,61 @@ WORKFLOW_JSON=$(jq -nc \
           }
         },
         required: ["toE164", "body"]
+      }
+    },
+    # Dashboard-surface twins of the customer tools (see the OwnerCoworker
+    # comment above). Same dispatcher cores, separate toggle + channel.
+    {
+      name: "dashboard_customer_lookup_by_phone",
+      description: "Look up the cross-channel customer profile (display name, rolling summary, last channel/date, total interaction count) for a customer phone number the owner asks about.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          phone: {
+            type: "string",
+            description: "E.164 phone to look up, e.g. +15551234567."
+          }
+        },
+        required: ["phone"]
+      }
+    },
+    {
+      name: "dashboard_customer_set_display_name",
+      description: "Persist a customer name on their profile when the owner states it in dashboard chat. Will not overwrite a name the owner already set from the customers page.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          displayName: {
+            type: "string",
+            description: "The customer name. Will be normalized server-side."
+          },
+          phone: {
+            type: "string",
+            description: "E.164 phone to attribute the name to."
+          }
+        },
+        required: ["displayName", "phone"]
+      }
+    },
+    {
+      name: "dashboard_customer_append_pinned_note",
+      description: "Append a permanent fact to a customer pinned notes when the owner states it in dashboard chat. The note survives every future summary. Use sparingly.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          note: {
+            type: "string",
+            description: "The fact to pin, in the owner words. Keep concise."
+          },
+          phone: {
+            type: "string",
+            description: "E.164 phone to attribute the note to."
+          }
+        },
+        required: ["note", "phone"]
       }
     },
     {

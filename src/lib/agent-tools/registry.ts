@@ -67,6 +67,27 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
           "Automatically save durable business rules you state in chat to your coworker's memory.",
         defaultEnabled: true,
         configurable: true
+      },
+      {
+        toolKey: "customer_lookup_by_phone",
+        label: "Recognize repeat customers",
+        description: "Look up a customer's cross-channel history when you ask about them in chat.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "customer_set_display_name",
+        label: "Save customer names",
+        description: "Save a customer's name to their profile from chat.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "customer_append_pinned_note",
+        label: "Pin customer notes",
+        description: "Pin permanent facts (preferences, constraints) to a customer's profile from chat.",
+        defaultEnabled: true,
+        configurable: true
       }
     ]
   },
@@ -149,15 +170,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "customer_lookup_by_phone",
         label: "Recognize repeat customers",
         description:
-          "Look up a texter's cross-channel history so they're greeted as a known customer. Also covers the dashboard coworker's lookups.",
+          "Look up a texter's cross-channel history so they're greeted as a known customer.",
         defaultEnabled: true,
         configurable: true
       },
       {
         toolKey: "customer_set_display_name",
         label: "Save customer names",
-        description:
-          "Remember a texter's name on their customer profile. Also covers the dashboard coworker.",
+        description: "Remember a texter's name on their customer profile.",
         defaultEnabled: true,
         configurable: true
       },
@@ -165,7 +185,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "customer_append_pinned_note",
         label: "Pin customer notes",
         description:
-          "Pin permanent facts (preferences, constraints) to a customer's profile. Also covers the dashboard coworker.",
+          "Pin permanent facts (preferences, constraints) to a customer's profile.",
         defaultEnabled: true,
         configurable: true
       }

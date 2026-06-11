@@ -213,7 +213,7 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
     expect((await res.json()).detail).toBe("invalid_args:displayName empty");
   });
 
-  it("dispatches customer_append_pinned_note with the chat stamp", async () => {
+  it("dispatches customer_append_pinned_note with the text channel + stamp", async () => {
     vi.mocked(appendCustomerPinnedNote).mockResolvedValue({
       ok: true,
       data: { appended: true, pinnedChars: 30, truncated: false }
@@ -230,7 +230,47 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
       "+15551230000",
       "prefers mornings",
       "sms",
-      "chat"
+      "text"
+    );
+  });
+
+  it("attributes the dashboard_ twins to the dashboard surface (toggle + channel)", async () => {
+    vi.mocked(setCustomerDisplayName).mockResolvedValue({ ok: true, data: { updated: true } });
+    vi.mocked(appendCustomerPinnedNote).mockResolvedValue({
+      ok: true,
+      data: { appended: true, pinnedChars: 10, truncated: false }
+    });
+    vi.mocked(lookupCustomerByPhone).mockResolvedValue({ ok: true, data: { found: false } });
+
+    for (const [name, args] of [
+      ["dashboard_customer_lookup_by_phone", { phone: "+15551230000" }],
+      ["dashboard_customer_set_display_name", { displayName: "Joe", phone: "+15551230000" }],
+      ["dashboard_customer_append_pinned_note", { note: "vip", phone: "+15551230000" }]
+    ] as const) {
+      const content = makeContent(name, args);
+      vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+      const res = await POST(makeRequest(content));
+      expect((await res.json()).ok).toBe(true);
+      // Gated by the DASHBOARD toggle of the underlying tool key.
+      expect(vi.mocked(isAgentToolEnabled)).toHaveBeenLastCalledWith(
+        BIZ,
+        "dashboard",
+        name.replace(/^dashboard_/, "")
+      );
+    }
+    // Writes record the honest dashboard channel, not "sms".
+    expect(vi.mocked(setCustomerDisplayName)).toHaveBeenCalledWith(
+      BIZ,
+      "+15551230000",
+      "Joe",
+      "dashboard"
+    );
+    expect(vi.mocked(appendCustomerPinnedNote)).toHaveBeenCalledWith(
+      BIZ,
+      "+15551230000",
+      "vip",
+      "dashboard",
+      "dashboard"
     );
   });
 

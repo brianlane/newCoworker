@@ -32,11 +32,13 @@ import { logger } from "@/lib/logger";
  * (`agent_tool_settings`) per call.
  *
  * Agent attribution: Rowboat's webhook payload carries the project + tool
- * but NOT which agent invoked it, so each tool maps to the surface that
- * owns its toggle — customer-memory tools to the texting coworker (`sms`),
- * `send_sms` to the dashboard coworker. The voice path never crosses this
- * endpoint (the bridge posts /api/voice/tools/* directly), so the `voice`
- * toggles stay independent.
+ * but NOT which agent invoked it, so the workflow gives each surface its
+ * own tool names — the texting coworker declares `customer_*` and the
+ * dashboard coworker declares `dashboard_customer_*` + `send_sms`. That
+ * keeps the Settings toggles per-surface AND records customer interactions
+ * under the right channel. The voice path never crosses this endpoint (the
+ * bridge posts /api/voice/tools/* directly), so the `voice` toggles stay
+ * independent.
  *
  * Responses are HTTP 200 even for failures (`{ ok:false, detail }`):
  * Rowboat treats non-2xx as a thrown error that can wedge the turn, while
@@ -72,16 +74,42 @@ const sendSmsArgsSchema = z.object({
 
 type ToolResult = { ok: boolean; detail?: string; data?: unknown };
 
-/** toolName → the Settings → Coworker tools toggle that gates it. */
+/**
+ * toolName → the Settings → Coworker tools toggle that gates it, plus the
+ * channel recorded on customer interactions and the stamp on pinned notes.
+ * The `dashboard_`-prefixed names are the dashboard coworker's declarations
+ * of the same underlying tools (see deploy-client.sh workflow seed).
+ */
+const CUSTOMER_TOOL_SURFACES: Record<
+  string,
+  { agentKey: AgentKey; channel: "sms" | "dashboard"; stamp: string }
+> = {
+  customer_lookup_by_phone: { agentKey: "sms", channel: "sms", stamp: "text" },
+  customer_set_display_name: { agentKey: "sms", channel: "sms", stamp: "text" },
+  customer_append_pinned_note: { agentKey: "sms", channel: "sms", stamp: "text" },
+  dashboard_customer_lookup_by_phone: { agentKey: "dashboard", channel: "dashboard", stamp: "dashboard" },
+  dashboard_customer_set_display_name: { agentKey: "dashboard", channel: "dashboard", stamp: "dashboard" },
+  dashboard_customer_append_pinned_note: { agentKey: "dashboard", channel: "dashboard", stamp: "dashboard" }
+};
+
+/** Strips the surface prefix: dashboard_customer_lookup_by_phone → customer_lookup_by_phone. */
+function baseToolKey(name: string): string {
+  return name.startsWith("dashboard_") ? name.slice("dashboard_".length) : name;
+}
+
 const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }> = {
-  customer_lookup_by_phone: { agentKey: "sms", toolKey: "customer_lookup_by_phone" },
-  customer_set_display_name: { agentKey: "sms", toolKey: "customer_set_display_name" },
-  customer_append_pinned_note: { agentKey: "sms", toolKey: "customer_append_pinned_note" },
-  send_sms: { agentKey: "dashboard", toolKey: "send_sms" }
+  send_sms: { agentKey: "dashboard", toolKey: "send_sms" },
+  ...Object.fromEntries(
+    Object.entries(CUSTOMER_TOOL_SURFACES).map(([name, surface]) => [
+      name,
+      { agentKey: surface.agentKey, toolKey: baseToolKey(name) }
+    ])
+  )
 };
 
 async function dispatch(businessId: string, name: string, args: unknown): Promise<ToolResult> {
-  switch (name) {
+  const surface = CUSTOMER_TOOL_SURFACES[name];
+  switch (baseToolKey(name)) {
     case "customer_lookup_by_phone": {
       const parsed = lookupArgsSchema.safeParse(args);
       if (!parsed.success) {
@@ -96,7 +124,7 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
       }
       const displayName = parsed.data.displayName.trim();
       if (!displayName) return { ok: false, detail: "invalid_args:displayName empty" };
-      return setCustomerDisplayName(businessId, parsed.data.phone, displayName, "sms");
+      return setCustomerDisplayName(businessId, parsed.data.phone, displayName, surface.channel);
     }
     case "customer_append_pinned_note": {
       const parsed = pinNoteArgsSchema.safeParse(args);
@@ -105,9 +133,13 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
       }
       const note = parsed.data.note.trim();
       if (!note) return { ok: false, detail: "invalid_args:note empty" };
-      // Stamp "via chat": this path serves both the texting and dashboard
-      // coworkers and the payload cannot distinguish them.
-      return appendCustomerPinnedNote(businessId, parsed.data.phone, note, "sms", "chat");
+      return appendCustomerPinnedNote(
+        businessId,
+        parsed.data.phone,
+        note,
+        surface.channel,
+        surface.stamp
+      );
     }
     case "send_sms": {
       const parsed = sendSmsArgsSchema.safeParse(args);
@@ -127,6 +159,7 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
         return { ok: false, detail: isQuota ? "sms_quota_blocked" : "sms_send_failed" };
       }
     }
+    /* v8 ignore next 3 -- unreachable: TOOL_GATES allowlists every name before dispatch. */
     default:
       return { ok: false, detail: "unknown_tool" };
   }
@@ -169,18 +202,21 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, detail: "invalid_tool_call" });
   }
 
+  // TOOL_GATES doubles as the allowlist: every dispatchable name has a
+  // toggle, and anything else is rejected before reaching a handler.
   const gate = TOOL_GATES[name];
-  if (gate) {
-    const enabled = await isAgentToolEnabled(businessId, gate.agentKey, gate.toolKey);
-    if (!enabled) {
-      logger.info("rowboat/tool-call: tool disabled", { businessId, tool: name });
-      return NextResponse.json({
-        ok: false,
-        detail: "tool_disabled",
-        message:
-          "The owner turned this tool off under Settings → Coworker tools. Tell them plainly instead of pretending it worked."
-      });
-    }
+  if (!gate) {
+    return NextResponse.json({ ok: false, detail: "unknown_tool" });
+  }
+  const enabled = await isAgentToolEnabled(businessId, gate.agentKey, gate.toolKey);
+  if (!enabled) {
+    logger.info("rowboat/tool-call: tool disabled", { businessId, tool: name });
+    return NextResponse.json({
+      ok: false,
+      detail: "tool_disabled",
+      message:
+        "The owner turned this tool off under Settings → Coworker tools. Tell them plainly instead of pretending it worked."
+    });
   }
 
   try {

@@ -27,7 +27,7 @@ export type CustomerToolResult = {
   data?: unknown;
 };
 
-export type CustomerToolChannel = "voice" | "sms";
+export type CustomerToolChannel = "voice" | "sms" | "dashboard";
 
 export const E164_RE = /^\+[1-9]\d{6,15}$/;
 

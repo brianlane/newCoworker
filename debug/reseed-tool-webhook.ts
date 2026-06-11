@@ -12,6 +12,10 @@
  *                          payload has no caller context)
  *   - send_sms           ← new dashboard-chat tool, declared + added to
  *                          OwnerCoworker / OwnerCoworkerLocal
+ *   - dashboard_customer_* twins ← dashboard-surface declarations of the
+ *                          customer tools (separate toggle, honest
+ *                          "dashboard" interaction channel); Owner agents
+ *                          are repointed from customer_* to these
  *
  * Surgical Mongo patch over SSH — no container churn, no .env regeneration
  * (mirrors debug/reseed-sms-workflow.ts). Idempotent: re-running converges
@@ -45,23 +49,70 @@ DC="docker compose -f /opt/rowboat/docker-compose.yml"
 
 printf 'const WEBHOOK=%s;\\nconst SECRET=%s;\\n' "\\"\$WEBHOOK\\"" "\\"\$TOK\\"" > /tmp/reseed-webhook.js
 cat >> /tmp/reseed-webhook.js <<'JS_EOF'
-var SEND_SMS_TOOL = {
-  name: "send_sms",
-  description: "Send a text message from the business number to any phone number. Use ONLY when the owner explicitly asks in dashboard chat for a text to be sent. Never invent recipients.",
-  isWebhook: true,
-  parameters: {
-    type: "object",
-    properties: {
-      toE164: { type: "string", description: "Recipient phone in E.164, e.g. +15551234567." },
-      body: { type: "string", description: "Plain-text message body, at most 1600 characters." }
-    },
-    required: ["toE164", "body"]
+var NEW_TOOLS = [
+  {
+    name: "send_sms",
+    description: "Send a text message from the business number to any phone number. Use ONLY when the owner explicitly asks in dashboard chat for a text to be sent. Never invent recipients.",
+    isWebhook: true,
+    parameters: {
+      type: "object",
+      properties: {
+        toE164: { type: "string", description: "Recipient phone in E.164, e.g. +15551234567." },
+        body: { type: "string", description: "Plain-text message body, at most 1600 characters." }
+      },
+      required: ["toE164", "body"]
+    }
+  },
+  {
+    name: "dashboard_customer_lookup_by_phone",
+    description: "Look up the cross-channel customer profile (display name, rolling summary, last channel/date, total interaction count) for a customer phone number the owner asks about.",
+    isWebhook: true,
+    parameters: {
+      type: "object",
+      properties: {
+        phone: { type: "string", description: "E.164 phone to look up, e.g. +15551234567." }
+      },
+      required: ["phone"]
+    }
+  },
+  {
+    name: "dashboard_customer_set_display_name",
+    description: "Persist a customer name on their profile when the owner states it in dashboard chat. Will not overwrite a name the owner already set from the customers page.",
+    isWebhook: true,
+    parameters: {
+      type: "object",
+      properties: {
+        displayName: { type: "string", description: "The customer name. Will be normalized server-side." },
+        phone: { type: "string", description: "E.164 phone to attribute the name to." }
+      },
+      required: ["displayName", "phone"]
+    }
+  },
+  {
+    name: "dashboard_customer_append_pinned_note",
+    description: "Append a permanent fact to a customer pinned notes when the owner states it in dashboard chat. The note survives every future summary. Use sparingly.",
+    isWebhook: true,
+    parameters: {
+      type: "object",
+      properties: {
+        note: { type: "string", description: "The fact to pin, in the owner words. Keep concise." },
+        phone: { type: "string", description: "E.164 phone to attribute the note to." }
+      },
+      required: ["note", "phone"]
+    }
   }
-};
+];
 var PHONE_REQUIRED = {
   customer_lookup_by_phone: ["phone"],
   customer_set_display_name: ["displayName", "phone"],
   customer_append_pinned_note: ["note", "phone"]
+};
+// Owner agents are repointed onto the dashboard-surface twins so the
+// dispatcher can attribute calls (separate toggle + honest channel).
+var OWNER_TOOL_RENAMES = {
+  customer_lookup_by_phone: "dashboard_customer_lookup_by_phone",
+  customer_set_display_name: "dashboard_customer_set_display_name",
+  customer_append_pinned_note: "dashboard_customer_append_pinned_note"
 };
 function patch(wf) {
   if (!wf) return false;
@@ -84,15 +135,20 @@ function patch(wf) {
         }
       }
     });
-    if (!wf.tools.some(function (t) { return t.name === "send_sms"; })) {
-      wf.tools.push(SEND_SMS_TOOL);
-      changed = true;
-    }
+    NEW_TOOLS.forEach(function (def) {
+      if (!wf.tools.some(function (t) { return t.name === def.name; })) {
+        wf.tools.push(def);
+        changed = true;
+      }
+    });
   }
   if (Array.isArray(wf.agents)) {
     wf.agents.forEach(function (a) {
       if (a.name === "OwnerCoworker" || a.name === "OwnerCoworkerLocal") {
-        a.tools = a.tools || [];
+        a.tools = (a.tools || []).map(function (name) {
+          if (OWNER_TOOL_RENAMES[name]) { changed = true; return OWNER_TOOL_RENAMES[name]; }
+          return name;
+        });
         if (a.tools.indexOf("send_sms") === -1) { a.tools.push("send_sms"); changed = true; }
       }
     });

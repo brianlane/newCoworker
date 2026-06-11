@@ -457,10 +457,21 @@ serve(async (req: Request) => {
       .eq("business_id", job.business_id)
       .eq("customer_e164", fromE164)
       .maybeSingle();
-    const customerPreamble =
+    const memoryPreamble =
       memoryRow == null
         ? null
         : buildCustomerPreambleForEdge(memoryRow as EdgeCustomerMemoryRow);
+    // The texter's E.164 is ALWAYS stated, even on first contact with no
+    // memory row: the Rowboat tool webhook (/api/rowboat/tool-call) has no
+    // caller context, so the customer tools require an explicit `phone`
+    // argument — without this line the model has nothing to pass and every
+    // tool call fails validation.
+    const phoneLine =
+      `Current texter phone: ${fromE164}. When calling customer tools ` +
+      `(customer_lookup_by_phone, customer_set_display_name, ` +
+      `customer_append_pinned_note), pass this exact value as the phone ` +
+      `argument unless the texter explicitly refers to a different number.`;
+    const customerPreamble = memoryPreamble ? `${phoneLine}\n\n${memoryPreamble}` : phoneLine;
 
     let convId: string | undefined;
     let reply = (job.rowboat_reply_cached ?? "").trim();
