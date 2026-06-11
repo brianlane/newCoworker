@@ -200,6 +200,46 @@ export async function deleteAiFlow(
   if (error) throw new Error(`deleteAiFlow: ${error.message}`);
 }
 
+export type EnqueueAiFlowRunInput = {
+  businessId: string;
+  flowId: string;
+  /** Becomes the run's `context.trigger` (what {{trigger.x}} renders from). */
+  trigger: Record<string, unknown>;
+  /** Exactly-once key per (flow, dedupeKey); null skips deduplication. */
+  dedupeKey?: string | null;
+};
+
+/**
+ * Insert a queued run for the worker to claim — the Node-side counterpart of
+ * the Telnyx webhook's enqueue (manual "Run now", inbound-email triggers).
+ * Returns the row, or null when `dedupeKey` was already enqueued for this
+ * flow (unique-violation 23505 — the benign "another poller tick got here
+ * first" outcome).
+ */
+export async function enqueueAiFlowRun(
+  input: EnqueueAiFlowRunInput,
+  client?: SupabaseClient
+): Promise<AiFlowRunRow | null> {
+  const db = await resolveDb(client);
+  const { data, error } = await db
+    .from("ai_flow_runs")
+    .insert({
+      flow_id: input.flowId,
+      business_id: input.businessId,
+      status: "queued",
+      context: { trigger: input.trigger },
+      current_step: 0,
+      dedupe_key: input.dedupeKey ?? null
+    })
+    .select(RUN_COLS)
+    .single();
+  if (error) {
+    if ((error as { code?: string }).code === "23505") return null;
+    throw new Error(`enqueueAiFlowRun: ${error.message}`);
+  }
+  return data as AiFlowRunRow;
+}
+
 export type ListRunsOptions = {
   flowId?: string;
   status?: AiFlowRunStatus;

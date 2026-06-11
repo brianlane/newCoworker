@@ -4,6 +4,7 @@ import {
   createAiFlow,
   decideAiFlowApproval,
   deleteAiFlow,
+  enqueueAiFlowRun,
   getAiFlow,
   getAiFlowRun,
   listAiFlowRunSteps,
@@ -248,6 +249,50 @@ describe("deleteAiFlow", () => {
     const { db } = makeDb({ array: null, error: { message: "x" } });
      
     await expect(deleteAiFlow("biz-1", "flow-1", db as any)).rejects.toThrow("deleteAiFlow: x");
+  });
+});
+
+describe("enqueueAiFlowRun", () => {
+  const input = {
+    businessId: "biz-1",
+    flowId: "flow-1",
+    trigger: { channel: "manual", windowText: "", url: null, from: "owner@x.com" },
+    dedupeKey: "manual:abc"
+  };
+
+  it("inserts a queued run and returns the row", async () => {
+    const { db, builder } = makeDb({ single: RUN_ROW });
+    expect(await enqueueAiFlowRun(input, db as never)).toEqual(RUN_ROW);
+    expect(builder.insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        flow_id: "flow-1",
+        business_id: "biz-1",
+        status: "queued",
+        context: { trigger: input.trigger },
+        current_step: 0,
+        dedupe_key: "manual:abc"
+      })
+    );
+  });
+
+  it("defaults a missing dedupeKey to null", async () => {
+    const { db, builder } = makeDb({ single: RUN_ROW });
+    await enqueueAiFlowRun({ ...input, dedupeKey: undefined }, db as never);
+    expect(builder.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ dedupe_key: null })
+    );
+  });
+
+  it("returns null on a dedupe collision (23505)", async () => {
+    const { db } = makeDb({ singleError: { message: "dup", code: "23505" } as never });
+    expect(await enqueueAiFlowRun(input, db as never)).toBeNull();
+  });
+
+  it("throws on any other insert error", async () => {
+    const { db } = makeDb({ singleError: { message: "boom" } });
+    await expect(enqueueAiFlowRun(input, db as never)).rejects.toThrow(
+      "enqueueAiFlowRun: boom"
+    );
   });
 });
 

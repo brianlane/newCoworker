@@ -54,6 +54,7 @@ import {
   offerRespondByMs,
   smsQuietDecision
 } from "../_shared/ai_flows/quiet_hours.ts";
+import { scheduleDue } from "../_shared/ai_flows/schedule.ts";
 import {
   estimateChatCostMicros,
   readChatSpendMicros,
@@ -164,6 +165,11 @@ serve(async (req: Request): Promise<Response> => {
   // Re-queue route_to_team runs whose agent offer deadline lapsed so the next
   // claim escalates them to the following agent (status-driven, like reclaim).
   await supabase.rpc("escalate_overdue_agent_offers");
+
+  // Non-SMS trigger sources, both failure-isolated so a bad schedule or a
+  // mailbox outage never stalls run processing below.
+  await enqueueDueScheduledRuns(supabase);
+  await kickEmailTriggerPoll();
 
   const { data: claimed, error: claimErr } = await supabase.rpc("claim_ai_flow_runs", {
     p_limit: CLAIM_LIMIT
@@ -1865,6 +1871,109 @@ async function handleRunThrow(supabase: Supabase, run: RunRow, e: unknown): Prom
       max_retries: MAX_ATTEMPTS
     }
   });
+}
+
+// --- non-SMS trigger sources ---------------------------------------------------
+
+/**
+ * Schedule sweep: enqueue a run for every enabled schedule-triggered flow that
+ * is due this tick. Exactly-once per occurrence via dedupe_key (the unique
+ * (flow_id, dedupe_key) index turns repeat ticks inside the due window into
+ * benign 23505s). Never throws — a bad flow just logs and is skipped.
+ */
+async function enqueueDueScheduledRuns(supabase: Supabase): Promise<void> {
+  try {
+    const { data, error } = await supabase
+      .from("ai_flows")
+      .select("id, business_id, definition")
+      .eq("enabled", true)
+      .eq("definition->trigger->>channel", "schedule")
+      .limit(200);
+    if (error) {
+      console.error("schedule sweep list", error);
+      return;
+    }
+    const nowMs = Date.now();
+    const rows = (data ?? []) as { id: string; business_id: string; definition: unknown }[];
+    for (const row of rows) {
+      if (!isExecutableDefinition(row.definition)) continue;
+      const trig = row.definition.trigger;
+      if (trig.channel !== "schedule") continue;
+      const due = scheduleDue(nowMs, trig);
+      if (!due) continue;
+      const { error: insErr } = await supabase.from("ai_flow_runs").insert({
+        flow_id: row.id,
+        business_id: row.business_id,
+        status: "queued",
+        context: {
+          trigger: {
+            channel: "schedule",
+            scheduled_for: due.scheduledForIso,
+            url: null,
+            windowText: "",
+            from: ""
+          }
+        },
+        current_step: 0,
+        dedupe_key: `sched:${due.key}`
+      });
+      // 23505 = this occurrence is already enqueued (earlier tick) — expected.
+      if (insErr && (insErr as { code?: string }).code !== "23505") {
+        console.error("schedule enqueue", insErr);
+        continue;
+      }
+      if (!insErr) {
+        await telemetryRecord(supabase, "ai_flow_run_enqueued_schedule", {
+          business_id: row.business_id,
+          flow_id: row.id,
+          scheduled_for: due.scheduledForIso
+        });
+        await systemLog(supabase, {
+          businessId: row.business_id,
+          source: "aiflow",
+          level: "info",
+          event: "ai_flow_run_enqueued_schedule",
+          message: `Scheduled run enqueued (${due.scheduledForIso})`,
+          payload: { flow_id: row.id, dedupe_key: `sched:${due.key}` }
+        });
+      }
+    }
+  } catch (e) {
+    console.error("enqueueDueScheduledRuns", e);
+  }
+}
+
+/**
+ * Email triggers: the mailbox polling needs the app's Nango credentials, so
+ * the actual work lives in the Next.js /api/internal/aiflow-email-poll route
+ * (cron-secret authed, same contract as this worker's own auth); this just
+ * kicks it once per tick. The route is a cheap no-op when no enabled flow has
+ * an email trigger. Failures only log — mailbox trouble must never stall SMS
+ * or scheduled runs.
+ */
+async function kickEmailTriggerPoll(): Promise<void> {
+  const base = Deno.env.get("AIFLOW_PLATFORM_URL") ?? "";
+  const secret = Deno.env.get("INTERNAL_CRON_SECRET") ?? "";
+  if (!base || !secret) return;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${base.replace(/\/$/, "")}/api/internal/aiflow-email-poll`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" },
+      body: "{}",
+      signal: ctl.signal
+    });
+    if (!res.ok) {
+      console.error("aiflow-email-poll", res.status, (await res.text()).slice(0, 200));
+    } else {
+      await res.body?.cancel();
+    }
+  } catch (e) {
+    console.error("kickEmailTriggerPoll", e);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // --- misc helpers ------------------------------------------------------------

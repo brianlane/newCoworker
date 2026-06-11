@@ -88,11 +88,69 @@ const conditionSchema = z.discriminatedUnion("type", [
   })
 ]);
 
-const triggerSchema = z.object({
+/** 24h wall-clock "HH:MM" (quiet-hour boundaries, schedule times). */
+const hhmm = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):([0-5]\d)$/, 'must be a 24h time like "21:00"');
+
+/** IANA zone name; validity is enforced at runtime (helpers fail open). */
+const timezone = z.string().min(1).max(60);
+
+const smsTriggerSchema = z.object({
   channel: z.literal("sms"),
   correlationWindowMinutes: z.number().int().min(0).max(1440).optional(),
   conditions: z.array(conditionSchema).max(20)
 });
+
+/** Manual-only: never starts automatically, only via the "Run now" button. */
+const manualTriggerSchema = z.object({ channel: z.literal("manual") });
+
+/**
+ * Clock trigger. Exactly one mode: daily (`time` + `timezone`, optional
+ * `daysOfWeek` 0=Sun..6=Sat) or interval (`everyMinutes` >= 15). The worker's
+ * cron sweep enqueues each occurrence exactly once (dedupe_key).
+ */
+const scheduleTriggerSchema = z
+  .object({
+    channel: z.literal("schedule"),
+    timezone: timezone.optional(),
+    time: hhmm.optional(),
+    daysOfWeek: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional(),
+    everyMinutes: z.number().int().min(15).max(10080).optional()
+  })
+  .superRefine((t, ctx) => {
+    const interval = t.everyMinutes !== undefined;
+    const dailyFields = t.time !== undefined || t.timezone !== undefined || t.daysOfWeek !== undefined;
+    if (interval && dailyFields) {
+      ctx.addIssue({
+        code: "custom",
+        message: "use either a daily time or everyMinutes, not both"
+      });
+    } else if (!interval && (t.time === undefined || t.timezone === undefined)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "daily mode needs both time and timezone (or set everyMinutes)"
+      });
+    }
+  });
+
+/**
+ * Inbound-email trigger: poll the owner's connected mailbox (the same Nango
+ * connections the send_email "From" dropdown offers) and match conditions
+ * over subject + body (`from_matches` tests the sender address).
+ */
+const emailTriggerSchema = z.object({
+  channel: z.literal("email"),
+  connectionId: z.string().uuid(),
+  conditions: z.array(conditionSchema).max(20)
+});
+
+const triggerSchema = z.discriminatedUnion("channel", [
+  smsTriggerSchema,
+  manualTriggerSchema,
+  scheduleTriggerSchema,
+  emailTriggerSchema
+]);
 
 const extractFieldSchema = z.object({
   name: varName,
@@ -117,14 +175,6 @@ const browseAuthSchema = z.object({
 });
 
 const stepId = z.string().min(1).max(60);
-
-/** 24h wall-clock "HH:MM" (quiet-hour boundaries). */
-const hhmm = z
-  .string()
-  .regex(/^([01]\d|2[0-3]):([0-5]\d)$/, 'must be a 24h time like "21:00"');
-
-/** IANA zone name; validity is enforced at runtime (helpers fail open). */
-const timezone = z.string().min(1).max(60);
 
 /**
  * Lead-contact quiet hours on a send_sms step: never text inside
@@ -261,9 +311,13 @@ export const aiFlowDefinitionSchema = z.object({
 });
 
 export type TriggerCondition = z.infer<typeof conditionSchema>;
+export type FlowTrigger = z.infer<typeof triggerSchema>;
 export type FlowStep = z.infer<typeof stepSchema>;
 export type StepCondition = z.infer<typeof whenSchema>;
 export type AiFlowDefinition = z.infer<typeof aiFlowDefinitionSchema>;
+
+/** The trigger channels the builder offers. */
+export const TRIGGER_CHANNELS = ["sms", "manual", "schedule", "email"] as const;
 
 export class AiFlowValidationError extends Error {
   constructor(
@@ -463,9 +517,31 @@ export function parseAiFlowDefinition(input: unknown): AiFlowDefinition {
 
 /** A short, human summary of a definition for list/run UIs. */
 export function summarizeDefinition(def: AiFlowDefinition): string {
-  const condCount = def.trigger.conditions.length;
-  const trigPart =
-    condCount === 0 ? "any inbound SMS" : `SMS matching ${condCount} condition(s)`;
+  const t = def.trigger;
+  let trigPart: string;
+  switch (t.channel) {
+    case "sms":
+      trigPart =
+        t.conditions.length === 0
+          ? "When any inbound SMS"
+          : `When SMS matching ${t.conditions.length} condition(s)`;
+      break;
+    case "manual":
+      trigPart = "On demand";
+      break;
+    case "schedule":
+      trigPart =
+        t.everyMinutes !== undefined
+          ? `Every ${t.everyMinutes} min`
+          : `Daily at ${t.time} (${t.timezone})`;
+      break;
+    case "email":
+      trigPart =
+        t.conditions.length === 0
+          ? "When any inbound email"
+          : `When email matching ${t.conditions.length} condition(s)`;
+      break;
+  }
   const stepTypes = def.steps.map((s) => s.type).join(" -> ");
-  return `When ${trigPart}: ${stepTypes}`;
+  return `${trigPart}: ${stepTypes}`;
 }

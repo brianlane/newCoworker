@@ -109,6 +109,10 @@ async function evaluateAiFlows(
   for (const f of flows) {
     if (!isExecutableDefinition(f.definition)) continue;
     const def = f.definition;
+    // Only SMS-triggered flows react to an inbound text; manual / schedule /
+    // email flows are started elsewhere (Run-now route, worker cron sweep,
+    // mailbox poller).
+    if (def.trigger.channel !== "sms") continue;
     const res = evaluateSmsTrigger(def.trigger, { messages, nowMs: current.nowMs });
     if (res.matched) {
       matched.push({ id: f.id, def, url: res.url, windowText: res.windowText });

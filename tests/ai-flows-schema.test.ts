@@ -656,4 +656,145 @@ describe("summarizeDefinition", () => {
   it("summarizes a conditioned trigger with step chain", () => {
     expect(summarizeDefinition(baseDef())).toContain("SMS matching 2 condition(s)");
   });
+  it("summarizes the non-SMS channels", () => {
+    const steps: AiFlowDefinition["steps"] = [{ id: "n", type: "notify_owner", message: "hi" }];
+    expect(
+      summarizeDefinition({ version: 1, trigger: { channel: "manual" }, steps })
+    ).toBe("On demand: notify_owner");
+    expect(
+      summarizeDefinition({
+        version: 1,
+        trigger: { channel: "schedule", time: "08:30", timezone: "America/Phoenix" },
+        steps
+      })
+    ).toBe("Daily at 08:30 (America/Phoenix): notify_owner");
+    expect(
+      summarizeDefinition({
+        version: 1,
+        trigger: { channel: "schedule", everyMinutes: 60 },
+        steps
+      })
+    ).toBe("Every 60 min: notify_owner");
+    expect(
+      summarizeDefinition({
+        version: 1,
+        trigger: {
+          channel: "email",
+          connectionId: "8e7f95b0-0000-4000-8000-000000000001",
+          conditions: []
+        },
+        steps
+      })
+    ).toBe("When any inbound email: notify_owner");
+    expect(
+      summarizeDefinition({
+        version: 1,
+        trigger: {
+          channel: "email",
+          connectionId: "8e7f95b0-0000-4000-8000-000000000001",
+          conditions: [{ type: "has_url" }]
+        },
+        steps
+      })
+    ).toBe("When email matching 1 condition(s): notify_owner");
+  });
+});
+
+describe("trigger channels", () => {
+  const steps = [{ id: "n", type: "notify_owner", message: "hi" }];
+  const CONN = "8e7f95b0-0000-4000-8000-000000000001";
+
+  it("accepts a manual trigger", () => {
+    const def = parseAiFlowDefinition({ version: 1, trigger: { channel: "manual" }, steps });
+    expect(def.trigger.channel).toBe("manual");
+  });
+
+  it("accepts a daily schedule trigger (with optional daysOfWeek)", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: {
+        channel: "schedule",
+        time: "08:30",
+        timezone: "America/Phoenix",
+        daysOfWeek: [1, 2, 3, 4, 5]
+      },
+      steps
+    });
+    expect(def.trigger.channel === "schedule" && def.trigger.time).toBe("08:30");
+  });
+
+  it("accepts an interval schedule trigger", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "schedule", everyMinutes: 60 },
+      steps
+    });
+    expect(def.trigger.channel === "schedule" && def.trigger.everyMinutes).toBe(60);
+  });
+
+  it("rejects a schedule mixing daily and interval mode", () => {
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: {
+          channel: "schedule",
+          time: "08:30",
+          timezone: "America/Phoenix",
+          everyMinutes: 60
+        },
+        steps
+      })
+    ).toThrow(AiFlowValidationError);
+  });
+
+  it("rejects a half-configured daily schedule", () => {
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "schedule", time: "08:30" },
+        steps
+      })
+    ).toThrow(AiFlowValidationError);
+    expect(() =>
+      parseAiFlowDefinition({ version: 1, trigger: { channel: "schedule" }, steps })
+    ).toThrow(AiFlowValidationError);
+  });
+
+  it("rejects an everyMinutes below the floor", () => {
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "schedule", everyMinutes: 5 },
+        steps
+      })
+    ).toThrow(AiFlowValidationError);
+  });
+
+  it("accepts an email trigger and rejects one without a connection", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "email", connectionId: CONN, conditions: [{ type: "has_url" }] },
+      steps
+    });
+    expect(def.trigger.channel === "email" && def.trigger.connectionId).toBe(CONN);
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "email", conditions: [] },
+        steps
+      })
+    ).toThrow(AiFlowValidationError);
+  });
+
+  it("steps in non-SMS flows may still reference {{trigger.x}} scope keys", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "email", connectionId: CONN, conditions: [] },
+      steps: [
+        { id: "u", type: "extract_url", saveAs: "lead_url" },
+        { id: "n", type: "notify_owner", message: "from {{trigger.from}}: {{trigger.windowText}}" }
+      ]
+    });
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
 });

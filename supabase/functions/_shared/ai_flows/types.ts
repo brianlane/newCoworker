@@ -35,6 +35,55 @@ export type SmsTrigger = {
   conditions: TriggerCondition[];
 };
 
+/**
+ * Manual-only trigger: the flow never starts on its own — the owner starts it
+ * from the dashboard "Run now" button (optionally with input text that
+ * populates {{trigger.windowText}} / {{trigger.url}}). Any flow, regardless
+ * of channel, can ALSO be run manually; this channel just opts out of every
+ * automatic start.
+ */
+export type ManualTrigger = {
+  channel: "manual";
+};
+
+/**
+ * Clock trigger: the worker's cron tick enqueues a run when the schedule is
+ * due. Exactly one mode:
+ *   - daily: `time` ("HH:MM") in `timezone`, optionally limited to
+ *     `daysOfWeek` (0=Sunday..6=Saturday);
+ *   - interval: `everyMinutes` (>= 15).
+ * Exactly-once per occurrence via ai_flow_runs.dedupe_key, so a tick that
+ * fires late or twice never double-enqueues.
+ */
+export type ScheduleTrigger = {
+  channel: "schedule";
+  /** IANA zone for `time` (required in daily mode). */
+  timezone?: string;
+  /** Daily wall-clock time, 24h "HH:MM". */
+  time?: string;
+  /** Days `time` applies (0=Sun..6=Sat). Default: every day. */
+  daysOfWeek?: number[];
+  /** Interval mode: run every N minutes (>= 15). */
+  everyMinutes?: number;
+};
+
+/**
+ * Inbound-email trigger: the app polls the owner's connected mailbox
+ * (workspace_oauth_connections.id via Nango Gmail/Outlook) for recent
+ * messages and evaluates the same condition set over subject + body text
+ * (`from_matches` tests the sender address). Trigger scope: windowText =
+ * subject + body, url = first link in it, from = sender address.
+ */
+export type EmailTrigger = {
+  channel: "email";
+  /** Mailbox to watch (workspace_oauth_connections.id). */
+  connectionId: string;
+  /** AND-ed conditions; empty means "match every inbound email". */
+  conditions: TriggerCondition[];
+};
+
+export type FlowTrigger = SmsTrigger | ManualTrigger | ScheduleTrigger | EmailTrigger;
+
 export type ExtractField = {
   name: string;
   description?: string;
@@ -254,7 +303,7 @@ export type AiFlowOptions = {
 
 export type AiFlowDefinition = {
   version: typeof AI_FLOW_DEFINITION_VERSION;
-  trigger: SmsTrigger;
+  trigger: FlowTrigger;
   steps: FlowStep[];
   options?: AiFlowOptions;
 };
