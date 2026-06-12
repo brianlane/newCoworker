@@ -37,6 +37,46 @@ export function ensureStopLanguage(body: string, suffix: string = STOP_SUFFIX): 
 }
 
 /**
+ * One non-GSM character anywhere in an SMS forces UCS-2 encoding for the WHOLE
+ * message: 67 chars per segment instead of 153, and Telnyx hard-rejects
+ * anything over 10 segments (error 40302 "Message too large"). 10 × 67 = 670
+ * is therefore the longest UCS-2 message that can be sent at all.
+ */
+export const UCS2_MAX_SENDABLE_CHARS = 670;
+
+/**
+ * Longest body the worker will hand to Telnyx: just under 10 GSM segments
+ * (10 × 153 = 1530), minus headroom for the appended STOP suffix.
+ */
+export const SMS_MAX_BODY_CHARS = 1500;
+
+/**
+ * Make an outbound body safe to actually deliver.
+ *
+ * Live failure this guards against: a flow template written with smart quotes
+ * and a 😊 produced a ~1300-char intro that Telnyx rejected outright (15 UCS-2
+ * parts > the 10-part cap), so the "approved" SMS never sent. Smart
+ * punctuation is always normalized to its ASCII equivalent (same words, GSM
+ * encodable). Emoji are kept when the message is short enough to survive
+ * UCS-2 encoding (≤ 670 chars) and stripped only when keeping them would make
+ * the message unsendable.
+ */
+export function gsmSafeSmsText(text: string): string {
+  const normalized = text
+    .replace(/[\u2018\u2019\u02BC]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[\u2013\u2014]/g, "-")
+    .replace(/\u2026/g, "...")
+    .replace(/\u00A0/g, " ")
+    .replace(/[\u{1F600}\u{1F603}\u{1F604}\u{1F60A}\u{1F642}]/gu, ":-)");
+  if (!/[^\x00-\x7F]/.test(normalized)) return normalized;
+  if (normalized.length <= UCS2_MAX_SENDABLE_CHARS) return normalized;
+  // Long + still non-ASCII: dropping the remaining symbols is the only way
+  // the message can be delivered at all.
+  return normalized.replace(/[^\x00-\x7F]/gu, "");
+}
+
+/**
  * True when `toE164` has opted out of SMS for this business. Throws on a hard
  * RPC error so the worker treats it as a retryable failure rather than sending
  * to a possibly opted-out number.

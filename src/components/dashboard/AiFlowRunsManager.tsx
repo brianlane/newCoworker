@@ -68,7 +68,7 @@ export function AiFlowRunsManager({
     }
   };
 
-  const decide = async (runId: string, decision: "approve" | "deny") => {
+  const decide = async (runId: string, decision: "approve" | "skip" | "deny") => {
     setBusy(runId);
     setError(null);
     try {
@@ -154,16 +154,26 @@ export function AiFlowRunsManager({
                     Approve
                   </button>
                   <button
+                    onClick={() => decide(r.id, "skip")}
+                    disabled={busy === r.id}
+                    className="rounded-md bg-parchment/10 px-3 py-1.5 text-sm text-parchment/70 hover:bg-parchment/20 disabled:opacity-50"
+                    title="Don't run this step, but continue the rest of the workflow"
+                  >
+                    Skip step
+                  </button>
+                  <button
                     onClick={() => decide(r.id, "deny")}
                     disabled={busy === r.id}
                     className="rounded-md bg-red-500/15 px-3 py-1.5 text-sm text-red-400 hover:bg-red-500/25 disabled:opacity-50"
+                    title="Stop the whole workflow"
                   >
-                    Deny
+                    Cancel workflow
                   </button>
                 </div>
                 <p className="mt-2 text-xs text-parchment/50">
-                  You can also reply <span className="text-parchment/70">1</span> to approve or{" "}
-                  <span className="text-parchment/70">2</span> to decline by text.
+                  You can also reply by text: <span className="text-parchment/70">1</span> to
+                  approve, <span className="text-parchment/70">2</span> to skip this step, or{" "}
+                  <span className="text-parchment/70">3</span> to cancel the workflow.
                 </p>
               </Card>
             );

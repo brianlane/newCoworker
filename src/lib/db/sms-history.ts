@@ -17,6 +17,12 @@
  *   We synthesize "messages" from each row: 1 inbound + 1 outbound when a
  *   reply was generated. There is no separate `sms_messages` table; the
  *   inbound job IS the conversational unit.
+ *
+ *   `sms_outbound_log` holds worker-initiated sends (AiFlow lead intros,
+ *   team agent offers, owner notifications) that have no inbound job — the
+ *   ai-flow-worker writes one row per send. Both sources are merged here so
+ *   the Text history shows every message the coworker sent, not just replies
+ *   to inbound texts.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -63,6 +69,24 @@ export function outboundReplyFromRow(
 const SMS_JOB_SELECT =
   "id, business_id, payload, status, assistant_reply_text, rowboat_reply_cached, telnyx_outbound_message_id, last_error, created_at, updated_at";
 
+export type OutboundLogSource = "ai_flow" | "agent_offer" | "owner_notify";
+
+export type OutboundLogRow = {
+  id: string;
+  business_id: string;
+  to_e164: string;
+  from_e164: string | null;
+  body: string;
+  source: OutboundLogSource;
+  run_id: string | null;
+  flow_id: string | null;
+  telnyx_message_id: string | null;
+  created_at: string;
+};
+
+const OUTBOUND_LOG_SELECT =
+  "id, business_id, to_e164, from_e164, body, source, run_id, flow_id, telnyx_message_id, created_at";
+
 export type SmsMessageDirection = "inbound" | "outbound";
 
 export type SmsMessage = {
@@ -75,6 +99,8 @@ export type SmsMessage = {
   timestamp: string;
   status: SmsJobRow["status"];
   lastError: string | null;
+  /** Set for worker-initiated sends from `sms_outbound_log` (AiFlow etc.). */
+  source?: OutboundLogSource;
 };
 
 export type SmsConversation = {
@@ -140,10 +166,11 @@ export function customerE164FromPayload(
 }
 
 /**
- * Group the most-recent N inbound jobs into per-customer conversations.
- * Sorted by most-recent activity first. Rows without a parseable customer
- * number are skipped (typically Telnyx delivery receipts that landed in
- * the wrong table — defence against schema drift).
+ * Group the most-recent N inbound jobs PLUS worker-initiated outbound sends
+ * into per-customer conversations. Sorted by most-recent activity first.
+ * Rows without a parseable customer number are skipped (typically Telnyx
+ * delivery receipts that landed in the wrong table — defence against schema
+ * drift).
  */
 export async function listConversationsForBusiness(
   businessId: string,
@@ -164,7 +191,17 @@ export async function listConversationsForBusiness(
   if (error) {
     throw new Error(`listConversationsForBusiness: ${error.message}`);
   }
+  const { data: outboundData, error: outboundError } = await db
+    .from("sms_outbound_log")
+    .select(OUTBOUND_LOG_SELECT)
+    .eq("business_id", businessId)
+    .order("created_at", { ascending: false })
+    .limit(Math.min(limit * 4, MAX_LIST_LIMIT * 4));
+  if (outboundError) {
+    throw new Error(`listConversationsForBusiness: ${outboundError.message}`);
+  }
   const rows = (data as SmsJobRow[] | null) ?? [];
+  const outboundRows = (outboundData as OutboundLogRow[] | null) ?? [];
   const byCustomer = new Map<string, SmsConversation>();
   for (const row of rows) {
     const cust = customerE164FromPayload(row.payload);
@@ -209,6 +246,29 @@ export async function listConversationsForBusiness(
       existing.messageCount += expandedThisRow;
     }
   }
+  // Fold worker-initiated sends in: each log row is one outbound message.
+  // Unlike the inbound loop above (which relies on newest-first iteration to
+  // set the preview), these may interleave with inbound rows in time, so the
+  // preview/timestamp only advance when the log row is strictly newer.
+  for (const row of outboundRows) {
+    const existing = byCustomer.get(row.to_e164);
+    if (!existing) {
+      byCustomer.set(row.to_e164, {
+        customerE164: row.to_e164,
+        lastMessageAt: row.created_at,
+        lastMessage: row.body,
+        lastStatus: "done",
+        messageCount: 1
+      });
+      continue;
+    }
+    existing.messageCount += 1;
+    if (row.created_at > existing.lastMessageAt) {
+      existing.lastMessageAt = row.created_at;
+      existing.lastMessage = row.body;
+      existing.lastStatus = "done";
+    }
+  }
   return Array.from(byCustomer.values())
     .sort((a, b) => (a.lastMessageAt < b.lastMessageAt ? 1 : -1))
     .slice(0, limit);
@@ -217,7 +277,8 @@ export async function listConversationsForBusiness(
 /**
  * List every message exchanged with `customerE164`, expanded to one
  * record per direction. Inbound first, then outbound (when reply exists),
- * sorted oldest → newest so the UI can render the thread top-down.
+ * merged with worker-initiated sends from `sms_outbound_log`, sorted
+ * oldest → newest so the UI can render the thread top-down.
  */
 export async function listMessagesForCustomer(
   businessId: string,
@@ -243,7 +304,19 @@ export async function listMessagesForCustomer(
   if (error) {
     throw new Error(`listMessagesForCustomer: ${error.message}`);
   }
+  // Worker-initiated sends CAN be filtered in SQL (to_e164 is a real column).
+  const { data: outboundData, error: outboundError } = await db
+    .from("sms_outbound_log")
+    .select(OUTBOUND_LOG_SELECT)
+    .eq("business_id", businessId)
+    .eq("to_e164", customerE164)
+    .order("created_at", { ascending: false })
+    .limit(Math.min(limit, MAX_LIST_LIMIT));
+  if (outboundError) {
+    throw new Error(`listMessagesForCustomer: ${outboundError.message}`);
+  }
   const rows = (data as SmsJobRow[] | null) ?? [];
+  const outboundRows = (outboundData as OutboundLogRow[] | null) ?? [];
   // Reverse to chronological order BEFORE expansion so the inbound/
   // outbound pairs land in the messages array in the correct order
   // (inbound at index N, outbound at N+1).
@@ -279,6 +352,23 @@ export async function listMessagesForCustomer(
       });
     }
   }
+  for (const row of outboundRows) {
+    messages.push({
+      id: `${row.id}:flow-outbound`,
+      jobId: row.id,
+      direction: "outbound",
+      content: row.body,
+      timestamp: row.created_at,
+      status: "done",
+      lastError: null,
+      source: row.source
+    });
+  }
+  // Worker sends interleave with the conversation in time, so re-sort the
+  // merged list chronologically. The expansion above pushes an inbound/
+  // outbound pair with identical-or-increasing timestamps, so a stable sort
+  // preserves their order.
+  messages.sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
   // Keep the most recent `limit` expanded messages (slice from the END
   // of the chronological array) so we never drop a reply paired with the
   // row that hit the SQL limit.

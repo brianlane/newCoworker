@@ -5,7 +5,11 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import type { NotificationRow } from "@/lib/db/notifications";
-import { notificationDetailFields, notificationLink } from "@/lib/notifications/display";
+import {
+  notificationDetailFields,
+  notificationEventLinks,
+  notificationLink
+} from "@/lib/notifications/display";
 
 type Props = {
   businessId: string;
@@ -137,6 +141,7 @@ export function NotificationList({ businessId, initial }: Props) {
           const isExpanded = expandedId === n.id;
           const link = notificationLink(n);
           const detailFields = notificationDetailFields(n);
+          const eventLinks = notificationEventLinks(n);
           return (
             <li
               key={n.id}
@@ -181,7 +186,7 @@ export function NotificationList({ businessId, initial }: Props) {
                   data-testid="notification-detail"
                   className="mt-3 rounded-lg border border-parchment/10 bg-deep-ink/40 px-4 py-3 space-y-2"
                 >
-                  {detailFields.length === 0 && !link && (
+                  {detailFields.length === 0 && eventLinks.length === 0 && !link && (
                     <p className="text-xs text-parchment/40">No additional detail recorded.</p>
                   )}
                   {detailFields.map((f) => (
@@ -190,6 +195,28 @@ export function NotificationList({ businessId, initial }: Props) {
                       {f.value}
                     </p>
                   ))}
+                  {eventLinks.length > 0 && (
+                    <div data-testid="notification-events" className="pt-1">
+                      <p className="text-xs font-medium text-parchment/50">Events</p>
+                      <ul className="mt-1 space-y-1">
+                        {eventLinks.map((ev, i) => (
+                          <li key={`${ev.href}-${i}`} className="text-xs">
+                            <Link
+                              href={ev.href}
+                              className="text-signal-teal hover:underline"
+                            >
+                              {ev.label}
+                            </Link>
+                            {ev.at && (
+                              <span className="ml-2 text-parchment/35">
+                                {new Date(ev.at).toLocaleString()}
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                   {link && (
                     <Link
                       href={link.href}

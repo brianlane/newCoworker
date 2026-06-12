@@ -50,7 +50,12 @@ import {
   parseActionResponse,
   parseRenderResponse
 } from "../_shared/ai_flows/browse.ts";
-import { ensureStopLanguage, isRecipientOptedOut } from "../_shared/ai_flows/compliance.ts";
+import {
+  SMS_MAX_BODY_CHARS,
+  ensureStopLanguage,
+  gsmSafeSmsText,
+  isRecipientOptedOut
+} from "../_shared/ai_flows/compliance.ts";
 import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
 import {
   formatInTimeZone,
@@ -331,11 +336,12 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         context: buildContext(scope, approval, routing),
         claimed_at: null
       });
-      // Offer the owner an SMS approval path (reply 1 = approve, 2 = decline)
-      // alongside the dashboard buttons. Best-effort + idempotent: a send failure
-      // must not unwind the parked state (that would re-run the gate on retry),
-      // and the idempotency key dedupes resends if the run is ever re-queued and
-      // re-pauses at this same gate.
+      // Offer the owner an SMS approval path (reply 1 = approve, 2 = skip just
+      // this step, 3 = cancel the whole workflow) alongside the dashboard
+      // buttons. Best-effort + idempotent: a send failure must not unwind the
+      // parked state (that would re-run the gate on retry), and the idempotency
+      // key dedupes resends if the run is ever re-queued and re-pauses at this
+      // same gate.
       const approvalPrompt =
         typeof approval.prompt === "string" && approval.prompt.trim()
           ? approval.prompt
@@ -344,7 +350,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         await sendOwnerSms(
           supabase,
           run,
-          `${approvalPrompt}\n\nReply 1 to approve or 2 to decline.`,
+          `${approvalPrompt}\n\nReply 1 to approve, 2 to skip this step, or 3 to cancel the workflow.`,
           `aiflow-approval:${run.id}:${index}`
         );
       } catch (e) {
@@ -460,6 +466,14 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     }
     await recordStep(supabase, run, index, step, outcome.skipped ? "skipped" : "done", outcome.result);
     index += 1;
+    if (outcome.skipNextStep && index < def.steps.length) {
+      // Approval gate decided "skip": the step the gate guards (the one
+      // directly after it) is recorded as skipped without running.
+      await recordStep(supabase, run, index, def.steps[index], "skipped", {
+        skipped: "approval_skipped"
+      });
+      index += 1;
+    }
     await updateRun(supabase, run.id, {
       current_step: index,
       context: buildContext(scope, approval, routing)
@@ -488,7 +502,10 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
 }
 
 type StepOutcome =
-  | { kind: "ok"; result?: Record<string, unknown>; skipped?: boolean }
+  // skipNextStep: set by an approval gate decided "skip" — the step directly
+  // after the gate (the action it guards) is recorded as skipped and never
+  // runs, while the rest of the flow continues.
+  | { kind: "ok"; result?: Record<string, unknown>; skipped?: boolean; skipNextStep?: boolean }
   | { kind: "fail"; error: string }
   | { kind: "pause" }
   | {
@@ -550,6 +567,90 @@ async function runStep(
     case "browse_action":
       return browseActionStep(supabase, run, index, scope, action);
   }
+}
+
+/**
+ * Durably log a worker-sent SMS so it shows up in the dashboard Text history
+ * (which otherwise only sees inbound conversations). Best-effort: a logging
+ * failure must never fail a send that already happened.
+ */
+async function logOutboundSms(
+  supabase: Supabase,
+  run: RunRow,
+  args: {
+    to: string;
+    from: string | null;
+    body: string;
+    source: "ai_flow" | "agent_offer" | "owner_notify";
+    telnyxMessageId?: string | null;
+  }
+): Promise<void> {
+  const { error } = await supabase.from("sms_outbound_log").insert({
+    business_id: run.business_id,
+    to_e164: args.to,
+    from_e164: args.from,
+    body: args.body,
+    source: args.source,
+    run_id: run.id,
+    flow_id: run.flow_id,
+    telnyx_message_id: args.telnyxMessageId ?? null
+  });
+  if (error) console.error("sms_outbound_log insert", error);
+}
+
+/**
+ * Durably log a flow-sent email for the dashboard Emails page. Best-effort:
+ * a logging failure must never fail a send that already happened.
+ */
+async function logFlowEmail(
+  supabase: Supabase,
+  run: RunRow,
+  args: {
+    to: string;
+    from: string | null;
+    subject: string;
+    body: string;
+    source: "ai_flow" | "owner_mailbox";
+    providerMessageId?: string | null;
+  }
+): Promise<void> {
+  const { error } = await supabase.from("email_log").insert({
+    business_id: run.business_id,
+    direction: "outbound",
+    to_email: args.to,
+    from_email: args.from,
+    subject: args.subject,
+    body_preview: args.body.slice(0, 500),
+    source: args.source,
+    run_id: run.id,
+    flow_id: run.flow_id,
+    provider_message_id: args.providerMessageId ?? null
+  });
+  if (error) console.error("email_log insert", error);
+}
+
+/**
+ * Upsert a customer profile for a lead the flow just contacted, so every
+ * AiFlow lead shows up on the dashboard Customers page like SMS/voice
+ * customers do. Uses the same alias-aware RPC as the SMS worker. Best-effort:
+ * the contact already succeeded, so a profile failure only logs.
+ */
+async function recordLeadCustomerProfile(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  customerE164: string
+): Promise<void> {
+  const rawName = scope.vars.lead_name;
+  const displayName =
+    typeof rawName === "string" && rawName.trim().length > 0 ? rawName.trim() : null;
+  const { error } = await supabase.rpc("record_customer_interaction", {
+    p_business_id: run.business_id,
+    p_customer_e164: customerE164,
+    p_channel: "sms",
+    p_display_name: displayName
+  });
+  if (error) console.error("record_customer_interaction (aiflow lead)", error);
 }
 
 /**
@@ -1085,7 +1186,7 @@ async function sendSmsStep(
   const cfg = await messagingConfig(supabase, run.business_id);
   if (!cfg) return { kind: "fail", error: "send_sms: Telnyx messaging is not configured" };
 
-  const text = ensureStopLanguage(action.body).slice(0, 1600);
+  const text = ensureStopLanguage(gsmSafeSmsText(action.body)).slice(0, SMS_MAX_BODY_CHARS);
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
     { p_business_id: run.business_id }
@@ -1127,6 +1228,14 @@ async function sendSmsStep(
       messageId = null;
     }
     appendActionTaken(scope, `texted the lead at ${action.to}`);
+    await logOutboundSms(supabase, run, {
+      to: action.to,
+      from: cfg.from || null,
+      body: text,
+      source: "ai_flow",
+      telnyxMessageId: messageId
+    });
+    await recordLeadCustomerProfile(supabase, run, scope, action.to);
     return { kind: "ok", result: { to: action.to, messageId } };
   } catch (e) {
     await release();
@@ -1191,7 +1300,7 @@ async function deliverFlowEmail(
   action: FlowEmailArgs
 ): Promise<StepOutcome> {
   if (action.fromConnectionId) {
-    return deliverOwnerMailboxEmail(run, action);
+    return deliverOwnerMailboxEmail(supabase, run, action);
   }
   const apiKey = Deno.env.get("RESEND_API_KEY") ?? "";
   if (!apiKey) return { kind: "fail", error: "send_email: RESEND_API_KEY is not configured" };
@@ -1240,6 +1349,14 @@ async function deliverFlowEmail(
   } catch {
     emailId = null;
   }
+  await logFlowEmail(supabase, run, {
+    to: action.to,
+    from: Deno.env.get("MAILER_EMAIL") ?? null,
+    subject: action.subject,
+    body: action.body,
+    source: "ai_flow",
+    providerMessageId: emailId
+  });
   return {
     kind: "ok",
     result: { to: action.to, emailId, attached: attachment !== null }
@@ -1248,6 +1365,7 @@ async function deliverFlowEmail(
 
 /** Send via the owner's connected mailbox through the platform adapter. */
 async function deliverOwnerMailboxEmail(
+  supabase: Supabase,
   run: RunRow,
   action: FlowEmailArgs
 ): Promise<StepOutcome> {
@@ -1286,6 +1404,14 @@ async function deliverOwnerMailboxEmail(
       error: `send_email: owner-mailbox send failed (${parsed.detail ?? `http ${res.status}`})`
     };
   }
+  await logFlowEmail(supabase, run, {
+    to: action.to,
+    from: parsed.data?.provider ?? "owner mailbox",
+    subject: action.subject,
+    body: action.body,
+    source: "owner_mailbox",
+    providerMessageId: parsed.data?.messageId ?? null
+  });
   return {
     kind: "ok",
     result: {
@@ -1316,15 +1442,22 @@ async function notifyOwnerStep(
   const forward = (settingsRow as { forward_to_e164?: string | null } | null)?.forward_to_e164 ?? "";
   const cfg = await messagingConfig(supabase, run.business_id);
   if (forward && cfg) {
+    const text = `[AiFlow] ${gsmSafeSmsText(action.message)}`.slice(0, SMS_MAX_BODY_CHARS);
     const send = await telnyxSendSms({
       apiKey: cfg.apiKey,
       messagingProfileId: cfg.profile,
       fromE164: cfg.from,
       toE164: forward,
-      text: `[AiFlow] ${action.message}`.slice(0, 1600),
+      text,
       idempotencyKey: `aiflow-notify:${run.id}`
     });
     if (!send.ok) throw new Error(`notify_owner telnyx ${send.status}`);
+    await logOutboundSms(supabase, run, {
+      to: forward,
+      from: cfg.from || null,
+      body: text,
+      source: "owner_notify"
+    });
     return { kind: "ok", result: { notified: forward } };
   }
   return { kind: "ok", result: { notified: null } };
@@ -1366,6 +1499,15 @@ function approvalStep(
   if (approval.decision === "approve" && approval.consumed !== true) {
     approval.consumed = true;
     return { kind: "ok", result: { approved: true } };
+  }
+  // "Skip" (reply 2 / dashboard Skip): don't run the action this gate guards
+  // — the step immediately following the gate — but keep the rest of the
+  // workflow going (later emails, team routing, timeline updates). A full
+  // stop is "cancel" (reply 3 / dashboard Cancel), which never reaches the
+  // worker: the decide paths set the run to canceled directly.
+  if (approval.decision === "skip" && approval.consumed !== true) {
+    approval.consumed = true;
+    return { kind: "ok", result: { approved: false, skipped_gated_step: true }, skipNextStep: true };
   }
   // Stash the prompt for the dashboard approvals inbox.
   approval.prompt = action.prompt;
@@ -1718,7 +1860,7 @@ async function sendOfferSms(
 ): Promise<void> {
   const cfg = await messagingConfig(supabase, run.business_id);
   if (!cfg) throw new Error("route_to_team: Telnyx messaging is not configured");
-  const body = ensureStopLanguage(text).slice(0, 1600);
+  const body = ensureStopLanguage(gsmSafeSmsText(text)).slice(0, SMS_MAX_BODY_CHARS);
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
     { p_business_id: run.business_id }
@@ -1742,6 +1884,12 @@ async function sendOfferSms(
       idempotencyKey
     });
     if (!send.ok) throw new Error(`telnyx ${send.status}: ${send.body.slice(0, 200)}`);
+    await logOutboundSms(supabase, run, {
+      to,
+      from: cfg.from || null,
+      body,
+      source: "agent_offer"
+    });
   } catch (e) {
     const { error } = await supabase.rpc("release_sms_outbound_slot", {
       p_business_id: run.business_id,
@@ -1798,15 +1946,22 @@ async function sendOwnerSms(
     });
     return;
   }
+  const body = `[AiFlow] ${gsmSafeSmsText(text)}`.slice(0, SMS_MAX_BODY_CHARS);
   const send = await telnyxSendSms({
     apiKey: cfg.apiKey,
     messagingProfileId: cfg.profile,
     fromE164: cfg.from,
     toE164: forward,
-    text: `[AiFlow] ${text}`.slice(0, 1600),
+    text: body,
     idempotencyKey
   });
   if (!send.ok) throw new Error(`route_to_team owner sms telnyx ${send.status}`);
+  await logOutboundSms(supabase, run, {
+    to: forward,
+    from: cfg.from || null,
+    body,
+    source: "owner_notify"
+  });
 }
 
 // --- persistence helpers -----------------------------------------------------

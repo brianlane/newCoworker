@@ -297,13 +297,17 @@ export async function listAiFlowRunSteps(
   return (data ?? []) as AiFlowRunStepRow[];
 }
 
-export type ApprovalDecision = "approve" | "deny";
+export type ApprovalDecision = "approve" | "skip" | "deny";
 
 /**
- * Resolve an `awaiting_approval` run. Approve → back to `queued` so the worker
- * resumes at `current_step`; deny → `canceled`. The decision (+ optional note)
- * is merged into `context.approval` for the audit trail. Throws if the run is
- * not currently awaiting approval (already decided / wrong tenant / missing).
+ * Resolve an `awaiting_approval` run.
+ *   - approve → back to `queued`; the worker resumes at `current_step`.
+ *   - skip    → back to `queued`; the worker skips the step the gate guards
+ *               (the one directly after it) and the rest of the flow continues.
+ *   - deny    → `canceled`; the whole workflow stops.
+ * The decision (+ optional note) is merged into `context.approval` for the
+ * audit trail. Throws if the run is not currently awaiting approval (already
+ * decided / wrong tenant / missing).
  */
 export async function decideAiFlowApproval(
   args: {
@@ -323,7 +327,7 @@ export async function decideAiFlowApproval(
   if (current.status !== "awaiting_approval") {
     throw new Error("decideAiFlowApproval: run is not awaiting approval");
   }
-  const nextStatus: AiFlowRunStatus = args.decision === "approve" ? "queued" : "canceled";
+  const nextStatus: AiFlowRunStatus = args.decision === "deny" ? "canceled" : "queued";
   const context = {
     ...current.context,
     approval: {

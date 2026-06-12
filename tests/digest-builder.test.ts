@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   AI_FLOW_RECAP_MAX_RUNS,
+  DIGEST_EVENT_LINKS_MAX,
   buildAiFlowRecapLine,
   buildDigestEmailModel,
+  buildDigestEventLinks,
   hasDigestActivity,
   routingSummary,
   totalDigestEvents,
@@ -261,5 +263,79 @@ describe("digest_builder buildDigestEmailModel", () => {
     const custSection = model.sections.find((s) => s.heading.startsWith("New customers"))!;
     expect(custSection.lines).toHaveLength(11);
     expect(custSection.lines.at(-1)).toBe("…and 1 more");
+  });
+});
+
+describe("buildDigestEventLinks", () => {
+  it("returns no events for an empty window", () => {
+    expect(buildDigestEventLinks(emptyActivity())).toEqual([]);
+  });
+
+  it("builds one deep link per call, run, and customer plus text/chat roll-ups", () => {
+    const activity: DigestActivity = {
+      ...emptyActivity(),
+      chatTurns: 3,
+      smsInbound: 2,
+      smsOutbound: 1,
+      calls: [
+        { caller_e164: "+15551111111", status: "completed", started_at: "2026-06-11T10:00:00Z" },
+        { caller_e164: null, status: "missed", started_at: "2026-06-11T11:00:00Z" }
+      ],
+      aiFlowRuns: [makeRun({ flowName: "ReferralExchange lead", status: "done" })],
+      newCustomers: [
+        { display_name: "Domenico Siciliano", customer_e164: "+14695555555" },
+        { display_name: null, customer_e164: "+14805555555" }
+      ]
+    };
+    const events = buildDigestEventLinks(activity);
+    expect(events).toEqual([
+      {
+        label: "Call — +15551111111 (completed)",
+        href: "/dashboard/calls",
+        at: "2026-06-11T10:00:00Z"
+      },
+      {
+        label: "Call — unknown caller (missed)",
+        href: "/dashboard/calls",
+        at: "2026-06-11T11:00:00Z"
+      },
+      {
+        label: "AiFlow — ReferralExchange lead (done)",
+        href: "/dashboard/aiflows",
+        at: "2026-06-11T12:00:00Z"
+      },
+      {
+        label: "New customer — Domenico Siciliano (+14695555555)",
+        href: "/dashboard/customers/%2B14695555555"
+      },
+      {
+        label: "New customer — +14805555555",
+        href: "/dashboard/customers/%2B14805555555"
+      },
+      { label: "Texts — 2 received, 1 sent", href: "/dashboard/messages" },
+      { label: "Dashboard chat — 3 turns", href: "/dashboard/chat" }
+    ]);
+  });
+
+  it("uses singular wording for one chat turn and includes texts when only outbound exist", () => {
+    const events = buildDigestEventLinks({
+      ...emptyActivity(),
+      chatTurns: 1,
+      smsOutbound: 4
+    });
+    expect(events).toEqual([
+      { label: "Texts — 0 received, 4 sent", href: "/dashboard/messages" },
+      { label: "Dashboard chat — 1 turn", href: "/dashboard/chat" }
+    ]);
+  });
+
+  it("caps the stored events list", () => {
+    const calls = Array.from({ length: DIGEST_EVENT_LINKS_MAX + 5 }, (_, i) => ({
+      caller_e164: `+1555${String(i).padStart(7, "0")}`,
+      status: "completed",
+      started_at: "2026-06-11T10:00:00Z"
+    }));
+    const events = buildDigestEventLinks({ ...emptyActivity(), calls });
+    expect(events).toHaveLength(DIGEST_EVENT_LINKS_MAX);
   });
 });

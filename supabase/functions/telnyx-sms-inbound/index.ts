@@ -555,7 +555,7 @@ serve(async (req: Request) => {
     // collide with STOP/HELP/START keywords (handled above).
     if (from) {
       const replyBody = inboundSmsBody(payload).trim();
-      if (replyBody === "1" || replyBody === "2") {
+      if (replyBody === "1" || replyBody === "2" || replyBody === "3") {
         // AiFlow agent/owner acks must reply from the business's OWN number (the
         // per-tenant DID the worker also sends prompts from), NOT the global
         // TELNYX_SMS_FROM_E164 — otherwise the ack lands in a separate thread
@@ -596,7 +596,10 @@ serve(async (req: Request) => {
         const offer = offerRow as
           | { id: string; context: Record<string, unknown> | null }
           | null;
-        if (offer) {
+        // Agent offers only understand 1 (claim) / 2 (pass); a "3" from an
+        // agent falls through to the owner-approval check (the owner may also
+        // be a roster agent) and then to the normal customer path.
+        if (offer && (replyBody === "1" || replyBody === "2")) {
           const claimed = replyBody === "1";
           const prevRouting =
             offer.context?.routing && typeof offer.context.routing === "object"
@@ -655,14 +658,15 @@ serve(async (req: Request) => {
           );
         }
 
-        // Owner approval via SMS: the same 1 (approve) / 2 (decline) convention
-        // resolves an awaiting_approval run, mirroring the dashboard Approve/Deny
-        // buttons (decideAiFlowApproval). Only honored when the reply comes from
-        // the business's configured owner forward number, and only after no agent
-        // offer matched above (an owner who is also a roster agent claims/rejects
-        // their own offer first). With multiple pending approvals 1/2 resolves the
-        // most recently updated one — the owner can always use the dashboard to
-        // disambiguate.
+        // Owner approval via SMS: 1 = approve (resume the run), 2 = skip just
+        // the gated step (run continues past it), 3 = cancel the whole
+        // workflow — mirroring the dashboard Approve/Skip/Cancel buttons
+        // (decideAiFlowApproval). Only honored when the reply comes from the
+        // business's configured owner forward number, and only after no agent
+        // offer matched above (an owner who is also a roster agent
+        // claims/rejects their own offer first). With multiple pending
+        // approvals the reply resolves the most recently updated one — the
+        // owner can always use the dashboard to disambiguate.
         if (businessId) {
           const ownerForward = normalizeE164(bizSettings?.forward_to_e164 ?? "");
           if (ownerForward && from === ownerForward) {
@@ -678,14 +682,17 @@ serve(async (req: Request) => {
               | { id: string; context: Record<string, unknown> | null }
               | null;
             if (appr) {
-              const approved = replyBody === "1";
+              const decision =
+                replyBody === "1" ? "approve" : replyBody === "2" ? "skip" : "deny";
               // Replace context.approval wholesale (dropping any stale `consumed`
               // flag left by an earlier gate) so the worker resumes past THIS gate
               // — exactly what decideAiFlowApproval does for the dashboard path.
+              // approve/skip re-queue the run (the worker consumes the decision
+              // at the gate); deny cancels the whole run.
               const nextContext = {
                 ...(appr.context ?? {}),
                 approval: {
-                  decision: approved ? "approve" : "deny",
+                  decision,
                   decided_by: `sms:${from}`,
                   note: null,
                   decided_at: new Date().toISOString()
@@ -694,7 +701,7 @@ serve(async (req: Request) => {
               const { data: updatedRows, error: decideErr } = await supabase
                 .from("ai_flow_runs")
                 .update({
-                  status: approved ? "queued" : "canceled",
+                  status: decision === "deny" ? "canceled" : "queued",
                   context: nextContext,
                   claimed_at: null,
                   updated_at: new Date().toISOString()
@@ -714,9 +721,11 @@ serve(async (req: Request) => {
               const applied = (updatedRows ?? []).length > 0;
               const ack = !applied
                 ? "That request was already handled — no change made."
-                : approved
+                : decision === "approve"
                   ? "Approved — sending it now."
-                  : "Declined — I won't send that.";
+                  : decision === "skip"
+                    ? "Skipped — I won't send that, but the rest of the workflow continues."
+                    : "Canceled — I stopped the whole workflow.";
               if (canAck) {
                 const send = await telnyxSendSms({
                   apiKey: telnyxApiKey,
@@ -734,10 +743,10 @@ serve(async (req: Request) => {
                 business_id: businessId,
                 run_id: appr.id,
                 event_id: eventId,
-                decision: applied ? (approved ? "approve" : "deny") : "noop"
+                decision: applied ? decision : "noop"
               });
               return new Response(
-                JSON.stringify({ ok: true, approval: applied ? (approved ? "approved" : "declined") : "noop" }),
+                JSON.stringify({ ok: true, approval: applied ? decision : "noop" }),
                 { status: 200, headers: { "Content-Type": "application/json" } }
               );
             }
