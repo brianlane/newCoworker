@@ -16,11 +16,16 @@ vi.mock("@/lib/db/agent-tool-settings", () => ({
   isAgentToolEnabled: vi.fn()
 }));
 
+vi.mock("@/lib/db/email-log", () => ({
+  recordOutboundAssistantEmail: vi.fn()
+}));
+
 import { POST } from "@/app/api/voice/tools/email/route";
 import { resolveEmailConnection } from "@/lib/voice-tools/connections";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
 import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
+import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 
 const businessId = "11111111-1111-4111-8111-111111111111";
 
@@ -129,6 +134,14 @@ describe("POST /api/voice/tools/email", () => {
     expect(decoded).toMatch(/To: lead@example.com/);
     expect(decoded).toMatch(/Subject: Follow-up/);
     expect(decoded).toMatch(/Thanks\./);
+    expect(vi.mocked(recordOutboundAssistantEmail)).toHaveBeenCalledWith({
+      businessId,
+      toEmail: "lead@example.com",
+      subject: "Follow-up",
+      bodyText: "Thanks.",
+      source: "voice_assistant",
+      providerMessageId: "gmail-abc"
+    });
   });
 
   it("falls back to Microsoft Graph sendMail for outlook connections", async () => {

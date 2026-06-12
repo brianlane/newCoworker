@@ -6,6 +6,9 @@
  *     (written by the ai-flow-worker Edge function)
  *   - outbound `owner_mailbox` rows: flow sends through the owner's
  *     connected Gmail/Outlook (also written by the worker)
+ *   - outbound `dashboard_chat` / `sms_assistant` / `voice_assistant` rows:
+ *     owner-mailbox sends the assistant made from those surfaces (written
+ *     by the tool adapters via recordOutboundAssistantEmail)
  *   - inbound `email_trigger` rows: emails that triggered a flow run
  *     (written by the email-trigger poller in this app)
  *
@@ -17,7 +20,13 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-export type EmailLogSource = "ai_flow" | "owner_mailbox" | "email_trigger";
+export type EmailLogSource =
+  | "ai_flow"
+  | "owner_mailbox"
+  | "email_trigger"
+  | "dashboard_chat"
+  | "sms_assistant"
+  | "voice_assistant";
 
 export type EmailLogRow = {
   id: string;
@@ -97,4 +106,43 @@ export async function recordInboundTriggerEmail(
     provider_message_id: input.providerMessageId
   });
   if (error) console.error("recordInboundTriggerEmail", error.message);
+}
+
+export type RecordOutboundAssistantEmailInput = {
+  businessId: string;
+  toEmail: string;
+  subject: string;
+  bodyText: string;
+  /** Surface the assistant sent from. */
+  source: "dashboard_chat" | "sms_assistant" | "voice_assistant";
+  providerMessageId?: string | null;
+};
+
+/**
+ * Record an owner-mailbox email the assistant sent from chat/SMS/voice so it
+ * shows on the dashboard Emails page. Best-effort by design — the email is
+ * already out, so a logging failure only logs to console.
+ */
+export async function recordOutboundAssistantEmail(
+  input: RecordOutboundAssistantEmailInput,
+  client?: SupabaseClient
+): Promise<void> {
+  try {
+    const db = client ?? (await createSupabaseServiceClient());
+    const { error } = await db.from("email_log").insert({
+      business_id: input.businessId,
+      direction: "outbound",
+      to_email: input.toEmail,
+      from_email: null,
+      subject: input.subject,
+      body_preview: input.bodyText.slice(0, 500),
+      source: input.source,
+      run_id: null,
+      flow_id: null,
+      provider_message_id: input.providerMessageId ?? null
+    });
+    if (error) console.error("recordOutboundAssistantEmail", error.message);
+  } catch (err) {
+    console.error("recordOutboundAssistantEmail", err instanceof Error ? err.message : err);
+  }
 }

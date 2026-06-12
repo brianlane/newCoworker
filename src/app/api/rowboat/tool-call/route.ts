@@ -12,6 +12,7 @@ import {
 } from "@/lib/customer-tools/handlers";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
+import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
 import { findCalendarSlots, bookCalendarAppointment } from "@/lib/calendar-tools/handlers";
 import { logger } from "@/lib/logger";
@@ -219,6 +220,14 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
       if (!result.ok) {
         return { ok: false, detail: result.detail };
       }
+      await recordOutboundAssistantEmail({
+        businessId,
+        toEmail: parsed.data.toEmail,
+        subject: parsed.data.subject,
+        bodyText: parsed.data.bodyText,
+        source: "sms_assistant",
+        providerMessageId: result.messageId
+      });
       return { ok: true, data: { messageId: result.messageId, provider: result.provider } };
     }
     case "send_sms": {

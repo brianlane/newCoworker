@@ -28,6 +28,10 @@ vi.mock("@/lib/email/owner-mailbox", () => ({
   sendFromOwnerMailbox: vi.fn()
 }));
 
+vi.mock("@/lib/db/email-log", () => ({
+  recordOutboundAssistantEmail: vi.fn()
+}));
+
 vi.mock("@/lib/knowledge-tools/handlers", () => ({
   lookupBusinessKnowledge: vi.fn()
 }));
@@ -47,6 +51,7 @@ import {
 } from "@/lib/customer-tools/handlers";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
+import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
 import { findCalendarSlots, bookCalendarAppointment } from "@/lib/calendar-tools/handlers";
 
@@ -435,6 +440,14 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
       subject: "Your estimate",
       bodyText: "Here are the details we discussed."
     });
+    expect(vi.mocked(recordOutboundAssistantEmail)).toHaveBeenCalledWith({
+      businessId: BIZ,
+      toEmail: "joe@example.com",
+      subject: "Your estimate",
+      bodyText: "Here are the details we discussed.",
+      source: "sms_assistant",
+      providerMessageId: "m-1"
+    });
   });
 
   it("propagates owner-mailbox failure details (e.g. email_not_connected)", async () => {
@@ -450,6 +463,7 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
     vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
     const res = await POST(makeRequest(content));
     expect(await res.json()).toEqual({ ok: false, detail: "email_not_connected" });
+    expect(vi.mocked(recordOutboundAssistantEmail)).not.toHaveBeenCalled();
   });
 
   it("rejects invalid send_email args", async () => {
