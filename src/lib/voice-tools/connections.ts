@@ -7,7 +7,11 @@ import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connecti
  * owner completed the Connect UI. For each logical capability (calendar,
  * email) we prefer Google if connected, otherwise fall back to Microsoft.
  */
-const CALENDAR_KEYS = ["google-calendar", "outlook-calendar"] as const;
+// Dedicated calendar connections first; the broad full-scope "google" /
+// "outlook" workspace connections (which include calendar read/write) act as
+// fallbacks so owners who connected the all-in-one integration get calendar
+// tools without reconnecting.
+const CALENDAR_KEYS = ["google-calendar", "outlook-calendar", "google", "outlook"] as const;
 export const EMAIL_PROVIDER_CONFIG_KEYS = ["google-mail", "gmail", "outlook"] as const;
 const EMAIL_KEYS = EMAIL_PROVIDER_CONFIG_KEYS;
 
