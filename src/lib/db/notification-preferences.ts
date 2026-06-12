@@ -11,6 +11,10 @@ export type NotificationPreferencesRow = {
   dashboard_alerts: boolean;
   phone_number: string | null;
   alert_email: string | null;
+  /** Optional daily-digest recipient override; null = alert_email → owner_email chain. */
+  digest_email_daily: string | null;
+  /** Optional weekly-digest recipient override; null = alert_email → owner_email chain. */
+  digest_email_weekly: string | null;
   /**
    * Set when the owner clicks "Unsubscribe from all" or hits a one-click
    * email-link unsubscribe. Cleared automatically when any toggle is flipped
@@ -90,6 +94,8 @@ export type NotificationPreferencesUpdate = Partial<
     | "dashboard_alerts"
     | "phone_number"
     | "alert_email"
+    | "digest_email_daily"
+    | "digest_email_weekly"
     | "unsubscribed_at"
   >
 >;
@@ -102,6 +108,8 @@ const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> =
   dashboard_alerts: true,
   phone_number: null,
   alert_email: null,
+  digest_email_daily: null,
+  digest_email_weekly: null,
   unsubscribed_at: null
 };
 
@@ -181,6 +189,8 @@ export async function updateNotificationPreferences(
     "dashboard_alerts",
     "phone_number",
     "alert_email",
+    "digest_email_daily",
+    "digest_email_weekly",
     "unsubscribed_at"
   ];
   const update: Record<string, unknown> = { updated_at: now };
