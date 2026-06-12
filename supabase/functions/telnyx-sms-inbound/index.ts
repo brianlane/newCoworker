@@ -22,6 +22,11 @@ import {
 } from "../_shared/telnyx_edge_guard.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 import { evaluateSmsTrigger, isExecutableDefinition } from "../_shared/ai_flows/engine.ts";
+import {
+  APPROVAL_OPTION_DECISIONS,
+  approvalOptionForReply,
+  parseStoredApprovalOptions
+} from "../_shared/ai_flows/approval_options.ts";
 import type {
   AiFlowDefinition,
   CorrelationMessage
@@ -555,7 +560,11 @@ serve(async (req: Request) => {
     // collide with STOP/HELP/START keywords (handled above).
     if (from) {
       const replyBody = inboundSmsBody(payload).trim();
-      if (replyBody === "1" || replyBody === "2" || replyBody === "3") {
+      // Single digits 1-9: agent offers understand 1/2; owner approvals map
+      // the digit against the option list stored on the pending run (gates
+      // offer up to 4 options today — approve / skip / bypass quiet hours /
+      // cancel-last). Anything unmatched falls through to the customer path.
+      if (/^[1-9]$/.test(replyBody)) {
         // AiFlow agent/owner acks must reply from the business's OWN number (the
         // per-tenant DID the worker also sends prompts from), NOT the global
         // TELNYX_SMS_FROM_E164 — otherwise the ack lands in a separate thread
@@ -658,9 +667,10 @@ serve(async (req: Request) => {
           );
         }
 
-        // Owner approval via SMS: 1 = approve (resume the run), 2 = skip just
-        // the gated step (run continues past it), 3 = cancel the whole
-        // workflow — mirroring the dashboard Approve/Skip/Cancel buttons
+        // Owner approval via SMS: the digit maps against the option list the
+        // worker STORED on the pending run when it parked (approve and skip
+        // lead, optional extras like "bypass quiet hours" in between, cancel
+        // is always the last digit) — mirroring the dashboard buttons
         // (decideAiFlowApproval). Only honored when the reply comes from the
         // business's configured owner forward number, and only after no agent
         // offer matched above (an owner who is also a roster agent
@@ -681,14 +691,19 @@ serve(async (req: Request) => {
             const appr = apprRow as
               | { id: string; context: Record<string, unknown> | null }
               | null;
-            if (appr) {
-              const decision =
-                replyBody === "1" ? "approve" : replyBody === "2" ? "skip" : "deny";
+            const approvalCtx =
+              appr?.context?.approval && typeof appr.context.approval === "object"
+                ? (appr.context.approval as Record<string, unknown>)
+                : null;
+            const offered = parseStoredApprovalOptions(approvalCtx?.options);
+            const option = appr ? approvalOptionForReply(offered, replyBody) : null;
+            if (appr && option) {
+              const decision = APPROVAL_OPTION_DECISIONS[option];
               // Replace context.approval wholesale (dropping any stale `consumed`
               // flag left by an earlier gate) so the worker resumes past THIS gate
               // — exactly what decideAiFlowApproval does for the dashboard path.
-              // approve/skip re-queue the run (the worker consumes the decision
-              // at the gate); deny cancels the whole run.
+              // approve/skip/bypass re-queue the run (the worker consumes the
+              // decision at the gate); deny cancels the whole run.
               const nextContext = {
                 ...(appr.context ?? {}),
                 approval: {
@@ -723,9 +738,11 @@ serve(async (req: Request) => {
                 ? "That request was already handled — no change made."
                 : decision === "approve"
                   ? "Approved — sending it now."
-                  : decision === "skip"
-                    ? "Skipped — I won't send that, but the rest of the workflow continues."
-                    : "Canceled — I stopped the whole workflow.";
+                  : decision === "bypass_quiet_hours"
+                    ? "Approved — sending now, and I'll skip quiet hours for the rest of this workflow."
+                    : decision === "skip"
+                      ? "Skipped — I won't send that, but the rest of the workflow continues."
+                      : "Canceled — I stopped the whole workflow.";
               if (canAck) {
                 const send = await telnyxSendSms({
                   apiKey: telnyxApiKey,

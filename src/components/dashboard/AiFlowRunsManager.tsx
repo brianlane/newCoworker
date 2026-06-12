@@ -4,7 +4,29 @@ import { useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { retrySummary, routingSummary } from "@/lib/ai-flows/run-stats";
-import type { AiFlowRunRow, AiFlowRunStepRow } from "@/lib/ai-flows/db";
+import type { AiFlowRunRow, AiFlowRunStepRow, ApprovalDecision } from "@/lib/ai-flows/db";
+import {
+  APPROVAL_OPTION_DECISIONS,
+  APPROVAL_OPTION_INSTRUCTIONS,
+  APPROVAL_OPTION_LABELS,
+  parseStoredApprovalOptions,
+  type ApprovalGateOption
+} from "../../../supabase/functions/_shared/ai_flows/approval_options";
+
+const OPTION_BUTTON_STYLES: Record<ApprovalGateOption, string> = {
+  approve: "bg-claw-green/20 text-claw-green hover:bg-claw-green/30",
+  skip: "bg-parchment/10 text-parchment/70 hover:bg-parchment/20",
+  bypass_quiet_hours: "bg-signal-teal/15 text-signal-teal hover:bg-signal-teal/25",
+  cancel: "bg-red-500/15 text-red-400 hover:bg-red-500/25"
+};
+
+const OPTION_BUTTON_TITLES: Record<ApprovalGateOption, string> = {
+  approve: "Run the step this gate guards",
+  skip: "Don't run this step, but continue the rest of the workflow",
+  bypass_quiet_hours:
+    "Approve, and send remaining texts immediately instead of waiting out quiet hours",
+  cancel: "Stop the whole workflow"
+};
 
 const STATUS_STYLES: Record<string, string> = {
   queued: "bg-parchment/10 text-parchment/60",
@@ -68,7 +90,7 @@ export function AiFlowRunsManager({
     }
   };
 
-  const decide = async (runId: string, decision: "approve" | "skip" | "deny") => {
+  const decide = async (runId: string, decision: ApprovalDecision) => {
     setBusy(runId);
     setError(null);
     try {
@@ -136,7 +158,14 @@ export function AiFlowRunsManager({
             Approvals needed ({pending.length})
           </h2>
           {pending.map((r) => {
-            const approval = (r.context.approval ?? {}) as { prompt?: string };
+            const approval = (r.context.approval ?? {}) as {
+              prompt?: string;
+              options?: unknown;
+            };
+            // Render exactly the options the worker offered for THIS gate
+            // (stored on the run when it parked) so dashboard buttons and the
+            // SMS digit hint always agree. Cancel is always last.
+            const options = parseStoredApprovalOptions(approval.options);
             return (
               <Card key={r.id} className="border-spark-orange/30 bg-spark-orange/5">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-parchment/40">
@@ -145,35 +174,28 @@ export function AiFlowRunsManager({
                 <p className="mt-1 text-sm text-parchment">
                   {approval.prompt || "This automation is waiting for your approval."}
                 </p>
-                <div className="mt-3 flex gap-2">
-                  <button
-                    onClick={() => decide(r.id, "approve")}
-                    disabled={busy === r.id}
-                    className="rounded-md bg-claw-green/20 px-3 py-1.5 text-sm text-claw-green hover:bg-claw-green/30 disabled:opacity-50"
-                  >
-                    Approve
-                  </button>
-                  <button
-                    onClick={() => decide(r.id, "skip")}
-                    disabled={busy === r.id}
-                    className="rounded-md bg-parchment/10 px-3 py-1.5 text-sm text-parchment/70 hover:bg-parchment/20 disabled:opacity-50"
-                    title="Don't run this step, but continue the rest of the workflow"
-                  >
-                    Skip step
-                  </button>
-                  <button
-                    onClick={() => decide(r.id, "deny")}
-                    disabled={busy === r.id}
-                    className="rounded-md bg-red-500/15 px-3 py-1.5 text-sm text-red-400 hover:bg-red-500/25 disabled:opacity-50"
-                    title="Stop the whole workflow"
-                  >
-                    Cancel workflow
-                  </button>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {options.map((opt) => (
+                    <button
+                      key={opt}
+                      onClick={() => decide(r.id, APPROVAL_OPTION_DECISIONS[opt])}
+                      disabled={busy === r.id}
+                      className={`rounded-md px-3 py-1.5 text-sm disabled:opacity-50 ${OPTION_BUTTON_STYLES[opt]}`}
+                      title={OPTION_BUTTON_TITLES[opt]}
+                    >
+                      {APPROVAL_OPTION_LABELS[opt]}
+                    </button>
+                  ))}
                 </div>
                 <p className="mt-2 text-xs text-parchment/50">
-                  You can also reply by text: <span className="text-parchment/70">1</span> to
-                  approve, <span className="text-parchment/70">2</span> to skip this step, or{" "}
-                  <span className="text-parchment/70">3</span> to cancel the workflow.
+                  You can also reply by text:{" "}
+                  {options.map((opt, i) => (
+                    <span key={opt}>
+                      <span className="text-parchment/70">{i + 1}</span> to{" "}
+                      {APPROVAL_OPTION_INSTRUCTIONS[opt]}
+                      {i < options.length - 2 ? ", " : i === options.length - 2 ? ", or " : "."}
+                    </span>
+                  ))}
                 </p>
               </Card>
             );

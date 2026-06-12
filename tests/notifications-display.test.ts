@@ -164,6 +164,7 @@ describe("notifications/display", () => {
               { label: "", href: "/dashboard/calls" },
               { label: "no href" },
               { label: "external", href: "https://evil.example.com" },
+              { label: "protocol-relative", href: "//evil.example.com/phish" },
               { label: "bad at", href: "/dashboard/calls", at: 42 },
               { label: "empty at", href: "/dashboard/calls", at: "" },
               { label: "ok", href: "/dashboard/aiflows" }

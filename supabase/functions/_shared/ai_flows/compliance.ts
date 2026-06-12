@@ -77,6 +77,28 @@ export function gsmSafeSmsText(text: string): string {
 }
 
 /**
+ * Compose the full outbound-body pipeline in the only order that can't
+ * produce an unsendable message: GSM-normalize, append the STOP suffix (cold
+ * sends), then re-check the UCS-2 cap and the 10-segment GSM cap AFTER the
+ * suffix. Appending after the cap check (the previous order) could push a
+ * ≤670-char UCS-2 body past Telnyx's ten-segment limit — failing exactly the
+ * sends the STOP suffix exists to protect.
+ */
+export function prepareSmsBody(raw: string, opts: { requireStop?: boolean } = {}): string {
+  let body = gsmSafeSmsText(raw);
+  if (opts.requireStop) body = ensureStopLanguage(body);
+  // Suffix may have pushed a kept-emoji body past the UCS-2 sendable cap;
+  // re-running the guard strips the non-GSM chars in that case.
+  body = gsmSafeSmsText(body);
+  if (body.length > SMS_MAX_BODY_CHARS) {
+    body = opts.requireStop
+      ? ensureStopLanguage(body.slice(0, SMS_MAX_BODY_CHARS - STOP_SUFFIX.length - 1))
+      : body.slice(0, SMS_MAX_BODY_CHARS);
+  }
+  return body;
+}
+
+/**
  * True when `toE164` has opted out of SMS for this business. Throws on a hard
  * RPC error so the worker treats it as a retryable failure rather than sending
  * to a possibly opted-out number.

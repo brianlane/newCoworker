@@ -26,9 +26,9 @@ import { callSmsRowboatWithStatelessFallback } from "../_shared/sms_rowboat.ts";
 import { buildCustomerPreambleForEdge, type EdgeCustomerMemoryRow } from "../_shared/customer_memory_preamble.ts";
 import { currentDateTimeLine } from "../_shared/datetime_line.ts";
 import {
-  monthStartIso,
   pickSmsTurn,
   recordSmsChatSpend,
+  resolveChatPeriodStart,
   resolveSmsChatCap
 } from "../_shared/chat_spend_cap.ts";
 import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
@@ -695,10 +695,14 @@ serve(async (req: Request) => {
               business_id: job.business_id,
               spend_micros: meterRes.spendMicros ?? null
             });
+            // Same billing-period key the spend RPC used: cap.periodStart
+            // when the cap read resolved it, otherwise re-resolve (matching
+            // recordSmsChatSpend's internal fallback) instead of assuming
+            // the UTC month start.
             await sendCapAlertOnce(supabase, {
               businessId: job.business_id,
               kind: "chat_spend",
-              periodKey: cap.periodStart ?? monthStartIso(),
+              periodKey: cap.periodStart ?? (await resolveChatPeriodStart(supabase, job.business_id)),
               notifyUrl: `${supabaseUrl}/functions/v1/notifications`,
               bearer: serviceKey,
               payload: { surface: "sms_worker", spend_micros: meterRes.spendMicros ?? null }
@@ -731,10 +735,16 @@ serve(async (req: Request) => {
               business_id: job.business_id,
               spend_micros: meterRes.spendMicros ?? null
             });
+            // Dedupe key must be the SAME billing period the spend was
+            // recorded under (Stripe period start, month-start fallback) —
+            // recordSmsChatSpend resolved it internally because periodStart
+            // was null here. A bare monthStartIso() could mint a second key
+            // for one Stripe period (double alert) or collide with a prior
+            // period's key (missed alert).
             await sendCapAlertOnce(supabase, {
               businessId: job.business_id,
               kind: "chat_spend",
-              periodKey: monthStartIso(),
+              periodKey: await resolveChatPeriodStart(supabase, job.business_id),
               notifyUrl: `${supabaseUrl}/functions/v1/notifications`,
               bearer: serviceKey,
               payload: { surface: "sms_worker", spend_micros: meterRes.spendMicros ?? null }

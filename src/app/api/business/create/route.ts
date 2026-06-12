@@ -1,5 +1,10 @@
 import { getAuthUser, verifySignupIdentity } from "@/lib/auth";
-import { createBusiness, getBusiness, isValidIanaTimezone } from "@/lib/db/businesses";
+import {
+  createBusiness,
+  getBusiness,
+  isValidIanaTimezone,
+  updateBusinessTimezone
+} from "@/lib/db/businesses";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { teamSizeBucketToInt } from "@/lib/onboarding/intakeOptions";
 import { createOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
@@ -68,6 +73,16 @@ export async function POST(request: Request) {
     const existing = await getBusiness(body.businessId);
     if (existing) {
       if (existing.owner_email === ownerEmail) {
+        // A retry can carry the browser timezone the original insert never
+        // persisted (e.g. the row was created by a pre-timezone deploy, or
+        // the first request raced the client write). Apply it on the
+        // idempotent path too — otherwise the business stays on the UTC
+        // fallback until the owner finds the Settings field.
+        const tz =
+          body.timezone && isValidIanaTimezone(body.timezone) ? body.timezone : null;
+        if (tz && !existing.timezone) {
+          await updateBusinessTimezone(existing.id, tz);
+        }
         logger.info("business.create idempotent: returning existing row", {
           businessId: body.businessId,
           anonymous: !user

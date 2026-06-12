@@ -41,6 +41,11 @@ export type CapAlertResult = "sent" | "already_alerted" | "mark_failed" | "post_
  * Send the urgent cap alert if this is the FIRST hit for (business, kind,
  * period). Never throws — alerting must never fail the send/turn that
  * discovered the cap.
+ *
+ * The mark RPC atomically claims the once-per-period guard BEFORE the post
+ * (so concurrent workers can't double-send); if the post then fails, the
+ * claim is ROLLED BACK so the next cap hit retries instead of the owner
+ * silently never hearing about the cap for the whole period.
  */
 export async function sendCapAlertOnce(
   supabase: CapAlertSupabase,
@@ -55,6 +60,23 @@ export async function sendCapAlertOnce(
     fetchFn?: typeof fetch;
   }
 ): Promise<CapAlertResult> {
+  const unmark = async () => {
+    try {
+      const { error } = await supabase.rpc("unmark_usage_cap_alert", {
+        p_business_id: opts.businessId,
+        p_cap_kind: opts.kind,
+        p_period_key: opts.periodKey
+      });
+      if (error) console.error("cap_alert unmark failed", opts.kind, error.message);
+    } catch (err) {
+      console.error(
+        "cap_alert unmark failed",
+        opts.kind,
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  };
+  let marked = false;
   try {
     const { data, error } = await supabase.rpc("mark_usage_cap_alert", {
       p_business_id: opts.businessId,
@@ -66,6 +88,7 @@ export async function sendCapAlertOnce(
       return "mark_failed";
     }
     if (data !== true) return "already_alerted";
+    marked = true;
 
     const doFetch = opts.fetchFn ?? fetch;
     const res = await doFetch(opts.notifyUrl, {
@@ -89,11 +112,13 @@ export async function sendCapAlertOnce(
     });
     if (!res.ok) {
       console.error("cap_alert post failed", opts.kind, res.status);
+      await unmark();
       return "post_failed";
     }
     return "sent";
   } catch (err) {
     console.error("cap_alert unexpected", opts.kind, err instanceof Error ? err.message : String(err));
+    if (marked) await unmark();
     return "post_failed";
   }
 }

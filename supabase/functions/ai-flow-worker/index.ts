@@ -51,11 +51,13 @@ import {
   parseRenderResponse
 } from "../_shared/ai_flows/browse.ts";
 import {
-  SMS_MAX_BODY_CHARS,
-  ensureStopLanguage,
-  gsmSafeSmsText,
-  isRecipientOptedOut
+  isRecipientOptedOut,
+  prepareSmsBody
 } from "../_shared/ai_flows/compliance.ts";
+import {
+  approvalSmsInstruction,
+  buildApprovalGateOptions
+} from "../_shared/ai_flows/approval_options.ts";
 import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
 import {
   formatInTimeZone,
@@ -330,17 +332,27 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     }
     if (outcome.kind === "pause") {
       await recordStep(supabase, run, index, step, "pending");
+      // Dynamic reply options for THIS gate, persisted on the run so the
+      // inbound webhook and dashboard render/parse exactly what was offered:
+      // approve/skip always lead, "bypass quiet hours" appears only when a
+      // later send_sms step actually has quiet hours configured, and cancel
+      // is always the LAST digit.
+      const gateOptions = buildApprovalGateOptions({
+        offerQuietBypass: def.steps
+          .slice(index + 1)
+          .some((s) => s.type === "send_sms" && Boolean(s.quietHours))
+      });
+      approval.options = gateOptions;
       await updateRun(supabase, run.id, {
         status: "awaiting_approval",
         current_step: index,
         context: buildContext(scope, approval, routing),
         claimed_at: null
       });
-      // Offer the owner an SMS approval path (reply 1 = approve, 2 = skip just
-      // this step, 3 = cancel the whole workflow) alongside the dashboard
-      // buttons. Best-effort + idempotent: a send failure must not unwind the
-      // parked state (that would re-run the gate on retry), and the idempotency
-      // key dedupes resends if the run is ever re-queued and re-pauses at this
+      // Offer the owner an SMS approval path alongside the dashboard buttons.
+      // Best-effort + idempotent: a send failure must not unwind the parked
+      // state (that would re-run the gate on retry), and the idempotency key
+      // dedupes resends if the run is ever re-queued and re-pauses at this
       // same gate.
       const approvalPrompt =
         typeof approval.prompt === "string" && approval.prompt.trim()
@@ -350,7 +362,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         await sendOwnerSms(
           supabase,
           run,
-          `${approvalPrompt}\n\nReply 1 to approve, 2 to skip this step, or 3 to cancel the workflow.`,
+          `${approvalPrompt}\n\n${approvalSmsInstruction(gateOptions)}`,
           `aiflow-approval:${run.id}:${index}`
         );
       } catch (e) {
@@ -501,6 +513,14 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   });
 }
 
+/**
+ * scope.vars flag set when an approval gate is answered with "bypass quiet
+ * hours": every later send_sms step in the run sends immediately instead of
+ * deferring/emailing inside the quiet window. Underscore-prefixed like the
+ * other engine-internal vars (e.g. the after-hours email markers).
+ */
+const BYPASS_QUIET_HOURS_VAR = "_bypass_quiet_hours";
+
 type StepOutcome =
   // skipNextStep: set by an approval gate decided "skip" — the step directly
   // after the gate (the action it guards) is recorded as skipped and never
@@ -561,7 +581,7 @@ async function runStep(
     case "http_call":
       return httpCallStep(run, scope, action);
     case "await_approval":
-      return approvalStep(approval, index, action);
+      return approvalStep(approval, scope, index, action);
     case "route_to_team":
       return routeToTeamStep(supabase, run, scope, action, routing);
     case "browse_action":
@@ -1145,8 +1165,9 @@ async function sendSmsStep(
   // is never texted. With an extracted lead email we email the same message
   // right away (email is not time-gated) AND still defer the run so the text
   // also goes out at the morning resume time; without an email the run just
-  // parks until then via earliest_claim_at.
-  if (action.quiet) {
+  // parks until then via earliest_claim_at. The owner can lift this for the
+  // rest of the run by answering an approval gate with "bypass quiet hours".
+  if (action.quiet && scope.vars[BYPASS_QUIET_HOURS_VAR] !== true) {
     const decision = smsQuietDecision(Date.now(), {
       timezone: action.quiet.timezone,
       noSendAfter: action.quiet.noSendAfter,
@@ -1186,7 +1207,7 @@ async function sendSmsStep(
   const cfg = await messagingConfig(supabase, run.business_id);
   if (!cfg) return { kind: "fail", error: "send_sms: Telnyx messaging is not configured" };
 
-  const text = ensureStopLanguage(gsmSafeSmsText(action.body)).slice(0, SMS_MAX_BODY_CHARS);
+  const text = prepareSmsBody(action.body, { requireStop: true });
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
     { p_business_id: run.business_id }
@@ -1442,7 +1463,7 @@ async function notifyOwnerStep(
   const forward = (settingsRow as { forward_to_e164?: string | null } | null)?.forward_to_e164 ?? "";
   const cfg = await messagingConfig(supabase, run.business_id);
   if (forward && cfg) {
-    const text = `[AiFlow] ${gsmSafeSmsText(action.message)}`.slice(0, SMS_MAX_BODY_CHARS);
+    const text = prepareSmsBody(`[AiFlow] ${action.message}`);
     const send = await telnyxSendSms({
       apiKey: cfg.apiKey,
       messagingProfileId: cfg.profile,
@@ -1493,6 +1514,7 @@ async function httpCallStep(
 
 function approvalStep(
   approval: Record<string, unknown>,
+  scope: Scope,
   index: number,
   action: Extract<StepAction, { kind: "await_approval" }>
 ): StepOutcome {
@@ -1500,11 +1522,19 @@ function approvalStep(
     approval.consumed = true;
     return { kind: "ok", result: { approved: true } };
   }
-  // "Skip" (reply 2 / dashboard Skip): don't run the action this gate guards
-  // — the step immediately following the gate — but keep the rest of the
-  // workflow going (later emails, team routing, timeline updates). A full
-  // stop is "cancel" (reply 3 / dashboard Cancel), which never reaches the
-  // worker: the decide paths set the run to canceled directly.
+  // "Bypass quiet hours": approve AND drop the quiet-hours gate on every
+  // remaining send_sms step in this run. The flag rides in scope.vars (which
+  // buildContext persists), so it survives re-claims and later gates.
+  if (approval.decision === "bypass_quiet_hours" && approval.consumed !== true) {
+    approval.consumed = true;
+    scope.vars[BYPASS_QUIET_HOURS_VAR] = true;
+    return { kind: "ok", result: { approved: true, quiet_hours_bypassed: true } };
+  }
+  // "Skip": don't run the action this gate guards — the step immediately
+  // following the gate — but keep the rest of the workflow going (later
+  // emails, team routing, timeline updates). A full stop is "cancel" (always
+  // the LAST reply digit / dashboard Cancel), which never reaches the worker:
+  // the decide paths set the run to canceled directly.
   if (approval.decision === "skip" && approval.consumed !== true) {
     approval.consumed = true;
     return { kind: "ok", result: { approved: false, skipped_gated_step: true }, skipNextStep: true };
@@ -1860,7 +1890,7 @@ async function sendOfferSms(
 ): Promise<void> {
   const cfg = await messagingConfig(supabase, run.business_id);
   if (!cfg) throw new Error("route_to_team: Telnyx messaging is not configured");
-  const body = ensureStopLanguage(gsmSafeSmsText(text)).slice(0, SMS_MAX_BODY_CHARS);
+  const body = prepareSmsBody(text, { requireStop: true });
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
     { p_business_id: run.business_id }
@@ -1946,7 +1976,7 @@ async function sendOwnerSms(
     });
     return;
   }
-  const body = `[AiFlow] ${gsmSafeSmsText(text)}`.slice(0, SMS_MAX_BODY_CHARS);
+  const body = prepareSmsBody(`[AiFlow] ${text}`);
   const send = await telnyxSendSms({
     apiKey: cfg.apiKey,
     messagingProfileId: cfg.profile,

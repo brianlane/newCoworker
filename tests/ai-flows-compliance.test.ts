@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  SMS_MAX_BODY_CHARS,
   STOP_SUFFIX,
   UCS2_MAX_SENDABLE_CHARS,
   ensureStopLanguage,
   gsmSafeSmsText,
   isRecipientOptedOut,
+  prepareSmsBody,
   type ComplianceRpcClient
 } from "../supabase/functions/_shared/ai_flows/compliance";
 
@@ -57,6 +59,40 @@ describe("gsmSafeSmsText", () => {
     expect(/[^\x00-\x7F]/.test(out)).toBe(false);
     expect(out).toContain("I'm licensed since 1989...");
     expect(out).toContain("Thanks, Amy :-)");
+  });
+});
+
+describe("prepareSmsBody", () => {
+  it("passes a short ASCII body through unchanged (no STOP requested)", () => {
+    expect(prepareSmsBody("See you at 2pm.")).toBe("See you at 2pm.");
+  });
+  it("normalizes punctuation and appends STOP for cold sends", () => {
+    expect(prepareSmsBody("I\u2019m Amy \u2014 are you selling?", { requireStop: true })).toBe(
+      `I'm Amy - are you selling? ${STOP_SUFFIX}`
+    );
+  });
+  it("strips kept emoji when the STOP suffix would push a UCS-2 body past the send cap", () => {
+    // Body sits just UNDER the UCS-2 cap with an unmapped emoji kept; the
+    // appended suffix would exceed it — the rocket must be stripped, never
+    // shipped as an unsendable 11-segment message.
+    const body = `\u{1F680} ${"x".repeat(UCS2_MAX_SENDABLE_CHARS - 10)}`;
+    const out = prepareSmsBody(body, { requireStop: true });
+    expect(/[^\x00-\x7F]/.test(out)).toBe(false);
+    expect(out.endsWith(STOP_SUFFIX)).toBe(true);
+    expect(out.length).toBeLessThanOrEqual(UCS2_MAX_SENDABLE_CHARS + STOP_SUFFIX.length + 1);
+  });
+  it("keeps a short emoji body intact, suffix included, when it still fits UCS-2", () => {
+    const out = prepareSmsBody("Caf\u00E9 tour this week?", { requireStop: true });
+    expect(out).toBe(`Caf\u00E9 tour this week? ${STOP_SUFFIX}`);
+  });
+  it("caps an over-long ASCII body at the GSM ceiling", () => {
+    const out = prepareSmsBody("y".repeat(SMS_MAX_BODY_CHARS + 200));
+    expect(out.length).toBe(SMS_MAX_BODY_CHARS);
+  });
+  it("re-appends STOP after truncating an over-long cold body, never cutting the suffix off", () => {
+    const out = prepareSmsBody("y".repeat(SMS_MAX_BODY_CHARS + 200), { requireStop: true });
+    expect(out.length).toBeLessThanOrEqual(SMS_MAX_BODY_CHARS);
+    expect(out.endsWith(STOP_SUFFIX)).toBe(true);
   });
 });
 

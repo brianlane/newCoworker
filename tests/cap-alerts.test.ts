@@ -6,8 +6,13 @@ import {
   type CapAlertSupabase
 } from "../supabase/functions/_shared/cap_alerts";
 
-function stubSupabase(rpcResult: { data: unknown; error: { message: string } | null }) {
-  const rpc = vi.fn(async () => rpcResult);
+function stubSupabase(
+  rpcResult: { data: unknown; error: { message: string } | null },
+  unmarkResult: { data: unknown; error: { message: string } | null } = { data: null, error: null }
+) {
+  const rpc = vi.fn(async (fn: string) =>
+    fn === "unmark_usage_cap_alert" ? unmarkResult : rpcResult
+  );
   return { supabase: { rpc } as unknown as CapAlertSupabase, rpc };
 }
 
@@ -118,20 +123,76 @@ describe("sendCapAlertOnce", () => {
     errSpy.mockRestore();
   });
 
-  it("returns post_failed when the notifications POST is non-2xx", async () => {
+  it("rolls the mark back when the notifications POST is non-2xx, so a later cap hit retries", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const { supabase } = stubSupabase({ data: true, error: null });
+    const { supabase, rpc } = stubSupabase({ data: true, error: null });
     const fetchFn = vi.fn(async () => ({ ok: false, status: 500 })) as unknown as typeof fetch;
 
     const result = await sendCapAlertOnce(supabase, { ...baseOpts, fetchFn });
 
     expect(result).toBe("post_failed");
+    expect(rpc).toHaveBeenCalledWith("unmark_usage_cap_alert", {
+      p_business_id: "biz-1",
+      p_cap_kind: "sms_monthly",
+      p_period_key: "2026-06-01"
+    });
     errSpy.mockRestore();
   });
 
-  it("never throws: returns post_failed when fetch rejects (Error)", async () => {
+  it("logs (but still returns post_failed) when the rollback RPC itself errors", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const { supabase } = stubSupabase({ data: true, error: null });
+    const { supabase } = stubSupabase(
+      { data: true, error: null },
+      { data: null, error: { message: "unmark boom" } }
+    );
+    const fetchFn = vi.fn(async () => ({ ok: false, status: 500 })) as unknown as typeof fetch;
+
+    const result = await sendCapAlertOnce(supabase, { ...baseOpts, fetchFn });
+
+    expect(result).toBe("post_failed");
+    expect(errSpy).toHaveBeenCalledWith("cap_alert unmark failed", "sms_monthly", "unmark boom");
+    errSpy.mockRestore();
+  });
+
+  it("never throws even when the rollback RPC rejects", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const rpc = vi.fn(async (fn: string) => {
+      if (fn === "unmark_usage_cap_alert") throw new Error("unmark down");
+      return { data: true, error: null };
+    });
+    const supabase = { rpc } as unknown as CapAlertSupabase;
+    const fetchFn = vi.fn(async () => ({ ok: false, status: 500 })) as unknown as typeof fetch;
+
+    const result = await sendCapAlertOnce(supabase, { ...baseOpts, fetchFn });
+
+    expect(result).toBe("post_failed");
+    expect(errSpy).toHaveBeenCalledWith("cap_alert unmark failed", "sms_monthly", "unmark down");
+    errSpy.mockRestore();
+  });
+
+  it("handles a non-Error rollback rejection", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const rpc = vi.fn(async (fn: string) => {
+      if (fn === "unmark_usage_cap_alert") throw "unmark string failure";
+      return { data: true, error: null };
+    });
+    const supabase = { rpc } as unknown as CapAlertSupabase;
+    const fetchFn = vi.fn(async () => ({ ok: false, status: 500 })) as unknown as typeof fetch;
+
+    const result = await sendCapAlertOnce(supabase, { ...baseOpts, fetchFn });
+
+    expect(result).toBe("post_failed");
+    expect(errSpy).toHaveBeenCalledWith(
+      "cap_alert unmark failed",
+      "sms_monthly",
+      "unmark string failure"
+    );
+    errSpy.mockRestore();
+  });
+
+  it("never throws: rolls back the mark when fetch rejects (Error)", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { supabase, rpc } = stubSupabase({ data: true, error: null });
     const fetchFn = vi.fn(async () => {
       throw new Error("network down");
     }) as unknown as typeof fetch;
@@ -139,21 +200,23 @@ describe("sendCapAlertOnce", () => {
     const result = await sendCapAlertOnce(supabase, { ...baseOpts, fetchFn });
 
     expect(result).toBe("post_failed");
+    expect(rpc).toHaveBeenCalledWith("unmark_usage_cap_alert", expect.anything());
     errSpy.mockRestore();
   });
 
-  it("never throws: handles non-Error thrown values", async () => {
+  it("never throws: handles non-Error thrown values without rolling back an unclaimed mark", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const supabase = {
-      rpc: vi.fn(async () => {
-        throw "string failure";
-      })
-    } as unknown as CapAlertSupabase;
+    const rpc = vi.fn(async () => {
+      throw "string failure";
+    });
+    const supabase = { rpc } as unknown as CapAlertSupabase;
 
     const result = await sendCapAlertOnce(supabase, { ...baseOpts });
 
     expect(result).toBe("post_failed");
     expect(errSpy).toHaveBeenCalledWith("cap_alert unexpected", "sms_monthly", "string failure");
+    // The mark RPC threw before claiming, so there is nothing to roll back.
+    expect(rpc).toHaveBeenCalledTimes(1);
     errSpy.mockRestore();
   });
 });

@@ -131,17 +131,22 @@ export async function listTurns(
 export async function listTranscriptsForCaller(
   businessId: string,
   callerE164: string,
-  options: { limit?: number } = {},
+  options: {
+    limit?: number;
+    /** Merged-in numbers whose calls belong to the same customer profile. */
+    aliases?: string[];
+  } = {},
   client?: SupabaseClient
 ): Promise<VoiceCallTranscriptRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
   const requested = options.limit ?? DEFAULT_LIST_LIMIT;
   const limit = Math.min(Math.max(1, requested), MAX_LIST_LIMIT);
+  const callers = [...new Set([callerE164, ...(options.aliases ?? [])])];
   const { data, error } = await db
     .from("voice_call_transcripts")
     .select("*")
     .eq("business_id", businessId)
-    .eq("caller_e164", callerE164)
+    .in("caller_e164", callers)
     .order("started_at", { ascending: false, nullsFirst: false })
     .limit(limit);
   if (error) throw new Error(`listTranscriptsForCaller: ${error.message}`);

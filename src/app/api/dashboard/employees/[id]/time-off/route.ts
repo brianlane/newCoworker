@@ -68,6 +68,15 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
 
     const body = createSchema.parse(await request.json());
 
+    // The member must belong to THIS business before inserting: the insert
+    // itself only stamps business_id from the query param, so a foreign
+    // member UUID would otherwise create a time-off row scoped to the wrong
+    // business.
+    const member = await getTeamMember(businessId, id);
+    if (!member) {
+      return errorResponse("NOT_FOUND", "Employee not found", 404);
+    }
+
     const timeOff = await addTimeOff(businessId, {
       memberId: id,
       startsOn: body.startsOn,
@@ -78,7 +87,6 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     // Best-effort mirror onto the shared NewCoworker calendar (all-day
     // "out of office" event, display only). Failure leaves the time off
     // fully functional — routing reads the DB, not the calendar.
-    const member = await getTeamMember(businessId, id);
     const eventId = await mirrorTimeOffEvent(
       businessId,
       member?.name ?? "Employee",
