@@ -35,6 +35,8 @@ export type TimeOffRow = {
   starts_on: string;
   ends_on: string;
   note: string | null;
+  /** Mirror event on the shared NewCoworker calendar; null = not mirrored. */
+  calendar_event_id: string | null;
   created_at: string;
 };
 
@@ -42,7 +44,8 @@ const MEMBER_COLUMNS =
   "id,business_id,name,phone_e164,email,active,last_offered_at," +
   "weekly_schedule,preferred_windows,created_at";
 
-const TIME_OFF_COLUMNS = "id,business_id,member_id,starts_on,ends_on,note,created_at";
+const TIME_OFF_COLUMNS =
+  "id,business_id,member_id,starts_on,ends_on,note,calendar_event_id,created_at";
 
 export async function listTeamMembers(
   businessId: string,
@@ -56,6 +59,22 @@ export async function listTeamMembers(
     .order("created_at", { ascending: true });
   if (error) throw new Error(`listTeamMembers: ${error.message}`);
   return (data ?? []) as unknown as TeamMemberRow[];
+}
+
+export async function getTeamMember(
+  businessId: string,
+  memberId: string,
+  client?: SupabaseClient
+): Promise<TeamMemberRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("ai_flow_team_members")
+    .select(MEMBER_COLUMNS)
+    .eq("business_id", businessId)
+    .eq("id", memberId)
+    .maybeSingle();
+  if (error) throw new Error(`getTeamMember: ${error.message}`);
+  return (data as unknown as TeamMemberRow | null) ?? null;
 }
 
 export type TeamMemberInput = {
@@ -177,6 +196,38 @@ export async function addTimeOff(
     .single();
   if (error) throw new Error(`addTimeOff: ${error.message}`);
   return data as TimeOffRow;
+}
+
+export async function getTimeOff(
+  businessId: string,
+  timeOffId: string,
+  client?: SupabaseClient
+): Promise<TimeOffRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("employee_time_off")
+    .select(TIME_OFF_COLUMNS)
+    .eq("business_id", businessId)
+    .eq("id", timeOffId)
+    .maybeSingle();
+  if (error) throw new Error(`getTimeOff: ${error.message}`);
+  return (data as TimeOffRow | null) ?? null;
+}
+
+/** Records the shared-calendar mirror event id after a successful push. */
+export async function setTimeOffCalendarEventId(
+  businessId: string,
+  timeOffId: string,
+  eventId: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("employee_time_off")
+    .update({ calendar_event_id: eventId })
+    .eq("business_id", businessId)
+    .eq("id", timeOffId);
+  if (error) throw new Error(`setTimeOffCalendarEventId: ${error.message}`);
 }
 
 export async function deleteTimeOff(

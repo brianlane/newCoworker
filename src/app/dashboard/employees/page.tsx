@@ -16,6 +16,7 @@ import {
   listTeamMembers,
   listTimeOff
 } from "@/lib/db/employees";
+import { sharedCalendarStatus } from "@/lib/calendar-tools/shared-calendar";
 import { EmployeesManager } from "@/components/dashboard/EmployeesManager";
 
 export const dynamic = "force-dynamic";
@@ -57,10 +58,11 @@ export default async function DashboardEmployeesPage() {
     );
   }
 
-  const [members, timeOff, stats] = await Promise.all([
+  const [members, timeOff, stats, sharedCalendar] = await Promise.all([
     listTeamMembers(business.id),
     listTimeOff(business.id),
-    listEmployeeRoutingStats(business.id)
+    listEmployeeRoutingStats(business.id),
+    sharedCalendarStatus(business.id)
   ]);
 
   return (
@@ -88,6 +90,7 @@ export default async function DashboardEmployeesPage() {
         initialMembers={members}
         initialTimeOff={timeOff}
         initialStats={stats}
+        initialSharedCalendar={sharedCalendar}
       />
     </div>
   );

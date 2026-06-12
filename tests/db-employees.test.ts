@@ -20,9 +20,12 @@ import {
   createTeamMember,
   deleteTeamMember,
   deleteTimeOff,
+  getTeamMember,
+  getTimeOff,
   listEmployeeRoutingStats,
   listTeamMembers,
   listTimeOff,
+  setTimeOffCalendarEventId,
   updateTeamMember,
   type TeamMemberRow,
   type TimeOffRow
@@ -65,6 +68,7 @@ function timeOffRow(overrides: Partial<TimeOffRow> = {}): TimeOffRow {
     starts_on: "2026-06-12",
     ends_on: "2026-06-14",
     note: null,
+    calendar_event_id: null,
     created_at: "2026-06-01T00:00:00Z",
     ...overrides
   };
@@ -129,6 +133,32 @@ describe("listTeamMembers", () => {
   it("throws on PostgREST error", async () => {
     const { client } = makeClient({ data: null, error: { message: "rls" } });
     await expect(listTeamMembers(BIZ, client)).rejects.toThrow(/listTeamMembers: rls/);
+  });
+});
+
+describe("getTeamMember", () => {
+  it("selects a single member scoped to (business_id, id)", async () => {
+    const row = memberRow();
+    const { client, fromCalls } = makeClient({ data: row, error: null });
+    expect(await getTeamMember(BIZ, MEMBER_ID, client)).toEqual(row);
+    const fr = fromCalls[0]!;
+    expect(fr.table).toBe("ai_flow_team_members");
+    const eqs = fr.calls.filter((c) => c.name === "eq");
+    expect(eqs[0]?.args).toEqual(["business_id", BIZ]);
+    expect(eqs[1]?.args).toEqual(["id", MEMBER_ID]);
+    expect(fr.calls.find((c) => c.name === "maybeSingle")).toBeDefined();
+  });
+
+  it("returns null when not found, with the default client", async () => {
+    const { client } = makeClient({ data: null, error: null });
+    defaultClientSpy.mockReturnValue(client);
+    expect(await getTeamMember(BIZ, MEMBER_ID)).toBeNull();
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws on PostgREST error", async () => {
+    const { client } = makeClient({ data: null, error: { message: "rls" } });
+    await expect(getTeamMember(BIZ, MEMBER_ID, client)).rejects.toThrow(/getTeamMember: rls/);
   });
 });
 
@@ -324,6 +354,57 @@ describe("addTimeOff", () => {
     await expect(
       addTimeOff(BIZ, { memberId: MEMBER_ID, startsOn: "2026-06-14", endsOn: "2026-06-12" }, client)
     ).rejects.toThrow(/addTimeOff: check constraint/);
+  });
+});
+
+describe("getTimeOff", () => {
+  it("selects a single time-off row scoped to (business_id, id)", async () => {
+    const row = timeOffRow({ calendar_event_id: "ev-1" });
+    const { client, fromCalls } = makeClient({ data: row, error: null });
+    expect(await getTimeOff(BIZ, "too-1", client)).toEqual(row);
+    const fr = fromCalls[0]!;
+    expect(fr.table).toBe("employee_time_off");
+    const select = String(fr.calls.find((c) => c.name === "select")?.args[0]);
+    expect(select).toContain("calendar_event_id");
+    const eqs = fr.calls.filter((c) => c.name === "eq");
+    expect(eqs[0]?.args).toEqual(["business_id", BIZ]);
+    expect(eqs[1]?.args).toEqual(["id", "too-1"]);
+  });
+
+  it("returns null when not found, with the default client", async () => {
+    const { client } = makeClient({ data: null, error: null });
+    defaultClientSpy.mockReturnValue(client);
+    expect(await getTimeOff(BIZ, "too-1")).toBeNull();
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws on PostgREST error", async () => {
+    const { client } = makeClient({ data: null, error: { message: "boom" } });
+    await expect(getTimeOff(BIZ, "too-1", client)).rejects.toThrow(/getTimeOff: boom/);
+  });
+});
+
+describe("setTimeOffCalendarEventId", () => {
+  it("updates calendar_event_id scoped to (business_id, id)", async () => {
+    const { client, fromCalls } = makeClient({ data: null, error: null });
+    await setTimeOffCalendarEventId(BIZ, "too-1", "ev-1", client);
+    const fr = fromCalls[0]!;
+    expect(fr.table).toBe("employee_time_off");
+    expect(fr.calls.find((c) => c.name === "update")?.args[0]).toEqual({
+      calendar_event_id: "ev-1"
+    });
+    const eqs = fr.calls.filter((c) => c.name === "eq");
+    expect(eqs[0]?.args).toEqual(["business_id", BIZ]);
+    expect(eqs[1]?.args).toEqual(["id", "too-1"]);
+  });
+
+  it("falls back to the default client and throws on error", async () => {
+    const { client } = makeClient({ data: null, error: { message: "rls" } });
+    defaultClientSpy.mockReturnValue(client);
+    await expect(setTimeOffCalendarEventId(BIZ, "too-1", "ev-1")).rejects.toThrow(
+      /setTimeOffCalendarEventId: rls/
+    );
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
   });
 });
 

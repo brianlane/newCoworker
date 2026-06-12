@@ -19,7 +19,14 @@ import { z } from "zod";
 import { getAuthUser, requireOwner } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
-import { addTimeOff, deleteTimeOff } from "@/lib/db/employees";
+import {
+  addTimeOff,
+  deleteTimeOff,
+  getTeamMember,
+  getTimeOff,
+  setTimeOffCalendarEventId
+} from "@/lib/db/employees";
+import { mirrorTimeOffEvent, removeTimeOffEvent } from "@/lib/calendar-tools/shared-calendar";
 
 export const dynamic = "force-dynamic";
 
@@ -68,6 +75,21 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       note: body.note ?? null
     });
 
+    // Best-effort mirror onto the shared NewCoworker calendar (all-day
+    // "out of office" event, display only). Failure leaves the time off
+    // fully functional — routing reads the DB, not the calendar.
+    const member = await getTeamMember(businessId, id);
+    const eventId = await mirrorTimeOffEvent(
+      businessId,
+      member?.name ?? "Employee",
+      body.startsOn,
+      body.endsOn
+    );
+    if (eventId) {
+      await setTimeOffCalendarEventId(businessId, timeOff.id, eventId);
+      timeOff.calendar_event_id = eventId;
+    }
+
     return successResponse({ timeOff });
   } catch (err) {
     return handleRouteError(err);
@@ -95,7 +117,12 @@ export async function DELETE(request: Request, ctx: { params: Promise<{ id: stri
       return errorResponse("CONFLICT", "Too many deletes, slow down.", 429);
     }
 
+    // Read before delete so we can also remove the shared-calendar mirror.
+    const existing = await getTimeOff(businessId, timeOffId);
     await deleteTimeOff(businessId, timeOffId);
+    if (existing?.calendar_event_id) {
+      await removeTimeOffEvent(businessId, existing.calendar_event_id);
+    }
     return successResponse({ ok: true });
   } catch (err) {
     return handleRouteError(err);

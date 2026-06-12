@@ -29,6 +29,7 @@ import {
   listTimeOff
 } from "@/lib/db/employees";
 import { parseScheduleText } from "@/lib/employees/schedule-text";
+import { sharedCalendarStatus } from "@/lib/calendar-tools/shared-calendar";
 
 export const dynamic = "force-dynamic";
 
@@ -74,13 +75,14 @@ export async function GET(request: Request) {
       return errorResponse("CONFLICT", "Too many requests, slow down.", 429);
     }
 
-    const [members, timeOff, stats] = await Promise.all([
+    const [members, timeOff, stats, sharedCalendar] = await Promise.all([
       listTeamMembers(businessId),
       listTimeOff(businessId),
-      listEmployeeRoutingStats(businessId)
+      listEmployeeRoutingStats(businessId),
+      sharedCalendarStatus(businessId)
     ]);
 
-    return successResponse({ members, timeOff, stats });
+    return successResponse({ members, timeOff, stats, sharedCalendar });
   } catch (err) {
     return handleRouteError(err);
   }
