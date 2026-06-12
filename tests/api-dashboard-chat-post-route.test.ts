@@ -335,12 +335,14 @@ describe("POST /api/dashboard/chat — email tool preamble (Settings → Coworke
     }
   });
 
-  it("keeps OWNER_PREAMBLE first — the email block rides second", async () => {
+  it("keeps OWNER_PREAMBLE first — date line second, email block third", async () => {
     await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
     const { inputMessages } = vi.mocked(insertChatJob).mock.calls[0][0];
     expect(inputMessages[0].content).toContain("OWNER MODE");
     expect(inputMessages[1].role).toBe("system");
-    expect(inputMessages[1].content).toContain("EMAIL TOOL");
+    expect(inputMessages[1].content).toContain("Current date/time:");
+    expect(inputMessages[2].role).toBe("system");
+    expect(inputMessages[2].content).toContain("EMAIL TOOL");
   });
 });
 

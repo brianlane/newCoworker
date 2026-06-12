@@ -4,6 +4,7 @@ import { parsePcmRateFromMime, resamplePCM16Mono } from "./audio-resample.js";
 import { parseTelnyxFrame, telnyxMediaMessageFromPcmBase64 } from "./telnyx-media-json.js";
 import { decodeTelnyxMediaPayload, RtpEncoder } from "./rtp-frame.js";
 import { composeVaultPromptSection, type VaultSnapshot } from "./vault-loader.js";
+import { currentDateTimeLine } from "./datetime-line.js";
 import {
   createTranscriptRecorder,
   type TranscriptAdapter,
@@ -133,7 +134,8 @@ export function systemInstructionForBusiness(
     `You are the AI phone receptionist for ${businessName}.`,
     "You are on a live phone call with a human caller. Keep replies concise, natural, and spoken (not bulleted).",
     "Be warm and professional. If you don't know something specific to this business, say you'll have someone follow up.",
-    "Do not mention APIs, models, tokens, or internal session limits to the caller unless a coordinator message explicitly tells you what to say."
+    "Do not mention APIs, models, tokens, or internal session limits to the caller unless a coordinator message explicitly tells you what to say.",
+    currentDateTimeLine()
   ];
   if (hasTransfer) {
     base.push(

@@ -24,6 +24,7 @@ import { systemLog } from "../_shared/system_log.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 import { callSmsRowboatWithStatelessFallback } from "../_shared/sms_rowboat.ts";
 import { buildCustomerPreambleForEdge, type EdgeCustomerMemoryRow } from "../_shared/customer_memory_preamble.ts";
+import { currentDateTimeLine } from "../_shared/datetime_line.ts";
 import {
   pickSmsTurn,
   recordSmsChatSpend,
@@ -471,7 +472,12 @@ serve(async (req: Request) => {
       `(customer_lookup_by_phone, customer_set_display_name, ` +
       `customer_append_pinned_note), pass this exact value as the phone ` +
       `argument unless the texter explicitly refers to a different number.`;
-    const customerPreamble = memoryPreamble ? `${phoneLine}\n\n${memoryPreamble}` : phoneLine;
+    // Date awareness: without this the model cannot resolve "tomorrow at
+    // 2pm" into the ISO times the calendar tools require.
+    const dateAndPhoneLines = `${currentDateTimeLine()}\n\n${phoneLine}`;
+    const customerPreamble = memoryPreamble
+      ? `${dateAndPhoneLines}\n\n${memoryPreamble}`
+      : dateAndPhoneLines;
 
     let convId: string | undefined;
     let reply = (job.rowboat_reply_cached ?? "").trim();
