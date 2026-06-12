@@ -711,6 +711,43 @@ describe("summarizeCustomerMemory — joinSmsHistory branch coverage", () => {
     // Sanity check: no orphan empty assistant line emitted for j1.
     expect(user).not.toContain("[2026-05-05T09:00:00Z SMS AI assistant]:");
   });
+
+  it("renders outbound-only entries (AiFlow sends) without an empty Customer line (covers the `if (r.inboundText)` false arm)", async () => {
+    // Worker-initiated sends from sms_outbound_log have no inbound side —
+    // the flow texted the lead first. The prompt must show the assistant
+    // line but never an empty "[... SMS Customer]:" line.
+    const callRowboatChat = vi.fn(async () => ({
+      reply: "ok",
+      conversationId: undefined,
+      state: undefined,
+      hasStateKey: false
+    }));
+    await summarizeCustomerMemory(BIZ, CUSTOMER, {
+      getCustomerMemory: (async () => memory({ interaction_count: 5 })) as never,
+      getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,
+      callRowboatChat: callRowboatChat as never,
+      listSmsHistoryForCustomer: (async () => [
+        {
+          jobId: "o1",
+          inboundText: "",
+          assistantReply: "Hi Liz, re your inquiry...",
+          receivedAt: "2026-05-05T08:00:00Z",
+          source: "ai_flow" as const
+        }
+      ]) as never,
+      listVoiceTurnsForCustomer: vi.fn(async () => []),
+      updateCustomerSummary: vi.fn() as never,
+      rowboatBearer: "tok"
+    });
+    const args = (callRowboatChat.mock.calls as unknown as Array<[{
+      messages: Array<{ role: string; content: string }>;
+    }]>)[0]?.[0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const user = args.messages[1]?.content ?? "";
+    expect(user).toContain("[2026-05-05T08:00:00Z SMS AI assistant]: Hi Liz, re your inquiry...");
+    expect(user).not.toContain("[2026-05-05T08:00:00Z SMS Customer]:");
+  });
 });
 
 describe("shouldSummarize — supplemental branch coverage", () => {
