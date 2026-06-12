@@ -805,11 +805,16 @@ serve(async (req: Request) => {
     // from suppressed senders.
     const { data: bizRow } = await supabase
       .from("businesses")
-      .select("is_paused, customer_channels_enabled")
+      .select("is_paused, customer_channels_enabled, owner_name, phone")
       .eq("id", businessId)
       .maybeSingle();
     const biz = bizRow as
-      | { is_paused?: boolean; customer_channels_enabled?: boolean }
+      | {
+          is_paused?: boolean;
+          customer_channels_enabled?: boolean;
+          owner_name?: string | null;
+          phone?: string | null;
+        }
       | null;
 
     // Roster lookup for the team-member gate (applied below on BOTH the Safe
@@ -837,6 +842,45 @@ serve(async (req: Request) => {
         );
       }
       teamMember = memberRow as { name?: string | null } | null;
+      // The OWNER's own numbers get the same gate: a free text from the
+      // owner is never a customer message, and without this the worker
+      // would AI-chat with the owner and auto-create a customer profile for
+      // their cell. Checked against ALL owner-configured numbers — the Safe
+      // Mode forward cell, the notification alert phone, and the onboarding
+      // phone — the same set `resolveContactNames` labels as "owner" on the
+      // dashboard, so gate behavior and labeling can't disagree. The gate's
+      // owner-forward is a no-op when sender === forward number.
+      if (!teamMember) {
+        const [fwdRes, prefsRes] = await Promise.all([
+          supabase
+            .from("business_telnyx_settings")
+            .select("forward_to_e164")
+            .eq("business_id", businessId)
+            .maybeSingle(),
+          supabase
+            .from("notification_preferences")
+            .select("phone_number")
+            .eq("business_id", businessId)
+            .maybeSingle()
+        ]);
+        if (fwdRes.error || prefsRes.error) {
+          console.error("owner number lookup", fwdRes.error ?? prefsRes.error);
+          return new Response(
+            JSON.stringify({ ok: false, error: "team_lookup_failed" }),
+            { status: 503, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        const ownerNumbers = [
+          (fwdRes.data as { forward_to_e164?: string | null } | null)
+            ?.forward_to_e164,
+          (prefsRes.data as { phone_number?: string | null } | null)
+            ?.phone_number,
+          biz?.phone
+        ].map((n) => normalizeE164(n ?? ""));
+        if (ownerNumbers.some((n) => n && from === n)) {
+          teamMember = { name: biz?.owner_name?.trim() || "Owner" };
+        }
+      }
     }
 
     // Persist the employee text for the thread audit trail, forward it to
