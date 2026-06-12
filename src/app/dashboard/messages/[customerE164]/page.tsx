@@ -101,7 +101,17 @@ export default async function SmsThreadPage({
                   ].join(" ")}
                 >
                   <div className="text-[10px] uppercase tracking-wide text-parchment/50 mb-1 flex items-center gap-2">
-                    <span>{isInbound ? "Customer" : "Assistant"}</span>
+                    <span>
+                      {isInbound
+                        ? "Customer"
+                        : m.source === "ai_flow"
+                          ? "AiFlow"
+                          : m.source === "agent_offer"
+                            ? "AiFlow · team offer"
+                            : m.source === "owner_notify"
+                              ? "AiFlow · notification"
+                              : "Assistant"}
+                    </span>
                     <span className="text-parchment/30 normal-case font-normal">
                       <LocalDateTime iso={m.timestamp} />
                     </span>

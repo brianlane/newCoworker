@@ -140,6 +140,61 @@ export function hasDigestActivity(a: DigestActivity): boolean {
 
 export type DigestSection = { heading: string; lines: string[] };
 
+/**
+ * One clickable event for the dashboard notifications list. `href` is always
+ * a dashboard-relative path (never absolute) so the client can render it as
+ * an internal link without an allowlist.
+ */
+export type DigestEventLink = { label: string; href: string; at?: string };
+
+/** Cap stored on the notifications row so one busy week can't bloat payload JSON. */
+export const DIGEST_EVENT_LINKS_MAX = 30;
+
+/**
+ * Per-event deep links recorded on the digest's notifications row, so the
+ * dashboard can expand a "Daily summary (5 events)" notification into the
+ * actual events it counted, each linking to the relevant page.
+ */
+export function buildDigestEventLinks(activity: DigestActivity): DigestEventLink[] {
+  const events: DigestEventLink[] = [];
+  for (const c of activity.calls) {
+    events.push({
+      label: `Call — ${c.caller_e164 ?? "unknown caller"} (${c.status})`,
+      href: "/dashboard/calls",
+      at: c.started_at
+    });
+  }
+  for (const r of activity.aiFlowRuns) {
+    events.push({
+      label: `AiFlow — ${r.flowName} (${r.status})`,
+      href: "/dashboard/aiflows",
+      at: r.created_at
+    });
+  }
+  for (const cust of activity.newCustomers) {
+    const who = cust.display_name
+      ? `${cust.display_name} (${cust.customer_e164})`
+      : cust.customer_e164;
+    events.push({
+      label: `New customer — ${who}`,
+      href: `/dashboard/customers/${encodeURIComponent(cust.customer_e164)}`
+    });
+  }
+  if (activity.smsInbound > 0 || activity.smsOutbound > 0) {
+    events.push({
+      label: `Texts — ${activity.smsInbound} received, ${activity.smsOutbound} sent`,
+      href: "/dashboard/messages"
+    });
+  }
+  if (activity.chatTurns > 0) {
+    events.push({
+      label: `Dashboard chat — ${activity.chatTurns} turn${activity.chatTurns === 1 ? "" : "s"}`,
+      href: "/dashboard/chat"
+    });
+  }
+  return events.slice(0, DIGEST_EVENT_LINKS_MAX);
+}
+
 export type DigestEmailModel = {
   subject: string;
   intro: string;

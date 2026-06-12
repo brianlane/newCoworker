@@ -36,6 +36,33 @@ export function notificationLink(n: NotificationLike): NotificationLink | null {
 
 export type NotificationDetailField = { label: string; value: string };
 
+export type NotificationEventLink = { label: string; href: string; at?: string };
+
+/**
+ * Per-event deep links stored on digest notifications (payload.events,
+ * written by the notifications-digest function). Validated defensively:
+ * only objects with a non-empty label and a DASHBOARD-RELATIVE href (must
+ * start with "/") are returned, so a malformed or tampered payload can never
+ * render an external link.
+ */
+export function notificationEventLinks(n: NotificationLike): NotificationEventLink[] {
+  const raw = n.payload?.events;
+  if (!Array.isArray(raw)) return [];
+  const out: NotificationEventLink[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const { label, href, at } = item as Record<string, unknown>;
+    if (typeof label !== "string" || label.trim().length === 0) continue;
+    if (typeof href !== "string" || !href.startsWith("/")) continue;
+    out.push({
+      label: label.trim(),
+      href,
+      ...(typeof at === "string" && at ? { at } : {})
+    });
+  }
+  return out;
+}
+
 /**
  * Human-labeled payload fields for the expanded row. Only fields with
  * presentable values are returned; internal keys (logId, reason — rendered

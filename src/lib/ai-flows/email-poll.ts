@@ -31,6 +31,7 @@ import {
   type InboundEmailMessage
 } from "@/lib/ai-flows/trigger-eval";
 import { recordSystemLog } from "@/lib/db/system-logs";
+import { recordInboundTriggerEmail } from "@/lib/db/email-log";
 import type { TriggerCondition } from "@/lib/ai-flows/schema";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -419,6 +420,19 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
           );
           if (!run) continue; // already enqueued by an earlier tick
           result.enqueued += 1;
+          // Surface the triggering email on the dashboard Emails page.
+          await recordInboundTriggerEmail(
+            {
+              businessId,
+              fromEmail: msg.fromEmail,
+              subject: msg.subject,
+              bodyText: msg.bodyText,
+              flowId: flow.id,
+              runId: run.id,
+              providerMessageId: msg.id
+            },
+            db
+          );
           await recordSystemLog({
             businessId,
             source: "aiflow",

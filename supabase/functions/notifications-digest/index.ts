@@ -42,6 +42,7 @@ import { buildBrandedEmailHtml, type BrandedBodyBlock } from "../_shared/branded
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 import {
   buildDigestEmailModel,
+  buildDigestEventLinks,
   hasDigestActivity,
   windowLabel,
   type DigestActivity,
@@ -453,11 +454,16 @@ serve(async (req: Request) => {
       })
     });
 
+    // Per-event deep links so the dashboard notification expands into the
+    // actual events the digest counted.
+    const events = buildDigestEventLinks(activity);
+
     if (res.ok) {
       await recordDigestRow(supa, t.business_id, "sent", model.subject, {
         window,
         recipient,
-        activitySummary: model.activitySummary
+        activitySummary: model.activitySummary,
+        events
       });
       sent += 1;
     } else {
@@ -468,7 +474,7 @@ serve(async (req: Request) => {
         t.business_id,
         "failed",
         model.subject,
-        { window, recipient, activitySummary: model.activitySummary },
+        { window, recipient, activitySummary: model.activitySummary, events },
         `resend_${res.status}`
       );
       failed += 1;

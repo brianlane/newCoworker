@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   notificationDetailFields,
+  notificationEventLinks,
   notificationLink
 } from "@/lib/notifications/display";
 
@@ -121,6 +122,59 @@ describe("notifications/display", () => {
         })
       ).toEqual([]);
       expect(notificationDetailFields({ kind: null, payload: null })).toEqual([]);
+    });
+  });
+
+  describe("notificationEventLinks", () => {
+    it("returns the validated events from a digest payload", () => {
+      expect(
+        notificationEventLinks({
+          kind: "digest",
+          payload: {
+            events: [
+              { label: "Call — +15551111111 (completed)", href: "/dashboard/calls", at: "2026-06-11T10:00:00Z" },
+              { label: " Texts — 2 received, 1 sent ", href: "/dashboard/messages" }
+            ]
+          }
+        })
+      ).toEqual([
+        {
+          label: "Call — +15551111111 (completed)",
+          href: "/dashboard/calls",
+          at: "2026-06-11T10:00:00Z"
+        },
+        { label: "Texts — 2 received, 1 sent", href: "/dashboard/messages" }
+      ]);
+    });
+
+    it("returns [] when events are missing or not an array", () => {
+      expect(notificationEventLinks({ kind: "digest", payload: null })).toEqual([]);
+      expect(notificationEventLinks({ kind: "digest", payload: {} })).toEqual([]);
+      expect(notificationEventLinks({ kind: "digest", payload: { events: "junk" } })).toEqual([]);
+    });
+
+    it("drops malformed entries and non-relative hrefs (tamper defence)", () => {
+      expect(
+        notificationEventLinks({
+          kind: "digest",
+          payload: {
+            events: [
+              null,
+              "string",
+              { label: "", href: "/dashboard/calls" },
+              { label: "no href" },
+              { label: "external", href: "https://evil.example.com" },
+              { label: "bad at", href: "/dashboard/calls", at: 42 },
+              { label: "empty at", href: "/dashboard/calls", at: "" },
+              { label: "ok", href: "/dashboard/aiflows" }
+            ]
+          }
+        })
+      ).toEqual([
+        { label: "bad at", href: "/dashboard/calls" },
+        { label: "empty at", href: "/dashboard/calls" },
+        { label: "ok", href: "/dashboard/aiflows" }
+      ]);
     });
   });
 });

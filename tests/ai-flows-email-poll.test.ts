@@ -11,6 +11,7 @@ vi.mock("@/lib/voice-tools/connections", () => ({
 }));
 vi.mock("@/lib/ai-flows/db", () => ({ enqueueAiFlowRun: vi.fn() }));
 vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
+vi.mock("@/lib/db/email-log", () => ({ recordInboundTriggerEmail: vi.fn() }));
 
 import {
   EMAIL_POLL_MAX_LIST_PAGES,
@@ -24,6 +25,7 @@ import { nangoProxyForBusiness } from "@/lib/nango/workspace";
 import { getWorkspaceOAuthConnection } from "@/lib/db/workspace-oauth-connections";
 import { enqueueAiFlowRun } from "@/lib/ai-flows/db";
 import { recordSystemLog } from "@/lib/db/system-logs";
+import { recordInboundTriggerEmail } from "@/lib/db/email-log";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const CONN = "33333333-3333-4333-8333-333333333333";
@@ -270,9 +272,22 @@ describe("pollEmailTriggers", () => {
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({ event: "ai_flow_run_enqueued_email" })
     );
+    // The triggering email is recorded for the dashboard Emails page.
+    expect(recordInboundTriggerEmail).toHaveBeenCalledTimes(1);
+    expect(recordInboundTriggerEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: BIZ,
+        flowId: "f-match",
+        fromEmail: "leads@rx.com",
+        subject: "New referral",
+        providerMessageId: "m1"
+      }),
+      expect.anything()
+    );
   });
 
   it("treats a dedupe collision (null run) as already-enqueued, not a new run", async () => {
+    vi.mocked(recordInboundTriggerEmail).mockClear();
     vi.mocked(nangoProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
@@ -283,6 +298,7 @@ describe("pollEmailTriggers", () => {
     const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())], null, { rows: null }));
     expect(res.enqueued).toBe(0);
     expect(recordSystemLog).not.toHaveBeenCalled();
+    expect(recordInboundTriggerEmail).not.toHaveBeenCalled();
   });
 
   it("throws into the per-mailbox error path when the Gmail link is dead", async () => {

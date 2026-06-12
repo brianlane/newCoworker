@@ -7,6 +7,7 @@ import {
   MessageSquare,
   Phone,
   MessageCircle,
+  Mail,
   Brain,
   Plug,
   Settings,
@@ -22,6 +23,9 @@ const ownerNavItems = [
   { label: "Chat", href: "/dashboard/chat", icon: MessageSquare },
   { label: "Calls", href: "/dashboard/calls", icon: Phone },
   { label: "Texts", href: "/dashboard/messages", icon: MessageCircle },
+  // AiFlow email activity (sends + trigger emails) from email_log — the
+  // email counterpart of the Texts/Calls history pages.
+  { label: "Emails", href: "/dashboard/emails", icon: Mail },
   // Cross-channel customers view (Phase 4 of the customer memory plan):
   // unified per-customer profile across SMS + voice. Sits between the
   // channel-specific dashboards and the business-level Memory page so

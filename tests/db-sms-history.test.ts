@@ -29,8 +29,41 @@ function chain(): Chain {
   return c;
 }
 
-function makeDb(c: Chain) {
-  return { from: vi.fn(() => c) };
+/**
+ * Fake Supabase client routing `sms_inbound_jobs` to `c` and
+ * `sms_outbound_log` to `outbound` (default: an empty result, so the many
+ * inbound-focused tests don't need to care about the merge).
+ */
+function makeDb(c: Chain, outbound?: Chain) {
+  let oc = outbound;
+  if (!oc) {
+    oc = chain();
+    oc.limit.mockResolvedValue({ data: [], error: null });
+  }
+  return {
+    from: vi.fn((table: string) => (table === "sms_outbound_log" ? oc : c))
+  };
+}
+
+function outboundLogRow(args: {
+  id?: string;
+  to?: string;
+  body?: string;
+  source?: string;
+  created_at?: string;
+}) {
+  return {
+    id: args.id ?? "ob1",
+    business_id: "biz",
+    to_e164: args.to ?? "+15551111111",
+    from_e164: "+16025550000",
+    body: args.body ?? "flow message",
+    source: args.source ?? "ai_flow",
+    run_id: "run-1",
+    flow_id: "flow-1",
+    telnyx_message_id: "tm-1",
+    created_at: args.created_at ?? "2026-05-05T03:00:00Z"
+  };
 }
 
 function envelope(args: {
@@ -463,6 +496,88 @@ describe("listConversationsForBusiness", () => {
     defaultClientSpy.mockResolvedValueOnce(makeDb(c));
     await expect(listConversationsForBusiness("biz")).resolves.toEqual([]);
   });
+
+  it("creates a conversation from worker-initiated sends alone (AiFlow lead with no inbound yet)", async () => {
+    const c = chain();
+    c.limit.mockResolvedValue({ data: [], error: null });
+    const oc = chain();
+    oc.limit.mockResolvedValue({
+      data: [
+        outboundLogRow({ id: "ob1", to: "+14695555555", body: "Hi, I'd love to help you sell." })
+      ],
+      error: null
+    });
+    const result = await listConversationsForBusiness("biz", {}, makeDb(c, oc) as never);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      customerE164: "+14695555555",
+      lastMessage: "Hi, I'd love to help you sell.",
+      lastStatus: "done",
+      messageCount: 1
+    });
+  });
+
+  it("merges worker sends into an existing conversation: newer send takes the preview, older only counts", async () => {
+    const c = chain();
+    c.limit.mockResolvedValue({
+      data: [
+        {
+          id: "j1",
+          business_id: "biz",
+          payload: envelope({ from: { phone_number: "+15551111111" }, text: "inbound hi" }),
+          status: "done",
+          rowboat_reply_cached: "reply",
+          telnyx_outbound_message_id: null,
+          last_error: null,
+          created_at: "2026-05-05T01:00:00Z",
+          updated_at: "2026-05-05T01:00:00Z"
+        }
+      ],
+      error: null
+    });
+    const oc = chain();
+    oc.limit.mockResolvedValue({
+      data: [
+        outboundLogRow({
+          id: "ob-new",
+          body: "newer flow send",
+          created_at: "2026-05-05T02:00:00Z"
+        }),
+        outboundLogRow({
+          id: "ob-old",
+          body: "older flow send",
+          created_at: "2026-05-05T00:00:00Z"
+        })
+      ],
+      error: null
+    });
+    const result = await listConversationsForBusiness("biz", {}, makeDb(c, oc) as never);
+    expect(result).toHaveLength(1);
+    // 2 expanded inbound-job messages + 2 log rows.
+    expect(result[0]?.messageCount).toBe(4);
+    expect(result[0]?.lastMessage).toBe("newer flow send");
+    expect(result[0]?.lastMessageAt).toBe("2026-05-05T02:00:00Z");
+  });
+
+  it("surfaces outbound-log query errors", async () => {
+    const c = chain();
+    c.limit.mockResolvedValue({ data: [], error: null });
+    const oc = chain();
+    oc.limit.mockResolvedValue({ data: null, error: { message: "log boom" } });
+    await expect(
+      listConversationsForBusiness("biz", {}, makeDb(c, oc) as never)
+    ).rejects.toThrow(/log boom/);
+  });
+
+  it("handles null outbound-log data", async () => {
+    const c = chain();
+    c.limit.mockResolvedValue({ data: [], error: null });
+    const oc = chain();
+    oc.limit.mockResolvedValue({ data: null, error: null });
+    await expect(
+      listConversationsForBusiness("biz", {}, makeDb(c, oc) as never)
+    ).resolves.toEqual([]);
+  });
 });
 
 describe("listMessagesForCustomer", () => {
@@ -790,6 +905,94 @@ describe("listMessagesForCustomer", () => {
     c.limit.mockResolvedValue({ data: [], error: null });
     defaultClientSpy.mockResolvedValueOnce(makeDb(c));
     await expect(listMessagesForCustomer("biz", "+15551111111")).resolves.toEqual([]);
+  });
+
+  it("interleaves worker-initiated sends chronologically with the conversation, tagged with their source", async () => {
+    const c = chain();
+    c.limit.mockResolvedValue({
+      data: [
+        {
+          id: "j1",
+          business_id: "biz",
+          payload: envelope({ from: { phone_number: "+15551111111" }, text: "got your text!" }),
+          status: "done",
+          rowboat_reply_cached: "great, talk soon",
+          telnyx_outbound_message_id: null,
+          last_error: null,
+          created_at: "2026-05-05T02:00:00Z",
+          updated_at: "2026-05-05T02:00:01Z"
+        }
+      ],
+      error: null
+    });
+    const oc = chain();
+    oc.limit.mockResolvedValue({
+      data: [
+        // Newest-first like the real query; the intro PREDATES the inbound.
+        outboundLogRow({
+          id: "ob-intro",
+          body: "Hi, this is Amy's coworker.",
+          created_at: "2026-05-05T01:00:00Z"
+        })
+      ],
+      error: null
+    });
+    const result = await listMessagesForCustomer("biz", "+15551111111", {}, makeDb(c, oc) as never);
+    expect(result.map((m) => `${m.direction}:${m.content}`)).toEqual([
+      "outbound:Hi, this is Amy's coworker.",
+      "inbound:got your text!",
+      "outbound:great, talk soon"
+    ]);
+    expect(result[0]?.source).toBe("ai_flow");
+    expect(result[0]?.id).toBe("ob-intro:flow-outbound");
+    expect(result[1]?.source).toBeUndefined();
+  });
+
+  it("keeps stable order for identical timestamps (comparator equality branch)", async () => {
+    const c = chain();
+    c.limit.mockResolvedValue({
+      data: [
+        {
+          id: "j1",
+          business_id: "biz",
+          payload: envelope({ from: { phone_number: "+15551111111" }, text: "hi" }),
+          status: "done",
+          rowboat_reply_cached: null,
+          telnyx_outbound_message_id: null,
+          last_error: null,
+          created_at: "2026-05-05T00:00:00Z",
+          updated_at: "2026-05-05T00:00:00Z"
+        }
+      ],
+      error: null
+    });
+    const oc = chain();
+    oc.limit.mockResolvedValue({
+      data: [outboundLogRow({ id: "ob1", body: "same instant", created_at: "2026-05-05T00:00:00Z" })],
+      error: null
+    });
+    const result = await listMessagesForCustomer("biz", "+15551111111", {}, makeDb(c, oc) as never);
+    expect(result.map((m) => m.content)).toEqual(["hi", "same instant"]);
+  });
+
+  it("surfaces outbound-log query errors", async () => {
+    const c = chain();
+    c.limit.mockResolvedValue({ data: [], error: null });
+    const oc = chain();
+    oc.limit.mockResolvedValue({ data: null, error: { message: "log thread boom" } });
+    await expect(
+      listMessagesForCustomer("biz", "+15551111111", {}, makeDb(c, oc) as never)
+    ).rejects.toThrow(/log thread boom/);
+  });
+
+  it("handles null outbound-log data", async () => {
+    const c = chain();
+    c.limit.mockResolvedValue({ data: [], error: null });
+    const oc = chain();
+    oc.limit.mockResolvedValue({ data: null, error: null });
+    await expect(
+      listMessagesForCustomer("biz", "+15551111111", {}, makeDb(c, oc) as never)
+    ).resolves.toEqual([]);
   });
 
   it("respects the limit slice (keeps the most-recent expanded messages)", async () => {
