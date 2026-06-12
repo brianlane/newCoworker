@@ -13,7 +13,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { ChatMarkdown } from "@/components/ui/ChatMarkdown";
 import { listMessagesForCustomer } from "@/lib/db/sms-history";
-import { resolveContactNames } from "@/lib/db/contact-names";
+import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { ContactNameEditor } from "@/components/dashboard/ContactNameEditor";
 
@@ -66,8 +66,7 @@ export default async function SmsThreadPage({
   if (messages.length === 0) notFound();
   const contact = (
     await resolveContactNames(business.id, [customerE164]).catch(
-      () =>
-        new Map<string, { name: string; kind: "owner" | "employee" | "customer" }>()
+      () => new Map<string, ContactName>()
     )
   ).get(customerE164);
   const inboundLabel = contact

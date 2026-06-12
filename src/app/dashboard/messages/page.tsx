@@ -16,7 +16,7 @@ import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { listConversationsForBusiness } from "@/lib/db/sms-history";
-import { resolveContactNames } from "@/lib/db/contact-names";
+import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 
 export const dynamic = "force-dynamic";
@@ -63,9 +63,7 @@ export default async function DashboardMessagesPage() {
   const contactNames = await resolveContactNames(
     business.id,
     conversations.map((c) => c.customerE164)
-  ).catch(
-    () => new Map<string, { name: string; kind: "owner" | "employee" | "customer" }>()
-  );
+  ).catch(() => new Map<string, ContactName>());
 
   return (
     <div className="space-y-6 max-w-4xl">
