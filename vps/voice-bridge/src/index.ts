@@ -493,11 +493,15 @@ function main(): void {
           let customerMemorySummary: string | undefined;
           if (fromE164Info) {
             try {
+              // Alias-aware: a number merged into another profile
+              // (alias_e164s) resolves to the surviving row. On a Supabase
+              // predating the merge migration this errors like a missing
+              // table would — swallowed below, degraded prompt.
               const { data: memRow } = await supabase
                 .from("customer_memories")
                 .select("summary_md, pinned_md, display_name, total_interaction_count")
                 .eq("business_id", businessId)
-                .eq("customer_e164", fromE164Info)
+                .or(`customer_e164.eq.${fromE164Info},alias_e164s.cs.{${fromE164Info}}`)
                 .maybeSingle();
               if (memRow) {
                 const segments: string[] = [];

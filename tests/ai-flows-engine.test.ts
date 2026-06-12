@@ -5,15 +5,20 @@ import {
   evaluateSmsTrigger,
   evaluateStepCondition,
   extractPhones,
+  filterRosterByAvailability,
   firstUrlInText,
   hasUnresolvedPlaceholders,
   htmlToText,
   isExecutableDefinition,
+  isWithinWeeklyWindows,
+  localClock,
   messagesInWindow,
   isE164,
   normalizeNanpToE164,
   parseExtractionJson,
+  parseHmToMinutes,
   parseRoutedAgent,
+  parseWeeklyWindows,
   pickRosterAgent,
   renderTemplate,
   resolvePath,
@@ -514,5 +519,168 @@ describe("pickRosterAgent", () => {
 
   it("returns null for an empty roster", () => {
     expect(pickRosterAgent([], [])).toBeNull();
+  });
+});
+
+describe("parseHmToMinutes", () => {
+  it("parses padded and unpadded HH:MM", () => {
+    expect(parseHmToMinutes("09:00")).toBe(540);
+    expect(parseHmToMinutes("9:05")).toBe(545);
+    expect(parseHmToMinutes("0:00")).toBe(0);
+    expect(parseHmToMinutes("23:59")).toBe(1439);
+    expect(parseHmToMinutes(" 12:30 ")).toBe(750);
+  });
+
+  it("rejects out-of-range and malformed values", () => {
+    expect(parseHmToMinutes("24:00")).toBeNull();
+    expect(parseHmToMinutes("12:60")).toBeNull();
+    expect(parseHmToMinutes("noon")).toBeNull();
+    expect(parseHmToMinutes("12-30")).toBeNull();
+    expect(parseHmToMinutes("12:3")).toBeNull();
+    expect(parseHmToMinutes("")).toBeNull();
+  });
+});
+
+describe("localClock", () => {
+  // 2026-06-11T06:23:00Z is a Thursday in UTC but still Wednesday night in
+  // Phoenix (UTC-7, no DST) — the exact cross-midnight case time-off and
+  // schedule checks must get right.
+  const instant = new Date("2026-06-11T06:23:00Z");
+
+  it("resolves the business-local date, weekday, and minutes", () => {
+    expect(localClock(instant, "America/Phoenix")).toEqual({
+      isoDate: "2026-06-10",
+      weekday: "wed",
+      minutes: 23 * 60 + 23
+    });
+  });
+
+  it("defaults to UTC when the timezone is null, undefined, or blank", () => {
+    const utc = { isoDate: "2026-06-11", weekday: "thu", minutes: 6 * 60 + 23 };
+    expect(localClock(instant, null)).toEqual(utc);
+    expect(localClock(instant, undefined)).toEqual(utc);
+    expect(localClock(instant, "  ")).toEqual(utc);
+  });
+
+  it("falls back to UTC on an invalid IANA name instead of throwing (typos must never stop routing)", () => {
+    expect(localClock(instant, "Not/AZone")).toEqual({
+      isoDate: "2026-06-11",
+      weekday: "thu",
+      minutes: 6 * 60 + 23
+    });
+  });
+});
+
+describe("parseWeeklyWindows", () => {
+  it("parses the stored jsonb shape into minute windows", () => {
+    expect(
+      parseWeeklyWindows({ mon: [["09:00", "17:00"]], sat: [["10:00", "12:00"], ["13:00", "15:00"]] })
+    ).toEqual({
+      mon: [[540, 1020]],
+      sat: [[600, 720], [780, 900]]
+    });
+  });
+
+  it("returns null for non-objects, arrays, and empty objects", () => {
+    expect(parseWeeklyWindows(null)).toBeNull();
+    expect(parseWeeklyWindows(undefined)).toBeNull();
+    expect(parseWeeklyWindows("mon 9-5")).toBeNull();
+    expect(parseWeeklyWindows([["09:00", "17:00"]])).toBeNull();
+    expect(parseWeeklyWindows({})).toBeNull();
+  });
+
+  it("drops malformed windows (wrong shape, bad times, inverted ranges) and unknown day keys", () => {
+    expect(
+      parseWeeklyWindows({
+        mon: [
+          "not-a-window",
+          ["09:00"],
+          [42, "17:00"],
+          ["09:00", 42],
+          ["25:00", "26:00"],
+          ["17:00", "09:00"],
+          ["09:00", "09:00"],
+          ["09:00", "17:00"]
+        ],
+        funday: [["09:00", "17:00"]],
+        tue: "closed"
+      })
+    ).toEqual({ mon: [[540, 1020]] });
+  });
+
+  it("returns null when every entry is malformed", () => {
+    expect(parseWeeklyWindows({ mon: [["17:00", "09:00"]] })).toBeNull();
+  });
+});
+
+describe("isWithinWeeklyWindows", () => {
+  const windows = { mon: [[540, 1020]] } as ReturnType<typeof parseWeeklyWindows> & object;
+
+  it("is true inside a window (start inclusive, end exclusive)", () => {
+    expect(isWithinWeeklyWindows(windows, { isoDate: "2026-06-08", weekday: "mon", minutes: 540 })).toBe(true);
+    expect(isWithinWeeklyWindows(windows, { isoDate: "2026-06-08", weekday: "mon", minutes: 1019 })).toBe(true);
+    expect(isWithinWeeklyWindows(windows, { isoDate: "2026-06-08", weekday: "mon", minutes: 1020 })).toBe(false);
+    expect(isWithinWeeklyWindows(windows, { isoDate: "2026-06-08", weekday: "mon", minutes: 539 })).toBe(false);
+  });
+
+  it("is false on a day with no windows", () => {
+    expect(isWithinWeeklyWindows(windows, { isoDate: "2026-06-09", weekday: "tue", minutes: 600 })).toBe(false);
+  });
+});
+
+describe("filterRosterByAvailability", () => {
+  const monMorning = { isoDate: "2026-06-08", weekday: "mon" as const, minutes: 600 };
+  const member = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    name: id,
+    phone_e164: `+1480555${id.padStart(4, "0")}`,
+    ...extra
+  });
+
+  it("hard-skips members on time off (supersedes everything, including pinned routing upstream)", () => {
+    const roster = [member("1"), member("2")];
+    expect(filterRosterByAvailability(roster, new Set(["1"]), monMorning).map((m) => m.id)).toEqual([
+      "2"
+    ]);
+  });
+
+  it("hard-skips members outside their weekly schedule; no schedule = always available", () => {
+    const roster = [
+      member("works-now", { weekly_schedule: { mon: [["09:00", "17:00"]] } }),
+      member("off-today", { weekly_schedule: { tue: [["09:00", "17:00"]] } }),
+      member("no-schedule")
+    ];
+    expect(filterRosterByAvailability(roster, new Set(), monMorning).map((m) => m.id)).toEqual([
+      "works-now",
+      "no-schedule"
+    ]);
+  });
+
+  it("treats an unparseable schedule as unset (owner typo must not bench an employee)", () => {
+    const roster = [member("garbled", { weekly_schedule: { mon: [["17:00", "09:00"]] } })];
+    expect(filterRosterByAvailability(roster, new Set(), monMorning).map((m) => m.id)).toEqual([
+      "garbled"
+    ]);
+  });
+
+  it("floats members inside a preferred window to the front, preserving rotation order otherwise", () => {
+    const roster = [
+      member("first-in-rotation"),
+      member("prefers-now", { preferred_windows: { mon: [["09:00", "12:00"]] } }),
+      member("prefers-later", { preferred_windows: { mon: [["18:00", "20:00"]] } })
+    ];
+    expect(filterRosterByAvailability(roster, new Set(), monMorning).map((m) => m.id)).toEqual([
+      "prefers-now",
+      "first-in-rotation",
+      "prefers-later"
+    ]);
+  });
+
+  it("returns an empty array when everyone is out (worker falls back to the owner)", () => {
+    const roster = [
+      member("away", { weekly_schedule: { tue: [["09:00", "17:00"]] } }),
+      member("off")
+    ];
+    expect(filterRosterByAvailability(roster, new Set(["off"]), monMorning)).toEqual([]);
   });
 });

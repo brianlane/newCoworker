@@ -17,7 +17,7 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 const ALL_COLUMNS =
   "id,business_id,customer_e164,display_name,summary_md,pinned_md," +
   "interaction_count,total_interaction_count,last_interaction_at," +
-  "last_summarized_at,last_channel,created_at,updated_at";
+  "last_summarized_at,last_channel,alias_e164s,created_at,updated_at";
 
 export async function getCustomerMemory(
   businessId: string,
@@ -25,14 +25,42 @@ export async function getCustomerMemory(
   client?: SupabaseClient
 ): Promise<CustomerMemoryRow | null> {
   const db = client ?? (await createSupabaseServiceClient());
+  // Match the primary number OR any merged-away alias so a profile keeps
+  // resolving from its old number after merge_customer_memories(). E.164 is
+  // strictly `+digits`, so the value is safe inside the PostgREST filter
+  // string (no commas/dots/braces to escape). `cs` = array contains, served
+  // by the GIN index on alias_e164s.
   const { data, error } = await db
     .from("customer_memories")
     .select(ALL_COLUMNS)
     .eq("business_id", businessId)
-    .eq("customer_e164", customerE164)
+    .or(`customer_e164.eq.${customerE164},alias_e164s.cs.{${customerE164}}`)
     .maybeSingle();
   if (error) throw new Error(`getCustomerMemory: ${error.message}`);
   return (data as CustomerMemoryRow | null) ?? null;
+}
+
+/**
+ * Owner-driven profile merge: folds `fromE164` into `intoE164` (concatenated
+ * summary/pinned, summed counters, alias recorded) and deletes the from-row.
+ * All field semantics live in the merge_customer_memories RPC.
+ */
+export async function mergeCustomerMemories(
+  businessId: string,
+  fromE164: string,
+  intoE164: string,
+  client?: SupabaseClient
+): Promise<CustomerMemoryRow> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db.rpc("merge_customer_memories", {
+    p_business_id: businessId,
+    p_from_e164: fromE164,
+    p_into_e164: intoE164
+  });
+  if (error) throw new Error(`mergeCustomerMemories: ${error.message}`);
+  const row = (data as CustomerMemoryRow[] | CustomerMemoryRow | null) ?? null;
+  if (!row) throw new Error("mergeCustomerMemories: rpc returned no row");
+  return Array.isArray(row) ? row[0] : row;
 }
 
 export type ListCustomerMemoriesOptions = {
@@ -224,7 +252,7 @@ const DEFAULT_SMS_HISTORY_LIMIT = 30;
 export async function listSmsHistoryForCustomer(
   businessId: string,
   customerE164: string,
-  options: { limit?: number } = {},
+  options: { limit?: number; aliases?: string[] } = {},
   client?: SupabaseClient
 ): Promise<SmsHistoryEntry[]> {
   const db = client ?? (await createSupabaseServiceClient());
@@ -232,11 +260,15 @@ export async function listSmsHistoryForCustomer(
     Math.max(1, options.limit ?? DEFAULT_SMS_HISTORY_LIMIT),
     100
   );
+  // After a profile merge the old number's SMS rows keep their original
+  // customer_e164 (history is immutable); pass the profile's alias_e164s so
+  // the merged conversation reads as one thread.
+  const numbers = [customerE164, ...(options.aliases ?? [])];
   const { data, error } = await db
     .from("sms_inbound_jobs")
     .select("id, payload, assistant_reply_text, rowboat_reply_cached, created_at")
     .eq("business_id", businessId)
-    .eq("customer_e164", customerE164)
+    .in("customer_e164", numbers)
     .order("created_at", { ascending: false })
     .limit(limit);
   if (error) throw new Error(`listSmsHistoryForCustomer: ${error.message}`);

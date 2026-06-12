@@ -454,6 +454,8 @@ serve(async (req: Request) => {
     // is null when there's no summary/pinned content yet, which keeps
     // first-contact SMS exactly as it was pre-Phase-3 (no empty
     // "Customer profile:" header in the prompt).
+    // Alias-aware: a number merged into another profile (alias_e164s) must
+    // resolve to the surviving row so the merged context follows the texter.
     const { data: memoryRow } = await supabase
       .from("customer_memories")
       .select(
@@ -461,7 +463,7 @@ serve(async (req: Request) => {
           "total_interaction_count, last_channel, last_interaction_at"
       )
       .eq("business_id", job.business_id)
-      .eq("customer_e164", fromE164)
+      .or(`customer_e164.eq.${fromE164},alias_e164s.cs.{${fromE164}}`)
       .maybeSingle();
     const memoryPreamble =
       memoryRow == null

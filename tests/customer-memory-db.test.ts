@@ -37,6 +37,7 @@ import {
   getCustomerMemory,
   listCustomerMemories,
   listSmsHistoryForCustomer,
+  mergeCustomerMemories,
   recordInteractionAndIncrement,
   updateCustomerOwnerFields,
   updateCustomerSummary
@@ -68,6 +69,7 @@ function memory(overrides: Partial<CustomerMemoryRow> = {}): CustomerMemoryRow {
     last_interaction_at: null,
     last_summarized_at: null,
     last_channel: null,
+    alias_e164s: [],
     created_at: "2026-05-01T00:00:00Z",
     updated_at: "2026-05-01T00:00:00Z",
     ...overrides
@@ -92,6 +94,7 @@ function makeBuilder(terminator: { data?: unknown; error?: unknown } | (() => Pr
     "eq",
     "neq",
     "or",
+    "in",
     "order",
     "limit",
     "filter"
@@ -142,7 +145,7 @@ function makeClient(opts: {
 }
 
 describe("getCustomerMemory", () => {
-  it("queries customer_memories with the full column projection and (business_id, customer_e164) filter", async () => {
+  it("queries customer_memories with the full column projection and an alias-aware (e164 OR alias) filter", async () => {
     const row = memory({ display_name: "Joe" });
     const { client, fromCalls } = makeClient({
       fromTerminator: { data: row, error: null }
@@ -159,11 +162,15 @@ describe("getCustomerMemory", () => {
     expect(fr.calls.find((c) => c.name === "select")?.args[0]).toContain("summary_md");
     expect(fr.calls.find((c) => c.name === "select")?.args[0]).toContain("pinned_md");
     expect(fr.calls.find((c) => c.name === "select")?.args[0]).toContain("interaction_count");
-    // Both filter eq() calls are present.
+    expect(fr.calls.find((c) => c.name === "select")?.args[0]).toContain("alias_e164s");
+    // business scope via eq(); the number matches customer_e164 OR a
+    // merged-away alias (merge_customer_memories) via .or().
     const eqs = fr.calls.filter((c) => c.name === "eq");
-    expect(eqs).toHaveLength(2);
+    expect(eqs).toHaveLength(1);
     expect(eqs[0]?.args).toEqual(["business_id", BIZ]);
-    expect(eqs[1]?.args).toEqual(["customer_e164", CUSTOMER]);
+    expect(fr.calls.find((c) => c.name === "or")?.args[0]).toBe(
+      `customer_e164.eq.${CUSTOMER},alias_e164s.cs.{${CUSTOMER}}`
+    );
     // maybeSingle() — null when missing, never throws on 0 rows.
     expect(fr.calls.find((c) => c.name === "maybeSingle")).toBeDefined();
   });
@@ -340,6 +347,45 @@ describe("recordInteractionAndIncrement", () => {
   });
 });
 
+describe("mergeCustomerMemories", () => {
+  const FROM = "+15555550777";
+
+  it("calls the merge_customer_memories RPC with the three expected positional args", async () => {
+    const merged = memory({ alias_e164s: [FROM] });
+    const { client, rpcCalls } = makeClient({ rpcResult: { data: merged, error: null } });
+    const result = await mergeCustomerMemories(BIZ, FROM, CUSTOMER, client);
+    expect(result).toEqual(merged);
+    expect(rpcCalls[0]?.name).toBe("merge_customer_memories");
+    expect(rpcCalls[0]?.args).toEqual({
+      p_business_id: BIZ,
+      p_from_e164: FROM,
+      p_into_e164: CUSTOMER
+    });
+  });
+
+  it("unwraps an array return shape (SETOF-style RPC results)", async () => {
+    const merged = memory({ alias_e164s: [FROM] });
+    const { client } = makeClient({ rpcResult: { data: [merged], error: null } });
+    expect(await mergeCustomerMemories(BIZ, FROM, CUSTOMER, client)).toEqual(merged);
+  });
+
+  it("throws when the RPC errors (e.g. source row not found)", async () => {
+    const { client } = makeClient({
+      rpcResult: { data: null, error: { message: "source customer +1555 not found" } }
+    });
+    await expect(mergeCustomerMemories(BIZ, FROM, CUSTOMER, client)).rejects.toThrow(
+      /mergeCustomerMemories: source customer/
+    );
+  });
+
+  it("throws when the RPC returns no row", async () => {
+    const { client } = makeClient({ rpcResult: { data: null, error: null } });
+    await expect(mergeCustomerMemories(BIZ, FROM, CUSTOMER, client)).rejects.toThrow(
+      /rpc returned no row/
+    );
+  });
+});
+
 describe("updateCustomerSummary", () => {
   it("UPDATEs summary_md, resets interaction_count to 0, sets last_summarized_at + updated_at, scoped to (biz, customer)", async () => {
     const { client, fromCalls } = makeClient({ fromTerminator: { data: null, error: null } });
@@ -474,7 +520,7 @@ describe("listSmsHistoryForCustomer", () => {
     };
   }
 
-  it("queries sms_inbound_jobs scoped to (business_id, customer_e164) ordered desc, limit clamped", async () => {
+  it("queries sms_inbound_jobs scoped to business_id + customer numbers ordered desc, limit clamped", async () => {
     const { client, fromCalls } = makeClient({ fromTerminator: { data: [], error: null } });
     await listSmsHistoryForCustomer(BIZ, CUSTOMER, { limit: 5 }, client);
     const fr = fromCalls[0]!;
@@ -486,7 +532,24 @@ describe("listSmsHistoryForCustomer", () => {
     ]);
     const eqs = fr.calls.filter((c) => c.name === "eq");
     expect(eqs[0]?.args).toEqual(["business_id", BIZ]);
-    expect(eqs[1]?.args).toEqual(["customer_e164", CUSTOMER]);
+    expect(fr.calls.find((c) => c.name === "in")?.args).toEqual([
+      "customer_e164",
+      [CUSTOMER]
+    ]);
+  });
+
+  it("includes merged-away aliases in the customer_e164 IN list so a merged profile reads as one thread", async () => {
+    const { client, fromCalls } = makeClient({ fromTerminator: { data: [], error: null } });
+    await listSmsHistoryForCustomer(
+      BIZ,
+      CUSTOMER,
+      { aliases: ["+15555550999", "+15555550888"] },
+      client
+    );
+    expect(fromCalls[0]?.calls.find((c) => c.name === "in")?.args).toEqual([
+      "customer_e164",
+      [CUSTOMER, "+15555550999", "+15555550888"]
+    ]);
   });
 
   it("clamps limit to [1, 100] with a 30 default", async () => {
@@ -647,6 +710,13 @@ describe("default service-client fallback (every public helper)", () => {
     const { client } = makeClient({ fromTerminator: { data: [], error: null } });
     defaultClientSpy.mockReturnValue(client);
     await listSmsHistoryForCustomer(BIZ, CUSTOMER);
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("mergeCustomerMemories falls back to createSupabaseServiceClient", async () => {
+    const { client } = makeClient({ rpcResult: { data: memory(), error: null } });
+    defaultClientSpy.mockReturnValue(client);
+    await mergeCustomerMemories(BIZ, "+15555550777", CUSTOMER);
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
   });
 });
