@@ -123,6 +123,18 @@ describe("customerE164FromPayload", () => {
       customerE164FromPayload(envelope({ from: { phone_number: "15551234567" } }))
     ).toBeNull();
   });
+
+  it("accepts SHORT CODE senders (ReferralExchange texts from 73339)", () => {
+    expect(customerE164FromPayload(envelope({ from: "73339" }))).toBe("73339");
+    expect(
+      customerE164FromPayload(envelope({ from: { phone_number: "73339" } }))
+    ).toBe("73339");
+  });
+
+  it("still rejects bare 10/11-digit numbers (full phones must be E.164, not guessed)", () => {
+    expect(customerE164FromPayload(envelope({ from: "5551234567" }))).toBeNull();
+    expect(customerE164FromPayload(envelope({ from: "15551234567" }))).toBeNull();
+  });
 });
 
 describe("inboundTextFromPayload", () => {

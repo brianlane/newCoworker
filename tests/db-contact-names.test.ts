@@ -131,7 +131,8 @@ describe("resolveContactNames", () => {
   it("tolerates null data payloads and null alias arrays / names", async () => {
     const a = makeDb({
       ai_flow_team_members: { data: null, error: null },
-      customer_memories: { data: null, error: null }
+      customer_memories: { data: null, error: null },
+      contact_overrides: { data: null, error: null }
     });
     expect(
       (await resolveContactNames(BIZ, ["+1555"], a.db as unknown as Client)).size
@@ -278,6 +279,50 @@ describe("resolveContactNames", () => {
     });
     const out = await resolveContactNames(BIZ, ["+15550000099"], db as unknown as Client);
     expect(out.size).toBe(0);
+  });
+
+  it("manual contact override wins over the derived owner name but keeps the derived kind", async () => {
+    const { db } = makeDb({
+      businesses: { data: { owner_name: "Brian Lane", phone: null }, error: null },
+      business_telnyx_settings: { data: { forward_to_e164: "+16026951142" }, error: null },
+      notification_preferences: { data: null, error: null },
+      contact_overrides: {
+        data: [{ e164: "+16026951142", name: "Amy Laidlaw" }],
+        error: null
+      }
+    });
+    const out = await resolveContactNames(BIZ, ["+16026951142"], db as unknown as Client);
+    expect(out.get("+16026951142")).toEqual({
+      name: "Amy Laidlaw",
+      kind: "owner",
+      override: true
+    });
+  });
+
+  it("labels an override on an unidentified number (short-code lead source) as kind 'contact'", async () => {
+    const { db } = makeDb({
+      contact_overrides: {
+        data: [
+          { e164: "73339", name: "ReferralExchange" },
+          { e164: "+15550000088", name: "" },
+          { e164: "+15550000089", name: null }
+        ],
+        error: null
+      }
+    });
+    const out = await resolveContactNames(
+      BIZ,
+      ["73339", "+15550000088", "+15550000089"],
+      db as unknown as Client
+    );
+    expect(out.get("73339")).toEqual({
+      name: "ReferralExchange",
+      kind: "contact",
+      override: true
+    });
+    // Blank / null override names are ignored rather than rendering "".
+    expect(out.has("+15550000088")).toBe(false);
+    expect(out.has("+15550000089")).toBe(false);
   });
 
   it("throws on owner-source query errors", async () => {

@@ -13,12 +13,15 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { ChatMarkdown } from "@/components/ui/ChatMarkdown";
 import { listMessagesForCustomer } from "@/lib/db/sms-history";
-import { resolveContactNames } from "@/lib/db/contact-names";
+import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
+import { ContactNameEditor } from "@/components/dashboard/ContactNameEditor";
 
 export const dynamic = "force-dynamic";
 
-const e164Schema = z.string().regex(/^\+[1-9]\d{6,15}$/);
+// E.164 or a bare short code (lead sources like ReferralExchange text from
+// 5-digit short codes; their threads are addressable too).
+const e164Schema = z.string().regex(/^(\+[1-9]\d{6,15}|\d{3,8})$/);
 
 export default async function SmsThreadPage({
   params
@@ -63,8 +66,7 @@ export default async function SmsThreadPage({
   if (messages.length === 0) notFound();
   const contact = (
     await resolveContactNames(business.id, [customerE164]).catch(
-      () =>
-        new Map<string, { name: string; kind: "owner" | "employee" | "customer" }>()
+      () => new Map<string, ContactName>()
     )
   ).get(customerE164);
   const inboundLabel = contact
@@ -73,7 +75,9 @@ export default async function SmsThreadPage({
       : contact.kind === "owner"
         ? `${contact.name} (owner)`
         : contact.name
-    : "Customer";
+    : customerE164.startsWith("+")
+      ? "Customer"
+      : customerE164;
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -100,6 +104,13 @@ export default async function SmsThreadPage({
             </span>
           )}
           {contact && <span className="font-mono text-xs">{customerE164}</span>}
+          <ContactNameEditor
+            key={customerE164}
+            businessId={business.id}
+            e164={customerE164}
+            currentName={contact?.name ?? null}
+            hasOverride={Boolean(contact?.override)}
+          />
           <span>·</span>
           <span>
             {messages.length} message{messages.length === 1 ? "" : "s"}
