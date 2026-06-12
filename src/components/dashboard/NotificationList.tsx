@@ -24,7 +24,7 @@ function describeKind(row: NotificationRow): string {
     case "voice_capture":
       return "Voice capture";
     case "digest":
-      return "Daily digest";
+      return row.payload?.window === "weekly" ? "Weekly digest" : "Daily digest";
     default:
       return row.kind ?? "Notification";
   }
@@ -46,10 +46,12 @@ function describeReason(payload: Record<string, unknown>): string | null {
       return "Skipped — urgent SMS disabled";
     case "email_digest_disabled":
       return "Skipped — daily digest disabled";
+    case "email_digest_weekly_disabled":
+      return "Skipped — weekly digest disabled";
     case "dashboard_alerts_disabled":
       return "Skipped — dashboard alerts disabled";
     case "no_activity":
-      return "Skipped — no activity in the last 24h";
+      return "Skipped — no activity in this digest window";
     case "resend_unconfigured":
       return "Skipped — email service not configured";
     case "telnyx_unconfigured":

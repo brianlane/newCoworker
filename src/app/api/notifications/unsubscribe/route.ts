@@ -36,6 +36,7 @@ async function applyUnsubscribe(bid: string | null): Promise<ApplyResult> {
     await updateNotificationPreferences(bid, {
       sms_urgent: false,
       email_digest: false,
+      email_digest_weekly: false,
       email_urgent: false,
       dashboard_alerts: false,
       unsubscribed_at: new Date().toISOString()

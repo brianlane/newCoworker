@@ -6,6 +6,7 @@ export type NotificationPreferencesRow = {
   business_id: string;
   sms_urgent: boolean;
   email_digest: boolean;
+  email_digest_weekly: boolean;
   email_urgent: boolean;
   dashboard_alerts: boolean;
   phone_number: string | null;
@@ -84,6 +85,7 @@ export type NotificationPreferencesUpdate = Partial<
     NotificationPreferencesRow,
     | "sms_urgent"
     | "email_digest"
+    | "email_digest_weekly"
     | "email_urgent"
     | "dashboard_alerts"
     | "phone_number"
@@ -95,6 +97,7 @@ export type NotificationPreferencesUpdate = Partial<
 const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> = {
   sms_urgent: true,
   email_digest: true,
+  email_digest_weekly: true,
   email_urgent: true,
   dashboard_alerts: true,
   phone_number: null,
@@ -173,6 +176,7 @@ export async function updateNotificationPreferences(
   const keys: (keyof NotificationPreferencesUpdate)[] = [
     "sms_urgent",
     "email_digest",
+    "email_digest_weekly",
     "email_urgent",
     "dashboard_alerts",
     "phone_number",
@@ -195,6 +199,7 @@ export async function updateNotificationPreferences(
     update.unsubscribed_at === undefined &&
     (patch.sms_urgent === true ||
       patch.email_digest === true ||
+      patch.email_digest_weekly === true ||
       patch.email_urgent === true ||
       patch.dashboard_alerts === true);
   if (reSubscribed) {

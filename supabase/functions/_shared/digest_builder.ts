@@ -1,0 +1,239 @@
+/**
+ * Pure digest-model builder for the notifications-digest Edge function.
+ *
+ * Why this exists: the original digest counted only `coworker_logs`, a table
+ * that nothing but voice captures writes to — so every digest skipped with
+ * "no_activity" while the business had chats, texts, and AiFlow runs. The
+ * IO shell (../notifications-digest/index.ts) now aggregates the REAL
+ * activity tables and hands plain rows to these helpers, which decide
+ * whether anything happened and shape the email.
+ *
+ * Kept dependency-free (no supabase-js, no Deno APIs) so the module is unit
+ * tested from vitest under the shared 100% coverage gate.
+ */
+
+export type DigestWindow = "daily" | "weekly";
+
+export type DigestCallRow = {
+  caller_e164: string | null;
+  status: string;
+  started_at: string;
+};
+
+export type DigestAiFlowRun = {
+  flowName: string;
+  status: string;
+  created_at: string;
+  /** ai_flow_runs.context — { vars: {...}, routing: {...}, ... } */
+  context: Record<string, unknown>;
+};
+
+export type DigestCustomerRow = {
+  display_name: string | null;
+  customer_e164: string;
+};
+
+export type DigestActivity = {
+  /** Dashboard chat turns (dashboard_chat_jobs rows in window). */
+  chatTurns: number;
+  /** Inbound customer texts (sms_inbound_jobs rows in window). */
+  smsInbound: number;
+  /** Outbound texts (sum of daily_usage.sms_sent over the window dates). */
+  smsOutbound: number;
+  calls: DigestCallRow[];
+  aiFlowRuns: DigestAiFlowRun[];
+  newCustomers: DigestCustomerRow[];
+  /** coworker_logs rows with status=urgent_alert in window. */
+  urgentAlerts: number;
+  /** notifications rows with status=sent in window. */
+  notificationsDelivered: number;
+};
+
+export const AI_FLOW_RECAP_MAX_RUNS = 10;
+const ACTIONS_TAKEN_MAX_CHARS = 220;
+
+/**
+ * One-line routing summary from a run's context.routing — who was offered
+ * the lead and who (if anyone) claimed it. Mirrors
+ * src/lib/ai-flows/run-stats.ts (the owner runs page), ported here because
+ * the Edge runtime cannot import from src/.
+ */
+export function routingSummary(context: Record<string, unknown>): string | null {
+  const routing = context.routing as Record<string, unknown> | undefined;
+  if (!routing || typeof routing !== "object") return null;
+  const tried = Array.isArray(routing.tried) ? routing.tried.length : 0;
+  const hasCurrentOffer = typeof routing.offered === "string" && routing.offered !== "";
+  const claimedName = typeof routing.claimed_name === "string" ? routing.claimed_name : "";
+  const claimedBy = typeof routing.claimed_by === "string" ? routing.claimed_by : "";
+  const claimed = claimedName || claimedBy;
+  const offers = tried + (hasCurrentOffer || claimed ? 1 : 0);
+  if (offers === 0) return null;
+  const offersPart = `offered to ${offers} agent${offers === 1 ? "" : "s"}`;
+  if (claimed) return `${offersPart} · claimed by ${claimed}`;
+  if (hasCurrentOffer) return `${offersPart} · awaiting reply`;
+  return `${offersPart} · no claim (owner fallback)`;
+}
+
+/** Well-known extracted-lead var names, in display order. */
+const LEAD_VAR_KEYS = [
+  ["lead_name", "name"],
+  ["lead_phone", "phone"],
+  ["lead_email", "email"]
+] as const;
+
+function extractLeadSummary(vars: Record<string, unknown>): string | null {
+  const parts: string[] = [];
+  for (const aliases of LEAD_VAR_KEYS) {
+    for (const key of aliases) {
+      const value = vars[key];
+      if (typeof value === "string" && value.trim()) {
+        parts.push(value.trim());
+        break;
+      }
+    }
+  }
+  return parts.length > 0 ? `lead: ${parts.join(", ")}` : null;
+}
+
+/**
+ * One recap line per AiFlow run: name, status, routing ("offered to 3
+ * agents · claimed by …"), extracted lead fields, and the run's
+ * actions_taken log (capped so one chatty run can't flood the email).
+ */
+export function buildAiFlowRecapLine(run: DigestAiFlowRun): string {
+  const vars = (run.context.vars ?? {}) as Record<string, unknown>;
+  const segments: string[] = [`${run.flowName} — ${run.status}`];
+
+  const routing = routingSummary(run.context);
+  if (routing) segments.push(routing);
+
+  const lead = extractLeadSummary(vars);
+  if (lead) segments.push(lead);
+
+  const actions = vars.actions_taken;
+  if (typeof actions === "string" && actions.trim()) {
+    const trimmed = actions.trim();
+    segments.push(
+      trimmed.length > ACTIONS_TAKEN_MAX_CHARS
+        ? `${trimmed.slice(0, ACTIONS_TAKEN_MAX_CHARS - 1)}…`
+        : trimmed
+    );
+  }
+
+  return segments.join(" · ");
+}
+
+export function totalDigestEvents(a: DigestActivity): number {
+  return (
+    a.chatTurns +
+    a.smsInbound +
+    a.smsOutbound +
+    a.calls.length +
+    a.aiFlowRuns.length +
+    a.newCustomers.length
+  );
+}
+
+export function hasDigestActivity(a: DigestActivity): boolean {
+  return totalDigestEvents(a) > 0;
+}
+
+export type DigestSection = { heading: string; lines: string[] };
+
+export type DigestEmailModel = {
+  subject: string;
+  intro: string;
+  sections: DigestSection[];
+  /** Short roll-up recorded on the notifications row. */
+  activitySummary: string;
+};
+
+export function windowLabel(window: DigestWindow): { title: string; span: string } {
+  return window === "weekly"
+    ? { title: "Weekly summary", span: "the last 7 days" }
+    : { title: "Daily summary", span: "the last 24 hours" };
+}
+
+export function buildDigestEmailModel(opts: {
+  window: DigestWindow;
+  businessName: string;
+  activity: DigestActivity;
+}): DigestEmailModel {
+  const { window, businessName, activity } = opts;
+  const { title, span } = windowLabel(window);
+  const total = totalDigestEvents(activity);
+  const sections: DigestSection[] = [];
+
+  const convoLines: string[] = [];
+  if (activity.chatTurns > 0) {
+    convoLines.push(`Dashboard chat: ${activity.chatTurns} turn${activity.chatTurns === 1 ? "" : "s"}`);
+  }
+  if (activity.smsInbound > 0 || activity.smsOutbound > 0) {
+    convoLines.push(
+      `Texts: ${activity.smsInbound} received, ${activity.smsOutbound} sent`
+    );
+  }
+  if (convoLines.length > 0) {
+    sections.push({ heading: "Conversations", lines: convoLines });
+  }
+
+  if (activity.calls.length > 0) {
+    const lines = activity.calls.slice(0, 10).map((c) => {
+      const who = c.caller_e164 ?? "unknown caller";
+      return `${who} — ${c.status}`;
+    });
+    if (activity.calls.length > 10) {
+      lines.push(`…and ${activity.calls.length - 10} more`);
+    }
+    sections.push({
+      heading: `Calls (${activity.calls.length})`,
+      lines
+    });
+  }
+
+  if (activity.aiFlowRuns.length > 0) {
+    const shown = activity.aiFlowRuns.slice(0, AI_FLOW_RECAP_MAX_RUNS);
+    const lines = shown.map(buildAiFlowRecapLine);
+    if (activity.aiFlowRuns.length > AI_FLOW_RECAP_MAX_RUNS) {
+      lines.push(`…and ${activity.aiFlowRuns.length - AI_FLOW_RECAP_MAX_RUNS} more runs`);
+    }
+    sections.push({
+      heading: `AiFlow runs (${activity.aiFlowRuns.length})`,
+      lines
+    });
+  }
+
+  if (activity.newCustomers.length > 0) {
+    const lines = activity.newCustomers.slice(0, 10).map((c) => {
+      return c.display_name ? `${c.display_name} (${c.customer_e164})` : c.customer_e164;
+    });
+    if (activity.newCustomers.length > 10) {
+      lines.push(`…and ${activity.newCustomers.length - 10} more`);
+    }
+    sections.push({
+      heading: `New customers (${activity.newCustomers.length})`,
+      lines
+    });
+  }
+
+  const statusLines = [
+    `Urgent alerts: ${activity.urgentAlerts}`,
+    `Notifications delivered: ${activity.notificationsDelivered}`
+  ];
+  sections.push({ heading: "Status", lines: statusLines });
+
+  const subject = `${title} — ${businessName} (${total} event${total === 1 ? "" : "s"})`;
+  const intro = `Hi — here's what your AI Coworker handled over ${span}.`;
+  const parts = [
+    `${total} events`,
+    activity.calls.length > 0 ? `${activity.calls.length} calls` : null,
+    activity.smsInbound + activity.smsOutbound > 0
+      ? `${activity.smsInbound + activity.smsOutbound} texts`
+      : null,
+    activity.aiFlowRuns.length > 0 ? `${activity.aiFlowRuns.length} AiFlow runs` : null,
+    activity.urgentAlerts > 0 ? `${activity.urgentAlerts} urgent` : null
+  ].filter((p): p is string => p !== null);
+  const activitySummary = parts.join(", ");
+
+  return { subject, intro, sections, activitySummary };
+}

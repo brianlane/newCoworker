@@ -18,6 +18,7 @@ const PREFS = {
   business_id: "biz-1",
   sms_urgent: true,
   email_digest: true,
+  email_digest_weekly: true,
   email_urgent: true,
   dashboard_alerts: true,
   phone_number: null,
@@ -608,6 +609,36 @@ describe("db/notification-preferences", () => {
     await updateNotificationPreferences("biz-1", { email_urgent: true });
     expect(updateChain.update).toHaveBeenCalledWith(
       expect.objectContaining({ email_urgent: true, unsubscribed_at: null })
+    );
+  });
+
+  it("updateNotificationPreferences clears unsubscribed_at when re-enabling the weekly digest", async () => {
+    const startingPrefs = {
+      ...PREFS,
+      email_digest_weekly: false,
+      unsubscribed_at: "2026-05-01T00:00:00Z"
+    };
+    const selectChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: startingPrefs, error: null })
+    };
+    const updateChain = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({
+        data: { ...startingPrefs, email_digest_weekly: true, unsubscribed_at: null },
+        error: null
+      })
+    };
+    const db = {
+      from: vi.fn().mockReturnValueOnce(selectChain).mockReturnValueOnce(updateChain)
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await updateNotificationPreferences("biz-1", { email_digest_weekly: true });
+    expect(updateChain.update).toHaveBeenCalledWith(
+      expect.objectContaining({ email_digest_weekly: true, unsubscribed_at: null })
     );
   });
 

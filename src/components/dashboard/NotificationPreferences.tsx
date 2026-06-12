@@ -43,6 +43,7 @@ function ToggleRow({
 export function NotificationPreferences({ businessId, initial }: Props) {
   const [smsUrgent, setSmsUrgent] = useState(initial.sms_urgent);
   const [emailDigest, setEmailDigest] = useState(initial.email_digest);
+  const [emailDigestWeekly, setEmailDigestWeekly] = useState(initial.email_digest_weekly);
   const [emailUrgent, setEmailUrgent] = useState(initial.email_urgent);
   const [dashboardAlerts, setDashboardAlerts] = useState(initial.dashboard_alerts);
   const [phone, setPhone] = useState(initial.phone_number ?? "");
@@ -56,6 +57,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
   useEffect(() => {
     setSmsUrgent(initial.sms_urgent);
     setEmailDigest(initial.email_digest);
+    setEmailDigestWeekly(initial.email_digest_weekly);
     setEmailUrgent(initial.email_urgent);
     setDashboardAlerts(initial.dashboard_alerts);
     setPhone(initial.phone_number ?? "");
@@ -66,6 +68,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
   function applyResponse(prefs: NotificationPreferencesRow) {
     setSmsUrgent(prefs.sms_urgent);
     setEmailDigest(prefs.email_digest);
+    setEmailDigestWeekly(prefs.email_digest_weekly);
     setEmailUrgent(prefs.email_urgent);
     setDashboardAlerts(prefs.dashboard_alerts);
     setPhone(prefs.phone_number ?? "");
@@ -84,6 +87,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           businessId,
           sms_urgent: smsUrgent,
           email_digest: emailDigest,
+          email_digest_weekly: emailDigestWeekly,
           email_urgent: emailUrgent,
           dashboard_alerts: dashboardAlerts,
           phone_number: phone.trim() || null,
@@ -116,6 +120,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           businessId,
           sms_urgent: false,
           email_digest: false,
+          email_digest_weekly: false,
           email_urgent: false,
           dashboard_alerts: false,
           unsubscribed_at: "now"
@@ -162,6 +167,13 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           description="Summary of activity sent to your inbox each morning."
           checked={emailDigest}
           onChange={setEmailDigest}
+          disabled={loading || unsubscribing}
+        />
+        <ToggleRow
+          label="Email — weekly digest"
+          description="Roll-up of the past week's activity, sent Monday mornings."
+          checked={emailDigestWeekly}
+          onChange={setEmailDigestWeekly}
           disabled={loading || unsubscribing}
         />
         <ToggleRow
