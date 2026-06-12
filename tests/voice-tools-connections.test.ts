@@ -68,6 +68,30 @@ describe("resolveVoiceConnection", () => {
     expect(res?.provider).toBe("google");
     expect(res?.providerConfigKey).toBe("google-calendar");
   });
+
+  it("resolveCalendarConnection falls back to the broad google/outlook connections", async () => {
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([fakeRow("outlook")]);
+    const ms = await resolveCalendarConnection(businessId);
+    expect(ms?.provider).toBe("microsoft");
+    expect(ms?.providerConfigKey).toBe("outlook");
+
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      fakeRow("outlook"),
+      fakeRow("google")
+    ]);
+    const g = await resolveCalendarConnection(businessId);
+    expect(g?.provider).toBe("google");
+    expect(g?.providerConfigKey).toBe("google");
+  });
+
+  it("resolveCalendarConnection still prefers a dedicated calendar connection", async () => {
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      fakeRow("google"),
+      fakeRow("outlook-calendar")
+    ]);
+    const res = await resolveCalendarConnection(businessId);
+    expect(res?.providerConfigKey).toBe("outlook-calendar");
+  });
 });
 
 describe("isEmailProviderConfigKey / providerFromKey", () => {
