@@ -25,7 +25,9 @@ type Props = {
 export function ContactNameEditor(props: Props) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [name, setName] = useState(props.currentName ?? "");
+  // Seeded each time the editor is OPENED (not at mount) so the field always
+  // reflects the freshest server-rendered name after router.refresh().
+  const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -60,7 +62,11 @@ export function ContactNameEditor(props: Props) {
     return (
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          setName(props.currentName ?? "");
+          setErrorMsg(null);
+          setOpen(true);
+        }}
         className="text-[10px] uppercase tracking-wide text-parchment/40 hover:text-parchment/80 border border-parchment/15 rounded px-1.5 py-0.5 transition-colors"
       >
         {props.currentName ? "Edit contact" : "Set contact"}
@@ -100,7 +106,6 @@ export function ContactNameEditor(props: Props) {
         type="button"
         onClick={() => {
           setOpen(false);
-          setName(props.currentName ?? "");
           setErrorMsg(null);
         }}
         disabled={busy}

@@ -105,6 +105,7 @@ export default async function SmsThreadPage({
           )}
           {contact && <span className="font-mono text-xs">{customerE164}</span>}
           <ContactNameEditor
+            key={customerE164}
             businessId={business.id}
             e164={customerE164}
             currentName={contact?.name ?? null}
