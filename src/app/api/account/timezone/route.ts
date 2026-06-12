@@ -1,0 +1,44 @@
+/**
+ * Owner-facing: set the signed-in account's business timezone (IANA name).
+ *
+ * Auth + business resolution mirror /api/account/business-name: the newest
+ * business under the auth user's owner_email, so a caller can only ever
+ * touch their own business. Validation is "can Intl.DateTimeFormat format
+ * with it" — the exact consumer of the value downstream.
+ */
+import { z } from "zod";
+import { getAuthUser } from "@/lib/auth";
+import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { isValidIanaTimezone, updateBusinessTimezone } from "@/lib/db/businesses";
+
+const schema = z.object({
+  timezone: z.union([z.string().trim().min(1).max(64), z.null()])
+});
+
+export async function POST(request: Request) {
+  try {
+    const user = await getAuthUser();
+    if (!user?.email) return errorResponse("UNAUTHORIZED", "Authentication required");
+
+    const { timezone } = schema.parse(await request.json());
+    if (timezone !== null && !isValidIanaTimezone(timezone)) {
+      return errorResponse("VALIDATION_ERROR", "Unknown timezone");
+    }
+
+    const db = await createSupabaseServiceClient();
+    const { data: biz } = await db
+      .from("businesses")
+      .select("id")
+      .eq("owner_email", user.email)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!biz) return errorResponse("NOT_FOUND", "No business found for this account");
+
+    await updateBusinessTimezone((biz as { id: string }).id, timezone, db);
+    return successResponse({ timezone });
+  } catch (err) {
+    return handleRouteError(err);
+  }
+}

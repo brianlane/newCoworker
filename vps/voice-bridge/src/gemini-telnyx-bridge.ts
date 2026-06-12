@@ -74,6 +74,8 @@ export type GeminiBridgeOptions = {
   /** Second, firmer coordinator prompt this many ms before `sessionMaxMs`. */
   finalNudgeBeforeMs: number;
   businessName: string;
+  /** Business IANA timezone for the date/time prompt line; undefined/null = UTC. */
+  businessTimezone?: string | null;
   /** When set, registers a `transfer_to_owner` function tool on the Live session. */
   transfer?: TransferCapability;
   /** Vault markdown (soul/identity/memory/website) rendered into the system prompt. */
@@ -128,14 +130,15 @@ export function systemInstructionForBusiness(
   hasTransfer: boolean,
   hasVoiceTools: boolean,
   vault?: VaultSnapshot,
-  customerMemorySummary?: string
+  customerMemorySummary?: string,
+  businessTimezone?: string | null
 ): string {
   const base = [
     `You are the AI phone receptionist for ${businessName}.`,
     "You are on a live phone call with a human caller. Keep replies concise, natural, and spoken (not bulleted).",
     "Be warm and professional. If you don't know something specific to this business, say you'll have someone follow up.",
     "Do not mention APIs, models, tokens, or internal session limits to the caller unless a coordinator message explicitly tells you what to say.",
-    currentDateTimeLine()
+    currentDateTimeLine(new Date(), businessTimezone)
   ];
   if (hasTransfer) {
     base.push(
@@ -680,7 +683,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         Boolean(opts.transfer),
         voiceToolsReady,
         opts.vault,
-        opts.customerMemorySummary
+        opts.customerMemorySummary,
+        opts.businessTimezone
       ),
       tools: toolsForSession
     },

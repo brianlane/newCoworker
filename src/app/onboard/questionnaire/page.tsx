@@ -545,7 +545,10 @@ function QuestionnaireForm() {
             serviceArea: onboardingData.serviceArea,
             typicalInquiry: onboardingData.typicalInquiry,
             teamSize: onboardingData.teamSize,
-            crmUsed: onboardingData.crmUsed
+            crmUsed: onboardingData.crmUsed,
+            // Auto-detected business timezone so the AI coworker talks in
+            // local time from day one; editable later in Settings.
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
           })
         });
         const createJson = await createRes.json().catch(() => null);
