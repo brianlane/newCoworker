@@ -1,6 +1,7 @@
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
 import { getBusinessTimezone } from "@/lib/db/businesses";
+import { ensureSharedCalendar, getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
 import { logger } from "@/lib/logger";
 
 /**
@@ -13,6 +14,12 @@ import { logger } from "@/lib/logger";
  * Graph getSchedule + event create via the Nango proxy). When no calendar is
  * connected we return `calendar_not_connected` so the model can gracefully
  * offer an alternative instead of pretending it booked something.
+ *
+ * Bookings land on the dedicated shared "NewCoworker" calendar (created on
+ * first booking; see shared-calendar.ts) so the whole team can see them,
+ * falling back to the owner's primary calendar if creation fails. Slot
+ * search checks busy across BOTH calendars, so owner personal events still
+ * prevent double-booking.
  */
 
 export type CalendarToolResult = {
@@ -128,8 +135,12 @@ export async function findCalendarSlots(
     }
 
     let busy: Array<{ start: Date; end: Date }> = [];
+    // Read-only: never creates the shared calendar from the search path.
+    const shared = await getSharedCalendar(businessId);
 
     if (conn.provider === "google") {
+      const items = [{ id: "primary" }];
+      if (shared) items.push({ id: shared.calendarId });
       const res = await nangoProxyForBusiness(
         businessId,
         { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
@@ -139,13 +150,13 @@ export async function findCalendarSlots(
           data: {
             timeMin: windowStart.toISOString(),
             timeMax: windowEnd.toISOString(),
-            items: [{ id: "primary" }]
+            items
           }
         }
       );
       if (!res) return { ok: false, detail: "calendar_not_connected" };
       const data = res.data as FreeBusyBody;
-      const blocks = data?.calendars?.primary?.busy ?? [];
+      const blocks = Object.values(data?.calendars ?? {}).flatMap((c) => c.busy ?? []);
       busy = blocks.map((b) => ({ start: new Date(b.start), end: new Date(b.end) }));
     } else {
       // Microsoft Graph getSchedule: POST /me/calendar/getSchedule.
@@ -174,6 +185,32 @@ export async function findCalendarSlots(
       busy = items
         .filter((i) => i.start?.dateTime && i.end?.dateTime)
         .map((i) => ({ start: new Date(i.start!.dateTime), end: new Date(i.end!.dateTime) }));
+
+      // getSchedule only covers the default calendar; pull the shared
+      // NewCoworker calendar's events separately and merge them in.
+      if (shared) {
+        const viewRes = await nangoProxyForBusiness(
+          businessId,
+          { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
+          {
+            endpoint: `/v1.0/me/calendars/${encodeURIComponent(shared.calendarId)}/calendarView`,
+            method: "GET",
+            params: {
+              startDateTime: windowStart.toISOString(),
+              endDateTime: windowEnd.toISOString()
+            }
+          }
+        );
+        type GraphView = {
+          value?: Array<{ start?: { dateTime: string }; end?: { dateTime: string } }>;
+        };
+        const viewItems = ((viewRes?.data ?? null) as GraphView | null)?.value ?? [];
+        busy = busy.concat(
+          viewItems
+            .filter((i) => i.start?.dateTime && i.end?.dateTime)
+            .map((i) => ({ start: new Date(i.start!.dateTime), end: new Date(i.end!.dateTime) }))
+        );
+      }
     }
 
     const slots = computeFreeSlots(windowStart, windowEnd, busy, durationMs);
@@ -238,12 +275,22 @@ export async function bookCalendarAppointment(
     // model reasoning about offsets.
     const eventTimezone = await resolveToolTimezone(businessId, args.timezone);
 
+    // Book onto the shared NewCoworker calendar (created here on first
+    // booking). Null = creation failed → book primary; never lose a booking.
+    const shared = await ensureSharedCalendar(businessId);
+    const googleCalendarPath = shared
+      ? `/calendar/v3/calendars/${encodeURIComponent(shared.calendarId)}/events`
+      : "/calendar/v3/calendars/primary/events";
+    const microsoftEventsPath = shared
+      ? `/v1.0/me/calendars/${encodeURIComponent(shared.calendarId)}/events`
+      : "/v1.0/me/events";
+
     if (conn.provider === "google") {
       const res = await nangoProxyForBusiness(
         businessId,
         { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
         {
-          endpoint: "/calendar/v3/calendars/primary/events",
+          endpoint: googleCalendarPath,
           method: "POST",
           data: {
             summary: args.summary,
@@ -265,7 +312,7 @@ export async function bookCalendarAppointment(
         businessId,
         { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
         {
-          endpoint: "/v1.0/me/events",
+          endpoint: microsoftEventsPath,
           method: "POST",
           data: {
             subject: args.summary,
@@ -291,7 +338,12 @@ export async function bookCalendarAppointment(
 
     return {
       ok: true,
-      data: { eventId, htmlLink, provider: conn.provider }
+      data: {
+        eventId,
+        htmlLink,
+        provider: conn.provider,
+        calendar: shared ? "shared" : "primary"
+      }
     };
   } catch (err) {
     logger.warn("calendar-tools/book failed", {

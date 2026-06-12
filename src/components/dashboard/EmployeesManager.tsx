@@ -10,11 +10,17 @@ import type {
 } from "@/lib/db/employees";
 import { formatScheduleText } from "@/lib/employees/schedule-text";
 
+type SharedCalendarStatus = {
+  calendarId: string | null;
+  sharedWith: string[];
+};
+
 type Props = {
   businessId: string;
   initialMembers: TeamMemberRow[];
   initialTimeOff: TimeOffRow[];
   initialStats: Record<string, EmployeeRoutingStats>;
+  initialSharedCalendar: SharedCalendarStatus;
 };
 
 type ApiError = { error?: { message?: string } };
@@ -36,6 +42,9 @@ export function EmployeesManager(props: Props) {
   const [members, setMembers] = useState(props.initialMembers);
   const [timeOff, setTimeOff] = useState(props.initialTimeOff);
   const [stats, setStats] = useState(props.initialStats);
+  const [sharedCalendar, setSharedCalendar] = useState(props.initialSharedCalendar);
+  const [sharing, setSharing] = useState(false);
+  const [shareMsg, setShareMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Add form
@@ -56,12 +65,47 @@ export function EmployeesManager(props: Props) {
         members: TeamMemberRow[];
         timeOff: TimeOffRow[];
         stats: Record<string, EmployeeRoutingStats>;
+        sharedCalendar: SharedCalendarStatus;
       };
     };
     if (json.ok && json.data) {
       setMembers(json.data.members);
       setTimeOff(json.data.timeOff);
       setStats(json.data.stats);
+      setSharedCalendar(json.data.sharedCalendar);
+    }
+  }
+
+  async function shareCalendar() {
+    setSharing(true);
+    setShareMsg(null);
+    setErrorMsg(null);
+    try {
+      const res = await fetch(`/api/dashboard/employees/share-calendar?${qs}`, {
+        method: "POST"
+      });
+      if (!res.ok) throw new Error(await readError(res));
+      const json = (await res.json()) as {
+        ok: boolean;
+        data?: { calendarId: string; sharedWith: string[]; added: number; failed: number };
+      };
+      if (json.ok && json.data) {
+        setSharedCalendar({
+          calendarId: json.data.calendarId,
+          sharedWith: json.data.sharedWith
+        });
+        setShareMsg(
+          json.data.added > 0
+            ? `Shared with ${json.data.added} new employee${json.data.added === 1 ? "" : "s"}${json.data.failed > 0 ? ` (${json.data.failed} failed)` : ""}.`
+            : json.data.failed > 0
+              ? `No new access granted (${json.data.failed} failed). Check employee emails.`
+              : "Everyone with an email already has access."
+        );
+      }
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSharing(false);
     }
   }
 
@@ -109,6 +153,35 @@ export function EmployeesManager(props: Props) {
       </div>
 
       {errorMsg && <p className="text-xs text-red-300">{errorMsg}</p>}
+
+      <Card padding="sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-xs font-semibold text-parchment">
+              Shared NewCoworker calendar
+            </h3>
+            <p className="text-[11px] text-parchment/50 mt-0.5">
+              {sharedCalendar.calendarId
+                ? `Appointments your coworker books land here. Shared with ${sharedCalendar.sharedWith.length} employee${sharedCalendar.sharedWith.length === 1 ? "" : "s"}.`
+                : "Created automatically on the first booking — or set it up now and share it with your team."}
+              {" "}Time off shows up on it as all-day events.
+            </p>
+            {shareMsg && <p className="text-[11px] text-claw-green mt-1">{shareMsg}</p>}
+          </div>
+          <button
+            type="button"
+            onClick={shareCalendar}
+            disabled={sharing}
+            className="rounded-lg border border-parchment/20 text-parchment/80 px-3 py-1.5 text-xs hover:bg-parchment/5 transition-colors disabled:opacity-40 shrink-0"
+          >
+            {sharing
+              ? "Sharing…"
+              : sharedCalendar.calendarId
+                ? "Share with new employees"
+                : "Set up & share"}
+          </button>
+        </div>
+      </Card>
 
       {addOpen && (
         <Card>

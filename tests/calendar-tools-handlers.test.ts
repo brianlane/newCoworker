@@ -8,6 +8,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/voice-tools/connections", () => ({ resolveCalendarConnection: vi.fn() }));
 vi.mock("@/lib/nango/workspace", () => ({ nangoProxyForBusiness: vi.fn() }));
 vi.mock("@/lib/db/businesses", () => ({ getBusinessTimezone: vi.fn() }));
+vi.mock("@/lib/calendar-tools/shared-calendar", () => ({
+  getSharedCalendar: vi.fn(),
+  ensureSharedCalendar: vi.fn()
+}));
 
 import {
   bookCalendarAppointment,
@@ -17,6 +21,7 @@ import {
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
 import { getBusinessTimezone } from "@/lib/db/businesses";
+import { ensureSharedCalendar, getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -34,6 +39,9 @@ const MS_CONN = {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getBusinessTimezone).mockResolvedValue(null);
+  // Default: no shared NewCoworker calendar → pre-shared-calendar behavior.
+  vi.mocked(getSharedCalendar).mockResolvedValue(null);
+  vi.mocked(ensureSharedCalendar).mockResolvedValue(null);
 });
 
 describe("computeFreeSlots", () => {
@@ -130,9 +138,11 @@ describe("findCalendarSlots", () => {
     );
   });
 
-  it("tolerates a FreeBusy body without the primary calendar", async () => {
+  it("tolerates a FreeBusy body with calendars missing busy arrays", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
-    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({
+      data: { calendars: { primary: {} } }
+    } as never);
     const result = await findCalendarSlots(BIZ, {
       earliest: "2026-06-12T09:00:00.000Z",
       latest: "2026-06-12T12:00:00.000Z",
@@ -243,6 +253,110 @@ describe("findCalendarSlots", () => {
     const result = await findCalendarSlots(BIZ, { durationMinutes: 30 });
     expect(result).toEqual({ ok: false, detail: "calendar_lookup_failed" });
   });
+
+  it("includes the shared calendar in the Google FreeBusy query and merges its busy blocks", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(getSharedCalendar).mockResolvedValue({
+      calendarId: "shared-cal",
+      conn: GOOGLE_CONN
+    } as never);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({
+      data: {
+        calendars: {
+          primary: {
+            busy: [{ start: "2026-06-12T09:00:00.000Z", end: "2026-06-12T10:00:00.000Z" }]
+          },
+          "shared-cal": {
+            busy: [{ start: "2026-06-12T10:00:00.000Z", end: "2026-06-12T11:00:00.000Z" }]
+          }
+        }
+      }
+    } as never);
+    const result = await findCalendarSlots(BIZ, {
+      earliest: "2026-06-12T09:00:00.000Z",
+      latest: "2026-06-12T12:00:00.000Z",
+      durationMinutes: 60
+    });
+    expect(result.ok).toBe(true);
+    // Both calendars' blocks consume 09:00-11:00 → only 11:00-12:00 remains.
+    expect((result.data as { slots: Array<{ startIso: string }> }).slots).toEqual([
+      {
+        startIso: "2026-06-12T11:00:00.000Z",
+        endIso: "2026-06-12T12:00:00.000Z"
+      }
+    ]);
+    const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+      data: { items: Array<{ id: string }> };
+    };
+    expect(payload.data.items).toEqual([{ id: "primary" }, { id: "shared-cal" }]);
+  });
+
+  it("merges shared-calendar events into Microsoft busy via calendarView", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(getSharedCalendar).mockResolvedValue({
+      calendarId: "shared-ms",
+      conn: MS_CONN
+    } as never);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({
+        data: {
+          value: [
+            {
+              scheduleItems: [
+                {
+                  start: { dateTime: "2026-06-12T09:00:00.000Z" },
+                  end: { dateTime: "2026-06-12T10:00:00.000Z" }
+                }
+              ]
+            }
+          ]
+        }
+      } as never)
+      .mockResolvedValueOnce({
+        data: {
+          value: [
+            {
+              start: { dateTime: "2026-06-12T10:00:00.000Z" },
+              end: { dateTime: "2026-06-12T11:00:00.000Z" }
+            },
+            { start: { dateTime: "2026-06-12T11:00:00.000Z" } } // missing end → dropped
+          ]
+        }
+      } as never);
+    const result = await findCalendarSlots(BIZ, {
+      earliest: "2026-06-12T09:00:00.000Z",
+      latest: "2026-06-12T12:00:00.000Z",
+      durationMinutes: 60
+    });
+    expect(result.ok).toBe(true);
+    expect((result.data as { slots: unknown[] }).slots).toEqual([
+      {
+        startIso: "2026-06-12T11:00:00.000Z",
+        endIso: "2026-06-12T12:00:00.000Z"
+      }
+    ]);
+    expect(vi.mocked(nangoProxyForBusiness)).toHaveBeenCalledWith(
+      BIZ,
+      { connectionId: "conn-2", providerConfigKey: "microsoft-calendar" },
+      expect.objectContaining({
+        endpoint: "/v1.0/me/calendars/shared-ms/calendarView",
+        method: "GET"
+      })
+    );
+  });
+
+  it("tolerates a null calendarView response for the Microsoft shared calendar", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(getSharedCalendar).mockResolvedValue({
+      calendarId: "shared-ms",
+      conn: MS_CONN
+    } as never);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: {} } as never)
+      .mockResolvedValueOnce(null as never);
+    const result = await findCalendarSlots(BIZ, { durationMinutes: 30 });
+    expect(result.ok).toBe(true);
+  });
 });
 
 describe("bookCalendarAppointment", () => {
@@ -280,7 +394,7 @@ describe("bookCalendarAppointment", () => {
     );
     expect(result).toEqual({
       ok: true,
-      data: { eventId: "ev-1", htmlLink: "https://cal/ev-1", provider: "google" }
+      data: { eventId: "ev-1", htmlLink: "https://cal/ev-1", provider: "google", calendar: "primary" }
     });
     const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
       endpoint: string;
@@ -313,7 +427,7 @@ describe("bookCalendarAppointment", () => {
     const result = await bookCalendarAppointment(BIZ, ARGS);
     expect(result).toEqual({
       ok: true,
-      data: { eventId: null, htmlLink: null, provider: "google" }
+      data: { eventId: null, htmlLink: null, provider: "google", calendar: "primary" }
     });
     const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
       data: { description: string; attendees?: unknown };
@@ -352,7 +466,7 @@ describe("bookCalendarAppointment", () => {
     });
     expect(result).toEqual({
       ok: true,
-      data: { eventId: "ms-1", htmlLink: "https://outlook/ms-1", provider: "microsoft" }
+      data: { eventId: "ms-1", htmlLink: "https://outlook/ms-1", provider: "microsoft", calendar: "primary" }
     });
     const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
       endpoint: string;
@@ -373,7 +487,7 @@ describe("bookCalendarAppointment", () => {
     const result = await bookCalendarAppointment(BIZ, ARGS);
     expect(result).toEqual({
       ok: true,
-      data: { eventId: null, htmlLink: null, provider: "microsoft" }
+      data: { eventId: null, htmlLink: null, provider: "microsoft", calendar: "primary" }
     });
     const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
       data: { attendees?: unknown };
@@ -399,5 +513,37 @@ describe("bookCalendarAppointment", () => {
     vi.mocked(resolveCalendarConnection).mockRejectedValue("string failure");
     const result = await bookCalendarAppointment(BIZ, ARGS);
     expect(result).toEqual({ ok: false, detail: "calendar_book_failed" });
+  });
+
+  it("books Google events onto the shared NewCoworker calendar when available", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(ensureSharedCalendar).mockResolvedValue({
+      calendarId: "shared-cal",
+      conn: GOOGLE_CONN
+    } as never);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-s" } } as never);
+    const result = await bookCalendarAppointment(BIZ, ARGS);
+    expect(result).toEqual({
+      ok: true,
+      data: { eventId: "ev-s", htmlLink: null, provider: "google", calendar: "shared" }
+    });
+    const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as { endpoint: string };
+    expect(payload.endpoint).toBe("/calendar/v3/calendars/shared-cal/events");
+  });
+
+  it("books Microsoft events onto the shared NewCoworker calendar when available", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(ensureSharedCalendar).mockResolvedValue({
+      calendarId: "shared-ms",
+      conn: MS_CONN
+    } as never);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ms-s" } } as never);
+    const result = await bookCalendarAppointment(BIZ, ARGS);
+    expect(result).toEqual({
+      ok: true,
+      data: { eventId: "ms-s", htmlLink: null, provider: "microsoft", calendar: "shared" }
+    });
+    const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as { endpoint: string };
+    expect(payload.endpoint).toBe("/v1.0/me/calendars/shared-ms/events");
   });
 });
