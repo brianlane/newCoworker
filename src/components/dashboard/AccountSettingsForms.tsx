@@ -52,10 +52,21 @@ export function AccountSettingsForms({
   const [tzStatus, setTzStatus] = useState<Status>({ kind: "idle" });
   const [tzOptions, setTzOptions] = useState<string[]>(businessTimezone ? [businessTimezone] : []);
   useEffect(() => {
-    const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    setDetectedTz(detected);
-    setTzOptions(Intl.supportedValuesOf("timeZone"));
-    setTimezone((prev) => prev || detected);
+    // Browser-only detection has to happen post-hydration; deferring the
+    // state writes to a microtask keeps the effect itself render-clean
+    // (react-hooks/set-state-in-effect) while still resolving before paint
+    // matters for this below-the-fold card.
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      setDetectedTz(detected);
+      setTzOptions(Intl.supportedValuesOf("timeZone"));
+      setTimezone((prev) => prev || detected);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function saveTimezone(e: FormEvent) {
