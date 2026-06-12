@@ -63,7 +63,9 @@ export default async function DashboardMessagesPage() {
   const contactNames = await resolveContactNames(
     business.id,
     conversations.map((c) => c.customerE164)
-  ).catch(() => new Map<string, { name: string; kind: "employee" | "customer" }>());
+  ).catch(
+    () => new Map<string, { name: string; kind: "owner" | "employee" | "customer" }>()
+  );
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -108,7 +110,11 @@ export default async function DashboardMessagesPage() {
                       </span>
                       {contact && (
                         <span className="text-[10px] uppercase tracking-wide text-parchment/40">
-                          {contact.kind === "employee" ? "employee" : null}
+                          {contact.kind === "employee"
+                            ? "employee"
+                            : contact.kind === "owner"
+                              ? "owner"
+                              : null}
                         </span>
                       )}
                       {contact && (

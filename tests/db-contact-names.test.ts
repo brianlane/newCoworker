@@ -23,7 +23,7 @@ function makeDb(perTable: Record<string, Result>) {
     from(table: string) {
       const result = perTable[table] ?? { data: [], error: null };
       const chain: Record<string, unknown> = {};
-      for (const m of ["select", "eq", "in", "or"]) {
+      for (const m of ["select", "eq", "in", "or", "maybeSingle"]) {
         chain[m] = (...args: unknown[]) => {
           calls.push({ table, method: m, args });
           return chain;
@@ -223,5 +223,69 @@ describe("resolveContactNames", () => {
     defaultClientSpy.mockReturnValue(db);
     await resolveContactNames(BIZ, ["+1555"]);
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("labels the Safe Mode forward number as the owner, beating roster and customer entries", async () => {
+    const { db } = makeDb({
+      ai_flow_team_members: {
+        data: [{ phone_e164: "+16026951142", name: "Amy L" }],
+        error: null
+      },
+      customer_memories: {
+        data: [
+          { customer_e164: "+16026951142", alias_e164s: [], display_name: "Stale Profile" }
+        ],
+        error: null
+      },
+      businesses: { data: { owner_name: "Amy Laidlaw", phone: null }, error: null },
+      business_telnyx_settings: { data: { forward_to_e164: "+16026951142" }, error: null },
+      notification_preferences: { data: null, error: null }
+    });
+    const out = await resolveContactNames(BIZ, ["+16026951142"], db as unknown as Client);
+    expect(out.get("+16026951142")).toEqual({ name: "Amy Laidlaw", kind: "owner" });
+  });
+
+  it("loose-normalizes the bare 10-digit alert phone and onboarding phone to +1 E.164", async () => {
+    const { db } = makeDb({
+      businesses: { data: { owner_name: "Amy Laidlaw", phone: "(602) 805-3377" }, error: null },
+      business_telnyx_settings: { data: null, error: null },
+      notification_preferences: { data: { phone_number: "6026951142" }, error: null }
+    });
+    const out = await resolveContactNames(
+      BIZ,
+      ["+16026951142", "+16028053377"],
+      db as unknown as Client
+    );
+    expect(out.get("+16026951142")).toEqual({ name: "Amy Laidlaw", kind: "owner" });
+    expect(out.get("+16028053377")).toEqual({ name: "Amy Laidlaw", kind: "owner" });
+  });
+
+  it("falls back to the label 'Owner' when owner_name is blank, and skips unparseable owner phone fields", async () => {
+    const { db } = makeDb({
+      businesses: { data: { owner_name: "   ", phone: "ext. 0" }, error: null },
+      business_telnyx_settings: { data: { forward_to_e164: "+16026951142" }, error: null },
+      notification_preferences: { data: { phone_number: "n/a" }, error: null }
+    });
+    const out = await resolveContactNames(BIZ, ["+16026951142"], db as unknown as Client);
+    expect(out.get("+16026951142")).toEqual({ name: "Owner", kind: "owner" });
+  });
+
+  it("ignores owner numbers that are not among the asked-about threads (and tolerates a missing businesses row)", async () => {
+    const { db } = makeDb({
+      businesses: { data: null, error: null },
+      business_telnyx_settings: { data: { forward_to_e164: "+16026951142" }, error: null },
+      notification_preferences: { data: { phone_number: null }, error: null }
+    });
+    const out = await resolveContactNames(BIZ, ["+15550000099"], db as unknown as Client);
+    expect(out.size).toBe(0);
+  });
+
+  it("throws on owner-source query errors", async () => {
+    const { db } = makeDb({
+      business_telnyx_settings: { data: null, error: { message: "settings rls" } }
+    });
+    await expect(
+      resolveContactNames(BIZ, ["+1555"], db as unknown as Client)
+    ).rejects.toThrow(/resolveContactNames: settings rls/);
   });
 });

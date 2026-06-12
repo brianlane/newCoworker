@@ -63,13 +63,16 @@ export default async function SmsThreadPage({
   if (messages.length === 0) notFound();
   const contact = (
     await resolveContactNames(business.id, [customerE164]).catch(
-      () => new Map<string, { name: string; kind: "employee" | "customer" }>()
+      () =>
+        new Map<string, { name: string; kind: "owner" | "employee" | "customer" }>()
     )
   ).get(customerE164);
   const inboundLabel = contact
     ? contact.kind === "employee"
       ? `${contact.name} (employee)`
-      : contact.name
+      : contact.kind === "owner"
+        ? `${contact.name} (owner)`
+        : contact.name
     : "Customer";
 
   return (
@@ -89,6 +92,11 @@ export default async function SmsThreadPage({
           {contact?.kind === "employee" && (
             <span className="text-[10px] uppercase tracking-wide text-amber-300/80 bg-amber-300/10 rounded px-1.5 py-0.5">
               employee
+            </span>
+          )}
+          {contact?.kind === "owner" && (
+            <span className="text-[10px] uppercase tracking-wide text-signal-teal/90 bg-signal-teal/10 rounded px-1.5 py-0.5">
+              owner
             </span>
           )}
           {contact && <span className="font-mono text-xs">{customerE164}</span>}

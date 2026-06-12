@@ -805,11 +805,15 @@ serve(async (req: Request) => {
     // from suppressed senders.
     const { data: bizRow } = await supabase
       .from("businesses")
-      .select("is_paused, customer_channels_enabled")
+      .select("is_paused, customer_channels_enabled, owner_name")
       .eq("id", businessId)
       .maybeSingle();
     const biz = bizRow as
-      | { is_paused?: boolean; customer_channels_enabled?: boolean }
+      | {
+          is_paused?: boolean;
+          customer_channels_enabled?: boolean;
+          owner_name?: string | null;
+        }
       | null;
 
     // Roster lookup for the team-member gate (applied below on BOTH the Safe
@@ -837,6 +841,32 @@ serve(async (req: Request) => {
         );
       }
       teamMember = memberRow as { name?: string | null } | null;
+      // The OWNER's own cell (the Safe Mode forward number) gets the same
+      // gate: a free text from the owner is never a customer message, and
+      // without this the worker would AI-chat with the owner and auto-create
+      // a customer profile for their cell. The gate's owner-forward is a
+      // no-op for them (it skips sending when sender === forward number).
+      if (!teamMember) {
+        const { data: fwdRow, error: fwdErr } = await supabase
+          .from("business_telnyx_settings")
+          .select("forward_to_e164")
+          .eq("business_id", businessId)
+          .maybeSingle();
+        if (fwdErr) {
+          console.error("owner number lookup", fwdErr);
+          return new Response(
+            JSON.stringify({ ok: false, error: "team_lookup_failed" }),
+            { status: 503, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        const ownerCell = normalizeE164(
+          (fwdRow as { forward_to_e164?: string | null } | null)
+            ?.forward_to_e164 ?? ""
+        );
+        if (ownerCell && from === ownerCell) {
+          teamMember = { name: biz?.owner_name?.trim() || "Owner" };
+        }
+      }
     }
 
     // Persist the employee text for the thread audit trail, forward it to
