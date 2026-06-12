@@ -119,6 +119,42 @@ describe("api/notifications/preferences route", () => {
     );
   });
 
+  it("normalizes digest recipient overrides: trims values, blanks become null", async () => {
+    const response = await POST(
+      new Request("http://localhost/api/notifications/preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId: PREFS.business_id,
+          digest_email_daily: "daily@biz.com",
+          digest_email_weekly: ""
+        })
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(updateNotificationPreferences).toHaveBeenCalledWith(
+      PREFS.business_id,
+      expect.objectContaining({
+        digest_email_daily: "daily@biz.com",
+        digest_email_weekly: null
+      })
+    );
+  });
+
+  it("rejects malformed digest recipient emails", async () => {
+    const response = await POST(
+      new Request("http://localhost/api/notifications/preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId: PREFS.business_id,
+          digest_email_daily: "not-an-email"
+        })
+      })
+    );
+    expect(response.status).toBe(400);
+  });
+
   it("translates unsubscribed_at:'now' into an ISO timestamp", async () => {
     const response = await POST(
       new Request("http://localhost/api/notifications/preferences", {

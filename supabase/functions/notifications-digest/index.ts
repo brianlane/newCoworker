@@ -58,6 +58,9 @@ type DigestTarget = {
   business_name: string | null;
   owner_email: string | null;
   alert_email: string | null;
+  /** Per-window recipient overrides; null = alert_email → owner_email chain. */
+  digest_email_daily: string | null;
+  digest_email_weekly: string | null;
   email_digest: boolean;
   email_digest_weekly: boolean;
   unsubscribed_at: string | null;
@@ -270,26 +273,25 @@ serve(async (req: Request) => {
   const ids = liveBusinesses.map((b) => b.id);
   const { data: prefsRows } = await supa
     .from("notification_preferences")
-    .select("business_id, alert_email, email_digest, email_digest_weekly, unsubscribed_at")
+    .select(
+      "business_id, alert_email, digest_email_daily, digest_email_weekly, email_digest, email_digest_weekly, unsubscribed_at"
+    )
     .in("business_id", ids);
-  const prefsByBiz = new Map<
-    string,
-    {
-      alert_email: string | null;
-      email_digest: boolean;
-      email_digest_weekly: boolean;
-      unsubscribed_at: string | null;
-    }
-  >();
-  for (const row of (prefsRows ?? []) as Array<{
+  type PrefsRow = {
     business_id: string;
     alert_email: string | null;
+    digest_email_daily: string | null;
+    digest_email_weekly: string | null;
     email_digest: boolean;
     email_digest_weekly: boolean;
     unsubscribed_at: string | null;
-  }>) {
+  };
+  const prefsByBiz = new Map<string, Omit<PrefsRow, "business_id">>();
+  for (const row of (prefsRows ?? []) as PrefsRow[]) {
     prefsByBiz.set(row.business_id, {
       alert_email: row.alert_email,
+      digest_email_daily: row.digest_email_daily,
+      digest_email_weekly: row.digest_email_weekly,
       email_digest: row.email_digest,
       email_digest_weekly: row.email_digest_weekly,
       unsubscribed_at: row.unsubscribed_at
@@ -306,6 +308,8 @@ serve(async (req: Request) => {
       email_digest: prefs ? prefs.email_digest : true,
       email_digest_weekly: prefs ? prefs.email_digest_weekly : true,
       alert_email: prefs?.alert_email ?? null,
+      digest_email_daily: prefs?.digest_email_daily ?? null,
+      digest_email_weekly: prefs?.digest_email_weekly ?? null,
       unsubscribed_at: prefs?.unsubscribed_at ?? null
     };
   });
@@ -319,13 +323,16 @@ serve(async (req: Request) => {
 
   for (const t of targets) {
     const toggleOn = window === "weekly" ? t.email_digest_weekly : t.email_digest;
+    // Window-specific recipient override first, then the legacy chain.
+    const windowOverride = window === "weekly" ? t.digest_email_weekly : t.digest_email_daily;
+    const fallbackRecipient = t.alert_email ?? t.owner_email ?? adminEmail;
     if (!toggleOn || t.unsubscribed_at) {
       await recordDigestRow(
         supa,
         t.business_id,
         "skipped",
         digestLabel,
-        { window, recipient: t.alert_email ?? t.owner_email ?? adminEmail },
+        { window, recipient: windowOverride ?? fallbackRecipient },
         t.unsubscribed_at
           ? "unsubscribed"
           : window === "weekly"
@@ -336,7 +343,7 @@ serve(async (req: Request) => {
       continue;
     }
 
-    const recipient = (t.alert_email ?? t.owner_email ?? adminEmail ?? "").trim();
+    const recipient = (windowOverride ?? fallbackRecipient ?? "").trim();
     if (!recipient) {
       await recordDigestRow(supa, t.business_id, "skipped", digestLabel, { window }, "no_email");
       skipped += 1;

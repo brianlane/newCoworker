@@ -12,7 +12,8 @@ import {
   Settings,
   Bell,
   Users,
-  Workflow
+  Workflow,
+  CreditCard
 } from "lucide-react";
 
 const ownerNavItems = [
@@ -29,6 +30,7 @@ const ownerNavItems = [
   { label: "Memory", href: "/dashboard/memory", icon: Brain },
   { label: "Integrations", href: "/dashboard/integrations", icon: Plug },
   { label: "AiFlows", href: "/dashboard/aiflows", icon: Workflow },
+  { label: "Billing", href: "/dashboard/billing", icon: CreditCard },
   { label: "Settings", href: "/dashboard/settings", icon: Settings },
   { label: "Notifications", href: "/dashboard/notifications", icon: Bell }
 ];

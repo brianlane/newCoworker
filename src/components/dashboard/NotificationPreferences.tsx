@@ -48,6 +48,8 @@ export function NotificationPreferences({ businessId, initial }: Props) {
   const [dashboardAlerts, setDashboardAlerts] = useState(initial.dashboard_alerts);
   const [phone, setPhone] = useState(initial.phone_number ?? "");
   const [alertEmail, setAlertEmail] = useState(initial.alert_email ?? "");
+  const [digestEmailDaily, setDigestEmailDaily] = useState(initial.digest_email_daily ?? "");
+  const [digestEmailWeekly, setDigestEmailWeekly] = useState(initial.digest_email_weekly ?? "");
   const [unsubscribedAt, setUnsubscribedAt] = useState<string | null>(initial.unsubscribed_at);
   const [loading, setLoading] = useState(false);
   const [unsubscribing, setUnsubscribing] = useState(false);
@@ -62,6 +64,8 @@ export function NotificationPreferences({ businessId, initial }: Props) {
     setDashboardAlerts(initial.dashboard_alerts);
     setPhone(initial.phone_number ?? "");
     setAlertEmail(initial.alert_email ?? "");
+    setDigestEmailDaily(initial.digest_email_daily ?? "");
+    setDigestEmailWeekly(initial.digest_email_weekly ?? "");
     setUnsubscribedAt(initial.unsubscribed_at);
   }, [initial]);
 
@@ -73,6 +77,8 @@ export function NotificationPreferences({ businessId, initial }: Props) {
     setDashboardAlerts(prefs.dashboard_alerts);
     setPhone(prefs.phone_number ?? "");
     setAlertEmail(prefs.alert_email ?? "");
+    setDigestEmailDaily(prefs.digest_email_daily ?? "");
+    setDigestEmailWeekly(prefs.digest_email_weekly ?? "");
     setUnsubscribedAt(prefs.unsubscribed_at);
   }
 
@@ -91,7 +97,9 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           email_urgent: emailUrgent,
           dashboard_alerts: dashboardAlerts,
           phone_number: phone.trim() || null,
-          alert_email: alertEmail.trim() || ""
+          alert_email: alertEmail.trim() || "",
+          digest_email_daily: digestEmailDaily.trim() || "",
+          digest_email_weekly: digestEmailWeekly.trim() || ""
         })
       });
       const json = await res.json();
@@ -207,6 +215,22 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           value={alertEmail}
           onChange={(e) => setAlertEmail(e.target.value)}
           placeholder="you@company.com"
+          disabled={loading || unsubscribing}
+        />
+        <Input
+          label="Daily digest email (optional)"
+          type="email"
+          value={digestEmailDaily}
+          onChange={(e) => setDigestEmailDaily(e.target.value)}
+          placeholder={alertEmail.trim() || "defaults to alert email"}
+          disabled={loading || unsubscribing}
+        />
+        <Input
+          label="Weekly digest email (optional)"
+          type="email"
+          value={digestEmailWeekly}
+          onChange={(e) => setDigestEmailWeekly(e.target.value)}
+          placeholder={alertEmail.trim() || "defaults to alert email"}
           disabled={loading || unsubscribing}
         />
       </div>

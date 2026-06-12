@@ -23,6 +23,8 @@ const PREFS = {
   dashboard_alerts: true,
   phone_number: null,
   alert_email: null,
+  digest_email_daily: null,
+  digest_email_weekly: null,
   unsubscribed_at: null,
   updated_at: "2026-01-01T00:00:00Z"
 };
@@ -522,6 +524,44 @@ describe("db/notification-preferences", () => {
       })
     );
     expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  it("updateNotificationPreferences persists per-window digest recipient overrides", async () => {
+    const selectChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: PREFS, error: null })
+    };
+    const updateChain = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({
+        data: {
+          ...PREFS,
+          digest_email_daily: "daily@biz.com",
+          digest_email_weekly: "weekly@biz.com"
+        },
+        error: null
+      })
+    };
+    const shared = {
+      from: vi.fn().mockReturnValueOnce(selectChain).mockReturnValueOnce(updateChain)
+    };
+
+    const row = await updateNotificationPreferences(
+      "biz-1",
+      { digest_email_daily: "daily@biz.com", digest_email_weekly: "weekly@biz.com" },
+      shared as never
+    );
+    expect(row.digest_email_daily).toBe("daily@biz.com");
+    expect(row.digest_email_weekly).toBe("weekly@biz.com");
+    expect(updateChain.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        digest_email_daily: "daily@biz.com",
+        digest_email_weekly: "weekly@biz.com"
+      })
+    );
   });
 
   it("updateNotificationPreferences throws on update error", async () => {

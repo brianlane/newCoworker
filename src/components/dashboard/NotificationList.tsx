@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import type { NotificationRow } from "@/lib/db/notifications";
+import { notificationDetailFields, notificationLink } from "@/lib/notifications/display";
 
 type Props = {
   businessId: string;
@@ -65,6 +67,7 @@ export function NotificationList({ businessId, initial }: Props) {
   const [items, setItems] = useState<NotificationRow[]>(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const unreadCount = items.filter((it) => !it.read_at).length;
 
@@ -131,43 +134,72 @@ export function NotificationList({ businessId, initial }: Props) {
         {items.map((n) => {
           const reason = describeReason((n.payload as Record<string, unknown>) ?? {});
           const isUnread = !n.read_at;
+          const isExpanded = expandedId === n.id;
+          const link = notificationLink(n);
+          const detailFields = notificationDetailFields(n);
           return (
             <li
               key={n.id}
-              className={[
-                "flex flex-wrap items-center justify-between gap-3 py-3 transition-colors",
-                isUnread ? "" : "opacity-60"
-              ].join(" ")}
+              className={["py-3 transition-colors", isUnread ? "" : "opacity-60"].join(" ")}
             >
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-sm font-medium text-parchment">
-                    {n.summary ?? describeKind(n)}
-                  </span>
-                  {isUnread && (
-                    <span className="inline-block h-2 w-2 rounded-full bg-signal-teal" aria-label="unread" />
+              <button
+                type="button"
+                data-testid="notification-row"
+                aria-expanded={isExpanded}
+                onClick={() => {
+                  setExpandedId(isExpanded ? null : n.id);
+                  // Viewing the detail counts as reading it.
+                  if (!isExpanded && isUnread) void markOne(n.id);
+                }}
+                className="flex w-full flex-wrap items-center justify-between gap-3 text-left cursor-pointer"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-medium text-parchment">
+                      {n.summary ?? describeKind(n)}
+                    </span>
+                    {isUnread && (
+                      <span
+                        className="inline-block h-2 w-2 rounded-full bg-signal-teal"
+                        aria-label="unread"
+                      />
+                    )}
+                  </div>
+                  <p className="text-xs text-parchment/45 mt-1">
+                    {describeKind(n)} • {n.delivery_channel} •{" "}
+                    {new Date(n.created_at).toLocaleString()}
+                  </p>
+                  {reason && <p className="text-xs text-parchment/35 mt-1 italic">{reason}</p>}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant={statusVariant(n.status)}>{n.status}</Badge>
+                  <span className="text-xs text-parchment/40">{isExpanded ? "▾" : "▸"}</span>
+                </div>
+              </button>
+              {isExpanded && (
+                <div
+                  data-testid="notification-detail"
+                  className="mt-3 rounded-lg border border-parchment/10 bg-deep-ink/40 px-4 py-3 space-y-2"
+                >
+                  {detailFields.length === 0 && !link && (
+                    <p className="text-xs text-parchment/40">No additional detail recorded.</p>
+                  )}
+                  {detailFields.map((f) => (
+                    <p key={f.label} className="text-xs text-parchment/70">
+                      <span className="font-medium text-parchment/50">{f.label}: </span>
+                      {f.value}
+                    </p>
+                  ))}
+                  {link && (
+                    <Link
+                      href={link.href}
+                      className="inline-block text-xs font-medium text-signal-teal hover:underline"
+                    >
+                      {link.label} →
+                    </Link>
                   )}
                 </div>
-                <p className="text-xs text-parchment/45 mt-1">
-                  {describeKind(n)} • {n.delivery_channel} •{" "}
-                  {new Date(n.created_at).toLocaleString()}
-                </p>
-                {reason && (
-                  <p className="text-xs text-parchment/35 mt-1 italic">{reason}</p>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge variant={statusVariant(n.status)}>{n.status}</Badge>
-                {isUnread && (
-                  <button
-                    type="button"
-                    onClick={() => void markOne(n.id)}
-                    className="text-xs text-signal-teal hover:underline"
-                  >
-                    Mark read
-                  </button>
-                )}
-              </div>
+              )}
             </li>
           );
         })}
