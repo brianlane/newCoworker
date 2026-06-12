@@ -31,9 +31,11 @@ import {
   buildExtractionPrompt,
   evaluateStepCondition,
   extractPhones,
+  filterRosterByAvailability,
   htmlToText,
   isE164,
   isExecutableDefinition,
+  localClock,
   normalizeNanpToE164,
   parseExtractionJson,
   parseRoutedAgent,
@@ -1524,7 +1526,7 @@ async function pickNextAgent(
   // --- Deterministic roster path -------------------------------------------
   const { data: rosterRows, error: rosterErr } = await supabase
     .from("ai_flow_team_members")
-    .select("id, name, phone_e164")
+    .select("id, name, phone_e164, weekly_schedule, preferred_windows")
     .eq("business_id", run.business_id)
     .eq("active", true)
     .order("last_offered_at", { ascending: true, nullsFirst: true })
@@ -1532,7 +1534,13 @@ async function pickNextAgent(
   if (rosterErr) {
     throw new Error(`route_to_team: roster query failed: ${rosterErr.message}`);
   }
-  let roster = (rosterRows ?? []) as { id: string; name: string; phone_e164: string }[];
+  let roster = (rosterRows ?? []) as {
+    id: string;
+    name: string;
+    phone_e164: string;
+    weekly_schedule?: unknown;
+    preferred_windows?: unknown;
+  }[];
   // Pinned routing (step.agentName): this lead type goes to ONE named member
   // (e.g. every seller lead straight to the broker). Restrict the roster to
   // that member; if they're missing/renamed — or there is no roster at all —
@@ -1555,8 +1563,44 @@ async function pickNextAgent(
     }
   }
   if (roster.length > 0) {
+    // Working-info rules (evaluated business-local): time off covering today
+    // and out-of-schedule members are hard skips — applied AFTER the pin
+    // filter so time off supersedes pinned routing too. Preferred windows
+    // only reorder. When every roster member is unavailable the offer falls
+    // through to the owner fallback (null), never to the legacy Rowboat
+    // picker — the owner curated this roster; don't let the model improvise.
+    const [tzRes, offRes] = await Promise.all([
+      supabase.from("businesses").select("timezone").eq("id", run.business_id).maybeSingle(),
+      supabase
+        .from("employee_time_off")
+        .select("member_id, starts_on, ends_on")
+        .eq("business_id", run.business_id)
+    ]);
+    if (offRes.error) {
+      throw new Error(`route_to_team: time-off query failed: ${offRes.error.message}`);
+    }
+    const tz = (tzRes.data as { timezone?: string | null } | null)?.timezone ?? null;
+    const clock = localClock(new Date(), tz);
+    const offIds = new Set(
+      ((offRes.data ?? []) as { member_id: string; starts_on: string; ends_on: string }[])
+        .filter((t) => t.starts_on <= clock.isoDate && t.ends_on >= clock.isoDate)
+        .map((t) => t.member_id)
+    );
+    const availableRoster = filterRosterByAvailability(roster, offIds, clock);
+    if (availableRoster.length === 0) {
+      await systemLog(supabase, {
+        businessId: run.business_id,
+        source: "aiflow",
+        level: "warn",
+        event: "ai_flow_no_agent_available",
+        message:
+          "route_to_team: every roster member is on time off or outside their schedule; falling back to the owner",
+        payload: { run_id: run.id, flow_id: run.flow_id, roster_size: roster.length }
+      });
+      return null;
+    }
     const pick = pickRosterAgent(
-      roster.map((r) => ({ name: r.name, phone: r.phone_e164 })),
+      availableRoster.map((r) => ({ name: r.name, phone: r.phone_e164 })),
       tried,
       leadPhoneE164(scope)
     );
@@ -1567,7 +1611,7 @@ async function pickNextAgent(
     const { error: stampErr } = await supabase
       .from("ai_flow_team_members")
       .update({ last_offered_at: new Date().toISOString() })
-      .eq("id", roster[pick.index].id);
+      .eq("id", availableRoster[pick.index].id);
     if (stampErr) {
       console.error(`route_to_team: rotation stamp failed: ${stampErr.message}`);
     }

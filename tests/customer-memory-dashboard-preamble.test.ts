@@ -19,6 +19,7 @@ function memory(overrides: Partial<CustomerMemoryRow> = {}): CustomerMemoryRow {
     last_interaction_at: "2026-05-06T10:00:00Z",
     last_summarized_at: null,
     last_channel: "sms",
+    alias_e164s: [],
     created_at: "2026-05-01T00:00:00Z",
     updated_at: "2026-05-06T10:00:00Z",
     ...overrides

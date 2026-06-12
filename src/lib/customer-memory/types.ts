@@ -28,6 +28,8 @@ export type CustomerMemoryRow = {
   last_interaction_at: string | null;
   last_summarized_at: string | null;
   last_channel: CustomerMemoryChannel | null;
+  /** E.164 numbers merged into this profile (merge_customer_memories). */
+  alias_e164s: string[];
   created_at: string;
   updated_at: string;
 };

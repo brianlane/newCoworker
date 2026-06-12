@@ -12,6 +12,7 @@ import {
   Settings,
   Bell,
   Users,
+  UserCog,
   Workflow,
   CreditCard
 } from "lucide-react";
@@ -27,6 +28,9 @@ const ownerNavItems = [
   // owners can find a person without remembering which channel they
   // came in on.
   { label: "Customers", href: "/dashboard/customers", icon: Users },
+  // Team roster shared with AiFlow route_to_team: who leads rotate through,
+  // their schedules/preferred times, and time off (which supersedes routing).
+  { label: "Employees", href: "/dashboard/employees", icon: UserCog },
   { label: "Memory", href: "/dashboard/memory", icon: Brain },
   { label: "Integrations", href: "/dashboard/integrations", icon: Plug },
   { label: "AiFlows", href: "/dashboard/aiflows", icon: Workflow },

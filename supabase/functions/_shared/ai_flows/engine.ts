@@ -330,6 +330,145 @@ export function pickRosterAgent(
   return null;
 }
 
+// --- Employee availability (route_to_team working-info rules) -----------------
+//
+// Pure evaluation of `ai_flow_team_members.weekly_schedule` /
+// `.preferred_windows` and `employee_time_off` against a business-local
+// clock. The worker fetches the rows; everything date/time lives here so it
+// is unit-testable and identical across Deno/Node.
+
+export const WEEKDAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
+export type Weekday = (typeof WEEKDAY_KEYS)[number];
+
+/** Business-local "now": calendar date, weekday key, and minutes since midnight. */
+export type LocalClock = { isoDate: string; weekday: Weekday; minutes: number };
+
+/**
+ * Resolve `now` into the business-local calendar clock. Invalid/missing
+ * timezone falls back to UTC — same forgiving posture as currentDateTimeLine,
+ * because a typo'd timezone must never stop lead routing.
+ */
+export function localClock(now: Date, timeZone?: string | null): LocalClock {
+  let fmt: Intl.DateTimeFormat;
+  try {
+    fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: timeZone && timeZone.trim() ? timeZone.trim() : "UTC",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      weekday: "short"
+    });
+  } catch {
+    fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: "UTC",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      weekday: "short"
+    });
+  }
+  const parts: Record<string, string> = {};
+  for (const p of fmt.formatToParts(now)) parts[p.type] = p.value;
+  // hour12:false can render midnight as "24" in some engines; normalize.
+  const hour = Number(parts.hour) % 24;
+  const weekday = parts.weekday.slice(0, 3).toLowerCase() as Weekday;
+  return {
+    isoDate: `${parts.year}-${parts.month}-${parts.day}`,
+    weekday,
+    minutes: hour * 60 + Number(parts.minute)
+  };
+}
+
+/** Per-weekday minute windows, e.g. { mon: [[540, 1020]] } for 09:00–17:00. */
+export type WeeklyWindows = Partial<Record<Weekday, [number, number][]>>;
+
+/** "HH:MM" → minutes since midnight, or null when malformed/out of range. */
+export function parseHmToMinutes(raw: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(raw.trim());
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  return h * 60 + min;
+}
+
+/**
+ * Validate a stored weekly-windows jsonb value (shape
+ * `{"mon":[["09:00","17:00"]]}`) into minute windows. Malformed entries are
+ * dropped (an owner typo narrows availability rather than crashing routing);
+ * returns null when nothing valid remains, which callers treat as "unset".
+ */
+export function parseWeeklyWindows(raw: unknown): WeeklyWindows | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const out: WeeklyWindows = {};
+  let any = false;
+  for (const day of WEEKDAY_KEYS) {
+    const windows = (raw as Record<string, unknown>)[day];
+    if (!Array.isArray(windows)) continue;
+    const parsed: [number, number][] = [];
+    for (const w of windows) {
+      if (!Array.isArray(w) || w.length !== 2) continue;
+      if (typeof w[0] !== "string" || typeof w[1] !== "string") continue;
+      const start = parseHmToMinutes(w[0]);
+      const end = parseHmToMinutes(w[1]);
+      if (start === null || end === null || end <= start) continue;
+      parsed.push([start, end]);
+    }
+    if (parsed.length > 0) {
+      out[day] = parsed;
+      any = true;
+    }
+  }
+  return any ? out : null;
+}
+
+/** True when the clock falls inside any window for its weekday (start inclusive, end exclusive). */
+export function isWithinWeeklyWindows(windows: WeeklyWindows, clock: LocalClock): boolean {
+  const dayWindows = windows[clock.weekday];
+  if (!dayWindows) return false;
+  return dayWindows.some(([start, end]) => clock.minutes >= start && clock.minutes < end);
+}
+
+/** Roster row shape the availability filter needs (worker passes DB rows through). */
+export type AvailabilityInput = {
+  id: string;
+  weekly_schedule?: unknown;
+  preferred_windows?: unknown;
+};
+
+/**
+ * Apply the working-info rules to a rotation-ordered roster:
+ *   1. members in `offIds` (time off covering today) are dropped — hard skip;
+ *   2. members with a valid weekly_schedule are dropped when the clock is
+ *      outside it — hard skip (no schedule = always available);
+ *   3. members currently inside a preferred window float to the front,
+ *      otherwise relative rotation order is preserved — soft priority only,
+ *      so a lead is never dropped because nobody "prefers" the current hour.
+ */
+export function filterRosterByAvailability<T extends AvailabilityInput>(
+  roster: T[],
+  offIds: ReadonlySet<string>,
+  clock: LocalClock
+): T[] {
+  const available = roster.filter((m) => {
+    if (offIds.has(m.id)) return false;
+    const schedule = parseWeeklyWindows(m.weekly_schedule);
+    if (schedule && !isWithinWeeklyWindows(schedule, clock)) return false;
+    return true;
+  });
+  const preferredNow = (m: T): boolean => {
+    const preferred = parseWeeklyWindows(m.preferred_windows);
+    return preferred !== null && isWithinWeeklyWindows(preferred, clock);
+  };
+  return [...available.filter(preferredNow), ...available.filter((m) => !preferredNow(m))];
+}
+
 /** Find and parse the first balanced JSON object in a string. Null on failure. */
 function extractFirstJsonObject(raw: string): Record<string, unknown> | null {
   const start = raw.indexOf("{");

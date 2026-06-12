@@ -16,10 +16,12 @@ import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import {
   getCustomerMemory,
+  listCustomerMemories,
   listSmsHistoryForCustomer
 } from "@/lib/customer-memory/db";
 import { listTranscriptsForCaller } from "@/lib/db/voice-transcripts";
 import { CustomerProfileEditor } from "@/components/dashboard/CustomerProfileEditor";
+import { CustomerMergeAction } from "@/components/dashboard/CustomerMergeAction";
 
 export const dynamic = "force-dynamic";
 
@@ -59,14 +61,24 @@ export default async function CustomerDetailPage({ params }: Props) {
   // Phase 4 + 4b: pull SMS + voice in parallel so the page hydrates in
   // one round-trip group rather than serial. Voice list is capped at
   // 10 — the per-call transcript page is one click away for full detail.
-  const [smsHistory, voiceTranscripts] = await Promise.all([
-    listSmsHistoryForCustomer(business.id, customerE164, { limit: 50 }),
+  // SMS history is alias-aware: messages from numbers merged into this
+  // profile read as one thread. Merge candidates (every OTHER customer)
+  // ride the same round-trip group.
+  const [smsHistory, voiceTranscripts, allCustomers] = await Promise.all([
+    listSmsHistoryForCustomer(business.id, customerE164, {
+      limit: 50,
+      aliases: memory.alias_e164s ?? []
+    }),
     // Tolerate transcript table errors here so a voice-table outage
     // doesn't block the SMS-only customer detail page from rendering.
     listTranscriptsForCaller(business.id, customerE164, { limit: 10 }).catch(
       () => []
-    )
+    ),
+    listCustomerMemories(business.id, { limit: 200 }).catch(() => [])
   ]);
+  const mergeCandidates = allCustomers
+    .filter((c) => c.customer_e164 !== memory.customer_e164)
+    .map((c) => ({ customerE164: c.customer_e164, displayName: c.display_name }));
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -100,6 +112,15 @@ export default async function CustomerDetailPage({ params }: Props) {
               last seen <LocalDateTime iso={memory.last_interaction_at} />
             </span>
           )}
+          {(memory.alias_e164s ?? []).map((alias) => (
+            <span
+              key={alias}
+              className="text-parchment/70 bg-parchment/10 rounded px-2 py-0.5 font-mono"
+              title="Merged-in number — texts and calls from it land on this profile"
+            >
+              also {alias}
+            </span>
+          ))}
         </div>
       </div>
 
@@ -108,6 +129,12 @@ export default async function CustomerDetailPage({ params }: Props) {
         customerE164={memory.customer_e164}
         initialDisplayName={memory.display_name}
         initialPinnedMd={memory.pinned_md}
+      />
+
+      <CustomerMergeAction
+        businessId={business.id}
+        customerE164={memory.customer_e164}
+        candidates={mergeCandidates}
       />
 
       {memory.summary_md?.trim() ? (
