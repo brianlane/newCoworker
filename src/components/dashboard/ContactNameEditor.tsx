@@ -8,6 +8,12 @@ type Props = {
   e164: string;
   /** Name currently shown for this number (derived or override), if any. */
   currentName: string | null;
+  /**
+   * Whether the shown name comes from a manual override row. "Remove" only
+   * makes sense then — deleting an override under a derived name would
+   * succeed yet visibly change nothing.
+   */
+  hasOverride: boolean;
 };
 
 /**
@@ -80,7 +86,7 @@ export function ContactNameEditor(props: Props) {
       >
         {busy ? "Saving…" : "Save"}
       </button>
-      {props.currentName && (
+      {props.hasOverride && (
         <button
           type="button"
           onClick={() => call("DELETE", { e164: props.e164 })}

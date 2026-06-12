@@ -109,6 +109,7 @@ export default async function SmsThreadPage({
             businessId={business.id}
             e164={customerE164}
             currentName={contact?.name ?? null}
+            hasOverride={Boolean(contact?.override)}
           />
           <span>·</span>
           <span>

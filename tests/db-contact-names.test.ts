@@ -292,7 +292,11 @@ describe("resolveContactNames", () => {
       }
     });
     const out = await resolveContactNames(BIZ, ["+16026951142"], db as unknown as Client);
-    expect(out.get("+16026951142")).toEqual({ name: "Amy Laidlaw", kind: "owner" });
+    expect(out.get("+16026951142")).toEqual({
+      name: "Amy Laidlaw",
+      kind: "owner",
+      override: true
+    });
   });
 
   it("labels an override on an unidentified number (short-code lead source) as kind 'contact'", async () => {
@@ -311,7 +315,11 @@ describe("resolveContactNames", () => {
       ["73339", "+15550000088", "+15550000089"],
       db as unknown as Client
     );
-    expect(out.get("73339")).toEqual({ name: "ReferralExchange", kind: "contact" });
+    expect(out.get("73339")).toEqual({
+      name: "ReferralExchange",
+      kind: "contact",
+      override: true
+    });
     // Blank / null override names are ignored rather than rendering "".
     expect(out.has("+15550000088")).toBe(false);
     expect(out.has("+15550000089")).toBe(false);

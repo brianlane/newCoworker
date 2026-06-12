@@ -18,6 +18,8 @@ export type ContactName = {
   name: string;
   /** `contact` = owner-set override on a number with no derived identity. */
   kind: "owner" | "employee" | "customer" | "contact";
+  /** Present (true) when the NAME came from a manual contact_overrides row. */
+  override?: true;
 };
 
 /**
@@ -136,7 +138,7 @@ export async function resolveContactNames(
     const name = row.name?.trim();
     if (!name) continue;
     const existing = out.get(row.e164);
-    out.set(row.e164, { name, kind: existing?.kind ?? "contact" });
+    out.set(row.e164, { name, kind: existing?.kind ?? "contact", override: true });
   }
   return out;
 }
