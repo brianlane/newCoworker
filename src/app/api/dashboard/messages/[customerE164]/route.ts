@@ -25,7 +25,9 @@ export const dynamic = "force-dynamic";
 const SMS_THREAD_RATE = { interval: 60 * 1000, maxRequests: 60 };
 
 const paramsSchema = z.object({
-  customerE164: z.string().regex(/^\+[1-9]\d{6,15}$/)
+  // E.164 or a bare short code — short-code lead sources (ReferralExchange
+  // = 73339) have readable threads too.
+  customerE164: z.string().regex(/^(\+[1-9]\d{6,15}|\d{3,8})$/)
 });
 
 const querySchema = z.object({

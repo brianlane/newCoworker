@@ -16,7 +16,8 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 export type ContactName = {
   name: string;
-  kind: "owner" | "employee" | "customer";
+  /** `contact` = owner-set override on a number with no derived identity. */
+  kind: "owner" | "employee" | "customer" | "contact";
 };
 
 /**
@@ -36,7 +37,7 @@ export async function resolveContactNames(
   // E.164 strings are "+digits" only, so embedding them in a PostgREST
   // .or() filter needs no escaping (no commas/parens/braces possible).
   const inList = unique.join(",");
-  const [teamRes, custRes, bizRes, telnyxRes, prefsRes] = await Promise.all([
+  const [teamRes, custRes, bizRes, telnyxRes, prefsRes, overrideRes] = await Promise.all([
     // active-only: matches the inbound webhook's employee gate, so a
     // deactivated employee whose texts take the normal customer path is
     // not labeled "employee" in the UI either.
@@ -71,9 +72,14 @@ export async function resolveContactNames(
       .from("notification_preferences")
       .select("phone_number")
       .eq("business_id", businessId)
-      .maybeSingle()
+      .maybeSingle(),
+    db
+      .from("contact_overrides")
+      .select("e164, name")
+      .eq("business_id", businessId)
+      .in("e164", unique)
   ]);
-  for (const res of [teamRes, custRes, bizRes, telnyxRes, prefsRes]) {
+  for (const res of [teamRes, custRes, bizRes, telnyxRes, prefsRes, overrideRes]) {
     if (res.error) {
       throw new Error(`resolveContactNames: ${res.error.message}`);
     }
@@ -117,6 +123,20 @@ export async function resolveContactNames(
   ];
   for (const num of ownerNumbers) {
     if (num && wanted.has(num)) out.set(num, { name: ownerName, kind: "owner" });
+  }
+  // Manual overrides win over every derived name — they exist precisely for
+  // the numbers the heuristics get wrong (e.g. a forward cell that belongs
+  // to someone other than businesses.owner_name) or can't know at all
+  // (short-code lead sources). The derived KIND is kept when one exists so
+  // badges like "owner"/"employee" stay accurate; only the name changes.
+  for (const row of (overrideRes.data as Array<{
+    e164: string;
+    name: string;
+  }> | null) ?? []) {
+    const name = row.name?.trim();
+    if (!name) continue;
+    const existing = out.get(row.e164);
+    out.set(row.e164, { name, kind: existing?.kind ?? "contact" });
   }
   return out;
 }

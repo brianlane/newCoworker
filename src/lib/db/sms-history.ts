@@ -138,9 +138,19 @@ export function inboundTextFromPayload(
 }
 
 /**
- * Pluck the customer-side phone (E.164) from a Telnyx webhook envelope.
- * Returns `null` when the envelope shape is unrecognized — the caller
- * should drop those rows from the conversation index rather than crash.
+ * A renderable sender id: E.164, or a bare 3-8 digit SHORT CODE. Lead
+ * sources text from short codes (ReferralExchange = 73339); rejecting them
+ * made those threads invisible in Text history even though the jobs exist.
+ */
+function isRenderableSender(value: string): boolean {
+  return value.startsWith("+") || /^\d{3,8}$/.test(value);
+}
+
+/**
+ * Pluck the customer-side phone (E.164 or short code) from a Telnyx webhook
+ * envelope. Returns `null` when the envelope shape is unrecognized — the
+ * caller should drop those rows from the conversation index rather than
+ * crash.
  */
 export function customerE164FromPayload(
   payload: Record<string, unknown> | null | undefined
@@ -153,12 +163,12 @@ export function customerE164FromPayload(
     | { phone_number?: string }
     | string
     | undefined;
-  if (typeof from === "string" && from.startsWith("+")) return from;
+  if (typeof from === "string" && isRenderableSender(from)) return from;
   if (
     from &&
     typeof from === "object" &&
     typeof from.phone_number === "string" &&
-    from.phone_number.startsWith("+")
+    isRenderableSender(from.phone_number)
   ) {
     return from.phone_number;
   }
