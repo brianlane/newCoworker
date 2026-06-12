@@ -16,6 +16,7 @@ import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { listConversationsForBusiness } from "@/lib/db/sms-history";
+import { resolveContactNames } from "@/lib/db/contact-names";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 
 export const dynamic = "force-dynamic";
@@ -59,6 +60,10 @@ export default async function DashboardMessagesPage() {
   }
 
   const conversations = await listConversationsForBusiness(business.id, { limit: 50 });
+  const contactNames = await resolveContactNames(
+    business.id,
+    conversations.map((c) => c.customerE164)
+  ).catch(() => new Map<string, { name: string; kind: "employee" | "customer" }>());
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -88,7 +93,9 @@ export default async function DashboardMessagesPage() {
       ) : (
         <Card padding="sm">
           <ul className="divide-y divide-parchment/10">
-            {conversations.map((c) => (
+            {conversations.map((c) => {
+              const contact = contactNames.get(c.customerE164);
+              return (
               <li key={c.customerE164}>
                 <Link
                   href={`/dashboard/messages/${encodeURIComponent(c.customerE164)}`}
@@ -97,8 +104,18 @@ export default async function DashboardMessagesPage() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-parchment truncate">
-                        {c.customerE164}
+                        {contact?.name ?? c.customerE164}
                       </span>
+                      {contact && (
+                        <span className="text-[10px] uppercase tracking-wide text-parchment/40">
+                          {contact.kind === "employee" ? "employee" : null}
+                        </span>
+                      )}
+                      {contact && (
+                        <span className="text-[10px] text-parchment/40 font-mono">
+                          {c.customerE164}
+                        </span>
+                      )}
                       <span className="text-[10px] uppercase tracking-wide text-parchment/40 font-mono">
                         {c.messageCount} msg{c.messageCount === 1 ? "" : "s"}
                       </span>
@@ -113,7 +130,8 @@ export default async function DashboardMessagesPage() {
                   <span className="text-parchment/40 text-sm shrink-0">View →</span>
                 </Link>
               </li>
-            ))}
+              );
+            })}
           </ul>
         </Card>
       )}

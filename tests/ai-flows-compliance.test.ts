@@ -39,9 +39,17 @@ describe("gsmSafeSmsText", () => {
     );
     expect(gsmSafeSmsText("a\u00A0b \u2013 c \u02BCd")).toBe("a b - c 'd");
   });
-  it("converts common smiley emoji to an emoticon", () => {
-    expect(gsmSafeSmsText("Thanks, Amy \u{1F60A}")).toBe("Thanks, Amy :-)");
-    expect(gsmSafeSmsText("\u{1F600}\u{1F603}\u{1F604}\u{1F642}")).toBe(":-):-):-):-)");
+  it("keeps emoji intact when the message fits the UCS-2 send cap", () => {
+    expect(gsmSafeSmsText("Thanks, Amy \u{1F60A}")).toBe("Thanks, Amy \u{1F60A}");
+    expect(gsmSafeSmsText("\u{1F600}\u{1F603}\u{1F604}\u{1F642}")).toBe(
+      "\u{1F600}\u{1F603}\u{1F604}\u{1F642}"
+    );
+  });
+  it("downgrades smileys to an emoticon only when the body is too long to ship as UCS-2", () => {
+    const long = `Thanks, Amy \u{1F60A} ${"x".repeat(UCS2_MAX_SENDABLE_CHARS)}`;
+    const out = gsmSafeSmsText(long);
+    expect(out).toContain("Thanks, Amy :-)");
+    expect(/[^\x00-\x7F]/.test(out)).toBe(false);
   });
   it("keeps unmapped non-ASCII when the message fits the UCS-2 send cap", () => {
     const short = `caf\u00E9 ${"x".repeat(50)}`;
@@ -84,6 +92,10 @@ describe("prepareSmsBody", () => {
   it("keeps a short emoji body intact, suffix included, when it still fits UCS-2", () => {
     const out = prepareSmsBody("Caf\u00E9 tour this week?", { requireStop: true });
     expect(out).toBe(`Caf\u00E9 tour this week? ${STOP_SUFFIX}`);
+  });
+  it("ships real smiley emoji (not :-)) when the cold body is short enough to deliver", () => {
+    const out = prepareSmsBody("Thanks, Amy \u{1F60A}", { requireStop: true });
+    expect(out).toBe(`Thanks, Amy \u{1F60A} ${STOP_SUFFIX}`);
   });
   it("caps an over-long ASCII body at the GSM ceiling", () => {
     const out = prepareSmsBody("y".repeat(SMS_MAX_BODY_CHARS + 200));

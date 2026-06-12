@@ -148,7 +148,12 @@ function joinVoiceTurns(rows: VoiceTurnEntry[]): string {
 function joinSmsHistory(rows: SmsHistoryEntry[]): string {
   return rows
     .flatMap((r) => {
-      const lines: string[] = [`[${r.receivedAt} SMS Customer]: ${r.inboundText}`];
+      // Worker-initiated sends (AiFlow intros) have no inbound side; don't
+      // emit an empty "Customer:" line for them.
+      const lines: string[] = [];
+      if (r.inboundText) {
+        lines.push(`[${r.receivedAt} SMS Customer]: ${r.inboundText}`);
+      }
       if (r.assistantReply) {
         lines.push(`[${r.receivedAt} SMS AI assistant]: ${r.assistantReply}`);
       }

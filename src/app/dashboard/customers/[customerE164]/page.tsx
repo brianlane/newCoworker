@@ -188,13 +188,17 @@ export default async function CustomerDetailPage({ params }: Props) {
                 <p className="text-[10px] uppercase tracking-wide text-parchment/40">
                   <LocalDateTime iso={entry.receivedAt} />
                 </p>
-                <p className="text-sm text-parchment/90 mt-0.5">
-                  <span className="text-parchment/40 mr-1">Customer:</span>
-                  {entry.inboundText}
-                </p>
+                {entry.inboundText && (
+                  <p className="text-sm text-parchment/90 mt-0.5">
+                    <span className="text-parchment/40 mr-1">Customer:</span>
+                    {entry.inboundText}
+                  </p>
+                )}
                 {entry.assistantReply && (
                   <p className="text-sm text-parchment/70 mt-1">
-                    <span className="text-parchment/40 mr-1">Coworker:</span>
+                    <span className="text-parchment/40 mr-1">
+                      {entry.source ? "AiFlow:" : "Coworker:"}
+                    </span>
                     {entry.assistantReply}
                   </p>
                 )}

@@ -67,13 +67,18 @@ export function gsmSafeSmsText(text: string): string {
     .replace(/[\u201C\u201D]/g, '"')
     .replace(/[\u2013\u2014]/g, "-")
     .replace(/\u2026/g, "...")
-    .replace(/\u00A0/g, " ")
-    .replace(/[\u{1F600}\u{1F603}\u{1F604}\u{1F60A}\u{1F642}]/gu, ":-)");
+    .replace(/\u00A0/g, " ");
   if (!/[^\x00-\x7F]/.test(normalized)) return normalized;
+  // Short enough to deliver as UCS-2: keep emoji (and any other symbols)
+  // exactly as written. Emoji must never be downgraded when the message is
+  // deliverable with them intact.
   if (normalized.length <= UCS2_MAX_SENDABLE_CHARS) return normalized;
-  // Long + still non-ASCII: dropping the remaining symbols is the only way
-  // the message can be delivered at all.
-  return normalized.replace(/[^\x00-\x7F]/gu, "");
+  // Long + non-ASCII: the message can only be delivered as GSM-7, so the
+  // symbols have to go. Downgrade common smileys to their ASCII emoticon
+  // (better than disappearing), then drop whatever non-ASCII remains.
+  return normalized
+    .replace(/[\u{1F600}\u{1F603}\u{1F604}\u{1F60A}\u{1F642}]/gu, ":-)")
+    .replace(/[^\x00-\x7F]/gu, "");
 }
 
 /**

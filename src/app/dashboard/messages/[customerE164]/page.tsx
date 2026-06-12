@@ -13,6 +13,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { ChatMarkdown } from "@/components/ui/ChatMarkdown";
 import { listMessagesForCustomer } from "@/lib/db/sms-history";
+import { resolveContactNames } from "@/lib/db/contact-names";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 
 export const dynamic = "force-dynamic";
@@ -60,6 +61,16 @@ export default async function SmsThreadPage({
     limit: 100
   });
   if (messages.length === 0) notFound();
+  const contact = (
+    await resolveContactNames(business.id, [customerE164]).catch(
+      () => new Map<string, { name: string; kind: "employee" | "customer" }>()
+    )
+  ).get(customerE164);
+  const inboundLabel = contact
+    ? contact.kind === "employee"
+      ? `${contact.name} (employee)`
+      : contact.name
+    : "Customer";
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -72,7 +83,15 @@ export default async function SmsThreadPage({
         </Link>
         <h1 className="text-2xl font-bold text-parchment mt-2">SMS thread</h1>
         <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-parchment/60">
-          <span className="font-semibold text-parchment">{customerE164}</span>
+          <span className="font-semibold text-parchment">
+            {contact?.name ?? customerE164}
+          </span>
+          {contact?.kind === "employee" && (
+            <span className="text-[10px] uppercase tracking-wide text-amber-300/80 bg-amber-300/10 rounded px-1.5 py-0.5">
+              employee
+            </span>
+          )}
+          {contact && <span className="font-mono text-xs">{customerE164}</span>}
           <span>·</span>
           <span>
             {messages.length} message{messages.length === 1 ? "" : "s"}
@@ -103,7 +122,7 @@ export default async function SmsThreadPage({
                   <div className="text-[10px] uppercase tracking-wide text-parchment/50 mb-1 flex items-center gap-2">
                     <span>
                       {isInbound
-                        ? "Customer"
+                        ? inboundLabel
                         : m.source === "ai_flow"
                           ? "AiFlow"
                           : m.source === "agent_offer"

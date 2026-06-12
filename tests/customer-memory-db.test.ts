@@ -126,13 +126,17 @@ function makeBuilder(terminator: { data?: unknown; error?: unknown } | (() => Pr
 
 function makeClient(opts: {
   fromTerminator?: { data?: unknown; error?: unknown };
+  /** Per-table override; falls back to `fromTerminator` for other tables. */
+  tableTerminators?: Record<string, { data?: unknown; error?: unknown }>;
   rpcResult?: { data?: unknown; error?: unknown };
 }) {
   const fromCalls: Array<{ table: string; calls: CallLog[] }> = [];
   const rpcCalls: Array<{ name: string; args: unknown }> = [];
   const client = {
     from(table: string) {
-      const { builder, calls } = makeBuilder(opts.fromTerminator ?? { data: null, error: null });
+      const terminator =
+        opts.tableTerminators?.[table] ?? opts.fromTerminator ?? { data: null, error: null };
+      const { builder, calls } = makeBuilder(terminator);
       fromCalls.push({ table, calls });
       return builder;
     },
@@ -575,7 +579,8 @@ describe("listSmsHistoryForCustomer", () => {
           jobRow({ id: "oldest", created_at: "2026-05-01T00:00:00Z" })
         ],
         error: null
-      }
+      },
+      tableTerminators: { sms_outbound_log: { data: [], error: null } }
     });
     const result = await listSmsHistoryForCustomer(BIZ, CUSTOMER, {}, client);
     expect(result.map((r) => r.jobId)).toEqual(["oldest", "middle", "newest"]);
@@ -591,7 +596,8 @@ describe("listSmsHistoryForCustomer", () => {
           jobRow({ id: "c", payload: {} })
         ],
         error: null
-      }
+      },
+      tableTerminators: { sms_outbound_log: { data: [], error: null } }
     });
     const result = await listSmsHistoryForCustomer(BIZ, CUSTOMER, {}, client);
     // Note: result is reversed (chronological), so DB index 0 -> result last.
@@ -612,7 +618,8 @@ describe("listSmsHistoryForCustomer", () => {
           jobRow({ id: "blank", assistant_reply_text: "   ", rowboat_reply_cached: "cache fallback" })
         ],
         error: null
-      }
+      },
+      tableTerminators: { sms_outbound_log: { data: [], error: null } }
     });
     const result = await listSmsHistoryForCustomer(BIZ, CUSTOMER, {}, client);
     expect(result.find((r) => r.jobId === "durable")?.assistantReply).toBe("durable reply");
@@ -630,7 +637,8 @@ describe("listSmsHistoryForCustomer", () => {
           jobRow({ id: "d", rowboat_reply_cached: null })
         ],
         error: null
-      }
+      },
+      tableTerminators: { sms_outbound_log: { data: [], error: null } }
     });
     const result = await listSmsHistoryForCustomer(BIZ, CUSTOMER, {}, client);
     expect(result.find((r) => r.jobId === "a")?.assistantReply).toBe("real reply");
@@ -653,6 +661,81 @@ describe("listSmsHistoryForCustomer", () => {
     });
     await expect(listSmsHistoryForCustomer(BIZ, CUSTOMER, {}, client)).rejects.toThrow(
       /listSmsHistoryForCustomer: rls/
+    );
+  });
+
+  it("also queries sms_outbound_log scoped to business + to_e164 numbers (aliases included)", async () => {
+    const { client, fromCalls } = makeClient({
+      fromTerminator: { data: [], error: null }
+    });
+    await listSmsHistoryForCustomer(BIZ, CUSTOMER, { aliases: ["+15555550999"] }, client);
+    const out = fromCalls.find((f) => f.table === "sms_outbound_log");
+    expect(out).toBeDefined();
+    expect(out!.calls.find((c) => c.name === "eq")?.args).toEqual(["business_id", BIZ]);
+    expect(out!.calls.find((c) => c.name === "in")?.args).toEqual([
+      "to_e164",
+      [CUSTOMER, "+15555550999"]
+    ]);
+  });
+
+  it("merges worker-initiated sends chronologically with inbound jobs, tagging their source", async () => {
+    // AiFlow texted the lead FIRST (no inbound job exists for that send) —
+    // exactly the live shape that left the profile page saying "No SMS
+    // history" while the thread page showed the message.
+    const { client } = makeClient({
+      tableTerminators: {
+        sms_inbound_jobs: {
+          data: [jobRow({ id: "reply", created_at: "2026-05-02T00:00:00Z" })],
+          error: null
+        },
+        sms_outbound_log: {
+          data: [
+            {
+              id: "intro",
+              body: "Hi Liz, re your inquiry...",
+              source: "ai_flow",
+              created_at: "2026-05-01T00:00:00Z"
+            }
+          ],
+          error: null
+        }
+      }
+    });
+    const result = await listSmsHistoryForCustomer(BIZ, CUSTOMER, {}, client);
+    expect(result.map((r) => r.jobId)).toEqual(["intro", "reply"]);
+    const intro = result[0]!;
+    expect(intro.inboundText).toBe("");
+    expect(intro.assistantReply).toBe("Hi Liz, re your inquiry...");
+    expect(intro.source).toBe("ai_flow");
+    expect(result[1]!.source).toBeUndefined();
+  });
+
+  it("returns ONLY outbound-log sends when no inbound job exists at all", async () => {
+    const { client } = makeClient({
+      tableTerminators: {
+        sms_inbound_jobs: { data: [], error: null },
+        sms_outbound_log: {
+          data: [
+            { id: "o1", body: "intro", source: "ai_flow", created_at: "2026-05-01T00:00:00Z" }
+          ],
+          error: null
+        }
+      }
+    });
+    const result = await listSmsHistoryForCustomer(BIZ, CUSTOMER, {}, client);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.jobId).toBe("o1");
+  });
+
+  it("propagates sms_outbound_log errors", async () => {
+    const { client } = makeClient({
+      tableTerminators: {
+        sms_inbound_jobs: { data: [], error: null },
+        sms_outbound_log: { data: null, error: { message: "outbound rls" } }
+      }
+    });
+    await expect(listSmsHistoryForCustomer(BIZ, CUSTOMER, {}, client)).rejects.toThrow(
+      /listSmsHistoryForCustomer: outbound rls/
     );
   });
 });

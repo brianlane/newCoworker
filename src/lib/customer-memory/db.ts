@@ -245,6 +245,12 @@ export type SmsHistoryEntry = {
   inboundText: string;
   assistantReply: string | null;
   receivedAt: string;
+  /**
+   * Set for worker-initiated sends from `sms_outbound_log` (AiFlow lead
+   * intros etc.) — those rows have no inbound side; `assistantReply` carries
+   * the outbound body.
+   */
+  source?: "ai_flow" | "agent_offer" | "owner_notify";
 };
 
 const DEFAULT_SMS_HISTORY_LIMIT = 30;
@@ -272,6 +278,20 @@ export async function listSmsHistoryForCustomer(
     .order("created_at", { ascending: false })
     .limit(limit);
   if (error) throw new Error(`listSmsHistoryForCustomer: ${error.message}`);
+  // Worker-initiated sends (AiFlow lead intros, offers) live in
+  // `sms_outbound_log` with no inbound job — without them a lead the flow
+  // texted first shows "No SMS history" on the profile even though the
+  // thread page renders the message.
+  const { data: outboundData, error: outboundError } = await db
+    .from("sms_outbound_log")
+    .select("id, body, source, created_at")
+    .eq("business_id", businessId)
+    .in("to_e164", numbers)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (outboundError) {
+    throw new Error(`listSmsHistoryForCustomer: ${outboundError.message}`);
+  }
   // Returned newest-first by the planner (cheaper to LIMIT against
   // the desc index); flip to chronological so the summarizer prompt
   // reads in conversation order.
@@ -290,12 +310,31 @@ export async function listSmsHistoryForCustomer(
     if (typeof cached === "string" && cached.trim().length > 0) return cached;
     return null;
   };
-  return rows.map((r) => ({
+  const entries: SmsHistoryEntry[] = rows.map((r) => ({
     jobId: r.id,
     inboundText: extractInboundText(r.payload),
     assistantReply: resolveReply(r.assistant_reply_text, r.rowboat_reply_cached),
     receivedAt: r.created_at
   }));
+  for (const r of (outboundData as Array<{
+    id: string;
+    body: string;
+    source: "ai_flow" | "agent_offer" | "owner_notify";
+    created_at: string;
+  }> | null) ?? []) {
+    entries.push({
+      jobId: r.id,
+      inboundText: "",
+      assistantReply: r.body,
+      receivedAt: r.created_at,
+      source: r.source
+    });
+  }
+  // Merge both sources chronologically and keep the most recent `limit`.
+  entries.sort((a, b) =>
+    a.receivedAt < b.receivedAt ? -1 : a.receivedAt > b.receivedAt ? 1 : 0
+  );
+  return entries.slice(-limit);
 }
 
 function extractInboundText(payload: Record<string, unknown>): string {

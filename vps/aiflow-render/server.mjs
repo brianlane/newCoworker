@@ -373,6 +373,7 @@ async function captureScreenshot(page) {
 async function respondWithActions(page, res, actions, wantScreenshot) {
   const acted = await performActions(page, actions);
   if (acted.error) {
+    console.error(`[render] action_failed after ${acted.completed} actions: ${acted.error}`);
     return res.status(502).json({
       error: "action_failed",
       detail: acted.error,
@@ -419,6 +420,7 @@ app.post("/render", async (req, res) => {
         ...(screenshotBase64 ? { screenshotBase64 } : {})
       });
     } catch (e) {
+      console.error(`[render] render_failed (unauthenticated) for ${safe}: ${String(e).slice(0, 300)}`);
       return res.status(502).json({ error: "render_failed", detail: String(e).slice(0, 300) });
     } finally {
       if (context) await context.close().catch(() => {});
@@ -434,6 +436,7 @@ app.post("/render", async (req, res) => {
   try {
     session = await acquireSession(key);
   } catch (e) {
+    console.error(`[render] session acquire failed for ${key}: ${String(e).slice(0, 300)}`);
     return res.status(502).json({ error: "render_failed", detail: String(e).slice(0, 300) });
   }
 
@@ -455,6 +458,7 @@ app.post("/render", async (req, res) => {
         await performLogin(page, creds, auth?.login);
       } catch (e) {
         poisoned = true;
+        console.error(`[render] auth_config_error for ${key}: ${String(e).slice(0, 200)}`);
         return res
           .status(502)
           .json({ error: "auth_config_error", detail: String(e).slice(0, 200) });
@@ -465,6 +469,7 @@ app.post("/render", async (req, res) => {
       // hand the extractor a login page.
       if (await looksLikeLogin(page, auth?.login)) {
         poisoned = true;
+        console.error(`[render] login_failed for ${key}`);
         return res.status(502).json({ error: "login_failed" });
       }
     }
@@ -484,6 +489,7 @@ app.post("/render", async (req, res) => {
     });
   } catch (e) {
     poisoned = true;
+    console.error(`[render] render_failed (authenticated ${key}) for ${safe}: ${String(e).slice(0, 300)}`);
     return res.status(502).json({ error: "render_failed", detail: String(e).slice(0, 300) });
   } finally {
     if (page) await page.close().catch(() => {});
