@@ -108,7 +108,10 @@ describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
         { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
       )
     ).rejects.toThrow("Telnyx SMS error");
-    expect(rpc).toHaveBeenCalledWith("release_sms_outbound_slot", { p_business_id: "biz-1" });
+    expect(rpc).toHaveBeenCalledWith("release_sms_outbound_slot", {
+      p_business_id: "biz-1",
+      p_refund_bonus: false
+    });
   });
 
   it("releases slot when response has no message id", async () => {
@@ -124,7 +127,10 @@ describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
         { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
       )
     ).rejects.toThrow("missing message id");
-    expect(rpc).toHaveBeenCalledWith("release_sms_outbound_slot", { p_business_id: "biz-1" });
+    expect(rpc).toHaveBeenCalledWith("release_sms_outbound_slot", {
+      p_business_id: "biz-1",
+      p_refund_bonus: false
+    });
   });
 
   it("releases slot when fetch throws", async () => {
@@ -137,7 +143,125 @@ describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
         { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
       )
     ).rejects.toThrow("network");
-    expect(rpc).toHaveBeenCalledWith("release_sms_outbound_slot", { p_business_id: "biz-1" });
+    expect(rpc).toHaveBeenCalledWith("release_sms_outbound_slot", {
+      p_business_id: "biz-1",
+      p_refund_bonus: false
+    });
+  });
+
+  it("refunds the bonus grant when a bonus-sourced reserve fails to send", async () => {
+    rpc.mockImplementation((name: string) => {
+      if (name === "try_reserve_sms_outbound_slot") {
+        return Promise.resolve({ data: { ok: true, source: "bonus" }, error: null });
+      }
+      if (name === "release_sms_outbound_slot") {
+        return Promise.resolve({ error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      text: () => Promise.resolve("err")
+    });
+    await expect(
+      sendTelnyxSms(
+        { apiKey: "k", messagingProfileId: "p" },
+        "+15550001111",
+        "Hi",
+        { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
+      )
+    ).rejects.toThrow("Telnyx SMS error");
+    expect(rpc).toHaveBeenCalledWith("release_sms_outbound_slot", {
+      p_business_id: "biz-1",
+      p_refund_bonus: true
+    });
+  });
+
+  it("sends a one-time owner cap alert when the monthly limit first blocks a send", async () => {
+    const savedUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const savedKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://x.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "srv-key";
+    try {
+      rpc.mockImplementation((name: string) => {
+        if (name === "try_reserve_sms_outbound_slot") {
+          return Promise.resolve({ data: { ok: false, reason: "monthly_sms_limit" }, error: null });
+        }
+        if (name === "mark_usage_cap_alert") {
+          return Promise.resolve({ data: true, error: null });
+        }
+        return Promise.resolve({ data: null, error: null });
+      });
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+      await expect(
+        sendTelnyxSms(
+          { apiKey: "k", messagingProfileId: "p" },
+          "+15550001111",
+          "Hi",
+          { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
+        )
+      ).rejects.toThrow("Monthly SMS limit reached");
+      expect(rpc).toHaveBeenCalledWith(
+        "mark_usage_cap_alert",
+        expect.objectContaining({
+          p_business_id: "biz-1",
+          p_cap_kind: "sms_monthly",
+          p_period_key: expect.stringMatching(/^\d{4}-\d{2}-01$/)
+        })
+      );
+      // The only fetch is the notifications POST (Telnyx is never called).
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("https://x.supabase.co/functions/v1/notifications");
+      const body = JSON.parse(init.body as string);
+      expect(body.record.task_type).toBe("sms_cap_reached");
+      expect(body.record.log_payload.surface).toBe("app_send_sms");
+    } finally {
+      if (savedUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+      else process.env.NEXT_PUBLIC_SUPABASE_URL = savedUrl;
+      if (savedKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+      else process.env.SUPABASE_SERVICE_ROLE_KEY = savedKey;
+    }
+  });
+
+  it("skips the alert POST when another sender already alerted this period", async () => {
+    rpc.mockImplementation((name: string) => {
+      if (name === "try_reserve_sms_outbound_slot") {
+        return Promise.resolve({ data: { ok: false, reason: "monthly_sms_limit" }, error: null });
+      }
+      if (name === "mark_usage_cap_alert") {
+        return Promise.resolve({ data: false, error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    const fetchMock = vi.fn();
+    await expect(
+      sendTelnyxSms(
+        { apiKey: "k", messagingProfileId: "p" },
+        "+15550001111",
+        "Hi",
+        { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
+      )
+    ).rejects.toThrow("Monthly SMS limit reached");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not alert for non-cap reserve failures", async () => {
+    rpc.mockImplementation((name: string) => {
+      if (name === "try_reserve_sms_outbound_slot") {
+        return Promise.resolve({ data: { ok: false, reason: "no_business" }, error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    await expect(
+      sendTelnyxSms(
+        { apiKey: "k", messagingProfileId: "p" },
+        "+15550001111",
+        "Hi",
+        { meterBusinessId: "biz-1" }
+      )
+    ).rejects.toThrow("Business not found");
+    expect(rpc).not.toHaveBeenCalledWith("mark_usage_cap_alert", expect.anything());
   });
 
   it("logs when release_sms_outbound_slot returns an error", async () => {

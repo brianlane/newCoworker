@@ -154,25 +154,60 @@ export async function readChatSpendMicros(
   return Number(row?.spend_micros ?? 0);
 }
 
-export type CapDecision = { periodStart: string | null; overCap: boolean };
+/**
+ * Purchased spend credit currently active for this business (micro-USD).
+ * Comes from `chat_spend_credit_grants` via the `chat_active_credit_micros`
+ * RPC; credit RAISES the period cap (base + credits) rather than being
+ * consumed per turn. Returns 0 on any failure — the base cap still applies,
+ * so a read blip can never mint free headroom.
+ */
+export async function readActiveChatCreditMicros(
+  supabase: SpendSupabase,
+  businessId: string
+): Promise<number> {
+  try {
+    const { data, error } = await supabase.rpc("chat_active_credit_micros", {
+      p_business_id: businessId
+    });
+    if (error) return 0;
+    const n = Number(data ?? 0);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export type CapDecision = {
+  periodStart: string | null;
+  overCap: boolean;
+  /** Base cap + active purchased credit; what the meter should trip against. */
+  effectiveCapMicros: number;
+};
 
 /**
  * Resolve the cap decision for the SMS turn about to run. Never throws — on any
  * read failure it fails OPEN (overCap=false → Gemini), and returns the period it
  * resolved so post-turn metering can reuse it without a second subscription read.
+ * The cap compared against is `base cap + active purchased credit`
+ * (chat_spend_credit_grants), so a Gemini pack purchase immediately restores
+ * cloud-model replies.
  */
 export async function resolveSmsChatCap(
   supabase: SpendSupabase,
   businessId: string,
   opts: { capMicros: number; enabled: boolean }
 ): Promise<CapDecision> {
-  if (!opts.enabled) return { periodStart: null, overCap: false };
+  if (!opts.enabled) {
+    return { periodStart: null, overCap: false, effectiveCapMicros: opts.capMicros };
+  }
   try {
     const periodStart = await resolveChatPeriodStart(supabase, businessId);
     const spent = await readChatSpendMicros(supabase, businessId, periodStart);
-    return { periodStart, overCap: spent >= opts.capMicros };
+    const credits = await readActiveChatCreditMicros(supabase, businessId);
+    const effectiveCapMicros = opts.capMicros + credits;
+    return { periodStart, overCap: spent >= effectiveCapMicros, effectiveCapMicros };
   } catch {
-    return { periodStart: null, overCap: false };
+    return { periodStart: null, overCap: false, effectiveCapMicros: opts.capMicros };
   }
 }
 
@@ -225,11 +260,14 @@ export async function recordSmsChatSpend(
 
   const ps = args.periodStart ?? (await resolveChatPeriodStart(supabase, args.businessId));
   const costMicros = estimateChatCostMicros(args.inputChars, args.outputChars, args.costConfig);
+  // Trip the fuse against the EFFECTIVE cap (base + purchased credit) so a
+  // Gemini pack purchase moves the trip point along with the routing check.
+  const credits = await readActiveChatCreditMicros(supabase, args.businessId);
   const { data, error } = await supabase.rpc("owner_chat_record_spend", {
     p_business_id: args.businessId,
     p_period_start: ps,
     p_cost_micros: costMicros,
-    p_cap_micros: args.capMicros
+    p_cap_micros: args.capMicros + credits
   });
   if (error) {
     // Release the claim so a reclaim can retry metering this turn's spend.

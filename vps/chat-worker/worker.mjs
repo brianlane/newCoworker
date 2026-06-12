@@ -402,16 +402,36 @@ async function readOwnerChatSpendMicros(periodStart) {
   return Number(data?.spend_micros ?? 0);
 }
 
+// Purchased Gemini spend credit currently active for this tenant (micro-USD,
+// chat_spend_credit_grants). Credit RAISES the period cap: effective cap =
+// base + credits. Returns 0 on any failure so a read blip can never mint
+// free headroom beyond the base cap.
+async function readActiveChatCreditMicros() {
+  try {
+    const { data, error } = await sb.rpc("chat_active_credit_micros", {
+      p_business_id: BUSINESS_ID
+    });
+    if (error) return 0;
+    const n = Number(data ?? 0);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
 // Resolve the spend-cap decision for the turn about to run: the billing-period
 // key + whether the tenant is already at/over the cap. Never throws — on any
 // read failure it returns overCap=false (fail open to the Gemini agent), and
 // returns the period it resolved so the post-turn metering can reuse it.
+// The cap compared against is `base + active purchased credit`, so a Gemini
+// pack purchase immediately restores cloud-model replies mid-period.
 async function resolveOwnerChatCap() {
   if (!OWNER_CHAT_SPEND_METERING_ENABLED) return { periodStart: null, overCap: false };
   try {
     const periodStart = await resolveOwnerChatPeriodStart();
     const spent = await readOwnerChatSpendMicros(periodStart);
-    return { periodStart, overCap: spent >= OWNER_CHAT_SPEND_CAP_MICROS };
+    const effectiveCap = OWNER_CHAT_SPEND_CAP_MICROS + (await readActiveChatCreditMicros());
+    return { periodStart, overCap: spent >= effectiveCap };
   } catch (err) {
     log("warn", "owner_chat_cap_read_failed", { error: err?.message || String(err) });
     return { periodStart: null, overCap: false };
@@ -485,11 +505,15 @@ async function recordOwnerChatSpend(job, inputMessages, replyContent, usedAgent,
     // don't re-query subscriptions; fall back to resolving it if absent.
     const ps = periodStart ?? (await resolveOwnerChatPeriodStart());
     const costMicros = estimateOwnerChatCostMicros(inputMessages, replyContent);
+    // Trip the fuse against the EFFECTIVE cap (base + purchased credit) so a
+    // Gemini pack purchase moves the trip point along with the routing check.
+    const effectiveCapMicros =
+      OWNER_CHAT_SPEND_CAP_MICROS + (await readActiveChatCreditMicros());
     const { data, error } = await sb.rpc("owner_chat_record_spend", {
       p_business_id: job.business_id,
       p_period_start: ps,
       p_cost_micros: costMicros,
-      p_cap_micros: OWNER_CHAT_SPEND_CAP_MICROS
+      p_cap_micros: effectiveCapMicros
     });
     if (error) {
       // RPC failed after we claimed — release so a reclaim can retry metering.
@@ -509,6 +533,7 @@ async function recordOwnerChatSpend(job, inputMessages, replyContent, usedAgent,
         capUsd: (OWNER_CHAT_SPEND_CAP_MICROS / 1_000_000).toFixed(2),
         turnCount: row.turn_count
       });
+      await sendChatCapAlertOnce(job.business_id, ps, Number(row.spend_micros) || null);
     }
   } catch (err) {
     log("warn", "owner_chat_spend_record_unexpected", {
@@ -524,6 +549,51 @@ async function recordOwnerChatSpend(job, inputMessages, replyContent, usedAgent,
         // Best-effort; releaseMeterClaim already logs its own failures.
       }
     }
+  }
+}
+
+// One-time-per-period urgent owner alert when the Gemini spend fuse trips.
+// Postgres-side dedupe (mark_usage_cap_alert, unique on business+kind+period)
+// keeps this race-safe with the SMS worker, which shares the same fuse.
+// Mirrors supabase/functions/_shared/cap_alerts.ts (worker.mjs is standalone JS
+// and cannot import the Deno module). Never throws — alerting must never fail
+// the turn that discovered the cap.
+async function sendChatCapAlertOnce(businessId, periodKey, spendMicros) {
+  try {
+    const { data, error } = await sb.rpc("mark_usage_cap_alert", {
+      p_business_id: businessId,
+      p_cap_kind: "chat_spend",
+      p_period_key: periodKey
+    });
+    if (error) {
+      log("warn", "chat_cap_alert_mark_failed", { businessId, error: error.message });
+      return;
+    }
+    if (data !== true) return; // already alerted this period
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/notifications`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+      },
+      body: JSON.stringify({
+        type: "INSERT",
+        table: "coworker_logs",
+        record: {
+          id: crypto.randomUUID(),
+          business_id: businessId,
+          task_type: "chat_spend_cap_reached",
+          status: "urgent_alert",
+          log_payload: { period_key: periodKey, surface: "chat_worker", spend_micros: spendMicros },
+          created_at: new Date().toISOString()
+        }
+      })
+    });
+    if (!res.ok) {
+      log("warn", "chat_cap_alert_post_failed", { businessId, status: res.status });
+    }
+  } catch (err) {
+    log("warn", "chat_cap_alert_unexpected", { businessId, error: err?.message || String(err) });
   }
 }
 

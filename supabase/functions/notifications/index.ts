@@ -206,7 +206,15 @@ serve(async (req: Request) => {
     });
   }
 
-  const summary = `URGENT ${record.task_type}`;
+  // Usage-cap alerts carry owner-actionable copy instead of the generic
+  // "URGENT <task_type>" headline — silence (blocked texts / degraded chat)
+  // must never be the only signal a cap was hit.
+  const summary =
+    record.task_type === "sms_cap_reached"
+      ? "Monthly SMS limit reached — outbound texting is paused. Buy an SMS pack from Billing to resume."
+      : record.task_type === "chat_spend_cap_reached"
+        ? "AI chat budget reached — replies switched to the slower local model. Buy a Gemini pack from Billing to restore."
+        : `URGENT ${record.task_type}`;
   const kind = "urgent_alert";
   // Strip trailing slash so dashboardUrl never ends up as
   // `https://example.com//dashboard` if the env var was set with one.

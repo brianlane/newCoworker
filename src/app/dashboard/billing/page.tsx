@@ -27,6 +27,14 @@ import {
   getVoiceBonusBestUsdPerMinute,
   listVoiceBonusPacks
 } from "@/lib/billing/voice-bonus-packs";
+import { listSmsBonusPacks } from "@/lib/billing/sms-bonus-packs";
+import { listChatCreditPacks } from "@/lib/billing/chat-credit-packs";
+import {
+  getChatSpendSnapshotForBusiness,
+  getSmsBonusTextsRemaining
+} from "@/lib/db/chat-usage";
+import { getCalendarMonthUsageTotals } from "@/lib/db/usage";
+import { getTierLimits } from "@/lib/plans/limits";
 import {
   getCustomerProfileById,
   isWithinLifetimeRefundWindow,
@@ -34,6 +42,7 @@ import {
 } from "@/lib/db/customer-profiles";
 import { Card } from "@/components/ui/Card";
 import { VoiceBonusPacks } from "@/components/dashboard/VoiceBonusPacks";
+import { UsagePacks } from "@/components/dashboard/UsagePacks";
 import { PlanCard } from "@/components/billing/PlanCard";
 
 export const dynamic = "force-dynamic";
@@ -98,6 +107,29 @@ export default async function BillingPage(props: {
 
   const packs = listVoiceBonusPacks();
   const usdPerMinute = getVoiceBonusBestUsdPerMinute(packs);
+  const smsPacks = listSmsBonusPacks();
+  const chatPacks = listChatCreditPacks();
+
+  // SMS + Gemini usage meters (read-only display; enforcement lives in the
+  // workers / RPCs). Each read is independent and non-fatal for the page.
+  let smsMonthUsed: number | null = null;
+  let smsBonusRemaining = 0;
+  let chatSpend: Awaited<ReturnType<typeof getChatSpendSnapshotForBusiness>> | null = null;
+  if (business) {
+    [smsMonthUsed, smsBonusRemaining, chatSpend] = await Promise.all([
+      getCalendarMonthUsageTotals(business.id, db)
+        .then((t) => t.sms_sent)
+        .catch(() => null),
+      getSmsBonusTextsRemaining(business.id, db),
+      getChatSpendSnapshotForBusiness(business.id, db).catch(() => null)
+    ]);
+  }
+  const smsMonthlyCap = business?.tier
+    ? getTierLimits(
+        business.tier as PlanTier,
+        business.tier === "enterprise" ? business.enterprise_limits : undefined
+      ).smsPerMonth
+    : null;
 
   const canPurchase = Boolean(
     subscription?.stripe_subscription_id && subscription.status === "active"
@@ -292,6 +324,79 @@ export default async function BillingPage(props: {
       <VoiceBonusPacks
         packs={packs}
         usdPerMinute={usdPerMinute}
+        canPurchase={canPurchase}
+        disabledReason={disabledReason}
+      />
+
+      {business && (
+        <Card>
+          <h2 className="text-sm font-semibold text-parchment mb-4">Messaging &amp; AI usage</h2>
+          <dl className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+            <div>
+              <dt className="text-xs text-parchment/50 uppercase tracking-wider">
+                Texts sent this month
+              </dt>
+              <dd className="mt-1 text-lg font-semibold text-parchment">
+                {smsMonthUsed === null ? "—" : smsMonthUsed.toLocaleString()}
+              </dd>
+              <dd className="text-[11px] text-parchment/40">
+                {smsMonthlyCap === null || smsMonthlyCap === Infinity
+                  ? "no monthly cap on your plan"
+                  : `plan cap ${smsMonthlyCap.toLocaleString()}/month`}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-parchment/50 uppercase tracking-wider">
+                Bonus texts remaining
+              </dt>
+              <dd className="mt-1 text-lg font-semibold text-parchment">
+                {smsBonusRemaining.toLocaleString()}
+              </dd>
+              <dd className="text-[11px] text-parchment/40">
+                used automatically after the plan cap
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-parchment/50 uppercase tracking-wider">AI chat budget</dt>
+              <dd className="mt-1 text-lg font-semibold text-parchment">
+                {chatSpend
+                  ? `$${(chatSpend.spendMicros / 1_000_000).toFixed(2)} / $${(chatSpend.effectiveCapMicros / 1_000_000).toFixed(2)}`
+                  : "—"}
+              </dd>
+              <dd className="text-[11px] text-parchment/40">
+                {chatSpend && chatSpend.creditMicros > 0
+                  ? `includes $${(chatSpend.creditMicros / 1_000_000).toFixed(2)} purchased credit`
+                  : "shared across dashboard chat + texting; resets each period"}
+              </dd>
+            </div>
+          </dl>
+        </Card>
+      )}
+
+      <UsagePacks
+        title="Buy more texts"
+        description="Bonus texts kick in after your plan's monthly allowance and expire at the later of your current billing period end or 30 days after purchase."
+        checkoutPath="/api/billing/sms-bonus/checkout"
+        packs={smsPacks.map((p) => ({
+          id: p.id,
+          label: p.label,
+          priceUsd: p.priceUsd,
+          subline: `$${p.effectiveUsdPerText.toFixed(3)}/text`
+        }))}
+        canPurchase={canPurchase}
+        disabledReason={disabledReason}
+      />
+
+      <UsagePacks
+        title="Buy AI chat credit"
+        description="Credit raises this period's shared AI budget (dashboard chat + texting) so replies stay on the fast cloud model instead of degrading to the local fallback."
+        checkoutPath="/api/billing/chat-credit/checkout"
+        packs={chatPacks.map((p) => ({
+          id: p.id,
+          label: p.label,
+          priceUsd: p.priceUsd,
+          subline: `adds $${p.creditUsd.toFixed(2)} to this period's budget`
+        }))}
         canPurchase={canPurchase}
         disabledReason={disabledReason}
       />

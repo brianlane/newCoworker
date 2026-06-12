@@ -49,6 +49,7 @@ import {
   parseRenderResponse
 } from "../_shared/ai_flows/browse.ts";
 import { ensureStopLanguage, isRecipientOptedOut } from "../_shared/ai_flows/compliance.ts";
+import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
 import {
   formatInTimeZone,
   offerRespondByMs,
@@ -1088,14 +1089,18 @@ async function sendSmsStep(
     { p_business_id: run.business_id }
   );
   if (reserveErr) throw new Error(`reserve slot: ${reserveErr.message}`);
-  const reserve = reserveRaw as { ok?: boolean; reason?: string } | null;
+  const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string } | null;
   if (!reserve?.ok) {
+    if (reserve?.reason === "monthly_sms_limit") {
+      await alertSmsCapOnce(supabase, run.business_id, "ai_flow_send_sms");
+    }
     return { kind: "ok", skipped: true, result: { skipped: reserve?.reason ?? "quota" } };
   }
 
   const release = async () => {
     const { error } = await supabase.rpc("release_sms_outbound_slot", {
-      p_business_id: run.business_id
+      p_business_id: run.business_id,
+      p_refund_bonus: reserve.source === "bonus"
     });
     if (error) console.error("release_sms_outbound_slot", error);
   };
@@ -1675,8 +1680,11 @@ async function sendOfferSms(
     { p_business_id: run.business_id }
   );
   if (reserveErr) throw new Error(`reserve slot: ${reserveErr.message}`);
-  const reserve = reserveRaw as { ok?: boolean; reason?: string } | null;
+  const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string } | null;
   if (!reserve?.ok) {
+    if (reserve?.reason === "monthly_sms_limit") {
+      await alertSmsCapOnce(supabase, run.business_id, "ai_flow_route_to_team");
+    }
     throw new Error(`route_to_team: outbound quota unavailable (${reserve?.reason ?? "quota"})`);
   }
   try {
@@ -1692,11 +1700,28 @@ async function sendOfferSms(
     if (!send.ok) throw new Error(`telnyx ${send.status}: ${send.body.slice(0, 200)}`);
   } catch (e) {
     const { error } = await supabase.rpc("release_sms_outbound_slot", {
-      p_business_id: run.business_id
+      p_business_id: run.business_id,
+      p_refund_bonus: reserve.source === "bonus"
     });
     if (error) console.error("release_sms_outbound_slot", error);
     throw e;
   }
+}
+
+/** One-shot (per business per month) urgent owner alert when the SMS cap blocks a send. */
+async function alertSmsCapOnce(
+  supabase: Supabase,
+  businessId: string,
+  surface: string
+): Promise<void> {
+  await sendCapAlertOnce(supabase, {
+    businessId,
+    kind: "sms_monthly",
+    periodKey: smsCapPeriodKey(),
+    notifyUrl: `${Deno.env.get("SUPABASE_URL") ?? ""}/functions/v1/notifications`,
+    bearer: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+    payload: { surface }
+  });
 }
 
 /**

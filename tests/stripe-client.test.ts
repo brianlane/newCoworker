@@ -3,7 +3,9 @@ import {
   getStripe,
   verifyWebhook,
   createCheckoutSession,
+  createChatCreditCheckoutSession,
   createCustomerPortalSession,
+  createSmsBonusCheckoutSession,
   createVoiceBonusCheckoutSession,
   ensureCommitmentSchedule,
   resolveIntroDiscountCouponId,
@@ -496,6 +498,133 @@ describe("stripe/client", () => {
           userId: "user-1"
         })
       ).rejects.toThrow("Stripe checkout session URL is null");
+    });
+  });
+
+  describe("createSmsBonusCheckoutSession", () => {
+    it("creates a payment-mode session with sms_bonus_texts metadata mirrored to the payment intent", async () => {
+      const result = await createSmsBonusCheckoutSession({
+        priceId: "price_sms_500",
+        businessId: "biz-1",
+        smsTexts: 500,
+        successUrl: "https://example.com/ok",
+        cancelUrl: "https://example.com/cancel",
+        customerEmail: "owner@example.com",
+        userId: "user-1"
+      });
+
+      expect(result.id).toBe("cs_mock_session");
+      const call = mockSessionCreate.mock.calls[0]?.[0];
+      expect(call).toMatchObject({
+        mode: "payment",
+        line_items: [{ price: "price_sms_500", quantity: 1 }],
+        customer_email: "owner@example.com",
+        customer_creation: "always",
+        metadata: {
+          checkoutKind: "sms_bonus_texts",
+          businessId: "biz-1",
+          smsTexts: "500",
+          userId: "user-1"
+        },
+        payment_intent_data: {
+          metadata: expect.objectContaining({ checkoutKind: "sms_bonus_texts", smsTexts: "500" })
+        }
+      });
+      expect(call.customer).toBeUndefined();
+    });
+
+    it("pins the customer id and omits customer_email when provided", async () => {
+      await createSmsBonusCheckoutSession({
+        priceId: "price_sms_2000",
+        businessId: "biz-2",
+        smsTexts: 2000,
+        successUrl: "https://example.com/ok",
+        cancelUrl: "https://example.com/cancel",
+        customerEmail: "owner@example.com",
+        customerId: "cus_abc",
+        userId: "user-2"
+      });
+
+      const call = mockSessionCreate.mock.calls[0]?.[0];
+      expect(call.customer).toBe("cus_abc");
+      expect(call.customer_email).toBeUndefined();
+      expect(call.customer_creation).toBeUndefined();
+    });
+
+    it("rejects non-positive or non-integer smsTexts", async () => {
+      for (const smsTexts of [0, -5, 1.5]) {
+        await expect(
+          createSmsBonusCheckoutSession({
+            priceId: "price_sms_500",
+            businessId: "biz-1",
+            smsTexts,
+            successUrl: "https://example.com/ok",
+            cancelUrl: "https://example.com/cancel",
+            userId: "user-1"
+          })
+        ).rejects.toThrow("smsTexts must be a positive integer");
+      }
+      expect(mockSessionCreate).not.toHaveBeenCalled();
+    });
+
+    it("throws when Stripe returns a null session URL", async () => {
+      mockSessionCreate.mockResolvedValueOnce({ id: "cs_null", url: null });
+      await expect(
+        createSmsBonusCheckoutSession({
+          priceId: "price_sms_500",
+          businessId: "biz-1",
+          smsTexts: 500,
+          successUrl: "https://example.com/ok",
+          cancelUrl: "https://example.com/cancel",
+          userId: "user-1"
+        })
+      ).rejects.toThrow("Stripe checkout session URL is null");
+    });
+  });
+
+  describe("createChatCreditCheckoutSession", () => {
+    it("creates a payment-mode session with chat_credit_micros metadata", async () => {
+      const result = await createChatCreditCheckoutSession({
+        priceId: "price_chat_5",
+        businessId: "biz-1",
+        creditMicros: 5_000_000,
+        successUrl: "https://example.com/ok",
+        cancelUrl: "https://example.com/cancel",
+        customerEmail: "owner@example.com",
+        userId: "user-1"
+      });
+
+      expect(result.url).toContain("stripe.com");
+      const call = mockSessionCreate.mock.calls[0]?.[0];
+      expect(call).toMatchObject({
+        mode: "payment",
+        line_items: [{ price: "price_chat_5", quantity: 1 }],
+        metadata: {
+          checkoutKind: "chat_credit_micros",
+          businessId: "biz-1",
+          creditMicros: "5000000",
+          userId: "user-1"
+        },
+        payment_intent_data: {
+          metadata: expect.objectContaining({ checkoutKind: "chat_credit_micros" })
+        }
+      });
+    });
+
+    it("rejects non-positive or non-integer creditMicros", async () => {
+      for (const creditMicros of [0, -1, 0.5]) {
+        await expect(
+          createChatCreditCheckoutSession({
+            priceId: "price_chat_5",
+            businessId: "biz-1",
+            creditMicros,
+            successUrl: "https://example.com/ok",
+            cancelUrl: "https://example.com/cancel",
+            userId: "user-1"
+          })
+        ).rejects.toThrow("creditMicros must be a positive integer");
+      }
+      expect(mockSessionCreate).not.toHaveBeenCalled();
     });
   });
 });

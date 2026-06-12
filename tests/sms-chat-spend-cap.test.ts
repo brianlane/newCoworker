@@ -3,6 +3,7 @@ import {
   estimateChatCostMicros,
   monthStartIso,
   pickSmsTurn,
+  readActiveChatCreditMicros,
   readChatSpendMicros,
   recordSmsChatSpend,
   resolveSmsChatCap,
@@ -103,6 +104,10 @@ type Scenario = {
   claimError?: string;
   // owner_chat_record_spend rpc result
   rpc?: { data: unknown; error: { message: string } | null };
+  // chat_active_credit_micros rpc result (purchased Gemini credit)
+  creditMicros?: unknown;
+  creditError?: string;
+  creditThrows?: boolean;
 };
 
 function makeStub(s: Scenario) {
@@ -194,6 +199,13 @@ function makeStub(s: Scenario) {
     },
     rpc(fn: string, args: Record<string, unknown>) {
       calls.rpc.push({ fn, args });
+      if (fn === "chat_active_credit_micros") {
+        if (s.creditThrows) return Promise.reject(new Error("credit read failed"));
+        if (s.creditError) {
+          return Promise.resolve({ data: null, error: { message: s.creditError } });
+        }
+        return Promise.resolve({ data: s.creditMicros ?? null, error: null });
+      }
       return Promise.resolve(s.rpc ?? { data: null, error: null });
     },
     _calls: calls
@@ -207,7 +219,7 @@ describe("resolveSmsChatCap", () => {
   it("disabled → never over cap, no period", async () => {
     const stub = makeStub({});
     const d = await resolveSmsChatCap(stub, "biz", { capMicros: 10_000_000, enabled: false });
-    expect(d).toEqual({ periodStart: null, overCap: false });
+    expect(d).toEqual({ periodStart: null, overCap: false, effectiveCapMicros: 10_000_000 });
     expect(stub._calls.rpc).toHaveLength(0);
   });
 
@@ -227,7 +239,28 @@ describe("resolveSmsChatCap", () => {
   it("fails open (overCap false) when the spend read errors", async () => {
     const stub = makeStub({ periodStart: "2026-06-01T00:00:00.000Z", spendError: "boom" });
     const d = await resolveSmsChatCap(stub, "biz", { capMicros: 10_000_000, enabled: true });
-    expect(d).toEqual({ periodStart: null, overCap: false });
+    expect(d).toEqual({ periodStart: null, overCap: false, effectiveCapMicros: 10_000_000 });
+  });
+
+  it("purchased credit raises the effective cap (over base, under base+credit → Gemini)", async () => {
+    const stub = makeStub({
+      periodStart: "2026-06-01T00:00:00.000Z",
+      spendMicros: 12_000_000,
+      creditMicros: 5_000_000
+    });
+    const d = await resolveSmsChatCap(stub, "biz", { capMicros: 10_000_000, enabled: true });
+    expect(d.overCap).toBe(false);
+    expect(d.effectiveCapMicros).toBe(15_000_000);
+  });
+
+  it("over base+credit → overCap true", async () => {
+    const stub = makeStub({
+      periodStart: "2026-06-01T00:00:00.000Z",
+      spendMicros: 15_000_000,
+      creditMicros: 5_000_000
+    });
+    const d = await resolveSmsChatCap(stub, "biz", { capMicros: 10_000_000, enabled: true });
+    expect(d.overCap).toBe(true);
   });
 
   it("falls back to the UTC month start when there's no subscription period", async () => {
@@ -241,6 +274,29 @@ describe("resolveSmsChatCap", () => {
     const stub = makeStub({ periodThrows: true, spendMicros: 0 });
     const d = await resolveSmsChatCap(stub, "biz", { capMicros: 10_000_000, enabled: true });
     expect(d.periodStart).toMatch(/^\d{4}-\d{2}-01T00:00:00\.000Z$/);
+  });
+});
+
+describe("readActiveChatCreditMicros", () => {
+  it("returns the credit when positive", async () => {
+    const stub = makeStub({ creditMicros: 5_000_000 });
+    expect(await readActiveChatCreditMicros(stub, "biz")).toBe(5_000_000);
+  });
+
+  it("returns 0 for null / non-finite / non-positive values", async () => {
+    expect(await readActiveChatCreditMicros(makeStub({ creditMicros: null }), "biz")).toBe(0);
+    expect(await readActiveChatCreditMicros(makeStub({ creditMicros: -5 }), "biz")).toBe(0);
+    expect(await readActiveChatCreditMicros(makeStub({ creditMicros: "zzz" }), "biz")).toBe(0);
+  });
+
+  it("returns 0 on rpc error (base cap still applies)", async () => {
+    const stub = makeStub({ creditError: "rpc down" });
+    expect(await readActiveChatCreditMicros(stub, "biz")).toBe(0);
+  });
+
+  it("returns 0 when the rpc throws", async () => {
+    const stub = makeStub({ creditThrows: true });
+    expect(await readActiveChatCreditMicros(stub, "biz")).toBe(0);
   });
 });
 
@@ -288,13 +344,25 @@ describe("recordSmsChatSpend", () => {
     expect(r.costMicros).toBe(50);
     expect(r.spendMicros).toBe(50);
     expect(r.fuseNewlyTripped).toBe(false);
-    expect(stub._calls.rpc[0].fn).toBe("owner_chat_record_spend");
-    expect(stub._calls.rpc[0].args).toMatchObject({
+    const spendCall = stub._calls.rpc.find((c) => c.fn === "owner_chat_record_spend");
+    expect(spendCall?.args).toMatchObject({
       p_business_id: "biz",
       p_period_start: "2026-06-01T00:00:00.000Z",
       p_cost_micros: 50,
       p_cap_micros: 10_000_000
     });
+  });
+
+  it("passes base + purchased credit as p_cap_micros so the fuse trips at the raised cap", async () => {
+    const stub = makeStub({
+      claimRows: [{ id: "job-1" }],
+      creditMicros: 5_000_000,
+      rpc: { data: [{ spend_micros: 50, fuse_newly_tripped: false }], error: null }
+    });
+    const r = await recordSmsChatSpend(stub, { ...base, enabled: true });
+    expect(r.metered).toBe(true);
+    const spendCall = stub._calls.rpc.find((c) => c.fn === "owner_chat_record_spend");
+    expect(spendCall?.args.p_cap_micros).toBe(15_000_000);
   });
 
   it("surfaces fuse_newly_tripped", async () => {
@@ -330,7 +398,8 @@ describe("recordSmsChatSpend", () => {
     });
     const r = await recordSmsChatSpend(stub, { ...base, periodStart: null, enabled: true });
     expect(r.metered).toBe(true);
-    expect(stub._calls.rpc[0].args.p_period_start).toBe("2026-06-01T00:00:00.000Z");
+    const spendCall = stub._calls.rpc.find((c) => c.fn === "owner_chat_record_spend");
+    expect(spendCall?.args.p_period_start).toBe("2026-06-01T00:00:00.000Z");
   });
 
   it("non-array claim data is treated as already-metered", async () => {

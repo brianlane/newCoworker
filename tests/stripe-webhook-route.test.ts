@@ -150,6 +150,8 @@ vi.mock("@/lib/logger", () => ({
 import {
   POST,
   computeVoiceBonusClawbackSeconds,
+  parseChatCreditMicrosFromMetadata,
+  parseSmsBonusTextsFromMetadata,
   parseVoiceBonusSecondsFromMetadata
 } from "@/app/api/webhooks/stripe/route";
 import { ensureCommitmentSchedule, verifyWebhook } from "@/lib/stripe/client";
@@ -686,6 +688,178 @@ describe("stripe webhook route", () => {
             checkoutKind: "voice_bonus_seconds",
             businessId: bid,
             voiceSeconds: "120"
+          }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockVoiceBonusRpc).not.toHaveBeenCalled();
+  });
+
+  it("records SMS bonus grant on payment checkout with sms_bonus_texts metadata", async () => {
+    const bid = "00000000-0000-4000-8000-000000000011";
+    const periodEndSec = 1702678400;
+    const createdSec = 1700000000;
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "local_sub_sms",
+      business_id: bid,
+      status: "active",
+      stripe_subscription_id: "sub_sms_1"
+    } as never);
+    mockStripeRetrieve.mockResolvedValue({
+      status: "active",
+      current_period_start: 1700000000,
+      current_period_end: periodEndSec
+    } as never);
+
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_sms_bonus",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_test_sms_bonus",
+          mode: "payment",
+          created: createdSec,
+          metadata: {
+            checkoutKind: "sms_bonus_texts",
+            businessId: bid,
+            smsTexts: "500"
+          }
+        }
+      }
+    } as never);
+
+    const plus30Ms = createdSec * 1000 + 30 * 24 * 60 * 60 * 1000;
+    const expectedExpires =
+      periodEndSec * 1000 >= plus30Ms
+        ? new Date(periodEndSec * 1000).toISOString()
+        : new Date(plus30Ms).toISOString();
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+      "apply_sms_bonus_grant_from_checkout",
+      expect.objectContaining({
+        p_business_id: bid,
+        p_checkout_session_id: "cs_test_sms_bonus",
+        p_texts_purchased: 500,
+        p_expires_at: expectedExpires
+      })
+    );
+    expect(orchestrateProvisioning).not.toHaveBeenCalled();
+    expect(updateSubscription).not.toHaveBeenCalled();
+  });
+
+  it("records chat credit grant on payment checkout with chat_credit_micros metadata", async () => {
+    const bid = "00000000-0000-4000-8000-000000000012";
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "local_sub_chat",
+      business_id: bid,
+      status: "active",
+      stripe_subscription_id: "sub_chat_1"
+    } as never);
+    mockStripeRetrieve.mockResolvedValue({
+      status: "trialing",
+      current_period_start: 1700000000,
+      current_period_end: 1702678400
+    } as never);
+
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_chat_credit",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_test_chat_credit",
+          mode: "payment",
+          created: 1700000000,
+          metadata: {
+            checkoutKind: "chat_credit_micros",
+            businessId: bid,
+            creditMicros: "5000000"
+          }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+      "apply_chat_credit_grant_from_checkout",
+      expect.objectContaining({
+        p_business_id: bid,
+        p_checkout_session_id: "cs_test_chat_credit",
+        p_credit_micros: 5_000_000
+      })
+    );
+  });
+
+  it("does not record SMS bonus grant when smsTexts metadata is invalid", async () => {
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_sms_bad_meta",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_sms_bad_meta",
+          mode: "payment",
+          created: 1700000000,
+          metadata: {
+            checkoutKind: "sms_bonus_texts",
+            businessId: "00000000-0000-4000-8000-000000000013",
+            smsTexts: "1.5e3"
+          }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockVoiceBonusRpc).not.toHaveBeenCalled();
+  });
+
+  it("does not record chat credit grant without an active subscription row", async () => {
+    vi.mocked(getSubscription).mockResolvedValue(null);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_chat_block",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_chat_block",
+          mode: "payment",
+          created: 1700000000,
+          metadata: {
+            checkoutKind: "chat_credit_micros",
+            businessId: "00000000-0000-4000-8000-000000000014",
+            creditMicros: "5000000"
           }
         }
       }
@@ -2305,6 +2479,128 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
       }
     );
   });
+
+  it("voids an SMS pack grant with prorated text clawback on partial refund", async () => {
+    mockCheckoutSessionsList.mockResolvedValueOnce({
+      data: [
+        {
+          id: "cs_sms_partial",
+          amount_total: 1000,
+          metadata: {
+            checkoutKind: "sms_bonus_texts",
+            businessId: "biz_sms_partial",
+            smsTexts: "500"
+          }
+        }
+      ]
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_sms_partial_refund",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_sms_partial",
+          amount: 1000,
+          amount_captured: 1000,
+          amount_refunded: 250,
+          payment_intent: "pi_sms_partial"
+        }
+      }
+    } as never);
+
+    const res = await postEvent();
+    expect(res.status).toBe(200);
+    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+      "void_sms_bonus_grant_by_checkout_session",
+      {
+        p_checkout_session_id: "cs_sms_partial",
+        p_reason: "refund",
+        p_clawback_texts: 125
+      }
+    );
+  });
+
+  it("fully voids a chat credit grant on dispute lost", async () => {
+    mockCheckoutSessionsList.mockResolvedValueOnce({
+      data: [
+        {
+          id: "cs_chat_dispute",
+          metadata: {
+            checkoutKind: "chat_credit_micros",
+            businessId: "biz_chat_dispute",
+            creditMicros: "5000000"
+          }
+        }
+      ]
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_chat_dispute_lost",
+      type: "charge.dispute.closed",
+      data: {
+        object: {
+          id: "dp_chat_lost",
+          status: "lost",
+          payment_intent: "pi_chat_lost"
+        }
+      }
+    } as never);
+
+    const res = await postEvent();
+    expect(res.status).toBe(200);
+    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+      "void_chat_credit_grant_by_checkout_session",
+      {
+        p_checkout_session_id: "cs_chat_dispute",
+        p_reason: "dispute",
+        p_clawback_micros: null
+      }
+    );
+  });
+
+  it("voids each pack kind through its own RPC when one payment covers multiple packs", async () => {
+    mockCheckoutSessionsList.mockResolvedValueOnce({
+      data: [
+        {
+          id: "cs_multi_voice",
+          metadata: { checkoutKind: "voice_bonus_seconds", businessId: "biz_multi" }
+        },
+        {
+          id: "cs_multi_sms",
+          metadata: { checkoutKind: "sms_bonus_texts", businessId: "biz_multi" }
+        },
+        {
+          id: "cs_multi_chat",
+          metadata: { checkoutKind: "chat_credit_micros", businessId: "biz_multi" }
+        }
+      ]
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_multi_refund",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_multi",
+          amount_refunded: 100,
+          payment_intent: "pi_multi"
+        }
+      }
+    } as never);
+
+    const res = await postEvent();
+    expect(res.status).toBe(200);
+    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      expect.objectContaining({ p_checkout_session_id: "cs_multi_voice" })
+    );
+    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+      "void_sms_bonus_grant_by_checkout_session",
+      expect.objectContaining({ p_checkout_session_id: "cs_multi_sms" })
+    );
+    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+      "void_chat_credit_grant_by_checkout_session",
+      expect.objectContaining({ p_checkout_session_id: "cs_multi_chat" })
+    );
+  });
 });
 
 describe("stripe webhook helpers", () => {
@@ -2338,5 +2634,32 @@ describe("stripe webhook helpers", () => {
     expect(computeVoiceBonusClawbackSeconds(100, 0, 1800)).toBe(0);
     expect(computeVoiceBonusClawbackSeconds(0, 10, 1800)).toBeNull();
     expect(computeVoiceBonusClawbackSeconds(100, 10, 0)).toBeNull();
+  });
+
+  it("parseSmsBonusTextsFromMetadata accepts digits within the hard max and rejects junk", () => {
+    expect(parseSmsBonusTextsFromMetadata("500")).toBe(500);
+    expect(parseSmsBonusTextsFromMetadata("1000000")).toBe(1000000);
+    expect(parseSmsBonusTextsFromMetadata(null)).toBeNull();
+    expect(parseSmsBonusTextsFromMetadata(undefined)).toBeNull();
+    expect(parseSmsBonusTextsFromMetadata("0")).toBeNull();
+    expect(parseSmsBonusTextsFromMetadata("-1")).toBeNull();
+    expect(parseSmsBonusTextsFromMetadata("1.5")).toBeNull();
+    expect(parseSmsBonusTextsFromMetadata("1e3")).toBeNull();
+    expect(parseSmsBonusTextsFromMetadata("0x10")).toBeNull();
+    expect(parseSmsBonusTextsFromMetadata("1000001")).toBeNull();
+    expect(parseSmsBonusTextsFromMetadata("99999999")).toBeNull();
+  });
+
+  it("parseChatCreditMicrosFromMetadata accepts digits within the hard max and rejects junk", () => {
+    expect(parseChatCreditMicrosFromMetadata("5000000")).toBe(5_000_000);
+    expect(parseChatCreditMicrosFromMetadata("1000000000")).toBe(1_000_000_000);
+    expect(parseChatCreditMicrosFromMetadata(null)).toBeNull();
+    expect(parseChatCreditMicrosFromMetadata(undefined)).toBeNull();
+    expect(parseChatCreditMicrosFromMetadata("0")).toBeNull();
+    expect(parseChatCreditMicrosFromMetadata("-1")).toBeNull();
+    expect(parseChatCreditMicrosFromMetadata("0.5")).toBeNull();
+    expect(parseChatCreditMicrosFromMetadata("1e6")).toBeNull();
+    expect(parseChatCreditMicrosFromMetadata("1000000001")).toBeNull();
+    expect(parseChatCreditMicrosFromMetadata("99999999999")).toBeNull();
   });
 });

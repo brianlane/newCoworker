@@ -1,4 +1,5 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { sendCapAlertOnce, smsCapPeriodKey } from "../../../supabase/functions/_shared/cap_alerts";
 
 export type TelnyxMessagingConfig = {
   apiKey: string;
@@ -67,7 +68,7 @@ export type SendTelnyxSmsOptions = {
 
 type TelnyxMessageResponse = { data?: { id?: string } };
 
-type ReserveSlotResult = { ok?: boolean; reason?: string };
+type ReserveSlotResult = { ok?: boolean; reason?: string; source?: string };
 
 const DEFAULT_THROTTLE_MAX_PER_SECOND = 10;
 
@@ -94,6 +95,7 @@ export async function sendTelnyxSms(
   const fetchImpl = options?.fetchImpl ?? fetch;
   let meterClient: Awaited<ReturnType<typeof createSupabaseServiceClient>> | undefined;
   let reservedSlot = false;
+  let reservedFromBonus = false;
   const businessId = options?.meterBusinessId;
 
   if (businessId) {
@@ -129,15 +131,31 @@ export async function sendTelnyxSms(
     }
     const gate = res as ReserveSlotResult | null;
     if (!gate?.ok) {
+      if (gate?.reason === "monthly_sms_limit") {
+        // One urgent owner alert per month when the cap first blocks a send,
+        // so the owner learns about it before customers report silence.
+        await sendCapAlertOnce(meterClient, {
+          businessId,
+          kind: "sms_monthly",
+          periodKey: smsCapPeriodKey(),
+          notifyUrl: `${process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""}/functions/v1/notifications`,
+          bearer: process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
+          payload: { surface: "app_send_sms" },
+          fetchFn: fetchImpl
+        });
+      }
       throw new Error(reserveSlotFailureMessage(gate));
     }
     reservedSlot = true;
+    reservedFromBonus = gate.source === "bonus";
   }
 
   const releaseIfNeeded = async (): Promise<void> => {
     if (!reservedSlot || !businessId || !meterClient) return;
     const { error: relErr } = await meterClient.rpc("release_sms_outbound_slot", {
-      p_business_id: businessId
+      p_business_id: businessId,
+      // Bonus-sourced reserves consumed a purchased text; refund it to the grant.
+      p_refund_bonus: reservedFromBonus
     });
     if (relErr) {
       // Leave reservedSlot=true so any retry on this path (or an upstream wrapper calling
