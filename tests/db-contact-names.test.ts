@@ -128,6 +128,53 @@ describe("resolveContactNames", () => {
     expect(out.size).toBe(0);
   });
 
+  it("tolerates null data payloads and null alias arrays / names", async () => {
+    const a = makeDb({
+      ai_flow_team_members: { data: null, error: null },
+      customer_memories: { data: null, error: null }
+    });
+    expect(
+      (await resolveContactNames(BIZ, ["+1555"], a.db as unknown as Client)).size
+    ).toBe(0);
+
+    const b = makeDb({
+      ai_flow_team_members: {
+        data: [{ phone_e164: "+15550000030", name: null }],
+        error: null
+      },
+      customer_memories: {
+        data: [
+          { customer_e164: "+15550000031", alias_e164s: null, display_name: "Pat" }
+        ],
+        error: null
+      }
+    });
+    const out = await resolveContactNames(
+      BIZ,
+      ["+15550000030", "+15550000031"],
+      b.db as unknown as Client
+    );
+    expect(out.has("+15550000030")).toBe(false);
+    expect(out.get("+15550000031")).toEqual({ name: "Pat", kind: "customer" });
+  });
+
+  it("ignores customer profiles whose numbers were not asked about", async () => {
+    const { db } = makeDb({
+      customer_memories: {
+        data: [
+          {
+            customer_e164: "+15550000040",
+            alias_e164s: ["+15550000041"],
+            display_name: "Unrelated"
+          }
+        ],
+        error: null
+      }
+    });
+    const out = await resolveContactNames(BIZ, ["+15550000099"], db as unknown as Client);
+    expect(out.size).toBe(0);
+  });
+
   it("dedupes input numbers and ignores empty strings", async () => {
     const { db, calls } = makeDb({});
     await resolveContactNames(BIZ, ["+1555", "+1555", ""], db as unknown as Client);
