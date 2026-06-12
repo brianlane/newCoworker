@@ -1,7 +1,122 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { geminiGenerateText } from "@/lib/gemini-generate-content";
+import {
+  GeminiEmptyError,
+  geminiGenerateText,
+  geminiGenerateTextDetailed
+} from "@/lib/gemini-generate-content";
 
 type FetchArgs = Parameters<typeof fetch>;
+
+function okResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" }
+  });
+}
+
+describe("geminiGenerateTextDetailed usage extraction", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const candidates = [{ content: { parts: [{ text: "hi" }] } }];
+
+  async function runWith(usageMetadata: unknown) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (): Promise<Response> => okResponse({ candidates, usageMetadata }))
+    );
+    return geminiGenerateTextDetailed({
+      apiKey: "k",
+      model: "m",
+      systemInstruction: "s",
+      userText: "u"
+    });
+  }
+
+  it("sums candidate and thinking tokens into outputTokens", async () => {
+    const res = await runWith({
+      promptTokenCount: 1200,
+      candidatesTokenCount: 80,
+      thoughtsTokenCount: 500
+    });
+    expect(res.text).toBe("hi");
+    expect(res.usage).toEqual({ promptTokens: 1200, outputTokens: 580 });
+  });
+
+  it("defaults missing token fields to 0", async () => {
+    const res = await runWith({ promptTokenCount: 10 });
+    expect(res.usage).toEqual({ promptTokens: 10, outputTokens: 0 });
+  });
+
+  it("defaults a missing promptTokenCount to 0", async () => {
+    const res = await runWith({ candidatesTokenCount: 5 });
+    expect(res.usage).toEqual({ promptTokens: 0, outputTokens: 5 });
+  });
+
+  it("returns null usage when usageMetadata is absent", async () => {
+    const res = await runWith(undefined);
+    expect(res.usage).toBeNull();
+  });
+
+  it("returns null usage when usageMetadata is not an object", async () => {
+    const res = await runWith("bogus");
+    expect(res.usage).toBeNull();
+  });
+
+  it("returns null usage when promptTokenCount is non-numeric", async () => {
+    const res = await runWith({ promptTokenCount: "x", candidatesTokenCount: 1 });
+    expect(res.usage).toBeNull();
+  });
+
+  it("returns null usage when candidatesTokenCount is non-numeric", async () => {
+    const res = await runWith({ promptTokenCount: 1, candidatesTokenCount: "x" });
+    expect(res.usage).toBeNull();
+  });
+
+  it("returns null usage when thoughtsTokenCount is non-numeric", async () => {
+    const res = await runWith({ promptTokenCount: 1, thoughtsTokenCount: "x" });
+    expect(res.usage).toBeNull();
+  });
+
+  it("returns null usage when all counts are zero", async () => {
+    const res = await runWith({ promptTokenCount: 0, candidatesTokenCount: 0 });
+    expect(res.usage).toBeNull();
+  });
+
+  it("clamps negative counts to 0", async () => {
+    const res = await runWith({
+      promptTokenCount: -5,
+      candidatesTokenCount: 7,
+      thoughtsTokenCount: -3
+    });
+    expect(res.usage).toEqual({ promptTokens: 0, outputTokens: 7 });
+  });
+
+  it("throws GeminiEmptyError carrying billed usage when text is empty (thinking-only output)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async (): Promise<Response> =>
+          okResponse({
+            candidates: [{ content: { parts: [] } }],
+            usageMetadata: { promptTokenCount: 800, thoughtsTokenCount: 200 }
+          })
+      )
+    );
+    const pending = geminiGenerateTextDetailed({
+      apiKey: "k",
+      model: "m",
+      systemInstruction: "s",
+      userText: "u"
+    });
+    await expect(pending).rejects.toThrow("gemini_empty");
+    const err = await pending.catch((e) => e);
+    expect(err).toBeInstanceOf(GeminiEmptyError);
+    expect((err as GeminiEmptyError).usage).toEqual({ promptTokens: 800, outputTokens: 200 });
+  });
+});
 
 describe("geminiGenerateText", () => {
   afterEach(() => {

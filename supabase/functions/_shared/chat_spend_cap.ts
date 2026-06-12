@@ -21,6 +21,33 @@
 // chat-worker constants in vps/chat-worker/worker.mjs).
 export const DEFAULT_CHAT_PRICE_IN_PER_1M = 0.1;
 export const DEFAULT_CHAT_PRICE_OUT_PER_1M = 0.4;
+
+// Per-model Google list prices (USD per 1M tokens, standard tier). Unknown
+// models fall back to the priciest tier we deploy so the fuse never
+// undercounts. Mirrors src/lib/billing/ai-spend-meter.ts on the Next side.
+export const GEMINI_PRICES_PER_1M: Record<string, { in: number; out: number }> = {
+  "gemini-2.5-flash-lite": { in: 0.1, out: 0.4 },
+  "gemini-2.5-flash": { in: 0.3, out: 2.5 },
+  "gemini-3-flash": { in: 0.5, out: 3.0 },
+  "gemini-3-flash-preview": { in: 0.5, out: 3.0 }
+};
+export const DEFAULT_GEMINI_PRICE_PER_1M = { in: 0.5, out: 3.0 };
+
+/**
+ * Exact cost (micro-USD) from billed token counts (`usageMetadata`).
+ * `outputTokens` must already include thinking tokens — Google bills them at
+ * the output rate. Negative inputs clamp to 0.
+ */
+export function geminiCostMicrosFromTokens(
+  model: string,
+  promptTokens: number,
+  outputTokens: number
+): number {
+  const price = GEMINI_PRICES_PER_1M[model.trim()] ?? DEFAULT_GEMINI_PRICE_PER_1M;
+  return Math.ceil(
+    Math.max(0, promptTokens) * price.in + Math.max(0, outputTokens) * price.out
+  );
+}
 // Flat token overhead added to the text-only estimate. Rowboat prepends the
 // agent instructions (synced memory + persona) AND — because SMS turns resume a
 // stateful thread — the server-side conversation history, none of which is in

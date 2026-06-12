@@ -16,7 +16,8 @@
  */
 
 import { promises as dns } from "node:dns";
-import { geminiGenerateText } from "@/lib/gemini-generate-content";
+import { GeminiEmptyError, geminiGenerateTextDetailed } from "@/lib/gemini-generate-content";
+import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import { logger } from "@/lib/logger";
 import { isPrivateIpv4, isPrivateIpv6 } from "@/lib/net/ip-classification";
 import { BUSINESS_CONFIG_WEBSITE_MD_MAX_CHARS } from "@/lib/vault/business-config-markdown-limits";
@@ -105,7 +106,7 @@ export type WebsiteIngestResult = WebsiteIngestSuccess | WebsiteIngestFailure;
 type FetchImpl = typeof fetch;
 type DnsLookup = (hostname: string, options: { all: true }) => Promise<Array<{ address: string; family: number }>>;
 
-type GeminiSummarizer = (prompt: string) => Promise<string>;
+type GeminiSummarizer = (prompt: string, meterBusinessId?: string) => Promise<string>;
 
 export interface WebsiteIngestOptions {
   fetchImpl?: FetchImpl;
@@ -132,6 +133,15 @@ export interface WebsiteIngestOptions {
    * URLs the user did not explicitly provide.
    */
   ignoreRobots?: boolean;
+  /**
+   * When set, the default Gemini summarizer meters its spend into this
+   * business's shared AI budget (`owner_chat_model_spend`). The summary
+   * runs on the gemini-3 tier with a large crawled-text prompt — left
+   * unmetered it was the biggest gap between the billing page's "AI chat
+   * budget" and Google's actual bill. Ignored when a custom `summarize`
+   * is injected (tests).
+   */
+  meterBusinessId?: string;
   /**
    * When true, and the direct crawl recovers zero pages (e.g. the site
    * is behind Cloudflare bot mitigation returning HTTP 403 to every
@@ -674,7 +684,10 @@ function remapGeminiEmptyToSummarizerEmpty(err: unknown): never {
   throw err;
 }
 
-async function defaultGeminiSummarize(prompt: string): Promise<string> {
+async function defaultGeminiSummarize(
+  prompt: string,
+  meterBusinessId?: string
+): Promise<string> {
   const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
   if (!apiKey) throw new Error("summarizer_unavailable");
   const resolvedModel = resolveWebsiteSummaryGeminiModel();
@@ -685,7 +698,7 @@ async function defaultGeminiSummarize(prompt: string): Promise<string> {
        AbortError classification is covered by classifyGeminiError tests. */
     const timer = setTimeout(() => controller.abort(), 20_000);
     try {
-      return await geminiGenerateText({
+      const { text, usage } = await geminiGenerateTextDetailed({
         apiKey,
         model,
         systemInstruction: WEBSITE_INGEST_SUMMARY_SYSTEM_PROMPT,
@@ -694,6 +707,31 @@ async function defaultGeminiSummarize(prompt: string): Promise<string> {
         maxOutputTokens: 1500,
         signal: controller.signal
       });
+      if (meterBusinessId) {
+        await meterGeminiSpendForBusiness({
+          businessId: meterBusinessId,
+          model,
+          surface: "website_ingest",
+          usage,
+          inputChars: WEBSITE_INGEST_SUMMARY_SYSTEM_PROMPT.length + prompt.length,
+          outputChars: text.length
+        });
+      }
+      return text;
+    } catch (err) {
+      // Empty replies (e.g. thinking-only output) are still billed by
+      // Google — meter them before the error is remapped upstream.
+      if (err instanceof GeminiEmptyError && meterBusinessId) {
+        await meterGeminiSpendForBusiness({
+          businessId: meterBusinessId,
+          model,
+          surface: "website_ingest",
+          usage: err.usage,
+          inputChars: WEBSITE_INGEST_SUMMARY_SYSTEM_PROMPT.length + prompt.length,
+          outputChars: 0
+        });
+      }
+      throw err;
     } finally {
       clearTimeout(timer);
     }
@@ -907,7 +945,8 @@ export async function ingestWebsite(
     corpus: combined,
     businessName: options.businessName,
     businessType: options.businessType,
-    summarize
+    summarize,
+    meterBusinessId: options.meterBusinessId
   });
   if (!summarized.ok) return summarized;
 
@@ -932,6 +971,7 @@ async function summarizeCorpusToWebsiteMd(args: {
   businessName?: string;
   businessType?: string;
   summarize: GeminiSummarizer;
+  meterBusinessId?: string;
 }): Promise<{ ok: true; websiteMd: string } | WebsiteIngestFailure> {
   if (args.corpus.trim().length < 200) {
     return { ok: false, error: "empty_content" };
@@ -946,7 +986,7 @@ async function summarizeCorpusToWebsiteMd(args: {
 
   let summary: string;
   try {
-    summary = await args.summarize(prompt);
+    summary = await args.summarize(prompt, args.meterBusinessId);
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown";
     if (message === "summarizer_unavailable") {
@@ -994,7 +1034,10 @@ export const WEBSITE_INGEST_MAX_PASTED_HTML_CHARS = 2_000_000;
 export async function ingestWebsiteFromHtml(
   rawUrl: string,
   html: string,
-  options: Pick<WebsiteIngestOptions, "summarize" | "businessName" | "businessType"> = {}
+  options: Pick<
+    WebsiteIngestOptions,
+    "summarize" | "businessName" | "businessType" | "meterBusinessId"
+  > = {}
 ): Promise<WebsiteIngestResult> {
   const normalized = normalizeWebsiteUrl(rawUrl);
   if (!normalized) return { ok: false, error: "invalid_url" };
@@ -1012,7 +1055,8 @@ export async function ingestWebsiteFromHtml(
     corpus,
     businessName: options.businessName,
     businessType: options.businessType,
-    summarize
+    summarize,
+    meterBusinessId: options.meterBusinessId
   });
   if (!summarized.ok) return summarized;
 

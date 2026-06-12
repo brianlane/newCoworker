@@ -1,6 +1,11 @@
 import { getBusinessConfig } from "@/lib/db/configs";
 import { getBusiness } from "@/lib/db/businesses";
-import { geminiGenerateText } from "@/lib/gemini-generate-content";
+import {
+  GeminiEmptyError,
+  geminiGenerateTextDetailed,
+  type GeminiUsage
+} from "@/lib/gemini-generate-content";
+import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import { logger } from "@/lib/logger";
 
 /**
@@ -53,7 +58,20 @@ export function classifyGeminiError(err: unknown): string {
 
 const GEMINI_LOOKUP_DEFAULT_MODEL = "gemini-3-flash-preview";
 
-async function askGemini(question: string, context: string): Promise<string> {
+type AskGeminiResult = {
+  answer: string;
+  /** Model the successful call actually ran on (primary or 404-fallback). */
+  model: string;
+  usage: GeminiUsage | null;
+  /** Prompt size, for the metering fallback when usage is absent. */
+  inputChars: number;
+};
+
+async function askGemini(
+  question: string,
+  context: string,
+  businessId: string
+): Promise<AskGeminiResult> {
   const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
   if (!apiKey) throw new Error("gemini_unavailable");
   const configured = process.env.GEMINI_ROWBOAT_MODEL?.trim();
@@ -61,12 +79,13 @@ async function askGemini(question: string, context: string): Promise<string> {
   const sys =
     "You answer caller questions about a specific small business using only the provided business knowledge. Reply in 1-2 short sentences meant to be read aloud. If the answer is not in the context, reply exactly: 'I don't have that handy - I'll make sure the team follows up.'";
   const userText = `Business knowledge:\n${context}\n\nCaller question: ${question}`;
+  const inputChars = sys.length + userText.length;
 
-  const runWithDeadline = async (model: string) => {
+  const runWithDeadline = async (model: string): Promise<AskGeminiResult> => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 3000);
     try {
-      return await geminiGenerateText({
+      const { text, usage } = await geminiGenerateTextDetailed({
         apiKey,
         model,
         systemInstruction: sys,
@@ -75,6 +94,21 @@ async function askGemini(question: string, context: string): Promise<string> {
         maxOutputTokens: 200,
         signal: controller.signal
       });
+      return { answer: text, model, usage, inputChars };
+    } catch (err) {
+      // Empty replies (e.g. thinking-only output) are still billed by
+      // Google — meter them here, where the model is known, then rethrow.
+      if (err instanceof GeminiEmptyError) {
+        await meterGeminiSpendForBusiness({
+          businessId,
+          model,
+          surface: "knowledge_lookup",
+          usage: err.usage,
+          inputChars,
+          outputChars: 0
+        });
+      }
+      throw err;
     } finally {
       clearTimeout(timer);
     }
@@ -113,8 +147,18 @@ export async function lookupBusinessKnowledge(
   }
 
   try {
-    const answer = await askGemini(question, context);
-    return { ok: true, data: { answer } };
+    const result = await askGemini(question, context, businessId);
+    // Knowledge lookups run on the gemini-3 tier — meter them into the
+    // shared AI budget so the billing-page number matches Google's bill.
+    await meterGeminiSpendForBusiness({
+      businessId,
+      model: result.model,
+      surface: "knowledge_lookup",
+      usage: result.usage,
+      inputChars: result.inputChars,
+      outputChars: result.answer.length
+    });
+    return { ok: true, data: { answer: result.answer } };
   } catch (err) {
     logger.warn("knowledge-tools: gemini failed", {
       businessId,

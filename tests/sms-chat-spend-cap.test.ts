@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_GEMINI_PRICE_PER_1M,
   estimateChatCostMicros,
+  geminiCostMicrosFromTokens,
   monthStartIso,
   pickSmsTurn,
   readActiveChatCreditMicros,
@@ -44,6 +46,32 @@ describe("estimateChatCostMicros", () => {
     // defaults: priceIn 0.1, priceOut 0.4, overhead 1200.
     // inTokens = 100 + 1200 = 1300; 1300*0.1 + 100*0.4 = 170.
     expect(estimateChatCostMicros(400, 400)).toBe(170);
+  });
+});
+
+// --- geminiCostMicrosFromTokens ------------------------------------------------
+
+describe("geminiCostMicrosFromTokens", () => {
+  it("bills exact tokens at the model's list price (trimming whitespace)", () => {
+    // flash-lite: 0.1 micro per prompt token, 0.4 per output token.
+    expect(geminiCostMicrosFromTokens(" gemini-2.5-flash-lite ", 1000, 500)).toBe(
+      Math.ceil(1000 * 0.1 + 500 * 0.4)
+    );
+    // 2.5 flash is 3x in / 6.25x out vs flash-lite.
+    expect(geminiCostMicrosFromTokens("gemini-2.5-flash", 1000, 500)).toBe(
+      Math.ceil(1000 * 0.3 + 500 * 2.5)
+    );
+  });
+
+  it("falls back to the priciest deployed tier for unknown models", () => {
+    expect(geminiCostMicrosFromTokens("gemini-99-ultra", 1000, 100)).toBe(
+      Math.ceil(1000 * DEFAULT_GEMINI_PRICE_PER_1M.in + 100 * DEFAULT_GEMINI_PRICE_PER_1M.out)
+    );
+  });
+
+  it("clamps negative token counts to zero", () => {
+    expect(geminiCostMicrosFromTokens("gemini-2.5-flash-lite", -10, 10)).toBe(4);
+    expect(geminiCostMicrosFromTokens("gemini-2.5-flash-lite", 10, -10)).toBe(1);
   });
 });
 

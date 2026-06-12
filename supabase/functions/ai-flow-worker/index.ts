@@ -67,6 +67,7 @@ import {
 import { scheduleDue } from "../_shared/ai_flows/schedule.ts";
 import {
   estimateChatCostMicros,
+  geminiCostMicrosFromTokens,
   readChatSpendMicros,
   resolveChatPeriodStart,
   type SpendSupabase
@@ -1087,15 +1088,20 @@ async function meterAiFlowSpend(
   run: RunRow,
   surface: string,
   inputChars: number,
-  outputChars: number
+  outputChars: number,
+  /** Exact billed cost from usageMetadata when available; overrides the estimate. */
+  exactCostMicros: number | null = null
 ): Promise<void> {
   if (!AIFLOW_SPEND_METERING_ENABLED) return;
   try {
     const spend = supabase as unknown as SpendSupabase;
     const periodStart = await resolveChatPeriodStart(spend, run.business_id);
-    const costMicros = estimateChatCostMicros(inputChars, outputChars, {
-      promptOverheadTokens: 0
-    });
+    const costMicros =
+      exactCostMicros !== null && exactCostMicros > 0
+        ? exactCostMicros
+        : estimateChatCostMicros(inputChars, outputChars, {
+            promptOverheadTokens: 0
+          });
     const { data, error } = await supabase.rpc("owner_chat_record_spend", {
       p_business_id: run.business_id,
       p_period_start: periodStart,
@@ -1158,9 +1164,26 @@ async function extractFields(
   if (!res.ok) throw new Error(`gemini ${res.status}`);
   const body = (await res.json()) as {
     candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    usageMetadata?: {
+      promptTokenCount?: number;
+      candidatesTokenCount?: number;
+      thoughtsTokenCount?: number;
+    };
   };
   const text = body.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-  await meterAiFlowSpend(supabase, run, "extract", prompt.length, text.length);
+  // Prefer the EXACT billed tokens from usageMetadata: thinking tokens are
+  // billed as output but invisible in the candidate text, and the configured
+  // model may not be flash-lite — both made the chars/4 estimate undercount.
+  const um = body.usageMetadata;
+  const promptTokens = Number(um?.promptTokenCount ?? 0);
+  const outputTokens =
+    Number(um?.candidatesTokenCount ?? 0) + Number(um?.thoughtsTokenCount ?? 0);
+  const exactCostMicros =
+    Number.isFinite(promptTokens) && Number.isFinite(outputTokens) &&
+    promptTokens + outputTokens > 0
+      ? geminiCostMicrosFromTokens(GEMINI_MODEL, promptTokens, outputTokens)
+      : null;
+  await meterAiFlowSpend(supabase, run, "extract", prompt.length, text.length, exactCostMicros);
   return parseExtractionJson(text, fields);
 }
 
