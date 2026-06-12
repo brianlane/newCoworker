@@ -391,6 +391,23 @@ describe("decideAiFlowApproval", () => {
       })
     );
   });
+  it("bypass_quiet_hours: re-queues the run with the bypass decision recorded", async () => {
+    const { db, builder } = makeDb({ maybe: RUN_ROW, single: { ...RUN_ROW, status: "queued" } });
+    const out = await decideAiFlowApproval(
+      { businessId: "biz-1", runId: "run-1", decision: "bypass_quiet_hours", decidedBy: "user-1" },
+       
+      db as any
+    );
+    expect(out.status).toBe("queued");
+    expect(builder.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "queued",
+        context: expect.objectContaining({
+          approval: expect.objectContaining({ decision: "bypass_quiet_hours" })
+        })
+      })
+    );
+  });
   it("denies: flips to canceled with null decidedBy/note defaults", async () => {
     const { db, builder } = makeDb({ maybe: RUN_ROW, single: { ...RUN_ROW, status: "canceled" } });
     const out = await decideAiFlowApproval(

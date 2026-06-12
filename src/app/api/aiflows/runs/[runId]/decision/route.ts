@@ -1,7 +1,9 @@
 /**
  * Decide an AiFlow run paused at an approval_gate. Owner-only.
  * approve → run returns to `queued` (worker resumes); skip → `queued` but the
- * gated step is skipped (rest of the flow continues); deny → `canceled`.
+ * gated step is skipped (rest of the flow continues); bypass_quiet_hours →
+ * `queued`, approved with quiet hours lifted for the rest of the run;
+ * deny → `canceled`.
  */
 import { z } from "zod";
 import { getAuthUser, requireOwner } from "@/lib/auth";
@@ -12,7 +14,7 @@ const idSchema = z.string().uuid();
 
 const bodySchema = z.object({
   businessId: z.string().uuid(),
-  decision: z.enum(["approve", "skip", "deny"]),
+  decision: z.enum(["approve", "skip", "bypass_quiet_hours", "deny"]),
   note: z.string().max(500).optional()
 });
 

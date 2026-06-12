@@ -61,19 +61,21 @@ export default async function CustomerDetailPage({ params }: Props) {
   // Phase 4 + 4b: pull SMS + voice in parallel so the page hydrates in
   // one round-trip group rather than serial. Voice list is capped at
   // 10 — the per-call transcript page is one click away for full detail.
-  // SMS history is alias-aware: messages from numbers merged into this
-  // profile read as one thread. Merge candidates (every OTHER customer)
-  // ride the same round-trip group.
+  // Both lists key off the PROFILE's primary number + its merged aliases —
+  // not the URL value, which after a merge may itself be an alias (the
+  // alias-aware getCustomerMemory above already resolved it). Keying off
+  // the raw URL number dropped everything stored under the primary.
   const [smsHistory, voiceTranscripts, allCustomers] = await Promise.all([
-    listSmsHistoryForCustomer(business.id, customerE164, {
+    listSmsHistoryForCustomer(business.id, memory.customer_e164, {
       limit: 50,
       aliases: memory.alias_e164s ?? []
     }),
     // Tolerate transcript table errors here so a voice-table outage
     // doesn't block the SMS-only customer detail page from rendering.
-    listTranscriptsForCaller(business.id, customerE164, { limit: 10 }).catch(
-      () => []
-    ),
+    listTranscriptsForCaller(business.id, memory.customer_e164, {
+      limit: 10,
+      aliases: memory.alias_e164s ?? []
+    }).catch(() => []),
     listCustomerMemories(business.id, { limit: 200 }).catch(() => [])
   ]);
   const mergeCandidates = allCustomers

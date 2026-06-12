@@ -41,9 +41,11 @@ export type NotificationEventLink = { label: string; href: string; at?: string }
 /**
  * Per-event deep links stored on digest notifications (payload.events,
  * written by the notifications-digest function). Validated defensively:
- * only objects with a non-empty label and a DASHBOARD-RELATIVE href (must
- * start with "/") are returned, so a malformed or tampered payload can never
- * render an external link.
+ * only objects with a non-empty label and a DASHBOARD-RELATIVE href are
+ * returned, so a malformed or tampered payload can never render an external
+ * link. "Starts with /" alone is NOT enough — "//evil.example.com" is a
+ * protocol-relative URL browsers resolve off-site, so a second leading slash
+ * is rejected (same rule the redirect helpers apply).
  */
 export function notificationEventLinks(n: NotificationLike): NotificationEventLink[] {
   const raw = n.payload?.events;
@@ -53,7 +55,7 @@ export function notificationEventLinks(n: NotificationLike): NotificationEventLi
     if (!item || typeof item !== "object") continue;
     const { label, href, at } = item as Record<string, unknown>;
     if (typeof label !== "string" || label.trim().length === 0) continue;
-    if (typeof href !== "string" || !href.startsWith("/")) continue;
+    if (typeof href !== "string" || !href.startsWith("/") || href.startsWith("//")) continue;
     out.push({
       label: label.trim(),
       href,

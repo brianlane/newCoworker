@@ -1,6 +1,9 @@
 import { getAuthUser, requireOwner } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
-import { upsertWorkspaceOAuthConnection } from "@/lib/db/workspace-oauth-connections";
+import {
+  getWorkspaceOAuthConnectionByNangoIds,
+  upsertWorkspaceOAuthConnection
+} from "@/lib/db/workspace-oauth-connections";
 import {
   getNangoClient,
   readConnectionEndUserId,
@@ -40,11 +43,24 @@ export async function POST(request: Request) {
       return errorResponse("FORBIDDEN", "Connection does not belong to this workspace");
     }
 
+    // Re-completing an existing connection must MERGE metadata, not replace
+    // it: app-owned keys written after the original connect (the shared
+    // NewCoworker calendar id + ACL grants) would otherwise be dropped on
+    // every reconnect, orphaning the real shared calendar and letting the
+    // next booking create a duplicate.
+    const existing = await getWorkspaceOAuthConnectionByNangoIds(
+      parsed.businessId,
+      parsed.providerConfigKey,
+      parsed.connectionId
+    );
     await upsertWorkspaceOAuthConnection({
       businessId: parsed.businessId,
       providerConfigKey: parsed.providerConfigKey,
       connectionId: parsed.connectionId,
-      metadata: workspaceConnectionMetadataFromNangoConnection(connection)
+      metadata: {
+        ...(existing?.metadata ?? {}),
+        ...workspaceConnectionMetadataFromNangoConnection(connection)
+      }
     });
 
     return successResponse({ connected: true });

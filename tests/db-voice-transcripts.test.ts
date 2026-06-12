@@ -244,12 +244,24 @@ describe("db/voice-transcripts — listTranscriptsForCaller (Phase 4b)", () => {
     ).resolves.toEqual([TRANSCRIPT_FOR_CALLER]);
     expect(db.from).toHaveBeenCalledWith("voice_call_transcripts");
     expect(c.eq).toHaveBeenNthCalledWith(1, "business_id", BIZ);
-    expect(c.eq).toHaveBeenNthCalledWith(2, "caller_e164", CALLER);
+    expect(c.in).toHaveBeenCalledWith("caller_e164", [CALLER]);
     expect(c.order).toHaveBeenCalledWith("started_at", {
       ascending: false,
       nullsFirst: false
     });
     expect(c.limit).toHaveBeenCalledWith(DEFAULT_LIST_LIMIT);
+  });
+
+  it("includes merged alias numbers (deduped) so calls under any of the profile's numbers appear", async () => {
+    const c = chain();
+    c.limit.mockResolvedValue({ data: [], error: null });
+    await listTranscriptsForCaller(
+      BIZ,
+      CALLER,
+      { aliases: ["+15555550111", CALLER, "+15555550111"] },
+      makeDb(c) as never
+    );
+    expect(c.in).toHaveBeenCalledWith("caller_e164", [CALLER, "+15555550111"]);
   });
 
   it("clamps requested limits to [1, MAX_LIST_LIMIT]", async () => {

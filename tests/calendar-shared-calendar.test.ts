@@ -216,6 +216,78 @@ describe("ensureSharedCalendar", () => {
     vi.mocked(nangoProxyForBusiness).mockRejectedValue("string failure");
     expect(await ensureSharedCalendar(BIZ)).toBeNull();
   });
+
+  it("race loser: prefers the id a concurrent caller stored and deletes its own duplicate", async () => {
+    // First meta read: no calendar yet; recheck after create: another caller
+    // already persisted "cal-winner".
+    vi.mocked(listWorkspaceOAuthConnections)
+      .mockResolvedValueOnce([connRow()])
+      .mockResolvedValueOnce([connRow({ metadata: { shared_calendar_id: "cal-winner" } })]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "cal-dup" } } as never);
+
+    expect(await ensureSharedCalendar(BIZ)).toEqual({ calendarId: "cal-winner", conn: GOOGLE_CONN });
+    expect(vi.mocked(nangoProxyForBusiness)).toHaveBeenCalledWith(
+      BIZ,
+      { connectionId: "conn-1", providerConfigKey: "google-calendar" },
+      { endpoint: "/calendar/v3/calendars/cal-dup", method: "DELETE" }
+    );
+    expect(vi.mocked(upsertWorkspaceOAuthConnection)).not.toHaveBeenCalled();
+  });
+
+  it("race loser: deletes the Microsoft duplicate via the Graph endpoint", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(listWorkspaceOAuthConnections)
+      .mockResolvedValueOnce([
+        connRow({ provider_config_key: "outlook-calendar", connection_id: "conn-2" })
+      ])
+      .mockResolvedValueOnce([
+        connRow({
+          provider_config_key: "outlook-calendar",
+          connection_id: "conn-2",
+          metadata: { shared_calendar_id: "ms-winner" }
+        })
+      ]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ms-dup" } } as never);
+
+    expect(await ensureSharedCalendar(BIZ)).toEqual({ calendarId: "ms-winner", conn: MS_CONN });
+    expect(vi.mocked(nangoProxyForBusiness)).toHaveBeenCalledWith(
+      BIZ,
+      { connectionId: "conn-2", providerConfigKey: "outlook-calendar" },
+      { endpoint: "/v1.0/me/calendars/ms-dup", method: "DELETE" }
+    );
+  });
+
+  it("race loser: still returns the winner when the duplicate cleanup delete fails", async () => {
+    vi.mocked(listWorkspaceOAuthConnections)
+      .mockResolvedValueOnce([connRow()])
+      .mockResolvedValueOnce([connRow({ metadata: { shared_calendar_id: "cal-winner" } })]);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { id: "cal-dup" } } as never)
+      .mockRejectedValueOnce(new Error("delete 403"));
+
+    expect(await ensureSharedCalendar(BIZ)).toEqual({ calendarId: "cal-winner", conn: GOOGLE_CONN });
+  });
+
+  it("race loser: tolerates a non-Error cleanup rejection", async () => {
+    vi.mocked(listWorkspaceOAuthConnections)
+      .mockResolvedValueOnce([connRow()])
+      .mockResolvedValueOnce([connRow({ metadata: { shared_calendar_id: "cal-winner" } })]);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { id: "cal-dup" } } as never)
+      .mockRejectedValueOnce("string failure");
+
+    expect(await ensureSharedCalendar(BIZ)).toEqual({ calendarId: "cal-winner", conn: GOOGLE_CONN });
+  });
+
+  it("writes normally when the recheck shows our own id (idempotent double-write)", async () => {
+    vi.mocked(listWorkspaceOAuthConnections)
+      .mockResolvedValueOnce([connRow()])
+      .mockResolvedValueOnce([connRow({ metadata: { shared_calendar_id: "new-cal" } })]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "new-cal" } } as never);
+
+    expect(await ensureSharedCalendar(BIZ)).toEqual({ calendarId: "new-cal", conn: GOOGLE_CONN });
+    expect(vi.mocked(upsertWorkspaceOAuthConnection)).toHaveBeenCalled();
+  });
 });
 
 describe("sharedCalendarStatus", () => {

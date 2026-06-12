@@ -147,8 +147,19 @@ export async function ensureSharedCalendar(
     }
     if (!calendarId) return null;
 
+    // Concurrent first-bookings (or "Set up & share" racing a booking) can
+    // both pass the calendarId-null check above and each create a provider
+    // calendar. Re-read before persisting: if another caller already stored
+    // an id, prefer theirs and best-effort delete the one we just created so
+    // it doesn't linger as an orphan on the owner's account.
+    const recheck = await readConnectionMeta(businessId, conn);
+    if (recheck.calendarId && recheck.calendarId !== calendarId) {
+      await deleteProviderCalendar(businessId, conn, calendarId);
+      return { calendarId: recheck.calendarId, conn };
+    }
+
     await writeConnectionMeta(businessId, conn, {
-      ...meta.rowMetadata,
+      ...recheck.rowMetadata,
       shared_calendar_id: calendarId
     });
     return { calendarId, conn };
@@ -158,6 +169,28 @@ export async function ensureSharedCalendar(
       error: err instanceof Error ? err.message : String(err)
     });
     return null;
+  }
+}
+
+/** Best-effort delete of a just-created duplicate calendar (race loser). */
+async function deleteProviderCalendar(
+  businessId: string,
+  conn: ResolvedVoiceConnection,
+  calendarId: string
+): Promise<void> {
+  try {
+    const proxyTarget = { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey };
+    const endpoint =
+      conn.provider === "google"
+        ? `/calendar/v3/calendars/${encodeURIComponent(calendarId)}`
+        : `/v1.0/me/calendars/${encodeURIComponent(calendarId)}`;
+    await nangoProxyForBusiness(businessId, proxyTarget, { endpoint, method: "DELETE" });
+  } catch (err) {
+    logger.warn("shared-calendar: duplicate calendar cleanup failed", {
+      businessId,
+      calendarId,
+      error: err instanceof Error ? err.message : String(err)
+    });
   }
 }
 

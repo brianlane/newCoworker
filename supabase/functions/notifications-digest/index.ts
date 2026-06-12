@@ -11,8 +11,8 @@
 // (email_digest / email_digest_weekly) is true and a resolvable email exists
 // (preferences.alert_email > businesses.owner_email > ADMIN_EMAIL), build an
 // activity digest and send via Resend. Activity is aggregated from the REAL
-// activity tables — dashboard_chat_jobs, sms_inbound_jobs,
-// daily_usage.sms_sent, voice_call_transcripts, ai_flow_runs,
+// activity tables — dashboard_chat_jobs, sms_inbound_jobs (inbound + cached
+// replies), sms_outbound_log, voice_call_transcripts, ai_flow_runs,
 // customer_memories — plus coworker_logs (urgent alerts) and notifications
 // (delivered count). The original implementation counted only coworker_logs,
 // which nothing but voice captures writes to, so every digest skipped with
@@ -106,9 +106,7 @@ async function fetchActivity(
   businessId: string,
   sinceIso: string
 ): Promise<{ activity: DigestActivity; error: string | null }> {
-  const sinceDate = sinceIso.slice(0, 10);
-
-  const [chatRes, smsInRes, usageRes, callsRes, flowsRes, custRes, logRes, notifRes] =
+  const [chatRes, smsInRes, repliesRes, outLogRes, callsRes, flowsRes, custRes, logRes, notifRes] =
     await Promise.all([
       supa
         .from("dashboard_chat_jobs")
@@ -120,11 +118,29 @@ async function fetchActivity(
         .select("id", { count: "exact", head: true })
         .eq("business_id", businessId)
         .gte("created_at", sinceIso),
+      // Outbound = coworker replies + worker-initiated sends
+      // (sms_outbound_log). Both filter on real timestamps, unlike the
+      // previous daily_usage.sms_sent sum whose calendar-day usage_date
+      // granularity let a daily digest absorb up to a full extra UTC day of
+      // sends outside the rolling window.
+      //
+      // Replies are detected via assistant_reply_text (durable, written at
+      // send time, never cleared) — NOT rowboat_reply_cached, which is a
+      // transient Telnyx retry buffer nulled after every successful send.
+      // The window filters on updated_at because the send-time write bumps
+      // it; created_at would miss backlogged jobs received before the window
+      // but answered inside it.
       supa
-        .from("daily_usage")
-        .select("sms_sent")
+        .from("sms_inbound_jobs")
+        .select("id", { count: "exact", head: true })
         .eq("business_id", businessId)
-        .gte("usage_date", sinceDate),
+        .not("assistant_reply_text", "is", null)
+        .gte("updated_at", sinceIso),
+      supa
+        .from("sms_outbound_log")
+        .select("id", { count: "exact", head: true })
+        .eq("business_id", businessId)
+        .gte("created_at", sinceIso),
       supa
         .from("voice_call_transcripts")
         .select("caller_e164, status, started_at")
@@ -163,7 +179,8 @@ async function fetchActivity(
   const firstError =
     (chatRes.error && `dashboard_chat_jobs: ${chatRes.error.message}`) ||
     (smsInRes.error && `sms_inbound_jobs: ${smsInRes.error.message}`) ||
-    (usageRes.error && `daily_usage: ${usageRes.error.message}`) ||
+    (repliesRes.error && `sms_inbound_jobs (replies): ${repliesRes.error.message}`) ||
+    (outLogRes.error && `sms_outbound_log: ${outLogRes.error.message}`) ||
     (callsRes.error && `voice_call_transcripts: ${callsRes.error.message}`) ||
     (flowsRes.error && `ai_flow_runs: ${flowsRes.error.message}`) ||
     (custRes.error && `customer_memories: ${custRes.error.message}`) ||
@@ -171,10 +188,7 @@ async function fetchActivity(
     (notifRes.error && `notifications: ${notifRes.error.message}`) ||
     null;
 
-  const smsOutbound = ((usageRes.data ?? []) as Array<{ sms_sent: number | null }>).reduce(
-    (sum, row) => sum + (row.sms_sent ?? 0),
-    0
-  );
+  const smsOutbound = (repliesRes.count ?? 0) + (outLogRes.count ?? 0);
 
   const aiFlowRuns: DigestAiFlowRun[] = (
     (flowsRes.data ?? []) as Array<{

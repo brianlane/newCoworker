@@ -88,6 +88,13 @@ export async function POST(
     if (!source) {
       return errorResponse("NOT_FOUND", "Customer not found");
     }
+    // Both lookups are alias-aware, so a path that is itself a merged ALIAS
+    // can resolve to the same profile as the typed target (e.g. viewing an
+    // alias URL and typing that profile's primary). The RPC would then fold
+    // the row into itself and error — reject as validation instead.
+    if (source.customer_e164 === target.customer_e164) {
+      return errorResponse("VALIDATION_ERROR", "That number already belongs to this customer.");
+    }
 
     const memory = await mergeCustomerMemories(
       businessId,
