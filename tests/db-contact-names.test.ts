@@ -23,7 +23,7 @@ function makeDb(perTable: Record<string, Result>) {
     from(table: string) {
       const result = perTable[table] ?? { data: [], error: null };
       const chain: Record<string, unknown> = {};
-      for (const m of ["select", "eq", "in"]) {
+      for (const m of ["select", "eq", "in", "or"]) {
         chain[m] = (...args: unknown[]) => {
           calls.push({ table, method: m, args });
           return chain;
@@ -180,6 +180,24 @@ describe("resolveContactNames", () => {
     await resolveContactNames(BIZ, ["+1555", "+1555", ""], db as unknown as Client);
     const inCall = calls.find((c) => c.table === "ai_flow_team_members" && c.method === "in");
     expect(inCall?.args).toEqual(["phone_e164", ["+1555"]]);
+  });
+
+  it("only matches ACTIVE roster members, mirroring the inbound webhook's employee gate", async () => {
+    const { db, calls } = makeDb({});
+    await resolveContactNames(BIZ, ["+1555"], db as unknown as Client);
+    const eqCalls = calls.filter(
+      (c) => c.table === "ai_flow_team_members" && c.method === "eq"
+    );
+    expect(eqCalls.map((c) => c.args)).toContainEqual(["active", true]);
+  });
+
+  it("filters customer_memories in SQL by primary number OR alias overlap (no full-table scan)", async () => {
+    const { db, calls } = makeDb({});
+    await resolveContactNames(BIZ, ["+1555", "+1666"], db as unknown as Client);
+    const orCall = calls.find((c) => c.table === "customer_memories" && c.method === "or");
+    expect(orCall?.args).toEqual([
+      "customer_e164.in.(+1555,+1666),alias_e164s.ov.{+1555,+1666}"
+    ]);
   });
 
   it("throws on team query errors", async () => {

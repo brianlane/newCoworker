@@ -31,16 +31,27 @@ export async function resolveContactNames(
   if (unique.length === 0) return new Map();
   const db = client ?? (await createSupabaseServiceClient());
 
+  // E.164 strings are "+digits" only, so embedding them in a PostgREST
+  // .or() filter needs no escaping (no commas/parens/braces possible).
+  const inList = unique.join(",");
   const [teamRes, custRes] = await Promise.all([
+    // active-only: matches the inbound webhook's employee gate, so a
+    // deactivated employee whose texts take the normal customer path is
+    // not labeled "employee" in the UI either.
     db
       .from("ai_flow_team_members")
       .select("phone_e164, name")
       .eq("business_id", businessId)
+      .eq("active", true)
       .in("phone_e164", unique),
+    // Filter in SQL (primary number IN list, or alias array overlaps it)
+    // so the query scales with the numbers shown, not the tenant's total
+    // customer count.
     db
       .from("customer_memories")
       .select("customer_e164, alias_e164s, display_name")
       .eq("business_id", businessId)
+      .or(`customer_e164.in.(${inList}),alias_e164s.ov.{${inList}}`)
   ]);
   if (teamRes.error) {
     throw new Error(`resolveContactNames: ${teamRes.error.message}`);
