@@ -214,15 +214,18 @@ serve(async (req: Request) => {
     // Defense in depth against the telnyx-sms-inbound gate: flags can flip
     // between enqueue and drain, so re-check the kill switch + Safe Mode
     // before running Rowboat. Matches the webhook gate (§CustomerChannelGate).
+    // The same row carries the business timezone for the date/time preamble.
+    let businessTimezone: string | null = null;
     {
       const { data: bizRow } = await supabase
         .from("businesses")
-        .select("is_paused, customer_channels_enabled")
+        .select("is_paused, customer_channels_enabled, timezone")
         .eq("id", job.business_id)
         .maybeSingle();
       const biz = bizRow as
-        | { is_paused?: boolean; customer_channels_enabled?: boolean }
+        | { is_paused?: boolean; customer_channels_enabled?: boolean; timezone?: string | null }
         | null;
+      businessTimezone = typeof biz?.timezone === "string" ? biz.timezone : null;
 
       if (biz?.is_paused || biz?.customer_channels_enabled === false) {
         const { data: settingsRow } = await supabase
@@ -475,8 +478,9 @@ serve(async (req: Request) => {
       `customer_append_pinned_note), pass this exact value as the phone ` +
       `argument unless the texter explicitly refers to a different number.`;
     // Date awareness: without this the model cannot resolve "tomorrow at
-    // 2pm" into the ISO times the calendar tools require.
-    const dateAndPhoneLines = `${currentDateTimeLine()}\n\n${phoneLine}`;
+    // 2pm" into the ISO times the calendar tools require. Business-local
+    // when the owner set a timezone; UTC fallback otherwise.
+    const dateAndPhoneLines = `${currentDateTimeLine(new Date(), businessTimezone)}\n\n${phoneLine}`;
     const customerPreamble = memoryPreamble
       ? `${dateAndPhoneLines}\n\n${memoryPreamble}`
       : dateAndPhoneLines;

@@ -395,10 +395,11 @@ function main(): void {
       const tenantSettings = await loadTenantTelnyxSettings(supabase, businessId);
       const { data: biz } = await supabase
         .from("businesses")
-        .select("name")
+        .select("name, timezone")
         .eq("id", businessId)
         .maybeSingle();
       const businessName = typeof biz?.name === "string" && biz.name.length > 0 ? biz.name : "your business";
+      const businessTimezone = typeof biz?.timezone === "string" && biz.timezone.length > 0 ? biz.timezone : null;
 
       /** Compose the Gemini tool capability only when admin opted in + a forwarding target exists. */
       let transfer: TransferCapability | undefined;
@@ -530,6 +531,7 @@ function main(): void {
             warnBeforeMs,
             finalNudgeBeforeMs,
             businessName,
+            businessTimezone,
             transfer,
             vault,
             callerE164: fromE164Info || "",

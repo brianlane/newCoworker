@@ -34,7 +34,7 @@ export default async function SettingsPage() {
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
-    .select("id, name, tier, enterprise_limits")
+    .select("id, name, tier, enterprise_limits, timezone")
     .eq("owner_email", user.email)
     .order("created_at", { ascending: false })
     .limit(1);
@@ -120,7 +120,11 @@ export default async function SettingsPage() {
         )}
       </Card>
 
-      <AccountSettingsForms businessName={business?.name ?? ""} email={user.email} />
+      <AccountSettingsForms
+        businessName={business?.name ?? ""}
+        businessTimezone={(business?.timezone as string | null) ?? null}
+        email={user.email}
+      />
 
       {business && agents && (
         <CoworkerToolsManager businessId={business.id} initialAgents={agents} />

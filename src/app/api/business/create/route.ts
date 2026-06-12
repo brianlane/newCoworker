@@ -1,5 +1,5 @@
 import { getAuthUser, verifySignupIdentity } from "@/lib/auth";
-import { createBusiness, getBusiness } from "@/lib/db/businesses";
+import { createBusiness, getBusiness, isValidIanaTimezone } from "@/lib/db/businesses";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { teamSizeBucketToInt } from "@/lib/onboarding/intakeOptions";
 import { createOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
@@ -19,7 +19,9 @@ const schema = z.object({
   serviceArea: z.string().optional(),
   typicalInquiry: z.string().optional(),
   teamSize: z.string().optional(),
-  crmUsed: z.string().optional()
+  crmUsed: z.string().optional(),
+  /** IANA timezone auto-detected from the owner's browser; validated below. */
+  timezone: z.string().trim().min(1).max(64).optional()
 });
 
 export async function POST(request: Request) {
@@ -94,7 +96,10 @@ export async function POST(request: Request) {
       serviceArea: body.serviceArea,
       typicalInquiry: body.typicalInquiry,
       teamSize: body.teamSize ? teamSizeBucketToInt(body.teamSize) : undefined,
-      crmUsed: body.crmUsed
+      crmUsed: body.crmUsed,
+      // Browser-detected; silently dropped when not a real IANA name so a
+      // tampered value can never fail business creation.
+      timezone: body.timezone && isValidIanaTimezone(body.timezone) ? body.timezone : undefined
     });
 
     return successResponse({ businessId: business.id, onboardingToken });

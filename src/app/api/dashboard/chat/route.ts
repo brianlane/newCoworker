@@ -190,20 +190,23 @@ type BusinessFlags = {
   id: string;
   is_paused: boolean;
   customer_channels_enabled: boolean;
+  /** IANA timezone for the date/time preamble; null = UTC fallback. */
+  timezone: string | null;
 };
 
 async function loadBusinessFlags(businessId: string): Promise<BusinessFlags | null> {
   const db = await createSupabaseServiceClient();
   const { data } = await db
     .from("businesses")
-    .select("id, is_paused, customer_channels_enabled")
+    .select("id, is_paused, customer_channels_enabled, timezone")
     .eq("id", businessId)
     .maybeSingle();
   if (!data) return null;
   return {
     id: data.id as string,
     is_paused: Boolean(data.is_paused),
-    customer_channels_enabled: data.customer_channels_enabled !== false
+    customer_channels_enabled: data.customer_channels_enabled !== false,
+    timezone: typeof data.timezone === "string" ? data.timezone : null
   };
 }
 
@@ -352,6 +355,8 @@ function buildRowboatChatMessages(args: {
    * was sent).
    */
   emailToolEnabled: boolean;
+  /** Business IANA timezone for the date/time line; null/undefined = UTC. */
+  businessTimezone?: string | null;
 }): DashboardChatJobInputMessage[] {
   const out: DashboardChatJobInputMessage[] = [];
   // ALWAYS first: OWNER_PREAMBLE establishes that this is the
@@ -361,8 +366,9 @@ function buildRowboatChatMessages(args: {
   // continuation.
   out.push({ role: "system", content: OWNER_PREAMBLE });
   // Date awareness: without this the model cannot resolve "tomorrow at 2pm"
-  // into the ISO times the calendar tools require.
-  out.push({ role: "system", content: currentDateTimeLine() });
+  // into the ISO times the calendar tools require. Business-local when the
+  // owner set a timezone; UTC fallback otherwise.
+  out.push({ role: "system", content: currentDateTimeLine(new Date(), args.businessTimezone) });
   out.push({
     role: "system",
     content: args.emailToolEnabled ? EMAIL_TOOL_ENABLED_PREAMBLE : EMAIL_TOOL_DISABLED_PREAMBLE
@@ -531,7 +537,8 @@ export async function POST(request: Request) {
       newUserMessage: body.message,
       includeTailContext: true,
       customerPreamble,
-      emailToolEnabled
+      emailToolEnabled,
+      businessTimezone: flags.timezone
     });
     const statelessInputMessages = hasContinuation
       ? buildRowboatChatMessages({
@@ -540,7 +547,8 @@ export async function POST(request: Request) {
           newUserMessage: body.message,
           includeTailContext: true,
           customerPreamble,
-          emailToolEnabled
+          emailToolEnabled,
+          businessTimezone: flags.timezone
         })
       : null;
 

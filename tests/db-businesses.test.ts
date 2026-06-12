@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   createBusiness,
   getBusiness,
+  getBusinessTimezone,
+  isValidIanaTimezone,
   listBusinesses,
   setBusinessPaused,
   setCustomerChannelsEnabled,
@@ -9,6 +11,7 @@ import {
   updateBusinessOwnerEmail,
   updateBusinessOwnerEmailIfPending,
   updateBusinessStatus,
+  updateBusinessTimezone,
   updateBusinessWebsiteUrl,
   updateEnterpriseLimits
 } from "@/lib/db/businesses";
@@ -66,6 +69,23 @@ describe("db/businesses", () => {
     expect(result.name).toBe("Sunrise Realty");
     expect(db.from).toHaveBeenCalledWith("businesses");
     expect(db.insert).toHaveBeenCalled();
+  });
+
+  it("createBusiness passes the detected timezone through to the insert", async () => {
+    const db = mockDb({ single: vi.fn().mockResolvedValue({ data: MOCK_BUSINESS, error: null }) });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await createBusiness({
+      id: "uuid-biz-1",
+      name: "Sunrise Realty",
+      ownerEmail: "owner@test.com",
+      tier: "starter",
+      timezone: "America/Phoenix"
+    });
+
+    expect(db.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ timezone: "America/Phoenix" })
+    );
   });
 
   it("createBusiness throws on DB error", async () => {
@@ -398,6 +418,64 @@ describe("db/businesses", () => {
       db as never
     );
     expect(result.name).toBe("Sunrise Realty");
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  it("isValidIanaTimezone accepts real zones and rejects junk", () => {
+    expect(isValidIanaTimezone("America/Phoenix")).toBe(true);
+    expect(isValidIanaTimezone("UTC")).toBe(true);
+    expect(isValidIanaTimezone("Not/AZone")).toBe(false);
+    expect(isValidIanaTimezone("")).toBe(false);
+  });
+
+  it("updateBusinessTimezone writes the zone and supports clearing with null", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await updateBusinessTimezone("uuid-biz-1", "America/Phoenix");
+    expect(db.update).toHaveBeenCalledWith({ timezone: "America/Phoenix" });
+
+    await updateBusinessTimezone("uuid-biz-1", null, db as never);
+    expect(db.update).toHaveBeenCalledWith({ timezone: null });
+  });
+
+  it("updateBusinessTimezone throws when Supabase reports an error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(updateBusinessTimezone("uuid-biz-1", "UTC")).rejects.toThrow(
+      "updateBusinessTimezone"
+    );
+  });
+
+  it("getBusinessTimezone returns the trimmed zone when set", async () => {
+    const db = mockDb({
+      maybeSingle: vi.fn().mockResolvedValue({ data: { timezone: "America/Denver" }, error: null })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(getBusinessTimezone("uuid-biz-1")).resolves.toBe("America/Denver");
+  });
+
+  it("getBusinessTimezone returns null for unset, blank, error, and missing rows", async () => {
+    const cases = [
+      { data: { timezone: null }, error: null },
+      { data: { timezone: "   " }, error: null },
+      { data: null, error: { message: "boom" } },
+      { data: null, error: null }
+    ];
+    for (const result of cases) {
+      const db = mockDb({ maybeSingle: vi.fn().mockResolvedValue(result) });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      await expect(getBusinessTimezone("uuid-biz-1")).resolves.toBeNull();
+    }
+  });
+
+  it("getBusinessTimezone honors an injected client", async () => {
+    const db = mockDb({
+      maybeSingle: vi.fn().mockResolvedValue({ data: { timezone: "UTC" }, error: null })
+    });
+    await expect(getBusinessTimezone("uuid-biz-1", db as never)).resolves.toBe("UTC");
     expect(createSupabaseServiceClient).not.toHaveBeenCalled();
   });
 });

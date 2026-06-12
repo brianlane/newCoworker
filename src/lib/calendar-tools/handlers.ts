@@ -1,5 +1,6 @@
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { getBusinessTimezone } from "@/lib/db/businesses";
 import { logger } from "@/lib/logger";
 
 /**
@@ -42,6 +43,24 @@ export type BookAppointmentArgs = {
 };
 
 type Slot = { startIso: string; endIso: string };
+
+/**
+ * Timezone the event/slot payloads should use: the model's explicit choice
+ * first, then the business timezone, then UTC. Looked up per call (single
+ * indexed read) and never fatal — a lookup error degrades to UTC, exactly
+ * the pre-timezone behavior.
+ */
+async function resolveToolTimezone(
+  businessId: string,
+  explicit: string | undefined
+): Promise<string> {
+  if (explicit && explicit.trim().length > 0) return explicit;
+  try {
+    return (await getBusinessTimezone(businessId)) ?? "UTC";
+  } catch {
+    return "UTC";
+  }
+}
 
 type FreeBusyBody = {
   calendars?: Record<string, { busy?: Array<{ start: string; end: string }> }>;
@@ -158,11 +177,14 @@ export async function findCalendarSlots(
     }
 
     const slots = computeFreeSlots(windowStart, windowEnd, busy, durationMs);
+    // Echo the resolved timezone so the model presents the ISO slots in
+    // business-local terms instead of raw UTC.
+    const timezone = await resolveToolTimezone(businessId, args.timezone);
     return {
       ok: true,
       data: {
         slots,
-        timezone: args.timezone ?? null,
+        timezone,
         purpose: args.purpose ?? null,
         durationMinutes: args.durationMinutes
       }
@@ -211,6 +233,11 @@ export async function bookCalendarAppointment(
     let eventId: string | null = null;
     let htmlLink: string | null = null;
 
+    // Model's explicit timezone → business timezone → UTC. Means a naive
+    // local "2026-06-13T14:00:00" books 2pm business-local without the
+    // model reasoning about offsets.
+    const eventTimezone = await resolveToolTimezone(businessId, args.timezone);
+
     if (conn.provider === "google") {
       const res = await nangoProxyForBusiness(
         businessId,
@@ -221,8 +248,8 @@ export async function bookCalendarAppointment(
           data: {
             summary: args.summary,
             description,
-            start: { dateTime: args.startIso, timeZone: args.timezone ?? "UTC" },
-            end: { dateTime: args.endIso, timeZone: args.timezone ?? "UTC" },
+            start: { dateTime: args.startIso, timeZone: eventTimezone },
+            end: { dateTime: args.endIso, timeZone: eventTimezone },
             attendees: args.attendeeEmail
               ? [{ email: args.attendeeEmail, displayName: args.attendeeName }]
               : undefined
@@ -243,8 +270,8 @@ export async function bookCalendarAppointment(
           data: {
             subject: args.summary,
             body: { contentType: "Text", content: description },
-            start: { dateTime: args.startIso, timeZone: args.timezone ?? "UTC" },
-            end: { dateTime: args.endIso, timeZone: args.timezone ?? "UTC" },
+            start: { dateTime: args.startIso, timeZone: eventTimezone },
+            end: { dateTime: args.endIso, timeZone: eventTimezone },
             attendees: args.attendeeEmail
               ? [
                   {

@@ -36,7 +36,27 @@ export type BusinessRow = {
    * `coerceOwnerPhoneToE164` before persisting downstream.
    */
   phone?: string | null;
+  /**
+   * IANA timezone (e.g. "America/Phoenix") used for AI date/time context
+   * and calendar tool defaults. Null = UTC fallback. Captured from the
+   * owner's browser at onboarding; editable in Settings.
+   */
+  timezone?: string | null;
 };
+
+/**
+ * True when `tz` is an IANA timezone name the runtime can actually format
+ * with — the only validation that matters, since `Intl.DateTimeFormat` is
+ * exactly what consumes the value downstream.
+ */
+export function isValidIanaTimezone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export async function createBusiness(
   data: {
@@ -52,6 +72,8 @@ export async function createBusiness(
     typicalInquiry?: string;
     teamSize?: number;
     crmUsed?: string;
+    /** IANA timezone auto-detected from the owner's browser at onboarding. */
+    timezone?: string;
   },
   client?: SupabaseClient
 ): Promise<BusinessRow> {
@@ -71,7 +93,8 @@ export async function createBusiness(
       service_area: data.serviceArea ?? null,
       typical_inquiry: data.typicalInquiry ?? null,
       team_size: data.teamSize ?? null,
-      crm_used: data.crmUsed ?? null
+      crm_used: data.crmUsed ?? null,
+      timezone: data.timezone ?? null
     })
     .select()
     .single();
@@ -187,6 +210,36 @@ export async function updateBusinessName(
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db.from("businesses").update({ name }).eq("id", id);
   if (error) throw new Error(`updateBusinessName: ${error.message}`);
+}
+
+export async function updateBusinessTimezone(
+  id: string,
+  timezone: string | null,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("businesses").update({ timezone }).eq("id", id);
+  if (error) throw new Error(`updateBusinessTimezone: ${error.message}`);
+}
+
+/**
+ * Light single-column read for the calendar tools' timezone default.
+ * Returns null when unset or on any read error (degrade to UTC, never
+ * fail the tool call over a timezone lookup).
+ */
+export async function getBusinessTimezone(
+  id: string,
+  client?: SupabaseClient
+): Promise<string | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("businesses")
+    .select("timezone")
+    .eq("id", id)
+    .maybeSingle();
+  if (error || !data) return null;
+  const tz = (data as { timezone?: string | null }).timezone;
+  return typeof tz === "string" && tz.trim().length > 0 ? tz : null;
 }
 
 export async function setBusinessCustomerProfile(

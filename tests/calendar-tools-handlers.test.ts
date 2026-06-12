@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/voice-tools/connections", () => ({ resolveCalendarConnection: vi.fn() }));
 vi.mock("@/lib/nango/workspace", () => ({ nangoProxyForBusiness: vi.fn() }));
+vi.mock("@/lib/db/businesses", () => ({ getBusinessTimezone: vi.fn() }));
 
 import {
   bookCalendarAppointment,
@@ -15,6 +16,7 @@ import {
 } from "@/lib/calendar-tools/handlers";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { getBusinessTimezone } from "@/lib/db/businesses";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -31,6 +33,7 @@ const MS_CONN = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(getBusinessTimezone).mockResolvedValue(null);
 });
 
 describe("computeFreeSlots", () => {
@@ -209,6 +212,32 @@ describe("findCalendarSlots", () => {
     expect(result).toEqual({ ok: false, detail: "calendar_lookup_failed" });
   });
 
+  it("defaults the echoed timezone to the business timezone when the model omits one", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(getBusinessTimezone).mockResolvedValue("America/Denver");
+    const result = await findCalendarSlots(BIZ, { durationMinutes: 30 });
+    expect(result.ok).toBe(true);
+    expect((result.data as { timezone: string }).timezone).toBe("America/Denver");
+  });
+
+  it("degrades the timezone default to UTC when the business lookup throws", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(getBusinessTimezone).mockRejectedValue(new Error("db down"));
+    const result = await findCalendarSlots(BIZ, { durationMinutes: 30 });
+    expect(result.ok).toBe(true);
+    expect((result.data as { timezone: string }).timezone).toBe("UTC");
+  });
+
+  it("echoes UTC when neither the model nor the business provides a timezone", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    const result = await findCalendarSlots(BIZ, { durationMinutes: 30 });
+    expect(result.ok).toBe(true);
+    expect((result.data as { timezone: string }).timezone).toBe("UTC");
+  });
+
   it("tolerates non-Error throw values in the failure log", async () => {
     vi.mocked(resolveCalendarConnection).mockRejectedValue("string failure");
     const result = await findCalendarSlots(BIZ, { durationMinutes: 30 });
@@ -298,6 +327,18 @@ describe("bookCalendarAppointment", () => {
     vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never);
     const result = await bookCalendarAppointment(BIZ, ARGS);
     expect(result).toEqual({ ok: false, detail: "calendar_not_connected" });
+  });
+
+  it("books in the business timezone when the model omits one", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-tz" } } as never);
+    vi.mocked(getBusinessTimezone).mockResolvedValue("America/Chicago");
+    await bookCalendarAppointment(BIZ, ARGS);
+    const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+      data: { start: { timeZone: string }; end: { timeZone: string } };
+    };
+    expect(payload.data.start.timeZone).toBe("America/Chicago");
+    expect(payload.data.end.timeZone).toBe("America/Chicago");
   });
 
   it("books a Microsoft event, falling back to the summary for an empty body", async () => {
