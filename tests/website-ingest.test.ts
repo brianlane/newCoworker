@@ -23,6 +23,7 @@ import {
   WEBSITE_INGEST_MAX_PASTED_HTML_CHARS
 } from "@/lib/website-ingest";
 import * as geminiGc from "@/lib/gemini-generate-content";
+import * as aiSpendMeter from "@/lib/billing/ai-spend-meter";
 import { logger } from "@/lib/logger";
 
 type FetchArgs = Parameters<typeof fetch>;
@@ -1633,6 +1634,49 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
     expect(seen[0]).toBe("gemini-2.0-flash");
   });
 
+  it("meters summarizer spend into the shared AI budget when meterBusinessId is set", async () => {
+    process.env.GOOGLE_API_KEY = "test-key";
+    delete process.env.GEMINI_SUMMARY_MODEL;
+    delete process.env.GEMINI_ROWBOAT_MODEL;
+    const meterSpy = vi
+      .spyOn(aiSpendMeter, "meterGeminiSpendForBusiness")
+      .mockResolvedValue(undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: Request | string | URL) => {
+        const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (new URL(urlStr).hostname !== "generativelanguage.googleapis.com") {
+          throw new Error(`unexpected fetch: ${urlStr}`);
+        }
+        return new Response(
+          JSON.stringify({
+            candidates: [{ content: { parts: [{ text: "## Summary\nmetered" }] } }],
+            usageMetadata: { promptTokenCount: 2000, candidatesTokenCount: 300 }
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      })
+    );
+
+    try {
+      const res = await ingestWebsite("https://example.com/", {
+        fetchImpl: pageFetchImpl(),
+        lookup: publicLookup as never,
+        meterBusinessId: "biz-meter-1"
+      });
+      expect(res.ok).toBe(true);
+      expect(meterSpy).toHaveBeenCalledOnce();
+      expect(meterSpy.mock.calls[0][0]).toMatchObject({
+        businessId: "biz-meter-1",
+        model: "gemini-3-flash-preview",
+        surface: "website_ingest",
+        usage: { promptTokens: 2000, outputTokens: 300 }
+      });
+    } finally {
+      meterSpy.mockRestore();
+    }
+  });
+
   it("emits an audit log when coercing a legacy Gemini model env id", async () => {
     process.env.GOOGLE_API_KEY = "test-key";
     process.env.GEMINI_ROWBOAT_MODEL = "gemini-pro";
@@ -1700,7 +1744,7 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
     process.env.GOOGLE_API_KEY = "test-key";
     delete process.env.GEMINI_SUMMARY_MODEL;
     delete process.env.GEMINI_ROWBOAT_MODEL;
-    const spy = vi.spyOn(geminiGc, "geminiGenerateText").mockRejectedValue("boom");
+    const spy = vi.spyOn(geminiGc, "geminiGenerateTextDetailed").mockRejectedValue("boom");
     try {
       const res = await ingestWebsite("https://example.com/", {
         fetchImpl: pageFetchImpl(),

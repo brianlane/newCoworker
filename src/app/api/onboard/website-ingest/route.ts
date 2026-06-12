@@ -88,11 +88,14 @@ export async function POST(request: Request) {
         // crawl, no SSRF surface — same extraction/summarization pipeline.
         await ingestWebsiteFromHtml(normalized, body.pastedHtml as string, {
           businessName: body.businessName,
-          businessType: body.businessType
+          businessType: body.businessType,
+          meterBusinessId: body.businessId
         })
       : await ingestWebsite(normalized, {
           businessName: body.businessName,
           businessType: body.businessType,
+          // Meter the Gemini summary into this business's shared AI budget.
+          meterBusinessId: body.businessId,
           // Owner-consented bypass: this route is invoked post-checkout
           // with a URL the business owner explicitly provided during
           // onboarding. robots.txt expresses third-party-crawler

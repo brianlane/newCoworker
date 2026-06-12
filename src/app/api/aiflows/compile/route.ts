@@ -10,7 +10,8 @@
 import { z } from "zod";
 import { getAuthUser, requireOwner } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
-import { geminiGenerateText } from "@/lib/gemini-generate-content";
+import { geminiGenerateTextDetailed } from "@/lib/gemini-generate-content";
+import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import {
   FLOW_COMPILE_SYSTEM_PROMPT,
   buildFlowCompileUserText,
@@ -35,13 +36,26 @@ export async function POST(request: Request) {
       return errorResponse("INTERNAL_SERVER_ERROR", "AI assist is not configured");
     }
 
-    const raw = await geminiGenerateText({
+    const model = process.env.AIFLOW_COMPILE_MODEL ?? "gemini-2.5-flash";
+    const userText = buildFlowCompileUserText(body.description);
+    const { text: raw, usage } = await geminiGenerateTextDetailed({
       apiKey,
-      model: process.env.AIFLOW_COMPILE_MODEL ?? "gemini-2.5-flash",
+      model,
       systemInstruction: FLOW_COMPILE_SYSTEM_PROMPT,
-      userText: buildFlowCompileUserText(body.description),
+      userText,
       temperature: 0,
       maxOutputTokens: 2000
+    });
+    // Compile runs on a pricier model than chat (2.5 Flash, thinking tokens
+    // billed as output) — meter it into the shared AI budget like every
+    // other Gemini surface. Exact tokens when available, chars/4 otherwise.
+    await meterGeminiSpendForBusiness({
+      businessId: body.businessId,
+      model,
+      surface: "aiflow_compile",
+      usage,
+      inputChars: FLOW_COMPILE_SYSTEM_PROMPT.length + userText.length,
+      outputChars: raw.length
     });
 
     const candidate = extractFlowJson(raw);
