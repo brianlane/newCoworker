@@ -1,6 +1,10 @@
 import { getBusinessConfig } from "@/lib/db/configs";
 import { getBusiness } from "@/lib/db/businesses";
-import { geminiGenerateTextDetailed, type GeminiUsage } from "@/lib/gemini-generate-content";
+import {
+  GeminiEmptyError,
+  geminiGenerateTextDetailed,
+  type GeminiUsage
+} from "@/lib/gemini-generate-content";
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import { logger } from "@/lib/logger";
 
@@ -63,7 +67,11 @@ type AskGeminiResult = {
   inputChars: number;
 };
 
-async function askGemini(question: string, context: string): Promise<AskGeminiResult> {
+async function askGemini(
+  question: string,
+  context: string,
+  businessId: string
+): Promise<AskGeminiResult> {
   const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
   if (!apiKey) throw new Error("gemini_unavailable");
   const configured = process.env.GEMINI_ROWBOAT_MODEL?.trim();
@@ -87,6 +95,20 @@ async function askGemini(question: string, context: string): Promise<AskGeminiRe
         signal: controller.signal
       });
       return { answer: text, model, usage, inputChars };
+    } catch (err) {
+      // Empty replies (e.g. thinking-only output) are still billed by
+      // Google — meter them here, where the model is known, then rethrow.
+      if (err instanceof GeminiEmptyError) {
+        await meterGeminiSpendForBusiness({
+          businessId,
+          model,
+          surface: "knowledge_lookup",
+          usage: err.usage,
+          inputChars,
+          outputChars: 0
+        });
+      }
+      throw err;
     } finally {
       clearTimeout(timer);
     }
@@ -125,7 +147,7 @@ export async function lookupBusinessKnowledge(
   }
 
   try {
-    const result = await askGemini(question, context);
+    const result = await askGemini(question, context, businessId);
     // Knowledge lookups run on the gemini-3 tier — meter them into the
     // shared AI budget so the billing-page number matches Google's bill.
     await meterGeminiSpendForBusiness({

@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { geminiGenerateText, geminiGenerateTextDetailed } from "@/lib/gemini-generate-content";
+import {
+  GeminiEmptyError,
+  geminiGenerateText,
+  geminiGenerateTextDetailed
+} from "@/lib/gemini-generate-content";
 
 type FetchArgs = Parameters<typeof fetch>;
 
@@ -88,6 +92,29 @@ describe("geminiGenerateTextDetailed usage extraction", () => {
       thoughtsTokenCount: -3
     });
     expect(res.usage).toEqual({ promptTokens: 0, outputTokens: 7 });
+  });
+
+  it("throws GeminiEmptyError carrying billed usage when text is empty (thinking-only output)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async (): Promise<Response> =>
+          okResponse({
+            candidates: [{ content: { parts: [] } }],
+            usageMetadata: { promptTokenCount: 800, thoughtsTokenCount: 200 }
+          })
+      )
+    );
+    const pending = geminiGenerateTextDetailed({
+      apiKey: "k",
+      model: "m",
+      systemInstruction: "s",
+      userText: "u"
+    });
+    await expect(pending).rejects.toThrow("gemini_empty");
+    const err = await pending.catch((e) => e);
+    expect(err).toBeInstanceOf(GeminiEmptyError);
+    expect((err as GeminiEmptyError).usage).toEqual({ promptTokens: 800, outputTokens: 200 });
   });
 });
 

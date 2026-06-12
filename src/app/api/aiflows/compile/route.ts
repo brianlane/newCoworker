@@ -10,7 +10,11 @@
 import { z } from "zod";
 import { getAuthUser, requireOwner } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
-import { geminiGenerateTextDetailed } from "@/lib/gemini-generate-content";
+import {
+  GeminiEmptyError,
+  geminiGenerateTextDetailed,
+  type GeminiUsage
+} from "@/lib/gemini-generate-content";
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import {
   FLOW_COMPILE_SYSTEM_PROMPT,
@@ -38,14 +42,32 @@ export async function POST(request: Request) {
 
     const model = process.env.AIFLOW_COMPILE_MODEL ?? "gemini-2.5-flash";
     const userText = buildFlowCompileUserText(body.description);
-    const { text: raw, usage } = await geminiGenerateTextDetailed({
-      apiKey,
-      model,
-      systemInstruction: FLOW_COMPILE_SYSTEM_PROMPT,
-      userText,
-      temperature: 0,
-      maxOutputTokens: 2000
-    });
+    let raw: string;
+    let usage: GeminiUsage | null;
+    try {
+      ({ text: raw, usage } = await geminiGenerateTextDetailed({
+        apiKey,
+        model,
+        systemInstruction: FLOW_COMPILE_SYSTEM_PROMPT,
+        userText,
+        temperature: 0,
+        maxOutputTokens: 2000
+      }));
+    } catch (err) {
+      // Empty replies (e.g. thinking-only output) are still billed — meter
+      // them before surfacing the failure.
+      if (err instanceof GeminiEmptyError) {
+        await meterGeminiSpendForBusiness({
+          businessId: body.businessId,
+          model,
+          surface: "aiflow_compile",
+          usage: err.usage,
+          inputChars: FLOW_COMPILE_SYSTEM_PROMPT.length + userText.length,
+          outputChars: 0
+        });
+      }
+      throw err;
+    }
     // Compile runs on a pricier model than chat (2.5 Flash, thinking tokens
     // billed as output) — meter it into the shared AI budget like every
     // other Gemini surface. Exact tokens when available, chars/4 otherwise.

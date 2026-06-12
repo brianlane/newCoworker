@@ -8,13 +8,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db/configs", () => ({ getBusinessConfig: vi.fn() }));
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
-vi.mock("@/lib/gemini-generate-content", () => ({ geminiGenerateTextDetailed: vi.fn() }));
+vi.mock("@/lib/gemini-generate-content", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/gemini-generate-content")>()),
+  geminiGenerateTextDetailed: vi.fn()
+}));
 vi.mock("@/lib/billing/ai-spend-meter", () => ({ meterGeminiSpendForBusiness: vi.fn() }));
 
 import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
 import { getBusinessConfig } from "@/lib/db/configs";
 import { getBusiness } from "@/lib/db/businesses";
-import { geminiGenerateTextDetailed } from "@/lib/gemini-generate-content";
+import { GeminiEmptyError, geminiGenerateTextDetailed } from "@/lib/gemini-generate-content";
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -144,6 +147,20 @@ describe("lookupBusinessKnowledge", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("meters a billed-but-empty reply (thinking-only output) before classifying it", async () => {
+    gemini.mockRejectedValue(new GeminiEmptyError({ promptTokens: 800, outputTokens: 200 }));
+    const result = await lookupBusinessKnowledge(BIZ, "hours?");
+    expect(result).toEqual({ ok: false, detail: "empty_answer" });
+    expect(meter).toHaveBeenCalledOnce();
+    expect(meter.mock.calls[0][0]).toMatchObject({
+      businessId: BIZ,
+      model: "gemini-3-flash-preview",
+      surface: "knowledge_lookup",
+      usage: { promptTokens: 800, outputTokens: 200 },
+      outputChars: 0
+    });
   });
 
   it("tolerates non-Error throw values (classified as gemini_error)", async () => {

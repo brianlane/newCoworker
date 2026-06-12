@@ -1677,6 +1677,49 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
     }
   });
 
+  it("meters a billed-but-empty summarizer reply when meterBusinessId is set", async () => {
+    process.env.GOOGLE_API_KEY = "test-key";
+    delete process.env.GEMINI_SUMMARY_MODEL;
+    delete process.env.GEMINI_ROWBOAT_MODEL;
+    const meterSpy = vi
+      .spyOn(aiSpendMeter, "meterGeminiSpendForBusiness")
+      .mockResolvedValue(undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: Request | string | URL) => {
+        const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (new URL(urlStr).hostname !== "generativelanguage.googleapis.com") {
+          throw new Error(`unexpected fetch: ${urlStr}`);
+        }
+        return new Response(
+          JSON.stringify({
+            candidates: [{ content: { parts: [] } }],
+            usageMetadata: { promptTokenCount: 1500, thoughtsTokenCount: 1500 }
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      })
+    );
+
+    try {
+      const res = await ingestWebsite("https://example.com/", {
+        fetchImpl: pageFetchImpl(),
+        lookup: publicLookup as never,
+        meterBusinessId: "biz-meter-1"
+      });
+      expect(res.ok).toBe(false);
+      expect(meterSpy).toHaveBeenCalledOnce();
+      expect(meterSpy.mock.calls[0][0]).toMatchObject({
+        businessId: "biz-meter-1",
+        surface: "website_ingest",
+        usage: { promptTokens: 1500, outputTokens: 1500 },
+        outputChars: 0
+      });
+    } finally {
+      meterSpy.mockRestore();
+    }
+  });
+
   it("emits an audit log when coercing a legacy Gemini model env id", async () => {
     process.env.GOOGLE_API_KEY = "test-key";
     process.env.GEMINI_ROWBOAT_MODEL = "gemini-pro";

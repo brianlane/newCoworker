@@ -51,6 +51,22 @@ function extractGeminiUsage(json: unknown): GeminiUsage | null {
   return { promptTokens, outputTokens };
 }
 
+/**
+ * Thrown when a 200 response parses but has no candidate text. Google still
+ * BILLS these calls (e.g. thinking-only output when the thinking budget eats
+ * `maxOutputTokens`), so the error carries the parsed usage for callers that
+ * meter spend. `message` stays "gemini_empty" for existing classifiers.
+ */
+export class GeminiEmptyError extends Error {
+  readonly usage: GeminiUsage | null;
+
+  constructor(usage: GeminiUsage | null) {
+    super("gemini_empty");
+    this.name = "GeminiEmptyError";
+    this.usage = usage;
+  }
+}
+
 function extractGeminiCandidateText(json: unknown): string | null {
   const root = json as Record<string, unknown>;
   const candidates = root?.candidates;
@@ -111,7 +127,7 @@ export async function geminiGenerateTextDetailed(
   }
 
   const out = extractGeminiCandidateText(json);
-  if (!out) throw new Error("gemini_empty");
+  if (!out) throw new GeminiEmptyError(extractGeminiUsage(json));
   return { text: out, usage: extractGeminiUsage(json) };
 }
 

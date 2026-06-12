@@ -16,7 +16,7 @@
  */
 
 import { promises as dns } from "node:dns";
-import { geminiGenerateTextDetailed } from "@/lib/gemini-generate-content";
+import { GeminiEmptyError, geminiGenerateTextDetailed } from "@/lib/gemini-generate-content";
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import { logger } from "@/lib/logger";
 import { isPrivateIpv4, isPrivateIpv6 } from "@/lib/net/ip-classification";
@@ -718,6 +718,20 @@ async function defaultGeminiSummarize(
         });
       }
       return text;
+    } catch (err) {
+      // Empty replies (e.g. thinking-only output) are still billed by
+      // Google — meter them before the error is remapped upstream.
+      if (err instanceof GeminiEmptyError && meterBusinessId) {
+        await meterGeminiSpendForBusiness({
+          businessId: meterBusinessId,
+          model,
+          surface: "website_ingest",
+          usage: err.usage,
+          inputChars: WEBSITE_INGEST_SUMMARY_SYSTEM_PROMPT.length + prompt.length,
+          outputChars: 0
+        });
+      }
+      throw err;
     } finally {
       clearTimeout(timer);
     }
