@@ -1,0 +1,81 @@
+/**
+ * POST /api/billing/sms-bonus/checkout
+ *
+ * Self-serve top-up: authenticated tenant buys an SMS bonus pack. Mirrors
+ * /api/billing/voice-bonus/checkout: pick a `packId` from
+ * `src/lib/billing/sms-bonus-packs.ts`, confirm the caller's business has an
+ * active Stripe subscription, then create a `mode=payment` Checkout Session.
+ * The Stripe webhook records the grant on success; refund / dispute-lost
+ * clawback is wired in the webhook handler.
+ *
+ * Returns `{ checkoutUrl }` so the client can `window.location = checkoutUrl`.
+ */
+import { z } from "zod";
+import { getAuthUser } from "@/lib/auth";
+import { getSubscription } from "@/lib/db/subscriptions";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { createSmsBonusCheckoutSession } from "@/lib/stripe/client";
+import { SMS_BONUS_PACK_IDS, getSmsBonusPack } from "@/lib/billing/sms-bonus-packs";
+import {
+  successResponse,
+  errorResponse,
+  handleRouteError
+} from "@/lib/api-response";
+
+const schema = z.object({
+  packId: z.enum(SMS_BONUS_PACK_IDS)
+});
+
+export async function POST(request: Request) {
+  try {
+    const user = await getAuthUser();
+    if (!user?.email) {
+      return errorResponse("UNAUTHORIZED", "Authentication required");
+    }
+
+    const body = schema.parse(await request.json());
+    const pack = getSmsBonusPack(body.packId);
+    if (!pack) {
+      return errorResponse("NOT_FOUND", "SMS bonus pack is not available");
+    }
+
+    const db = await createSupabaseServiceClient();
+    // Mirror the ordering the dashboard uses (created_at DESC) so an owner
+    // with multiple businesses always checks out for the row the billing
+    // page displays.
+    const { data: businesses } = await db
+      .from("businesses")
+      .select("id")
+      .eq("owner_email", user.email)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    const business = businesses?.[0] ?? null;
+    if (!business) {
+      return errorResponse("NOT_FOUND", "Business not found");
+    }
+
+    const subscription = await getSubscription(business.id);
+    if (!subscription?.stripe_subscription_id || subscription.status !== "active") {
+      return errorResponse(
+        "CONFLICT",
+        "An active subscription is required before buying bonus texts"
+      );
+    }
+
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+    const session = await createSmsBonusCheckoutSession({
+      priceId: pack.priceId,
+      businessId: business.id,
+      smsTexts: pack.texts,
+      successUrl: `${appUrl}/dashboard/billing?bonus=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancelUrl: `${appUrl}/dashboard/billing?bonus=cancelled`,
+      customerEmail: user.email,
+      customerId: subscription.stripe_customer_id ?? undefined,
+      userId: user.userId
+    });
+
+    return successResponse({ checkoutUrl: session.url, sessionId: session.id });
+  } catch (err) {
+    return handleRouteError(err);
+  }
+}

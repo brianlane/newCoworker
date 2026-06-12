@@ -25,10 +25,12 @@ import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts
 import { callSmsRowboatWithStatelessFallback } from "../_shared/sms_rowboat.ts";
 import { buildCustomerPreambleForEdge, type EdgeCustomerMemoryRow } from "../_shared/customer_memory_preamble.ts";
 import {
+  monthStartIso,
   pickSmsTurn,
   recordSmsChatSpend,
   resolveSmsChatCap
 } from "../_shared/chat_spend_cap.ts";
+import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
 
 const MAX_ATTEMPTS = 8;
 const NCW_IDEM_TAG_PREFIX = "ncw_idem:";
@@ -681,6 +683,14 @@ serve(async (req: Request) => {
               business_id: job.business_id,
               spend_micros: meterRes.spendMicros ?? null
             });
+            await sendCapAlertOnce(supabase, {
+              businessId: job.business_id,
+              kind: "chat_spend",
+              periodKey: cap.periodStart ?? monthStartIso(),
+              notifyUrl: `${supabaseUrl}/functions/v1/notifications`,
+              bearer: serviceKey,
+              payload: { surface: "sms_worker", spend_micros: meterRes.spendMicros ?? null }
+            });
           }
         }
         // Over-cap local ($0) turns need no metering call: metered_at was set
@@ -708,6 +718,14 @@ serve(async (req: Request) => {
               job_id: job.id,
               business_id: job.business_id,
               spend_micros: meterRes.spendMicros ?? null
+            });
+            await sendCapAlertOnce(supabase, {
+              businessId: job.business_id,
+              kind: "chat_spend",
+              periodKey: monthStartIso(),
+              notifyUrl: `${supabaseUrl}/functions/v1/notifications`,
+              bearer: serviceKey,
+              payload: { surface: "sms_worker", spend_micros: meterRes.spendMicros ?? null }
             });
           }
         }
@@ -835,9 +853,10 @@ serve(async (req: Request) => {
       processed += 1;
       continue;
     }
-    const reserve = reserveRaw as { ok?: boolean; reason?: string } | null;
+    const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string } | null;
     if (!reserve?.ok) {
-      // Strict cap: no auto-reply here (customer sees silence). Product follow-up: optional one-shot "quota exceeded" SMS.
+      // Strict cap: no auto-reply here (customer sees silence). The owner gets
+      // a one-time urgent alert per period so silence isn't the only signal.
       await supabase.rpc("complete_sms_inbound_job", {
         p_job_id: job.id,
         p_status: "dead_letter",
@@ -854,13 +873,26 @@ serve(async (req: Request) => {
         message: `Reply suppressed: ${reserve?.reason ?? "monthly_sms_limit"} (customer sees silence)`,
         payload: { job_id: job.id }
       });
+      if (reserve?.reason === "monthly_sms_limit") {
+        await sendCapAlertOnce(supabase, {
+          businessId: job.business_id,
+          kind: "sms_monthly",
+          periodKey: smsCapPeriodKey(),
+          notifyUrl: `${supabaseUrl}/functions/v1/notifications`,
+          bearer: serviceKey,
+          payload: { surface: "sms_worker", job_id: job.id }
+        });
+      }
       processed += 1;
       continue;
     }
 
     const releaseReservedSlot = async (): Promise<void> => {
       const { error: relErr } = await supabase.rpc("release_sms_outbound_slot", {
-        p_business_id: job.business_id
+        p_business_id: job.business_id,
+        // A bonus-sourced reserve consumed a purchased text; give it back when
+        // the Telnyx send failed after the reserve.
+        p_refund_bonus: reserve.source === "bonus"
       });
       if (relErr) console.error("release_sms_outbound_slot", relErr);
     };

@@ -154,6 +154,81 @@ export async function createVoiceBonusCheckoutSession(
   return { id: session.id, url: session.url };
 }
 
+export type UsagePackCheckoutParams = {
+  priceId: string;
+  businessId: string;
+  successUrl: string;
+  cancelUrl: string;
+  customerEmail?: string;
+  customerId?: string;
+  userId: string;
+};
+
+/**
+ * Shared body for the one-time usage-pack Checkout Sessions (SMS texts +
+ * chat credit). Same shape as the voice-bonus session: `mode=payment`,
+ * metadata mirrored onto the payment intent so refunds/disputes can be traced
+ * back to the originating checkout.
+ */
+async function createUsagePackCheckoutSession(
+  params: UsagePackCheckoutParams,
+  metadata: Record<string, string>
+): Promise<{ id: string; url: string }> {
+  const stripe = getStripe();
+  const session = await stripe.checkout.sessions.create({
+    mode: "payment",
+    line_items: [{ price: params.priceId, quantity: 1 }],
+    success_url: params.successUrl,
+    cancel_url: params.cancelUrl,
+    customer: params.customerId,
+    customer_email: params.customerId ? undefined : params.customerEmail,
+    customer_creation: params.customerId ? undefined : "always",
+    billing_address_collection: "auto",
+    metadata,
+    payment_intent_data: { metadata }
+  });
+  if (!session.url) throw new Error("Stripe checkout session URL is null");
+  return { id: session.id, url: session.url };
+}
+
+/**
+ * One-time Checkout Session for an SMS bonus pack. Metadata shape is what the
+ * Stripe webhook expects so `apply_sms_bonus_grant_from_checkout` records the
+ * grant.
+ */
+export async function createSmsBonusCheckoutSession(
+  params: UsagePackCheckoutParams & { smsTexts: number }
+): Promise<{ id: string; url: string }> {
+  if (!Number.isInteger(params.smsTexts) || params.smsTexts <= 0) {
+    throw new Error("smsTexts must be a positive integer");
+  }
+  return createUsagePackCheckoutSession(params, {
+    checkoutKind: "sms_bonus_texts",
+    businessId: params.businessId,
+    smsTexts: String(params.smsTexts),
+    userId: params.userId
+  });
+}
+
+/**
+ * One-time Checkout Session for a Gemini chat spend-credit pack. Metadata
+ * shape is what the Stripe webhook expects so
+ * `apply_chat_credit_grant_from_checkout` records the grant.
+ */
+export async function createChatCreditCheckoutSession(
+  params: UsagePackCheckoutParams & { creditMicros: number }
+): Promise<{ id: string; url: string }> {
+  if (!Number.isInteger(params.creditMicros) || params.creditMicros <= 0) {
+    throw new Error("creditMicros must be a positive integer");
+  }
+  return createUsagePackCheckoutSession(params, {
+    checkoutKind: "chat_credit_micros",
+    businessId: params.businessId,
+    creditMicros: String(params.creditMicros),
+    userId: params.userId
+  });
+}
+
 export async function createCustomerPortalSession(params: {
   customerId: string;
   returnUrl: string;
