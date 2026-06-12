@@ -118,17 +118,24 @@ async function fetchActivity(
         .select("id", { count: "exact", head: true })
         .eq("business_id", businessId)
         .gte("created_at", sinceIso),
-      // Outbound = coworker replies (every job with a cached reply sent one)
-      // + worker-initiated sends (sms_outbound_log). Both filter on real
-      // timestamps, unlike the previous daily_usage.sms_sent sum whose
-      // calendar-day usage_date granularity let a daily digest absorb up to
-      // a full extra UTC day of sends outside the rolling window.
+      // Outbound = coworker replies + worker-initiated sends
+      // (sms_outbound_log). Both filter on real timestamps, unlike the
+      // previous daily_usage.sms_sent sum whose calendar-day usage_date
+      // granularity let a daily digest absorb up to a full extra UTC day of
+      // sends outside the rolling window.
+      //
+      // Replies are detected via assistant_reply_text (durable, written at
+      // send time, never cleared) — NOT rowboat_reply_cached, which is a
+      // transient Telnyx retry buffer nulled after every successful send.
+      // The window filters on updated_at because the send-time write bumps
+      // it; created_at would miss backlogged jobs received before the window
+      // but answered inside it.
       supa
         .from("sms_inbound_jobs")
         .select("id", { count: "exact", head: true })
         .eq("business_id", businessId)
-        .not("rowboat_reply_cached", "is", null)
-        .gte("created_at", sinceIso),
+        .not("assistant_reply_text", "is", null)
+        .gte("updated_at", sinceIso),
       supa
         .from("sms_outbound_log")
         .select("id", { count: "exact", head: true })
