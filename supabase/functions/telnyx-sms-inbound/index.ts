@@ -959,6 +959,84 @@ serve(async (req: Request) => {
       }
     }
 
+    // Team-member gate: a roster employee's free-text reply (anything that
+    // wasn't a 1/2 offer digit or an approval digit above) must NEVER be
+    // treated as a customer message — no Coworker auto-reply, no AiFlow lead
+    // trigger, no customer-memory profile. Persist it for the thread audit
+    // trail and forward it to the owner's cell so a status update like
+    // "I just called her and left a message" still reaches a human.
+    if (from) {
+      const { data: memberRow } = await supabase
+        .from("ai_flow_team_members")
+        .select("name")
+        .eq("business_id", businessId)
+        .eq("phone_e164", from)
+        .eq("active", true)
+        .maybeSingle();
+      const member = memberRow as { name?: string | null } | null;
+      if (member) {
+        const { error: tmJobErr } = await supabase.from("sms_inbound_jobs").insert({
+          business_id: businessId,
+          telnyx_event_id: eventId,
+          payload: envelope as unknown as Record<string, unknown>,
+          status: "done",
+          suppress_reply: true,
+          customer_e164: from,
+          outbound_idempotency_key: crypto.randomUUID()
+        });
+        if (tmJobErr && (tmJobErr as { code?: string }).code !== "23505") {
+          console.error("team member inbound persist", tmJobErr);
+        }
+        // Best-effort owner forward (mirrors the Safe Mode forward contract,
+        // including its truncation caps). Skipped when the sender IS the
+        // owner's forward number — no point forwarding to themselves.
+        const { data: fwdSettingsRow } = await supabase
+          .from("business_telnyx_settings")
+          .select("forward_to_e164, telnyx_messaging_profile_id, telnyx_sms_from_e164")
+          .eq("business_id", businessId)
+          .maybeSingle();
+        const fwdSettings = fwdSettingsRow as
+          | {
+              forward_to_e164?: string | null;
+              telnyx_messaging_profile_id?: string | null;
+              telnyx_sms_from_e164?: string | null;
+            }
+          | null;
+        const ownerCell = normalizeE164(fwdSettings?.forward_to_e164 ?? "");
+        const fwdProfile =
+          (fwdSettings?.telnyx_messaging_profile_id &&
+            fwdSettings.telnyx_messaging_profile_id.trim()) ||
+          messagingProfileId;
+        const fwdFrom =
+          (fwdSettings?.telnyx_sms_from_e164 && fwdSettings.telnyx_sms_from_e164.trim()) ||
+          smsFromE164;
+        if (telnyxApiKey && fwdProfile && ownerCell && from !== ownerCell) {
+          const rawBody = inboundSmsBody(payload).slice(0, 1000);
+          const who = member.name?.trim() || from;
+          const send = await telnyxSendSms({
+            apiKey: telnyxApiKey,
+            messagingProfileId: fwdProfile,
+            fromE164: fwdFrom,
+            toE164: ownerCell,
+            text: `[Team] ${who}: ${rawBody}`.slice(0, 1600),
+            idempotencyKey: `${eventId}:team-forward`
+          });
+          if (!send.ok) {
+            console.error("team member forward", send.status, send.body.slice(0, 300));
+          }
+        }
+        await telemetryRecord(supabase, "sms_inbound_team_member", {
+          business_id: businessId,
+          event_id: eventId,
+          member_e164: from
+        });
+        return new Response(JSON.stringify({ ok: true, skip: "team_member" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+    }
+
     // Evaluate AiFlow triggers + enqueue runs up front so we only suppress the
     // default Coworker reply when an automation is actually queued to handle it.
     const { suppressingRunQueued } = await evaluateAndEnqueueAiFlows(supabase, businessId, {

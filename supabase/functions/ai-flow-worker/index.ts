@@ -835,7 +835,11 @@ async function browseActionStep(
       if (errCode === "action_failed") {
         return { kind: "fail", error: `browse_action: ${detail || "a page action failed"}` };
       }
-      throw new Error(`browse_action: render service ${res.status}`);
+      // Carry the render service's own error/detail into the retryable error
+      // so the run log shows WHY (e.g. a Playwright navigation timeout)
+      // instead of a bare status code.
+      const why = [errCode, detail].filter(Boolean).join(": ");
+      throw new Error(`browse_action: render service ${res.status}${why ? ` (${why})` : ""}`);
     }
     body = await res.json();
   } finally {
@@ -962,8 +966,11 @@ async function fetchViaRender(
       // Distinguish a permanent login failure from transient render errors so
       // the caller can fail fast instead of retrying bad credentials.
       let errCode = "";
+      let detail = "";
       try {
-        errCode = ((await res.json()) as { error?: string })?.error ?? "";
+        const errBody = (await res.json()) as { error?: string; detail?: string };
+        errCode = errBody?.error ?? "";
+        detail = errBody?.detail ?? "";
       } catch {
         /* non-JSON error body — treat as transient below */
       }
@@ -973,7 +980,10 @@ async function fetchViaRender(
       if (errCode === "login_failed" || errCode === "auth_config_error") {
         throw new BrowseLoginError(errCode);
       }
-      throw new Error(`render service ${res.status}`);
+      // Surface the render service's own error/detail so retry logs show the
+      // root cause (e.g. Playwright nav timeout) instead of a bare status.
+      const why = [errCode, detail].filter(Boolean).join(": ");
+      throw new Error(`render service ${res.status}${why ? ` (${why})` : ""}`);
     }
     const parsed = parseRenderResponse(await res.json(), url);
     if (!parsed) throw new Error("render service returned an invalid body");
