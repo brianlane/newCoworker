@@ -10,6 +10,7 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { coerceOwnerPhoneToE164 } from "@/lib/telnyx/assign-did";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -17,21 +18,6 @@ export type ContactName = {
   name: string;
   kind: "owner" | "employee" | "customer";
 };
-
-/**
- * Lenient E.164 normalization for owner-entered phone fields
- * (`notification_preferences.phone_number`, `businesses.phone`) which are
- * free text — owners type "6026951142". Bare 10-digit numbers are assumed
- * NANP (+1), matching how Telnyx provisions every tenant DID today. Returns
- * null when the input can't be made into a plausible E.164.
- */
-function looseE164(input: string | null | undefined): string | null {
-  const digits = (input ?? "").replace(/[^\d]/g, "");
-  if (!digits) return null;
-  const candidate =
-    digits.length === 10 ? `+1${digits}` : `+${digits}`;
-  return /^\+[1-9]\d{7,14}$/.test(candidate) ? candidate : null;
-}
 
 /**
  * Map E.164 → display name for every number we can identify. Numbers with
@@ -121,10 +107,13 @@ export async function resolveContactNames(
   const telnyx = telnyxRes.data as { forward_to_e164?: string | null } | null;
   const prefs = prefsRes.data as { phone_number?: string | null } | null;
   const ownerName = biz?.owner_name?.trim() || "Owner";
+  // coerceOwnerPhoneToE164: these are owner-typed free-text fields
+  // ("6026951142", "(602) 805-3377") — same coercion the DID-assign path
+  // uses for the onboarding phone.
   const ownerNumbers = [
-    looseE164(telnyx?.forward_to_e164),
-    looseE164(prefs?.phone_number),
-    looseE164(biz?.phone)
+    coerceOwnerPhoneToE164(telnyx?.forward_to_e164),
+    coerceOwnerPhoneToE164(prefs?.phone_number),
+    coerceOwnerPhoneToE164(biz?.phone)
   ];
   for (const num of ownerNumbers) {
     if (num && wanted.has(num)) out.set(num, { name: ownerName, kind: "owner" });
