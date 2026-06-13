@@ -240,16 +240,19 @@ export const DIGEST_EVENT_LINKS_MAX = 30;
  * actual events it counted, each linking to the relevant page.
  */
 export function buildDigestEventLinks(activity: DigestActivity): DigestEventLink[] {
-  const events: DigestEventLink[] = [];
+  // Non-text detail (calls, AiFlows, new customers) plus per-conversation text
+  // deep links. These fill whatever budget is left after the guaranteed
+  // summary events below.
+  const detail: DigestEventLink[] = [];
   for (const c of activity.calls) {
-    events.push({
+    detail.push({
       label: `Call — ${c.caller_e164 ?? "unknown caller"} (${c.status})`,
       href: "/dashboard/calls",
       at: c.started_at
     });
   }
   for (const r of activity.aiFlowRuns) {
-    events.push({
+    detail.push({
       label: `AiFlow — ${r.flowName} (${r.status})`,
       href: "/dashboard/aiflows",
       at: r.created_at
@@ -259,36 +262,63 @@ export function buildDigestEventLinks(activity: DigestActivity): DigestEventLink
     const who = cust.display_name
       ? `${cust.display_name} (${cust.customer_e164})`
       : cust.customer_e164;
-    events.push({
+    detail.push({
       label: `New customer — ${who}`,
       href: `/dashboard/customers/${encodeURIComponent(cust.customer_e164)}`
     });
   }
-  if (activity.smsThreads.length > 0) {
-    // One clickable event per conversation, deep-linked to that thread so the
-    // owner sees the actual texts (the "log") instead of the messages index.
-    for (const t of activity.smsThreads) {
-      events.push({
-        label: `Texts with ${t.counterpart} — ${t.inbound} received, ${t.outbound} sent`,
-        href: `/dashboard/messages/${encodeURIComponent(t.counterpart)}`,
-        at: t.lastAt
-      });
-    }
-  } else if (activity.smsInbound > 0 || activity.smsOutbound > 0) {
-    // No parseable counterpart (rare schema drift) — fall back to a single
-    // index roll-up so the texts are never silently dropped from the list.
-    events.push({
-      label: `Texts — ${activity.smsInbound} received, ${activity.smsOutbound} sent`,
-      href: "/dashboard/messages"
-    });
-  }
+  // One clickable event per conversation, deep-linked to that thread so the
+  // owner sees the actual texts (the "log") instead of the messages index.
+  const threadLinks: DigestEventLink[] = activity.smsThreads.map((t) => ({
+    label: `Texts with ${t.counterpart} — ${t.inbound} received, ${t.outbound} sent`,
+    href: `/dashboard/messages/${encodeURIComponent(t.counterpart)}`,
+    at: t.lastAt
+  }));
+
+  // Chat is always shown when present (reserved from the cap below).
+  const chat: DigestEventLink[] = [];
   if (activity.chatTurns > 0) {
-    events.push({
+    chat.push({
       label: `Dashboard chat — ${activity.chatTurns} turn${activity.chatTurns === 1 ? "" : "s"}`,
       href: "/dashboard/chat"
     });
   }
-  return events.slice(0, DIGEST_EVENT_LINKS_MAX);
+
+  const hasTexts = activity.smsInbound > 0 || activity.smsOutbound > 0;
+  const parsedInbound = activity.smsThreads.reduce((s, t) => s + t.inbound, 0);
+  const parsedOutbound = activity.smsThreads.reduce((s, t) => s + t.outbound, 0);
+  // True when some texts have no per-thread link (unparseable counterpart) and
+  // would otherwise be invisible in the events list.
+  const hasUnlinkedTexts =
+    activity.smsInbound > parsedInbound || activity.smsOutbound > parsedOutbound;
+
+  // Common case: every text maps to a thread AND everything fits under the cap
+  // — emit the per-conversation deep links with no redundant index roll-up.
+  if (
+    hasTexts &&
+    !hasUnlinkedTexts &&
+    detail.length + threadLinks.length + chat.length <= DIGEST_EVENT_LINKS_MAX
+  ) {
+    return [...detail, ...threadLinks, ...chat];
+  }
+
+  if (!hasTexts) {
+    // No texts: reserve chat from the cap, fill the rest with non-text detail.
+    const budget = Math.max(0, DIGEST_EVENT_LINKS_MAX - chat.length);
+    return [...detail.slice(0, budget), ...chat];
+  }
+
+  // Texts exist but can't all be shown individually (unparseable counterpart,
+  // or more per-thread links than the cap allows). Guarantee an index roll-up
+  // that covers EVERY text, reserve it and chat from the cap, then fill the
+  // remaining budget with non-text + per-thread detail.
+  const rollup: DigestEventLink = {
+    label: `Texts — ${activity.smsInbound} received, ${activity.smsOutbound} sent`,
+    href: "/dashboard/messages"
+  };
+  const budget = Math.max(0, DIGEST_EVENT_LINKS_MAX - chat.length - 1);
+  const shownDetail = [...detail, ...threadLinks].slice(0, budget);
+  return [...shownDetail, rollup, ...chat];
 }
 
 export type DigestEmailModel = {

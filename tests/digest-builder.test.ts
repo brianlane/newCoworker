@@ -382,6 +382,59 @@ describe("buildDigestEventLinks", () => {
     });
     expect(events).toEqual([{ label: "Texts — 1 received, 0 sent", href: "/dashboard/messages" }]);
   });
+
+  it("adds an index roll-up alongside per-thread links when some texts are unparsed", () => {
+    const events = buildDigestEventLinks({
+      ...emptyActivity(),
+      // 3 inbound counted but only 2 mapped to a thread -> 1 unparsed.
+      smsInbound: 3,
+      smsOutbound: 1,
+      smsThreads: [
+        { counterpart: "+14695555555", inbound: 2, outbound: 1, lastAt: "2026-06-11T12:00:00Z" }
+      ]
+    });
+    expect(events).toEqual([
+      {
+        label: "Texts with +14695555555 — 2 received, 1 sent",
+        href: "/dashboard/messages/%2B14695555555",
+        at: "2026-06-11T12:00:00Z"
+      },
+      { label: "Texts — 3 received, 1 sent", href: "/dashboard/messages" }
+    ]);
+  });
+
+  it("reserves the text roll-up and chat from the cap when detail overflows", () => {
+    const calls = Array.from({ length: DIGEST_EVENT_LINKS_MAX + 5 }, (_, i) => ({
+      caller_e164: `+1555${String(i).padStart(7, "0")}`,
+      status: "completed",
+      started_at: "2026-06-11T10:00:00Z"
+    }));
+    const events = buildDigestEventLinks({
+      ...emptyActivity(),
+      chatTurns: 2,
+      smsInbound: 4,
+      smsOutbound: 0,
+      smsThreads: [
+        { counterpart: "+19998887777", inbound: 4, outbound: 0, lastAt: "2026-06-11T11:00:00Z" }
+      ],
+      calls
+    });
+    expect(events).toHaveLength(DIGEST_EVENT_LINKS_MAX);
+    // Even buried behind 35 calls, the texts and chat are guaranteed a slot.
+    expect(events.at(-1)).toEqual({ label: "Dashboard chat — 2 turns", href: "/dashboard/chat" });
+    expect(events.at(-2)).toEqual({ label: "Texts — 4 received, 0 sent", href: "/dashboard/messages" });
+  });
+
+  it("reserves chat from the cap even when there are no texts", () => {
+    const calls = Array.from({ length: DIGEST_EVENT_LINKS_MAX + 5 }, (_, i) => ({
+      caller_e164: `+1555${String(i).padStart(7, "0")}`,
+      status: "completed",
+      started_at: "2026-06-11T10:00:00Z"
+    }));
+    const events = buildDigestEventLinks({ ...emptyActivity(), chatTurns: 1, calls });
+    expect(events).toHaveLength(DIGEST_EVENT_LINKS_MAX);
+    expect(events.at(-1)).toEqual({ label: "Dashboard chat — 1 turn", href: "/dashboard/chat" });
+  });
 });
 
 describe("digest_builder isRenderableSmsSender", () => {
@@ -442,6 +495,28 @@ describe("digest_builder groupSmsThreads", () => {
     ]);
     expect(threads).toEqual([
       { counterpart: "+1", inbound: 1, outbound: 1, lastAt: "2026-06-11T12:00:00Z" }
+    ]);
+  });
+
+  it("treats threads with identical lastAt as equal in the sort", () => {
+    const threads = groupSmsThreads([
+      { counterpart: "+1", direction: "inbound", at: "2026-06-11T10:00:00Z" },
+      { counterpart: "+2", direction: "inbound", at: "2026-06-11T10:00:00Z" }
+    ]);
+    expect(threads).toEqual([
+      { counterpart: "+1", inbound: 1, outbound: 0, lastAt: "2026-06-11T10:00:00Z" },
+      { counterpart: "+2", inbound: 1, outbound: 0, lastAt: "2026-06-11T10:00:00Z" }
+    ]);
+  });
+
+  it("reorders an earlier-seen thread below a later one (newest first)", () => {
+    const threads = groupSmsThreads([
+      { counterpart: "+1", direction: "inbound", at: "2026-06-11T08:00:00Z" },
+      { counterpart: "+2", direction: "inbound", at: "2026-06-11T10:00:00Z" }
+    ]);
+    expect(threads).toEqual([
+      { counterpart: "+2", inbound: 1, outbound: 0, lastAt: "2026-06-11T10:00:00Z" },
+      { counterpart: "+1", inbound: 1, outbound: 0, lastAt: "2026-06-11T08:00:00Z" }
     ]);
   });
 });

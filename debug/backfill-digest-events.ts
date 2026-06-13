@@ -8,6 +8,15 @@
  */
 import { loadEnv } from "./_shared.ts";
 import { createClient } from "@supabase/supabase-js";
+import {
+  buildDigestEventLinks,
+  groupSmsThreads,
+  isRenderableSmsSender,
+  smsCounterpartFromPayload,
+  type DigestActivity,
+  type DigestEventLink,
+  type DigestSmsMessage
+} from "../supabase/functions/_shared/digest_builder.ts";
 
 loadEnv();
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? "";
@@ -15,34 +24,13 @@ const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
 const db = createClient(url, key);
 const APPLY = process.argv.includes("--apply");
 
-type EventLink = { label: string; href: string; at?: string };
-
-function isRenderableSender(value: string): boolean {
-  return value.startsWith("+") || /^\d{3,8}$/.test(value);
-}
-
-function counterpartFromPayload(payload: unknown): string | null {
-  if (!payload || typeof payload !== "object") return null;
-  const inner = (payload as { data?: { payload?: Record<string, unknown> } }).data?.payload;
-  if (!inner) return null;
-  const from = inner["from"] as { phone_number?: string } | string | undefined;
-  if (typeof from === "string" && isRenderableSender(from)) return from;
-  if (
-    from &&
-    typeof from === "object" &&
-    typeof from.phone_number === "string" &&
-    isRenderableSender(from.phone_number)
-  ) {
-    return from.phone_number;
-  }
-  return null;
-}
-
+// Reuse the live builder so backfilled rows match what the edge function would
+// now write (per-thread deep links + cap/roll-up handling).
 async function buildEvents(
   businessId: string,
   sinceIso: string,
   untilIso: string
-): Promise<EventLink[]> {
+): Promise<DigestEventLink[]> {
   const [chatRes, smsInRes, repliesRes, outLogRes, callsRes, flowsRes, custRes] =
     await Promise.all([
       db
@@ -102,92 +90,46 @@ async function buildEvents(
         .limit(25)
     ]);
 
-  const events: EventLink[] = [];
-  for (const c of (callsRes.data ?? []) as Array<{
-    caller_e164: string | null;
-    status: string;
-    started_at: string;
-  }>) {
-    events.push({
-      label: `Call — ${c.caller_e164 ?? "unknown caller"} (${c.status})`,
-      href: "/dashboard/calls",
-      at: c.started_at
-    });
-  }
-  for (const r of (flowsRes.data ?? []) as Array<{
-    status: string;
-    created_at: string;
-    ai_flows: { name: string } | { name: string }[] | null;
-  }>) {
-    const flow = Array.isArray(r.ai_flows) ? r.ai_flows[0] : r.ai_flows;
-    events.push({
-      label: `AiFlow — ${flow?.name ?? "AiFlow"} (${r.status})`,
-      href: "/dashboard/aiflows",
-      at: r.created_at
-    });
-  }
-  for (const cust of (custRes.data ?? []) as Array<{
-    display_name: string | null;
-    customer_e164: string;
-  }>) {
-    const who = cust.display_name
-      ? `${cust.display_name} (${cust.customer_e164})`
-      : cust.customer_e164;
-    events.push({
-      label: `New customer — ${who}`,
-      href: `/dashboard/customers/${encodeURIComponent(cust.customer_e164)}`
-    });
-  }
-  const threads = new Map<string, { inbound: number; outbound: number; lastAt: string }>();
-  const bump = (cp: string, dir: "inbound" | "outbound", at: string) => {
-    const t = threads.get(cp) ?? { inbound: 0, outbound: 0, lastAt: at };
-    if (dir === "inbound") t.inbound += 1;
-    else t.outbound += 1;
-    if (at > t.lastAt) t.lastAt = at;
-    threads.set(cp, t);
-  };
+  const smsMessages: DigestSmsMessage[] = [];
   let smsInbound = 0;
   let smsOutbound = 0;
   for (const r of (smsInRes.data ?? []) as Array<{ payload: unknown; created_at: string }>) {
     smsInbound += 1;
-    const cp = counterpartFromPayload(r.payload);
-    if (cp) bump(cp, "inbound", r.created_at);
+    const cp = smsCounterpartFromPayload(r.payload);
+    if (cp) smsMessages.push({ counterpart: cp, direction: "inbound", at: r.created_at });
   }
   for (const r of (repliesRes.data ?? []) as Array<{ payload: unknown; updated_at: string }>) {
     smsOutbound += 1;
-    const cp = counterpartFromPayload(r.payload);
-    if (cp) bump(cp, "outbound", r.updated_at);
+    const cp = smsCounterpartFromPayload(r.payload);
+    if (cp) smsMessages.push({ counterpart: cp, direction: "outbound", at: r.updated_at });
   }
   for (const r of (outLogRes.data ?? []) as Array<{ to_e164: string | null; created_at: string }>) {
     smsOutbound += 1;
-    if (r.to_e164 && isRenderableSender(r.to_e164)) bump(r.to_e164, "outbound", r.created_at);
-  }
-  const sortedThreads = Array.from(threads.entries()).sort((a, b) =>
-    a[1].lastAt < b[1].lastAt ? 1 : a[1].lastAt > b[1].lastAt ? -1 : 0
-  );
-  if (sortedThreads.length > 0) {
-    for (const [cp, t] of sortedThreads) {
-      events.push({
-        label: `Texts with ${cp} — ${t.inbound} received, ${t.outbound} sent`,
-        href: `/dashboard/messages/${encodeURIComponent(cp)}`,
-        at: t.lastAt
-      });
+    if (r.to_e164 && isRenderableSmsSender(r.to_e164)) {
+      smsMessages.push({ counterpart: r.to_e164, direction: "outbound", at: r.created_at });
     }
-  } else if (smsInbound > 0 || smsOutbound > 0) {
-    events.push({
-      label: `Texts — ${smsInbound} received, ${smsOutbound} sent`,
-      href: "/dashboard/messages"
-    });
   }
-  const chatTurns = chatRes.count ?? 0;
-  if (chatTurns > 0) {
-    events.push({
-      label: `Dashboard chat — ${chatTurns} turn${chatTurns === 1 ? "" : "s"}`,
-      href: "/dashboard/chat"
-    });
-  }
-  // Mirror DIGEST_EVENT_LINKS_MAX in supabase/functions/_shared/digest_builder.ts.
-  return events.slice(0, 30);
+
+  const activity: DigestActivity = {
+    chatTurns: chatRes.count ?? 0,
+    smsInbound,
+    smsOutbound,
+    smsThreads: groupSmsThreads(smsMessages),
+    calls: (callsRes.data ?? []) as DigestActivity["calls"],
+    aiFlowRuns: ((flowsRes.data ?? []) as Array<{
+      status: string;
+      created_at: string;
+      ai_flows: { name: string } | { name: string }[] | null;
+    }>).map((r) => {
+      const flow = Array.isArray(r.ai_flows) ? r.ai_flows[0] : r.ai_flows;
+      return { flowName: flow?.name ?? "AiFlow", status: r.status, created_at: r.created_at, context: {} };
+    }),
+    newCustomers: (custRes.data ?? []) as DigestActivity["newCustomers"],
+    urgentAlerts: 0,
+    notificationsDelivered: 0
+  };
+
+  return buildDigestEventLinks(activity);
 }
 
 const { data: rows, error } = await db
