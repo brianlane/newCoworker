@@ -43,12 +43,16 @@ import { assertCronAuth } from "../_shared/cron_auth.ts";
 import {
   buildDigestEmailModel,
   buildDigestEventLinks,
+  groupSmsThreads,
   hasDigestActivity,
+  isRenderableSmsSender,
+  smsCounterpartFromPayload,
   windowLabel,
   type DigestActivity,
   type DigestAiFlowRun,
   type DigestCallRow,
   type DigestCustomerRow,
+  type DigestSmsMessage,
   type DigestWindow
 } from "../_shared/digest_builder.ts";
 
@@ -106,13 +110,27 @@ async function fetchActivity(
   businessId: string,
   sinceIso: string
 ): Promise<{ activity: DigestActivity; error: string | null }> {
-  const [chatRes, smsInRes, repliesRes, outLogRes, callsRes, flowsRes, custRes, logRes, notifRes] =
-    await Promise.all([
+  const [
+    chatRes,
+    smsInCountRes,
+    repliesCountRes,
+    outLogCountRes,
+    smsJobRowsRes,
+    outLogRowsRes,
+    callsRes,
+    flowsRes,
+    custRes,
+    logRes,
+    notifRes
+  ] = await Promise.all([
       supa
         .from("dashboard_chat_jobs")
         .select("id", { count: "exact", head: true })
         .eq("business_id", businessId)
         .gte("created_at", sinceIso),
+      // Exact totals (head counts) drive the email subject, summary, roll-up
+      // labels, and hasDigestActivity — these must reflect the FULL window, not
+      // the capped row sets used for per-thread links below.
       supa
         .from("sms_inbound_jobs")
         .select("id", { count: "exact", head: true })
@@ -141,6 +159,26 @@ async function fetchActivity(
         .select("id", { count: "exact", head: true })
         .eq("business_id", businessId)
         .gte("created_at", sinceIso),
+      // Rows for per-conversation deep links. Reading the reply ("sent") side
+      // from the SAME inbound rows as the received side means a thread's
+      // received/sent tallies can never skew against each other (no split
+      // capped queries). Capped well beyond realistic daily/weekly volume;
+      // when exceeded, per-thread DETAIL is best-effort while the exact totals
+      // above and the index roll-up stay authoritative.
+      supa
+        .from("sms_inbound_jobs")
+        .select("payload, created_at, assistant_reply_text, updated_at")
+        .eq("business_id", businessId)
+        .gte("created_at", sinceIso)
+        .order("created_at", { ascending: false })
+        .limit(400),
+      supa
+        .from("sms_outbound_log")
+        .select("to_e164, created_at")
+        .eq("business_id", businessId)
+        .gte("created_at", sinceIso)
+        .order("created_at", { ascending: false })
+        .limit(500),
       supa
         .from("voice_call_transcripts")
         .select("caller_e164, status, started_at")
@@ -178,9 +216,12 @@ async function fetchActivity(
 
   const firstError =
     (chatRes.error && `dashboard_chat_jobs: ${chatRes.error.message}`) ||
-    (smsInRes.error && `sms_inbound_jobs: ${smsInRes.error.message}`) ||
-    (repliesRes.error && `sms_inbound_jobs (replies): ${repliesRes.error.message}`) ||
-    (outLogRes.error && `sms_outbound_log: ${outLogRes.error.message}`) ||
+    (smsInCountRes.error && `sms_inbound_jobs (count): ${smsInCountRes.error.message}`) ||
+    (repliesCountRes.error &&
+      `sms_inbound_jobs (replies count): ${repliesCountRes.error.message}`) ||
+    (outLogCountRes.error && `sms_outbound_log (count): ${outLogCountRes.error.message}`) ||
+    (smsJobRowsRes.error && `sms_inbound_jobs (rows): ${smsJobRowsRes.error.message}`) ||
+    (outLogRowsRes.error && `sms_outbound_log (rows): ${outLogRowsRes.error.message}`) ||
     (callsRes.error && `voice_call_transcripts: ${callsRes.error.message}`) ||
     (flowsRes.error && `ai_flow_runs: ${flowsRes.error.message}`) ||
     (custRes.error && `customer_memories: ${custRes.error.message}`) ||
@@ -188,7 +229,50 @@ async function fetchActivity(
     (notifRes.error && `notifications: ${notifRes.error.message}`) ||
     null;
 
-  const smsOutbound = (repliesRes.count ?? 0) + (outLogRes.count ?? 0);
+  // Exact totals from head counts (full window, uncapped).
+  const smsInbound = smsInCountRes.count ?? 0;
+  const smsOutbound = (repliesCountRes.count ?? 0) + (outLogCountRes.count ?? 0);
+
+  const jobRows = (smsJobRowsRes.data ?? []) as Array<{
+    payload: Record<string, unknown> | null;
+    created_at: string;
+    assistant_reply_text: string | null;
+    updated_at: string;
+  }>;
+  const outLogRows = (outLogRowsRes.data ?? []) as Array<{
+    to_e164: string | null;
+    created_at: string;
+  }>;
+
+  // Build per-conversation threads (best-effort detail capped to the row sets
+  // above). Each inbound job is the customer's received text; if that same job
+  // carries an assistant reply it is also one sent text to the same customer —
+  // reading both sides off the one row keeps a thread's tallies self-consistent.
+  // The reply is only counted as "sent" when its updated_at falls in the digest
+  // window, matching the authoritative smsOutbound head count (a job received
+  // in-window but answered later must not inflate the thread's sent tally).
+  // Worker-initiated sends come from sms_outbound_log.to_e164.
+  const sinceMs = Date.parse(sinceIso);
+  const smsMessages: DigestSmsMessage[] = [];
+  for (const r of jobRows) {
+    const cp = smsCounterpartFromPayload(r.payload);
+    if (!cp) continue;
+    smsMessages.push({ counterpart: cp, direction: "inbound", at: r.created_at });
+    if (
+      typeof r.assistant_reply_text === "string" &&
+      r.assistant_reply_text.length > 0 &&
+      Date.parse(r.updated_at) >= sinceMs
+    ) {
+      smsMessages.push({ counterpart: cp, direction: "outbound", at: r.updated_at });
+    }
+  }
+  for (const r of outLogRows) {
+    const cp = r.to_e164;
+    if (cp && isRenderableSmsSender(cp)) {
+      smsMessages.push({ counterpart: cp, direction: "outbound", at: r.created_at });
+    }
+  }
+  const smsThreads = groupSmsThreads(smsMessages);
 
   const aiFlowRuns: DigestAiFlowRun[] = (
     (flowsRes.data ?? []) as Array<{
@@ -209,8 +293,9 @@ async function fetchActivity(
 
   const activity: DigestActivity = {
     chatTurns: chatRes.count ?? 0,
-    smsInbound: smsInRes.count ?? 0,
+    smsInbound,
     smsOutbound,
+    smsThreads,
     calls: (callsRes.data ?? []) as DigestCallRow[],
     aiFlowRuns,
     newCustomers: (custRes.data ?? []) as DigestCustomerRow[],

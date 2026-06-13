@@ -33,6 +33,16 @@ export type DigestCustomerRow = {
   customer_e164: string;
 };
 
+/** One customer texting conversation rolled up for the window. */
+export type DigestSmsThread = {
+  /** Customer-side phone (E.164) or short code. */
+  counterpart: string;
+  inbound: number;
+  outbound: number;
+  /** Most recent message timestamp in the thread (ISO). */
+  lastAt: string;
+};
+
 export type DigestActivity = {
   /** Dashboard chat turns (dashboard_chat_jobs rows in window). */
   chatTurns: number;
@@ -40,6 +50,13 @@ export type DigestActivity = {
   smsInbound: number;
   /** Outbound texts (sum of daily_usage.sms_sent over the window dates). */
   smsOutbound: number;
+  /**
+   * Per-customer texting conversations in the window, so the dashboard can
+   * deep-link each text event straight into its thread instead of the
+   * messages index. Empty when no counterpart could be parsed (the event
+   * builder then falls back to a single index roll-up).
+   */
+  smsThreads: DigestSmsThread[];
   calls: DigestCallRow[];
   aiFlowRuns: DigestAiFlowRun[];
   newCustomers: DigestCustomerRow[];
@@ -48,6 +65,73 @@ export type DigestActivity = {
   /** notifications rows with status=sent in window. */
   notificationsDelivered: number;
 };
+
+/** A single text message reduced to what the thread grouping needs. */
+export type DigestSmsMessage = {
+  counterpart: string;
+  direction: "inbound" | "outbound";
+  /** ISO timestamp. */
+  at: string;
+};
+
+/**
+ * A renderable customer phone: full E.164 (`+1…`) or a bare 3–8 digit short
+ * code (lead sources like ReferralExchange text from short codes). Mirrors
+ * `isRenderableSender` in src/lib/db/sms-history.ts; duplicated because the
+ * Edge runtime cannot import from src/.
+ */
+export function isRenderableSmsSender(value: string): boolean {
+  return value.startsWith("+") || /^\d{3,8}$/.test(value);
+}
+
+/**
+ * Pluck the customer-side phone from a Telnyx inbound webhook envelope
+ * (`{ data: { payload: { from } } }`). Returns null for unrecognized shapes.
+ * Mirrors `customerE164FromPayload` in src/lib/db/sms-history.ts.
+ */
+export function smsCounterpartFromPayload(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const data = (payload as { data?: { payload?: Record<string, unknown> } }).data;
+  const inner = data?.payload;
+  if (!inner) return null;
+  const from = inner["from"] as { phone_number?: string } | string | undefined;
+  if (typeof from === "string" && isRenderableSmsSender(from)) return from;
+  if (
+    from &&
+    typeof from === "object" &&
+    typeof from.phone_number === "string" &&
+    isRenderableSmsSender(from.phone_number)
+  ) {
+    return from.phone_number;
+  }
+  return null;
+}
+
+/**
+ * Group individual text messages into per-counterpart threads, most-recent
+ * activity first. Pure so it can be unit-tested without the Edge runtime.
+ */
+export function groupSmsThreads(messages: DigestSmsMessage[]): DigestSmsThread[] {
+  const byCounterpart = new Map<string, DigestSmsThread>();
+  for (const m of messages) {
+    const existing = byCounterpart.get(m.counterpart);
+    if (existing) {
+      if (m.direction === "inbound") existing.inbound += 1;
+      else existing.outbound += 1;
+      if (m.at > existing.lastAt) existing.lastAt = m.at;
+    } else {
+      byCounterpart.set(m.counterpart, {
+        counterpart: m.counterpart,
+        inbound: m.direction === "inbound" ? 1 : 0,
+        outbound: m.direction === "outbound" ? 1 : 0,
+        lastAt: m.at
+      });
+    }
+  }
+  return Array.from(byCounterpart.values()).sort((a, b) =>
+    a.lastAt < b.lastAt ? 1 : a.lastAt > b.lastAt ? -1 : 0
+  );
+}
 
 export const AI_FLOW_RECAP_MAX_RUNS = 10;
 const ACTIONS_TAKEN_MAX_CHARS = 220;
@@ -156,16 +240,19 @@ export const DIGEST_EVENT_LINKS_MAX = 30;
  * actual events it counted, each linking to the relevant page.
  */
 export function buildDigestEventLinks(activity: DigestActivity): DigestEventLink[] {
-  const events: DigestEventLink[] = [];
+  // Non-text detail (calls, AiFlows, new customers) plus per-conversation text
+  // deep links. These fill whatever budget is left after the guaranteed
+  // summary events below.
+  const detail: DigestEventLink[] = [];
   for (const c of activity.calls) {
-    events.push({
+    detail.push({
       label: `Call — ${c.caller_e164 ?? "unknown caller"} (${c.status})`,
       href: "/dashboard/calls",
       at: c.started_at
     });
   }
   for (const r of activity.aiFlowRuns) {
-    events.push({
+    detail.push({
       label: `AiFlow — ${r.flowName} (${r.status})`,
       href: "/dashboard/aiflows",
       at: r.created_at
@@ -175,24 +262,63 @@ export function buildDigestEventLinks(activity: DigestActivity): DigestEventLink
     const who = cust.display_name
       ? `${cust.display_name} (${cust.customer_e164})`
       : cust.customer_e164;
-    events.push({
+    detail.push({
       label: `New customer — ${who}`,
       href: `/dashboard/customers/${encodeURIComponent(cust.customer_e164)}`
     });
   }
-  if (activity.smsInbound > 0 || activity.smsOutbound > 0) {
-    events.push({
-      label: `Texts — ${activity.smsInbound} received, ${activity.smsOutbound} sent`,
-      href: "/dashboard/messages"
-    });
-  }
+  // One clickable event per conversation, deep-linked to that thread so the
+  // owner sees the actual texts (the "log") instead of the messages index.
+  const threadLinks: DigestEventLink[] = activity.smsThreads.map((t) => ({
+    label: `Texts with ${t.counterpart} — ${t.inbound} received, ${t.outbound} sent`,
+    href: `/dashboard/messages/${encodeURIComponent(t.counterpart)}`,
+    at: t.lastAt
+  }));
+
+  // Chat is always shown when present (reserved from the cap below).
+  const chat: DigestEventLink[] = [];
   if (activity.chatTurns > 0) {
-    events.push({
+    chat.push({
       label: `Dashboard chat — ${activity.chatTurns} turn${activity.chatTurns === 1 ? "" : "s"}`,
       href: "/dashboard/chat"
     });
   }
-  return events.slice(0, DIGEST_EVENT_LINKS_MAX);
+
+  const hasTexts = activity.smsInbound > 0 || activity.smsOutbound > 0;
+  const parsedInbound = activity.smsThreads.reduce((s, t) => s + t.inbound, 0);
+  const parsedOutbound = activity.smsThreads.reduce((s, t) => s + t.outbound, 0);
+  // True when some texts have no per-thread link (unparseable counterpart) and
+  // would otherwise be invisible in the events list.
+  const hasUnlinkedTexts =
+    activity.smsInbound > parsedInbound || activity.smsOutbound > parsedOutbound;
+
+  // Common case: every text maps to a thread AND everything fits under the cap
+  // — emit the per-conversation deep links with no redundant index roll-up.
+  if (
+    hasTexts &&
+    !hasUnlinkedTexts &&
+    detail.length + threadLinks.length + chat.length <= DIGEST_EVENT_LINKS_MAX
+  ) {
+    return [...detail, ...threadLinks, ...chat];
+  }
+
+  if (!hasTexts) {
+    // No texts: reserve chat from the cap, fill the rest with non-text detail.
+    const budget = Math.max(0, DIGEST_EVENT_LINKS_MAX - chat.length);
+    return [...detail.slice(0, budget), ...chat];
+  }
+
+  // Texts exist but can't all be shown individually (unparseable counterpart,
+  // or more per-thread links than the cap allows). Guarantee an index roll-up
+  // that covers EVERY text, reserve it and chat from the cap, then fill the
+  // remaining budget with non-text + per-thread detail.
+  const rollup: DigestEventLink = {
+    label: `Texts — ${activity.smsInbound} received, ${activity.smsOutbound} sent`,
+    href: "/dashboard/messages"
+  };
+  const budget = Math.max(0, DIGEST_EVENT_LINKS_MAX - chat.length - 1);
+  const shownDetail = [...detail, ...threadLinks].slice(0, budget);
+  return [...shownDetail, rollup, ...chat];
 }
 
 export type DigestEmailModel = {

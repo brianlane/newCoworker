@@ -8,6 +8,15 @@
  */
 import { loadEnv } from "./_shared.ts";
 import { createClient } from "@supabase/supabase-js";
+import {
+  buildDigestEventLinks,
+  groupSmsThreads,
+  isRenderableSmsSender,
+  smsCounterpartFromPayload,
+  type DigestActivity,
+  type DigestEventLink,
+  type DigestSmsMessage
+} from "../supabase/functions/_shared/digest_builder.ts";
 
 loadEnv();
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? "";
@@ -15,21 +24,31 @@ const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
 const db = createClient(url, key);
 const APPLY = process.argv.includes("--apply");
 
-type EventLink = { label: string; href: string; at?: string };
-
+// Reuse the live builder so backfilled rows match what the edge function would
+// now write (per-thread deep links + cap/roll-up handling).
 async function buildEvents(
   businessId: string,
   sinceIso: string,
   untilIso: string
-): Promise<EventLink[]> {
-  const [chatRes, smsInRes, repliesRes, outLogRes, callsRes, flowsRes, custRes] =
-    await Promise.all([
+): Promise<DigestEventLink[]> {
+  const [
+    chatRes,
+    smsInCountRes,
+    repliesCountRes,
+    outLogCountRes,
+    smsJobRowsRes,
+    outLogRowsRes,
+    callsRes,
+    flowsRes,
+    custRes
+  ] = await Promise.all([
       db
         .from("dashboard_chat_jobs")
         .select("id", { count: "exact", head: true })
         .eq("business_id", businessId)
         .gte("created_at", sinceIso)
         .lt("created_at", untilIso),
+      // Exact totals (head counts) — mirror the live function.
       db
         .from("sms_inbound_jobs")
         .select("id", { count: "exact", head: true })
@@ -49,6 +68,24 @@ async function buildEvents(
         .eq("business_id", businessId)
         .gte("created_at", sinceIso)
         .lt("created_at", untilIso),
+      // Rows for per-thread detail; reply side read off the same row as the
+      // received side (no split-query skew).
+      db
+        .from("sms_inbound_jobs")
+        .select("payload, created_at, assistant_reply_text, updated_at")
+        .eq("business_id", businessId)
+        .gte("created_at", sinceIso)
+        .lt("created_at", untilIso)
+        .order("created_at", { ascending: false })
+        .limit(400),
+      db
+        .from("sms_outbound_log")
+        .select("to_e164, created_at")
+        .eq("business_id", businessId)
+        .gte("created_at", sinceIso)
+        .lt("created_at", untilIso)
+        .order("created_at", { ascending: false })
+        .limit(500),
       db
         .from("voice_call_transcripts")
         .select("caller_e164, status, started_at")
@@ -75,59 +112,59 @@ async function buildEvents(
         .limit(25)
     ]);
 
-  const events: EventLink[] = [];
-  for (const c of (callsRes.data ?? []) as Array<{
-    caller_e164: string | null;
-    status: string;
-    started_at: string;
-  }>) {
-    events.push({
-      label: `Call — ${c.caller_e164 ?? "unknown caller"} (${c.status})`,
-      href: "/dashboard/calls",
-      at: c.started_at
-    });
-  }
-  for (const r of (flowsRes.data ?? []) as Array<{
-    status: string;
+  const sinceMs = Date.parse(sinceIso);
+  const untilMs = Date.parse(untilIso);
+  const smsMessages: DigestSmsMessage[] = [];
+  for (const r of (smsJobRowsRes.data ?? []) as Array<{
+    payload: unknown;
     created_at: string;
-    ai_flows: { name: string } | { name: string }[] | null;
+    assistant_reply_text: string | null;
+    updated_at: string;
   }>) {
-    const flow = Array.isArray(r.ai_flows) ? r.ai_flows[0] : r.ai_flows;
-    events.push({
-      label: `AiFlow — ${flow?.name ?? "AiFlow"} (${r.status})`,
-      href: "/dashboard/aiflows",
-      at: r.created_at
-    });
+    const cp = smsCounterpartFromPayload(r.payload);
+    if (!cp) continue;
+    smsMessages.push({ counterpart: cp, direction: "inbound", at: r.created_at });
+    // Only count the reply when its updated_at is inside the window, matching
+    // the authoritative smsOutbound head count.
+    const replyAtMs = Date.parse(r.updated_at);
+    if (
+      typeof r.assistant_reply_text === "string" &&
+      r.assistant_reply_text.length > 0 &&
+      replyAtMs >= sinceMs &&
+      replyAtMs < untilMs
+    ) {
+      smsMessages.push({ counterpart: cp, direction: "outbound", at: r.updated_at });
+    }
   }
-  for (const cust of (custRes.data ?? []) as Array<{
-    display_name: string | null;
-    customer_e164: string;
+  for (const r of (outLogRowsRes.data ?? []) as Array<{
+    to_e164: string | null;
+    created_at: string;
   }>) {
-    const who = cust.display_name
-      ? `${cust.display_name} (${cust.customer_e164})`
-      : cust.customer_e164;
-    events.push({
-      label: `New customer — ${who}`,
-      href: `/dashboard/customers/${encodeURIComponent(cust.customer_e164)}`
-    });
+    if (r.to_e164 && isRenderableSmsSender(r.to_e164)) {
+      smsMessages.push({ counterpart: r.to_e164, direction: "outbound", at: r.created_at });
+    }
   }
-  const smsInbound = smsInRes.count ?? 0;
-  const smsOutbound = (repliesRes.count ?? 0) + (outLogRes.count ?? 0);
-  if (smsInbound > 0 || smsOutbound > 0) {
-    events.push({
-      label: `Texts — ${smsInbound} received, ${smsOutbound} sent`,
-      href: "/dashboard/messages"
-    });
-  }
-  const chatTurns = chatRes.count ?? 0;
-  if (chatTurns > 0) {
-    events.push({
-      label: `Dashboard chat — ${chatTurns} turn${chatTurns === 1 ? "" : "s"}`,
-      href: "/dashboard/chat"
-    });
-  }
-  // Mirror DIGEST_EVENT_LINKS_MAX in supabase/functions/_shared/digest_builder.ts.
-  return events.slice(0, 30);
+
+  const activity: DigestActivity = {
+    chatTurns: chatRes.count ?? 0,
+    smsInbound: smsInCountRes.count ?? 0,
+    smsOutbound: (repliesCountRes.count ?? 0) + (outLogCountRes.count ?? 0),
+    smsThreads: groupSmsThreads(smsMessages),
+    calls: (callsRes.data ?? []) as DigestActivity["calls"],
+    aiFlowRuns: ((flowsRes.data ?? []) as Array<{
+      status: string;
+      created_at: string;
+      ai_flows: { name: string } | { name: string }[] | null;
+    }>).map((r) => {
+      const flow = Array.isArray(r.ai_flows) ? r.ai_flows[0] : r.ai_flows;
+      return { flowName: flow?.name ?? "AiFlow", status: r.status, created_at: r.created_at, context: {} };
+    }),
+    newCustomers: (custRes.data ?? []) as DigestActivity["newCustomers"],
+    urgentAlerts: 0,
+    notificationsDelivered: 0
+  };
+
+  return buildDigestEventLinks(activity);
 }
 
 const { data: rows, error } = await db
