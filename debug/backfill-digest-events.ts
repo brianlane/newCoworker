@@ -126,7 +126,8 @@ async function buildEvents(
       href: "/dashboard/chat"
     });
   }
-  return events.slice(0, 20);
+  // Mirror DIGEST_EVENT_LINKS_MAX in supabase/functions/_shared/digest_builder.ts.
+  return events.slice(0, 30);
 }
 
 const { data: rows, error } = await db
