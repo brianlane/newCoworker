@@ -9,7 +9,8 @@ import {
   EMAIL_LOG_DEFAULT_LIMIT,
   EMAIL_LOG_MAX_LIMIT,
   listEmailLog,
-  recordInboundTriggerEmail
+  recordInboundTriggerEmail,
+  recordOutboundAssistantEmail
 } from "@/lib/db/email-log";
 
 function listChain(result: { data: unknown; error: { message: string } | null }) {
@@ -124,5 +125,76 @@ describe("recordInboundTriggerEmail", () => {
     defaultClientSpy.mockResolvedValueOnce({ from: vi.fn(() => ({ insert })) });
     await recordInboundTriggerEmail(input);
     expect(insert).toHaveBeenCalled();
+  });
+});
+
+describe("recordOutboundAssistantEmail", () => {
+  const input = {
+    businessId: "biz",
+    toEmail: "lead@example.com",
+    subject: "Following up",
+    bodyText: "y".repeat(600),
+    source: "dashboard_chat" as const,
+    providerMessageId: "gm-1"
+  };
+
+  it("inserts an outbound row with a capped body preview and the surface source", async () => {
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    const db = { from: vi.fn(() => ({ insert })) };
+    await recordOutboundAssistantEmail(input, db as never);
+    expect(db.from).toHaveBeenCalledWith("email_log");
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        business_id: "biz",
+        direction: "outbound",
+        source: "dashboard_chat",
+        to_email: "lead@example.com",
+        from_email: null,
+        subject: "Following up",
+        body_preview: "y".repeat(500),
+        run_id: null,
+        flow_id: null,
+        provider_message_id: "gm-1"
+      })
+    );
+  });
+
+  it("defaults a missing providerMessageId to null", async () => {
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    const db = { from: vi.fn(() => ({ insert })) };
+    await recordOutboundAssistantEmail(
+      { ...input, source: "sms_assistant", providerMessageId: undefined },
+      db as never
+    );
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "sms_assistant", provider_message_id: null })
+    );
+  });
+
+  it("only logs on insert error (best-effort)", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const insert = vi.fn().mockResolvedValue({ error: { message: "down" } });
+    const db = { from: vi.fn(() => ({ insert })) };
+    await expect(recordOutboundAssistantEmail(input, db as never)).resolves.toBeUndefined();
+    expect(errSpy).toHaveBeenCalledWith("recordOutboundAssistantEmail", "down");
+    errSpy.mockRestore();
+  });
+
+  it("uses the default service client when none is injected", async () => {
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    defaultClientSpy.mockResolvedValueOnce({ from: vi.fn(() => ({ insert })) });
+    await recordOutboundAssistantEmail(input);
+    expect(insert).toHaveBeenCalled();
+  });
+
+  it("never throws, even when the client cannot be created", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    defaultClientSpy.mockRejectedValueOnce(new Error("no env"));
+    await expect(recordOutboundAssistantEmail(input)).resolves.toBeUndefined();
+    expect(errSpy).toHaveBeenCalledWith("recordOutboundAssistantEmail", "no env");
+    defaultClientSpy.mockRejectedValueOnce("weird");
+    await expect(recordOutboundAssistantEmail(input)).resolves.toBeUndefined();
+    expect(errSpy).toHaveBeenCalledWith("recordOutboundAssistantEmail", "weird");
+    errSpy.mockRestore();
   });
 });

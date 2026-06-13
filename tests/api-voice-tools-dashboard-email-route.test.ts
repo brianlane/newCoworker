@@ -16,10 +16,15 @@ vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
 
+vi.mock("@/lib/db/email-log", () => ({
+  recordOutboundAssistantEmail: vi.fn()
+}));
+
 import { POST } from "@/app/api/voice/tools/dashboard-email/route";
 import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
+import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 
 const businessId = "11111111-1111-4111-8111-111111111111";
 const validArgs = { toEmail: "lead@example.com", subject: "Hello", bodyText: "Hi" };
@@ -89,12 +94,21 @@ describe("POST /api/voice/tools/dashboard-email", () => {
       subject: "Hello",
       bodyText: "Hi"
     });
+    expect(vi.mocked(recordOutboundAssistantEmail)).toHaveBeenCalledWith({
+      businessId,
+      toEmail: "lead@example.com",
+      subject: "Hello",
+      bodyText: "Hi",
+      source: "dashboard_chat",
+      providerMessageId: null
+    });
   });
 
   it("forwards email_not_connected from the mailbox layer", async () => {
     vi.mocked(sendFromOwnerMailbox).mockResolvedValue({ ok: false, detail: "email_not_connected" });
     const res = await POST(makeRequest({ businessId, args: validArgs }));
     expect(await res.json()).toEqual({ ok: false, detail: "email_not_connected" });
+    expect(vi.mocked(recordOutboundAssistantEmail)).not.toHaveBeenCalled();
   });
 
   it("returns email_send_failed (500) on provider errors", async () => {

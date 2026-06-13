@@ -19,6 +19,9 @@ export const dynamic = "force-dynamic";
 function sourceLabel(row: EmailLogRow): string {
   if (row.source === "email_trigger") return "Trigger";
   if (row.source === "owner_mailbox") return "Sent as you";
+  if (row.source === "dashboard_chat") return "Chat";
+  if (row.source === "sms_assistant") return "Texts";
+  if (row.source === "voice_assistant") return "Call";
   return "AiFlow";
 }
 
@@ -72,9 +75,11 @@ export default async function DashboardEmailsPage() {
 
       <Card padding="sm" className="border-signal-teal/30 bg-signal-teal/5">
         <p className="text-xs text-parchment/70 leading-relaxed">
-          Emails your AiFlows send (from the platform or your connected
-          mailbox) and the inbound emails that trigger them are recorded here
-          so you can review them later.
+          Every email your coworker handles is recorded here: AiFlow sends
+          (from the platform or your connected mailbox), the inbound emails
+          that trigger flows, and emails the assistant sends from dashboard
+          chat, texting, or phone calls. Digest and alert emails we send you
+          are tracked on the Notifications page instead.
         </p>
       </Card>
 

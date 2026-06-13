@@ -7,6 +7,7 @@ import {
 } from "@/lib/voice-tools/common";
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
+import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 import { logger } from "@/lib/logger";
 
 /**
@@ -62,6 +63,14 @@ export async function POST(request: Request) {
     if (!result.ok) {
       return voiceToolResponse({ ok: false, detail: result.detail });
     }
+    await recordOutboundAssistantEmail({
+      businessId: envelope.businessId,
+      toEmail: args.toEmail,
+      subject: args.subject,
+      bodyText: args.bodyText,
+      source: "voice_assistant",
+      providerMessageId: result.messageId
+    });
     return voiceToolResponse({
       ok: true,
       data: { messageId: result.messageId, provider: result.provider }

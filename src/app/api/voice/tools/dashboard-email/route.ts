@@ -28,6 +28,7 @@ import {
 } from "@/lib/voice-tools/common";
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
+import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 import { logger } from "@/lib/logger";
 
 const argsSchema = z.object({
@@ -74,6 +75,14 @@ export async function POST(request: Request) {
       return voiceToolResponse({ ok: false, detail: result.detail });
     }
 
+    await recordOutboundAssistantEmail({
+      businessId: envelope.businessId,
+      toEmail: args.toEmail,
+      subject: args.subject,
+      bodyText: args.bodyText,
+      source: "dashboard_chat",
+      providerMessageId: result.messageId
+    });
     logger.info("voice-tools/dashboard-email: sent", {
       businessId: envelope.businessId,
       provider: result.provider
