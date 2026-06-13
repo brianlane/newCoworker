@@ -31,31 +31,53 @@ async function buildEvents(
   sinceIso: string,
   untilIso: string
 ): Promise<DigestEventLink[]> {
-  const [chatRes, smsInRes, repliesRes, outLogRes, callsRes, flowsRes, custRes] =
-    await Promise.all([
+  const [
+    chatRes,
+    smsInCountRes,
+    repliesCountRes,
+    outLogCountRes,
+    smsJobRowsRes,
+    outLogRowsRes,
+    callsRes,
+    flowsRes,
+    custRes
+  ] = await Promise.all([
       db
         .from("dashboard_chat_jobs")
         .select("id", { count: "exact", head: true })
         .eq("business_id", businessId)
         .gte("created_at", sinceIso)
         .lt("created_at", untilIso),
+      // Exact totals (head counts) — mirror the live function.
       db
         .from("sms_inbound_jobs")
-        .select("payload, created_at")
+        .select("id", { count: "exact", head: true })
+        .eq("business_id", businessId)
+        .gte("created_at", sinceIso)
+        .lt("created_at", untilIso),
+      db
+        .from("sms_inbound_jobs")
+        .select("id", { count: "exact", head: true })
+        .eq("business_id", businessId)
+        .not("assistant_reply_text", "is", null)
+        .gte("updated_at", sinceIso)
+        .lt("updated_at", untilIso),
+      db
+        .from("sms_outbound_log")
+        .select("id", { count: "exact", head: true })
+        .eq("business_id", businessId)
+        .gte("created_at", sinceIso)
+        .lt("created_at", untilIso),
+      // Rows for per-thread detail; reply side read off the same row as the
+      // received side (no split-query skew).
+      db
+        .from("sms_inbound_jobs")
+        .select("payload, created_at, assistant_reply_text, updated_at")
         .eq("business_id", businessId)
         .gte("created_at", sinceIso)
         .lt("created_at", untilIso)
         .order("created_at", { ascending: false })
-        .limit(300),
-      db
-        .from("sms_inbound_jobs")
-        .select("payload, updated_at")
-        .eq("business_id", businessId)
-        .not("assistant_reply_text", "is", null)
-        .gte("updated_at", sinceIso)
-        .lt("updated_at", untilIso)
-        .order("updated_at", { ascending: false })
-        .limit(300),
+        .limit(400),
       db
         .from("sms_outbound_log")
         .select("to_e164, created_at")
@@ -91,20 +113,23 @@ async function buildEvents(
     ]);
 
   const smsMessages: DigestSmsMessage[] = [];
-  let smsInbound = 0;
-  let smsOutbound = 0;
-  for (const r of (smsInRes.data ?? []) as Array<{ payload: unknown; created_at: string }>) {
-    smsInbound += 1;
+  for (const r of (smsJobRowsRes.data ?? []) as Array<{
+    payload: unknown;
+    created_at: string;
+    assistant_reply_text: string | null;
+    updated_at: string;
+  }>) {
     const cp = smsCounterpartFromPayload(r.payload);
-    if (cp) smsMessages.push({ counterpart: cp, direction: "inbound", at: r.created_at });
+    if (!cp) continue;
+    smsMessages.push({ counterpart: cp, direction: "inbound", at: r.created_at });
+    if (typeof r.assistant_reply_text === "string" && r.assistant_reply_text.length > 0) {
+      smsMessages.push({ counterpart: cp, direction: "outbound", at: r.updated_at });
+    }
   }
-  for (const r of (repliesRes.data ?? []) as Array<{ payload: unknown; updated_at: string }>) {
-    smsOutbound += 1;
-    const cp = smsCounterpartFromPayload(r.payload);
-    if (cp) smsMessages.push({ counterpart: cp, direction: "outbound", at: r.updated_at });
-  }
-  for (const r of (outLogRes.data ?? []) as Array<{ to_e164: string | null; created_at: string }>) {
-    smsOutbound += 1;
+  for (const r of (outLogRowsRes.data ?? []) as Array<{
+    to_e164: string | null;
+    created_at: string;
+  }>) {
     if (r.to_e164 && isRenderableSmsSender(r.to_e164)) {
       smsMessages.push({ counterpart: r.to_e164, direction: "outbound", at: r.created_at });
     }
@@ -112,8 +137,8 @@ async function buildEvents(
 
   const activity: DigestActivity = {
     chatTurns: chatRes.count ?? 0,
-    smsInbound,
-    smsOutbound,
+    smsInbound: smsInCountRes.count ?? 0,
+    smsOutbound: (repliesCountRes.count ?? 0) + (outLogCountRes.count ?? 0),
     smsThreads: groupSmsThreads(smsMessages),
     calls: (callsRes.data ?? []) as DigestActivity["calls"],
     aiFlowRuns: ((flowsRes.data ?? []) as Array<{

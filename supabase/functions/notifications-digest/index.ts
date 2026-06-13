@@ -110,24 +110,32 @@ async function fetchActivity(
   businessId: string,
   sinceIso: string
 ): Promise<{ activity: DigestActivity; error: string | null }> {
-  const [chatRes, smsInRes, repliesRes, outLogRes, callsRes, flowsRes, custRes, logRes, notifRes] =
-    await Promise.all([
+  const [
+    chatRes,
+    smsInCountRes,
+    repliesCountRes,
+    outLogCountRes,
+    smsJobRowsRes,
+    outLogRowsRes,
+    callsRes,
+    flowsRes,
+    custRes,
+    logRes,
+    notifRes
+  ] = await Promise.all([
       supa
         .from("dashboard_chat_jobs")
         .select("id", { count: "exact", head: true })
         .eq("business_id", businessId)
         .gte("created_at", sinceIso),
-      // Pull the actual rows (not just a count) so each text can deep-link to
-      // its conversation thread. Capped generously — well beyond any realistic
-      // daily/weekly volume — and the counts below derive from these rows so
-      // the per-thread links always agree with the summary count.
+      // Exact totals (head counts) drive the email subject, summary, roll-up
+      // labels, and hasDigestActivity — these must reflect the FULL window, not
+      // the capped row sets used for per-thread links below.
       supa
         .from("sms_inbound_jobs")
-        .select("payload, created_at")
+        .select("id", { count: "exact", head: true })
         .eq("business_id", businessId)
-        .gte("created_at", sinceIso)
-        .order("created_at", { ascending: false })
-        .limit(300),
+        .gte("created_at", sinceIso),
       // Outbound = coworker replies + worker-initiated sends
       // (sms_outbound_log). Both filter on real timestamps, unlike the
       // previous daily_usage.sms_sent sum whose calendar-day usage_date
@@ -142,12 +150,28 @@ async function fetchActivity(
       // but answered inside it.
       supa
         .from("sms_inbound_jobs")
-        .select("payload, updated_at")
+        .select("id", { count: "exact", head: true })
         .eq("business_id", businessId)
         .not("assistant_reply_text", "is", null)
-        .gte("updated_at", sinceIso)
-        .order("updated_at", { ascending: false })
-        .limit(300),
+        .gte("updated_at", sinceIso),
+      supa
+        .from("sms_outbound_log")
+        .select("id", { count: "exact", head: true })
+        .eq("business_id", businessId)
+        .gte("created_at", sinceIso),
+      // Rows for per-conversation deep links. Reading the reply ("sent") side
+      // from the SAME inbound rows as the received side means a thread's
+      // received/sent tallies can never skew against each other (no split
+      // capped queries). Capped well beyond realistic daily/weekly volume;
+      // when exceeded, per-thread DETAIL is best-effort while the exact totals
+      // above and the index roll-up stay authoritative.
+      supa
+        .from("sms_inbound_jobs")
+        .select("payload, created_at, assistant_reply_text, updated_at")
+        .eq("business_id", businessId)
+        .gte("created_at", sinceIso)
+        .order("created_at", { ascending: false })
+        .limit(400),
       supa
         .from("sms_outbound_log")
         .select("to_e164, created_at")
@@ -192,9 +216,12 @@ async function fetchActivity(
 
   const firstError =
     (chatRes.error && `dashboard_chat_jobs: ${chatRes.error.message}`) ||
-    (smsInRes.error && `sms_inbound_jobs: ${smsInRes.error.message}`) ||
-    (repliesRes.error && `sms_inbound_jobs (replies): ${repliesRes.error.message}`) ||
-    (outLogRes.error && `sms_outbound_log: ${outLogRes.error.message}`) ||
+    (smsInCountRes.error && `sms_inbound_jobs (count): ${smsInCountRes.error.message}`) ||
+    (repliesCountRes.error &&
+      `sms_inbound_jobs (replies count): ${repliesCountRes.error.message}`) ||
+    (outLogCountRes.error && `sms_outbound_log (count): ${outLogCountRes.error.message}`) ||
+    (smsJobRowsRes.error && `sms_inbound_jobs (rows): ${smsJobRowsRes.error.message}`) ||
+    (outLogRowsRes.error && `sms_outbound_log (rows): ${outLogRowsRes.error.message}`) ||
     (callsRes.error && `voice_call_transcripts: ${callsRes.error.message}`) ||
     (flowsRes.error && `ai_flow_runs: ${flowsRes.error.message}`) ||
     (custRes.error && `customer_memories: ${custRes.error.message}`) ||
@@ -202,33 +229,34 @@ async function fetchActivity(
     (notifRes.error && `notifications: ${notifRes.error.message}`) ||
     null;
 
-  const inboundRows = (smsInRes.data ?? []) as Array<{
+  // Exact totals from head counts (full window, uncapped).
+  const smsInbound = smsInCountRes.count ?? 0;
+  const smsOutbound = (repliesCountRes.count ?? 0) + (outLogCountRes.count ?? 0);
+
+  const jobRows = (smsJobRowsRes.data ?? []) as Array<{
     payload: Record<string, unknown> | null;
     created_at: string;
-  }>;
-  const replyRows = (repliesRes.data ?? []) as Array<{
-    payload: Record<string, unknown> | null;
+    assistant_reply_text: string | null;
     updated_at: string;
   }>;
-  const outLogRows = (outLogRes.data ?? []) as Array<{
+  const outLogRows = (outLogRowsRes.data ?? []) as Array<{
     to_e164: string | null;
     created_at: string;
   }>;
 
-  const smsInbound = inboundRows.length;
-  const smsOutbound = replyRows.length + outLogRows.length;
-
-  // Build per-conversation threads. Inbound jobs carry the customer in the
-  // Telnyx envelope (`from`); a reply rides the same inbound row (outbound to
-  // that same customer); worker sends use sms_outbound_log.to_e164.
+  // Build per-conversation threads (best-effort detail capped to the row sets
+  // above). Each inbound job is the customer's received text; if that same job
+  // carries an assistant reply it is also one sent text to the same customer —
+  // reading both sides off the one row keeps a thread's tallies self-consistent.
+  // Worker-initiated sends come from sms_outbound_log.to_e164.
   const smsMessages: DigestSmsMessage[] = [];
-  for (const r of inboundRows) {
+  for (const r of jobRows) {
     const cp = smsCounterpartFromPayload(r.payload);
-    if (cp) smsMessages.push({ counterpart: cp, direction: "inbound", at: r.created_at });
-  }
-  for (const r of replyRows) {
-    const cp = smsCounterpartFromPayload(r.payload);
-    if (cp) smsMessages.push({ counterpart: cp, direction: "outbound", at: r.updated_at });
+    if (!cp) continue;
+    smsMessages.push({ counterpart: cp, direction: "inbound", at: r.created_at });
+    if (typeof r.assistant_reply_text === "string" && r.assistant_reply_text.length > 0) {
+      smsMessages.push({ counterpart: cp, direction: "outbound", at: r.updated_at });
+    }
   }
   for (const r of outLogRows) {
     const cp = r.to_e164;
