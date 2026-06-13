@@ -131,6 +131,11 @@ export default async function DashboardCallsPage() {
                           {badge}
                         </span>
                       )}
+                      {contact && row.caller_e164 && (
+                        <span className="text-[10px] text-parchment/40 font-mono">
+                          {row.caller_e164}
+                        </span>
+                      )}
                       <StatusBadge status={row.status} />
                     </div>
                     <p className="text-xs text-parchment/50 mt-0.5">

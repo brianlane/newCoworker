@@ -92,7 +92,7 @@ export default async function CustomerDetailPage({ params }: Props) {
   ).catch(() => new Map<string, ContactName>());
   const headerContact = contactNames.get(memory.customer_e164);
   const headerName =
-    headerContact?.name ?? memory.display_name?.trim() ?? memory.customer_e164;
+    headerContact?.name ?? (memory.display_name?.trim() || memory.customer_e164);
   const headerBadge =
     headerContact?.kind === "employee"
       ? "employee"
