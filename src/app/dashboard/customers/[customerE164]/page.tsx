@@ -90,7 +90,15 @@ export default async function CustomerDetailPage({ params }: Props) {
     [memory.customer_e164, ...(memory.alias_e164s ?? [])],
     db
   ).catch(() => new Map<string, ContactName>());
-  const headerContact = contactNames.get(memory.customer_e164);
+  // The URL number can be a merged-in alias, and the owner/override identity
+  // may live on the alias rather than the profile's primary. Prefer the
+  // primary, then the URL number, then any alias that resolved.
+  const headerContact =
+    contactNames.get(memory.customer_e164) ??
+    contactNames.get(customerE164) ??
+    (memory.alias_e164s ?? [])
+      .map((a) => contactNames.get(a))
+      .find((c): c is ContactName => Boolean(c));
   const headerName =
     headerContact?.name ?? (memory.display_name?.trim() || memory.customer_e164);
   const headerBadge =
