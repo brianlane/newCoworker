@@ -825,7 +825,7 @@ export function AiFlowsManager({
       <div className="flex justify-end">
         <button
           onClick={() => setEditor(emptyEditor())}
-          className="inline-flex items-center gap-1 rounded-md bg-spark-orange px-3 py-2 text-sm font-semibold text-deep-ink hover:bg-spark-orange/90"
+          className="inline-flex items-center gap-1 rounded-md bg-signal-teal px-3 py-2 text-sm font-semibold text-deep-ink hover:bg-signal-teal/90"
         >
           <Plus className="h-4 w-4" /> New AiFlow
         </button>

@@ -75,11 +75,7 @@ export default async function DashboardEmailsPage() {
 
       <Card padding="sm" className="border-signal-teal/30 bg-signal-teal/5">
         <p className="text-xs text-parchment/70 leading-relaxed">
-          Every email your coworker handles is recorded here: AiFlow sends
-          (from the platform or your connected mailbox), the inbound emails
-          that trigger flows, and emails the assistant sends from dashboard
-          chat, texting, or phone calls. Digest and alert emails we send you
-          are tracked on the Notifications page instead.
+          Every email your coworker handles is recorded here
         </p>
       </Card>
 
@@ -88,8 +84,7 @@ export default async function DashboardEmailsPage() {
           <div className="text-center py-8">
             <p className="text-parchment/60">No email activity yet.</p>
             <p className="text-xs text-parchment/40 mt-2">
-              Once an AiFlow sends or is triggered by an email, it will appear
-              here.
+              Once an email is sent or received, it will appear here.
             </p>
           </div>
         </Card>
