@@ -19,6 +19,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { listCustomerMemories, DEFAULT_LIST_LIMIT } from "@/lib/customer-memory/db";
+import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 
 export const dynamic = "force-dynamic";
 
@@ -63,6 +64,14 @@ export default async function DashboardCustomersPage() {
   const customers = await listCustomerMemories(business.id, {
     limit: DEFAULT_LIST_LIMIT
   });
+  // Owner/employee/manual-override names win over the stored customer
+  // display_name, so the owner's own number reads "Brian Lane (owner)" instead
+  // of a bare number, and roster members get their names here too.
+  const contactNames = await resolveContactNames(
+    business.id,
+    customers.map((c) => c.customer_e164),
+    db
+  ).catch(() => new Map<string, ContactName>());
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -95,7 +104,16 @@ export default async function DashboardCustomersPage() {
       ) : (
         <Card padding="sm">
           <ul className="divide-y divide-parchment/10">
-            {customers.map((c) => (
+            {customers.map((c) => {
+              const contact = contactNames.get(c.customer_e164);
+              const name = contact?.name ?? c.display_name ?? c.customer_e164;
+              const badge =
+                contact?.kind === "employee"
+                  ? "employee"
+                  : contact?.kind === "owner"
+                    ? "owner"
+                    : null;
+              return (
               <li key={c.customer_e164}>
                 <Link
                   href={`/dashboard/customers/${encodeURIComponent(c.customer_e164)}`}
@@ -104,9 +122,14 @@ export default async function DashboardCustomersPage() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-sm font-semibold text-parchment truncate">
-                        {c.display_name ?? c.customer_e164}
+                        {name}
                       </span>
-                      {c.display_name && (
+                      {badge && (
+                        <span className="text-[10px] uppercase tracking-wide text-parchment/40">
+                          {badge}
+                        </span>
+                      )}
+                      {name !== c.customer_e164 && (
                         <span className="text-xs text-parchment/50 font-mono">
                           {c.customer_e164}
                         </span>
@@ -144,7 +167,8 @@ export default async function DashboardCustomersPage() {
                   <span className="text-parchment/40 text-sm shrink-0">View →</span>
                 </Link>
               </li>
-            ))}
+              );
+            })}
           </ul>
         </Card>
       )}
