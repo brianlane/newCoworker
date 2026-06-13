@@ -17,6 +17,27 @@ const APPLY = process.argv.includes("--apply");
 
 type EventLink = { label: string; href: string; at?: string };
 
+function isRenderableSender(value: string): boolean {
+  return value.startsWith("+") || /^\d{3,8}$/.test(value);
+}
+
+function counterpartFromPayload(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const inner = (payload as { data?: { payload?: Record<string, unknown> } }).data?.payload;
+  if (!inner) return null;
+  const from = inner["from"] as { phone_number?: string } | string | undefined;
+  if (typeof from === "string" && isRenderableSender(from)) return from;
+  if (
+    from &&
+    typeof from === "object" &&
+    typeof from.phone_number === "string" &&
+    isRenderableSender(from.phone_number)
+  ) {
+    return from.phone_number;
+  }
+  return null;
+}
+
 async function buildEvents(
   businessId: string,
   sinceIso: string,
@@ -32,23 +53,29 @@ async function buildEvents(
         .lt("created_at", untilIso),
       db
         .from("sms_inbound_jobs")
-        .select("id", { count: "exact", head: true })
+        .select("payload, created_at")
         .eq("business_id", businessId)
         .gte("created_at", sinceIso)
-        .lt("created_at", untilIso),
+        .lt("created_at", untilIso)
+        .order("created_at", { ascending: false })
+        .limit(300),
       db
         .from("sms_inbound_jobs")
-        .select("id", { count: "exact", head: true })
+        .select("payload, updated_at")
         .eq("business_id", businessId)
         .not("assistant_reply_text", "is", null)
         .gte("updated_at", sinceIso)
-        .lt("updated_at", untilIso),
+        .lt("updated_at", untilIso)
+        .order("updated_at", { ascending: false })
+        .limit(300),
       db
         .from("sms_outbound_log")
-        .select("id", { count: "exact", head: true })
+        .select("to_e164, created_at")
         .eq("business_id", businessId)
         .gte("created_at", sinceIso)
-        .lt("created_at", untilIso),
+        .lt("created_at", untilIso)
+        .order("created_at", { ascending: false })
+        .limit(500),
       db
         .from("voice_call_transcripts")
         .select("caller_e164, status, started_at")
@@ -111,9 +138,42 @@ async function buildEvents(
       href: `/dashboard/customers/${encodeURIComponent(cust.customer_e164)}`
     });
   }
-  const smsInbound = smsInRes.count ?? 0;
-  const smsOutbound = (repliesRes.count ?? 0) + (outLogRes.count ?? 0);
-  if (smsInbound > 0 || smsOutbound > 0) {
+  const threads = new Map<string, { inbound: number; outbound: number; lastAt: string }>();
+  const bump = (cp: string, dir: "inbound" | "outbound", at: string) => {
+    const t = threads.get(cp) ?? { inbound: 0, outbound: 0, lastAt: at };
+    if (dir === "inbound") t.inbound += 1;
+    else t.outbound += 1;
+    if (at > t.lastAt) t.lastAt = at;
+    threads.set(cp, t);
+  };
+  let smsInbound = 0;
+  let smsOutbound = 0;
+  for (const r of (smsInRes.data ?? []) as Array<{ payload: unknown; created_at: string }>) {
+    smsInbound += 1;
+    const cp = counterpartFromPayload(r.payload);
+    if (cp) bump(cp, "inbound", r.created_at);
+  }
+  for (const r of (repliesRes.data ?? []) as Array<{ payload: unknown; updated_at: string }>) {
+    smsOutbound += 1;
+    const cp = counterpartFromPayload(r.payload);
+    if (cp) bump(cp, "outbound", r.updated_at);
+  }
+  for (const r of (outLogRes.data ?? []) as Array<{ to_e164: string | null; created_at: string }>) {
+    smsOutbound += 1;
+    if (r.to_e164 && isRenderableSender(r.to_e164)) bump(r.to_e164, "outbound", r.created_at);
+  }
+  const sortedThreads = Array.from(threads.entries()).sort((a, b) =>
+    a[1].lastAt < b[1].lastAt ? 1 : a[1].lastAt > b[1].lastAt ? -1 : 0
+  );
+  if (sortedThreads.length > 0) {
+    for (const [cp, t] of sortedThreads) {
+      events.push({
+        label: `Texts with ${cp} — ${t.inbound} received, ${t.outbound} sent`,
+        href: `/dashboard/messages/${encodeURIComponent(cp)}`,
+        at: t.lastAt
+      });
+    }
+  } else if (smsInbound > 0 || smsOutbound > 0) {
     events.push({
       label: `Texts — ${smsInbound} received, ${smsOutbound} sent`,
       href: "/dashboard/messages"

@@ -43,12 +43,16 @@ import { assertCronAuth } from "../_shared/cron_auth.ts";
 import {
   buildDigestEmailModel,
   buildDigestEventLinks,
+  groupSmsThreads,
   hasDigestActivity,
+  isRenderableSmsSender,
+  smsCounterpartFromPayload,
   windowLabel,
   type DigestActivity,
   type DigestAiFlowRun,
   type DigestCallRow,
   type DigestCustomerRow,
+  type DigestSmsMessage,
   type DigestWindow
 } from "../_shared/digest_builder.ts";
 
@@ -113,11 +117,17 @@ async function fetchActivity(
         .select("id", { count: "exact", head: true })
         .eq("business_id", businessId)
         .gte("created_at", sinceIso),
+      // Pull the actual rows (not just a count) so each text can deep-link to
+      // its conversation thread. Capped generously — well beyond any realistic
+      // daily/weekly volume — and the counts below derive from these rows so
+      // the per-thread links always agree with the summary count.
       supa
         .from("sms_inbound_jobs")
-        .select("id", { count: "exact", head: true })
+        .select("payload, created_at")
         .eq("business_id", businessId)
-        .gte("created_at", sinceIso),
+        .gte("created_at", sinceIso)
+        .order("created_at", { ascending: false })
+        .limit(300),
       // Outbound = coworker replies + worker-initiated sends
       // (sms_outbound_log). Both filter on real timestamps, unlike the
       // previous daily_usage.sms_sent sum whose calendar-day usage_date
@@ -132,15 +142,19 @@ async function fetchActivity(
       // but answered inside it.
       supa
         .from("sms_inbound_jobs")
-        .select("id", { count: "exact", head: true })
+        .select("payload, updated_at")
         .eq("business_id", businessId)
         .not("assistant_reply_text", "is", null)
-        .gte("updated_at", sinceIso),
+        .gte("updated_at", sinceIso)
+        .order("updated_at", { ascending: false })
+        .limit(300),
       supa
         .from("sms_outbound_log")
-        .select("id", { count: "exact", head: true })
+        .select("to_e164, created_at")
         .eq("business_id", businessId)
-        .gte("created_at", sinceIso),
+        .gte("created_at", sinceIso)
+        .order("created_at", { ascending: false })
+        .limit(500),
       supa
         .from("voice_call_transcripts")
         .select("caller_e164, status, started_at")
@@ -188,7 +202,41 @@ async function fetchActivity(
     (notifRes.error && `notifications: ${notifRes.error.message}`) ||
     null;
 
-  const smsOutbound = (repliesRes.count ?? 0) + (outLogRes.count ?? 0);
+  const inboundRows = (smsInRes.data ?? []) as Array<{
+    payload: Record<string, unknown> | null;
+    created_at: string;
+  }>;
+  const replyRows = (repliesRes.data ?? []) as Array<{
+    payload: Record<string, unknown> | null;
+    updated_at: string;
+  }>;
+  const outLogRows = (outLogRes.data ?? []) as Array<{
+    to_e164: string | null;
+    created_at: string;
+  }>;
+
+  const smsInbound = inboundRows.length;
+  const smsOutbound = replyRows.length + outLogRows.length;
+
+  // Build per-conversation threads. Inbound jobs carry the customer in the
+  // Telnyx envelope (`from`); a reply rides the same inbound row (outbound to
+  // that same customer); worker sends use sms_outbound_log.to_e164.
+  const smsMessages: DigestSmsMessage[] = [];
+  for (const r of inboundRows) {
+    const cp = smsCounterpartFromPayload(r.payload);
+    if (cp) smsMessages.push({ counterpart: cp, direction: "inbound", at: r.created_at });
+  }
+  for (const r of replyRows) {
+    const cp = smsCounterpartFromPayload(r.payload);
+    if (cp) smsMessages.push({ counterpart: cp, direction: "outbound", at: r.updated_at });
+  }
+  for (const r of outLogRows) {
+    const cp = r.to_e164;
+    if (cp && isRenderableSmsSender(cp)) {
+      smsMessages.push({ counterpart: cp, direction: "outbound", at: r.created_at });
+    }
+  }
+  const smsThreads = groupSmsThreads(smsMessages);
 
   const aiFlowRuns: DigestAiFlowRun[] = (
     (flowsRes.data ?? []) as Array<{
@@ -209,8 +257,9 @@ async function fetchActivity(
 
   const activity: DigestActivity = {
     chatTurns: chatRes.count ?? 0,
-    smsInbound: smsInRes.count ?? 0,
+    smsInbound,
     smsOutbound,
+    smsThreads,
     calls: (callsRes.data ?? []) as DigestCallRow[],
     aiFlowRuns,
     newCustomers: (custRes.data ?? []) as DigestCustomerRow[],

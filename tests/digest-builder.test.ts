@@ -5,8 +5,11 @@ import {
   buildAiFlowRecapLine,
   buildDigestEmailModel,
   buildDigestEventLinks,
+  groupSmsThreads,
   hasDigestActivity,
+  isRenderableSmsSender,
   routingSummary,
+  smsCounterpartFromPayload,
   totalDigestEvents,
   windowLabel,
   type DigestActivity,
@@ -18,6 +21,7 @@ function emptyActivity(): DigestActivity {
     chatTurns: 0,
     smsInbound: 0,
     smsOutbound: 0,
+    smsThreads: [],
     calls: [],
     aiFlowRuns: [],
     newCustomers: [],
@@ -165,6 +169,7 @@ describe("digest_builder buildDigestEmailModel", () => {
       chatTurns: 1,
       smsInbound: 2,
       smsOutbound: 3,
+      smsThreads: [],
       calls: [
         { caller_e164: "+15550001111", status: "completed", started_at: "t1" },
         { caller_e164: null, status: "errored", started_at: "t2" }
@@ -337,5 +342,106 @@ describe("buildDigestEventLinks", () => {
     }));
     const events = buildDigestEventLinks({ ...emptyActivity(), calls });
     expect(events).toHaveLength(DIGEST_EVENT_LINKS_MAX);
+  });
+
+  it("emits one deep-linked event per texting thread, newest-thread first", () => {
+    const events = buildDigestEventLinks({
+      ...emptyActivity(),
+      smsInbound: 3,
+      smsOutbound: 2,
+      smsThreads: [
+        {
+          counterpart: "+14695555555",
+          inbound: 2,
+          outbound: 1,
+          lastAt: "2026-06-11T12:00:00Z"
+        },
+        { counterpart: "73339", inbound: 1, outbound: 1, lastAt: "2026-06-11T09:00:00Z" }
+      ]
+    });
+    expect(events).toEqual([
+      {
+        label: "Texts with +14695555555 — 2 received, 1 sent",
+        href: "/dashboard/messages/%2B14695555555",
+        at: "2026-06-11T12:00:00Z"
+      },
+      {
+        label: "Texts with 73339 — 1 received, 1 sent",
+        href: "/dashboard/messages/73339",
+        at: "2026-06-11T09:00:00Z"
+      }
+    ]);
+  });
+
+  it("falls back to the index roll-up when counts exist but no thread parsed", () => {
+    const events = buildDigestEventLinks({
+      ...emptyActivity(),
+      smsInbound: 1,
+      smsOutbound: 0,
+      smsThreads: []
+    });
+    expect(events).toEqual([{ label: "Texts — 1 received, 0 sent", href: "/dashboard/messages" }]);
+  });
+});
+
+describe("digest_builder isRenderableSmsSender", () => {
+  it("accepts E.164 and 3-8 digit short codes, rejects everything else", () => {
+    expect(isRenderableSmsSender("+14695555555")).toBe(true);
+    expect(isRenderableSmsSender("73339")).toBe(true);
+    expect(isRenderableSmsSender("123")).toBe(true);
+    expect(isRenderableSmsSender("123456789")).toBe(false);
+    expect(isRenderableSmsSender("notaphone")).toBe(false);
+    expect(isRenderableSmsSender("")).toBe(false);
+  });
+});
+
+describe("digest_builder smsCounterpartFromPayload", () => {
+  function env(from: unknown) {
+    return { data: { payload: { from } } };
+  }
+
+  it("reads from an object phone_number", () => {
+    expect(smsCounterpartFromPayload(env({ phone_number: "+14695555555" }))).toBe("+14695555555");
+  });
+
+  it("reads a bare string sender (short code)", () => {
+    expect(smsCounterpartFromPayload(env("73339"))).toBe("73339");
+  });
+
+  it("returns null for unrenderable, missing, or malformed shapes", () => {
+    expect(smsCounterpartFromPayload(env({ phone_number: "garbage" }))).toBeNull();
+    expect(smsCounterpartFromPayload(env("garbage"))).toBeNull();
+    expect(smsCounterpartFromPayload(env(undefined))).toBeNull();
+    expect(smsCounterpartFromPayload(env({}))).toBeNull();
+    expect(smsCounterpartFromPayload({ data: {} })).toBeNull();
+    expect(smsCounterpartFromPayload({})).toBeNull();
+    expect(smsCounterpartFromPayload(null)).toBeNull();
+    expect(smsCounterpartFromPayload("nope")).toBeNull();
+  });
+});
+
+describe("digest_builder groupSmsThreads", () => {
+  it("groups by counterpart, tallies direction, and sorts newest-thread first", () => {
+    const threads = groupSmsThreads([
+      { counterpart: "+1111", direction: "inbound", at: "2026-06-11T08:00:00Z" },
+      { counterpart: "+1111", direction: "outbound", at: "2026-06-11T09:00:00Z" },
+      { counterpart: "+2222", direction: "inbound", at: "2026-06-11T07:00:00Z" },
+      { counterpart: "+1111", direction: "inbound", at: "2026-06-11T08:30:00Z" }
+    ]);
+    expect(threads).toEqual([
+      { counterpart: "+1111", inbound: 2, outbound: 1, lastAt: "2026-06-11T09:00:00Z" },
+      { counterpart: "+2222", inbound: 1, outbound: 0, lastAt: "2026-06-11T07:00:00Z" }
+    ]);
+  });
+
+  it("keeps the earliest lastAt when later messages are older and handles empty input", () => {
+    expect(groupSmsThreads([])).toEqual([]);
+    const threads = groupSmsThreads([
+      { counterpart: "+1", direction: "outbound", at: "2026-06-11T12:00:00Z" },
+      { counterpart: "+1", direction: "inbound", at: "2026-06-11T06:00:00Z" }
+    ]);
+    expect(threads).toEqual([
+      { counterpart: "+1", inbound: 1, outbound: 1, lastAt: "2026-06-11T12:00:00Z" }
+    ]);
   });
 });
