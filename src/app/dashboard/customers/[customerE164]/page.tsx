@@ -22,6 +22,7 @@ import {
 import { listTranscriptsForCaller } from "@/lib/db/voice-transcripts";
 import { CustomerProfileEditor } from "@/components/dashboard/CustomerProfileEditor";
 import { CustomerMergeAction } from "@/components/dashboard/CustomerMergeAction";
+import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 
 export const dynamic = "force-dynamic";
 
@@ -82,6 +83,23 @@ export default async function CustomerDetailPage({ params }: Props) {
     .filter((c) => c.customer_e164 !== memory.customer_e164)
     .map((c) => ({ customerE164: c.customer_e164, displayName: c.display_name }));
 
+  // Owner/employee/manual-override names win over the stored display_name for
+  // the header, so the owner's own number reads "Brian Lane (owner)".
+  const contactNames = await resolveContactNames(
+    business.id,
+    [memory.customer_e164, ...(memory.alias_e164s ?? [])],
+    db
+  ).catch(() => new Map<string, ContactName>());
+  const headerContact = contactNames.get(memory.customer_e164);
+  const headerName =
+    headerContact?.name ?? memory.display_name?.trim() ?? memory.customer_e164;
+  const headerBadge =
+    headerContact?.kind === "employee"
+      ? "employee"
+      : headerContact?.kind === "owner"
+        ? "owner"
+        : null;
+
   return (
     <div className="space-y-6 max-w-3xl">
       <div>
@@ -91,10 +109,15 @@ export default async function CustomerDetailPage({ params }: Props) {
         >
           ← Customers
         </Link>
-        <h1 className="text-2xl font-bold text-parchment mt-2">
-          {memory.display_name?.trim() || memory.customer_e164}
-        </h1>
-        {memory.display_name && (
+        <div className="flex items-center gap-2 mt-2 flex-wrap">
+          <h1 className="text-2xl font-bold text-parchment">{headerName}</h1>
+          {headerBadge && (
+            <span className="text-[10px] uppercase tracking-wide text-parchment/40">
+              {headerBadge}
+            </span>
+          )}
+        </div>
+        {headerName !== memory.customer_e164 && (
           <p className="text-sm text-parchment/50 font-mono mt-0.5">
             {memory.customer_e164}
           </p>

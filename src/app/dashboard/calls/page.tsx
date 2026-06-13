@@ -18,6 +18,7 @@ import {
   formatDuration
 } from "@/components/dashboard/voice-transcript-helpers";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
+import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +61,13 @@ export default async function DashboardCallsPage() {
   }
 
   const transcripts = await listTranscriptsForBusiness(business.id, { limit: 50 });
+  // Name known callers (owner / roster members / manual overrides) instead of
+  // only pretty-printing the raw E.164.
+  const contactNames = await resolveContactNames(
+    business.id,
+    transcripts.map((t) => t.caller_e164).filter((p): p is string => Boolean(p)),
+    db
+  ).catch(() => new Map<string, ContactName>());
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -89,7 +97,18 @@ export default async function DashboardCallsPage() {
       ) : (
         <Card padding="sm">
           <ul className="divide-y divide-parchment/10">
-            {transcripts.map((row) => (
+            {transcripts.map((row) => {
+              const contact = row.caller_e164
+                ? contactNames.get(row.caller_e164)
+                : undefined;
+              const label = contact?.name ?? callerLabel(row.caller_e164);
+              const badge =
+                contact?.kind === "employee"
+                  ? "employee"
+                  : contact?.kind === "owner"
+                    ? "owner"
+                    : null;
+              return (
               <li key={row.id}>
                 <Link
                   // Link by transcript row UUID rather than the Telnyx
@@ -105,8 +124,13 @@ export default async function DashboardCallsPage() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-parchment truncate">
-                        {callerLabel(row.caller_e164)}
+                        {label}
                       </span>
+                      {badge && (
+                        <span className="text-[10px] uppercase tracking-wide text-parchment/40">
+                          {badge}
+                        </span>
+                      )}
                       <StatusBadge status={row.status} />
                     </div>
                     <p className="text-xs text-parchment/50 mt-0.5">
@@ -117,7 +141,8 @@ export default async function DashboardCallsPage() {
                   <span className="text-parchment/40 text-sm shrink-0">View →</span>
                 </Link>
               </li>
-            ))}
+              );
+            })}
           </ul>
         </Card>
       )}
