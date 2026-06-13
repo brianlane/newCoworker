@@ -248,13 +248,21 @@ async function fetchActivity(
   // above). Each inbound job is the customer's received text; if that same job
   // carries an assistant reply it is also one sent text to the same customer —
   // reading both sides off the one row keeps a thread's tallies self-consistent.
+  // The reply is only counted as "sent" when its updated_at falls in the digest
+  // window, matching the authoritative smsOutbound head count (a job received
+  // in-window but answered later must not inflate the thread's sent tally).
   // Worker-initiated sends come from sms_outbound_log.to_e164.
+  const sinceMs = Date.parse(sinceIso);
   const smsMessages: DigestSmsMessage[] = [];
   for (const r of jobRows) {
     const cp = smsCounterpartFromPayload(r.payload);
     if (!cp) continue;
     smsMessages.push({ counterpart: cp, direction: "inbound", at: r.created_at });
-    if (typeof r.assistant_reply_text === "string" && r.assistant_reply_text.length > 0) {
+    if (
+      typeof r.assistant_reply_text === "string" &&
+      r.assistant_reply_text.length > 0 &&
+      Date.parse(r.updated_at) >= sinceMs
+    ) {
       smsMessages.push({ counterpart: cp, direction: "outbound", at: r.updated_at });
     }
   }

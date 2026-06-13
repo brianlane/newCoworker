@@ -112,6 +112,8 @@ async function buildEvents(
         .limit(25)
     ]);
 
+  const sinceMs = Date.parse(sinceIso);
+  const untilMs = Date.parse(untilIso);
   const smsMessages: DigestSmsMessage[] = [];
   for (const r of (smsJobRowsRes.data ?? []) as Array<{
     payload: unknown;
@@ -122,7 +124,15 @@ async function buildEvents(
     const cp = smsCounterpartFromPayload(r.payload);
     if (!cp) continue;
     smsMessages.push({ counterpart: cp, direction: "inbound", at: r.created_at });
-    if (typeof r.assistant_reply_text === "string" && r.assistant_reply_text.length > 0) {
+    // Only count the reply when its updated_at is inside the window, matching
+    // the authoritative smsOutbound head count.
+    const replyAtMs = Date.parse(r.updated_at);
+    if (
+      typeof r.assistant_reply_text === "string" &&
+      r.assistant_reply_text.length > 0 &&
+      replyAtMs >= sinceMs &&
+      replyAtMs < untilMs
+    ) {
       smsMessages.push({ counterpart: cp, direction: "outbound", at: r.updated_at });
     }
   }
