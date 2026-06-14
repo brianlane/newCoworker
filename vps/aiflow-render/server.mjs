@@ -15,6 +15,15 @@
  *   ... + { screenshot: true }                        -> adds screenshotBase64 (JPEG)
  *   ... + { actions: [...] }                          -> ACTION mode (below)
  *
+ * IMPORTANT — application-level failures (action_failed / login_failed /
+ * auth_config_error / render_failed) are returned with HTTP **200** and an
+ * `{ error, detail }` body, NOT a 5xx. This service runs behind a Cloudflare
+ * Tunnel, and Cloudflare REPLACES the body of any origin 5xx with its own
+ * "error code: 502" page — which would erase the structured error and make the
+ * worker retry a permanent failure. The worker classifies on the `error` code
+ * (see renderErrorKind) and treats a genuine non-2xx as a transport failure.
+ * Only client errors (400/401) keep their status — Cloudflare passes 4xx through.
+ *
  * When `auth` is present the service logs in first using the named custom
  * integration's stored credentials (fetched from the platform's gateway-guarded
  * /api/integrations/custom/credentials endpoint), reusing a per-tenant browser
@@ -374,7 +383,7 @@ async function respondWithActions(page, res, actions, wantScreenshot) {
   const acted = await performActions(page, actions);
   if (acted.error) {
     console.error(`[render] action_failed after ${acted.completed} actions: ${acted.error}`);
-    return res.status(502).json({
+    return res.status(200).json({
       error: "action_failed",
       detail: acted.error,
       actionsCompleted: acted.completed
@@ -421,7 +430,7 @@ app.post("/render", async (req, res) => {
       });
     } catch (e) {
       console.error(`[render] render_failed (unauthenticated) for ${safe}: ${String(e).slice(0, 300)}`);
-      return res.status(502).json({ error: "render_failed", detail: String(e).slice(0, 300) });
+      return res.status(200).json({ error: "render_failed", detail: String(e).slice(0, 300) });
     } finally {
       if (context) await context.close().catch(() => {});
     }
@@ -437,7 +446,7 @@ app.post("/render", async (req, res) => {
     session = await acquireSession(key);
   } catch (e) {
     console.error(`[render] session acquire failed for ${key}: ${String(e).slice(0, 300)}`);
-    return res.status(502).json({ error: "render_failed", detail: String(e).slice(0, 300) });
+    return res.status(200).json({ error: "render_failed", detail: String(e).slice(0, 300) });
   }
 
   let page;
@@ -460,7 +469,7 @@ app.post("/render", async (req, res) => {
         poisoned = true;
         console.error(`[render] auth_config_error for ${key}: ${String(e).slice(0, 200)}`);
         return res
-          .status(502)
+          .status(200)
           .json({ error: "auth_config_error", detail: String(e).slice(0, 200) });
       }
       await page.goto(safe, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
@@ -470,7 +479,7 @@ app.post("/render", async (req, res) => {
       if (await looksLikeLogin(page, auth?.login)) {
         poisoned = true;
         console.error(`[render] login_failed for ${key}`);
-        return res.status(502).json({ error: "login_failed" });
+        return res.status(200).json({ error: "login_failed" });
       }
     }
 
@@ -490,7 +499,7 @@ app.post("/render", async (req, res) => {
   } catch (e) {
     poisoned = true;
     console.error(`[render] render_failed (authenticated ${key}) for ${safe}: ${String(e).slice(0, 300)}`);
-    return res.status(502).json({ error: "render_failed", detail: String(e).slice(0, 300) });
+    return res.status(200).json({ error: "render_failed", detail: String(e).slice(0, 300) });
   } finally {
     if (page) await page.close().catch(() => {});
     finishSession(key, session, poisoned);

@@ -88,6 +88,39 @@ export function parseRenderResponse(body: unknown, requestedUrl: string): Render
   return { finalUrl, text, html, ...(screenshotBase64 ? { screenshotBase64 } : {}) };
 }
 
+/**
+ * Map a render-service error code to how the worker should treat it.
+ *
+ * The render service reports application-level failures in a 200 JSON body
+ * (`{ error, detail }`) rather than an HTTP 5xx, because a per-tenant render
+ * sidecar sits behind a Cloudflare Tunnel and Cloudflare REPLACES the body of
+ * any origin 5xx with its own `error code: 502` page — so a 502 would erase the
+ * structured error and the worker would misread a permanent failure as a
+ * transient one and retry it. Classifying on the error code keeps that
+ * distinction intact:
+ *  - "login"     — bad creds / MFA / missing platform config (`login_failed`,
+ *                  `auth_config_error`): a permanent setup error.
+ *  - "action"    — a browse_action selector no longer matches (`action_failed`):
+ *                  permanent (the page changed; retrying can't fix it).
+ *  - "transient" — navigation timeout / unknown (`render_failed`, anything else):
+ *                  safe to retry.
+ */
+export function renderErrorKind(errCode: string): "login" | "action" | "transient" {
+  if (errCode === "login_failed" || errCode === "auth_config_error") return "login";
+  if (errCode === "action_failed") return "action";
+  return "transient";
+}
+
+/** Extract the `{ error, detail }` pair from a render body, empty strings if absent. */
+export function renderErrorFields(body: unknown): { error: string; detail: string } {
+  if (!body || typeof body !== "object") return { error: "", detail: "" };
+  const b = body as Record<string, unknown>;
+  return {
+    error: typeof b.error === "string" ? b.error : "",
+    detail: typeof b.detail === "string" ? b.detail : ""
+  };
+}
+
 export type ActionRenderResult = {
   finalUrl: string;
   /** How many of the requested UI actions the service completed, in order. */
