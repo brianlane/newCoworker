@@ -15,7 +15,8 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { chatSpendBaseCapMicros } from "@/lib/db/chat-usage";
+import { chatSpendBaseCapMicrosForTier } from "@/lib/db/chat-usage";
+import type { PlanTier } from "@/lib/plans/tier";
 import type { GeminiUsage } from "@/lib/gemini-generate-content";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -108,6 +109,15 @@ export async function meterGeminiSpendForBusiness(args: MeterGeminiSpendArgs): P
       ?.stripe_current_period_start;
     if (subStart) periodStart = subStart;
 
+    // Trip the fuse against the tenant's tier cap ($5 starter / $10 otherwise)
+    // so this platform-side meter agrees with the chat-worker and SMS surfaces.
+    const { data: bizRow } = await db
+      .from("businesses")
+      .select("tier")
+      .eq("id", args.businessId)
+      .maybeSingle();
+    const tier = (bizRow as { tier?: PlanTier | null } | null)?.tier ?? null;
+
     let creditMicros = 0;
     const { data: creditRaw, error: creditErr } = await db.rpc("chat_active_credit_micros", {
       p_business_id: args.businessId
@@ -121,7 +131,7 @@ export async function meterGeminiSpendForBusiness(args: MeterGeminiSpendArgs): P
       p_business_id: args.businessId,
       p_period_start: periodStart,
       p_cost_micros: costMicros,
-      p_cap_micros: chatSpendBaseCapMicros() + creditMicros
+      p_cap_micros: chatSpendBaseCapMicrosForTier(tier) + creditMicros
     });
     if (error) throw new Error(error.message);
   } catch (err) {

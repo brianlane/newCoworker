@@ -93,6 +93,8 @@ export default function OnboardPage() {
         "AI voice coworker",
         "Phone number",
         "Chat access to your coworker",
+        "$5/mo AI budget for agentic tasks, before free model fallback",
+        "Light browser tasks (full automation on Standard)",
         "3rd party integrations",
         "Lossless memory and expansive knowledge base",
         "Unlimited emails and appointment booking",
@@ -128,6 +130,7 @@ export default function OnboardPage() {
         "Send texts during calls",
         "Warm handoff call transfers",
         "Full Swarm reasoning + deep reasoning",
+        "$10/mo AI budget for agentic tasks, before free model fallback",
         "Configuration and training updates",
         "Priority support & maintenance",
         "Full browser skills"

@@ -9,10 +9,12 @@
  * (`OWNER_CHAT_SPEND_CAP_MICROS`, default $10).
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import type { PlanTier } from "@/lib/plans/tier";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-export const DEFAULT_CHAT_SPEND_CAP_MICROS = 10_000_000; // $10
+export const DEFAULT_CHAT_SPEND_CAP_MICROS = 10_000_000; // $10 (standard / enterprise)
+export const STARTER_CHAT_SPEND_CAP_MICROS = 5_000_000; // $5
 
 export type ChatSpendSnapshot = {
   periodStart: string;
@@ -30,13 +32,35 @@ export function chatSpendBaseCapMicros(
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_CHAT_SPEND_CAP_MICROS;
 }
 
+/**
+ * Tier-derived base cap. Starter gets a lower included AI budget ($5) than
+ * Standard/Enterprise ($10). Each side has an optional env override
+ * (`OWNER_CHAT_SPEND_CAP_MICROS_STARTER` / `OWNER_CHAT_SPEND_CAP_MICROS`) so ops
+ * can tune without a code change. Must stay in lockstep with the Edge
+ * (`_shared/chat_spend_cap.ts`) and VPS worker (`vps/chat-worker/worker.mjs`)
+ * mappings so every surface trips the shared fuse at the same total.
+ */
+export function chatSpendBaseCapMicrosForTier(
+  tier: PlanTier | null | undefined,
+  env: Record<string, string | undefined> = process.env
+): number {
+  if (tier === "starter") {
+    const n = Number(env.OWNER_CHAT_SPEND_CAP_MICROS_STARTER);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : STARTER_CHAT_SPEND_CAP_MICROS;
+  }
+  return chatSpendBaseCapMicros(env);
+}
+
 function monthStartIso(now: Date = new Date()): string {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
 }
 
 export async function getChatSpendSnapshotForBusiness(
   businessId: string,
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  // The caller passes the tenant tier so the displayed cap matches what the fuse
+  // enforces ($5 starter / $10 otherwise). Omitted/null → standard base cap.
+  tier?: PlanTier | null
 ): Promise<ChatSpendSnapshot> {
   const db = client ?? (await createSupabaseServiceClient());
 
@@ -72,7 +96,7 @@ export async function getChatSpendSnapshotForBusiness(
     if (Number.isFinite(n) && n > 0) creditMicros = n;
   }
 
-  const baseCapMicros = chatSpendBaseCapMicros();
+  const baseCapMicros = chatSpendBaseCapMicrosForTier(tier);
   return {
     periodStart,
     spendMicros,

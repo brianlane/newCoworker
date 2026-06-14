@@ -7,7 +7,9 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   DEFAULT_CHAT_SPEND_CAP_MICROS,
+  STARTER_CHAT_SPEND_CAP_MICROS,
   chatSpendBaseCapMicros,
+  chatSpendBaseCapMicrosForTier,
   getChatSpendSnapshotForBusiness,
   getSmsBonusTextsRemaining
 } from "@/lib/db/chat-usage";
@@ -55,6 +57,25 @@ describe("chatSpendBaseCapMicros", () => {
 
   it("reads and floors a valid env value", () => {
     expect(chatSpendBaseCapMicros({ OWNER_CHAT_SPEND_CAP_MICROS: "5000000.9" })).toBe(5_000_000);
+  });
+});
+
+describe("chatSpendBaseCapMicrosForTier", () => {
+  it("gives starter the lower $5 base, standard/enterprise the $10 base", () => {
+    expect(chatSpendBaseCapMicrosForTier("starter", {})).toBe(STARTER_CHAT_SPEND_CAP_MICROS);
+    expect(chatSpendBaseCapMicrosForTier("starter", {})).toBe(5_000_000);
+    expect(chatSpendBaseCapMicrosForTier("standard", {})).toBe(DEFAULT_CHAT_SPEND_CAP_MICROS);
+    expect(chatSpendBaseCapMicrosForTier("enterprise", {})).toBe(10_000_000);
+    expect(chatSpendBaseCapMicrosForTier(null, {})).toBe(10_000_000);
+  });
+
+  it("honors per-tier env overrides", () => {
+    expect(
+      chatSpendBaseCapMicrosForTier("starter", { OWNER_CHAT_SPEND_CAP_MICROS_STARTER: "3000000" })
+    ).toBe(3_000_000);
+    expect(
+      chatSpendBaseCapMicrosForTier("standard", { OWNER_CHAT_SPEND_CAP_MICROS: "12000000" })
+    ).toBe(12_000_000);
   });
 });
 
@@ -120,6 +141,23 @@ describe("getChatSpendSnapshotForBusiness", () => {
     const snap = await getChatSpendSnapshotForBusiness("biz-1");
 
     expect(mockCreateClient).toHaveBeenCalled();
+    expect(snap.baseCapMicros).toBe(10_000_000);
+  });
+
+  it("uses the $5 starter base when tier is starter", async () => {
+    const db = stubDb({ spendRow: { spend_micros: "1000000" } });
+
+    const snap = await getChatSpendSnapshotForBusiness("biz-1", db as never, "starter");
+
+    expect(snap.baseCapMicros).toBe(5_000_000);
+    expect(snap.effectiveCapMicros).toBe(5_000_000);
+  });
+
+  it("uses the $10 base for a non-starter tier", async () => {
+    const db = stubDb({ spendRow: { spend_micros: "1000000" } });
+
+    const snap = await getChatSpendSnapshotForBusiness("biz-1", db as never, "standard");
+
     expect(snap.baseCapMicros).toBe(10_000_000);
   });
 });

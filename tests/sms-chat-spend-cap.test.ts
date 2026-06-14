@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_CHAT_SPEND_CAP_MICROS,
   DEFAULT_GEMINI_PRICE_PER_1M,
+  STARTER_CHAT_SPEND_CAP_MICROS,
+  capMicrosForTier,
   estimateChatCostMicros,
   geminiCostMicrosFromTokens,
   monthStartIso,
@@ -72,6 +75,22 @@ describe("geminiCostMicrosFromTokens", () => {
   it("clamps negative token counts to zero", () => {
     expect(geminiCostMicrosFromTokens("gemini-2.5-flash-lite", -10, 10)).toBe(4);
     expect(geminiCostMicrosFromTokens("gemini-2.5-flash-lite", 10, -10)).toBe(1);
+  });
+});
+
+// --- capMicrosForTier --------------------------------------------------------
+
+describe("capMicrosForTier", () => {
+  it("returns the starter base for starter, the standard base otherwise", () => {
+    expect(capMicrosForTier("starter", 10_000_000)).toBe(STARTER_CHAT_SPEND_CAP_MICROS);
+    expect(capMicrosForTier("starter", 10_000_000)).toBe(5_000_000);
+    expect(capMicrosForTier("standard", 10_000_000)).toBe(10_000_000);
+    expect(capMicrosForTier("enterprise", 10_000_000)).toBe(10_000_000);
+    expect(capMicrosForTier(null, DEFAULT_CHAT_SPEND_CAP_MICROS)).toBe(10_000_000);
+  });
+
+  it("honors an explicit starter override", () => {
+    expect(capMicrosForTier("starter", 10_000_000, 3_000_000)).toBe(3_000_000);
   });
 });
 

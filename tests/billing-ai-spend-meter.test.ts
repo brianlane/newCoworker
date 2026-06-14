@@ -18,6 +18,7 @@ type DbResult = { data: unknown; error: { message: string } | null };
 
 function stubDb(opts: {
   subscriptionRow?: unknown;
+  businessRow?: unknown;
   creditResult?: DbResult;
   recordResult?: DbResult;
 }) {
@@ -25,13 +26,16 @@ function stubDb(opts: {
     if (fn === "chat_active_credit_micros") return opts.creditResult ?? { data: 0, error: null };
     return opts.recordResult ?? { data: null, error: null };
   });
-  const from = vi.fn(() => {
+  const from = vi.fn((table: string) => {
     const builder = {
       select: () => builder,
       eq: () => builder,
       order: () => builder,
       limit: () => builder,
-      maybeSingle: async () => ({ data: opts.subscriptionRow ?? null, error: null })
+      maybeSingle: async () =>
+        table === "businesses"
+          ? { data: opts.businessRow ?? null, error: null }
+          : { data: opts.subscriptionRow ?? null, error: null }
     };
     return builder;
   });
@@ -116,6 +120,24 @@ describe("meterGeminiSpendForBusiness", () => {
       p_cost_micros: Math.ceil(10_000 * 0.5 + 1_000 * 3.0),
       p_cap_micros: 15_000_000
     });
+  });
+
+  it("trips against the $5 starter base cap for starter tenants", async () => {
+    const db = stubDb({
+      businessRow: { tier: "starter" },
+      creditResult: { data: 0, error: null }
+    });
+
+    await meterGeminiSpendForBusiness({
+      businessId: "biz-1",
+      model: "gemini-2.5-flash-lite",
+      surface: "knowledge_lookup",
+      usage: { promptTokens: 100, outputTokens: 10 },
+      client: db as never
+    });
+
+    const call = db.rpc.mock.calls.find((c) => c[0] === "owner_chat_record_spend");
+    expect((call![1] as Record<string, unknown>).p_cap_micros).toBe(5_000_000);
   });
 
   it("falls back to a chars/4 estimate and UTC month-start period without usage/subscription", async () => {

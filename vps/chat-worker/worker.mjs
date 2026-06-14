@@ -121,7 +121,12 @@ const OWNER_START_AGENT_OPTS = OWNER_START_AGENT
 // The local-agent name MUST match the agent deploy-client.sh seeds for the
 // Qwen fallback; turns on it are $0 and skip metering.
 const OWNER_CHAT_LOCAL_AGENT = (process.env.CHAT_WORKER_OWNER_LOCAL_AGENT ?? "OwnerCoworkerLocal").trim();
-const OWNER_CHAT_SPEND_CAP_MICROS = intEnv("OWNER_CHAT_SPEND_CAP_MICROS", 10_000_000); // $10
+const OWNER_CHAT_SPEND_CAP_MICROS = intEnv("OWNER_CHAT_SPEND_CAP_MICROS", 10_000_000); // $10 (standard/enterprise)
+// Starter tenants get a lower included AI budget ($5). The cap is derived from
+// the business tier (read from `businesses.tier`, cached) so it stays in lockstep
+// with the platform (src/lib/db/chat-usage.ts) and Edge (_shared/chat_spend_cap.ts)
+// mappings without depending on a per-tenant .env redeploy. Env-tunable base.
+const OWNER_CHAT_SPEND_CAP_MICROS_STARTER = intEnv("OWNER_CHAT_SPEND_CAP_MICROS_STARTER", 5_000_000); // $5
 // Gemini 2.5 Flash-Lite list price, USD per 1M tokens (see debug/bench-cloud.ts).
 const OWNER_CHAT_PRICE_IN_PER_1M = Number(process.env.OWNER_CHAT_PRICE_IN_PER_1M ?? 0.1);
 const OWNER_CHAT_PRICE_OUT_PER_1M = Number(process.env.OWNER_CHAT_PRICE_OUT_PER_1M ?? 0.4);
@@ -389,6 +394,31 @@ async function resolveOwnerChatPeriodStart() {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
 }
 
+// Tier-derived shared spend cap base ($5 starter / $10 otherwise). Tier rarely
+// changes for a tenant (only on a plan change, which re-provisions), so we read
+// `businesses.tier` once and cache it. A read blip falls back to the standard
+// base, never minting extra headroom for a starter tenant beyond one process
+// lifetime.
+let cachedTierCapMicros = null;
+async function resolveTierCapMicros() {
+  if (cachedTierCapMicros !== null) return cachedTierCapMicros;
+  try {
+    const { data } = await sb
+      .from("businesses")
+      .select("tier")
+      .eq("id", BUSINESS_ID)
+      .maybeSingle();
+    const tier = typeof data?.tier === "string" ? data.tier : null;
+    cachedTierCapMicros =
+      tier === "starter" ? OWNER_CHAT_SPEND_CAP_MICROS_STARTER : OWNER_CHAT_SPEND_CAP_MICROS;
+  } catch {
+    // Don't cache a fallback: a transient read failure shouldn't pin the cap
+    // for the process lifetime; retry on the next turn.
+    return OWNER_CHAT_SPEND_CAP_MICROS;
+  }
+  return cachedTierCapMicros;
+}
+
 // Current period spend (micro-USD) for this tenant. Throws on a hard read
 // error so the caller can fail open. 0 when no row exists yet.
 async function readOwnerChatSpendMicros(periodStart) {
@@ -430,7 +460,8 @@ async function resolveOwnerChatCap() {
   try {
     const periodStart = await resolveOwnerChatPeriodStart();
     const spent = await readOwnerChatSpendMicros(periodStart);
-    const effectiveCap = OWNER_CHAT_SPEND_CAP_MICROS + (await readActiveChatCreditMicros());
+    const baseCap = await resolveTierCapMicros();
+    const effectiveCap = baseCap + (await readActiveChatCreditMicros());
     return { periodStart, overCap: spent >= effectiveCap };
   } catch (err) {
     log("warn", "owner_chat_cap_read_failed", { error: err?.message || String(err) });
@@ -507,8 +538,8 @@ async function recordOwnerChatSpend(job, inputMessages, replyContent, usedAgent,
     const costMicros = estimateOwnerChatCostMicros(inputMessages, replyContent);
     // Trip the fuse against the EFFECTIVE cap (base + purchased credit) so a
     // Gemini pack purchase moves the trip point along with the routing check.
-    const effectiveCapMicros =
-      OWNER_CHAT_SPEND_CAP_MICROS + (await readActiveChatCreditMicros());
+    const baseCapMicros = await resolveTierCapMicros();
+    const effectiveCapMicros = baseCapMicros + (await readActiveChatCreditMicros());
     const { data, error } = await sb.rpc("owner_chat_record_spend", {
       p_business_id: job.business_id,
       p_period_start: ps,
@@ -530,7 +561,7 @@ async function recordOwnerChatSpend(job, inputMessages, replyContent, usedAgent,
         businessId: job.business_id,
         periodStart: ps,
         spendUsd: (Number(row.spend_micros) / 1_000_000).toFixed(4),
-        capUsd: (OWNER_CHAT_SPEND_CAP_MICROS / 1_000_000).toFixed(2),
+        capUsd: (baseCapMicros / 1_000_000).toFixed(2),
         turnCount: row.turn_count
       });
       await sendChatCapAlertOnce(job.business_id, ps, Number(row.spend_micros) || null);

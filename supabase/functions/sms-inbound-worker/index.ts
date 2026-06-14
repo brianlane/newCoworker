@@ -27,6 +27,7 @@ import { buildCustomerPreambleForEdge, type EdgeCustomerMemoryRow } from "../_sh
 import { currentDateTimeLine } from "../_shared/datetime_line.ts";
 import {
   pickSmsTurn,
+  capMicrosForTier,
   recordSmsChatSpend,
   resolveChatPeriodStart,
   resolveSmsChatCap
@@ -74,6 +75,12 @@ const SMS_CHAT_SPEND_METERING_ENABLED =
 const CHAT_SPEND_CAP_MICROS = (() => {
   const n = Number(Deno.env.get("OWNER_CHAT_SPEND_CAP_MICROS"));
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 10_000_000;
+})();
+// Starter tenants get a lower shared AI budget ($5). Resolved per job from the
+// business tier via capMicrosForTier; this is the starter base (env-tunable).
+const CHAT_SPEND_CAP_MICROS_STARTER = (() => {
+  const n = Number(Deno.env.get("OWNER_CHAT_SPEND_CAP_MICROS_STARTER"));
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 5_000_000;
 })();
 // Agent names MUST match the workflow deploy-client.sh seeds: `Coworker` is the
 // Gemini-backed SMS startAgent, `CoworkerLocal` its $0 Qwen fallback twin.
@@ -216,16 +223,24 @@ serve(async (req: Request) => {
     // before running Rowboat. Matches the webhook gate (§CustomerChannelGate).
     // The same row carries the business timezone for the date/time preamble.
     let businessTimezone: string | null = null;
+    // Tier drives the shared AI spend cap ($5 starter / $10 otherwise).
+    let businessTier: string | null = null;
     {
       const { data: bizRow } = await supabase
         .from("businesses")
-        .select("is_paused, customer_channels_enabled, timezone")
+        .select("is_paused, customer_channels_enabled, timezone, tier")
         .eq("id", job.business_id)
         .maybeSingle();
       const biz = bizRow as
-        | { is_paused?: boolean; customer_channels_enabled?: boolean; timezone?: string | null }
+        | {
+            is_paused?: boolean;
+            customer_channels_enabled?: boolean;
+            timezone?: string | null;
+            tier?: string | null;
+          }
         | null;
       businessTimezone = typeof biz?.timezone === "string" ? biz.timezone : null;
+      businessTier = typeof biz?.tier === "string" ? biz.tier : null;
 
       if (biz?.is_paused || biz?.customer_channels_enabled === false) {
         const { data: settingsRow } = await supabase
@@ -500,7 +515,7 @@ serve(async (req: Request) => {
         // startAgent override (it ignores startAgent when a conversationId is
         // supplied), $0 and not metered. Fails open to Gemini on any read error.
         const cap = await resolveSmsChatCap(supabase, job.business_id, {
-          capMicros: CHAT_SPEND_CAP_MICROS,
+          capMicros: capMicrosForTier(businessTier, CHAT_SPEND_CAP_MICROS, CHAT_SPEND_CAP_MICROS_STARTER),
           enabled: SMS_CHAT_SPEND_METERING_ENABLED
         });
         const turnPlan = pickSmsTurn({
@@ -686,7 +701,7 @@ serve(async (req: Request) => {
             periodStart: cap.periodStart,
             inputChars: (customerPreamble?.length ?? 0) + userText.length,
             outputChars: reply.length,
-            capMicros: CHAT_SPEND_CAP_MICROS,
+            capMicros: capMicrosForTier(businessTier, CHAT_SPEND_CAP_MICROS, CHAT_SPEND_CAP_MICROS_STARTER),
             enabled: SMS_CHAT_SPEND_METERING_ENABLED
           });
           if (meterRes.fuseNewlyTripped) {
@@ -726,7 +741,7 @@ serve(async (req: Request) => {
             periodStart: null,
             inputChars: (customerPreamble?.length ?? 0) + userText.length,
             outputChars: reply.length,
-            capMicros: CHAT_SPEND_CAP_MICROS,
+            capMicros: capMicrosForTier(businessTier, CHAT_SPEND_CAP_MICROS, CHAT_SPEND_CAP_MICROS_STARTER),
             enabled: SMS_CHAT_SPEND_METERING_ENABLED
           });
           if (meterRes.fuseNewlyTripped) {
