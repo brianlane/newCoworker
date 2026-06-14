@@ -58,22 +58,11 @@ function monthStartIso(now: Date = new Date()): string {
 export async function getChatSpendSnapshotForBusiness(
   businessId: string,
   client?: SupabaseClient,
+  // The caller passes the tenant tier so the displayed cap matches what the fuse
+  // enforces ($5 starter / $10 otherwise). Omitted/null → standard base cap.
   tier?: PlanTier | null
 ): Promise<ChatSpendSnapshot> {
   const db = client ?? (await createSupabaseServiceClient());
-
-  // Resolve tier when the caller didn't supply it, so the displayed cap matches
-  // what the fuse enforces ($5 starter / $10 otherwise). A read blip falls back
-  // to the standard base cap.
-  let resolvedTier: PlanTier | null | undefined = tier;
-  if (resolvedTier === undefined) {
-    const { data: bizRow } = await db
-      .from("businesses")
-      .select("tier")
-      .eq("id", businessId)
-      .maybeSingle();
-    resolvedTier = (bizRow as { tier?: PlanTier | null } | null)?.tier ?? null;
-  }
 
   let periodStart = monthStartIso();
   const { data: subRow } = await db
@@ -107,7 +96,7 @@ export async function getChatSpendSnapshotForBusiness(
     if (Number.isFinite(n) && n > 0) creditMicros = n;
   }
 
-  const baseCapMicros = chatSpendBaseCapMicrosForTier(resolvedTier);
+  const baseCapMicros = chatSpendBaseCapMicrosForTier(tier);
   return {
     periodStart,
     spendMicros,

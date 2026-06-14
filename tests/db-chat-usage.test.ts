@@ -24,14 +24,12 @@ type MaybeSingleResult = { data: unknown; error: { message: string } | null };
 function stubDb(opts: {
   subscriptionRow?: unknown;
   spendRow?: unknown;
-  businessRow?: unknown;
   creditResult?: MaybeSingleResult;
   rpcResults?: Record<string, MaybeSingleResult>;
 }) {
   const tables: Record<string, MaybeSingleResult> = {
     subscriptions: { data: opts.subscriptionRow ?? null, error: null },
-    owner_chat_model_spend: { data: opts.spendRow ?? null, error: null },
-    businesses: { data: opts.businessRow ?? null, error: null }
+    owner_chat_model_spend: { data: opts.spendRow ?? null, error: null }
   };
   const rpc = vi.fn(async (fn: string) => {
     if (opts.rpcResults && fn in opts.rpcResults) return opts.rpcResults[fn];
@@ -146,7 +144,7 @@ describe("getChatSpendSnapshotForBusiness", () => {
     expect(snap.baseCapMicros).toBe(10_000_000);
   });
 
-  it("uses the $5 starter base when tier is passed explicitly", async () => {
+  it("uses the $5 starter base when tier is starter", async () => {
     const db = stubDb({ spendRow: { spend_micros: "1000000" } });
 
     const snap = await getChatSpendSnapshotForBusiness("biz-1", db as never, "starter");
@@ -155,12 +153,12 @@ describe("getChatSpendSnapshotForBusiness", () => {
     expect(snap.effectiveCapMicros).toBe(5_000_000);
   });
 
-  it("resolves the tier from businesses.tier when not passed", async () => {
-    const db = stubDb({ businessRow: { tier: "starter" } });
+  it("uses the $10 base for a non-starter tier", async () => {
+    const db = stubDb({ spendRow: { spend_micros: "1000000" } });
 
-    const snap = await getChatSpendSnapshotForBusiness("biz-1", db as never);
+    const snap = await getChatSpendSnapshotForBusiness("biz-1", db as never, "standard");
 
-    expect(snap.baseCapMicros).toBe(5_000_000);
+    expect(snap.baseCapMicros).toBe(10_000_000);
   });
 });
 
