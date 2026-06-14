@@ -28,9 +28,18 @@ interface SidebarProps {
 export function Sidebar({ items, userEmail, renderTrailing }: SidebarProps) {
   const pathname = usePathname();
   // Mobile-only off-canvas state. At lg+ the drawer is always static/visible
-  // (CSS), so this flag only matters below lg. We close it from the nav links'
-  // onClick so the drawer doesn't stay open over the page after a tap.
+  // (CSS), so this flag only matters below lg.
   const [open, setOpen] = useState(false);
+
+  // Auto-close on navigation (covers link taps, back/forward, programmatic
+  // routing). We adjust state during render by comparing the current pathname
+  // to the one we last rendered with — React's recommended alternative to a
+  // setState-in-effect, which also avoids the cascading-render lint rule.
+  const [lastPathname, setLastPathname] = useState(pathname);
+  if (pathname !== lastPathname) {
+    setLastPathname(pathname);
+    setOpen(false);
+  }
 
   const activeItem = [...items]
     .sort((a, b) => b.href.length - a.href.length)

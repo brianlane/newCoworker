@@ -129,7 +129,7 @@ export default async function AdminDashboardPage() {
       {/* ── Middle row: sparkline + tier breakdown ── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Signup sparkline */}
-        <Card className="col-span-2">
+        <Card className="lg:col-span-2">
           <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
             New Signups — Last 6 Months
           </h2>
