@@ -26,8 +26,8 @@ export default async function AiFlowsPage() {
 
   return (
     <div className="max-w-4xl space-y-8">
-      <div className="flex items-start justify-between">
-        <div>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold text-parchment">AiFlows</h1>
           <p className="mt-1 text-sm text-parchment/50">
             Automate multi-step workflows: start from an inbound text or email, on a
@@ -36,7 +36,10 @@ export default async function AiFlowsPage() {
           </p>
         </div>
         {businessId && (
-          <Link href="/dashboard/aiflows/runs" className="text-sm text-signal-teal hover:underline">
+          <Link
+            href="/dashboard/aiflows/runs"
+            className="shrink-0 whitespace-nowrap text-sm text-signal-teal hover:underline"
+          >
             View runs →
           </Link>
         )}

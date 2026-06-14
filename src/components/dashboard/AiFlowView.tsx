@@ -1,0 +1,285 @@
+import type {
+  AiFlowDefinition,
+  FlowStep,
+  FlowTrigger,
+  StepCondition,
+  TriggerCondition
+} from "@/lib/ai-flows/schema";
+
+/** How the workflow starts. Mirrors CHANNEL_LABELS in AiFlowsManager. */
+const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
+  sms: "Inbound text (SMS)",
+  manual: "Manual — Run now button",
+  schedule: "On a schedule",
+  email: "Inbound email"
+};
+
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+const sectionClass =
+  "rounded-md border border-parchment/10 bg-deep-ink/20 p-4 space-y-3";
+
+/** One read-only "label: value" row. Multi-line values keep their whitespace. */
+function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="space-y-0.5">
+      <div className="text-xs font-medium text-parchment/50">{label}</div>
+      <div
+        className={`whitespace-pre-wrap break-words text-sm text-parchment ${
+          mono ? "font-mono text-[13px]" : ""
+        }`}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+/** A small pill used for conditions / flags. */
+function Chip({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center rounded-full border border-parchment/15 bg-deep-ink/40 px-2 py-0.5 text-[11px] text-parchment/70">
+      {children}
+    </span>
+  );
+}
+
+function conditionLabel(c: TriggerCondition): string {
+  switch (c.type) {
+    case "has_url":
+      return "has a URL";
+    case "contains":
+      return `contains "${c.value}"`;
+    case "regex":
+      return `matches /${c.value}/`;
+    case "from_matches":
+      return `sender matches "${c.value}"`;
+  }
+}
+
+function TriggerView({ trigger }: { trigger: FlowTrigger }) {
+  return (
+    <section className={sectionClass}>
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">Trigger</h3>
+      <Row label="Starts when" value={CHANNEL_LABELS[trigger.channel]} />
+      {trigger.channel === "sms" && (
+        <>
+          <Row
+            label="Correlation window"
+            value={`${trigger.correlationWindowMinutes ?? 10} minute(s)`}
+          />
+          <ConditionsView conditions={trigger.conditions} />
+        </>
+      )}
+      {trigger.channel === "schedule" &&
+        (trigger.everyMinutes !== undefined ? (
+          <Row label="Runs" value={`Every ${trigger.everyMinutes} minutes`} />
+        ) : (
+          <>
+            <Row label="Time" value={`${trigger.time} (${trigger.timezone})`} />
+            <Row
+              label="Days"
+              value={
+                trigger.daysOfWeek && trigger.daysOfWeek.length > 0
+                  ? [...trigger.daysOfWeek].sort().map((d) => DAY_NAMES[d]).join(", ")
+                  : "Every day"
+              }
+            />
+          </>
+        ))}
+      {trigger.channel === "email" && (
+        <>
+          <Row label="Watched mailbox" value={trigger.connectionId} mono />
+          <ConditionsView conditions={trigger.conditions} />
+        </>
+      )}
+    </section>
+  );
+}
+
+function ConditionsView({ conditions }: { conditions: TriggerCondition[] }) {
+  if (conditions.length === 0) {
+    return <Row label="Conditions" value="Any inbound message" />;
+  }
+  return (
+    <div className="space-y-1">
+      <div className="text-xs font-medium text-parchment/50">Conditions</div>
+      <div className="flex flex-wrap gap-1.5">
+        {conditions.map((c, i) => (
+          <Chip key={i}>{conditionLabel(c)}</Chip>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function WhenView({ when }: { when: StepCondition }) {
+  const operator = when.equals !== undefined ? "equals" : "contains";
+  const value = when.equals ?? when.contains ?? "";
+  return (
+    <Row label="Only runs when" value={`${when.var} ${operator} "${value}"`} />
+  );
+}
+
+/** The meaningful fields of a single step, rendered read-only. */
+function StepBody({ step }: { step: FlowStep }) {
+  switch (step.type) {
+    case "extract_url":
+      return <Row label="Save URL as" value={step.saveAs} mono />;
+    case "browse_extract":
+      return (
+        <>
+          <Row label="URL variable" value={step.urlVar} mono />
+          <div className="space-y-1">
+            <div className="text-xs font-medium text-parchment/50">Fields to extract</div>
+            <div className="flex flex-wrap gap-1.5">
+              {step.fields.map((f, i) => (
+                <Chip key={i}>
+                  {f.name}
+                  {f.description ? ` — ${f.description}` : ""}
+                </Chip>
+              ))}
+            </div>
+          </div>
+          {step.auth?.integrationLabel && (
+            <Row label="Login integration" value={step.auth.integrationLabel} />
+          )}
+          {step.screenshot && <Chip>Captures a screenshot</Chip>}
+        </>
+      );
+    case "send_sms":
+      return (
+        <>
+          <Row label="Recipient" value={step.to} mono />
+          <Row label="Message" value={step.body} />
+          {step.quietHours && (
+            <div className="rounded-md border border-parchment/10 bg-deep-ink/30 p-3 space-y-2">
+              <div className="text-xs font-semibold text-parchment/60">Quiet hours</div>
+              <Row
+                label="Window"
+                value={`No texts ${step.quietHours.noSendAfter} – ${step.quietHours.resumeAt} (${step.quietHours.timezone})`}
+              />
+              {step.quietHours.emailFallbackVar && (
+                <Row
+                  label="After-hours email"
+                  value={`Emails {{vars.${step.quietHours.emailFallbackVar}}}${
+                    step.quietHours.emailSubject ? ` — "${step.quietHours.emailSubject}"` : ""
+                  }`}
+                />
+              )}
+            </div>
+          )}
+        </>
+      );
+    case "send_email":
+      return (
+        <>
+          <Row label="Recipient" value={step.to} mono />
+          <Row
+            label="From"
+            value={step.fromConnectionId ?? "New Coworker (platform sender)"}
+            mono={Boolean(step.fromConnectionId)}
+          />
+          <Row label="Subject" value={step.subject} />
+          <Row label="Body" value={step.body} />
+          {step.attachScreenshot && <Chip>Attaches an earlier screenshot</Chip>}
+        </>
+      );
+    case "approval_gate":
+      return <Row label="Approval prompt" value={step.prompt} />;
+    case "notify_owner":
+      return <Row label="Owner message" value={step.message} />;
+    case "http_call":
+      return (
+        <>
+          <Row label="Integration label" value={step.label} />
+          <Row label="Method" value={step.method ?? "POST"} />
+          {step.path && <Row label="Path" value={step.path} mono />}
+          {step.bodyTemplate && <Row label="Body template" value={step.bodyTemplate} />}
+          {step.saveAs && <Row label="Save response as" value={step.saveAs} mono />}
+        </>
+      );
+    case "route_to_team":
+      return (
+        <>
+          <Row label="Agent offer SMS" value={step.offerTemplate} />
+          <Row label="Minutes to respond" value={String(step.responseMinutes ?? 10)} />
+          {step.agentName && <Row label="Pinned to" value={step.agentName} />}
+          <Row label="Owner fallback SMS" value={step.ownerFallbackTemplate} />
+          {step.claimedNotifyTemplate && (
+            <Row label="Owner notice when claimed" value={step.claimedNotifyTemplate} />
+          )}
+          {step.offerWindow && (
+            <div className="rounded-md border border-parchment/10 bg-deep-ink/30 p-3 space-y-2">
+              <div className="text-xs font-semibold text-parchment/60">After-hours offers</div>
+              <Row
+                label="Window"
+                value={`Quiet ${step.offerWindow.quietStart} – ${step.offerWindow.quietEnd} (${step.offerWindow.timezone}), grace ${step.offerWindow.graceMinutes ?? 10} min`}
+              />
+            </div>
+          )}
+          {step.attachScreenshot && <Chip>Attaches an earlier screenshot</Chip>}
+        </>
+      );
+    case "browse_action":
+      return (
+        <>
+          <Row label="URL variable" value={step.urlVar} mono />
+          {step.auth?.integrationLabel && (
+            <Row label="Login integration" value={step.auth.integrationLabel} />
+          )}
+          <div className="space-y-1">
+            <div className="text-xs font-medium text-parchment/50">Page actions, in order</div>
+            <ol className="space-y-1">
+              {step.actions.map((a, i) => (
+                <li
+                  key={i}
+                  className="flex flex-wrap items-center gap-2 text-sm text-parchment"
+                >
+                  <span className="text-parchment/40">{i + 1}.</span>
+                  <Chip>{a.kind}</Chip>
+                  <span className="font-mono text-[13px] text-parchment/80">{a.target}</span>
+                  {a.valueTemplate && (
+                    <span className="text-parchment/50">→ {a.valueTemplate}</span>
+                  )}
+                </li>
+              ))}
+            </ol>
+          </div>
+          {step.screenshot && <Chip>Captures a screenshot</Chip>}
+        </>
+      );
+  }
+}
+
+function StepView({ step, index }: { step: FlowStep; index: number }) {
+  return (
+    <div className={sectionClass}>
+      <div className="text-sm font-medium text-parchment">
+        {index + 1}. {step.type}
+      </div>
+      <StepBody step={step} />
+      {step.when && <WhenView when={step.when} />}
+    </div>
+  );
+}
+
+/** Read-only rendering of an AiFlow definition (trigger, steps, options). */
+export function AiFlowView({ definition }: { definition: AiFlowDefinition }) {
+  return (
+    <div className="space-y-4">
+      <TriggerView trigger={definition.trigger} />
+      <section className="space-y-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">Steps</h3>
+        {definition.steps.map((step, i) => (
+          <StepView key={step.id} step={step} index={i} />
+        ))}
+      </section>
+      {definition.options?.suppressDefaultReply && (
+        <p className="text-xs text-parchment/50">
+          Suppresses the normal Coworker reply when this flow matches.
+        </p>
+      )}
+    </div>
+  );
+}
