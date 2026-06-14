@@ -25,7 +25,8 @@ import type { ProvisionVpsForBusinessResult } from "@/lib/hostinger/provision";
 import type { SshExecResult } from "@/lib/hostinger/ssh";
 
 vi.mock("@/lib/db/businesses", () => ({
-  updateBusinessStatus: vi.fn().mockResolvedValue(undefined)
+  updateBusinessStatus: vi.fn().mockResolvedValue(undefined),
+  getBusiness: vi.fn().mockResolvedValue({ business_type: "real_estate" })
 }));
 
 vi.mock("@/lib/db/configs", () => ({

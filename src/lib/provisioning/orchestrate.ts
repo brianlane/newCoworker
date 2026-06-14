@@ -19,7 +19,8 @@ import {
 import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { buildProvisioningLiveEmail } from "@/lib/email/templates/provisioning-live";
-import { updateBusinessStatus } from "@/lib/db/businesses";
+import { updateBusinessStatus, getBusiness } from "@/lib/db/businesses";
+import { buildComplianceSystemPrompt } from "@/lib/compliance/fha";
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
 import { readFileSync } from "fs";
@@ -59,11 +60,20 @@ function resolveStarterOrStandard(tier: ProvisioningInput["tier"]): "starter" | 
   return tier;
 }
 
-function loadSoulTemplate(): string {
+/**
+ * Bootstrap soul.md used only when a business has no existing config yet (i.e.
+ * pre-onboarding). The compliance guardrail is selected per business type so a
+ * housing business gets Fair Housing Act language while every other industry
+ * gets a neutral guardrail. Onboarding later regenerates soul.md via
+ * `compileSoulMd`, which applies the same per-type rule.
+ */
+function loadSoulTemplate(businessType?: string | null): string {
+  const compliance = buildComplianceSystemPrompt(businessType);
   try {
-    return readFileSync(join(process.cwd(), "vps/templates/soul.md"), "utf-8");
+    const base = readFileSync(join(process.cwd(), "vps/templates/soul.md"), "utf-8").trimEnd();
+    return `${base}\n\n## Compliance\n${compliance}\n`;
   } catch {
-    return "# soul.md\nYou are a professional AI coworker. Follow Fair Housing Act guardrails at all times.";
+    return `# soul.md\nYou are a professional AI coworker.\n\n## Compliance\n${compliance}\n`;
   }
 }
 
@@ -610,9 +620,10 @@ async function runOrchestrator(
   await updateBusinessStatus(businessId, "offline", vpsId);
 
   const existingConfig = await getBusinessConfig(businessId);
+  const businessRow = await getBusiness(businessId);
   await upsertBusinessConfig({
     business_id: businessId,
-    soul_md: existingConfig?.soul_md ?? loadSoulTemplate(),
+    soul_md: existingConfig?.soul_md ?? loadSoulTemplate(businessRow?.business_type),
     identity_md: existingConfig?.identity_md ?? loadIdentityTemplate(),
     memory_md: existingConfig?.memory_md ?? "# memory.md\nLossless memory DAG initialized.",
     // Preserve the onboarding website crawl. Without this the upsert defaults

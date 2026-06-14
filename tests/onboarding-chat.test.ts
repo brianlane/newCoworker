@@ -181,11 +181,24 @@ describe("onboarding chat helpers", () => {
     expect(drafts.identityMd).toContain("Team Size: 4");
     expect(drafts.soulMd).toContain("Be calm, clear, and reassuring.");
     expect(drafts.soulMd).toContain("Thanks, Northwind Services");
+    expect(drafts.soulMd).toContain("## Compliance");
+    expect(drafts.soulMd).not.toContain("Fair Housing Act");
     expect(drafts.memoryMd).toContain("## Business Summary");
     expect(drafts.memoryMd).toContain("## Customer Types");
     expect(drafts.memoryMd).toContain("ServiceTitan");
     expect(drafts.memoryMd).toContain("Offers 24/7 emergency service.");
     expect(drafts.memoryMd).toContain("Cause: A customer says the AC stopped working.");
+  });
+
+  it("injects Fair Housing Act compliance only for housing business types", () => {
+    const profile = createEmptyAssistantProfile();
+    const realEstate = compileRowboatMarkdownDrafts({ businessType: "real_estate" }, profile);
+    const salon = compileRowboatMarkdownDrafts({ businessType: "hair_salons" }, profile);
+
+    expect(realEstate.soulMd).toContain("## Compliance");
+    expect(realEstate.soulMd).toContain("Fair Housing Act");
+    expect(salon.soulMd).toContain("## Compliance");
+    expect(salon.soulMd).not.toContain("Fair Housing Act");
   });
 
   it("uses fallback copy when context and profile details are sparse", () => {

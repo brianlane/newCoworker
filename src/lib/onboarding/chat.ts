@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { buildComplianceSystemPrompt } from "@/lib/compliance/fha";
 
 function normalizeString(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -369,7 +370,10 @@ export function compileIdentityMd(
   ].join("\n");
 }
 
-export function compileSoulMd(profile: OnboardingAssistantProfile): string {
+export function compileSoulMd(
+  profile: OnboardingAssistantProfile,
+  businessType?: string | null
+): string {
   return [
     "# soul.md",
     "You are a professional AI coworker representing the business with accuracy, clarity, and good judgment.",
@@ -388,6 +392,9 @@ export function compileSoulMd(profile: OnboardingAssistantProfile): string {
     "",
     "## Policies / Boundaries",
     listOrFallback(profile.policies, "Do not invent business policies. If uncertain, say so and offer a follow-up."),
+    "",
+    "## Compliance",
+    buildComplianceSystemPrompt(businessType),
     "",
     "## Signature",
     profile.signature ? `Use this sign-off when appropriate: ${profile.signature}` : "Use the business's preferred sign-off when one is provided."
@@ -438,7 +445,7 @@ export function compileRowboatMarkdownDrafts(
 ): RowboatMarkdownDrafts {
   return {
     identityMd: compileIdentityMd(knownContext, profile),
-    soulMd: compileSoulMd(profile),
+    soulMd: compileSoulMd(profile, knownContext.businessType),
     memoryMd: compileMemoryMd(knownContext, profile)
   };
 }

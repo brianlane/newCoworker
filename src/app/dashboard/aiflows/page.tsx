@@ -16,11 +16,12 @@ export default async function AiFlowsPage() {
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
-    .select("id")
+    .select("id, business_type")
     .eq("owner_email", user.email)
     .order("created_at", { ascending: false })
     .limit(1);
   const businessId = businesses?.[0]?.id ?? null;
+  const businessType = (businesses?.[0]?.business_type as string | null | undefined) ?? null;
 
   const flows = businessId ? await listAiFlows(businessId) : [];
 
@@ -55,7 +56,7 @@ export default async function AiFlowsPage() {
           </a>
         </Card>
       ) : (
-        <AiFlowsManager businessId={businessId} initialFlows={flows} />
+        <AiFlowsManager businessId={businessId} businessType={businessType} initialFlows={flows} />
       )}
     </div>
   );
