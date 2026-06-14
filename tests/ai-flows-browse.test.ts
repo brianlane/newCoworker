@@ -3,7 +3,9 @@ import {
   isUnsafeBrowseHost,
   normalizeBrowseUrl,
   parseActionResponse,
-  parseRenderResponse
+  parseRenderResponse,
+  renderErrorFields,
+  renderErrorKind
 } from "../supabase/functions/_shared/ai_flows/browse";
 
 describe("isUnsafeBrowseHost", () => {
@@ -113,6 +115,42 @@ describe("parseRenderResponse", () => {
     expect(parseRenderResponse("nope", "u")).toBeNull();
     expect(parseRenderResponse({}, "u")).toBeNull();
     expect(parseRenderResponse({ finalUrl: "x" }, "u")).toBeNull();
+  });
+});
+
+describe("renderErrorKind", () => {
+  it.each([
+    ["login_failed", "login"],
+    ["auth_config_error", "login"],
+    ["action_failed", "action"],
+    ["render_failed", "transient"],
+    ["", "transient"],
+    ["something_unknown", "transient"]
+  ])("maps %s -> %s", (code, expected) => {
+    expect(renderErrorKind(code)).toBe(expected);
+  });
+});
+
+describe("renderErrorFields", () => {
+  it("pulls string error + detail", () => {
+    expect(renderErrorFields({ error: "action_failed", detail: "click timeout" })).toEqual({
+      error: "action_failed",
+      detail: "click timeout"
+    });
+  });
+  it("treats a success body (no error) as empty", () => {
+    expect(renderErrorFields({ finalUrl: "x", actionsCompleted: 3 })).toEqual({
+      error: "",
+      detail: ""
+    });
+  });
+  it("ignores non-string error/detail", () => {
+    expect(renderErrorFields({ error: 42, detail: { x: 1 } })).toEqual({ error: "", detail: "" });
+  });
+  it("returns empty for non-object bodies", () => {
+    expect(renderErrorFields(null)).toEqual({ error: "", detail: "" });
+    expect(renderErrorFields("nope")).toEqual({ error: "", detail: "" });
+    expect(renderErrorFields(undefined)).toEqual({ error: "", detail: "" });
   });
 });
 

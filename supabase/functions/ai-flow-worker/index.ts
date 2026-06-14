@@ -48,7 +48,9 @@ import { planStep, type StepAction } from "../_shared/ai_flows/steps.ts";
 import {
   normalizeBrowseUrl,
   parseActionResponse,
-  parseRenderResponse
+  parseRenderResponse,
+  renderErrorFields,
+  renderErrorKind
 } from "../_shared/ai_flows/browse.ts";
 import {
   isRecipientOptedOut,
@@ -817,32 +819,42 @@ async function browseActionStep(
       }),
       signal: ctrl.signal
     });
-    if (!res.ok) {
-      let errCode = "";
-      let detail = "";
-      try {
-        const errBody = (await res.json()) as { error?: string; detail?: string };
-        errCode = errBody?.error ?? "";
-        detail = errBody?.detail ?? "";
-      } catch {
-        /* non-JSON error body — treat as transient below */
-      }
+    // The render service reports application outcomes in a 200 JSON body (NOT a
+    // 5xx) so the Cloudflare Tunnel can't strip the structured error off a
+    // gateway-error status. Read the body once and classify on its `error` code;
+    // a real non-2xx here means a transport/edge failure (origin down, body
+    // replaced by Cloudflare's "error code: 502" page) → retry.
+    const raw = await res.text();
+    let parsedBody: unknown = null;
+    try {
+      parsedBody = raw ? JSON.parse(raw) : null;
+    } catch {
+      parsedBody = null;
+    }
+    const { error: errCode, detail } = renderErrorFields(parsedBody);
+    if (errCode) {
+      const kind = renderErrorKind(errCode);
       // Permanent setup/page errors: bad creds, missing platform config, or a
       // selector that no longer matches. Retrying cannot fix any of these.
-      if (errCode === "login_failed" || errCode === "auth_config_error") {
+      if (kind === "login") {
         const which = action.auth ? ` for integration "${action.auth.integrationLabel}"` : "";
         return { kind: "fail", error: `browse_action: ${errCode}${which}` };
       }
-      if (errCode === "action_failed") {
+      if (kind === "action") {
         return { kind: "fail", error: `browse_action: ${detail || "a page action failed"}` };
       }
-      // Carry the render service's own error/detail into the retryable error
-      // so the run log shows WHY (e.g. a Playwright navigation timeout)
-      // instead of a bare status code.
+      // render_failed / unknown → transient; carry the detail so the run log
+      // shows WHY (e.g. a Playwright navigation timeout).
       const why = [errCode, detail].filter(Boolean).join(": ");
-      throw new Error(`browse_action: render service ${res.status}${why ? ` (${why})` : ""}`);
+      throw new Error(`browse_action: render service error${why ? ` (${why})` : ""}`);
     }
-    body = await res.json();
+    if (!res.ok) {
+      // No app error code on a non-2xx → the body was stripped/replaced by the
+      // tunnel edge (origin unreachable). Surface a snippet and retry.
+      const snippet = raw.replace(/\s+/g, " ").trim().slice(0, 120);
+      throw new Error(`browse_action: render service ${res.status}${snippet ? ` (${snippet})` : ""}`);
+    }
+    body = parsedBody;
   } finally {
     clearTimeout(timer);
   }
@@ -963,30 +975,33 @@ async function fetchViaRender(
       }),
       signal: ctrl.signal
     });
-    if (!res.ok) {
-      // Distinguish a permanent login failure from transient render errors so
-      // the caller can fail fast instead of retrying bad credentials.
-      let errCode = "";
-      let detail = "";
-      try {
-        const errBody = (await res.json()) as { error?: string; detail?: string };
-        errCode = errBody?.error ?? "";
-        detail = errBody?.detail ?? "";
-      } catch {
-        /* non-JSON error body — treat as transient below */
-      }
+    // Render outcomes arrive in a 200 JSON body (see browse_action above for
+    // why a 5xx would be body-stripped by the Cloudflare Tunnel). Classify on
+    // the `error` code; a true non-2xx is a transport failure to retry.
+    const raw = await res.text();
+    let body: unknown = null;
+    try {
+      body = raw ? JSON.parse(raw) : null;
+    } catch {
+      body = null;
+    }
+    const { error: errCode, detail } = renderErrorFields(body);
+    if (errCode) {
       // login_failed (bad creds/MFA) and auth_config_error (missing platform
       // config, integration not found, wrong selectors) are permanent setup
       // failures — fail the run rather than retrying transiently.
-      if (errCode === "login_failed" || errCode === "auth_config_error") {
+      if (renderErrorKind(errCode) === "login") {
         throw new BrowseLoginError(errCode);
       }
-      // Surface the render service's own error/detail so retry logs show the
-      // root cause (e.g. Playwright nav timeout) instead of a bare status.
+      // render_failed / unknown → transient; surface the root cause.
       const why = [errCode, detail].filter(Boolean).join(": ");
-      throw new Error(`render service ${res.status}${why ? ` (${why})` : ""}`);
+      throw new Error(`render service error${why ? ` (${why})` : ""}`);
     }
-    const parsed = parseRenderResponse(await res.json(), url);
+    if (!res.ok) {
+      const snippet = raw.replace(/\s+/g, " ").trim().slice(0, 120);
+      throw new Error(`render service ${res.status}${snippet ? ` (${snippet})` : ""}`);
+    }
+    const parsed = parseRenderResponse(body, url);
     if (!parsed) throw new Error("render service returned an invalid body");
     return parsed;
   } finally {

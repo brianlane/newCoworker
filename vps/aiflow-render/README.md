@@ -44,9 +44,14 @@ POST /render
 
 200 -> { "finalUrl": "https://...", "text": "<innerText>", "html": "<html>",
          "screenshotBase64": "<base64 jpeg, only when requested>" }
-400 -> { "error": "invalid_or_unsafe_url" | "missing_business_or_label" }
+# Application-level failures also return 200 with an { error, detail } body so
+# the Cloudflare Tunnel can't strip them (it replaces any origin 5xx body with
+# its own "error code: 502" page). The worker classifies on the error code.
+200 -> { "error": "render_failed" | "login_failed" | "auth_config_error"
+                 | "action_failed", "detail": "...", "actionsCompleted": <n> }
+400 -> { "error": "invalid_or_unsafe_url" | "missing_business_or_label"
+                 | "invalid_actions" }
 401 -> { "error": "unauthorized" }                              # bad/no bearer
-502 -> { "error": "render_failed" | "login_failed", "detail": "..." }
 ```
 
 ### Authenticated (credentialed) browse
