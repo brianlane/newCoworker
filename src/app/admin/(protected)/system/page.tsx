@@ -102,7 +102,7 @@ export default async function SystemPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Card>
           <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Total Clients</p>
           <p className="text-3xl font-bold text-parchment">{businesses.length}</p>

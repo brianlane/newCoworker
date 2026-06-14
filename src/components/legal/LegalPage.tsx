@@ -21,7 +21,7 @@ export function LegalPage({
 }: LegalPageProps) {
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
-      <nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
+      <nav className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-6 py-5">
         <Link href="/" className="flex items-center gap-3">
           <Image src="/logo.png" alt="New Coworker" width={36} height={36} className="rounded-full" />
           <span className="text-lg font-bold tracking-tight">New Coworker</span>

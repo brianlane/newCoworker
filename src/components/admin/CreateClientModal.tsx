@@ -65,12 +65,12 @@ export function CreateClientModal() {
       <Button onClick={() => setOpen(true)}>+ New Client</Button>
 
       {open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div
             className="absolute inset-0 bg-deep-ink/80 backdrop-blur-sm"
             onClick={handleClose}
           />
-          <div className="relative z-10 w-full max-w-md bg-deep-ink border border-parchment/15 rounded-xl shadow-2xl p-6">
+          <div className="relative z-10 w-full max-w-md max-h-[90vh] overflow-y-auto bg-deep-ink border border-parchment/15 rounded-xl shadow-2xl p-5 sm:p-6">
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-lg font-bold text-parchment">New Client</h2>
               <button
@@ -121,7 +121,7 @@ export function CreateClientModal() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Input
                   label="Owner Name"
                   value={ownerName}

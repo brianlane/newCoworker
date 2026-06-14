@@ -66,7 +66,7 @@ export default function HomePage() {
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
       {/* Nav */}
-      <nav className="flex items-center justify-between max-w-6xl mx-auto px-6 py-5">
+      <nav className="flex flex-wrap items-center justify-between gap-3 max-w-6xl mx-auto px-6 py-5">
         <div className="flex items-center gap-3">
           <Image src="/logo.png" alt="New Coworker" width={36} height={36} className="rounded-full" />
           <span className="text-lg font-bold tracking-tight">New Coworker</span>

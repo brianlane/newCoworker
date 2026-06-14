@@ -14,7 +14,7 @@ export default async function AdminClientsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-parchment">Admin Overview</h1>
           <p className="text-sm text-parchment/50 mt-1">
@@ -32,7 +32,8 @@ export default async function AdminClientsPage() {
         </Card>
       ) : (
         <Card padding="sm">
-          <table className="w-full text-sm">
+          <div className="mobile-scroll-x">
+          <table className="w-full min-w-[640px] text-sm">
             <thead>
               <tr className="border-b border-parchment/10">
                 <th className="text-left py-3 px-4 text-parchment/40 font-medium">Business</th>
@@ -102,6 +103,7 @@ export default async function AdminClientsPage() {
               ))}
             </tbody>
           </table>
+          </div>
         </Card>
       )}
     </div>
