@@ -158,6 +158,7 @@
   "notification_webhook": "{{SUPABASE_URL}}/functions/v1/notifications",
   "notification_webhook_token": "{{NOTIFICATIONS_WEBHOOK_TOKEN}}",
   "compliance": {
+    "_comment": "Real-estate/mortgage profile. fha_guardrails + the housing forbidden_topics below apply to FHA-covered tenants; other industries run with the neutral guardrail compiled into soul.md (see src/lib/compliance/fha.ts). This file is documentation only — the live per-tenant guardrail ships in the vault soul.md seeded by deploy-client.sh.",
     "fha_guardrails": true,
     "forbidden_topics": [
       "race",

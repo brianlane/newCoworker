@@ -24,6 +24,7 @@ import {
   CONDITION_LABELS,
   BROWSE_ACTION_LABELS
 } from "@/components/dashboard/aiflow-labels";
+import { getAiFlowExampleCopy, type AiFlowExampleCopy } from "@/lib/ai-flows/examples";
 
 // Mirrors EMAIL_PROVIDER_CONFIG_KEYS in src/lib/voice-tools/connections.ts —
 // that module is server-only (it pulls in the service-role Supabase client),
@@ -157,15 +158,15 @@ function freshStepId(): string {
   return `s_${(crypto.randomUUID?.() ?? String(Date.now())).slice(0, 8)}`;
 }
 
-function newStep(type: FlowStep["type"]): FlowStep {
+function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep {
   const id = freshStepId();
   switch (type) {
     case "extract_url":
       return { id, type, saveAs: "lead_url" };
     case "browse_extract":
-      return { id, type, urlVar: "lead_url", fields: [{ name: "seller_phone", description: "" }] };
+      return { id, type, urlVar: "lead_url", fields: [{ name: examples.contactVar, description: "" }] };
     case "send_sms":
-      return { id, type, to: "{{vars.seller_phone}}", body: "" };
+      return { id, type, to: `{{vars.${examples.contactVar}}}`, body: "" };
     case "send_email":
       return { id, type, to: "", subject: "", body: "" };
     case "approval_gate":
@@ -260,11 +261,14 @@ function toDefinition(s: EditorState): AiFlowDefinition {
 
 export function AiFlowsManager({
   businessId,
+  businessType,
   initialFlows
 }: {
   businessId: string;
+  businessType?: string | null;
   initialFlows: AiFlowRow[];
 }) {
+  const examples = getAiFlowExampleCopy(businessType);
   const [flows, setFlows] = useState<AiFlowRow[]>(initialFlows);
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [busy, setBusy] = useState(false);
@@ -507,7 +511,7 @@ export function AiFlowsManager({
             className={inputClass}
             value={editor.name}
             onChange={(ev) => setEditor({ ...editor, name: ev.target.value })}
-            placeholder="ReferralExchange lead follow-up"
+            placeholder={examples.namePlaceholder}
           />
         </div>
 
@@ -526,7 +530,7 @@ export function AiFlowsManager({
               rows={2}
               value={aiPrompt}
               onChange={(ev) => setAiPrompt(ev.target.value)}
-              placeholder="When a ReferralExchange lead texts a link, open it, get the seller's phone, ask me to approve, then text them."
+              placeholder={examples.aiPromptPlaceholder}
             />
             <button
               onClick={generateWithAi}
@@ -741,7 +745,7 @@ export function AiFlowsManager({
         <section className="space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">Steps</h3>
           <p className="text-[11px] text-parchment/40">
-            Steps run top to bottom. Tip: type something like {"{{vars.seller_phone}}"} to reuse a
+            Steps run top to bottom. Tip: type something like {`{{vars.${examples.tipVar}}}`} to reuse a
             detail an earlier step found, or {"{{trigger.url}}"} for the link from the text that
             started the workflow.
           </p>
@@ -785,12 +789,19 @@ export function AiFlowsManager({
                 </div>
               </div>
               <p className="text-[11px] text-parchment/40">{STEP_TYPE_HELP[step.type]}</p>
-              <StepFields step={step} index={i} patchStep={patchStep} emailConns={emailConns} />
+              <StepFields
+                step={step}
+                index={i}
+                patchStep={patchStep}
+                emailConns={emailConns}
+                examples={examples}
+              />
               <WhenEditor
                 step={step}
                 index={i}
                 earlierVars={[...varsProducedBefore(editor.steps, i), ...ENGINE_PROVIDED_VARS]}
                 patchStep={patchStep}
+                examples={examples}
               />
             </div>
           ))}
@@ -798,7 +809,7 @@ export function AiFlowsManager({
             {FLOW_STEP_TYPES.map((t) => (
               <button
                 key={t}
-                onClick={() => setEditor({ ...editor, steps: [...editor.steps, newStep(t)] })}
+                onClick={() => setEditor({ ...editor, steps: [...editor.steps, newStep(t, examples)] })}
                 title={STEP_TYPE_HELP[t]}
                 className="inline-flex items-center gap-1 rounded-md border border-parchment/15 px-2 py-1 text-xs text-parchment/70 hover:border-signal-teal hover:text-signal-teal"
               >
@@ -995,12 +1006,14 @@ function StepFields({
   step,
   index,
   patchStep,
-  emailConns
+  emailConns,
+  examples
 }: {
   step: FlowStep;
   index: number;
   patchStep: (index: number, patch: Record<string, unknown>) => void;
   emailConns: EmailConnectionOption[];
+  examples: AiFlowExampleCopy;
 }) {
   if (step.type === "extract_url") {
     return (
@@ -1027,7 +1040,7 @@ function StepFields({
             <input
               className={inputClass}
               value={f.name}
-              placeholder="seller_phone"
+              placeholder={examples.contactVar}
               onChange={(ev) =>
                 patchStep(index, {
                   fields: step.fields.map((x, xi) =>
@@ -1165,7 +1178,7 @@ function StepFields({
           emailConns={emailConns}
         />
         <Field
-          label="Subject (e.g. {{vars.lead_name}} BS RE)"
+          label={`Subject (e.g. ${examples.emailSubjectExample})`}
           value={step.subject}
           onChange={(v) => patchStep(index, { subject: v })}
         />
@@ -1217,7 +1230,7 @@ function StepFields({
           }}
         />
         <Field
-          label="Pin to one team member by name (optional — e.g. all seller leads to one agent)"
+          label={`Pin to one team member by name (optional — e.g. ${examples.pinExample})`}
           value={step.agentName ?? ""}
           onChange={(v) => patchStep(index, { agentName: v.trim() ? v : undefined })}
         />
@@ -1441,12 +1454,14 @@ function WhenEditor({
   step,
   index,
   earlierVars,
-  patchStep
+  patchStep,
+  examples
 }: {
   step: FlowStep;
   index: number;
   earlierVars: string[];
   patchStep: (index: number, patch: Record<string, unknown>) => void;
+  examples: AiFlowExampleCopy;
 }) {
   const when = step.when;
   const operator: "contains" | "equals" = when?.equals !== undefined ? "equals" : "contains";
@@ -1509,7 +1524,7 @@ function WhenEditor({
           <input
             className={`${inputClass} flex-1`}
             value={value}
-            placeholder="buyer"
+            placeholder={examples.whenValuePlaceholder}
             onChange={(ev) => setWhen(buildWhen({ value: ev.target.value }))}
           />
         </div>

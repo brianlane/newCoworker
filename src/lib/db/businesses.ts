@@ -31,6 +31,12 @@ export type BusinessRow = {
   /** Lifetime abuse-tracking profile — null for pre-lifecycle businesses. */
   customer_profile_id?: string | null;
   /**
+   * Industry slug chosen during onboarding (e.g. "real_estate"). Drives
+   * per-industry behavior such as compliance guardrails and AiFlow example
+   * copy. Null for pre-onboarding / legacy rows.
+   */
+  business_type?: string | null;
+  /**
    * Owner phone number captured during onboarding. May be free-form (no
    * country code, formatting characters) — coerce via
    * `coerceOwnerPhoneToE164` before persisting downstream.

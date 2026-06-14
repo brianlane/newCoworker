@@ -1892,8 +1892,20 @@ async function pickNextAgent(
   // NOTE: a pinned step never reaches this legacy path — the pin guard above
   // either restricted the roster or already returned the owner fallback, so
   // the model can never be asked to (mis)pick a pinned lead's agent.
+  // Real-estate / mortgage tenants keep the original "real-estate lead" wording
+  // (no behavior change for existing prod businesses); every other industry
+  // gets the neutral phrasing.
+  const { data: bizTypeRow } = await supabase
+    .from("businesses")
+    .select("business_type")
+    .eq("id", run.business_id)
+    .maybeSingle();
+  const businessType = (bizTypeRow as { business_type?: string | null } | null)?.business_type ?? null;
+  const isHousingBusiness =
+    businessType === "real_estate" || businessType === "mortgage_brokerage";
+  const leadDescriptor = isHousingBusiness ? "new real-estate lead" : "new lead";
   const preamble = [
-    "You are routing a new real-estate lead to your team.",
+    `You are routing a ${leadDescriptor} to your team.`,
     "Pick the single NEXT team agent to offer this lead to, using the team",
     "roster and rotation rules in your memory.",
     "Do NOT pick any agent whose phone is in the alreadyTried list.",
