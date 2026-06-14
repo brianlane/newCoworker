@@ -18,6 +18,12 @@ import {
   type TriggerCondition
 } from "@/lib/ai-flows/schema";
 import type { AiFlowRow } from "@/lib/ai-flows/db";
+import {
+  STEP_TYPE_LABELS,
+  STEP_TYPE_HELP,
+  CONDITION_LABELS,
+  BROWSE_ACTION_LABELS
+} from "@/components/dashboard/aiflow-labels";
 
 // Mirrors EMAIL_PROVIDER_CONFIG_KEYS in src/lib/voice-tools/connections.ts —
 // that module is server-only (it pulls in the service-role Supabase client),
@@ -505,29 +511,38 @@ export function AiFlowsManager({
           />
         </div>
 
-        <div className="rounded-md border border-parchment/10 bg-deep-ink/20 p-4 space-y-3">
-          <div className="flex items-center gap-2 text-parchment/70">
-            <Sparkles className="h-4 w-4 text-signal-teal" />
-            <span className="text-sm font-medium">Generate with AI</span>
+        {editor.id === null && (
+          <div className="rounded-md border border-parchment/10 bg-deep-ink/20 p-4 space-y-3">
+            <div className="flex items-center gap-2 text-parchment/70">
+              <Sparkles className="h-4 w-4 text-signal-teal" />
+              <span className="text-sm font-medium">Generate with AI</span>
+            </div>
+            <p className="text-[11px] text-parchment/40">
+              Describe what you want in plain English and we’ll draft the steps for you. You can
+              edit everything afterward.
+            </p>
+            <textarea
+              className={inputClass}
+              rows={2}
+              value={aiPrompt}
+              onChange={(ev) => setAiPrompt(ev.target.value)}
+              placeholder="When a ReferralExchange lead texts a link, open it, get the seller's phone, ask me to approve, then text them."
+            />
+            <button
+              onClick={generateWithAi}
+              disabled={aiBusy}
+              className="rounded-md bg-signal-teal/20 px-3 py-1.5 text-sm text-signal-teal hover:bg-signal-teal/30 disabled:opacity-50"
+            >
+              {aiBusy ? "Generating…" : "Generate steps"}
+            </button>
           </div>
-          <textarea
-            className={inputClass}
-            rows={2}
-            value={aiPrompt}
-            onChange={(ev) => setAiPrompt(ev.target.value)}
-            placeholder="When a ReferralExchange lead texts a link, open it, get the seller's phone, ask me to approve, then text them."
-          />
-          <button
-            onClick={generateWithAi}
-            disabled={aiBusy}
-            className="rounded-md bg-signal-teal/20 px-3 py-1.5 text-sm text-signal-teal hover:bg-signal-teal/30 disabled:opacity-50"
-          >
-            {aiBusy ? "Generating…" : "Generate steps"}
-          </button>
-        </div>
+        )}
 
         <section className="space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">Trigger</h3>
+          <p className="text-[11px] text-parchment/40">
+            The trigger is what kicks off this workflow — pick how it should start below.
+          </p>
           <div>
             <label className={labelClass}>Starts when</label>
             <select
@@ -646,7 +661,7 @@ export function AiFlowsManager({
           )}
           {editor.channel === "sms" && (
             <div>
-              <label className={labelClass}>Correlation window (minutes)</label>
+              <label className={labelClass}>Combine related texts that arrive within (minutes)</label>
               <input
                 type="number"
                 className={inputClass}
@@ -655,6 +670,10 @@ export function AiFlowsManager({
                   setEditor({ ...editor, correlationWindowMinutes: Number(ev.target.value) || 0 })
                 }
               />
+              <p className="mt-1 text-[11px] text-parchment/40">
+                If a lead sends several texts in a row, wait this long to group them together
+                before starting the workflow.
+              </p>
             </div>
           )}
           {(editor.channel === "sms" || editor.channel === "email") &&
@@ -675,7 +694,7 @@ export function AiFlowsManager({
               >
                 {TRIGGER_CONDITION_TYPES.map((t) => (
                   <option key={t} value={t}>
-                    {t}
+                    {CONDITION_LABELS[t]}
                   </option>
                 ))}
               </select>
@@ -721,11 +740,16 @@ export function AiFlowsManager({
 
         <section className="space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">Steps</h3>
+          <p className="text-[11px] text-parchment/40">
+            Steps run top to bottom. Tip: type something like {"{{vars.seller_phone}}"} to reuse a
+            detail an earlier step found, or {"{{trigger.url}}"} for the link from the text that
+            started the workflow.
+          </p>
           {editor.steps.map((step, i) => (
             <div key={step.id} className="rounded-md border border-parchment/10 bg-deep-ink/20 p-3 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-parchment">
-                  {i + 1}. {step.type}
+                  {i + 1}. {STEP_TYPE_LABELS[step.type]}
                 </span>
                 <div className="flex items-center gap-2 text-parchment/40">
                   <button onClick={() => moveStep(i, -1)} aria-label="Move up">
@@ -760,6 +784,7 @@ export function AiFlowsManager({
                   </button>
                 </div>
               </div>
+              <p className="text-[11px] text-parchment/40">{STEP_TYPE_HELP[step.type]}</p>
               <StepFields step={step} index={i} patchStep={patchStep} emailConns={emailConns} />
               <WhenEditor
                 step={step}
@@ -774,9 +799,10 @@ export function AiFlowsManager({
               <button
                 key={t}
                 onClick={() => setEditor({ ...editor, steps: [...editor.steps, newStep(t)] })}
+                title={STEP_TYPE_HELP[t]}
                 className="inline-flex items-center gap-1 rounded-md border border-parchment/15 px-2 py-1 text-xs text-parchment/70 hover:border-signal-teal hover:text-signal-teal"
               >
-                <Plus className="h-3 w-3" /> {t}
+                <Plus className="h-3 w-3" /> {STEP_TYPE_LABELS[t]}
               </button>
             ))}
           </div>
@@ -979,16 +1005,22 @@ function StepFields({
   if (step.type === "extract_url") {
     return (
       <Field
-        label="Save URL as variable"
+        label="Save the link as"
         value={step.saveAs}
         onChange={(v) => patchStep(index, { saveAs: v })}
+        help="A short name for the link so later steps can reuse it (e.g. lead_url)."
       />
     );
   }
   if (step.type === "browse_extract") {
     return (
       <div className="space-y-2">
-        <Field label="URL variable" value={step.urlVar} onChange={(v) => patchStep(index, { urlVar: v })} />
+        <Field
+          label="Which saved link to open"
+          value={step.urlVar}
+          onChange={(v) => patchStep(index, { urlVar: v })}
+          help="The name of a link an earlier step saved (e.g. lead_url)."
+        />
         <label className={labelClass}>Fields to extract</label>
         {step.fields.map((f, fi) => (
           <div key={fi} className="flex gap-2">
@@ -1300,7 +1332,7 @@ function StepFields({
             >
               {BROWSE_ACTION_KINDS.map((k) => (
                 <option key={k} value={k}>
-                  {k}
+                  {BROWSE_ACTION_LABELS[k]}
                 </option>
               ))}
             </select>
@@ -1490,12 +1522,14 @@ function Field({
   label,
   value,
   onChange,
-  textarea
+  textarea,
+  help
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   textarea?: boolean;
+  help?: string;
 }) {
   return (
     <div>
@@ -1505,6 +1539,7 @@ function Field({
       ) : (
         <input className={inputClass} value={value} onChange={(e) => onChange(e.target.value)} />
       )}
+      {help && <p className="mt-1 text-[11px] text-parchment/40">{help}</p>}
     </div>
   );
 }

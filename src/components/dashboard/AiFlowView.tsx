@@ -5,6 +5,11 @@ import type {
   StepCondition,
   TriggerCondition
 } from "@/lib/ai-flows/schema";
+import {
+  BROWSE_ACTION_LABELS,
+  CONDITION_LABELS,
+  STEP_TYPE_LABELS
+} from "@/components/dashboard/aiflow-labels";
 
 /** How the workflow starts. Mirrors CHANNEL_LABELS in AiFlowsManager. */
 const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
@@ -47,13 +52,13 @@ function Chip({ children }: { children: React.ReactNode }) {
 function conditionLabel(c: TriggerCondition): string {
   switch (c.type) {
     case "has_url":
-      return "has a URL";
+      return CONDITION_LABELS.has_url;
     case "contains":
-      return `contains "${c.value}"`;
+      return `${CONDITION_LABELS.contains}: "${c.value}"`;
     case "regex":
-      return `matches /${c.value}/`;
+      return `${CONDITION_LABELS.regex}: /${c.value}/`;
     case "from_matches":
-      return `sender matches "${c.value}"`;
+      return `${CONDITION_LABELS.from_matches}: "${c.value}"`;
   }
 }
 
@@ -237,7 +242,7 @@ function StepBody({ step }: { step: FlowStep }) {
                   className="flex flex-wrap items-center gap-2 text-sm text-parchment"
                 >
                   <span className="text-parchment/40">{i + 1}.</span>
-                  <Chip>{a.kind}</Chip>
+                  <Chip>{BROWSE_ACTION_LABELS[a.kind]}</Chip>
                   <span className="font-mono text-[13px] text-parchment/80">{a.target}</span>
                   {a.valueTemplate && (
                     <span className="text-parchment/50">→ {a.valueTemplate}</span>
@@ -256,7 +261,7 @@ function StepView({ step, index }: { step: FlowStep; index: number }) {
   return (
     <div className={sectionClass}>
       <div className="text-sm font-medium text-parchment">
-        {index + 1}. {step.type}
+        {index + 1}. {STEP_TYPE_LABELS[step.type]}
       </div>
       <StepBody step={step} />
       {step.when && <WhenView when={step.when} />}
