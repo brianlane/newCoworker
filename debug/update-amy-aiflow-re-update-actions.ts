@@ -36,10 +36,6 @@ import {
   type FlowStep
 } from "../src/lib/ai-flows/schema.ts";
 
-const BUSINESS_ID = process.env.AIFLOW_UPDATE_BUSINESS_ID ?? "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
-const FLOW_NAME = process.env.AIFLOW_UPDATE_FLOW_NAME ?? "ReferralExchange lead";
-const STEP_ID = process.env.AIFLOW_UPDATE_STEP_ID ?? "re_update";
-
 const NEW_ACTIONS = [
   { kind: "click_text", target: "Leave an update" },
   { kind: "click_text", target: "No interaction yet" },
@@ -54,6 +50,11 @@ const NEW_ACTIONS = [
 
 async function main(): Promise<void> {
   loadEnv();
+  // Read overrides AFTER loadEnv() so repo-root `.env` values actually apply.
+  const BUSINESS_ID =
+    process.env.AIFLOW_UPDATE_BUSINESS_ID ?? "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
+  const FLOW_NAME = process.env.AIFLOW_UPDATE_FLOW_NAME ?? "ReferralExchange lead";
+  const STEP_ID = process.env.AIFLOW_UPDATE_STEP_ID ?? "re_update";
   const apply = process.argv.includes("--apply");
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? "";
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
