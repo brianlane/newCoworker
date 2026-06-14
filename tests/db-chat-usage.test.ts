@@ -7,7 +7,9 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   DEFAULT_CHAT_SPEND_CAP_MICROS,
+  STARTER_CHAT_SPEND_CAP_MICROS,
   chatSpendBaseCapMicros,
+  chatSpendBaseCapMicrosForTier,
   getChatSpendSnapshotForBusiness,
   getSmsBonusTextsRemaining
 } from "@/lib/db/chat-usage";
@@ -22,12 +24,14 @@ type MaybeSingleResult = { data: unknown; error: { message: string } | null };
 function stubDb(opts: {
   subscriptionRow?: unknown;
   spendRow?: unknown;
+  businessRow?: unknown;
   creditResult?: MaybeSingleResult;
   rpcResults?: Record<string, MaybeSingleResult>;
 }) {
   const tables: Record<string, MaybeSingleResult> = {
     subscriptions: { data: opts.subscriptionRow ?? null, error: null },
-    owner_chat_model_spend: { data: opts.spendRow ?? null, error: null }
+    owner_chat_model_spend: { data: opts.spendRow ?? null, error: null },
+    businesses: { data: opts.businessRow ?? null, error: null }
   };
   const rpc = vi.fn(async (fn: string) => {
     if (opts.rpcResults && fn in opts.rpcResults) return opts.rpcResults[fn];
@@ -55,6 +59,25 @@ describe("chatSpendBaseCapMicros", () => {
 
   it("reads and floors a valid env value", () => {
     expect(chatSpendBaseCapMicros({ OWNER_CHAT_SPEND_CAP_MICROS: "5000000.9" })).toBe(5_000_000);
+  });
+});
+
+describe("chatSpendBaseCapMicrosForTier", () => {
+  it("gives starter the lower $5 base, standard/enterprise the $10 base", () => {
+    expect(chatSpendBaseCapMicrosForTier("starter", {})).toBe(STARTER_CHAT_SPEND_CAP_MICROS);
+    expect(chatSpendBaseCapMicrosForTier("starter", {})).toBe(5_000_000);
+    expect(chatSpendBaseCapMicrosForTier("standard", {})).toBe(DEFAULT_CHAT_SPEND_CAP_MICROS);
+    expect(chatSpendBaseCapMicrosForTier("enterprise", {})).toBe(10_000_000);
+    expect(chatSpendBaseCapMicrosForTier(null, {})).toBe(10_000_000);
+  });
+
+  it("honors per-tier env overrides", () => {
+    expect(
+      chatSpendBaseCapMicrosForTier("starter", { OWNER_CHAT_SPEND_CAP_MICROS_STARTER: "3000000" })
+    ).toBe(3_000_000);
+    expect(
+      chatSpendBaseCapMicrosForTier("standard", { OWNER_CHAT_SPEND_CAP_MICROS: "12000000" })
+    ).toBe(12_000_000);
   });
 });
 
@@ -121,6 +144,23 @@ describe("getChatSpendSnapshotForBusiness", () => {
 
     expect(mockCreateClient).toHaveBeenCalled();
     expect(snap.baseCapMicros).toBe(10_000_000);
+  });
+
+  it("uses the $5 starter base when tier is passed explicitly", async () => {
+    const db = stubDb({ spendRow: { spend_micros: "1000000" } });
+
+    const snap = await getChatSpendSnapshotForBusiness("biz-1", db as never, "starter");
+
+    expect(snap.baseCapMicros).toBe(5_000_000);
+    expect(snap.effectiveCapMicros).toBe(5_000_000);
+  });
+
+  it("resolves the tier from businesses.tier when not passed", async () => {
+    const db = stubDb({ businessRow: { tier: "starter" } });
+
+    const snap = await getChatSpendSnapshotForBusiness("biz-1", db as never);
+
+    expect(snap.baseCapMicros).toBe(5_000_000);
   });
 });
 

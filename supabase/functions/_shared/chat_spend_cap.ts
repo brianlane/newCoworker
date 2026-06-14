@@ -33,6 +33,22 @@ export const GEMINI_PRICES_PER_1M: Record<string, { in: number; out: number }> =
 };
 export const DEFAULT_GEMINI_PRICE_PER_1M = { in: 0.5, out: 3.0 };
 
+// Tier-derived shared spend cap. Starter gets a lower included AI budget ($5)
+// than Standard/Enterprise ($10). Kept as a pure helper so the SMS worker (and
+// its unit test) and the platform/VPS mirrors all trip the shared fuse at the
+// same total. Must stay in lockstep with src/lib/db/chat-usage.ts
+// (chatSpendBaseCapMicrosForTier) and vps/chat-worker/worker.mjs.
+export const STARTER_CHAT_SPEND_CAP_MICROS = 5_000_000; // $5
+export const DEFAULT_CHAT_SPEND_CAP_MICROS = 10_000_000; // $10
+
+export function capMicrosForTier(
+  tier: string | null | undefined,
+  baseCapMicros: number,
+  starterCapMicros: number = STARTER_CHAT_SPEND_CAP_MICROS
+): number {
+  return tier === "starter" ? starterCapMicros : baseCapMicros;
+}
+
 /**
  * Exact cost (micro-USD) from billed token counts (`usageMetadata`).
  * `outputTokens` must already include thinking tokens — Google bills them at

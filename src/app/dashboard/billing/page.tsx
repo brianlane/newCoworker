@@ -121,7 +121,11 @@ export default async function BillingPage(props: {
         .then((t) => t.sms_sent)
         .catch(() => null),
       getSmsBonusTextsRemaining(business.id, db),
-      getChatSpendSnapshotForBusiness(business.id, db).catch(() => null)
+      getChatSpendSnapshotForBusiness(
+        business.id,
+        db,
+        (business.tier ?? null) as PlanTier | null
+      ).catch(() => null)
     ]);
   }
   const smsMonthlyCap = business?.tier
