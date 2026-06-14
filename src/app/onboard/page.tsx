@@ -94,15 +94,14 @@ export default function OnboardPage() {
         "Phone number",
         "Chat access to your coworker",
         "$5/mo AI budget for agentic tasks, before free model fallback",
-        "Light browser tasks (full automation on Standard)",
+        "Light browser tasks",
         "3rd party integrations",
         "Lossless memory and expansive knowledge base",
-        "Unlimited emails and appointment booking",
+        "Emails and appointment booking",
         voiceMinutesLine("starter"),
         `${TIER_LIMITS.starter.smsPerMonth} SMS`,
-        "1 concurrent call",
-        "Dashboard access"
-      ],
+        "1 concurrent call"
+        ],
       cta: "Choose Starter",
       highlight: false,
       badge: period === "biennial" ? "Best Value" : undefined
@@ -129,7 +128,6 @@ export default function OnboardPage() {
         "3 concurrent calls",
         "Send texts during calls",
         "Warm handoff call transfers",
-        "Full Swarm reasoning + deep reasoning",
         "$10/mo AI budget for agentic tasks, before free model fallback",
         "Configuration and training updates",
         "Priority support & maintenance",
