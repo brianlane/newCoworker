@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { Plus, Trash2, ArrowUp, ArrowDown, Sparkles, Pencil, Copy } from "lucide-react";
 import {
@@ -848,7 +849,12 @@ export function AiFlowsManager({
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <h3 className="truncate font-semibold text-parchment">{row.name}</h3>
+                  <Link
+                    href={`/dashboard/aiflows/${row.id}`}
+                    className="truncate font-semibold text-parchment hover:text-signal-teal hover:underline"
+                  >
+                    {row.name}
+                  </Link>
                   <span
                     className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
                       row.enabled
