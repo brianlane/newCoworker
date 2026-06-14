@@ -338,12 +338,23 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       // Dynamic reply options for THIS gate, persisted on the run so the
       // inbound webhook and dashboard render/parse exactly what was offered:
       // approve/skip always lead, "bypass quiet hours" appears only when a
-      // later send_sms step actually has quiet hours configured, and cancel
-      // is always the LAST digit.
+      // later send_sms step has quiet hours configured AND it is currently
+      // inside that window (no point offering to skip a window we're not in),
+      // and cancel is always the LAST digit.
+      const nowMs = Date.now();
       const gateOptions = buildApprovalGateOptions({
         offerQuietBypass: def.steps
           .slice(index + 1)
-          .some((s) => s.type === "send_sms" && Boolean(s.quietHours))
+          .some(
+            (s) =>
+              s.type === "send_sms" &&
+              s.quietHours != null &&
+              !smsQuietDecision(nowMs, {
+                timezone: s.quietHours.timezone,
+                noSendAfter: s.quietHours.noSendAfter,
+                resumeAt: s.quietHours.resumeAt
+              }).allowed
+          )
       });
       approval.options = gateOptions;
       await updateRun(supabase, run.id, {
