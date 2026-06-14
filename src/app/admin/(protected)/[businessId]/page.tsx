@@ -125,7 +125,7 @@ export default async function BusinessDetailPage({
               Subscription
             </h2>
             {subscription ? (
-              <dl className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm">
+              <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3 text-sm">
                 <div>
                   <dt className="text-parchment/40 text-xs">Status</dt>
                   <dd>
@@ -177,7 +177,7 @@ export default async function BusinessDetailPage({
         <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-3">
           Infrastructure
         </h2>
-        <dl className="grid grid-cols-2 gap-3 text-sm">
+        <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
           <div>
             <dt className="text-parchment/40 text-xs">VPS ID</dt>
             <dd className="text-parchment font-mono">{business.hostinger_vps_id ?? "—"}</dd>

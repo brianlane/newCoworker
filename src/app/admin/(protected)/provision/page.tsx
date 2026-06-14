@@ -42,7 +42,8 @@ export default async function ProvisionPage() {
           </Card>
         ) : (
           <Card padding="sm">
-            <table className="w-full text-sm">
+            <div className="mobile-scroll-x">
+            <table className="w-full min-w-[640px] text-sm">
               <thead>
                 <tr className="border-b border-parchment/10">
                   <th className="text-left py-3 px-4 text-parchment/40 font-medium">Business</th>
@@ -90,6 +91,7 @@ export default async function ProvisionPage() {
                 })}
               </tbody>
             </table>
+            </div>
           </Card>
         )}
       </div>
@@ -105,7 +107,8 @@ export default async function ProvisionPage() {
           </Card>
         ) : (
           <Card padding="sm">
-            <table className="w-full text-sm">
+            <div className="mobile-scroll-x">
+            <table className="w-full min-w-[560px] text-sm">
               <thead>
                 <tr className="border-b border-parchment/10">
                   <th className="text-left py-3 px-4 text-parchment/40 font-medium">Business</th>
@@ -136,6 +139,7 @@ export default async function ProvisionPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           </Card>
         )}
       </div>

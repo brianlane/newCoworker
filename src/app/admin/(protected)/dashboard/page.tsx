@@ -92,7 +92,7 @@ export default async function AdminDashboardPage() {
       </div>
 
       {/* ── KPI row ── */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
           <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Total Clients</p>
           <p className="text-3xl font-bold text-parchment">{totalClients}</p>
@@ -127,7 +127,7 @@ export default async function AdminDashboardPage() {
         </Card>
       </div>
       {/* ── Middle row: sparkline + tier breakdown ── */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Signup sparkline */}
         <Card className="col-span-2">
           <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
@@ -254,7 +254,7 @@ export default async function AdminDashboardPage() {
       </Card>
 
       {/* ── Bottom row: alerts + recent activity ── */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Alerts */}
         <Card>
           <div className="flex items-center justify-between mb-4">

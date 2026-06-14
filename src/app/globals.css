@@ -52,3 +52,46 @@ button:disabled {
 .animate-fade-slide-up {
   animation: fade-slide-up 220ms ease-out;
 }
+
+/* Horizontal-scroll wrapper for wide content (tables, button rows) on small
+   screens. Desktop is unaffected — this is opt-in via the class. */
+.mobile-scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Mobile-only enhancements. Everything lives inside max-width media queries so
+   the desktop (>= 1024px) presentation is byte-for-byte unchanged. */
+@media (max-width: 767px) {
+  /* Touch-friendly hit areas for interactive elements. */
+  button,
+  [role="button"],
+  a.btn,
+  input[type="submit"],
+  input[type="button"] {
+    min-height: 44px;
+  }
+
+  button,
+  a {
+    touch-action: manipulation;
+  }
+
+  /* 16px text on form controls stops iOS Safari from auto-zooming on focus. */
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+/* Honor users who prefer reduced motion: drop the sidebar slide + entrance. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-slide-up {
+    animation: none;
+  }
+
+  .transition-transform {
+    transition: none !important;
+  }
+}
