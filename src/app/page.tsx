@@ -146,7 +146,7 @@ export default function HomePage() {
         <div className="max-w-6xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
           <p className="text-xs text-parchment/30">&copy; {new Date().getFullYear()} New Coworker. All rights reserved.</p>
           <div className="flex gap-6 text-xs text-parchment/30">
-            <a href={`mailto:${process.env.CONTACT_EMAIL ?? "newcoworkerteam@gmail.com"}`} className="hover:text-parchment/60 transition-colors">Contact</a>
+            <a href={`mailto:${process.env.CONTACT_EMAIL ?? "team@newcoworker.com"}`} className="hover:text-parchment/60 transition-colors">Contact</a>
             <Link href="/onboard" className="hover:text-parchment/60 transition-colors">Pricing</Link>
             <Link href="/privacy" className="hover:text-parchment/60 transition-colors">Privacy Policy</Link>
             <Link href="/terms" className="hover:text-parchment/60 transition-colors">Terms of Service</Link>

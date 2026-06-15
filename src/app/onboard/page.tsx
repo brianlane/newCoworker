@@ -310,7 +310,7 @@ export default function OnboardPage() {
               <div className="mt-6">
                 {tier.id === "enterprise" ? (
                   <a
-                    href="mailto:newcoworkerteam@gmail.com"
+                    href="mailto:contact@newcoworker.com"
                     className="block w-full text-center rounded-lg border border-parchment/20 text-parchment px-4 py-2.5 text-sm font-semibold hover:bg-parchment/10 transition-colors"
                   >
                     {tier.cta}

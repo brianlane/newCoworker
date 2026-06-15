@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 };
 
 export default function PrivacyPolicyPage() {
-  const contactEmail = process.env.CONTACT_EMAIL ?? "newcoworkerteam@gmail.com";
+  const contactEmail = process.env.CONTACT_EMAIL ?? "team@newcoworker.com";
 
   return (
     <LegalPage

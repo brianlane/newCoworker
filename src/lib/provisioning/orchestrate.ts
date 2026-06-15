@@ -52,7 +52,7 @@ export type ProvisioningResult = {
 
 function resolveStarterOrStandard(tier: ProvisioningInput["tier"]): "starter" | "standard" {
   if (tier === "enterprise") {
-    const contact = process.env.CONTACT_EMAIL ?? "newcoworkerteam@gmail.com";
+    const contact = process.env.CONTACT_EMAIL ?? "team@newcoworker.com";
     throw new Error(
       `Enterprise provisioning requires a custom engagement. Please contact ${contact} to discuss your needs.`
     );

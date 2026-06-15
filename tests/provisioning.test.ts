@@ -578,7 +578,7 @@ describe("provisioning/orchestrate", () => {
     delete process.env.CONTACT_EMAIL;
     await expect(
       orchestrateProvisioning({ businessId: "biz-enterprise-3", tier: "enterprise" })
-    ).rejects.toThrow("newcoworkerteam@gmail.com");
+    ).rejects.toThrow("team@newcoworker.com");
   });
 
   it("falls back RESEND_API_KEY to '' when unset but ownerEmail provided", async () => {
