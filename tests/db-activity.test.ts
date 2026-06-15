@@ -226,6 +226,44 @@ describe("buildActivityFeed", () => {
     expect(items[1].label).toBe("Urgent — Gas leak");
   });
 
+  it("caps alerts at half the feed so newer activity still appears", () => {
+    const items = buildActivityFeed(
+      emptyInput({
+        alerts: [
+          { task_type: "call", log_payload: { reason: "A1" }, created_at: "2026-02-01T04:00:00Z" },
+          { task_type: "call", log_payload: { reason: "A2" }, created_at: "2026-02-01T03:00:00Z" },
+          { task_type: "call", log_payload: { reason: "A3" }, created_at: "2026-02-01T02:00:00Z" },
+          { task_type: "call", log_payload: { reason: "A4" }, created_at: "2026-02-01T01:00:00Z" }
+        ],
+        calls: [
+          { caller_e164: "+1", status: "ok", started_at: "2026-02-02T10:00:00Z" },
+          { caller_e164: "+2", status: "ok", started_at: "2026-02-02T09:00:00Z" }
+        ],
+        limit: 4
+      })
+    );
+    const kinds = items.map((i) => i.kind);
+    expect(items).toHaveLength(4);
+    expect(kinds.filter((k) => k === "alert")).toHaveLength(2);
+    expect(kinds.filter((k) => k === "call")).toHaveLength(2);
+  });
+
+  it("backfills remaining slots with alerts when there is no other activity", () => {
+    const items = buildActivityFeed(
+      emptyInput({
+        alerts: [
+          { task_type: "call", log_payload: { reason: "A1" }, created_at: "2026-03-01T04:00:00Z" },
+          { task_type: "call", log_payload: { reason: "A2" }, created_at: "2026-03-01T03:00:00Z" },
+          { task_type: "call", log_payload: { reason: "A3" }, created_at: "2026-03-01T02:00:00Z" },
+          { task_type: "call", log_payload: { reason: "A4" }, created_at: "2026-03-01T01:00:00Z" }
+        ],
+        limit: 3
+      })
+    );
+    expect(items).toHaveLength(3);
+    expect(items.every((i) => i.kind === "alert")).toBe(true);
+  });
+
   it("sorts newest-first across sources and caps to limit", () => {
     const items = buildActivityFeed(
       emptyInput({

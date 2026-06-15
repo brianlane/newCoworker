@@ -218,16 +218,19 @@ export function buildActivityFeed(input: ActivityFeedInput): ActivityItem[] {
     });
   });
 
-  // Alerts are high-signal: reserve their slots first so a burst of routine
-  // calls/texts can't push an urgent item off the card, then fill the rest by
-  // recency. The final feed is still displayed newest-first.
+  // Alerts are high-signal but mustn't dominate: reserve at most half the feed
+  // for the newest alerts so a backlog of urgent items can't hide the latest
+  // calls/texts, fill the rest by recency, then backfill any unused slots with
+  // extra alerts when there isn't enough other activity. Displayed newest-first.
   const byRecency = (a: ActivityItem, b: ActivityItem) =>
     a.at < b.at ? 1 : a.at > b.at ? -1 : 0;
   const alerts = items.filter((i) => i.kind === "alert").sort(byRecency);
   const rest = items.filter((i) => i.kind !== "alert").sort(byRecency);
-  const keptAlerts = alerts.slice(0, input.limit);
-  const keptRest = rest.slice(0, Math.max(0, input.limit - keptAlerts.length));
-  return [...keptAlerts, ...keptRest].sort(byRecency);
+  const reserve = Math.ceil(input.limit / 2);
+  const reservedAlerts = alerts.slice(0, reserve);
+  const keptRest = rest.slice(0, input.limit - reservedAlerts.length);
+  const extraAlerts = alerts.slice(reservedAlerts.length, input.limit - keptRest.length);
+  return [...reservedAlerts, ...extraAlerts, ...keptRest].sort(byRecency);
 }
 
 /** Treat a failed query as "no rows" so one broken source never blanks the feed. */
