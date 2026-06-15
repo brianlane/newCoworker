@@ -738,6 +738,16 @@ WORKFLOW_JSON=$(jq -nc \
           bodyText: {
             type: "string",
             description: "Plain-text body, 1-3 short paragraphs, at most 4000 characters."
+          },
+          cc: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional cc email addresses, at most 10. Only use addresses the owner/customer gave you."
+          },
+          bcc: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional bcc email addresses, at most 10. Only use addresses the owner/customer gave you."
           }
         },
         required: ["toEmail", "subject", "bodyText"]

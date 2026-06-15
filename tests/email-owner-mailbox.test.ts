@@ -51,6 +51,54 @@ describe("sendFromOwnerMailbox", () => {
     expect(decoded).toContain("Subject: Hello");
   });
 
+  it("adds Cc and Bcc header lines to the Gmail MIME when present", async () => {
+    vi.mocked(resolveEmailConnection).mockResolvedValue({
+      provider: "google",
+      providerConfigKey: "google-mail",
+      connectionId: "cx-1"
+    });
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "gmail-cc" } } as never);
+
+    await sendFromOwnerMailbox(BIZ, {
+      ...ARGS,
+      ccEmails: ["cc1@example.com", "cc2@example.com"],
+      bccEmails: ["bcc@example.com"]
+    });
+    const call = vi.mocked(nangoProxyForBusiness).mock.calls[0];
+    const raw = (call[2] as { data: { raw: string } }).data.raw;
+    const decoded = Buffer.from(raw.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+    expect(decoded).toContain("Cc: cc1@example.com, cc2@example.com");
+    expect(decoded).toContain("Bcc: bcc@example.com");
+  });
+
+  it("adds ccRecipients/bccRecipients to the Microsoft payload when present", async () => {
+    vi.mocked(resolveEmailConnection).mockResolvedValue({
+      provider: "microsoft",
+      providerConfigKey: "outlook",
+      connectionId: "cx-ms"
+    });
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+
+    await sendFromOwnerMailbox(BIZ, {
+      ...ARGS,
+      ccEmails: ["cc@example.com"],
+      bccEmails: ["bcc@example.com"]
+    });
+    const call = vi.mocked(nangoProxyForBusiness).mock.calls[0];
+    const data = (
+      call[2] as {
+        data: {
+          message: {
+            ccRecipients: Array<{ emailAddress: { address: string } }>;
+            bccRecipients: Array<{ emailAddress: { address: string } }>;
+          };
+        };
+      }
+    ).data;
+    expect(data.message.ccRecipients[0].emailAddress.address).toBe("cc@example.com");
+    expect(data.message.bccRecipients[0].emailAddress.address).toBe("bcc@example.com");
+  });
+
   it("returns a null messageId when Gmail omits the id", async () => {
     vi.mocked(resolveEmailConnection).mockResolvedValue({
       provider: "google",

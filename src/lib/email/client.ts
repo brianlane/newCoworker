@@ -16,6 +16,10 @@ export type SendOwnerEmailOptions = {
   text?: string;
   /** Optional HTML body. If both are supplied, both are sent. */
   html?: string;
+  /** Optional cc recipients (already normalized to valid addresses). */
+  cc?: string[];
+  /** Optional bcc recipients (already normalized to valid addresses). */
+  bcc?: string[];
 };
 
 const DEFAULT_FROM = "New Coworker <contact@newcoworker.com>";
@@ -86,6 +90,8 @@ export async function sendOwnerEmail(
     subject,
     text: finalText,
     ...(opts.html ? { html: opts.html } : {}),
+    ...(opts.cc && opts.cc.length > 0 ? { cc: opts.cc } : {}),
+    ...(opts.bcc && opts.bcc.length > 0 ? { bcc: opts.bcc } : {}),
     ...(replyTo ? { replyTo } : {}),
     ...(Object.keys(headers).length > 0 ? { headers } : {})
   });

@@ -641,6 +641,8 @@ async function logFlowEmail(
   run: RunRow,
   args: {
     to: string;
+    cc?: string[];
+    bcc?: string[];
     from: string | null;
     subject: string;
     body: string;
@@ -652,6 +654,8 @@ async function logFlowEmail(
     business_id: run.business_id,
     direction: "outbound",
     to_email: args.to,
+    cc_email: args.cc && args.cc.length > 0 ? args.cc.join(", ") : null,
+    bcc_email: args.bcc && args.bcc.length > 0 ? args.bcc.join(", ") : null,
     from_email: args.from,
     subject: args.subject,
     body_preview: args.body.slice(0, 500),
@@ -1352,6 +1356,8 @@ async function sendEmailStep(
 
 type FlowEmailArgs = {
   to: string;
+  cc?: string[];
+  bcc?: string[];
   subject: string;
   body: string;
   attachScreenshot: boolean;
@@ -1413,6 +1419,8 @@ async function deliverFlowEmail(
     body: JSON.stringify({
       from: Deno.env.get("MAILER_EMAIL") ?? "New Coworker <contact@newcoworker.com>",
       to: action.to,
+      ...(action.cc && action.cc.length > 0 ? { cc: action.cc } : {}),
+      ...(action.bcc && action.bcc.length > 0 ? { bcc: action.bcc } : {}),
       reply_to: Deno.env.get("CONTACT_EMAIL") ?? undefined,
       subject: action.subject,
       text: action.body,
@@ -1431,6 +1439,8 @@ async function deliverFlowEmail(
   }
   await logFlowEmail(supabase, run, {
     to: action.to,
+    cc: action.cc,
+    bcc: action.bcc,
     from: Deno.env.get("MAILER_EMAIL") ?? null,
     subject: action.subject,
     body: action.body,
@@ -1461,6 +1471,8 @@ async function deliverOwnerMailboxEmail(
       businessId: run.business_id,
       connectionId: action.fromConnectionId,
       toEmail: action.to,
+      ...(action.cc && action.cc.length > 0 ? { cc: action.cc } : {}),
+      ...(action.bcc && action.bcc.length > 0 ? { bcc: action.bcc } : {}),
       subject: action.subject,
       bodyText: action.body
     })
@@ -1486,6 +1498,8 @@ async function deliverOwnerMailboxEmail(
   }
   await logFlowEmail(supabase, run, {
     to: action.to,
+    cc: action.cc,
+    bcc: action.bcc,
     from: parsed.data?.provider ?? "owner mailbox",
     subject: action.subject,
     body: action.body,

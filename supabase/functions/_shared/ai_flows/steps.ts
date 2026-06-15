@@ -45,6 +45,10 @@ export type StepAction =
   | {
       kind: "send_email";
       to: string;
+      /** Resolved cc recipients (templated, empties dropped). Omitted when none. */
+      cc?: string[];
+      /** Resolved bcc recipients (templated, empties dropped). Omitted when none. */
+      bcc?: string[];
       subject: string;
       body: string;
       attachScreenshot: boolean;
@@ -160,11 +164,21 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       if (!to) return { ok: false, error: "send_email: recipient is empty after templating" };
       if (!subject) return { ok: false, error: "send_email: subject is empty after templating" };
       if (!body) return { ok: false, error: "send_email: body is empty after templating" };
+      // Render each cc/bcc template and drop entries that resolve to empty
+      // (e.g. a {{vars.x}} that wasn't produced), so a blank slot never sends.
+      const cc = (step.cc ?? [])
+        .map((entry) => renderTemplate(entry, scope).trim())
+        .filter((entry) => entry.length > 0);
+      const bcc = (step.bcc ?? [])
+        .map((entry) => renderTemplate(entry, scope).trim())
+        .filter((entry) => entry.length > 0);
       return {
         ok: true,
         action: {
           kind: "send_email",
           to,
+          ...(cc.length > 0 ? { cc } : {}),
+          ...(bcc.length > 0 ? { bcc } : {}),
           subject,
           body,
           attachScreenshot: step.attachScreenshot === true,

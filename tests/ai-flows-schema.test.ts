@@ -359,6 +359,31 @@ describe("browse_extract screenshot + send_email step", () => {
     delete bad.steps[2].subject;
     expect(() => parseAiFlowDefinition(bad)).toThrow(AiFlowValidationError);
   });
+
+  it("parses cc/bcc arrays and template-validates their {{vars.x}} refs", () => {
+    const withCc = JSON.parse(JSON.stringify(emailInput));
+    withCc.steps[2].cc = ["manager@x.com", "{{vars.lead_name}}@x.com"];
+    withCc.steps[2].bcc = ["archive@x.com"];
+    const def = parseAiFlowDefinition(withCc);
+    const email = def.steps[2];
+    expect(email.type === "send_email" && email.cc).toEqual([
+      "manager@x.com",
+      "{{vars.lead_name}}@x.com"
+    ]);
+    expect(email.type === "send_email" && email.bcc).toEqual(["archive@x.com"]);
+
+    // A cc that references a not-yet-produced var is flagged like to/subject/body.
+    const bad = JSON.parse(JSON.stringify(emailInput));
+    bad.steps[2].cc = ["{{vars.ghost}}@x.com"];
+    const badDef = aiFlowDefinitionSchema.parse(bad);
+    expect(validateDefinitionSemantics(badDef).some((i) => i.includes("{{vars.ghost}}"))).toBe(true);
+  });
+
+  it("rejects a send_email cc list over the 10-recipient cap", () => {
+    const bad = JSON.parse(JSON.stringify(emailInput));
+    bad.steps[2].cc = Array.from({ length: 11 }, (_, i) => `u${i}@x.com`);
+    expect(() => parseAiFlowDefinition(bad)).toThrow(AiFlowValidationError);
+  });
 });
 
 describe("route_to_team step", () => {

@@ -25,15 +25,20 @@ import {
 import { getWorkspaceOAuthConnection } from "@/lib/db/workspace-oauth-connections";
 import { isEmailProviderConfigKey, providerFromKey } from "@/lib/voice-tools/connections";
 import { sendFromMailboxConnection } from "@/lib/email/owner-mailbox";
+import { normalizeRecipients } from "@/lib/email/recipients";
 import { logger } from "@/lib/logger";
 import { recordSystemLog } from "@/lib/db/system-logs";
+
+const recipientList = z.union([z.string(), z.array(z.string())]).optional();
 
 const bodySchema = z.object({
   businessId: z.string().uuid(),
   connectionId: z.string().uuid(),
   toEmail: z.string().email(),
   subject: z.string().min(1).max(300),
-  bodyText: z.string().min(1).max(8000)
+  bodyText: z.string().min(1).max(8000),
+  cc: recipientList,
+  bcc: recipientList
 });
 
 export async function POST(request: Request) {
@@ -63,7 +68,13 @@ export async function POST(request: Request) {
         providerConfigKey: row.provider_config_key,
         connectionId: row.connection_id
       },
-      { toEmail: body.toEmail, subject: body.subject, bodyText: body.bodyText }
+      {
+        toEmail: body.toEmail,
+        subject: body.subject,
+        bodyText: body.bodyText,
+        ccEmails: normalizeRecipients(body.cc),
+        bccEmails: normalizeRecipients(body.bcc)
+      }
     );
     if (!result.ok) {
       return voiceToolResponse({ ok: false, detail: result.detail });

@@ -246,6 +246,29 @@ describe("planStep: send_email", () => {
       "33333333-3333-4333-8333-333333333333"
     );
   });
+  it("renders cc/bcc templates and drops entries that resolve empty", () => {
+    const r = planStep(
+      {
+        ...step,
+        cc: ["manager@x.com", "{{vars.cc_extra}}", "{{vars.missing}}"],
+        bcc: ["archive@x.com"]
+      },
+      { vars: { lead_name: "Jane", cc_extra: "ops@x.com" } }
+    );
+    expect(r.ok && r.action.kind === "send_email" && r.action.cc).toEqual([
+      "manager@x.com",
+      "ops@x.com"
+    ]);
+    expect(r.ok && r.action.kind === "send_email" && r.action.bcc).toEqual(["archive@x.com"]);
+  });
+  it("omits cc/bcc entirely when none are configured or all resolve empty", () => {
+    const r = planStep(
+      { ...step, cc: ["{{vars.missing}}"], bcc: [] },
+      { vars: { lead_name: "Jane" } }
+    );
+    expect(r.ok && r.action.kind === "send_email" && "cc" in r.action).toBe(false);
+    expect(r.ok && r.action.kind === "send_email" && "bcc" in r.action).toBe(false);
+  });
 });
 
 describe("planStep: notify_owner", () => {

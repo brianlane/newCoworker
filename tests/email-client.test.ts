@@ -192,6 +192,42 @@ describe("email client", () => {
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards cc/bcc arrays to resend when present", async () => {
+    const sendMock = vi.fn(async () => ({ data: { id: "id_cc" } }));
+    class MockResend {
+      emails = { send: sendMock };
+      constructor(_key: string) {}
+    }
+    process.env.MAILER_EMAIL = "sender@example.com";
+    await sendOwnerEmail("re_key", "owner@example.com", "Hi", {
+      text: "body",
+      cc: ["cc@example.com"],
+      bcc: ["bcc1@example.com", "bcc2@example.com"],
+      resendCtor: MockResend as never
+    });
+    const calls = sendMock.mock.calls as unknown as Array<Array<Record<string, unknown>>>;
+    expect(calls[0][0].cc).toEqual(["cc@example.com"]);
+    expect(calls[0][0].bcc).toEqual(["bcc1@example.com", "bcc2@example.com"]);
+  });
+
+  it("omits cc/bcc when given empty arrays", async () => {
+    const sendMock = vi.fn(async () => ({ data: { id: "id_cc0" } }));
+    class MockResend {
+      emails = { send: sendMock };
+      constructor(_key: string) {}
+    }
+    process.env.MAILER_EMAIL = "sender@example.com";
+    await sendOwnerEmail("re_key", "owner@example.com", "Hi", {
+      text: "body",
+      cc: [],
+      bcc: [],
+      resendCtor: MockResend as never
+    });
+    const calls = sendMock.mock.calls as unknown as Array<Array<Record<string, unknown>>>;
+    expect(calls[0][0].cc).toBeUndefined();
+    expect(calls[0][0].bcc).toBeUndefined();
+  });
+
   it("substitutes empty string when text is omitted from options", async () => {
     const sendMock = vi.fn(async () => ({ data: { id: "id_7" } }));
     class MockResend {
