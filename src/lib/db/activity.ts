@@ -26,7 +26,8 @@ export type ActivityKind =
   | "sms_outbound"
   | "chat"
   | "aiflow"
-  | "customer";
+  | "customer"
+  | "alert";
 
 export type ActivityItem = {
   /** Stable React key, unique across all sources. */
@@ -72,6 +73,13 @@ export type ActivityCustomerRow = {
   created_at: string;
 };
 
+export type ActivityAlertRow = {
+  task_type: string;
+  status: string;
+  log_payload: Record<string, unknown> | null;
+  created_at: string;
+};
+
 export type ActivityFeedInput = {
   calls: ActivityCallRow[];
   smsInbound: ActivitySmsInboundRow[];
@@ -79,6 +87,7 @@ export type ActivityFeedInput = {
   chat: ActivityChatRow[];
   flows: ActivityFlowRow[];
   customers: ActivityCustomerRow[];
+  alerts: ActivityAlertRow[];
   limit: number;
 };
 
@@ -86,6 +95,22 @@ export type ActivityFeedInput = {
 function flowName(join: ActivityFlowRow["ai_flows"]): string {
   const flow = Array.isArray(join) ? join[0] : join;
   return flow?.name ?? "AiFlow";
+}
+
+/** Pull a non-empty string field off a coworker_logs payload, else null. */
+function payloadString(payload: Record<string, unknown> | null, key: string): string | null {
+  const raw = payload?.[key];
+  return typeof raw === "string" && raw.trim() ? raw.trim() : null;
+}
+
+/** Human label for a high-signal coworker_logs entry (urgent alert / error). */
+function alertLabel(row: ActivityAlertRow): string {
+  const detail =
+    payloadString(row.log_payload, "reason") ??
+    payloadString(row.log_payload, "callerName") ??
+    row.task_type.replace(/_/g, " ");
+  const prefix = row.status === "urgent_alert" ? "Urgent" : "Issue";
+  return `${prefix} — ${detail}`;
 }
 
 /**
@@ -159,6 +184,16 @@ export function buildActivityFeed(input: ActivityFeedInput): ActivityItem[] {
     });
   });
 
+  input.alerts.forEach((r, i) => {
+    items.push({
+      id: `alert:${i}:${r.created_at}`,
+      kind: "alert",
+      label: alertLabel(r),
+      href: "/dashboard/notifications",
+      at: r.created_at
+    });
+  });
+
   items.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
   return items.slice(0, input.limit);
 }
@@ -171,8 +206,17 @@ function rowsOf<T>(res: { data: unknown; error: unknown }): T[] {
 export const DEFAULT_ACTIVITY_LIMIT = 10;
 
 /**
+ * How far back the feed looks. Bounding the window keeps "Recent Activity"
+ * actually recent — without it, a long-idle business would surface months-old
+ * rows (e.g. a stale `customer_memories` row mislabeled "New customer").
+ * Mirrors the digest's windowed aggregation.
+ */
+export const ACTIVITY_WINDOW_DAYS = 30;
+
+/**
  * Fetch the most-recent activity across calls, texts, dashboard chat, AiFlow
- * runs, and new customers for a business, merged into one chronological feed.
+ * runs, new customers, and urgent alerts for a business, merged into one
+ * chronological feed and bounded to the last {@link ACTIVITY_WINDOW_DAYS} days.
  * Each source is over-fetched to `limit` so the merge can't starve a source;
  * the builder caps the merged result back to `limit`.
  */
@@ -182,45 +226,63 @@ export async function getRecentActivity(
   client?: SupabaseClient
 ): Promise<ActivityItem[]> {
   const db = client ?? (await createSupabaseServiceClient());
+  const since = new Date(Date.now() - ACTIVITY_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
-  const [callsRes, smsInRes, smsOutRes, chatRes, flowsRes, custRes] = await Promise.all([
-    db
-      .from("voice_call_transcripts")
-      .select("caller_e164, status, started_at")
-      .eq("business_id", businessId)
-      .order("started_at", { ascending: false })
-      .limit(limit),
-    db
-      .from("sms_inbound_jobs")
-      .select("payload, created_at")
-      .eq("business_id", businessId)
-      .order("created_at", { ascending: false })
-      .limit(limit),
-    db
-      .from("sms_outbound_log")
-      .select("to_e164, created_at")
-      .eq("business_id", businessId)
-      .order("created_at", { ascending: false })
-      .limit(limit),
-    db
-      .from("dashboard_chat_jobs")
-      .select("created_at")
-      .eq("business_id", businessId)
-      .order("created_at", { ascending: false })
-      .limit(limit),
-    db
-      .from("ai_flow_runs")
-      .select("status, created_at, ai_flows(name)")
-      .eq("business_id", businessId)
-      .order("created_at", { ascending: false })
-      .limit(limit),
-    db
-      .from("customer_memories")
-      .select("display_name, customer_e164, created_at")
-      .eq("business_id", businessId)
-      .order("created_at", { ascending: false })
-      .limit(limit)
-  ]);
+  const [callsRes, smsInRes, smsOutRes, chatRes, flowsRes, custRes, alertRes] =
+    await Promise.all([
+      db
+        .from("voice_call_transcripts")
+        .select("caller_e164, status, started_at")
+        .eq("business_id", businessId)
+        .gte("started_at", since)
+        .order("started_at", { ascending: false })
+        .limit(limit),
+      db
+        .from("sms_inbound_jobs")
+        .select("payload, created_at")
+        .eq("business_id", businessId)
+        .gte("created_at", since)
+        .order("created_at", { ascending: false })
+        .limit(limit),
+      db
+        .from("sms_outbound_log")
+        .select("to_e164, created_at")
+        .eq("business_id", businessId)
+        .gte("created_at", since)
+        .order("created_at", { ascending: false })
+        .limit(limit),
+      db
+        .from("dashboard_chat_jobs")
+        .select("created_at")
+        .eq("business_id", businessId)
+        .gte("created_at", since)
+        .order("created_at", { ascending: false })
+        .limit(limit),
+      db
+        .from("ai_flow_runs")
+        .select("status, created_at, ai_flows(name)")
+        .eq("business_id", businessId)
+        .gte("created_at", since)
+        .order("created_at", { ascending: false })
+        .limit(limit),
+      db
+        .from("customer_memories")
+        .select("display_name, customer_e164, created_at")
+        .eq("business_id", businessId)
+        .gte("created_at", since)
+        .order("created_at", { ascending: false })
+        .limit(limit),
+      // High-signal coworker_logs entries (urgent caller captures + errors)
+      // that aren't otherwise represented by the call/text sources above.
+      db
+        .from("coworker_logs")
+        .select("task_type, status, log_payload, created_at")
+        .eq("business_id", businessId)
+        .in("status", ["urgent_alert", "error"])
+        .gte("created_at", since)
+        .order("created_at", { ascending: false })
+        .limit(limit)
+    ]);
 
   return buildActivityFeed({
     calls: rowsOf<ActivityCallRow>(callsRes),
@@ -229,6 +291,7 @@ export async function getRecentActivity(
     chat: rowsOf<ActivityChatRow>(chatRes),
     flows: rowsOf<ActivityFlowRow>(flowsRes),
     customers: rowsOf<ActivityCustomerRow>(custRes),
+    alerts: rowsOf<ActivityAlertRow>(alertRes),
     limit
   });
 }

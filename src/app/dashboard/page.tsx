@@ -27,14 +27,15 @@ export const dynamic = "force-dynamic";
 
 const ACTIVITY_BADGE: Record<
   ActivityItem["kind"],
-  { label: string; variant: "online" | "pending" | "neutral" | "success" }
+  { label: string; variant: "online" | "pending" | "neutral" | "success" | "urgent" }
 > = {
   call: { label: "Call", variant: "online" },
   sms_inbound: { label: "Text in", variant: "pending" },
   sms_outbound: { label: "Text out", variant: "neutral" },
   chat: { label: "Chat", variant: "neutral" },
   aiflow: { label: "AiFlow", variant: "success" },
-  customer: { label: "Customer", variant: "pending" }
+  customer: { label: "Customer", variant: "pending" },
+  alert: { label: "Alert", variant: "urgent" }
 };
 
 export default async function DashboardPage() {

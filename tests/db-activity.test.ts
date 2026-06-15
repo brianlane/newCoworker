@@ -20,6 +20,7 @@ function emptyInput(overrides: Partial<ActivityFeedInput> = {}): ActivityFeedInp
     chat: [],
     flows: [],
     customers: [],
+    alerts: [],
     limit: 10,
     ...overrides
   };
@@ -142,6 +143,55 @@ describe("buildActivityFeed", () => {
     expect(items[1].label).toBe("New customer — +15550005555");
   });
 
+  it("labels urgent alerts by reason, then caller name, then task type", () => {
+    const items = buildActivityFeed(
+      emptyInput({
+        alerts: [
+          {
+            task_type: "call",
+            status: "urgent_alert",
+            log_payload: { reason: "Pipe burst" },
+            created_at: "2026-01-07T03:00:00Z"
+          },
+          {
+            task_type: "call",
+            status: "urgent_alert",
+            log_payload: { callerName: "Pat" },
+            created_at: "2026-01-07T02:00:00Z"
+          },
+          {
+            task_type: "sms_reply",
+            status: "error",
+            log_payload: null,
+            created_at: "2026-01-07T01:00:00Z"
+          }
+        ]
+      })
+    );
+    expect(items.map((i) => i.label)).toEqual([
+      "Urgent — Pipe burst",
+      "Urgent — Pat",
+      "Issue — sms reply"
+    ]);
+    expect(items[0]).toMatchObject({ kind: "alert", href: "/dashboard/notifications" });
+  });
+
+  it("ignores blank payload fields when labeling alerts", () => {
+    const [item] = buildActivityFeed(
+      emptyInput({
+        alerts: [
+          {
+            task_type: "call",
+            status: "urgent_alert",
+            log_payload: { reason: "   ", callerName: "" },
+            created_at: "2026-01-07T00:00:00Z"
+          }
+        ]
+      })
+    );
+    expect(item.label).toBe("Urgent — call");
+  });
+
   it("sorts newest-first across sources and caps to limit", () => {
     const items = buildActivityFeed(
       emptyInput({
@@ -171,6 +221,8 @@ function chainResult(result: { data: unknown; error: unknown }) {
   return {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
+    in: vi.fn().mockReturnThis(),
+    gte: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockResolvedValue(result)
   };
@@ -192,7 +244,8 @@ const ALL_EMPTY = {
   sms_outbound_log: { data: [], error: null },
   dashboard_chat_jobs: { data: [], error: null },
   ai_flow_runs: { data: [], error: null },
-  customer_memories: { data: [], error: null }
+  customer_memories: { data: [], error: null },
+  coworker_logs: { data: [], error: null }
 };
 
 describe("getRecentActivity", () => {
@@ -205,13 +258,34 @@ describe("getRecentActivity", () => {
         data: [{ caller_e164: "+15550001111", status: "completed", started_at: "2026-02-01T10:00:00Z" }],
         error: null
       },
-      dashboard_chat_jobs: { data: [{ created_at: "2026-02-01T09:00:00Z" }], error: null }
+      dashboard_chat_jobs: { data: [{ created_at: "2026-02-01T09:00:00Z" }], error: null },
+      coworker_logs: {
+        data: [
+          {
+            task_type: "call",
+            status: "urgent_alert",
+            log_payload: { reason: "Flood" },
+            created_at: "2026-02-01T11:00:00Z"
+          }
+        ],
+        error: null
+      }
     });
 
     const items = await getRecentActivity("biz-1", 10, db as never);
-    expect(items.map((i) => i.kind)).toEqual(["call", "chat"]);
+    expect(items.map((i) => i.kind)).toEqual(["alert", "call", "chat"]);
     expect(db.from).toHaveBeenCalledWith("voice_call_transcripts");
     expect(db.from).toHaveBeenCalledWith("ai_flow_runs");
+    expect(db.from).toHaveBeenCalledWith("coworker_logs");
+  });
+
+  it("bounds every source to the recency window and filters alert statuses", async () => {
+    const db = mockDbByTable(ALL_EMPTY);
+    await getRecentActivity("biz-1", 10, db as never);
+    const callChain = db.from.mock.results.find((r) => r.value.gte.mock.calls.length > 0)?.value;
+    expect(callChain.gte).toHaveBeenCalledWith(expect.any(String), expect.any(String));
+    const logChain = db.from.mock.results[db.from.mock.calls.length - 1].value;
+    expect(logChain.in).toHaveBeenCalledWith("status", ["urgent_alert", "error"]);
   });
 
   it("treats a failed source as empty instead of throwing", async () => {
