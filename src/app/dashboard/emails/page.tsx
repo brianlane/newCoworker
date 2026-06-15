@@ -117,6 +117,13 @@ export default async function DashboardEmailsPage() {
                     : `To ${r.to_email ?? "unknown"}`}
                   {r.body_preview ? ` — ${r.body_preview}` : ""}
                 </p>
+                {(r.cc_email || r.bcc_email) && (
+                  <p className="text-[10px] text-parchment/40 mt-0.5 truncate">
+                    {r.cc_email ? `Cc ${r.cc_email}` : ""}
+                    {r.cc_email && r.bcc_email ? " · " : ""}
+                    {r.bcc_email ? `Bcc ${r.bcc_email}` : ""}
+                  </p>
+                )}
                 <p className="text-[10px] text-parchment/40 mt-0.5">
                   <LocalDateTime iso={r.created_at} />
                 </p>

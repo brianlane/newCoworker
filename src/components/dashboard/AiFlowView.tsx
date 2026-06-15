@@ -180,6 +180,8 @@ function StepBody({ step }: { step: FlowStep }) {
       return (
         <>
           <Row label="Recipient" value={step.to} mono />
+          {step.cc && step.cc.length > 0 && <Row label="Cc" value={step.cc.join(", ")} mono />}
+          {step.bcc && step.bcc.length > 0 && <Row label="Bcc" value={step.bcc.join(", ")} mono />}
           <Row
             label="From"
             value={step.fromConnectionId ?? "New Coworker (platform sender)"}

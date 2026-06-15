@@ -250,6 +250,11 @@ const stepSchema = z.discriminatedUnion("type", [
     id: stepId,
     type: z.literal("send_email"),
     to: z.string().min(3).max(320),
+    // cc/bcc are optional extra recipients. Bounded like `to` (not strict
+    // .email()) so they can carry a {{vars.x}} template; capped so a flow
+    // can't blast an unbounded recipient list. Empty entries dropped at render.
+    cc: z.array(z.string().min(3).max(320)).max(10).optional(),
+    bcc: z.array(z.string().min(3).max(320)).max(10).optional(),
     subject: z.string().min(1).max(300),
     body: z.string().min(1).max(8000),
     attachScreenshot: z.boolean().optional(),
@@ -350,7 +355,7 @@ function templateStringsForStep(step: FlowStep): string[] {
     case "send_sms":
       return [step.to, step.body, step.quietHours?.emailSubject ?? ""];
     case "send_email":
-      return [step.to, step.subject, step.body];
+      return [step.to, ...(step.cc ?? []), ...(step.bcc ?? []), step.subject, step.body];
     case "notify_owner":
       return [step.message];
     case "approval_gate":

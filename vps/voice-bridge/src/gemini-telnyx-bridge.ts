@@ -433,7 +433,17 @@ function buildVoiceToolDeclarations() {
         properties: {
           toEmail: { type: Type.STRING, description: "Recipient email address." },
           subject: { type: Type.STRING, description: "Short subject line." },
-          bodyText: { type: Type.STRING, description: "Plain-text email body." }
+          bodyText: { type: Type.STRING, description: "Plain-text email body." },
+          cc: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: "Optional cc email addresses, at most 10. Only use addresses the caller gave you."
+          },
+          bcc: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: "Optional bcc email addresses, at most 10. Only use addresses the caller gave you."
+          }
         },
         required: ["toEmail", "subject", "bodyText"]
       }

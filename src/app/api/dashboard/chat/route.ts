@@ -289,9 +289,11 @@ ${EMAIL_SEND_OPEN}
 {"to": "recipient@example.com", "subject": "Subject line", "body": "Plain-text body"}
 ${EMAIL_SEND_CLOSE}
 
+To copy others, add optional "cc" and/or "bcc" array fields of email addresses, e.g. {"to": "a@x.com", "cc": ["b@x.com"], "bcc": ["c@x.com"], "subject": "...", "body": "..."}.
+
 Rules:
-- Only include the block when the owner explicitly asks, in this conversation, for an email to be sent. Never invent recipients — use addresses the owner gave you.
-- Exactly one valid JSON object per block. Plain-text body only (use \\n for line breaks). Subject at most 150 characters; body at most 4000 characters. At most 3 such blocks per reply.
+- Only include the block when the owner explicitly asks, in this conversation, for an email to be sent. Never invent recipients — use addresses the owner gave you (including any cc/bcc).
+- Exactly one valid JSON object per block. Plain-text body only (use \\n for line breaks). Subject at most 150 characters; body at most 4000 characters. At most 10 cc and 10 bcc recipients. At most 3 such blocks per reply.
 - Do NOT claim the email was sent. The platform sends it after your reply and appends the actual delivery result for the owner. Phrase your reply as "sending it now".`;
 
 export const EMAIL_TOOL_DISABLED_PREAMBLE = `EMAIL TOOL — DISABLED.

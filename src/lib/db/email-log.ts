@@ -36,6 +36,10 @@ export type EmailLogRow = {
   from_email: string | null;
   subject: string | null;
   body_preview: string | null;
+  /** Comma-separated cc recipients, or null when none. */
+  cc_email: string | null;
+  /** Comma-separated bcc recipients, or null when none. */
+  bcc_email: string | null;
   source: EmailLogSource;
   run_id: string | null;
   flow_id: string | null;
@@ -44,7 +48,13 @@ export type EmailLogRow = {
 };
 
 const EMAIL_LOG_SELECT =
-  "id, business_id, direction, to_email, from_email, subject, body_preview, source, run_id, flow_id, provider_message_id, created_at";
+  "id, business_id, direction, to_email, from_email, subject, body_preview, cc_email, bcc_email, source, run_id, flow_id, provider_message_id, created_at";
+
+/** Join a recipient list into the stored CSV form, or null when empty. */
+function recipientsToCsv(recipients?: string[] | null): string | null {
+  if (!recipients || recipients.length === 0) return null;
+  return recipients.join(", ");
+}
 
 export const EMAIL_LOG_DEFAULT_LIMIT = 50;
 export const EMAIL_LOG_MAX_LIMIT = 200;
@@ -116,6 +126,10 @@ export type RecordOutboundAssistantEmailInput = {
   /** Surface the assistant sent from. */
   source: "dashboard_chat" | "sms_assistant" | "voice_assistant";
   providerMessageId?: string | null;
+  /** Optional cc recipients (already normalized to valid addresses). */
+  ccEmails?: string[];
+  /** Optional bcc recipients (already normalized to valid addresses). */
+  bccEmails?: string[];
 };
 
 /**
@@ -136,6 +150,8 @@ export async function recordOutboundAssistantEmail(
       from_email: null,
       subject: input.subject,
       body_preview: input.bodyText.slice(0, 500),
+      cc_email: recipientsToCsv(input.ccEmails),
+      bcc_email: recipientsToCsv(input.bccEmails),
       source: input.source,
       run_id: null,
       flow_id: null,

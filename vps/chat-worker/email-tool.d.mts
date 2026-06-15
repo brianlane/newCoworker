@@ -8,11 +8,14 @@ export const EMAIL_SEND_CLOSE: string;
 export const MAX_EMAILS_PER_TURN: number;
 export const SUBJECT_MAX_CHARS: number;
 export const BODY_MAX_CHARS: number;
+export const MAX_CC_BCC_RECIPIENTS: number;
 
 export interface EmailSendRequest {
   to: string;
   subject: string;
   body: string;
+  cc?: string[];
+  bcc?: string[];
 }
 
 export interface EmailSendOutcome {

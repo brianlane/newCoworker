@@ -140,7 +140,9 @@ describe("POST /api/voice/tools/email", () => {
       subject: "Follow-up",
       bodyText: "Thanks.",
       source: "voice_assistant",
-      providerMessageId: "gmail-abc"
+      providerMessageId: "gmail-abc",
+      ccEmails: [],
+      bccEmails: []
     });
   });
 

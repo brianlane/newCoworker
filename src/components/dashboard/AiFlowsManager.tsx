@@ -34,6 +34,9 @@ const EMAIL_CONNECTION_KEYS = ["google-mail", "gmail", "outlook"];
 /** A connected owner mailbox the editor can offer as an email "From". */
 export type EmailConnectionOption = { id: string; label: string };
 
+/** A team member with an email, offered in the cc/bcc "Add employee" picker. */
+export type EmployeeEmailOption = { name: string; email: string };
+
 const inputClass =
   "w-full rounded-md border border-parchment/15 bg-deep-ink/40 px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:border-signal-teal focus:outline-none";
 const labelClass = "block text-xs font-medium text-parchment/60 mb-1";
@@ -276,6 +279,7 @@ export function AiFlowsManager({
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
   const [emailConns, setEmailConns] = useState<EmailConnectionOption[]>([]);
+  const [employees, setEmployees] = useState<EmployeeEmailOption[]>([]);
   // Run-now panel: which flow's panel is open, its input, and the last outcome.
   const [runFor, setRunFor] = useState<string | null>(null);
   const [runInput, setRunInput] = useState("");
@@ -315,6 +319,37 @@ export function AiFlowsManager({
         );
       } catch {
         /* options stay empty; the dropdown still offers the platform sender */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [businessId]);
+
+  // Team roster (ai_flow_team_members) for the cc/bcc "Add employee" picker.
+  // Best-effort: on any failure the picker simply hides and owners type emails.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/dashboard/employees?businessId=${encodeURIComponent(businessId)}`,
+          { cache: "no-store" }
+        );
+        const json = (await res.json()) as {
+          ok: boolean;
+          data?: { members?: Array<{ name?: string; email?: string | null }> };
+        };
+        if (cancelled || !json.ok || !json.data?.members) return;
+        setEmployees(
+          json.data.members
+            .filter((m): m is { name?: string; email: string } =>
+              typeof m.email === "string" && m.email.length > 0
+            )
+            .map((m) => ({ name: typeof m.name === "string" ? m.name : m.email, email: m.email }))
+        );
+      } catch {
+        /* picker stays empty; owners can still type cc/bcc addresses */
       }
     })();
     return () => {
@@ -794,6 +829,7 @@ export function AiFlowsManager({
                 index={i}
                 patchStep={patchStep}
                 emailConns={emailConns}
+                employees={employees}
                 examples={examples}
               />
               <WhenEditor
@@ -1002,17 +1038,84 @@ function FromMailboxSelect({
   );
 }
 
+/** Cap mirrors the schema's `.max(10)` on each of cc/bcc. */
+const MAX_CC_BCC = 10;
+
+/**
+ * A cc/bcc editor: a comma-separated text input backed by a string[] plus an
+ * "Add employee" dropdown that appends a roster member's email. Stores
+ * `undefined` (not []) when empty so the schema strips the optional field.
+ */
+function RecipientListField({
+  label,
+  value,
+  onChange,
+  employees
+}: {
+  label: string;
+  value: string[] | undefined;
+  onChange: (list: string[] | undefined) => void;
+  employees: EmployeeEmailOption[];
+}) {
+  const current = value ?? [];
+  const commit = (list: string[]) => onChange(list.length > 0 ? list.slice(0, MAX_CC_BCC) : undefined);
+  const addEmployee = (email: string) => {
+    if (!email || current.some((e) => e.toLowerCase() === email.toLowerCase())) return;
+    commit([...current, email]);
+  };
+  // Roster members not already in this list, so the picker never re-adds a dupe.
+  const available = employees.filter(
+    (m) => !current.some((e) => e.toLowerCase() === m.email.toLowerCase())
+  );
+  return (
+    <div>
+      <label className={labelClass}>{label}</label>
+      <input
+        className={inputClass}
+        value={current.join(", ")}
+        onChange={(e) =>
+          commit(
+            e.target.value
+              .split(",")
+              .map((s) => s.trim())
+              .filter((s) => s.length > 0)
+          )
+        }
+      />
+      {available.length > 0 && (
+        <select
+          className={`${inputClass} mt-1`}
+          value=""
+          onChange={(e) => {
+            addEmployee(e.target.value);
+            e.target.value = "";
+          }}
+        >
+          <option value="">Add employee…</option>
+          {available.map((m) => (
+            <option key={m.email} value={m.email}>
+              {m.name ? `${m.name} — ${m.email}` : m.email}
+            </option>
+          ))}
+        </select>
+      )}
+    </div>
+  );
+}
+
 function StepFields({
   step,
   index,
   patchStep,
   emailConns,
+  employees,
   examples
 }: {
   step: FlowStep;
   index: number;
   patchStep: (index: number, patch: Record<string, unknown>) => void;
   emailConns: EmailConnectionOption[];
+  employees: EmployeeEmailOption[];
   examples: AiFlowExampleCopy;
 }) {
   if (step.type === "extract_url") {
@@ -1171,6 +1274,18 @@ function StepFields({
           label="Recipient email"
           value={step.to}
           onChange={(v) => patchStep(index, { to: v })}
+        />
+        <RecipientListField
+          label="Cc (optional, comma-separated)"
+          value={step.cc}
+          onChange={(list) => patchStep(index, { cc: list })}
+          employees={employees}
+        />
+        <RecipientListField
+          label="Bcc (optional, comma-separated)"
+          value={step.bcc}
+          onChange={(list) => patchStep(index, { bcc: list })}
+          employees={employees}
         />
         <FromMailboxSelect
           value={step.fromConnectionId ?? ""}

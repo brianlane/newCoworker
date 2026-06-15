@@ -92,7 +92,9 @@ describe("POST /api/voice/tools/dashboard-email", () => {
     expect(vi.mocked(sendFromOwnerMailbox)).toHaveBeenCalledWith(businessId, {
       toEmail: "lead@example.com",
       subject: "Hello",
-      bodyText: "Hi"
+      bodyText: "Hi",
+      ccEmails: [],
+      bccEmails: []
     });
     expect(vi.mocked(recordOutboundAssistantEmail)).toHaveBeenCalledWith({
       businessId,
@@ -100,7 +102,9 @@ describe("POST /api/voice/tools/dashboard-email", () => {
       subject: "Hello",
       bodyText: "Hi",
       source: "dashboard_chat",
-      providerMessageId: null
+      providerMessageId: null,
+      ccEmails: [],
+      bccEmails: []
     });
   });
 

@@ -32,7 +32,9 @@ describe("extractEmailSendRequests", () => {
   it("parses a valid block and strips it from the visible reply", () => {
     const content = `Sending it now.\n\n${block(VALID_JSON)}\n\nAnything else?`;
     const out = extractEmailSendRequests(content);
-    expect(out.requests).toEqual([{ to: "lead@example.com", subject: "Hello", body: "Hi there" }]);
+    expect(out.requests).toEqual([
+      { to: "lead@example.com", subject: "Hello", body: "Hi there", cc: [], bcc: [] }
+    ]);
     expect(out.invalidCount).toBe(0);
     expect(out.cleanedContent).not.toContain(EMAIL_SEND_OPEN);
     expect(out.cleanedContent).not.toContain("lead@example.com");
@@ -50,7 +52,17 @@ describe("extractEmailSendRequests", () => {
   it("accepts the adapter alias field names (toEmail/bodyText)", () => {
     const content = block(`{"toEmail": "a@b.co", "subject": "S", "bodyText": "B"}`);
     const out = extractEmailSendRequests(content);
-    expect(out.requests).toEqual([{ to: "a@b.co", subject: "S", body: "B" }]);
+    expect(out.requests).toEqual([{ to: "a@b.co", subject: "S", body: "B", cc: [], bcc: [] }]);
+  });
+
+  it("parses cc/bcc from arrays or CSV, lowercasing and dropping invalid entries", () => {
+    const arr = block(
+      `{"to": "a@b.co", "subject": "S", "body": "B", "cc": ["CC@x.com", "nope"], "bcc": "d@x.com, e@x.com"}`
+    );
+    const out = extractEmailSendRequests(arr);
+    expect(out.requests).toEqual([
+      { to: "a@b.co", subject: "S", body: "B", cc: ["cc@x.com"], bcc: ["d@x.com", "e@x.com"] }
+    ]);
   });
 
   it("counts malformed JSON as invalid without surfacing it", () => {
@@ -160,6 +172,25 @@ describe("postEmailSend", () => {
     expect(JSON.parse(String(init.body))).toEqual({
       businessId: BIZ,
       args: { toEmail: "a@b.co", subject: "Hi", bodyText: "Yo" }
+    });
+  });
+
+  it("includes cc/bcc in the args when the request carries them", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ ok: true, data: {} })));
+    await postEmailSend({
+      url: "u",
+      bearer: "gw",
+      businessId: BIZ,
+      request: { ...request, cc: ["cc@x.com"], bcc: ["bcc@x.com"] },
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).args).toEqual({
+      toEmail: "a@b.co",
+      subject: "Hi",
+      bodyText: "Yo",
+      cc: ["cc@x.com"],
+      bcc: ["bcc@x.com"]
     });
   });
 

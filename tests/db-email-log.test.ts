@@ -159,6 +159,27 @@ describe("recordOutboundAssistantEmail", () => {
     );
   });
 
+  it("stores cc as CSV and treats an empty bcc array as null", async () => {
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    const db = { from: vi.fn(() => ({ insert })) };
+    await recordOutboundAssistantEmail(
+      { ...input, ccEmails: ["a@x.com", "b@x.com"], bccEmails: [] },
+      db as never
+    );
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({ cc_email: "a@x.com, b@x.com", bcc_email: null })
+    );
+  });
+
+  it("defaults missing cc/bcc to null", async () => {
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    const db = { from: vi.fn(() => ({ insert })) };
+    await recordOutboundAssistantEmail(input, db as never);
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({ cc_email: null, bcc_email: null })
+    );
+  });
+
   it("defaults a missing providerMessageId to null", async () => {
     const insert = vi.fn().mockResolvedValue({ error: null });
     const db = { from: vi.fn(() => ({ insert })) };

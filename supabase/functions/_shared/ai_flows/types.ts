@@ -212,6 +212,10 @@ export type FlowStep =
       type: "send_email";
       /** Recipient address (templatable, e.g. a fixed owner address). */
       to: string;
+      /** Optional cc recipients (templatable; empty entries dropped at render). */
+      cc?: string[];
+      /** Optional bcc recipients (templatable; empty entries dropped at render). */
+      bcc?: string[];
       /** Subject template, e.g. "{{vars.lead_name}} BS RE". */
       subject: string;
       /** Plain-text body template. */

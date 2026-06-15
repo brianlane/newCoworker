@@ -6,6 +6,7 @@ import {
   voiceToolValidationError
 } from "@/lib/voice-tools/common";
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
+import { normalizeRecipients } from "@/lib/email/recipients";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 import { logger } from "@/lib/logger";
@@ -24,10 +25,14 @@ import { logger } from "@/lib/logger";
  * `tool_disabled` for the same graceful-degradation reason.
  */
 
+const recipientList = z.union([z.string(), z.array(z.string())]).optional();
+
 const argsSchema = z.object({
   toEmail: z.string().email(),
   subject: z.string().min(1).max(150),
-  bodyText: z.string().min(1).max(4000)
+  bodyText: z.string().min(1).max(4000),
+  cc: recipientList,
+  bcc: recipientList
 });
 
 export async function POST(request: Request) {
@@ -48,6 +53,8 @@ export async function POST(request: Request) {
     return voiceToolValidationError(parsed.error.issues[0]?.message ?? "invalid args");
   }
   const args = parsed.data;
+  const ccEmails = normalizeRecipients(args.cc);
+  const bccEmails = normalizeRecipients(args.bcc);
 
   try {
     const enabled = await isAgentToolEnabled(envelope.businessId, "voice", "send_follow_up_email");
@@ -58,7 +65,9 @@ export async function POST(request: Request) {
     const result = await sendFromOwnerMailbox(envelope.businessId, {
       toEmail: args.toEmail,
       subject: args.subject,
-      bodyText: args.bodyText
+      bodyText: args.bodyText,
+      ccEmails,
+      bccEmails
     });
     if (!result.ok) {
       return voiceToolResponse({ ok: false, detail: result.detail });
@@ -69,7 +78,9 @@ export async function POST(request: Request) {
       subject: args.subject,
       bodyText: args.bodyText,
       source: "voice_assistant",
-      providerMessageId: result.messageId
+      providerMessageId: result.messageId,
+      ccEmails,
+      bccEmails
     });
     return voiceToolResponse({
       ok: true,

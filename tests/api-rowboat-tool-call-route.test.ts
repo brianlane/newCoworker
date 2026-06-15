@@ -438,7 +438,9 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
     expect(vi.mocked(sendFromOwnerMailbox)).toHaveBeenCalledWith(BIZ, {
       toEmail: "joe@example.com",
       subject: "Your estimate",
-      bodyText: "Here are the details we discussed."
+      bodyText: "Here are the details we discussed.",
+      ccEmails: [],
+      bccEmails: []
     });
     expect(vi.mocked(recordOutboundAssistantEmail)).toHaveBeenCalledWith({
       businessId: BIZ,
@@ -446,8 +448,31 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
       subject: "Your estimate",
       bodyText: "Here are the details we discussed.",
       source: "sms_assistant",
-      providerMessageId: "m-1"
+      providerMessageId: "m-1",
+      ccEmails: [],
+      bccEmails: []
     });
+  });
+
+  it("forwards normalized cc/bcc on the sms send_email path", async () => {
+    vi.mocked(sendFromOwnerMailbox).mockResolvedValue({
+      ok: true,
+      messageId: "m-2",
+      provider: "google"
+    } as never);
+    const content = makeContent("send_email", {
+      toEmail: "joe@example.com",
+      subject: "Your estimate",
+      bodyText: "Details.",
+      cc: ["CC@x.com", "not-an-email"],
+      bcc: "bcc@x.com"
+    });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    await POST(makeRequest(content));
+    expect(vi.mocked(sendFromOwnerMailbox)).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ ccEmails: ["cc@x.com"], bccEmails: ["bcc@x.com"] })
+    );
   });
 
   it("propagates owner-mailbox failure details (e.g. email_not_connected)", async () => {

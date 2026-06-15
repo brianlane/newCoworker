@@ -100,7 +100,13 @@ describe("POST /api/aiflows/send-owner-email", () => {
     expect(sendFromMailboxConnection).toHaveBeenCalledWith(
       businessId,
       { provider: "google", providerConfigKey: "google-mail", connectionId: "cx-1" },
-      { toEmail: "lead@example.com", subject: "Following up", bodyText: "Hi — still interested?" }
+      {
+        toEmail: "lead@example.com",
+        subject: "Following up",
+        bodyText: "Hi — still interested?",
+        ccEmails: [],
+        bccEmails: []
+      }
     );
   });
 

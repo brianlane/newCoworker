@@ -45,6 +45,10 @@ export type StepAction =
   | {
       kind: "send_email";
       to: string;
+      /** Resolved cc recipients (templated, empties dropped). Omitted when none. */
+      cc?: string[];
+      /** Resolved bcc recipients (templated, empties dropped). Omitted when none. */
+      bcc?: string[];
       subject: string;
       body: string;
       attachScreenshot: boolean;
@@ -92,6 +96,33 @@ export type StepPlan =
 function triggerString(scope: StepScope, key: string): string {
   const v = scope.trigger?.[key];
   return typeof v === "string" ? v : "";
+}
+
+/** Max cc (and, separately, bcc) recipients on one send. Mirrors the schema. */
+const MAX_CC_BCC_RECIPIENTS = 10;
+// Same strictness class as the Node senders and the chat-worker regex.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Render each cc/bcc template, then normalize the results the same way every
+ * other send path does: split comma/semicolon/whitespace lists, validate each
+ * address, lowercase, de-dup, and cap. Keeps the platform (Resend) path in
+ * lockstep with the owner-mailbox adapter and the email_log it writes.
+ */
+function normalizeFlowRecipients(templates: string[] | undefined, scope: StepScope): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const template of templates ?? []) {
+    const rendered = renderTemplate(template, scope);
+    for (const part of rendered.split(/[,;\s]+/)) {
+      const addr = part.trim().toLowerCase();
+      if (!addr || seen.has(addr) || !EMAIL_RE.test(addr)) continue;
+      seen.add(addr);
+      out.push(addr);
+      if (out.length >= MAX_CC_BCC_RECIPIENTS) return out;
+    }
+  }
+  return out;
 }
 
 /**
@@ -160,11 +191,18 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       if (!to) return { ok: false, error: "send_email: recipient is empty after templating" };
       if (!subject) return { ok: false, error: "send_email: subject is empty after templating" };
       if (!body) return { ok: false, error: "send_email: body is empty after templating" };
+      // Render + normalize cc/bcc (validate, split lists, lowercase, de-dup,
+      // cap) so the platform and owner-mailbox paths — and the email_log —
+      // all carry the exact addresses that get delivered.
+      const cc = normalizeFlowRecipients(step.cc, scope);
+      const bcc = normalizeFlowRecipients(step.bcc, scope);
       return {
         ok: true,
         action: {
           kind: "send_email",
           to,
+          ...(cc.length > 0 ? { cc } : {}),
+          ...(bcc.length > 0 ? { bcc } : {}),
           subject,
           body,
           attachScreenshot: step.attachScreenshot === true,

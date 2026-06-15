@@ -6,8 +6,10 @@
 // teaches the model to emit
 //
 //   <<EMAIL_SEND>>
-//   {"to": "x@y.com", "subject": "...", "body": "..."}
+//   {"to": "x@y.com", "subject": "...", "body": "...", "cc": [...], "bcc": [...]}
 //   <<END_EMAIL_SEND>>
+//
+// (cc/bcc are optional arrays of addresses; capped + validated like `to`.)
 //
 // and this module extracts those blocks from the reply, POSTs each one to the
 // platform adapter (/api/voice/tools/dashboard-email — gateway-token authed,
@@ -26,9 +28,37 @@ export const EMAIL_SEND_CLOSE = "<<END_EMAIL_SEND>>";
 export const MAX_EMAILS_PER_TURN = 3;
 export const SUBJECT_MAX_CHARS = 150;
 export const BODY_MAX_CHARS = 4000;
+// Cap cc (and, separately, bcc) recipients so a runaway model can't blast mail.
+export const MAX_CC_BCC_RECIPIENTS = 10;
 
 // Pragmatic RFC-5322-ish check, same strictness class as zod's z.string().email().
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Normalize a cc/bcc value (array of strings or a comma/semicolon/whitespace
+ * separated string) into a de-duplicated, capped array of valid addresses.
+ * Mirrors src/lib/email/recipients.ts so every surface behaves identically.
+ */
+function parseRecipients(value) {
+  let parts = [];
+  if (Array.isArray(value)) {
+    for (const v of value) {
+      if (typeof v === "string") parts = parts.concat(v.split(/[,;\s]+/));
+    }
+  } else if (typeof value === "string") {
+    parts = value.split(/[,;\s]+/);
+  }
+  const seen = new Set();
+  const out = [];
+  for (const part of parts) {
+    const addr = part.trim().toLowerCase();
+    if (!addr || seen.has(addr) || !EMAIL_RE.test(addr)) continue;
+    seen.add(addr);
+    out.push(addr);
+    if (out.length >= MAX_CC_BCC_RECIPIENTS) break;
+  }
+  return out;
+}
 
 /**
  * Extract every EMAIL_SEND block from an assistant reply.
@@ -108,7 +138,9 @@ function parseEmailRequest(inner) {
   if (subject.length < 1 || subject.length > SUBJECT_MAX_CHARS) return null;
   const bodyTrimmed = body.trim();
   if (bodyTrimmed.length < 1 || bodyTrimmed.length > BODY_MAX_CHARS) return null;
-  return { to: toTrimmed, subject, body: bodyTrimmed };
+  const cc = parseRecipients(obj.cc);
+  const bcc = parseRecipients(obj.bcc);
+  return { to: toTrimmed, subject, body: bodyTrimmed, cc, bcc };
 }
 
 /**
@@ -171,7 +203,13 @@ export async function postEmailSend({
       },
       body: JSON.stringify({
         businessId,
-        args: { toEmail: request.to, subject: request.subject, bodyText: request.body }
+        args: {
+          toEmail: request.to,
+          subject: request.subject,
+          bodyText: request.body,
+          ...(request.cc && request.cc.length > 0 ? { cc: request.cc } : {}),
+          ...(request.bcc && request.bcc.length > 0 ? { bcc: request.bcc } : {})
+        }
       }),
       signal: ctl.signal
     });

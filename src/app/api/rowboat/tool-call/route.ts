@@ -12,6 +12,7 @@ import {
 } from "@/lib/customer-tools/handlers";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
+import { normalizeRecipients } from "@/lib/email/recipients";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
 import { findCalendarSlots, bookCalendarAppointment } from "@/lib/calendar-tools/handlers";
@@ -78,7 +79,9 @@ const sendSmsArgsSchema = z.object({
 const sendEmailArgsSchema = z.object({
   toEmail: z.string().email(),
   subject: z.string().min(1).max(150),
-  bodyText: z.string().min(1).max(4000)
+  bodyText: z.string().min(1).max(4000),
+  cc: z.union([z.string(), z.array(z.string())]).optional(),
+  bcc: z.union([z.string(), z.array(z.string())]).optional()
 });
 const knowledgeArgsSchema = z.object({ question: z.string().min(1).max(500) });
 const findSlotsArgsSchema = z.object({
@@ -212,10 +215,14 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
       if (!parsed.success) {
         return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
       }
+      const ccEmails = normalizeRecipients(parsed.data.cc);
+      const bccEmails = normalizeRecipients(parsed.data.bcc);
       const result = await sendFromOwnerMailbox(businessId, {
         toEmail: parsed.data.toEmail,
         subject: parsed.data.subject,
-        bodyText: parsed.data.bodyText
+        bodyText: parsed.data.bodyText,
+        ccEmails,
+        bccEmails
       });
       if (!result.ok) {
         return { ok: false, detail: result.detail };
@@ -226,7 +233,9 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
         subject: parsed.data.subject,
         bodyText: parsed.data.bodyText,
         source: "sms_assistant",
-        providerMessageId: result.messageId
+        providerMessageId: result.messageId,
+        ccEmails,
+        bccEmails
       });
       return { ok: true, data: { messageId: result.messageId, provider: result.provider } };
     }
