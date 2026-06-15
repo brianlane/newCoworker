@@ -13,6 +13,8 @@ import { formatAdminLabel, getLogBadgeVariant } from "@/lib/admin/dashboard";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
+import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
+import { LocalTime } from "@/components/LocalTime";
 import { SoulEditor } from "@/components/dashboard/SoulEditor";
 import { SkipPaymentButton } from "@/components/admin/SkipPaymentButton";
 import { DeleteClientButton } from "@/components/admin/DeleteClientButton";
@@ -149,9 +151,11 @@ export default async function BusinessDetailPage({
                 <div>
                   <dt className="text-parchment/40 text-xs">Renewal</dt>
                   <dd className="text-parchment">
-                    {subscription.renewal_at
-                      ? new Date(subscription.renewal_at).toLocaleDateString()
-                      : "—"}
+                    {subscription.renewal_at ? (
+                      <LocalDateTime iso={subscription.renewal_at} style="date" />
+                    ) : (
+                      "—"
+                    )}
                   </dd>
                 </div>
                 <div>
@@ -243,9 +247,10 @@ export default async function BusinessDetailPage({
               return (
                 <li key={log.id} className="py-3 space-y-2">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-xs text-parchment/45 font-mono">
-                      {new Date(log.created_at).toLocaleString()}
-                    </span>
+                    <LocalTime
+                      iso={log.created_at}
+                      className="text-xs text-parchment/45 font-mono"
+                    />
                     <div className="flex items-center gap-2">
                       <Badge variant="neutral" className="text-[10px] uppercase">
                         {src}
@@ -284,9 +289,7 @@ export default async function BusinessDetailPage({
               <li key={log.id} className="flex justify-between items-center py-3">
                 <div>
                   <p className="text-sm text-parchment capitalize">{formatAdminLabel(log.task_type)}</p>
-                  <p className="text-xs text-parchment/30">
-                    {new Date(log.created_at).toLocaleString()}
-                  </p>
+                  <LocalTime iso={log.created_at} className="text-xs text-parchment/30" />
                 </div>
                 <Badge
                   variant={getLogBadgeVariant(log.status)}

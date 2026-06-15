@@ -20,6 +20,7 @@ import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { KillSwitch } from "@/components/dashboard/KillSwitch";
 import { SafeModeToggle } from "@/components/dashboard/SafeModeToggle";
+import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 
@@ -212,7 +213,7 @@ export default async function DashboardPage() {
                           {item.label}
                         </p>
                         <p className="text-xs text-parchment/40">
-                          {new Date(item.at).toLocaleString()}
+                          <LocalDateTime iso={item.at} />
                         </p>
                       </div>
                       <Badge variant={ACTIVITY_BADGE[item.kind].variant}>

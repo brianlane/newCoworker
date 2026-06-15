@@ -9,22 +9,10 @@ import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { AccountSettingsForms } from "@/components/dashboard/AccountSettingsForms";
 import { CoworkerToolsManager } from "@/components/dashboard/CoworkerToolsManager";
+import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { resolveAgentTools } from "@/lib/db/agent-tool-settings";
 
 export const dynamic = "force-dynamic";
-
-function formatDate(iso: string | null): string | null {
-  if (!iso) return null;
-  try {
-    return new Date(iso).toLocaleDateString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric"
-    });
-  } catch {
-    return iso;
-  }
-}
 
 export default async function SettingsPage() {
   const user = await getAuthUser();
@@ -46,7 +34,7 @@ export default async function SettingsPage() {
   // current_period_end, cached and webhook-advanced; see resolveActiveRenewalDate).
   const nextBillingAt =
     subscription?.status === "active" && !subscription.cancel_at_period_end
-      ? formatDate(await resolveActiveRenewalDate(subscription))
+      ? await resolveActiveRenewalDate(subscription)
       : null;
 
   return (
@@ -98,7 +86,9 @@ export default async function SettingsPage() {
           {nextBillingAt && (
             <div className="flex justify-between">
               <dt className="text-parchment/50">Next billing date</dt>
-              <dd className="text-parchment font-mono">{nextBillingAt}</dd>
+              <dd className="text-parchment font-mono">
+                <LocalDateTime iso={nextBillingAt} style="date" />
+              </dd>
             </div>
           )}
         </dl>

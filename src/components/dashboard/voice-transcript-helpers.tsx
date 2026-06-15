@@ -10,12 +10,13 @@
 import { Badge } from "@/components/ui/Badge";
 import type { VoiceTranscriptStatus } from "@/lib/db/voice-transcripts";
 
-export type FormatDateTimeStyle = "list" | "detail";
+export type FormatDateTimeStyle = "list" | "detail" | "date";
 
 /**
  * List rows prefer compact "Apr 23, 4:15 PM"; detail header wants the weekday
- * prefix for scannability ("Thu, Apr 23, 4:15 PM"). Keep both in one place so
- * the two pages can never drift.
+ * prefix for scannability ("Thu, Apr 23, 4:15 PM"); "date" drops the time for
+ * day-granular fields like billing dates ("Apr 23, 2026"). Keep them in one
+ * place so the pages can never drift.
  */
 export function formatDateTime(
   iso: string,
@@ -32,12 +33,18 @@ export function formatDateTime(
             hour: "numeric",
             minute: "2-digit"
           }
-        : {
-            month: "short",
-            day: "numeric",
-            hour: "numeric",
-            minute: "2-digit"
-          };
+        : style === "date"
+          ? {
+              year: "numeric",
+              month: "short",
+              day: "numeric"
+            }
+          : {
+              month: "short",
+              day: "numeric",
+              hour: "numeric",
+              minute: "2-digit"
+            };
     return d.toLocaleString(undefined, options);
   } catch {
     return iso;
