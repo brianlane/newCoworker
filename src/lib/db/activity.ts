@@ -50,6 +50,10 @@ export type ActivityCallRow = {
 export type ActivitySmsInboundRow = {
   payload: Record<string, unknown> | null;
   created_at: string;
+  /** Durable coworker reply; when present this row is also one outbound text. */
+  assistant_reply_text: string | null;
+  /** Send-time stamp used as the outbound reply's timestamp. */
+  updated_at: string;
 };
 
 export type ActivitySmsOutboundRow = {
@@ -75,7 +79,6 @@ export type ActivityCustomerRow = {
 
 export type ActivityAlertRow = {
   task_type: string;
-  status: string;
   log_payload: Record<string, unknown> | null;
   created_at: string;
 };
@@ -103,14 +106,13 @@ function payloadString(payload: Record<string, unknown> | null, key: string): st
   return typeof raw === "string" && raw.trim() ? raw.trim() : null;
 }
 
-/** Human label for a high-signal coworker_logs entry (urgent alert / error). */
+/** Human label for an urgent coworker_logs entry (urgent caller capture etc.). */
 function alertLabel(row: ActivityAlertRow): string {
   const detail =
     payloadString(row.log_payload, "reason") ??
     payloadString(row.log_payload, "callerName") ??
     row.task_type.replace(/_/g, " ");
-  const prefix = row.status === "urgent_alert" ? "Urgent" : "Issue";
-  return `${prefix} — ${detail}`;
+  return `Urgent — ${detail}`;
 }
 
 /**
@@ -140,6 +142,19 @@ export function buildActivityFeed(input: ActivityFeedInput): ActivityItem[] {
       href: `/dashboard/messages/${encodeURIComponent(cp)}`,
       at: r.created_at
     });
+    // Most coworker replies live on the inbound job (assistant_reply_text),
+    // not sms_outbound_log — surface them as outbound texts too, matching the
+    // digest's reply accounting.
+    const reply = r.assistant_reply_text;
+    if (typeof reply === "string" && reply.trim()) {
+      items.push({
+        id: `sms_reply:${i}:${r.updated_at}`,
+        kind: "sms_outbound",
+        label: `Text to ${cp}`,
+        href: `/dashboard/messages/${encodeURIComponent(cp)}`,
+        at: r.updated_at
+      });
+    }
   });
 
   input.smsOutbound.forEach((r, i) => {
@@ -194,8 +209,16 @@ export function buildActivityFeed(input: ActivityFeedInput): ActivityItem[] {
     });
   });
 
-  items.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
-  return items.slice(0, input.limit);
+  // Alerts are high-signal: reserve their slots first so a burst of routine
+  // calls/texts can't push an urgent item off the card, then fill the rest by
+  // recency. The final feed is still displayed newest-first.
+  const byRecency = (a: ActivityItem, b: ActivityItem) =>
+    a.at < b.at ? 1 : a.at > b.at ? -1 : 0;
+  const alerts = items.filter((i) => i.kind === "alert").sort(byRecency);
+  const rest = items.filter((i) => i.kind !== "alert").sort(byRecency);
+  const keptAlerts = alerts.slice(0, input.limit);
+  const keptRest = rest.slice(0, Math.max(0, input.limit - keptAlerts.length));
+  return [...keptAlerts, ...keptRest].sort(byRecency);
 }
 
 /** Treat a failed query as "no rows" so one broken source never blanks the feed. */
@@ -239,7 +262,7 @@ export async function getRecentActivity(
         .limit(limit),
       db
         .from("sms_inbound_jobs")
-        .select("payload, created_at")
+        .select("payload, created_at, assistant_reply_text, updated_at")
         .eq("business_id", businessId)
         .gte("created_at", since)
         .order("created_at", { ascending: false })
@@ -272,13 +295,16 @@ export async function getRecentActivity(
         .gte("created_at", since)
         .order("created_at", { ascending: false })
         .limit(limit),
-      // High-signal coworker_logs entries (urgent caller captures + errors)
-      // that aren't otherwise represented by the call/text sources above.
+      // High-signal coworker_logs entries: urgent alerts only. These are the
+      // ones dispatched to the notifications page (see evaluateUrgency), so the
+      // "/dashboard/notifications" deep link always resolves to the event.
+      // `error` rows are intentionally excluded — they aren't dispatched
+      // anywhere owner-facing, so there's no page to link them to.
       db
         .from("coworker_logs")
-        .select("task_type, status, log_payload, created_at")
+        .select("task_type, log_payload, created_at")
         .eq("business_id", businessId)
-        .in("status", ["urgent_alert", "error"])
+        .eq("status", "urgent_alert")
         .gte("created_at", since)
         .order("created_at", { ascending: false })
         .limit(limit)

@@ -62,8 +62,18 @@ describe("buildActivityFeed", () => {
     const items = buildActivityFeed(
       emptyInput({
         smsInbound: [
-          { payload: smsPayload("+15550002222"), created_at: "2026-01-02T10:00:00Z" },
-          { payload: null, created_at: "2026-01-02T11:00:00Z" }
+          {
+            payload: smsPayload("+15550002222"),
+            created_at: "2026-01-02T10:00:00Z",
+            assistant_reply_text: null,
+            updated_at: "2026-01-02T10:00:00Z"
+          },
+          {
+            payload: null,
+            created_at: "2026-01-02T11:00:00Z",
+            assistant_reply_text: null,
+            updated_at: "2026-01-02T11:00:00Z"
+          }
         ]
       })
     );
@@ -72,6 +82,39 @@ describe("buildActivityFeed", () => {
       kind: "sms_inbound",
       label: "Text from +15550002222",
       href: "/dashboard/messages/%2B15550002222"
+    });
+  });
+
+  it("emits the coworker reply as a 'Text out' item, and skips blank replies", () => {
+    const items = buildActivityFeed(
+      emptyInput({
+        smsInbound: [
+          {
+            payload: smsPayload("+15550002222"),
+            created_at: "2026-01-02T10:00:00Z",
+            assistant_reply_text: "On my way",
+            updated_at: "2026-01-02T10:05:00Z"
+          },
+          {
+            payload: smsPayload("+15550006666"),
+            created_at: "2026-01-02T09:00:00Z",
+            assistant_reply_text: "   ",
+            updated_at: "2026-01-02T09:05:00Z"
+          }
+        ]
+      })
+    );
+    // First row: inbound + outbound reply. Second row: inbound only (blank reply).
+    expect(items.map((i) => i.kind)).toEqual([
+      "sms_outbound",
+      "sms_inbound",
+      "sms_inbound"
+    ]);
+    const reply = items.find((i) => i.kind === "sms_outbound");
+    expect(reply).toMatchObject({
+      label: "Text to +15550002222",
+      href: "/dashboard/messages/%2B15550002222",
+      at: "2026-01-02T10:05:00Z"
     });
   });
 
@@ -149,19 +192,16 @@ describe("buildActivityFeed", () => {
         alerts: [
           {
             task_type: "call",
-            status: "urgent_alert",
             log_payload: { reason: "Pipe burst" },
             created_at: "2026-01-07T03:00:00Z"
           },
           {
             task_type: "call",
-            status: "urgent_alert",
             log_payload: { callerName: "Pat" },
             created_at: "2026-01-07T02:00:00Z"
           },
           {
             task_type: "sms_reply",
-            status: "error",
             log_payload: null,
             created_at: "2026-01-07T01:00:00Z"
           }
@@ -171,7 +211,7 @@ describe("buildActivityFeed", () => {
     expect(items.map((i) => i.label)).toEqual([
       "Urgent — Pipe burst",
       "Urgent — Pat",
-      "Issue — sms reply"
+      "Urgent — sms reply"
     ]);
     expect(items[0]).toMatchObject({ kind: "alert", href: "/dashboard/notifications" });
   });
@@ -182,7 +222,6 @@ describe("buildActivityFeed", () => {
         alerts: [
           {
             task_type: "call",
-            status: "urgent_alert",
             log_payload: { reason: "   ", callerName: "" },
             created_at: "2026-01-07T00:00:00Z"
           }
@@ -190,6 +229,25 @@ describe("buildActivityFeed", () => {
       })
     );
     expect(item.label).toBe("Urgent — call");
+  });
+
+  it("reserves slots for alerts so routine events can't push them off", () => {
+    const items = buildActivityFeed(
+      emptyInput({
+        // One old urgent alert plus three newer routine calls, limit 2.
+        alerts: [{ task_type: "call", log_payload: { reason: "Gas leak" }, created_at: "2026-01-01T00:00:00Z" }],
+        calls: [
+          { caller_e164: "+1", status: "ok", started_at: "2026-01-09T00:00:00Z" },
+          { caller_e164: "+2", status: "ok", started_at: "2026-01-08T00:00:00Z" },
+          { caller_e164: "+3", status: "ok", started_at: "2026-01-07T00:00:00Z" }
+        ],
+        limit: 2
+      })
+    );
+    expect(items).toHaveLength(2);
+    // Newest routine call shown, but the old alert is retained (last by recency).
+    expect(items.map((i) => i.kind)).toEqual(["call", "alert"]);
+    expect(items[1].label).toBe("Urgent — Gas leak");
   });
 
   it("sorts newest-first across sources and caps to limit", () => {
@@ -221,7 +279,6 @@ function chainResult(result: { data: unknown; error: unknown }) {
   return {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
-    in: vi.fn().mockReturnThis(),
     gte: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockResolvedValue(result)
@@ -279,13 +336,13 @@ describe("getRecentActivity", () => {
     expect(db.from).toHaveBeenCalledWith("coworker_logs");
   });
 
-  it("bounds every source to the recency window and filters alert statuses", async () => {
+  it("bounds every source to the recency window and filters to urgent alerts", async () => {
     const db = mockDbByTable(ALL_EMPTY);
     await getRecentActivity("biz-1", 10, db as never);
     const callChain = db.from.mock.results.find((r) => r.value.gte.mock.calls.length > 0)?.value;
     expect(callChain.gte).toHaveBeenCalledWith(expect.any(String), expect.any(String));
     const logChain = db.from.mock.results[db.from.mock.calls.length - 1].value;
-    expect(logChain.in).toHaveBeenCalledWith("status", ["urgent_alert", "error"]);
+    expect(logChain.eq).toHaveBeenCalledWith("status", "urgent_alert");
   });
 
   it("treats a failed source as empty instead of throwing", async () => {
