@@ -124,6 +124,8 @@ export type EmailOp =
       /** `null` if the cancel is immediate (refund / admin / payment-failure). */
       effectiveAt: string;
       graceEndsAt: string | null;
+      /** IANA timezone for date rendering; null → runtime default (UTC). */
+      timeZone: string | null;
     }
   | {
       type: "send_refund_issued";
@@ -165,6 +167,12 @@ export type LifecycleContext = {
   subscription: SubscriptionRow;
   /** Owner email on the business — used as the send-to address for all emails. */
   ownerEmail: string;
+  /**
+   * IANA timezone of the business, for rendering dates in emails (which have
+   * no "viewer" timezone). Null/omitted → emails fall back to the runtime
+   * default (UTC in production).
+   */
+  businessTimezone?: string | null;
   /** Supabase auth user id of the owner; required only for grace-sweep/force. */
   ownerAuthUserId?: string;
   /** Null when the sub pre-dates the lifecycle rollout; refund window cannot be checked. */
@@ -304,7 +312,8 @@ function planCancelAtPeriodEnd(ctx: LifecycleContext): LifecyclePlanResult {
           businessId: sub.business_id,
           reason: "user_period_end",
           effectiveAt: sub.stripe_current_period_end ?? now.toISOString(),
-          graceEndsAt: null
+          graceEndsAt: null,
+          timeZone: ctx.businessTimezone ?? null
         }
       ]
     }
@@ -660,7 +669,8 @@ function buildCancelPlan(args: {
     businessId: sub.business_id,
     reason: cancelReason,
     effectiveAt: now.toISOString(),
-    graceEndsAt: graceEndsAtIso
+    graceEndsAt: graceEndsAtIso,
+    timeZone: ctx.businessTimezone ?? null
   });
   if (includeRefund) {
     plan.emailsToSend.push({

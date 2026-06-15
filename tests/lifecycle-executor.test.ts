@@ -184,7 +184,8 @@ describe("executeLifecyclePlan refund handling", () => {
             businessId: "biz_1",
             reason: "user_refund",
             effectiveAt: "2026-04-01T00:00:00.000Z",
-            graceEndsAt: "2026-05-01T00:00:00.000Z"
+            graceEndsAt: "2026-05-01T00:00:00.000Z",
+            timeZone: null
           }
         ]
       },
@@ -213,7 +214,8 @@ describe("executeLifecyclePlan refund handling", () => {
             businessId: "biz_1",
             reason: "user_refund",
             effectiveAt: "2026-04-01T00:00:00.000Z",
-            graceEndsAt: "2026-05-01T00:00:00.000Z"
+            graceEndsAt: "2026-05-01T00:00:00.000Z",
+            timeZone: null
           }
         ]
       },
@@ -223,6 +225,35 @@ describe("executeLifecyclePlan refund handling", () => {
     const html = (send.mock.calls[0][3] as { html: string }).html;
     expect(html).not.toContain("https://trailing.example.com//");
     expect(html).toContain("https://trailing.example.com/dashboard/billing");
+  });
+
+  it("renders the cancel email date in the business timezone", async () => {
+    const send = vi.fn().mockResolvedValue(null);
+    await executeLifecyclePlan(
+      {
+        stripeOps: [],
+        hostingerOps: [],
+        sshOps: [],
+        dbUpdates: [],
+        emailsToSend: [
+          {
+            type: "send_cancel_confirmation",
+            toEmail: "owner@example.com",
+            businessId: "biz_1",
+            reason: "user_period_end",
+            // Midnight UTC on June 2 is still June 1 in Phoenix (UTC-7).
+            effectiveAt: "2026-06-02T05:00:00.000Z",
+            graceEndsAt: null,
+            timeZone: "America/Phoenix"
+          }
+        ]
+      },
+      { businessId: "biz_1", vpsHost: null },
+      { stripe: {} as never, sendEmail: send }
+    );
+    const text = (send.mock.calls[0][3] as { text: string }).text;
+    expect(text).toContain("June 1, 2026");
+    expect(text).not.toContain("June 2, 2026");
   });
 
   it("uses localhost base URL for refund email when NEXT_PUBLIC_APP_URL is unset", async () => {
@@ -374,7 +405,8 @@ describe("executeLifecyclePlan refund handling", () => {
             businessId: "biz_1",
             reason: "user_period_end",
             effectiveAt: "2026-05-01T00:00:00.000Z",
-            graceEndsAt: null
+            graceEndsAt: null,
+            timeZone: null
           }
         ]
       },
@@ -598,7 +630,8 @@ describe("executeLifecyclePlan refund handling", () => {
             businessId: "biz_1",
             reason: "user_refund",
             effectiveAt: "2026-04-01T00:00:00.000Z",
-            graceEndsAt: "2026-05-01T00:00:00.000Z"
+            graceEndsAt: "2026-05-01T00:00:00.000Z",
+            timeZone: null
           }
         ]
       },
@@ -620,7 +653,8 @@ describe("executeLifecyclePlan refund handling", () => {
             businessId: "biz_1",
             reason: "user_refund",
             effectiveAt: "2026-04-01T00:00:00.000Z",
-            graceEndsAt: "2026-05-01T00:00:00.000Z"
+            graceEndsAt: "2026-05-01T00:00:00.000Z",
+            timeZone: null
           }
         ]
       },
@@ -641,7 +675,8 @@ describe("executeLifecyclePlan refund handling", () => {
             businessId: "biz_1",
             reason: "user_refund",
             effectiveAt: "2026-04-01T00:00:00.000Z",
-            graceEndsAt: "2026-05-01T00:00:00.000Z"
+            graceEndsAt: "2026-05-01T00:00:00.000Z",
+            timeZone: null
           }
         ]
       },
@@ -894,7 +929,8 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
             businessId: "biz_slow",
             reason: "user_refund",
             effectiveAt: "2026-04-01T00:00:00.000Z",
-            graceEndsAt: "2026-05-01T00:00:00.000Z"
+            graceEndsAt: "2026-05-01T00:00:00.000Z",
+            timeZone: null
           }
         ]
       },
@@ -931,7 +967,8 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
             businessId: "biz_slow2",
             reason: "user_refund",
             effectiveAt: "2026-04-01T00:00:00.000Z",
-            graceEndsAt: "2026-05-01T00:00:00.000Z"
+            graceEndsAt: "2026-05-01T00:00:00.000Z",
+            timeZone: null
           }
         ]
       },

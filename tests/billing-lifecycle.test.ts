@@ -106,6 +106,16 @@ describe("planLifecycleAction: cancelWithRefund", () => {
     ]);
   });
 
+  it("passes the business timezone to the cancel confirmation email op", () => {
+    const res = planLifecycleAction(
+      { type: "cancelWithRefund" },
+      makeCtx({ businessTimezone: "America/Phoenix" })
+    );
+    if (!res.ok) throw new Error(`expected ok, got ${res.reason}`);
+    const cancelOp = res.plan.emailsToSend.find((e) => e.type === "send_cancel_confirmation");
+    expect(cancelOp).toEqual(expect.objectContaining({ timeZone: "America/Phoenix" }));
+  });
+
   it("still snapshots/stops/cancels Hostinger when IP lookup fails", () => {
     const res = planLifecycleAction(
       { type: "cancelWithRefund" },
@@ -247,6 +257,17 @@ describe("planLifecycleAction: cancelAtPeriodEnd", () => {
     expect(patch.cancel_at_period_end).toBe(true);
     expect(patch.cancel_reason).toBe("user_period_end");
     expect(res.plan.emailsToSend[0].type).toBe("send_cancel_confirmation");
+  });
+
+  it("passes the business timezone to the confirmation email op", () => {
+    const res = planLifecycleAction(
+      { type: "cancelAtPeriodEnd" },
+      makeCtx({ businessTimezone: "America/Phoenix" })
+    );
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    expect(res.plan.emailsToSend[0]).toEqual(
+      expect.objectContaining({ type: "send_cancel_confirmation", timeZone: "America/Phoenix" })
+    );
   });
 
   it("uses the request time as effective date when Stripe period end is missing", () => {

@@ -24,6 +24,19 @@ describe("cancel-confirmation email", () => {
     expect(html).toContain("/dashboard/billing");
   });
 
+  it("renders dates in the provided business timezone", () => {
+    // Midnight UTC June 2 is still June 1 in Phoenix (UTC-7).
+    const { text } = buildCancelConfirmationEmail({
+      reason: "user_period_end",
+      effectiveAt: "2026-06-02T05:00:00.000Z",
+      graceEndsAt: null,
+      timeZone: "America/Phoenix",
+      ...mailCtx
+    });
+    expect(text).toContain("June 1, 2026");
+    expect(text).not.toContain("June 2, 2026");
+  });
+
   it("uses a payment-failure framing when the cancel was auto-triggered", () => {
     const { subject, text } = buildCancelConfirmationEmail({
       reason: "payment_failed",

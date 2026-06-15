@@ -72,6 +72,7 @@ export async function loadLifecycleContextForBusiness(
   const context: LifecycleContext = {
     subscription,
     ownerEmail: business.owner_email,
+    businessTimezone: business.timezone ?? null,
     ownerAuthUserId: opts.ownerAuthUserId,
     profile,
     virtualMachineId,
