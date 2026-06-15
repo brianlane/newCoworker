@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { getRecentLogs } from "@/lib/db/logs";
+import { getRecentActivity, type ActivityItem } from "@/lib/db/activity";
 import {
   getLatestProvisioningStatus,
   shouldMountProvisioningWidget,
@@ -25,6 +25,18 @@ import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 
 export const dynamic = "force-dynamic";
 
+const ACTIVITY_BADGE: Record<
+  ActivityItem["kind"],
+  { label: string; variant: "online" | "pending" | "neutral" | "success" }
+> = {
+  call: { label: "Call", variant: "online" },
+  sms_inbound: { label: "Text in", variant: "pending" },
+  sms_outbound: { label: "Text out", variant: "neutral" },
+  chat: { label: "Chat", variant: "neutral" },
+  aiflow: { label: "AiFlow", variant: "success" },
+  customer: { label: "Customer", variant: "pending" }
+};
+
 export default async function DashboardPage() {
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard");
@@ -41,13 +53,13 @@ export default async function DashboardPage() {
 
   const business = businesses?.[0] ?? null;
 
-  let recentLogs: Awaited<ReturnType<typeof getRecentLogs>> = [];
+  let recentActivity: ActivityItem[] = [];
   let latestProvisioning = null;
   let telnyxRoute: Awaited<ReturnType<typeof getTelnyxVoiceRouteForBusiness>> = null;
   let telnyxSettings: Awaited<ReturnType<typeof getBusinessTelnyxSettings>> = null;
   if (business) {
-    [recentLogs, latestProvisioning, telnyxRoute, telnyxSettings] = await Promise.all([
-      getRecentLogs(business.id, 10, undefined, { excludeProvisioning: true }),
+    [recentActivity, latestProvisioning, telnyxRoute, telnyxSettings] = await Promise.all([
+      getRecentActivity(business.id, 10),
       getLatestProvisioningStatus(business.id),
       getTelnyxVoiceRouteForBusiness(business.id),
       getBusinessTelnyxSettings(business.id)
@@ -119,14 +131,6 @@ export default async function DashboardPage() {
             />
           )}
 
-          <KillSwitch businessId={business.id} initiallyPaused={!!business.is_paused} />
-
-          <SafeModeToggle
-            businessId={business.id}
-            initiallyEnabled={business.customer_channels_enabled === false}
-            initialForwardToE164={telnyxSettings?.forward_to_e164 ?? null}
-          />
-
           <Card>
             <PhoneNumberCard
               e164={telnyxRoute?.to_e164 ?? null}
@@ -192,36 +196,41 @@ export default async function DashboardPage() {
             <h2 className="text-sm font-semibold text-parchment/60 uppercase tracking-wider mb-4">
               Recent Activity
             </h2>
-            {recentLogs.length === 0 ? (
+            {recentActivity.length === 0 ? (
               <p className="text-sm text-parchment/40">No activity yet.</p>
             ) : (
               <ul className="divide-y divide-parchment/10">
-                {recentLogs.map((log) => (
-                  <li key={log.id} className="flex items-center justify-between py-3">
-                    <div>
-                      <p className="text-sm text-parchment capitalize">{log.task_type.replace("_", " ")}</p>
-                      <p className="text-xs text-parchment/40">
-                        {new Date(log.created_at).toLocaleString()}
-                      </p>
-                    </div>
-                    <Badge
-                      variant={
-                        log.status === "urgent_alert"
-                          ? "error"
-                          : log.status === "success"
-                            ? "success"
-                            : log.status === "error"
-                              ? "error"
-                              : "pending"
-                      }
+                {recentActivity.map((item) => (
+                  <li key={item.id}>
+                    <a
+                      href={item.href}
+                      className="flex items-center justify-between gap-3 py-3 group"
                     >
-                      {log.status.replace("_", " ")}
-                    </Badge>
+                      <div className="min-w-0">
+                        <p className="text-sm text-parchment truncate group-hover:text-signal-teal transition-colors">
+                          {item.label}
+                        </p>
+                        <p className="text-xs text-parchment/40">
+                          {new Date(item.at).toLocaleString()}
+                        </p>
+                      </div>
+                      <Badge variant={ACTIVITY_BADGE[item.kind].variant}>
+                        {ACTIVITY_BADGE[item.kind].label}
+                      </Badge>
+                    </a>
                   </li>
                 ))}
               </ul>
             )}
           </Card>
+
+          <KillSwitch businessId={business.id} initiallyPaused={!!business.is_paused} />
+
+          <SafeModeToggle
+            businessId={business.id}
+            initiallyEnabled={business.customer_channels_enabled === false}
+            initialForwardToE164={telnyxSettings?.forward_to_e164 ?? null}
+          />
 
           {/* Quick Links */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

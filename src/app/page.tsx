@@ -1,7 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import type { Metadata } from "next";
-import { Phone, Brain, Zap, ShieldCheck, LayoutDashboard, Rocket } from "lucide-react";
+import { Phone, Brain, Zap, ShieldCheck, LayoutDashboard, Rocket, Workflow } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
 
 type FeatureItem = {
@@ -22,9 +22,9 @@ const features: FeatureItem[] = [
     Icon: Brain,
   },
   {
-    title: "Multi-Model Reasoning",
-    description: "Multi-model swarm reasoning handles complex questions other bots can't.",
-    Icon: Zap,
+    title: "Automated Workflows",
+    description: "Set up AiFlows that reply to texts and emails, route to your team, and follow up in real time.",
+    Icon: Workflow,
   },
   {
     title: "Compliance Guardrails",
@@ -38,7 +38,7 @@ const features: FeatureItem[] = [
   },
   {
     title: "Deploy in Minutes",
-    description: "One-click provisioning: tailored assistant, voice agent, phone number all handled automatically.",
+    description: "One-click provisioning: tailored assistant, ai agent, phone number all handled.",
     Icon: Rocket,
   },
 ];
