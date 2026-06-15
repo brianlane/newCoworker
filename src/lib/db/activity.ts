@@ -50,9 +50,15 @@ export type ActivityCallRow = {
 export type ActivitySmsInboundRow = {
   payload: Record<string, unknown> | null;
   created_at: string;
-  /** Durable coworker reply; when present this row is also one outbound text. */
-  assistant_reply_text: string | null;
-  /** Send-time stamp used as the outbound reply's timestamp. */
+};
+
+/**
+ * A coworker reply stored on an inbound job. Queried on its own `updated_at`
+ * window (not `created_at`) so a reply sent recently to an older inbound text
+ * still appears — matching the digest's reply accounting.
+ */
+export type ActivitySmsReplyRow = {
+  payload: Record<string, unknown> | null;
   updated_at: string;
 };
 
@@ -86,6 +92,7 @@ export type ActivityAlertRow = {
 export type ActivityFeedInput = {
   calls: ActivityCallRow[];
   smsInbound: ActivitySmsInboundRow[];
+  smsReplies: ActivitySmsReplyRow[];
   smsOutbound: ActivitySmsOutboundRow[];
   chat: ActivityChatRow[];
   flows: ActivityFlowRow[];
@@ -142,19 +149,21 @@ export function buildActivityFeed(input: ActivityFeedInput): ActivityItem[] {
       href: `/dashboard/messages/${encodeURIComponent(cp)}`,
       at: r.created_at
     });
-    // Most coworker replies live on the inbound job (assistant_reply_text),
-    // not sms_outbound_log — surface them as outbound texts too, matching the
-    // digest's reply accounting.
-    const reply = r.assistant_reply_text;
-    if (typeof reply === "string" && reply.trim()) {
-      items.push({
-        id: `sms_reply:${i}:${r.updated_at}`,
-        kind: "sms_outbound",
-        label: `Text to ${cp}`,
-        href: `/dashboard/messages/${encodeURIComponent(cp)}`,
-        at: r.updated_at
-      });
-    }
+  });
+
+  // Coworker replies live on the inbound job (assistant_reply_text); they're
+  // queried on their own updated_at window so a recent reply to an older text
+  // still surfaces as outbound activity.
+  input.smsReplies.forEach((r, i) => {
+    const cp = customerE164FromPayload(r.payload);
+    if (!cp) return;
+    items.push({
+      id: `sms_reply:${i}:${r.updated_at}`,
+      kind: "sms_outbound",
+      label: `Text to ${cp}`,
+      href: `/dashboard/messages/${encodeURIComponent(cp)}`,
+      at: r.updated_at
+    });
   });
 
   input.smsOutbound.forEach((r, i) => {
@@ -251,7 +260,7 @@ export async function getRecentActivity(
   const db = client ?? (await createSupabaseServiceClient());
   const since = new Date(Date.now() - ACTIVITY_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
-  const [callsRes, smsInRes, smsOutRes, chatRes, flowsRes, custRes, alertRes] =
+  const [callsRes, smsInRes, smsReplyRes, smsOutRes, chatRes, flowsRes, custRes, alertRes] =
     await Promise.all([
       db
         .from("voice_call_transcripts")
@@ -262,10 +271,20 @@ export async function getRecentActivity(
         .limit(limit),
       db
         .from("sms_inbound_jobs")
-        .select("payload, created_at, assistant_reply_text, updated_at")
+        .select("payload, created_at")
         .eq("business_id", businessId)
         .gte("created_at", since)
         .order("created_at", { ascending: false })
+        .limit(limit),
+      // Replies windowed on updated_at (send time) so a recent reply to an
+      // older inbound text still appears as outbound activity.
+      db
+        .from("sms_inbound_jobs")
+        .select("payload, updated_at")
+        .eq("business_id", businessId)
+        .not("assistant_reply_text", "is", null)
+        .gte("updated_at", since)
+        .order("updated_at", { ascending: false })
         .limit(limit),
       db
         .from("sms_outbound_log")
@@ -313,6 +332,7 @@ export async function getRecentActivity(
   return buildActivityFeed({
     calls: rowsOf<ActivityCallRow>(callsRes),
     smsInbound: rowsOf<ActivitySmsInboundRow>(smsInRes),
+    smsReplies: rowsOf<ActivitySmsReplyRow>(smsReplyRes),
     smsOutbound: rowsOf<ActivitySmsOutboundRow>(smsOutRes),
     chat: rowsOf<ActivityChatRow>(chatRes),
     flows: rowsOf<ActivityFlowRow>(flowsRes),

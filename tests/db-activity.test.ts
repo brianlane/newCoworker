@@ -16,6 +16,7 @@ function emptyInput(overrides: Partial<ActivityFeedInput> = {}): ActivityFeedInp
   return {
     calls: [],
     smsInbound: [],
+    smsReplies: [],
     smsOutbound: [],
     chat: [],
     flows: [],
@@ -62,18 +63,8 @@ describe("buildActivityFeed", () => {
     const items = buildActivityFeed(
       emptyInput({
         smsInbound: [
-          {
-            payload: smsPayload("+15550002222"),
-            created_at: "2026-01-02T10:00:00Z",
-            assistant_reply_text: null,
-            updated_at: "2026-01-02T10:00:00Z"
-          },
-          {
-            payload: null,
-            created_at: "2026-01-02T11:00:00Z",
-            assistant_reply_text: null,
-            updated_at: "2026-01-02T11:00:00Z"
-          }
+          { payload: smsPayload("+15550002222"), created_at: "2026-01-02T10:00:00Z" },
+          { payload: null, created_at: "2026-01-02T11:00:00Z" }
         ]
       })
     );
@@ -85,33 +76,18 @@ describe("buildActivityFeed", () => {
     });
   });
 
-  it("emits the coworker reply as a 'Text out' item, and skips blank replies", () => {
+  it("emits coworker replies as 'Text out' items and skips unparseable ones", () => {
     const items = buildActivityFeed(
       emptyInput({
-        smsInbound: [
-          {
-            payload: smsPayload("+15550002222"),
-            created_at: "2026-01-02T10:00:00Z",
-            assistant_reply_text: "On my way",
-            updated_at: "2026-01-02T10:05:00Z"
-          },
-          {
-            payload: smsPayload("+15550006666"),
-            created_at: "2026-01-02T09:00:00Z",
-            assistant_reply_text: "   ",
-            updated_at: "2026-01-02T09:05:00Z"
-          }
+        smsReplies: [
+          { payload: smsPayload("+15550002222"), updated_at: "2026-01-02T10:05:00Z" },
+          { payload: null, updated_at: "2026-01-02T09:05:00Z" }
         ]
       })
     );
-    // First row: inbound + outbound reply. Second row: inbound only (blank reply).
-    expect(items.map((i) => i.kind)).toEqual([
-      "sms_outbound",
-      "sms_inbound",
-      "sms_inbound"
-    ]);
-    const reply = items.find((i) => i.kind === "sms_outbound");
-    expect(reply).toMatchObject({
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "sms_outbound",
       label: "Text to +15550002222",
       href: "/dashboard/messages/%2B15550002222",
       at: "2026-01-02T10:05:00Z"
@@ -279,6 +255,7 @@ function chainResult(result: { data: unknown; error: unknown }) {
   return {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
+    not: vi.fn().mockReturnThis(),
     gte: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockResolvedValue(result)
@@ -343,6 +320,9 @@ describe("getRecentActivity", () => {
     expect(callChain.gte).toHaveBeenCalledWith(expect.any(String), expect.any(String));
     const logChain = db.from.mock.results[db.from.mock.calls.length - 1].value;
     expect(logChain.eq).toHaveBeenCalledWith("status", "urgent_alert");
+    // Replies are queried on their own updated_at window (not null reply).
+    const replyChain = db.from.mock.results.find((r) => r.value.not.mock.calls.length > 0)?.value;
+    expect(replyChain.not).toHaveBeenCalledWith("assistant_reply_text", "is", null);
   });
 
   it("treats a failed source as empty instead of throwing", async () => {
