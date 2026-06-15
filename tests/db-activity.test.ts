@@ -143,6 +143,27 @@ describe("buildActivityFeed", () => {
     ]);
   });
 
+  it("uses the resolver for new-customer labels, overriding display_name", () => {
+    const items = buildActivityFeed(
+      emptyInput({
+        contactNames: new Map<string, ContactName>([
+          ["+15550004444", { name: "Pat (override)", kind: "contact", override: true }],
+          ["+15550005555", { name: "Owner", kind: "owner" }]
+        ]),
+        customers: [
+          // Resolver name wins over the row's own display_name.
+          { display_name: "Stale Name", customer_e164: "+15550004444", created_at: "2026-01-06T10:00:00Z" },
+          // No display_name on the row, but the number is a known contact.
+          { display_name: null, customer_e164: "+15550005555", created_at: "2026-01-06T09:00:00Z" }
+        ]
+      })
+    );
+    expect(items.map((i) => i.label)).toEqual([
+      "New customer — Pat (override) (+15550004444)",
+      "New customer — Owner (+15550005555)"
+    ]);
+  });
+
   it("keeps the deep-link href on the raw number even when a name is shown", () => {
     const [item] = buildActivityFeed(
       emptyInput({

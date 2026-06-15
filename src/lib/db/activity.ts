@@ -207,7 +207,11 @@ export function buildActivityFeed(input: ActivityFeedInput): ActivityItem[] {
   });
 
   input.customers.forEach((r, i) => {
-    const who = r.display_name ? `${r.display_name} (${r.customer_e164})` : r.customer_e164;
+    // Prefer a resolver name (owner/employee/override/customer) over the row's
+    // own display_name, so a known contact is shown even when the auto-created
+    // customer profile has no display_name of its own.
+    const name = input.contactNames?.get(r.customer_e164)?.name ?? r.display_name ?? null;
+    const who = name ? `${name} (${r.customer_e164})` : r.customer_e164;
     items.push({
       id: `customer:${i}:${r.created_at}`,
       kind: "customer",
