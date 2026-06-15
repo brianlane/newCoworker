@@ -6,6 +6,12 @@ import {
   mergeNotificationContactsForDisplay
 } from "@/lib/db/notification-preferences";
 import { getNotifications } from "@/lib/db/notifications";
+import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
+import {
+  applyContactNamesToEventLinks,
+  eventLinkE164,
+  notificationEventLinks
+} from "@/lib/notifications/display";
 import { Card } from "@/components/ui/Card";
 import { NotificationPreferences } from "@/components/dashboard/NotificationPreferences";
 import { NotificationList } from "@/components/dashboard/NotificationList";
@@ -56,6 +62,32 @@ export default async function NotificationsPage() {
 
   const recent = businessId ? await getNotifications(businessId, { limit: 25 }) : [];
 
+  // Swap raw phone numbers in the stored digest event labels for known contact
+  // names, using the same resolver the dashboard's Recent Activity uses. The
+  // digest is built server-side (Edge) where the names aren't available, so we
+  // resolve and substitute at render time; this also retroactively names older
+  // notifications. A resolver failure leaves the raw numbers untouched.
+  const eventE164s = recent
+    .flatMap((n) => notificationEventLinks(n))
+    .map((ev) => eventLinkE164(ev.href))
+    .filter((x): x is string => Boolean(x));
+  const contactNames =
+    businessId && eventE164s.length > 0
+      ? await resolveContactNames(businessId, eventE164s, db).catch(
+          () => new Map<string, ContactName>()
+        )
+      : new Map<string, ContactName>();
+  const nameMap = new Map<string, string>();
+  for (const [e164, c] of contactNames) nameMap.set(e164, c.name);
+  const recentWithNames = recent.map((n) => {
+    const events = notificationEventLinks(n);
+    if (events.length === 0) return n;
+    return {
+      ...n,
+      payload: { ...(n.payload ?? {}), events: applyContactNamesToEventLinks(events, nameMap) }
+    };
+  });
+
   return (
     <div className="space-y-8 max-w-3xl">
       <div>
@@ -88,7 +120,7 @@ export default async function NotificationsPage() {
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-semibold text-parchment">Recent notifications</h2>
             </div>
-            <NotificationList businessId={businessId} initial={recent} />
+            <NotificationList businessId={businessId} initial={recentWithNames} />
           </Card>
         </>
       )}

@@ -65,6 +65,48 @@ export function notificationEventLinks(n: NotificationLike): NotificationEventLi
   return out;
 }
 
+/** Digest text-thread events deep-link here, with the E.164 URL-encoded. */
+const MESSAGES_HREF_PREFIX = "/dashboard/messages/";
+
+/**
+ * Extract the E.164 a digest event deep-links to, or null when it isn't a
+ * text-thread link. The digest builder encodes the number into the href
+ * (`/dashboard/messages/<encodeURIComponent(e164)>`); this reverses that so
+ * the raw number embedded in the label can be swapped for a contact name.
+ * decodeURIComponent can throw on a malformed (tampered) payload — treated as
+ * "no number" rather than crashing the list render.
+ */
+export function eventLinkE164(href: string): string | null {
+  if (!href.startsWith(MESSAGES_HREF_PREFIX)) return null;
+  try {
+    return decodeURIComponent(href.slice(MESSAGES_HREF_PREFIX.length));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Swap raw phone numbers in digest event labels for known contact names using
+ * the same resolver (`resolveContactNames`) the dashboard uses, so the
+ * notifications list reads "Texts with Mike Haas — …" instead of a bare
+ * +1602… number. Only text-thread events are rewritten — customer events
+ * already carry the display name in their label — and only when the number is
+ * actually known; everything else is returned unchanged.
+ */
+export function applyContactNamesToEventLinks(
+  events: NotificationEventLink[],
+  names: Map<string, string>
+): NotificationEventLink[] {
+  if (names.size === 0) return events;
+  return events.map((ev) => {
+    const e164 = eventLinkE164(ev.href);
+    if (!e164) return ev;
+    const name = names.get(e164);
+    if (!name) return ev;
+    return { ...ev, label: ev.label.split(e164).join(name) };
+  });
+}
+
 /**
  * Human-labeled payload fields for the expanded row. Only fields with
  * presentable values are returned; internal keys (logId, reason — rendered

@@ -10,7 +10,12 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
 }));
 
+vi.mock("@/lib/db/contact-names", () => ({
+  resolveContactNames: vi.fn()
+}));
+
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 
 function emptyInput(overrides: Partial<ActivityFeedInput> = {}): ActivityFeedInput {
   return {
@@ -109,6 +114,46 @@ describe("buildActivityFeed", () => {
       label: "Text to +15550003333",
       href: "/dashboard/messages/%2B15550003333"
     });
+  });
+
+  it("shows known contact names in call and text labels, falling back to the number", () => {
+    const contactNames = new Map<string, ContactName>([
+      ["+15550001111", { name: "Mike Haas", kind: "customer" }],
+      ["+15550002222", { name: "Pat (employee)", kind: "employee" }]
+    ]);
+    const items = buildActivityFeed(
+      emptyInput({
+        contactNames,
+        calls: [
+          { caller_e164: "+15550001111", status: "completed", started_at: "2026-01-01T10:00:00Z" },
+          // No name on file: still rendered as the raw number.
+          { caller_e164: "+19998887777", status: "missed", started_at: "2026-01-01T09:00:00Z" }
+        ],
+        smsInbound: [{ payload: smsPayload("+15550002222"), created_at: "2026-01-01T08:00:00Z" }],
+        smsReplies: [{ payload: smsPayload("+15550001111"), updated_at: "2026-01-01T07:00:00Z" }],
+        smsOutbound: [{ to_e164: "+15550002222", created_at: "2026-01-01T06:00:00Z" }]
+      })
+    );
+    expect(items.map((i) => i.label)).toEqual([
+      "Call — Mike Haas (completed)",
+      "Call — +19998887777 (missed)",
+      "Text from Pat (employee)",
+      "Text to Mike Haas",
+      "Text to Pat (employee)"
+    ]);
+  });
+
+  it("keeps the deep-link href on the raw number even when a name is shown", () => {
+    const [item] = buildActivityFeed(
+      emptyInput({
+        contactNames: new Map<string, ContactName>([
+          ["+15550003333", { name: "Owner", kind: "owner" }]
+        ]),
+        smsOutbound: [{ to_e164: "+15550003333", created_at: "2026-01-03T10:00:00Z" }]
+      })
+    );
+    expect(item.label).toBe("Text to Owner");
+    expect(item.href).toBe("/dashboard/messages/%2B15550003333");
   });
 
   it("maps dashboard chat turns", () => {
@@ -321,7 +366,11 @@ const ALL_EMPTY = {
 };
 
 describe("getRecentActivity", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default: no known contacts, so labels show raw numbers.
+    vi.mocked(resolveContactNames).mockResolvedValue(new Map<string, ContactName>());
+  });
 
   it("merges rows from every table into one feed", async () => {
     const db = mockDbByTable({
@@ -393,5 +442,62 @@ describe("getRecentActivity", () => {
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
     const chain = db.from.mock.results[0].value;
     expect(chain.limit).toHaveBeenCalledWith(DEFAULT_ACTIVITY_LIMIT);
+  });
+
+  it("resolves contact names across every phone-bearing source", async () => {
+    const db = mockDbByTable({
+      ...ALL_EMPTY,
+      voice_call_transcripts: {
+        data: [
+          { caller_e164: "+15550001111", status: "completed", started_at: "2026-02-01T10:00:00Z" },
+          // Null number is filtered out before the resolver call.
+          { caller_e164: null, status: "missed", started_at: "2026-02-01T09:00:00Z" }
+        ],
+        error: null
+      },
+      // Both the inbound and reply queries read sms_inbound_jobs.
+      sms_inbound_jobs: {
+        data: [{ payload: smsPayload("+15550002222"), created_at: "2026-02-01T08:00:00Z", updated_at: "2026-02-01T08:30:00Z" }],
+        error: null
+      },
+      sms_outbound_log: {
+        data: [{ to_e164: "+15550003333", created_at: "2026-02-01T07:00:00Z" }],
+        error: null
+      },
+      customer_memories: {
+        data: [{ display_name: null, customer_e164: "+15550004444", created_at: "2026-02-01T06:00:00Z" }],
+        error: null
+      }
+    });
+    vi.mocked(resolveContactNames).mockResolvedValue(
+      new Map<string, ContactName>([["+15550001111", { name: "Mike Haas", kind: "customer" }]])
+    );
+
+    const items = await getRecentActivity("biz-1", 10, db as never);
+    expect(resolveContactNames).toHaveBeenCalledWith(
+      "biz-1",
+      ["+15550001111", "+15550002222", "+15550002222", "+15550003333", "+15550004444"],
+      db
+    );
+    const labels = items.map((i) => i.label);
+    expect(labels).toContain("Call — Mike Haas (completed)");
+    expect(labels).toContain("Call — unknown caller (missed)");
+    expect(labels).toContain("Text from +15550002222");
+    expect(labels).toContain("Text to +15550003333");
+    expect(labels).toContain("New customer — +15550004444");
+  });
+
+  it("falls back to raw numbers when the contact resolver fails", async () => {
+    const db = mockDbByTable({
+      ...ALL_EMPTY,
+      sms_outbound_log: {
+        data: [{ to_e164: "+15550002222", created_at: "2026-02-01T08:00:00Z" }],
+        error: null
+      }
+    });
+    vi.mocked(resolveContactNames).mockRejectedValue(new Error("resolver down"));
+
+    const items = await getRecentActivity("biz-1", 10, db as never);
+    expect(items.map((i) => i.label)).toEqual(["Text to +15550002222"]);
   });
 });
