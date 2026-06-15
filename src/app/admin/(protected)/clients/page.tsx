@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { DeployButton } from "@/components/dashboard/DeployButton";
 import { CreateClientModal } from "@/components/admin/CreateClientModal";
+import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 
 export const dynamic = "force-dynamic";
 
@@ -52,7 +53,7 @@ export default async function AdminClientsPage() {
                       {b.name}
                     </a>
                     <p className="text-xs text-parchment/30 mt-0.5">
-                      {new Date(b.created_at).toLocaleDateString()}
+                      <LocalDateTime iso={b.created_at} style="date" />
                     </p>
                   </td>
                   <td className="py-3 px-4 text-parchment/70">{b.owner_email}</td>
