@@ -466,7 +466,8 @@ async function runEmailOp(
         effectiveAt: op.effectiveAt,
         graceEndsAt: op.graceEndsAt,
         recipientEmail: op.toEmail,
-        siteUrl
+        siteUrl,
+        ...(op.timeZone ? { timeZone: op.timeZone } : {})
       });
       await send(apiKey, op.toEmail, subject, { text, html });
       return;

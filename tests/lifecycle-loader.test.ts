@@ -56,7 +56,8 @@ describe("loadLifecycleContextForBusiness", () => {
       id: "biz-1",
       owner_email: "owner@example.com",
       customer_profile_id: "prof-business",
-      hostinger_vps_id: "42"
+      hostinger_vps_id: "42",
+      timezone: "America/Phoenix"
     });
     getSubscriptionMock.mockResolvedValue({
       id: "sub-1",
@@ -74,6 +75,7 @@ describe("loadLifecycleContextForBusiness", () => {
       vpsHost: "1.2.3.4",
       context: expect.objectContaining({
         ownerEmail: "owner@example.com",
+        businessTimezone: "America/Phoenix",
         ownerAuthUserId: "auth-1",
         profile: { id: "prof-sub" },
         virtualMachineId: 42,

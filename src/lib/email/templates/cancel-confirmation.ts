@@ -23,6 +23,12 @@ export type CancelConfirmationInput = {
   recipientEmail: string;
   /** App origin without trailing slash (e.g. https://www.newcoworker.com). */
   siteUrl: string;
+  /**
+   * IANA timezone (e.g. "America/Phoenix") the dates are rendered in. Emails
+   * have no "viewer", so without this the server's zone (UTC) leaks into copy
+   * like "ends on June 1". Falls back to the runtime default when omitted.
+   */
+  timeZone?: string;
 };
 
 export type CancelConfirmationEmail = {
@@ -55,8 +61,8 @@ function envelope(
 export function buildCancelConfirmationEmail(
   input: CancelConfirmationInput
 ): CancelConfirmationEmail {
-  const effective = fmtDate(input.effectiveAt);
-  const graceEnds = input.graceEndsAt ? fmtDate(input.graceEndsAt) : null;
+  const effective = fmtDate(input.effectiveAt, input.timeZone);
+  const graceEnds = input.graceEndsAt ? fmtDate(input.graceEndsAt, input.timeZone) : null;
   const normalizedSite = input.siteUrl.replace(/\/$/, "");
   const billingUrl = `${normalizedSite}/dashboard/billing`;
   const dashboardUrl = `${normalizedSite}/dashboard`;
@@ -141,12 +147,13 @@ export function buildCancelConfirmationEmail(
   );
 }
 
-function fmtDate(iso: string): string {
+function fmtDate(iso: string, timeZone?: string): string {
   try {
     return new Date(iso).toLocaleDateString("en-US", {
       year: "numeric",
       month: "long",
-      day: "numeric"
+      day: "numeric",
+      ...(timeZone ? { timeZone } : {})
     });
   } catch {
     return iso;
