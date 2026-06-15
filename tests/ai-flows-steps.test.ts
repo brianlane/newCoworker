@@ -246,20 +246,27 @@ describe("planStep: send_email", () => {
       "33333333-3333-4333-8333-333333333333"
     );
   });
-  it("renders cc/bcc templates and drops entries that resolve empty", () => {
+  it("renders, validates, lowercases and de-dups cc; drops empty/invalid; splits CSV", () => {
     const r = planStep(
       {
         ...step,
-        cc: ["manager@x.com", "{{vars.cc_extra}}", "{{vars.missing}}"],
+        // CSV in one slot, an uppercase dup, a missing var (empty), and an
+        // invalid token — only the valid, de-duplicated addresses survive.
+        cc: ["Manager@x.com, ops@x.com", "MANAGER@x.com", "{{vars.missing}}", "not-an-email"],
         bcc: ["archive@x.com"]
       },
-      { vars: { lead_name: "Jane", cc_extra: "ops@x.com" } }
+      { vars: { lead_name: "Jane" } }
     );
     expect(r.ok && r.action.kind === "send_email" && r.action.cc).toEqual([
       "manager@x.com",
       "ops@x.com"
     ]);
     expect(r.ok && r.action.kind === "send_email" && r.action.bcc).toEqual(["archive@x.com"]);
+  });
+  it("caps cc at 10 recipients", () => {
+    const many = Array.from({ length: 13 }, (_, i) => `u${i}@x.com`);
+    const r = planStep({ ...step, cc: many }, { vars: { lead_name: "Jane" } });
+    expect(r.ok && r.action.kind === "send_email" && r.action.cc).toHaveLength(10);
   });
   it("omits cc/bcc entirely when none are configured or all resolve empty", () => {
     const r = planStep(
