@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  applyContactNamesToEventLinks,
+  eventLinkE164,
   notificationDetailFields,
   notificationEventLinks,
   notificationLink
@@ -176,6 +178,50 @@ describe("notifications/display", () => {
         { label: "empty at", href: "/dashboard/calls" },
         { label: "ok", href: "/dashboard/aiflows" }
       ]);
+    });
+  });
+
+  describe("eventLinkE164", () => {
+    it("decodes the E.164 from a text-thread deep link", () => {
+      expect(eventLinkE164("/dashboard/messages/%2B15550001111")).toBe("+15550001111");
+    });
+
+    it("returns null for non-text-thread hrefs", () => {
+      expect(eventLinkE164("/dashboard/calls")).toBeNull();
+      expect(eventLinkE164("/dashboard/customers/%2B15550001111")).toBeNull();
+    });
+
+    it("returns null when the encoded segment is malformed", () => {
+      expect(eventLinkE164("/dashboard/messages/%E0%A4%A")).toBeNull();
+    });
+  });
+
+  describe("applyContactNamesToEventLinks", () => {
+    const events = [
+      { label: "Texts with +15550001111 — 0 received, 10 sent", href: "/dashboard/messages/%2B15550001111" },
+      { label: "New customer — Mike Haas (+15550001111)", href: "/dashboard/customers/%2B15550001111" },
+      { label: "Call — +15550009999 (completed)", href: "/dashboard/calls" }
+    ];
+
+    it("substitutes known names into text-thread labels only", () => {
+      const names = new Map([["+15550001111", "Mike Haas"]]);
+      expect(applyContactNamesToEventLinks(events, names)).toEqual([
+        { label: "Texts with Mike Haas — 0 received, 10 sent", href: "/dashboard/messages/%2B15550001111" },
+        // Customer + call events are left untouched (already named / no thread link).
+        { label: "New customer — Mike Haas (+15550001111)", href: "/dashboard/customers/%2B15550001111" },
+        { label: "Call — +15550009999 (completed)", href: "/dashboard/calls" }
+      ]);
+    });
+
+    it("leaves a text-thread label unchanged when the number is unknown", () => {
+      const names = new Map([["+19998887777", "Someone Else"]]);
+      expect(applyContactNamesToEventLinks(events, names)).toEqual(events);
+    });
+
+    it("returns the events untouched when the name map is empty", () => {
+      const empty = new Map<string, string>();
+      const result = applyContactNamesToEventLinks(events, empty);
+      expect(result).toBe(events);
     });
   });
 });

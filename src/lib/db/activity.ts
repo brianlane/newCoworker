@@ -17,6 +17,7 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { customerE164FromPayload } from "@/lib/db/sms-history";
+import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -98,6 +99,12 @@ export type ActivityFeedInput = {
   flows: ActivityFlowRow[];
   customers: ActivityCustomerRow[];
   alerts: ActivityAlertRow[];
+  /**
+   * E.164 → known contact name (owner/employee/customer/override), from the
+   * shared {@link resolveContactNames} resolver. Numbers absent from the map
+   * fall back to the raw E.164. Defaults to empty when callers omit it.
+   */
+  contactNames?: Map<string, ContactName>;
   limit: number;
 };
 
@@ -128,12 +135,14 @@ function alertLabel(row: ActivityAlertRow): string {
  */
 export function buildActivityFeed(input: ActivityFeedInput): ActivityItem[] {
   const items: ActivityItem[] = [];
+  // Show a known contact's name instead of the raw E.164 wherever we have one.
+  const named = (e164: string): string => input.contactNames?.get(e164)?.name ?? e164;
 
   input.calls.forEach((c, i) => {
     items.push({
       id: `call:${i}:${c.started_at}`,
       kind: "call",
-      label: `Call — ${c.caller_e164 ?? "unknown caller"} (${c.status})`,
+      label: `Call — ${c.caller_e164 ? named(c.caller_e164) : "unknown caller"} (${c.status})`,
       href: "/dashboard/calls",
       at: c.started_at
     });
@@ -145,7 +154,7 @@ export function buildActivityFeed(input: ActivityFeedInput): ActivityItem[] {
     items.push({
       id: `sms_in:${i}:${r.created_at}`,
       kind: "sms_inbound",
-      label: `Text from ${cp}`,
+      label: `Text from ${named(cp)}`,
       href: `/dashboard/messages/${encodeURIComponent(cp)}`,
       at: r.created_at
     });
@@ -160,7 +169,7 @@ export function buildActivityFeed(input: ActivityFeedInput): ActivityItem[] {
     items.push({
       id: `sms_reply:${i}:${r.updated_at}`,
       kind: "sms_outbound",
-      label: `Text to ${cp}`,
+      label: `Text to ${named(cp)}`,
       href: `/dashboard/messages/${encodeURIComponent(cp)}`,
       at: r.updated_at
     });
@@ -171,7 +180,7 @@ export function buildActivityFeed(input: ActivityFeedInput): ActivityItem[] {
     items.push({
       id: `sms_out:${i}:${r.created_at}`,
       kind: "sms_outbound",
-      label: `Text to ${r.to_e164}`,
+      label: `Text to ${named(r.to_e164)}`,
       href: `/dashboard/messages/${encodeURIComponent(r.to_e164)}`,
       at: r.created_at
     });
@@ -198,7 +207,11 @@ export function buildActivityFeed(input: ActivityFeedInput): ActivityItem[] {
   });
 
   input.customers.forEach((r, i) => {
-    const who = r.display_name ? `${r.display_name} (${r.customer_e164})` : r.customer_e164;
+    // Prefer a resolver name (owner/employee/override/customer) over the row's
+    // own display_name, so a known contact is shown even when the auto-created
+    // customer profile has no display_name of its own.
+    const name = input.contactNames?.get(r.customer_e164)?.name ?? r.display_name ?? null;
+    const who = name ? `${name} (${r.customer_e164})` : r.customer_e164;
     items.push({
       id: `customer:${i}:${r.created_at}`,
       kind: "customer",
@@ -332,15 +345,37 @@ export async function getRecentActivity(
         .limit(limit)
     ]);
 
+  const calls = rowsOf<ActivityCallRow>(callsRes);
+  const smsInbound = rowsOf<ActivitySmsInboundRow>(smsInRes);
+  const smsReplies = rowsOf<ActivitySmsReplyRow>(smsReplyRes);
+  const smsOutbound = rowsOf<ActivitySmsOutboundRow>(smsOutRes);
+  const customers = rowsOf<ActivityCustomerRow>(custRes);
+
+  // Resolve every phone number the feed will show to a known contact name
+  // (owner/employee/customer/override) via the shared converter, so the SMS
+  // and call lines read "Text to Mike Haas" instead of a bare +1602… number.
+  // A resolver failure must never blank the feed, so fall back to no names.
+  const e164s = [
+    ...calls.map((c) => c.caller_e164),
+    ...smsInbound.map((r) => customerE164FromPayload(r.payload)),
+    ...smsReplies.map((r) => customerE164FromPayload(r.payload)),
+    ...smsOutbound.map((r) => r.to_e164),
+    ...customers.map((r) => r.customer_e164)
+  ].filter((x): x is string => Boolean(x));
+  const contactNames = await resolveContactNames(businessId, e164s, db).catch(
+    () => new Map<string, ContactName>()
+  );
+
   return buildActivityFeed({
-    calls: rowsOf<ActivityCallRow>(callsRes),
-    smsInbound: rowsOf<ActivitySmsInboundRow>(smsInRes),
-    smsReplies: rowsOf<ActivitySmsReplyRow>(smsReplyRes),
-    smsOutbound: rowsOf<ActivitySmsOutboundRow>(smsOutRes),
+    calls,
+    smsInbound,
+    smsReplies,
+    smsOutbound,
     chat: rowsOf<ActivityChatRow>(chatRes),
     flows: rowsOf<ActivityFlowRow>(flowsRes),
-    customers: rowsOf<ActivityCustomerRow>(custRes),
+    customers,
     alerts: rowsOf<ActivityAlertRow>(alertRes),
+    contactNames,
     limit
   });
 }
