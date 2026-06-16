@@ -79,7 +79,7 @@ function emptyEditor(): EditorState {
   return {
     id: null,
     name: "",
-    enabled: false,
+    enabled: true,
     suppressDefaultReply: false,
     channel: "sms",
     correlationWindowMinutes: 10,
@@ -517,7 +517,7 @@ export function AiFlowsManager({
       setEditor((e) => ({
         id: e?.id ?? null,
         name: e?.name || "New automation",
-        enabled: e?.enabled ?? false,
+        enabled: e?.enabled ?? true,
         suppressDefaultReply: def.options?.suppressDefaultReply ?? false,
         ...triggerToEditorFields(def.trigger),
         steps: def.steps

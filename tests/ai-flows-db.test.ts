@@ -164,8 +164,16 @@ describe("createAiFlow", () => {
     );
     expect(row).toEqual(FLOW_ROW);
     expect(builder.insert).toHaveBeenCalledWith(
-      expect.objectContaining({ name: "ReferralExchange", enabled: false, created_by: null })
+      expect.objectContaining({ name: "ReferralExchange", enabled: true, created_by: null })
     );
+  });
+  it("honors an explicit enabled:false (e.g. the duplicate path)", async () => {
+    const { db, builder } = makeDb({ single: FLOW_ROW });
+    await createAiFlow(
+      { businessId: "biz-1", name: "x", enabled: false, definition: VALID_DEF },
+      db as any
+    );
+    expect(builder.insert).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
   });
   it("honors enabled + createdBy", async () => {
     const { db, builder } = makeDb({ single: FLOW_ROW });
