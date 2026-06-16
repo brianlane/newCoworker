@@ -41,6 +41,7 @@ export type BrowseActionPlanned = {
 export type StepAction =
   | { kind: "set_vars"; vars: Record<string, string> }
   | { kind: "browse"; url: string; fields: ExtractField[]; auth?: BrowseAuth; screenshot?: boolean }
+  | { kind: "extract_text"; text: string; fields: ExtractField[] }
   | { kind: "send_sms"; to: string; body: string; quiet?: SendSmsQuietPlan }
   | {
       kind: "send_email";
@@ -156,6 +157,16 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           screenshot: step.screenshot
         }
       };
+    }
+    case "extract_text": {
+      // Read the same structured fields out of the inbound message text rather
+      // than a fetched page. windowText is the combined correlation-window text
+      // the trigger evaluated, so it carries everything the lead sent.
+      const text = triggerString(scope, "windowText").trim();
+      if (!text) {
+        return { ok: false, error: "extract_text: no message text to read" };
+      }
+      return { ok: true, action: { kind: "extract_text", text, fields: step.fields } };
     }
     case "send_sms": {
       const to = renderTemplate(step.to, scope).trim();

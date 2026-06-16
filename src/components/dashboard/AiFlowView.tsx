@@ -159,6 +159,22 @@ function StepBody({ step }: { step: FlowStep }) {
           {step.screenshot && <Chip>Captures a screenshot</Chip>}
         </>
       );
+    case "extract_text":
+      return (
+        <div className="space-y-1">
+          <div className="text-xs font-medium text-parchment/50">
+            Fields read from the message text
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {step.fields.map((f, i) => (
+              <Chip key={i}>
+                {f.name}
+                {f.description ? ` — ${f.description}` : ""}
+              </Chip>
+            ))}
+          </div>
+        </div>
+      );
     case "send_sms":
       return (
         <>

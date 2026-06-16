@@ -78,6 +78,32 @@ describe("planStep: browse_extract", () => {
   });
 });
 
+describe("planStep: extract_text", () => {
+  const step: FlowStep = {
+    id: "t",
+    type: "extract_text",
+    fields: [{ name: "buyer_phone" }, { name: "buyer_name" }]
+  };
+  it("returns an extract_text action carrying the trigger windowText and fields", () => {
+    const scope: StepScope = { trigger: { windowText: "New inquiry: Jane 480-555-0100" } };
+    expect(planStep(step, scope)).toEqual({
+      ok: true,
+      action: {
+        kind: "extract_text",
+        text: "New inquiry: Jane 480-555-0100",
+        fields: [{ name: "buyer_phone" }, { name: "buyer_name" }]
+      }
+    });
+  });
+  it("fails when there is no message text to read", () => {
+    expect(planStep(step, { trigger: {} })).toEqual({
+      ok: false,
+      error: "extract_text: no message text to read"
+    });
+    expect(planStep(step, { trigger: { windowText: "   " } }).ok).toBe(false);
+  });
+});
+
 describe("planStep: send_sms", () => {
   const step: FlowStep = {
     id: "x",

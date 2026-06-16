@@ -171,6 +171,8 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
       return { id, type, saveAs: "lead_url" };
     case "browse_extract":
       return { id, type, urlVar: "lead_url", fields: [{ name: examples.contactVar, description: "" }] };
+    case "extract_text":
+      return { id, type, fields: [{ name: examples.contactVar, description: "" }] };
     case "send_sms":
       return { id, type, to: `{{vars.${examples.contactVar}}}`, body: "" };
     case "send_email":
@@ -208,6 +210,7 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
 function varsProducedByStep(step: FlowStep): string[] {
   if (step.type === "extract_url") return [step.saveAs];
   if (step.type === "browse_extract") return step.fields.map((f) => f.name).filter(Boolean);
+  if (step.type === "extract_text") return step.fields.map((f) => f.name).filter(Boolean);
   if (step.type === "http_call" && step.saveAs) return [step.saveAs];
   return [];
 }
@@ -1201,6 +1204,50 @@ function StepFields({
           />
           Capture a screenshot of the page
         </label>
+      </div>
+    );
+  }
+  if (step.type === "extract_text") {
+    return (
+      <div className="space-y-2">
+        <p className="text-xs text-parchment/50">
+          Reads these details straight from the incoming message - no link needed.
+        </p>
+        <label className={labelClass}>Fields to extract</label>
+        {step.fields.map((f, fi) => (
+          <div key={fi} className="flex gap-2">
+            <input
+              className={inputClass}
+              value={f.name}
+              placeholder={examples.contactVar}
+              onChange={(ev) =>
+                patchStep(index, {
+                  fields: step.fields.map((x, xi) =>
+                    xi === fi ? { ...x, name: ev.target.value } : x
+                  )
+                })
+              }
+            />
+            <input
+              className={inputClass}
+              value={f.description ?? ""}
+              placeholder="description (optional)"
+              onChange={(ev) =>
+                patchStep(index, {
+                  fields: step.fields.map((x, xi) =>
+                    xi === fi ? { ...x, description: ev.target.value } : x
+                  )
+                })
+              }
+            />
+          </div>
+        ))}
+        <button
+          onClick={() => patchStep(index, { fields: [...step.fields, { name: "", description: "" }] })}
+          className="text-xs text-signal-teal hover:underline"
+        >
+          + field
+        </button>
       </div>
     );
   }

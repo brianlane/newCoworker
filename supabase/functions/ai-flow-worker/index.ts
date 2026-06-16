@@ -586,6 +586,8 @@ async function runStep(
       return { kind: "ok", result: { vars: action.vars } };
     case "browse":
       return browseStep(supabase, run, index, scope, action);
+    case "extract_text":
+      return extractTextStep(supabase, run, scope, action);
     case "send_sms":
       return sendSmsStep(supabase, run, index, scope, action);
     case "send_email":
@@ -787,6 +789,42 @@ async function browseStep(
 
   Object.assign(scope.vars, out);
   return { kind: "ok", result: { vars: out, finalUrl: page.finalUrl } };
+}
+
+/**
+ * extract_text: the browser-free sibling of browse_extract. Runs the SAME
+ * Gemini structured extraction over the inbound message text (resolved by the
+ * planner from {{trigger.windowText}}) instead of a fetched page, then applies
+ * the same phone-regex fallback for phone-like fields. Used when the triggering
+ * message already contains the lead details, so no link needs to be opened.
+ */
+async function extractTextStep(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "extract_text" }>
+): Promise<StepOutcome> {
+  let extracted: Record<string, string>;
+  try {
+    extracted = await extractFields(supabase, run, action.fields, action.text);
+  } catch (e) {
+    // An exhausted shared AI budget is a permanent, owner-actionable state for
+    // this period — fail the run instead of retrying into the cap.
+    if (e instanceof SpendCapError) return { kind: "fail", error: `extract_text: ${e.message}` };
+    throw e;
+  }
+
+  const out: Record<string, string> = {};
+  for (const f of action.fields) {
+    let val = extracted[f.name] ?? "";
+    if (!val && /phone|mobile|cell|tel/i.test(f.name)) {
+      val = extractPhones(action.text)[0] ?? "";
+    }
+    out[f.name] = val;
+  }
+
+  Object.assign(scope.vars, out);
+  return { kind: "ok", result: { vars: out } };
 }
 
 /**

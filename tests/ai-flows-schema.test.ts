@@ -80,6 +80,37 @@ describe("parseAiFlowDefinition", () => {
     );
   });
 
+  it("accepts an extract_text step whose fields feed a later step (no URL needed)", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [{ type: "contains", value: "rltr.pro" }] },
+      steps: [
+        {
+          id: "s1",
+          type: "extract_text",
+          fields: [
+            { name: "buyer_phone", description: "the buyer phone" },
+            { name: "buyer_name", description: "the buyer full name" }
+          ]
+        },
+        { id: "s2", type: "send_sms", to: "{{vars.buyer_phone}}", body: "Hi {{vars.buyer_name}}" }
+      ]
+    });
+    expect(def.steps[0].type).toBe("extract_text");
+  });
+
+  it("flags a {{vars.x}} that only a LATER extract_text would produce", () => {
+    const bad = {
+      version: 1,
+      trigger: { channel: "sms", conditions: [] },
+      steps: [
+        { id: "s1", type: "send_sms", to: "{{vars.buyer_phone}}", body: "hi" },
+        { id: "s2", type: "extract_text", fields: [{ name: "buyer_phone" }] }
+      ]
+    };
+    expect(() => parseAiFlowDefinition(bad)).toThrow(AiFlowValidationError);
+  });
+
   it("rejects an auth block missing integrationLabel", () => {
     const bad = JSON.parse(JSON.stringify(validInput));
     bad.steps[1].auth = { login: { usernameSelector: "#email" } };

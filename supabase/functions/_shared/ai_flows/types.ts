@@ -217,6 +217,19 @@ export type FlowStep =
     }
   | {
       id: string;
+      /**
+       * Browser-free extraction: run the SAME Gemini structured extraction as
+       * browse_extract, but over the inbound message text
+       * ({{trigger.windowText}}) instead of a fetched page. Produces
+       * {{vars.<field>}} for each field. No URL/auth/screenshot — use when the
+       * triggering message already contains the lead details.
+       */
+      type: "extract_text";
+      fields: ExtractField[];
+      when?: StepCondition;
+    }
+  | {
+      id: string;
       type: "send_sms";
       to: string;
       body: string;
