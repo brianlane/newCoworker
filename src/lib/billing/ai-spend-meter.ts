@@ -28,11 +28,14 @@ export const GEMINI_PRICES_PER_1M: Record<string, GeminiPricePer1M> = {
   "gemini-2.5-flash-lite": { in: 0.1, out: 0.4 },
   "gemini-2.5-flash": { in: 0.3, out: 2.5 },
   "gemini-3-flash": { in: 0.5, out: 3.0 },
-  "gemini-3-flash-preview": { in: 0.5, out: 3.0 }
+  "gemini-3-flash-preview": { in: 0.5, out: 3.0 },
+  // Gemini 3.5 Flash (GA May 2026). Output price includes thinking tokens, so
+  // a medium/high reasoning compile is billed entirely at this rate.
+  "gemini-3.5-flash": { in: 1.5, out: 9.0 }
 };
 
 /** Unknown model → assume the priciest tier we deploy (never undercount a fuse). */
-export const DEFAULT_GEMINI_PRICE_PER_1M: GeminiPricePer1M = { in: 0.5, out: 3.0 };
+export const DEFAULT_GEMINI_PRICE_PER_1M: GeminiPricePer1M = { in: 1.5, out: 9.0 };
 
 export function geminiPriceFor(model: string): GeminiPricePer1M {
   return GEMINI_PRICES_PER_1M[model.trim()] ?? DEFAULT_GEMINI_PRICE_PER_1M;

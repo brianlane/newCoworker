@@ -49,10 +49,12 @@ describe("geminiPriceFor", () => {
     expect(geminiPriceFor("gemini-3-flash-preview")).toEqual(
       GEMINI_PRICES_PER_1M["gemini-3-flash"]
     );
+    expect(geminiPriceFor(" gemini-3.5-flash ")).toEqual({ in: 1.5, out: 9.0 });
   });
 
-  it("falls back to the priciest deployed tier for unknown models", () => {
+  it("falls back to the priciest deployed tier (gemini-3.5-flash) for unknown models", () => {
     expect(geminiPriceFor("gemini-99-ultra")).toBe(DEFAULT_GEMINI_PRICE_PER_1M);
+    expect(DEFAULT_GEMINI_PRICE_PER_1M).toEqual({ in: 1.5, out: 9.0 });
   });
 });
 

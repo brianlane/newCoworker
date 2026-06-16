@@ -23,6 +23,15 @@ export type GeminiGenerateTextParams = {
    * trailing off into unparseable output.
    */
   responseMimeType?: string;
+  /**
+   * Gemini 3 reasoning budget (`thinkingConfig.thinkingLevel`). Gemini 3 Flash
+   * defaults to `"high"` (dynamic), which can spend nearly the entire
+   * `maxOutputTokens` budget on hidden thinking and truncate the visible
+   * answer. Set `"low"` (or `"minimal"`) for structured-extraction tasks where
+   * the output budget must go to the answer, not reasoning. Only valid on
+   * Gemini 3 models — Gemini 2.5 rejects it (those use a numeric budget).
+   */
+  thinkingLevel?: "minimal" | "low" | "medium" | "high";
   signal?: AbortSignal;
 };
 
@@ -117,7 +126,10 @@ export async function geminiGenerateTextDetailed(
       generationConfig: {
         temperature,
         maxOutputTokens,
-        ...(params.responseMimeType ? { responseMimeType: params.responseMimeType } : {})
+        ...(params.responseMimeType ? { responseMimeType: params.responseMimeType } : {}),
+        ...(params.thinkingLevel
+          ? { thinkingConfig: { thinkingLevel: params.thinkingLevel } }
+          : {})
       }
     })
   });

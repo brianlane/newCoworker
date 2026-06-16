@@ -46,18 +46,27 @@ export async function POST(request: Request) {
     // budget keep large multi-step definitions from truncating into
     // unparseable JSON, which is what tripped the old 2.5-flash + 2000-token
     // path (thinking tokens ate the budget mid-object).
-    const model = process.env.AIFLOW_COMPILE_MODEL ?? "gemini-3-flash-preview";
+    // Gemini 3.5 Flash: GA, agentic-grade reasoning — capable enough to author
+    // a complex multi-step branched flow from a long spec. It reasons at its
+    // balanced default ("medium") rather than the preview's "high" (dynamic),
+    // which previously ate the whole output budget on hidden thinking.
+    const model = process.env.AIFLOW_COMPILE_MODEL ?? "gemini-3.5-flash";
     const userText = buildFlowCompileUserText(body.description);
     let raw: string;
     let usage: GeminiUsage | null;
     try {
+      // Output price includes thinking tokens, but billing is by ACTUAL tokens
+      // used (meterGeminiSpendForBusiness below), not this cap. So a generous
+      // 32k cap (well under the model's 65,536 limit) just guarantees the full
+      // definition + reasoning never truncate mid-JSON — it does not inflate
+      // cost. JSON mode keeps the visible output to a strict object.
       ({ text: raw, usage } = await geminiGenerateTextDetailed({
         apiKey,
         model,
         systemInstruction: FLOW_COMPILE_SYSTEM_PROMPT,
         userText,
         temperature: 0,
-        maxOutputTokens: 8000,
+        maxOutputTokens: 32000,
         responseMimeType: "application/json"
       }));
     } catch (err) {
