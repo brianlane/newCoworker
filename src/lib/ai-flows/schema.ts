@@ -26,6 +26,7 @@ export const TRIGGER_CONDITION_TYPES = [
 export const FLOW_STEP_TYPES = [
   "extract_url",
   "browse_extract",
+  "extract_text",
   "send_sms",
   "send_email",
   "approval_gate",
@@ -251,6 +252,16 @@ const stepSchema = z.discriminatedUnion("type", [
     screenshot: z.boolean().optional(),
     when: whenSchema.optional()
   }),
+  // Browser-free sibling of browse_extract: pull the same structured fields out
+  // of the inbound message text ({{trigger.windowText}}) instead of a fetched
+  // page. No urlVar/auth/screenshot — the worker runs the SAME Gemini
+  // extraction on the trigger text. Produces {{vars.<field>}} like browse_extract.
+  z.object({
+    id: stepId,
+    type: z.literal("extract_text"),
+    fields: z.array(extractFieldSchema).min(1).max(15),
+    when: whenSchema.optional()
+  }),
   z.object({
     id: stepId,
     type: z.literal("send_sms"),
@@ -381,6 +392,7 @@ function templateStringsForStep(step: FlowStep): string[] {
       return step.actions.map((a) => a.valueTemplate ?? "");
     case "extract_url":
     case "browse_extract":
+    case "extract_text":
       return [];
   }
 }
@@ -503,6 +515,8 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     } else if (step.type === "browse_extract") {
       for (const f of step.fields) vars.add(f.name);
       if (step.screenshot) screenshotCaptured = true;
+    } else if (step.type === "extract_text") {
+      for (const f of step.fields) vars.add(f.name);
     } else if (step.type === "browse_action") {
       if (step.screenshot) screenshotCaptured = true;
     } else if (step.type === "http_call" && step.saveAs) {

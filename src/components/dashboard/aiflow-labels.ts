@@ -22,6 +22,7 @@ type BrowseActionKind = (typeof BROWSE_ACTION_KINDS)[number];
 export const STEP_TYPE_LABELS: Record<StepType, string> = {
   extract_url: "Get the link from the text",
   browse_extract: "Read details from a web page",
+  extract_text: "Read details from the message text",
   send_sms: "Send a text",
   send_email: "Send an email",
   approval_gate: "Ask me to approve first",
@@ -35,6 +36,8 @@ export const STEP_TYPE_LABELS: Record<StepType, string> = {
 export const STEP_TYPE_HELP: Record<StepType, string> = {
   extract_url: "Pulls the first link out of the incoming message and saves it for later steps.",
   browse_extract: "Opens a saved link and reads the details you ask for (like a phone number).",
+  extract_text:
+    "Reads the details you ask for (like a name or phone number) straight from the incoming message - no link needed.",
   send_sms: "Sends a text message. You can reuse details earlier steps found.",
   send_email: "Sends an email. You can reuse details earlier steps found.",
   approval_gate: "Pauses and texts you to approve before continuing.",
