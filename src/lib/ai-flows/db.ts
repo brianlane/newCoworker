@@ -143,7 +143,10 @@ export async function createAiFlow(
     .insert({
       business_id: input.businessId,
       name,
-      enabled: input.enabled ?? false,
+      // New flows go live on creation unless the caller opts out (e.g. the
+      // "duplicate" path passes enabled:false to avoid two identical flows
+      // firing on the same trigger). Matches the column default.
+      enabled: input.enabled ?? true,
       definition,
       created_by: input.createdBy ?? null
     })
