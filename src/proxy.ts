@@ -121,6 +121,12 @@ export async function proxy(request: NextRequest) {
     // email fallback). It sends no Origin header, so CSRF would 403 every send.
     // Same rationale as the exemptions above.
     pathname !== "/api/aiflows/send-owner-email" &&
+    // /api/email/inbound is the per-tenant AI mailbox webhook authenticated
+    // solely by `Authorization: Bearer EMAIL_INBOUND_SECRET` (assertEmailInboundAuth)
+    // — the Cloudflare Email Worker POSTs every inbound message here with no Origin
+    // header, so CSRF would 403 all inbound mail. Same rationale as the exemptions
+    // above.
+    pathname !== "/api/email/inbound" &&
     ["POST", "PUT", "DELETE", "PATCH"].includes(method)
   ) {
     const origin = request.headers.get("origin");

@@ -179,6 +179,13 @@ describe("proxy", () => {
     expect(res.status).not.toBe(403);
   });
 
+  it("allows POST to /api/email/inbound without origin (bearer-authed Cloudflare email worker)", async () => {
+    mockSupabaseWithUser(null);
+    const req = makeRequest("/api/email/inbound", { method: "POST" });
+    const res = await proxy(req);
+    expect(res.status).not.toBe(403);
+  });
+
   it("still enforces CSRF on other /api/aiflows POSTs (dashboard, cookie-authed)", async () => {
     mockSupabaseWithUser(null);
     const req = makeRequest("/api/aiflows/compile", { method: "POST" });
