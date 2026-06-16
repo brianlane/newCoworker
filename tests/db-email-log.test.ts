@@ -155,6 +155,7 @@ describe("recordTenantMailboxInbound", () => {
         from_email: "jane@example.com",
         subject: "Quote please",
         body_preview: "z".repeat(500),
+        body_full: "z".repeat(600),
         run_id: "run-1",
         flow_id: "flow-1",
         provider_message_id: "<m1@x>"

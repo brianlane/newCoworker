@@ -661,6 +661,7 @@ async function logFlowEmail(
     from_email: args.from,
     subject: args.subject,
     body_preview: args.body.slice(0, 500),
+    body_full: args.body,
     source: args.source,
     run_id: run.id,
     flow_id: run.flow_id,

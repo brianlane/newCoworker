@@ -56,7 +56,7 @@ export default async function DashboardEmailsPage() {
   const rows = await listEmailLog(business.id, { limit: 100 });
 
   return (
-    <div className="space-y-6 max-w-4xl">
+    <div className="space-y-6 max-w-6xl">
       <div>
         <h1 className="text-2xl font-bold text-parchment">Emails</h1>
         <p className="text-sm text-parchment/50 mt-1">

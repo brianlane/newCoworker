@@ -38,6 +38,8 @@ export type EmailLogRow = {
   from_email: string | null;
   subject: string | null;
   body_preview: string | null;
+  /** Full plain-text body for the reading pane; null on rows predating capture. */
+  body_full: string | null;
   /** Comma-separated cc recipients, or null when none. */
   cc_email: string | null;
   /** Comma-separated bcc recipients, or null when none. */
@@ -50,7 +52,7 @@ export type EmailLogRow = {
 };
 
 const EMAIL_LOG_SELECT =
-  "id, business_id, direction, to_email, from_email, subject, body_preview, cc_email, bcc_email, source, run_id, flow_id, provider_message_id, created_at";
+  "id, business_id, direction, to_email, from_email, subject, body_preview, body_full, cc_email, bcc_email, source, run_id, flow_id, provider_message_id, created_at";
 
 /** Join a recipient list into the stored CSV form, or null when empty. */
 function recipientsToCsv(recipients?: string[] | null): string | null {
@@ -112,6 +114,7 @@ export async function recordInboundTriggerEmail(
     from_email: input.fromEmail,
     subject: input.subject,
     body_preview: input.bodyText.slice(0, 500),
+    body_full: input.bodyText,
     source: "email_trigger",
     run_id: input.runId,
     flow_id: input.flowId,
@@ -151,6 +154,7 @@ export async function recordTenantMailboxInbound(
       from_email: input.fromEmail,
       subject: input.subject,
       body_preview: input.bodyText.slice(0, 500),
+      body_full: input.bodyText,
       source: "tenant_mailbox_inbound",
       run_id: input.runId ?? null,
       flow_id: input.flowId ?? null,
@@ -194,6 +198,7 @@ export async function recordOutboundAssistantEmail(
       from_email: null,
       subject: input.subject,
       body_preview: input.bodyText.slice(0, 500),
+      body_full: input.bodyText,
       cc_email: recipientsToCsv(input.ccEmails),
       bcc_email: recipientsToCsv(input.bccEmails),
       source: input.source,
