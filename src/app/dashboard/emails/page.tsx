@@ -11,19 +11,10 @@ import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
-import { listEmailLog, type EmailLogRow } from "@/lib/db/email-log";
-import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
+import { listEmailLog } from "@/lib/db/email-log";
+import { EmailsList } from "@/components/dashboard/EmailsList";
 
 export const dynamic = "force-dynamic";
-
-function sourceLabel(row: EmailLogRow): string {
-  if (row.source === "email_trigger") return "Trigger";
-  if (row.source === "owner_mailbox") return "Sent as you";
-  if (row.source === "dashboard_chat") return "Chat";
-  if (row.source === "sms_assistant") return "Texts";
-  if (row.source === "voice_assistant") return "Call";
-  return "AiFlow";
-}
 
 export default async function DashboardEmailsPage() {
   const user = await getAuthUser();
@@ -89,48 +80,7 @@ export default async function DashboardEmailsPage() {
           </div>
         </Card>
       ) : (
-        <Card padding="sm">
-          <ul className="divide-y divide-parchment/10">
-            {rows.map((r) => (
-              <li key={r.id} className="px-3 py-3">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span
-                    className={[
-                      "text-[10px] uppercase tracking-wide font-semibold rounded px-1.5 py-0.5",
-                      r.direction === "inbound"
-                        ? "bg-signal-teal/15 text-signal-teal"
-                        : "bg-claw-green/15 text-claw-green"
-                    ].join(" ")}
-                  >
-                    {r.direction === "inbound" ? "Received" : "Sent"}
-                  </span>
-                  <span className="text-[10px] uppercase tracking-wide text-parchment/40 font-mono">
-                    {sourceLabel(r)}
-                  </span>
-                  <span className="text-sm font-semibold text-parchment truncate">
-                    {r.subject || "(no subject)"}
-                  </span>
-                </div>
-                <p className="text-xs text-parchment/60 mt-1 truncate">
-                  {r.direction === "inbound"
-                    ? `From ${r.from_email ?? "unknown"}`
-                    : `To ${r.to_email ?? "unknown"}`}
-                  {r.body_preview ? ` — ${r.body_preview}` : ""}
-                </p>
-                {(r.cc_email || r.bcc_email) && (
-                  <p className="text-[10px] text-parchment/40 mt-0.5 truncate">
-                    {r.cc_email ? `Cc ${r.cc_email}` : ""}
-                    {r.cc_email && r.bcc_email ? " · " : ""}
-                    {r.bcc_email ? `Bcc ${r.bcc_email}` : ""}
-                  </p>
-                )}
-                <p className="text-[10px] text-parchment/40 mt-0.5">
-                  <LocalDateTime iso={r.created_at} />
-                </p>
-              </li>
-            ))}
-          </ul>
-        </Card>
+        <EmailsList rows={rows} />
       )}
     </div>
   );
