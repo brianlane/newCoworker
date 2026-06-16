@@ -370,7 +370,7 @@ export default async function BillingPage(props: {
               <dd className="text-[11px] text-parchment/40">
                 {chatSpend && chatSpend.creditMicros > 0
                   ? `includes $${(chatSpend.creditMicros / 1_000_000).toFixed(2)} purchased credit`
-                  : "shared across dashboard chat + texting; resets each period"}
+                  : "shared across all agentic tasks"}
               </dd>
             </div>
           </dl>
@@ -393,7 +393,7 @@ export default async function BillingPage(props: {
 
       <UsagePacks
         title="Buy AI chat credit"
-        description="Credit raises this period's shared AI budget (dashboard chat + texting) so replies stay on the fast cloud model instead of degrading to the local fallback."
+        description="Credit raises this period's shared AI budget, so replies stay on the cloud model instead of falling back to the local model."
         checkoutPath="/api/billing/chat-credit/checkout"
         packs={chatPacks.map((p) => ({
           id: p.id,
