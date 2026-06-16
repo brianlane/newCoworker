@@ -722,6 +722,16 @@ describe("summarizeDefinition", () => {
         steps
       })
     ).toBe("When email matching 1 condition(s): notify_owner");
+    expect(
+      summarizeDefinition({ version: 1, trigger: { channel: "tenant_email", conditions: [] }, steps })
+    ).toBe("When the AI mailbox receives any email: notify_owner");
+    expect(
+      summarizeDefinition({
+        version: 1,
+        trigger: { channel: "tenant_email", conditions: [{ type: "has_url" }] },
+        steps
+      })
+    ).toBe("When AI mailbox email matches 1 condition(s): notify_owner");
   });
 });
 
@@ -809,6 +819,17 @@ describe("trigger channels", () => {
         steps
       })
     ).toThrow(AiFlowValidationError);
+  });
+
+  it("accepts a tenant_email trigger (no connectionId on the type)", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "tenant_email", conditions: [{ type: "contains", value: "quote" }] },
+      steps
+    });
+    expect(def.trigger.channel).toBe("tenant_email");
+    // tenant_email has no connectionId field; an extra one is stripped, not stored.
+    expect("connectionId" in def.trigger).toBe(false);
   });
 
   it("steps in non-SMS flows may still reference {{trigger.x}} scope keys", () => {

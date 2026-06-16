@@ -82,7 +82,24 @@ export type EmailTrigger = {
   conditions: TriggerCondition[];
 };
 
-export type FlowTrigger = SmsTrigger | ManualTrigger | ScheduleTrigger | EmailTrigger;
+/**
+ * Inbound trigger on the AI coworker's OWN dedicated mailbox
+ * (`<tenant>@<platform domain>`). Push-based (Cloudflare Email Routing ->
+ * /api/email/inbound enqueues the run) so there is NO connectionId — the
+ * mailbox is implicit per business. Same condition semantics as EmailTrigger.
+ */
+export type TenantEmailTrigger = {
+  channel: "tenant_email";
+  /** AND-ed conditions; empty means "match every inbound email". */
+  conditions: TriggerCondition[];
+};
+
+export type FlowTrigger =
+  | SmsTrigger
+  | ManualTrigger
+  | ScheduleTrigger
+  | EmailTrigger
+  | TenantEmailTrigger;
 
 export type ExtractField = {
   name: string;

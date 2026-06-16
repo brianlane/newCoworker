@@ -1,0 +1,19 @@
+{
+  "name": "nc-email-inbound",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Email Worker that forwards per-tenant AI mailbox mail to the app inbound webhook.",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "postal-mime": "^2.4.4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250906.0",
+    "typescript": "^5.6.0",
+    "wrangler": "^4.0.0"
+  }
+}

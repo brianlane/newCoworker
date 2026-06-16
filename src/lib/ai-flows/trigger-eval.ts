@@ -81,7 +81,7 @@ export function htmlToText(html: string): string {
 
 /** What an enqueued run's `context.trigger` looks like for these channels. */
 export type TriggerScope = {
-  channel: "manual" | "email" | "schedule";
+  channel: "manual" | "email" | "schedule" | "tenant_email";
   windowText: string;
   url: string | null;
   from: string;
@@ -121,6 +121,28 @@ export function emailTriggerScope(msg: InboundEmailMessage): TriggerScope {
     from: msg.fromEmail,
     subject: msg.subject.slice(0, 300),
     message_id: msg.id,
+    ...(msg.receivedAt ? { received_at: msg.receivedAt } : {})
+  };
+}
+
+/**
+ * Trigger scope for an inbound email delivered to the AI coworker's dedicated
+ * mailbox (the `tenant_email` channel). Same shape as `emailTriggerScope` but
+ * tagged with the distinct channel and the recipient address so steps can
+ * template the mailbox the mail arrived at.
+ */
+export function tenantEmailTriggerScope(
+  msg: InboundEmailMessage & { toEmail?: string }
+): TriggerScope {
+  const windowText = `${msg.subject}\n${msg.bodyText}`.slice(0, EMAIL_WINDOW_TEXT_MAX);
+  return {
+    channel: "tenant_email",
+    windowText,
+    url: firstUrlInText(windowText),
+    from: msg.fromEmail,
+    subject: msg.subject.slice(0, 300),
+    message_id: msg.id,
+    ...(msg.toEmail ? { to: msg.toEmail } : {}),
     ...(msg.receivedAt ? { received_at: msg.receivedAt } : {})
   };
 }

@@ -46,7 +46,8 @@ const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
   sms: "Inbound text (SMS)",
   manual: "Manual — Run now button",
   schedule: "On a schedule",
-  email: "Inbound email"
+  email: "Inbound email (your connected inbox)",
+  tenant_email: "Inbound email (AI coworker's mailbox)"
 };
 
 type EditorState = {
@@ -142,6 +143,8 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
         conditions: trigger.conditions,
         emailConnectionId: trigger.connectionId
       };
+    case "tenant_email":
+      return { ...base, conditions: trigger.conditions };
   }
 }
 
@@ -250,6 +253,8 @@ function editorTrigger(s: EditorState): FlowTrigger {
           };
     case "email":
       return { channel: "email", connectionId: s.emailConnectionId, conditions: s.conditions };
+    case "tenant_email":
+      return { channel: "tenant_email", conditions: s.conditions };
   }
 }
 
@@ -698,6 +703,15 @@ export function AiFlowsManager({
               </p>
             </div>
           )}
+          {editor.channel === "tenant_email" && (
+            <div className="rounded-md border border-parchment/10 bg-deep-ink/20 p-3">
+              <p className="text-[11px] text-parchment/60">
+                This runs when your AI coworker&apos;s own email address receives a message. The
+                address is shown (and can be personalized on Standard and above) under Settings →
+                Mailbox. No mailbox connection is needed.
+              </p>
+            </div>
+          )}
           {editor.channel === "sms" && (
             <div>
               <label className={labelClass}>Combine related texts that arrive within (minutes)</label>
@@ -715,7 +729,9 @@ export function AiFlowsManager({
               </p>
             </div>
           )}
-          {(editor.channel === "sms" || editor.channel === "email") &&
+          {(editor.channel === "sms" ||
+            editor.channel === "email" ||
+            editor.channel === "tenant_email") &&
             editor.conditions.map((c, i) => (
             <div key={i} className="flex items-center gap-2">
               <select
@@ -765,7 +781,9 @@ export function AiFlowsManager({
               </button>
             </div>
           ))}
-          {(editor.channel === "sms" || editor.channel === "email") && (
+          {(editor.channel === "sms" ||
+            editor.channel === "email" ||
+            editor.channel === "tenant_email") && (
             <button
               onClick={() =>
                 setEditor({ ...editor, conditions: [...editor.conditions, { type: "contains", value: "" }] })

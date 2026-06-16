@@ -9,8 +9,14 @@ import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { AccountSettingsForms } from "@/components/dashboard/AccountSettingsForms";
 import { CoworkerToolsManager } from "@/components/dashboard/CoworkerToolsManager";
+import { MailboxSettings } from "@/components/dashboard/MailboxSettings";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { resolveAgentTools } from "@/lib/db/agent-tool-settings";
+import {
+  PERSONALIZE_TIERS,
+  ensureTenantMailbox,
+  tenantEmailDomain
+} from "@/lib/email/tenant-mailbox";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +36,8 @@ export default async function SettingsPage() {
   const business = businesses?.[0] ?? null;
   const subscription = business ? await getSubscription(business.id) : null;
   const agents = business ? await resolveAgentTools(business.id) : null;
+  // Self-heals if provisioning hadn't reserved a mailbox yet (legacy tenants).
+  const mailbox = business ? await ensureTenantMailbox(business.id) : null;
   // Same rolling next-charge date the Billing page shows (Stripe's
   // current_period_end, cached and webhook-advanced; see resolveActiveRenewalDate).
   const nextBillingAt =
@@ -115,6 +123,16 @@ export default async function SettingsPage() {
         businessTimezone={(business?.timezone as string | null) ?? null}
         email={user.email}
       />
+
+      {business && mailbox && (
+        <MailboxSettings
+          businessId={business.id}
+          domain={tenantEmailDomain()}
+          initialLocalPart={mailbox.local_part}
+          initialPersonalized={mailbox.personalized}
+          canPersonalize={PERSONALIZE_TIERS.has(business.tier)}
+        />
+      )}
 
       {business && agents && (
         <CoworkerToolsManager businessId={business.id} initialAgents={agents} />

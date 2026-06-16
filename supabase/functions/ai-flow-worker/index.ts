@@ -646,7 +646,7 @@ async function logFlowEmail(
     from: string | null;
     subject: string;
     body: string;
-    source: "ai_flow" | "owner_mailbox";
+    source: "ai_flow" | "owner_mailbox" | "tenant_mailbox_outbound";
     providerMessageId?: string | null;
   }
 ): Promise<void> {
@@ -1364,13 +1364,48 @@ type FlowEmailArgs = {
   fromConnectionId?: string;
 };
 
+/** The platform email domain tenant mailboxes live under. */
+function tenantEmailDomain(): string {
+  const raw = (Deno.env.get("TENANT_EMAIL_DOMAIN") ?? "").trim();
+  return raw.length > 0 ? raw.toLowerCase() : "newcoworker.com";
+}
+
+/**
+ * Resolve the dedicated AI-mailbox "From" for a business so flow emails send
+ * AS the coworker's own address (and replies route back to it, re-triggering
+ * tenant_email flows). Returns null when the business has no mailbox row yet,
+ * so the caller falls back to the global MAILER_EMAIL.
+ */
+async function resolveTenantMailboxFrom(
+  supabase: Supabase,
+  businessId: string
+): Promise<{ from: string; address: string } | null> {
+  const { data, error } = await supabase
+    .from("tenant_mailboxes")
+    .select("local_part")
+    .eq("business_id", businessId)
+    .maybeSingle();
+  if (error || !data) return null;
+  const localPart = (data as { local_part?: string }).local_part;
+  if (!localPart) return null;
+  const address = `${String(localPart).toLowerCase()}@${tenantEmailDomain()}`;
+  const { data: biz } = await supabase
+    .from("businesses")
+    .select("name")
+    .eq("id", businessId)
+    .maybeSingle();
+  const name = (biz as { name?: string } | null)?.name?.trim();
+  return { from: name ? `${name} <${address}>` : address, address };
+}
+
 /**
  * Deliver one flow email.
  *
- * Default path: platform Resend sender, optionally attaching the screenshot a
- * prior browse_extract stored (downloaded from the private bucket by path —
- * never by fetching a templatable URL). Missing RESEND_API_KEY is a permanent
- * setup error; a Resend/storage IO failure throws so the run retries.
+ * Default path: platform Resend sender (from the tenant's own AI mailbox when
+ * one is provisioned, else the global MAILER_EMAIL), optionally attaching the
+ * screenshot a prior browse_extract stored (downloaded from the private bucket
+ * by path — never by fetching a templatable URL). Missing RESEND_API_KEY is a
+ * permanent setup error; a Resend/storage IO failure throws so the run retries.
  *
  * `fromConnectionId` path: the owner chose "send as me" — the worker calls the
  * app's gateway-guarded /api/aiflows/send-owner-email, which sends through the
@@ -1408,6 +1443,13 @@ async function deliverFlowEmail(
     // without the attachment rather than stranding the lead email.
   }
 
+  // Prefer the tenant's own AI mailbox as the sender so replies come back to it
+  // (and re-trigger tenant_email flows); fall back to the global platform
+  // sender when no mailbox is provisioned yet.
+  const mailbox = await resolveTenantMailboxFrom(supabase, run.business_id);
+  const fromHeader = mailbox?.from ?? Deno.env.get("MAILER_EMAIL") ?? "New Coworker <contact@newcoworker.com>";
+  const replyTo = mailbox?.address ?? Deno.env.get("CONTACT_EMAIL") ?? undefined;
+
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -1417,11 +1459,11 @@ async function deliverFlowEmail(
       "Idempotency-Key": `aiflow-email/${run.id}/${index}`
     },
     body: JSON.stringify({
-      from: Deno.env.get("MAILER_EMAIL") ?? "New Coworker <contact@newcoworker.com>",
+      from: fromHeader,
       to: action.to,
       ...(action.cc && action.cc.length > 0 ? { cc: action.cc } : {}),
       ...(action.bcc && action.bcc.length > 0 ? { bcc: action.bcc } : {}),
-      reply_to: Deno.env.get("CONTACT_EMAIL") ?? undefined,
+      reply_to: replyTo,
       subject: action.subject,
       text: action.body,
       ...(attachment ? { attachments: [attachment] } : {})
@@ -1441,10 +1483,10 @@ async function deliverFlowEmail(
     to: action.to,
     cc: action.cc,
     bcc: action.bcc,
-    from: Deno.env.get("MAILER_EMAIL") ?? null,
+    from: fromHeader,
     subject: action.subject,
     body: action.body,
-    source: "ai_flow",
+    source: mailbox ? "tenant_mailbox_outbound" : "ai_flow",
     providerMessageId: emailId
   });
   return {

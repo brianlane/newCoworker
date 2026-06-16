@@ -10,7 +10,8 @@ import {
   EMAIL_LOG_MAX_LIMIT,
   listEmailLog,
   recordInboundTriggerEmail,
-  recordOutboundAssistantEmail
+  recordOutboundAssistantEmail,
+  recordTenantMailboxInbound
 } from "@/lib/db/email-log";
 
 function listChain(result: { data: unknown; error: { message: string } | null }) {
@@ -125,6 +126,79 @@ describe("recordInboundTriggerEmail", () => {
     defaultClientSpy.mockResolvedValueOnce({ from: vi.fn(() => ({ insert })) });
     await recordInboundTriggerEmail(input);
     expect(insert).toHaveBeenCalled();
+  });
+});
+
+describe("recordTenantMailboxInbound", () => {
+  const input = {
+    businessId: "biz",
+    toEmail: "amy@newcoworker.com",
+    fromEmail: "jane@example.com",
+    subject: "Quote please",
+    bodyText: "z".repeat(600),
+    flowId: "flow-1",
+    runId: "run-1",
+    providerMessageId: "<m1@x>"
+  };
+
+  it("inserts an inbound tenant-mailbox row with a capped preview", async () => {
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    const db = { from: vi.fn(() => ({ insert })) };
+    await recordTenantMailboxInbound(input, db as never);
+    expect(db.from).toHaveBeenCalledWith("email_log");
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        business_id: "biz",
+        direction: "inbound",
+        source: "tenant_mailbox_inbound",
+        to_email: "amy@newcoworker.com",
+        from_email: "jane@example.com",
+        subject: "Quote please",
+        body_preview: "z".repeat(500),
+        run_id: "run-1",
+        flow_id: "flow-1",
+        provider_message_id: "<m1@x>"
+      })
+    );
+  });
+
+  it("defaults optional fields to null", async () => {
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    const db = { from: vi.fn(() => ({ insert })) };
+    await recordTenantMailboxInbound(
+      { businessId: "biz", toEmail: "a@nc.com", fromEmail: "b@x.com", subject: "s", bodyText: "t" },
+      db as never
+    );
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({ run_id: null, flow_id: null, provider_message_id: null })
+    );
+  });
+
+  it("only logs on insert error (best-effort)", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const insert = vi.fn().mockResolvedValue({ error: { message: "down" } });
+    const db = { from: vi.fn(() => ({ insert })) };
+    await expect(recordTenantMailboxInbound(input, db as never)).resolves.toBeUndefined();
+    expect(errSpy).toHaveBeenCalledWith("recordTenantMailboxInbound", "down");
+    errSpy.mockRestore();
+  });
+
+  it("uses the default service client when none is injected", async () => {
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    defaultClientSpy.mockResolvedValueOnce({ from: vi.fn(() => ({ insert })) });
+    await recordTenantMailboxInbound(input);
+    expect(insert).toHaveBeenCalled();
+  });
+
+  it("never throws when the client cannot be created", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    defaultClientSpy.mockRejectedValueOnce(new Error("no env"));
+    await expect(recordTenantMailboxInbound(input)).resolves.toBeUndefined();
+    expect(errSpy).toHaveBeenCalledWith("recordTenantMailboxInbound", "no env");
+    defaultClientSpy.mockRejectedValueOnce("weird");
+    await expect(recordTenantMailboxInbound(input)).resolves.toBeUndefined();
+    expect(errSpy).toHaveBeenCalledWith("recordTenantMailboxInbound", "weird");
+    errSpy.mockRestore();
   });
 });
 
