@@ -22,6 +22,7 @@ import {
   extractFlowJson
 } from "@/lib/ai-flows/compile";
 import { AiFlowValidationError, parseAiFlowDefinition } from "@/lib/ai-flows/schema";
+import { recordSystemLog } from "@/lib/db/system-logs";
 
 const bodySchema = z.object({
   businessId: z.string().uuid(),
@@ -40,7 +41,12 @@ export async function POST(request: Request) {
       return errorResponse("INTERNAL_SERVER_ERROR", "AI assist is not configured");
     }
 
-    const model = process.env.AIFLOW_COMPILE_MODEL ?? "gemini-2.5-flash";
+    // gemini-3-flash-preview: the gemini-3 tier already used for knowledge
+    // lookups (and priced in ai-spend-meter). JSON mode + a generous output
+    // budget keep large multi-step definitions from truncating into
+    // unparseable JSON, which is what tripped the old 2.5-flash + 2000-token
+    // path (thinking tokens ate the budget mid-object).
+    const model = process.env.AIFLOW_COMPILE_MODEL ?? "gemini-3-flash-preview";
     const userText = buildFlowCompileUserText(body.description);
     let raw: string;
     let usage: GeminiUsage | null;
@@ -51,7 +57,8 @@ export async function POST(request: Request) {
         systemInstruction: FLOW_COMPILE_SYSTEM_PROMPT,
         userText,
         temperature: 0,
-        maxOutputTokens: 2000
+        maxOutputTokens: 8000,
+        responseMimeType: "application/json"
       }));
     } catch (err) {
       // Empty replies (e.g. thinking-only output) are still billed — meter
@@ -82,10 +89,45 @@ export async function POST(request: Request) {
 
     const candidate = extractFlowJson(raw);
     if (candidate === null) {
+      // The compile (authoring) call is otherwise invisible in system_logs —
+      // record truncated/unparseable model output so "the AI builder failed"
+      // is debuggable via `debug/system-logs.ts --source=app --grep=compile`.
+      void recordSystemLog({
+        businessId: body.businessId,
+        source: "app",
+        level: "warn",
+        event: "aiflow_compile_failed",
+        message: "AI did not return a usable automation",
+        payload: {
+          model,
+          reason: "unparseable",
+          rawLength: raw.length,
+          outputTokens: usage?.outputTokens ?? null
+        }
+      });
       return errorResponse("VALIDATION_ERROR", "AI did not return a usable automation");
     }
-    const definition = parseAiFlowDefinition(candidate);
-    return successResponse({ definition });
+    try {
+      const definition = parseAiFlowDefinition(candidate);
+      return successResponse({ definition });
+    } catch (err) {
+      if (err instanceof AiFlowValidationError) {
+        void recordSystemLog({
+          businessId: body.businessId,
+          source: "app",
+          level: "warn",
+          event: "aiflow_compile_failed",
+          message: "AI produced an invalid automation",
+          payload: {
+            model,
+            reason: "schema",
+            issues: err.issues,
+            outputTokens: usage?.outputTokens ?? null
+          }
+        });
+      }
+      throw err;
+    }
   } catch (err) {
     if (err instanceof AiFlowValidationError) {
       return errorResponse(
