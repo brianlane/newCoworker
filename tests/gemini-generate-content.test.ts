@@ -185,6 +185,59 @@ describe("geminiGenerateText", () => {
     expect(parsed.generationConfig).toEqual({ temperature: 0.2, maxOutputTokens: 1500 });
   });
 
+  it("forwards responseMimeType into generationConfig when provided (JSON mode)", async () => {
+    const fetchStub = vi.fn(
+      async (): Promise<Response> =>
+        new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "{}" }] } }] }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+    );
+    vi.stubGlobal("fetch", fetchStub);
+
+    await geminiGenerateText({
+      apiKey: "k",
+      model: "m",
+      systemInstruction: "s",
+      userText: "u",
+      responseMimeType: "application/json"
+    });
+
+    const tup = fetchStub.mock.calls.at(0) as FetchArgs | undefined;
+    expect(tup).toBeDefined();
+    const [, init] = tup!;
+    const parsed = JSON.parse(String(init?.body ?? "{}"));
+    expect(parsed.generationConfig).toEqual({
+      temperature: 0.2,
+      maxOutputTokens: 1500,
+      responseMimeType: "application/json"
+    });
+  });
+
+  it("omits responseMimeType from generationConfig when not provided", async () => {
+    const fetchStub = vi.fn(
+      async (): Promise<Response> =>
+        new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "ok" }] } }] }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+    );
+    vi.stubGlobal("fetch", fetchStub);
+
+    await geminiGenerateText({
+      apiKey: "k",
+      model: "m",
+      systemInstruction: "s",
+      userText: "u"
+    });
+
+    const tup = fetchStub.mock.calls.at(0) as FetchArgs | undefined;
+    expect(tup).toBeDefined();
+    const [, init] = tup!;
+    const parsed = JSON.parse(String(init?.body ?? "{}"));
+    expect(parsed.generationConfig).not.toHaveProperty("responseMimeType");
+  });
+
   it("throws gemini_http_<status> with a truncated body on non-OK responses", async () => {
     const longBody = "x".repeat(300);
     vi.stubGlobal(

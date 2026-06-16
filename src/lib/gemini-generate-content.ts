@@ -16,6 +16,13 @@ export type GeminiGenerateTextParams = {
   userText: string;
   temperature?: number;
   maxOutputTokens?: number;
+  /**
+   * Forces a structured response, e.g. `"application/json"` (Gemini "JSON
+   * mode"). When the caller needs strict JSON, this is far more reliable than
+   * prompting alone — it removes code fences/prose and prevents the model from
+   * trailing off into unparseable output.
+   */
+  responseMimeType?: string;
   signal?: AbortSignal;
 };
 
@@ -109,7 +116,8 @@ export async function geminiGenerateTextDetailed(
       contents: [{ role: "user", parts: [{ text: params.userText }] }],
       generationConfig: {
         temperature,
-        maxOutputTokens
+        maxOutputTokens,
+        ...(params.responseMimeType ? { responseMimeType: params.responseMimeType } : {})
       }
     })
   });
