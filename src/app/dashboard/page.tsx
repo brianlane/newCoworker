@@ -24,6 +24,9 @@ import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
+import { getVoiceBillingSnapshotForBusiness } from "@/lib/db/voice-usage";
+import { getCalendarMonthUsageTotals } from "@/lib/db/usage";
+import { getTierLimits } from "@/lib/plans/limits";
 
 export const dynamic = "force-dynamic";
 
@@ -60,23 +63,46 @@ export default async function DashboardPage() {
   let latestProvisioning = null;
   let telnyxRoute: Awaited<ReturnType<typeof getTelnyxVoiceRouteForBusiness>> = null;
   let telnyxSettings: Awaited<ReturnType<typeof getBusinessTelnyxSettings>> = null;
-  // Shared AI budget shown on the Plan card; tier-aware cap mirrors Billing.
-  // Non-fatal: a lookup blip must never blank the dashboard.
+  // Voice / SMS / AI usage shown on the Plan card, mirroring the Billing page
+  // sources so the caps and consumption match. All non-fatal: a lookup blip
+  // falls back to the static plan copy rather than blanking the dashboard.
   let chatSpend: Awaited<ReturnType<typeof getChatSpendSnapshotForBusiness>> | null = null;
+  let voiceSnapshot: Awaited<ReturnType<typeof getVoiceBillingSnapshotForBusiness>> | null = null;
+  let smsUsedThisMonth: number | null = null;
   if (business) {
-    [recentActivity, latestProvisioning, telnyxRoute, telnyxSettings, chatSpend] =
-      await Promise.all([
-        getRecentActivity(business.id, 10),
-        getLatestProvisioningStatus(business.id),
-        getTelnyxVoiceRouteForBusiness(business.id),
-        getBusinessTelnyxSettings(business.id),
-        getChatSpendSnapshotForBusiness(
-          business.id,
-          db,
-          (business.tier ?? null) as PlanTier | null
-        ).catch(() => null)
-      ]);
+    [
+      recentActivity,
+      latestProvisioning,
+      telnyxRoute,
+      telnyxSettings,
+      chatSpend,
+      voiceSnapshot,
+      smsUsedThisMonth
+    ] = await Promise.all([
+      getRecentActivity(business.id, 10),
+      getLatestProvisioningStatus(business.id),
+      getTelnyxVoiceRouteForBusiness(business.id),
+      getBusinessTelnyxSettings(business.id),
+      getChatSpendSnapshotForBusiness(
+        business.id,
+        db,
+        (business.tier ?? null) as PlanTier | null
+      ).catch(() => null),
+      getVoiceBillingSnapshotForBusiness(business.id).catch(() => null),
+      getCalendarMonthUsageTotals(business.id, db)
+        .then((t) => t.sms_sent)
+        .catch(() => null)
+    ]);
   }
+
+  // SMS monthly cap for the tier (Infinity for enterprise → show static copy).
+  const smsCap =
+    business?.tier
+      ? getTierLimits(
+          business.tier as PlanTier,
+          business.tier === "enterprise" ? business.enterprise_limits : undefined
+        ).smsPerMonth
+      : null;
 
   // Pull verification status from `customer_profiles` (the single
   // source of truth for "the human pressed the verification link in
@@ -186,15 +212,23 @@ export default async function DashboardPage() {
                 {business.tier.charAt(0).toUpperCase() + business.tier.slice(1)}
               </Badge>
               <p className="mt-2 text-xs text-parchment/50 leading-relaxed">
-                {voiceMinutesLine(
-                  business.tier as PlanTier,
-                  business.tier === "enterprise" ? business.enterprise_limits : undefined
-                )}
+                {voiceSnapshot
+                  ? `Voice ${Math.round(
+                      voiceSnapshot.committedIncludedSeconds / 60
+                    ).toLocaleString()} / ${Math.round(
+                      voiceSnapshot.tierCapSeconds / 60
+                    ).toLocaleString()} min`
+                  : voiceMinutesLine(
+                      business.tier as PlanTier,
+                      business.tier === "enterprise" ? business.enterprise_limits : undefined
+                    )}
                 <br />
-                {smsMonthlyLine(
-                  business.tier as PlanTier,
-                  business.tier === "enterprise" ? business.enterprise_limits : undefined
-                )}
+                {smsUsedThisMonth !== null && smsCap !== null && Number.isFinite(smsCap)
+                  ? `Texts ${smsUsedThisMonth.toLocaleString()} / ${smsCap.toLocaleString()} this month`
+                  : smsMonthlyLine(
+                      business.tier as PlanTier,
+                      business.tier === "enterprise" ? business.enterprise_limits : undefined
+                    )}
                 {chatSpend && (
                   <>
                     <br />
