@@ -23,6 +23,7 @@ import { SafeModeToggle } from "@/components/dashboard/SafeModeToggle";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
+import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
 
 export const dynamic = "force-dynamic";
 
@@ -59,13 +60,22 @@ export default async function DashboardPage() {
   let latestProvisioning = null;
   let telnyxRoute: Awaited<ReturnType<typeof getTelnyxVoiceRouteForBusiness>> = null;
   let telnyxSettings: Awaited<ReturnType<typeof getBusinessTelnyxSettings>> = null;
+  // Shared AI budget shown on the Plan card; tier-aware cap mirrors Billing.
+  // Non-fatal: a lookup blip must never blank the dashboard.
+  let chatSpend: Awaited<ReturnType<typeof getChatSpendSnapshotForBusiness>> | null = null;
   if (business) {
-    [recentActivity, latestProvisioning, telnyxRoute, telnyxSettings] = await Promise.all([
-      getRecentActivity(business.id, 10),
-      getLatestProvisioningStatus(business.id),
-      getTelnyxVoiceRouteForBusiness(business.id),
-      getBusinessTelnyxSettings(business.id)
-    ]);
+    [recentActivity, latestProvisioning, telnyxRoute, telnyxSettings, chatSpend] =
+      await Promise.all([
+        getRecentActivity(business.id, 10),
+        getLatestProvisioningStatus(business.id),
+        getTelnyxVoiceRouteForBusiness(business.id),
+        getBusinessTelnyxSettings(business.id),
+        getChatSpendSnapshotForBusiness(
+          business.id,
+          db,
+          (business.tier ?? null) as PlanTier | null
+        ).catch(() => null)
+      ]);
   }
 
   // Pull verification status from `customer_profiles` (the single
@@ -184,6 +194,14 @@ export default async function DashboardPage() {
                 {smsMonthlyLine(
                   business.tier as PlanTier,
                   business.tier === "enterprise" ? business.enterprise_limits : undefined
+                )}
+                {chatSpend && (
+                  <>
+                    <br />
+                    {`AI budget $${(chatSpend.spendMicros / 1_000_000).toFixed(2)} / $${(
+                      chatSpend.effectiveCapMicros / 1_000_000
+                    ).toFixed(2)}`}
+                  </>
                 )}
               </p>
             </Card>
