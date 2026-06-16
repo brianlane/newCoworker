@@ -20,8 +20,8 @@ compatibility_date = "2025-09-01"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
-# Public URL of the app's inbound webhook.
-APP_INBOUND_URL = "https://app.newcoworker.com/api/email/inbound"
+# Public URL of the app's inbound webhook (the app is served at www.newcoworker.com).
+APP_INBOUND_URL = "https://www.newcoworker.com/api/email/inbound"
 # Mail FROM this domain is dropped without forwarding (loop guard) — the AI
 # mailbox sends from here via Resend, so its own replies must not re-trigger.
 PLATFORM_EMAIL_DOMAIN = "newcoworker.com"
