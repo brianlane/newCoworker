@@ -26,7 +26,9 @@ export type EmailLogSource =
   | "email_trigger"
   | "dashboard_chat"
   | "sms_assistant"
-  | "voice_assistant";
+  | "voice_assistant"
+  | "tenant_mailbox_inbound"
+  | "tenant_mailbox_outbound";
 
 export type EmailLogRow = {
   id: string;
@@ -116,6 +118,48 @@ export async function recordInboundTriggerEmail(
     provider_message_id: input.providerMessageId
   });
   if (error) console.error("recordInboundTriggerEmail", error.message);
+}
+
+export type RecordTenantMailboxInboundInput = {
+  businessId: string;
+  /** The tenant address the mail was sent TO (e.g. amy@newcoworker.com). */
+  toEmail: string;
+  fromEmail: string;
+  subject: string;
+  bodyText: string;
+  /** Flow run this inbound mail enqueued, when it matched a tenant_email flow. */
+  flowId?: string | null;
+  runId?: string | null;
+  providerMessageId?: string | null;
+};
+
+/**
+ * Record an inbound email delivered to the tenant's AI mailbox so it shows on
+ * the dashboard Emails page. Best-effort: a logging failure never blocks the
+ * webhook's 200 (mail is already accepted by Cloudflare at that point).
+ */
+export async function recordTenantMailboxInbound(
+  input: RecordTenantMailboxInboundInput,
+  client?: SupabaseClient
+): Promise<void> {
+  try {
+    const db = client ?? (await createSupabaseServiceClient());
+    const { error } = await db.from("email_log").insert({
+      business_id: input.businessId,
+      direction: "inbound",
+      to_email: input.toEmail,
+      from_email: input.fromEmail,
+      subject: input.subject,
+      body_preview: input.bodyText.slice(0, 500),
+      source: "tenant_mailbox_inbound",
+      run_id: input.runId ?? null,
+      flow_id: input.flowId ?? null,
+      provider_message_id: input.providerMessageId ?? null
+    });
+    if (error) console.error("recordTenantMailboxInbound", error.message);
+  } catch (err) {
+    console.error("recordTenantMailboxInbound", err instanceof Error ? err.message : err);
+  }
 }
 
 export type RecordOutboundAssistantEmailInput = {

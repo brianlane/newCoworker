@@ -546,6 +546,11 @@ export function isExecutableDefinition(def: unknown): def is AiFlowDefinition {
         return false;
       }
       break;
+    case "tenant_email":
+      // The dedicated AI mailbox: push-triggered, so no connectionId — just
+      // the AND-ed condition list (which may be empty = match every email).
+      if (!Array.isArray(trigger.conditions)) return false;
+      break;
     case "schedule": {
       const daily = typeof trigger.time === "string" && typeof trigger.timezone === "string";
       const interval = typeof trigger.everyMinutes === "number";

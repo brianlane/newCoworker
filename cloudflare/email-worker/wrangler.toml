@@ -1,0 +1,29 @@
+# Cloudflare Email Worker for per-tenant AI mailboxes.
+#
+# Catches mail to <tenant>@newcoworker.com (via the Email Routing catch-all
+# rule -> "Send to a Worker") and forwards the parsed message to the app's
+# /api/email/inbound webhook.
+#
+# Deploy:
+#   cd cloudflare/email-worker
+#   npm install
+#   npx wrangler secret put EMAIL_INBOUND_SECRET   # same value as the app env
+#   npx wrangler deploy
+#
+# Then in the Cloudflare dashboard: Email Routing -> Routing rules ->
+# Catch-all -> Action "Send to a Worker" -> select "nc-email-inbound" -> Save.
+# (Explicit rules like contact@/team@ keep taking precedence over the catch-all.)
+
+name = "nc-email-inbound"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+# Public URL of the app's inbound webhook.
+APP_INBOUND_URL = "https://app.newcoworker.com/api/email/inbound"
+# Mail FROM this domain is dropped without forwarding (loop guard) — the AI
+# mailbox sends from here via Resend, so its own replies must not re-trigger.
+PLATFORM_EMAIL_DOMAIN = "newcoworker.com"
+
+# EMAIL_INBOUND_SECRET is a SECRET, set with `wrangler secret put` (never here).

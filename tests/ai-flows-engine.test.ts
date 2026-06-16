@@ -387,6 +387,9 @@ describe("isExecutableDefinition", () => {
         trigger: { channel: "email", connectionId: "abc", conditions: [] }
       })
     ).toBe(true);
+    expect(
+      isExecutableDefinition({ ...valid, trigger: { channel: "tenant_email", conditions: [] } })
+    ).toBe(true);
   });
   it("rejects malformed schedule / email triggers", () => {
     // schedule: neither mode, both modes, or a half-configured daily mode
@@ -414,6 +417,10 @@ describe("isExecutableDefinition", () => {
         ...valid,
         trigger: { channel: "email", connectionId: "abc", conditions: "x" }
       })
+    ).toBe(false);
+    // tenant_email: non-array conditions
+    expect(
+      isExecutableDefinition({ ...valid, trigger: { channel: "tenant_email", conditions: "x" } })
     ).toBe(false);
   });
   it("rejects non-array steps", () => {

@@ -16,7 +16,8 @@ const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
   sms: "Inbound text (SMS)",
   manual: "Manual — Run now button",
   schedule: "On a schedule",
-  email: "Inbound email"
+  email: "Inbound email (your connected inbox)",
+  tenant_email: "Inbound email (AI coworker's mailbox)"
 };
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -95,6 +96,12 @@ function TriggerView({ trigger }: { trigger: FlowTrigger }) {
       {trigger.channel === "email" && (
         <>
           <Row label="Watched mailbox" value={trigger.connectionId} mono />
+          <ConditionsView conditions={trigger.conditions} />
+        </>
+      )}
+      {trigger.channel === "tenant_email" && (
+        <>
+          <Row label="Watched mailbox" value="AI coworker's dedicated mailbox" />
           <ConditionsView conditions={trigger.conditions} />
         </>
       )}

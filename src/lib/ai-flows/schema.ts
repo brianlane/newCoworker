@@ -145,11 +145,24 @@ const emailTriggerSchema = z.object({
   conditions: z.array(conditionSchema).max(20)
 });
 
+/**
+ * Inbound trigger on the AI coworker's OWN dedicated mailbox
+ * (`<tenant>@<platform domain>`). Unlike the `email` channel this is push-based
+ * (Cloudflare Email Routing -> /api/email/inbound) and needs NO `connectionId`:
+ * the mailbox is implicit per business. Same condition semantics over subject +
+ * body, `from_matches` tests the sender.
+ */
+const tenantEmailTriggerSchema = z.object({
+  channel: z.literal("tenant_email"),
+  conditions: z.array(conditionSchema).max(20)
+});
+
 const triggerSchema = z.discriminatedUnion("channel", [
   smsTriggerSchema,
   manualTriggerSchema,
   scheduleTriggerSchema,
-  emailTriggerSchema
+  emailTriggerSchema,
+  tenantEmailTriggerSchema
 ]);
 
 const extractFieldSchema = z.object({
@@ -322,7 +335,7 @@ export type StepCondition = z.infer<typeof whenSchema>;
 export type AiFlowDefinition = z.infer<typeof aiFlowDefinitionSchema>;
 
 /** The trigger channels the builder offers. */
-export const TRIGGER_CHANNELS = ["sms", "manual", "schedule", "email"] as const;
+export const TRIGGER_CHANNELS = ["sms", "manual", "schedule", "email", "tenant_email"] as const;
 
 export class AiFlowValidationError extends Error {
   constructor(
@@ -545,6 +558,12 @@ export function summarizeDefinition(def: AiFlowDefinition): string {
         t.conditions.length === 0
           ? "When any inbound email"
           : `When email matching ${t.conditions.length} condition(s)`;
+      break;
+    case "tenant_email":
+      trigPart =
+        t.conditions.length === 0
+          ? "When the AI mailbox receives any email"
+          : `When AI mailbox email matches ${t.conditions.length} condition(s)`;
       break;
   }
   const stepTypes = def.steps.map((s) => s.type).join(" -> ");

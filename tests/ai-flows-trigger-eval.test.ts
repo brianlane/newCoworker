@@ -6,7 +6,8 @@ import {
   firstUrlInText,
   htmlToText,
   manualTriggerScope,
-  safeRegexTest
+  safeRegexTest,
+  tenantEmailTriggerScope
 } from "@/lib/ai-flows/trigger-eval";
 
 describe("firstUrlInText", () => {
@@ -120,6 +121,39 @@ describe("emailTriggerScope", () => {
       bodyText: "x".repeat(EMAIL_WINDOW_TEXT_MAX + 500)
     });
     expect(scope.windowText.length).toBe(EMAIL_WINDOW_TEXT_MAX);
+    expect("received_at" in scope).toBe(false);
+  });
+});
+
+describe("tenantEmailTriggerScope", () => {
+  it("tags the tenant_email channel and keeps the recipient + provenance", () => {
+    const scope = tenantEmailTriggerScope({
+      id: "m1",
+      fromEmail: "jane@example.com",
+      subject: "New lead",
+      bodyText: "Open https://rfrl.to/abc",
+      toEmail: "amy@newcoworker.com",
+      receivedAt: "2026-06-09T15:00:00Z"
+    });
+    expect(scope).toEqual({
+      channel: "tenant_email",
+      windowText: "New lead\nOpen https://rfrl.to/abc",
+      url: "https://rfrl.to/abc",
+      from: "jane@example.com",
+      subject: "New lead",
+      message_id: "m1",
+      to: "amy@newcoworker.com",
+      received_at: "2026-06-09T15:00:00Z"
+    });
+  });
+  it("omits to and received_at when unknown", () => {
+    const scope = tenantEmailTriggerScope({
+      id: "m2",
+      fromEmail: "a@b.c",
+      subject: "s",
+      bodyText: "body"
+    });
+    expect("to" in scope).toBe(false);
     expect("received_at" in scope).toBe(false);
   });
 });

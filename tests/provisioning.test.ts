@@ -46,6 +46,16 @@ vi.mock("@/lib/email/client", () => ({
   sendOwnerEmail: vi.fn().mockResolvedValue({ id: "email-mock" })
 }));
 
+vi.mock("@/lib/email/tenant-mailbox", () => ({
+  ensureTenantMailbox: vi.fn().mockResolvedValue({
+    business_id: "b",
+    local_part: "biz",
+    personalized: false,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z"
+  })
+}));
+
 vi.mock("@/lib/db/telnyx-routes", () => ({
   getTelnyxVoiceRouteForBusiness: vi.fn().mockResolvedValue(null),
   // tendlc-attach.ts persists per-business 10DLC status via this helper —
@@ -58,6 +68,7 @@ vi.mock("@/lib/db/telnyx-routes", () => ({
 import { updateBusinessStatus } from "@/lib/db/businesses";
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
+import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
 
 function makeVpsStub(
   vpsId = "42",
@@ -355,6 +366,30 @@ describe("provisioning/orchestrate", () => {
     );
     expect(result.vpsId).toBe("42");
     expect(sendOwnerEmail).not.toHaveBeenCalled();
+  });
+
+  it("does not abort the deploy when AI-mailbox reservation fails (Error and non-Error)", async () => {
+    vi.mocked(ensureTenantMailbox).mockRejectedValueOnce(new Error("mailbox db down"));
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-mailbox-fail", tier: "starter" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(result.vpsId).toBe("42");
+    expect(ensureTenantMailbox).toHaveBeenCalledWith("biz-mailbox-fail");
+
+    // Non-Error rejection exercises the String(err) fallback branch.
+    vi.mocked(ensureTenantMailbox).mockRejectedValueOnce("mailbox weird");
+    const result2 = await orchestrateProvisioning(
+      { businessId: "biz-mailbox-fail-2", tier: "starter" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(result2.vpsId).toBe("42");
   });
 
   it("deploy command forwards voice-bridge env when set", async () => {

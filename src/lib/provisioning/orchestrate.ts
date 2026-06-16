@@ -18,6 +18,7 @@ import {
 } from "@/lib/telnyx/platform-defaults";
 import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
 import { sendOwnerEmail } from "@/lib/email/client";
+import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
 import { buildProvisioningLiveEmail } from "@/lib/email/templates/provisioning-live";
 import { updateBusinessStatus, getBusiness } from "@/lib/db/businesses";
 import { buildComplianceSystemPrompt } from "@/lib/compliance/fha";
@@ -638,6 +639,26 @@ async function runOrchestrator(
     message: "Business config written to Supabase",
     source: "orchestrator"
   });
+
+  // Reserve the AI coworker's dedicated mailbox (default = the business UUID;
+  // standard/enterprise can personalize later from Settings). Idempotent and
+  // best-effort: it's just a DB row (Cloudflare Email Routing's catch-all
+  // already routes every address), so a transient failure here must never
+  // abort the deploy — the dashboard's mailbox route also self-heals via
+  // ensureTenantMailbox on first read.
+  try {
+    const mailbox = await ensureTenantMailbox(businessId);
+    await recordProvisioningProgress({
+      businessId,
+      phase: "mailbox_reserved",
+      percent: 26,
+      message: `AI mailbox reserved (${mailbox.local_part})`,
+      source: "orchestrator"
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn("Tenant mailbox reservation failed (non-fatal)", { businessId, error: msg });
+  }
 
   await recordProvisioningProgress({
     businessId,
