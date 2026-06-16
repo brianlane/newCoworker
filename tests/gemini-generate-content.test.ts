@@ -214,6 +214,56 @@ describe("geminiGenerateText", () => {
     });
   });
 
+  it("forwards thinkingLevel into generationConfig.thinkingConfig when provided", async () => {
+    const fetchStub = vi.fn(
+      async (): Promise<Response> =>
+        new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "{}" }] } }] }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+    );
+    vi.stubGlobal("fetch", fetchStub);
+
+    await geminiGenerateText({
+      apiKey: "k",
+      model: "gemini-3-flash-preview",
+      systemInstruction: "s",
+      userText: "u",
+      responseMimeType: "application/json",
+      thinkingLevel: "low"
+    });
+
+    const tup = fetchStub.mock.calls.at(0) as FetchArgs | undefined;
+    expect(tup).toBeDefined();
+    const [, init] = tup!;
+    const parsed = JSON.parse(String(init?.body ?? "{}"));
+    expect(parsed.generationConfig.thinkingConfig).toEqual({ thinkingLevel: "low" });
+  });
+
+  it("omits thinkingConfig from generationConfig when thinkingLevel not provided", async () => {
+    const fetchStub = vi.fn(
+      async (): Promise<Response> =>
+        new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "ok" }] } }] }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+    );
+    vi.stubGlobal("fetch", fetchStub);
+
+    await geminiGenerateText({
+      apiKey: "k",
+      model: "m",
+      systemInstruction: "s",
+      userText: "u"
+    });
+
+    const tup = fetchStub.mock.calls.at(0) as FetchArgs | undefined;
+    expect(tup).toBeDefined();
+    const [, init] = tup!;
+    const parsed = JSON.parse(String(init?.body ?? "{}"));
+    expect(parsed.generationConfig).not.toHaveProperty("thinkingConfig");
+  });
+
   it("omits responseMimeType from generationConfig when not provided", async () => {
     const fetchStub = vi.fn(
       async (): Promise<Response> =>
