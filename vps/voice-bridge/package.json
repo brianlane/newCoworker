@@ -11,14 +11,14 @@
   },
   "dependencies": {
     "@google/genai": "^1.50.1",
-    "@supabase/supabase-js": "^2.45.0",
+    "@supabase/supabase-js": "^2.108.2",
     "dotenv": "^16.6.1",
-    "ws": "^8.18.0"
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/ws": "^8.5.13",
-    "tsx": "^4.19.2",
+    "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   }
 }
