@@ -7,7 +7,8 @@
 # Deploy:
 #   cd cloudflare/email-worker
 #   npm install
-#   npx wrangler secret put EMAIL_INBOUND_SECRET   # same value as the app env
+#   npx wrangler secret put EMAIL_INBOUND_SECRET        # same value as the app env
+#   npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY   # for attachment uploads
 #   npx wrangler deploy
 #
 # Then in the Cloudflare dashboard: Email Routing -> Routing rules ->
@@ -25,5 +26,12 @@ APP_INBOUND_URL = "https://www.newcoworker.com/api/email/inbound"
 # Mail FROM this domain is dropped without forwarding (loop guard) — the AI
 # mailbox sends from here via Resend, so its own replies must not re-trigger.
 PLATFORM_EMAIL_DOMAIN = "newcoworker.com"
+# Supabase project URL + private bucket the worker uploads inbound attachments
+# to (via the Storage REST API). Bucket created by migration
+# 20260626130000_email_attachments.sql.
+SUPABASE_URL = "https://glwmorjxzkzpcfffwvkk.supabase.co"
+ATTACHMENTS_BUCKET = "email-attachments"
 
-# EMAIL_INBOUND_SECRET is a SECRET, set with `wrangler secret put` (never here).
+# SECRETS (set with `wrangler secret put`, never here):
+#   EMAIL_INBOUND_SECRET       — bearer for the app webhook
+#   SUPABASE_SERVICE_ROLE_KEY  — authorizes attachment uploads to Storage

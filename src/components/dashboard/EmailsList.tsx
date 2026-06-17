@@ -61,10 +61,23 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+type Attachment = {
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  url: string | null;
+};
+
 type BodyState =
   | { status: "loading" }
-  | { status: "loaded"; bodyFull: string | null; bodyPreview: string | null }
+  | { status: "loaded"; bodyFull: string | null; bodyPreview: string | null; attachments: Attachment[] }
   | { status: "error" };
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 /**
  * Reading pane. Mounted with a `key={row.id}` so it remounts (fresh state) per
@@ -93,12 +106,17 @@ function ReadingPane({
       .then(async (res) => {
         if (!res.ok) throw new Error(`status ${res.status}`);
         const json = (await res.json()) as {
-          data?: { body_full: string | null; body_preview: string | null };
+          data?: {
+            body_full: string | null;
+            body_preview: string | null;
+            attachments?: Attachment[];
+          };
         };
         setState({
           status: "loaded",
           bodyFull: json.data?.body_full ?? null,
-          bodyPreview: json.data?.body_preview ?? null
+          bodyPreview: json.data?.body_preview ?? null,
+          attachments: json.data?.attachments ?? []
         });
       })
       .catch((err: unknown) => {
@@ -175,6 +193,49 @@ function ReadingPane({
           </p>
         )}
       </div>
+
+      {state.status === "loaded" && state.attachments.length > 0 && (
+        <div className="mb-4">
+          <span className="block text-[11px] uppercase tracking-wide text-parchment/40 mb-1.5">
+            {state.attachments.length} attachment{state.attachments.length === 1 ? "" : "s"}
+          </span>
+          <ul className="space-y-1.5">
+            {state.attachments.map((a, i) => {
+              const inner = (
+                <span className="flex items-center gap-2 min-w-0">
+                  <span className="text-parchment/40">📎</span>
+                  <span className="truncate text-parchment/90">{a.filename}</span>
+                  <span className="shrink-0 text-[10px] text-parchment/40">
+                    {formatBytes(a.size_bytes)}
+                  </span>
+                </span>
+              );
+              return (
+                <li key={`${a.filename}-${i}`}>
+                  {a.url ? (
+                    <a
+                      href={a.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center justify-between gap-2 rounded-md border border-parchment/10 bg-deep-ink/40 px-3 py-2 text-sm hover:border-signal-teal/40 hover:bg-signal-teal/5 transition-colors"
+                    >
+                      {inner}
+                      <span className="shrink-0 text-[10px] uppercase tracking-wide text-signal-teal">
+                        Download
+                      </span>
+                    </a>
+                  ) : (
+                    <div className="flex items-center justify-between gap-2 rounded-md border border-parchment/10 bg-deep-ink/40 px-3 py-2 text-sm opacity-60">
+                      {inner}
+                      <span className="shrink-0 text-[10px] text-parchment/40">Unavailable</span>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
 
       {(row.provider_message_id || row.flow_id || row.run_id) && (
         <div className="pt-3 border-t border-parchment/10">

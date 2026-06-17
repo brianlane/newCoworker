@@ -91,11 +91,20 @@ describe("listEmailLog", () => {
 });
 
 describe("getEmailBody", () => {
-  it("returns the body scoped by business + id", async () => {
-    const c = singleChain({ data: { body_preview: "hi", body_full: "hi there" }, error: null });
+  it("returns the body + attachments scoped by business + id", async () => {
+    const att = {
+      filename: "quote.pdf",
+      mime_type: "application/pdf",
+      size_bytes: 1234,
+      storage_path: "inbound/abc/0-quote.pdf"
+    };
+    const c = singleChain({
+      data: { body_preview: "hi", body_full: "hi there", attachments: [att] },
+      error: null
+    });
     const body = await getEmailBody("biz", "e1", makeDb(c as never) as never);
-    expect(body).toEqual({ body_preview: "hi", body_full: "hi there" });
-    expect(c.select).toHaveBeenCalledWith("body_preview, body_full");
+    expect(body).toEqual({ body_preview: "hi", body_full: "hi there", attachments: [att] });
+    expect(c.select).toHaveBeenCalledWith("body_preview, body_full, attachments");
     expect(c.eqBiz).toHaveBeenCalledWith("business_id", "biz");
     expect(c.eqId).toHaveBeenCalledWith("id", "e1");
   });
@@ -112,10 +121,14 @@ describe("getEmailBody", () => {
     );
   });
 
-  it("uses the default service client when none is injected", async () => {
+  it("defaults attachments to [] and uses the default client when none is injected", async () => {
     const c = singleChain({ data: { body_preview: "p", body_full: null }, error: null });
     defaultClientSpy.mockResolvedValueOnce(makeDb(c as never));
-    expect(await getEmailBody("biz", "e1")).toEqual({ body_preview: "p", body_full: null });
+    expect(await getEmailBody("biz", "e1")).toEqual({
+      body_preview: "p",
+      body_full: null,
+      attachments: []
+    });
   });
 });
 

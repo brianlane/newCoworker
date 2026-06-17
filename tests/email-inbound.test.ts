@@ -98,6 +98,33 @@ describe("processInboundTenantEmail", () => {
     );
   });
 
+  it("maps attachment metadata onto the inbound row", async () => {
+    resolveBusinessByAddress.mockResolvedValue("biz-1");
+    const db = flowsDb({ data: [], error: null });
+    await processInboundTenantEmail(
+      {
+        ...PAYLOAD,
+        attachments: [
+          { filename: "quote.pdf", mimeType: "application/pdf", size: 2048, path: "inbound/x/0-quote.pdf" }
+        ]
+      },
+      db as never
+    );
+    expect(recordTenantMailboxInbound).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: [
+          {
+            filename: "quote.pdf",
+            mime_type: "application/pdf",
+            size_bytes: 2048,
+            storage_path: "inbound/x/0-quote.pdf"
+          }
+        ]
+      }),
+      db
+    );
+  });
+
   it("treats a duplicate (null enqueue) as already-handled and logs once", async () => {
     resolveBusinessByAddress.mockResolvedValue("biz-1");
     const db = flowsDb({

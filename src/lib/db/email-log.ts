@@ -30,6 +30,18 @@ export type EmailLogSource =
   | "tenant_mailbox_inbound"
   | "tenant_mailbox_outbound";
 
+/**
+ * Attachment metadata as stored inline on email_log.attachments. `storage_path`
+ * is the object key in the private `email-attachments` bucket; it stays
+ * server-side (the dashboard fetches signed URLs, never the raw path).
+ */
+export type StoredAttachment = {
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  storage_path: string;
+};
+
 export type EmailLogRow = {
   id: string;
   business_id: string;
@@ -94,13 +106,15 @@ export type EmailLogBody = {
   body_preview: string | null;
   /** Full plain-text body; null on rows predating full-body capture. */
   body_full: string | null;
+  /** Stored attachment metadata (storage paths resolved to signed URLs upstream). */
+  attachments: StoredAttachment[];
 };
 
 /**
- * Full body for a single email, scoped by business so one tenant can never
- * read another's mail. Loaded on demand when the reading pane opens (the list
- * query omits body_full). Returns null when the id doesn't belong to the
- * business.
+ * Full body + attachment metadata for a single email, scoped by business so one
+ * tenant can never read another's mail. Loaded on demand when the reading pane
+ * opens (the list query omits these). Returns null when the id doesn't belong
+ * to the business.
  */
 export async function getEmailBody(
   businessId: string,
@@ -110,12 +124,18 @@ export async function getEmailBody(
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("email_log")
-    .select("body_preview, body_full")
+    .select("body_preview, body_full, attachments")
     .eq("business_id", businessId)
     .eq("id", id)
     .maybeSingle();
   if (error) throw new Error(`getEmailBody: ${error.message}`);
-  return (data as EmailLogBody | null) ?? null;
+  if (!data) return null;
+  const row = data as { body_preview: string | null; body_full: string | null; attachments: StoredAttachment[] | null };
+  return {
+    body_preview: row.body_preview,
+    body_full: row.body_full,
+    attachments: row.attachments ?? []
+  };
 }
 
 export type RecordInboundTriggerEmailInput = {
@@ -164,6 +184,8 @@ export type RecordTenantMailboxInboundInput = {
   flowId?: string | null;
   runId?: string | null;
   providerMessageId?: string | null;
+  /** Attachment metadata (bytes already uploaded to the bucket by the worker). */
+  attachments?: StoredAttachment[];
 };
 
 /**
@@ -185,6 +207,7 @@ export async function recordTenantMailboxInbound(
       subject: input.subject,
       body_preview: input.bodyText.slice(0, 500),
       body_full: input.bodyText,
+      attachments: input.attachments ?? [],
       source: "tenant_mailbox_inbound",
       run_id: input.runId ?? null,
       flow_id: input.flowId ?? null,

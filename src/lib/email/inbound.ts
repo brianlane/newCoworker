@@ -35,6 +35,11 @@ export type InboundEmailPayload = {
   text: string;
   /** Provider/RFC Message-Id — drives the run dedupe key. */
   messageId: string;
+  /**
+   * Attachments the worker already uploaded to the email-attachments bucket.
+   * `path` is the object key; `size` is bytes. Absent when the mail had none.
+   */
+  attachments?: { filename: string; mimeType: string; size: number; path: string }[];
 };
 
 export type InboundEmailResult =
@@ -116,6 +121,12 @@ export async function processInboundTenantEmail(
 
   // Always surface the inbound mail on the Emails page, even when nothing
   // matched — the owner should see what their AI mailbox received.
+  const attachments = (payload.attachments ?? []).map((a) => ({
+    filename: a.filename,
+    mime_type: a.mimeType,
+    size_bytes: a.size,
+    storage_path: a.path
+  }));
   await recordTenantMailboxInbound(
     {
       businessId,
@@ -123,6 +134,7 @@ export async function processInboundTenantEmail(
       fromEmail,
       subject: payload.subject,
       bodyText: payload.text,
+      attachments,
       flowId: firstFlowId,
       runId: firstRunId,
       providerMessageId: payload.messageId
