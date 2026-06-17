@@ -1280,14 +1280,17 @@ function StepFields({
         </label>
         {!step.replyToGroup && (
           <>
-            {!step.toAgentName && (
+            {/* Recipient is phone OR team-member, never both. Hide the other
+                control once one is chosen — but if BOTH are somehow set (invalid
+                imported/legacy data) keep both visible so it can be corrected. */}
+            {(!step.toAgentName || Boolean(step.to)) && (
               <Field
                 label="Recipient (phone or {{vars.x}})"
                 value={step.to ?? ""}
                 onChange={(v) => patchStep(index, { to: v.trim() ? v : undefined })}
               />
             )}
-            {!step.to && (
+            {(!step.to || Boolean(step.toAgentName)) && (
               <Field
                 label="Or send to a team member by name (resolves their phone; body can use {{agent.name}})"
                 value={step.toAgentName ?? ""}
