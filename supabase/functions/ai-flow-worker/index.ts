@@ -100,6 +100,15 @@ const ROWBOAT_ROUTE_TIMEOUT_MS = Number(
 const RENDER_FETCH_TIMEOUT_MS = Number(
   Deno.env.get("AIFLOW_RENDER_FETCH_TIMEOUT_MS") ?? "120000"
 );
+// A forEachLink browse runs up to MAX_FOREACH_ITEMS (render-side, default 25)
+// sequential `networkidle` navigations plus per-item actions inside ONE HTTP
+// response, so the single-page budget would abort the worker fetch mid-loop and
+// leave the Clever portal partially updated. Give it a much larger,
+// independently configurable budget (default 10 min). The render service and
+// any tunnel in front of it must allow a response this long too.
+const RENDER_FOREACH_FETCH_TIMEOUT_MS = Number(
+  Deno.env.get("AIFLOW_RENDER_FOREACH_FETCH_TIMEOUT_MS") ?? "600000"
+);
 const MAX_REDIRECTS = 5;
 
 // Storage bucket (private) for browse_extract screenshots; the worker writes
@@ -898,7 +907,10 @@ async function browseActionStep(
   }
 
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), RENDER_FETCH_TIMEOUT_MS);
+  const fetchTimeoutMs = action.forEachLink
+    ? RENDER_FOREACH_FETCH_TIMEOUT_MS
+    : RENDER_FETCH_TIMEOUT_MS;
+  const timer = setTimeout(() => ctrl.abort(), fetchTimeoutMs);
   let body: unknown;
   try {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
