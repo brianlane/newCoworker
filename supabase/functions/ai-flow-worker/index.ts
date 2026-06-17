@@ -967,11 +967,38 @@ async function browseActionStep(
   // path an earlier browse_extract stored for later attachScreenshot steps.
   if (screenshotPath) scope.vars.screenshot_path = screenshotPath;
 
+  // Same-pass extraction: when the step asked for `fields`, read them out of the
+  // page text the render service returned AFTER the actions (e.g. the accepted
+  // lead's name/phone/email), reusing the browse_extract extraction + phone
+  // fallback so no second navigation is needed.
+  let extractedVars: Record<string, string> | undefined;
+  if (action.fields && action.fields.length > 0) {
+    const pageText = parsed.text || htmlToText(parsed.html);
+    let extracted: Record<string, string>;
+    try {
+      extracted = await extractFields(supabase, run, action.fields, pageText);
+    } catch (e) {
+      if (e instanceof SpendCapError) return { kind: "fail", error: `browse_action: ${e.message}` };
+      throw e;
+    }
+    const out: Record<string, string> = {};
+    for (const f of action.fields) {
+      let val = extracted[f.name] ?? "";
+      if (!val && /phone|mobile|cell|tel/i.test(f.name)) {
+        val = extractPhones(pageText)[0] ?? "";
+      }
+      out[f.name] = val;
+    }
+    Object.assign(scope.vars, out);
+    extractedVars = out;
+  }
+
   return {
     kind: "ok",
     result: {
       finalUrl: parsed.finalUrl,
       actionsCompleted: parsed.actionsCompleted,
+      ...(extractedVars ? { vars: extractedVars } : {}),
       ...(screenshotPath ? { screenshot_path: screenshotPath } : {})
     }
   };
@@ -1323,6 +1350,13 @@ async function sendSmsStep(
       };
     }
   }
+  // Group reply: one group MMS to every other participant in the inbound thread
+  // (the planner already excluded our own DID). Diverges enough from the 1:1
+  // path — recipient list, per-recipient opt-out, array `to` — to live on its
+  // own.
+  if (action.recipients && action.recipients.length > 0) {
+    return await sendGroupSmsStep(supabase, run, index, scope, action);
+  }
   if (await isRecipientOptedOut(supabase, run.business_id, action.to)) {
     return { kind: "ok", skipped: true, result: { skipped: "recipient_opted_out", to: action.to } };
   }
@@ -1380,6 +1414,95 @@ async function sendSmsStep(
     });
     await recordLeadCustomerProfile(supabase, run, scope, action.to);
     return { kind: "ok", result: { to: action.to, messageId } };
+  } catch (e) {
+    await release();
+    throw e;
+  }
+}
+
+/**
+ * send_sms with replyToGroup: post one group MMS into the inbound thread. The
+ * planner supplied every participant except our own DID; here we additionally
+ * drop our own number (defensive) and any opted-out recipient, reserve a SINGLE
+ * outbound slot (one Telnyx message, group-fanned), and send `to` as an array.
+ */
+async function sendGroupSmsStep(
+  supabase: Supabase,
+  run: RunRow,
+  index: number,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "send_sms" }>
+): Promise<StepOutcome> {
+  const cfg = await messagingConfig(supabase, run.business_id);
+  if (!cfg) return { kind: "fail", error: "send_sms: Telnyx messaging is not configured" };
+
+  const own = (cfg.from ?? "").trim();
+  const seen = new Set<string>();
+  const recipients: string[] = [];
+  for (const r of action.recipients ?? []) {
+    const n = r.trim();
+    if (!n || n === own || seen.has(n)) continue;
+    seen.add(n);
+    if (await isRecipientOptedOut(supabase, run.business_id, n)) continue;
+    recipients.push(n);
+  }
+  if (recipients.length === 0) {
+    return { kind: "ok", skipped: true, result: { skipped: "group_no_recipients" } };
+  }
+
+  const text = prepareSmsBody(action.body, { requireStop: true });
+  const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
+    "try_reserve_sms_outbound_slot",
+    { p_business_id: run.business_id }
+  );
+  if (reserveErr) throw new Error(`reserve slot: ${reserveErr.message}`);
+  const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string } | null;
+  if (!reserve?.ok) {
+    if (reserve?.reason === "monthly_sms_limit") {
+      await alertSmsCapOnce(supabase, run.business_id, "ai_flow_send_sms");
+    }
+    return { kind: "ok", skipped: true, result: { skipped: reserve?.reason ?? "quota" } };
+  }
+
+  const release = async () => {
+    const { error } = await supabase.rpc("release_sms_outbound_slot", {
+      p_business_id: run.business_id,
+      p_refund_bonus: reserve.source === "bonus"
+    });
+    if (error) console.error("release_sms_outbound_slot", error);
+  };
+
+  try {
+    const send = await telnyxSendSms({
+      apiKey: cfg.apiKey,
+      messagingProfileId: cfg.profile,
+      fromE164: cfg.from,
+      toE164: recipients,
+      text,
+      idempotencyKey: `aiflow:${run.id}:${index}`
+    });
+    if (!send.ok) {
+      await release();
+      throw new Error(`telnyx ${send.status}: ${send.body.slice(0, 200)}`);
+    }
+    let messageId: string | null = null;
+    try {
+      messageId = (JSON.parse(send.body) as { data?: { id?: string } })?.data?.id ?? null;
+    } catch {
+      messageId = null;
+    }
+    appendActionTaken(scope, `replied in the group text to ${recipients.length} recipient(s)`);
+    // Log one outbound row per recipient so each shows up in Text history.
+    for (const to of recipients) {
+      await logOutboundSms(supabase, run, {
+        to,
+        from: cfg.from || null,
+        body: text,
+        source: "ai_flow",
+        telnyxMessageId: messageId
+      });
+    }
+    return { kind: "ok", result: { to: recipients, group: true, messageId } };
   } catch (e) {
     await release();
     throw e;

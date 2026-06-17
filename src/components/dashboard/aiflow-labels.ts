@@ -60,5 +60,6 @@ export const BROWSE_ACTION_LABELS: Record<BrowseActionKind, string> = {
   click_text: "Click a button or link by its text",
   click_selector: "Click an element (CSS selector)",
   fill_selector: "Type into a field (CSS selector)",
-  fill_placeholder: "Type into a field (by its placeholder)"
+  fill_placeholder: "Type into a field (by its placeholder)",
+  click_text_while_present: "Keep clicking a button until it's gone (e.g. \"Next\")"
 };

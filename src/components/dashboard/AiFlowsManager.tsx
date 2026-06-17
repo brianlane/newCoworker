@@ -211,6 +211,7 @@ function varsProducedByStep(step: FlowStep): string[] {
   if (step.type === "extract_url") return [step.saveAs];
   if (step.type === "browse_extract") return step.fields.map((f) => f.name).filter(Boolean);
   if (step.type === "extract_text") return step.fields.map((f) => f.name).filter(Boolean);
+  if (step.type === "browse_action") return (step.fields ?? []).map((f) => f.name).filter(Boolean);
   if (step.type === "http_call" && step.saveAs) return [step.saveAs];
   return [];
 }
@@ -1264,7 +1265,23 @@ function StepFields({
     const qh = step.quietHours;
     return (
       <div className="space-y-2">
-        <Field label="Recipient" value={step.to} onChange={(v) => patchStep(index, { to: v })} />
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={Boolean(step.replyToGroup)}
+            onChange={(ev) =>
+              patchStep(index, { replyToGroup: ev.target.checked ? true : undefined })
+            }
+          />
+          Reply into the group text (everyone on the thread except your number)
+        </label>
+        {!step.replyToGroup && (
+          <Field
+            label="Recipient"
+            value={step.to ?? ""}
+            onChange={(v) => patchStep(index, { to: v })}
+          />
+        )}
         <Field label="Message" value={step.body} onChange={(v) => patchStep(index, { body: v })} textarea />
         <div className="rounded-md border border-parchment/10 bg-deep-ink/30 px-3 py-2 space-y-2">
           <label className="flex items-center gap-2 text-xs text-parchment/70">

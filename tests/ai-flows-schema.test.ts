@@ -875,3 +875,79 @@ describe("trigger channels", () => {
     expect(validateDefinitionSemantics(def)).toEqual([]);
   });
 });
+
+describe("Clever engine: browse_action same-pass extraction + click_text_while_present", () => {
+  it("accepts a browse_action with click_text_while_present and registers extracted fields", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [{ type: "contains", value: "Clever referral" }] },
+      steps: [
+        { id: "u", type: "extract_url", saveAs: "lead_url" },
+        {
+          id: "acc",
+          type: "browse_action",
+          urlVar: "lead_url",
+          auth: { integrationLabel: "Clever" },
+          actions: [{ kind: "click_text_while_present", target: "Next" }],
+          fields: [{ name: "lead_name" }, { name: "lead_phone" }],
+          screenshot: true
+        },
+        // A LATER step may reference the vars the browse_action extracted.
+        { id: "e", type: "send_email", to: "amy@amylaidlaw.com", subject: "{{vars.lead_name}} QT, Clever", body: "{{vars.lead_phone}}", attachScreenshot: true }
+      ]
+    });
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("flags a {{vars.x}} referencing a browse_action field BEFORE it runs", () => {
+    const def = baseDef();
+    def.steps = [
+      { id: "early", type: "notify_owner", message: "name is {{vars.lead_name}}" },
+      {
+        id: "acc",
+        type: "browse_action",
+        urlVar: "lead_url",
+        actions: [{ kind: "click_text", target: "Accept" }],
+        fields: [{ name: "lead_name" }]
+      }
+    ] as AiFlowDefinition["steps"];
+    // urlVar lead_url is also unproduced here, so expect the var-scope issue among the list.
+    const issues = validateDefinitionSemantics(def);
+    expect(issues.some((i) => i.includes("{{vars.lead_name}} before any step produces it"))).toBe(
+      true
+    );
+  });
+});
+
+describe("Clever engine: send_sms replyToGroup", () => {
+  it("accepts a replyToGroup send_sms with no `to`", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [{ type: "contains", value: "introduce you to Amy" }] },
+      steps: [
+        { id: "t", type: "extract_text", fields: [{ name: "seller_first_name" }] },
+        { id: "g", type: "send_sms", replyToGroup: true, body: "Hi {{vars.seller_first_name}}!" }
+      ]
+    });
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects a send_sms with neither `to` nor replyToGroup", () => {
+    const def = baseDef();
+    def.steps = [{ id: "g", type: "send_sms", body: "hi" }] as AiFlowDefinition["steps"];
+    expect(validateDefinitionSemantics(def)).toEqual([
+      'Step "g" sends a text but has no recipient — set "to" or turn on replyToGroup.'
+    ]);
+  });
+
+  it("rejects replyToGroup on a non-SMS-triggered flow", () => {
+    const def: AiFlowDefinition = {
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [{ id: "g", type: "send_sms", replyToGroup: true, body: "hi" }]
+    };
+    expect(validateDefinitionSemantics(def)).toContain(
+      'Step "g" replies to a group thread, which only works on an SMS-triggered flow.'
+    );
+  });
+});

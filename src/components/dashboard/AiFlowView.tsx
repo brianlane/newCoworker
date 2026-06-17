@@ -178,7 +178,11 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
     case "send_sms":
       return (
         <>
-          <Row label="Recipient" value={step.to} mono />
+          <Row
+            label="Recipient"
+            value={step.replyToGroup ? "Everyone in the group text (except your number)" : (step.to ?? "")}
+            mono={!step.replyToGroup}
+          />
           <Row label="Message" value={step.body} />
           {step.quietHours && (
             <div className="rounded-md border border-parchment/10 bg-deep-ink/30 p-3 space-y-2">

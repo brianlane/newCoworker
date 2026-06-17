@@ -33,10 +33,13 @@
  * login form and never clicks lead-page buttons. ACTION mode (the worker's
  * browse_action step) performs an owner-authored ordered click/fill sequence —
  * e.g. posting a "still trying to contact" update on a lead timeline — and
- * returns { finalUrl, actionsCompleted } (+ screenshotBase64 when asked). Each
- * action is { kind: click_text | click_selector | fill_selector |
- * fill_placeholder, target, value? }; the FIRST failing action aborts with
- * { error: "action_failed", detail, actionsCompleted }.
+ * returns { finalUrl, actionsCompleted, text, html } (+ screenshotBase64 when
+ * asked) so the worker can extract fields in the same pass. Each action is
+ * { kind: click_text | click_selector | fill_selector | fill_placeholder |
+ * click_text_while_present, target, value? }; the FIRST failing action aborts
+ * with { error: "action_failed", detail, actionsCompleted }.
+ * `click_text_while_present` clicks `target` until it's gone (bounded) and
+ * treats zero matches as success.
  *
  * SSRF guard mirrors the worker's normalizeBrowseUrl: only http(s), no
  * localhost / private IPv4 / IPv6-literal / *.internal / metadata hosts. Every
@@ -298,7 +301,20 @@ const SCREENSHOT_QUALITY = Number(process.env.AIFLOW_SCREENSHOT_QUALITY ?? 60);
 // (mirrors the worker-side schema cap so a hand-crafted request can't loop).
 const ACTION_TIMEOUT_MS = Number(process.env.AIFLOW_ACTION_TIMEOUT_MS ?? 10_000);
 const MAX_ACTIONS = 15;
-const ACTION_KINDS = new Set(["click_text", "click_selector", "fill_selector", "fill_placeholder"]);
+// Upper bound on click_text_while_present iterations so a perpetually-present
+// target (or a re-rendering label) can never spin forever.
+const MAX_WHILE_PRESENT_CLICKS = Number(process.env.AIFLOW_MAX_WHILE_PRESENT_CLICKS ?? 10);
+// Shorter per-probe timeout for the "is the target still there?" check: once
+// the button is gone we want to fall through quickly, not wait the full
+// ACTION_TIMEOUT_MS for a locator that will never resolve.
+const WHILE_PRESENT_PROBE_MS = Number(process.env.AIFLOW_WHILE_PRESENT_PROBE_MS ?? 2_000);
+const ACTION_KINDS = new Set([
+  "click_text",
+  "click_selector",
+  "fill_selector",
+  "fill_placeholder",
+  "click_text_while_present"
+]);
 
 /** Normalize + validate the request's actions array, or null when malformed. */
 function parseActions(raw) {
@@ -327,6 +343,23 @@ async function performActions(page, actions) {
     try {
       if (a.kind === "click_text") {
         await page.getByText(a.target, { exact: false }).first().click({ timeout: ACTION_TIMEOUT_MS });
+      } else if (a.kind === "click_text_while_present") {
+        // Wizard-style "Next" loop: click the target as long as it is visible,
+        // bounded by MAX_WHILE_PRESENT_CLICKS. Zero matches is SUCCESS (the page
+        // is already past the step) — only an unexpected error fails the action.
+        for (let i = 0; i < MAX_WHILE_PRESENT_CLICKS; i++) {
+          const locator = page.getByText(a.target, { exact: false }).first();
+          let present = false;
+          try {
+            await locator.waitFor({ state: "visible", timeout: WHILE_PRESENT_PROBE_MS });
+            present = true;
+          } catch {
+            present = false;
+          }
+          if (!present) break;
+          await locator.click({ timeout: ACTION_TIMEOUT_MS });
+          await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
+        }
       } else if (a.kind === "click_selector") {
         await page.locator(a.target).first().click({ timeout: ACTION_TIMEOUT_MS });
       } else if (a.kind === "fill_selector") {
@@ -389,10 +422,24 @@ async function respondWithActions(page, res, actions, wantScreenshot) {
       actionsCompleted: acted.completed
     });
   }
+  // Return the post-action page text/html alongside the count so the worker can
+  // extract lead fields in the SAME credentialed pass that accepted the lead
+  // (no second navigation). Best-effort: a read failure still reports success.
+  let text = "";
+  let html = "";
+  try {
+    html = await page.content();
+    text = await page.evaluate(() => document.body?.innerText ?? "");
+  } catch {
+    text = "";
+    html = "";
+  }
   const screenshotBase64 = wantScreenshot ? await captureScreenshot(page) : null;
   return res.json({
     finalUrl: page.url(),
     actionsCompleted: acted.completed,
+    text,
+    html,
     ...(screenshotBase64 ? { screenshotBase64 } : {})
   });
 }

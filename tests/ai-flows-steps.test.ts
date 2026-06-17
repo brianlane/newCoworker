@@ -131,6 +131,13 @@ describe("planStep: send_sms", () => {
       error: "send_sms: recipient is empty after templating"
     });
   });
+  it("fails when `to` is absent and replyToGroup is off", () => {
+    const noTo: FlowStep = { id: "x", type: "send_sms", body: "hi" };
+    expect(planStep(noTo, {})).toEqual({
+      ok: false,
+      error: "send_sms: recipient is empty after templating"
+    });
+  });
   it("fails when the body resolves empty", () => {
     const blankBody: FlowStep = { id: "x", type: "send_sms", to: "+16026866672", body: "{{vars.msg}}" };
     expect(planStep(blankBody, { vars: {} })).toEqual({
@@ -465,6 +472,101 @@ describe("planStep: browse_action", () => {
     expect(planStep({ ...base, actions: [] }, { vars: { lead_url: "https://rfrl.to/x" } })).toEqual({
       ok: false,
       error: "browse_action: no actions configured"
+    });
+  });
+  it("passes a click_text_while_present action through unchanged", () => {
+    const wizard: FlowStep = {
+      id: "u",
+      type: "browse_action",
+      urlVar: "lead_url",
+      actions: [{ kind: "click_text_while_present", target: "Next" }]
+    };
+    const r = planStep(wizard, { vars: { lead_url: "https://listwithclever.com/x" } });
+    expect(r.ok && r.action.kind === "browse_action" && r.action.actions).toEqual([
+      { kind: "click_text_while_present", target: "Next", value: "" }
+    ]);
+  });
+  it("carries same-pass extraction fields through (1b)", () => {
+    const withFields: FlowStep = {
+      ...base,
+      fields: [{ name: "lead_name" }, { name: "lead_phone" }]
+    };
+    const r = planStep(withFields, { vars: { lead_url: "https://listwithclever.com/x" } });
+    expect(r.ok && r.action.kind === "browse_action" && r.action.fields).toEqual([
+      { name: "lead_name" },
+      { name: "lead_phone" }
+    ]);
+  });
+  it("omits fields entirely when none are configured", () => {
+    const r = planStep(base, { vars: { lead_url: "https://rfrl.to/x" } });
+    expect(r.ok && r.action.kind === "browse_action" && "fields" in r.action).toBe(false);
+  });
+});
+
+describe("planStep: send_sms replyToGroup", () => {
+  const step: FlowStep = {
+    id: "g",
+    type: "send_sms",
+    replyToGroup: true,
+    body: "Hi {{vars.seller_first_name}}!"
+  };
+  it("replies to every participant except our own number, de-duped; skips junk entries", () => {
+    const scope: StepScope = {
+      vars: { seller_first_name: "Pat" },
+      trigger: {
+        to: "+16025550000",
+        // Includes our own number (dropped), a dup (de-duped), a non-string
+        // (skipped) and a whitespace-only entry (skipped after trim).
+        participants: [
+          "+16025550000",
+          "+14805551111",
+          "+14805552222",
+          "+14805551111",
+          12345,
+          "   "
+        ]
+      }
+    };
+    expect(planStep(step, scope)).toEqual({
+      ok: true,
+      action: {
+        kind: "send_sms",
+        to: "+14805551111",
+        recipients: ["+14805551111", "+14805552222"],
+        body: "Hi Pat!"
+      }
+    });
+  });
+  it("ignores the templated `to` when replyToGroup is set", () => {
+    const withTo: FlowStep = { ...step, to: "+19999999999" };
+    const r = planStep(withTo, {
+      trigger: { to: "+16025550000", participants: ["+16025550000", "+14805551111"] }
+    });
+    expect(r.ok && r.action.kind === "send_sms" && r.action.recipients).toEqual(["+14805551111"]);
+  });
+  it("fails when the thread has no other participants", () => {
+    expect(
+      planStep(step, { trigger: { to: "+16025550000", participants: ["+16025550000"] } })
+    ).toEqual({
+      ok: false,
+      error: "send_sms: replyToGroup but the trigger has no other group participants"
+    });
+    expect(planStep(step, { trigger: { to: "+16025550000" } }).ok).toBe(false);
+  });
+  it("still carries quiet hours into a group reply", () => {
+    const withQuiet: FlowStep = {
+      ...step,
+      quietHours: { timezone: "America/Phoenix", noSendAfter: "22:00", resumeAt: "08:30" }
+    };
+    const r = planStep(withQuiet, {
+      trigger: { to: "+16025550000", participants: ["+16025550000", "+14805551111"] }
+    });
+    expect(r.ok && r.action.kind === "send_sms" && r.action.quiet).toEqual({
+      timezone: "America/Phoenix",
+      noSendAfter: "22:00",
+      resumeAt: "08:30",
+      emailTo: "",
+      emailSubject: "Following up on your inquiry"
     });
   });
 });
