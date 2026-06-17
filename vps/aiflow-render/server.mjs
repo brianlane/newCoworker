@@ -474,11 +474,22 @@ async function performForEach(page, forEachLink, actions) {
       errors: [`forEachLink "${forEachLink}": ${String(e?.message ?? e)}`.slice(0, 200)]
     };
   }
+  // Report the TRUE match count and surface any overflow as failures so the
+  // worker never logs a misleading "updated N of N" while silently skipping
+  // leads past the cap. (`items` stays the pre-slice total; the skipped tail is
+  // counted as failed with an explicit error.)
+  const totalMatched = hrefs.length;
   hrefs = hrefs.slice(0, MAX_FOREACH_ITEMS);
+  const skipped = totalMatched - hrefs.length;
   let succeeded = 0;
-  let failed = 0;
+  let failed = skipped;
   let actionsCompleted = 0;
   const errors = [];
+  if (skipped > 0) {
+    errors.push(
+      `forEachLink matched ${totalMatched} items; capped at ${MAX_FOREACH_ITEMS}, ${skipped} not processed`
+    );
+  }
   for (const href of hrefs) {
     try {
       await page.goto(href, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
@@ -496,7 +507,7 @@ async function performForEach(page, forEachLink, actions) {
       succeeded++;
     }
   }
-  return { items: hrefs.length, succeeded, failed, actionsCompleted, errors: errors.slice(0, 20) };
+  return { items: totalMatched, succeeded, failed, actionsCompleted, errors: errors.slice(0, 20) };
 }
 
 /**
