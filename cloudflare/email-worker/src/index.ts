@@ -67,7 +67,14 @@ async function uploadAttachment(
     console.error(`attachment upload failed (${res.status}) for ${safeName}`);
     return null;
   }
-  return { filename: att.filename || safeName, mimeType, size: bytes.byteLength, path };
+  // Cap the display filename to the webhook's 255-char limit: a longer raw MIME
+  // filename would fail Zod validation and make the whole message retry forever.
+  return {
+    filename: (att.filename || safeName).slice(0, 255),
+    mimeType,
+    size: bytes.byteLength,
+    path
+  };
 }
 
 interface ForwardableEmailMessage {

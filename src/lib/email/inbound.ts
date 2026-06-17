@@ -25,6 +25,8 @@ import type { TriggerCondition } from "@/lib/ai-flows/schema";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
+const EMAIL_ATTACHMENTS_BUCKET = "email-attachments";
+
 export type InboundEmailPayload = {
   /** Recipient address the mail was sent to (the tenant mailbox). */
   to: string;
@@ -81,7 +83,16 @@ export async function processInboundTenantEmail(
 ): Promise<InboundEmailResult> {
   const db = client ?? (await createSupabaseServiceClient());
   const businessId = await resolveBusinessByAddress(payload.to, db);
-  if (!businessId) return { matched: false };
+  if (!businessId) {
+    // No tenant owns this address. The worker already uploaded any attachment
+    // bytes before posting here, so remove them to avoid orphaning objects in
+    // the bucket (best-effort).
+    const orphanPaths = (payload.attachments ?? []).map((a) => a.path);
+    if (orphanPaths.length > 0) {
+      await db.storage.from(EMAIL_ATTACHMENTS_BUCKET).remove(orphanPaths);
+    }
+    return { matched: false };
+  }
 
   const fromEmail = bareEmail(payload.from);
   const scope = tenantEmailTriggerScope({

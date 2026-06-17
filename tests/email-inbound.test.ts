@@ -64,6 +64,26 @@ describe("processInboundTenantEmail", () => {
     expect(recordTenantMailboxInbound).not.toHaveBeenCalled();
   });
 
+  it("removes orphaned attachments when the recipient is unknown", async () => {
+    resolveBusinessByAddress.mockResolvedValue(null);
+    const remove = vi.fn().mockResolvedValue({ data: [], error: null });
+    const storageFrom = vi.fn(() => ({ remove }));
+    const db = { from: vi.fn(), storage: { from: storageFrom } };
+    const res = await processInboundTenantEmail(
+      {
+        ...PAYLOAD,
+        attachments: [
+          { filename: "a.pdf", mimeType: "application/pdf", size: 10, path: "inbound/x/a.pdf" }
+        ]
+      },
+      db as never
+    );
+    expect(res).toEqual({ matched: false });
+    expect(storageFrom).toHaveBeenCalledWith("email-attachments");
+    expect(remove).toHaveBeenCalledWith(["inbound/x/a.pdf"]);
+    expect(recordTenantMailboxInbound).not.toHaveBeenCalled();
+  });
+
   it("logs inbound mail and enqueues each matching flow", async () => {
     resolveBusinessByAddress.mockResolvedValue("biz-1");
     const db = flowsDb({
