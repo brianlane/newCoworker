@@ -1492,7 +1492,9 @@ async function sendGroupSmsStep(
       messageId = null;
     }
     appendActionTaken(scope, `replied in the group text to ${recipients.length} recipient(s)`);
-    // Log one outbound row per recipient so each shows up in Text history.
+    // Log one outbound row per recipient AND record a customer interaction for
+    // each, mirroring the 1:1 path so every texted number shows up in Text
+    // history and on the Customers page.
     for (const to of recipients) {
       await logOutboundSms(supabase, run, {
         to,
@@ -1501,6 +1503,7 @@ async function sendGroupSmsStep(
         source: "ai_flow",
         telnyxMessageId: messageId
       });
+      await recordLeadCustomerProfile(supabase, run, scope, to);
     }
     return { kind: "ok", result: { to: recipients, group: true, messageId } };
   } catch (e) {

@@ -346,19 +346,29 @@ async function performActions(page, actions) {
       } else if (a.kind === "click_text_while_present") {
         // Wizard-style "Next" loop: click the target as long as it is visible,
         // bounded by MAX_WHILE_PRESENT_CLICKS. Zero matches is SUCCESS (the page
-        // is already past the step) — only an unexpected error fails the action.
-        for (let i = 0; i < MAX_WHILE_PRESENT_CLICKS; i++) {
-          const locator = page.getByText(a.target, { exact: false }).first();
-          let present = false;
+        // is already past the step).
+        const isPresent = async () => {
           try {
-            await locator.waitFor({ state: "visible", timeout: WHILE_PRESENT_PROBE_MS });
-            present = true;
+            await page
+              .getByText(a.target, { exact: false })
+              .first()
+              .waitFor({ state: "visible", timeout: WHILE_PRESENT_PROBE_MS });
+            return true;
           } catch {
-            present = false;
+            return false;
           }
-          if (!present) break;
-          await locator.click({ timeout: ACTION_TIMEOUT_MS });
+        };
+        let clicks = 0;
+        while (clicks < MAX_WHILE_PRESENT_CLICKS && (await isPresent())) {
+          await page.getByText(a.target, { exact: false }).first().click({ timeout: ACTION_TIMEOUT_MS });
           await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
+          clicks++;
+        }
+        // Hitting the cap WHILE the target is still on the page means the wizard
+        // never finished — fail the action so the worker doesn't extract from a
+        // half-completed page (a changed/looping page is a permanent error).
+        if (clicks >= MAX_WHILE_PRESENT_CLICKS && (await isPresent())) {
+          throw new Error(`still present after ${MAX_WHILE_PRESENT_CLICKS} clicks`);
         }
       } else if (a.kind === "click_selector") {
         await page.locator(a.target).first().click({ timeout: ACTION_TIMEOUT_MS });
