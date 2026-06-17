@@ -1454,22 +1454,32 @@ async function ensureMailboxIdentity(
 
   if (!localPart) {
     // Default local-part is the business UUID (mirrors ensureTenantMailbox in
-    // the app). Idempotent: a concurrent insert (23505) just means another
-    // worker won the race — re-read and use whatever was reserved.
+    // the app).
     const fallback = businessId.toLowerCase();
     const { error: insertError } = await supabase
       .from("tenant_mailboxes")
       .insert({ business_id: businessId, local_part: fallback, personalized: false });
-    if (insertError && (insertError as { code?: string }).code !== "23505") {
-      throw new Error(`ensureMailboxIdentity insert: ${insertError.message}`);
-    }
     if (insertError) {
+      // 23505 = unique violation. The benign case is a concurrent insert for
+      // THIS business (business_id PK) — re-read and use the reserved row. But a
+      // 23505 can also mean the local_part is already claimed by ANOTHER tenant;
+      // in that case there's no row for this business and we must NOT fall back
+      // to the default address (it would resolve to the wrong mailbox). Throw so
+      // the run surfaces the conflict instead of sending as someone else.
+      if ((insertError as { code?: string }).code !== "23505") {
+        throw new Error(`ensureMailboxIdentity insert: ${insertError.message}`);
+      }
       const { data: row } = await supabase
         .from("tenant_mailboxes")
         .select("local_part")
         .eq("business_id", businessId)
         .maybeSingle();
-      localPart = (row as { local_part?: string } | null)?.local_part ?? fallback;
+      localPart = (row as { local_part?: string } | null)?.local_part ?? null;
+      if (!localPart) {
+        throw new Error(
+          `ensureMailboxIdentity: default mailbox local-part conflict for ${businessId}`
+        );
+      }
     } else {
       localPart = fallback;
     }
@@ -1875,12 +1885,15 @@ async function routeToTeamStep(
 
 /**
  * Scope for templating an agent-facing SMS: run vars/trigger plus {{agent.*}}
- * and (when resolved) the {{offer.deadline}} claim deadline.
+ * and (when resolved) the {{offer.deadline}} claim deadline. Carries
+ * {{coworker.email}} through too so it stays resolvable in route_to_team
+ * offer/claimed templates (it's documented as always available).
  */
 function agentScope(scope: Scope, agent: RoutedAgent, deadline?: string): Record<string, unknown> {
   return {
     vars: scope.vars,
     trigger: scope.trigger,
+    ...(scope.coworker ? { coworker: scope.coworker } : {}),
     agent: { name: agent.name, phone: agent.phone },
     ...(deadline ? { offer: { deadline } } : {})
   };
