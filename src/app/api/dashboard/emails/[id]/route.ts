@@ -19,7 +19,10 @@ import { getEmailBody } from "@/lib/db/email-log";
 
 export const dynamic = "force-dynamic";
 
-const ATTACHMENTS_BUCKET = "email-attachments";
+// Default bucket for inbound attachments. Each stored attachment may name its
+// own bucket (outbound flow screenshots live in `aiflow-screenshots`); rows
+// without one predate that and fall back here.
+const DEFAULT_ATTACHMENTS_BUCKET = "email-attachments";
 // Signed-URL lifetime: long enough for the owner to click download, short
 // enough that a leaked URL expires quickly.
 const SIGNED_URL_TTL_S = 300;
@@ -47,7 +50,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     const attachments = await Promise.all(
       body.attachments.map(async (a) => {
         const { data } = await db.storage
-          .from(ATTACHMENTS_BUCKET)
+          .from(a.bucket ?? DEFAULT_ATTACHMENTS_BUCKET)
           .createSignedUrl(a.storage_path, SIGNED_URL_TTL_S, { download: a.filename });
         return {
           filename: a.filename,
