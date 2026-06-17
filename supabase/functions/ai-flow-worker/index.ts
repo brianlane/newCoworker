@@ -164,7 +164,14 @@ type RunRow = {
   error_retry_count: number;
 };
 
-type Scope = { vars: Record<string, unknown>; trigger: Record<string, unknown> };
+type Scope = {
+  vars: Record<string, unknown>;
+  trigger: Record<string, unknown>;
+  // The AI coworker's own mailbox, exposed to templates as {{coworker.email}}
+  // (e.g. for a body signature or a self-CC). Derived from tenant_mailboxes each
+  // run; never persisted in run.context (buildContext omits it).
+  coworker?: { email: string };
+};
 
 serve(async (req: Request): Promise<Response> => {
   if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
@@ -319,6 +326,11 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     vars: asRecord(run.context.vars),
     trigger: asRecord(run.context.trigger)
   };
+  // Resolve (and self-heal) the business's dedicated AI mailbox up front so every
+  // outbound email sends AS the coworker — never the platform identity — and so
+  // flows can reference {{coworker.email}} in templates.
+  const mailbox = await ensureMailboxIdentity(supabase, run.business_id);
+  scope.coworker = { email: mailbox.address };
   const approval = asRecord(run.context.approval);
   // route_to_team state: tried[], the currently-offered agent, and last_event
   // (claim/reject/timeout) stamped by the inbound webhook / escalation sweep.
@@ -1418,23 +1430,61 @@ function tenantEmailDomain(): string {
 }
 
 /**
- * Resolve the dedicated AI-mailbox "From" for a business so flow emails send
+ * Resolve the dedicated AI-mailbox identity for a business so flow emails send
  * AS the coworker's own address (and replies route back to it, re-triggering
- * tenant_email flows). Returns null when the business has no mailbox row yet,
- * so the caller falls back to the global MAILER_EMAIL.
+ * tenant_email flows).
+ *
+ * NEVER returns the platform sender: an account's outbound mail must always go
+ * out as that account's coworker. Provisioning normally reserves the row, but we
+ * self-heal here by creating the default (business UUID) mailbox if it's missing,
+ * so a flow can never fall back to "New Coworker <contact@…>". A hard DB error
+ * throws → the run retries rather than silently sending from the platform.
  */
-async function resolveTenantMailboxFrom(
+async function ensureMailboxIdentity(
   supabase: Supabase,
   businessId: string
-): Promise<{ from: string; address: string } | null> {
+): Promise<{ from: string; address: string }> {
   const { data, error } = await supabase
     .from("tenant_mailboxes")
     .select("local_part")
     .eq("business_id", businessId)
     .maybeSingle();
-  if (error || !data) return null;
-  const localPart = (data as { local_part?: string }).local_part;
-  if (!localPart) return null;
+  if (error) throw new Error(`ensureMailboxIdentity: ${error.message}`);
+  let localPart = (data as { local_part?: string } | null)?.local_part ?? null;
+
+  if (!localPart) {
+    // Default local-part is the business UUID (mirrors ensureTenantMailbox in
+    // the app).
+    const fallback = businessId.toLowerCase();
+    const { error: insertError } = await supabase
+      .from("tenant_mailboxes")
+      .insert({ business_id: businessId, local_part: fallback, personalized: false });
+    if (insertError) {
+      // 23505 = unique violation. The benign case is a concurrent insert for
+      // THIS business (business_id PK) — re-read and use the reserved row. But a
+      // 23505 can also mean the local_part is already claimed by ANOTHER tenant;
+      // in that case there's no row for this business and we must NOT fall back
+      // to the default address (it would resolve to the wrong mailbox). Throw so
+      // the run surfaces the conflict instead of sending as someone else.
+      if ((insertError as { code?: string }).code !== "23505") {
+        throw new Error(`ensureMailboxIdentity insert: ${insertError.message}`);
+      }
+      const { data: row } = await supabase
+        .from("tenant_mailboxes")
+        .select("local_part")
+        .eq("business_id", businessId)
+        .maybeSingle();
+      localPart = (row as { local_part?: string } | null)?.local_part ?? null;
+      if (!localPart) {
+        throw new Error(
+          `ensureMailboxIdentity: default mailbox local-part conflict for ${businessId}`
+        );
+      }
+    } else {
+      localPart = fallback;
+    }
+  }
+
   const address = `${String(localPart).toLowerCase()}@${tenantEmailDomain()}`;
   const { data: biz } = await supabase
     .from("businesses")
@@ -1448,11 +1498,12 @@ async function resolveTenantMailboxFrom(
 /**
  * Deliver one flow email.
  *
- * Default path: platform Resend sender (from the tenant's own AI mailbox when
- * one is provisioned, else the global MAILER_EMAIL), optionally attaching the
- * screenshot a prior browse_extract stored (downloaded from the private bucket
- * by path — never by fetching a templatable URL). Missing RESEND_API_KEY is a
- * permanent setup error; a Resend/storage IO failure throws so the run retries.
+ * Default path: platform Resend transport, but always sending FROM the tenant's
+ * own AI mailbox (created on the fly if missing) — never the platform identity.
+ * Optionally attaches the screenshot a prior browse_extract stored (downloaded
+ * from the private bucket by path — never by fetching a templatable URL). Missing
+ * RESEND_API_KEY is a permanent setup error; a Resend/storage IO failure throws
+ * so the run retries.
  *
  * `fromConnectionId` path: the owner chose "send as me" — the worker calls the
  * app's gateway-guarded /api/aiflows/send-owner-email, which sends through the
@@ -1505,12 +1556,12 @@ async function deliverFlowEmail(
     // without the attachment rather than stranding the lead email.
   }
 
-  // Prefer the tenant's own AI mailbox as the sender so replies come back to it
-  // (and re-trigger tenant_email flows); fall back to the global platform
-  // sender when no mailbox is provisioned yet.
-  const mailbox = await resolveTenantMailboxFrom(supabase, run.business_id);
-  const fromHeader = mailbox?.from ?? Deno.env.get("MAILER_EMAIL") ?? "New Coworker <contact@newcoworker.com>";
-  const replyTo = mailbox?.address ?? Deno.env.get("CONTACT_EMAIL") ?? undefined;
+  // Always send AS the tenant's own AI mailbox (creating it if missing) so the
+  // platform identity is NEVER used on a business's behalf, and replies come
+  // back to the coworker (re-triggering tenant_email flows).
+  const mailbox = await ensureMailboxIdentity(supabase, run.business_id);
+  const fromHeader = mailbox.from;
+  const replyTo = mailbox.address;
 
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -1548,7 +1599,7 @@ async function deliverFlowEmail(
     from: fromHeader,
     subject: action.subject,
     body: action.body,
-    source: mailbox ? "tenant_mailbox_outbound" : "ai_flow",
+    source: "tenant_mailbox_outbound",
     providerMessageId: emailId,
     attachments: attachmentMeta ? [attachmentMeta] : []
   });
@@ -1834,12 +1885,15 @@ async function routeToTeamStep(
 
 /**
  * Scope for templating an agent-facing SMS: run vars/trigger plus {{agent.*}}
- * and (when resolved) the {{offer.deadline}} claim deadline.
+ * and (when resolved) the {{offer.deadline}} claim deadline. Carries
+ * {{coworker.email}} through too so it stays resolvable in route_to_team
+ * offer/claimed templates (it's documented as always available).
  */
 function agentScope(scope: Scope, agent: RoutedAgent, deadline?: string): Record<string, unknown> {
   return {
     vars: scope.vars,
     trigger: scope.trigger,
+    ...(scope.coworker ? { coworker: scope.coworker } : {}),
     agent: { name: agent.name, phone: agent.phone },
     ...(deadline ? { offer: { deadline } } : {})
   };

@@ -91,7 +91,7 @@ export default function OnboardPage() {
       setup: "No setup fee · 30-day money-back guarantee",
       features: [
         "AI voice coworker",
-        "Phone number",
+        "Phone number and email address dedicated to your coworker",
         "Chat access to your coworker",
         "$5/mo AI budget for agentic tasks, before free model fallback",
         "Light browser tasks",

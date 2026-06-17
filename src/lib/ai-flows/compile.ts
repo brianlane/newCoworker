@@ -60,6 +60,8 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   "triggers; for email triggers windowText is subject+body, from is the sender,",
   "url is the first link in the message). {{vars.actions_taken}}",
   "is engine-provided (a running summary of sends/routing) and always available.",
+  "{{coworker.email}} is the AI coworker's own mailbox address and is always",
+  "available (e.g. for an email signature or to cc the coworker itself).",
   "Prefer an approval_gate before any send_sms to a scraped number. A",
   "route_to_team step offers the lead to team members one at a time (reply",
   "1=claim, 2=pass) with timed escalation and an owner fallback; only its",

@@ -263,6 +263,18 @@ describe("planStep: send_email", () => {
       error: "send_email: body is empty after templating"
     });
   });
+  it("renders {{coworker.email}} from scope into body/cc", () => {
+    const r = planStep(
+      { ...step, body: "Reach me at {{coworker.email}}", cc: ["{{coworker.email}}"] },
+      { vars: { lead_name: "Jane" }, coworker: { email: "amy@newcoworker.com" } }
+    );
+    expect(r.ok && r.action.kind === "send_email" && r.action.body).toBe(
+      "Reach me at amy@newcoworker.com"
+    );
+    expect(r.ok && r.action.kind === "send_email" && r.action.cc).toEqual([
+      "amy@newcoworker.com"
+    ]);
+  });
   it("carries fromConnectionId through (owner-mailbox send)", () => {
     const r = planStep(
       { ...step, fromConnectionId: "33333333-3333-4333-8333-333333333333" },

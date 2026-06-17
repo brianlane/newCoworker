@@ -14,6 +14,8 @@ import type { BrowseAuth, ExtractField, FlowStep, RouteOfferWindow } from "./typ
 export type StepScope = {
   vars?: Record<string, unknown>;
   trigger?: Record<string, unknown>;
+  /** The AI coworker's own mailbox, referenceable in templates as {{coworker.email}}. */
+  coworker?: { email?: string };
 };
 
 /**
