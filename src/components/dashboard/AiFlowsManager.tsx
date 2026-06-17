@@ -318,7 +318,15 @@ export function AiFlowsManager({
           json.data
             .filter((c) => EMAIL_CONNECTION_KEYS.includes(c.providerConfigKey))
             .map((c) => {
-              const email = typeof c.metadata?.email === "string" ? c.metadata.email : "";
+              // Prefer an explicit `email`, but Nango Connect-UI connections
+              // store the address under `end_user_email` / `end_user_display_name`
+              // instead, so fall back to those before showing a bare provider key.
+              const m = c.metadata ?? {};
+              const email =
+                (typeof m.email === "string" && m.email) ||
+                (typeof m.end_user_email === "string" && m.end_user_email) ||
+                (typeof m.end_user_display_name === "string" && m.end_user_display_name) ||
+                "";
               return {
                 id: c.id,
                 label: email ? `${c.providerConfigKey} — ${email}` : c.providerConfigKey
