@@ -63,7 +63,11 @@ function DetailRow({ label, value }: { label: string; value: string }) {
 
 function ReadingPane({ row, onClose }: { row: EmailLogRow; onClose: () => void }) {
   const meta = sourceMeta(row.source);
-  const body = row.body_full && row.body_full.length > 0 ? row.body_full : row.body_preview;
+  // body_full === null means the row predates full-body capture (legacy preview
+  // only). An empty string is a real captured body (e.g. an email with no text
+  // part) and must NOT fall back to the preview note.
+  const hasFullBody = row.body_full !== null;
+  const body = hasFullBody ? row.body_full : row.body_preview;
 
   return (
     <Card>
@@ -109,7 +113,7 @@ function ReadingPane({ row, onClose }: { row: EmailLogRow; onClose: () => void }
         <div className="rounded-md border border-parchment/10 bg-deep-ink/40 p-3 text-sm text-parchment/90 whitespace-pre-wrap break-words">
           {body && body.length > 0 ? body : "(no body captured)"}
         </div>
-        {!row.body_full && (
+        {!hasFullBody && (
           <p className="mt-1 text-[10px] text-parchment/30">
             Stored preview (first 500 characters).
           </p>
