@@ -80,7 +80,7 @@ export default async function DashboardEmailsPage() {
           </div>
         </Card>
       ) : (
-        <EmailsList rows={rows} />
+        <EmailsList rows={rows} businessId={business.id} />
       )}
     </div>
   );

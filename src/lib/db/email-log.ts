@@ -38,8 +38,6 @@ export type EmailLogRow = {
   from_email: string | null;
   subject: string | null;
   body_preview: string | null;
-  /** Full plain-text body for the reading pane; null on rows predating capture. */
-  body_full: string | null;
   /** Comma-separated cc recipients, or null when none. */
   cc_email: string | null;
   /** Comma-separated bcc recipients, or null when none. */
@@ -51,8 +49,12 @@ export type EmailLogRow = {
   created_at: string;
 };
 
+// The list query intentionally omits `body_full`: it loads up to 200 rows and
+// the list only renders `body_preview`. Full bodies (potentially large) are
+// fetched on demand via getEmailBody when a message is opened in the reading
+// pane — see /api/dashboard/emails/[id].
 const EMAIL_LOG_SELECT =
-  "id, business_id, direction, to_email, from_email, subject, body_preview, body_full, cc_email, bcc_email, source, run_id, flow_id, provider_message_id, created_at";
+  "id, business_id, direction, to_email, from_email, subject, body_preview, cc_email, bcc_email, source, run_id, flow_id, provider_message_id, created_at";
 
 /** Join a recipient list into the stored CSV form, or null when empty. */
 function recipientsToCsv(recipients?: string[] | null): string | null {
@@ -86,6 +88,34 @@ export async function listEmailLog(
     .limit(limit);
   if (error) throw new Error(`listEmailLog: ${error.message}`);
   return (data as EmailLogRow[] | null) ?? [];
+}
+
+export type EmailLogBody = {
+  body_preview: string | null;
+  /** Full plain-text body; null on rows predating full-body capture. */
+  body_full: string | null;
+};
+
+/**
+ * Full body for a single email, scoped by business so one tenant can never
+ * read another's mail. Loaded on demand when the reading pane opens (the list
+ * query omits body_full). Returns null when the id doesn't belong to the
+ * business.
+ */
+export async function getEmailBody(
+  businessId: string,
+  id: string,
+  client?: SupabaseClient
+): Promise<EmailLogBody | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("email_log")
+    .select("body_preview, body_full")
+    .eq("business_id", businessId)
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw new Error(`getEmailBody: ${error.message}`);
+  return (data as EmailLogBody | null) ?? null;
 }
 
 export type RecordInboundTriggerEmailInput = {

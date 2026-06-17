@@ -8,6 +8,7 @@ vi.mock("@/lib/supabase/server", () => ({
 import {
   EMAIL_LOG_DEFAULT_LIMIT,
   EMAIL_LOG_MAX_LIMIT,
+  getEmailBody,
   listEmailLog,
   recordInboundTriggerEmail,
   recordOutboundAssistantEmail,
@@ -40,6 +41,14 @@ const ROW = {
   provider_message_id: "rs-1",
   created_at: "2026-06-12T10:00:00Z"
 };
+
+function singleChain(result: { data: unknown; error: { message: string } | null }) {
+  const maybeSingle = vi.fn().mockResolvedValue(result);
+  const eqId = vi.fn(() => ({ maybeSingle }));
+  const eqBiz = vi.fn(() => ({ eq: eqId }));
+  const select = vi.fn(() => ({ eq: eqBiz }));
+  return { select, eqBiz, eqId, maybeSingle };
+}
 
 beforeEach(() => {
   defaultClientSpy.mockReset();
@@ -78,6 +87,35 @@ describe("listEmailLog", () => {
     const c = listChain({ data: [], error: null });
     defaultClientSpy.mockResolvedValueOnce(makeDb(c));
     await expect(listEmailLog("biz")).resolves.toEqual([]);
+  });
+});
+
+describe("getEmailBody", () => {
+  it("returns the body scoped by business + id", async () => {
+    const c = singleChain({ data: { body_preview: "hi", body_full: "hi there" }, error: null });
+    const body = await getEmailBody("biz", "e1", makeDb(c as never) as never);
+    expect(body).toEqual({ body_preview: "hi", body_full: "hi there" });
+    expect(c.select).toHaveBeenCalledWith("body_preview, body_full");
+    expect(c.eqBiz).toHaveBeenCalledWith("business_id", "biz");
+    expect(c.eqId).toHaveBeenCalledWith("id", "e1");
+  });
+
+  it("returns null when the id is not found for the business", async () => {
+    const c = singleChain({ data: null, error: null });
+    expect(await getEmailBody("biz", "missing", makeDb(c as never) as never)).toBeNull();
+  });
+
+  it("throws on a query error", async () => {
+    const c = singleChain({ data: null, error: { message: "boom" } });
+    await expect(getEmailBody("biz", "e1", makeDb(c as never) as never)).rejects.toThrow(
+      "getEmailBody: boom"
+    );
+  });
+
+  it("uses the default service client when none is injected", async () => {
+    const c = singleChain({ data: { body_preview: "p", body_full: null }, error: null });
+    defaultClientSpy.mockResolvedValueOnce(makeDb(c as never));
+    expect(await getEmailBody("biz", "e1")).toEqual({ body_preview: "p", body_full: null });
   });
 });
 

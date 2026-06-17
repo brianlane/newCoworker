@@ -61,13 +61,59 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ReadingPane({ row, onClose }: { row: EmailLogRow; onClose: () => void }) {
+type BodyState =
+  | { status: "loading" }
+  | { status: "loaded"; bodyFull: string | null; bodyPreview: string | null }
+  | { status: "error" };
+
+/**
+ * Reading pane. Mounted with a `key={row.id}` so it remounts (fresh state) per
+ * selection — that lets us initialise to "loading" without a synchronous
+ * setState in the effect. The full body is fetched on demand (the list omits it
+ * to avoid pulling every message body), falling back to the row's preview while
+ * loading or on error.
+ */
+function ReadingPane({
+  row,
+  businessId,
+  onClose
+}: {
+  row: EmailLogRow;
+  businessId: string;
+  onClose: () => void;
+}) {
   const meta = sourceMeta(row.source);
+  const [state, setState] = useState<BodyState>({ status: "loading" });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`/api/dashboard/emails/${row.id}?businessId=${encodeURIComponent(businessId)}`, {
+      signal: controller.signal
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        const json = (await res.json()) as {
+          data?: { body_full: string | null; body_preview: string | null };
+        };
+        setState({
+          status: "loaded",
+          bodyFull: json.data?.body_full ?? null,
+          bodyPreview: json.data?.body_preview ?? null
+        });
+      })
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setState({ status: "error" });
+      });
+    return () => controller.abort();
+  }, [row.id, businessId]);
+
   // body_full === null means the row predates full-body capture (legacy preview
   // only). An empty string is a real captured body (e.g. an email with no text
   // part) and must NOT fall back to the preview note.
-  const hasFullBody = row.body_full !== null;
-  const body = hasFullBody ? row.body_full : row.body_preview;
+  const hasFullBody = state.status === "loaded" && state.bodyFull !== null;
+  const loadedBody =
+    state.status === "loaded" ? (hasFullBody ? state.bodyFull : state.bodyPreview) : row.body_preview;
 
   return (
     <Card>
@@ -107,13 +153,23 @@ function ReadingPane({ row, onClose }: { row: EmailLogRow; onClose: () => void }
       </div>
 
       <div className="mb-4">
-        <span className="block text-[11px] uppercase tracking-wide text-parchment/40 mb-1.5">
-          Message
-        </span>
-        <div className="rounded-md border border-parchment/10 bg-deep-ink/40 p-3 text-sm text-parchment/90 whitespace-pre-wrap break-words">
-          {body && body.length > 0 ? body : "(no body captured)"}
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="block text-[11px] uppercase tracking-wide text-parchment/40">
+            Message
+          </span>
+          {state.status === "loading" && (
+            <span className="text-[10px] text-parchment/40">Loading full message…</span>
+          )}
         </div>
-        {!hasFullBody && (
+        <div className="rounded-md border border-parchment/10 bg-deep-ink/40 p-3 text-sm text-parchment/90 whitespace-pre-wrap break-words">
+          {loadedBody && loadedBody.length > 0 ? loadedBody : "(no body captured)"}
+        </div>
+        {state.status === "error" && (
+          <p className="mt-1 text-[10px] text-spark-orange/80">
+            Couldn&apos;t load the full message — showing the stored preview.
+          </p>
+        )}
+        {state.status === "loaded" && !hasFullBody && (
           <p className="mt-1 text-[10px] text-parchment/30">
             Stored preview (first 500 characters).
           </p>
@@ -136,7 +192,7 @@ function ReadingPane({ row, onClose }: { row: EmailLogRow; onClose: () => void }
   );
 }
 
-export function EmailsList({ rows }: { rows: EmailLogRow[] }) {
+export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; businessId: string }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = rows.find((r) => r.id === selectedId) ?? null;
 
@@ -222,7 +278,12 @@ export function EmailsList({ rows }: { rows: EmailLogRow[] }) {
           >
             ← Back to inbox
           </button>
-          <ReadingPane row={selected} onClose={() => setSelectedId(null)} />
+          <ReadingPane
+            key={selected.id}
+            row={selected}
+            businessId={businessId}
+            onClose={() => setSelectedId(null)}
+          />
         </div>
       )}
     </div>
