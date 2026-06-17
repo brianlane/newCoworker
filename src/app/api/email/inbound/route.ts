@@ -26,7 +26,18 @@ const bodySchema = z.object({
   from: z.string().min(3).max(320),
   subject: z.string().max(998).default(""),
   text: z.string().max(200_000).default(""),
-  messageId: z.string().min(1).max(998)
+  messageId: z.string().min(1).max(998),
+  attachments: z
+    .array(
+      z.object({
+        filename: z.string().min(1).max(255),
+        mimeType: z.string().min(1).max(255),
+        size: z.number().int().nonnegative(),
+        path: z.string().min(1).max(1024)
+      })
+    )
+    .max(25)
+    .optional()
 });
 
 export async function POST(request: Request): Promise<Response> {

@@ -21,6 +21,67 @@ interface Env {
   APP_INBOUND_URL: string;
   PLATFORM_EMAIL_DOMAIN: string;
   EMAIL_INBOUND_SECRET: string;
+  // Optional: when both are set the worker uploads attachments to Storage.
+  SUPABASE_URL?: string;
+  SUPABASE_SERVICE_ROLE_KEY?: string;
+  ATTACHMENTS_BUCKET?: string;
+}
+
+// Skip individual attachments larger than this (Cloudflare caps the whole
+// message around 25 MB anyway) and cap the count to bound work per message.
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const MAX_ATTACHMENTS = 25;
+
+type UploadedAttachment = { filename: string; mimeType: string; size: number; path: string };
+
+/** Bytes for a postal-mime attachment, regardless of decode mode. */
+function attachmentBytes(content: ArrayBuffer | string): Uint8Array {
+  if (typeof content === "string") return new TextEncoder().encode(content);
+  return new Uint8Array(content);
+}
+
+/** Upload one attachment to the private bucket; returns metadata or null on skip/failure. */
+async function uploadAttachment(
+  env: Env,
+  att: { filename?: string | null; mimeType?: string; content: ArrayBuffer | string },
+  messageId: string,
+  index: number
+): Promise<UploadedAttachment | null> {
+  const bytes = attachmentBytes(att.content);
+  if (bytes.byteLength === 0 || bytes.byteLength > MAX_ATTACHMENT_BYTES) return null;
+
+  const safeName = (att.filename || "attachment").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 200);
+  // Deterministic per-message path + upsert: a retried delivery (same messageId)
+  // overwrites the same object instead of orphaning a fresh random copy.
+  const safeMsg = messageId.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "msg";
+  const path = `inbound/${safeMsg}/${index}-${safeName}`;
+  const bucket = env.ATTACHMENTS_BUCKET || "email-attachments";
+  // Cap the MIME type to the webhook's 255-char limit so a malformed/over-long
+  // Content-Type can't fail Zod validation and make the message retry forever.
+  const mimeType = (att.mimeType || "application/octet-stream").slice(0, 255);
+
+  const res = await fetch(`${env.SUPABASE_URL}/storage/v1/object/${bucket}/${path}`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      "content-type": mimeType,
+      "x-upsert": "true"
+    },
+    body: bytes
+  });
+
+  if (!res.ok) {
+    // One bad upload must not fail the whole delivery — log and drop it.
+    console.error(`attachment upload failed (${res.status}) for ${safeName}`);
+    return null;
+  }
+  // Cap the display filename to the webhook's 255-char limit (same reason).
+  return {
+    filename: (att.filename || safeName).slice(0, 255),
+    mimeType,
+    size: bytes.byteLength,
+    path
+  };
 }
 
 interface ForwardableEmailMessage {
@@ -55,13 +116,26 @@ export default {
       email.messageId ||
       `cf-${Date.now()}-${crypto.randomUUID()}`;
 
+    // Upload attachments to Storage (best-effort). Only runs when the Supabase
+    // secrets are configured, so an un-migrated deploy still forwards mail.
+    const attachments: UploadedAttachment[] = [];
+    if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
+      const atts = email.attachments ?? [];
+      // Indexed loop so each attachment keeps a stable path across retries.
+      for (let i = 0; i < atts.length && attachments.length < MAX_ATTACHMENTS; i++) {
+        const meta = await uploadAttachment(env, atts[i], messageId, i);
+        if (meta) attachments.push(meta);
+      }
+    }
+
     const payload = {
       // Envelope recipient is the authoritative tenant address to route on.
       to: message.to,
       from: email.from?.address || message.from,
       subject: email.subject ?? "",
       text,
-      messageId
+      messageId,
+      attachments
     };
 
     const res = await fetch(env.APP_INBOUND_URL, {

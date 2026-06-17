@@ -64,6 +64,34 @@ describe("processInboundTenantEmail", () => {
     expect(recordTenantMailboxInbound).not.toHaveBeenCalled();
   });
 
+  it("removes orphaned attachments when the recipient is unknown", async () => {
+    resolveBusinessByAddress.mockResolvedValue(null);
+    const remove = vi.fn().mockResolvedValue({ data: [], error: null });
+    const storageFrom = vi.fn(() => ({ remove }));
+    const db = { from: vi.fn(), storage: { from: storageFrom } };
+    const res = await processInboundTenantEmail(
+      {
+        ...PAYLOAD,
+        attachments: [
+          {
+            filename: "a.pdf",
+            mimeType: "application/pdf",
+            size: 10,
+            path: "inbound/_msg-1_example.com_/0-a.pdf"
+          },
+          // Foreign path (another message's namespace) must be ignored, never
+          // removed — otherwise a secret-holder could delete others' objects.
+          { filename: "evil.pdf", mimeType: "application/pdf", size: 1, path: "inbound/victim/0-x.pdf" }
+        ]
+      },
+      db as never
+    );
+    expect(res).toEqual({ matched: false });
+    expect(storageFrom).toHaveBeenCalledWith("email-attachments");
+    expect(remove).toHaveBeenCalledWith(["inbound/_msg-1_example.com_/0-a.pdf"]);
+    expect(recordTenantMailboxInbound).not.toHaveBeenCalled();
+  });
+
   it("logs inbound mail and enqueues each matching flow", async () => {
     resolveBusinessByAddress.mockResolvedValue("biz-1");
     const db = flowsDb({
@@ -93,6 +121,41 @@ describe("processInboundTenantEmail", () => {
         flowId: "flow-match",
         runId: "run-1",
         providerMessageId: "<msg-1@example.com>"
+      }),
+      db
+    );
+  });
+
+  it("records message-scoped attachments and drops foreign paths", async () => {
+    resolveBusinessByAddress.mockResolvedValue("biz-1");
+    const db = flowsDb({ data: [], error: null });
+    await processInboundTenantEmail(
+      {
+        ...PAYLOAD,
+        attachments: [
+          {
+            filename: "quote.pdf",
+            mimeType: "application/pdf",
+            size: 2048,
+            path: "inbound/_msg-1_example.com_/0-quote.pdf"
+          },
+          // Path outside this message's namespace — must be dropped so it can't
+          // be bound to this tenant's row and signed by the dashboard.
+          { filename: "secret.pdf", mimeType: "application/pdf", size: 9, path: "inbound/other/0-secret.pdf" }
+        ]
+      },
+      db as never
+    );
+    expect(recordTenantMailboxInbound).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: [
+          {
+            filename: "quote.pdf",
+            mime_type: "application/pdf",
+            size_bytes: 2048,
+            storage_path: "inbound/_msg-1_example.com_/0-quote.pdf"
+          }
+        ]
       }),
       db
     );

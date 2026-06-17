@@ -25,6 +25,20 @@ import type { TriggerCondition } from "@/lib/ai-flows/schema";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
+const EMAIL_ATTACHMENTS_BUCKET = "email-attachments";
+
+/**
+ * The object-key namespace the Cloudflare worker uploads this message's
+ * attachments under. We only ever persist/delete paths inside this prefix so a
+ * caller with the inbound secret can't bind an unrelated message's storage key
+ * (which the dashboard would otherwise resolve to a signed download URL). Must
+ * mirror the worker's path scheme exactly.
+ */
+function attachmentPrefix(messageId: string): string {
+  const safeMsg = messageId.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120);
+  return `inbound/${safeMsg}/`;
+}
+
 export type InboundEmailPayload = {
   /** Recipient address the mail was sent to (the tenant mailbox). */
   to: string;
@@ -35,6 +49,11 @@ export type InboundEmailPayload = {
   text: string;
   /** Provider/RFC Message-Id — drives the run dedupe key. */
   messageId: string;
+  /**
+   * Attachments the worker already uploaded to the email-attachments bucket.
+   * `path` is the object key; `size` is bytes. Absent when the mail had none.
+   */
+  attachments?: { filename: string; mimeType: string; size: number; path: string }[];
 };
 
 export type InboundEmailResult =
@@ -75,8 +94,22 @@ export async function processInboundTenantEmail(
   client?: SupabaseClient
 ): Promise<InboundEmailResult> {
   const db = client ?? (await createSupabaseServiceClient());
+
+  // Only trust attachment objects within this message's own path namespace.
+  const prefix = attachmentPrefix(payload.messageId);
+  const ownAttachments = (payload.attachments ?? []).filter((a) => a.path.startsWith(prefix));
+
   const businessId = await resolveBusinessByAddress(payload.to, db);
-  if (!businessId) return { matched: false };
+  if (!businessId) {
+    // No tenant owns this address. The worker already uploaded any attachment
+    // bytes before posting here, so remove them to avoid orphaning objects in
+    // the bucket (best-effort). Scoped to this message's own paths only.
+    const orphanPaths = ownAttachments.map((a) => a.path);
+    if (orphanPaths.length > 0) {
+      await db.storage.from(EMAIL_ATTACHMENTS_BUCKET).remove(orphanPaths);
+    }
+    return { matched: false };
+  }
 
   const fromEmail = bareEmail(payload.from);
   const scope = tenantEmailTriggerScope({
@@ -116,6 +149,12 @@ export async function processInboundTenantEmail(
 
   // Always surface the inbound mail on the Emails page, even when nothing
   // matched — the owner should see what their AI mailbox received.
+  const attachments = ownAttachments.map((a) => ({
+    filename: a.filename,
+    mime_type: a.mimeType,
+    size_bytes: a.size,
+    storage_path: a.path
+  }));
   await recordTenantMailboxInbound(
     {
       businessId,
@@ -123,6 +162,7 @@ export async function processInboundTenantEmail(
       fromEmail,
       subject: payload.subject,
       bodyText: payload.text,
+      attachments,
       flowId: firstFlowId,
       runId: firstRunId,
       providerMessageId: payload.messageId
