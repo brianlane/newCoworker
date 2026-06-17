@@ -158,6 +158,24 @@ describe("planStep: send_sms", () => {
       action: { kind: "send_sms", to: "+16026866672", body: "buyer copy" }
     });
   });
+
+  it("passes toAgentName + UNRENDERED body through (worker resolves the agent)", () => {
+    const agentSend: FlowStep = {
+      id: "x",
+      type: "send_sms",
+      toAgentName: "Dave",
+      body: "{{agent.name}}, offers: {{trigger.windowText}}"
+    };
+    expect(planStep(agentSend, { trigger: { windowText: "Cash: $400k" } })).toEqual({
+      ok: true,
+      action: {
+        kind: "send_sms",
+        to: "",
+        toAgentName: "Dave",
+        body: "{{agent.name}}, offers: {{trigger.windowText}}"
+      }
+    });
+  });
 });
 
 describe("planStep: send_sms quietHours", () => {
@@ -625,6 +643,17 @@ describe("planStep: browse_action rememberUrlKeyedByVar", () => {
     const noRemember: FlowStep = { ...base, rememberUrlKeyedByVar: undefined };
     const r = planStep(noRemember, { vars: { lead_url: "https://x" } });
     expect(r.ok && r.action.kind === "browse_action" && "rememberKeyVar" in r.action).toBe(false);
+  });
+  it("passes forEachLink through to the action", () => {
+    const loop: FlowStep = {
+      id: "loop",
+      type: "browse_action",
+      urlVar: "lead_url",
+      forEachLink: "a.needs-action",
+      actions: [{ kind: "click_text", target: "Provide Update" }]
+    };
+    const r = planStep(loop, { vars: { lead_url: "https://x" } });
+    expect(r.ok && r.action.kind === "browse_action" && r.action.forEachLink).toBe("a.needs-action");
   });
   it("renders click_role / select_option values", () => {
     const step: FlowStep = {

@@ -180,8 +180,14 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
         <>
           <Row
             label="Recipient"
-            value={step.replyToGroup ? "Everyone in the group text (except your number)" : (step.to ?? "")}
-            mono={!step.replyToGroup}
+            value={
+              step.replyToGroup
+                ? "Everyone in the group text (except your number)"
+                : step.toAgentName
+                  ? `${step.toAgentName} (team member)`
+                  : (step.to ?? "")
+            }
+            mono={!step.replyToGroup && !step.toAgentName}
           />
           <Row label="Message" value={step.body} />
           {step.quietHours && (
@@ -285,6 +291,9 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
             </ol>
           </div>
           {step.screenshot && <Chip>Captures a screenshot</Chip>}
+          {step.forEachLink && (
+            <Row label="Repeats for each list link matching" value={step.forEachLink} mono />
+          )}
           {step.rememberUrlKeyedByVar && (
             <Row label="Remembers link keyed by" value={`{{vars.${step.rememberUrlKeyedByVar}}}`} mono />
           )}

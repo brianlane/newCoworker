@@ -1279,11 +1279,22 @@ function StepFields({
           Reply into the group text (everyone on the thread except your number)
         </label>
         {!step.replyToGroup && (
-          <Field
-            label="Recipient"
-            value={step.to ?? ""}
-            onChange={(v) => patchStep(index, { to: v })}
-          />
+          <>
+            {!step.toAgentName && (
+              <Field
+                label="Recipient (phone or {{vars.x}})"
+                value={step.to ?? ""}
+                onChange={(v) => patchStep(index, { to: v.trim() ? v : undefined })}
+              />
+            )}
+            {!step.to && (
+              <Field
+                label="Or send to a team member by name (resolves their phone; body can use {{agent.name}})"
+                value={step.toAgentName ?? ""}
+                onChange={(v) => patchStep(index, { toAgentName: v.trim() ? v : undefined })}
+              />
+            )}
+          </>
         )}
         <Field label="Message" value={step.body} onChange={(v) => patchStep(index, { body: v })} textarea />
         <div className="rounded-md border border-parchment/10 bg-deep-ink/30 px-3 py-2 space-y-2">
@@ -1635,6 +1646,11 @@ function StepFields({
           onChange={(v) =>
             patchStep(index, { rememberUrlKeyedByVar: v.trim() ? v.trim() : undefined })
           }
+        />
+        <Field
+          label="Repeat the actions for each list link matching this CSS selector (optional; loops over a list)"
+          value={step.forEachLink ?? ""}
+          onChange={(v) => patchStep(index, { forEachLink: v.trim() ? v : undefined })}
         />
       </div>
     );

@@ -86,7 +86,7 @@ export const TRIGGER_SCOPE_KEYS = ["url", "windowText", "from", "to", "participa
  * `now.tomorrow.weekday` are not enumerated — the validator only checks the
  * first scope segment.
  */
-export const NOW_SCOPE_KEYS = ["today", "tomorrow", "afternoonTime"] as const;
+export const NOW_SCOPE_KEYS = ["today", "tomorrow", "in7Days", "afternoonTime"] as const;
 
 const varName = z
   .string()
@@ -294,10 +294,10 @@ const stepSchema = z.discriminatedUnion("type", [
   z.object({
     id: stepId,
     type: z.literal("send_sms"),
-    // Optional when `replyToGroup` is set (the recipients come from the
-    // trigger's group thread instead of a templated address). The
-    // "to required unless replyToGroup" rule is enforced in
-    // validateDefinitionSemantics (discriminatedUnion can't hold a refine).
+    // Optional when `replyToGroup` or `toAgentName` supplies the recipient
+    // instead of a templated address. Exactly one recipient source is required;
+    // the "set exactly one of to / toAgentName / replyToGroup" rule is enforced
+    // in validateDefinitionSemantics (a discriminatedUnion can't hold a refine).
     to: z.string().min(1).max(200).optional(),
     body: z.string().min(1).max(1600),
     quietHours: sendSmsQuietHoursSchema.optional(),
@@ -308,6 +308,13 @@ const stepSchema = z.discriminatedUnion("type", [
      * group message.
      */
     replyToGroup: z.boolean().optional(),
+    /**
+     * Send to a single named roster member (ai_flow_team_members) instead of a
+     * templated address — the worker resolves their current phone at run time,
+     * so the number stays correct as the roster changes. When set, the body may
+     * reference {{agent.name}}/{{agent.phone}} (the resolved member).
+     */
+    toAgentName: z.string().min(1).max(120).optional(),
     when: whenSchema.optional()
   }),
   z.object({
@@ -373,6 +380,11 @@ const stepSchema = z.discriminatedUnion("type", [
     // Persist this step's final URL keyed by the (normalized) phone in this var,
     // so a later run for the same person can recall it via a recall_url step.
     rememberUrlKeyedByVar: varName.optional(),
+    // Loop-over-list: a CSS selector for link rows on the urlVar page. The render
+    // service visits each match's href and runs `actions` on every one. Per-item,
+    // so it's incompatible with fields/screenshot/rememberUrlKeyedByVar (enforced
+    // in validateDefinitionSemantics).
+    forEachLink: z.string().min(1).max(200).optional(),
     when: whenSchema.optional()
   }),
   // Recall a URL a PRIOR run persisted (browse_action.rememberUrlKeyedByVar) for
@@ -498,11 +510,15 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
             );
           }
         } else if (ref.scope === "agent") {
-          // {{agent.name}}/{{agent.phone}} is the offered team member, resolved at
-          // run time — only meaningful inside a route_to_team step's templates.
-          if (step.type !== "route_to_team") {
+          // {{agent.name}}/{{agent.phone}} is the resolved team member, known at
+          // run time inside a route_to_team step (the offered agent) or a
+          // send_sms { toAgentName } step (the named recipient).
+          const hasAgent =
+            step.type === "route_to_team" ||
+            (step.type === "send_sms" && Boolean(step.toAgentName));
+          if (!hasAgent) {
             issues.push(
-              `Step "${step.id}" uses {{agent.${ref.key}}} but only a route_to_team step has an agent.`
+              `Step "${step.id}" uses {{agent.${ref.key}}} but only a route_to_team or send_sms toAgentName step has an agent.`
             );
           } else if (!AGENT_KEYS.has(ref.key)) {
             issues.push(`Step "${step.id}" references unknown agent field "${ref.key}".`);
@@ -532,6 +548,23 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
 
     if ((step.type === "browse_extract" || step.type === "browse_action") && !vars.has(step.urlVar)) {
       issues.push(`Step "${step.id}" browses urlVar "${step.urlVar}" which no earlier step produces.`);
+    }
+
+    // browse_action.forEachLink loops the actions over many list rows, so the
+    // single-page features (same-pass extraction, one screenshot, remembering one
+    // URL) don't apply — reject the combination rather than silently ignore it.
+    if (step.type === "browse_action" && step.forEachLink) {
+      if (step.fields && step.fields.length > 0) {
+        issues.push(
+          `Step "${step.id}" can't combine forEachLink with fields — extraction has no single page in a loop.`
+        );
+      }
+      if (step.screenshot) {
+        issues.push(`Step "${step.id}" can't combine forEachLink with screenshot.`);
+      }
+      if (step.rememberUrlKeyedByVar) {
+        issues.push(`Step "${step.id}" can't combine forEachLink with rememberUrlKeyedByVar.`);
+      }
     }
 
     // browse_action.rememberUrlKeyedByVar persists the final URL under a phone
@@ -580,15 +613,22 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       );
     }
 
-    // A send_sms needs a recipient: either a templated `to`, or `replyToGroup`
-    // (which replies into the inbound group thread instead). replyToGroup also
-    // only makes sense for an SMS-triggered flow that can carry participants.
+    // A send_sms needs EXACTLY ONE recipient source: a templated `to`, a named
+    // roster member (`toAgentName`), or `replyToGroup` (reply into the inbound
+    // group thread). replyToGroup only makes sense for an SMS-triggered flow
+    // that can carry participants.
     if (step.type === "send_sms") {
-      // `to` is either absent or (by schema) a non-empty string, so a falsy
-      // `to` means "no recipient configured".
-      if (!step.replyToGroup && !step.to) {
+      // `to` is either absent or (by schema) a non-empty string, so a truthy
+      // `to` means a recipient is configured.
+      const sources = [Boolean(step.to), Boolean(step.toAgentName), Boolean(step.replyToGroup)];
+      const count = sources.filter(Boolean).length;
+      if (count === 0) {
         issues.push(
-          `Step "${step.id}" sends a text but has no recipient — set "to" or turn on replyToGroup.`
+          `Step "${step.id}" sends a text but has no recipient — set "to", "toAgentName", or turn on replyToGroup.`
+        );
+      } else if (count > 1) {
+        issues.push(
+          `Step "${step.id}" sets more than one recipient — use only one of "to", "toAgentName", or replyToGroup.`
         );
       }
       if (step.replyToGroup && def.trigger.channel !== "sms") {

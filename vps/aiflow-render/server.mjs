@@ -308,6 +308,9 @@ const MAX_WHILE_PRESENT_CLICKS = Number(process.env.AIFLOW_MAX_WHILE_PRESENT_CLI
 // the button is gone we want to fall through quickly, not wait the full
 // ACTION_TIMEOUT_MS for a locator that will never resolve.
 const WHILE_PRESENT_PROBE_MS = Number(process.env.AIFLOW_WHILE_PRESENT_PROBE_MS ?? 2_000);
+// Hard cap on forEachLink list items so one request can't enumerate an unbounded
+// page of links and run the action sequence hundreds of times.
+const MAX_FOREACH_ITEMS = Number(process.env.AIFLOW_MAX_FOREACH_ITEMS ?? 25);
 const ACTION_KINDS = new Set([
   "click_text",
   "click_selector",
@@ -441,12 +444,84 @@ async function captureScreenshot(page) {
 }
 
 /**
+ * Loop-over-list: collect every `forEachLink` row's href up front (the list
+ * page is replaced as we navigate into each), then visit each href and run the
+ * SAME action sequence. Per-item failures are recorded but DON'T abort the loop
+ * — a weekly bulk update shouldn't stop because one lead's page changed.
+ */
+async function performForEach(page, forEachLink, actions) {
+  let hrefs = [];
+  try {
+    hrefs = await page.evaluate((sel) => {
+      const out = [];
+      const seen = new Set();
+      for (const el of document.querySelectorAll(sel)) {
+        const a = el.matches("a[href]") ? el : el.closest("a[href]");
+        const href = a && a.href ? a.href : null;
+        if (href && !seen.has(href)) {
+          seen.add(href);
+          out.push(href);
+        }
+      }
+      return out;
+    }, forEachLink);
+  } catch (e) {
+    return {
+      items: 0,
+      succeeded: 0,
+      failed: 0,
+      actionsCompleted: 0,
+      errors: [`forEachLink "${forEachLink}": ${String(e?.message ?? e)}`.slice(0, 200)]
+    };
+  }
+  hrefs = hrefs.slice(0, MAX_FOREACH_ITEMS);
+  let succeeded = 0;
+  let failed = 0;
+  let actionsCompleted = 0;
+  const errors = [];
+  for (const href of hrefs) {
+    try {
+      await page.goto(href, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
+    } catch (e) {
+      failed++;
+      errors.push(`goto ${href}: ${String(e?.message ?? e)}`.slice(0, 200));
+      continue;
+    }
+    const acted = await performActions(page, actions);
+    actionsCompleted += acted.completed;
+    if (acted.error) {
+      failed++;
+      errors.push(`${href}: ${acted.error}`.slice(0, 200));
+    } else {
+      succeeded++;
+    }
+  }
+  return { items: hrefs.length, succeeded, failed, actionsCompleted, errors: errors.slice(0, 20) };
+}
+
+/**
  * Respond for ACTION mode: run the sequence and reply with how far it got.
  * Returns true (response sent). An action failure is reported as
  * `action_failed` so the worker fails the run permanently instead of retrying
- * a selector that no longer matches.
+ * a selector that no longer matches. When `forEachLink` is set, loops the
+ * sequence over every matching list row instead.
  */
-async function respondWithActions(page, res, actions, wantScreenshot) {
+async function respondWithActions(page, res, actions, wantScreenshot, forEachLink) {
+  if (forEachLink) {
+    const fe = await performForEach(page, forEachLink, actions);
+    return res.json({
+      finalUrl: page.url(),
+      actionsCompleted: fe.actionsCompleted,
+      forEach: {
+        items: fe.items,
+        succeeded: fe.succeeded,
+        failed: fe.failed,
+        errors: fe.errors
+      },
+      text: "",
+      html: ""
+    });
+  }
   const acted = await performActions(page, actions);
   if (acted.error) {
     console.error(`[render] action_failed after ${acted.completed} actions: ${acted.error}`);
@@ -489,6 +564,19 @@ app.post("/render", async (req, res) => {
   if (rawActions !== undefined && !actions) {
     return res.status(400).json({ error: "invalid_actions" });
   }
+  // forEachLink loops `actions` over every matching list row; it therefore
+  // REQUIRES an actions array. Bound the selector length defensively.
+  const forEachRaw = req.body?.forEachLink;
+  const forEachLink =
+    typeof forEachRaw === "string" && forEachRaw.trim() && forEachRaw.length <= 200
+      ? forEachRaw.trim()
+      : null;
+  if (forEachRaw !== undefined && !forEachLink) {
+    return res.status(400).json({ error: "invalid_for_each_link" });
+  }
+  if (forEachLink && !actions) {
+    return res.status(400).json({ error: "invalid_actions" });
+  }
 
   // --- Unauthenticated render: stateless context, no session reuse. ---
   if (!auth) {
@@ -499,7 +587,7 @@ app.post("/render", async (req, res) => {
       const page = await context.newPage();
       await attachSsrfGuard(page);
       await page.goto(safe, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
-      if (actions) return await respondWithActions(page, res, actions, wantScreenshot);
+      if (actions) return await respondWithActions(page, res, actions, wantScreenshot, forEachLink);
       const html = await page.content();
       const text = await page.evaluate(() => document.body?.innerText ?? "");
       const screenshotBase64 = wantScreenshot ? await captureScreenshot(page) : null;
@@ -566,7 +654,7 @@ app.post("/render", async (req, res) => {
 
     // ACTION mode runs after any login. An action failure does NOT poison the
     // session — the login is still good; only the page/selectors disagreed.
-    if (actions) return await respondWithActions(page, res, actions, wantScreenshot);
+    if (actions) return await respondWithActions(page, res, actions, wantScreenshot, forEachLink);
 
     const html = await page.content();
     const text = await page.evaluate(() => document.body?.innerText ?? "");

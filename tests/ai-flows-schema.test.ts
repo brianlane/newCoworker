@@ -454,7 +454,9 @@ describe("route_to_team step", () => {
     bad.steps.push({ id: "n", type: "notify_owner", message: "by {{agent.name}}" });
     const def = aiFlowDefinitionSchema.parse(bad);
     expect(
-      validateDefinitionSemantics(def).some((i) => i.includes("only a route_to_team step has an agent"))
+      validateDefinitionSemantics(def).some((i) =>
+        i.includes("only a route_to_team or send_sms toAgentName step has an agent")
+      )
     ).toBe(true);
   });
 
@@ -932,11 +934,11 @@ describe("Clever engine: send_sms replyToGroup", () => {
     expect(validateDefinitionSemantics(def)).toEqual([]);
   });
 
-  it("rejects a send_sms with neither `to` nor replyToGroup", () => {
+  it("rejects a send_sms with no recipient at all", () => {
     const def = baseDef();
     def.steps = [{ id: "g", type: "send_sms", body: "hi" }] as AiFlowDefinition["steps"];
     expect(validateDefinitionSemantics(def)).toEqual([
-      'Step "g" sends a text but has no recipient — set "to" or turn on replyToGroup.'
+      'Step "g" sends a text but has no recipient — set "to", "toAgentName", or turn on replyToGroup.'
     ]);
   });
 
@@ -949,6 +951,91 @@ describe("Clever engine: send_sms replyToGroup", () => {
     expect(validateDefinitionSemantics(def)).toContain(
       'Step "g" replies to a group thread, which only works on an SMS-triggered flow.'
     );
+  });
+});
+
+describe("Clever engine: send_sms toAgentName", () => {
+  it("accepts toAgentName as the sole recipient and {{agent.*}} in the body", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [{ type: "from_matches", value: "4702212279" }] },
+      steps: [
+        {
+          id: "tell",
+          type: "send_sms",
+          toAgentName: "Dave",
+          body: "{{agent.name}}, Homeward offers: {{trigger.windowText}}"
+        }
+      ]
+    });
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects setting more than one recipient source", () => {
+    const def = baseDef();
+    def.steps = [
+      { id: "g", type: "send_sms", to: "{{vars.x}}", toAgentName: "Dave", body: "hi" }
+    ] as AiFlowDefinition["steps"];
+    expect(validateDefinitionSemantics(def)).toContain(
+      'Step "g" sets more than one recipient — use only one of "to", "toAgentName", or replyToGroup.'
+    );
+  });
+
+  it("rejects {{agent.*}} in a send_sms body without toAgentName", () => {
+    const def = baseDef();
+    def.steps = [
+      { id: "g", type: "send_sms", to: "{{vars.x}}", body: "hi {{agent.name}}" }
+    ] as AiFlowDefinition["steps"];
+    expect(validateDefinitionSemantics(def)).toContain(
+      'Step "g" uses {{agent.name}} but only a route_to_team or send_sms toAgentName step has an agent.'
+    );
+  });
+});
+
+describe("Clever weekly update: browse_action forEachLink", () => {
+  it("accepts forEachLink with an actions sequence", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [{ type: "from_matches", value: "3142707635" }] },
+      steps: [
+        { id: "u", type: "extract_url", saveAs: "portal_url" },
+        {
+          id: "loop",
+          type: "browse_action",
+          urlVar: "portal_url",
+          auth: { integrationLabel: "Clever" },
+          forEachLink: "a.needs-action-lead",
+          actions: [
+            { kind: "click_text", target: "Provide Update" },
+            { kind: "click_text", target: "We Spoke" }
+          ]
+        }
+      ]
+    });
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects combining forEachLink with fields, screenshot, or rememberUrlKeyedByVar", () => {
+    const def = baseDef();
+    def.steps = [
+      { id: "u", type: "extract_url", saveAs: "portal_url" },
+      {
+        id: "loop",
+        type: "browse_action",
+        urlVar: "portal_url",
+        forEachLink: "a.lead",
+        actions: [{ kind: "click_text", target: "Provide Update" }],
+        fields: [{ name: "x" }],
+        screenshot: true,
+        rememberUrlKeyedByVar: "x"
+      }
+    ] as AiFlowDefinition["steps"];
+    const issues = validateDefinitionSemantics(def);
+    expect(issues).toContain(
+      'Step "loop" can\'t combine forEachLink with fields — extraction has no single page in a loop.'
+    );
+    expect(issues).toContain('Step "loop" can\'t combine forEachLink with screenshot.');
+    expect(issues).toContain('Step "loop" can\'t combine forEachLink with rememberUrlKeyedByVar.');
   });
 });
 

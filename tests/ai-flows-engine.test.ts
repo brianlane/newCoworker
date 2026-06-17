@@ -711,6 +711,10 @@ describe("buildNowScope", () => {
     expect(now.tomorrow.weekday).toBe("Thursday");
     expect(now.tomorrow.dayOrdinal).toBe("18th");
     expect(now.tomorrow.iso).toBe("2026-06-18");
+    // Seven calendar days out from the 17th -> the 24th.
+    expect(now.in7Days.weekday).toBe("Wednesday");
+    expect(now.in7Days.dayOrdinal).toBe("24th");
+    expect(now.in7Days.iso).toBe("2026-06-24");
     expect(now.afternoonTime).toBe("14:00");
   });
 

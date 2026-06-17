@@ -121,6 +121,18 @@ export function renderErrorFields(body: unknown): { error: string; detail: strin
   };
 }
 
+/** Loop-over-list outcome when a browse_action carried `forEachLink`. */
+export type ForEachSummary = {
+  /** How many list links the service found + visited (capped service-side). */
+  items: number;
+  /** Items whose full action sequence completed. */
+  succeeded: number;
+  /** Items where navigation or an action failed (best-effort: loop continues). */
+  failed: number;
+  /** Up to a few human-readable per-item failure reasons. */
+  errors: string[];
+};
+
 export type ActionRenderResult = {
   finalUrl: string;
   /** How many of the requested UI actions the service completed, in order. */
@@ -131,6 +143,8 @@ export type ActionRenderResult = {
   html: string;
   /** Base64 JPEG captured AFTER the actions, when the request asked for one. */
   screenshotBase64?: string;
+  /** Present only for a forEachLink loop; summarizes the per-item outcomes. */
+  forEach?: ForEachSummary;
 };
 
 /**
@@ -151,11 +165,29 @@ export function parseActionResponse(body: unknown, requestedUrl: string): Action
   const html = typeof b.html === "string" ? b.html : "";
   const screenshotBase64 =
     typeof b.screenshotBase64 === "string" && b.screenshotBase64 ? b.screenshotBase64 : undefined;
+  const forEach = parseForEach(b.forEach);
   return {
     finalUrl,
     actionsCompleted: Math.floor(completed),
     text,
     html,
-    ...(screenshotBase64 ? { screenshotBase64 } : {})
+    ...(screenshotBase64 ? { screenshotBase64 } : {}),
+    ...(forEach ? { forEach } : {})
   };
+}
+
+/** Coerce a render `forEach` summary, or null when absent/malformed. */
+function parseForEach(raw: unknown): ForEachSummary | null {
+  if (!raw || typeof raw !== "object") return null;
+  const f = raw as Record<string, unknown>;
+  const num = (v: unknown) =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : null;
+  const items = num(f.items);
+  const succeeded = num(f.succeeded);
+  const failed = num(f.failed);
+  if (items === null || succeeded === null || failed === null) return null;
+  const errors = Array.isArray(f.errors)
+    ? f.errors.filter((e): e is string => typeof e === "string").slice(0, 20)
+    : [];
+  return { items, succeeded, failed, errors };
 }

@@ -59,6 +59,12 @@ export type StepAction =
       to: string;
       /** All recipients for a group MMS reply; absent for a normal 1:1 send. */
       recipients?: string[];
+      /**
+       * When set, the worker resolves this named roster member's phone at run
+       * time (the planner can't reach the DB) and renders `body` with {{agent.*}}
+       * in scope. `to` is left empty until then.
+       */
+      toAgentName?: string;
       body: string;
       quiet?: SendSmsQuietPlan;
     }
@@ -115,6 +121,12 @@ export type StepAction =
        * this step itself extracts can be the key.
        */
       rememberKeyVar?: string;
+      /**
+       * CSS selector for list rows: the render service collects each match's
+       * href and runs `actions` on every one in turn (loop-over-list). When set,
+       * fields/screenshot/rememberKeyVar don't apply.
+       */
+      forEachLink?: string;
     }
   | {
       kind: "recall_url";
@@ -202,8 +214,6 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       return { ok: true, action: { kind: "extract_text", text, fields: step.fields } };
     }
     case "send_sms": {
-      const body = renderTemplate(step.body, scope).trim();
-      if (!body) return { ok: false, error: "send_sms: body is empty after templating" };
       let quiet: SendSmsQuietPlan | undefined;
       if (step.quietHours) {
         const q = step.quietHours;
@@ -224,6 +234,23 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           ...(q.emailFromConnectionId ? { emailFromConnectionId: q.emailFromConnectionId } : {})
         };
       }
+      // Named-agent send: the planner can't reach the roster DB, so pass the
+      // agent name + the UNRENDERED body through; the worker resolves the
+      // member's phone and renders the body with {{agent.*}} in scope.
+      if (step.toAgentName) {
+        return {
+          ok: true,
+          action: {
+            kind: "send_sms",
+            to: "",
+            body: step.body,
+            toAgentName: step.toAgentName.trim(),
+            ...(quiet ? { quiet } : {})
+          }
+        };
+      }
+      const body = renderTemplate(step.body, scope).trim();
+      if (!body) return { ok: false, error: "send_sms: body is empty after templating" };
       // Group reply: recipients come from the inbound thread roster, not `to`.
       // Everyone in trigger.participants except our own business number
       // (trigger.to), de-duped, preserving order.
@@ -359,7 +386,8 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           actions,
           ...(step.fields && step.fields.length > 0 ? { fields: step.fields } : {}),
           screenshot: step.screenshot === true,
-          ...(step.rememberUrlKeyedByVar ? { rememberKeyVar: step.rememberUrlKeyedByVar } : {})
+          ...(step.rememberUrlKeyedByVar ? { rememberKeyVar: step.rememberUrlKeyedByVar } : {}),
+          ...(step.forEachLink ? { forEachLink: step.forEachLink } : {})
         }
       };
     }

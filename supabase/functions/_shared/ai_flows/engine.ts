@@ -413,6 +413,8 @@ export type NowDateParts = {
 export type NowScope = {
   today: NowDateParts;
   tomorrow: NowDateParts;
+  /** Seven days out, for a weekly follow-up (e.g. a Clever "follow up in 7 days"). */
+  in7Days: NowDateParts;
   /** A canonical afternoon time, 24h "HH:MM". */
   afternoonTime: string;
 };
@@ -463,9 +465,11 @@ function datePartsInZone(d: Date, timeZone: string): NowDateParts {
  */
 export function buildNowScope(nowMs: number, timeZone?: string | null): NowScope {
   const tz = timeZone && timeZone.trim() ? timeZone.trim() : "UTC";
+  const DAY_MS = 24 * 60 * 60 * 1000;
   return {
     today: datePartsInZone(new Date(nowMs), tz),
-    tomorrow: datePartsInZone(new Date(nowMs + 24 * 60 * 60 * 1000), tz),
+    tomorrow: datePartsInZone(new Date(nowMs + DAY_MS), tz),
+    in7Days: datePartsInZone(new Date(nowMs + 7 * DAY_MS), tz),
     afternoonTime: "14:00"
   };
 }
