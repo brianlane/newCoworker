@@ -191,8 +191,13 @@ export type RouteOfferWindow = {
  * action runs (only meaningful for fill kinds).
  */
 export type BrowseActionItem = {
-  kind: "click_text" | "click_selector" | "fill_selector" | "fill_placeholder";
-  /** Visible text (click_text / fill_placeholder) or CSS selector (the _selector kinds). */
+  kind:
+    | "click_text"
+    | "click_selector"
+    | "fill_selector"
+    | "fill_placeholder"
+    | "click_text_while_present";
+  /** Visible text (click_text / fill_placeholder / click_text_while_present) or CSS selector (the _selector kinds). */
   target: string;
   /** Fill value template, e.g. "AI assistant: {{vars.actions_taken}}". */
   valueTemplate?: string;
@@ -231,10 +236,17 @@ export type FlowStep =
   | {
       id: string;
       type: "send_sms";
-      to: string;
+      /** Recipient (templatable). Optional when `replyToGroup` supplies recipients. */
+      to?: string;
       body: string;
       /** Lead-contact quiet hours; see SendSmsQuietHours. */
       quietHours?: SendSmsQuietHours;
+      /**
+       * Reply into the inbound group MMS thread: the worker sends ONE group MMS
+       * to every trigger participant except our own business number, ignoring
+       * `to`. SMS-triggered flows only.
+       */
+      replyToGroup?: boolean;
       when?: StepCondition;
     }
   | {
@@ -309,6 +321,13 @@ export type FlowStep =
       auth?: BrowseAuth;
       /** UI actions performed in order; the FIRST failure fails the step. */
       actions: BrowseActionItem[];
+      /**
+       * Optional structured fields to extract from the page text AFTER the
+       * actions run (same Gemini extraction as browse_extract), so one
+       * credentialed pass can accept a lead AND capture its details. Produces
+       * {{vars.<field>}} for each field. Omit to only perform the actions.
+       */
+      fields?: ExtractField[];
       /** Capture a screenshot AFTER the actions complete (audit trail). */
       screenshot?: boolean;
       when?: StepCondition;

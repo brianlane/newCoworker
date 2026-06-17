@@ -5,7 +5,10 @@
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { header, verifyTelnyxWebhook } from "../_shared/telnyx_webhook.ts";
-import { telnyxMessagingPhoneString } from "../_shared/telnyx_messaging_payload.ts";
+import {
+  telnyxMessagingParticipants,
+  telnyxMessagingPhoneString
+} from "../_shared/telnyx_messaging_payload.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import {
@@ -136,10 +139,30 @@ async function evaluateAiFlows(
  * Called from BOTH the normal enqueue path and the Safe-Mode forward path, so a
  * lead automation still starts even when the customer reply is handled manually.
  */
+/** E.164-normalized, de-duped thread roster (sender + every `to`) for group replies. */
+function normalizedParticipants(payload: Record<string, unknown>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of telnyxMessagingParticipants(payload)) {
+    const n = normalizeE164(raw);
+    if (!n || seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  return out;
+}
+
 async function evaluateAndEnqueueAiFlows(
   supabase: ReturnType<typeof createClient>,
   businessId: string,
-  ctx: { from: string | null; to: string; eventId: string; bodyText: string }
+  ctx: {
+    from: string | null;
+    to: string;
+    eventId: string;
+    bodyText: string;
+    /** Every E.164 number in the thread (sender + all `to`), for group replies. */
+    participants: string[];
+  }
 ): Promise<{ suppressingRunQueued: boolean }> {
   let evalRes: AiFlowEval = { suppress: false, matched: [] };
   try {
@@ -167,6 +190,11 @@ async function evaluateAndEnqueueAiFlows(
             windowText: m.windowText,
             from: ctx.from ?? "",
             to: ctx.to,
+            // The full thread roster (sender + every `to`). More than two
+            // numbers means a group MMS — a send_sms { replyToGroup } step
+            // posts back to everyone except our own DID.
+            participants: ctx.participants,
+            group: ctx.participants.length > 2,
             event_id: ctx.eventId
           }
         },
@@ -1054,7 +1082,8 @@ serve(async (req: Request) => {
             from,
             to,
             eventId,
-            bodyText: inboundSmsBody(payload)
+            bodyText: inboundSmsBody(payload),
+            participants: normalizedParticipants(payload)
           });
           // Persist the inbound as an already-`done` job so it still appears in
           // the AiFlow correlation window + audit trail for FUTURE messages
@@ -1111,7 +1140,8 @@ serve(async (req: Request) => {
       from,
       to,
       eventId,
-      bodyText: inboundSmsBody(payload)
+      bodyText: inboundSmsBody(payload),
+      participants: normalizedParticipants(payload)
     });
 
     const { error } = await supabase.from("sms_inbound_jobs").insert({

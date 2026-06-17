@@ -35,7 +35,12 @@ export type SendSmsQuietPlan = {
 
 /** One resolved browse_action UI action (valueTemplate already rendered). */
 export type BrowseActionPlanned = {
-  kind: "click_text" | "click_selector" | "fill_selector" | "fill_placeholder";
+  kind:
+    | "click_text"
+    | "click_selector"
+    | "fill_selector"
+    | "fill_placeholder"
+    | "click_text_while_present";
   target: string;
   value: string;
 };
@@ -44,7 +49,15 @@ export type StepAction =
   | { kind: "set_vars"; vars: Record<string, string> }
   | { kind: "browse"; url: string; fields: ExtractField[]; auth?: BrowseAuth; screenshot?: boolean }
   | { kind: "extract_text"; text: string; fields: ExtractField[] }
-  | { kind: "send_sms"; to: string; body: string; quiet?: SendSmsQuietPlan }
+  | {
+      kind: "send_sms";
+      /** Primary recipient (used for logging / opt-out; recipients[0] for a group). */
+      to: string;
+      /** All recipients for a group MMS reply; absent for a normal 1:1 send. */
+      recipients?: string[];
+      body: string;
+      quiet?: SendSmsQuietPlan;
+    }
   | {
       kind: "send_email";
       to: string;
@@ -89,6 +102,8 @@ export type StepAction =
       url: string;
       auth?: BrowseAuth;
       actions: BrowseActionPlanned[];
+      /** Same-pass field extraction over the post-action page text, if any. */
+      fields?: ExtractField[];
       screenshot: boolean;
     };
 
@@ -171,9 +186,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       return { ok: true, action: { kind: "extract_text", text, fields: step.fields } };
     }
     case "send_sms": {
-      const to = renderTemplate(step.to, scope).trim();
       const body = renderTemplate(step.body, scope).trim();
-      if (!to) return { ok: false, error: "send_sms: recipient is empty after templating" };
       if (!body) return { ok: false, error: "send_sms: body is empty after templating" };
       let quiet: SendSmsQuietPlan | undefined;
       if (step.quietHours) {
@@ -195,6 +208,42 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           ...(q.emailFromConnectionId ? { emailFromConnectionId: q.emailFromConnectionId } : {})
         };
       }
+      // Group reply: recipients come from the inbound thread roster, not `to`.
+      // Everyone in trigger.participants except our own business number
+      // (trigger.to), de-duped, preserving order.
+      if (step.replyToGroup) {
+        const ownNumber = triggerString(scope, "to");
+        const raw = scope.trigger?.participants;
+        const seen = new Set<string>();
+        const recipients: string[] = [];
+        if (Array.isArray(raw)) {
+          for (const p of raw) {
+            if (typeof p !== "string") continue;
+            const n = p.trim();
+            if (!n || n === ownNumber || seen.has(n)) continue;
+            seen.add(n);
+            recipients.push(n);
+          }
+        }
+        if (recipients.length === 0) {
+          return {
+            ok: false,
+            error: "send_sms: replyToGroup but the trigger has no other group participants"
+          };
+        }
+        return {
+          ok: true,
+          action: {
+            kind: "send_sms",
+            to: recipients[0],
+            recipients,
+            body,
+            ...(quiet ? { quiet } : {})
+          }
+        };
+      }
+      const to = renderTemplate(step.to ?? "", scope).trim();
+      if (!to) return { ok: false, error: "send_sms: recipient is empty after templating" };
       return { ok: true, action: { kind: "send_sms", to, body, ...(quiet ? { quiet } : {}) } };
     }
     case "send_email": {
@@ -289,6 +338,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           url,
           auth: step.auth,
           actions,
+          ...(step.fields && step.fields.length > 0 ? { fields: step.fields } : {}),
           screenshot: step.screenshot === true
         }
       };

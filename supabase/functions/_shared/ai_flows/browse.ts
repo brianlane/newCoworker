@@ -125,6 +125,10 @@ export type ActionRenderResult = {
   finalUrl: string;
   /** How many of the requested UI actions the service completed, in order. */
   actionsCompleted: number;
+  /** Visible page text AFTER the actions ran (for same-pass field extraction). */
+  text: string;
+  /** Page HTML AFTER the actions ran (extraction fallback when text is empty). */
+  html: string;
   /** Base64 JPEG captured AFTER the actions, when the request asked for one. */
   screenshotBase64?: string;
 };
@@ -133,7 +137,9 @@ export type ActionRenderResult = {
  * Coerce a render-service ACTION-mode JSON body (`POST /render` with
  * `actions[]`) into an `ActionRenderResult`, or null when it doesn't match the
  * contract. `actionsCompleted` must be a non-negative number — it is how the
- * worker proves the click sequence actually ran.
+ * worker proves the click sequence actually ran. `text`/`html` are optional
+ * (an older render service omits them) and default to "" so a browse_action
+ * WITHOUT `fields` keeps working against any service version.
  */
 export function parseActionResponse(body: unknown, requestedUrl: string): ActionRenderResult | null {
   if (!body || typeof body !== "object") return null;
@@ -141,11 +147,15 @@ export function parseActionResponse(body: unknown, requestedUrl: string): Action
   const completed = b.actionsCompleted;
   if (typeof completed !== "number" || !Number.isFinite(completed) || completed < 0) return null;
   const finalUrl = typeof b.finalUrl === "string" && b.finalUrl ? b.finalUrl : requestedUrl;
+  const text = typeof b.text === "string" ? b.text : "";
+  const html = typeof b.html === "string" ? b.html : "";
   const screenshotBase64 =
     typeof b.screenshotBase64 === "string" && b.screenshotBase64 ? b.screenshotBase64 : undefined;
   return {
     finalUrl,
     actionsCompleted: Math.floor(completed),
+    text,
+    html,
     ...(screenshotBase64 ? { screenshotBase64 } : {})
   };
 }

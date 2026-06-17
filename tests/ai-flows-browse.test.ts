@@ -158,29 +158,53 @@ describe("parseActionResponse", () => {
   it("accepts a full action-mode body", () => {
     expect(
       parseActionResponse(
-        { finalUrl: "https://x.com/final", actionsCompleted: 3, screenshotBase64: "aGVsbG8=" },
+        {
+          finalUrl: "https://x.com/final",
+          actionsCompleted: 3,
+          text: "Lead accepted",
+          html: "<p>Lead accepted</p>",
+          screenshotBase64: "aGVsbG8="
+        },
         "https://x.com/req"
       )
     ).toEqual({
       finalUrl: "https://x.com/final",
       actionsCompleted: 3,
+      text: "Lead accepted",
+      html: "<p>Lead accepted</p>",
       screenshotBase64: "aGVsbG8="
     });
   });
   it("falls back to requestedUrl and floors a fractional count", () => {
     expect(parseActionResponse({ actionsCompleted: 2.7 }, "https://x.com/req")).toEqual({
       finalUrl: "https://x.com/req",
-      actionsCompleted: 2
+      actionsCompleted: 2,
+      text: "",
+      html: ""
+    });
+  });
+  it("defaults text/html to empty strings when the service omits them", () => {
+    // An older render service (pre same-pass-extraction) returns no text/html;
+    // a browse_action WITHOUT fields must still parse cleanly.
+    expect(parseActionResponse({ actionsCompleted: 1 }, "u")).toEqual({
+      finalUrl: "u",
+      actionsCompleted: 1,
+      text: "",
+      html: ""
     });
   });
   it("drops empty/non-string screenshots", () => {
     expect(parseActionResponse({ actionsCompleted: 1, screenshotBase64: "" }, "u")).toEqual({
       finalUrl: "u",
-      actionsCompleted: 1
+      actionsCompleted: 1,
+      text: "",
+      html: ""
     });
     expect(parseActionResponse({ actionsCompleted: 1, screenshotBase64: 42 }, "u")).toEqual({
       finalUrl: "u",
-      actionsCompleted: 1
+      actionsCompleted: 1,
+      text: "",
+      html: ""
     });
   });
   it("rejects bodies without a valid actionsCompleted", () => {

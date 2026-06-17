@@ -35,7 +35,12 @@ export async function telnyxSendSms(params: {
    * When empty we must OMIT the `from` key entirely (sending "" would 400).
    */
   fromE164?: string;
-  toE164: string;
+  /**
+   * Recipient E.164, or an ARRAY of recipients for a group MMS (Telnyx accepts
+   * `to` as a list and fans the message into one group thread). An empty array
+   * is rejected by Telnyx, so callers must pass at least one number.
+   */
+  toE164: string | string[];
   text: string;
   /**
    * Optional public/signed media URLs. When non-empty the message is sent as

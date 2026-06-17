@@ -21,3 +21,43 @@ export function telnyxMessagingPhoneString(
   }
   return undefined;
 }
+
+/** Pull every phone string out of a `to`/`from` value (string | object | array). */
+function phoneStringsFromField(raw: unknown): string[] {
+  const out: string[] = [];
+  if (typeof raw === "string") {
+    if (raw) out.push(raw);
+  } else if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (item && typeof item === "object") {
+        const pn = (item as { phone_number?: unknown }).phone_number;
+        if (typeof pn === "string" && pn) out.push(pn);
+      } else if (typeof item === "string" && item) {
+        out.push(item);
+      }
+    }
+  } else if (raw && typeof raw === "object") {
+    const pn = (raw as { phone_number?: unknown }).phone_number;
+    if (typeof pn === "string" && pn) out.push(pn);
+  }
+  return out;
+}
+
+/**
+ * Every distinct participant phone number in a Telnyx messaging webhook: the
+ * sender (`from`) plus all `to` recipients. A group MMS lists multiple `to`
+ * numbers (the other group members AND our own DID), so this is the raw roster
+ * the AiFlow engine uses to reply into the thread. Order: `from` first, then
+ * `to[]`; de-duped, preserving first-seen order. NOT E.164-normalized — the
+ * caller normalizes (the inbound handler already has normalizeE164).
+ */
+export function telnyxMessagingParticipants(payload: Record<string, unknown>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const n of [...phoneStringsFromField(payload["from"]), ...phoneStringsFromField(payload["to"])]) {
+    if (seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  return out;
+}

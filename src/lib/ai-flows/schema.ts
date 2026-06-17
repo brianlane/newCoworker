@@ -55,7 +55,11 @@ export const BROWSE_ACTION_KINDS = [
   "click_text",
   "click_selector",
   "fill_selector",
-  "fill_placeholder"
+  "fill_placeholder",
+  // Repeatedly click an element matching `target`'s visible text until it is
+  // no longer present (bounded). Zero matches is success, not a failure — for
+  // multi-step wizards whose "Next" button count varies between leads.
+  "click_text_while_present"
 ] as const;
 
 export const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
@@ -64,7 +68,7 @@ export const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
 export const VAR_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,40}$/;
 
 /** Trigger-scope keys the engine always populates (see evaluateSmsTrigger). */
-export const TRIGGER_SCOPE_KEYS = ["url", "windowText", "from"] as const;
+export const TRIGGER_SCOPE_KEYS = ["url", "windowText", "from", "to", "participants"] as const;
 
 const varName = z
   .string()
@@ -265,9 +269,20 @@ const stepSchema = z.discriminatedUnion("type", [
   z.object({
     id: stepId,
     type: z.literal("send_sms"),
-    to: z.string().min(1).max(200),
+    // Optional when `replyToGroup` is set (the recipients come from the
+    // trigger's group thread instead of a templated address). The
+    // "to required unless replyToGroup" rule is enforced in
+    // validateDefinitionSemantics (discriminatedUnion can't hold a refine).
+    to: z.string().min(1).max(200).optional(),
     body: z.string().min(1).max(1600),
     quietHours: sendSmsQuietHoursSchema.optional(),
+    /**
+     * Reply into the inbound group MMS thread: the worker sends ONE group MMS
+     * to every trigger participant except our own business number, ignoring
+     * `to`. Only meaningful for SMS-triggered flows where the inbound was a
+     * group message.
+     */
+    replyToGroup: z.boolean().optional(),
     when: whenSchema.optional()
   }),
   z.object({
@@ -325,6 +340,10 @@ const stepSchema = z.discriminatedUnion("type", [
     urlVar: varName,
     auth: browseAuthSchema.optional(),
     actions: z.array(browseActionItemSchema).min(1).max(15),
+    // Optional same-pass extraction: pull these fields from the page text AFTER
+    // the actions run (e.g. accept a lead then read its name/phone/email in one
+    // credentialed session). Produces {{vars.<field>}} like browse_extract.
+    fields: z.array(extractFieldSchema).min(1).max(15).optional(),
     screenshot: z.boolean().optional(),
     when: whenSchema.optional()
   })
@@ -377,7 +396,7 @@ export function collectTemplateRefs(text: string): { scope: string; key: string 
 function templateStringsForStep(step: FlowStep): string[] {
   switch (step.type) {
     case "send_sms":
-      return [step.to, step.body, step.quietHours?.emailSubject ?? ""];
+      return [step.to ?? "", step.body, step.quietHours?.emailSubject ?? ""];
     case "send_email":
       return [step.to, ...(step.cc ?? []), ...(step.bcc ?? []), step.subject, step.body];
     case "notify_owner":
@@ -475,6 +494,24 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       );
     }
 
+    // A send_sms needs a recipient: either a templated `to`, or `replyToGroup`
+    // (which replies into the inbound group thread instead). replyToGroup also
+    // only makes sense for an SMS-triggered flow that can carry participants.
+    if (step.type === "send_sms") {
+      // `to` is either absent or (by schema) a non-empty string, so a falsy
+      // `to` means "no recipient configured".
+      if (!step.replyToGroup && !step.to) {
+        issues.push(
+          `Step "${step.id}" sends a text but has no recipient — set "to" or turn on replyToGroup.`
+        );
+      }
+      if (step.replyToGroup && def.trigger.channel !== "sms") {
+        issues.push(
+          `Step "${step.id}" replies to a group thread, which only works on an SMS-triggered flow.`
+        );
+      }
+    }
+
     // The quiet-hours email fallback reads the lead email from a var an
     // EARLIER step must have produced (same scope rule as urlVar / when).
     if (
@@ -518,6 +555,9 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     } else if (step.type === "extract_text") {
       for (const f of step.fields) vars.add(f.name);
     } else if (step.type === "browse_action") {
+      // Same-pass extraction registers its produced vars for LATER steps, just
+      // like browse_extract.
+      for (const f of step.fields ?? []) vars.add(f.name);
       if (step.screenshot) screenshotCaptured = true;
     } else if (step.type === "http_call" && step.saveAs) {
       vars.add(step.saveAs);
