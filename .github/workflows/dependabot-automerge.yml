@@ -56,7 +56,13 @@ jobs:
 
           [ "$STATE" = "OPEN" ]       || { echo "PR #$PR_NUMBER is $STATE; skipping."; exit 0; }
           [ "$IS_DRAFT" = "false" ]   || { echo "PR #$PR_NUMBER is a draft; skipping."; exit 0; }
-          [ "$AUTHOR" = "dependabot[bot]" ] || { echo "PR #$PR_NUMBER author is $AUTHOR; skipping."; exit 0; }
+          # gh reports the Dependabot bot login as "dependabot[bot]" in webhook
+          # payloads but as "app/dependabot" via `gh pr view --json author`.
+          # Accept both so the guard works regardless of gh's representation.
+          case "$AUTHOR" in
+            "dependabot[bot]"|"app/dependabot") ;;
+            *) echo "PR #$PR_NUMBER author is $AUTHOR; skipping."; exit 0 ;;
+          esac
           [ "$HAS_LABEL" = "true" ]   || { echo "PR #$PR_NUMBER lacks '$REQUIRED_LABEL' label (likely a major update); skipping."; exit 0; }
 
           # Guard against a stale run: only act on checks for the current head.
