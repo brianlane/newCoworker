@@ -385,6 +385,91 @@ export function localClock(now: Date, timeZone?: string | null): LocalClock {
   };
 }
 
+/** A single calendar day's parts, in the business timezone, for templates. */
+export type NowDateParts = {
+  /** Full weekday name, e.g. "Thursday". */
+  weekday: string;
+  /** Full month name, e.g. "June". */
+  month: string;
+  /** Zero-padded month number, e.g. "06". */
+  monthNum: string;
+  /** Day of month with no leading zero, e.g. "18". */
+  day: string;
+  /** Day of month with English ordinal suffix, e.g. "18th". */
+  dayOrdinal: string;
+  /** Four-digit year, e.g. "2026". */
+  year: string;
+  /** ISO date, e.g. "2026-06-18". */
+  iso: string;
+};
+
+/**
+ * Relative-date tokens injected into the step scope as `{{now.*}}` so a flow can
+ * template human dates (e.g. a Clever "tomorrow afternoon" follow-up) without
+ * the engine hard-coding any portal's label format. Computed in the business
+ * timezone. Today/tomorrow expose the same parts; `afternoonTime` is a 24h
+ * "HH:MM" convenience constant a flow can pair with a date.
+ */
+export type NowScope = {
+  today: NowDateParts;
+  tomorrow: NowDateParts;
+  /** A canonical afternoon time, 24h "HH:MM". */
+  afternoonTime: string;
+};
+
+/** English ordinal suffix: 1 -> "1st", 2 -> "2nd", 11 -> "11th", 22 -> "22nd". */
+function ordinal(n: number): string {
+  const suffixes = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return `${n}${suffixes[(v - 20) % 10] ?? suffixes[v] ?? suffixes[0]}`;
+}
+
+/** Date parts for `d` rendered in `timeZone` (falls open to UTC on a bad zone). */
+function datePartsInZone(d: Date, timeZone: string): NowDateParts {
+  const make = (zone: string): NowDateParts => {
+    const dmy = new Intl.DateTimeFormat("en-US", {
+      timeZone: zone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      weekday: "long"
+    });
+    const monthLongFmt = new Intl.DateTimeFormat("en-US", { timeZone: zone, month: "long" });
+    const parts: Record<string, string> = {};
+    for (const p of dmy.formatToParts(d)) parts[p.type] = p.value;
+    const dayNum = Number(parts.day);
+    return {
+      weekday: parts.weekday,
+      month: monthLongFmt.format(d),
+      monthNum: parts.month,
+      day: String(dayNum),
+      dayOrdinal: ordinal(dayNum),
+      year: parts.year,
+      iso: `${parts.year}-${parts.month}-${parts.day}`
+    };
+  };
+  try {
+    return make(timeZone);
+  } catch {
+    return make("UTC");
+  }
+}
+
+/**
+ * Build the `{{now.*}}` scope at `nowMs`, in the business timezone. Tomorrow is
+ * "now + 24h" formatted in-zone, which lands on the next calendar day in every
+ * case except the rare instant a DST jump straddles local midnight — acceptable
+ * for day-granularity follow-up scheduling.
+ */
+export function buildNowScope(nowMs: number, timeZone?: string | null): NowScope {
+  const tz = timeZone && timeZone.trim() ? timeZone.trim() : "UTC";
+  return {
+    today: datePartsInZone(new Date(nowMs), tz),
+    tomorrow: datePartsInZone(new Date(nowMs + 24 * 60 * 60 * 1000), tz),
+    afternoonTime: "14:00"
+  };
+}
+
 /** Per-weekday minute windows, e.g. { mon: [[540, 1020]] } for 09:00–17:00. */
 export type WeeklyWindows = Partial<Record<Weekday, [number, number][]>>;
 

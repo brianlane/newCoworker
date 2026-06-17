@@ -285,6 +285,25 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
             </ol>
           </div>
           {step.screenshot && <Chip>Captures a screenshot</Chip>}
+          {step.rememberUrlKeyedByVar && (
+            <Row label="Remembers link keyed by" value={`{{vars.${step.rememberUrlKeyedByVar}}}`} mono />
+          )}
+        </>
+      );
+    case "recall_url":
+      return (
+        <>
+          {step.keyFromTrigger === "participants" && (
+            <Chip>Matches the people in the incoming group text</Chip>
+          )}
+          {step.keyVars && step.keyVars.length > 0 && (
+            <Row
+              label="Matches phone variables"
+              value={step.keyVars.map((v) => `{{vars.${v}}}`).join(", ")}
+              mono
+            />
+          )}
+          <Row label="Saves link as" value={step.saveAs} mono />
         </>
       );
   }

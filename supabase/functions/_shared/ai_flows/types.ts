@@ -196,10 +196,17 @@ export type BrowseActionItem = {
     | "click_selector"
     | "fill_selector"
     | "fill_placeholder"
-    | "click_text_while_present";
-  /** Visible text (click_text / fill_placeholder / click_text_while_present) or CSS selector (the _selector kinds). */
+    | "click_text_while_present"
+    // Click by ARIA role + accessible name: `target` is the role (e.g. "option",
+    // "button"), `valueTemplate` renders the name (e.g. a calendar day cell's
+    // "Choose Thursday, June 18th, 2026"). For widgets that aren't plain buttons.
+    | "click_role"
+    // Choose an <option> in a native <select>: `target` is the select's CSS
+    // selector, `valueTemplate` renders the option value/label (e.g. "No").
+    | "select_option";
+  /** Visible text / placeholder, a CSS selector (_selector / select_option), or an ARIA role (click_role). */
   target: string;
-  /** Fill value template, e.g. "AI assistant: {{vars.actions_taken}}". */
+  /** Fill/select/role-name value template, e.g. "AI assistant: {{vars.actions_taken}}". */
   valueTemplate?: string;
 };
 
@@ -330,6 +337,29 @@ export type FlowStep =
       fields?: ExtractField[];
       /** Capture a screenshot AFTER the actions complete (audit trail). */
       screenshot?: boolean;
+      /**
+       * Persist this step's final URL keyed by the (normalized) phone value held
+       * in this var, so a LATER flow run triggered by the same person can recall
+       * the same page via a `recall_url` step. Skipped when the var is empty or
+       * not a phone number.
+       */
+      rememberUrlKeyedByVar?: string;
+      when?: StepCondition;
+    }
+  | {
+      id: string;
+      /**
+       * Recall a URL a PRIOR flow run persisted (via browse_action
+       * `rememberUrlKeyedByVar`) for the same person, into {{vars.<saveAs>}}.
+       * Keys are gathered from the inbound group thread participants
+       * (`keyFromTrigger: "participants"`) and/or vars naming phone numbers
+       * (`keyVars`). Saves "" when nothing matches — guard the consuming step
+       * with a `when` so it skips on a miss.
+       */
+      type: "recall_url";
+      keyFromTrigger?: "participants";
+      keyVars?: string[];
+      saveAs: string;
       when?: StepCondition;
     }
   | {

@@ -606,3 +606,95 @@ describe("planStep: http_call", () => {
     });
   });
 });
+
+describe("planStep: browse_action rememberUrlKeyedByVar", () => {
+  const base: FlowStep = {
+    id: "acc",
+    type: "browse_action",
+    urlVar: "lead_url",
+    actions: [{ kind: "click_text", target: "Accept" }],
+    rememberUrlKeyedByVar: "lead_phone"
+  };
+  it("resolves and normalizes the remember key from the var", () => {
+    const r = planStep(base, { vars: { lead_url: "https://x", lead_phone: "(602) 555-0100" } });
+    expect(r.ok && r.action.kind === "browse_action" && r.action.rememberKey).toBe("+16025550100");
+  });
+  it("omits rememberKey when the var is missing or not a phone", () => {
+    const r1 = planStep(base, { vars: { lead_url: "https://x" } });
+    expect(r1.ok && r1.action.kind === "browse_action" && "rememberKey" in r1.action).toBe(false);
+    const r2 = planStep(base, { vars: { lead_url: "https://x", lead_phone: "not a phone" } });
+    expect(r2.ok && r2.action.kind === "browse_action" && "rememberKey" in r2.action).toBe(false);
+  });
+  it("renders click_role / select_option values", () => {
+    const step: FlowStep = {
+      id: "a",
+      type: "browse_action",
+      urlVar: "lead_url",
+      actions: [
+        { kind: "click_role", target: "option", valueTemplate: "Choose {{vars.day}}" },
+        { kind: "select_option", target: "#status", valueTemplate: "We Spoke" }
+      ]
+    };
+    const r = planStep(step, { vars: { lead_url: "https://x", day: "Thursday" } });
+    expect(r.ok && r.action.kind === "browse_action" && r.action.actions).toEqual([
+      { kind: "click_role", target: "option", value: "Choose Thursday" },
+      { kind: "select_option", target: "#status", value: "We Spoke" }
+    ]);
+  });
+});
+
+describe("planStep: recall_url", () => {
+  it("gathers normalized, deduped keys from participants and keyVars", () => {
+    const step: FlowStep = {
+      id: "r",
+      type: "recall_url",
+      keyFromTrigger: "participants",
+      keyVars: ["seller_phone"],
+      saveAs: "connection_url"
+    };
+    const r = planStep(step, {
+      trigger: { participants: ["+16025550100", "(602) 555-0100", "602-555-0200"] },
+      vars: { seller_phone: "6025550300" }
+    });
+    expect(r).toEqual({
+      ok: true,
+      action: {
+        kind: "recall_url",
+        keys: ["+16025550100", "+16025550200", "+16025550300"],
+        saveAs: "connection_url"
+      }
+    });
+  });
+  it("returns empty keys when nothing resolves", () => {
+    const step: FlowStep = { id: "r", type: "recall_url", keyVars: ["x"], saveAs: "u" };
+    const r = planStep(step, { vars: { x: "nope" } });
+    expect(r).toEqual({ ok: true, action: { kind: "recall_url", keys: [], saveAs: "u" } });
+  });
+  it("ignores non-string and duplicate participants, with no keyVars", () => {
+    const step: FlowStep = {
+      id: "r",
+      type: "recall_url",
+      keyFromTrigger: "participants",
+      saveAs: "u"
+    };
+    const r = planStep(step, {
+      trigger: { participants: ["+16025550100", 12345, "(602) 555-0100"] }
+    });
+    expect(r).toEqual({
+      ok: true,
+      action: { kind: "recall_url", keys: ["+16025550100"], saveAs: "u" }
+    });
+  });
+  it("yields no keys when participants is not an array", () => {
+    const step: FlowStep = {
+      id: "r",
+      type: "recall_url",
+      keyFromTrigger: "participants",
+      saveAs: "u"
+    };
+    expect(planStep(step, { trigger: {} })).toEqual({
+      ok: true,
+      action: { kind: "recall_url", keys: [], saveAs: "u" }
+    });
+  });
+});
