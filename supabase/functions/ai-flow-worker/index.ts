@@ -973,6 +973,15 @@ async function browseActionStep(
     }
     const fe = parsed.forEach;
     if (fe.items === 0) {
+      // Zero items WITH errors means link collection itself failed (e.g. a bad
+      // CSS selector throws in querySelectorAll) — fail loudly instead of
+      // treating a broken weekly-update selector as a clean "nothing to do".
+      if (fe.errors.length > 0) {
+        return {
+          kind: "fail",
+          error: `browse_action: forEachLink matched no items (${fe.errors[0]})`
+        };
+      }
       appendActionTaken(scope, "found no matching list items to update");
       return { kind: "ok", result: { forEach: fe } };
     }
@@ -1451,7 +1460,12 @@ async function sendSmsStep(
       };
     }
     toE164 = agent.phone;
-    bodyText = renderTemplate(action.body, agentScope(scope, agent));
+    // The planner couldn't render this (agent scope is worker-only), so its
+    // empty-body guard never ran. Re-check here so an all-template body that
+    // resolves to nothing doesn't send a bare compliance-suffix text to a
+    // teammate.
+    bodyText = renderTemplate(action.body, agentScope(scope, agent)).trim();
+    if (!bodyText) return { kind: "fail", error: "send_sms: body is empty after templating" };
   }
   // Lead-contact quiet hours: inside the configured overnight window the lead
   // is never texted. With an extracted lead email we email the same message
@@ -1459,7 +1473,11 @@ async function sendSmsStep(
   // also goes out at the morning resume time; without an email the run just
   // parks until then via earliest_claim_at. The owner can lift this for the
   // rest of the run by answering an approval gate with "bypass quiet hours".
-  if (action.quiet && scope.vars[BYPASS_QUIET_HOURS_VAR] !== true) {
+  // Quiet hours (defer overnight) and the email fallback are lead-contact
+  // protections; an agent-directed text (toAgentName) is an internal
+  // notification that must not be parked until morning or copied to the lead's
+  // email with content meant for a roster member.
+  if (action.quiet && !action.toAgentName && scope.vars[BYPASS_QUIET_HOURS_VAR] !== true) {
     const decision = smsQuietDecision(Date.now(), {
       timezone: action.quiet.timezone,
       noSendAfter: action.quiet.noSendAfter,

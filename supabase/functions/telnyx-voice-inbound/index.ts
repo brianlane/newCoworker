@@ -349,22 +349,43 @@ serve(async (req: Request) => {
     const rule = ruleRow as { to_e164?: string; whisper?: string | null } | null;
     if (rule?.to_e164) {
       const whisper = (rule.whisper ?? "").trim();
+      // A warm transfer bridges an *answered* leg. Answer first and gate the
+      // whisper + transfer on it — transferring an unanswered call is rejected
+      // by Telnyx and strands the caller on dead air. (answerThenSpeak swallows
+      // the answer result, so we answer explicitly here to act on a failure.)
+      const ans = await telnyxAnswerPlain(apiKey, callControlId);
+      if (!ans.ok) {
+        const errText = (await ans.text()).slice(0, 300);
+        console.error("caller-rule answer failed", ans.status, errText);
+        await telemetryRecord(supabase, "voice_caller_transfer_failed", {
+          business_id: businessId,
+          call_control_id: callControlId,
+          http_status: ans.status
+        });
+        await systemLog(supabase, {
+          businessId,
+          source: "voice",
+          level: "error",
+          event: "voice_caller_transfer_failed",
+          message: `Caller-rule answer refused by Telnyx (HTTP ${ans.status}); transfer skipped: ${errText}`,
+          payload: { call_control_id: callControlId, http_status: ans.status, to: rule.to_e164 }
+        });
+        return new Response(JSON.stringify({ ok: true, path: "caller_transfer_answer_failed" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
       if (whisper) {
-        // answerThenSpeak answers + speaks the greeting to the caller; then we
-        // pause long enough for the short prompt to play before bridging (the
-        // same pacing the Safe Mode forward uses).
-        await answerThenSpeak(apiKey, callControlId, whisper);
+        // Speak the short prompt to the caller, then pause long enough for it to
+        // play before bridging (the same pacing the Safe Mode forward uses).
+        const sp = await telnyxSpeak(apiKey, callControlId, whisper);
+        if (!sp.ok) {
+          console.error("caller-rule whisper failed", sp.status, (await sp.text()).slice(0, 300));
+        }
         const delayRaw = Deno.env.get("VOICE_SAFE_MODE_TRANSFER_DELAY_MS");
         const delayMs = delayRaw ? Number(delayRaw) : 2500;
         if (Number.isFinite(delayMs) && delayMs > 0) {
           await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
-        }
-      } else {
-        // No whisper: answer first (transfer bridges an answered leg) then go
-        // straight to the human.
-        const ans = await telnyxAnswerPlain(apiKey, callControlId);
-        if (!ans.ok) {
-          console.error("caller-rule answer failed", ans.status, (await ans.text()).slice(0, 300));
         }
       }
       const transferRes = await telnyxTransferCall(apiKey, callControlId, rule.to_e164);
