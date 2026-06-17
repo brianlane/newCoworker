@@ -176,6 +176,33 @@ describe("planStep: send_sms", () => {
       }
     });
   });
+
+  it("carries quiet hours into a toAgentName send", () => {
+    const agentSend: FlowStep = {
+      id: "x",
+      type: "send_sms",
+      toAgentName: "Dave",
+      body: "{{agent.name}}, heads up",
+      quietHours: { timezone: "America/Phoenix", noSendAfter: "22:00", resumeAt: "08:30" }
+    };
+    const r = planStep(agentSend, {});
+    expect(r).toEqual({
+      ok: true,
+      action: {
+        kind: "send_sms",
+        to: "",
+        toAgentName: "Dave",
+        body: "{{agent.name}}, heads up",
+        quiet: {
+          timezone: "America/Phoenix",
+          noSendAfter: "22:00",
+          resumeAt: "08:30",
+          emailTo: "",
+          emailSubject: "Following up on your inquiry"
+        }
+      }
+    });
+  });
 });
 
 describe("planStep: send_sms quietHours", () => {

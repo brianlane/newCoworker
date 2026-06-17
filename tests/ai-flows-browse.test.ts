@@ -240,4 +240,46 @@ describe("parseActionResponse", () => {
       parseActionResponse({ actionsCompleted: 1, forEach: { items: "x" } }, "u")
     ).toEqual({ finalUrl: "u", actionsCompleted: 1, text: "", html: "" });
   });
+
+  it("defaults forEach errors to [] when absent or non-array", () => {
+    expect(
+      parseActionResponse({ actionsCompleted: 4, forEach: { items: 2, succeeded: 2, failed: 0 } }, "u")
+    ).toEqual({
+      finalUrl: "u",
+      actionsCompleted: 4,
+      text: "",
+      html: "",
+      forEach: { items: 2, succeeded: 2, failed: 0, errors: [] }
+    });
+    expect(
+      parseActionResponse(
+        { actionsCompleted: 4, forEach: { items: 2, succeeded: 2, failed: 0, errors: "nope" } },
+        "u"
+      )
+    ).toEqual({
+      finalUrl: "u",
+      actionsCompleted: 4,
+      text: "",
+      html: "",
+      forEach: { items: 2, succeeded: 2, failed: 0, errors: [] }
+    });
+  });
+
+  it("filters non-string entries out of forEach errors", () => {
+    expect(
+      parseActionResponse(
+        {
+          actionsCompleted: 4,
+          forEach: { items: 2, succeeded: 1, failed: 1, errors: ["real error", 42, null, "second"] }
+        },
+        "u"
+      )
+    ).toEqual({
+      finalUrl: "u",
+      actionsCompleted: 4,
+      text: "",
+      html: "",
+      forEach: { items: 2, succeeded: 1, failed: 1, errors: ["real error", "second"] }
+    });
+  });
 });
