@@ -650,6 +650,13 @@ async function logFlowEmail(
     body: string;
     source: "ai_flow" | "owner_mailbox" | "tenant_mailbox_outbound";
     providerMessageId?: string | null;
+    attachments?: {
+      filename: string;
+      mime_type: string;
+      size_bytes: number;
+      storage_path: string;
+      bucket: string;
+    }[];
   }
 ): Promise<void> {
   const { error } = await supabase.from("email_log").insert({
@@ -665,7 +672,8 @@ async function logFlowEmail(
     source: args.source,
     run_id: run.id,
     flow_id: run.flow_id,
-    provider_message_id: args.providerMessageId ?? null
+    provider_message_id: args.providerMessageId ?? null,
+    attachments: args.attachments ?? []
   });
   if (error) console.error("email_log insert", error);
 }
@@ -1465,7 +1473,14 @@ async function deliverFlowEmail(
   const apiKey = Deno.env.get("RESEND_API_KEY") ?? "";
   if (!apiKey) return { kind: "fail", error: "send_email: RESEND_API_KEY is not configured" };
 
+  const SCREENSHOT_FILENAME = "lead-screenshot.jpg";
   let attachment: { filename: string; content: string } | null = null;
+  // Metadata logged onto email_log.attachments so the dashboard reading pane can
+  // show + sign the screenshot. References the bytes in the screenshots bucket in
+  // place (no copy) — see StoredAttachment.bucket.
+  let attachmentMeta:
+    | { filename: string; mime_type: string; size_bytes: number; storage_path: string; bucket: string }
+    | null = null;
   if (action.attachScreenshot) {
     const path = typeof scope.vars.screenshot_path === "string" ? scope.vars.screenshot_path : "";
     if (path) {
@@ -1473,9 +1488,17 @@ async function deliverFlowEmail(
       if (error || !data) {
         throw new Error(`send_email: screenshot download failed: ${error?.message ?? "no data"}`);
       }
+      const bytes = new Uint8Array(await data.arrayBuffer());
       attachment = {
-        filename: "lead-screenshot.jpg",
-        content: bytesToBase64(new Uint8Array(await data.arrayBuffer()))
+        filename: SCREENSHOT_FILENAME,
+        content: bytesToBase64(bytes)
+      };
+      attachmentMeta = {
+        filename: SCREENSHOT_FILENAME,
+        mime_type: "image/jpeg",
+        size_bytes: bytes.byteLength,
+        storage_path: path,
+        bucket: SCREENSHOT_BUCKET
       };
     }
     // No screenshot in scope (static-fetch fallback or capture failure): send
@@ -1526,7 +1549,8 @@ async function deliverFlowEmail(
     subject: action.subject,
     body: action.body,
     source: mailbox ? "tenant_mailbox_outbound" : "ai_flow",
-    providerMessageId: emailId
+    providerMessageId: emailId,
+    attachments: attachmentMeta ? [attachmentMeta] : []
   });
   return {
     kind: "ok",

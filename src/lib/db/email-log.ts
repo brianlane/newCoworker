@@ -32,14 +32,21 @@ export type EmailLogSource =
 
 /**
  * Attachment metadata as stored inline on email_log.attachments. `storage_path`
- * is the object key in the private `email-attachments` bucket; it stays
- * server-side (the dashboard fetches signed URLs, never the raw path).
+ * is the object key the bytes live under; it stays server-side (the dashboard
+ * fetches signed URLs, never the raw path).
+ *
+ * `bucket` names the private Storage bucket holding the bytes. Inbound mail omits
+ * it (the bytes live in `email-attachments`, which the reader treats as the
+ * default). Outbound flow mail sets it to `aiflow-screenshots`, since the
+ * coworker's only sent attachment is the optional lead screenshot, which already
+ * lives in that bucket — we reference it in place rather than copying bytes.
  */
 export type StoredAttachment = {
   filename: string;
   mime_type: string;
   size_bytes: number;
   storage_path: string;
+  bucket?: string;
 };
 
 export type EmailLogRow = {
