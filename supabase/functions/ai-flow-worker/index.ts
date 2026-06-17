@@ -29,6 +29,7 @@ import { systemLog } from "../_shared/system_log.ts";
 import { telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
 import {
   buildExtractionPrompt,
+  buildNowScope,
   evaluateStepCondition,
   extractPhones,
   filterRosterByAvailability,
@@ -41,6 +42,7 @@ import {
   parseRoutedAgent,
   pickRosterAgent,
   renderTemplate,
+  type NowScope,
   type RoutedAgent
 } from "../_shared/ai_flows/engine.ts";
 import { callRowboatChatOnce } from "../_shared/sms_rowboat.ts";
@@ -167,6 +169,11 @@ type RunRow = {
 type Scope = {
   vars: Record<string, unknown>;
   trigger: Record<string, unknown>;
+  /**
+   * Relative-date tokens ({{now.*}}), computed once per run in the business
+   * timezone. Derived only — buildContext omits it from the persisted context.
+   */
+  now?: NowScope;
   // The AI coworker's own mailbox, exposed to templates as {{coworker.email}}
   // (e.g. for a body signature or a self-CC). Derived from tenant_mailboxes each
   // run; never persisted in run.context (buildContext omits it).
@@ -331,6 +338,20 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   // flows can reference {{coworker.email}} in templates.
   const mailbox = await ensureMailboxIdentity(supabase, run.business_id);
   scope.coworker = { email: mailbox.address };
+  // Relative-date tokens ({{now.*}}) in the business timezone, so a step can
+  // template a follow-up like "tomorrow afternoon" without hard-coding dates.
+  try {
+    const { data: tzRow } = await supabase
+      .from("businesses")
+      .select("timezone")
+      .eq("id", run.business_id)
+      .maybeSingle();
+    const tz = (tzRow as { timezone?: string | null } | null)?.timezone ?? null;
+    scope.now = buildNowScope(Date.now(), tz);
+  } catch (e) {
+    console.error("executeRun buildNowScope", e);
+    scope.now = buildNowScope(Date.now(), null);
+  }
   const approval = asRecord(run.context.approval);
   // route_to_team state: tried[], the currently-offered agent, and last_event
   // (claim/reject/timeout) stamped by the inbound webhook / escalation sweep.
@@ -614,6 +635,8 @@ async function runStep(
       return routeToTeamStep(supabase, run, scope, action, routing);
     case "browse_action":
       return browseActionStep(supabase, run, index, scope, action);
+    case "recall_url":
+      return recallUrlStep(supabase, run, scope, action);
   }
 }
 
@@ -993,6 +1016,37 @@ async function browseActionStep(
     extractedVars = out;
   }
 
+  // Persist the final URL keyed by a phone so a LATER run for the same person
+  // can recall it (recall_url). Resolved from scope.vars AFTER same-pass
+  // extraction above, so a phone THIS step just extracted can be the key.
+  // Best-effort: a memory write must never fail a browse that already posted.
+  const rememberRaw = action.rememberKeyVar ? scope.vars[action.rememberKeyVar] : undefined;
+  const rememberKey =
+    typeof rememberRaw === "string" ? normalizeNanpToE164(rememberRaw) : null;
+  if (rememberKey && parsed.finalUrl) {
+    const { error: memErr } = await supabase.from("aiflow_url_memory").upsert(
+      {
+        business_id: run.business_id,
+        memory_key: rememberKey,
+        url: parsed.finalUrl,
+        flow_id: run.flow_id,
+        run_id: run.id
+      },
+      { onConflict: "business_id,memory_key" }
+    );
+    if (memErr) {
+      console.error("aiflow_url_memory upsert", memErr);
+      await systemLog(supabase, {
+        businessId: run.business_id,
+        source: "aiflow",
+        level: "warn",
+        event: "ai_flow_url_memory_write_failed",
+        message: `URL memory write failed: ${memErr.message}`,
+        payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
+      });
+    }
+  }
+
   return {
     kind: "ok",
     result: {
@@ -1002,6 +1056,37 @@ async function browseActionStep(
       ...(screenshotPath ? { screenshot_path: screenshotPath } : {})
     }
   };
+}
+
+/**
+ * recall_url: look up a URL a prior browse_action persisted for the same person
+ * (by normalized phone) and save it into {{vars.<saveAs>}}. Saves "" on a miss,
+ * so a consuming step guarded by a `when` skips cleanly instead of failing.
+ */
+async function recallUrlStep(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "recall_url" }>
+): Promise<StepOutcome> {
+  let url = "";
+  if (action.keys.length > 0) {
+    const { data, error } = await supabase
+      .from("aiflow_url_memory")
+      .select("memory_key, url, updated_at")
+      .eq("business_id", run.business_id)
+      .in("memory_key", action.keys)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.error("aiflow_url_memory read", error);
+    } else if (data && typeof (data as { url?: unknown }).url === "string") {
+      url = (data as { url: string }).url;
+    }
+  }
+  scope.vars[action.saveAs] = url;
+  return { kind: "ok", result: { vars: { [action.saveAs]: url }, matched: url.length > 0 } };
 }
 
 /**

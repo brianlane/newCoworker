@@ -203,6 +203,8 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
         urlVar: "lead_url",
         actions: [{ kind: "click_text", target: "" }]
       };
+    case "recall_url":
+      return { id, type, keyFromTrigger: "participants", saveAs: "saved_url" };
   }
 }
 
@@ -213,6 +215,7 @@ function varsProducedByStep(step: FlowStep): string[] {
   if (step.type === "extract_text") return step.fields.map((f) => f.name).filter(Boolean);
   if (step.type === "browse_action") return (step.fields ?? []).map((f) => f.name).filter(Boolean);
   if (step.type === "http_call" && step.saveAs) return [step.saveAs];
+  if (step.type === "recall_url") return [step.saveAs];
   return [];
 }
 
@@ -1558,7 +1561,13 @@ function StepFields({
             <input
               className={`${inputClass} flex-1`}
               value={a.target}
-              placeholder={a.kind.endsWith("_selector") ? "CSS selector" : "visible text / placeholder"}
+              placeholder={
+                a.kind === "select_option" || a.kind.endsWith("_selector")
+                  ? "CSS selector"
+                  : a.kind === "click_role"
+                    ? "ARIA role (e.g. option, button)"
+                    : "visible text / placeholder"
+              }
               onChange={(ev) =>
                 patchStep(index, {
                   actions: step.actions.map((x, xi) =>
@@ -1567,11 +1576,17 @@ function StepFields({
                 })
               }
             />
-            {a.kind.startsWith("fill") && (
+            {(a.kind.startsWith("fill") || a.kind === "click_role" || a.kind === "select_option") && (
               <input
                 className={`${inputClass} flex-1`}
                 value={a.valueTemplate ?? ""}
-                placeholder="value to type"
+                placeholder={
+                  a.kind === "click_role"
+                    ? "accessible name to click"
+                    : a.kind === "select_option"
+                      ? "option to choose"
+                      : "value to type"
+                }
                 onChange={(ev) =>
                   patchStep(index, {
                     actions: step.actions.map((x, xi) =>
@@ -1614,6 +1629,41 @@ function StepFields({
           />
           Capture a screenshot after the actions (audit trail)
         </label>
+        <Field
+          label="Remember this link for later runs, keyed by this phone variable (optional)"
+          value={step.rememberUrlKeyedByVar ?? ""}
+          onChange={(v) =>
+            patchStep(index, { rememberUrlKeyedByVar: v.trim() ? v.trim() : undefined })
+          }
+        />
+      </div>
+    );
+  }
+  if (step.type === "recall_url") {
+    return (
+      <div className="space-y-2">
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={step.keyFromTrigger === "participants"}
+            onChange={(ev) =>
+              patchStep(index, { keyFromTrigger: ev.target.checked ? "participants" : undefined })
+            }
+          />
+          Match by the people in the incoming group text
+        </label>
+        <Field
+          label="Or match by phone variables (comma-separated, optional)"
+          value={(step.keyVars ?? []).join(", ")}
+          onChange={(v) => {
+            const list = v
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean);
+            patchStep(index, { keyVars: list.length > 0 ? list : undefined });
+          }}
+        />
+        <Field label="Save the link as" value={step.saveAs} onChange={(v) => patchStep(index, { saveAs: v })} />
       </div>
     );
   }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   allUrlsInText,
   buildExtractionPrompt,
+  buildNowScope,
   evaluateSmsTrigger,
   evaluateStepCondition,
   extractPhones,
@@ -689,5 +690,52 @@ describe("filterRosterByAvailability", () => {
       member("off")
     ];
     expect(filterRosterByAvailability(roster, new Set(["off"]), monMorning)).toEqual([]);
+  });
+});
+
+describe("buildNowScope", () => {
+  // 2026-06-17 18:00 UTC = 11:00 in America/Phoenix (UTC-7, no DST).
+  const ms = Date.parse("2026-06-17T18:00:00Z");
+
+  it("computes today/tomorrow date parts in the business timezone", () => {
+    const now = buildNowScope(ms, "America/Phoenix");
+    expect(now.today).toEqual({
+      weekday: "Wednesday",
+      month: "June",
+      monthNum: "06",
+      day: "17",
+      dayOrdinal: "17th",
+      year: "2026",
+      iso: "2026-06-17"
+    });
+    expect(now.tomorrow.weekday).toBe("Thursday");
+    expect(now.tomorrow.dayOrdinal).toBe("18th");
+    expect(now.tomorrow.iso).toBe("2026-06-18");
+    expect(now.afternoonTime).toBe("14:00");
+  });
+
+  it("rolls the date across a timezone's midnight", () => {
+    // 06:30 UTC is still the prior evening in Phoenix (UTC-7) -> 23:30 on the 16th.
+    const lateNight = Date.parse("2026-06-17T06:30:00Z");
+    expect(buildNowScope(lateNight, "America/Phoenix").today.iso).toBe("2026-06-16");
+  });
+
+  it("produces correct ordinals (1st, 2nd, 3rd, 11th, 21st)", () => {
+    expect(buildNowScope(Date.parse("2026-06-01T18:00:00Z"), "UTC").today.dayOrdinal).toBe("1st");
+    expect(buildNowScope(Date.parse("2026-06-02T18:00:00Z"), "UTC").today.dayOrdinal).toBe("2nd");
+    expect(buildNowScope(Date.parse("2026-06-03T18:00:00Z"), "UTC").today.dayOrdinal).toBe("3rd");
+    expect(buildNowScope(Date.parse("2026-06-11T18:00:00Z"), "UTC").today.dayOrdinal).toBe("11th");
+    expect(buildNowScope(Date.parse("2026-06-21T18:00:00Z"), "UTC").today.dayOrdinal).toBe("21st");
+  });
+
+  it("falls open to UTC on an invalid timezone", () => {
+    const now = buildNowScope(ms, "Not/AZone");
+    expect(now.today.iso).toBe("2026-06-17");
+  });
+
+  it("defaults to UTC when no timezone is given", () => {
+    expect(buildNowScope(ms).today.iso).toBe("2026-06-17");
+    expect(buildNowScope(ms, null).today.iso).toBe("2026-06-17");
+    expect(buildNowScope(ms, "   ").today.iso).toBe("2026-06-17");
   });
 });

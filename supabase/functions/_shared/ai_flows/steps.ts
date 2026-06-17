@@ -8,7 +8,7 @@
  * ai-flow-worker (supabase/functions/ai-flow-worker/index.ts) stays a thin IO
  * dispatcher that switches on `action.kind`.
  */
-import { firstUrlInText, renderTemplate } from "./engine.ts";
+import { firstUrlInText, normalizeNanpToE164, renderTemplate } from "./engine.ts";
 import type { BrowseAuth, ExtractField, FlowStep, RouteOfferWindow } from "./types.ts";
 
 export type StepScope = {
@@ -16,6 +16,8 @@ export type StepScope = {
   trigger?: Record<string, unknown>;
   /** The AI coworker's own mailbox, referenceable in templates as {{coworker.email}}. */
   coworker?: { email?: string };
+  /** Relative-date tokens ({{now.*}}); see engine.buildNowScope. Derived, never persisted. */
+  now?: unknown;
 };
 
 /**
@@ -40,7 +42,9 @@ export type BrowseActionPlanned = {
     | "click_selector"
     | "fill_selector"
     | "fill_placeholder"
-    | "click_text_while_present";
+    | "click_text_while_present"
+    | "click_role"
+    | "select_option";
   target: string;
   value: string;
 };
@@ -105,6 +109,18 @@ export type StepAction =
       /** Same-pass field extraction over the post-action page text, if any. */
       fields?: ExtractField[];
       screenshot: boolean;
+      /**
+       * Var name whose (phone) value the worker normalizes and persists the
+       * final URL under — resolved AFTER any same-pass extraction, so a phone
+       * this step itself extracts can be the key.
+       */
+      rememberKeyVar?: string;
+    }
+  | {
+      kind: "recall_url";
+      /** Candidate (normalized) phone keys to look up, in priority order. */
+      keys: string[];
+      saveAs: string;
     };
 
 export type StepPlan =
@@ -331,6 +347,9 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         target: a.target,
         value: a.valueTemplate ? renderTemplate(a.valueTemplate, scope).trim() : ""
       }));
+      // Pass the remember-key VAR NAME (not a resolved value): the worker reads
+      // and normalizes it AFTER any same-pass extraction, so a phone this step
+      // itself extracts can serve as the key.
       return {
         ok: true,
         action: {
@@ -339,9 +358,30 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           auth: step.auth,
           actions,
           ...(step.fields && step.fields.length > 0 ? { fields: step.fields } : {}),
-          screenshot: step.screenshot === true
+          screenshot: step.screenshot === true,
+          ...(step.rememberUrlKeyedByVar ? { rememberKeyVar: step.rememberUrlKeyedByVar } : {})
         }
       };
+    }
+    case "recall_url": {
+      // Gather candidate phone keys: the inbound group participants and/or vars
+      // the author named, all normalized to E.164 and deduped (priority order).
+      const keys: string[] = [];
+      const seen = new Set<string>();
+      const add = (raw: unknown) => {
+        if (typeof raw !== "string") return;
+        const norm = normalizeNanpToE164(raw);
+        if (norm && !seen.has(norm)) {
+          seen.add(norm);
+          keys.push(norm);
+        }
+      };
+      if (step.keyFromTrigger === "participants") {
+        const parts = scope.trigger?.participants;
+        if (Array.isArray(parts)) for (const p of parts) add(p);
+      }
+      for (const v of step.keyVars ?? []) add(scope.vars?.[v]);
+      return { ok: true, action: { kind: "recall_url", keys, saveAs: step.saveAs } };
     }
   }
 }

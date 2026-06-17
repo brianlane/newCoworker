@@ -951,3 +951,162 @@ describe("Clever engine: send_sms replyToGroup", () => {
     );
   });
 });
+
+describe("Clever auto-update: recall_url + rememberUrlKeyedByVar", () => {
+  it("accepts a browse_action that remembers its URL and a later recall_url", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [{ type: "contains", value: "Clever referral" }] },
+      steps: [
+        { id: "u", type: "extract_url", saveAs: "lead_url" },
+        {
+          id: "acc",
+          type: "browse_action",
+          urlVar: "lead_url",
+          actions: [{ kind: "click_text", target: "Accept" }],
+          fields: [{ name: "lead_phone" }],
+          rememberUrlKeyedByVar: "lead_phone"
+        }
+      ]
+    });
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects rememberUrlKeyedByVar pointing at an unproduced var", () => {
+    const def = baseDef();
+    def.steps = [
+      { id: "u", type: "extract_url", saveAs: "lead_url" },
+      {
+        id: "acc",
+        type: "browse_action",
+        urlVar: "lead_url",
+        actions: [{ kind: "click_text", target: "Accept" }],
+        rememberUrlKeyedByVar: "lead_phone"
+      }
+    ] as AiFlowDefinition["steps"];
+    expect(validateDefinitionSemantics(def)).toContain(
+      'Step "acc" remembers its URL keyed by {{vars.lead_phone}} which no earlier step or its own extraction produces.'
+    );
+  });
+
+  it("recall_url registers saveAs for a later browse_action urlVar, guarded by when", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [{ type: "contains", value: "introduce you" }] },
+      steps: [
+        { id: "r", type: "recall_url", keyFromTrigger: "participants", saveAs: "connection_url" },
+        {
+          id: "upd",
+          type: "browse_action",
+          urlVar: "connection_url",
+          actions: [{ kind: "select_option", target: "#status", valueTemplate: "We Spoke" }],
+          when: { var: "connection_url", contains: "http" }
+        }
+      ]
+    });
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects a recall_url with no key source", () => {
+    const def: AiFlowDefinition = {
+      version: 1,
+      trigger: { channel: "sms", conditions: [] },
+      steps: [{ id: "r", type: "recall_url", saveAs: "connection_url" }]
+    };
+    expect(validateDefinitionSemantics(def)).toContain(
+      'Step "r" recalls a URL but has no key source — set keyFromTrigger or keyVars.'
+    );
+  });
+
+  it("rejects recall by participants on a non-SMS flow", () => {
+    const def: AiFlowDefinition = {
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [{ id: "r", type: "recall_url", keyFromTrigger: "participants", saveAs: "u" }]
+    };
+    expect(validateDefinitionSemantics(def)).toContain(
+      'Step "r" recalls by group participants, which only works on an SMS-triggered flow.'
+    );
+  });
+
+  it("rejects recall_url keyVars naming an unproduced var", () => {
+    const def: AiFlowDefinition = {
+      version: 1,
+      trigger: { channel: "sms", conditions: [] },
+      steps: [{ id: "r", type: "recall_url", keyVars: ["lead_phone"], saveAs: "u" }]
+    };
+    expect(validateDefinitionSemantics(def)).toContain(
+      'Step "r" recalls a URL keyed by {{vars.lead_phone}} which no earlier step produces.'
+    );
+  });
+
+  it("accepts recall_url keyVars naming an earlier or engine-provided var", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [] },
+      steps: [
+        { id: "t", type: "extract_text", fields: [{ name: "seller_phone" }] },
+        { id: "r", type: "recall_url", keyVars: ["seller_phone", "actions_taken"], saveAs: "u" }
+      ]
+    });
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+});
+
+describe("click_role / select_option require a value", () => {
+  it("rejects click_role with no valueTemplate", () => {
+    const parsed = aiFlowDefinitionSchema.safeParse({
+      version: 1,
+      trigger: { channel: "sms", conditions: [] },
+      steps: [
+        { id: "u", type: "extract_url", saveAs: "lead_url" },
+        {
+          id: "a",
+          type: "browse_action",
+          urlVar: "lead_url",
+          actions: [{ kind: "click_role", target: "option" }]
+        }
+      ]
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("accepts click_role with a name and select_option with a value", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [] },
+      steps: [
+        { id: "u", type: "extract_url", saveAs: "lead_url" },
+        {
+          id: "a",
+          type: "browse_action",
+          urlVar: "lead_url",
+          actions: [
+            { kind: "click_role", target: "option", valueTemplate: "Choose {{now.tomorrow.weekday}}" },
+            { kind: "select_option", target: "#status", valueTemplate: "We Spoke" }
+          ]
+        }
+      ]
+    });
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+});
+
+describe("{{now.*}} template scope", () => {
+  it("accepts known now fields and rejects unknown ones", () => {
+    const ok = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [] },
+      steps: [{ id: "n", type: "notify_owner", message: "Follow up {{now.tomorrow.weekday}} at {{now.afternoonTime}}" }]
+    });
+    expect(validateDefinitionSemantics(ok)).toEqual([]);
+
+    const bad = baseDef();
+    bad.steps = [
+      { id: "n", type: "notify_owner", message: "{{now.yesterday}}" }
+    ] as AiFlowDefinition["steps"];
+    expect(validateDefinitionSemantics(bad)).toContain(
+      'Step "n" references unknown date field "now.yesterday".'
+    );
+  });
+});

@@ -33,7 +33,8 @@ export const FLOW_STEP_TYPES = [
   "notify_owner",
   "http_call",
   "route_to_team",
-  "browse_action"
+  "browse_action",
+  "recall_url"
 ] as const;
 
 /** Keys available as `{{agent.x}}` inside a route_to_team step's templates. */
@@ -59,8 +60,17 @@ export const BROWSE_ACTION_KINDS = [
   // Repeatedly click an element matching `target`'s visible text until it is
   // no longer present (bounded). Zero matches is success, not a failure — for
   // multi-step wizards whose "Next" button count varies between leads.
-  "click_text_while_present"
+  "click_text_while_present",
+  // Click by ARIA role (`target`) + accessible name (`valueTemplate`), for
+  // widgets that aren't plain text buttons (e.g. a calendar day cell).
+  "click_role",
+  // Choose an option in a native <select>: `target` is the select's CSS
+  // selector, `valueTemplate` is the option value/label.
+  "select_option"
 ] as const;
+
+/** browse_action kinds whose `valueTemplate` is required (name / option value). */
+export const BROWSE_ACTION_KINDS_REQUIRING_VALUE = ["click_role", "select_option"] as const;
 
 export const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
 
@@ -69,6 +79,14 @@ export const VAR_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,40}$/;
 
 /** Trigger-scope keys the engine always populates (see evaluateSmsTrigger). */
 export const TRIGGER_SCOPE_KEYS = ["url", "windowText", "from", "to", "participants"] as const;
+
+/**
+ * Top-level keys of the `{{now.*}}` scope the worker injects each run (relative
+ * dates in the business timezone; see engine.buildNowScope). Nested parts like
+ * `now.tomorrow.weekday` are not enumerated — the validator only checks the
+ * first scope segment.
+ */
+export const NOW_SCOPE_KEYS = ["today", "tomorrow", "afternoonTime"] as const;
 
 const varName = z
   .string()
@@ -221,11 +239,18 @@ const routeOfferWindowSchema = z.object({
   graceMinutes: z.number().int().min(0).max(720).optional()
 });
 
-const browseActionItemSchema = z.object({
-  kind: z.enum(BROWSE_ACTION_KINDS),
-  target: z.string().min(1).max(300),
-  valueTemplate: z.string().max(2000).optional()
-});
+const VALUE_REQUIRING_KINDS = new Set<string>(BROWSE_ACTION_KINDS_REQUIRING_VALUE);
+
+const browseActionItemSchema = z
+  .object({
+    kind: z.enum(BROWSE_ACTION_KINDS),
+    target: z.string().min(1).max(300),
+    valueTemplate: z.string().max(2000).optional()
+  })
+  .refine(
+    (a) => !VALUE_REQUIRING_KINDS.has(a.kind) || (a.valueTemplate ?? "").length > 0,
+    { message: "this action kind needs a value (the option to choose or the name to click)" }
+  );
 
 /**
  * Optional per-step guard. The step only runs when the condition holds against a
@@ -345,6 +370,20 @@ const stepSchema = z.discriminatedUnion("type", [
     // credentialed session). Produces {{vars.<field>}} like browse_extract.
     fields: z.array(extractFieldSchema).min(1).max(15).optional(),
     screenshot: z.boolean().optional(),
+    // Persist this step's final URL keyed by the (normalized) phone in this var,
+    // so a later run for the same person can recall it via a recall_url step.
+    rememberUrlKeyedByVar: varName.optional(),
+    when: whenSchema.optional()
+  }),
+  // Recall a URL a PRIOR run persisted (browse_action.rememberUrlKeyedByVar) for
+  // the same person into {{vars.<saveAs>}}. Keys come from the inbound group
+  // participants and/or vars naming phone numbers. Saves "" on a miss.
+  z.object({
+    id: stepId,
+    type: z.literal("recall_url"),
+    keyFromTrigger: z.literal("participants").optional(),
+    keyVars: z.array(varName).max(10).optional(),
+    saveAs: varName,
     when: whenSchema.optional()
   })
 ]);
@@ -412,6 +451,7 @@ function templateStringsForStep(step: FlowStep): string[] {
     case "extract_url":
     case "browse_extract":
     case "extract_text":
+    case "recall_url":
       return [];
   }
 }
@@ -420,6 +460,7 @@ const TRIGGER_KEYS = new Set<string>(TRIGGER_SCOPE_KEYS);
 const AGENT_KEYS = new Set<string>(AGENT_SCOPE_KEYS);
 const OFFER_KEYS = new Set<string>(OFFER_SCOPE_KEYS);
 const ENGINE_VARS = new Set<string>(ENGINE_PROVIDED_VARS);
+const NOW_KEYS = new Set<string>(NOW_SCOPE_KEYS);
 
 /**
  * Cross-step invariants zod cannot express:
@@ -476,6 +517,13 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
           } else if (!OFFER_KEYS.has(ref.key)) {
             issues.push(`Step "${step.id}" references unknown offer field "${ref.key}".`);
           }
+        } else if (ref.scope === "now") {
+          // {{now.today.*}} / {{now.tomorrow.*}} / {{now.afternoonTime}} —
+          // relative dates the worker injects each run. Only the first segment
+          // is validated; the date parts under today/tomorrow are open.
+          if (!NOW_KEYS.has(ref.key)) {
+            issues.push(`Step "${step.id}" references unknown date field "now.${ref.key}".`);
+          }
         } else {
           issues.push(`Step "${step.id}" uses unknown template scope "${ref.scope}".`);
         }
@@ -484,6 +532,44 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
 
     if ((step.type === "browse_extract" || step.type === "browse_action") && !vars.has(step.urlVar)) {
       issues.push(`Step "${step.id}" browses urlVar "${step.urlVar}" which no earlier step produces.`);
+    }
+
+    // browse_action.rememberUrlKeyedByVar persists the final URL under a phone
+    // value from an EARLIER step OR a field THIS step extracts in the same pass
+    // (e.g. accept a lead, read its phone, remember the page by that phone).
+    if (step.type === "browse_action" && step.rememberUrlKeyedByVar) {
+      const ownFields = new Set((step.fields ?? []).map((f) => f.name));
+      if (
+        !vars.has(step.rememberUrlKeyedByVar) &&
+        !ENGINE_VARS.has(step.rememberUrlKeyedByVar) &&
+        !ownFields.has(step.rememberUrlKeyedByVar)
+      ) {
+        issues.push(
+          `Step "${step.id}" remembers its URL keyed by {{vars.${step.rememberUrlKeyedByVar}}} which no earlier step or its own extraction produces.`
+        );
+      }
+    }
+
+    // recall_url.keyVars name phone-holding vars an EARLIER step produced, and
+    // it must have SOME key source (participants and/or keyVars) to look up.
+    if (step.type === "recall_url") {
+      for (const kv of step.keyVars ?? []) {
+        if (!vars.has(kv) && !ENGINE_VARS.has(kv)) {
+          issues.push(
+            `Step "${step.id}" recalls a URL keyed by {{vars.${kv}}} which no earlier step produces.`
+          );
+        }
+      }
+      if (step.keyFromTrigger === undefined && (step.keyVars?.length ?? 0) === 0) {
+        issues.push(
+          `Step "${step.id}" recalls a URL but has no key source — set keyFromTrigger or keyVars.`
+        );
+      }
+      if (step.keyFromTrigger === "participants" && def.trigger.channel !== "sms") {
+        issues.push(
+          `Step "${step.id}" recalls by group participants, which only works on an SMS-triggered flow.`
+        );
+      }
     }
 
     // The owner-mailbox send path is plain text (Nango Gmail/Outlook); the
@@ -560,6 +646,8 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       for (const f of step.fields ?? []) vars.add(f.name);
       if (step.screenshot) screenshotCaptured = true;
     } else if (step.type === "http_call" && step.saveAs) {
+      vars.add(step.saveAs);
+    } else if (step.type === "recall_url") {
       vars.add(step.saveAs);
     }
   }

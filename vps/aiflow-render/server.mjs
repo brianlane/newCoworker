@@ -313,8 +313,14 @@ const ACTION_KINDS = new Set([
   "click_selector",
   "fill_selector",
   "fill_placeholder",
-  "click_text_while_present"
+  "click_text_while_present",
+  "click_role",
+  "select_option"
 ]);
+
+// Kinds whose `value` is REQUIRED (a fill string, an ARIA name, an option value).
+// fill_placeholder is intentionally NOT here: clearing a field with "" is valid.
+const ACTION_KINDS_REQUIRING_VALUE = new Set(["click_role", "select_option"]);
 
 /** Normalize + validate the request's actions array, or null when malformed. */
 function parseActions(raw) {
@@ -325,6 +331,7 @@ function parseActions(raw) {
     const target = String(a?.target ?? "");
     const value = String(a?.value ?? "");
     if (!ACTION_KINDS.has(kind) || !target) return null;
+    if (ACTION_KINDS_REQUIRING_VALUE.has(kind) && !value) return null;
     out.push({ kind, target, value });
   }
   return out;
@@ -372,6 +379,23 @@ async function performActions(page, actions) {
         }
       } else if (a.kind === "click_selector") {
         await page.locator(a.target).first().click({ timeout: ACTION_TIMEOUT_MS });
+      } else if (a.kind === "click_role") {
+        // target = ARIA role, value = accessible name (e.g. a calendar day cell
+        // "Choose Thursday, June 18th, 2026"). Name match is case-insensitive
+        // substring so authors don't have to reproduce the exact label.
+        await page
+          .getByRole(a.target, { name: a.value, exact: false })
+          .first()
+          .click({ timeout: ACTION_TIMEOUT_MS });
+      } else if (a.kind === "select_option") {
+        // target = CSS selector for the <select>, value = option value OR label.
+        await page
+          .locator(a.target)
+          .first()
+          .selectOption({ label: a.value }, { timeout: ACTION_TIMEOUT_MS })
+          .catch(() =>
+            page.locator(a.target).first().selectOption(a.value, { timeout: ACTION_TIMEOUT_MS })
+          );
       } else if (a.kind === "fill_selector") {
         await page.locator(a.target).first().fill(a.value, { timeout: ACTION_TIMEOUT_MS });
       } else {
