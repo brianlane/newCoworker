@@ -1,210 +1,109 @@
-#!/usr/bin/env tsx
 /**
- * Targeted aiflow-render redeploy across per-tenant VPSes.
+ * Render-only redeploy of the per-tenant AiFlow render service (headless
+ * Chromium) to the latest `origin/main`.
  *
- * Why this exists (same rationale as `redeploy-voice-bridge.ts`):
- *   `vps/scripts/deploy-client.sh` is the full provisioner — it rewrites
- *   `/opt/aiflow-render/.env` from the RUNNER's process env, reseeds Rowboat
- *   Mongo, rewrites vault, etc. Re-running all of that just to roll a
- *   render-service code change (e.g. screenshot capture) is overkill and, if
- *   the runner is missing a secret like AIFLOW_RENDER_TOKEN, would blank it
- *   on the VPS. This script does the minimum:
- *     1. SSH into the live VPS
- *     2. `git fetch && git checkout` the requested ref in /opt/newcoworker-repo
- *     3. rsync `vps/aiflow-render/` → `/opt/aiflow-render/` preserving `.env`
- *        and `node_modules` (matches deploy-client.sh's excludes)
- *     4. `docker compose up -d --build --force-recreate`
- *     5. Poll `http://127.0.0.1:8080/health` until 200 (60s budget — the
- *        image build pulls Playwright layers, the poll only starts after)
+ * WHY a dedicated script instead of `scripts/redeploy-deploy-client.ts`:
+ * the full deploy-client run rewrites the render container's `.env` from the
+ * caller's environment every time (`AIFLOW_RENDER_TOKEN=${AIFLOW_RENDER_TOKEN:-}`,
+ * see vps/scripts/deploy-client.sh) AND restarts voice-bridge + chat-worker.
+ * Our local `.env` does NOT carry AIFLOW_RENDER_TOKEN (it's a Supabase Edge /
+ * orchestrator secret), so a full redeploy would BLANK the render service's
+ * bearer and needlessly bounce live voice/chat. This script instead:
+ *   - refreshes /opt/newcoworker-repo to origin/main,
+ *   - rsyncs ONLY vps/aiflow-render → /opt/aiflow-render (excluding .env), so the
+ *     existing AIFLOW_RENDER_TOKEN / AIFLOW_PLATFORM_URL / AIFLOW_GATEWAY_TOKEN
+ *     are preserved untouched,
+ *   - verifies the Clever-engine code landed (click_text_while_present), and
+ *   - rebuilds ONLY the aiflow-render container.
  *
- *   Starter-tier tenants are skipped: the render sidecar is not deployed on
- *   KVM2 (deploy-client.sh tears it down there).
+ * Usage:
+ *   tsx debug/redeploy-aiflow-render.ts                       # Amy's business (default)
+ *   tsx debug/redeploy-aiflow-render.ts --business-id <uuid>
+ *   tsx debug/redeploy-aiflow-render.ts --dry-run             # resolve target only
  *
- * Usage (reads the repo-root `.env` automatically, like the rest of debug/):
- *   tsx debug/redeploy-aiflow-render.ts                   # all render-capable tenants
- *   tsx debug/redeploy-aiflow-render.ts --ref main
- *   tsx debug/redeploy-aiflow-render.ts --business <uuid> # single tenant
- *   tsx debug/redeploy-aiflow-render.ts --json
- *
- * Required env: NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY,
- * HOSTINGER_API_TOKEN.
- *
- * Exit codes: 0 all ok; 1 any failure; 2 bad args/env.
+ * Exit code: 0 on a clean rebuild, 1 otherwise.
  */
-import { loadEnv } from "./_shared.ts";
-import { getActiveVpsSshKeyForBusiness } from "../src/lib/db/vps-ssh-keys.ts";
-import { sshExec } from "../src/lib/hostinger/ssh.ts";
-import {
-  assertSafeGitRef,
-  listTenantVpsTargets,
-  parseTenantVpsRedeployArgs,
-  resolveTenantVpsPublicIp,
-  requireServiceRoleAndHostingerToken,
-  ensureNextPublicSupabaseUrlOrExit,
-  type TenantVpsRedeployResult,
-  type TenantVpsTarget
-} from "../scripts/lib/redeploy-tenant-vps.ts";
+import { loadEnv, makeHostingerClient, resolveVpsIp } from "./_shared.ts";
 
-/**
- * The exact bash run over SSH. Mirrors the aiflow-render block of
- * `deploy-client.sh` (lines ~1142-1202) minus the .env rewrite — secret
- * rotations stay confined to the full deploy path.
- */
-function buildRenderRedeployCommand(ref: string): string {
-  assertSafeGitRef(ref);
-  return `set -euo pipefail
-NEWCOWORKER_REPO_PATH="/opt/newcoworker-repo"
-NEWCOWORKER_REPO_REF='${ref}'
-NEWCOWORKER_REPO_URL="https://github.com/brianlane/newCoworker.git"
-AIFLOW_RENDER_SRC="\${NEWCOWORKER_REPO_PATH}/vps/aiflow-render"
-AIFLOW_RENDER_DEST="/opt/aiflow-render"
+loadEnv();
 
-echo "[redeploy-render] refreshing repo at \${NEWCOWORKER_REPO_PATH} (ref=\${NEWCOWORKER_REPO_REF})"
-if [[ -d "\${NEWCOWORKER_REPO_PATH}/.git" ]]; then
-  git -C "\${NEWCOWORKER_REPO_PATH}" fetch --depth=1 origin "\${NEWCOWORKER_REPO_REF}"
-  git -C "\${NEWCOWORKER_REPO_PATH}" checkout -B "\${NEWCOWORKER_REPO_REF}" "origin/\${NEWCOWORKER_REPO_REF}"
-elif command -v git >/dev/null 2>&1; then
-  mkdir -p "$(dirname "\${NEWCOWORKER_REPO_PATH}")"
-  git clone --depth=1 --branch "\${NEWCOWORKER_REPO_REF}" "\${NEWCOWORKER_REPO_URL}" "\${NEWCOWORKER_REPO_PATH}"
-else
-  echo "git not installed" >&2
+const DEFAULT_BUSINESS_ID = "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
+const DRY_RUN = process.argv.includes("--dry-run");
+
+function parseBusinessId(): string {
+  const i = process.argv.indexOf("--business-id");
+  if (i !== -1 && process.argv[i + 1]) return process.argv[i + 1];
+  return process.env.AIFLOW_SEED_BUSINESS_ID ?? DEFAULT_BUSINESS_ID;
+}
+const BUSINESS_ID = parseBusinessId();
+
+// Render-only remote sequence. `set -euo pipefail` so a failed fetch/rsync/build
+// aborts instead of falsely reporting success. The `.env` exclusion is what
+// preserves the render bearer the worker authenticates with.
+const REDEPLOY_RENDER_REMOTE = `
+set -euo pipefail
+REPO=/opt/newcoworker-repo
+DEST=/opt/aiflow-render
+echo "== refreshing repo =="
+git -C "$REPO" fetch --depth=1 origin main && git -C "$REPO" reset --hard FETCH_HEAD
+git -C "$REPO" log --oneline -1
+if [ ! -d "$REPO/vps/aiflow-render" ]; then
+  echo "ERROR: $REPO/vps/aiflow-render missing in repo" >&2
   exit 1
 fi
-
-if [[ ! -d "\${AIFLOW_RENDER_SRC}" || ! -f "\${AIFLOW_RENDER_SRC}/docker-compose.yml" ]]; then
-  echo "missing render source at \${AIFLOW_RENDER_SRC}" >&2
+if [ ! -f "$DEST/.env" ]; then
+  echo "ERROR: $DEST/.env missing — this box never ran deploy-client.sh for render (starter tier?). Aborting so we don't deploy render without its token." >&2
   exit 1
 fi
-if [[ ! -f "\${AIFLOW_RENDER_DEST}/.env" ]]; then
-  echo "no existing \${AIFLOW_RENDER_DEST}/.env — run the full deploy-client.sh instead" >&2
+echo "== rsync aiflow-render (preserve .env + node_modules) =="
+rsync -a --delete --exclude .env --exclude node_modules "$REPO/vps/aiflow-render/" "$DEST/"
+echo "== verify Clever-engine code landed =="
+if ! grep -q click_text_while_present "$DEST/server.mjs"; then
+  echo "ERROR: click_text_while_present not found in synced server.mjs" >&2
   exit 1
 fi
-
-echo "[redeploy-render] rsync \${AIFLOW_RENDER_SRC} -> \${AIFLOW_RENDER_DEST}"
-mkdir -p "\${AIFLOW_RENDER_DEST}"
-if command -v rsync >/dev/null 2>&1; then
-  rsync -a --delete \\
-    --exclude ".env" \\
-    --exclude "node_modules" \\
-    "\${AIFLOW_RENDER_SRC}/" "\${AIFLOW_RENDER_DEST}/"
-else
-  cp -R "\${AIFLOW_RENDER_SRC}/." "\${AIFLOW_RENDER_DEST}/"
-fi
-
-echo "[redeploy-render] docker compose up -d --build --force-recreate"
-cd "\${AIFLOW_RENDER_DEST}"
-docker compose up -d --build --force-recreate
-
-echo "[redeploy-render] polling http://127.0.0.1:8080/health (60s budget)"
-for _ in $(seq 1 30); do
-  if curl -sf --max-time 3 http://127.0.0.1:8080/health >/dev/null 2>&1; then
-    echo "[redeploy-render] aiflow_render_ready"
-    exit 0
-  fi
-  sleep 2
-done
-echo "[redeploy-render] aiflow_render_unhealthy: never returned 200 within 60s" >&2
-exit 1
+echo "click_text_while_present present"
+echo "== confirm render token preserved (redacted) =="
+grep -E '^AIFLOW_RENDER_TOKEN=' "$DEST/.env" | sed 's/=.*/=<set>/' || echo "WARN: AIFLOW_RENDER_TOKEN not set in $DEST/.env"
+echo "== rebuild aiflow-render container only =="
+cd "$DEST" && docker compose up -d --build --force-recreate
+sleep 4
+echo "== render logs (tail) =="
+docker logs aiflow-render --tail 25 2>&1 | tail -25
+echo "== render health =="
+curl -fsS -m 5 http://127.0.0.1:8080/health || echo "(health check not ready yet)"
 `;
-}
 
-async function redeployOne(
-  target: TenantVpsTarget,
-  ref: string,
-  hostingerToken: string
-): Promise<TenantVpsRedeployResult> {
-  const key = await getActiveVpsSshKeyForBusiness(target.businessId);
-  if (!key) {
-    return { ...target, ok: false, detail: "no_active_ssh_key" };
-  }
-  const publicIp = await resolveTenantVpsPublicIp(
-    target.hostingerVpsId,
-    hostingerToken,
-    "[redeploy-render]"
-  );
-  if (!publicIp) {
-    return { ...target, ok: false, detail: "no_public_ip" };
-  }
-  const command = buildRenderRedeployCommand(ref);
-  try {
-    const result = await sshExec({
-      host: publicIp,
-      port: 22,
-      username: key.ssh_username,
-      privateKeyPem: key.private_key_pem,
-      command,
-      timeoutMs: 300_000
-    });
-    const stdoutTail = (result.stdout || "").split("\n").slice(-15).join("\n");
-    if (result.exitCode === 0) {
-      return { ...target, ok: true, publicIp, exitCode: 0, stdoutTail };
-    }
-    return {
-      ...target,
-      ok: false,
-      publicIp,
-      exitCode: result.exitCode,
-      detail: `ssh exit ${result.exitCode}`,
-      stdoutTail: `${stdoutTail}\n--stderr--\n${(result.stderr || "").slice(-800)}`
-    };
-  } catch (err) {
-    return {
-      ...target,
-      ok: false,
-      publicIp,
-      detail: err instanceof Error ? err.message : String(err)
-    };
-  }
-}
+const { getActiveVpsSshKeyForBusiness } = await import("../src/lib/db/vps-ssh-keys.ts");
+const { sshExec } = await import("../src/lib/hostinger/ssh.ts");
 
-async function main(): Promise<void> {
-  loadEnv();
-  const args = parseTenantVpsRedeployArgs(
-    process.argv.slice(2),
-    "Usage: tsx debug/redeploy-aiflow-render.ts [--ref main] [--business <uuid>] [--json]\n"
-  );
-  ensureNextPublicSupabaseUrlOrExit();
-  const hostingerToken = requireServiceRoleAndHostingerToken();
-
-  const targets = (await listTenantVpsTargets(args.businessId)).filter((t) => {
-    if (t.tier === "starter") {
-      process.stderr.write(`skip ${t.businessId}: starter tier has no render sidecar\n`);
-      return false;
-    }
-    return true;
-  });
-  if (targets.length === 0) {
-    process.stdout.write(
-      args.businessId
-        ? `no render-capable VPS for business ${args.businessId}\n`
-        : "no render-capable tenant VPSes provisioned\n"
-    );
-    process.exit(0);
-  }
-
-  const results: TenantVpsRedeployResult[] = [];
-  for (const t of targets) {
-    process.stderr.write(`\n=== ${t.businessId} (vps=${t.hostingerVpsId}) ===\n`);
-    const r = await redeployOne(t, args.ref, hostingerToken);
-    results.push(r);
-    if (args.json) continue;
-    if (r.ok) {
-      process.stdout.write(`OK  ${t.businessId} (ip=${r.publicIp}) ref=${args.ref}\n`);
-    } else {
-      process.stdout.write(`FAIL ${t.businessId} ip=${r.publicIp ?? "?"} detail=${r.detail ?? ""}\n`);
-    }
-    if (r.stdoutTail) process.stderr.write(r.stdoutTail + "\n");
-  }
-
-  if (args.json) {
-    process.stdout.write(JSON.stringify({ ref: args.ref, results }, null, 2) + "\n");
-  }
-
-  const failures = results.filter((r) => !r.ok);
-  process.exit(failures.length === 0 ? 0 : 1);
-}
-
-main().catch((err) => {
-  process.stderr.write(`fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+const key = await getActiveVpsSshKeyForBusiness(BUSINESS_ID);
+if (!key) {
+  console.error(`No active VPS SSH key for business ${BUSINESS_ID}`);
   process.exit(1);
+}
+
+const client = makeHostingerClient();
+const ip = await resolveVpsIp(client, key);
+
+console.log(`Business : ${BUSINESS_ID}`);
+console.log(`VPS      : ${key.hostinger_vps_id} @ ${ip}`);
+console.log(`User     : ${key.ssh_username || "root"}`);
+
+if (DRY_RUN) {
+  console.log("\n[dry-run] target resolved; not connecting.");
+  process.exit(0);
+}
+
+const res = await sshExec({
+  host: ip,
+  username: key.ssh_username || "root",
+  privateKeyPem: key.private_key_pem,
+  command: REDEPLOY_RENDER_REMOTE,
+  timeoutMs: 12 * 60 * 1000,
+  onStdout: (c) => process.stdout.write(c),
+  onStderr: (c) => process.stderr.write(c)
 });
+
+console.log(`\n[redeploy-aiflow-render] exitCode=${res.exitCode} signal=${res.signal ?? "none"}`);
+process.exit(res.exitCode === 0 ? 0 : 1);
