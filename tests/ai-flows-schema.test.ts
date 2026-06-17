@@ -641,7 +641,7 @@ describe("engine-provided vars + send_email fromConnectionId", () => {
     expect(validateDefinitionSemantics(mk({}))).toEqual([]);
     expect(
       validateDefinitionSemantics(mk({ attachScreenshot: true })).some((i) =>
-        i.includes("attachments are only supported from the platform sender")
+        i.includes("attachments are only supported when sending from your AI coworker's email")
       )
     ).toBe(true);
   });

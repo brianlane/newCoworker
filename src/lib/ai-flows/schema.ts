@@ -468,10 +468,10 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     }
 
     // The owner-mailbox send path is plain text (Nango Gmail/Outlook); the
-    // screenshot attachment only exists on the platform Resend path.
+    // screenshot attachment only exists on the AI coworker's own Resend path.
     if (step.type === "send_email" && step.attachScreenshot && step.fromConnectionId) {
       issues.push(
-        `Step "${step.id}" attaches a screenshot but sends from a connected mailbox — attachments are only supported from the platform sender.`
+        `Step "${step.id}" attaches a screenshot but sends from a connected mailbox — attachments are only supported when sending from your AI coworker's email.`
       );
     }
 

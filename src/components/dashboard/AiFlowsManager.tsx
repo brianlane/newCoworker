@@ -295,7 +295,7 @@ export function AiFlowsManager({
 
   // Connected owner mailboxes for the send_email "From" dropdown (and the
   // quiet-hours email fallback). Best-effort: on any failure the dropdown
-  // simply offers only the platform sender.
+  // simply offers only the AI coworker's own mailbox.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -326,7 +326,7 @@ export function AiFlowsManager({
             })
         );
       } catch {
-        /* options stay empty; the dropdown still offers the platform sender */
+        /* options stay empty; the dropdown still offers the AI coworker mailbox */
       }
     })();
     return () => {
@@ -1021,7 +1021,8 @@ export function AiFlowsManager({
 
 /**
  * "From" mailbox picker shared by send_email and the send_sms quiet-hours
- * fallback: "" = platform sender, otherwise a workspace_oauth_connections.id.
+ * fallback: "" = the business's own AI coworker mailbox, otherwise a
+ * workspace_oauth_connections.id (send as the owner's connected mailbox).
  * A stored id that no longer resolves to a connection is still shown (as
  * "connected mailbox (disconnected?)") so saving doesn't silently reset it.
  */
@@ -1042,7 +1043,7 @@ function FromMailboxSelect({
         value={value}
         onChange={(ev) => onChange(ev.target.value || undefined)}
       >
-        <option value="">New Coworker (platform sender)</option>
+        <option value="">Your AI coworker&apos;s email</option>
         {value && !emailConns.some((c) => c.id === value) && (
           <option value={value}>connected mailbox (disconnected?)</option>
         )}
@@ -1371,7 +1372,7 @@ function StepFields({
               patchStep(index, { attachScreenshot: ev.target.checked ? true : undefined })
             }
           />
-          Attach the screenshot from an earlier browse step (platform sender only)
+          Attach the screenshot from an earlier browse step (AI coworker email only)
         </label>
       </div>
     );

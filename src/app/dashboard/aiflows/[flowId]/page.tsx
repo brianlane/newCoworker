@@ -4,6 +4,7 @@ import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getAiFlow } from "@/lib/ai-flows/db";
 import { summarizeDefinition } from "@/lib/ai-flows/schema";
+import { getTenantMailbox, tenantMailboxAddress } from "@/lib/email/tenant-mailbox";
 import { Card } from "@/components/ui/Card";
 import { AiFlowView } from "@/components/dashboard/AiFlowView";
 
@@ -28,6 +29,16 @@ export default async function AiFlowViewPage({ params }: Props) {
   const businessId = businesses?.[0]?.id ?? null;
 
   const flow = businessId ? await getAiFlow(businessId, flowId) : null;
+
+  // The AI mailbox is the sender for any send_email step without a connected
+  // owner mailbox, so show the real address rather than a generic label. Legacy
+  // businesses may not have a row yet; the default local-part is the business
+  // UUID (the worker self-heals to the same address on first send), so fall back
+  // to that instead of a generic label.
+  const mailbox = businessId ? await getTenantMailbox(businessId, db) : null;
+  const coworkerEmail = businessId
+    ? tenantMailboxAddress(mailbox?.local_part ?? businessId)
+    : undefined;
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -65,7 +76,7 @@ export default async function AiFlowViewPage({ params }: Props) {
 
       {flow ? (
         <Card>
-          <AiFlowView definition={flow.definition} />
+          <AiFlowView definition={flow.definition} coworkerEmail={coworkerEmail} />
         </Card>
       ) : (
         <Card>
