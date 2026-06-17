@@ -109,8 +109,12 @@ export type StepAction =
       /** Same-pass field extraction over the post-action page text, if any. */
       fields?: ExtractField[];
       screenshot: boolean;
-      /** Normalized phone key to persist the final URL under, if resolvable. */
-      rememberKey?: string;
+      /**
+       * Var name whose (phone) value the worker normalizes and persists the
+       * final URL under — resolved AFTER any same-pass extraction, so a phone
+       * this step itself extracts can be the key.
+       */
+      rememberKeyVar?: string;
     }
   | {
       kind: "recall_url";
@@ -343,15 +347,9 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         target: a.target,
         value: a.valueTemplate ? renderTemplate(a.valueTemplate, scope).trim() : ""
       }));
-      // Resolve the (normalized) phone key to persist this page's URL under, so
-      // a later run for the same person can recall it. Omitted when the var is
-      // empty or not a phone number — the worker then just skips the persist.
-      let rememberKey: string | undefined;
-      if (step.rememberUrlKeyedByVar) {
-        const raw = scope.vars?.[step.rememberUrlKeyedByVar];
-        const norm = typeof raw === "string" ? normalizeNanpToE164(raw) : null;
-        if (norm) rememberKey = norm;
-      }
+      // Pass the remember-key VAR NAME (not a resolved value): the worker reads
+      // and normalizes it AFTER any same-pass extraction, so a phone this step
+      // itself extracts can serve as the key.
       return {
         ok: true,
         action: {
@@ -361,7 +359,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           actions,
           ...(step.fields && step.fields.length > 0 ? { fields: step.fields } : {}),
           screenshot: step.screenshot === true,
-          ...(rememberKey ? { rememberKey } : {})
+          ...(step.rememberUrlKeyedByVar ? { rememberKeyVar: step.rememberUrlKeyedByVar } : {})
         }
       };
     }

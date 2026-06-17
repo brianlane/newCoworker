@@ -615,15 +615,16 @@ describe("planStep: browse_action rememberUrlKeyedByVar", () => {
     actions: [{ kind: "click_text", target: "Accept" }],
     rememberUrlKeyedByVar: "lead_phone"
   };
-  it("resolves and normalizes the remember key from the var", () => {
-    const r = planStep(base, { vars: { lead_url: "https://x", lead_phone: "(602) 555-0100" } });
-    expect(r.ok && r.action.kind === "browse_action" && r.action.rememberKey).toBe("+16025550100");
+  it("passes the remember-key VAR NAME through (resolved post-extraction by the worker)", () => {
+    // Even when the var isn't in scope yet (it's extracted in the same pass),
+    // the planner forwards the name so the worker can resolve it afterward.
+    const r = planStep(base, { vars: { lead_url: "https://x" } });
+    expect(r.ok && r.action.kind === "browse_action" && r.action.rememberKeyVar).toBe("lead_phone");
   });
-  it("omits rememberKey when the var is missing or not a phone", () => {
-    const r1 = planStep(base, { vars: { lead_url: "https://x" } });
-    expect(r1.ok && r1.action.kind === "browse_action" && "rememberKey" in r1.action).toBe(false);
-    const r2 = planStep(base, { vars: { lead_url: "https://x", lead_phone: "not a phone" } });
-    expect(r2.ok && r2.action.kind === "browse_action" && "rememberKey" in r2.action).toBe(false);
+  it("omits rememberKeyVar when not configured", () => {
+    const noRemember: FlowStep = { ...base, rememberUrlKeyedByVar: undefined };
+    const r = planStep(noRemember, { vars: { lead_url: "https://x" } });
+    expect(r.ok && r.action.kind === "browse_action" && "rememberKeyVar" in r.action).toBe(false);
   });
   it("renders click_role / select_option values", () => {
     const step: FlowStep = {

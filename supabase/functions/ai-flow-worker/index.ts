@@ -1016,14 +1016,18 @@ async function browseActionStep(
     extractedVars = out;
   }
 
-  // Persist the final URL keyed by the resolved phone so a LATER run for the
-  // same person can recall it (recall_url). Best-effort: a memory write must
-  // never fail a browse that already posted.
-  if (action.rememberKey && parsed.finalUrl) {
+  // Persist the final URL keyed by a phone so a LATER run for the same person
+  // can recall it (recall_url). Resolved from scope.vars AFTER same-pass
+  // extraction above, so a phone THIS step just extracted can be the key.
+  // Best-effort: a memory write must never fail a browse that already posted.
+  const rememberRaw = action.rememberKeyVar ? scope.vars[action.rememberKeyVar] : undefined;
+  const rememberKey =
+    typeof rememberRaw === "string" ? normalizeNanpToE164(rememberRaw) : null;
+  if (rememberKey && parsed.finalUrl) {
     const { error: memErr } = await supabase.from("aiflow_url_memory").upsert(
       {
         business_id: run.business_id,
-        memory_key: action.rememberKey,
+        memory_key: rememberKey,
         url: parsed.finalUrl,
         flow_id: run.flow_id,
         run_id: run.id
