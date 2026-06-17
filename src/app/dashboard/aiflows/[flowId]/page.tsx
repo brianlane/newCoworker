@@ -4,6 +4,7 @@ import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getAiFlow } from "@/lib/ai-flows/db";
 import { summarizeDefinition } from "@/lib/ai-flows/schema";
+import { getTenantMailbox, tenantMailboxAddress } from "@/lib/email/tenant-mailbox";
 import { Card } from "@/components/ui/Card";
 import { AiFlowView } from "@/components/dashboard/AiFlowView";
 
@@ -28,6 +29,11 @@ export default async function AiFlowViewPage({ params }: Props) {
   const businessId = businesses?.[0]?.id ?? null;
 
   const flow = businessId ? await getAiFlow(businessId, flowId) : null;
+
+  // The AI mailbox is the sender for any send_email step without a connected
+  // owner mailbox, so show the real address rather than a generic label.
+  const mailbox = businessId ? await getTenantMailbox(businessId, db) : null;
+  const coworkerEmail = mailbox ? tenantMailboxAddress(mailbox.local_part) : undefined;
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -65,7 +71,7 @@ export default async function AiFlowViewPage({ params }: Props) {
 
       {flow ? (
         <Card>
-          <AiFlowView definition={flow.definition} />
+          <AiFlowView definition={flow.definition} coworkerEmail={coworkerEmail} />
         </Card>
       ) : (
         <Card>

@@ -134,7 +134,7 @@ function WhenView({ when }: { when: StepCondition }) {
 }
 
 /** The meaningful fields of a single step, rendered read-only. */
-function StepBody({ step }: { step: FlowStep }) {
+function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: string }) {
   switch (step.type) {
     case "extract_url":
       return <Row label="Save URL as" value={step.saveAs} mono />;
@@ -207,8 +207,12 @@ function StepBody({ step }: { step: FlowStep }) {
           {step.bcc && step.bcc.length > 0 && <Row label="Bcc" value={step.bcc.join(", ")} mono />}
           <Row
             label="From"
-            value={step.fromConnectionId ?? "New Coworker (platform sender)"}
-            mono={Boolean(step.fromConnectionId)}
+            value={
+              step.fromConnectionId
+                ? "Your connected mailbox (send as you)"
+                : (coworkerEmail ?? "Your AI coworker's email address")
+            }
+            mono={!step.fromConnectionId && Boolean(coworkerEmail)}
           />
           <Row label="Subject" value={step.subject} />
           <Row label="Body" value={step.body} />
@@ -282,27 +286,42 @@ function StepBody({ step }: { step: FlowStep }) {
   }
 }
 
-function StepView({ step, index }: { step: FlowStep; index: number }) {
+function StepView({
+  step,
+  index,
+  coworkerEmail
+}: {
+  step: FlowStep;
+  index: number;
+  coworkerEmail?: string;
+}) {
   return (
     <div className={sectionClass}>
       <div className="text-sm font-medium text-parchment">
         {index + 1}. {STEP_TYPE_LABELS[step.type]}
       </div>
-      <StepBody step={step} />
+      <StepBody step={step} coworkerEmail={coworkerEmail} />
       {step.when && <WhenView when={step.when} />}
     </div>
   );
 }
 
 /** Read-only rendering of an AiFlow definition (trigger, steps, options). */
-export function AiFlowView({ definition }: { definition: AiFlowDefinition }) {
+export function AiFlowView({
+  definition,
+  coworkerEmail
+}: {
+  definition: AiFlowDefinition;
+  /** The business's AI mailbox address, shown as the sender for platform-path emails. */
+  coworkerEmail?: string;
+}) {
   return (
     <div className="space-y-4">
       <TriggerView trigger={definition.trigger} />
       <section className="space-y-3">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">Steps</h3>
         {definition.steps.map((step, i) => (
-          <StepView key={step.id} step={step} index={i} />
+          <StepView key={step.id} step={step} index={i} coworkerEmail={coworkerEmail} />
         ))}
       </section>
       {definition.options?.suppressDefaultReply && (
