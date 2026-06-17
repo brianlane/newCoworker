@@ -73,14 +73,22 @@ describe("processInboundTenantEmail", () => {
       {
         ...PAYLOAD,
         attachments: [
-          { filename: "a.pdf", mimeType: "application/pdf", size: 10, path: "inbound/x/a.pdf" }
+          {
+            filename: "a.pdf",
+            mimeType: "application/pdf",
+            size: 10,
+            path: "inbound/_msg-1_example.com_/0-a.pdf"
+          },
+          // Foreign path (another message's namespace) must be ignored, never
+          // removed — otherwise a secret-holder could delete others' objects.
+          { filename: "evil.pdf", mimeType: "application/pdf", size: 1, path: "inbound/victim/0-x.pdf" }
         ]
       },
       db as never
     );
     expect(res).toEqual({ matched: false });
     expect(storageFrom).toHaveBeenCalledWith("email-attachments");
-    expect(remove).toHaveBeenCalledWith(["inbound/x/a.pdf"]);
+    expect(remove).toHaveBeenCalledWith(["inbound/_msg-1_example.com_/0-a.pdf"]);
     expect(recordTenantMailboxInbound).not.toHaveBeenCalled();
   });
 
@@ -118,14 +126,22 @@ describe("processInboundTenantEmail", () => {
     );
   });
 
-  it("maps attachment metadata onto the inbound row", async () => {
+  it("records message-scoped attachments and drops foreign paths", async () => {
     resolveBusinessByAddress.mockResolvedValue("biz-1");
     const db = flowsDb({ data: [], error: null });
     await processInboundTenantEmail(
       {
         ...PAYLOAD,
         attachments: [
-          { filename: "quote.pdf", mimeType: "application/pdf", size: 2048, path: "inbound/x/0-quote.pdf" }
+          {
+            filename: "quote.pdf",
+            mimeType: "application/pdf",
+            size: 2048,
+            path: "inbound/_msg-1_example.com_/0-quote.pdf"
+          },
+          // Path outside this message's namespace — must be dropped so it can't
+          // be bound to this tenant's row and signed by the dashboard.
+          { filename: "secret.pdf", mimeType: "application/pdf", size: 9, path: "inbound/other/0-secret.pdf" }
         ]
       },
       db as never
@@ -137,7 +153,7 @@ describe("processInboundTenantEmail", () => {
             filename: "quote.pdf",
             mime_type: "application/pdf",
             size_bytes: 2048,
-            storage_path: "inbound/x/0-quote.pdf"
+            storage_path: "inbound/_msg-1_example.com_/0-quote.pdf"
           }
         ]
       }),

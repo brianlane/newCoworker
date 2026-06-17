@@ -27,6 +27,18 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 const EMAIL_ATTACHMENTS_BUCKET = "email-attachments";
 
+/**
+ * The object-key namespace the Cloudflare worker uploads this message's
+ * attachments under. We only ever persist/delete paths inside this prefix so a
+ * caller with the inbound secret can't bind an unrelated message's storage key
+ * (which the dashboard would otherwise resolve to a signed download URL). Must
+ * mirror the worker's path scheme exactly.
+ */
+function attachmentPrefix(messageId: string): string {
+  const safeMsg = messageId.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120);
+  return `inbound/${safeMsg}/`;
+}
+
 export type InboundEmailPayload = {
   /** Recipient address the mail was sent to (the tenant mailbox). */
   to: string;
@@ -82,12 +94,17 @@ export async function processInboundTenantEmail(
   client?: SupabaseClient
 ): Promise<InboundEmailResult> {
   const db = client ?? (await createSupabaseServiceClient());
+
+  // Only trust attachment objects within this message's own path namespace.
+  const prefix = attachmentPrefix(payload.messageId);
+  const ownAttachments = (payload.attachments ?? []).filter((a) => a.path.startsWith(prefix));
+
   const businessId = await resolveBusinessByAddress(payload.to, db);
   if (!businessId) {
     // No tenant owns this address. The worker already uploaded any attachment
     // bytes before posting here, so remove them to avoid orphaning objects in
-    // the bucket (best-effort).
-    const orphanPaths = (payload.attachments ?? []).map((a) => a.path);
+    // the bucket (best-effort). Scoped to this message's own paths only.
+    const orphanPaths = ownAttachments.map((a) => a.path);
     if (orphanPaths.length > 0) {
       await db.storage.from(EMAIL_ATTACHMENTS_BUCKET).remove(orphanPaths);
     }
@@ -132,7 +149,7 @@ export async function processInboundTenantEmail(
 
   // Always surface the inbound mail on the Emails page, even when nothing
   // matched — the owner should see what their AI mailbox received.
-  const attachments = (payload.attachments ?? []).map((a) => ({
+  const attachments = ownAttachments.map((a) => ({
     filename: a.filename,
     mime_type: a.mimeType,
     size_bytes: a.size,
