@@ -43,21 +43,29 @@ function attachmentBytes(content: ArrayBuffer | string): Uint8Array {
 /** Upload one attachment to the private bucket; returns metadata or null on skip/failure. */
 async function uploadAttachment(
   env: Env,
-  att: { filename?: string | null; mimeType?: string; content: ArrayBuffer | string }
+  att: { filename?: string | null; mimeType?: string; content: ArrayBuffer | string },
+  messageId: string,
+  index: number
 ): Promise<UploadedAttachment | null> {
   const bytes = attachmentBytes(att.content);
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_ATTACHMENT_BYTES) return null;
 
   const safeName = (att.filename || "attachment").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 200);
-  const path = `inbound/${crypto.randomUUID()}/${safeName}`;
+  // Deterministic per-message path + upsert: a retried delivery (same messageId)
+  // overwrites the same object instead of orphaning a fresh random copy.
+  const safeMsg = messageId.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "msg";
+  const path = `inbound/${safeMsg}/${index}-${safeName}`;
   const bucket = env.ATTACHMENTS_BUCKET || "email-attachments";
-  const mimeType = att.mimeType || "application/octet-stream";
+  // Cap the MIME type to the webhook's 255-char limit so a malformed/over-long
+  // Content-Type can't fail Zod validation and make the message retry forever.
+  const mimeType = (att.mimeType || "application/octet-stream").slice(0, 255);
 
   const res = await fetch(`${env.SUPABASE_URL}/storage/v1/object/${bucket}/${path}`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-      "content-type": mimeType
+      "content-type": mimeType,
+      "x-upsert": "true"
     },
     body: bytes
   });
@@ -67,8 +75,7 @@ async function uploadAttachment(
     console.error(`attachment upload failed (${res.status}) for ${safeName}`);
     return null;
   }
-  // Cap the display filename to the webhook's 255-char limit: a longer raw MIME
-  // filename would fail Zod validation and make the whole message retry forever.
+  // Cap the display filename to the webhook's 255-char limit (same reason).
   return {
     filename: (att.filename || safeName).slice(0, 255),
     mimeType,
@@ -113,9 +120,10 @@ export default {
     // secrets are configured, so an un-migrated deploy still forwards mail.
     const attachments: UploadedAttachment[] = [];
     if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
-      for (const att of email.attachments ?? []) {
-        if (attachments.length >= MAX_ATTACHMENTS) break;
-        const meta = await uploadAttachment(env, att);
+      const atts = email.attachments ?? [];
+      // Indexed loop so each attachment keeps a stable path across retries.
+      for (let i = 0; i < atts.length && attachments.length < MAX_ATTACHMENTS; i++) {
+        const meta = await uploadAttachment(env, atts[i], messageId, i);
         if (meta) attachments.push(meta);
       }
     }
