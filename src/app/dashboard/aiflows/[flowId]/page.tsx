@@ -31,9 +31,14 @@ export default async function AiFlowViewPage({ params }: Props) {
   const flow = businessId ? await getAiFlow(businessId, flowId) : null;
 
   // The AI mailbox is the sender for any send_email step without a connected
-  // owner mailbox, so show the real address rather than a generic label.
+  // owner mailbox, so show the real address rather than a generic label. Legacy
+  // businesses may not have a row yet; the default local-part is the business
+  // UUID (the worker self-heals to the same address on first send), so fall back
+  // to that instead of a generic label.
   const mailbox = businessId ? await getTenantMailbox(businessId, db) : null;
-  const coworkerEmail = mailbox ? tenantMailboxAddress(mailbox.local_part) : undefined;
+  const coworkerEmail = businessId
+    ? tenantMailboxAddress(mailbox?.local_part ?? businessId)
+    : undefined;
 
   return (
     <div className="max-w-3xl space-y-6">
