@@ -265,11 +265,34 @@ function editorTrigger(s: EditorState): FlowTrigger {
   }
 }
 
+/**
+ * browse_action looping (forEachLink) is mutually exclusive with same-pass
+ * extraction, screenshot, and remember-link (enforced in
+ * validateDefinitionSemantics). The builder HIDES those controls while a
+ * forEachLink selector is set but keeps their values in editor state, so
+ * clearing the selector restores them without data loss. We strip them here, at
+ * save time, so the persisted definition is always valid.
+ */
+function sanitizeStepForSave(step: FlowStep): FlowStep {
+  if (step.type === "browse_action" && step.forEachLink) {
+    return {
+      id: step.id,
+      type: step.type,
+      urlVar: step.urlVar,
+      actions: step.actions,
+      forEachLink: step.forEachLink,
+      ...(step.auth ? { auth: step.auth } : {}),
+      ...(step.when ? { when: step.when } : {})
+    };
+  }
+  return step;
+}
+
 function toDefinition(s: EditorState): AiFlowDefinition {
   return {
     version: 1,
     trigger: editorTrigger(s),
-    steps: s.steps,
+    steps: s.steps.map(sanitizeStepForSave),
     options: { suppressDefaultReply: s.suppressDefaultReply }
   };
 }
@@ -1641,28 +1664,87 @@ function StepFields({
         >
           + action
         </button>
-        <label className="flex items-center gap-2 text-xs text-parchment/70">
-          <input
-            type="checkbox"
-            checked={step.screenshot ?? false}
-            onChange={(ev) =>
-              patchStep(index, { screenshot: ev.target.checked ? true : undefined })
-            }
-          />
-          Capture a screenshot after the actions (audit trail)
-        </label>
-        <Field
-          label="Remember this link for later runs, keyed by this phone variable (optional)"
-          value={step.rememberUrlKeyedByVar ?? ""}
-          onChange={(v) =>
-            patchStep(index, { rememberUrlKeyedByVar: v.trim() ? v.trim() : undefined })
-          }
-        />
         <Field
           label="Repeat the actions for each list link matching this CSS selector (optional; loops over a list)"
           value={step.forEachLink ?? ""}
-          onChange={(v) => patchStep(index, { forEachLink: v.trim() ? v : undefined })}
+          onChange={(v) => patchStep(index, { forEachLink: v.trim() ? v.trim() : undefined })}
+          help="Leave blank to act on a single page. When set, the actions run on every matching link — extraction fields, screenshot, and remember-link are hidden and dropped on save (they're kept in the editor so clearing the selector restores them)."
         />
+        {step.forEachLink ? (
+          <p className="text-xs text-parchment/50">
+            Looping over each matching link, so per-page field extraction, screenshot, and
+            remember-link are unavailable. Clear the selector above to re-enable them.
+          </p>
+        ) : (
+          <>
+            <label className={labelClass}>Fields to extract after the actions (optional)</label>
+            {(step.fields ?? []).map((f, fi) => (
+              <div key={fi} className="flex gap-2">
+                <input
+                  className={inputClass}
+                  value={f.name}
+                  placeholder={examples.contactVar}
+                  onChange={(ev) =>
+                    patchStep(index, {
+                      fields: (step.fields ?? []).map((x, xi) =>
+                        xi === fi ? { ...x, name: ev.target.value } : x
+                      )
+                    })
+                  }
+                />
+                <input
+                  className={inputClass}
+                  value={f.description ?? ""}
+                  placeholder="description (optional)"
+                  onChange={(ev) =>
+                    patchStep(index, {
+                      fields: (step.fields ?? []).map((x, xi) =>
+                        xi === fi ? { ...x, description: ev.target.value } : x
+                      )
+                    })
+                  }
+                />
+                <button
+                  onClick={() => {
+                    const next = (step.fields ?? []).filter((_, xi) => xi !== fi);
+                    patchStep(index, { fields: next.length ? next : undefined });
+                  }}
+                  className="text-parchment/40 hover:text-spark-orange"
+                  aria-label="Remove field"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+            <button
+              onClick={() =>
+                patchStep(index, {
+                  fields: [...(step.fields ?? []), { name: "", description: "" }]
+                })
+              }
+              className="text-xs text-signal-teal hover:underline"
+            >
+              + field
+            </button>
+            <label className="flex items-center gap-2 text-xs text-parchment/70">
+              <input
+                type="checkbox"
+                checked={step.screenshot ?? false}
+                onChange={(ev) =>
+                  patchStep(index, { screenshot: ev.target.checked ? true : undefined })
+                }
+              />
+              Capture a screenshot after the actions (audit trail)
+            </label>
+            <Field
+              label="Remember this link for later runs, keyed by this phone variable (optional)"
+              value={step.rememberUrlKeyedByVar ?? ""}
+              onChange={(v) =>
+                patchStep(index, { rememberUrlKeyedByVar: v.trim() ? v.trim() : undefined })
+              }
+            />
+          </>
+        )}
       </div>
     );
   }

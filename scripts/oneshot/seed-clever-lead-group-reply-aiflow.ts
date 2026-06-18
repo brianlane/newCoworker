@@ -6,11 +6,11 @@
  * plan). Clever introduces the agent to the seller in a GROUP text (seller +
  * Amy + our Telnyx DID). This flow:
  *   1. triggers on that intro text ("Clever Real Estate" + "introduce you to Amy"),
- *   2. reads the seller's first name straight from the message (extract_text),
- *   3. asks Amy to approve the canned reply (approval_gate), then
- *   4. posts the reply back INTO the group thread via send_sms { replyToGroup },
- *      which fans one group MMS to every participant except our own DID
- *      (the engine capability shipped in the Clever engine PR).
+ *   2. reads the seller's first name straight from the message (extract_text), then
+ *   3. posts Amy's canned reply back INTO the group thread via send_sms
+ *      { replyToGroup }, which fans one group MMS to every participant except our
+ *      own DID (the engine capability shipped in the Clever engine PR). The reply
+ *      auto-sends (no approval gate), matching the live row.
  *
  * IMPORTANT — prerequisites before --apply / --enable:
  *   - The ai-flow-worker + telnyx-sms-inbound Edge functions must be on the
@@ -19,8 +19,8 @@
  *   - Confirm Clever's intro reaches the Telnyx number as a true group MMS
  *     (the one thing only the live test proves). If it doesn't, fall back to a
  *     1:1 send to the seller using the same trigger.
- *   - Set the EXACT canned reply text via AIFLOW_CLEVER_REPLY_BODY (the default
- *     below is a placeholder — do NOT enable with the placeholder).
+ *   - The default reply is Amy's exact canned copy; override via
+ *     AIFLOW_CLEVER_REPLY_BODY only if the copy changes.
  *
  * Validated through the SAME `parseAiFlowDefinition` the dashboard + CRUD API
  * use. Dry-run by default; idempotent unless --force.
@@ -36,7 +36,7 @@
  * Optional overrides:
  *   AIFLOW_CLEVER_INTRO_MATCH_1 (default "Clever Real Estate")
  *   AIFLOW_CLEVER_INTRO_MATCH_2 (default "introduce you to Amy")
- *   AIFLOW_CLEVER_REPLY_BODY    (the canned seller reply — set before enabling)
+ *   AIFLOW_CLEVER_REPLY_BODY    (override Amy's default canned seller reply)
  */
 import { createClient } from "@supabase/supabase-js";
 import {
@@ -65,12 +65,19 @@ function parseArgs(argv: readonly string[]): Args {
 
 const DEFAULT_BUSINESS_ID = "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
 
-// PLACEHOLDER — replace with Amy's exact canned intro reply before enabling
-// (set AIFLOW_CLEVER_REPLY_BODY). Kept short so a dry-run validates.
-const PLACEHOLDER_REPLY =
-  "Hi {{vars.seller_first_name}}! This is Amy with HomeSmart. Thanks for connecting " +
-  "through Clever - I'd love to help you sell. I offer a FREE Certified Appraisal. " +
-  "When's a good time to chat?";
+// Amy's exact canned intro reply (captured from her instructions). The greeting
+// is templated on the seller's first name read from the intro text. Override
+// with AIFLOW_CLEVER_REPLY_BODY only if the copy changes.
+const DEFAULT_REPLY =
+  "Hi {{vars.seller_first_name}}.\n\n" +
+  "I am an agent partner with Clever Real Estate.\n\n" +
+  "I offer a FREE Certified Appraisal to all my sellers from my licensed appraiser " +
+  "to give buyers confidence and keep them from lowballing you. I'm licensed since " +
+  "1989, one of the top agents in Arizona and sell homes fast! We also have cash " +
+  "buyers on hand.\n\n" +
+  "We will be emailing you a market analysis home valuation for your home.\n\n" +
+  "When is a good time to discuss next steps for your FREE Appraisal & your cash offers?\n\n" +
+  "Thanks, Amy Laidlaw ~ HomeSmart 😊";
 
 function buildDefinition(opts: {
   match1: string;
@@ -99,13 +106,8 @@ function buildDefinition(opts: {
           }
         ]
       },
-      {
-        id: "approve",
-        type: "approval_gate",
-        prompt: "Send the Clever intro reply to {{vars.seller_first_name}}?"
-      },
       // Post the canned reply back into the group thread (all participants
-      // except our own DID).
+      // except our own DID). Auto-sends (no approval gate) to match the live row.
       {
         id: "reply",
         type: "send_sms",
@@ -134,8 +136,7 @@ async function main(): Promise<void> {
     args.businessId ?? process.env.AIFLOW_SEED_BUSINESS_ID ?? DEFAULT_BUSINESS_ID;
 
   const name = process.env.AIFLOW_SEED_NAME ?? "Clever Lead - Group Reply";
-  const replyBody = process.env.AIFLOW_CLEVER_REPLY_BODY ?? PLACEHOLDER_REPLY;
-  const usingPlaceholder = !process.env.AIFLOW_CLEVER_REPLY_BODY;
+  const replyBody = process.env.AIFLOW_CLEVER_REPLY_BODY ?? DEFAULT_REPLY;
 
   const definitionInput = buildDefinition({
     match1: process.env.AIFLOW_CLEVER_INTRO_MATCH_1 ?? "Clever Real Estate",
@@ -161,16 +162,6 @@ async function main(): Promise<void> {
   console.log(`Enabled  : ${args.enable}`);
   console.log(`Summary  : ${summarizeDefinition(definition)}`);
   console.log(`Definition:\n${JSON.stringify(definition, null, 2)}`);
-
-  // Guard: never enable with the placeholder reply (it would text real sellers
-  // a generic message). Require the operator to set the real copy first.
-  if (args.enable && usingPlaceholder) {
-    console.error(
-      "\nRefusing to --enable with the placeholder reply. Set AIFLOW_CLEVER_REPLY_BODY " +
-        "to Amy's exact canned reply first."
-    );
-    process.exit(2);
-  }
 
   const db = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
 
