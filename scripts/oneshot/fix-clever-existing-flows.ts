@@ -99,13 +99,19 @@ function fixGroupReply(def: AiFlowDefinition): AiFlowDefinition {
   const reply = def.steps.find((s) => s.type === "send_sms");
   if (!extract) throw new Error('Group Reply: no extract_text step found');
   if (!reply) throw new Error('Group Reply: no send_sms step found');
+  // The live def may still carry a stale `to`/`toAgentName` next to
+  // `replyToGroup` from an earlier round. The new "exactly one recipient
+  // source" rule would reject that on re-validation and block --apply, so
+  // normalize to a pure group reply while preserving the canned body.
+  const { to: _to, toAgentName: _agent, ...replyRest } = reply as Record<string, unknown>;
+  const groupReply = { ...replyRest, replyToGroup: true } as FlowStep;
   return {
     ...def,
     trigger: {
       ...def.trigger,
       conditions: [{ type: "from_matches", value: GROUP_FROM }]
     } as AiFlowDefinition["trigger"],
-    steps: [extract, reply]
+    steps: [extract, groupReply]
   };
 }
 
