@@ -155,11 +155,23 @@ describe("listContactOverrides", () => {
     ]);
   });
 
+  it("returns [] when the query yields null data", async () => {
+    const { db } = makeDb({ data: null, error: null });
+    await expect(listContactOverrides(BIZ, db as unknown as Client)).resolves.toEqual([]);
+  });
+
   it("surfaces list errors", async () => {
     const { db } = makeDb({ error: { message: "nope" } });
     await expect(listContactOverrides(BIZ, db as unknown as Client)).rejects.toThrow(
       /listContactOverrides: nope/
     );
+  });
+
+  it("uses the default service client when none is injected", async () => {
+    const { db } = makeDb({ data: [], error: null });
+    defaultClientSpy.mockReturnValue(db);
+    await listContactOverrides(BIZ);
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
   });
 });
 

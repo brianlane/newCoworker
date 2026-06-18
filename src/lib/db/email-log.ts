@@ -128,9 +128,9 @@ export async function listEmailLogForAddress(
   options: { limit?: number } = {},
   client?: SupabaseClient
 ): Promise<EmailLogRow[]> {
-  const db = client ?? (await createSupabaseServiceClient());
   const normalized = email.trim();
   if (!normalized) return [];
+  const db = client ?? (await createSupabaseServiceClient());
   const raw = options.limit;
   const limit = Math.max(
     1,

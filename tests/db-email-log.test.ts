@@ -10,6 +10,7 @@ import {
   EMAIL_LOG_MAX_LIMIT,
   getEmailBody,
   listEmailLog,
+  listEmailLogForAddress,
   recordInboundTriggerEmail,
   recordOutboundAssistantEmail,
   recordTenantMailboxInbound
@@ -23,7 +24,17 @@ function listChain(result: { data: unknown; error: { message: string } | null })
   return { select, eq, order, limit };
 }
 
-function makeDb(c: ReturnType<typeof listChain>) {
+/** listEmailLogForAddress chains select → eq → or → order → limit. */
+function addressChain(result: { data: unknown; error: { message: string } | null }) {
+  const limit = vi.fn().mockResolvedValue(result);
+  const order = vi.fn(() => ({ limit }));
+  const or = vi.fn(() => ({ order }));
+  const eq = vi.fn(() => ({ or }));
+  const select = vi.fn(() => ({ eq }));
+  return { select, eq, or, order, limit };
+}
+
+function makeDb<T>(c: T) {
   return { from: vi.fn(() => c) };
 }
 
@@ -87,6 +98,63 @@ describe("listEmailLog", () => {
     const c = listChain({ data: [], error: null });
     defaultClientSpy.mockResolvedValueOnce(makeDb(c));
     await expect(listEmailLog("biz")).resolves.toEqual([]);
+  });
+});
+
+describe("listEmailLogForAddress", () => {
+  it("matches FROM or TO the address (case-insensitive) newest-first, scoped to the business", async () => {
+    const c = addressChain({ data: [ROW], error: null });
+    const rows = await listEmailLogForAddress("biz", "lead@example.com", {}, makeDb(c) as never);
+    expect(rows).toEqual([ROW]);
+    expect(c.eq).toHaveBeenCalledWith("business_id", "biz");
+    expect(c.or).toHaveBeenCalledWith(
+      `from_email.ilike."lead@example.com",to_email.ilike."lead@example.com"`
+    );
+    expect(c.order).toHaveBeenCalledWith("created_at", { ascending: false });
+    expect(c.limit).toHaveBeenCalledWith(EMAIL_LOG_DEFAULT_LIMIT);
+  });
+
+  it("escapes LIKE/PostgREST metacharacters so a local-part like joe_smith is a literal", async () => {
+    const c = addressChain({ data: [], error: null });
+    await listEmailLogForAddress("biz", "joe_smith@x.com", {}, makeDb(c) as never);
+    // `_` → `\_` (LIKE), then the backslash is doubled for the PostgREST
+    // double-quoted literal → `\\_`.
+    expect(c.or).toHaveBeenCalledWith(
+      `from_email.ilike."joe\\\\_smith@x.com",to_email.ilike."joe\\\\_smith@x.com"`
+    );
+  });
+
+  it("trims and short-circuits to [] for an empty/whitespace address (never queries)", async () => {
+    const c = addressChain({ data: [ROW], error: null });
+    expect(await listEmailLogForAddress("biz", "   ", {}, makeDb(c) as never)).toEqual([]);
+    expect(c.select).not.toHaveBeenCalled();
+  });
+
+  it("clamps oversized and tiny limits", async () => {
+    const c = addressChain({ data: [], error: null });
+    await listEmailLogForAddress("biz", "a@x.com", { limit: 99999 }, makeDb(c) as never);
+    expect(c.limit).toHaveBeenCalledWith(EMAIL_LOG_MAX_LIMIT);
+    await listEmailLogForAddress("biz", "a@x.com", { limit: 0 }, makeDb(c) as never);
+    expect(c.limit).toHaveBeenCalledWith(1);
+    await listEmailLogForAddress("biz", "a@x.com", { limit: Number.NaN }, makeDb(c) as never);
+    expect(c.limit).toHaveBeenCalledWith(EMAIL_LOG_DEFAULT_LIMIT);
+  });
+
+  it("handles null data and surfaces query errors", async () => {
+    const empty = addressChain({ data: null, error: null });
+    await expect(
+      listEmailLogForAddress("biz", "a@x.com", {}, makeDb(empty) as never)
+    ).resolves.toEqual([]);
+    const broken = addressChain({ data: null, error: { message: "boom" } });
+    await expect(
+      listEmailLogForAddress("biz", "a@x.com", {}, makeDb(broken) as never)
+    ).rejects.toThrow("listEmailLogForAddress: boom");
+  });
+
+  it("uses the default service client when none is injected", async () => {
+    const c = addressChain({ data: [], error: null });
+    defaultClientSpy.mockResolvedValueOnce(makeDb(c));
+    await expect(listEmailLogForAddress("biz", "a@x.com")).resolves.toEqual([]);
   });
 });
 

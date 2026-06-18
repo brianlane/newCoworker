@@ -242,6 +242,22 @@ describe("processInboundTenantEmail", () => {
     expect(recordTenantMailboxInbound).toHaveBeenCalled();
   });
 
+  it("stringifies a non-Error rollup failure when logging it (never assumes Error)", async () => {
+    resolveBusinessByAddress.mockResolvedValue("biz-1");
+    findCustomerByEmail.mockRejectedValue("weird non-error");
+    const db = flowsDb({ data: [], error: null });
+
+    const res = await processInboundTenantEmail({ ...PAYLOAD, from: "jane@example.com" }, db as never);
+
+    expect(res).toEqual({ matched: true, businessId: "biz-1", enqueued: 0 });
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "customer_email_rollup_failed",
+        payload: expect.objectContaining({ error: "weird non-error" })
+      })
+    );
+  });
+
   it("surfaces an ai_flows query error", async () => {
     resolveBusinessByAddress.mockResolvedValue("biz-1");
     const db = flowsDb({ data: null, error: { message: "down" } });
