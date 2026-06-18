@@ -9,13 +9,21 @@
  * sequence:
  *   Provide Update -> We Spoke -> "No" (scheduled a meeting?) -> notes -> Submit.
  *
- * NOTE — selectors to confirm in the live test (then override via env, no code
- * edit): the Needs Action row link selector (AIFLOW_CLEVER_NEEDS_ACTION_SELECTOR)
- * and the per-lead action sequence (AIFLOW_CLEVER_UPDATE_ACTIONS_JSON). The
- * default action list is the sequence verified live on a single connection page;
- * the "follow up in 7 days" date field (revealed after picking "No") is widget-
- * dependent — add it to the override using {{now.in7Days.*}} once its DOM is
- * confirmed. Seed DISABLED; enable only after the live selector check.
+ * Selectors below were verified LIVE against the Clever portal (Jun 2026):
+ *   - Needs Action list: the first `InfiniteList` section on /active holds
+ *     exactly the "Needs Action (N)" lead cards; "Recently Updated" is a second
+ *     section. We scope forEachLink to that first section's lead links so a run
+ *     touches only the leads that actually need an update.
+ *   - Per-lead form: Provide Update -> We Spoke reveals a meeting <select>
+ *     (id = the question text, empty name) and a notes <textarea>. Picking "No"
+ *     reveals a required react-datepicker ("When do you plan to follow up
+ *     again?"): clicking the input opens a calendar whose day cells are
+ *     role="option" named e.g. "Choose Wednesday, June 24th, 2026". Choosing the
+ *     day (default 12:00 AM) sets the value and enables Submit — no time pick
+ *     needed. We template that label with {{now.in7Days.*}} (7 days out).
+ * Both the list selector and the action list stay env-overridable (no code edit)
+ * via AIFLOW_CLEVER_NEEDS_ACTION_SELECTOR / AIFLOW_CLEVER_UPDATE_ACTIONS_JSON.
+ * Seed DISABLED by default; enable only after the live selector check.
  *
  * Validated through the SAME parseAiFlowDefinition the dashboard + CRUD API use.
  * Dry-run by default; idempotent unless --force.
@@ -31,7 +39,8 @@
  * Optional overrides:
  *   AIFLOW_CLEVER_UPDATE_FROM            (default "3142707635")
  *   AIFLOW_CLEVER_INTEGRATION_LABEL      (default "Clever")
- *   AIFLOW_CLEVER_NEEDS_ACTION_SELECTOR  (default 'a[href*="/connection/"]')
+ *   AIFLOW_CLEVER_NEEDS_ACTION_SELECTOR  (default scopes to the first/"Needs
+ *                                         Action" InfiniteList section's cards)
  *   AIFLOW_CLEVER_UPDATE_ACTIONS_JSON    (default sequence below)
  */
 import { createClient } from "@supabase/supabase-js";
@@ -61,15 +70,24 @@ function parseArgs(argv: readonly string[]): Args {
 
 const DEFAULT_BUSINESS_ID = "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
 
-// Verified live on a single Clever connection page (Provide Update form). The
-// meeting <select> name + notes placeholder are the real labels. The optional
-// "follow up in 7 days" date step is added live (see header) via the override.
-const MEETING_SELECT = 'select[name="Did you schedule a time to meet in person?"]';
+// Verified live on a Clever connection page (Provide Update form). The meeting
+// <select> carries an empty `name`, so it's targeted by its `id` (the question
+// text). The follow-up date is a react-datepicker: open it (click the input by
+// placeholder), then click the calendar day cell whose accessible name encodes
+// the 7-days-out date. Day-only selection defaults the time to 12:00 AM and is
+// enough to enable Submit.
+const MEETING_SELECT = 'select[id="Did you schedule a time to meet in person?"]';
 const NOTES_PLACEHOLDER = "Type additional details about this update";
+const DATE_INPUT = 'input[placeholder="Select a date and time"]';
+// Calendar day cell label, e.g. "Choose Wednesday, June 24th, 2026".
+const FOLLOWUP_DAY_LABEL =
+  "Choose {{now.in7Days.weekday}}, {{now.in7Days.month}} {{now.in7Days.dayOrdinal}}, {{now.in7Days.year}}";
 const DEFAULT_UPDATE_ACTIONS = [
   { kind: "click_text", target: "Provide Update" },
   { kind: "click_text", target: "We Spoke" },
   { kind: "select_option", target: MEETING_SELECT, valueTemplate: "No" },
+  { kind: "click_selector", target: DATE_INPUT },
+  { kind: "click_role", target: "option", valueTemplate: FOLLOWUP_DAY_LABEL },
   { kind: "fill_placeholder", target: NOTES_PLACEHOLDER, valueTemplate: "call, texted, and emailed" },
   { kind: "click_text", target: "Submit Update" }
 ];
@@ -137,7 +155,8 @@ async function main(): Promise<void> {
     from: process.env.AIFLOW_CLEVER_UPDATE_FROM ?? "3142707635",
     integrationLabel: process.env.AIFLOW_CLEVER_INTEGRATION_LABEL ?? "Clever",
     needsActionSelector:
-      process.env.AIFLOW_CLEVER_NEEDS_ACTION_SELECTOR ?? 'a[href*="/connection/"]',
+      process.env.AIFLOW_CLEVER_NEEDS_ACTION_SELECTOR ??
+      'section[data-sentry-component="InfiniteList"]:first-of-type a.clickable-card',
     updateActions: parseActionsEnv("AIFLOW_CLEVER_UPDATE_ACTIONS_JSON", DEFAULT_UPDATE_ACTIONS)
   });
 

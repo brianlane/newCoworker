@@ -20,6 +20,9 @@ import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { listCustomerMemories, DEFAULT_LIST_LIMIT } from "@/lib/customer-memory/db";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
+import { listContactOverrides } from "@/lib/db/contact-overrides";
+import { AddCustomerForm } from "@/components/dashboard/AddCustomerForm";
+import { OtherContactsManager } from "@/components/dashboard/OtherContactsManager";
 
 export const dynamic = "force-dynamic";
 
@@ -61,9 +64,10 @@ export default async function DashboardCustomersPage() {
     );
   }
 
-  const customers = await listCustomerMemories(business.id, {
-    limit: DEFAULT_LIST_LIMIT
-  });
+  const [customers, otherContacts] = await Promise.all([
+    listCustomerMemories(business.id, { limit: DEFAULT_LIST_LIMIT }),
+    listContactOverrides(business.id).catch(() => [])
+  ]);
   // Owner/employee/manual-override names win over the stored customer
   // display_name, so the owner's own number reads "Brian Lane (owner)" instead
   // of a bare number, and roster members get their names here too.
@@ -91,6 +95,8 @@ export default async function DashboardCustomersPage() {
           per-channel dashboards.
         </p>
       </Card>
+
+      <AddCustomerForm businessId={business.id} />
 
       {customers.length === 0 ? (
         <Card>
@@ -172,6 +178,13 @@ export default async function DashboardCustomersPage() {
           </ul>
         </Card>
       )}
+
+      <div className="border-t border-parchment/10 pt-6">
+        <OtherContactsManager
+          businessId={business.id}
+          initialContacts={otherContacts}
+        />
+      </div>
     </div>
   );
 }

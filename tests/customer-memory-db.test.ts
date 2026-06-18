@@ -31,9 +31,12 @@ vi.mock("@/lib/supabase/server", () => ({
  */
 
 import {
+  CustomerExistsError,
   DEFAULT_LIST_LIMIT,
   MAX_LIST_LIMIT,
+  createCustomerMemory,
   deleteCustomerMemory,
+  findCustomerByEmail,
   getCustomerMemory,
   listCustomerMemories,
   listSmsHistoryForCustomer,
@@ -62,6 +65,7 @@ function memory(overrides: Partial<CustomerMemoryRow> = {}): CustomerMemoryRow {
     business_id: BIZ,
     customer_e164: CUSTOMER,
     display_name: null,
+    email: null,
     summary_md: null,
     pinned_md: null,
     interaction_count: 0,
@@ -94,6 +98,8 @@ function makeBuilder(terminator: { data?: unknown; error?: unknown } | (() => Pr
     "eq",
     "neq",
     "or",
+    "ilike",
+    "is",
     "in",
     "order",
     "limit",
@@ -351,6 +357,120 @@ describe("recordInteractionAndIncrement", () => {
   });
 });
 
+describe("createCustomerMemory", () => {
+  it("inserts a profile (counters untouched / left to DB defaults) and returns the row", async () => {
+    const row = memory({ display_name: "Joe", email: "joe@x.com" });
+    const { client, fromCalls } = makeClient({ fromTerminator: { data: row, error: null } });
+    const result = await createCustomerMemory(
+      BIZ,
+      { customerE164: CUSTOMER, displayName: "Joe", email: "joe@x.com", pinnedMd: "VIP" },
+      client
+    );
+    expect(result).toEqual(row);
+    const fr = fromCalls[0]!;
+    expect(fr.table).toBe("customer_memories");
+    const insert = fr.calls.find((c) => c.name === "insert")?.args[0] as Record<string, unknown>;
+    expect(insert).toMatchObject({
+      business_id: BIZ,
+      customer_e164: CUSTOMER,
+      display_name: "Joe",
+      email: "joe@x.com",
+      pinned_md: "VIP"
+    });
+    // Never fakes an interaction: no counter/last_channel keys in the insert.
+    expect(insert).not.toHaveProperty("interaction_count");
+    expect(insert).not.toHaveProperty("last_channel");
+    expect(fr.calls.find((c) => c.name === "single")).toBeDefined();
+  });
+
+  it("trims fields and coerces blank/omitted optionals to null", async () => {
+    const { client, fromCalls } = makeClient({ fromTerminator: { data: memory(), error: null } });
+    await createCustomerMemory(
+      BIZ,
+      { customerE164: CUSTOMER, displayName: "   ", email: "  A@B.com  ", pinnedMd: "" },
+      client
+    );
+    const insert = fromCalls[0]!.calls.find((c) => c.name === "insert")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(insert.display_name).toBeNull();
+    expect(insert.email).toBe("A@B.com");
+    expect(insert.pinned_md).toBeNull();
+  });
+
+  it("throws CustomerExistsError on the unique-violation SQLSTATE so the API can 409", async () => {
+    const { client } = makeClient({
+      fromTerminator: { data: null, error: { code: "23505", message: "duplicate key" } }
+    });
+    await expect(
+      createCustomerMemory(BIZ, { customerE164: CUSTOMER }, client)
+    ).rejects.toBeInstanceOf(CustomerExistsError);
+  });
+
+  it("rethrows other PostgREST errors with context", async () => {
+    const { client } = makeClient({
+      fromTerminator: { data: null, error: { code: "12345", message: "rls" } }
+    });
+    await expect(createCustomerMemory(BIZ, { customerE164: CUSTOMER }, client)).rejects.toThrow(
+      /createCustomerMemory: rls/
+    );
+  });
+});
+
+describe("findCustomerByEmail", () => {
+  it("ilike-matches the escaped address then re-verifies exact (case-insensitive) equality in JS", async () => {
+    const { client, fromCalls } = makeClient({
+      fromTerminator: {
+        data: [
+          // A wildcard false-positive shape the JS verify must reject.
+          { customer_e164: "+19999999999", display_name: "Imposter", email: "joeXsmith@x.com" },
+          { customer_e164: CUSTOMER, display_name: "Joe", email: "JOE_smith@x.com" }
+        ],
+        error: null
+      }
+    });
+    const result = await findCustomerByEmail(BIZ, "  joe_smith@x.com ", client);
+    expect(result).toEqual({ customerE164: CUSTOMER, displayName: "Joe" });
+    const fr = fromCalls[0]!;
+    // `_` is escaped so it can't act as a single-char wildcard.
+    expect(fr.calls.find((c) => c.name === "ilike")?.args).toEqual(["email", "joe\\_smith@x.com"]);
+    expect(fr.calls.find((c) => c.name === "eq")?.args).toEqual(["business_id", BIZ]);
+  });
+
+  it("returns null without querying when the address is empty/whitespace", async () => {
+    const { client, fromCalls } = makeClient({ fromTerminator: { data: [], error: null } });
+    expect(await findCustomerByEmail(BIZ, "   ", client)).toBeNull();
+    expect(fromCalls).toHaveLength(0);
+  });
+
+  it("returns null when nothing matches (or only wildcard false-positives come back)", async () => {
+    const { client } = makeClient({
+      fromTerminator: {
+        data: [
+          // A row whose email is null exercises the `r.email ?? ""` guard.
+          { customer_e164: "+1", display_name: null, email: null },
+          { customer_e164: "+1", display_name: null, email: "someone-else@x.com" }
+        ],
+        error: null
+      }
+    });
+    expect(await findCustomerByEmail(BIZ, "joe@x.com", client)).toBeNull();
+
+    const nullData = makeClient({ fromTerminator: { data: null, error: null } });
+    expect(await findCustomerByEmail(BIZ, "joe@x.com", nullData.client)).toBeNull();
+  });
+
+  it("propagates PostgREST errors", async () => {
+    const { client } = makeClient({
+      fromTerminator: { data: null, error: { message: "rls" } }
+    });
+    await expect(findCustomerByEmail(BIZ, "joe@x.com", client)).rejects.toThrow(
+      /findCustomerByEmail: rls/
+    );
+  });
+});
+
 describe("mergeCustomerMemories", () => {
   const FROM = "+15555550777";
 
@@ -439,6 +559,32 @@ describe("updateCustomerOwnerFields", () => {
     expect(patch.updated_at).toBeTruthy();
     expect(patch).not.toHaveProperty("summary_md");
     expect(patch).not.toHaveProperty("interaction_count");
+  });
+
+  it("writes email only when the key is present, and supports clearing it with null", async () => {
+    const set = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { email: "joe@x.com" }, set.client);
+    const setPatch = set.fromCalls[0]!.calls.find((c) => c.name === "update")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(setPatch).toHaveProperty("email", "joe@x.com");
+    expect(setPatch).not.toHaveProperty("display_name");
+
+    const clear = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { email: null }, clear.client);
+    const clearPatch = clear.fromCalls[0]!.calls.find((c) => c.name === "update")
+      ?.args[0] as Record<string, unknown>;
+    expect(clearPatch.email).toBeNull();
+
+    // Absent key → never written (no clobber of an existing link).
+    const skip = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { displayName: "Joe" }, skip.client);
+    const skipPatch = skip.fromCalls[0]!.calls.find((c) => c.name === "update")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(skipPatch).not.toHaveProperty("email");
   });
 
   it("supports clearing display_name / pinned_md by passing null (UI 'clear' button)", async () => {
@@ -800,6 +946,20 @@ describe("default service-client fallback (every public helper)", () => {
     const { client } = makeClient({ rpcResult: { data: memory(), error: null } });
     defaultClientSpy.mockReturnValue(client);
     await mergeCustomerMemories(BIZ, "+15555550777", CUSTOMER);
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("createCustomerMemory falls back to createSupabaseServiceClient", async () => {
+    const { client } = makeClient({ fromTerminator: { data: memory(), error: null } });
+    defaultClientSpy.mockReturnValue(client);
+    await createCustomerMemory(BIZ, { customerE164: CUSTOMER });
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("findCustomerByEmail falls back to createSupabaseServiceClient", async () => {
+    const { client } = makeClient({ fromTerminator: { data: [], error: null } });
+    defaultClientSpy.mockReturnValue(client);
+    await findCustomerByEmail(BIZ, "joe@x.com");
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
   });
 });

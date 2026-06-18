@@ -46,11 +46,13 @@ const querySchema = z.object({
 const patchBodySchema = z
   .object({
     displayName: z.string().trim().max(120).nullable().optional(),
-    pinnedMd: z.string().trim().max(2000).nullable().optional()
+    pinnedMd: z.string().trim().max(2000).nullable().optional(),
+    email: z.string().trim().email("Enter a valid email").max(254).nullable().optional()
   })
-  .refine((b) => b.displayName !== undefined || b.pinnedMd !== undefined, {
-    message: "Provide at least one of displayName, pinnedMd"
-  });
+  .refine(
+    (b) => b.displayName !== undefined || b.pinnedMd !== undefined || b.email !== undefined,
+    { message: "Provide at least one of displayName, pinnedMd, email" }
+  );
 
 async function decodePathParam(raw: string): Promise<string> {
   // Next decodes path segments once; if upstream double-encodes the
@@ -95,6 +97,7 @@ export async function GET(
       memory: {
         customerE164: memory.customer_e164,
         displayName: memory.display_name,
+        email: memory.email,
         summaryMd: memory.summary_md,
         pinnedMd: memory.pinned_md,
         interactionCount: memory.interaction_count,
@@ -145,8 +148,9 @@ export async function PATCH(
     if (!existing) return errorResponse("NOT_FOUND", "Customer not found");
 
     await updateCustomerOwnerFields(businessId, customerE164, {
-      displayName: body.displayName,
-      pinnedMd: body.pinnedMd
+      ...(body.displayName !== undefined ? { displayName: body.displayName } : {}),
+      ...(body.pinnedMd !== undefined ? { pinnedMd: body.pinnedMd } : {}),
+      ...(body.email !== undefined ? { email: body.email } : {})
     });
 
     return successResponse({ ok: true });

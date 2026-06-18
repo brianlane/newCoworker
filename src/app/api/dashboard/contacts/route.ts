@@ -19,18 +19,21 @@ import { rateLimit } from "@/lib/rate-limit";
 import {
   CONTACT_NUMBER_RE,
   deleteContactOverride,
+  listContactOverrides,
   setContactOverride
 } from "@/lib/db/contact-overrides";
 
 export const dynamic = "force-dynamic";
 
 const WRITE_RATE = { interval: 60 * 1000, maxRequests: 20 };
+const READ_RATE = { interval: 60 * 1000, maxRequests: 60 };
 
 const querySchema = z.object({ businessId: z.string().uuid() });
 
 const setSchema = z.object({
   e164: z.string().regex(CONTACT_NUMBER_RE, "Must be E.164 (+1602...) or a short code"),
-  name: z.string().trim().min(1).max(120)
+  name: z.string().trim().min(1).max(120),
+  email: z.string().trim().email("Enter a valid email").max(254).optional()
 });
 
 const deleteSchema = z.object({
@@ -52,13 +55,38 @@ async function authorize(request: Request) {
   return { businessId };
 }
 
+export async function GET(request: Request) {
+  try {
+    const user = await getAuthUser();
+    if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
+    const url = new URL(request.url);
+    const { businessId } = querySchema.parse({
+      businessId: url.searchParams.get("businessId") ?? ""
+    });
+    if (!user.isAdmin) await requireOwner(businessId);
+    const limiter = rateLimit(`dashboard-contacts-list:${businessId}`, READ_RATE);
+    if (!limiter.success) {
+      return errorResponse("CONFLICT", "Too many requests, please slow down.", 429);
+    }
+    const contacts = await listContactOverrides(businessId);
+    return successResponse({ contacts });
+  } catch (err) {
+    return handleRouteError(err);
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const auth = await authorize(request);
     if ("error" in auth) return auth.error;
-    const { e164, name } = setSchema.parse(await request.json());
-    await setContactOverride(auth.businessId, e164, name);
-    return successResponse({ e164, name });
+    const { e164, name, email } = setSchema.parse(await request.json());
+    // Only touch email when the caller actually sent it: setContactOverride
+    // treats the key's presence as "overwrite", so passing it on a name-only
+    // save would unlink an existing address. (Schema rejects null/empty, so a
+    // present `email` is always a real address.)
+    const options = email === undefined ? {} : { email };
+    await setContactOverride(auth.businessId, e164, name, options);
+    return successResponse({ e164, name, email: email ?? null });
   } catch (err) {
     return handleRouteError(err);
   }

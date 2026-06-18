@@ -9,29 +9,41 @@ type Props = {
   customerE164: string;
   initialDisplayName: string | null;
   initialPinnedMd: string | null;
+  initialEmail: string | null;
 };
 
 const PINNED_MAX = 2000;
 const NAME_MAX = 120;
+const EMAIL_MAX = 254;
 
 export function CustomerProfileEditor(props: Props) {
   const router = useRouter();
   const [displayName, setDisplayName] = useState(props.initialDisplayName ?? "");
   const [pinnedMd, setPinnedMd] = useState(props.initialPinnedMd ?? "");
+  const [email, setEmail] = useState(props.initialEmail ?? "");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const dirty =
-    (props.initialDisplayName ?? "") !== displayName ||
-    (props.initialPinnedMd ?? "") !== pinnedMd;
+  const nameChanged = (props.initialDisplayName ?? "") !== displayName;
+  const pinnedChanged = (props.initialPinnedMd ?? "") !== pinnedMd;
+  const emailChanged = (props.initialEmail ?? "") !== email;
+  const dirty = nameChanged || pinnedChanged || emailChanged;
 
   async function save() {
     setSaving(true);
     setErrorMsg(null);
     setStatusMsg(null);
     try {
+      // Only send fields the owner actually changed. Sending an unchanged
+      // (possibly legacy-invalid) email alongside a name/pinned edit would let
+      // server-side .email() validation reject the whole save, blocking edits to
+      // unrelated fields.
+      const body: Record<string, string | null> = {};
+      if (nameChanged) body.displayName = displayName.trim() === "" ? null : displayName.trim();
+      if (pinnedChanged) body.pinnedMd = pinnedMd.trim() === "" ? null : pinnedMd.trim();
+      if (emailChanged) body.email = email.trim() === "" ? null : email.trim();
       const res = await fetch(
         `/api/dashboard/customers/${encodeURIComponent(
           props.customerE164
@@ -39,10 +51,7 @@ export function CustomerProfileEditor(props: Props) {
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            displayName: displayName.trim() === "" ? null : displayName.trim(),
-            pinnedMd: pinnedMd.trim() === "" ? null : pinnedMd.trim()
-          })
+          body: JSON.stringify(body)
         }
       );
       if (!res.ok) {
@@ -104,6 +113,21 @@ export function CustomerProfileEditor(props: Props) {
         onChange={(e) => setDisplayName(e.target.value.slice(0, NAME_MAX))}
         placeholder="e.g. Joe at ACME"
         maxLength={NAME_MAX}
+        className="w-full bg-deep-ink/60 border border-parchment/15 rounded-lg px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:outline-none focus:border-claw-green/60"
+      />
+
+      <label className="block text-xs text-parchment/70 mb-1 mt-4">
+        Email
+        <span className="ml-1 text-parchment/40">
+          (optional — links their email so inbound/outbound mail rolls up here)
+        </span>
+      </label>
+      <input
+        type="email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value.slice(0, EMAIL_MAX))}
+        placeholder="joe@acme.com"
+        maxLength={EMAIL_MAX}
         className="w-full bg-deep-ink/60 border border-parchment/15 rounded-lg px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:outline-none focus:border-claw-green/60"
       />
 
