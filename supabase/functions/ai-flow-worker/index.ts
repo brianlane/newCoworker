@@ -100,6 +100,15 @@ const ROWBOAT_ROUTE_TIMEOUT_MS = Number(
 const RENDER_FETCH_TIMEOUT_MS = Number(
   Deno.env.get("AIFLOW_RENDER_FETCH_TIMEOUT_MS") ?? "120000"
 );
+// A forEachLink browse runs up to MAX_FOREACH_ITEMS (render-side, default 25)
+// sequential `networkidle` navigations plus per-item actions inside ONE HTTP
+// response, so the single-page budget would abort the worker fetch mid-loop and
+// leave the Clever portal partially updated. Give it a much larger,
+// independently configurable budget (default 10 min). The render service and
+// any tunnel in front of it must allow a response this long too.
+const RENDER_FOREACH_FETCH_TIMEOUT_MS = Number(
+  Deno.env.get("AIFLOW_RENDER_FOREACH_FETCH_TIMEOUT_MS") ?? "600000"
+);
 const MAX_REDIRECTS = 5;
 
 // Storage bucket (private) for browse_extract screenshots; the worker writes
@@ -898,7 +907,10 @@ async function browseActionStep(
   }
 
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), RENDER_FETCH_TIMEOUT_MS);
+  const fetchTimeoutMs = action.forEachLink
+    ? RENDER_FOREACH_FETCH_TIMEOUT_MS
+    : RENDER_FETCH_TIMEOUT_MS;
+  const timer = setTimeout(() => ctrl.abort(), fetchTimeoutMs);
   let body: unknown;
   try {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -912,7 +924,8 @@ async function browseActionStep(
         businessId: run.business_id,
         ...(action.auth ? { auth: action.auth } : {}),
         actions: action.actions,
-        ...(action.screenshot ? { screenshot: true } : {})
+        ...(action.screenshot ? { screenshot: true } : {}),
+        ...(action.forEachLink ? { forEachLink: action.forEachLink } : {})
       }),
       signal: ctrl.signal
     });
@@ -958,6 +971,56 @@ async function browseActionStep(
 
   const parsed = parseActionResponse(body, safe);
   if (!parsed) throw new Error("browse_action: render service returned an invalid body");
+
+  // Loop-over-list: the response summarizes per-item outcomes instead of a
+  // single page's action count. Handle it on its own terms and return early.
+  if (action.forEachLink) {
+    if (!parsed.forEach) {
+      // A render service that doesn't loop would silently run the actions once
+      // on the LIST page. Fail loudly rather than half-apply the update.
+      return {
+        kind: "fail",
+        error: "browse_action: render service did not loop (forEachLink unsupported)"
+      };
+    }
+    const fe = parsed.forEach;
+    if (fe.items === 0) {
+      // Zero items WITH errors means link collection itself failed (e.g. a bad
+      // CSS selector throws in querySelectorAll) — fail loudly instead of
+      // treating a broken weekly-update selector as a clean "nothing to do".
+      if (fe.errors.length > 0) {
+        return {
+          kind: "fail",
+          error: `browse_action: forEachLink matched no items (${fe.errors[0]})`
+        };
+      }
+      appendActionTaken(scope, "found no matching list items to update");
+      return { kind: "ok", result: { forEach: fe } };
+    }
+    // Every item failed → the selectors are wrong (or every page changed). Fail
+    // so we notice; nothing was applied, so a retry won't double-update.
+    if (fe.succeeded === 0) {
+      return {
+        kind: "fail",
+        error: `browse_action: all ${fe.items} list item(s) failed${fe.errors[0] ? `: ${fe.errors[0]}` : ""}`
+      };
+    }
+    // Partial success: don't fail the run (a retry would re-update the ones that
+    // already succeeded), but log the misses so they can be checked.
+    if (fe.failed > 0) {
+      await systemLog(supabase, {
+        businessId: run.business_id,
+        source: "aiflow",
+        level: "warn",
+        event: "ai_flow_for_each_partial",
+        message: `forEachLink updated ${fe.succeeded}/${fe.items}; ${fe.failed} failed`,
+        payload: { run_id: run.id, flow_id: run.flow_id, step_index: index, errors: fe.errors }
+      });
+    }
+    appendActionTaken(scope, `updated ${fe.succeeded} of ${fe.items} list item(s)`);
+    return { kind: "ok", result: { forEach: fe } };
+  }
+
   // The render service fails fast on the first broken action, so a 200 with a
   // short count means the contract was violated somewhere — never mark the
   // step done unless every planned action actually ran.
@@ -1395,13 +1458,38 @@ async function sendSmsStep(
   scope: Scope,
   action: Extract<StepAction, { kind: "send_sms" }>
 ): Promise<StepOutcome> {
+  // Named-agent send: resolve the roster member's current phone and render the
+  // body with {{agent.*}} in scope (the planner left both pending — only the
+  // worker can read the roster). Everything below then treats it as a 1:1 send.
+  let toE164 = action.to;
+  let bodyText = action.body;
+  if (action.toAgentName) {
+    const agent = await resolveAgentByName(supabase, run.business_id, action.toAgentName);
+    if (!agent) {
+      return {
+        kind: "fail",
+        error: `send_sms: agent "${action.toAgentName}" is not on the active roster`
+      };
+    }
+    toE164 = agent.phone;
+    // The planner couldn't render this (agent scope is worker-only), so its
+    // empty-body guard never ran. Re-check here so an all-template body that
+    // resolves to nothing doesn't send a bare compliance-suffix text to a
+    // teammate.
+    bodyText = renderTemplate(action.body, agentScope(scope, agent)).trim();
+    if (!bodyText) return { kind: "fail", error: "send_sms: body is empty after templating" };
+  }
   // Lead-contact quiet hours: inside the configured overnight window the lead
   // is never texted. With an extracted lead email we email the same message
   // right away (email is not time-gated) AND still defer the run so the text
   // also goes out at the morning resume time; without an email the run just
   // parks until then via earliest_claim_at. The owner can lift this for the
   // rest of the run by answering an approval gate with "bypass quiet hours".
-  if (action.quiet && scope.vars[BYPASS_QUIET_HOURS_VAR] !== true) {
+  // Quiet hours (defer overnight) and the email fallback are lead-contact
+  // protections; an agent-directed text (toAgentName) is an internal
+  // notification that must not be parked until morning or copied to the lead's
+  // email with content meant for a roster member.
+  if (action.quiet && !action.toAgentName && scope.vars[BYPASS_QUIET_HOURS_VAR] !== true) {
     const decision = smsQuietDecision(Date.now(), {
       timezone: action.quiet.timezone,
       noSendAfter: action.quiet.noSendAfter,
@@ -1416,7 +1504,7 @@ async function sendSmsStep(
         const sent = await deliverFlowEmail(supabase, run, index, scope, {
           to: action.quiet.emailTo,
           subject: action.quiet.emailSubject || "Following up on your inquiry",
-          body: action.body,
+          body: bodyText,
           attachScreenshot: false,
           fromConnectionId: action.quiet.emailFromConnectionId
         });
@@ -1442,13 +1530,13 @@ async function sendSmsStep(
   if (action.recipients && action.recipients.length > 0) {
     return await sendGroupSmsStep(supabase, run, index, scope, action);
   }
-  if (await isRecipientOptedOut(supabase, run.business_id, action.to)) {
-    return { kind: "ok", skipped: true, result: { skipped: "recipient_opted_out", to: action.to } };
+  if (await isRecipientOptedOut(supabase, run.business_id, toE164)) {
+    return { kind: "ok", skipped: true, result: { skipped: "recipient_opted_out", to: toE164 } };
   }
   const cfg = await messagingConfig(supabase, run.business_id);
   if (!cfg) return { kind: "fail", error: "send_sms: Telnyx messaging is not configured" };
 
-  const text = prepareSmsBody(action.body, { requireStop: true });
+  const text = prepareSmsBody(bodyText, { requireStop: true });
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
     { p_business_id: run.business_id }
@@ -1475,7 +1563,7 @@ async function sendSmsStep(
       apiKey: cfg.apiKey,
       messagingProfileId: cfg.profile,
       fromE164: cfg.from,
-      toE164: action.to,
+      toE164,
       text,
       idempotencyKey: `aiflow:${run.id}:${index}`
     });
@@ -1489,16 +1577,20 @@ async function sendSmsStep(
     } catch {
       messageId = null;
     }
-    appendActionTaken(scope, `texted the lead at ${action.to}`);
+    appendActionTaken(scope, `texted ${action.toAgentName ?? "the lead"} at ${toE164}`);
     await logOutboundSms(supabase, run, {
-      to: action.to,
+      to: toE164,
       from: cfg.from || null,
       body: text,
       source: "ai_flow",
       telnyxMessageId: messageId
     });
-    await recordLeadCustomerProfile(supabase, run, scope, action.to);
-    return { kind: "ok", result: { to: action.to, messageId } };
+    // An agent recipient is a teammate, not a lead — don't file them as a lead
+    // customer profile.
+    if (!action.toAgentName) {
+      await recordLeadCustomerProfile(supabase, run, scope, toE164);
+    }
+    return { kind: "ok", result: { to: toE164, messageId } };
   } catch (e) {
     await release();
     throw e;
@@ -2104,10 +2196,38 @@ function agentScope(scope: Scope, agent: RoutedAgent, deadline?: string): Record
   return {
     vars: scope.vars,
     trigger: scope.trigger,
+    ...(scope.now ? { now: scope.now } : {}),
     ...(scope.coworker ? { coworker: scope.coworker } : {}),
     agent: { name: agent.name, phone: agent.phone },
     ...(deadline ? { offer: { deadline } } : {})
   };
+}
+
+/**
+ * Resolve a single named roster member to {name, phone} for a send_sms
+ * { toAgentName } step. Active members only; first match by created_at when a
+ * name is duplicated. Returns null when no active member matches; THROWS on a
+ * query error so the run retries rather than silently mis-sending.
+ */
+async function resolveAgentByName(
+  supabase: Supabase,
+  businessId: string,
+  name: string
+): Promise<RoutedAgent | null> {
+  const want = name.trim().toLowerCase();
+  if (!want) return null;
+  const { data, error } = await supabase
+    .from("ai_flow_team_members")
+    .select("name, phone_e164")
+    .eq("business_id", businessId)
+    .eq("active", true)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(`send_sms: roster query failed: ${error.message}`);
+  const rows = (data ?? []) as { name: string; phone_e164: string }[];
+  const match = rows.find((r) => r.name.trim().toLowerCase() === want);
+  const phone = match?.phone_e164?.trim();
+  if (!match || !phone) return null;
+  return { name: match.name, phone };
 }
 
 /** The lead's own phone (from vars.lead_phone) normalized to E.164, or null. */

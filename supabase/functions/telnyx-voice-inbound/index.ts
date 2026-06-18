@@ -33,6 +33,7 @@ import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
 import {
   answerThenSpeak,
+  telnyxAnswerPlain,
   telnyxAnswerWithStream,
   telnyxHangupCall,
   telnyxSpeak,
@@ -326,6 +327,113 @@ serve(async (req: Request) => {
   }
 
   const businessId = routeRow.business_id as string;
+
+  // Per-caller warm-transfer rules (§voice_caller_transfer_rules). Certain
+  // inbound numbers (e.g. Clever's live-transfer line) should bypass the AI
+  // bridge entirely and connect straight to a human. Runs BEFORE the kill
+  // switch / reserve / Stripe / bridge checks so it never consumes concurrency
+  // or bills minutes. Matched on the (normalized) caller id; a missing/garbled
+  // `from` simply can't match a rule and falls through to the normal path.
+  if (fromE164Informational) {
+    const { data: ruleRow, error: ruleErr } = await supabase
+      .from("voice_caller_transfer_rules")
+      .select("to_e164, whisper")
+      .eq("business_id", businessId)
+      .eq("from_e164", fromE164Informational)
+      .maybeSingle();
+    if (ruleErr) {
+      // A rules lookup failure must not strand the caller — log and fall through
+      // to the normal (AI) path rather than dropping the call.
+      console.error("voice_caller_transfer_rules", ruleErr);
+    }
+    const rule = ruleRow as { to_e164?: string; whisper?: string | null } | null;
+    if (rule?.to_e164) {
+      const whisper = (rule.whisper ?? "").trim();
+      // A warm transfer bridges an *answered* leg. Answer first and gate the
+      // whisper + transfer on it — transferring an unanswered call is rejected
+      // by Telnyx and strands the caller on dead air. (answerThenSpeak swallows
+      // the answer result, so we answer explicitly here to act on a failure.)
+      const ans = await telnyxAnswerPlain(apiKey, callControlId);
+      if (!ans.ok) {
+        const errText = (await ans.text()).slice(0, 300);
+        console.error("caller-rule answer failed", ans.status, errText);
+        await telemetryRecord(supabase, "voice_caller_transfer_failed", {
+          business_id: businessId,
+          call_control_id: callControlId,
+          http_status: ans.status
+        });
+        await systemLog(supabase, {
+          businessId,
+          source: "voice",
+          level: "error",
+          event: "voice_caller_transfer_failed",
+          message: `Caller-rule answer refused by Telnyx (HTTP ${ans.status}); transfer skipped: ${errText}`,
+          payload: { call_control_id: callControlId, http_status: ans.status, to: rule.to_e164 }
+        });
+        return new Response(JSON.stringify({ ok: true, path: "caller_transfer_answer_failed" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      if (whisper) {
+        // Speak the short prompt to the caller, then pause long enough for it to
+        // play before bridging (the same pacing the Safe Mode forward uses).
+        const sp = await telnyxSpeak(apiKey, callControlId, whisper);
+        if (!sp.ok) {
+          console.error("caller-rule whisper failed", sp.status, (await sp.text()).slice(0, 300));
+        }
+        const delayRaw = Deno.env.get("VOICE_SAFE_MODE_TRANSFER_DELAY_MS");
+        const delayMs = delayRaw ? Number(delayRaw) : 2500;
+        if (Number.isFinite(delayMs) && delayMs > 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+        }
+      }
+      const transferRes = await telnyxTransferCall(apiKey, callControlId, rule.to_e164);
+      if (!transferRes.ok) {
+        const errText = await transferRes.text();
+        console.error("caller-rule transfer failed", transferRes.status, errText.slice(0, 300));
+        await telemetryRecord(supabase, "voice_caller_transfer_failed", {
+          business_id: businessId,
+          call_control_id: callControlId,
+          http_status: transferRes.status
+        });
+        await systemLog(supabase, {
+          businessId,
+          source: "voice",
+          level: "error",
+          event: "voice_caller_transfer_failed",
+          message: `Caller-rule transfer refused by Telnyx (HTTP ${transferRes.status}): ${errText.slice(0, 300)}`,
+          payload: { call_control_id: callControlId, http_status: transferRes.status, to: rule.to_e164 }
+        });
+        // The call is answered but the bridge was refused; hang up cleanly so the
+        // caller isn't stranded on silent audio.
+        const hup = await telnyxHangupCall(apiKey, callControlId);
+        if (!hup.ok) {
+          console.error("caller-rule hangup failed", hup.status, (await hup.text()).slice(0, 300));
+        }
+        return new Response(JSON.stringify({ ok: true, path: "caller_transfer_failed" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      await telemetryRecord(supabase, "voice_caller_transferred", {
+        business_id: businessId,
+        call_control_id: callControlId
+      });
+      await systemLog(supabase, {
+        businessId,
+        source: "voice",
+        level: "info",
+        event: "voice_caller_transferred",
+        message: `Warm-transferred caller ${fromE164Informational} to ${rule.to_e164} (per-caller rule)`,
+        payload: { call_control_id: callControlId, from: fromE164Informational, to: rule.to_e164 }
+      });
+      return new Response(JSON.stringify({ ok: true, path: "caller_transfer" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  }
 
   // Kill switch + Safe Mode gate (§CustomerChannelGate).
   // Runs BEFORE reserve/Stripe/bridge checks so paused + forwarding calls never

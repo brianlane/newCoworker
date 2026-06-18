@@ -243,7 +243,7 @@ export type FlowStep =
   | {
       id: string;
       type: "send_sms";
-      /** Recipient (templatable). Optional when `replyToGroup` supplies recipients. */
+      /** Recipient (templatable). Optional when `replyToGroup`/`toAgentName` supplies recipients. */
       to?: string;
       body: string;
       /** Lead-contact quiet hours; see SendSmsQuietHours. */
@@ -254,6 +254,12 @@ export type FlowStep =
        * `to`. SMS-triggered flows only.
        */
       replyToGroup?: boolean;
+      /**
+       * Send to a single named roster member; the worker resolves their phone at
+       * run time and exposes {{agent.*}} to the body. Mutually exclusive with
+       * `to`/`replyToGroup`.
+       */
+      toAgentName?: string;
       when?: StepCondition;
     }
   | {
@@ -344,6 +350,14 @@ export type FlowStep =
        * not a phone number.
        */
       rememberUrlKeyedByVar?: string;
+      /**
+       * Loop-over-list: a CSS selector for link rows on the urlVar page. The
+       * render service collects each match's href and runs `actions` on every
+       * one in turn (e.g. apply a status update to every "Needs Action" lead).
+       * Incompatible with fields/screenshot/rememberUrlKeyedByVar (per-item, not
+       * one page).
+       */
+      forEachLink?: string;
       when?: StepCondition;
     }
   | {

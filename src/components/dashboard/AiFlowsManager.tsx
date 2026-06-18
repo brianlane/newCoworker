@@ -1273,17 +1273,39 @@ function StepFields({
             type="checkbox"
             checked={Boolean(step.replyToGroup)}
             onChange={(ev) =>
-              patchStep(index, { replyToGroup: ev.target.checked ? true : undefined })
+              // Group reply is its own recipient source — clear any prior
+              // `to`/`toAgentName` so the "exactly one recipient" rule passes on
+              // save (those fields are hidden while group reply is on).
+              patchStep(
+                index,
+                ev.target.checked
+                  ? { replyToGroup: true, to: undefined, toAgentName: undefined }
+                  : { replyToGroup: undefined }
+              )
             }
           />
           Reply into the group text (everyone on the thread except your number)
         </label>
         {!step.replyToGroup && (
-          <Field
-            label="Recipient"
-            value={step.to ?? ""}
-            onChange={(v) => patchStep(index, { to: v })}
-          />
+          <>
+            {/* Recipient is phone OR team-member, never both. Hide the other
+                control once one is chosen — but if BOTH are somehow set (invalid
+                imported/legacy data) keep both visible so it can be corrected. */}
+            {(!step.toAgentName || Boolean(step.to)) && (
+              <Field
+                label="Recipient (phone or {{vars.x}})"
+                value={step.to ?? ""}
+                onChange={(v) => patchStep(index, { to: v.trim() ? v : undefined })}
+              />
+            )}
+            {(!step.to || Boolean(step.toAgentName)) && (
+              <Field
+                label="Or send to a team member by name (resolves their phone; body can use {{agent.name}})"
+                value={step.toAgentName ?? ""}
+                onChange={(v) => patchStep(index, { toAgentName: v.trim() ? v : undefined })}
+              />
+            )}
+          </>
         )}
         <Field label="Message" value={step.body} onChange={(v) => patchStep(index, { body: v })} textarea />
         <div className="rounded-md border border-parchment/10 bg-deep-ink/30 px-3 py-2 space-y-2">
@@ -1635,6 +1657,11 @@ function StepFields({
           onChange={(v) =>
             patchStep(index, { rememberUrlKeyedByVar: v.trim() ? v.trim() : undefined })
           }
+        />
+        <Field
+          label="Repeat the actions for each list link matching this CSS selector (optional; loops over a list)"
+          value={step.forEachLink ?? ""}
+          onChange={(v) => patchStep(index, { forEachLink: v.trim() ? v : undefined })}
         />
       </div>
     );
