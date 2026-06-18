@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
-import { rateLimit, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
+import { rateLimitDurable, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
 import { ingestWebsite, normalizeWebsiteUrl } from "@/lib/website-ingest";
 import { logger } from "@/lib/logger";
 
@@ -84,7 +84,7 @@ const schema = z.object({
 export async function POST(request: Request) {
   try {
     const body = schema.parse(await request.json());
-    const limiter = rateLimit(`website-preview:${rateLimitIdentifierFromRequest(request)}`, RATE_LIMIT_CONFIG);
+    const limiter = await rateLimitDurable(`website-preview:${rateLimitIdentifierFromRequest(request)}`, RATE_LIMIT_CONFIG);
     if (!limiter.success) {
       return errorResponse(
         "INTERNAL_SERVER_ERROR",

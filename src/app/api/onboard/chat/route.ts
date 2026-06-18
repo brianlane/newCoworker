@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { errorResponse, successResponse, handleRouteError } from "@/lib/api-response";
-import { rateLimit, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
+import { rateLimitDurable, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
 import {
   areAllChatTopicsCovered,
   buildOnboardingChatSystemPrompt,
@@ -236,7 +236,7 @@ function createFallbackAssistantQuestion(
 export async function POST(request: Request) {
   try {
     const body = requestSchema.parse(await request.json());
-    const limiter = rateLimit(`onboard-chat:${rateLimitIdentifierFromRequest(request)}`, ONBOARDING_CHAT_RATE_LIMIT);
+    const limiter = await rateLimitDurable(`onboard-chat:${rateLimitIdentifierFromRequest(request)}`, ONBOARDING_CHAT_RATE_LIMIT);
     if (!limiter.success) {
       return errorResponse("INTERNAL_SERVER_ERROR", "Too many chat messages right now. Please wait a minute and try again.", 429);
     }
