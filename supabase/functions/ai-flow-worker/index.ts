@@ -722,6 +722,9 @@ async function logFlowEmail(
   if (error) console.error("email_log insert", error);
 }
 
+/** Conservative email shape check for lead-supplied addresses (no whitespace, one @). */
+const LEAD_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 /**
  * Upsert a customer profile for a lead the flow just contacted, so every
  * AiFlow lead shows up on the dashboard Customers page like SMS/voice
@@ -744,6 +747,26 @@ async function recordLeadCustomerProfile(
     p_display_name: displayName
   });
   if (error) console.error("record_customer_interaction (aiflow lead)", error);
+
+  // Going-forward phone↔email link: a lead intake run carries the lead's email
+  // in `vars.lead_email`; persist it onto THEIR profile so SMS/voice/email all
+  // roll up to one customer. Guard strictly to the lead's own number — this
+  // helper also runs for every group-reply recipient (agent + owner), and the
+  // lead's email must never be stamped onto a teammate. Only fill when empty so
+  // a later run or an owner edit is never clobbered. Best-effort.
+  const rawEmail = scope.vars.lead_email;
+  const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
+  const leadPhone =
+    typeof scope.vars.lead_phone === "string" ? scope.vars.lead_phone.trim() : "";
+  if (email && LEAD_EMAIL_RE.test(email) && leadPhone && leadPhone === customerE164) {
+    const { error: emailErr } = await supabase
+      .from("customer_memories")
+      .update({ email, updated_at: new Date().toISOString() })
+      .eq("business_id", run.business_id)
+      .eq("customer_e164", customerE164)
+      .is("email", null);
+    if (emailErr) console.error("record lead email (aiflow lead)", emailErr);
+  }
 }
 
 /**

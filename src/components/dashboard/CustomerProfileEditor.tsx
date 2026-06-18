@@ -9,15 +9,18 @@ type Props = {
   customerE164: string;
   initialDisplayName: string | null;
   initialPinnedMd: string | null;
+  initialEmail: string | null;
 };
 
 const PINNED_MAX = 2000;
 const NAME_MAX = 120;
+const EMAIL_MAX = 254;
 
 export function CustomerProfileEditor(props: Props) {
   const router = useRouter();
   const [displayName, setDisplayName] = useState(props.initialDisplayName ?? "");
   const [pinnedMd, setPinnedMd] = useState(props.initialPinnedMd ?? "");
+  const [email, setEmail] = useState(props.initialEmail ?? "");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
@@ -25,7 +28,8 @@ export function CustomerProfileEditor(props: Props) {
 
   const dirty =
     (props.initialDisplayName ?? "") !== displayName ||
-    (props.initialPinnedMd ?? "") !== pinnedMd;
+    (props.initialPinnedMd ?? "") !== pinnedMd ||
+    (props.initialEmail ?? "") !== email;
 
   async function save() {
     setSaving(true);
@@ -41,7 +45,8 @@ export function CustomerProfileEditor(props: Props) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             displayName: displayName.trim() === "" ? null : displayName.trim(),
-            pinnedMd: pinnedMd.trim() === "" ? null : pinnedMd.trim()
+            pinnedMd: pinnedMd.trim() === "" ? null : pinnedMd.trim(),
+            email: email.trim() === "" ? null : email.trim()
           })
         }
       );
@@ -104,6 +109,21 @@ export function CustomerProfileEditor(props: Props) {
         onChange={(e) => setDisplayName(e.target.value.slice(0, NAME_MAX))}
         placeholder="e.g. Joe at ACME"
         maxLength={NAME_MAX}
+        className="w-full bg-deep-ink/60 border border-parchment/15 rounded-lg px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:outline-none focus:border-claw-green/60"
+      />
+
+      <label className="block text-xs text-parchment/70 mb-1 mt-4">
+        Email
+        <span className="ml-1 text-parchment/40">
+          (optional — links their email so inbound/outbound mail rolls up here)
+        </span>
+      </label>
+      <input
+        type="email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value.slice(0, EMAIL_MAX))}
+        placeholder="joe@acme.com"
+        maxLength={EMAIL_MAX}
         className="w-full bg-deep-ink/60 border border-parchment/15 rounded-lg px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:outline-none focus:border-claw-green/60"
       />
 

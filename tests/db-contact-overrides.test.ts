@@ -8,20 +8,21 @@ vi.mock("@/lib/supabase/server", () => ({
 import {
   CONTACT_NUMBER_RE,
   deleteContactOverride,
+  listContactOverrides,
   setContactOverride
 } from "@/lib/db/contact-overrides";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
-type Result = { error: { message: string } | null };
+type Result = { data?: unknown; error: { message: string } | null };
 
 function makeDb(result: Result = { error: null }) {
   const calls: Array<{ table: string; method: string; args: unknown[] }> = [];
   const db = {
     from(table: string) {
       const chain: Record<string, unknown> = {};
-      for (const m of ["upsert", "delete", "eq"]) {
+      for (const m of ["upsert", "delete", "eq", "select", "order"]) {
         chain[m] = (...args: unknown[]) => {
           calls.push({ table, method: m, args });
           return chain;
@@ -37,7 +38,7 @@ function makeDb(result: Result = { error: null }) {
   return { db, calls };
 }
 
-type Client = Parameters<typeof setContactOverride>[3];
+type Client = Parameters<typeof setContactOverride>[4];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -57,7 +58,7 @@ describe("CONTACT_NUMBER_RE", () => {
 describe("setContactOverride", () => {
   it("upserts a trimmed name keyed by business+number", async () => {
     const { db, calls } = makeDb();
-    await setContactOverride(BIZ, "+16026951142", "  Amy Laidlaw  ", db as unknown as Client);
+    await setContactOverride(BIZ, "+16026951142", "  Amy Laidlaw  ", {}, db as unknown as Client);
     const upsert = calls.find((c) => c.method === "upsert");
     expect(upsert?.table).toBe("contact_overrides");
     expect(upsert?.args[0]).toMatchObject({
@@ -70,32 +71,65 @@ describe("setContactOverride", () => {
 
   it("accepts short codes", async () => {
     const { db, calls } = makeDb();
-    await setContactOverride(BIZ, "73339", "ReferralExchange", db as unknown as Client);
+    await setContactOverride(BIZ, "73339", "ReferralExchange", {}, db as unknown as Client);
     expect(calls.some((c) => c.method === "upsert")).toBe(true);
   });
 
   it("rejects invalid numbers", async () => {
     const { db } = makeDb();
     await expect(
-      setContactOverride(BIZ, "not-a-number", "Amy", db as unknown as Client)
+      setContactOverride(BIZ, "not-a-number", "Amy", {}, db as unknown as Client)
     ).rejects.toThrow(/invalid number/);
   });
 
   it("rejects blank and over-long names", async () => {
     const { db } = makeDb();
     await expect(
-      setContactOverride(BIZ, "+16026951142", "   ", db as unknown as Client)
+      setContactOverride(BIZ, "+16026951142", "   ", {}, db as unknown as Client)
     ).rejects.toThrow(/1-120 characters/);
     await expect(
-      setContactOverride(BIZ, "+16026951142", "x".repeat(121), db as unknown as Client)
+      setContactOverride(BIZ, "+16026951142", "x".repeat(121), {}, db as unknown as Client)
     ).rejects.toThrow(/1-120 characters/);
   });
 
   it("surfaces upsert errors", async () => {
     const { db } = makeDb({ error: { message: "rls denied" } });
     await expect(
-      setContactOverride(BIZ, "+16026951142", "Amy", db as unknown as Client)
+      setContactOverride(BIZ, "+16026951142", "Amy", {}, db as unknown as Client)
     ).rejects.toThrow(/setContactOverride: rls denied/);
+  });
+
+  it("writes a trimmed email when one is provided", async () => {
+    const { db, calls } = makeDb();
+    await setContactOverride(
+      BIZ,
+      "+16026951142",
+      "Amy",
+      { email: "  amy@acme.com " },
+      db as unknown as Client
+    );
+    const upsert = calls.find((c) => c.method === "upsert");
+    expect(upsert?.args[0]).toMatchObject({ email: "amy@acme.com" });
+  });
+
+  it("clears the email when null is passed", async () => {
+    const { db, calls } = makeDb();
+    await setContactOverride(
+      BIZ,
+      "+16026951142",
+      "Amy",
+      { email: null },
+      db as unknown as Client
+    );
+    const upsert = calls.find((c) => c.method === "upsert");
+    expect(upsert?.args[0]).toMatchObject({ email: null });
+  });
+
+  it("leaves email untouched on a name-only save (no email key)", async () => {
+    const { db, calls } = makeDb();
+    await setContactOverride(BIZ, "+16026951142", "Amy", {}, db as unknown as Client);
+    const upsert = calls.find((c) => c.method === "upsert");
+    expect(upsert?.args[0]).not.toHaveProperty("email");
   });
 
   it("uses the default service client when none is injected", async () => {
@@ -103,6 +137,29 @@ describe("setContactOverride", () => {
     defaultClientSpy.mockReturnValue(db);
     await setContactOverride(BIZ, "+16026951142", "Amy");
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("listContactOverrides", () => {
+  it("returns rows scoped by business, newest-edited first", async () => {
+    const rows = [
+      { e164: "+16026951142", name: "Amy", email: "amy@acme.com", updated_at: "2026-06-29T00:00:00Z" }
+    ];
+    const { db, calls } = makeDb({ data: rows, error: null });
+    const out = await listContactOverrides(BIZ, db as unknown as Client);
+    expect(out).toEqual(rows);
+    expect(calls.find((c) => c.method === "eq")?.args).toEqual(["business_id", BIZ]);
+    expect(calls.find((c) => c.method === "order")?.args).toEqual([
+      "updated_at",
+      { ascending: false }
+    ]);
+  });
+
+  it("surfaces list errors", async () => {
+    const { db } = makeDb({ error: { message: "nope" } });
+    await expect(listContactOverrides(BIZ, db as unknown as Client)).rejects.toThrow(
+      /listContactOverrides: nope/
+    );
   });
 });
 

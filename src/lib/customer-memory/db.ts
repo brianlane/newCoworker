@@ -15,7 +15,7 @@ import type { CustomerMemoryChannel, CustomerMemoryRow } from "./types";
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 const ALL_COLUMNS =
-  "id,business_id,customer_e164,display_name,summary_md,pinned_md," +
+  "id,business_id,customer_e164,display_name,email,summary_md,pinned_md," +
   "interaction_count,total_interaction_count,last_interaction_at," +
   "last_summarized_at,last_channel,alias_e164s,created_at,updated_at";
 
@@ -40,6 +40,56 @@ export async function getCustomerMemory(
   return (data as CustomerMemoryRow | null) ?? null;
 }
 
+export type CreateCustomerInput = {
+  customerE164: string;
+  displayName?: string | null;
+  pinnedMd?: string | null;
+  email?: string | null;
+};
+
+/** Postgres unique-violation SQLSTATE — a profile already exists for this number. */
+export const PG_UNIQUE_VIOLATION = "23505";
+
+export class CustomerExistsError extends Error {
+  constructor(public readonly customerE164: string) {
+    super(`A customer profile already exists for ${customerE164}`);
+    this.name = "CustomerExistsError";
+  }
+}
+
+/**
+ * Owner-driven manual customer creation (customers page "Add customer").
+ * Unlike recordInteractionAndIncrement this does NOT fake an interaction —
+ * counters start at 0 and last_channel stays null until the customer actually
+ * texts/calls. Throws CustomerExistsError when a profile already exists for the
+ * (business, number) pair so the caller can surface a friendly 409.
+ */
+export async function createCustomerMemory(
+  businessId: string,
+  input: CreateCustomerInput,
+  client?: SupabaseClient
+): Promise<CustomerMemoryRow> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("customer_memories")
+    .insert({
+      business_id: businessId,
+      customer_e164: input.customerE164,
+      display_name: input.displayName?.trim() || null,
+      email: input.email?.trim() || null,
+      pinned_md: input.pinnedMd?.trim() || null
+    })
+    .select(ALL_COLUMNS)
+    .single();
+  if (error) {
+    if (error.code === PG_UNIQUE_VIOLATION) {
+      throw new CustomerExistsError(input.customerE164);
+    }
+    throw new Error(`createCustomerMemory: ${error.message}`);
+  }
+  return data as unknown as CustomerMemoryRow;
+}
+
 /**
  * Owner-driven profile merge: folds `fromE164` into `intoE164` (concatenated
  * summary/pinned, summed counters, alias recorded) and deletes the from-row.
@@ -61,6 +111,40 @@ export async function mergeCustomerMemories(
   const row = (data as CustomerMemoryRow[] | CustomerMemoryRow | null) ?? null;
   if (!row) throw new Error("mergeCustomerMemories: rpc returned no row");
   return Array.isArray(row) ? row[0] : row;
+}
+
+/**
+ * Find a customer profile by its linked email (case-insensitive), scoped to
+ * the business. Powers inbound-email recognition: when mail arrives from an
+ * address an owner has linked to a customer, we roll it up to that profile.
+ * Returns the minimal identity the caller needs; null when no profile matches.
+ */
+export async function findCustomerByEmail(
+  businessId: string,
+  email: string,
+  client?: SupabaseClient
+): Promise<{ customerE164: string; displayName: string | null } | null> {
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) return null;
+  const db = client ?? (await createSupabaseServiceClient());
+  // Escape LIKE metacharacters so a local-part like `joe_smith` can't match
+  // `joeXsmith`; then re-verify exact (case-insensitive) equality in JS so the
+  // result is never a wildcard false positive.
+  const pattern = normalized.replace(/[%_\\]/g, (m) => `\\${m}`);
+  const { data, error } = await db
+    .from("customer_memories")
+    .select("customer_e164, display_name, email")
+    .eq("business_id", businessId)
+    .ilike("email", pattern)
+    .limit(5);
+  if (error) throw new Error(`findCustomerByEmail: ${error.message}`);
+  const row = ((data as Array<{
+    customer_e164: string;
+    display_name: string | null;
+    email: string | null;
+  }> | null) ?? []).find((r) => (r.email ?? "").trim().toLowerCase() === normalized);
+  if (!row) return null;
+  return { customerE164: row.customer_e164, displayName: row.display_name };
 }
 
 export type ListCustomerMemoriesOptions = {
@@ -197,6 +281,7 @@ export async function updateCustomerSummary(
 export type CustomerOwnerEdit = {
   displayName?: string | null;
   pinnedMd?: string | null;
+  email?: string | null;
 };
 
 /** Owner-driven edit (customers page). Only writes the fields the owner controls. */
@@ -210,7 +295,8 @@ export async function updateCustomerOwnerFields(
   const patch: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
     ...("displayName" in edit ? { display_name: edit.displayName } : {}),
-    ...("pinnedMd" in edit ? { pinned_md: edit.pinnedMd } : {})
+    ...("pinnedMd" in edit ? { pinned_md: edit.pinnedMd } : {}),
+    ...("email" in edit ? { email: edit.email } : {})
   };
   const { error } = await db
     .from("customer_memories")

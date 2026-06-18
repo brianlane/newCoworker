@@ -21,6 +21,10 @@ import {
 import { enqueueAiFlowRun } from "@/lib/ai-flows/db";
 import { recordTenantMailboxInbound } from "@/lib/db/email-log";
 import { recordSystemLog } from "@/lib/db/system-logs";
+import {
+  findCustomerByEmail,
+  recordInteractionAndIncrement
+} from "@/lib/customer-memory/db";
 import type { TriggerCondition } from "@/lib/ai-flows/schema";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -169,6 +173,40 @@ export async function processInboundTenantEmail(
     },
     db
   );
+
+  // Cross-channel rollup: if the sender's address is linked to a customer
+  // profile, record an `email` interaction so the customer list reflects it
+  // ("last via email") and the profile counts mail alongside SMS/voice. The
+  // mail already shows on the profile via address match; this just keeps the
+  // unified counters honest. Best-effort — never block on it.
+  try {
+    const customer = await findCustomerByEmail(businessId, fromEmail, db);
+    if (customer) {
+      await recordInteractionAndIncrement(
+        businessId,
+        customer.customerE164,
+        "email",
+        {},
+        db
+      );
+    }
+  } catch (err) {
+    try {
+      await recordSystemLog({
+        businessId,
+        source: "aiflow",
+        level: "warn",
+        event: "customer_email_rollup_failed",
+        message: "Failed to roll inbound email up to a customer profile",
+        payload: {
+          from: fromEmail,
+          error: err instanceof Error ? err.message : String(err)
+        }
+      });
+    } catch {
+      // best-effort: never let logging the rollup miss break the inbound path
+    }
+  }
 
   return { matched: true, businessId, enqueued };
 }

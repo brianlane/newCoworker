@@ -12,6 +12,7 @@ function memory(overrides: Partial<CustomerMemoryRow> = {}): CustomerMemoryRow {
     business_id: "00000000-0000-0000-0000-000000000001",
     customer_e164: "+15555550123",
     display_name: null,
+    email: null,
     summary_md: null,
     pinned_md: null,
     interaction_count: 0,

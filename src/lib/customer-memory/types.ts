@@ -10,13 +10,15 @@
  * Supabase client and our server-only modules.
  */
 
-export type CustomerMemoryChannel = "sms" | "voice" | "dashboard";
+export type CustomerMemoryChannel = "sms" | "voice" | "dashboard" | "email";
 
 export type CustomerMemoryRow = {
   id: string;
   business_id: string;
   customer_e164: string;
   display_name: string | null;
+  /** Owner-set email linked to this customer, so email rolls up to the profile. */
+  email: string | null;
   /** LLM-generated rolling summary; null until first successful summarizer run. */
   summary_md: string | null;
   /** Owner-pinned notes. Always concatenated with summary_md in the preamble. */

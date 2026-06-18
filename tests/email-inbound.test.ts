@@ -25,6 +25,13 @@ vi.mock("@/lib/db/system-logs", () => ({
   recordSystemLog: (...a: unknown[]) => recordSystemLog(...a)
 }));
 
+const findCustomerByEmail = vi.fn();
+const recordInteractionAndIncrement = vi.fn();
+vi.mock("@/lib/customer-memory/db", () => ({
+  findCustomerByEmail: (...a: unknown[]) => findCustomerByEmail(...a),
+  recordInteractionAndIncrement: (...a: unknown[]) => recordInteractionAndIncrement(...a)
+}));
+
 import { processInboundTenantEmail } from "@/lib/email/inbound";
 
 /** A db whose ai_flows query resolves to the given flow rows (or error). */
@@ -54,6 +61,10 @@ beforeEach(() => {
   enqueueAiFlowRun.mockReset();
   recordTenantMailboxInbound.mockReset();
   recordSystemLog.mockReset();
+  findCustomerByEmail.mockReset();
+  findCustomerByEmail.mockResolvedValue(null);
+  recordInteractionAndIncrement.mockReset();
+  recordInteractionAndIncrement.mockResolvedValue(undefined);
 });
 
 describe("processInboundTenantEmail", () => {
@@ -190,6 +201,45 @@ describe("processInboundTenantEmail", () => {
       expect.objectContaining({ fromEmail: "jane@example.com", flowId: null, runId: null }),
       db
     );
+  });
+
+  it("rolls inbound mail up to a matching customer profile as an email interaction", async () => {
+    resolveBusinessByAddress.mockResolvedValue("biz-1");
+    findCustomerByEmail.mockResolvedValue({ customerE164: "+15555550123", displayName: "Jane" });
+    const db = flowsDb({ data: [], error: null });
+
+    const res = await processInboundTenantEmail({ ...PAYLOAD, from: "jane@example.com" }, db as never);
+
+    expect(res).toEqual({ matched: true, businessId: "biz-1", enqueued: 0 });
+    expect(findCustomerByEmail).toHaveBeenCalledWith("biz-1", "jane@example.com", db);
+    expect(recordInteractionAndIncrement).toHaveBeenCalledWith(
+      "biz-1",
+      "+15555550123",
+      "email",
+      {},
+      db
+    );
+  });
+
+  it("skips the rollup (no interaction) when the sender isn't a known customer", async () => {
+    resolveBusinessByAddress.mockResolvedValue("biz-1");
+    findCustomerByEmail.mockResolvedValue(null);
+    const db = flowsDb({ data: [], error: null });
+
+    await processInboundTenantEmail({ ...PAYLOAD, from: "stranger@example.com" }, db as never);
+
+    expect(recordInteractionAndIncrement).not.toHaveBeenCalled();
+  });
+
+  it("never lets a rollup failure break inbound processing", async () => {
+    resolveBusinessByAddress.mockResolvedValue("biz-1");
+    findCustomerByEmail.mockRejectedValue(new Error("lookup boom"));
+    const db = flowsDb({ data: [], error: null });
+
+    const res = await processInboundTenantEmail({ ...PAYLOAD, from: "jane@example.com" }, db as never);
+
+    expect(res).toEqual({ matched: true, businessId: "biz-1", enqueued: 0 });
+    expect(recordTenantMailboxInbound).toHaveBeenCalled();
   });
 
   it("surfaces an ai_flows query error", async () => {

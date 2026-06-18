@@ -109,6 +109,51 @@ export async function listEmailLog(
   return (data as EmailLogRow[] | null) ?? [];
 }
 
+/**
+ * Email activity to/from a specific address, newest-first. Powers the
+ * "Email history" rollup on a customer/contact profile: a profile carries an
+ * optional `email`, and this returns every logged message that came FROM that
+ * address (inbound) or was sent TO it (outbound), unifying email with the
+ * SMS/voice history already shown there.
+ *
+ * Matching is case-insensitive. The address is wrapped as an anchored,
+ * literal `ilike` value — `%`/`_` (legal in local-parts like `joe_smith`) are
+ * escaped so they don't act as wildcards, and the PostgREST double-quote +
+ * backslash dance mirrors listCustomerMemories so reserved chars (`.`, `,`)
+ * inside the address can't split the filter string.
+ */
+export async function listEmailLogForAddress(
+  businessId: string,
+  email: string,
+  options: { limit?: number } = {},
+  client?: SupabaseClient
+): Promise<EmailLogRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const normalized = email.trim();
+  if (!normalized) return [];
+  const raw = options.limit;
+  const limit = Math.max(
+    1,
+    Math.min(
+      typeof raw === "number" && Number.isFinite(raw) ? raw : EMAIL_LOG_DEFAULT_LIMIT,
+      EMAIL_LOG_MAX_LIMIT
+    )
+  );
+  // See listCustomerMemories for the full rationale on this two-step escape.
+  const escapedForLike = normalized.replace(/[%_]/g, (m) => `\\${m}`);
+  const escapedForPostgrest = escapedForLike.replace(/["\\]/g, "\\$&");
+  const pattern = `"${escapedForPostgrest}"`;
+  const { data, error } = await db
+    .from("email_log")
+    .select(EMAIL_LOG_SELECT)
+    .eq("business_id", businessId)
+    .or(`from_email.ilike.${pattern},to_email.ilike.${pattern}`)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`listEmailLogForAddress: ${error.message}`);
+  return (data ?? []) as unknown as EmailLogRow[];
+}
+
 export type EmailLogBody = {
   body_preview: string | null;
   /** Full plain-text body; null on rows predating full-body capture. */

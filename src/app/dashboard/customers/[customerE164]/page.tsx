@@ -20,7 +20,9 @@ import {
   listSmsHistoryForCustomer
 } from "@/lib/customer-memory/db";
 import { listTranscriptsForCaller } from "@/lib/db/voice-transcripts";
+import { listEmailLogForAddress } from "@/lib/db/email-log";
 import { CustomerProfileEditor } from "@/components/dashboard/CustomerProfileEditor";
+import { CustomerEmailComposer } from "@/components/dashboard/CustomerEmailComposer";
 import { CustomerMergeAction } from "@/components/dashboard/CustomerMergeAction";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 
@@ -79,6 +81,11 @@ export default async function CustomerDetailPage({ params }: Props) {
     }).catch(() => []),
     listCustomerMemories(business.id, { limit: 200 }).catch(() => [])
   ]);
+  // Email rollup: only when the profile has a linked address. Tolerate a
+  // log-table error so it never blocks the rest of the page.
+  const emailHistory = memory.email
+    ? await listEmailLogForAddress(business.id, memory.email, { limit: 20 }).catch(() => [])
+    : [];
   const mergeCandidates = allCustomers
     .filter((c) => c.customer_e164 !== memory.customer_e164)
     .map((c) => ({ customerE164: c.customer_e164, displayName: c.display_name }));
@@ -162,6 +169,7 @@ export default async function CustomerDetailPage({ params }: Props) {
         customerE164={memory.customer_e164}
         initialDisplayName={memory.display_name}
         initialPinnedMd={memory.pinned_md}
+        initialEmail={memory.email}
       />
 
       <CustomerMergeAction
@@ -238,6 +246,57 @@ export default async function CustomerDetailPage({ params }: Props) {
           </ul>
         )}
       </Card>
+
+      {memory.email && (
+        <Card>
+          <div className="flex items-center justify-between mb-3">
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold text-parchment">Email history</h2>
+              <p className="text-xs text-parchment/50 font-mono truncate">{memory.email}</p>
+            </div>
+            <Link
+              href="/dashboard/emails"
+              className="text-xs text-claw-green hover:underline shrink-0"
+            >
+              All emails →
+            </Link>
+          </div>
+          {emailHistory.length === 0 ? (
+            <p className="text-xs text-parchment/50">
+              No email to or from this address yet.
+            </p>
+          ) : (
+            <ul className="space-y-3">
+              {emailHistory.map((e) => (
+                <li key={e.id} className="border-l-2 border-parchment/10 pl-3">
+                  <p className="text-[10px] uppercase tracking-wide text-parchment/40">
+                    {e.direction === "inbound" ? "Received" : "Sent"}
+                    {" • "}
+                    <LocalDateTime iso={e.created_at} />
+                  </p>
+                  {e.subject && (
+                    <p className="text-sm text-parchment/90 mt-0.5 font-semibold">
+                      {e.subject}
+                    </p>
+                  )}
+                  {e.body_preview && (
+                    <p className="text-sm text-parchment/70 mt-0.5 line-clamp-2">
+                      {e.body_preview}
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="mt-4">
+            <CustomerEmailComposer
+              businessId={business.id}
+              customerE164={memory.customer_e164}
+              email={memory.email}
+            />
+          </div>
+        </Card>
+      )}
 
       <Card>
         <div className="flex items-center justify-between mb-3">
