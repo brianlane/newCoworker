@@ -150,15 +150,29 @@ if (!APPLY) {
   process.exit(0);
 }
 
+// Supabase has no multi-table transaction from the JS client, so attempt BOTH
+// writes rather than bailing after the first failure (which could leave Accept
+// updated and Group Reply stale, i.e. out of sync). Each update is an
+// idempotent read-modify-write to a fixed target state, so simply re-running
+// the script reapplies any flow that didn't land.
+const failures: string[] = [];
 for (const [row, next] of [
   [accept, acceptNext],
   [group, groupNext]
 ] as const) {
   const { error } = await db.from("ai_flows").update({ definition: next }).eq("id", row.id);
   if (error) {
-    console.error(`update "${row.name}" failed: ${error.message}`);
-    process.exit(1);
+    console.error(`update "${row.name}" (id=${row.id}) failed: ${error.message}`);
+    failures.push(row.name);
+    continue;
   }
   console.log(`Updated "${row.name}" (id=${row.id}).`);
+}
+if (failures.length > 0) {
+  console.error(
+    `\n${failures.length} flow(s) failed: ${failures.join(", ")}. ` +
+      `The updates are idempotent — re-run with --apply to reapply (already-updated flows are unaffected).`
+  );
+  process.exit(1);
 }
 console.log("\nDone. Both existing Clever flows corrected (Phase 0).");
