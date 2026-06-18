@@ -154,7 +154,7 @@ function makeSession(overrides: Partial<Stripe.Checkout.Session> = {}): Stripe.C
     customer: "cus_new",
     subscription: "sub_new",
     customer_email: null,
-    customer_details: { email: "owner@example.com" } as Stripe.Checkout.Session.CustomerDetails,
+    customer_details: { email: "owner@example.com" } as NonNullable<Stripe.Checkout.Session["customer_details"]>,
     metadata: {
       businessId: "biz-1",
       previousSubscriptionId: "sub-row-old",
@@ -1224,7 +1224,7 @@ describe("runResubscribeFromCheckout", () => {
     await runResubscribeFromCheckout(
       makeSession({
         customer_email: null,
-        customer_details: null as unknown as Stripe.Checkout.Session.CustomerDetails,
+        customer_details: null as unknown as NonNullable<Stripe.Checkout.Session["customer_details"]>,
         metadata: {
           businessId: "biz-1",
           lifecycleAction: "resubscribe"
@@ -1296,7 +1296,7 @@ describe("runResubscribeFromCheckout", () => {
     await runResubscribeFromCheckout(
       makeSession({
         customer_email: null,
-        customer_details: null as unknown as Stripe.Checkout.Session.CustomerDetails,
+        customer_details: null as unknown as NonNullable<Stripe.Checkout.Session["customer_details"]>,
         metadata: {
           businessId: "biz-1",
           lifecycleAction: "resubscribe"
@@ -2034,7 +2034,7 @@ describe("runResubscribeFromCheckout", () => {
         // customerProfileId null (no metadata.customerProfileId,
         // no oldSub link, no business link).
         customer_email: null,
-        customer_details: { email: null } as Stripe.Checkout.Session.CustomerDetails,
+        customer_details: { email: null } as NonNullable<Stripe.Checkout.Session["customer_details"]>,
         metadata: {
           businessId: "biz-1",
           tier: "standard",

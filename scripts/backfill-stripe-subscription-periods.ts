@@ -149,7 +149,7 @@ async function main(): Promise<void> {
   }
 
   const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
-  const stripe = new Stripe(stripeKey, { apiVersion: "2026-02-25.clover" });
+  const stripe = new Stripe(stripeKey, { apiVersion: "2026-05-27.dahlia" });
 
   const staleCutoffIso = new Date(Date.now() - args.staleHours * 3600 * 1000).toISOString();
   const mode = args.verifyOnly ? "VERIFY-ONLY" : args.apply ? "APPLY" : "DRY-RUN";
@@ -233,7 +233,7 @@ async function main(): Promise<void> {
     }
 
     // Stripe moved `current_period_start/end` from Subscription → SubscriptionItem
-    // in API version 2025-03-31.basil. Our pinned `2026-02-25.clover` is post-basil,
+    // in API version 2025-03-31.basil. Our pinned `2026-05-27.dahlia` is post-basil,
     // so the authoritative period lives on `items.data[i]`. We derive the
     // subscription-wide window as [min(start), max(end)] across items; for the
     // single-item subs this project creates today that reduces to item[0]. The
