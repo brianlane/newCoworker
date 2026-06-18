@@ -9,7 +9,8 @@ vi.mock("@/lib/nango/workspace", () => ({
 }));
 
 vi.mock("@/lib/rowboat/gateway-token", () => ({
-  verifyRowboatGatewayToken: vi.fn().mockReturnValue(true)
+  verifyRowboatGatewayToken: vi.fn().mockReturnValue(true),
+  verifyGatewayTokenForBusiness: vi.fn().mockResolvedValue(true)
 }));
 
 vi.mock("@/lib/db/agent-tool-settings", () => ({

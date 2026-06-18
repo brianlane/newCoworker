@@ -57,6 +57,7 @@ import {
   type DashboardChatThreadRow
 } from "@/lib/db/dashboard-chat";
 import { logger } from "@/lib/logger";
+import { resolveOutboundRowboatBearer } from "@/lib/rowboat/gateway-token";
 import {
   callRowboatChat,
   type RowboatChatMessage
@@ -169,11 +170,7 @@ export async function summarizeThread(
   const _callRowboatChat = deps.callRowboatChat ?? callRowboatChat;
   const _updateThreadSummary = deps.updateThreadSummary ?? updateThreadSummary;
   /* c8 ignore stop */
-  const bearer =
-    deps.rowboatBearer ??
-    process.env.ROWBOAT_VPS_CHAT_BEARER ??
-    process.env.ROWBOAT_GATEWAY_TOKEN ??
-    "";
+  const bearer = deps.rowboatBearer ?? (await resolveOutboundRowboatBearer(businessId));
 
   let thread: DashboardChatThreadRow | null;
   try {

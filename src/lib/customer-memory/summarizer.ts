@@ -31,6 +31,7 @@
 
 import { getBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
+import { resolveOutboundRowboatBearer } from "@/lib/rowboat/gateway-token";
 import { callRowboatChat, type RowboatChatMessage } from "@/lib/rowboat/chat";
 import { listVoiceTurnsForCustomer as defaultListVoiceTurns } from "@/lib/db/voice-transcripts";
 import {
@@ -176,11 +177,7 @@ export async function summarizeCustomerMemory(
   const _updateCustomerSummary = deps.updateCustomerSummary ?? updateCustomerSummary;
   const _now = deps.now ?? Date.now;
   /* c8 ignore stop */
-  const bearer =
-    deps.rowboatBearer ??
-    process.env.ROWBOAT_VPS_CHAT_BEARER ??
-    process.env.ROWBOAT_GATEWAY_TOKEN ??
-    "";
+  const bearer = deps.rowboatBearer ?? (await resolveOutboundRowboatBearer(businessId));
 
   let memory: CustomerMemoryRow | null;
   try {

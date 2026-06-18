@@ -29,6 +29,14 @@ vi.mock("@/lib/db/businesses", () => ({
   getBusiness: vi.fn().mockResolvedValue({ business_type: "real_estate" })
 }));
 
+// Per-tenant gateway token now resolves from the DB during provisioning.
+// Mock it to echo the shared env token so the deploy-command assertions
+// (ROWBOAT_GATEWAY_TOKEN=mock_gateway_token / fallback-when-unset) stay
+// hermetic and deterministic.
+vi.mock("@/lib/db/vps-gateway-tokens", () => ({
+  getOrIssueGatewayToken: vi.fn(async () => process.env.ROWBOAT_GATEWAY_TOKEN ?? "")
+}));
+
 vi.mock("@/lib/db/configs", () => ({
   upsertBusinessConfig: vi.fn().mockResolvedValue({}),
   getBusinessConfig: vi.fn().mockResolvedValue(null)
@@ -66,6 +74,7 @@ vi.mock("@/lib/db/telnyx-routes", () => ({
 }));
 
 import { updateBusinessStatus } from "@/lib/db/businesses";
+import { getOrIssueGatewayToken } from "@/lib/db/vps-gateway-tokens";
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
 import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
@@ -208,6 +217,30 @@ describe("provisioning/orchestrate", () => {
     expect(result.vpsId).toBe("123");
     expect(result.tunnelUrl).toContain(".newcoworker.com");
     expect(vpsProvisioner).toHaveBeenCalledWith({ businessId: "biz-uuid-1", tier: "starter" });
+  });
+
+  it("falls back to the shared gateway token when the per-tenant mint fails", async () => {
+    vi.mocked(getOrIssueGatewayToken).mockRejectedValueOnce(new Error("db down"));
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "standard", ownerEmail: "o@test.com" },
+      { vpsProvisioner, remoteExec }
+    );
+    const cmd = deployCallArg(remoteExec).command;
+    expectDeployHasEnv(cmd, "ROWBOAT_GATEWAY_TOKEN", "mock_gateway_token");
+  });
+
+  it("tolerates a non-Error rejection from the per-tenant token mint", async () => {
+    vi.mocked(getOrIssueGatewayToken).mockRejectedValueOnce("string failure");
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "standard", ownerEmail: "o@test.com" },
+      { vpsProvisioner, remoteExec }
+    );
+    const cmd = deployCallArg(remoteExec).command;
+    expectDeployHasEnv(cmd, "ROWBOAT_GATEWAY_TOKEN", "mock_gateway_token");
   });
 
   it("starter tier forwards to provisioner with tier='starter'", async () => {

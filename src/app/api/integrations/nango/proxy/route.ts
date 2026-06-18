@@ -1,7 +1,10 @@
 import { getAuthUser, requireOwner } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
-import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
+import {
+  verifyGatewayTokenForBusiness,
+  verifyRowboatGatewayToken
+} from "@/lib/rowboat/gateway-token";
 import { z } from "zod";
 
 const bodySchema = z.object({
@@ -35,6 +38,15 @@ export async function POST(request: Request) {
 
     if (user?.email) {
       await requireOwner(body.businessId);
+    } else {
+      // Gateway (VPS/Rowboat) path: the per-tenant token must resolve to the
+      // body's businessId, so a leaked tenant token can't proxy another
+      // tenant's Nango connection. Falls back to the shared token for boxes
+      // not yet on a per-tenant token.
+      const bound = await verifyGatewayTokenForBusiness(request, body.businessId);
+      if (!bound) {
+        return errorResponse("UNAUTHORIZED", "Token not valid for this business", 401);
+      }
     }
 
     return await runProxy(body);

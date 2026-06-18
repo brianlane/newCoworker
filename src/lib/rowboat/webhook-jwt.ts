@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { getActiveGatewayTokenForBusiness } from "@/lib/db/vps-gateway-tokens";
 
 /**
  * Verifier for Rowboat's project tool-webhook signature
@@ -12,10 +13,12 @@ import crypto from "node:crypto";
  *   `content` string in the request body), iss "rowboat", sub
  *   "tool-call-<id>", exp +5 minutes.
  *
- * deploy-client.sh seeds every per-tenant Rowboat project with
- * `secret: ROWBOAT_GATEWAY_TOKEN` — the same shared secret the VPS already
- * uses as the bearer for /api/voice/tools/* — so the platform can verify
- * with one env var instead of a per-tenant secret table.
+ * deploy-client.sh seeds each per-tenant Rowboat project with
+ * `secret: ROWBOAT_GATEWAY_TOKEN` (the per-tenant token once provisioning
+ * mints one; the legacy shared token on older boxes). The platform verifies
+ * with the per-tenant token resolved by the `projectId` claim
+ * (`resolveRowboatWebhookClaims`), falling back to the shared env secret so
+ * already-deployed boxes keep working during the transition.
  *
  * No `jose` dependency in this repo; HS256 verification is ~20 lines of
  * node:crypto, done here with timing-safe comparison.
@@ -31,13 +34,28 @@ function b64urlDecode(part: string): Buffer {
   return Buffer.from(part, "base64url");
 }
 
+/** Read the (UNVERIFIED) projectId claim so we can pick the per-tenant secret. */
+function peekProjectId(token: string): string | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const payload = JSON.parse(b64urlDecode(parts[1]).toString("utf8")) as Record<string, unknown>;
+    return typeof payload.projectId === "string" ? payload.projectId : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Verifies signature + expiry + issuer and returns the claims, or null when
- * anything fails. Callers must still compare `bodyHash` against the actual
- * request content and treat `projectId` as the tenant id.
+ * Verify the HS256 signature + expiry + issuer against a specific secret and
+ * return the claims, or null when anything fails. Callers must still compare
+ * `bodyHash` against the actual request content and treat `projectId` as the
+ * tenant id.
  */
-export function verifyRowboatWebhookJwt(token: string): RowboatWebhookClaims | null {
-  const secret = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
+export function verifyRowboatWebhookJwtWithSecret(
+  token: string,
+  secret: string
+): RowboatWebhookClaims | null {
   if (!secret) return null;
 
   const parts = token.split(".");
@@ -73,4 +91,37 @@ export function verifyRowboatWebhookJwt(token: string): RowboatWebhookClaims | n
   if (!requestId || !projectId || !bodyHash) return null;
 
   return { requestId, projectId, bodyHash };
+}
+
+/** Legacy shared-secret verifier (kept for callers/tests that don't need per-tenant resolution). */
+export function verifyRowboatWebhookJwt(token: string): RowboatWebhookClaims | null {
+  return verifyRowboatWebhookJwtWithSecret(token, process.env.ROWBOAT_GATEWAY_TOKEN ?? "");
+}
+
+/**
+ * Per-tenant tool-webhook verification. Resolves the project's per-tenant token
+ * (by the UNVERIFIED projectId claim) and verifies the HMAC with it; the
+ * signature check is what makes trusting the peeked projectId safe (a forged
+ * projectId won't verify under that tenant's secret). Falls back to the shared
+ * env secret so boxes still signing with the legacy shared token keep working.
+ */
+export async function resolveRowboatWebhookClaims(
+  token: string
+): Promise<RowboatWebhookClaims | null> {
+  const projectId = peekProjectId(token);
+  if (projectId) {
+    try {
+      const perTenant = await getActiveGatewayTokenForBusiness(projectId);
+      if (perTenant) {
+        // The HMAC verification with the per-tenant secret is itself the
+        // proof that this token belongs to `projectId` — a forged projectId
+        // would not verify under that tenant's secret.
+        const claims = verifyRowboatWebhookJwtWithSecret(token, perTenant);
+        if (claims) return claims;
+      }
+    } catch {
+      // Fall through to the shared-secret path on any DB error.
+    }
+  }
+  return verifyRowboatWebhookJwt(token);
 }

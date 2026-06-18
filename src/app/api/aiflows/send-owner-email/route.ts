@@ -19,6 +19,7 @@
 import { z } from "zod";
 import {
   gatewayGuard,
+  gatewayBusinessGuard,
   voiceToolResponse,
   voiceToolValidationError
 } from "@/lib/voice-tools/common";
@@ -53,6 +54,9 @@ export async function POST(request: Request) {
       err instanceof z.ZodError ? err.issues[0]?.message ?? "invalid args" : "invalid body";
     return voiceToolValidationError(detail);
   }
+
+  const bindGuard = await gatewayBusinessGuard(request, body.businessId);
+  if (bindGuard) return bindGuard;
 
   try {
     const row = await getWorkspaceOAuthConnection(body.businessId, body.connectionId);

@@ -33,7 +33,7 @@ Rowboat talks to a small `llm-router` sidecar on the VPS (`vps/llm-router/`) whi
 ### Voice knowledge + tools
 
 - The voice bridge loads `/opt/rowboat/vault/{soul,identity,memory,website}.md` (mounted read-only from Rowboat's vault) and injects them into Gemini Live's system prompt on every call. Owners set the website URL during onboarding; `/api/onboard/website-ingest` crawls once (SSRF-guarded, robots-respecting) and stores a summary in `business_configs.website_md`, which is editable from `/dashboard/memory` → "Website Knowledge".
-- Gemini Live calls typed tools exposed by the app under `/api/voice/tools/*` — `business_knowledge_lookup`, `calendar_find_slots`, `calendar_book_appointment`, `send_follow_up_email`, `send_follow_up_sms`, `capture_caller_details`. Calendar + email proxy through Nango (Google Workspace / Microsoft 365); SMS uses the metered Telnyx path; capture writes to `coworker_logs`. Authentication is a single `ROWBOAT_GATEWAY_TOKEN` shared by app, Rowboat, and bridge.
+- Gemini Live calls typed tools exposed by the app under `/api/voice/tools/*` — `business_knowledge_lookup`, `calendar_find_slots`, `calendar_book_appointment`, `send_follow_up_email`, `send_follow_up_sms`, `capture_caller_details`. Calendar + email proxy through Nango (Google Workspace / Microsoft 365); SMS uses the metered Telnyx path; capture writes to `coworker_logs`. Authentication is a **per-tenant gateway token** (see [Per-tenant gateway tokens](#security-per-tenant-gateway-tokens)); the shared `ROWBOAT_GATEWAY_TOKEN` remains a fallback during the transition.
 - See [docs/VOICE-ROLLOUT.md §9](docs/VOICE-ROLLOUT.md) for the Phase 2 rollout runbook.
 
 ## Testing
@@ -87,6 +87,50 @@ tsx debug/check-ollama.ts [businessId]  # verify Ollama reachable + JSON extract
 
 > ⚠️ These touch production (service-role key + plaintext VPS SSH keys, and
 > they recreate live containers). See [`debug/README.md`](debug/README.md).
+
+## Security: per-tenant gateway tokens
+
+Historically every tenant VPS shared one platform-wide `ROWBOAT_GATEWAY_TOKEN`. That
+token is used three ways: (1) the bearer on VPS → app calls (`/api/voice/tools/*`,
+the Nango proxy, custom-integration credentials/call, `aiflows/send-owner-email`,
+and `/api/provisioning/progress`); (2) the HMAC secret Rowboat signs its tool-call
+JWT (`x-signature-jwt`) with; and (3) the API key the platform uses for app → Rowboat
+calls (chat/customer-memory summarizers). A single shared token means a compromise of
+**one** tenant VPS could impersonate **every** other tenant.
+
+**What changed**
+
+- **`vps_gateway_tokens` table** (`supabase/migrations/20260629020000_vps_gateway_tokens.sql`):
+  stores a distinct token per `business_id`. RLS is on with **no policies**, so
+  `anon`/`authenticated` get nothing — only `service_role` (which bypasses RLS) can
+  read it, identical posture to `vps_ssh_keys`. The plaintext token is stored because
+  it doubles as the symmetric HMAC secret (needs the same value on both sides);
+  `token_sha256` is the O(1) bearer-lookup index.
+- **Inbound binding**: VPS → app endpoints now resolve the presented bearer (or the
+  JWT's `projectId`) to a specific business and reject it if it's a *known per-tenant
+  token bound to a different business*. Helpers: `verifyGatewayTokenForBusiness`,
+  `tokenBindingAllowsBusiness`, `gatewayBusinessGuard`, and
+  `resolveRowboatWebhookClaims`. This closes the cross-tenant impersonation gap.
+- **Outbound binding**: app → Rowboat calls resolve the tenant's token via
+  `resolveOutboundRowboatBearer(businessId)`.
+- **Fail-open transition**: every path falls back to the shared `ROWBOAT_GATEWAY_TOKEN`
+  when no per-tenant row exists, so existing deployments keep working. Provisioning
+  (`getOrIssueGatewayToken`) now mints/reuses a per-tenant token for **new** tenants
+  automatically and injects it via `deploy-client.sh`.
+- **Application side effect** — a new row is written to `vps_gateway_tokens` (logged in
+  the DB) per business: minted at provisioning time for new tenants, and seeded for the
+  one existing live tenant (`621a5b0d-…`) with the *current shared token value* so its
+  VPS keeps working untouched. Rotating that tenant's VPS to a **unique** value is a
+  deferred operator step (it can't be live-smoke-tested from here): mint a fresh token
+  (`issueGatewayToken`), redeploy the VPS with the new value, then revoke the old row.
+
+**`fn_grants_lockdown` event trigger** (`supabase/migrations/20260629030000_…sql`):
+a `ddl_command_end` event trigger that revokes `EXECUTE` from `public`/`anon`/
+`authenticated` on every new or altered **public** function (extension-owned functions
+skipped). This permanently closes the recurrence where `supabase_admin`'s default ACL —
+which the migration role can't `ALTER` — kept re-granting `anon`/`authenticated`
+EXECUTE on freshly created functions. Policy: public functions are **service_role-only**;
+callable surfaces go through service-role clients, never `anon`/`authenticated` RPC.
 
 ## Production checklist (high level)
 

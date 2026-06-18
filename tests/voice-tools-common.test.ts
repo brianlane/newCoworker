@@ -4,9 +4,16 @@ vi.mock("@/lib/db/agent-tool-settings", () => ({
   isAgentToolEnabled: vi.fn()
 }));
 
+const { verifyForBusinessMock } = vi.hoisted(() => ({ verifyForBusinessMock: vi.fn() }));
+vi.mock("@/lib/rowboat/gateway-token", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/rowboat/gateway-token")>();
+  return { ...actual, verifyGatewayTokenForBusiness: verifyForBusinessMock };
+});
+
 import {
   agentToolDisabledResponse,
   gatewayGuard,
+  gatewayBusinessGuard,
   parseVoiceToolRequest,
   voiceToolEnvelopeSchema,
   voiceToolResponse,
@@ -93,6 +100,27 @@ describe("gatewayGuard + response helpers", () => {
     const res = voiceToolUnauthorized();
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ ok: false, detail: "unauthorized" });
+  });
+});
+
+describe("gatewayBusinessGuard", () => {
+  const businessId = "11111111-1111-4111-8111-111111111111";
+  beforeEach(() => vi.clearAllMocks());
+
+  it("returns null when the token resolves to the business", async () => {
+    verifyForBusinessMock.mockResolvedValue(true);
+    await expect(
+      gatewayBusinessGuard(new Request("http://localhost/"), businessId)
+    ).resolves.toBeNull();
+    expect(verifyForBusinessMock).toHaveBeenCalledWith(expect.any(Request), businessId);
+  });
+
+  it("returns a 401 when the token does not resolve to the business", async () => {
+    verifyForBusinessMock.mockResolvedValue(false);
+    const res = await gatewayBusinessGuard(new Request("http://localhost/"), businessId);
+    expect(res).not.toBeNull();
+    expect(res!.status).toBe(401);
+    expect(await res!.json()).toEqual({ ok: false, detail: "unauthorized" });
   });
 });
 

@@ -1,8 +1,13 @@
 import crypto from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// The route now calls the async per-tenant resolver. Keep the existing
+// verifyRowboatWebhookJwt-driven tests working by delegating
+// resolveRowboatWebhookClaims to the same mock fn.
+const { verifyMock } = vi.hoisted(() => ({ verifyMock: vi.fn() }));
 vi.mock("@/lib/rowboat/webhook-jwt", () => ({
-  verifyRowboatWebhookJwt: vi.fn()
+  verifyRowboatWebhookJwt: verifyMock,
+  resolveRowboatWebhookClaims: vi.fn(async (token: string) => verifyMock(token))
 }));
 
 vi.mock("@/lib/db/agent-tool-settings", () => ({

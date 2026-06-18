@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/rowboat/gateway-token", () => ({
-  verifyRowboatGatewayToken: vi.fn().mockReturnValue(true)
+  verifyRowboatGatewayToken: vi.fn().mockReturnValue(true),
+  verifyGatewayTokenForBusiness: vi.fn().mockResolvedValue(true)
 }));
 
 vi.mock("@/lib/email/owner-mailbox", () => ({

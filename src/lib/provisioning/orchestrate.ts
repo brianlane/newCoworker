@@ -21,6 +21,7 @@ import { sendOwnerEmail } from "@/lib/email/client";
 import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
 import { buildProvisioningLiveEmail } from "@/lib/email/templates/provisioning-live";
 import { updateBusinessStatus, getBusiness } from "@/lib/db/businesses";
+import { getOrIssueGatewayToken } from "@/lib/db/vps-gateway-tokens";
 import { buildComplianceSystemPrompt } from "@/lib/compliance/fha";
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
@@ -851,11 +852,26 @@ async function runOrchestrator(
   // Phase 3: build the deploy command with env injection. Unchanged; the
   // only difference is *how* we execute it (SSH instead of the fictional
   // Hostinger /exec endpoint).
-  const gatewayToken = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
+  // Per-tenant gateway token: mint-or-reuse a token unique to this business so
+  // a compromise of one tenant VPS can't impersonate another (the token is the
+  // VPS->app bearer, Rowboat's tool-webhook JWT secret, and the platform's
+  // app->Rowboat API key). Falls back to the shared env token if the DB is
+  // unreachable so provisioning never hard-fails on this lookup.
+  let gatewayToken = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
+  try {
+    gatewayToken = await getOrIssueGatewayToken(businessId, { label: "provisioning" });
+  } catch (err) {
+    logger.warn("provisioning: per-tenant gateway token resolve failed; using shared token", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
   const bashQuote = deps?.quoteEnv ?? quoteShellEnvValue;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const progressUrl = `${appUrl.replace(/\/$/, "")}/api/provisioning/progress`;
-  const progressToken = process.env.PROVISIONING_PROGRESS_TOKEN ?? process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
+  // Bind the progress token to the per-tenant gateway token (when no explicit
+  // override is set) so /api/provisioning/progress's per-tenant binding matches.
+  const progressToken = process.env.PROVISIONING_PROGRESS_TOKEN ?? gatewayToken;
 
   const envVars = [
     ["BUSINESS_ID", businessId],

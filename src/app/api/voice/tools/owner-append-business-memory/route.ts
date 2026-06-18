@@ -15,6 +15,7 @@ import { z } from "zod";
 import {
   agentToolDisabledResponse,
   gatewayGuard,
+  gatewayBusinessGuard,
   parseVoiceToolRequest,
   voiceToolResponse,
   voiceToolValidationError
@@ -89,6 +90,9 @@ export async function POST(request: Request) {
       err instanceof z.ZodError ? err.issues[0]?.message ?? "invalid envelope" : "invalid body"
     );
   }
+
+  const bindGuard = await gatewayBusinessGuard(request, envelope.businessId);
+  if (bindGuard) return bindGuard;
 
   if ((envelope.callerE164 ?? "").trim() !== "") {
     return voiceToolResponse({ ok: false, detail: "owner_dashboard_only" });

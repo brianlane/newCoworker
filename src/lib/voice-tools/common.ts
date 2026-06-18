@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { NextResponse } from "next/server";
-import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
+import {
+  verifyGatewayTokenForBusiness,
+  verifyRowboatGatewayToken
+} from "@/lib/rowboat/gateway-token";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import type { AgentKey } from "@/lib/agent-tools/registry";
 
@@ -51,6 +54,22 @@ export function gatewayGuard(request: Request): NextResponse | null {
   if (!verifyRowboatGatewayToken(request)) {
     return voiceToolUnauthorized();
   }
+  return null;
+}
+
+/**
+ * Per-tenant binding guard. Call AFTER the businessId is known (envelope /
+ * query): the gateway token must resolve to THIS business, closing the
+ * cross-tenant hole where a leaked shared token could act as any businessId.
+ * Fails open to the legacy shared-token check for boxes not yet on a
+ * per-tenant token (see verifyGatewayTokenForBusiness).
+ */
+export async function gatewayBusinessGuard(
+  request: Request,
+  businessId: string
+): Promise<NextResponse | null> {
+  const ok = await verifyGatewayTokenForBusiness(request, businessId);
+  if (!ok) return voiceToolUnauthorized();
   return null;
 }
 

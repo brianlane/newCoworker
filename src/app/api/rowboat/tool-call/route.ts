@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { NextResponse } from "next/server";
-import { verifyRowboatWebhookJwt } from "@/lib/rowboat/webhook-jwt";
+import { resolveRowboatWebhookClaims } from "@/lib/rowboat/webhook-jwt";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import type { AgentKey } from "@/lib/agent-tools/registry";
 import {
@@ -265,7 +265,7 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
 
 export async function POST(request: Request) {
   const jwt = request.headers.get("x-signature-jwt") ?? "";
-  const claims = verifyRowboatWebhookJwt(jwt);
+  const claims = await resolveRowboatWebhookClaims(jwt);
   if (!claims) {
     return NextResponse.json({ ok: false, detail: "unauthorized" }, { status: 401 });
   }

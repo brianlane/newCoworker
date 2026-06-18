@@ -10,7 +10,8 @@ vi.mock("@/lib/nango/workspace", () => ({
 }));
 
 vi.mock("@/lib/rowboat/gateway-token", () => ({
-  verifyRowboatGatewayToken: vi.fn()
+  verifyRowboatGatewayToken: vi.fn(),
+  verifyGatewayTokenForBusiness: vi.fn().mockResolvedValue(true)
 }));
 
 import { POST } from "@/app/api/integrations/nango/proxy/route";
