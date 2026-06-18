@@ -756,8 +756,10 @@ async function recordLeadCustomerProfile(
   // a later run or an owner edit is never clobbered. Best-effort.
   const rawEmail = scope.vars.lead_email;
   const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
-  const leadPhone =
-    typeof scope.vars.lead_phone === "string" ? scope.vars.lead_phone.trim() : "";
+  // Compare normalized E.164 (the helper handles NANP/raw extracted numbers), so
+  // a format mismatch between vars.lead_phone and the send target doesn't silently
+  // skip the link.
+  const leadPhone = leadPhoneE164(scope);
   if (email && LEAD_EMAIL_RE.test(email) && leadPhone && leadPhone === customerE164) {
     const { error: emailErr } = await supabase
       .from("customer_memories")

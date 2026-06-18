@@ -15,11 +15,16 @@ with lead_pairs as (
   select distinct on (business_id, phone)
     business_id,
     context->'vars'->>'lead_phone' as phone,
-    nullif(trim(lower(context->'vars'->>'lead_email')), '') as email,
+    trim(lower(context->'vars'->>'lead_email')) as email,
     nullif(trim(context->'vars'->>'lead_name'), '') as name
   from ai_flow_runs
   where context->'vars'->>'lead_phone' is not null
-    and context->'vars'->>'lead_email' is not null
+    -- Validity check lives INSIDE the subquery so DISTINCT ON keeps the most
+    -- recent run with a *valid* email; otherwise a newer run carrying a
+    -- malformed/empty address would win and then be filtered out, skipping a
+    -- customer an older valid run could have linked.
+    and trim(lower(context->'vars'->>'lead_email'))
+        ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'
   order by business_id, phone, created_at desc
 )
 update customer_memories cm
@@ -29,5 +34,4 @@ set email = lp.email,
 from lead_pairs lp
 where cm.business_id = lp.business_id
   and cm.customer_e164 = lp.phone
-  and cm.email is null
-  and lp.email ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$';
+  and cm.email is null;

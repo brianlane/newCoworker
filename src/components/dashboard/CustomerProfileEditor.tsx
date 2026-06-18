@@ -26,16 +26,24 @@ export function CustomerProfileEditor(props: Props) {
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const dirty =
-    (props.initialDisplayName ?? "") !== displayName ||
-    (props.initialPinnedMd ?? "") !== pinnedMd ||
-    (props.initialEmail ?? "") !== email;
+  const nameChanged = (props.initialDisplayName ?? "") !== displayName;
+  const pinnedChanged = (props.initialPinnedMd ?? "") !== pinnedMd;
+  const emailChanged = (props.initialEmail ?? "") !== email;
+  const dirty = nameChanged || pinnedChanged || emailChanged;
 
   async function save() {
     setSaving(true);
     setErrorMsg(null);
     setStatusMsg(null);
     try {
+      // Only send fields the owner actually changed. Sending an unchanged
+      // (possibly legacy-invalid) email alongside a name/pinned edit would let
+      // server-side .email() validation reject the whole save, blocking edits to
+      // unrelated fields.
+      const body: Record<string, string | null> = {};
+      if (nameChanged) body.displayName = displayName.trim() === "" ? null : displayName.trim();
+      if (pinnedChanged) body.pinnedMd = pinnedMd.trim() === "" ? null : pinnedMd.trim();
+      if (emailChanged) body.email = email.trim() === "" ? null : email.trim();
       const res = await fetch(
         `/api/dashboard/customers/${encodeURIComponent(
           props.customerE164
@@ -43,11 +51,7 @@ export function CustomerProfileEditor(props: Props) {
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            displayName: displayName.trim() === "" ? null : displayName.trim(),
-            pinnedMd: pinnedMd.trim() === "" ? null : pinnedMd.trim(),
-            email: email.trim() === "" ? null : email.trim()
-          })
+          body: JSON.stringify(body)
         }
       );
       if (!res.ok) {

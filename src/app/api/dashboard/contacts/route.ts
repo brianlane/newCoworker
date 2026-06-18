@@ -80,7 +80,12 @@ export async function POST(request: Request) {
     const auth = await authorize(request);
     if ("error" in auth) return auth.error;
     const { e164, name, email } = setSchema.parse(await request.json());
-    await setContactOverride(auth.businessId, e164, name, { email: email ?? null });
+    // Only touch email when the caller actually sent it: setContactOverride
+    // treats the key's presence as "overwrite", so passing it on a name-only
+    // save would unlink an existing address. (Schema rejects null/empty, so a
+    // present `email` is always a real address.)
+    const options = email === undefined ? {} : { email };
+    await setContactOverride(auth.businessId, e164, name, options);
     return successResponse({ e164, name, email: email ?? null });
   } catch (err) {
     return handleRouteError(err);

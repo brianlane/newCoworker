@@ -136,6 +136,10 @@ export async function findCustomerByEmail(
     .select("customer_e164, display_name, email")
     .eq("business_id", businessId)
     .ilike("email", pattern)
+    // Deterministic tie-break: if two profiles share an address (no per-business
+    // uniqueness on email), always resolve to the same one rather than letting
+    // PostgREST return rows in an arbitrary order.
+    .order("customer_e164", { ascending: true })
     .limit(5);
   if (error) throw new Error(`findCustomerByEmail: ${error.message}`);
   const row = ((data as Array<{
