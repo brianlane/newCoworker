@@ -740,7 +740,7 @@ async function recordLeadCustomerProfile(
   const rawName = scope.vars.lead_name;
   const displayName =
     typeof rawName === "string" && rawName.trim().length > 0 ? rawName.trim() : null;
-  const { error } = await supabase.rpc("record_customer_interaction", {
+  const { data: interaction, error } = await supabase.rpc("record_customer_interaction", {
     p_business_id: run.business_id,
     p_customer_e164: customerE164,
     p_channel: "sms",
@@ -760,12 +760,19 @@ async function recordLeadCustomerProfile(
   // a format mismatch between vars.lead_phone and the send target doesn't silently
   // skip the link.
   const leadPhone = leadPhoneE164(scope);
-  if (email && LEAD_EMAIL_RE.test(email) && leadPhone && leadPhone === customerE164) {
+  // The RPC returns the row it actually bumped — which is the SURVIVING profile
+  // when customerE164 was a merged-away alias. Target the email update at that
+  // row's primary key so the link lands even after a merge (the merged-away
+  // number no longer exists as a customer_e164).
+  const profile = Array.isArray(interaction) ? interaction[0] : interaction;
+  const targetE164 =
+    profile && typeof profile.customer_e164 === "string" ? profile.customer_e164 : null;
+  if (email && LEAD_EMAIL_RE.test(email) && leadPhone && leadPhone === customerE164 && targetE164) {
     const { error: emailErr } = await supabase
       .from("customer_memories")
       .update({ email, updated_at: new Date().toISOString() })
       .eq("business_id", run.business_id)
-      .eq("customer_e164", customerE164)
+      .eq("customer_e164", targetE164)
       .is("email", null);
     if (emailErr) console.error("record lead email (aiflow lead)", emailErr);
   }
