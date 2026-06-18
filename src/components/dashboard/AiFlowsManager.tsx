@@ -265,11 +265,34 @@ function editorTrigger(s: EditorState): FlowTrigger {
   }
 }
 
+/**
+ * browse_action looping (forEachLink) is mutually exclusive with same-pass
+ * extraction, screenshot, and remember-link (enforced in
+ * validateDefinitionSemantics). The builder HIDES those controls while a
+ * forEachLink selector is set but keeps their values in editor state, so
+ * clearing the selector restores them without data loss. We strip them here, at
+ * save time, so the persisted definition is always valid.
+ */
+function sanitizeStepForSave(step: FlowStep): FlowStep {
+  if (step.type === "browse_action" && step.forEachLink) {
+    return {
+      id: step.id,
+      type: step.type,
+      urlVar: step.urlVar,
+      actions: step.actions,
+      forEachLink: step.forEachLink,
+      ...(step.auth ? { auth: step.auth } : {}),
+      ...(step.when ? { when: step.when } : {})
+    };
+  }
+  return step;
+}
+
 function toDefinition(s: EditorState): AiFlowDefinition {
   return {
     version: 1,
     trigger: editorTrigger(s),
-    steps: s.steps,
+    steps: s.steps.map(sanitizeStepForSave),
     options: { suppressDefaultReply: s.suppressDefaultReply }
   };
 }
@@ -1644,25 +1667,8 @@ function StepFields({
         <Field
           label="Repeat the actions for each list link matching this CSS selector (optional; loops over a list)"
           value={step.forEachLink ?? ""}
-          onChange={(v) => {
-            const next = v.trim();
-            // Looping is mutually exclusive with same-pass extraction, screenshot,
-            // and remember-link (enforced in validateDefinitionSemantics). Clear
-            // those incompatible props when a selector is set so a step that
-            // already had them still passes validation on save.
-            patchStep(
-              index,
-              next
-                ? {
-                    forEachLink: next,
-                    fields: undefined,
-                    screenshot: undefined,
-                    rememberUrlKeyedByVar: undefined
-                  }
-                : { forEachLink: undefined }
-            );
-          }}
-          help="Leave blank to act on a single page. When set, the actions run on every matching link — can't be combined with field extraction, screenshot, or remember-link."
+          onChange={(v) => patchStep(index, { forEachLink: v.trim() ? v.trim() : undefined })}
+          help="Leave blank to act on a single page. When set, the actions run on every matching link — extraction fields, screenshot, and remember-link are hidden and dropped on save (they're kept in the editor so clearing the selector restores them)."
         />
         {step.forEachLink ? (
           <p className="text-xs text-parchment/50">
