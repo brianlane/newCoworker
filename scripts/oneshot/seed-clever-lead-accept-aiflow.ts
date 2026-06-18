@@ -77,20 +77,32 @@ function parseArgs(argv: readonly string[]): Args {
 
 const DEFAULT_BUSINESS_ID = "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
 
-// The accept wizard: keep clicking "Next" until the button is gone (the count
-// varies per lead). If the final confirm button is a fixed label, append a
-// click_text for it via AIFLOW_CLEVER_ACCEPT_ACTIONS_JSON during the live test.
-const DEFAULT_ACCEPT_ACTIONS = [{ kind: "click_text_while_present", target: "Next" }];
+// The accept wizard: click "Accept", then keep clicking "Next" until the button
+// is gone (the count varies per lead). If the final confirm button is a fixed
+// label, append a click_text for it via AIFLOW_CLEVER_ACCEPT_ACTIONS_JSON
+// during the live test.
+const DEFAULT_ACCEPT_ACTIONS = [
+  { kind: "click_text", target: "Accept" },
+  { kind: "click_text_while_present", target: "Next" }
+];
 
-// Leaving a Clever status update (modeled on the ReferralExchange re_update
-// step). Exact labels/placeholders are tuned live.
+// Leaving a Clever status update on the just-accepted lead page, using the SAME
+// live-verified Provide Update sequence proven in the Clever Update Leads flow
+// (Provide Update -> We Spoke -> meeting "No" -> follow-up 7 days out -> notes
+// -> Submit). Exact labels/placeholders stay env-overridable for the live test.
+const MEETING_SELECT = 'select[id="Did you schedule a time to meet in person?"]';
+const NOTES_PLACEHOLDER = "Type additional details about this update";
+const DATE_INPUT = 'input[placeholder="Select a date and time"]';
+const FOLLOWUP_DAY_LABEL =
+  "Choose {{now.in7Days.weekday}}, {{now.in7Days.month}} {{now.in7Days.dayOrdinal}}, {{now.in7Days.year}}";
 const DEFAULT_UPDATE_ACTIONS = [
-  { kind: "click_text", target: "Leave an update" },
-  {
-    kind: "fill_placeholder",
-    target: "Add an update",
-    valueTemplate: "AI assistant: {{vars.actions_taken}}"
-  }
+  { kind: "click_text", target: "Provide Update" },
+  { kind: "click_text", target: "We Spoke" },
+  { kind: "select_option", target: MEETING_SELECT, valueTemplate: "No" },
+  { kind: "click_selector", target: DATE_INPUT },
+  { kind: "click_role", target: "option", valueTemplate: FOLLOWUP_DAY_LABEL },
+  { kind: "fill_placeholder", target: NOTES_PLACEHOLDER, valueTemplate: "call, texted, and emailed" },
+  { kind: "click_text", target: "Submit Update" }
 ];
 
 function parseActionsEnv(name: string, fallback: unknown): unknown {

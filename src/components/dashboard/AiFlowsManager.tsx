@@ -1641,28 +1641,87 @@ function StepFields({
         >
           + action
         </button>
-        <label className="flex items-center gap-2 text-xs text-parchment/70">
-          <input
-            type="checkbox"
-            checked={step.screenshot ?? false}
-            onChange={(ev) =>
-              patchStep(index, { screenshot: ev.target.checked ? true : undefined })
-            }
-          />
-          Capture a screenshot after the actions (audit trail)
-        </label>
-        <Field
-          label="Remember this link for later runs, keyed by this phone variable (optional)"
-          value={step.rememberUrlKeyedByVar ?? ""}
-          onChange={(v) =>
-            patchStep(index, { rememberUrlKeyedByVar: v.trim() ? v.trim() : undefined })
-          }
-        />
         <Field
           label="Repeat the actions for each list link matching this CSS selector (optional; loops over a list)"
           value={step.forEachLink ?? ""}
-          onChange={(v) => patchStep(index, { forEachLink: v.trim() ? v : undefined })}
+          onChange={(v) => patchStep(index, { forEachLink: v.trim() ? v.trim() : undefined })}
+          help="Leave blank to act on a single page. When set, the actions run on every matching link — can't be combined with field extraction, screenshot, or remember-link."
         />
+        {step.forEachLink ? (
+          <p className="text-xs text-parchment/50">
+            Looping over each matching link, so per-page field extraction, screenshot, and
+            remember-link are unavailable. Clear the selector above to re-enable them.
+          </p>
+        ) : (
+          <>
+            <label className={labelClass}>Fields to extract after the actions (optional)</label>
+            {(step.fields ?? []).map((f, fi) => (
+              <div key={fi} className="flex gap-2">
+                <input
+                  className={inputClass}
+                  value={f.name}
+                  placeholder={examples.contactVar}
+                  onChange={(ev) =>
+                    patchStep(index, {
+                      fields: (step.fields ?? []).map((x, xi) =>
+                        xi === fi ? { ...x, name: ev.target.value } : x
+                      )
+                    })
+                  }
+                />
+                <input
+                  className={inputClass}
+                  value={f.description ?? ""}
+                  placeholder="description (optional)"
+                  onChange={(ev) =>
+                    patchStep(index, {
+                      fields: (step.fields ?? []).map((x, xi) =>
+                        xi === fi ? { ...x, description: ev.target.value } : x
+                      )
+                    })
+                  }
+                />
+                <button
+                  onClick={() => {
+                    const next = (step.fields ?? []).filter((_, xi) => xi !== fi);
+                    patchStep(index, { fields: next.length ? next : undefined });
+                  }}
+                  className="text-parchment/40 hover:text-spark-orange"
+                  aria-label="Remove field"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+            <button
+              onClick={() =>
+                patchStep(index, {
+                  fields: [...(step.fields ?? []), { name: "", description: "" }]
+                })
+              }
+              className="text-xs text-signal-teal hover:underline"
+            >
+              + field
+            </button>
+            <label className="flex items-center gap-2 text-xs text-parchment/70">
+              <input
+                type="checkbox"
+                checked={step.screenshot ?? false}
+                onChange={(ev) =>
+                  patchStep(index, { screenshot: ev.target.checked ? true : undefined })
+                }
+              />
+              Capture a screenshot after the actions (audit trail)
+            </label>
+            <Field
+              label="Remember this link for later runs, keyed by this phone variable (optional)"
+              value={step.rememberUrlKeyedByVar ?? ""}
+              onChange={(v) =>
+                patchStep(index, { rememberUrlKeyedByVar: v.trim() ? v.trim() : undefined })
+              }
+            />
+          </>
+        )}
       </div>
     );
   }
