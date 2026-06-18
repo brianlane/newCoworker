@@ -1644,7 +1644,24 @@ function StepFields({
         <Field
           label="Repeat the actions for each list link matching this CSS selector (optional; loops over a list)"
           value={step.forEachLink ?? ""}
-          onChange={(v) => patchStep(index, { forEachLink: v.trim() ? v.trim() : undefined })}
+          onChange={(v) => {
+            const next = v.trim();
+            // Looping is mutually exclusive with same-pass extraction, screenshot,
+            // and remember-link (enforced in validateDefinitionSemantics). Clear
+            // those incompatible props when a selector is set so a step that
+            // already had them still passes validation on save.
+            patchStep(
+              index,
+              next
+                ? {
+                    forEachLink: next,
+                    fields: undefined,
+                    screenshot: undefined,
+                    rememberUrlKeyedByVar: undefined
+                  }
+                : { forEachLink: undefined }
+            );
+          }}
           help="Leave blank to act on a single page. When set, the actions run on every matching link — can't be combined with field extraction, screenshot, or remember-link."
         />
         {step.forEachLink ? (
