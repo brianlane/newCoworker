@@ -74,6 +74,64 @@ export const RATE_LIMITS = {
 } as const;
 
 /**
+ * Durable, cross-instance rate limit backed by Postgres (the
+ * `app_rate_limit_hit` SECURITY DEFINER RPC, service_role-only).
+ *
+ * Why: the in-memory `rateLimit` above uses a per-process `Map`, which on
+ * Vercel serverless is per-isolate and ephemeral — it barely binds across
+ * the fleet. This variant records the hit in a shared table so the window
+ * is enforced globally, which matters most for UNAUTHENTICATED,
+ * cost-amplifying endpoints (LLM-backed onboarding chat / website preview)
+ * where a single IP fanned across isolates could otherwise run up spend.
+ *
+ * Fail-open: if the DB call errors (transient outage, RPC missing on an
+ * un-migrated env), we fall back to the in-memory limiter rather than
+ * hard-failing the request. A rate limiter must never take down the very
+ * endpoint it protects on its own infrastructure blip.
+ *
+ * Only call from Node runtime route handlers (it imports the service
+ * client); never from edge middleware.
+ */
+const RATE_LIMIT_RPC_TIMEOUT_MS = 1500;
+
+export async function rateLimitDurable(
+  identifier: string,
+  config: RateLimitConfig,
+): Promise<RateLimitResult> {
+  const windowSeconds = Math.max(1, Math.round(config.interval / 1000));
+  try {
+    const { createSupabaseServiceClient } = await import("@/lib/supabase/server");
+    const db = await createSupabaseServiceClient();
+    // Bound the RPC: if PostgREST stalls (vs. erroring), we must still reach
+    // the in-memory fallback well within the route budget rather than block.
+    const timeout = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error("rate_limit_rpc_timeout")), RATE_LIMIT_RPC_TIMEOUT_MS).unref?.();
+    });
+    const { data, error } = await Promise.race([
+      db.rpc("app_rate_limit_hit", {
+        p_key: identifier,
+        p_max: config.maxRequests,
+        p_window_seconds: windowSeconds,
+      }),
+      timeout,
+    ]);
+    if (error || !data || typeof data !== "object") {
+      return rateLimit(identifier, config);
+    }
+    const payload = data as { ok?: boolean; hits?: number; reset?: number };
+    const hits = typeof payload.hits === "number" ? payload.hits : 0;
+    return {
+      success: payload.ok !== false,
+      limit: config.maxRequests,
+      remaining: Math.max(0, config.maxRequests - hits),
+      reset: typeof payload.reset === "number" ? payload.reset : Date.now() + config.interval,
+    };
+  } catch {
+    return rateLimit(identifier, config);
+  }
+}
+
+/**
  * Build a rate-limit identifier from a Web `Request`. Walks the
  * standard proxy-IP header chain (`x-forwarded-for` first, then
  * `x-real-ip`, then `cf-connecting-ip`) and falls back to

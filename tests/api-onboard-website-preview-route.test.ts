@@ -12,7 +12,7 @@ vi.mock("@/lib/rate-limit", async () => {
   const actual = await vi.importActual<typeof import("@/lib/rate-limit")>("@/lib/rate-limit");
   return {
     ...actual,
-    rateLimit: vi.fn()
+    rateLimitDurable: vi.fn()
   };
 });
 vi.mock("@/lib/logger", () => ({
@@ -21,7 +21,7 @@ vi.mock("@/lib/logger", () => ({
 
 import { POST } from "@/app/api/onboard/website-preview/route";
 import { ingestWebsite, normalizeWebsiteUrl } from "@/lib/website-ingest";
-import { rateLimit } from "@/lib/rate-limit";
+import { rateLimitDurable } from "@/lib/rate-limit";
 
 const TRUSTED_APP_URL = "https://app.test";
 
@@ -50,7 +50,7 @@ beforeEach(() => {
   // would fail closed (no trusted host configured) and every test
   // would land in the untrusted-fallback branch.
   vi.stubEnv("NEXT_PUBLIC_APP_URL", TRUSTED_APP_URL);
-  vi.mocked(rateLimit).mockReturnValue({
+  vi.mocked(rateLimitDurable).mockResolvedValue({
     success: true,
     limit: 6,
     remaining: 5,
@@ -261,7 +261,7 @@ describe("/api/onboard/website-preview", () => {
   });
 
   it("returns 429 when the per-IP rate limit is exhausted", async () => {
-    vi.mocked(rateLimit).mockReturnValue({
+    vi.mocked(rateLimitDurable).mockResolvedValue({
       success: false,
       limit: 6,
       remaining: 0,
@@ -284,7 +284,7 @@ describe("/api/onboard/website-preview", () => {
     await POST(
       jsonRequest({ websiteUrl: "https://example.com" }, { "x-forwarded-for": "203.0.113.4, 10.0.0.1" })
     );
-    expect(rateLimit).toHaveBeenCalledWith(
+    expect(rateLimitDurable).toHaveBeenCalledWith(
       "website-preview:203.0.113.4",
       expect.objectContaining({ maxRequests: 6 })
     );
