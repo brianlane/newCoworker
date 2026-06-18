@@ -102,6 +102,22 @@ describe("rateLimitDurable", () => {
     expect(result.remaining).toBe(4);
   });
 
+  it("fails open when the RPC stalls past the timeout (no error, just slow)", async () => {
+    vi.useFakeTimers();
+    try {
+      // PostgREST hangs rather than erroring — the RPC never settles.
+      rpcMock.mockReturnValue(new Promise(() => {}));
+      const pending = rateLimitDurable("durable-timeout", CONFIG);
+      // Drain the awaited client-resolution microtasks, then trip the deadline.
+      await vi.advanceTimersByTimeAsync(2000);
+      const result = await pending;
+      expect(result.success).toBe(true);
+      expect(result.remaining).toBe(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rounds sub-second intervals up to a one-second window", async () => {
     rpcMock.mockResolvedValue({ data: { ok: true, hits: 1 }, error: null });
 

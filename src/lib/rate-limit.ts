@@ -92,6 +92,8 @@ export const RATE_LIMITS = {
  * Only call from Node runtime route handlers (it imports the service
  * client); never from edge middleware.
  */
+const RATE_LIMIT_RPC_TIMEOUT_MS = 1500;
+
 export async function rateLimitDurable(
   identifier: string,
   config: RateLimitConfig,
@@ -100,11 +102,19 @@ export async function rateLimitDurable(
   try {
     const { createSupabaseServiceClient } = await import("@/lib/supabase/server");
     const db = await createSupabaseServiceClient();
-    const { data, error } = await db.rpc("app_rate_limit_hit", {
-      p_key: identifier,
-      p_max: config.maxRequests,
-      p_window_seconds: windowSeconds,
+    // Bound the RPC: if PostgREST stalls (vs. erroring), we must still reach
+    // the in-memory fallback well within the route budget rather than block.
+    const timeout = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error("rate_limit_rpc_timeout")), RATE_LIMIT_RPC_TIMEOUT_MS).unref?.();
     });
+    const { data, error } = await Promise.race([
+      db.rpc("app_rate_limit_hit", {
+        p_key: identifier,
+        p_max: config.maxRequests,
+        p_window_seconds: windowSeconds,
+      }),
+      timeout,
+    ]);
     if (error || !data || typeof data !== "object") {
       return rateLimit(identifier, config);
     }
