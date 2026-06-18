@@ -1273,7 +1273,15 @@ function StepFields({
             type="checkbox"
             checked={Boolean(step.replyToGroup)}
             onChange={(ev) =>
-              patchStep(index, { replyToGroup: ev.target.checked ? true : undefined })
+              // Group reply is its own recipient source — clear any prior
+              // `to`/`toAgentName` so the "exactly one recipient" rule passes on
+              // save (those fields are hidden while group reply is on).
+              patchStep(
+                index,
+                ev.target.checked
+                  ? { replyToGroup: true, to: undefined, toAgentName: undefined }
+                  : { replyToGroup: undefined }
+              )
             }
           />
           Reply into the group text (everyone on the thread except your number)
