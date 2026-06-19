@@ -225,30 +225,48 @@ describe("issueGatewayToken", () => {
 });
 
 describe("getActiveGatewayTokensForProject", () => {
-  it("resolves the business via business_configs then returns its non-revoked tokens", async () => {
+  it("resolves the business via business_configs then returns its non-revoked tokens (hasConfirmed true when any deployed_at set)", async () => {
     const { client } = makeClient({
       maybeSingle: { data: { business_id: "biz-cfg" }, error: null },
-      list: { data: [{ token: "t1" }, { token: "t2" }], error: null }
+      list: {
+        data: [
+          { token: "t1", deployed_at: null },
+          { token: "t2", deployed_at: "2026-06-19T00:00:00Z" }
+        ],
+        error: null
+      }
     });
-    expect(await getActiveGatewayTokensForProject("proj-1", client as never)).toEqual(["t1", "t2"]);
+    expect(await getActiveGatewayTokensForProject("proj-1", client as never)).toEqual({
+      tokens: ["t1", "t2"],
+      hasConfirmed: true
+    });
   });
 
-  it("falls back to treating projectId as the business id when no config matches", async () => {
+  it("reports hasConfirmed false when every token is still pending (deployed_at null)", async () => {
     const { client } = makeClient({
       maybeSingle: { data: null, error: null },
-      list: { data: [{ token: "only" }], error: null }
+      list: { data: [{ token: "pending", deployed_at: null }], error: null }
     });
-    expect(await getActiveGatewayTokensForProject("biz-as-proj", client as never)).toEqual(["only"]);
+    expect(await getActiveGatewayTokensForProject("biz-as-proj", client as never)).toEqual({
+      tokens: ["pending"],
+      hasConfirmed: false
+    });
   });
 
-  it("returns an empty array when the business has no tokens", async () => {
+  it("returns an empty list when the business has no tokens", async () => {
     const { client } = makeClient({ maybeSingle: { data: null, error: null }, list: { data: [], error: null } });
-    expect(await getActiveGatewayTokensForProject("p", client as never)).toEqual([]);
+    expect(await getActiveGatewayTokensForProject("p", client as never)).toEqual({
+      tokens: [],
+      hasConfirmed: false
+    });
   });
 
-  it("returns an empty array when the tokens query yields null data", async () => {
+  it("returns an empty list when the tokens query yields null data", async () => {
     const { client } = makeClient({ maybeSingle: { data: null, error: null }, list: { data: null, error: null } });
-    expect(await getActiveGatewayTokensForProject("p", client as never)).toEqual([]);
+    expect(await getActiveGatewayTokensForProject("p", client as never)).toEqual({
+      tokens: [],
+      hasConfirmed: false
+    });
   });
 
   it("throws when the config lookup errors", async () => {
@@ -267,10 +285,13 @@ describe("getActiveGatewayTokensForProject", () => {
   it("falls back to the service client when none is passed", async () => {
     const { client } = makeClient({
       maybeSingle: { data: null, error: null },
-      list: { data: [{ token: "svc" }], error: null }
+      list: { data: [{ token: "svc", deployed_at: "2026-06-19T00:00:00Z" }], error: null }
     });
     serviceClientHolder.current = client;
-    expect(await getActiveGatewayTokensForProject("p")).toEqual(["svc"]);
+    expect(await getActiveGatewayTokensForProject("p")).toEqual({
+      tokens: ["svc"],
+      hasConfirmed: true
+    });
   });
 });
 

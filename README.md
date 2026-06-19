@@ -124,10 +124,13 @@ calls (chat/customer-memory summarizers). A single shared token means a compromi
     business (binding check — this is the cross-tenant guard); otherwise the shared token is
     accepted. It is intentionally not exclusive, so platform callers keep working for migrated
     tenants. A transient DB read error fails open to the shared check.
-  - **JWT** (`resolveRowboatWebhookClaims`): once a project has a per-tenant secret, the JWT
-    is verified **only** against it — the shared secret is rejected. This is exclusive because
-    the HMAC secret is forgeable by anyone who knows the shared value, and Rowboat tool-call
-    JWTs are signed on the (per-tenant) VPS, never by the platform edge worker.
+  - **JWT** (`resolveRowboatWebhookClaims`): once a project has a **confirmed** per-tenant
+    secret, the JWT is verified **only** against its per-tenant token(s) — the shared secret is
+    rejected. This is exclusive because the HMAC secret is forgeable by anyone who knows the
+    shared value, and Rowboat tool-call JWTs are signed on the (per-tenant) VPS, never by the
+    platform edge worker. Exclusivity is gated on *confirmed* (not merely pending) because the
+    box keeps signing with the shared secret until the deploy that injects the per-tenant token
+    finishes (see lifecycle below).
 - **A token has a PENDING → CONFIRMED lifecycle (`deployed_at`)** so the DB never gets ahead
   of the VPS (`supabase/migrations/20260629050000_…sql`):
   - Provisioning reads the business's existing token (`getActiveGatewayTokenForBusiness`,
@@ -142,8 +145,12 @@ calls (chat/customer-memory summarizers). A single shared token means a compromi
     **every** non-revoked token for the project — pending *and* confirmed
     (`getActiveGatewayTokensForProject`) — because the VPS starts signing with a freshly
     deployed token the moment Rowboat restarts (before the app confirms it), and during a
-    rotation an old + new token briefly coexist. This removes the verification window while
-    staying exclusive vs the shared secret. The lookup resolves the owning business via
+    rotation an old + new token briefly coexist. The shared secret is **still accepted while
+    the project has no confirmed token** (`hasConfirmed` false): a pending row exists from the
+    moment provisioning inserts it, but the box keeps signing with the shared secret for the
+    whole (multi-minute) deploy — rejecting it then would 401 every tool-call during a first
+    migration. The instant the first token is confirmed, the box has switched to it and the
+    shared secret is rejected forever. The lookup resolves the owning business via
     `business_configs.rowboat_project_id` (which can be re-pointed) and falls back to treating
     the project id as the business id.
   - On a **successful** deploy the orchestrator calls `markGatewayTokenDeployed`, which runs

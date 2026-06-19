@@ -107,13 +107,28 @@ export async function getDeployedGatewayTokenForBusiness(
   return data ? (data.token as string) : null;
 }
 
+export type ProjectGatewayTokens = {
+  /** Every non-revoked token (pending AND confirmed) for the owning business. */
+  tokens: string[];
+  /**
+   * Whether AT LEAST ONE of those tokens is CONFIRMED deployed (`deployed_at` set).
+   * This gates JWT exclusivity: a project with no confirmed token yet is still being
+   * signed by its VPS with the shared secret (the deploy that injects the per-tenant
+   * token hasn't finished), so the shared secret must still be accepted. Once any
+   * token is confirmed the box has switched to it and the shared secret is rejected.
+   */
+  hasConfirmed: boolean;
+};
+
 /**
- * ALL non-revoked tokens (plaintext) for the business that owns Rowboat project
- * `projectId`. Used for tool-call JWT verification: the VPS starts signing with a
- * freshly deployed token the instant deploy-client.sh restarts Rowboat — before
- * the app confirms it — and during a rotation an old (confirmed) and new (pending)
- * token briefly coexist. Verifying against EVERY non-revoked token (pending or
- * confirmed) removes that window while staying exclusive vs the shared secret.
+ * Non-revoked tokens (plaintext) for the business that owns Rowboat project
+ * `projectId`, plus whether any is confirmed-deployed. Used for tool-call JWT
+ * verification: the VPS starts signing with a freshly deployed token the instant
+ * deploy-client.sh restarts Rowboat — before the app confirms it — and during a
+ * rotation an old (confirmed) and new (pending) token briefly coexist. Verifying
+ * against EVERY non-revoked token (pending or confirmed) removes that window. The
+ * `hasConfirmed` flag lets the caller keep accepting the shared secret until the
+ * tenant's first token is actually live on the box (see `resolveRowboatWebhookClaims`).
  *
  * `projectId` is the JWT's project claim, which is `business_configs.rowboat_project_id`
  * (re-pointable per tenant) and defaults to the business UUID — so we resolve the
@@ -123,7 +138,7 @@ export async function getDeployedGatewayTokenForBusiness(
 export async function getActiveGatewayTokensForProject(
   projectId: string,
   client?: SupabaseClient
-): Promise<string[]> {
+): Promise<ProjectGatewayTokens> {
   const db = client ?? (await createSupabaseServiceClient());
   let businessId = projectId;
   const { data: cfg, error: cfgErr } = await db
@@ -135,11 +150,15 @@ export async function getActiveGatewayTokensForProject(
   if (cfg) businessId = cfg.business_id as string;
   const { data, error } = await db
     .from("vps_gateway_tokens")
-    .select("token")
+    .select("token, deployed_at")
     .eq("business_id", businessId)
     .is("revoked_at", null);
   if (error) throw new Error(`getActiveGatewayTokensForProject(tokens): ${error.message}`);
-  return (data ?? []).map((row) => row.token as string);
+  const rows = data ?? [];
+  return {
+    tokens: rows.map((row) => row.token as string),
+    hasConfirmed: rows.some((row) => row.deployed_at != null)
+  };
 }
 
 export type IssueGatewayTokenOptions = {
