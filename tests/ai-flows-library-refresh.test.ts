@@ -6,6 +6,12 @@ vi.mock("@/lib/ai-flows/library", () => ({
   upsertLibraryEntry: vi.fn(),
   pruneLibraryEntries: vi.fn()
 }));
+// Wrap the real scrub module so scrubbing/redaction stay real, but the PII gate
+// can be forced on for the skip-branch test (a real scrub never leaves PII).
+vi.mock("@/lib/ai-flows/scrub", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/ai-flows/scrub")>();
+  return { ...actual, containsLikelyPii: vi.fn(actual.containsLikelyPii) };
+});
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
@@ -13,6 +19,7 @@ import {
   pruneLibraryEntries,
   upsertLibraryEntry
 } from "@/lib/ai-flows/library";
+import { containsLikelyPii } from "@/lib/ai-flows/scrub";
 import { refreshAiFlowLibrary } from "@/lib/ai-flows/library-refresh";
 
 const DEF = {
@@ -58,7 +65,7 @@ describe("refreshAiFlowLibrary", () => {
     vi.mocked(aggregateLibraryCandidates).mockResolvedValue([]);
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(makeNamesDb({}));
     const result = await refreshAiFlowLibrary();
-    expect(result).toEqual({ candidates: 0, groups: 0 });
+    expect(result).toEqual({ candidates: 0, groups: 0, published: 0, skipped: 0 });
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
     expect(upsertLibraryEntry).not.toHaveBeenCalled();
     // With no candidates, prune clears the whole catalog (empty keep list).
@@ -116,8 +123,10 @@ describe("refreshAiFlowLibrary", () => {
 
     const db = makeNamesDb({
       businesses: [
-        { id: "biz-2", owner_name: "Amy" },
-        { id: "biz-1", owner_name: null },
+        // Business name tokens ("Amy"/"Laidlaw") feed title redaction; the
+        // generic suffix ("Real Estate") is dropped so titles keep common nouns.
+        { id: "biz-2", owner_name: "Amy", name: "Amy Laidlaw Real Estate" },
+        { id: "biz-1", owner_name: null, name: null },
         { id: "biz-3", owner_name: "X" } // 1-char -> skipped
       ],
       ai_flow_team_members: [{ business_id: "biz-2", name: "Jordan" }]
@@ -128,6 +137,8 @@ describe("refreshAiFlowLibrary", () => {
     expect(result.candidates).toBe(6);
     // referralexchange-lead + daily-digest + weekly-report ("!!!" is dropped).
     expect(result.groups).toBe(3);
+    expect(result.published).toBe(3);
+    expect(result.skipped).toBe(0);
 
     const calls = vi.mocked(upsertLibraryEntry).mock.calls.map((c) => c[0]);
     const ref = calls.find((c) => c.templateKey === "referralexchange-lead")!;
@@ -158,7 +169,17 @@ describe("refreshAiFlowLibrary", () => {
   it("handles null name-lookup results (no known names)", async () => {
     vi.mocked(aggregateLibraryCandidates).mockResolvedValue([candidate()] as never);
     const result = await refreshAiFlowLibrary(makeNamesDb({}));
-    expect(result).toEqual({ candidates: 1, groups: 1 });
+    expect(result).toEqual({ candidates: 1, groups: 1, published: 1, skipped: 0 });
     expect(upsertLibraryEntry).toHaveBeenCalledTimes(1);
+  });
+
+  it("withholds a template that still trips the PII gate", async () => {
+    vi.mocked(aggregateLibraryCandidates).mockResolvedValue([candidate()] as never);
+    vi.mocked(containsLikelyPii).mockReturnValue(true);
+    const result = await refreshAiFlowLibrary(makeNamesDb({}));
+    expect(result).toEqual({ candidates: 1, groups: 1, published: 0, skipped: 1 });
+    expect(upsertLibraryEntry).not.toHaveBeenCalled();
+    // Nothing published -> prune clears the catalog.
+    expect(pruneLibraryEntries).toHaveBeenCalledWith([], expect.anything());
   });
 });

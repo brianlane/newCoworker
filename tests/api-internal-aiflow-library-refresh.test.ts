@@ -29,12 +29,17 @@ describe("api/internal/aiflow-library-refresh route", () => {
   });
 
   it("runs one refresh and returns its counts", async () => {
-    vi.mocked(refreshAiFlowLibrary).mockResolvedValue({ candidates: 5, groups: 2 });
+    vi.mocked(refreshAiFlowLibrary).mockResolvedValue({
+      candidates: 5,
+      groups: 2,
+      published: 2,
+      skipped: 0
+    });
     const res = await POST(req());
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body.ok).toBe(true);
-    expect(body.data).toEqual({ candidates: 5, groups: 2 });
+    expect(body.data).toEqual({ candidates: 5, groups: 2, published: 2, skipped: 0 });
   });
 
   it("maps a thrown refresh failure to the standard error contract", async () => {

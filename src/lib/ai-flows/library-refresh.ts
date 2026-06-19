@@ -13,7 +13,12 @@
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { summarizeDefinition } from "@/lib/ai-flows/schema";
-import { redactText, scrubDefinition, templateKeyFromName } from "@/lib/ai-flows/scrub";
+import {
+  containsLikelyPii,
+  redactText,
+  scrubDefinition,
+  templateKeyFromName
+} from "@/lib/ai-flows/scrub";
 import {
   aggregateLibraryCandidates,
   pruneLibraryEntries,
@@ -45,33 +50,96 @@ function cleanTitle(name: string): string {
 }
 
 /**
- * Build a business_id -> known names ([owner_name, ...roster names]) map for the
- * given businesses, so the scrubber can redact tenant-specific personal names
- * that a regex can't infer. Batched to two queries regardless of group count.
+ * Generic words to drop when tokenizing a business name so we redact the
+ * identifying parts ("Amy", "Laidlaw") without nuking common nouns ("Real",
+ * "Estate") that legitimately appear in flow titles.
  */
-async function loadKnownNames(
-  businessIds: string[],
-  db: SupabaseClient
-): Promise<Map<string, string[]>> {
-  const out = new Map<string, string[]>();
-  if (businessIds.length === 0) return out;
-  const push = (id: string, name: unknown) => {
+const BUSINESS_NAME_STOPWORDS: ReadonlySet<string> = new Set([
+  "real",
+  "estate",
+  "realty",
+  "realtor",
+  "realtors",
+  "group",
+  "team",
+  "homes",
+  "home",
+  "properties",
+  "property",
+  "company",
+  "co",
+  "agency",
+  "agent",
+  "agents",
+  "brokerage",
+  "services",
+  "solutions",
+  "the",
+  "and",
+  "llc",
+  "inc"
+]);
+
+type KnownNames = {
+  /** Owner + roster names — used to redact the (kept) definition strings. */
+  body: Map<string, string[]>;
+  /** body names PLUS business-name tokens — used only to redact the title. */
+  title: Map<string, string[]>;
+};
+
+/**
+ * Build per-business known-name lists so the scrubber can redact tenant-specific
+ * personal names a regex can't infer. Two scopes:
+ *   - `body`  = owner_name + roster names (conservative; applied to the whole
+ *               definition, where an over-broad token could corrupt a var name);
+ *   - `title` = body names + tokens of the business display name, applied only
+ *               to the short flow title/slug (e.g. business "Amy Laidlaw Real
+ *               Estate" redacts "Amy"/"Laidlaw" from a title without touching
+ *               "Real"/"Estate"). Batched to two queries regardless of count.
+ */
+async function loadKnownNames(businessIds: string[], db: SupabaseClient): Promise<KnownNames> {
+  const body = new Map<string, string[]>();
+  const title = new Map<string, string[]>();
+  if (businessIds.length === 0) return { body, title };
+  const push = (map: Map<string, string[]>, id: string, name: unknown) => {
     if (typeof name !== "string" || name.trim().length < 2) return;
-    const list = out.get(id) ?? [];
+    const list = map.get(id) ?? [];
     list.push(name.trim());
-    out.set(id, list);
+    map.set(id, list);
+  };
+  const pushBoth = (id: string, name: unknown) => {
+    push(body, id, name);
+    push(title, id, name);
   };
   const [{ data: businesses }, { data: members }] = await Promise.all([
-    db.from("businesses").select("id,owner_name").in("id", businessIds),
+    db.from("businesses").select("id,owner_name,name").in("id", businessIds),
     db.from("ai_flow_team_members").select("business_id,name").in("business_id", businessIds)
   ]);
-  for (const b of businesses ?? []) push(b.id as string, (b as { owner_name?: unknown }).owner_name);
+  for (const b of businesses ?? []) {
+    const id = b.id as string;
+    pushBoth(id, (b as { owner_name?: unknown }).owner_name);
+    // Business display name: title-only (whole name + identifying tokens).
+    const bizName = (b as { name?: unknown }).name;
+    push(title, id, bizName);
+    if (typeof bizName === "string") {
+      for (const tok of bizName.split(/[^A-Za-z]+/)) {
+        if (tok.length >= 2 && !BUSINESS_NAME_STOPWORDS.has(tok.toLowerCase())) push(title, id, tok);
+      }
+    }
+  }
   for (const m of members ?? [])
-    push((m as { business_id: string }).business_id, (m as { name?: unknown }).name);
-  return out;
+    pushBoth((m as { business_id: string }).business_id, (m as { name?: unknown }).name);
+  return { body, title };
 }
 
-export type LibraryRefreshResult = { candidates: number; groups: number };
+export type LibraryRefreshResult = {
+  candidates: number;
+  groups: number;
+  /** Entries actually upserted (groups minus any blocked by the PII gate). */
+  published: number;
+  /** Templates skipped because the scrubbed result still tripped the PII gate. */
+  skipped: number;
+};
 
 export async function refreshAiFlowLibrary(client?: SupabaseClient): Promise<LibraryRefreshResult> {
   const db = client ?? (await createSupabaseServiceClient());
@@ -87,7 +155,7 @@ export async function refreshAiFlowLibrary(client?: SupabaseClient): Promise<Lib
     db
   );
   const redactedNameFor = (c: AiFlowLibraryCandidate): string =>
-    redactText(c.name, knownNames.get(c.business_id) ?? []);
+    redactText(c.name, knownNames.title.get(c.business_id) ?? []);
 
   const groups = new Map<string, AiFlowLibraryCandidate[]>();
   for (const c of candidates) {
@@ -98,6 +166,9 @@ export async function refreshAiFlowLibrary(client?: SupabaseClient): Promise<Lib
     else groups.set(key, [c]);
   }
 
+  let published = 0;
+  let skipped = 0;
+  const publishedKeys: string[] = [];
   for (const [templateKey, members] of groups) {
     // Representative = the most recently successful copy (freshest definition).
     const representative = members.reduce((best, c) =>
@@ -113,14 +184,24 @@ export async function refreshAiFlowLibrary(client?: SupabaseClient): Promise<Lib
       null
     );
 
-    const repNames = knownNames.get(representative.business_id) ?? [];
-    const scrubbed = scrubDefinition(representative.definition, { knownNames: repNames });
+    const bid = representative.business_id;
+    const scrubbed = scrubDefinition(representative.definition, {
+      knownNames: knownNames.body.get(bid) ?? []
+    });
+
+    // Defense-in-depth: never publish a definition that still trips the PII
+    // gate (a missed prose field, an unexpected literal). The template just
+    // stays out of the library until its source flow is cleaned up.
+    if (containsLikelyPii(scrubbed)) {
+      skipped += 1;
+      continue;
+    }
 
     await upsertLibraryEntry(
       {
         templateKey,
         // Title comes from the redacted name too — never the raw (PII) name.
-        title: cleanTitle(redactText(representative.name, repNames)),
+        title: cleanTitle(redactText(representative.name, knownNames.title.get(bid) ?? [])),
         summary: summarizeDefinition(representative.definition),
         category: deriveCategory(representative.business_type),
         scrubbedDefinition: scrubbed,
@@ -133,10 +214,13 @@ export async function refreshAiFlowLibrary(client?: SupabaseClient): Promise<Lib
       },
       db
     );
+    published += 1;
+    publishedKeys.push(templateKey);
   }
 
-  // Drop catalog entries whose flows no longer qualify (no successful runs).
-  await pruneLibraryEntries([...groups.keys()], db);
+  // Drop catalog entries whose flows no longer qualify (no successful runs) or
+  // were withheld by the PII gate — keep only what we actually published.
+  await pruneLibraryEntries(publishedKeys, db);
 
-  return { candidates: candidates.length, groups: groups.size };
+  return { candidates: candidates.length, groups: groups.size, published, skipped };
 }

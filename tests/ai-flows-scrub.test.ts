@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   EMPLOYEE_NAME_PLACEHOLDER,
+  LIBRARY_STRIPPED_PLACEHOLDER,
   NAME_PLACEHOLDER,
   NIL_UUID,
   OWNER_EMAIL_PLACEHOLDER,
   OWNER_PHONE_PLACEHOLDER,
   applyLibrarySubstitutions,
+  containsLikelyPii,
   hasUnresolvedPlaceholders,
   redactText,
   scrubDefinition,
@@ -103,8 +105,31 @@ describe("scrubDefinition", () => {
     expect(json).not.toContain("15826866672");
     expect(json).not.toContain("amy@emylaidlaw.com");
     expect(json).not.toContain("From Amy");
+    // Recipient fields are kept (redacted to placeholders) for substitution.
     expect(json).toContain(OWNER_PHONE_PLACEHOLDER);
     expect(json).toContain(OWNER_EMAIL_PLACEHOLDER);
+  });
+
+  it("blanks every author-written prose field (bodies/subjects)", () => {
+    const steps = scrubbed.steps as Record<string, unknown>[];
+    // send_sms bodies, send_email subject + body, route_to_team templates.
+    expect(steps[1].body).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
+    expect(steps[2].body).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
+    expect(steps[3].subject).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
+    expect(steps[3].body).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
+    expect(steps[4].offerTemplate).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
+    expect(steps[4].ownerFallbackTemplate).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
+    // No body prose survives anywhere.
+    expect(json).not.toContain("this is");
+    expect(json).not.toContain("Lead for");
+  });
+
+  it("keeps the flow's structure (step types, recipients, var names)", () => {
+    const steps = scrubbed.steps as Record<string, unknown>[];
+    expect(steps[0].type).toBe("extract_text");
+    expect((steps[0].fields as { name: string }[])[0].name).toBe("lead_phone");
+    expect(steps[1].type).toBe("send_sms");
+    expect(steps[1].to).toBe(OWNER_PHONE_PLACEHOLDER);
   });
 
   it("blanks tenant-specific connection ids and pins", () => {
@@ -116,17 +141,114 @@ describe("scrubDefinition", () => {
     expect(steps[4].agentName).toBeUndefined();
   });
 
-  it("drops http_call endpoint path and bodyTemplate (tenant secrets)", () => {
+  it("drops http_call endpoint path and bodyTemplate (tenant secrets) and blanks the label", () => {
     expect(json).not.toContain("SECRET123");
     expect(json).not.toContain("sk_live_DEADBEEF");
     const steps = scrubbed.steps as Record<string, unknown>[];
     expect(steps[5].path).toBeUndefined();
     expect(steps[5].bodyTemplate).toBeUndefined();
-    expect(steps[5].label).toBe("Post to webhook");
+    expect(steps[5].label).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
   });
 
   it("does not mutate the input definition", () => {
     expect((piiDefinition.steps[1] as { to: string }).to).toBe("+15826866672");
+    expect((piiDefinition.steps[1] as { body: string }).body).toContain("Amy");
+  });
+});
+
+describe("scrubDefinition strips prose across all step/condition shapes", () => {
+  it("blanks descriptions, condition values, when comparisons, and integration labels", () => {
+    const def = {
+      version: 1 as const,
+      trigger: {
+        channel: "email" as const,
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        conditions: [
+          { type: "from_matches" as const, value: "amy@amylaidlaw.com" },
+          { type: "contains" as const, value: "Phoenix listing" }
+        ]
+      },
+      steps: [
+        { id: "u", type: "extract_url" as const, saveAs: "leadUrl" },
+        {
+          id: "b",
+          type: "browse_extract" as const,
+          urlVar: "leadUrl",
+          auth: { integrationLabel: "Amy's private portal" },
+          fields: [{ name: "lead_type", description: "Buyer or seller for Amy Laidlaw?" }]
+        },
+        {
+          id: "n",
+          type: "notify_owner" as const,
+          message: "Tell Brian at PhoenixAreasBestRealtor.com",
+          when: { var: "lead_type", equals: "buyer" }
+        },
+        {
+          id: "a",
+          type: "approval_gate" as const,
+          prompt: "Approve sending to HomeSmart?"
+        }
+      ]
+    };
+    const scrubbed = scrubDefinition(def as unknown as AiFlowDefinition);
+    const json = JSON.stringify(scrubbed);
+    for (const leak of [
+      "amylaidlaw",
+      "Phoenix",
+      "private portal",
+      "Buyer or seller",
+      "Brian",
+      "PhoenixAreasBestRealtor",
+      "HomeSmart",
+      "buyer"
+    ]) {
+      expect(json).not.toContain(leak);
+    }
+    const steps = scrubbed.steps as Record<string, unknown>[];
+    expect((steps[1].auth as Record<string, unknown>).integrationLabel).toBe(
+      LIBRARY_STRIPPED_PLACEHOLDER
+    );
+    expect((steps[1].fields as Record<string, unknown>[])[0].description).toBe(
+      LIBRARY_STRIPPED_PLACEHOLDER
+    );
+    expect((steps[2].when as Record<string, unknown>).equals).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
+    // condition values are blanked but the condition TYPE is kept (structure).
+    const conds = (scrubbed.trigger as Record<string, unknown>).conditions as Record<
+      string,
+      unknown
+    >[];
+    expect(conds[0].type).toBe("from_matches");
+    expect(conds[0].value).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
+  });
+});
+
+describe("containsLikelyPii", () => {
+  it("flags a literal email or phone", () => {
+    expect(containsLikelyPii({ a: "reach me at amy@amylaidlaw.com" })).toBe(true);
+    expect(containsLikelyPii({ a: "call +15826866672" })).toBe(true);
+  });
+
+  it("ignores uuids, times, and bounded numbers", () => {
+    expect(
+      containsLikelyPii({
+        connectionId: NIL_UUID,
+        other: "00000000-0000-0000-0000-000000000000",
+        time: "22:00",
+        everyMinutes: 10080,
+        responseMinutes: 1440
+      })
+    ).toBe(false);
+  });
+
+  it("returns false for a fully scrubbed definition", () => {
+    expect(containsLikelyPii(scrubDefinition(piiDefinition as unknown as AiFlowDefinition))).toBe(
+      false
+    );
+  });
+
+  it("returns false when the value can't be stringified", () => {
+    // JSON.stringify(undefined) === undefined -> the `?? ""` fallback.
+    expect(containsLikelyPii(undefined)).toBe(false);
   });
 });
 
