@@ -17,8 +17,11 @@ import { getActiveGatewayTokenForBusiness } from "@/lib/db/vps-gateway-tokens";
  * `secret: ROWBOAT_GATEWAY_TOKEN` (the per-tenant token once provisioning
  * mints one; the legacy shared token on older boxes). The platform verifies
  * with the per-tenant token resolved by the `projectId` claim
- * (`resolveRowboatWebhookClaims`), falling back to the shared env secret so
- * already-deployed boxes keep working during the transition.
+ * (`resolveRowboatWebhookClaims`). The shared env secret is accepted ONLY for
+ * projects that do not yet have a per-tenant token — once a tenant has one it is
+ * the EXCLUSIVE signer, so a holder of the shared secret can't forge that
+ * tenant's tool-call JWTs. (This is why per-tenant tokens are minted together
+ * with the VPS deploy that signs with them — never DB-only.)
  *
  * No `jose` dependency in this repo; HS256 verification is ~20 lines of
  * node:crypto, done here with timing-safe comparison.
@@ -102,25 +105,30 @@ export function verifyRowboatWebhookJwt(token: string): RowboatWebhookClaims | n
  * Per-tenant tool-webhook verification. Resolves the project's per-tenant token
  * (by the UNVERIFIED projectId claim) and verifies the HMAC with it; the
  * signature check is what makes trusting the peeked projectId safe (a forged
- * projectId won't verify under that tenant's secret). Falls back to the shared
- * env secret so boxes still signing with the legacy shared token keep working.
+ * projectId won't verify under that tenant's secret).
+ *
+ * When the project HAS a per-tenant token it is the EXCLUSIVE accepted signer —
+ * the shared env secret is NOT a fallback, otherwise anyone holding the shared
+ * secret could forge a valid tool-call JWT for that tenant's projectId. The
+ * shared secret is accepted only for projects without a per-tenant token (legacy
+ * boxes still on the shared token). A DB error reading the per-tenant token
+ * fails open to the shared path so a transient blip doesn't drop live tool-calls.
  */
 export async function resolveRowboatWebhookClaims(
   token: string
 ): Promise<RowboatWebhookClaims | null> {
   const projectId = peekProjectId(token);
   if (projectId) {
+    let perTenant: string | null = null;
     try {
-      const perTenant = await getActiveGatewayTokenForBusiness(projectId);
-      if (perTenant) {
-        // The HMAC verification with the per-tenant secret is itself the
-        // proof that this token belongs to `projectId` — a forged projectId
-        // would not verify under that tenant's secret.
-        const claims = verifyRowboatWebhookJwtWithSecret(token, perTenant);
-        if (claims) return claims;
-      }
+      perTenant = await getActiveGatewayTokenForBusiness(projectId);
     } catch {
-      // Fall through to the shared-secret path on any DB error.
+      // DB blip: treat as "no per-tenant token" and fall through to shared.
+      perTenant = null;
+    }
+    if (perTenant) {
+      // Exclusive: no shared fallback once the tenant has its own secret.
+      return verifyRowboatWebhookJwtWithSecret(token, perTenant);
     }
   }
   return verifyRowboatWebhookJwt(token);

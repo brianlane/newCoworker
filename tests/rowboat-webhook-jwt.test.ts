@@ -139,10 +139,13 @@ describe("resolveRowboatWebhookClaims", () => {
     expect(await resolveRowboatWebhookClaims(tok)).toMatchObject({ requestId: "req-1" });
   });
 
-  it("falls back to the shared secret when the per-tenant verify fails", async () => {
+  it("rejects (no shared fallback) when the project has a per-tenant secret but the JWT is signed with the shared secret", async () => {
+    // Security: once a tenant has a per-tenant secret it is the EXCLUSIVE signer.
+    // A JWT signed with the shared ROWBOAT_GATEWAY_TOKEN must NOT verify, or a
+    // holder of the shared secret could forge this tenant's tool-call JWTs.
     getActiveMock.mockResolvedValue("a-different-secret");
     const tok = sign(validClaims()); // signed with shared SECRET, not the per-tenant one
-    expect(await resolveRowboatWebhookClaims(tok)).toMatchObject({ requestId: "req-1" });
+    expect(await resolveRowboatWebhookClaims(tok)).toBeNull();
   });
 
   it("falls back to the shared secret when the per-tenant lookup throws", async () => {

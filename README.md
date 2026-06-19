@@ -113,16 +113,25 @@ calls (chat/customer-memory summarizers). A single shared token means a compromi
   `resolveRowboatWebhookClaims`. This closes the cross-tenant impersonation gap.
 - **Outbound binding**: app → Rowboat calls resolve the tenant's token via
   `resolveOutboundRowboatBearer(businessId)`.
-- **Fail-open transition**: every path falls back to the shared `ROWBOAT_GATEWAY_TOKEN`
-  when no per-tenant row exists, so existing deployments keep working. Provisioning
-  (`getOrIssueGatewayToken`) now mints/reuses a per-tenant token for **new** tenants
-  automatically and injects it via `deploy-client.sh`.
-- **Application side effect** — a new row is written to `vps_gateway_tokens` (logged in
-  the DB) per business: minted at provisioning time for new tenants, and seeded for the
-  one existing live tenant (`621a5b0d-…`) with the *current shared token value* so its
-  VPS keeps working untouched. Rotating that tenant's VPS to a **unique** value is a
-  deferred operator step (it can't be live-smoke-tested from here): mint a fresh token
-  (`issueGatewayToken`), redeploy the VPS with the new value, then revoke the old row.
+- **Per-tenant token is EXCLUSIVE once it exists.** When a business has an active
+  `vps_gateway_tokens` row, that token is the only accepted signer/bearer for it —
+  the shared `ROWBOAT_GATEWAY_TOKEN` is **not** a fallback for that tenant (otherwise
+  a holder of the shared secret could forge its tool-call JWTs / bearer calls). The
+  shared token is accepted only for tenants that have **no** per-tenant row yet
+  (legacy boxes still on the shared token). A transient DB read error fails open to
+  the shared path so a blip never drops live calls.
+- **Tokens are minted ATOMICALLY with the VPS deploy** — never DB-only. Provisioning
+  (`getOrIssueGatewayToken`) mints/reuses a per-tenant token for **new** tenants and
+  `deploy-client.sh` injects that same value into the VPS (Rowboat JWT secret, bearer,
+  chat-worker, voice-bridge, progress token) in the same run, so the DB token and the
+  VPS token never diverge. Seeding a token into the DB without redeploying the VPS
+  would break that tenant (the VPS would still sign with the old secret while the app
+  now requires the new one), so there is no DB-only seed path.
+- **Existing live tenant (`621a5b0d-…`) stays on the shared token** (no per-tenant row)
+  until an operator runs a full rotation: mint a fresh token (`issueGatewayToken`),
+  redeploy its VPS with the new value (`deploy-client.sh` / the `debug/` redeploy
+  scripts), confirm container health, then it is automatically exclusive. This is the
+  one deferred step — it touches the live VPS and so is operator-scheduled.
 
 **`fn_grants_lockdown` event trigger** (`supabase/migrations/20260629030000_…sql`):
 a `ddl_command_end` event trigger that revokes `EXECUTE` from `public`/`anon`/
