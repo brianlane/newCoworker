@@ -22,7 +22,7 @@ vi.mock("@/lib/db/email-log", () => ({
 }));
 
 import { POST } from "@/app/api/voice/tools/dashboard-email/route";
-import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
+import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
@@ -40,7 +40,7 @@ function makeRequest(body: unknown) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(verifyRowboatGatewayToken).mockReturnValue(true);
+  vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
   vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
   vi.mocked(sendFromOwnerMailbox).mockResolvedValue({
     ok: true,
@@ -51,7 +51,7 @@ beforeEach(() => {
 
 describe("POST /api/voice/tools/dashboard-email", () => {
   it("rejects requests without a gateway token", async () => {
-    vi.mocked(verifyRowboatGatewayToken).mockReturnValue(false);
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValueOnce(false);
     const res = await POST(makeRequest({ businessId, args: validArgs }));
     expect(res.status).toBe(401);
   });

@@ -21,7 +21,6 @@ import { z } from "zod";
 import { logger } from "@/lib/logger";
 import { errorResponse } from "@/lib/api-response";
 import {
-  gatewayGuard,
   gatewayBusinessGuard,
   voiceToolResponse,
   voiceToolValidationError
@@ -43,9 +42,6 @@ export function splitCredential(secret: string | null): { username: string; pass
 }
 
 export async function POST(request: Request) {
-  const guard = gatewayGuard(request);
-  if (guard) return guard;
-
   let businessId: string;
   try {
     const raw = new URL(request.url).searchParams.get("businessId");

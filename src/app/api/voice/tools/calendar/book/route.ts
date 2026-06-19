@@ -1,7 +1,6 @@
 import { z } from "zod";
 import {
   agentToolDisabledResponse,
-  gatewayGuard,
   gatewayBusinessGuard,
   parseVoiceToolRequest,
   voiceToolResponse,
@@ -29,9 +28,6 @@ const argsSchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const guard = gatewayGuard(request);
-  if (guard) return guard;
-
   let envelope;
   try {
     envelope = await parseVoiceToolRequest(request);

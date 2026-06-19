@@ -3,7 +3,7 @@
  *
  * Replaces the single platform-wide `ROWBOAT_GATEWAY_TOKEN` with a distinct
  * token per business so a compromise of one tenant VPS can't impersonate
- * another. Schema: `supabase/migrations/20260619020000_vps_gateway_tokens.sql`.
+ * another. Schema: `supabase/migrations/20260629020000_vps_gateway_tokens.sql`.
  * This module is the only reader/writer of `vps_gateway_tokens` from app code.
  *
  * The token is used two ways by the VPS:
@@ -104,6 +104,16 @@ export async function issueGatewayToken(
 ): Promise<string> {
   const db = client ?? (await createSupabaseServiceClient());
   const token = options.token ?? generateGatewayToken();
+  // Never store the shared ROWBOAT_GATEWAY_TOKEN as a per-tenant token: doing so
+  // would bind the shared secret to one business and break the legacy fallback
+  // for every other tenant still presenting it. Per-tenant tokens are always
+  // unique (minted here or supplied explicitly during a real VPS rotation).
+  const shared = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
+  if (shared !== "" && token === shared) {
+    throw new Error(
+      "issueGatewayToken: refusing to store the shared ROWBOAT_GATEWAY_TOKEN as a per-tenant token"
+    );
+  }
   if (options.revokeExisting !== false) {
     const { error: revErr } = await db
       .from("vps_gateway_tokens")

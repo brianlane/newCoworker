@@ -12,7 +12,6 @@ vi.mock("@/lib/db/vps-gateway-tokens", () => ({
 import {
   verifyRowboatGatewayToken,
   verifyGatewayTokenForBusiness,
-  tokenBindingAllowsBusiness,
   resolveOutboundRowboatBearer
 } from "@/lib/rowboat/gateway-token";
 
@@ -85,34 +84,6 @@ describe("verifyGatewayTokenForBusiness", () => {
   it("fails open to the shared token check when the binding lookup throws", async () => {
     resolveBindingMock.mockRejectedValue(new Error("db blip"));
     expect(await verifyGatewayTokenForBusiness(bearer("shared-tok"), "biz-1")).toBe(true);
-  });
-});
-
-describe("tokenBindingAllowsBusiness", () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it("allows when no bearer present", async () => {
-    expect(await tokenBindingAllowsBusiness(bearer(), "biz-1")).toBe(true);
-  });
-
-  it("allows an unknown (non-per-tenant) token", async () => {
-    resolveBindingMock.mockResolvedValue(null);
-    expect(await tokenBindingAllowsBusiness(bearer("x"), "biz-1")).toBe(true);
-  });
-
-  it("allows a per-tenant token bound to the same business", async () => {
-    resolveBindingMock.mockResolvedValue({ businessId: "biz-1", token: "x" });
-    expect(await tokenBindingAllowsBusiness(bearer("x"), "biz-1")).toBe(true);
-  });
-
-  it("rejects a per-tenant token bound to a different business", async () => {
-    resolveBindingMock.mockResolvedValue({ businessId: "other", token: "x" });
-    expect(await tokenBindingAllowsBusiness(bearer("x"), "biz-1")).toBe(false);
-  });
-
-  it("fails open when the lookup throws", async () => {
-    resolveBindingMock.mockRejectedValue(new Error("down"));
-    expect(await tokenBindingAllowsBusiness(bearer("x"), "biz-1")).toBe(true);
   });
 });
 

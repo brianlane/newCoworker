@@ -156,6 +156,33 @@ describe("issueGatewayToken", () => {
     );
   });
 
+  it("refuses to store the shared ROWBOAT_GATEWAY_TOKEN as a per-tenant token", async () => {
+    const prev = process.env.ROWBOAT_GATEWAY_TOKEN;
+    process.env.ROWBOAT_GATEWAY_TOKEN = "shared-secret";
+    const { client, insertSpy } = makeClient({});
+    await expect(
+      issueGatewayToken("biz", { token: "shared-secret", revokeExisting: false }, client as never)
+    ).rejects.toThrow(/refusing to store the shared/);
+    expect(insertSpy).not.toHaveBeenCalled();
+    if (prev === undefined) delete process.env.ROWBOAT_GATEWAY_TOKEN;
+    else process.env.ROWBOAT_GATEWAY_TOKEN = prev;
+  });
+
+  it("allows a unique token even when the shared token env is set", async () => {
+    const prev = process.env.ROWBOAT_GATEWAY_TOKEN;
+    process.env.ROWBOAT_GATEWAY_TOKEN = "shared-secret";
+    const { client, insertSpy } = makeClient({});
+    const token = await issueGatewayToken(
+      "biz",
+      { token: "unique-x", revokeExisting: false },
+      client as never
+    );
+    expect(token).toBe("unique-x");
+    expect(insertSpy).toHaveBeenCalled();
+    if (prev === undefined) delete process.env.ROWBOAT_GATEWAY_TOKEN;
+    else process.env.ROWBOAT_GATEWAY_TOKEN = prev;
+  });
+
   it("throws when revoke fails", async () => {
     const { client } = makeClient({ update: { error: { message: "revoke-fail" } } });
     await expect(issueGatewayToken("biz", {}, client as never)).rejects.toThrow(/revoke-fail/);

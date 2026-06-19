@@ -18,7 +18,6 @@
  */
 import { z } from "zod";
 import {
-  gatewayGuard,
   gatewayBusinessGuard,
   voiceToolResponse,
   voiceToolValidationError
@@ -43,9 +42,6 @@ const bodySchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const guard = gatewayGuard(request);
-  if (guard) return guard;
-
   let body: z.infer<typeof bodySchema>;
   try {
     body = bodySchema.parse(await request.json());

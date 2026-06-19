@@ -48,30 +48,9 @@ export async function verifyGatewayTokenForBusiness(
     return binding.businessId === businessId;
   }
 
-  const expected = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
-  if (expected === "") return false;
-  return timingSafeEqualUtf8(token, expected);
-}
-
-/**
- * Layered binding check: returns true UNLESS the presented bearer is a known
- * per-tenant token bound to a DIFFERENT business. Used to add cross-tenant
- * protection on top of an existing non-gateway auth (e.g. the provisioning
- * progress token) without disturbing that auth's own secret comparison. Fails
- * open (returns true) on any DB error.
- */
-export async function tokenBindingAllowsBusiness(
-  request: Request,
-  businessId: string
-): Promise<boolean> {
-  const token = extractBearerToken(request);
-  if (!token) return true;
-  try {
-    const binding = await resolveGatewayTokenBinding(token);
-    return !binding || binding.businessId === businessId;
-  } catch {
-    return true;
-  }
+  // Legacy fallback: the shared ROWBOAT_GATEWAY_TOKEN, for boxes not yet
+  // re-provisioned with a per-tenant token.
+  return verifyRowboatGatewayToken(request);
 }
 
 /**

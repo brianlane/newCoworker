@@ -1,10 +1,7 @@
 import { getAuthUser, requireOwner } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
-import {
-  verifyGatewayTokenForBusiness,
-  verifyRowboatGatewayToken
-} from "@/lib/rowboat/gateway-token";
+import { extractBearerToken, verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 import { z } from "zod";
 
 const bodySchema = z.object({
@@ -28,9 +25,9 @@ export async function POST(request: Request) {
     }
 
     const user = await getAuthUser();
-    const gateway = verifyRowboatGatewayToken(request);
+    const hasBearer = extractBearerToken(request) !== "";
 
-    if (!user?.email && !gateway) {
+    if (!user?.email && !hasBearer) {
       return errorResponse("UNAUTHORIZED", "Authentication required");
     }
 
@@ -39,10 +36,12 @@ export async function POST(request: Request) {
     if (user?.email) {
       await requireOwner(body.businessId);
     } else {
-      // Gateway (VPS/Rowboat) path: the per-tenant token must resolve to the
-      // body's businessId, so a leaked tenant token can't proxy another
-      // tenant's Nango connection. Falls back to the shared token for boxes
-      // not yet on a per-tenant token.
+      // Gateway (VPS/Rowboat) path: the presented bearer must resolve to the
+      // body's businessId (per-tenant token), so a leaked tenant token can't
+      // proxy another tenant's Nango connection. Falls back to the shared
+      // ROWBOAT_GATEWAY_TOKEN for boxes not yet on a per-tenant token. This is
+      // the single authoritative gateway check — there is no shared-only
+      // pre-gate that would 401 a tenant's own unique token first.
       const bound = await verifyGatewayTokenForBusiness(request, body.businessId);
       if (!bound) {
         return errorResponse("UNAUTHORIZED", "Token not valid for this business", 401);

@@ -11,12 +11,26 @@ vi.mock("@/lib/provisioning/progress", () => ({
   })
 }));
 
+// Keep extractBearerToken real (used by the explicit-token check); stub the
+// per-tenant DB-backed check so the happy path relies on the explicit token.
+vi.mock("@/lib/rowboat/gateway-token", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/rowboat/gateway-token")>();
+  return {
+    ...actual,
+    verifyGatewayTokenForBusiness: vi.fn().mockResolvedValue(false)
+  };
+});
+
 import { POST } from "@/app/api/provisioning/progress/route";
 import { recordProvisioningProgress } from "@/lib/provisioning/progress";
+import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
+
+const VALID_BIZ = "00000000-0000-4000-8000-000000000001";
 
 describe("POST /api/provisioning/progress", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(false);
     process.env.PROVISIONING_PROGRESS_TOKEN = "secret-token";
     process.env.ROWBOAT_GATEWAY_TOKEN = "secret-token";
   });
@@ -26,10 +40,24 @@ describe("POST /api/provisioning/progress", () => {
       new Request("http://localhost/api/provisioning/progress", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: "{}"
+        body: JSON.stringify({ businessId: VALID_BIZ, percent: 1, phase: "x", message: "" })
       })
     );
     expect(res.status).toBe(401);
+  });
+
+  it("accepts a per-tenant gateway token bound to the business", async () => {
+    delete process.env.PROVISIONING_PROGRESS_TOKEN;
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
+    const res = await POST(
+      new Request("http://localhost/api/provisioning/progress", {
+        method: "POST",
+        headers: { Authorization: "Bearer per-tenant", "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId: VALID_BIZ, percent: 10, phase: "x", message: "" })
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(verifyGatewayTokenForBusiness).toHaveBeenCalled();
   });
 
   it("returns 401 (not 500) when bearer and secret share JS length but differ in UTF-8 bytes", async () => {

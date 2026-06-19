@@ -9,15 +9,18 @@ vi.mock("@/lib/nango/workspace", () => ({
   nangoProxyForBusiness: vi.fn()
 }));
 
-vi.mock("@/lib/rowboat/gateway-token", () => ({
-  verifyRowboatGatewayToken: vi.fn(),
-  verifyGatewayTokenForBusiness: vi.fn().mockResolvedValue(true)
-}));
+vi.mock("@/lib/rowboat/gateway-token", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/rowboat/gateway-token")>();
+  return {
+    ...actual,
+    verifyGatewayTokenForBusiness: vi.fn().mockResolvedValue(true)
+  };
+});
 
 import { POST } from "@/app/api/integrations/nango/proxy/route";
 import { getAuthUser, requireOwner } from "@/lib/auth";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
-import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
+import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 
 const businessId = "11111111-1111-4111-8111-111111111111";
 
@@ -37,7 +40,7 @@ describe("api/integrations/nango/proxy", () => {
       isAdmin: false
     } as never);
     vi.mocked(requireOwner).mockResolvedValue(undefined as never);
-    vi.mocked(verifyRowboatGatewayToken).mockReturnValue(false);
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
   });
 
   it("returns 503 when NANGO_SECRET_KEY is missing", async () => {
@@ -111,7 +114,7 @@ describe("api/integrations/nango/proxy", () => {
 
   it("proxies for Rowboat gateway token without session", async () => {
     vi.mocked(getAuthUser).mockResolvedValue(null);
-    vi.mocked(verifyRowboatGatewayToken).mockReturnValue(true);
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
     vi.mocked(nangoProxyForBusiness).mockResolvedValue({ status: 204, data: null } as never);
 
     const res = await POST(

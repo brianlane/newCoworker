@@ -6,16 +6,20 @@ import { successResponse, errorResponse, handleRouteError } from "@/lib/api-resp
 import { logger } from "@/lib/logger";
 import { randomUUID } from "crypto";
 import { after } from "next/server";
-import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
+import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 
 export async function POST(request: Request) {
-  if (!verifyRowboatGatewayToken(request)) {
-    return errorResponse("UNAUTHORIZED", "Invalid gateway token", 401);
-  }
-
   try {
     const payload = await request.json();
     const log = parseClawLog(payload);
+
+    // Gateway auth bound to the log's businessId: a leaked tenant token can
+    // only write logs for ITS tenant. Falls back to the shared
+    // ROWBOAT_GATEWAY_TOKEN for boxes not yet on a per-tenant token.
+    if (!(await verifyGatewayTokenForBusiness(request, log.businessId))) {
+      return errorResponse("UNAUTHORIZED", "Invalid gateway token", 401);
+    }
+
     const urgency = evaluateUrgency(log);
 
     // Write log to DB

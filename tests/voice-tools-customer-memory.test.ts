@@ -36,7 +36,7 @@ import {
   recordInteractionAndIncrement,
   updateCustomerOwnerFields
 } from "@/lib/customer-memory/db";
-import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
+import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import type { CustomerMemoryRow } from "@/lib/customer-memory/types";
 
@@ -77,7 +77,7 @@ function memory(overrides: Partial<CustomerMemoryRow> = {}): CustomerMemoryRow {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(verifyRowboatGatewayToken).mockReturnValue(true);
+  vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
   // Registry default: the customer-memory voice tools are ON unless toggled.
   vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
 });
@@ -88,7 +88,7 @@ afterEach(() => {
 
 describe("POST /api/voice/tools/customer-lookup", () => {
   it("401s without a valid gateway bearer", async () => {
-    vi.mocked(verifyRowboatGatewayToken).mockReturnValue(false);
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValueOnce(false);
     const res = await lookupPOST(
       makeReq("/api/voice/tools/customer-lookup", { businessId: BIZ, callerE164: PHONE })
     );
@@ -202,7 +202,7 @@ describe("POST /api/voice/tools/customer-lookup", () => {
 
 describe("POST /api/voice/tools/customer-set-display-name", () => {
   it("401s without a valid gateway bearer", async () => {
-    vi.mocked(verifyRowboatGatewayToken).mockReturnValue(false);
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValueOnce(false);
     const res = await setNamePOST(
       makeReq("/api/voice/tools/customer-set-display-name", {
         businessId: BIZ,
@@ -358,7 +358,7 @@ describe("POST /api/voice/tools/customer-set-display-name", () => {
 
 describe("POST /api/voice/tools/customer-append-pinned-note", () => {
   it("401s without a valid gateway bearer", async () => {
-    vi.mocked(verifyRowboatGatewayToken).mockReturnValue(false);
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValueOnce(false);
     const res = await appendNotePOST(
       makeReq("/api/voice/tools/customer-append-pinned-note", {
         businessId: BIZ,

@@ -14,7 +14,6 @@
 import { z } from "zod";
 import {
   agentToolDisabledResponse,
-  gatewayGuard,
   gatewayBusinessGuard,
   parseVoiceToolRequest,
   voiceToolResponse,
@@ -79,9 +78,6 @@ function existingMemoryKeys(memoryMd: string): Set<string> {
 }
 
 export async function POST(request: Request) {
-  const guard = gatewayGuard(request);
-  if (guard) return guard;
-
   let envelope;
   try {
     envelope = await parseVoiceToolRequest(request);

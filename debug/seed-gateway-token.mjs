@@ -1,7 +1,16 @@
-// One-shot: seed the existing tenant's per-tenant gateway token row.
-// Binds the CURRENT shared ROWBOAT_GATEWAY_TOKEN value to the live VPS tenant so
-// inbound binding (sha256 lookup + per-tenant JWT secret) works without touching
-// the VPS yet. Idempotent: skips if an active row already exists for the business.
+// One-shot: ensure the given tenant has a UNIQUE per-tenant gateway token row
+// (logged in the DB), without touching the live VPS yet.
+//
+// Why unique (not the shared ROWBOAT_GATEWAY_TOKEN value): storing the shared
+// secret as a per-tenant row would bind it to one business and break the
+// legacy fallback for every other tenant still presenting the shared token.
+// The VPS keeps working on the shared token via verifyGatewayTokenForBusiness's
+// fallback; deploying this unique value to the VPS is a deferred operator step.
+//
+// Self-healing + idempotent:
+//   * Revokes any active row whose token == the shared ROWBOAT_GATEWAY_TOKEN
+//     (cleans up an earlier bad seed).
+//   * Inserts a fresh unique token only if the business has no active row left.
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -23,24 +32,33 @@ function get(key) {
   return v;
 }
 
-const token = get("ROWBOAT_GATEWAY_TOKEN");
+const sharedToken = get("ROWBOAT_GATEWAY_TOKEN");
 const dbUrl = get("DIRECT_DATABASE_URL") || get("DATABASE_URL");
-if (!token || !dbUrl) {
-  console.error("missing ROWBOAT_GATEWAY_TOKEN or DIRECT_DATABASE_URL in .env");
+if (!dbUrl) {
+  console.error("missing DIRECT_DATABASE_URL in .env");
   process.exit(1);
 }
-const sha = crypto.createHash("sha256").update(token).digest("hex");
+const sharedSha = sharedToken
+  ? crypto.createHash("sha256").update(sharedToken).digest("hex")
+  : "";
 
-// Dollar-quote the token to avoid SQL injection / escaping issues.
+const uniqueToken = crypto.randomBytes(32).toString("base64url");
+const uniqueSha = crypto.createHash("sha256").update(uniqueToken).digest("hex");
+
 const tag = "$seedtok$";
+const revokeShared = sharedSha
+  ? `update vps_gateway_tokens set revoked_at = now()
+     where business_id = '${BUSINESS_ID}' and revoked_at is null and token_sha256 = '${sharedSha}';`
+  : "";
 const sql = `
+${revokeShared}
 insert into vps_gateway_tokens (business_id, token, token_sha256, label)
-select '${BUSINESS_ID}', ${tag}${token}${tag}, '${sha}', 'seed-shared-token-transition'
+select '${BUSINESS_ID}', ${tag}${uniqueToken}${tag}, '${uniqueSha}', 'seed-unique-deferred-vps-rotation'
 where not exists (
   select 1 from vps_gateway_tokens where business_id = '${BUSINESS_ID}' and revoked_at is null
 );
-select business_id, token_sha256, label, created_at, revoked_at
-from vps_gateway_tokens where business_id = '${BUSINESS_ID}';
+select id, business_id, token_sha256, label, created_at, revoked_at
+from vps_gateway_tokens where business_id = '${BUSINESS_ID}' order by created_at;
 `;
 
 const tmp = path.join(os.tmpdir(), `seed-gw-${Date.now()}.sql`);
@@ -51,7 +69,7 @@ try {
     env: { ...process.env, PGCONNECT_TIMEOUT: "15" }
   });
   console.log(out);
-  console.log(`sha256(shared token) = ${sha}`);
+  console.log(`active per-tenant token sha256 = ${uniqueSha} (unique; shared token NOT stored)`);
 } finally {
   fs.rmSync(tmp, { force: true });
 }
