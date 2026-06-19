@@ -22,11 +22,19 @@
  *   npx tsx scripts/redeploy-deploy-client.ts --business <uuid>
  *   npx tsx scripts/redeploy-deploy-client.ts --json
  *
+ * Per-tenant gateway token: each box is deployed with its OWN unique gateway
+ * token (the bearer / Rowboat tool-call JWT secret / outbound API key), resolved
+ * or minted per business from `vps_gateway_tokens` and CONFIRMED after a
+ * successful deploy. The shared platform `ROWBOAT_GATEWAY_TOKEN` env value is NO
+ * LONGER injected onto boxes here — it stays a platform-internal secret. Running
+ * this against a legacy box still on the shared token therefore ROTATES it onto a
+ * fresh per-tenant token.
+ *
  * Required env (mirrors orchestrator + voice-bridge redeploy):
  *   NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL alone — we alias it for you)
  *   SUPABASE_SERVICE_ROLE_KEY
  *   HOSTINGER_API_TOKEN
- *   ROWBOAT_GATEWAY_TOKEN, TELNYX_* (see orchestrate.ts envVars), etc.
+ *   TELNYX_* (see orchestrate.ts envVars), etc.
  *
  * Per-tenant voice: when `BRIDGE_MEDIA_WSS_ORIGIN` is not set on the runner,
  * the script loads `media_wss_origin` / `bridge_media_wss_origin` from
@@ -46,6 +54,11 @@ import {
   getBusinessTelnyxSettings,
   getTelnyxVoiceRouteForBusiness
 } from "@/lib/db/telnyx-routes";
+import {
+  getActiveGatewayTokenForBusiness,
+  issueGatewayToken,
+  markGatewayTokenDeployed
+} from "@/lib/db/vps-gateway-tokens";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { quoteShellEnvValue } from "@/lib/provisioning/orchestrate";
 import { sshExec } from "@/lib/hostinger/ssh";
@@ -60,21 +73,38 @@ import {
   type TenantVpsTarget
 } from "./lib/redeploy-tenant-vps";
 
-/** Must stay aligned with `runOrchestrator` deploy phase (orchestrate.ts ~822). */
+/**
+ * Must stay aligned with `runOrchestrator` deploy phase (orchestrate.ts ~822).
+ *
+ * `gatewayToken` is the PER-TENANT gateway token for this box (resolved/minted by
+ * the caller), NOT the shared platform `ROWBOAT_GATEWAY_TOKEN` env value — the box's
+ * `ROWBOAT_GATEWAY_TOKEN`, its Rowboat tool-call JWT secret, and its outbound API key
+ * are all this unique token, so a redeploy rotates the box onto its own secret instead
+ * of re-stamping the shared one.
+ */
 function buildDeployEnvPrefix(
   businessId: string,
   deployTier: "starter" | "standard",
-  bridgeMediaWssOrigin: string
+  bridgeMediaWssOrigin: string,
+  gatewayToken: string,
+  repoRef: string
 ): string {
   const bashQuote = quoteShellEnvValue;
-  const gatewayToken = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const progressUrl = `${appUrl.replace(/\/$/, "")}/api/provisioning/progress`;
-  const progressToken = process.env.PROVISIONING_PROGRESS_TOKEN ?? process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
+  // No new secret on the box: the per-tenant token is already its ROWBOAT_GATEWAY_TOKEN,
+  // so the in-deploy progress callback authenticates via the inbound binding.
+  const progressToken = process.env.PROVISIONING_PROGRESS_TOKEN ?? gatewayToken;
 
   const pairs: Array<[string, string]> = [
     ["BUSINESS_ID", businessId],
     ["TIER", deployTier],
+    // deploy-client.sh re-pins /opt/newcoworker-repo to NEWCOWORKER_REPO_REF
+    // (default "main") before it rsyncs+builds chat-worker / voice-bridge /
+    // aiflow-render. Pass the requested ref through so `--ref` actually controls
+    // what gets BUILT, not just which deploy-client.sh runs — otherwise a branch
+    // redeploy silently builds those components from main.
+    ["NEWCOWORKER_REPO_REF", repoRef],
     ["SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? ""],
     ["SUPABASE_SERVICE_KEY", process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""],
     ["ROWBOAT_GATEWAY_TOKEN", gatewayToken],
@@ -172,9 +202,20 @@ async function redeployOne(
   if (!publicIp) {
     return { ...target, ok: false, detail: "no_public_ip" };
   }
+  // Per-tenant gateway token: reuse the business's existing (pending or confirmed)
+  // token, or mint a fresh PENDING one, and inject IT as the box's
+  // ROWBOAT_GATEWAY_TOKEN. After a successful deploy we CONFIRM it
+  // (`markGatewayTokenDeployed`), which revokes any older token and flips
+  // outbound/JWT verification onto the per-tenant secret — mirroring
+  // orchestrate.ts. This is what lets a redeploy ROTATE a legacy box off the
+  // shared platform token onto its own unique one, and keeps a routine fleet
+  // redeploy from ever re-stamping the shared token over a rotated tenant.
+  const existing = await getActiveGatewayTokenForBusiness(target.businessId);
+  const gatewayToken =
+    existing ?? (await issueGatewayToken(target.businessId, { label: "vps-redeploy" }));
   const tier = deployTierFromBusinessTier(target.tier);
   const bridgeOrigin = await resolveBridgeMediaWssOrigin(target.businessId);
-  const envPrefix = buildDeployEnvPrefix(target.businessId, tier, bridgeOrigin);
+  const envPrefix = buildDeployEnvPrefix(target.businessId, tier, bridgeOrigin, gatewayToken, ref);
   const command = buildRedeployCommand(ref, envPrefix);
   try {
     const result = await sshExec({
@@ -187,6 +228,15 @@ async function redeployOne(
     });
     const stdoutTail = (result.stdout || "").split("\n").slice(-20).join("\n");
     if (result.exitCode === 0) {
+      // Non-fatal on failure: the box already serves the new (still-pending) secret,
+      // which inbound JWT verification accepts; a later redeploy reuses + re-confirms.
+      try {
+        await markGatewayTokenDeployed(target.businessId, gatewayToken);
+      } catch (err) {
+        process.stderr.write(
+          `[redeploy-deploy-client] gateway-token confirm failed for ${target.businessId} (deploy OK, left pending): ${err instanceof Error ? err.message : String(err)}\n`
+        );
+      }
       return { ...target, ok: true, publicIp, exitCode: 0, stdoutTail };
     }
     return {

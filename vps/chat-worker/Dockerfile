@@ -1,8 +1,13 @@
 # Per-tenant chat-worker image. Slim runtime: no app build step, just
 # `node worker.mjs` against a small ESM script. Image size ~70 MB on
 # disk, ~30 MB compressed — fine to pull on every VPS deploy.
-
-FROM node:20-alpine
+#
+# Node 22 (not 20): @supabase/supabase-js >= 2.108 bundles a realtime-js that
+# hard-throws at createClient() on Node < 22 ("Node.js 20 detected without
+# native WebSocket support"). Node 22 ships a global WebSocket, so the worker —
+# which constructs a Supabase client even though it never opens a realtime
+# channel — starts cleanly. Keep this >= the engines floor in package.json.
+FROM node:22-alpine
 
 WORKDIR /app
 
