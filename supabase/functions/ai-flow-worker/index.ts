@@ -1162,7 +1162,15 @@ async function browseActionStep(
     try {
       extracted = await extractFields(supabase, run, action.fields, pageText);
     } catch (e) {
-      if (e instanceof SpendCapError) return { kind: "fail", error: `browse_action: ${e.message}` };
+      // Carry the after-action screenshot captured above onto the failed step so
+      // a cap hit mid-extraction still shows the page in the investigate view.
+      if (e instanceof SpendCapError) {
+        return {
+          kind: "fail",
+          error: `browse_action: ${e.message}`,
+          ...(screenshotPath ? { result: { screenshot_path: screenshotPath } } : {})
+        };
+      }
       throw e;
     }
     const out: Record<string, string> = {};
