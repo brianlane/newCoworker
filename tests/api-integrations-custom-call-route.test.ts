@@ -24,6 +24,23 @@ vi.mock("@/lib/db/custom-integrations", async () => {
   };
 });
 
+// The route's gateway auth resolves the bearer against the per-tenant token
+// table (`resolveGatewayTokenBinding`, a DB lookup). Stub it to "no per-tenant
+// binding" so auth is deterministic and never touches a real database — without
+// this, a Supabase URL/key in the ambient env (e.g. a sourced production .env)
+// makes the lookup hit prod and these tests 401. With no binding, auth falls to
+// the shared ROWBOAT_GATEWAY_TOKEN path that `beforeEach` configures — exactly
+// what every case here intends to exercise.
+vi.mock("@/lib/db/vps-gateway-tokens", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/lib/db/vps-gateway-tokens")
+  >("@/lib/db/vps-gateway-tokens");
+  return {
+    ...actual,
+    resolveGatewayTokenBinding: vi.fn(async () => null)
+  };
+});
+
 import { GET, POST, RESPONSE_MAX_BYTES } from "@/app/api/integrations/custom/call/route";
 import { getCustomIntegrationByLabel } from "@/lib/db/custom-integrations";
 
