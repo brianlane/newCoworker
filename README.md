@@ -88,6 +88,44 @@ tsx debug/check-ollama.ts [businessId]  # verify Ollama reachable + JSON extract
 > ⚠️ These touch production (service-role key + plaintext VPS SSH keys, and
 > they recreate live containers). See [`debug/README.md`](debug/README.md).
 
+## Security standards & posture
+
+The platform follows a **deny-by-default** model. New code is expected to uphold
+these standards:
+
+- **Database functions are `service_role`-only.** Every public-schema function
+  revokes `EXECUTE` from `PUBLIC`/`anon`/`authenticated`; callable surfaces go
+  through service-role clients, never `anon`/`authenticated` RPC. Enforced three
+  ways: an initial lockdown
+  (`supabase/migrations/20260618182009_lockdown_public_function_grants.sql`), an
+  explicit `PUBLIC` revoke that closed a residual gap
+  (`…20260618194058_lockdown_public_function_grants_revoke_public.sql`), and the
+  `fn_grants_lockdown` `ddl_command_end` event trigger
+  (`…20260629030000_…sql`, detailed below) that auto-revokes those grants on every
+  newly created or altered function — so the `supabase_admin` default ACL can
+  never silently re-open them again.
+- **`search_path` is pinned** (`SET search_path = pg_catalog, public`) on public
+  functions to block search-path-injection privilege escalation
+  (`…20260618194956_pin_function_search_path.sql`, Supabase advisor 0011).
+- **Row Level Security is on by default** with deny-by-default policies. Secret
+  tables (`vps_gateway_tokens`, `vps_ssh_keys`) run RLS with **no policies**, so
+  only `service_role` (which bypasses RLS) can read them.
+- **Per-tenant gateway tokens** replace the old platform-wide shared secret for
+  all VPS ↔ app authentication — see
+  [Security: per-tenant gateway tokens](#security-per-tenant-gateway-tokens) for
+  the table, inbound/outbound binding, PENDING→CONFIRMED lifecycle, and rotation.
+- **Rate limiting** guards abuse-prone surfaces: a durable per-key limiter
+  (`rateLimitDurable`, `…20260618184317_app_rate_limit.sql`) plus per-IP/route
+  caps on Telnyx Edge webhooks (`TELNYX_WEBHOOK_RATE_MAX_PER_MINUTE` /
+  `TELNYX_WEBHOOK_RATE_WINDOW_SEC`).
+- **Cron / Edge auth**: scheduled Edge functions require `INTERNAL_CRON_SECRET`
+  via `assertCronAuth`; `CRON_ALLOW_SERVICE_ROLE_BEARER` is dev-only and must stay
+  **unset** in production.
+- **Dependency hygiene**: Dependabot alerts are tracked to zero. Transitive
+  vulnerabilities are pinned via root `package.json` `overrides` (e.g. `postcss`)
+  or by bumping the owning tool when a dependency is implicitly pinned (e.g.
+  `wrangler` for the email worker).
+
 ## Security: per-tenant gateway tokens
 
 Historically every tenant VPS shared one platform-wide `ROWBOAT_GATEWAY_TOKEN`. That
