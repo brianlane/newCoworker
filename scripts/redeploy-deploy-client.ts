@@ -86,7 +86,8 @@ function buildDeployEnvPrefix(
   businessId: string,
   deployTier: "starter" | "standard",
   bridgeMediaWssOrigin: string,
-  gatewayToken: string
+  gatewayToken: string,
+  repoRef: string
 ): string {
   const bashQuote = quoteShellEnvValue;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
@@ -98,6 +99,12 @@ function buildDeployEnvPrefix(
   const pairs: Array<[string, string]> = [
     ["BUSINESS_ID", businessId],
     ["TIER", deployTier],
+    // deploy-client.sh re-pins /opt/newcoworker-repo to NEWCOWORKER_REPO_REF
+    // (default "main") before it rsyncs+builds chat-worker / voice-bridge /
+    // aiflow-render. Pass the requested ref through so `--ref` actually controls
+    // what gets BUILT, not just which deploy-client.sh runs — otherwise a branch
+    // redeploy silently builds those components from main.
+    ["NEWCOWORKER_REPO_REF", repoRef],
     ["SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? ""],
     ["SUPABASE_SERVICE_KEY", process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""],
     ["ROWBOAT_GATEWAY_TOKEN", gatewayToken],
@@ -208,7 +215,7 @@ async function redeployOne(
     existing ?? (await issueGatewayToken(target.businessId, { label: "vps-redeploy" }));
   const tier = deployTierFromBusinessTier(target.tier);
   const bridgeOrigin = await resolveBridgeMediaWssOrigin(target.businessId);
-  const envPrefix = buildDeployEnvPrefix(target.businessId, tier, bridgeOrigin, gatewayToken);
+  const envPrefix = buildDeployEnvPrefix(target.businessId, tier, bridgeOrigin, gatewayToken, ref);
   const command = buildRedeployCommand(ref, envPrefix);
   try {
     const result = await sshExec({
