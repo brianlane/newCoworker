@@ -55,6 +55,7 @@ type EditorState = {
   name: string;
   enabled: boolean;
   suppressDefaultReply: boolean;
+  captureStepScreenshots: boolean;
   channel: FlowTrigger["channel"];
   correlationWindowMinutes: number;
   conditions: TriggerCondition[];
@@ -81,6 +82,7 @@ function emptyEditor(): EditorState {
     name: "",
     enabled: true,
     suppressDefaultReply: false,
+    captureStepScreenshots: false,
     channel: "sms",
     correlationWindowMinutes: 10,
     conditions: [{ type: "has_url" }],
@@ -155,6 +157,7 @@ function editorFromRow(row: AiFlowRow): EditorState {
     name: row.name,
     enabled: row.enabled,
     suppressDefaultReply: def.options?.suppressDefaultReply ?? false,
+    captureStepScreenshots: def.options?.captureStepScreenshots ?? false,
     ...triggerToEditorFields(def.trigger),
     steps: def.steps
   };
@@ -168,6 +171,7 @@ function editorFromDefinition(def: AiFlowDefinition, name: string): EditorState 
     name,
     enabled: false,
     suppressDefaultReply: def.options?.suppressDefaultReply ?? false,
+    captureStepScreenshots: def.options?.captureStepScreenshots ?? false,
     ...triggerToEditorFields(def.trigger),
     steps: def.steps
   };
@@ -306,7 +310,10 @@ function toDefinition(s: EditorState): AiFlowDefinition {
     version: 1,
     trigger: editorTrigger(s),
     steps: s.steps.map(sanitizeStepForSave),
-    options: { suppressDefaultReply: s.suppressDefaultReply }
+    options: {
+      suppressDefaultReply: s.suppressDefaultReply,
+      captureStepScreenshots: s.captureStepScreenshots
+    }
   };
 }
 
@@ -598,6 +605,7 @@ export function AiFlowsManager({
         name: e?.name || "New automation",
         enabled: e?.enabled ?? true,
         suppressDefaultReply: def.options?.suppressDefaultReply ?? false,
+        captureStepScreenshots: e?.captureStepScreenshots ?? def.options?.captureStepScreenshots ?? false,
         ...triggerToEditorFields(def.trigger),
         steps: def.steps
       }));
@@ -966,6 +974,16 @@ export function AiFlowsManager({
               Suppress the normal Coworker reply when this flow matches
             </label>
           )}
+          <label className="flex items-center gap-2 text-sm text-parchment/70">
+            <input
+              type="checkbox"
+              checked={editor.captureStepScreenshots}
+              onChange={(ev) =>
+                setEditor({ ...editor, captureStepScreenshots: ev.target.checked })
+              }
+            />
+            Capture screenshots of each browser step (for debugging failures)
+          </label>
           <label className="flex items-center gap-2 text-sm text-parchment/70">
             <input
               type="checkbox"

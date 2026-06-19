@@ -396,6 +396,13 @@ export type AiFlowOptions = {
    * to act on, not chat back to).
    */
   suppressDefaultReply?: boolean;
+  /**
+   * When true, every browse step captures a screenshot — and a browse_action
+   * that fails captures a before-actions + at-failure pair — stored for the
+   * dashboard run "investigate" view. Default off so flows that don't need it
+   * pay no extra capture latency/storage.
+   */
+  captureStepScreenshots?: boolean;
 };
 
 export type AiFlowDefinition = {

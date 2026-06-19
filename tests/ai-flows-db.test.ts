@@ -74,6 +74,9 @@ type StubOpts = {
   single?: unknown;
   error?: StubErr;
   singleError?: StubErr;
+  // Storage.createSignedUrls stub for the run-step screenshot signer.
+  signed?: unknown;
+  signedError?: StubErr;
 };
 
 function makeBuilder(opts: StubOpts) {
@@ -99,7 +102,17 @@ function makeBuilder(opts: StubOpts) {
 
 function makeDb(opts: StubOpts) {
   const b = makeBuilder(opts);
-  return { builder: b, db: { from: vi.fn(() => b) } };
+  const createSignedUrls = vi.fn(() =>
+    Promise.resolve({ data: opts.signed ?? null, error: opts.signedError ?? null })
+  );
+  return {
+    builder: b,
+    createSignedUrls,
+    db: {
+      from: vi.fn(() => b),
+      storage: { from: vi.fn(() => ({ createSignedUrls })) }
+    }
+  };
 }
 
 beforeEach(() => {
@@ -366,6 +379,82 @@ describe("listAiFlowRunSteps", () => {
     await expect(listAiFlowRunSteps("biz-1", "run-1", db as any)).rejects.toThrow(
       "listAiFlowRunSteps: s"
     );
+  });
+});
+
+describe("listAiFlowRunSteps screenshot signing", () => {
+  const STEP_NULL = { ...STEP_ROW, id: "s0", step_index: 0, result: null };
+  const STEP_BOTH = {
+    ...STEP_ROW,
+    id: "s1",
+    step_index: 1,
+    step_type: "browse_action",
+    status: "failed",
+    result: {
+      screenshot_path: "biz-1/run-1/s1.jpg",
+      screenshot_before_path: "biz-1/run-1/s1-before.jpg"
+    },
+    error: "browse_action: action_failed"
+  };
+  const STEP_MAIN_ONLY = {
+    ...STEP_ROW,
+    id: "s2",
+    step_index: 2,
+    step_type: "browse_action",
+    result: { screenshot_path: "biz-1/run-1/s2.jpg" }
+  };
+
+  it("signs and attaches screenshot URLs (before + failure), leaving path-less steps untouched", async () => {
+    const { db, createSignedUrls } = makeDb({
+      array: [STEP_NULL, STEP_BOTH, STEP_MAIN_ONLY],
+      signed: [
+        { path: "biz-1/run-1/s1.jpg", signedUrl: "https://signed/s1" },
+        { path: "biz-1/run-1/s1-before.jpg", signedUrl: "https://signed/s1-before" },
+        { path: "biz-1/run-1/s2.jpg", signedUrl: "https://signed/s2" }
+      ]
+    });
+     
+    const out = await listAiFlowRunSteps("biz-1", "run-1", db as any);
+    expect(createSignedUrls).toHaveBeenCalledWith(
+      ["biz-1/run-1/s1.jpg", "biz-1/run-1/s1-before.jpg", "biz-1/run-1/s2.jpg"],
+      600
+    );
+    expect(out[0].screenshot_url).toBeUndefined();
+    expect(out[1].screenshot_url).toBe("https://signed/s1");
+    expect(out[1].screenshot_before_url).toBe("https://signed/s1-before");
+    expect(out[2].screenshot_url).toBe("https://signed/s2");
+    expect(out[2].screenshot_before_url).toBeUndefined();
+  });
+
+  it("skips entries missing a path or signedUrl; signs only the before shot when the main fails", async () => {
+    const { db } = makeDb({
+      array: [STEP_BOTH],
+      // Main entry has no signedUrl and an orphan entry has no path (both
+      // skipped); only the before shot signs → step keeps just the before URL.
+      signed: [
+        { path: "biz-1/run-1/s1.jpg", signedUrl: null },
+        { path: null, signedUrl: "https://orphan" },
+        { path: "biz-1/run-1/s1-before.jpg", signedUrl: "https://signed/before-only" }
+      ]
+    });
+     
+    const out = await listAiFlowRunSteps("biz-1", "run-1", db as any);
+    expect(out[0].screenshot_url).toBeUndefined();
+    expect(out[0].screenshot_before_url).toBe("https://signed/before-only");
+  });
+
+  it("leaves URLs off when the signing call errors", async () => {
+    const { db } = makeDb({ array: [STEP_BOTH], signedError: { message: "denied" } });
+     
+    const out = await listAiFlowRunSteps("biz-1", "run-1", db as any);
+    expect(out[0].screenshot_url).toBeUndefined();
+  });
+
+  it("tolerates a null signing payload", async () => {
+    const { db } = makeDb({ array: [STEP_MAIN_ONLY] });
+     
+    const out = await listAiFlowRunSteps("biz-1", "run-1", db as any);
+    expect(out[0].screenshot_url).toBeUndefined();
   });
 });
 

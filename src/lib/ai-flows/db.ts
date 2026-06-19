@@ -76,7 +76,25 @@ export type AiFlowRunStepRow = {
   error: string | null;
   created_at: string;
   updated_at: string;
+  /**
+   * Short-lived signed URL for the step's stored browse screenshot, when one
+   * was captured (the bucket is private). Attached by the run-detail reader, not
+   * a stored column. Lets the dashboard "investigate" a run by showing what each
+   * browser step (or the step that failed) actually saw.
+   */
+  screenshot_url?: string | null;
+  /**
+   * Signed URL for the "before actions" screenshot — only present on a failed
+   * browse_action step. Pairs with `screenshot_url` (the stuck page) to show the
+   * page state going into the step vs. where it broke.
+   */
+  screenshot_before_url?: string | null;
 };
+
+/** Private bucket the ai-flow-worker writes browse screenshots into. */
+const SCREENSHOT_BUCKET = "aiflow-screenshots";
+/** Signed-URL lifetime for dashboard screenshot viewing. */
+const SCREENSHOT_SIGNED_URL_TTL_S = 600;
 
 const FLOW_COLS =
   "id,business_id,name,enabled,definition,created_by,created_at,updated_at";
@@ -297,7 +315,49 @@ export async function listAiFlowRunSteps(
     .eq("run_id", runId)
     .order("step_index", { ascending: true });
   if (error) throw new Error(`listAiFlowRunSteps: ${error.message}`);
-  return (data ?? []) as AiFlowRunStepRow[];
+  const steps = (data ?? []) as AiFlowRunStepRow[];
+  return await attachScreenshotUrls(db, steps);
+}
+
+/**
+ * Sign a short-lived URL for each step that stored a browse screenshot
+ * (`result.screenshot_path`). The bucket is private, so the dashboard can only
+ * render a screenshot via a signed URL. Best-effort: a signing failure leaves
+ * `screenshot_url` undefined rather than failing the whole run-detail read.
+ */
+async function attachScreenshotUrls(
+  db: SupabaseClient,
+  steps: AiFlowRunStepRow[]
+): Promise<AiFlowRunStepRow[]> {
+  const pathOf = (s: AiFlowRunStepRow, key: "screenshot_path" | "screenshot_before_path") =>
+    typeof s.result?.[key] === "string" ? (s.result[key] as string) : "";
+  const paths = steps.flatMap((s) =>
+    [pathOf(s, "screenshot_path"), pathOf(s, "screenshot_before_path")].filter(
+      (p): p is string => p.length > 0
+    )
+  );
+  if (paths.length === 0) return steps;
+  const signedByPath = new Map<string, string>();
+  const { data, error } = await db.storage
+    .from(SCREENSHOT_BUCKET)
+    .createSignedUrls([...new Set(paths)], SCREENSHOT_SIGNED_URL_TTL_S);
+  if (!error && data) {
+    for (const entry of data) {
+      if (entry.path && entry.signedUrl) signedByPath.set(entry.path, entry.signedUrl);
+    }
+  }
+  return steps.map((s) => {
+    const main = pathOf(s, "screenshot_path");
+    const before = pathOf(s, "screenshot_before_path");
+    const mainUrl = main ? signedByPath.get(main) : undefined;
+    const beforeUrl = before ? signedByPath.get(before) : undefined;
+    if (!mainUrl && !beforeUrl) return s;
+    return {
+      ...s,
+      ...(mainUrl ? { screenshot_url: mainUrl } : {}),
+      ...(beforeUrl ? { screenshot_before_url: beforeUrl } : {})
+    };
+  });
 }
 
 export type ApprovalDecision = "approve" | "skip" | "bypass_quiet_hours" | "deny";
