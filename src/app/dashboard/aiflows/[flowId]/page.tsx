@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { getAiFlow } from "@/lib/ai-flows/db";
+import { getAiFlow, listAiFlowRuns } from "@/lib/ai-flows/db";
 import { summarizeDefinition } from "@/lib/ai-flows/schema";
 import { getTenantMailbox, tenantMailboxAddress } from "@/lib/email/tenant-mailbox";
 import { Card } from "@/components/ui/Card";
@@ -29,6 +29,13 @@ export default async function AiFlowViewPage({ params }: Props) {
   const businessId = businesses?.[0]?.id ?? null;
 
   const flow = businessId ? await getAiFlow(businessId, flowId) : null;
+
+  // Only offer "View runs" when this flow has actually been triggered/run at
+  // least once — a cheap single-row probe scoped to this flow.
+  const hasRuns =
+    businessId && flow
+      ? (await listAiFlowRuns(businessId, { flowId, limit: 1 })).length > 0
+      : false;
 
   // The AI mailbox is the sender for any send_email step without a connected
   // owner mailbox, so show the real address rather than a generic label. Legacy
@@ -66,12 +73,27 @@ export default async function AiFlowViewPage({ params }: Props) {
             <h1 className="text-2xl font-bold text-parchment">AiFlow not found</h1>
           )}
         </div>
-        <Link
-          href="/dashboard/aiflows"
-          className="shrink-0 whitespace-nowrap text-sm text-signal-teal hover:underline"
-        >
-          ← Back to AiFlows
-        </Link>
+        <div className="flex shrink-0 items-center gap-4 whitespace-nowrap text-sm">
+          {flow && (
+            <Link
+              href={`/dashboard/aiflows?edit=${flow.id}`}
+              className="text-signal-teal hover:underline"
+            >
+              Edit
+            </Link>
+          )}
+          {flow && hasRuns && (
+            <Link
+              href={`/dashboard/aiflows/runs?flowId=${flow.id}`}
+              className="text-signal-teal hover:underline"
+            >
+              View runs →
+            </Link>
+          )}
+          <Link href="/dashboard/aiflows" className="text-signal-teal hover:underline">
+            ← Back to AiFlows
+          </Link>
+        </div>
       </div>
 
       {flow ? (

@@ -160,6 +160,19 @@ function editorFromRow(row: AiFlowRow): EditorState {
   };
 }
 
+/** A NEW (unsaved) editor pre-loaded from a definition — used by AI generate
+ *  and the "Adapt with AI" library hand-off. Starts disabled for review. */
+function editorFromDefinition(def: AiFlowDefinition, name: string): EditorState {
+  return {
+    id: null,
+    name,
+    enabled: false,
+    suppressDefaultReply: def.options?.suppressDefaultReply ?? false,
+    ...triggerToEditorFields(def.trigger),
+    steps: def.steps
+  };
+}
+
 function freshStepId(): string {
   return `s_${(crypto.randomUUID?.() ?? String(Date.now())).slice(0, 8)}`;
 }
@@ -300,15 +313,25 @@ function toDefinition(s: EditorState): AiFlowDefinition {
 export function AiFlowsManager({
   businessId,
   businessType,
-  initialFlows
+  initialFlows,
+  initialEditId,
+  initialAdaptDraft
 }: {
   businessId: string;
   businessType?: string | null;
   initialFlows: AiFlowRow[];
+  /** When set (e.g. from `?edit=<id>`), open that flow in the editor on mount. */
+  initialEditId?: string | null;
+  /** When true (`?adapt=1`), load the AI-adapted draft stashed in sessionStorage. */
+  initialAdaptDraft?: boolean;
 }) {
   const examples = getAiFlowExampleCopy(businessType);
   const [flows, setFlows] = useState<AiFlowRow[]>(initialFlows);
-  const [editor, setEditor] = useState<EditorState | null>(null);
+  const [editor, setEditor] = useState<EditorState | null>(() => {
+    if (!initialEditId) return null;
+    const row = initialFlows.find((f) => f.id === initialEditId);
+    return row ? editorFromRow(row) : null;
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [aiPrompt, setAiPrompt] = useState("");
@@ -319,6 +342,27 @@ export function AiFlowsManager({
   const [runFor, setRunFor] = useState<string | null>(null);
   const [runInput, setRunInput] = useState("");
   const [runNotice, setRunNotice] = useState<string | null>(null);
+
+  // "Adapt with AI" hand-off: the library detail page stashes the adapted
+  // definition in sessionStorage then navigates here with ?adapt=1. Load it
+  // once into a fresh (disabled) editor for review, then clear the stash so a
+  // refresh doesn't re-open it.
+  useEffect(() => {
+    if (!initialAdaptDraft) return;
+    try {
+      const raw = sessionStorage.getItem("aiflow_adapt_draft");
+      if (!raw) return;
+      const def = JSON.parse(raw) as AiFlowDefinition;
+      if (def && Array.isArray(def.steps) && def.trigger) {
+        // Only drop the stash once the (paid) draft parsed and validated, so a
+        // malformed payload can still be retried from storage on reload.
+        sessionStorage.removeItem("aiflow_adapt_draft");
+        setEditor(editorFromDefinition(def, "Adapted automation"));
+      }
+    } catch {
+      /* malformed/absent draft — fall back to the normal list view */
+    }
+  }, [initialAdaptDraft]);
 
   // Connected owner mailboxes for the send_email "From" dropdown (and the
   // quiet-hours email fallback). Best-effort: on any failure the dropdown
