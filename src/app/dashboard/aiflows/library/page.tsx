@@ -30,8 +30,7 @@ export default async function AiFlowLibraryPage() {
         <div className="min-w-0">
           <h1 className="text-2xl font-bold text-parchment">AiFlow library</h1>
           <p className="mt-1 text-sm text-parchment/50">
-            Popular automations other businesses run successfully. Personal details are
-            removed — pick one, and we&apos;ll adapt it to your number and team.
+            Popular automations other businesses run successfully.
           </p>
         </div>
         <Link
