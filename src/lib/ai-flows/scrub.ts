@@ -26,6 +26,56 @@ export const EMPLOYEE_NAME_PLACEHOLDER = "{{employee_name}}";
 export const NAME_PLACEHOLDER = "[name]";
 /** Stand-in for a blanked tenant-specific mailbox connection id (schema-valid). */
 export const NIL_UUID = "00000000-0000-0000-0000-000000000000";
+/**
+ * What every author-written free-text field is replaced with in the public
+ * library. The library publishes only a flow's machine STRUCTURE (step/trigger
+ * types, conditions, var + field names, numeric/time/enum settings, recipient
+ * placeholders); all natural-language prose a human typed (message bodies,
+ * subjects, prompts, templates, descriptions, labels, condition/comparison
+ * values) is blanked to this token so it can never leak personal or business
+ * details. A duplicator fills in their own copy in the editor. Kept short +
+ * non-empty so the result still satisfies the per-field schema min/max lengths.
+ */
+export const LIBRARY_STRIPPED_PLACEHOLDER = "[edit after copying]";
+
+/**
+ * Object keys whose string value is author-written prose (vs. structural data).
+ * Every occurrence anywhere in the definition tree is blanked to
+ * `LIBRARY_STRIPPED_PLACEHOLDER`. Keyed by name (not step type) so it's robust
+ * to nesting (quietHours.emailSubject, when.equals, conditions[].value, ...).
+ */
+const PROSE_KEYS: ReadonlySet<string> = new Set([
+  "body",
+  "subject",
+  "message",
+  "prompt",
+  "offerTemplate",
+  "ownerFallbackTemplate",
+  "claimedNotifyTemplate",
+  "bodyTemplate",
+  "valueTemplate",
+  "label",
+  "description",
+  "emailSubject",
+  "integrationLabel",
+  // Trigger condition (`value`) and per-step gate (`equals`/`contains`)
+  // comparison literals — free text that can carry names/addresses/locations.
+  "value",
+  "equals",
+  "contains"
+]);
+
+function blankProse(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(blankProse);
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = PROSE_KEYS.has(k) && typeof v === "string" ? LIBRARY_STRIPPED_PLACEHOLDER : blankProse(v);
+    }
+    return out;
+  }
+  return value;
+}
 
 // A run of 9+ digits with optional +, leading paren, spaces, dashes, dots, and
 // parens — covers E.164 (+15551234567) and common US formats ((555) 123-4567,
@@ -73,11 +123,16 @@ type ScrubOptions = {
 
 /**
  * Return a PII-scrubbed copy of a definition, safe to publish cross-tenant.
- * Two passes: a deep text redaction over every string, then structural fixups
- * for tenant-specific fields the text pass can't reason about (mailbox
- * connection ids -> blanked, pinned roster members -> placeholders). The result
- * is intended for display + later substitution, not for direct schema parsing
- * (the placeholders resolve once `applyLibrarySubstitutions` runs).
+ * Three passes:
+ *   1. deep text redaction over every string (phones/emails/known names) — this
+ *      mainly covers the recipient fields that survive (`to`/`cc`/`bcc`);
+ *   2. blank every author-written prose field (`blankProse`) so no message
+ *      body, subject, template, prompt, description, label, or condition value
+ *      is ever published — only the flow's structure remains; and
+ *   3. structural fixups for tenant-specific fields (mailbox connection ids ->
+ *      blanked, pinned roster members -> placeholders, http endpoints dropped).
+ * The result is intended for display + later substitution, not for direct schema
+ * parsing (the placeholders resolve once `applyLibrarySubstitutions` runs).
  */
 export function scrubDefinition(
   def: AiFlowDefinition,
@@ -85,7 +140,8 @@ export function scrubDefinition(
 ): Record<string, unknown> {
   const knownNames = opts.knownNames ?? [];
   const clone = JSON.parse(JSON.stringify(def)) as Record<string, unknown>;
-  const scrubbed = deepRedact(clone, knownNames) as Record<string, unknown>;
+  const redacted = deepRedact(clone, knownNames);
+  const scrubbed = blankProse(redacted) as Record<string, unknown>;
 
   // Structural fixups (applied AFTER redaction so they aren't re-mangled): drop
   // or neutralize tenant-specific ids and pinned people.
@@ -131,6 +187,25 @@ export function scrubDefinition(
   }
 
   return scrubbed;
+}
+
+// Phone-like run: a digit, then 7+ phone characters, then a digit (>= 9 digits
+// of separators). Same shape as the redaction regex; long enough to skip times
+// ("22:00"), counts, and bounded settings (responseMinutes, everyMinutes, ...).
+const PHONE_LIKE_RE = /\(?\+?\d(?:[\d\s().-]{7,})\d/;
+const EMAIL_LIKE_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+const ANY_UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+/**
+ * Defense-in-depth gate for the refresh job: returns true if a scrubbed
+ * definition STILL contains a literal email or phone number. UUIDs (e.g. the
+ * blanked NIL connection id) are stripped first so they don't read as a phone.
+ * The refresh skips publishing any template that trips this, so even a future
+ * prose field that slips past `scrubDefinition` can't leak structured PII.
+ */
+export function containsLikelyPii(value: unknown): boolean {
+  const json = (JSON.stringify(value) ?? "").replace(ANY_UUID_RE, "");
+  return EMAIL_LIKE_RE.test(json) || PHONE_LIKE_RE.test(json);
 }
 
 type SubstituteOptions = {
