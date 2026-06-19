@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { getActiveMock } = vi.hoisted(() => ({ getActiveMock: vi.fn() }));
 vi.mock("@/lib/db/vps-gateway-tokens", () => ({
-  getActiveGatewayTokenForBusiness: getActiveMock
+  getDeployedGatewayTokenForBusiness: getActiveMock
 }));
 
 import {

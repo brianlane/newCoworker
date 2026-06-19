@@ -5,10 +5,10 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 // The no-deps bearer path now routes through resolveOutboundRowboatBearer ->
-// getActiveGatewayTokenForBusiness. Stub it to "no per-tenant token" so these
-// tests deterministically exercise the env-var fallback without a DB call.
+// getDeployedGatewayTokenForBusiness. Stub it to "no confirmed per-tenant token"
+// so these tests deterministically exercise the env-var fallback without a DB call.
 vi.mock("@/lib/db/vps-gateway-tokens", () => ({
-  getActiveGatewayTokenForBusiness: vi.fn(async () => null)
+  getDeployedGatewayTokenForBusiness: vi.fn(async () => null)
 }));
 
 import {

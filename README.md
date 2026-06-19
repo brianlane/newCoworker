@@ -128,19 +128,28 @@ calls (chat/customer-memory summarizers). A single shared token means a compromi
     is verified **only** against it — the shared secret is rejected. This is exclusive because
     the HMAC secret is forgeable by anyone who knows the shared value, and Rowboat tool-call
     JWTs are signed on the (per-tenant) VPS, never by the platform edge worker.
-- **Tokens are minted + persisted BEFORE the deploy, then reused on retry.** Provisioning
-  reads the business's active token (`getActiveGatewayTokenForBusiness`) or mints + persists
-  one (`issueGatewayToken`) up front, because the same token is also the in-deploy
-  progress-callback bearer (`/api/provisioning/progress`) and must already be resolvable while
-  `deploy-client.sh` runs. A failed deploy simply leaves a token the next attempt **reuses**
-  and redeploys (idempotent, self-healing) — safer than deploying a divergent shared token. A
-  DB error during this step aborts provisioning (no shared-token fallback). There is no
-  DB-only seed path — seeding without redeploying would desync the VPS.
-- **One active token per business** is enforced by the partial unique index
-  `uq_vps_gateway_tokens_active_business`
-  (`supabase/migrations/20260629040000_…sql`), so a concurrent double-mint fails at insert
-  instead of leaving two live tokens (which would make exclusive verification
-  non-deterministic). Rotations revoke the old row first, then insert the new one.
+- **A token has a PENDING → CONFIRMED lifecycle (`deployed_at`)** so the DB never gets ahead
+  of the VPS (`supabase/migrations/20260629050000_…sql`):
+  - Provisioning reads the business's existing token (`getActiveGatewayTokenForBusiness`,
+    pending **or** confirmed) or mints + inserts a fresh **pending** one (`issueGatewayToken`,
+    `deployed_at` NULL) BEFORE `deploy-client.sh` runs — the same token is the in-deploy
+    progress-callback bearer (`/api/provisioning/progress`), which authenticates via the
+    inbound binding (pending tokens still bind).
+  - While the token is pending, **outbound** app→Rowboat calls and **exclusive JWT**
+    verification keep using the shared secret the box is still on
+    (`getDeployedGatewayTokenForBusiness` returns only confirmed tokens), so a half-finished
+    deploy never breaks summarizers or tool webhooks.
+  - On a **successful** deploy the orchestrator calls `markGatewayTokenDeployed`, which revokes
+    any older token then stamps `deployed_at` — flipping outbound/JWT over to the per-tenant
+    secret. A failed deploy leaves the pending token for the next attempt to **reuse** +
+    redeploy (idempotent, self-healing). A DB error aborts provisioning (no shared-token
+    fallback). There is no DB-only seed path.
+- **One CONFIRMED token per business** is enforced by the partial unique index
+  `uq_vps_gateway_tokens_deployed_business` (`where revoked_at is null and deployed_at is not
+  null`), so two tenants can't end up with competing live secrets. `issueGatewayToken` is
+  insert-only (never revoke-before-insert), so a failed insert never leaves a business with
+  zero active tokens; revocation of the old token happens only in `markGatewayTokenDeployed`,
+  after the new one is confirmed.
 - **Existing live tenant (`621a5b0d-…`) stays on the shared token** (no per-tenant row)
   until an operator runs a full rotation: mint a fresh token (`issueGatewayToken`),
   redeploy its VPS with the new value (`deploy-client.sh` / the `debug/` redeploy

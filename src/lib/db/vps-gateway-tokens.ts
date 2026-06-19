@@ -60,10 +60,10 @@ export async function resolveGatewayTokenBinding(
 }
 
 /**
- * Return the active per-tenant token (plaintext) for a business, used for
- * HMAC JWT verification and as the outbound Rowboat API key. Returns null when
- * the business has no per-tenant token yet (caller falls back to the shared env
- * token).
+ * Latest non-revoked token (plaintext) for a business — INCLUDING a pending
+ * (not-yet-deployed) one. Used by provisioning to REUSE a token across deploy
+ * retries so a failed deploy doesn't churn the secret. Returns null when the
+ * business has no per-tenant token at all.
  */
 export async function getActiveGatewayTokenForBusiness(
   businessId: string,
@@ -82,21 +82,46 @@ export async function getActiveGatewayTokenForBusiness(
   return data ? (data.token as string) : null;
 }
 
+/**
+ * Latest non-revoked token (plaintext) that has been CONFIRMED on the VPS
+ * (`deployed_at` set). Used for the outbound Rowboat bearer and for exclusive
+ * tool-call JWT verification, so the app never gets "ahead" of the box: until a
+ * freshly minted token is confirmed deployed, callers fall back to the shared
+ * env token (which the VPS is still using). Returns null when the business has
+ * no confirmed per-tenant token yet.
+ */
+export async function getDeployedGatewayTokenForBusiness(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<string | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("vps_gateway_tokens")
+    .select("token")
+    .eq("business_id", businessId)
+    .is("revoked_at", null)
+    .not("deployed_at", "is", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`getDeployedGatewayTokenForBusiness: ${error.message}`);
+  return data ? (data.token as string) : null;
+}
+
 export type IssueGatewayTokenOptions = {
-  /** Human-readable note (e.g. "provisioning", "seed:existing-shared"). */
+  /** Human-readable note (e.g. "provisioning"). */
   label?: string;
-  /** Use a specific token value instead of minting one (e.g. seeding an existing VPS token). */
+  /** Use a specific token value instead of minting one (e.g. a real VPS rotation). */
   token?: string;
-  /** Revoke any prior active tokens for the business first. Default true. */
-  revokeExisting?: boolean;
 };
 
 /**
- * Mint + store a per-tenant token, returning the plaintext. By default revokes
- * any prior active token for the business (rotation). The partial unique index
- * `uq_vps_gateway_tokens_active_business` (one active row per business) makes a
- * concurrent double-mint fail at insert rather than leaving two live tokens —
- * the loser surfaces as an `issueGatewayToken(insert)` error.
+ * Mint + store a PENDING per-tenant token (deployed_at NULL), returning the
+ * plaintext. The row is inserted before the VPS deploy so in-deploy progress
+ * callbacks can authenticate via the inbound binding; the caller confirms it with
+ * `markGatewayTokenDeployed` only after a successful deploy. This is insert-only
+ * (no revoke-before-insert), so a failed insert never leaves the business with
+ * zero active tokens — the existing one stays untouched.
  */
 export async function issueGatewayToken(
   businessId: string,
@@ -115,14 +140,6 @@ export async function issueGatewayToken(
       "issueGatewayToken: refusing to store the shared ROWBOAT_GATEWAY_TOKEN as a per-tenant token"
     );
   }
-  if (options.revokeExisting !== false) {
-    const { error: revErr } = await db
-      .from("vps_gateway_tokens")
-      .update({ revoked_at: new Date().toISOString() })
-      .eq("business_id", businessId)
-      .is("revoked_at", null);
-    if (revErr) throw new Error(`issueGatewayToken(revoke): ${revErr.message}`);
-  }
   const { error } = await db.from("vps_gateway_tokens").insert({
     business_id: businessId,
     token,
@@ -131,4 +148,34 @@ export async function issueGatewayToken(
   });
   if (error) throw new Error(`issueGatewayToken(insert): ${error.message}`);
   return token;
+}
+
+/**
+ * Confirm a token is live on the VPS: revoke any OTHER non-revoked tokens for the
+ * business FIRST (so the confirmed-token unique index isn't violated), then stamp
+ * `deployed_at` on this token. Revoke-before-confirm ordering means a crash leaves
+ * AT MOST the just-deployed token unconfirmed (the next provisioning attempt
+ * reuses + redeploys it); it never leaves a stale confirmed token competing with
+ * the new one. Idempotent for an already-confirmed token.
+ */
+export async function markGatewayTokenDeployed(
+  businessId: string,
+  token: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error: revErr } = await db
+    .from("vps_gateway_tokens")
+    .update({ revoked_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .is("revoked_at", null)
+    .neq("token", token);
+  if (revErr) throw new Error(`markGatewayTokenDeployed(revoke): ${revErr.message}`);
+  const { error } = await db
+    .from("vps_gateway_tokens")
+    .update({ deployed_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .eq("token", token)
+    .is("revoked_at", null);
+  if (error) throw new Error(`markGatewayTokenDeployed(confirm): ${error.message}`);
 }

@@ -6,7 +6,7 @@ const { resolveBindingMock, getActiveMock } = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/db/vps-gateway-tokens", () => ({
   resolveGatewayTokenBinding: resolveBindingMock,
-  getActiveGatewayTokenForBusiness: getActiveMock
+  getDeployedGatewayTokenForBusiness: getActiveMock
 }));
 
 import {

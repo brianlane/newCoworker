@@ -14,35 +14,50 @@ import {
   generateGatewayToken,
   resolveGatewayTokenBinding,
   getActiveGatewayTokenForBusiness,
-  issueGatewayToken
+  getDeployedGatewayTokenForBusiness,
+  issueGatewayToken,
+  markGatewayTokenDeployed
 } from "@/lib/db/vps-gateway-tokens";
 
 type Handlers = {
   maybeSingle?: { data: unknown; error: unknown };
   insert?: { error: unknown };
-  update?: { error: unknown };
+  /** Results returned by successive `update()` awaits, consumed in order. */
+  updates?: { error: unknown }[];
 };
 
-/** Chainable Supabase query-builder mock covering select/eq/is/order/limit/maybeSingle/update/insert. */
+/**
+ * Chainable Supabase query-builder mock covering select/eq/is/not/order/limit/
+ * maybeSingle and update (chainable + awaitable) / insert. The update builder is
+ * a thenable so the real call chains (`.update().eq().is().neq()` etc.) resolve
+ * to the next queued `updates` result.
+ */
 function makeClient(handlers: Handlers) {
   const insertSpy = vi.fn(async () => handlers.insert ?? { error: null });
-  const updateTerminal = vi.fn(async () => handlers.update ?? { error: null });
-  const updateBuilder = {
-    eq: vi.fn(() => updateBuilder),
-    is: updateTerminal
-  };
+  const updateResults = [...(handlers.updates ?? [])];
+  const updateSpy = vi.fn(() => {
+    const builder: Record<string, unknown> = {
+      eq: vi.fn(() => builder),
+      is: vi.fn(() => builder),
+      neq: vi.fn(() => builder),
+      then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+        Promise.resolve(updateResults.shift() ?? { error: null }).then(resolve, reject)
+    };
+    return builder;
+  });
   const selectBuilder: Record<string, unknown> = {
     select: vi.fn(() => selectBuilder),
     eq: vi.fn(() => selectBuilder),
     is: vi.fn(() => selectBuilder),
+    not: vi.fn(() => selectBuilder),
     order: vi.fn(() => selectBuilder),
     limit: vi.fn(() => selectBuilder),
     maybeSingle: vi.fn(async () => handlers.maybeSingle ?? { data: null, error: null }),
-    update: vi.fn(() => updateBuilder),
+    update: updateSpy,
     insert: insertSpy
   };
   const from = vi.fn(() => selectBuilder);
-  return { client: { from }, from, insertSpy, updateTerminal };
+  return { client: { from }, from, insertSpy, updateSpy };
 }
 
 beforeEach(() => {
@@ -129,27 +144,50 @@ describe("getActiveGatewayTokenForBusiness", () => {
   });
 });
 
+describe("getDeployedGatewayTokenForBusiness", () => {
+  it("returns the confirmed token when present", async () => {
+    const { client } = makeClient({ maybeSingle: { data: { token: "dep-1" }, error: null } });
+    expect(await getDeployedGatewayTokenForBusiness("biz", client as never)).toBe("dep-1");
+  });
+
+  it("returns null when no confirmed token exists", async () => {
+    const { client } = makeClient({ maybeSingle: { data: null, error: null } });
+    expect(await getDeployedGatewayTokenForBusiness("biz", client as never)).toBeNull();
+  });
+
+  it("throws on a DB error", async () => {
+    const { client } = makeClient({ maybeSingle: { data: null, error: { message: "boom-dep" } } });
+    await expect(getDeployedGatewayTokenForBusiness("biz", client as never)).rejects.toThrow(/boom-dep/);
+  });
+
+  it("falls back to the service client when none is passed", async () => {
+    const { client } = makeClient({ maybeSingle: { data: { token: "svc-dep" }, error: null } });
+    serviceClientHolder.current = client;
+    expect(await getDeployedGatewayTokenForBusiness("biz")).toBe("svc-dep");
+  });
+});
+
 describe("issueGatewayToken", () => {
-  it("revokes prior tokens and inserts a generated token with default null label", async () => {
-    const { client, from, insertSpy, updateTerminal } = makeClient({});
+  it("inserts a generated PENDING token with default null label (no revoke)", async () => {
+    const { client, from, insertSpy, updateSpy } = makeClient({});
     const token = await issueGatewayToken("biz-1", {}, client as never);
     expect(token).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(from).toHaveBeenCalledWith("vps_gateway_tokens");
-    expect(updateTerminal).toHaveBeenCalled();
+    // Insert-only: never revokes existing rows.
+    expect(updateSpy).not.toHaveBeenCalled();
     expect(insertSpy).toHaveBeenCalledWith(
       expect.objectContaining({ business_id: "biz-1", token, label: null })
     );
   });
 
-  it("uses a provided token + label and can skip revocation", async () => {
-    const { client, insertSpy, updateTerminal } = makeClient({});
+  it("uses a provided token + label", async () => {
+    const { client, insertSpy } = makeClient({});
     const token = await issueGatewayToken(
       "biz-1",
-      { token: "preset", label: "seed", revokeExisting: false },
+      { token: "preset", label: "seed" },
       client as never
     );
     expect(token).toBe("preset");
-    expect(updateTerminal).not.toHaveBeenCalled();
     expect(insertSpy).toHaveBeenCalledWith(
       expect.objectContaining({ token: "preset", label: "seed" })
     );
@@ -160,7 +198,7 @@ describe("issueGatewayToken", () => {
     process.env.ROWBOAT_GATEWAY_TOKEN = "shared-secret";
     const { client, insertSpy } = makeClient({});
     await expect(
-      issueGatewayToken("biz", { token: "shared-secret", revokeExisting: false }, client as never)
+      issueGatewayToken("biz", { token: "shared-secret" }, client as never)
     ).rejects.toThrow(/refusing to store the shared/);
     expect(insertSpy).not.toHaveBeenCalled();
     if (prev === undefined) delete process.env.ROWBOAT_GATEWAY_TOKEN;
@@ -171,33 +209,53 @@ describe("issueGatewayToken", () => {
     const prev = process.env.ROWBOAT_GATEWAY_TOKEN;
     process.env.ROWBOAT_GATEWAY_TOKEN = "shared-secret";
     const { client, insertSpy } = makeClient({});
-    const token = await issueGatewayToken(
-      "biz",
-      { token: "unique-x", revokeExisting: false },
-      client as never
-    );
+    const token = await issueGatewayToken("biz", { token: "unique-x" }, client as never);
     expect(token).toBe("unique-x");
     expect(insertSpy).toHaveBeenCalled();
     if (prev === undefined) delete process.env.ROWBOAT_GATEWAY_TOKEN;
     else process.env.ROWBOAT_GATEWAY_TOKEN = prev;
   });
 
-  it("throws when revoke fails", async () => {
-    const { client } = makeClient({ update: { error: { message: "revoke-fail" } } });
-    await expect(issueGatewayToken("biz", {}, client as never)).rejects.toThrow(/revoke-fail/);
-  });
-
   it("throws when insert fails", async () => {
     const { client } = makeClient({ insert: { error: { message: "insert-fail" } } });
-    await expect(issueGatewayToken("biz", { revokeExisting: false }, client as never)).rejects.toThrow(
-      /insert-fail/
-    );
+    await expect(issueGatewayToken("biz", {}, client as never)).rejects.toThrow(/insert-fail/);
   });
 
   it("falls back to the service client when none is passed", async () => {
     const { client, insertSpy } = makeClient({});
     serviceClientHolder.current = client;
-    await issueGatewayToken("biz", { revokeExisting: false });
+    await issueGatewayToken("biz");
     expect(insertSpy).toHaveBeenCalled();
+  });
+});
+
+describe("markGatewayTokenDeployed", () => {
+  it("revokes other tokens then stamps deployed_at on this one", async () => {
+    const { client, updateSpy } = makeClient({ updates: [{ error: null }, { error: null }] });
+    await markGatewayTokenDeployed("biz-1", "tok-new", client as never);
+    // Two updates: revoke-others, then confirm.
+    expect(updateSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws when the revoke-others step fails (before confirming)", async () => {
+    const { client, updateSpy } = makeClient({ updates: [{ error: { message: "rev-fail" } }] });
+    await expect(markGatewayTokenDeployed("biz-1", "tok-new", client as never)).rejects.toThrow(
+      /markGatewayTokenDeployed\(revoke\): rev-fail/
+    );
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws when the confirm step fails", async () => {
+    const { client } = makeClient({ updates: [{ error: null }, { error: { message: "conf-fail" } }] });
+    await expect(markGatewayTokenDeployed("biz-1", "tok-new", client as never)).rejects.toThrow(
+      /markGatewayTokenDeployed\(confirm\): conf-fail/
+    );
+  });
+
+  it("falls back to the service client when none is passed", async () => {
+    const { client, updateSpy } = makeClient({ updates: [{ error: null }, { error: null }] });
+    serviceClientHolder.current = client;
+    await markGatewayTokenDeployed("biz-1", "tok-new");
+    expect(updateSpy).toHaveBeenCalledTimes(2);
   });
 });

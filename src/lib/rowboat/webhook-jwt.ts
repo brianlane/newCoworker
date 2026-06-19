@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { getActiveGatewayTokenForBusiness } from "@/lib/db/vps-gateway-tokens";
+import { getDeployedGatewayTokenForBusiness } from "@/lib/db/vps-gateway-tokens";
 
 /**
  * Verifier for Rowboat's project tool-webhook signature
@@ -107,12 +107,13 @@ export function verifyRowboatWebhookJwt(token: string): RowboatWebhookClaims | n
  * signature check is what makes trusting the peeked projectId safe (a forged
  * projectId won't verify under that tenant's secret).
  *
- * When the project HAS a per-tenant token it is the EXCLUSIVE accepted signer —
- * the shared env secret is NOT a fallback, otherwise anyone holding the shared
- * secret could forge a valid tool-call JWT for that tenant's projectId. The
- * shared secret is accepted only for projects without a per-tenant token (legacy
- * boxes still on the shared token). A DB error reading the per-tenant token
- * fails open to the shared path so a transient blip doesn't drop live tool-calls.
+ * When the project has a per-tenant token CONFIRMED deployed on its VPS it is the
+ * EXCLUSIVE accepted signer — the shared env secret is NOT a fallback, otherwise
+ * anyone holding the shared secret could forge a valid tool-call JWT for that
+ * tenant's projectId. The shared secret is accepted only for projects without a
+ * confirmed per-tenant token (legacy boxes, or a token still mid-deploy that the
+ * VPS is not yet signing with). A DB error reading the per-tenant token fails open
+ * to the shared path so a transient blip doesn't drop live tool-calls.
  */
 export async function resolveRowboatWebhookClaims(
   token: string
@@ -121,7 +122,7 @@ export async function resolveRowboatWebhookClaims(
   if (projectId) {
     let perTenant: string | null = null;
     try {
-      perTenant = await getActiveGatewayTokenForBusiness(projectId);
+      perTenant = await getDeployedGatewayTokenForBusiness(projectId);
     } catch {
       // DB blip: treat as "no per-tenant token" and fall through to shared.
       perTenant = null;

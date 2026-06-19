@@ -1,6 +1,6 @@
 import { timingSafeEqualUtf8 } from "@/lib/timing-safe-utf8";
 import {
-  getActiveGatewayTokenForBusiness,
+  getDeployedGatewayTokenForBusiness,
   resolveGatewayTokenBinding
 } from "@/lib/db/vps-gateway-tokens";
 
@@ -62,16 +62,19 @@ export async function verifyGatewayTokenForBusiness(
 
 /**
  * Resolve the bearer the platform should send when calling a tenant's Rowboat
- * (app → Rowboat). Prefers the per-tenant token, then the legacy
- * `ROWBOAT_VPS_CHAT_BEARER` / `ROWBOAT_GATEWAY_TOKEN` env fallbacks so existing
- * tenants keep working until they carry a per-tenant token. Fails over to the
- * env values on any DB error.
+ * (app → Rowboat). Prefers the per-tenant token that is CONFIRMED deployed on the
+ * box (`getDeployedGatewayTokenForBusiness`), then the legacy
+ * `ROWBOAT_VPS_CHAT_BEARER` / `ROWBOAT_GATEWAY_TOKEN` env fallbacks. Using the
+ * confirmed token (not a freshly minted, not-yet-deployed one) keeps the app from
+ * getting ahead of the VPS — a half-finished deploy never breaks summarizers,
+ * because the box is still on the shared/old secret which the env fallback
+ * supplies. Fails over to the env values on any DB error.
  */
 export async function resolveOutboundRowboatBearer(businessId: string): Promise<string> {
   const envFallback =
     process.env.ROWBOAT_VPS_CHAT_BEARER ?? process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
   try {
-    const perTenant = await getActiveGatewayTokenForBusiness(businessId);
+    const perTenant = await getDeployedGatewayTokenForBusiness(businessId);
     return perTenant ?? envFallback;
   } catch {
     return envFallback;

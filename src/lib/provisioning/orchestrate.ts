@@ -23,7 +23,8 @@ import { buildProvisioningLiveEmail } from "@/lib/email/templates/provisioning-l
 import { updateBusinessStatus, getBusiness } from "@/lib/db/businesses";
 import {
   getActiveGatewayTokenForBusiness,
-  issueGatewayToken
+  issueGatewayToken,
+  markGatewayTokenDeployed
 } from "@/lib/db/vps-gateway-tokens";
 import { buildComplianceSystemPrompt } from "@/lib/compliance/fha";
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
@@ -855,20 +856,20 @@ async function runOrchestrator(
   // Phase 3: build the deploy command with env injection. Unchanged; the
   // only difference is *how* we execute it (SSH instead of the fictional
   // Hostinger /exec endpoint).
-  // Per-tenant gateway token: reuse the business's existing per-tenant token, or
-  // mint + persist a fresh one BEFORE the deploy. The token is the VPS->app
-  // bearer, Rowboat's tool-webhook JWT secret, the app->Rowboat API key, AND the
-  // progress-callback bearer — so it must already exist in the DB while
-  // deploy-client.sh runs, otherwise in-deploy progress POSTs fail auth. We
-  // persist before deploy on purpose: a failed deploy simply leaves a token the
-  // next provisioning attempt REUSES and redeploys (idempotent, self-healing),
-  // which is safer than a divergent shared-token deploy. The partial unique index
-  // keeps this to one active token per business. A DB error aborts provisioning
-  // rather than deploying a mismatched shared token.
+  // Per-tenant gateway token: reuse the business's existing (pending or confirmed)
+  // token, or mint + persist a fresh PENDING one BEFORE the deploy. The token is
+  // the VPS->app bearer, Rowboat's tool-webhook JWT secret, the app->Rowboat API
+  // key, AND the in-deploy progress-callback bearer — so its row must exist while
+  // deploy-client.sh runs (so progress POSTs authenticate via the inbound
+  // binding). It stays PENDING (deployed_at NULL) until the deploy succeeds, so
+  // outbound/JWT verification keep using the shared secret the box is still on; we
+  // confirm it with markGatewayTokenDeployed only after a successful deploy. A
+  // failed deploy leaves the pending token for the next attempt to reuse +
+  // redeploy. A DB error aborts provisioning rather than deploying a mismatched
+  // shared token.
   const existingGatewayToken = await getActiveGatewayTokenForBusiness(businessId);
   const gatewayToken =
-    existingGatewayToken ??
-    (await issueGatewayToken(businessId, { label: "provisioning", revokeExisting: false }));
+    existingGatewayToken ?? (await issueGatewayToken(businessId, { label: "provisioning" }));
   const bashQuote = deps?.quoteEnv ?? quoteShellEnvValue;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const progressUrl = `${appUrl.replace(/\/$/, "")}/api/provisioning/progress`;
@@ -979,6 +980,13 @@ async function runOrchestrator(
       source: "orchestrator",
       status: "error"
     });
+  }
+
+  // Now that the box actually carries the token, confirm it: this is what flips
+  // outbound/JWT verification over to the per-tenant secret and revokes any older
+  // token. Done only on a successful deploy so the DB never gets ahead of the VPS.
+  if (deploySucceeded) {
+    await markGatewayTokenDeployed(businessId, gatewayToken);
   }
 
   await updateBusinessStatus(businessId, "online", vpsId);
