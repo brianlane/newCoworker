@@ -1568,7 +1568,11 @@ async function sendSmsStep(
   const cfg = await messagingConfig(supabase, run.business_id);
   if (!cfg) return { kind: "fail", error: "send_sms: Telnyx messaging is not configured" };
 
-  const text = prepareSmsBody(bodyText, { requireStop: true });
+  // No auto-appended opt-out footer on AiFlow sends. The "Reply STOP to opt out."
+  // suffix corrupts control replies (e.g. the literal "Y" a partner system expects)
+  // and was never part of these message bodies. We still normalize to GSM-safe text
+  // and cap length via prepareSmsBody; STOP/HELP handling lives in the inbound path.
+  const text = prepareSmsBody(bodyText);
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
     { p_business_id: run.business_id }
@@ -1659,7 +1663,7 @@ async function sendGroupSmsStep(
     return { kind: "ok", skipped: true, result: { skipped: "group_no_recipients" } };
   }
 
-  const text = prepareSmsBody(action.body, { requireStop: true });
+  const text = prepareSmsBody(action.body);
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
     { p_business_id: run.business_id }
@@ -2497,7 +2501,7 @@ async function sendOfferSms(
 ): Promise<void> {
   const cfg = await messagingConfig(supabase, run.business_id);
   if (!cfg) throw new Error("route_to_team: Telnyx messaging is not configured");
-  const body = prepareSmsBody(text, { requireStop: true });
+  const body = prepareSmsBody(text);
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
     { p_business_id: run.business_id }
