@@ -92,8 +92,8 @@ export async function proxy(request: NextRequest) {
     !pathname.startsWith("/api/webhooks/") &&
     !pathname.startsWith("/api/rowboat") &&
     // /api/voice/tools/* are server-to-server tool adapters authenticated
-    // solely by `Authorization: Bearer ROWBOAT_GATEWAY_TOKEN` (gatewayGuard),
-    // never by a session cookie. CSRF only defends cookie-authed browser
+    // solely by a gateway-token bearer bound to the businessId
+    // (gatewayBusinessGuard), never by a session cookie. CSRF only defends cookie-authed browser
     // requests, so it adds no protection here and instead 403s legitimate
     // callers that send no Origin (the VPS voice-bridge and chat-worker).
     // Same rationale as the /api/rowboat and /api/webhooks exemptions above.
@@ -107,15 +107,15 @@ export async function proxy(request: NextRequest) {
     // /api/voice/tools, /api/rowboat, and /api/webhooks exemptions above.
     !pathname.startsWith("/api/internal/") &&
     // /api/integrations/custom/credentials is a server-to-server endpoint
-    // authenticated solely by `Authorization: Bearer ROWBOAT_GATEWAY_TOKEN`
-    // (gatewayGuard) — the per-tenant render service (vps/aiflow-render) POSTs
+    // authenticated solely by a gateway-token bearer bound to the businessId
+    // (gatewayBusinessGuard) — the per-tenant render service (vps/aiflow-render) POSTs
     // it to fetch a stored integration's decrypted credentials before driving a
     // login form. It sends no Origin header, so CSRF would 403 it. Same
     // rationale as the /api/voice/tools, /api/internal, /api/rowboat, and
     // /api/webhooks exemptions above.
     pathname !== "/api/integrations/custom/credentials" &&
     // /api/aiflows/send-owner-email is a server-to-server endpoint authenticated
-    // solely by `Authorization: Bearer ROWBOAT_GATEWAY_TOKEN` (gatewayGuard) — the
+    // solely by a gateway-token bearer bound to the businessId (gatewayBusinessGuard) — the
     // ai-flow-worker Edge Function POSTs it to send email from an owner's
     // Nango-connected mailbox (send_email.fromConnectionId / SMS quiet-hours
     // email fallback). It sends no Origin header, so CSRF would 403 every send.

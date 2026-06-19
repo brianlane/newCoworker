@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/rowboat/gateway-token", () => ({
-  verifyRowboatGatewayToken: vi.fn().mockReturnValue(true)
+  verifyRowboatGatewayToken: vi.fn().mockReturnValue(true),
+  verifyGatewayTokenForBusiness: vi.fn().mockResolvedValue(true)
 }));
 
 vi.mock("@/lib/db/logs", () => ({
@@ -17,7 +18,7 @@ vi.mock("@/lib/db/agent-tool-settings", () => ({
 }));
 
 import { POST } from "@/app/api/voice/tools/capture/route";
-import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
+import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 import { insertCoworkerLog } from "@/lib/db/logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
@@ -40,7 +41,7 @@ describe("api/voice/tools/capture route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env = { ...original, ROWBOAT_GATEWAY_TOKEN: "gw" };
-    vi.mocked(verifyRowboatGatewayToken).mockReturnValue(true);
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
     vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
   });
   afterEach(() => {
@@ -48,7 +49,7 @@ describe("api/voice/tools/capture route", () => {
   });
 
   it("401s without gateway token", async () => {
-    vi.mocked(verifyRowboatGatewayToken).mockReturnValue(false);
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValueOnce(false);
     const r = await POST(req({ businessId: BIZ, args: { name: "Alex" } }));
     expect(r.status).toBe(401);
   });

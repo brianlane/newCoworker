@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/rowboat/gateway-token", () => ({
-  verifyRowboatGatewayToken: vi.fn().mockReturnValue(true)
+  verifyRowboatGatewayToken: vi.fn().mockReturnValue(true),
+  verifyGatewayTokenForBusiness: vi.fn().mockResolvedValue(true)
 }));
 
 vi.mock("@/lib/db/workspace-oauth-connections", () => ({
@@ -21,7 +22,7 @@ vi.mock("@/lib/db/system-logs", () => ({
 }));
 
 import { POST } from "@/app/api/aiflows/send-owner-email/route";
-import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
+import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 import { getWorkspaceOAuthConnection } from "@/lib/db/workspace-oauth-connections";
 import { sendFromMailboxConnection } from "@/lib/email/owner-mailbox";
 import { recordSystemLog } from "@/lib/db/system-logs";
@@ -50,7 +51,7 @@ function connRow(provider_config_key: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(verifyRowboatGatewayToken).mockReturnValue(true);
+  vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
   vi.mocked(getWorkspaceOAuthConnection).mockResolvedValue(connRow("google-mail"));
   vi.mocked(sendFromMailboxConnection).mockResolvedValue({
     ok: true,
@@ -61,7 +62,7 @@ beforeEach(() => {
 
 describe("POST /api/aiflows/send-owner-email", () => {
   it("rejects requests without a gateway token", async () => {
-    vi.mocked(verifyRowboatGatewayToken).mockReturnValue(false);
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValueOnce(false);
     const res = await POST(makeRequest(validBody));
     expect(res.status).toBe(401);
     expect(sendFromMailboxConnection).not.toHaveBeenCalled();

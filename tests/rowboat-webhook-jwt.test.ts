@@ -1,6 +1,16 @@
 import crypto from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { verifyRowboatWebhookJwt } from "@/lib/rowboat/webhook-jwt";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { getActiveMock } = vi.hoisted(() => ({ getActiveMock: vi.fn() }));
+vi.mock("@/lib/db/vps-gateway-tokens", () => ({
+  getActiveGatewayTokensForProject: getActiveMock
+}));
+
+import {
+  verifyRowboatWebhookJwt,
+  verifyRowboatWebhookJwtWithSecret,
+  resolveRowboatWebhookClaims
+} from "@/lib/rowboat/webhook-jwt";
 
 const SECRET = "test-gateway-token";
 
@@ -96,5 +106,97 @@ describe("verifyRowboatWebhookJwt", () => {
   it("rejects a truncated signature (length mismatch short-circuit)", () => {
     const [h, p] = sign(validClaims()).split(".");
     expect(verifyRowboatWebhookJwt(`${h}.${p}.AAAA`)).toBeNull();
+  });
+});
+
+describe("verifyRowboatWebhookJwtWithSecret", () => {
+  it("verifies against an explicit secret", () => {
+    const tok = sign(validClaims(), { secret: "per-tenant" });
+    expect(verifyRowboatWebhookJwtWithSecret(tok, "per-tenant")).toMatchObject({
+      projectId: "11111111-1111-4111-8111-111111111111"
+    });
+    expect(verifyRowboatWebhookJwtWithSecret(tok, "wrong")).toBeNull();
+  });
+});
+
+describe("resolveRowboatWebhookClaims", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.ROWBOAT_GATEWAY_TOKEN = SECRET;
+  });
+
+  it("verifies with a per-tenant secret resolved by projectId", async () => {
+    getActiveMock.mockResolvedValue({ tokens: ["per-tenant-secret"], hasConfirmed: true });
+    const tok = sign(validClaims(), { secret: "per-tenant-secret" });
+    const claims = await resolveRowboatWebhookClaims(tok);
+    expect(claims).toMatchObject({ projectId: "11111111-1111-4111-8111-111111111111" });
+    expect(getActiveMock).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
+  });
+
+  it("verifies against ANY non-revoked token (pending + confirmed coexist mid-rotation)", async () => {
+    // The matching secret is the second (e.g. the freshly deployed, not-yet-only token).
+    getActiveMock.mockResolvedValue({
+      tokens: ["old-confirmed-secret", "new-pending-secret"],
+      hasConfirmed: true
+    });
+    const tok = sign(validClaims(), { secret: "new-pending-secret" });
+    expect(await resolveRowboatWebhookClaims(tok)).toMatchObject({ requestId: "req-1" });
+  });
+
+  it("falls back to the shared secret when no per-tenant token exists", async () => {
+    getActiveMock.mockResolvedValue({ tokens: [], hasConfirmed: false });
+    const tok = sign(validClaims()); // signed with shared SECRET
+    expect(await resolveRowboatWebhookClaims(tok)).toMatchObject({ requestId: "req-1" });
+  });
+
+  it("accepts the shared secret while the only token is PENDING (box still signs with shared mid-deploy)", async () => {
+    // First migration: a pending token row exists but the VPS hasn't been redeployed
+    // yet, so Rowboat is still signing tool-call JWTs with the shared secret. We must
+    // NOT 401 these — exclusivity engages only once a token is confirmed.
+    getActiveMock.mockResolvedValue({ tokens: ["pending-not-yet-live"], hasConfirmed: false });
+    const tok = sign(validClaims()); // signed with shared SECRET
+    expect(await resolveRowboatWebhookClaims(tok)).toMatchObject({ requestId: "req-1" });
+  });
+
+  it("also accepts the freshly-deployed PENDING token (the instant the box switches, pre-confirm)", async () => {
+    getActiveMock.mockResolvedValue({ tokens: ["pending-now-live"], hasConfirmed: false });
+    const tok = sign(validClaims(), { secret: "pending-now-live" });
+    expect(await resolveRowboatWebhookClaims(tok)).toMatchObject({ requestId: "req-1" });
+  });
+
+  it("rejects (no shared fallback) once the project has a CONFIRMED secret but the JWT is signed with the shared secret", async () => {
+    // Security: once a tenant has a confirmed per-tenant secret it is the EXCLUSIVE
+    // signer. A JWT signed with the shared ROWBOAT_GATEWAY_TOKEN must NOT verify, or a
+    // holder of the shared secret could forge this tenant's tool-call JWTs.
+    getActiveMock.mockResolvedValue({ tokens: ["a-different-secret", "another-one"], hasConfirmed: true });
+    const tok = sign(validClaims()); // signed with shared SECRET, not a per-tenant one
+    expect(await resolveRowboatWebhookClaims(tok)).toBeNull();
+  });
+
+  it("falls back to the shared secret when the per-tenant lookup throws", async () => {
+    getActiveMock.mockRejectedValue(new Error("db down"));
+    const tok = sign(validClaims());
+    expect(await resolveRowboatWebhookClaims(tok)).toMatchObject({ requestId: "req-1" });
+  });
+
+  it("skips the per-tenant lookup for a malformed token (no projectId to peek)", async () => {
+    expect(await resolveRowboatWebhookClaims("a.b")).toBeNull();
+    expect(getActiveMock).not.toHaveBeenCalled();
+  });
+
+  it("skips the per-tenant lookup when the payload isn't valid JSON", async () => {
+    const header = b64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+    const badToken = `${header}.${b64url("not-json{")}.AAAA`;
+    expect(await resolveRowboatWebhookClaims(badToken)).toBeNull();
+    expect(getActiveMock).not.toHaveBeenCalled();
+  });
+
+  it("skips the per-tenant lookup when projectId is not a string", async () => {
+    getActiveMock.mockResolvedValue("unused");
+    // projectId is a number -> peekProjectId returns null -> shared-secret path,
+    // which also rejects (projectId claim must be a string).
+    const tok = sign(validClaims({ projectId: 123 }));
+    expect(await resolveRowboatWebhookClaims(tok)).toBeNull();
+    expect(getActiveMock).not.toHaveBeenCalled();
   });
 });

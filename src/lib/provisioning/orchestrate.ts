@@ -21,6 +21,11 @@ import { sendOwnerEmail } from "@/lib/email/client";
 import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
 import { buildProvisioningLiveEmail } from "@/lib/email/templates/provisioning-live";
 import { updateBusinessStatus, getBusiness } from "@/lib/db/businesses";
+import {
+  getActiveGatewayTokenForBusiness,
+  issueGatewayToken,
+  markGatewayTokenDeployed
+} from "@/lib/db/vps-gateway-tokens";
 import { buildComplianceSystemPrompt } from "@/lib/compliance/fha";
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
@@ -851,11 +856,28 @@ async function runOrchestrator(
   // Phase 3: build the deploy command with env injection. Unchanged; the
   // only difference is *how* we execute it (SSH instead of the fictional
   // Hostinger /exec endpoint).
-  const gatewayToken = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
+  // Per-tenant gateway token: reuse the business's existing (pending or confirmed)
+  // token, or mint + persist a fresh PENDING one BEFORE the deploy. The token is
+  // the VPS->app bearer, Rowboat's tool-webhook JWT secret, the app->Rowboat API
+  // key, AND the in-deploy progress-callback bearer — so its row must exist while
+  // deploy-client.sh runs (so progress POSTs authenticate via the inbound
+  // binding). It stays PENDING (deployed_at NULL) until the deploy succeeds, so
+  // outbound/JWT verification keep using the shared secret the box is still on; we
+  // confirm it with markGatewayTokenDeployed only after a successful deploy. A
+  // failed deploy leaves the pending token for the next attempt to reuse +
+  // redeploy. A DB error aborts provisioning rather than deploying a mismatched
+  // shared token.
+  const existingGatewayToken = await getActiveGatewayTokenForBusiness(businessId);
+  const gatewayToken =
+    existingGatewayToken ?? (await issueGatewayToken(businessId, { label: "provisioning" }));
   const bashQuote = deps?.quoteEnv ?? quoteShellEnvValue;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const progressUrl = `${appUrl.replace(/\/$/, "")}/api/provisioning/progress`;
-  const progressToken = process.env.PROVISIONING_PROGRESS_TOKEN ?? process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
+  // Bind the progress token to the per-tenant gateway token (when no explicit
+  // override is set) so /api/provisioning/progress's per-tenant binding matches
+  // the now-persisted token. No new secret is placed on the box: the per-tenant
+  // token is already its ROWBOAT_GATEWAY_TOKEN.
+  const progressToken = process.env.PROVISIONING_PROGRESS_TOKEN ?? gatewayToken;
 
   const envVars = [
     ["BUSINESS_ID", businessId],
@@ -958,6 +980,38 @@ async function runOrchestrator(
       source: "orchestrator",
       status: "error"
     });
+  }
+
+  // Now that the box actually carries the token, confirm it: this is what flips
+  // outbound/JWT verification over to the per-tenant secret and revokes any older
+  // token. Done only on a successful deploy so the DB never gets ahead of the VPS.
+  //
+  // A confirm failure here is NON-fatal: the deploy already succeeded and the box is
+  // serving the new (still-pending) secret, so inbound tool-call JWTs already verify
+  // (resolveRowboatWebhookClaims accepts pending tokens). Throwing would abort before
+  // `updateBusinessStatus` and leave the tenant stuck. Instead we log + record the
+  // warning and continue; outbound app→Rowboat keeps using the prior confirmed token
+  // until the next (idempotent) reprovision re-runs the confirm. The token row stays
+  // pending and is reused, so nothing is lost.
+  if (deploySucceeded) {
+    try {
+      await markGatewayTokenDeployed(businessId, gatewayToken);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error("markGatewayTokenDeployed failed after a successful deploy", {
+        businessId,
+        vpsId,
+        error: msg
+      });
+      await recordProvisioningProgress({
+        businessId,
+        phase: "gateway_token_confirm_failed",
+        percent: 96,
+        message: `Gateway token confirm failed (deploy OK, token left pending for reprovision): ${msg}`,
+        source: "orchestrator",
+        status: "error"
+      });
+    }
   }
 
   await updateBusinessStatus(businessId, "online", vpsId);

@@ -44,7 +44,7 @@ import { z } from "zod";
 import { logger } from "@/lib/logger";
 import { errorResponse } from "@/lib/api-response";
 import {
-  gatewayGuard,
+  gatewayBusinessGuard,
   voiceToolResponse,
   voiceToolValidationError
 } from "@/lib/voice-tools/common";
@@ -218,9 +218,6 @@ function safelyJoinPath(prefix: string, path: string): string | null {
 const businessIdSchema = z.string().uuid();
 
 export async function POST(request: Request) {
-  const guard = gatewayGuard(request);
-  if (guard) return guard;
-
   // Tenant binding: read from the URL query, NOT the JSON body. The
   // Rowboat workflow template hardcodes this query at deploy time,
   // so the model never has a chance to influence which tenant's
@@ -240,6 +237,9 @@ export async function POST(request: Request) {
        reached this handler; defensive only. */
     return voiceToolValidationError("invalid_request_url");
   }
+
+  const bindGuard = await gatewayBusinessGuard(request, businessId);
+  if (bindGuard) return bindGuard;
 
   let parsed: CustomIntegrationCallRequest;
   try {

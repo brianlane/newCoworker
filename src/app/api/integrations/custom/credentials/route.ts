@@ -21,7 +21,7 @@ import { z } from "zod";
 import { logger } from "@/lib/logger";
 import { errorResponse } from "@/lib/api-response";
 import {
-  gatewayGuard,
+  gatewayBusinessGuard,
   voiceToolResponse,
   voiceToolValidationError
 } from "@/lib/voice-tools/common";
@@ -42,9 +42,6 @@ export function splitCredential(secret: string | null): { username: string; pass
 }
 
 export async function POST(request: Request) {
-  const guard = gatewayGuard(request);
-  if (guard) return guard;
-
   let businessId: string;
   try {
     const raw = new URL(request.url).searchParams.get("businessId");
@@ -55,6 +52,9 @@ export async function POST(request: Request) {
     /* c8 ignore next 2 -- WHATWG URL never throws for a routed request; defensive only */
     return voiceToolValidationError("invalid_request_url");
   }
+
+  const bindGuard = await gatewayBusinessGuard(request, businessId);
+  if (bindGuard) return bindGuard;
 
   let label: string;
   try {

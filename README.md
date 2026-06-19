@@ -33,7 +33,7 @@ Rowboat talks to a small `llm-router` sidecar on the VPS (`vps/llm-router/`) whi
 ### Voice knowledge + tools
 
 - The voice bridge loads `/opt/rowboat/vault/{soul,identity,memory,website}.md` (mounted read-only from Rowboat's vault) and injects them into Gemini Live's system prompt on every call. Owners set the website URL during onboarding; `/api/onboard/website-ingest` crawls once (SSRF-guarded, robots-respecting) and stores a summary in `business_configs.website_md`, which is editable from `/dashboard/memory` → "Website Knowledge".
-- Gemini Live calls typed tools exposed by the app under `/api/voice/tools/*` — `business_knowledge_lookup`, `calendar_find_slots`, `calendar_book_appointment`, `send_follow_up_email`, `send_follow_up_sms`, `capture_caller_details`. Calendar + email proxy through Nango (Google Workspace / Microsoft 365); SMS uses the metered Telnyx path; capture writes to `coworker_logs`. Authentication is a single `ROWBOAT_GATEWAY_TOKEN` shared by app, Rowboat, and bridge.
+- Gemini Live calls typed tools exposed by the app under `/api/voice/tools/*` — `business_knowledge_lookup`, `calendar_find_slots`, `calendar_book_appointment`, `send_follow_up_email`, `send_follow_up_sms`, `capture_caller_details`. Calendar + email proxy through Nango (Google Workspace / Microsoft 365); SMS uses the metered Telnyx path; capture writes to `coworker_logs`. Authentication is a **per-tenant gateway token** (see [Per-tenant gateway tokens](#security-per-tenant-gateway-tokens)); the shared `ROWBOAT_GATEWAY_TOKEN` remains a fallback during the transition.
 - See [docs/VOICE-ROLLOUT.md §9](docs/VOICE-ROLLOUT.md) for the Phase 2 rollout runbook.
 
 ## Testing
@@ -87,6 +87,108 @@ tsx debug/check-ollama.ts [businessId]  # verify Ollama reachable + JSON extract
 
 > ⚠️ These touch production (service-role key + plaintext VPS SSH keys, and
 > they recreate live containers). See [`debug/README.md`](debug/README.md).
+
+## Security: per-tenant gateway tokens
+
+Historically every tenant VPS shared one platform-wide `ROWBOAT_GATEWAY_TOKEN`. That
+token is used three ways: (1) the bearer on VPS → app calls (`/api/voice/tools/*`,
+the Nango proxy, custom-integration credentials/call, `aiflows/send-owner-email`,
+and `/api/provisioning/progress`); (2) the HMAC secret Rowboat signs its tool-call
+JWT (`x-signature-jwt`) with; and (3) the API key the platform uses for app → Rowboat
+calls (chat/customer-memory summarizers). A single shared token means a compromise of
+**one** tenant VPS could impersonate **every** other tenant.
+
+**What changed**
+
+- **`vps_gateway_tokens` table** (`supabase/migrations/20260629020000_vps_gateway_tokens.sql`):
+  stores a distinct token per `business_id`. RLS is on with **no policies**, so
+  `anon`/`authenticated` get nothing — only `service_role` (which bypasses RLS) can
+  read it, identical posture to `vps_ssh_keys`. The plaintext token is stored because
+  it doubles as the symmetric HMAC secret (needs the same value on both sides);
+  `token_sha256` is the O(1) bearer-lookup index.
+- **Inbound binding**: VPS → app endpoints now resolve the presented bearer (or the
+  JWT's `projectId`) to a specific business and reject it if it's a *known per-tenant
+  token bound to a different business*. Helpers: `verifyGatewayTokenForBusiness`,
+  `gatewayBusinessGuard`, and `resolveRowboatWebhookClaims` (the single inbound gate —
+  the old shared-only `gatewayGuard` was removed so it can't reject a valid per-tenant
+  bearer). This closes the cross-tenant impersonation gap.
+- **Outbound binding**: app → Rowboat calls resolve the tenant's token via
+  `resolveOutboundRowboatBearer(businessId)`.
+- **The JWT path is EXCLUSIVE; the bearer path is NOT.** The shared `ROWBOAT_GATEWAY_TOKEN`
+  is a **platform-internal** secret: it lives in the app env and is presented by trusted
+  platform callers (notably the Supabase `ai-flow-worker` edge function, which calls
+  `/api/aiflows/*` and `/api/integrations/custom/call` on behalf of **every** tenant). It is
+  **never** deployed to a tenant VPS — provisioning injects each box's own per-tenant token
+  as its `ROWBOAT_GATEWAY_TOKEN`. Therefore:
+  - **Bearer** (`verifyGatewayTokenForBusiness`): a known per-tenant token must match its
+    business (binding check — this is the cross-tenant guard); otherwise the shared token is
+    accepted. It is intentionally not exclusive, so platform callers keep working for migrated
+    tenants. A transient DB read error fails open to the shared check.
+  - **JWT** (`resolveRowboatWebhookClaims`): once a project has a **confirmed** per-tenant
+    secret, the JWT is verified **only** against its per-tenant token(s) — the shared secret is
+    rejected. This is exclusive because the HMAC secret is forgeable by anyone who knows the
+    shared value, and Rowboat tool-call JWTs are signed on the (per-tenant) VPS, never by the
+    platform edge worker. Exclusivity is gated on *confirmed* (not merely pending) because the
+    box keeps signing with the shared secret until the deploy that injects the per-tenant token
+    finishes (see lifecycle below).
+- **A token has a PENDING → CONFIRMED lifecycle (`deployed_at`)** so the DB never gets ahead
+  of the VPS (`supabase/migrations/20260629050000_…sql`):
+  - Provisioning reads the business's existing token (`getActiveGatewayTokenForBusiness`,
+    pending **or** confirmed) or mints + inserts a fresh **pending** one (`issueGatewayToken`,
+    `deployed_at` NULL) BEFORE `deploy-client.sh` runs — the same token is the in-deploy
+    progress-callback bearer (`/api/provisioning/progress`), which authenticates via the
+    inbound binding (pending tokens still bind).
+  - While the token is pending, **outbound** app→Rowboat calls keep using the confirmed
+    secret the box is still on (`getDeployedGatewayTokenForBusiness` returns only confirmed
+    tokens), so a half-finished deploy never points summarizers at a token the box doesn't have.
+  - **Tool-call JWT** verification (`resolveRowboatWebhookClaims`) checks the JWT against
+    **every** non-revoked token for the project — pending *and* confirmed
+    (`getActiveGatewayTokensForProject`) — because the VPS starts signing with a freshly
+    deployed token the moment Rowboat restarts (before the app confirms it), and during a
+    rotation an old + new token briefly coexist. The shared secret is **still accepted while
+    the project has no confirmed token** (`hasConfirmed` false): a pending row exists from the
+    moment provisioning inserts it, but the box keeps signing with the shared secret for the
+    whole (multi-minute) deploy — rejecting it then would 401 every tool-call during a first
+    migration. The instant the first token is confirmed, the box has switched to it and the
+    shared secret is rejected forever. The lookup resolves the owning business via
+    `business_configs.rowboat_project_id` (which can be re-pointed) and falls back to treating
+    the project id as the business id.
+  - On a **successful** deploy the orchestrator calls `markGatewayTokenDeployed`, which runs
+    the `confirm_gateway_token` SQL function (`supabase/migrations/20260629060000_…sql`,
+    hardened by `…070000_confirm_gateway_token_guard.sql`) to revoke any older token and stamp
+    `deployed_at` **atomically** in one transaction — flipping outbound over to the per-tenant
+    secret without a zero-confirmed-token window. The function first verifies the target token
+    is a live row and raises (rolling back) otherwise, so a wrong/missing token can never
+    revoke the only confirmed secret and strand the tenant. A confirm failure *after* a
+    successful deploy is **non-fatal**: provisioning logs it and finishes (the box already
+    serves the new, still-pending secret that inbound JWT verification accepts), leaving the
+    pending token for the next idempotent reprovision to re-confirm. A failed deploy leaves
+    the pending token for the next attempt to **reuse** + redeploy (idempotent, self-healing).
+    A DB error during the initial mint aborts provisioning (no shared-token fallback). There
+    is no DB-only seed path.
+  - **Tool-call dispatch resolves the owning business**, not the raw project id. The JWT's
+    `projectId` claim is `business_configs.rowboat_project_id` (re-pointable), so both secret
+    resolution AND tool gating/dispatch go through `resolveBusinessIdForRowboatProject` —
+    otherwise a re-pointed project could authenticate yet run tools against the wrong tenant.
+- **One CONFIRMED token per business** is enforced by the partial unique index
+  `uq_vps_gateway_tokens_deployed_business` (`where revoked_at is null and deployed_at is not
+  null`), so two tenants can't end up with competing live secrets. `issueGatewayToken` is
+  insert-only (never revoke-before-insert), so a failed insert never leaves a business with
+  zero active tokens; revocation of the old token happens only in `markGatewayTokenDeployed`,
+  after the new one is confirmed.
+- **Existing live tenant (`621a5b0d-…`) stays on the shared token** (no per-tenant row)
+  until an operator runs a full rotation: mint a fresh token (`issueGatewayToken`),
+  redeploy its VPS with the new value (`deploy-client.sh` / the `debug/` redeploy
+  scripts), confirm container health, then it is automatically exclusive. This is the
+  one deferred step — it touches the live VPS and so is operator-scheduled.
+
+**`fn_grants_lockdown` event trigger** (`supabase/migrations/20260629030000_…sql`):
+a `ddl_command_end` event trigger that revokes `EXECUTE` from `public`/`anon`/
+`authenticated` on every new or altered **public** function (extension-owned functions
+skipped). This permanently closes the recurrence where `supabase_admin`'s default ACL —
+which the migration role can't `ALTER` — kept re-granting `anon`/`authenticated`
+EXECUTE on freshly created functions. Policy: public functions are **service_role-only**;
+callable surfaces go through service-role clients, never `anon`/`authenticated` RPC.
 
 ## Production checklist (high level)
 

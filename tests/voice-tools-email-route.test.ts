@@ -9,7 +9,8 @@ vi.mock("@/lib/nango/workspace", () => ({
 }));
 
 vi.mock("@/lib/rowboat/gateway-token", () => ({
-  verifyRowboatGatewayToken: vi.fn().mockReturnValue(true)
+  verifyRowboatGatewayToken: vi.fn().mockReturnValue(true),
+  verifyGatewayTokenForBusiness: vi.fn().mockResolvedValue(true)
 }));
 
 vi.mock("@/lib/db/agent-tool-settings", () => ({
@@ -23,7 +24,7 @@ vi.mock("@/lib/db/email-log", () => ({
 import { POST } from "@/app/api/voice/tools/email/route";
 import { resolveEmailConnection } from "@/lib/voice-tools/connections";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
-import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
+import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 
@@ -46,7 +47,7 @@ describe("POST /api/voice/tools/email", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env = { ...OLD, ROWBOAT_GATEWAY_TOKEN: "gw" };
-    vi.mocked(verifyRowboatGatewayToken).mockReturnValue(true);
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
     // Registry default: voice send_follow_up_email is ON unless toggled off.
     vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
   });
@@ -56,7 +57,7 @@ describe("POST /api/voice/tools/email", () => {
   });
 
   it("rejects requests without a gateway token", async () => {
-    vi.mocked(verifyRowboatGatewayToken).mockReturnValue(false);
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValueOnce(false);
     const res = await POST(makeRequest({ businessId, args: { toEmail: "x@y.com", subject: "s", bodyText: "b" } }));
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ ok: false, detail: "unauthorized" });

@@ -10,7 +10,8 @@ vi.mock("@/lib/vps/schedule-vault-sync", () => ({
 }));
 
 vi.mock("@/lib/rowboat/gateway-token", () => ({
-  verifyRowboatGatewayToken: vi.fn().mockReturnValue(true)
+  verifyRowboatGatewayToken: vi.fn().mockReturnValue(true),
+  verifyGatewayTokenForBusiness: vi.fn().mockResolvedValue(true)
 }));
 
 vi.mock("@/lib/db/agent-tool-settings", () => ({
@@ -20,7 +21,7 @@ vi.mock("@/lib/db/agent-tool-settings", () => ({
 import { POST } from "@/app/api/voice/tools/owner-append-business-memory/route";
 import { getBusinessConfig, patchBusinessConfig } from "@/lib/db/configs";
 import { scheduleVaultSync } from "@/lib/vps/schedule-vault-sync";
-import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
+import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -38,7 +39,7 @@ function makeReq(body: unknown, token = "gw"): Request {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(verifyRowboatGatewayToken).mockReturnValue(true);
+  vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
   // Registry default: dashboard memory_capture is ON unless toggled off.
   vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
 });
@@ -49,7 +50,7 @@ afterEach(() => {
 
 describe("POST /api/voice/tools/owner-append-business-memory", () => {
   it("401s without gateway bearer", async () => {
-    vi.mocked(verifyRowboatGatewayToken).mockReturnValue(false);
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValueOnce(false);
     const res = await POST(
       makeReq({
         businessId: BIZ,

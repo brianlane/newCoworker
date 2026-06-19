@@ -14,7 +14,7 @@ vi.mock("next/server", async () => {
   };
 });
 vi.mock("@/lib/rowboat/gateway-token", () => ({
-  verifyRowboatGatewayToken: vi.fn().mockReturnValue(true)
+  verifyGatewayTokenForBusiness: vi.fn().mockResolvedValue(true)
 }));
 vi.mock("@/lib/db/logs", () => ({ insertCoworkerLog: vi.fn() }));
 vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
@@ -23,7 +23,7 @@ vi.mock("@/lib/notifications/dispatch", () => ({
 }));
 
 import { POST } from "@/app/api/rowboat/route";
-import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
+import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 import { insertCoworkerLog } from "@/lib/db/logs";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
@@ -52,7 +52,7 @@ describe("api/rowboat route", () => {
   const original = process.env;
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(verifyRowboatGatewayToken).mockReturnValue(true);
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
     process.env = { ...original };
   });
   afterEach(() => {
@@ -60,7 +60,7 @@ describe("api/rowboat route", () => {
   });
 
   it("rejects unauthorized requests", async () => {
-    vi.mocked(verifyRowboatGatewayToken).mockReturnValue(false);
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(false);
     const res = await POST(makeReq(payload("urgent_alert")));
     expect(res.status).toBe(401);
     expect(insertCoworkerLog).not.toHaveBeenCalled();

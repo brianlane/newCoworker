@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// The no-deps bearer path routes through resolveOutboundRowboatBearer ->
+// getDeployedGatewayTokenForBusiness; stub it to "no confirmed per-tenant token"
+// so the env-var fallback tests stay hermetic (no DB call).
+vi.mock("@/lib/db/vps-gateway-tokens", () => ({
+  getDeployedGatewayTokenForBusiness: vi.fn(async () => null)
+}));
+
 /**
  * Supplemental coverage for src/lib/customer-memory/summarizer.ts —
  * targets the specific branches the original test file

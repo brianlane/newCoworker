@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { NextResponse } from "next/server";
-import { verifyRowboatGatewayToken } from "@/lib/rowboat/gateway-token";
+import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import type { AgentKey } from "@/lib/agent-tools/registry";
 
@@ -47,10 +47,21 @@ export function voiceToolValidationError(message: string): NextResponse {
   return NextResponse.json({ ok: false, detail: `invalid_args:${message}` }, { status: 400 });
 }
 
-export function gatewayGuard(request: Request): NextResponse | null {
-  if (!verifyRowboatGatewayToken(request)) {
-    return voiceToolUnauthorized();
-  }
+/**
+ * Single authoritative gateway guard for VPS → app calls. Call AFTER the
+ * businessId is known (envelope / query): the presented bearer must resolve to
+ * THIS business (per-tenant token) OR be the legacy shared `ROWBOAT_GATEWAY_TOKEN`
+ * (fail-open for boxes not yet on a per-tenant token). This closes the
+ * cross-tenant hole — a leaked tenant token can only act as ITS tenant, never as
+ * another via a forged businessId — while still accepting a tenant's own unique
+ * token at the door (no separate shared-only pre-gate that would 401 it first).
+ */
+export async function gatewayBusinessGuard(
+  request: Request,
+  businessId: string
+): Promise<NextResponse | null> {
+  const ok = await verifyGatewayTokenForBusiness(request, businessId);
+  if (!ok) return voiceToolUnauthorized();
   return null;
 }
 

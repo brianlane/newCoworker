@@ -1,12 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db/agent-tool-settings", () => ({
   isAgentToolEnabled: vi.fn()
 }));
 
+const { verifyForBusinessMock } = vi.hoisted(() => ({ verifyForBusinessMock: vi.fn() }));
+vi.mock("@/lib/rowboat/gateway-token", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/rowboat/gateway-token")>();
+  return { ...actual, verifyGatewayTokenForBusiness: verifyForBusinessMock };
+});
+
 import {
   agentToolDisabledResponse,
-  gatewayGuard,
+  gatewayBusinessGuard,
   parseVoiceToolRequest,
   voiceToolEnvelopeSchema,
   voiceToolResponse,
@@ -47,35 +53,7 @@ describe("voiceToolEnvelopeSchema", () => {
   });
 });
 
-describe("gatewayGuard + response helpers", () => {
-  const OLD = process.env;
-
-  beforeEach(() => {
-    process.env = { ...OLD, ROWBOAT_GATEWAY_TOKEN: "gw" };
-  });
-
-  afterEach(() => {
-    process.env = OLD;
-  });
-
-  it("returns 401 when the bearer is missing or wrong", async () => {
-    expect(gatewayGuard(new Request("http://localhost/"))).not.toBeNull();
-    const wrong = gatewayGuard(
-      new Request("http://localhost/", { headers: { authorization: "Bearer bad" } })
-    );
-    expect(wrong).not.toBeNull();
-    expect(wrong!.status).toBe(401);
-    const body = await wrong!.json();
-    expect(body).toEqual({ ok: false, detail: "unauthorized" });
-  });
-
-  it("returns null when the bearer matches", () => {
-    const ok = gatewayGuard(
-      new Request("http://localhost/", { headers: { authorization: "Bearer gw" } })
-    );
-    expect(ok).toBeNull();
-  });
-
+describe("response helpers", () => {
   it("voiceToolResponse keeps the raw ok/detail/data shape the bridge expects", async () => {
     const res = voiceToolResponse({ ok: false, detail: "email_not_connected" });
     expect(res.status).toBe(200); // bridge treats detail as a model-visible hint, not an HTTP error
@@ -93,6 +71,27 @@ describe("gatewayGuard + response helpers", () => {
     const res = voiceToolUnauthorized();
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ ok: false, detail: "unauthorized" });
+  });
+});
+
+describe("gatewayBusinessGuard", () => {
+  const businessId = "11111111-1111-4111-8111-111111111111";
+  beforeEach(() => vi.clearAllMocks());
+
+  it("returns null when the token resolves to the business", async () => {
+    verifyForBusinessMock.mockResolvedValue(true);
+    await expect(
+      gatewayBusinessGuard(new Request("http://localhost/"), businessId)
+    ).resolves.toBeNull();
+    expect(verifyForBusinessMock).toHaveBeenCalledWith(expect.any(Request), businessId);
+  });
+
+  it("returns a 401 when the token does not resolve to the business", async () => {
+    verifyForBusinessMock.mockResolvedValue(false);
+    const res = await gatewayBusinessGuard(new Request("http://localhost/"), businessId);
+    expect(res).not.toBeNull();
+    expect(res!.status).toBe(401);
+    expect(await res!.json()).toEqual({ ok: false, detail: "unauthorized" });
   });
 });
 

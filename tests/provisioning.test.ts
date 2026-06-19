@@ -29,6 +29,18 @@ vi.mock("@/lib/db/businesses", () => ({
   getBusiness: vi.fn().mockResolvedValue({ business_type: "real_estate" })
 }));
 
+// Per-tenant gateway token now resolves from the DB during provisioning: read
+// the active token, or mint + persist one BEFORE the deploy (it doubles as the
+// in-deploy progress-callback bearer). The reader echoes the shared env token so
+// the deploy-command assertion (ROWBOAT_GATEWAY_TOKEN=mock_gateway_token) stays
+// deterministic; when the env is unset the reader returns null so the mint path
+// runs with a fixed persisted value.
+vi.mock("@/lib/db/vps-gateway-tokens", () => ({
+  getActiveGatewayTokenForBusiness: vi.fn(async () => process.env.ROWBOAT_GATEWAY_TOKEN ?? null),
+  issueGatewayToken: vi.fn(async () => "minted-per-tenant-tok"),
+  markGatewayTokenDeployed: vi.fn(async () => undefined)
+}));
+
 vi.mock("@/lib/db/configs", () => ({
   upsertBusinessConfig: vi.fn().mockResolvedValue({}),
   getBusinessConfig: vi.fn().mockResolvedValue(null)
@@ -66,6 +78,11 @@ vi.mock("@/lib/db/telnyx-routes", () => ({
 }));
 
 import { updateBusinessStatus } from "@/lib/db/businesses";
+import {
+  getActiveGatewayTokenForBusiness,
+  issueGatewayToken,
+  markGatewayTokenDeployed
+} from "@/lib/db/vps-gateway-tokens";
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
 import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
@@ -208,6 +225,106 @@ describe("provisioning/orchestrate", () => {
     expect(result.vpsId).toBe("123");
     expect(result.tunnelUrl).toContain(".newcoworker.com");
     expect(vpsProvisioner).toHaveBeenCalledWith({ businessId: "biz-uuid-1", tier: "starter" });
+  });
+
+  it("reuses an existing per-tenant token without re-persisting it", async () => {
+    vi.mocked(getActiveGatewayTokenForBusiness).mockResolvedValueOnce("existing-per-tenant-tok");
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "standard", ownerEmail: "o@test.com" },
+      { vpsProvisioner, remoteExec }
+    );
+    const cmd = deployCallArg(remoteExec).command;
+    expectDeployHasEnv(cmd, "ROWBOAT_GATEWAY_TOKEN", "existing-per-tenant-tok");
+    // Existing token: nothing new is minted or persisted.
+    expect(issueGatewayToken).not.toHaveBeenCalled();
+  });
+
+  it("mints a PENDING token before deploy, injects it, and confirms it after", async () => {
+    delete process.env.ROWBOAT_GATEWAY_TOKEN;
+    vi.mocked(getActiveGatewayTokenForBusiness).mockResolvedValueOnce(null);
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "standard", ownerEmail: "o@test.com" },
+      { vpsProvisioner, remoteExec }
+    );
+    const cmd = deployCallArg(remoteExec).command;
+    expectDeployHasEnv(cmd, "ROWBOAT_GATEWAY_TOKEN", "minted-per-tenant-tok");
+    expect(issueGatewayToken).toHaveBeenCalledWith(
+      "biz-uuid-1",
+      expect.objectContaining({ label: "provisioning" })
+    );
+    // Confirmed only after a successful deploy.
+    expect(markGatewayTokenDeployed).toHaveBeenCalledWith("biz-uuid-1", "minted-per-tenant-tok");
+  });
+
+  it("does NOT abort when the post-deploy confirm fails (deploy already succeeded)", async () => {
+    delete process.env.ROWBOAT_GATEWAY_TOKEN;
+    vi.mocked(getActiveGatewayTokenForBusiness).mockResolvedValueOnce(null);
+    vi.mocked(markGatewayTokenDeployed).mockRejectedValueOnce(new Error("rpc boom"));
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    // The deploy succeeded; a confirm failure must be swallowed (logged) rather
+    // than throwing and stranding the tenant before status update.
+    await expect(
+      orchestrateProvisioning(
+        { businessId: "biz-uuid-1", tier: "standard", ownerEmail: "o@test.com" },
+        { vpsProvisioner, remoteExec }
+      )
+    ).resolves.not.toThrow();
+    expect(markGatewayTokenDeployed).toHaveBeenCalled();
+  });
+
+  it("swallows a non-Error confirm rejection too (String(err) branch)", async () => {
+    delete process.env.ROWBOAT_GATEWAY_TOKEN;
+    vi.mocked(getActiveGatewayTokenForBusiness).mockResolvedValueOnce(null);
+    vi.mocked(markGatewayTokenDeployed).mockRejectedValueOnce("plain-string-failure");
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await expect(
+      orchestrateProvisioning(
+        { businessId: "biz-uuid-1", tier: "standard", ownerEmail: "o@test.com" },
+        { vpsProvisioner, remoteExec }
+      )
+    ).resolves.not.toThrow();
+  });
+
+  it("does NOT confirm the token when the deploy fails", async () => {
+    delete process.env.ROWBOAT_GATEWAY_TOKEN;
+    vi.mocked(getActiveGatewayTokenForBusiness).mockResolvedValueOnce(null);
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+    const remoteExec = vi.fn(async (args: { command?: string }): Promise<SshExecResult> =>
+      String(args?.command ?? "").includes("/opt/deploy-client.sh")
+        ? { exitCode: 1, signal: null, stdout: "", stderr: "boom" }
+        : okExec()
+    );
+    await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "standard", ownerEmail: "o@test.com" },
+      { vpsProvisioner, remoteExec }
+    );
+    // Token was minted (pending) but never confirmed, so a retry reuses it.
+    expect(issueGatewayToken).toHaveBeenCalled();
+    expect(markGatewayTokenDeployed).not.toHaveBeenCalled();
+  });
+
+  it("aborts provisioning when the per-tenant token lookup fails", async () => {
+    vi.mocked(getActiveGatewayTokenForBusiness).mockRejectedValueOnce(new Error("db down"));
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await expect(
+      orchestrateProvisioning(
+        { businessId: "biz-uuid-1", tier: "standard", ownerEmail: "o@test.com" },
+        { vpsProvisioner, remoteExec }
+      )
+    ).rejects.toThrow(/db down/);
+    // Bootstrap may have run, but the deploy step must not have.
+    const ranDeploy = remoteExec.mock.calls.some((c) =>
+      String((c[0] as { command?: string } | undefined)?.command ?? "").includes("/opt/deploy-client.sh")
+    );
+    expect(ranDeploy).toBe(false);
+    expect(issueGatewayToken).not.toHaveBeenCalled();
   });
 
   it("starter tier forwards to provisioner with tier='starter'", async () => {

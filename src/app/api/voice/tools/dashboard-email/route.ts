@@ -10,8 +10,9 @@
  * already lives here for the same reason.
  *
  * Authorization layers:
- *   1. ROWBOAT_GATEWAY_TOKEN bearer (gatewayGuard) — only the tenant
- *      VPS/Rowboat can call.
+ *   1. Gateway-token bearer bound to this businessId (gatewayBusinessGuard) —
+ *      only the tenant's own VPS/Rowboat can call (per-tenant token, or the
+ *      shared ROWBOAT_GATEWAY_TOKEN fallback during the transition).
  *   2. The owner's Settings → Coworker tools toggle (`dashboard.send_email`,
  *      default OFF). Checked here authoritatively so a stale worker or a
  *      hallucinated block can never send mail the owner didn't opt into.
@@ -21,7 +22,7 @@
 
 import { z } from "zod";
 import {
-  gatewayGuard,
+  gatewayBusinessGuard,
   parseVoiceToolRequest,
   voiceToolResponse,
   voiceToolValidationError
@@ -43,9 +44,6 @@ const argsSchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const guard = gatewayGuard(request);
-  if (guard) return guard;
-
   let envelope;
   try {
     envelope = await parseVoiceToolRequest(request);
@@ -54,6 +52,9 @@ export async function POST(request: Request) {
       err instanceof z.ZodError ? err.issues[0]?.message ?? "invalid envelope" : "invalid body"
     );
   }
+
+  const bindGuard = await gatewayBusinessGuard(request, envelope.businessId);
+  if (bindGuard) return bindGuard;
 
   if ((envelope.callerE164 ?? "").trim() !== "") {
     return voiceToolResponse({ ok: false, detail: "owner_dashboard_only" });
