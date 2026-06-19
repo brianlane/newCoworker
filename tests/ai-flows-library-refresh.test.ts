@@ -3,11 +3,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
 vi.mock("@/lib/ai-flows/library", () => ({
   aggregateLibraryCandidates: vi.fn(),
-  upsertLibraryEntry: vi.fn()
+  upsertLibraryEntry: vi.fn(),
+  pruneLibraryEntries: vi.fn()
 }));
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { aggregateLibraryCandidates, upsertLibraryEntry } from "@/lib/ai-flows/library";
+import {
+  aggregateLibraryCandidates,
+  pruneLibraryEntries,
+  upsertLibraryEntry
+} from "@/lib/ai-flows/library";
 import { refreshAiFlowLibrary } from "@/lib/ai-flows/library-refresh";
 
 const DEF = {
@@ -56,6 +61,8 @@ describe("refreshAiFlowLibrary", () => {
     expect(result).toEqual({ candidates: 0, groups: 0 });
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
     expect(upsertLibraryEntry).not.toHaveBeenCalled();
+    // With no candidates, prune clears the whole catalog (empty keep list).
+    expect(pruneLibraryEntries).toHaveBeenCalledWith([], expect.anything());
   });
 
   it("groups copies, sums stats, scrubs names, and upserts one entry per template", async () => {
@@ -141,6 +148,11 @@ describe("refreshAiFlowLibrary", () => {
 
     const weekly = calls.find((c) => c.templateKey === "weekly-report")!;
     expect(weekly.category).toBe("Unknown Industry"); // unmapped -> title-cased
+
+    // Stale entries are pruned to the surviving template keys.
+    expect(pruneLibraryEntries).toHaveBeenCalledTimes(1);
+    const keptKeys = vi.mocked(pruneLibraryEntries).mock.calls[0][0];
+    expect([...keptKeys].sort()).toEqual(["daily-digest", "referralexchange-lead", "weekly-report"]);
   });
 
   it("handles null name-lookup results (no known names)", async () => {

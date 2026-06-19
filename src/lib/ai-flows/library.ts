@@ -81,9 +81,12 @@ export async function getAiFlowLibraryEntry(
 }
 
 /**
- * Record a duplication of a library entry into a business: log the download and
- * optimistically bump the entry's download_count (the refresh job reconciles it
- * from the downloads table). Best-effort — never blocks the duplicate itself.
+ * Record a duplication of a library entry into a business: log the download,
+ * then set download_count to the authoritative COUNT of download rows for the
+ * entry. Counting the just-written source-of-truth table (rather than bumping a
+ * cached value) avoids the lost-update race two concurrent "Use this flow"
+ * requests would hit with a read-modify-write. Best-effort — never blocks the
+ * duplicate itself.
  */
 export async function recordLibraryDownload(
   libraryId: string,
@@ -92,15 +95,37 @@ export async function recordLibraryDownload(
 ): Promise<void> {
   const db = await resolveDb(client);
   await db.from("ai_flow_library_downloads").insert({ library_id: libraryId, business_id: businessId });
-  // `download_count + 1` is evaluated in-statement, so concurrent duplicates
-  // don't lose increments (no read-modify-write race in app code).
-  const { data } = await db
+  const { count } = await db
+    .from("ai_flow_library_downloads")
+    .select("*", { count: "exact", head: true })
+    .eq("library_id", libraryId);
+  await db
     .from("ai_flow_library")
-    .select("download_count")
-    .eq("id", libraryId)
-    .maybeSingle();
-  const next = ((data?.download_count as number | undefined) ?? 0) + 1;
-  await db.from("ai_flow_library").update({ download_count: next }).eq("id", libraryId);
+    .update({ download_count: count ?? 0 })
+    .eq("id", libraryId);
+}
+
+/**
+ * Delete catalog entries whose template_key is NOT in `keepKeys` — i.e. flows
+ * that no longer have any successful run. Keeps the public library from showing
+ * retired automations with stale stats. When `keepKeys` is empty the whole
+ * catalog is cleared (no flow qualifies). Cascades to download rows via FK.
+ */
+export async function pruneLibraryEntries(
+  keepKeys: string[],
+  client?: SupabaseClient
+): Promise<number> {
+  const db = await resolveDb(client);
+  const { data, error } = await db.from("ai_flow_library").select("id,template_key");
+  if (error) throw new Error(`pruneLibraryEntries: ${error.message}`);
+  const keep = new Set(keepKeys);
+  const staleIds = (data ?? [])
+    .filter((r) => !keep.has(r.template_key as string))
+    .map((r) => r.id as string);
+  if (staleIds.length === 0) return 0;
+  const { error: delError } = await db.from("ai_flow_library").delete().in("id", staleIds);
+  if (delError) throw new Error(`pruneLibraryEntries: ${delError.message}`);
+  return staleIds.length;
 }
 
 /** Run the aggregation RPC: every flow with >=1 successful run + its stats. */

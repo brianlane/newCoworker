@@ -13,9 +13,10 @@
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { summarizeDefinition } from "@/lib/ai-flows/schema";
-import { scrubDefinition, templateKeyFromName } from "@/lib/ai-flows/scrub";
+import { redactText, scrubDefinition, templateKeyFromName } from "@/lib/ai-flows/scrub";
 import {
   aggregateLibraryCandidates,
+  pruneLibraryEntries,
   upsertLibraryEntry,
   type AiFlowLibraryCandidate
 } from "@/lib/ai-flows/library";
@@ -76,20 +77,26 @@ export async function refreshAiFlowLibrary(client?: SupabaseClient): Promise<Lib
   const db = client ?? (await createSupabaseServiceClient());
   const candidates = await aggregateLibraryCandidates(db);
 
-  // Group every successful-flow candidate by its template key.
+  // Known names must be loaded BEFORE grouping so the grouping key (and later
+  // the public title/URL slug) is derived from a PII-redacted name — the same
+  // phone/email/known-name redaction applied to the definition. This also makes
+  // grouping more robust: "Amy's referral flow" and "Bob's referral flow"
+  // redact to the same "[name]'s referral flow" and collapse into one entry.
+  const knownNames = await loadKnownNames(
+    [...new Set(candidates.map((c) => c.business_id))],
+    db
+  );
+  const redactedNameFor = (c: AiFlowLibraryCandidate): string =>
+    redactText(c.name, knownNames.get(c.business_id) ?? []);
+
   const groups = new Map<string, AiFlowLibraryCandidate[]>();
   for (const c of candidates) {
-    const key = templateKeyFromName(c.name);
+    const key = templateKeyFromName(redactedNameFor(c));
     if (!key) continue;
     const list = groups.get(key);
     if (list) list.push(c);
     else groups.set(key, [c]);
   }
-
-  const knownNames = await loadKnownNames(
-    [...new Set(candidates.map((c) => c.business_id))],
-    db
-  );
 
   for (const [templateKey, members] of groups) {
     // Representative = the most recently successful copy (freshest definition).
@@ -106,14 +113,14 @@ export async function refreshAiFlowLibrary(client?: SupabaseClient): Promise<Lib
       null
     );
 
-    const scrubbed = scrubDefinition(representative.definition, {
-      knownNames: knownNames.get(representative.business_id) ?? []
-    });
+    const repNames = knownNames.get(representative.business_id) ?? [];
+    const scrubbed = scrubDefinition(representative.definition, { knownNames: repNames });
 
     await upsertLibraryEntry(
       {
         templateKey,
-        title: cleanTitle(representative.name),
+        // Title comes from the redacted name too — never the raw (PII) name.
+        title: cleanTitle(redactText(representative.name, repNames)),
         summary: summarizeDefinition(representative.definition),
         category: deriveCategory(representative.business_type),
         scrubbedDefinition: scrubbed,
@@ -127,6 +134,9 @@ export async function refreshAiFlowLibrary(client?: SupabaseClient): Promise<Lib
       db
     );
   }
+
+  // Drop catalog entries whose flows no longer qualify (no successful runs).
+  await pruneLibraryEntries([...groups.keys()], db);
 
   return { candidates: candidates.length, groups: groups.size };
 }

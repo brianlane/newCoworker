@@ -7,6 +7,7 @@ import {
   aggregateLibraryCandidates,
   getAiFlowLibraryEntry,
   listAiFlowLibrary,
+  pruneLibraryEntries,
   recordLibraryDownload,
   upsertLibraryEntry
 } from "@/lib/ai-flows/library";
@@ -15,6 +16,7 @@ type StubErr = { message: string } | null;
 type StubOpts = {
   array?: unknown;
   maybe?: unknown;
+  count?: number | null;
   error?: StubErr;
   rpc?: unknown;
   rpcError?: StubErr;
@@ -27,15 +29,41 @@ function makeDb(opts: StubOpts) {
   }
   b.maybeSingle = vi.fn(() => Promise.resolve({ data: opts.maybe ?? null, error: opts.error ?? null }));
   b.then = (resolve: any, reject: any) =>
-    Promise.resolve({ data: "array" in opts ? opts.array : [], error: opts.error ?? null }).then(
-      resolve,
-      reject
-    );
+    Promise.resolve({
+      data: "array" in opts ? opts.array : [],
+      count: "count" in opts ? opts.count : undefined,
+      error: opts.error ?? null
+    }).then(resolve, reject);
   const db = {
     from: vi.fn(() => b),
     rpc: vi.fn(() => Promise.resolve({ data: opts.rpc ?? null, error: opts.rpcError ?? null }))
   };
   return { db, b };
+}
+
+// Prune needs independent results for the SELECT (existing rows) and the DELETE,
+// which a single shared builder can't express.
+function makePruneDb(opts: {
+  selectData?: unknown;
+  selectError?: StubErr;
+  deleteError?: StubErr;
+}) {
+  const selectChain: any = {
+    select: vi.fn(() => selectChain),
+    then: (resolve: any, reject: any) =>
+      Promise.resolve({ data: opts.selectData ?? null, error: opts.selectError ?? null }).then(
+        resolve,
+        reject
+      )
+  };
+  const deleteChain: any = {
+    delete: vi.fn(() => deleteChain),
+    in: vi.fn(() => deleteChain),
+    then: (resolve: any, reject: any) =>
+      Promise.resolve({ error: opts.deleteError ?? null }).then(resolve, reject)
+  };
+  const b = { select: selectChain.select, delete: deleteChain.delete };
+  return { db: { from: vi.fn(() => b) }, deleteChain };
 }
 
 const ROW = {
@@ -111,16 +139,67 @@ describe("getAiFlowLibraryEntry", () => {
 });
 
 describe("recordLibraryDownload", () => {
-  it("bumps an existing count", async () => {
-    const { db, b } = makeDb({ maybe: { download_count: 4 } });
+  it("sets download_count to the authoritative row count", async () => {
+    const { db, b } = makeDb({ count: 5 });
     await recordLibraryDownload(ROW.id, "biz-1", db as never);
+    expect(b.insert).toHaveBeenCalledWith({ library_id: ROW.id, business_id: "biz-1" });
     expect(b.update).toHaveBeenCalledWith({ download_count: 5 });
   });
 
-  it("starts at 1 when no row/count exists", async () => {
-    const { db, b } = makeDb({ maybe: null });
+  it("defaults to 0 when the count is null", async () => {
+    const { db, b } = makeDb({ count: null });
     await recordLibraryDownload(ROW.id, "biz-1", db as never);
-    expect(b.update).toHaveBeenCalledWith({ download_count: 1 });
+    expect(b.update).toHaveBeenCalledWith({ download_count: 0 });
+  });
+});
+
+describe("pruneLibraryEntries", () => {
+  it("deletes entries whose template_key is not kept", async () => {
+    const { db, deleteChain } = makePruneDb({
+      selectData: [
+        { id: "a", template_key: "keep-me" },
+        { id: "b", template_key: "stale" }
+      ]
+    });
+    const removed = await pruneLibraryEntries(["keep-me"], db as never);
+    expect(removed).toBe(1);
+    expect(deleteChain.in).toHaveBeenCalledWith("id", ["b"]);
+  });
+
+  it("removes everything when no keys are kept", async () => {
+    const { db, deleteChain } = makePruneDb({
+      selectData: [{ id: "a", template_key: "x" }]
+    });
+    expect(await pruneLibraryEntries([], db as never)).toBe(1);
+    expect(deleteChain.in).toHaveBeenCalledWith("id", ["a"]);
+  });
+
+  it("returns 0 and skips delete when nothing is stale", async () => {
+    const { db, deleteChain } = makePruneDb({ selectData: [{ id: "a", template_key: "keep" }] });
+    expect(await pruneLibraryEntries(["keep"], db as never)).toBe(0);
+    expect(deleteChain.in).not.toHaveBeenCalled();
+  });
+
+  it("defaults to empty when the select returns null", async () => {
+    const { db } = makePruneDb({ selectData: null });
+    expect(await pruneLibraryEntries(["keep"], db as never)).toBe(0);
+  });
+
+  it("throws when the select fails", async () => {
+    const { db } = makePruneDb({ selectError: { message: "sel boom" } });
+    await expect(pruneLibraryEntries(["k"], db as never)).rejects.toThrow(
+      "pruneLibraryEntries: sel boom"
+    );
+  });
+
+  it("throws when the delete fails", async () => {
+    const { db } = makePruneDb({
+      selectData: [{ id: "b", template_key: "stale" }],
+      deleteError: { message: "del boom" }
+    });
+    await expect(pruneLibraryEntries(["keep"], db as never)).rejects.toThrow(
+      "pruneLibraryEntries: del boom"
+    );
   });
 });
 

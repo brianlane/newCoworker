@@ -8,10 +8,15 @@ import { AiFlowRunsManager } from "@/components/dashboard/AiFlowRunsManager";
 
 export const dynamic = "force-dynamic";
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 type Props = { searchParams: Promise<{ flowId?: string }> };
 
 export default async function AiFlowRunsPage({ searchParams }: Props) {
-  const { flowId } = await searchParams;
+  const { flowId: rawFlowId } = await searchParams;
+  // Ignore a malformed flowId rather than letting it reach the query and 500
+  // (mirrors the runs API route, which also drops invalid ids).
+  const flowId = rawFlowId && UUID_RE.test(rawFlowId) ? rawFlowId : undefined;
 
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard/aiflows/runs");
@@ -28,7 +33,7 @@ export default async function AiFlowRunsPage({ searchParams }: Props) {
 
   const [runs, flows] = businessId
     ? await Promise.all([
-        listAiFlowRuns(businessId, { flowId: flowId || undefined, limit: 100 }),
+        listAiFlowRuns(businessId, { flowId, limit: 100 }),
         listAiFlows(businessId)
       ])
     : [[], []];
