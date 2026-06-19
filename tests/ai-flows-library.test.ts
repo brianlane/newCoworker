@@ -146,10 +146,16 @@ describe("recordLibraryDownload", () => {
     expect(b.update).toHaveBeenCalledWith({ download_count: 5 });
   });
 
-  it("defaults to 0 when the count is null", async () => {
+  it("leaves download_count untouched when the count is null", async () => {
     const { db, b } = makeDb({ count: null });
     await recordLibraryDownload(ROW.id, "biz-1", db as never);
-    expect(b.update).toHaveBeenCalledWith({ download_count: 0 });
+    expect(b.update).not.toHaveBeenCalled();
+  });
+
+  it("leaves download_count untouched when the count query errors", async () => {
+    const { db, b } = makeDb({ count: 3, error: { message: "count boom" } });
+    await recordLibraryDownload(ROW.id, "biz-1", db as never);
+    expect(b.update).not.toHaveBeenCalled();
   });
 });
 

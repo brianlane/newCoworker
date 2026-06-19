@@ -95,14 +95,14 @@ export async function recordLibraryDownload(
 ): Promise<void> {
   const db = await resolveDb(client);
   await db.from("ai_flow_library_downloads").insert({ library_id: libraryId, business_id: businessId });
-  const { count } = await db
+  const { count, error } = await db
     .from("ai_flow_library_downloads")
     .select("*", { count: "exact", head: true })
     .eq("library_id", libraryId);
-  await db
-    .from("ai_flow_library")
-    .update({ download_count: count ?? 0 })
-    .eq("id", libraryId);
+  // If the count is unavailable (query error / null), leave download_count as-is
+  // rather than zeroing a real total — the hourly refresh reconciles it anyway.
+  if (error || count === null || count === undefined) return;
+  await db.from("ai_flow_library").update({ download_count: count }).eq("id", libraryId);
 }
 
 /**
