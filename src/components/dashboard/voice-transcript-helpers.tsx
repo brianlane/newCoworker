@@ -20,11 +20,12 @@ export type FormatDateTimeStyle = "list" | "detail" | "date";
  */
 export function formatDateTime(
   iso: string,
-  style: FormatDateTimeStyle = "list"
+  style: FormatDateTimeStyle = "list",
+  timeZone?: string
 ): string {
   try {
     const d = new Date(iso);
-    const options: Intl.DateTimeFormatOptions =
+    const base: Intl.DateTimeFormatOptions =
       style === "detail"
         ? {
             weekday: "short",
@@ -45,6 +46,10 @@ export function formatDateTime(
               hour: "numeric",
               minute: "2-digit"
             };
+    // `timeZone` lets callers force a deterministic zone (e.g. "UTC") so the
+    // server and pre-hydration client markup match exactly; omit it to use the
+    // viewer's local zone.
+    const options = timeZone ? { ...base, timeZone } : base;
     return d.toLocaleString(undefined, options);
   } catch {
     return iso;
