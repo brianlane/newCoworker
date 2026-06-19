@@ -2,9 +2,9 @@
 # or login-gated; otherwise the worker's static fetch is sufficient.
 #
 # The base image tag MUST match the Playwright version pinned in package-lock.json
-# (currently 1.60.0) so the bundled browsers match the installed library — a
+# (currently 1.61.0) so the bundled browsers match the installed library — a
 # mismatch is the classic "Executable doesn't exist" container failure.
-FROM mcr.microsoft.com/playwright:v1.60.0-jammy
+FROM mcr.microsoft.com/playwright:v1.61.0-jammy
 
 WORKDIR /app
 COPY package.json package-lock.json ./
