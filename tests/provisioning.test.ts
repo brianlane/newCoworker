@@ -260,6 +260,37 @@ describe("provisioning/orchestrate", () => {
     expect(markGatewayTokenDeployed).toHaveBeenCalledWith("biz-uuid-1", "minted-per-tenant-tok");
   });
 
+  it("does NOT abort when the post-deploy confirm fails (deploy already succeeded)", async () => {
+    delete process.env.ROWBOAT_GATEWAY_TOKEN;
+    vi.mocked(getActiveGatewayTokenForBusiness).mockResolvedValueOnce(null);
+    vi.mocked(markGatewayTokenDeployed).mockRejectedValueOnce(new Error("rpc boom"));
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    // The deploy succeeded; a confirm failure must be swallowed (logged) rather
+    // than throwing and stranding the tenant before status update.
+    await expect(
+      orchestrateProvisioning(
+        { businessId: "biz-uuid-1", tier: "standard", ownerEmail: "o@test.com" },
+        { vpsProvisioner, remoteExec }
+      )
+    ).resolves.not.toThrow();
+    expect(markGatewayTokenDeployed).toHaveBeenCalled();
+  });
+
+  it("swallows a non-Error confirm rejection too (String(err) branch)", async () => {
+    delete process.env.ROWBOAT_GATEWAY_TOKEN;
+    vi.mocked(getActiveGatewayTokenForBusiness).mockResolvedValueOnce(null);
+    vi.mocked(markGatewayTokenDeployed).mockRejectedValueOnce("plain-string-failure");
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await expect(
+      orchestrateProvisioning(
+        { businessId: "biz-uuid-1", tier: "standard", ownerEmail: "o@test.com" },
+        { vpsProvisioner, remoteExec }
+      )
+    ).resolves.not.toThrow();
+  });
+
   it("does NOT confirm the token when the deploy fails", async () => {
     delete process.env.ROWBOAT_GATEWAY_TOKEN;
     vi.mocked(getActiveGatewayTokenForBusiness).mockResolvedValueOnce(null);

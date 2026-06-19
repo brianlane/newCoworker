@@ -107,6 +107,28 @@ export async function getDeployedGatewayTokenForBusiness(
   return data ? (data.token as string) : null;
 }
 
+/**
+ * Resolve the business that owns Rowboat project `projectId`. The JWT's project
+ * claim is `business_configs.rowboat_project_id`, which can be re-pointed per tenant
+ * and defaults to the business UUID — so we look it up in the config first and fall
+ * back to treating `projectId` as the business id (the >99% case). Both tool-call
+ * dispatch AND per-tenant token resolution MUST go through this so a re-pointed
+ * project can't authenticate as one business but run tools against another.
+ */
+export async function resolveBusinessIdForRowboatProject(
+  projectId: string,
+  client?: SupabaseClient
+): Promise<string> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data: cfg, error } = await db
+    .from("business_configs")
+    .select("business_id")
+    .eq("rowboat_project_id", projectId)
+    .maybeSingle();
+  if (error) throw new Error(`resolveBusinessIdForRowboatProject: ${error.message}`);
+  return cfg ? (cfg.business_id as string) : projectId;
+}
+
 export type ProjectGatewayTokens = {
   /** Every non-revoked token (pending AND confirmed) for the owning business. */
   tokens: string[];
@@ -140,14 +162,7 @@ export async function getActiveGatewayTokensForProject(
   client?: SupabaseClient
 ): Promise<ProjectGatewayTokens> {
   const db = client ?? (await createSupabaseServiceClient());
-  let businessId = projectId;
-  const { data: cfg, error: cfgErr } = await db
-    .from("business_configs")
-    .select("business_id")
-    .eq("rowboat_project_id", projectId)
-    .maybeSingle();
-  if (cfgErr) throw new Error(`getActiveGatewayTokensForProject(config): ${cfgErr.message}`);
-  if (cfg) businessId = cfg.business_id as string;
+  const businessId = await resolveBusinessIdForRowboatProject(projectId, db);
   const { data, error } = await db
     .from("vps_gateway_tokens")
     .select("token, deployed_at")

@@ -985,8 +985,33 @@ async function runOrchestrator(
   // Now that the box actually carries the token, confirm it: this is what flips
   // outbound/JWT verification over to the per-tenant secret and revokes any older
   // token. Done only on a successful deploy so the DB never gets ahead of the VPS.
+  //
+  // A confirm failure here is NON-fatal: the deploy already succeeded and the box is
+  // serving the new (still-pending) secret, so inbound tool-call JWTs already verify
+  // (resolveRowboatWebhookClaims accepts pending tokens). Throwing would abort before
+  // `updateBusinessStatus` and leave the tenant stuck. Instead we log + record the
+  // warning and continue; outbound app→Rowboat keeps using the prior confirmed token
+  // until the next (idempotent) reprovision re-runs the confirm. The token row stays
+  // pending and is reused, so nothing is lost.
   if (deploySucceeded) {
-    await markGatewayTokenDeployed(businessId, gatewayToken);
+    try {
+      await markGatewayTokenDeployed(businessId, gatewayToken);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error("markGatewayTokenDeployed failed after a successful deploy", {
+        businessId,
+        vpsId,
+        error: msg
+      });
+      await recordProvisioningProgress({
+        businessId,
+        phase: "gateway_token_confirm_failed",
+        percent: 96,
+        message: `Gateway token confirm failed (deploy OK, token left pending for reprovision): ${msg}`,
+        source: "orchestrator",
+        status: "error"
+      });
+    }
   }
 
   await updateBusinessStatus(businessId, "online", vpsId);

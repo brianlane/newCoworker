@@ -15,6 +15,7 @@ import {
   resolveGatewayTokenBinding,
   getActiveGatewayTokenForBusiness,
   getDeployedGatewayTokenForBusiness,
+  resolveBusinessIdForRowboatProject,
   getActiveGatewayTokensForProject,
   issueGatewayToken,
   markGatewayTokenDeployed
@@ -221,6 +222,29 @@ describe("issueGatewayToken", () => {
     serviceClientHolder.current = client;
     await issueGatewayToken("biz");
     expect(insertSpy).toHaveBeenCalled();
+  });
+});
+
+describe("resolveBusinessIdForRowboatProject", () => {
+  it("returns the mapped business id when a config row matches (explicit client)", async () => {
+    const { client } = makeClient({ maybeSingle: { data: { business_id: "biz-cfg" }, error: null } });
+    expect(await resolveBusinessIdForRowboatProject("proj-x", client as never)).toBe("biz-cfg");
+  });
+
+  it("falls back to treating the project id as the business id when no config matches", async () => {
+    const { client } = makeClient({ maybeSingle: { data: null, error: null } });
+    expect(await resolveBusinessIdForRowboatProject("proj-as-biz", client as never)).toBe("proj-as-biz");
+  });
+
+  it("throws on a config lookup error", async () => {
+    const { client } = makeClient({ maybeSingle: { data: null, error: { message: "cfg-fail" } } });
+    await expect(resolveBusinessIdForRowboatProject("p", client as never)).rejects.toThrow(/cfg-fail/);
+  });
+
+  it("falls back to the service client when none is passed", async () => {
+    const { client } = makeClient({ maybeSingle: { data: { business_id: "biz-svc" }, error: null } });
+    serviceClientHolder.current = client;
+    expect(await resolveBusinessIdForRowboatProject("p")).toBe("biz-svc");
   });
 });
 

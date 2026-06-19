@@ -4,10 +4,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // The route now calls the async per-tenant resolver. Keep the existing
 // verifyRowboatWebhookJwt-driven tests working by delegating
 // resolveRowboatWebhookClaims to the same mock fn.
-const { verifyMock } = vi.hoisted(() => ({ verifyMock: vi.fn() }));
+const { verifyMock, resolveBusinessMock } = vi.hoisted(() => ({
+  verifyMock: vi.fn(),
+  // Default: identity (projectId == business_id, the >99% case).
+  resolveBusinessMock: vi.fn(async (projectId: string) => projectId)
+}));
 vi.mock("@/lib/rowboat/webhook-jwt", () => ({
   verifyRowboatWebhookJwt: verifyMock,
   resolveRowboatWebhookClaims: vi.fn(async (token: string) => verifyMock(token))
+}));
+
+vi.mock("@/lib/db/vps-gateway-tokens", () => ({
+  resolveBusinessIdForRowboatProject: resolveBusinessMock
 }));
 
 vi.mock("@/lib/db/agent-tool-settings", () => ({
@@ -125,6 +133,41 @@ describe("POST /api/rowboat/tool-call auth", () => {
     vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content, { projectId: "nope" }));
     const res = await POST(makeRequest(content));
     expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: false, detail: "invalid_project" });
+    expect(vi.mocked(lookupCustomerByPhone)).not.toHaveBeenCalled();
+  });
+
+  it("maps a re-pointed projectId to the OWNING business before gating/dispatching", async () => {
+    const otherBiz = "22222222-2222-4222-8222-222222222222";
+    resolveBusinessMock.mockResolvedValueOnce(otherBiz);
+    const content = makeContent("customer_lookup_by_phone", { phone: "+15551230000" });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    vi.mocked(lookupCustomerByPhone).mockResolvedValue({ found: false } as never);
+    await POST(makeRequest(content));
+    // The gate check and the handler must run against the resolved business, not
+    // the raw projectId claim.
+    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenCalledWith(
+      otherBiz,
+      expect.anything(),
+      expect.anything()
+    );
+    expect(vi.mocked(lookupCustomerByPhone)).toHaveBeenCalledWith(otherBiz, expect.anything());
+  });
+
+  it("rejects when the project→business resolution throws", async () => {
+    resolveBusinessMock.mockRejectedValueOnce(new Error("db down"));
+    const content = makeContent("customer_lookup_by_phone", { phone: "+15551230000" });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect(await res.json()).toEqual({ ok: false, detail: "invalid_project" });
+    expect(vi.mocked(lookupCustomerByPhone)).not.toHaveBeenCalled();
+  });
+
+  it("rejects when the resolved business id is not a UUID", async () => {
+    resolveBusinessMock.mockResolvedValueOnce("not-a-uuid");
+    const content = makeContent("customer_lookup_by_phone", { phone: "+15551230000" });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
     expect(await res.json()).toEqual({ ok: false, detail: "invalid_project" });
     expect(vi.mocked(lookupCustomerByPhone)).not.toHaveBeenCalled();
   });

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { z } from "zod";
 import { NextResponse } from "next/server";
 import { resolveRowboatWebhookClaims } from "@/lib/rowboat/webhook-jwt";
+import { resolveBusinessIdForRowboatProject } from "@/lib/db/vps-gateway-tokens";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import type { AgentKey } from "@/lib/agent-tools/registry";
 import {
@@ -285,7 +286,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, detail: "unauthorized" }, { status: 401 });
   }
 
-  const businessId = claims.projectId;
+  // The JWT's projectId is `business_configs.rowboat_project_id`, which can be
+  // re-pointed, so map it to the OWNING business before gating/dispatching tools
+  // (the same resolver JWT verification used to pick the secret). Using the raw
+  // projectId here would run a re-pointed tenant's tools against the wrong UUID.
+  let businessId: string;
+  try {
+    businessId = await resolveBusinessIdForRowboatProject(claims.projectId);
+  } catch (err) {
+    logger.warn("rowboat/tool-call: project resolve failed", {
+      projectId: claims.projectId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return NextResponse.json({ ok: false, detail: "invalid_project" });
+  }
   if (!z.string().uuid().safeParse(businessId).success) {
     return NextResponse.json({ ok: false, detail: "invalid_project" });
   }
