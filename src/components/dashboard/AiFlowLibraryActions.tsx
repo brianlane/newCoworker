@@ -76,11 +76,22 @@ export function AiFlowLibraryActions({
         return;
       }
       // Stash the adapted draft for the builder to pick up, then open a fresh
-      // editor pre-loaded from it.
+      // editor pre-loaded from it. The builder reads the draft from
+      // sessionStorage, so if the write fails (private mode, quota, storage
+      // disabled) we must NOT navigate — otherwise the paid adaptation is lost.
+      let stored = false;
       try {
         sessionStorage.setItem("aiflow_adapt_draft", JSON.stringify(json.data.definition));
+        stored = true;
       } catch {
-        /* sessionStorage unavailable — fall through with the raw draft shown */
+        stored = false;
+      }
+      if (!stored) {
+        setError(
+          'Your browser blocked storage, so the adapted draft couldn\u2019t be opened. ' +
+            'Please try again, or use "Use this flow" instead.'
+        );
+        return;
       }
       setDraft(json.data.definition);
       router.push(`/dashboard/aiflows?adapt=1`);
