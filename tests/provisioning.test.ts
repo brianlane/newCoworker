@@ -264,9 +264,9 @@ describe("provisioning/orchestrate", () => {
     vi.mocked(getActiveGatewayTokenForBusiness).mockResolvedValueOnce(null);
     const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
     // Bootstrap succeeds; only the deploy-client.sh step fails.
-    const remoteExec = vi.fn(async (args: { command?: string }) =>
+    const remoteExec = vi.fn(async (args: { command?: string }): Promise<SshExecResult> =>
       String(args?.command ?? "").includes("/opt/deploy-client.sh")
-        ? { exitCode: 1, stdout: "", stderr: "boom" }
+        ? { exitCode: 1, signal: null, stdout: "", stderr: "boom" }
         : okExec()
     );
     await orchestrateProvisioning(
