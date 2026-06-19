@@ -84,11 +84,10 @@ export async function getActiveGatewayTokenForBusiness(
 
 /**
  * Latest non-revoked token (plaintext) that has been CONFIRMED on the VPS
- * (`deployed_at` set). Used for the outbound Rowboat bearer and for exclusive
- * tool-call JWT verification, so the app never gets "ahead" of the box: until a
- * freshly minted token is confirmed deployed, callers fall back to the shared
- * env token (which the VPS is still using). Returns null when the business has
- * no confirmed per-tenant token yet.
+ * (`deployed_at` set). Used for the outbound Rowboat bearer, so the app never
+ * gets "ahead" of the box: until a freshly minted token is confirmed deployed,
+ * callers fall back to the shared env token (which the VPS is still using).
+ * Returns null when the business has no confirmed per-tenant token yet.
  */
 export async function getDeployedGatewayTokenForBusiness(
   businessId: string,
@@ -106,6 +105,41 @@ export async function getDeployedGatewayTokenForBusiness(
     .maybeSingle();
   if (error) throw new Error(`getDeployedGatewayTokenForBusiness: ${error.message}`);
   return data ? (data.token as string) : null;
+}
+
+/**
+ * ALL non-revoked tokens (plaintext) for the business that owns Rowboat project
+ * `projectId`. Used for tool-call JWT verification: the VPS starts signing with a
+ * freshly deployed token the instant deploy-client.sh restarts Rowboat — before
+ * the app confirms it — and during a rotation an old (confirmed) and new (pending)
+ * token briefly coexist. Verifying against EVERY non-revoked token (pending or
+ * confirmed) removes that window while staying exclusive vs the shared secret.
+ *
+ * `projectId` is the JWT's project claim, which is `business_configs.rowboat_project_id`
+ * (re-pointable per tenant) and defaults to the business UUID — so we resolve the
+ * owning business via the config first, falling back to treating `projectId` as the
+ * business id (the >99% case).
+ */
+export async function getActiveGatewayTokensForProject(
+  projectId: string,
+  client?: SupabaseClient
+): Promise<string[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  let businessId = projectId;
+  const { data: cfg, error: cfgErr } = await db
+    .from("business_configs")
+    .select("business_id")
+    .eq("rowboat_project_id", projectId)
+    .maybeSingle();
+  if (cfgErr) throw new Error(`getActiveGatewayTokensForProject(config): ${cfgErr.message}`);
+  if (cfg) businessId = cfg.business_id as string;
+  const { data, error } = await db
+    .from("vps_gateway_tokens")
+    .select("token")
+    .eq("business_id", businessId)
+    .is("revoked_at", null);
+  if (error) throw new Error(`getActiveGatewayTokensForProject(tokens): ${error.message}`);
+  return (data ?? []).map((row) => row.token as string);
 }
 
 export type IssueGatewayTokenOptions = {
@@ -151,12 +185,11 @@ export async function issueGatewayToken(
 }
 
 /**
- * Confirm a token is live on the VPS: revoke any OTHER non-revoked tokens for the
- * business FIRST (so the confirmed-token unique index isn't violated), then stamp
- * `deployed_at` on this token. Revoke-before-confirm ordering means a crash leaves
- * AT MOST the just-deployed token unconfirmed (the next provisioning attempt
- * reuses + redeploys it); it never leaves a stale confirmed token competing with
- * the new one. Idempotent for an already-confirmed token.
+ * Confirm a token is live on the VPS. Delegates to the `confirm_gateway_token`
+ * SQL function so the "revoke other active tokens" + "stamp deployed_at" pair runs
+ * in ONE transaction: if the confirm fails, the revoke rolls back, so the business
+ * is never left without a confirmed token (and the one-confirmed-token unique index
+ * is never violated). Idempotent for an already-confirmed token.
  */
 export async function markGatewayTokenDeployed(
   businessId: string,
@@ -164,18 +197,9 @@ export async function markGatewayTokenDeployed(
   client?: SupabaseClient
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { error: revErr } = await db
-    .from("vps_gateway_tokens")
-    .update({ revoked_at: new Date().toISOString() })
-    .eq("business_id", businessId)
-    .is("revoked_at", null)
-    .neq("token", token);
-  if (revErr) throw new Error(`markGatewayTokenDeployed(revoke): ${revErr.message}`);
-  const { error } = await db
-    .from("vps_gateway_tokens")
-    .update({ deployed_at: new Date().toISOString() })
-    .eq("business_id", businessId)
-    .eq("token", token)
-    .is("revoked_at", null);
-  if (error) throw new Error(`markGatewayTokenDeployed(confirm): ${error.message}`);
+  const { error } = await db.rpc("confirm_gateway_token", {
+    p_business_id: businessId,
+    p_token: token
+  });
+  if (error) throw new Error(`markGatewayTokenDeployed: ${error.message}`);
 }

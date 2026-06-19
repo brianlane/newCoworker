@@ -135,15 +135,24 @@ calls (chat/customer-memory summarizers). A single shared token means a compromi
     `deployed_at` NULL) BEFORE `deploy-client.sh` runs — the same token is the in-deploy
     progress-callback bearer (`/api/provisioning/progress`), which authenticates via the
     inbound binding (pending tokens still bind).
-  - While the token is pending, **outbound** app→Rowboat calls and **exclusive JWT**
-    verification keep using the shared secret the box is still on
-    (`getDeployedGatewayTokenForBusiness` returns only confirmed tokens), so a half-finished
-    deploy never breaks summarizers or tool webhooks.
-  - On a **successful** deploy the orchestrator calls `markGatewayTokenDeployed`, which revokes
-    any older token then stamps `deployed_at` — flipping outbound/JWT over to the per-tenant
-    secret. A failed deploy leaves the pending token for the next attempt to **reuse** +
-    redeploy (idempotent, self-healing). A DB error aborts provisioning (no shared-token
-    fallback). There is no DB-only seed path.
+  - While the token is pending, **outbound** app→Rowboat calls keep using the confirmed
+    secret the box is still on (`getDeployedGatewayTokenForBusiness` returns only confirmed
+    tokens), so a half-finished deploy never points summarizers at a token the box doesn't have.
+  - **Tool-call JWT** verification (`resolveRowboatWebhookClaims`) checks the JWT against
+    **every** non-revoked token for the project — pending *and* confirmed
+    (`getActiveGatewayTokensForProject`) — because the VPS starts signing with a freshly
+    deployed token the moment Rowboat restarts (before the app confirms it), and during a
+    rotation an old + new token briefly coexist. This removes the verification window while
+    staying exclusive vs the shared secret. The lookup resolves the owning business via
+    `business_configs.rowboat_project_id` (which can be re-pointed) and falls back to treating
+    the project id as the business id.
+  - On a **successful** deploy the orchestrator calls `markGatewayTokenDeployed`, which runs
+    the `confirm_gateway_token` SQL function (`supabase/migrations/20260629060000_…sql`) to
+    revoke any older token and stamp `deployed_at` **atomically** in one transaction —
+    flipping outbound over to the per-tenant secret without a zero-confirmed-token window. A
+    failed deploy leaves the pending token for the next attempt to **reuse** + redeploy
+    (idempotent, self-healing). A DB error aborts provisioning (no shared-token fallback).
+    There is no DB-only seed path.
 - **One CONFIRMED token per business** is enforced by the partial unique index
   `uq_vps_gateway_tokens_deployed_business` (`where revoked_at is null and deployed_at is not
   null`), so two tenants can't end up with competing live secrets. `issueGatewayToken` is

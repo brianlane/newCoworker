@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { getDeployedGatewayTokenForBusiness } from "@/lib/db/vps-gateway-tokens";
+import { getActiveGatewayTokensForProject } from "@/lib/db/vps-gateway-tokens";
 
 /**
  * Verifier for Rowboat's project tool-webhook signature
@@ -107,29 +107,35 @@ export function verifyRowboatWebhookJwt(token: string): RowboatWebhookClaims | n
  * signature check is what makes trusting the peeked projectId safe (a forged
  * projectId won't verify under that tenant's secret).
  *
- * When the project has a per-tenant token CONFIRMED deployed on its VPS it is the
- * EXCLUSIVE accepted signer — the shared env secret is NOT a fallback, otherwise
+ * When the project has ANY non-revoked per-tenant token the JWT is verified
+ * EXCLUSIVELY against those — the shared env secret is NOT a fallback, otherwise
  * anyone holding the shared secret could forge a valid tool-call JWT for that
- * tenant's projectId. The shared secret is accepted only for projects without a
- * confirmed per-tenant token (legacy boxes, or a token still mid-deploy that the
- * VPS is not yet signing with). A DB error reading the per-tenant token fails open
- * to the shared path so a transient blip doesn't drop live tool-calls.
+ * tenant's projectId. We try every non-revoked token (pending OR confirmed)
+ * because the VPS starts signing with a freshly deployed token the instant Rowboat
+ * restarts — before the app confirms it — and an old + new token briefly coexist
+ * during a rotation; checking all of them removes that window. The shared secret is
+ * accepted only for projects with no per-tenant token at all (legacy boxes). A DB
+ * error fails open to the shared path so a transient blip doesn't drop live calls.
  */
 export async function resolveRowboatWebhookClaims(
   token: string
 ): Promise<RowboatWebhookClaims | null> {
   const projectId = peekProjectId(token);
   if (projectId) {
-    let perTenant: string | null = null;
+    let perTenantTokens: string[] = [];
     try {
-      perTenant = await getDeployedGatewayTokenForBusiness(projectId);
+      perTenantTokens = await getActiveGatewayTokensForProject(projectId);
     } catch {
       // DB blip: treat as "no per-tenant token" and fall through to shared.
-      perTenant = null;
+      perTenantTokens = [];
     }
-    if (perTenant) {
-      // Exclusive: no shared fallback once the tenant has its own secret.
-      return verifyRowboatWebhookJwtWithSecret(token, perTenant);
+    if (perTenantTokens.length > 0) {
+      // Exclusive: no shared fallback once the tenant has its own secret(s).
+      for (const secret of perTenantTokens) {
+        const claims = verifyRowboatWebhookJwtWithSecret(token, secret);
+        if (claims) return claims;
+      }
+      return null;
     }
   }
   return verifyRowboatWebhookJwt(token);

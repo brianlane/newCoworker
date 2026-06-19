@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { getActiveMock } = vi.hoisted(() => ({ getActiveMock: vi.fn() }));
 vi.mock("@/lib/db/vps-gateway-tokens", () => ({
-  getDeployedGatewayTokenForBusiness: getActiveMock
+  getActiveGatewayTokensForProject: getActiveMock
 }));
 
 import {
@@ -125,26 +125,33 @@ describe("resolveRowboatWebhookClaims", () => {
     process.env.ROWBOAT_GATEWAY_TOKEN = SECRET;
   });
 
-  it("verifies with the per-tenant secret resolved by projectId", async () => {
-    getActiveMock.mockResolvedValue("per-tenant-secret");
+  it("verifies with a per-tenant secret resolved by projectId", async () => {
+    getActiveMock.mockResolvedValue(["per-tenant-secret"]);
     const tok = sign(validClaims(), { secret: "per-tenant-secret" });
     const claims = await resolveRowboatWebhookClaims(tok);
     expect(claims).toMatchObject({ projectId: "11111111-1111-4111-8111-111111111111" });
     expect(getActiveMock).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
   });
 
+  it("verifies against ANY non-revoked token (pending + confirmed coexist mid-rotation)", async () => {
+    // The matching secret is the second (e.g. the freshly deployed, not-yet-only token).
+    getActiveMock.mockResolvedValue(["old-confirmed-secret", "new-pending-secret"]);
+    const tok = sign(validClaims(), { secret: "new-pending-secret" });
+    expect(await resolveRowboatWebhookClaims(tok)).toMatchObject({ requestId: "req-1" });
+  });
+
   it("falls back to the shared secret when no per-tenant token exists", async () => {
-    getActiveMock.mockResolvedValue(null);
+    getActiveMock.mockResolvedValue([]);
     const tok = sign(validClaims()); // signed with shared SECRET
     expect(await resolveRowboatWebhookClaims(tok)).toMatchObject({ requestId: "req-1" });
   });
 
-  it("rejects (no shared fallback) when the project has a per-tenant secret but the JWT is signed with the shared secret", async () => {
-    // Security: once a tenant has a per-tenant secret it is the EXCLUSIVE signer.
+  it("rejects (no shared fallback) when the project has per-tenant secrets but the JWT is signed with the shared secret", async () => {
+    // Security: once a tenant has per-tenant secret(s) they are the EXCLUSIVE signers.
     // A JWT signed with the shared ROWBOAT_GATEWAY_TOKEN must NOT verify, or a
     // holder of the shared secret could forge this tenant's tool-call JWTs.
-    getActiveMock.mockResolvedValue("a-different-secret");
-    const tok = sign(validClaims()); // signed with shared SECRET, not the per-tenant one
+    getActiveMock.mockResolvedValue(["a-different-secret", "another-one"]);
+    const tok = sign(validClaims()); // signed with shared SECRET, not a per-tenant one
     expect(await resolveRowboatWebhookClaims(tok)).toBeNull();
   });
 
