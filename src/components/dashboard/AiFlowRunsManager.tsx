@@ -40,6 +40,45 @@ const STATUS_STYLES: Record<string, string> = {
 
 export type AiFlowRef = { id: string; name: string };
 
+/** A labeled, clickable screenshot thumbnail shown in the run "investigate" view. */
+function Screenshot({
+  url,
+  label,
+  stepIndex,
+  failed
+}: {
+  url: string;
+  label: string;
+  stepIndex: number;
+  failed: boolean;
+}) {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      title="Open full-size screenshot in a new tab"
+      className="block space-y-1"
+    >
+      <span
+        className={`text-[10px] font-semibold uppercase tracking-wider ${
+          failed ? "text-red-400/80" : "text-parchment/40"
+        }`}
+      >
+        {label}
+      </span>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={url}
+        alt={`${label} — step ${stepIndex + 1}`}
+        className={`max-h-64 w-auto rounded-md border object-contain object-top transition hover:opacity-90 ${
+          failed ? "border-red-500/40" : "border-parchment/15"
+        }`}
+      />
+    </a>
+  );
+}
+
 export function AiFlowRunsManager({
   businessId,
   initialRuns,
@@ -300,11 +339,48 @@ export function AiFlowRunsManager({
                         <p className="text-xs text-red-400">Error: {r.last_error}</p>
                       )}
                       {(steps[r.id] ?? []).map((s) => (
-                        <div key={s.id} className="flex items-center justify-between text-xs">
-                          <span className="text-parchment/70">
-                            {s.step_index + 1}. {s.step_type}
-                          </span>
-                          <span className="text-parchment/40">{s.status}</span>
+                        <div key={s.id} className="space-y-1">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-parchment/70">
+                              {s.step_index + 1}. {s.step_type}
+                            </span>
+                            <span
+                              className={
+                                s.status === "failed" ? "text-red-400" : "text-parchment/40"
+                              }
+                            >
+                              {s.status}
+                            </span>
+                          </div>
+                          {s.error && s.status === "failed" && (
+                            <p className="text-xs text-red-400/90">{s.error}</p>
+                          )}
+                          {(s.screenshot_before_url || s.screenshot_url) && (
+                            <div className="flex flex-wrap gap-3 pt-1">
+                              {s.screenshot_before_url && (
+                                <Screenshot
+                                  url={s.screenshot_before_url}
+                                  label="Before actions"
+                                  stepIndex={s.step_index}
+                                  failed={false}
+                                />
+                              )}
+                              {s.screenshot_url && (
+                                <Screenshot
+                                  url={s.screenshot_url}
+                                  label={
+                                    s.status === "failed"
+                                      ? "At failure"
+                                      : s.screenshot_before_url
+                                        ? "After actions"
+                                        : "Page"
+                                  }
+                                  stepIndex={s.step_index}
+                                  failed={s.status === "failed"}
+                                />
+                              )}
+                            </div>
+                          )}
                         </div>
                       ))}
                       {(steps[r.id] ?? []).length === 0 && (

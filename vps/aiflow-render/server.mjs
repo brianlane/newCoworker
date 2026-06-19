@@ -517,7 +517,7 @@ async function performForEach(page, forEachLink, actions) {
  * a selector that no longer matches. When `forEachLink` is set, loops the
  * sequence over every matching list row instead.
  */
-async function respondWithActions(page, res, actions, wantScreenshot, forEachLink) {
+async function respondWithActions(page, res, actions, wantScreenshot, forEachLink, wantDebug) {
   if (forEachLink) {
     const fe = await performForEach(page, forEachLink, actions);
     return res.json({
@@ -533,13 +533,24 @@ async function respondWithActions(page, res, actions, wantScreenshot, forEachLin
       html: ""
     });
   }
+  // When debug capture is on, snapshot the page as it loaded, BEFORE the action
+  // sequence runs. On a failure this "what did we land on" shot pairs with the
+  // "where did we get stuck" shot below. Skipped entirely when debug is off so
+  // flows that don't opt in pay no extra capture latency.
+  const beforeBase64 = wantDebug ? await captureScreenshot(page) : null;
   const acted = await performActions(page, actions);
   if (acted.error) {
     console.error(`[render] action_failed after ${acted.completed} actions: ${acted.error}`);
+    // On debug capture, grab a diagnostic screenshot of the stuck page so the
+    // owner can see WHERE the automation broke (e.g. a wizard "Next" that never
+    // advanced). Best effort — a capture failure must not mask action_failed.
+    const screenshotBase64 = wantDebug ? await captureScreenshot(page) : null;
     return res.status(200).json({
       error: "action_failed",
       detail: acted.error,
-      actionsCompleted: acted.completed
+      actionsCompleted: acted.completed,
+      ...(screenshotBase64 ? { screenshotBase64 } : {}),
+      ...(beforeBase64 ? { screenshotBeforeBase64: beforeBase64 } : {})
     });
   }
   // Return the post-action page text/html alongside the count so the worker can
@@ -554,7 +565,8 @@ async function respondWithActions(page, res, actions, wantScreenshot, forEachLin
     text = "";
     html = "";
   }
-  const screenshotBase64 = wantScreenshot ? await captureScreenshot(page) : null;
+  const screenshotBase64 =
+    wantScreenshot || wantDebug ? await captureScreenshot(page) : null;
   return res.json({
     finalUrl: page.url(),
     actionsCompleted: acted.completed,
@@ -570,6 +582,9 @@ app.post("/render", async (req, res) => {
   const auth = req.body?.auth;
   const businessId = req.body?.businessId;
   const wantScreenshot = req.body?.screenshot === true;
+  // Per-flow visibility opt-in: capture before/after/failure shots for the
+  // dashboard "investigate" view. Off by default so most flows pay nothing.
+  const wantDebug = req.body?.debugScreenshots === true;
   const rawActions = req.body?.actions;
   const actions = rawActions === undefined ? null : parseActions(rawActions);
   if (rawActions !== undefined && !actions) {
@@ -592,16 +607,19 @@ app.post("/render", async (req, res) => {
   // --- Unauthenticated render: stateless context, no session reuse. ---
   if (!auth) {
     let context;
+    let page = null;
     try {
       const browser = await getBrowser();
       context = await browser.newContext({ userAgent: UA });
-      const page = await context.newPage();
+      page = await context.newPage();
       await attachSsrfGuard(page);
       await page.goto(safe, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
-      if (actions) return await respondWithActions(page, res, actions, wantScreenshot, forEachLink);
+      if (actions)
+        return await respondWithActions(page, res, actions, wantScreenshot, forEachLink, wantDebug);
       const html = await page.content();
       const text = await page.evaluate(() => document.body?.innerText ?? "");
-      const screenshotBase64 = wantScreenshot ? await captureScreenshot(page) : null;
+      const screenshotBase64 =
+        wantScreenshot || wantDebug ? await captureScreenshot(page) : null;
       return res.json({
         finalUrl: page.url(),
         text,
@@ -610,7 +628,12 @@ app.post("/render", async (req, res) => {
       });
     } catch (e) {
       console.error(`[render] render_failed (unauthenticated) for ${safe}: ${String(e).slice(0, 300)}`);
-      return res.status(200).json({ error: "render_failed", detail: String(e).slice(0, 300) });
+      const screenshotBase64 = page && wantDebug ? await captureScreenshot(page) : null;
+      return res.status(200).json({
+        error: "render_failed",
+        detail: String(e).slice(0, 300),
+        ...(screenshotBase64 ? { screenshotBase64 } : {})
+      });
     } finally {
       if (context) await context.close().catch(() => {});
     }
@@ -665,11 +688,13 @@ app.post("/render", async (req, res) => {
 
     // ACTION mode runs after any login. An action failure does NOT poison the
     // session — the login is still good; only the page/selectors disagreed.
-    if (actions) return await respondWithActions(page, res, actions, wantScreenshot, forEachLink);
+    if (actions)
+      return await respondWithActions(page, res, actions, wantScreenshot, forEachLink, wantDebug);
 
     const html = await page.content();
     const text = await page.evaluate(() => document.body?.innerText ?? "");
-    const screenshotBase64 = wantScreenshot ? await captureScreenshot(page) : null;
+    const screenshotBase64 =
+      wantScreenshot || wantDebug ? await captureScreenshot(page) : null;
     return res.json({
       finalUrl: page.url(),
       text,
@@ -679,7 +704,14 @@ app.post("/render", async (req, res) => {
   } catch (e) {
     poisoned = true;
     console.error(`[render] render_failed (authenticated ${key}) for ${safe}: ${String(e).slice(0, 300)}`);
-    return res.status(200).json({ error: "render_failed", detail: String(e).slice(0, 300) });
+    // Best-effort diagnostic screenshot of whatever the page got stuck on so the
+    // owner can see the failure state (a timeout, an unexpected interstitial).
+    const screenshotBase64 = page && wantDebug ? await captureScreenshot(page) : null;
+    return res.status(200).json({
+      error: "render_failed",
+      detail: String(e).slice(0, 300),
+      ...(screenshotBase64 ? { screenshotBase64 } : {})
+    });
   } finally {
     if (page) await page.close().catch(() => {});
     finishSession(key, session, poisoned);

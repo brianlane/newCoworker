@@ -361,6 +361,12 @@ export function AiFlowView({
           Suppresses the normal Coworker reply when this flow matches.
         </p>
       )}
+      {definition.options?.captureStepScreenshots && (
+        <p className="text-xs text-parchment/50">
+          Captures a screenshot of each browser step (and a before/at-failure pair on
+          failures) for the run investigate view.
+        </p>
+      )}
     </div>
   );
 }

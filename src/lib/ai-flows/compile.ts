@@ -20,7 +20,7 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   '  "version": 1,',
   '  "trigger": { ... },        // one of the trigger channels below',
   '  "steps": [ ... ],         // 1-25 ordered steps',
-  '  "options": { "suppressDefaultReply": <optional bool> }',
+  '  "options": { "suppressDefaultReply": <optional bool>, "captureStepScreenshots": <optional bool> }',
   "}",
   "",
   "Trigger channels (pick the one matching how the workflow should start):",

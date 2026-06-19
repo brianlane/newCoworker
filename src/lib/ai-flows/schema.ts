@@ -405,7 +405,13 @@ export const aiFlowDefinitionSchema = z.object({
   trigger: triggerSchema,
   steps: z.array(stepSchema).min(1).max(25),
   options: z
-    .object({ suppressDefaultReply: z.boolean().optional() })
+    .object({
+      suppressDefaultReply: z.boolean().optional(),
+      // Per-flow opt-in: capture a screenshot on every browse step (and a
+      // before/at-failure pair when a browse_action breaks) for the run
+      // "investigate" view. Default off so most flows pay no extra latency.
+      captureStepScreenshots: z.boolean().optional()
+    })
     .optional()
 });
 

@@ -187,6 +187,11 @@ type Scope = {
   // (e.g. for a body signature or a self-CC). Derived from tenant_mailboxes each
   // run; never persisted in run.context (buildContext omits it).
   coworker?: { email: string };
+  // Per-flow opt-in (options.captureStepScreenshots): capture a screenshot on
+  // every browse step — and a before/at-failure pair when a browse_action breaks
+  // — for the dashboard run "investigate" view. Default off so most flows pay no
+  // extra capture latency/storage; turned on for flows being debugged.
+  captureScreenshots?: boolean;
 };
 
 serve(async (req: Request): Promise<Response> => {
@@ -340,7 +345,8 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
 
   const scope: Scope = {
     vars: asRecord(run.context.vars),
-    trigger: asRecord(run.context.trigger)
+    trigger: asRecord(run.context.trigger),
+    captureScreenshots: def.options?.captureStepScreenshots === true
   };
   // Resolve (and self-heal) the business's dedicated AI mailbox up front so every
   // outbound email sends AS the coworker — never the platform identity — and so
@@ -371,7 +377,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     const step = def.steps[index];
     const outcome = await runStep(supabase, run, step, index, scope, approval, routing);
     if (outcome.kind === "fail") {
-      await recordStep(supabase, run, index, step, "failed", undefined, outcome.error);
+      await recordStep(supabase, run, index, step, "failed", outcome.result, outcome.error);
       await failRun(supabase, run, outcome.error, scope, approval, routing);
       return;
     }
@@ -582,7 +588,9 @@ type StepOutcome =
   // after the gate (the action it guards) is recorded as skipped and never
   // runs, while the rest of the flow continues.
   | { kind: "ok"; result?: Record<string, unknown>; skipped?: boolean; skipNextStep?: boolean }
-  | { kind: "fail"; error: string }
+  // `result` lets a failing step attach diagnostics (e.g. a screenshot_path of
+  // the stuck page) onto the recorded failed step so the dashboard can show it.
+  | { kind: "fail"; error: string; result?: Record<string, unknown> }
   | { kind: "pause" }
   | {
       kind: "pause_agent";
@@ -817,7 +825,10 @@ async function browseStep(
       safe,
       renderUrl,
       action.auth ? { businessId: run.business_id, auth: action.auth } : undefined,
-      action.screenshot === true
+      // Capture when the step attaches a screenshot downstream OR the flow opted
+      // into run-timeline visibility. The attach var below stays gated on the
+      // step's own `screenshot` flag.
+      action.screenshot === true || scope.captureScreenshots === true
     );
   } catch (e) {
     // A render login failure is permanent (bad creds / MFA), not transient IO —
@@ -848,32 +859,19 @@ async function browseStep(
     out[f.name] = val;
   }
 
-  // Best-effort screenshot persistence: a storage failure must not fail a
-  // browse that already extracted its fields — downstream attachScreenshot
-  // steps just run without the attachment. The path is cleared FIRST so a
-  // failed capture/upload can never leave a stale screenshot_path from an
-  // earlier browse in scope (attachments must show THIS page or nothing).
-  if (action.screenshot) {
-    out.screenshot_path = "";
-    if (page.screenshotBase64) {
-      try {
-        out.screenshot_path = await storeScreenshot(supabase, run, index, page.screenshotBase64);
-      } catch (e) {
-        console.error("browse screenshot store failed", e);
-        await systemLog(supabase, {
-          businessId: run.business_id,
-          source: "aiflow",
-          level: "warn",
-          event: "ai_flow_screenshot_store_failed",
-          message: `browse screenshot store failed: ${e instanceof Error ? e.message : String(e)}`,
-          payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
-        });
-      }
-    }
-  }
+  // Screenshot is captured on every browse for run-timeline visibility.
+  // Best-effort: a storage failure must not fail a browse that already extracted
+  // its fields. The downstream attach var (`screenshot_path` in scope) is only
+  // set when the flow asked to attach one — cleared FIRST so a failed
+  // capture/upload can never leave a stale path from an earlier browse.
+  const shotPath = await storeScreenshotBestEffort(supabase, run, index, page.screenshotBase64);
+  if (action.screenshot) out.screenshot_path = shotPath;
 
   Object.assign(scope.vars, out);
-  return { kind: "ok", result: { vars: out, finalUrl: page.finalUrl } };
+  return {
+    kind: "ok",
+    result: { vars: out, finalUrl: page.finalUrl, ...(shotPath ? { screenshot_path: shotPath } : {}) }
+  };
 }
 
 /**
@@ -956,7 +954,12 @@ async function browseActionStep(
         businessId: run.business_id,
         ...(action.auth ? { auth: action.auth } : {}),
         actions: action.actions,
+        // `screenshot` = capture the after-page shot for downstream attach
+        // (email/MMS). `debugScreenshots` = the per-flow visibility opt-in that
+        // also captures a before-actions shot and an at-failure shot for the
+        // dashboard "investigate" view. Default off so other flows pay nothing.
         ...(action.screenshot ? { screenshot: true } : {}),
+        ...(scope.captureScreenshots ? { debugScreenshots: true } : {}),
         ...(action.forEachLink ? { forEachLink: action.forEachLink } : {})
       }),
       signal: ctrl.signal
@@ -983,7 +986,31 @@ async function browseActionStep(
         return { kind: "fail", error: `browse_action: ${errCode}${which}` };
       }
       if (kind === "action") {
-        return { kind: "fail", error: `browse_action: ${detail || "a page action failed"}` };
+        // On an action failure the render service returns BOTH a "before" shot
+        // (the page as it loaded, going into the step) and a "failure" shot (the
+        // stuck page). Persist both onto the failed step so the owner can see the
+        // page state before AND where it broke (e.g. a wizard "Next" loop).
+        const failShot = await storeScreenshotBestEffort(
+          supabase,
+          run,
+          index,
+          readScreenshotBase64(parsedBody)
+        );
+        const beforeShot = await storeScreenshotBestEffort(
+          supabase,
+          run,
+          index,
+          readScreenshotBeforeBase64(parsedBody),
+          "before"
+        );
+        const diag: Record<string, unknown> = {};
+        if (failShot) diag.screenshot_path = failShot;
+        if (beforeShot) diag.screenshot_before_path = beforeShot;
+        return {
+          kind: "fail",
+          error: `browse_action: ${detail || "a page action failed"}`,
+          ...(Object.keys(diag).length > 0 ? { result: diag } : {})
+        };
       }
       // render_failed / unknown → transient; carry the detail so the run log
       // shows WHY (e.g. a Playwright navigation timeout).
@@ -1063,27 +1090,20 @@ async function browseActionStep(
     };
   }
 
-  // Best-effort audit screenshot of the page AFTER the actions; a storage
-  // failure must not fail an update that already posted.
-  let screenshotPath = "";
-  if (action.screenshot && parsed.screenshotBase64) {
-    try {
-      screenshotPath = await storeScreenshot(supabase, run, index, parsed.screenshotBase64);
-    } catch (e) {
-      console.error("browse_action screenshot store failed", e);
-      await systemLog(supabase, {
-        businessId: run.business_id,
-        source: "aiflow",
-        level: "warn",
-        event: "ai_flow_screenshot_store_failed",
-        message: `browse_action screenshot store failed: ${e instanceof Error ? e.message : String(e)}`,
-        payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
-      });
-    }
-  }
-  // Only publish a CAPTURED screenshot: writing "" here would clobber a valid
-  // path an earlier browse_extract stored for later attachScreenshot steps.
-  if (screenshotPath) scope.vars.screenshot_path = screenshotPath;
+  // Audit screenshot of the page AFTER the actions, captured on every browse so
+  // the dashboard run timeline can show it. Best-effort: a storage failure must
+  // not fail an update that already posted.
+  const screenshotPath = await storeScreenshotBestEffort(
+    supabase,
+    run,
+    index,
+    parsed.screenshotBase64
+  );
+  // Only PUBLISH the screenshot as the downstream attach var when the flow asked
+  // to attach one (email/MMS). Writing it unconditionally would change which
+  // screenshot a later attachScreenshot step picks up; visibility-only captures
+  // ride along in the step result instead.
+  if (action.screenshot && screenshotPath) scope.vars.screenshot_path = screenshotPath;
 
   // Same-pass extraction: when the step asked for `fields`, read them out of the
   // page text the render service returned AFTER the actions (e.g. the accepted
@@ -1193,10 +1213,15 @@ async function storeScreenshot(
   supabase: Supabase,
   run: RunRow,
   index: number,
-  base64: string
+  base64: string,
+  // Optional filename variant (e.g. "before") so a single step can store more
+  // than one screenshot — the default (no variant) stays `step-N.jpg`, which is
+  // the path attachScreenshot steps consume, so their behavior is unchanged.
+  variant?: string
 ): Promise<string> {
   const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-  const path = `${run.business_id}/${run.id}/step-${index}.jpg`;
+  const suffix = variant ? `-${variant}` : "";
+  const path = `${run.business_id}/${run.id}/step-${index}${suffix}.jpg`;
   const { error: upErr } = await supabase.storage
     .from(SCREENSHOT_BUCKET)
     .upload(path, new Blob([bytes], { type: "image/jpeg" }), {
@@ -1205,6 +1230,50 @@ async function storeScreenshot(
     });
   if (upErr) throw new Error(`screenshot upload: ${upErr.message}`);
   return path;
+}
+
+/**
+ * Store a screenshot for the run timeline without ever failing the step: a
+ * storage hiccup must not turn a browse that otherwise succeeded (or already
+ * failed for a real reason) into a different outcome. Returns the stored path,
+ * or "" when there was nothing to store or the upload failed.
+ */
+async function storeScreenshotBestEffort(
+  supabase: Supabase,
+  run: RunRow,
+  index: number,
+  base64: string | null | undefined,
+  variant?: string
+): Promise<string> {
+  if (!base64) return "";
+  try {
+    return await storeScreenshot(supabase, run, index, base64, variant);
+  } catch (e) {
+    console.error("browse screenshot store failed", e);
+    await systemLog(supabase, {
+      businessId: run.business_id,
+      source: "aiflow",
+      level: "warn",
+      event: "ai_flow_screenshot_store_failed",
+      message: `browse screenshot store failed: ${e instanceof Error ? e.message : String(e)}`,
+      payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
+    });
+    return "";
+  }
+}
+
+/** Read a base64 screenshot off a render-service body, or null when absent. */
+function readScreenshotBase64(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const v = (body as Record<string, unknown>).screenshotBase64;
+  return typeof v === "string" && v ? v : null;
+}
+
+/** Read the pre-action ("before") base64 screenshot off a render body, or null. */
+function readScreenshotBeforeBase64(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const v = (body as Record<string, unknown>).screenshotBeforeBase64;
+  return typeof v === "string" && v ? v : null;
 }
 
 /**
