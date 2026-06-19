@@ -81,6 +81,14 @@ const piiDefinition = {
       offerTemplate: "claim {{offer.deadline}}",
       ownerFallbackTemplate: "back to you",
       agentName: "Amy"
+    },
+    {
+      id: "s5",
+      type: "http_call" as const,
+      label: "Post to webhook",
+      method: "POST" as const,
+      path: "https://hooks.example.com/t/abc?token=SECRET123",
+      bodyTemplate: '{"key":"sk_live_DEADBEEF"}'
     }
   ]
 };
@@ -106,6 +114,15 @@ describe("scrubDefinition", () => {
     expect(steps[2].toAgentName).toBe(EMPLOYEE_NAME_PLACEHOLDER);
     expect(steps[3].fromConnectionId).toBeUndefined();
     expect(steps[4].agentName).toBeUndefined();
+  });
+
+  it("drops http_call endpoint path and bodyTemplate (tenant secrets)", () => {
+    expect(json).not.toContain("SECRET123");
+    expect(json).not.toContain("sk_live_DEADBEEF");
+    const steps = scrubbed.steps as Record<string, unknown>[];
+    expect(steps[5].path).toBeUndefined();
+    expect(steps[5].bodyTemplate).toBeUndefined();
+    expect(steps[5].label).toBe("Post to webhook");
   });
 
   it("does not mutate the input definition", () => {

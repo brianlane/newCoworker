@@ -117,6 +117,14 @@ export function scrubDefinition(
         // rotation by dropping the pin.
         delete step.agentName;
         break;
+      case "http_call":
+        // The endpoint `path` and `bodyTemplate` can embed webhook URLs, API
+        // keys, or bearer tokens — tenant secrets that must never reach the
+        // cross-tenant library. Drop them; the duplicating user re-enters their
+        // own endpoint in the editor.
+        delete step.path;
+        delete step.bodyTemplate;
+        break;
       default:
         break;
     }
