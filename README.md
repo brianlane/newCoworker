@@ -176,11 +176,42 @@ calls (chat/customer-memory summarizers). A single shared token means a compromi
   insert-only (never revoke-before-insert), so a failed insert never leaves a business with
   zero active tokens; revocation of the old token happens only in `markGatewayTokenDeployed`,
   after the new one is confirmed.
-- **Existing live tenant (`621a5b0d-…`) stays on the shared token** (no per-tenant row)
-  until an operator runs a full rotation: mint a fresh token (`issueGatewayToken`),
-  redeploy its VPS with the new value (`deploy-client.sh` / the `debug/` redeploy
-  scripts), confirm container health, then it is automatically exclusive. This is the
-  one deferred step — it touches the live VPS and so is operator-scheduled.
+### Accessing / rotating Rowboat on each VPS
+
+Every tenant box authenticates with its **own** unique gateway token — there is no
+longer a single shared secret on any VPS. The same per-tenant token value is, on each
+box (written by `deploy-client.sh`):
+
+- the box's `ROWBOAT_GATEWAY_TOKEN` in `/opt/rowboat/.env` and `/opt/chat-worker/.env`,
+- the Rowboat project **`secret`** (the HMAC key it signs tool-call JWTs with) and its
+  `api_keys` row (the bearer it accepts on VPS → app calls),
+- the `AIFLOW_GATEWAY_TOKEN` for the render sidecar.
+
+The plaintext + `token_sha256` live in `vps_gateway_tokens` (service-role-only). To talk
+to a tenant's Rowboat from the platform, resolve its token with
+`resolveOutboundRowboatBearer(businessId)` (confirmed token, else the platform env
+fallback for any not-yet-migrated box); never hard-code the shared value.
+
+**Rotating a box's token** is just a redeploy — `scripts/redeploy-deploy-client.ts` (and
+the provisioning orchestrator) **mint-or-reuse** the business's per-tenant token, inject
+it as the box's `ROWBOAT_GATEWAY_TOKEN`, and **confirm** it (`markGatewayTokenDeployed`)
+only after a healthy deploy:
+
+```bash
+set -a && source .env && set +a
+npx tsx scripts/redeploy-deploy-client.ts --business <uuid> --ref main
+```
+
+Because the redeploy injects the **DB** per-tenant token (not the shared env value), a
+routine fleet redeploy never re-stamps the shared secret over a rotated tenant, and
+running it against a legacy box still on the shared token transparently rotates it onto
+a fresh unique one.
+
+- **Existing live tenant (`621a5b0d-…`) has been rotated** off the shared token onto its
+  own confirmed per-tenant token (`vps_gateway_tokens`, `deployed_at` set) via the
+  `redeploy-deploy-client.ts` path above — verified by matching the on-box
+  `ROWBOAT_GATEWAY_TOKEN` SHA-256 to the DB `token_sha256`. New tenants get this from the
+  first provision; no box runs the shared secret anymore.
 
 **`fn_grants_lockdown` event trigger** (`supabase/migrations/20260629030000_…sql`):
 a `ddl_command_end` event trigger that revokes `EXECUTE` from `public`/`anon`/
