@@ -14,8 +14,7 @@ import {
   generateGatewayToken,
   resolveGatewayTokenBinding,
   getActiveGatewayTokenForBusiness,
-  issueGatewayToken,
-  getOrIssueGatewayToken
+  issueGatewayToken
 } from "@/lib/db/vps-gateway-tokens";
 
 type Handlers = {
@@ -200,28 +199,5 @@ describe("issueGatewayToken", () => {
     serviceClientHolder.current = client;
     await issueGatewayToken("biz", { revokeExisting: false });
     expect(insertSpy).toHaveBeenCalled();
-  });
-});
-
-describe("getOrIssueGatewayToken", () => {
-  it("returns the existing active token without issuing", async () => {
-    const { client, insertSpy } = makeClient({ maybeSingle: { data: { token: "existing" }, error: null } });
-    expect(await getOrIssueGatewayToken("biz", {}, client as never)).toBe("existing");
-    expect(insertSpy).not.toHaveBeenCalled();
-  });
-
-  it("issues a new token when none exists", async () => {
-    const { client, insertSpy } = makeClient({ maybeSingle: { data: null, error: null } });
-    const token = await getOrIssueGatewayToken("biz", { label: "provisioning" }, client as never);
-    expect(token).toMatch(/^[A-Za-z0-9_-]+$/);
-    expect(insertSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ business_id: "biz", label: "provisioning" })
-    );
-  });
-
-  it("falls back to the service client when none is passed", async () => {
-    const { client } = makeClient({ maybeSingle: { data: { token: "svc" }, error: null } });
-    serviceClientHolder.current = client;
-    expect(await getOrIssueGatewayToken("biz")).toBe("svc");
   });
 });

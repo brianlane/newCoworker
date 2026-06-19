@@ -93,9 +93,10 @@ export type IssueGatewayTokenOptions = {
 
 /**
  * Mint + store a per-tenant token, returning the plaintext. By default revokes
- * any prior active token for the business (rotation). Idempotent-friendly:
- * `getOrIssueGatewayToken` is preferred on the provisioning path so a
- * re-provision doesn't churn the token.
+ * any prior active token for the business (rotation). The partial unique index
+ * `uq_vps_gateway_tokens_active_business` (one active row per business) makes a
+ * concurrent double-mint fail at insert rather than leaving two live tokens —
+ * the loser surfaces as an `issueGatewayToken(insert)` error.
  */
 export async function issueGatewayToken(
   businessId: string,
@@ -130,20 +131,4 @@ export async function issueGatewayToken(
   });
   if (error) throw new Error(`issueGatewayToken(insert): ${error.message}`);
   return token;
-}
-
-/**
- * Resolve the business's active per-tenant token, minting one if absent.
- * Used by the provisioning path so a stable token flows to the VPS across
- * re-provisions (only the first provision mints).
- */
-export async function getOrIssueGatewayToken(
-  businessId: string,
-  options: IssueGatewayTokenOptions = {},
-  client?: SupabaseClient
-): Promise<string> {
-  const db = client ?? (await createSupabaseServiceClient());
-  const existing = await getActiveGatewayTokenForBusiness(businessId, db);
-  if (existing) return existing;
-  return issueGatewayToken(businessId, { ...options, revokeExisting: false }, db);
 }

@@ -24,11 +24,13 @@ export function verifyRowboatGatewayToken(request: Request): boolean {
  * - If the presented bearer is a known per-tenant token, it MUST resolve to
  *   `businessId` — this is what closes the cross-tenant hole (a leaked tenant
  *   token can only act as ITS tenant, never as another via a forged businessId).
- * - Otherwise fall back to the legacy shared `ROWBOAT_GATEWAY_TOKEN`. This keeps
- *   already-deployed boxes (still carrying the shared token) working until they
- *   are re-provisioned with a per-tenant token.
- * - Any DB error during resolution fails OPEN to the legacy check so a transient
- *   blip never 401s a live voice/chat call.
+ * - Otherwise (the bearer is not a per-tenant token) the shared
+ *   `ROWBOAT_GATEWAY_TOKEN` is accepted ONLY when this business has no per-tenant
+ *   token yet (legacy box). Once a business is migrated to a per-tenant token,
+ *   the shared secret can no longer impersonate it — mirroring the exclusive
+ *   rule in `resolveRowboatWebhookClaims`.
+ * - Any DB error during resolution fails OPEN to the legacy shared check so a
+ *   transient blip never 401s a live voice/chat call.
  */
 export async function verifyGatewayTokenForBusiness(
   request: Request,
@@ -48,8 +50,15 @@ export async function verifyGatewayTokenForBusiness(
     return binding.businessId === businessId;
   }
 
-  // Legacy fallback: the shared ROWBOAT_GATEWAY_TOKEN, for boxes not yet
-  // re-provisioned with a per-tenant token.
+  // The bearer is not a per-tenant token. Accept the shared token only if this
+  // business hasn't been migrated to a per-tenant token. Fail open to the shared
+  // check on a DB error so a transient blip doesn't drop live calls.
+  try {
+    const perTenant = await getActiveGatewayTokenForBusiness(businessId);
+    if (perTenant) return false;
+  } catch {
+    // fall through to the shared-token check
+  }
   return verifyRowboatGatewayToken(request);
 }
 

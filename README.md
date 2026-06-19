@@ -109,24 +109,34 @@ calls (chat/customer-memory summarizers). A single shared token means a compromi
 - **Inbound binding**: VPS → app endpoints now resolve the presented bearer (or the
   JWT's `projectId`) to a specific business and reject it if it's a *known per-tenant
   token bound to a different business*. Helpers: `verifyGatewayTokenForBusiness`,
-  `tokenBindingAllowsBusiness`, `gatewayBusinessGuard`, and
-  `resolveRowboatWebhookClaims`. This closes the cross-tenant impersonation gap.
+  `gatewayBusinessGuard`, and `resolveRowboatWebhookClaims` (the single inbound gate —
+  the old shared-only `gatewayGuard` was removed so it can't reject a valid per-tenant
+  bearer). This closes the cross-tenant impersonation gap.
 - **Outbound binding**: app → Rowboat calls resolve the tenant's token via
   `resolveOutboundRowboatBearer(businessId)`.
-- **Per-tenant token is EXCLUSIVE once it exists.** When a business has an active
-  `vps_gateway_tokens` row, that token is the only accepted signer/bearer for it —
-  the shared `ROWBOAT_GATEWAY_TOKEN` is **not** a fallback for that tenant (otherwise
-  a holder of the shared secret could forge its tool-call JWTs / bearer calls). The
-  shared token is accepted only for tenants that have **no** per-tenant row yet
-  (legacy boxes still on the shared token). A transient DB read error fails open to
-  the shared path so a blip never drops live calls.
-- **Tokens are minted ATOMICALLY with the VPS deploy** — never DB-only. Provisioning
-  (`getOrIssueGatewayToken`) mints/reuses a per-tenant token for **new** tenants and
-  `deploy-client.sh` injects that same value into the VPS (Rowboat JWT secret, bearer,
-  chat-worker, voice-bridge, progress token) in the same run, so the DB token and the
-  VPS token never diverge. Seeding a token into the DB without redeploying the VPS
-  would break that tenant (the VPS would still sign with the old secret while the app
-  now requires the new one), so there is no DB-only seed path.
+- **Per-tenant token is EXCLUSIVE once it exists — for BOTH the bearer and the JWT.**
+  When a business has an active `vps_gateway_tokens` row, that token is the only accepted
+  signer/bearer for it — the shared `ROWBOAT_GATEWAY_TOKEN` is **not** a fallback for that
+  tenant (otherwise a holder of the shared secret could forge its tool-call JWTs / bearer
+  calls). `verifyGatewayTokenForBusiness` and `resolveRowboatWebhookClaims` both enforce
+  this. The shared token is accepted only for tenants that have **no** per-tenant row yet
+  (legacy boxes still on the shared token). A transient DB read error fails open to the
+  shared path so a blip never drops live calls.
+- **Tokens are minted ATOMICALLY with the VPS deploy — DB write happens AFTER the deploy
+  succeeds.** Provisioning reads the business's active token (`getActiveGatewayTokenForBusiness`)
+  or mints a fresh candidate **in memory** (`generateGatewayToken`); `deploy-client.sh`
+  injects that value into the VPS (Rowboat JWT secret, bearer, chat-worker, voice-bridge,
+  progress token), and only on a successful deploy is the row persisted
+  (`issueGatewayToken`). If the deploy fails the DB is left untouched, so it never claims
+  a per-tenant secret the box didn't receive; if the post-deploy persist fails,
+  provisioning fails (no `complete`) and a retry redeploys + persists a fresh token. There
+  is no DB-only seed path — seeding without redeploying would break that tenant under the
+  exclusive rule.
+- **One active token per business** is enforced by the partial unique index
+  `uq_vps_gateway_tokens_active_business`
+  (`supabase/migrations/20260629040000_…sql`), so a concurrent double-mint fails at insert
+  instead of leaving two live tokens (which would make exclusive verification
+  non-deterministic). Rotations revoke the old row first, then insert the new one.
 - **Existing live tenant (`621a5b0d-…`) stays on the shared token** (no per-tenant row)
   until an operator runs a full rotation: mint a fresh token (`issueGatewayToken`),
   redeploy its VPS with the new value (`deploy-client.sh` / the `debug/` redeploy

@@ -21,7 +21,11 @@ import { sendOwnerEmail } from "@/lib/email/client";
 import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
 import { buildProvisioningLiveEmail } from "@/lib/email/templates/provisioning-live";
 import { updateBusinessStatus, getBusiness } from "@/lib/db/businesses";
-import { getOrIssueGatewayToken } from "@/lib/db/vps-gateway-tokens";
+import {
+  generateGatewayToken,
+  getActiveGatewayTokenForBusiness,
+  issueGatewayToken
+} from "@/lib/db/vps-gateway-tokens";
 import { buildComplianceSystemPrompt } from "@/lib/compliance/fha";
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
@@ -852,20 +856,17 @@ async function runOrchestrator(
   // Phase 3: build the deploy command with env injection. Unchanged; the
   // only difference is *how* we execute it (SSH instead of the fictional
   // Hostinger /exec endpoint).
-  // Per-tenant gateway token: mint-or-reuse a token unique to this business so
-  // a compromise of one tenant VPS can't impersonate another (the token is the
-  // VPS->app bearer, Rowboat's tool-webhook JWT secret, and the platform's
-  // app->Rowboat API key). Falls back to the shared env token if the DB is
-  // unreachable so provisioning never hard-fails on this lookup.
-  let gatewayToken = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
-  try {
-    gatewayToken = await getOrIssueGatewayToken(businessId, { label: "provisioning" });
-  } catch (err) {
-    logger.warn("provisioning: per-tenant gateway token resolve failed; using shared token", {
-      businessId,
-      error: err instanceof Error ? err.message : String(err)
-    });
-  }
+  // Per-tenant gateway token: reuse the business's existing per-tenant token, or
+  // mint a fresh candidate IN MEMORY. The candidate is persisted only AFTER the
+  // VPS deploy succeeds (below), so the DB never claims a per-tenant secret the
+  // box didn't actually receive — the token is the VPS->app bearer, Rowboat's
+  // tool-webhook JWT secret, and the platform's app->Rowboat API key, all of
+  // which the app now treats as the EXCLUSIVE signer once a row exists. A DB read
+  // failure here aborts provisioning rather than deploying a mismatched shared
+  // token.
+  const existingGatewayToken = await getActiveGatewayTokenForBusiness(businessId);
+  const mintedNewGatewayToken = existingGatewayToken === null;
+  const gatewayToken = existingGatewayToken ?? generateGatewayToken();
   const bashQuote = deps?.quoteEnv ?? quoteShellEnvValue;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const progressUrl = `${appUrl.replace(/\/$/, "")}/api/provisioning/progress`;
@@ -973,6 +974,20 @@ async function runOrchestrator(
       message: msg,
       source: "orchestrator",
       status: "error"
+    });
+  }
+
+  // Persist the per-tenant token ONLY now that the VPS actually carries it, and
+  // only if we minted a fresh one this run. This keeps the DB token and the VPS
+  // token from ever diverging (exclusive JWT/bearer verification depends on it).
+  // A persist failure intentionally propagates: the box has the token but the DB
+  // doesn't, so provisioning must fail and a retry will redeploy + persist a
+  // fresh token atomically rather than leave a silently-broken tenant.
+  if (deploySucceeded && mintedNewGatewayToken) {
+    await issueGatewayToken(businessId, {
+      token: gatewayToken,
+      label: "provisioning",
+      revokeExisting: false
     });
   }
 
