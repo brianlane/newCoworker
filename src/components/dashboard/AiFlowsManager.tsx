@@ -352,9 +352,11 @@ export function AiFlowsManager({
     try {
       const raw = sessionStorage.getItem("aiflow_adapt_draft");
       if (!raw) return;
-      sessionStorage.removeItem("aiflow_adapt_draft");
       const def = JSON.parse(raw) as AiFlowDefinition;
       if (def && Array.isArray(def.steps) && def.trigger) {
+        // Only drop the stash once the (paid) draft parsed and validated, so a
+        // malformed payload can still be retried from storage on reload.
+        sessionStorage.removeItem("aiflow_adapt_draft");
         setEditor(editorFromDefinition(def, "Adapted automation"));
       }
     } catch {
