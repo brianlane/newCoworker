@@ -22,7 +22,6 @@ import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
 import { buildProvisioningLiveEmail } from "@/lib/email/templates/provisioning-live";
 import { updateBusinessStatus, getBusiness } from "@/lib/db/businesses";
 import {
-  generateGatewayToken,
   getActiveGatewayTokenForBusiness,
   issueGatewayToken
 } from "@/lib/db/vps-gateway-tokens";
@@ -857,21 +856,26 @@ async function runOrchestrator(
   // only difference is *how* we execute it (SSH instead of the fictional
   // Hostinger /exec endpoint).
   // Per-tenant gateway token: reuse the business's existing per-tenant token, or
-  // mint a fresh candidate IN MEMORY. The candidate is persisted only AFTER the
-  // VPS deploy succeeds (below), so the DB never claims a per-tenant secret the
-  // box didn't actually receive — the token is the VPS->app bearer, Rowboat's
-  // tool-webhook JWT secret, and the platform's app->Rowboat API key, all of
-  // which the app now treats as the EXCLUSIVE signer once a row exists. A DB read
-  // failure here aborts provisioning rather than deploying a mismatched shared
-  // token.
+  // mint + persist a fresh one BEFORE the deploy. The token is the VPS->app
+  // bearer, Rowboat's tool-webhook JWT secret, the app->Rowboat API key, AND the
+  // progress-callback bearer — so it must already exist in the DB while
+  // deploy-client.sh runs, otherwise in-deploy progress POSTs fail auth. We
+  // persist before deploy on purpose: a failed deploy simply leaves a token the
+  // next provisioning attempt REUSES and redeploys (idempotent, self-healing),
+  // which is safer than a divergent shared-token deploy. The partial unique index
+  // keeps this to one active token per business. A DB error aborts provisioning
+  // rather than deploying a mismatched shared token.
   const existingGatewayToken = await getActiveGatewayTokenForBusiness(businessId);
-  const mintedNewGatewayToken = existingGatewayToken === null;
-  const gatewayToken = existingGatewayToken ?? generateGatewayToken();
+  const gatewayToken =
+    existingGatewayToken ??
+    (await issueGatewayToken(businessId, { label: "provisioning", revokeExisting: false }));
   const bashQuote = deps?.quoteEnv ?? quoteShellEnvValue;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const progressUrl = `${appUrl.replace(/\/$/, "")}/api/provisioning/progress`;
   // Bind the progress token to the per-tenant gateway token (when no explicit
-  // override is set) so /api/provisioning/progress's per-tenant binding matches.
+  // override is set) so /api/provisioning/progress's per-tenant binding matches
+  // the now-persisted token. No new secret is placed on the box: the per-tenant
+  // token is already its ROWBOAT_GATEWAY_TOKEN.
   const progressToken = process.env.PROVISIONING_PROGRESS_TOKEN ?? gatewayToken;
 
   const envVars = [
@@ -974,20 +978,6 @@ async function runOrchestrator(
       message: msg,
       source: "orchestrator",
       status: "error"
-    });
-  }
-
-  // Persist the per-tenant token ONLY now that the VPS actually carries it, and
-  // only if we minted a fresh one this run. This keeps the DB token and the VPS
-  // token from ever diverging (exclusive JWT/bearer verification depends on it).
-  // A persist failure intentionally propagates: the box has the token but the DB
-  // doesn't, so provisioning must fail and a retry will redeploy + persist a
-  // fresh token atomically rather than leave a silently-broken tenant.
-  if (deploySucceeded && mintedNewGatewayToken) {
-    await issueGatewayToken(businessId, {
-      token: gatewayToken,
-      label: "provisioning",
-      revokeExisting: false
     });
   }
 

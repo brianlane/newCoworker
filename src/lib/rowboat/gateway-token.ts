@@ -24,13 +24,19 @@ export function verifyRowboatGatewayToken(request: Request): boolean {
  * - If the presented bearer is a known per-tenant token, it MUST resolve to
  *   `businessId` — this is what closes the cross-tenant hole (a leaked tenant
  *   token can only act as ITS tenant, never as another via a forged businessId).
- * - Otherwise (the bearer is not a per-tenant token) the shared
- *   `ROWBOAT_GATEWAY_TOKEN` is accepted ONLY when this business has no per-tenant
- *   token yet (legacy box). Once a business is migrated to a per-tenant token,
- *   the shared secret can no longer impersonate it — mirroring the exclusive
- *   rule in `resolveRowboatWebhookClaims`.
- * - Any DB error during resolution fails OPEN to the legacy shared check so a
- *   transient blip never 401s a live voice/chat call.
+ * - Otherwise the shared `ROWBOAT_GATEWAY_TOKEN` is accepted. The shared token is
+ *   a PLATFORM-INTERNAL secret: it is held by the app and by trusted platform
+ *   callers (e.g. the Supabase `ai-flow-worker` edge function, which calls these
+ *   endpoints on behalf of every tenant), and is NEVER deployed to a tenant VPS
+ *   — provisioning injects each box's own per-tenant token as its
+ *   `ROWBOAT_GATEWAY_TOKEN`. So the bearer path is intentionally NOT exclusive:
+ *   making it exclusive would 401 the platform edge worker for any migrated
+ *   tenant. Cross-tenant safety on this path comes from the binding check above,
+ *   not from rejecting the shared token. (The JWT path IS exclusive — see
+ *   `resolveRowboatWebhookClaims` — because that secret is forgeable by anyone
+ *   who knows the shared value.)
+ * - Any DB error during resolution fails OPEN to the shared check so a transient
+ *   blip never 401s a live voice/chat call.
  */
 export async function verifyGatewayTokenForBusiness(
   request: Request,
@@ -43,22 +49,14 @@ export async function verifyGatewayTokenForBusiness(
   try {
     binding = await resolveGatewayTokenBinding(token);
   } catch {
-    // Fail open to the legacy shared-token check below.
+    // Fail open to the shared-token check below.
     binding = null;
   }
   if (binding) {
     return binding.businessId === businessId;
   }
 
-  // The bearer is not a per-tenant token. Accept the shared token only if this
-  // business hasn't been migrated to a per-tenant token. Fail open to the shared
-  // check on a DB error so a transient blip doesn't drop live calls.
-  try {
-    const perTenant = await getActiveGatewayTokenForBusiness(businessId);
-    if (perTenant) return false;
-  } catch {
-    // fall through to the shared-token check
-  }
+  // Not a known per-tenant token: accept the platform-internal shared token.
   return verifyRowboatGatewayToken(request);
 }
 

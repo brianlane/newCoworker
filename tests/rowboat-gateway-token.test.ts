@@ -69,35 +69,28 @@ describe("verifyGatewayTokenForBusiness", () => {
     expect(await verifyGatewayTokenForBusiness(bearer("t"), "biz-1")).toBe(false);
   });
 
-  it("falls back to the shared token when the business has no per-tenant token", async () => {
+  it("accepts the platform shared token when the bearer is not a per-tenant token", async () => {
     resolveBindingMock.mockResolvedValue(null);
-    getActiveMock.mockResolvedValue(null);
     expect(await verifyGatewayTokenForBusiness(bearer("shared-tok"), "biz-1")).toBe(true);
     expect(await verifyGatewayTokenForBusiness(bearer("bad"), "biz-1")).toBe(false);
   });
 
-  it("rejects the shared token once the business has a per-tenant token (exclusive)", async () => {
+  it("accepts the shared token even for a business that has a per-tenant token", async () => {
+    // The bearer path is intentionally NOT exclusive: the shared token is a
+    // platform-internal secret used by trusted callers (e.g. the edge worker).
     resolveBindingMock.mockResolvedValue(null);
     getActiveMock.mockResolvedValue("biz-1-per-tenant-tok");
-    expect(await verifyGatewayTokenForBusiness(bearer("shared-tok"), "biz-1")).toBe(false);
+    expect(await verifyGatewayTokenForBusiness(bearer("shared-tok"), "biz-1")).toBe(true);
   });
 
   it("rejects via fallback when the shared token is unset", async () => {
     resolveBindingMock.mockResolvedValue(null);
-    getActiveMock.mockResolvedValue(null);
     delete process.env.ROWBOAT_GATEWAY_TOKEN;
     expect(await verifyGatewayTokenForBusiness(bearer("anything"), "biz-1")).toBe(false);
   });
 
   it("fails open to the shared token check when the binding lookup throws", async () => {
     resolveBindingMock.mockRejectedValue(new Error("db blip"));
-    getActiveMock.mockResolvedValue(null);
-    expect(await verifyGatewayTokenForBusiness(bearer("shared-tok"), "biz-1")).toBe(true);
-  });
-
-  it("fails open to the shared token check when the per-tenant lookup throws", async () => {
-    resolveBindingMock.mockResolvedValue(null);
-    getActiveMock.mockRejectedValue(new Error("db blip"));
     expect(await verifyGatewayTokenForBusiness(bearer("shared-tok"), "biz-1")).toBe(true);
   });
 });

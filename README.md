@@ -114,24 +114,28 @@ calls (chat/customer-memory summarizers). A single shared token means a compromi
   bearer). This closes the cross-tenant impersonation gap.
 - **Outbound binding**: app → Rowboat calls resolve the tenant's token via
   `resolveOutboundRowboatBearer(businessId)`.
-- **Per-tenant token is EXCLUSIVE once it exists — for BOTH the bearer and the JWT.**
-  When a business has an active `vps_gateway_tokens` row, that token is the only accepted
-  signer/bearer for it — the shared `ROWBOAT_GATEWAY_TOKEN` is **not** a fallback for that
-  tenant (otherwise a holder of the shared secret could forge its tool-call JWTs / bearer
-  calls). `verifyGatewayTokenForBusiness` and `resolveRowboatWebhookClaims` both enforce
-  this. The shared token is accepted only for tenants that have **no** per-tenant row yet
-  (legacy boxes still on the shared token). A transient DB read error fails open to the
-  shared path so a blip never drops live calls.
-- **Tokens are minted ATOMICALLY with the VPS deploy — DB write happens AFTER the deploy
-  succeeds.** Provisioning reads the business's active token (`getActiveGatewayTokenForBusiness`)
-  or mints a fresh candidate **in memory** (`generateGatewayToken`); `deploy-client.sh`
-  injects that value into the VPS (Rowboat JWT secret, bearer, chat-worker, voice-bridge,
-  progress token), and only on a successful deploy is the row persisted
-  (`issueGatewayToken`). If the deploy fails the DB is left untouched, so it never claims
-  a per-tenant secret the box didn't receive; if the post-deploy persist fails,
-  provisioning fails (no `complete`) and a retry redeploys + persists a fresh token. There
-  is no DB-only seed path — seeding without redeploying would break that tenant under the
-  exclusive rule.
+- **The JWT path is EXCLUSIVE; the bearer path is NOT.** The shared `ROWBOAT_GATEWAY_TOKEN`
+  is a **platform-internal** secret: it lives in the app env and is presented by trusted
+  platform callers (notably the Supabase `ai-flow-worker` edge function, which calls
+  `/api/aiflows/*` and `/api/integrations/custom/call` on behalf of **every** tenant). It is
+  **never** deployed to a tenant VPS — provisioning injects each box's own per-tenant token
+  as its `ROWBOAT_GATEWAY_TOKEN`. Therefore:
+  - **Bearer** (`verifyGatewayTokenForBusiness`): a known per-tenant token must match its
+    business (binding check — this is the cross-tenant guard); otherwise the shared token is
+    accepted. It is intentionally not exclusive, so platform callers keep working for migrated
+    tenants. A transient DB read error fails open to the shared check.
+  - **JWT** (`resolveRowboatWebhookClaims`): once a project has a per-tenant secret, the JWT
+    is verified **only** against it — the shared secret is rejected. This is exclusive because
+    the HMAC secret is forgeable by anyone who knows the shared value, and Rowboat tool-call
+    JWTs are signed on the (per-tenant) VPS, never by the platform edge worker.
+- **Tokens are minted + persisted BEFORE the deploy, then reused on retry.** Provisioning
+  reads the business's active token (`getActiveGatewayTokenForBusiness`) or mints + persists
+  one (`issueGatewayToken`) up front, because the same token is also the in-deploy
+  progress-callback bearer (`/api/provisioning/progress`) and must already be resolvable while
+  `deploy-client.sh` runs. A failed deploy simply leaves a token the next attempt **reuses**
+  and redeploys (idempotent, self-healing) — safer than deploying a divergent shared token. A
+  DB error during this step aborts provisioning (no shared-token fallback). There is no
+  DB-only seed path — seeding without redeploying would desync the VPS.
 - **One active token per business** is enforced by the partial unique index
   `uq_vps_gateway_tokens_active_business`
   (`supabase/migrations/20260629040000_…sql`), so a concurrent double-mint fails at insert
