@@ -541,10 +541,11 @@ async function respondWithActions(page, res, actions, wantScreenshot, forEachLin
   const acted = await performActions(page, actions);
   if (acted.error) {
     console.error(`[render] action_failed after ${acted.completed} actions: ${acted.error}`);
-    // On debug capture, grab a diagnostic screenshot of the stuck page so the
-    // owner can see WHERE the automation broke (e.g. a wizard "Next" that never
-    // advanced). Best effort — a capture failure must not mask action_failed.
-    const screenshotBase64 = wantDebug ? await captureScreenshot(page) : null;
+    // Grab a diagnostic screenshot of the stuck page whenever ANY screenshot was
+    // requested (attach OR debug) so the owner can see WHERE the automation broke
+    // (e.g. a wizard "Next" that never advanced). The before-shot above stays
+    // debug-only. Best effort — a capture failure must not mask action_failed.
+    const screenshotBase64 = wantScreenshot || wantDebug ? await captureScreenshot(page) : null;
     return res.status(200).json({
       error: "action_failed",
       detail: acted.error,
@@ -628,7 +629,7 @@ app.post("/render", async (req, res) => {
       });
     } catch (e) {
       console.error(`[render] render_failed (unauthenticated) for ${safe}: ${String(e).slice(0, 300)}`);
-      const screenshotBase64 = page && wantDebug ? await captureScreenshot(page) : null;
+      const screenshotBase64 = page && (wantScreenshot || wantDebug) ? await captureScreenshot(page) : null;
       return res.status(200).json({
         error: "render_failed",
         detail: String(e).slice(0, 300),
@@ -706,7 +707,7 @@ app.post("/render", async (req, res) => {
     console.error(`[render] render_failed (authenticated ${key}) for ${safe}: ${String(e).slice(0, 300)}`);
     // Best-effort diagnostic screenshot of whatever the page got stuck on so the
     // owner can see the failure state (a timeout, an unexpected interstitial).
-    const screenshotBase64 = page && wantDebug ? await captureScreenshot(page) : null;
+    const screenshotBase64 = page && (wantScreenshot || wantDebug) ? await captureScreenshot(page) : null;
     return res.status(200).json({
       error: "render_failed",
       detail: String(e).slice(0, 300),

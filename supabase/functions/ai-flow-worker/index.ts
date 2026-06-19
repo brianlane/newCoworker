@@ -147,6 +147,19 @@ function resolveRenderUrl(businessId: string): string | null {
  */
 class BrowseLoginError extends Error {}
 /**
+ * Thrown by fetchPage when the render service reports a transient render_failed.
+ * Carries the failure screenshot (when the service captured one) so a debug-enabled
+ * browse step can surface the stuck page in the run timeline instead of dropping it
+ * into the silent retry path.
+ */
+class RenderFailedError extends Error {
+  screenshotBase64?: string;
+  constructor(message: string, screenshotBase64?: string) {
+    super(message);
+    this.screenshotBase64 = screenshotBase64;
+  }
+}
+/**
  * Thrown when the tenant's shared AI budget (owner chat + SMS + AiFlows) is
  * exhausted for the period — a permanent, owner-actionable state, so the run
  * fails immediately instead of burning retries.
@@ -837,6 +850,18 @@ async function browseStep(
       const which = action.auth ? ` for integration "${action.auth.integrationLabel}"` : "";
       return { kind: "fail", error: `browse: ${e.message}${which}` };
     }
+    // A render_failed (timeout/interstitial) is transient and normally retries.
+    // But when the flow opted into step screenshots and the render captured the
+    // stuck page, store it and fail the step so the investigate view shows the
+    // failure instead of dropping the image into the silent retry path.
+    if (e instanceof RenderFailedError && scope.captureScreenshots && e.screenshotBase64) {
+      const shotPath = await storeScreenshotBestEffort(supabase, run, index, e.screenshotBase64);
+      return {
+        kind: "fail",
+        error: `browse: ${e.message}`,
+        ...(shotPath ? { result: { screenshot_path: shotPath } } : {})
+      };
+    }
     throw e;
   }
   const pageText = page.text || htmlToText(page.html);
@@ -846,7 +871,16 @@ async function browseStep(
   } catch (e) {
     // The shared AI budget being exhausted is a permanent, owner-actionable
     // state for this period — fail the run instead of retrying into the cap.
-    if (e instanceof SpendCapError) return { kind: "fail", error: `browse: ${e.message}` };
+    // Persist the page screenshot (when one was captured) onto the failed step
+    // so the investigate view isn't empty for a cap-hit mid-extraction.
+    if (e instanceof SpendCapError) {
+      const shotPath = await storeScreenshotBestEffort(supabase, run, index, page.screenshotBase64);
+      return {
+        kind: "fail",
+        error: `browse: ${e.message}`,
+        ...(shotPath ? { result: { screenshot_path: shotPath } } : {})
+      };
+    }
     throw e;
   }
 
@@ -1013,8 +1047,20 @@ async function browseActionStep(
         };
       }
       // render_failed / unknown → transient; carry the detail so the run log
-      // shows WHY (e.g. a Playwright navigation timeout).
+      // shows WHY (e.g. a Playwright navigation timeout). When the flow opted into
+      // step screenshots and the render captured the stuck page, store it and fail
+      // the step so the investigate view shows the failure instead of dropping the
+      // image into the silent retry path.
       const why = [errCode, detail].filter(Boolean).join(": ");
+      const failBase64 = readScreenshotBase64(parsedBody);
+      if (scope.captureScreenshots && failBase64) {
+        const failShot = await storeScreenshotBestEffort(supabase, run, index, failBase64);
+        return {
+          kind: "fail",
+          error: `browse_action: render service error${why ? ` (${why})` : ""}`,
+          ...(failShot ? { result: { screenshot_path: failShot } } : {})
+        };
+      }
       throw new Error(`browse_action: render service error${why ? ` (${why})` : ""}`);
     }
     if (!res.ok) {
@@ -1343,9 +1389,14 @@ async function fetchViaRender(
       if (renderErrorKind(errCode) === "login") {
         throw new BrowseLoginError(errCode);
       }
-      // render_failed / unknown → transient; surface the root cause.
+      // render_failed / unknown → transient; surface the root cause. Carry any
+      // failure screenshot so a debug-enabled caller can store it before the run
+      // retries (otherwise the stuck page is lost on a timeout/interstitial).
       const why = [errCode, detail].filter(Boolean).join(": ");
-      throw new Error(`render service error${why ? ` (${why})` : ""}`);
+      throw new RenderFailedError(
+        `render service error${why ? ` (${why})` : ""}`,
+        readScreenshotBase64(body) ?? undefined
+      );
     }
     if (!res.ok) {
       const snippet = raw.replace(/\s+/g, " ").trim().slice(0, 120);
