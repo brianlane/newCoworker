@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FLOW_COMPILE_SYSTEM_PROMPT,
+  buildFlowAdaptUserText,
   buildFlowCompileUserText,
   extractFlowJson
 } from "@/lib/ai-flows/compile";
@@ -15,6 +16,36 @@ describe("FLOW_COMPILE_SYSTEM_PROMPT", () => {
 describe("buildFlowCompileUserText", () => {
   it("trims and labels the description", () => {
     expect(buildFlowCompileUserText("  do a thing  ")).toBe("Automation description:\ndo a thing");
+  });
+});
+
+describe("buildFlowAdaptUserText", () => {
+  it("includes the source definition and the business's concrete details", () => {
+    const text = buildFlowAdaptUserText({
+      sourceDefinition: { version: 1 },
+      ownerPhone: "+14805551234",
+      ownerEmail: "owner@biz.com",
+      employeeNames: ["Jordan", "Amy"],
+      instructions: "only text buyers"
+    });
+    expect(text).toContain('{"version":1}');
+    expect(text).toContain("Owner phone: +14805551234");
+    expect(text).toContain("Owner email: owner@biz.com");
+    expect(text).toContain("Team members: Jordan, Amy");
+    expect(text).toContain("Additional instructions: only text buyers");
+  });
+
+  it("falls back to '(none on file)' and omits empty instructions", () => {
+    const text = buildFlowAdaptUserText({ sourceDefinition: {} });
+    expect(text).toContain("Owner phone: (none on file)");
+    expect(text).toContain("Owner email: (none on file)");
+    expect(text).toContain("Team members: (none on file)");
+    expect(text).not.toContain("Additional instructions:");
+  });
+
+  it("treats whitespace-only instructions as empty", () => {
+    const text = buildFlowAdaptUserText({ sourceDefinition: {}, instructions: "   " });
+    expect(text).not.toContain("Additional instructions:");
   });
 });
 

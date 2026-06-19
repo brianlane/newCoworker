@@ -43,11 +43,14 @@ export type AiFlowRef = { id: string; name: string };
 export function AiFlowRunsManager({
   businessId,
   initialRuns,
-  flows
+  flows,
+  flowId
 }: {
   businessId: string;
   initialRuns: AiFlowRunRow[];
   flows: AiFlowRef[];
+  /** When set, the page is scoped to one flow — keep the filter on reload. */
+  flowId?: string;
 }) {
   const [runs, setRuns] = useState<AiFlowRunRow[]>(initialRuns);
   const [flowList, setFlowList] = useState<AiFlowRef[]>(flows);
@@ -60,10 +63,11 @@ export function AiFlowRunsManager({
     // Refresh runs AND flows together: grouping/labels join runs to flow names,
     // so refreshing only runs could file a newly created flow's runs under
     // "Deleted flow" (the server-rendered flows snapshot wouldn't know it yet).
+    const runsUrl =
+      `/api/aiflows/runs?businessId=${encodeURIComponent(businessId)}` +
+      (flowId ? `&flowId=${encodeURIComponent(flowId)}` : "");
     const [runsRes, flowsRes] = await Promise.all([
-      fetch(`/api/aiflows/runs?businessId=${encodeURIComponent(businessId)}`, {
-        cache: "no-store"
-      }),
+      fetch(runsUrl, { cache: "no-store" }),
       fetch(`/api/aiflows?businessId=${encodeURIComponent(businessId)}`, { cache: "no-store" })
     ]);
     const runsJson = (await runsRes.json()) as { ok: boolean; data?: AiFlowRunRow[] };

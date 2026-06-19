@@ -8,7 +8,11 @@ import { AiFlowsManager } from "@/components/dashboard/AiFlowsManager";
 
 export const dynamic = "force-dynamic";
 
-export default async function AiFlowsPage() {
+type Props = { searchParams: Promise<{ edit?: string; adapt?: string }> };
+
+export default async function AiFlowsPage({ searchParams }: Props) {
+  const { edit, adapt } = await searchParams;
+
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard/aiflows");
   if (!user.email) redirect("/login");
@@ -37,12 +41,20 @@ export default async function AiFlowsPage() {
           </p>
         </div>
         {businessId && (
-          <Link
-            href="/dashboard/aiflows/runs"
-            className="shrink-0 whitespace-nowrap text-sm text-signal-teal hover:underline"
-          >
-            View runs →
-          </Link>
+          <div className="flex shrink-0 items-center gap-4 whitespace-nowrap text-sm">
+            <Link
+              href="/dashboard/aiflows/library"
+              className="text-signal-teal hover:underline"
+            >
+              Browse library
+            </Link>
+            <Link
+              href="/dashboard/aiflows/runs"
+              className="text-signal-teal hover:underline"
+            >
+              View runs →
+            </Link>
+          </div>
         )}
       </div>
 
@@ -56,7 +68,13 @@ export default async function AiFlowsPage() {
           </a>
         </Card>
       ) : (
-        <AiFlowsManager businessId={businessId} businessType={businessType} initialFlows={flows} />
+        <AiFlowsManager
+          businessId={businessId}
+          businessType={businessType}
+          initialFlows={flows}
+          initialEditId={edit ?? null}
+          initialAdaptDraft={adapt === "1"}
+        />
       )}
     </div>
   );

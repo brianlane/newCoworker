@@ -116,6 +116,45 @@ export function buildFlowCompileUserText(description: string): string {
 }
 
 /**
+ * User text for adapting an existing (library) definition to a new business.
+ * The model receives the source definition plus the new owner's concrete
+ * details and any free-text tweak, and must return a full adapted definition
+ * following the same schema contract as the compile system prompt.
+ */
+export function buildFlowAdaptUserText(input: {
+  sourceDefinition: unknown;
+  ownerPhone?: string | null;
+  ownerEmail?: string | null;
+  employeeNames?: string[];
+  instructions?: string;
+}): string {
+  const lines = [
+    "Adapt the following AiFlow definition for a new business. Keep its structure",
+    "and intent, but replace placeholder/old contact details with the new",
+    "business's details below. Output the full adapted definition as JSON.",
+    "",
+    "Source definition (may contain placeholders like {{owner_phone}},",
+    "{{owner_email}}, {{employee_name}} — replace these):",
+    JSON.stringify(input.sourceDefinition),
+    "",
+    "New business details:"
+  ];
+  lines.push(`- Owner phone: ${input.ownerPhone?.trim() || "(none on file)"}`);
+  lines.push(`- Owner email: ${input.ownerEmail?.trim() || "(none on file)"}`);
+  lines.push(
+    `- Team members: ${
+      input.employeeNames && input.employeeNames.length > 0
+        ? input.employeeNames.join(", ")
+        : "(none on file)"
+    }`
+  );
+  if (input.instructions?.trim()) {
+    lines.push("", `Additional instructions: ${input.instructions.trim()}`);
+  }
+  return lines.join("\n");
+}
+
+/**
  * Tolerant JSON extraction from a model response: handles a bare object,
  * fenced/prose-wrapped output, and returns null when nothing parseable is found.
  * The caller still validates the result with parseAiFlowDefinition.
