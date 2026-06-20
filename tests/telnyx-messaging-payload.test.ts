@@ -63,6 +63,19 @@ describe("telnyxMessagingParticipants", () => {
     ]);
   });
 
+  it("includes cc participants (Telnyx puts other group members in cc), after from/to, de-duped", () => {
+    const payload = {
+      from: { phone_number: "+14805550001" },
+      to: [{ phone_number: "+16025550000" }],
+      cc: [{ phone_number: "+14805550002" }, { phone_number: "+16025550000" }]
+    };
+    expect(telnyxMessagingParticipants(payload)).toEqual([
+      "+14805550001",
+      "+16025550000",
+      "+14805550002"
+    ]);
+  });
+
   it("de-dupes a number that appears in both from and to, preserving first-seen order", () => {
     const payload = {
       from: "+14805550001",

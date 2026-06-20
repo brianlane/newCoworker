@@ -26,7 +26,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
-import { telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
+import { telnyxSendSms, telnyxSendGroupMms } from "../_shared/telnyx_sms_compliance.ts";
 import {
   buildExtractionPrompt,
   buildNowScope,
@@ -1875,10 +1875,13 @@ async function sendSmsStep(
 }
 
 /**
- * send_sms with replyToGroup: post one group MMS into the inbound thread. The
+ * send_sms with replyToGroup: post one reply into the inbound thread. The
  * planner supplied every participant except our own DID; here we additionally
- * drop our own number (defensive) and any opted-out recipient, reserve a SINGLE
- * outbound slot (one Telnyx message, group-fanned), and send `to` as an array.
+ * drop our own number (defensive) and any opted-out recipient, then reserve a
+ * SINGLE outbound slot. With 2+ recipients we send a Telnyx group MMS (its
+ * dedicated /messages/group_mms endpoint — the standard endpoint rejects a
+ * multi-destination SMS `to`); with exactly one we fall back to a normal 1:1
+ * SMS so a degenerate "group" of one still delivers.
  */
 async function sendGroupSmsStep(
   supabase: Supabase,
@@ -1904,6 +1907,17 @@ async function sendGroupSmsStep(
     return { kind: "ok", skipped: true, result: { skipped: "group_no_recipients" } };
   }
 
+  // 2+ recipients must go out as a Telnyx group MMS (the standard /messages
+  // endpoint rejects a multi-destination `to`). Group MMS requires an explicit
+  // MMS-enabled sender, so a missing from-number is a permanent config error.
+  const isGroup = recipients.length >= 2;
+  if (isGroup && !(cfg.from ?? "").trim()) {
+    return {
+      kind: "fail",
+      error: "send_sms: group reply needs a configured from-number (MMS-enabled)"
+    };
+  }
+
   const text = prepareSmsBody(action.body);
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
@@ -1927,14 +1941,22 @@ async function sendGroupSmsStep(
   };
 
   try {
-    const send = await telnyxSendSms({
-      apiKey: cfg.apiKey,
-      messagingProfileId: cfg.profile,
-      fromE164: cfg.from,
-      toE164: recipients,
-      text,
-      idempotencyKey: `aiflow:${run.id}:${index}`
-    });
+    const send = isGroup
+      ? await telnyxSendGroupMms({
+          apiKey: cfg.apiKey,
+          fromE164: cfg.from,
+          toE164: recipients,
+          text,
+          idempotencyKey: `aiflow:${run.id}:${index}`
+        })
+      : await telnyxSendSms({
+          apiKey: cfg.apiKey,
+          messagingProfileId: cfg.profile,
+          fromE164: cfg.from,
+          toE164: recipients[0],
+          text,
+          idempotencyKey: `aiflow:${run.id}:${index}`
+        });
     if (!send.ok) {
       await release();
       throw new Error(`telnyx ${send.status}: ${send.body.slice(0, 200)}`);

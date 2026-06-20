@@ -80,3 +80,49 @@ export async function telnyxSendSms(params: {
   const bodyText = await res.text();
   return { ok: res.ok, status: res.status, body: bodyText };
 }
+
+/**
+ * Send a group MMS to 2+ recipients via Telnyx's dedicated endpoint
+ * (`POST /v2/messages/group_mms`). The standard `/v2/messages` endpoint rejects
+ * a multi-destination `to` for SMS ("Destination number array must have a
+ * length of exactly 1"); group messaging lives on its own endpoint, fans the
+ * message into a single group thread, and is delivered as MMS.
+ *
+ * `from` is REQUIRED here (unlike the single-send number-pool case) — a group
+ * MMS must originate from a specific MMS-enabled number. Telnyx caps the group
+ * at 8 recipients; callers should pre-trim.
+ */
+export async function telnyxSendGroupMms(params: {
+  apiKey: string;
+  /** MMS-enabled sender E.164 (required for group MMS). */
+  fromE164: string;
+  /** 2+ recipient E.164 numbers (the other group participants). */
+  toE164: string[];
+  text: string;
+  /** Optional media URLs; group MMS may be text-only. */
+  mediaUrls?: string[];
+  fetchImpl?: typeof fetch;
+  idempotencyKey?: string;
+}): Promise<{ ok: boolean; status: number; body: string }> {
+  const fetchImpl = params.fetchImpl ?? fetch;
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${params.apiKey}`,
+    "Content-Type": "application/json"
+  };
+  if (params.idempotencyKey) {
+    headers["Idempotency-Key"] = params.idempotencyKey;
+  }
+  const body: Record<string, unknown> = {
+    from: params.fromE164,
+    to: params.toE164,
+    text: params.text
+  };
+  if (params.mediaUrls && params.mediaUrls.length > 0) body.media_urls = params.mediaUrls;
+  const res = await fetchImpl("https://api.telnyx.com/v2/messages/group_mms", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body)
+  });
+  const bodyText = await res.text();
+  return { ok: res.ok, status: res.status, body: bodyText };
+}
