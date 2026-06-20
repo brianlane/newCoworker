@@ -341,6 +341,34 @@ function parseActions(raw) {
 }
 
 /**
+ * Resolve a "click this text" target to an actual control, in preference order:
+ *   1. a button/link whose ACCESSIBLE NAME is exactly `target`,
+ *   2. an element whose visible text is exactly `target`,
+ *   3. (only when `allowSubstring`) any element merely CONTAINING `target`.
+ *
+ * Steps 1–2 are what stop the matcher from latching onto descriptive body copy
+ * that merely contains the word — e.g. a "click Accept" action matching the
+ * subtitle "…then accept or reject." or a "Next" wizard loop matching the
+ * sentence "…read the details on the next screen…". The substring fallback is
+ * kept for single `click_text` clicks so existing flows (whose labels may carry
+ * trailing glyphs) keep working; `click_text_while_present` opts OUT of it so a
+ * wizard loop only ever clicks a real control and treats "no control" as done.
+ *
+ * Returns a Locator (callers .click()/.waitFor() it) or null when nothing matched
+ * and substring fallback was disabled.
+ */
+async function resolveClickTarget(page, target, { allowSubstring = true } = {}) {
+  const byRole = page
+    .getByRole("button", { name: target, exact: true })
+    .or(page.getByRole("link", { name: target, exact: true }));
+  if ((await byRole.count()) > 0) return byRole.first();
+  const byExactText = page.getByText(target, { exact: true });
+  if ((await byExactText.count()) > 0) return byExactText.first();
+  if (allowSubstring) return page.getByText(target, { exact: false }).first();
+  return null;
+}
+
+/**
  * Run the ordered click/fill sequence. Stops at the FIRST failing action and
  * reports how far it got, so the worker can surface exactly which action broke
  * (a changed page is a permanent error, not a retry). After every action we
@@ -352,17 +380,21 @@ async function performActions(page, actions) {
   for (const a of actions) {
     try {
       if (a.kind === "click_text") {
-        await page.getByText(a.target, { exact: false }).first().click({ timeout: ACTION_TIMEOUT_MS });
+        // Prefer a real button/link (or exact-text element); substring fallback
+        // kept so labels with trailing glyphs still resolve.
+        const loc = await resolveClickTarget(page, a.target, { allowSubstring: true });
+        await loc.click({ timeout: ACTION_TIMEOUT_MS });
       } else if (a.kind === "click_text_while_present") {
-        // Wizard-style "Next" loop: click the target as long as it is visible,
-        // bounded by MAX_WHILE_PRESENT_CLICKS. Zero matches is SUCCESS (the page
-        // is already past the step).
+        // Wizard-style "Next" loop: click the control as long as it is visible,
+        // bounded by MAX_WHILE_PRESENT_CLICKS. Resolves ONLY to real controls
+        // (no substring fallback) so it can't latch onto prose that contains the
+        // word (e.g. "…on the next screen…"). Zero matches is SUCCESS — the page
+        // is already past the step.
         const isPresent = async () => {
+          const loc = await resolveClickTarget(page, a.target, { allowSubstring: false });
+          if (!loc) return false;
           try {
-            await page
-              .getByText(a.target, { exact: false })
-              .first()
-              .waitFor({ state: "visible", timeout: WHILE_PRESENT_PROBE_MS });
+            await loc.waitFor({ state: "visible", timeout: WHILE_PRESENT_PROBE_MS });
             return true;
           } catch {
             return false;
@@ -370,7 +402,9 @@ async function performActions(page, actions) {
         };
         let clicks = 0;
         while (clicks < MAX_WHILE_PRESENT_CLICKS && (await isPresent())) {
-          await page.getByText(a.target, { exact: false }).first().click({ timeout: ACTION_TIMEOUT_MS });
+          const loc = await resolveClickTarget(page, a.target, { allowSubstring: false });
+          if (!loc) break;
+          await loc.click({ timeout: ACTION_TIMEOUT_MS });
           await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
           clicks++;
         }
