@@ -110,7 +110,9 @@ export function AiFlowRunsManager({
 }) {
   const [runs, setRuns] = useState<AiFlowRunRow[]>(initialRuns);
   const [flowList, setFlowList] = useState<AiFlowRef[]>(flows);
-  const [expanded, setExpanded] = useState<string | null>(null);
+  // Set of expanded run ids. Multiple runs can be open at once (per-group
+  // "Expand all"); default empty = everything collapsed.
+  const [expandedRuns, setExpandedRuns] = useState<Set<string>>(new Set());
   const [steps, setSteps] = useState<Record<string, AiFlowRunStepRow[]>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -145,12 +147,31 @@ export function AiFlowRunsManager({
   };
 
   const toggle = async (runId: string) => {
-    if (expanded === runId) {
-      setExpanded(null);
-      return;
-    }
-    setExpanded(runId);
-    await loadSteps(runId);
+    let willExpand = false;
+    setExpandedRuns((prev) => {
+      const next = new Set(prev);
+      if (next.has(runId)) next.delete(runId);
+      else {
+        next.add(runId);
+        willExpand = true;
+      }
+      return next;
+    });
+    if (willExpand) await loadSteps(runId);
+  };
+
+  // Expand/collapse every run in one flow group. Expanding loads each run's
+  // steps (loadSteps no-ops on already-loaded runs).
+  const setGroupExpanded = async (runIds: string[], expand: boolean) => {
+    setExpandedRuns((prev) => {
+      const next = new Set(prev);
+      for (const id of runIds) {
+        if (expand) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+    if (expand) await Promise.all(runIds.map((id) => loadSteps(id)));
   };
 
   // Deep link from the dashboard "Recent activity" feed: ?run=<id> opens that
@@ -163,22 +184,22 @@ export function AiFlowRunsManager({
     if (!deepLinkedRun || handledDeepLink.current === deepLinkedRun) return;
     if (!runs.some((r) => r.id === deepLinkedRun)) return;
     handledDeepLink.current = deepLinkedRun;
-    setExpanded(deepLinkedRun);
+    setExpandedRuns((prev) => new Set(prev).add(deepLinkedRun));
     void loadSteps(deepLinkedRun);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deepLinkedRun, runs]);
 
   // Scroll only AFTER the row is expanded and its steps have mounted, so the
   // detail (error + steps + screenshots) is on the page when we center it —
-  // scrolling right after setExpanded would center the still-collapsed row.
+  // scrolling right after expanding would center the still-collapsed row.
   useEffect(() => {
     if (!deepLinkedRun || scrolledDeepLink.current === deepLinkedRun) return;
-    if (expanded !== deepLinkedRun || steps[deepLinkedRun] === undefined) return;
+    if (!expandedRuns.has(deepLinkedRun) || steps[deepLinkedRun] === undefined) return;
     scrolledDeepLink.current = deepLinkedRun;
     document
       .getElementById(`run-${deepLinkedRun}`)
       ?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [deepLinkedRun, expanded, steps]);
+  }, [deepLinkedRun, expandedRuns, steps]);
 
   const decide = async (runId: string, decision: ApprovalDecision) => {
     setBusy(runId);
@@ -212,11 +233,12 @@ export function AiFlowRunsManager({
   const flowName = (flowId: string) =>
     flowList.find((f) => f.id === flowId)?.name ?? "Deleted flow";
 
-  // Group run history per AiFlow. Groups follow the flows list order (newest
-  // flow first, matching the AiFlows page); runs within a group stay
-  // newest-first as the API returns them. Runs whose flow no longer appears in
-  // the list (deleted between fetches — FK cascade removes them on the next
-  // load) are collected into trailing "Deleted flow" groups rather than dropped.
+  // Group run history per AiFlow, then order groups by their most-recent run
+  // (newest-run flow first) so the runs view matches the AiFlows page's
+  // sort-by-last-run. Runs within a group stay newest-first as the API returns
+  // them, so runs[0] is the group's latest run. Runs whose flow no longer
+  // appears in the list (deleted between fetches — FK cascade removes them on
+  // the next load) still group together as "Deleted flow".
   const grouped: Array<{ id: string; name: string; runs: AiFlowRunRow[] }> = [];
   const byFlow = new Map<string, AiFlowRunRow[]>();
   for (const r of runs) {
@@ -224,16 +246,14 @@ export function AiFlowRunsManager({
     if (list) list.push(r);
     else byFlow.set(r.flow_id, [r]);
   }
-  for (const f of flowList) {
-    const list = byFlow.get(f.id);
-    if (list) {
-      grouped.push({ id: f.id, name: f.name, runs: list });
-      byFlow.delete(f.id);
-    }
-  }
   for (const [id, list] of byFlow) {
-    grouped.push({ id, name: "Deleted flow", runs: list });
+    grouped.push({ id, name: flowName(id), runs: list });
   }
+  grouped.sort((a, b) => {
+    const at = a.runs[0]?.created_at ?? "";
+    const bt = b.runs[0]?.created_at ?? "";
+    return at < bt ? 1 : at > bt ? -1 : 0;
+  });
 
   return (
     <div className="space-y-6">
@@ -334,13 +354,22 @@ export function AiFlowRunsManager({
             <p className="py-6 text-center text-sm text-parchment/60">No runs yet.</p>
           </Card>
         ) : (
-          grouped.map((group) => (
+          grouped.map((group) => {
+            const groupRunIds = group.runs.map((r) => r.id);
+            const allExpanded = groupRunIds.every((id) => expandedRuns.has(id));
+            return (
             <div key={group.id} className="space-y-2">
               <h3 className="flex items-baseline gap-2 pt-1 text-sm font-semibold text-parchment">
                 {group.name}
                 <span className="text-xs font-normal text-parchment/40">
                   {group.runs.length} run{group.runs.length === 1 ? "" : "s"}
                 </span>
+                <button
+                  onClick={() => setGroupExpanded(groupRunIds, !allExpanded)}
+                  className="ml-auto text-xs font-normal text-signal-teal hover:underline"
+                >
+                  {allExpanded ? "Collapse all" : "Expand all"}
+                </button>
               </h3>
               {group.runs.map((r) => (
                 <Card key={r.id} id={`run-${r.id}`} className="space-y-2">
@@ -349,7 +378,7 @@ export function AiFlowRunsManager({
                     className="flex w-full items-center justify-between text-left"
                   >
                     <span className="flex items-center gap-2">
-                      {expanded === r.id ? (
+                      {expandedRuns.has(r.id) ? (
                         <ChevronDown className="h-4 w-4 text-parchment/40" />
                       ) : (
                         <ChevronRight className="h-4 w-4 text-parchment/40" />
@@ -380,7 +409,7 @@ export function AiFlowRunsManager({
                       {new Date(r.earliest_claim_at).toLocaleString()}
                     </p>
                   )}
-                  {expanded === r.id && (
+                  {expandedRuns.has(r.id) && (
                     <div className="space-y-1 border-t border-parchment/10 pt-2">
                       {r.last_error && r.status !== "done" && (
                         <p className="text-xs text-red-400">Error: {r.last_error}</p>
@@ -440,7 +469,8 @@ export function AiFlowRunsManager({
                 </Card>
               ))}
             </div>
-          ))
+            );
+          })
         )}
       </section>
     </div>
