@@ -45,37 +45,53 @@ function Screenshot({
   url,
   label,
   stepIndex,
-  failed
+  failed,
+  sourceUrl
 }: {
   url: string;
   label: string;
   stepIndex: number;
   failed: boolean;
+  /** Signed URL to the captured page source (HTML) for this screenshot, if stored. */
+  sourceUrl?: string | null;
 }) {
   return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      title="Open full-size screenshot in a new tab"
-      className="block space-y-1"
-    >
+    <div className="space-y-1">
       <span
-        className={`text-[10px] font-semibold uppercase tracking-wider ${
+        className={`block text-[10px] font-semibold uppercase tracking-wider ${
           failed ? "text-red-400/80" : "text-parchment/40"
         }`}
       >
         {label}
       </span>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={url}
-        alt={`${label} — step ${stepIndex + 1}`}
-        className={`max-h-64 w-auto rounded-md border object-contain object-top transition hover:opacity-90 ${
-          failed ? "border-red-500/40" : "border-parchment/15"
-        }`}
-      />
-    </a>
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Open full-size screenshot in a new tab"
+        className="block"
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={url}
+          alt={`${label} — step ${stepIndex + 1}`}
+          className={`max-h-64 w-auto rounded-md border object-contain object-top transition hover:opacity-90 ${
+            failed ? "border-red-500/40" : "border-parchment/15"
+          }`}
+        />
+      </a>
+      {sourceUrl && (
+        <a
+          href={sourceUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Open the captured page source (raw HTML) in a new tab"
+          className="block text-[10px] font-medium text-sky-400/80 underline underline-offset-2 hover:text-sky-300"
+        >
+          View page source
+        </a>
+      )}
+    </div>
   );
 }
 
@@ -363,6 +379,7 @@ export function AiFlowRunsManager({
                                   label="Before actions"
                                   stepIndex={s.step_index}
                                   failed={false}
+                                  sourceUrl={s.source_before_url}
                                 />
                               )}
                               {s.screenshot_url && (
@@ -377,6 +394,7 @@ export function AiFlowRunsManager({
                                   }
                                   stepIndex={s.step_index}
                                   failed={s.status === "failed"}
+                                  sourceUrl={s.source_url}
                                 />
                               )}
                             </div>

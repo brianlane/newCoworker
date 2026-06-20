@@ -154,9 +154,11 @@ class BrowseLoginError extends Error {}
  */
 class RenderFailedError extends Error {
   screenshotBase64?: string;
-  constructor(message: string, screenshotBase64?: string) {
+  pageSource?: string;
+  constructor(message: string, screenshotBase64?: string, pageSource?: string) {
     super(message);
     this.screenshotBase64 = screenshotBase64;
+    this.pageSource = pageSource;
   }
 }
 /**
@@ -856,10 +858,14 @@ async function browseStep(
     // failure instead of dropping the image into the silent retry path.
     if (e instanceof RenderFailedError && scope.captureScreenshots && e.screenshotBase64) {
       const shotPath = await storeScreenshotBestEffort(supabase, run, index, e.screenshotBase64);
+      const srcPath = await storeSourceBestEffort(supabase, run, index, e.pageSource);
+      const diag: Record<string, unknown> = {};
+      if (shotPath) diag.screenshot_path = shotPath;
+      if (srcPath) diag.source_path = srcPath;
       return {
         kind: "fail",
         error: `browse: ${e.message}`,
-        ...(shotPath ? { result: { screenshot_path: shotPath } } : {})
+        ...(Object.keys(diag).length > 0 ? { result: diag } : {})
       };
     }
     throw e;
@@ -875,10 +881,14 @@ async function browseStep(
     // so the investigate view isn't empty for a cap-hit mid-extraction.
     if (e instanceof SpendCapError) {
       const shotPath = await storeScreenshotBestEffort(supabase, run, index, page.screenshotBase64);
+      const srcPath = await storeSourceBestEffort(supabase, run, index, page.html);
+      const diag: Record<string, unknown> = {};
+      if (shotPath) diag.screenshot_path = shotPath;
+      if (srcPath) diag.source_path = srcPath;
       return {
         kind: "fail",
         error: `browse: ${e.message}`,
-        ...(shotPath ? { result: { screenshot_path: shotPath } } : {})
+        ...(Object.keys(diag).length > 0 ? { result: diag } : {})
       };
     }
     throw e;
@@ -900,11 +910,19 @@ async function browseStep(
   // capture/upload can never leave a stale path from an earlier browse.
   const shotPath = await storeScreenshotBestEffort(supabase, run, index, page.screenshotBase64);
   if (action.screenshot) out.screenshot_path = shotPath;
+  // Store the page source alongside the screenshot (diagnostic only — never an
+  // attach var) so the run timeline can link "View page source" for the shot.
+  const srcPath = shotPath ? await storeSourceBestEffort(supabase, run, index, page.html) : "";
 
   Object.assign(scope.vars, out);
   return {
     kind: "ok",
-    result: { vars: out, finalUrl: page.finalUrl, ...(shotPath ? { screenshot_path: shotPath } : {}) }
+    result: {
+      vars: out,
+      finalUrl: page.finalUrl,
+      ...(shotPath ? { screenshot_path: shotPath } : {}),
+      ...(srcPath ? { source_path: srcPath } : {})
+    }
   };
 }
 
@@ -1037,9 +1055,21 @@ async function browseActionStep(
           readScreenshotBeforeBase64(parsedBody),
           "before"
         );
+        // Page source paired with each shot so the investigate view can link the
+        // exact markup before the actions AND at the point it broke.
+        const failSrc = await storeSourceBestEffort(supabase, run, index, readPageSource(parsedBody));
+        const beforeSrc = await storeSourceBestEffort(
+          supabase,
+          run,
+          index,
+          readPageSourceBefore(parsedBody),
+          "before"
+        );
         const diag: Record<string, unknown> = {};
         if (failShot) diag.screenshot_path = failShot;
         if (beforeShot) diag.screenshot_before_path = beforeShot;
+        if (failSrc) diag.source_path = failSrc;
+        if (beforeSrc) diag.source_before_path = beforeSrc;
         return {
           kind: "fail",
           error: `browse_action: ${detail || "a page action failed"}`,
@@ -1055,10 +1085,14 @@ async function browseActionStep(
       const failBase64 = readScreenshotBase64(parsedBody);
       if (scope.captureScreenshots && failBase64) {
         const failShot = await storeScreenshotBestEffort(supabase, run, index, failBase64);
+        const failSrc = await storeSourceBestEffort(supabase, run, index, readPageSource(parsedBody));
+        const diag: Record<string, unknown> = {};
+        if (failShot) diag.screenshot_path = failShot;
+        if (failSrc) diag.source_path = failSrc;
         return {
           kind: "fail",
           error: `browse_action: render service error${why ? ` (${why})` : ""}`,
-          ...(failShot ? { result: { screenshot_path: failShot } } : {})
+          ...(Object.keys(diag).length > 0 ? { result: diag } : {})
         };
       }
       throw new Error(`browse_action: render service error${why ? ` (${why})` : ""}`);
@@ -1145,6 +1179,11 @@ async function browseActionStep(
     index,
     parsed.screenshotBase64
   );
+  // Page source paired with the after-action screenshot (diagnostic only) so the
+  // run timeline can link "View page source" for the shot.
+  const sourcePath = screenshotPath
+    ? await storeSourceBestEffort(supabase, run, index, parsed.html)
+    : "";
   // Only PUBLISH the screenshot as the downstream attach var when the flow asked
   // to attach one (email/MMS). Writing it unconditionally would change which
   // screenshot a later attachScreenshot step picks up; visibility-only captures
@@ -1165,10 +1204,13 @@ async function browseActionStep(
       // Carry the after-action screenshot captured above onto the failed step so
       // a cap hit mid-extraction still shows the page in the investigate view.
       if (e instanceof SpendCapError) {
+        const diag: Record<string, unknown> = {};
+        if (screenshotPath) diag.screenshot_path = screenshotPath;
+        if (sourcePath) diag.source_path = sourcePath;
         return {
           kind: "fail",
           error: `browse_action: ${e.message}`,
-          ...(screenshotPath ? { result: { screenshot_path: screenshotPath } } : {})
+          ...(Object.keys(diag).length > 0 ? { result: diag } : {})
         };
       }
       throw e;
@@ -1222,7 +1264,8 @@ async function browseActionStep(
       finalUrl: parsed.finalUrl,
       actionsCompleted: parsed.actionsCompleted,
       ...(extractedVars ? { vars: extractedVars } : {}),
-      ...(screenshotPath ? { screenshot_path: screenshotPath } : {})
+      ...(screenshotPath ? { screenshot_path: screenshotPath } : {}),
+      ...(sourcePath ? { source_path: sourcePath } : {})
     }
   };
 }
@@ -1316,6 +1359,61 @@ async function storeScreenshotBestEffort(
   }
 }
 
+/**
+ * Upload captured page source (HTML) next to its screenshot in the same private
+ * bucket, returning its storage path. Stored as text/plain so the owner sees the
+ * raw markup (and the browser never executes it) when opening the signed URL.
+ * The filename mirrors the paired screenshot (`step-N[-variant].html`) so the
+ * run-detail reader can sign both together.
+ */
+async function storeSource(
+  supabase: Supabase,
+  run: RunRow,
+  index: number,
+  html: string,
+  variant?: string
+): Promise<string> {
+  const suffix = variant ? `-${variant}` : "";
+  const path = `${run.business_id}/${run.id}/step-${index}${suffix}.html`;
+  const { error: upErr } = await supabase.storage
+    .from(SCREENSHOT_BUCKET)
+    .upload(path, new Blob([html], { type: "text/plain" }), {
+      contentType: "text/plain; charset=utf-8",
+      upsert: true
+    });
+  if (upErr) throw new Error(`source upload: ${upErr.message}`);
+  return path;
+}
+
+/**
+ * Store captured page source for the run timeline without ever failing the step
+ * (a storage hiccup must not change a browse's outcome). Returns the stored path,
+ * or "" when there was nothing to store or the upload failed.
+ */
+async function storeSourceBestEffort(
+  supabase: Supabase,
+  run: RunRow,
+  index: number,
+  html: string | null | undefined,
+  variant?: string
+): Promise<string> {
+  if (!html) return "";
+  try {
+    return await storeSource(supabase, run, index, html, variant);
+  } catch (e) {
+    console.error("browse source store failed", e);
+    await systemLog(supabase, {
+      businessId: run.business_id,
+      source: "aiflow",
+      level: "warn",
+      event: "ai_flow_source_store_failed",
+      message: `browse source store failed: ${e instanceof Error ? e.message : String(e)}`,
+      payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
+    });
+    return "";
+  }
+}
+
 /** Read a base64 screenshot off a render-service body, or null when absent. */
 function readScreenshotBase64(body: unknown): string | null {
   if (!body || typeof body !== "object") return null;
@@ -1327,6 +1425,20 @@ function readScreenshotBase64(body: unknown): string | null {
 function readScreenshotBeforeBase64(body: unknown): string | null {
   if (!body || typeof body !== "object") return null;
   const v = (body as Record<string, unknown>).screenshotBeforeBase64;
+  return typeof v === "string" && v ? v : null;
+}
+
+/** Read the captured page source (HTML) paired with the failure shot, or null. */
+function readPageSource(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const v = (body as Record<string, unknown>).pageSource;
+  return typeof v === "string" && v ? v : null;
+}
+
+/** Read the page source paired with the "before" shot off a render body, or null. */
+function readPageSourceBefore(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const v = (body as Record<string, unknown>).pageSourceBefore;
   return typeof v === "string" && v ? v : null;
 }
 
@@ -1403,7 +1515,8 @@ async function fetchViaRender(
       const why = [errCode, detail].filter(Boolean).join(": ");
       throw new RenderFailedError(
         `render service error${why ? ` (${why})` : ""}`,
-        readScreenshotBase64(body) ?? undefined
+        readScreenshotBase64(body) ?? undefined,
+        readPageSource(body) ?? undefined
       );
     }
     if (!res.ok) {

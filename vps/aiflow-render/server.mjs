@@ -13,6 +13,10 @@
  *   POST /render { url }                              -> { finalUrl, text, html }
  *   POST /render { url, businessId, auth }            -> { finalUrl, text, html }
  *   ... + { screenshot: true }                        -> adds screenshotBase64 (JPEG)
+ *   ... + { debugScreenshots: true }                  -> before/after/failure shots
+ *                                                        + paired pageSource /
+ *                                                        pageSourceBefore (HTML) on
+ *                                                        failure responses
  *   ... + { actions: [...] }                          -> ACTION mode (below)
  *
  * IMPORTANT — application-level failures (action_failed / login_failed /
@@ -297,6 +301,11 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 const SCREENSHOT_MAX_HEIGHT = Number(process.env.AIFLOW_SCREENSHOT_MAX_HEIGHT ?? 4000);
 const SCREENSHOT_QUALITY = Number(process.env.AIFLOW_SCREENSHOT_QUALITY ?? 60);
 
+// Captured page-source (HTML) accompanies each debug screenshot so the dashboard
+// can link the raw markup behind a failure. Bound it so a pathological page can't
+// bloat the render JSON / storage object (the bucket itself caps at 10 MB).
+const SOURCE_MAX_CHARS = Number(process.env.AIFLOW_SOURCE_MAX_CHARS ?? 4_000_000);
+
 // ACTION mode: per-action click/fill timeout and a hard cap on sequence length
 // (mirrors the worker-side schema cap so a hand-crafted request can't loop).
 const ACTION_TIMEOUT_MS = Number(process.env.AIFLOW_ACTION_TIMEOUT_MS ?? 10_000);
@@ -505,6 +514,20 @@ async function captureScreenshot(page) {
 }
 
 /**
+ * Capture the page's current HTML source (length-capped), or null. Best-effort:
+ * paired with a debug screenshot so the dashboard can link "View page source"
+ * for the exact page state the shot was taken on. Never throws.
+ */
+async function capturePageSource(page) {
+  try {
+    const html = await page.content();
+    return typeof html === "string" ? html.slice(0, SOURCE_MAX_CHARS) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Loop-over-list: collect every `forEachLink` row's href up front (the list
  * page is replaced as we navigate into each), then visit each href and run the
  * SAME action sequence. Per-item failures are recorded but DON'T abort the loop
@@ -599,6 +622,9 @@ async function respondWithActions(page, res, actions, wantScreenshot, forEachLin
   // "where did we get stuck" shot below. Skipped entirely when debug is off so
   // flows that don't opt in pay no extra capture latency.
   const beforeBase64 = wantDebug ? await captureScreenshot(page) : null;
+  // Page source paired with the before-shot, so the dashboard can link the exact
+  // markup the automation was about to act on. Debug-only, like the before-shot.
+  const beforeSource = wantDebug ? await capturePageSource(page) : null;
   const acted = await performActions(page, actions);
   if (acted.error) {
     console.error(`[render] action_failed after ${acted.completed} actions: ${acted.error}`);
@@ -607,12 +633,15 @@ async function respondWithActions(page, res, actions, wantScreenshot, forEachLin
     // (e.g. a wizard "Next" that never advanced). The before-shot above stays
     // debug-only. Best effort — a capture failure must not mask action_failed.
     const screenshotBase64 = wantScreenshot || wantDebug ? await captureScreenshot(page) : null;
+    const pageSource = wantScreenshot || wantDebug ? await capturePageSource(page) : null;
     return res.status(200).json({
       error: "action_failed",
       detail: acted.error,
       actionsCompleted: acted.completed,
       ...(screenshotBase64 ? { screenshotBase64 } : {}),
-      ...(beforeBase64 ? { screenshotBeforeBase64: beforeBase64 } : {})
+      ...(pageSource ? { pageSource } : {}),
+      ...(beforeBase64 ? { screenshotBeforeBase64: beforeBase64 } : {}),
+      ...(beforeSource ? { pageSourceBefore: beforeSource } : {})
     });
   }
   // Return the post-action page text/html alongside the count so the worker can
@@ -691,10 +720,12 @@ app.post("/render", async (req, res) => {
     } catch (e) {
       console.error(`[render] render_failed (unauthenticated) for ${safe}: ${String(e).slice(0, 300)}`);
       const screenshotBase64 = page && (wantScreenshot || wantDebug) ? await captureScreenshot(page) : null;
+      const pageSource = page && (wantScreenshot || wantDebug) ? await capturePageSource(page) : null;
       return res.status(200).json({
         error: "render_failed",
         detail: String(e).slice(0, 300),
-        ...(screenshotBase64 ? { screenshotBase64 } : {})
+        ...(screenshotBase64 ? { screenshotBase64 } : {}),
+        ...(pageSource ? { pageSource } : {})
       });
     } finally {
       if (context) await context.close().catch(() => {});
@@ -769,10 +800,12 @@ app.post("/render", async (req, res) => {
     // Best-effort diagnostic screenshot of whatever the page got stuck on so the
     // owner can see the failure state (a timeout, an unexpected interstitial).
     const screenshotBase64 = page && (wantScreenshot || wantDebug) ? await captureScreenshot(page) : null;
+    const pageSource = page && (wantScreenshot || wantDebug) ? await capturePageSource(page) : null;
     return res.status(200).json({
       error: "render_failed",
       detail: String(e).slice(0, 300),
-      ...(screenshotBase64 ? { screenshotBase64 } : {})
+      ...(screenshotBase64 ? { screenshotBase64 } : {}),
+      ...(pageSource ? { pageSource } : {})
     });
   } finally {
     if (page) await page.close().catch(() => {});

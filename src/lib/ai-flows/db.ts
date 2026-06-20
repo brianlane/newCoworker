@@ -89,6 +89,14 @@ export type AiFlowRunStepRow = {
    * page state going into the step vs. where it broke.
    */
   screenshot_before_url?: string | null;
+  /**
+   * Short-lived signed URL for the captured page source (raw HTML) paired with
+   * `screenshot_url`, when one was stored. Lets the investigate view link the
+   * exact markup behind a step's screenshot.
+   */
+  source_url?: string | null;
+  /** Signed URL for the page source paired with `screenshot_before_url`. */
+  source_before_url?: string | null;
 };
 
 /** Private bucket the ai-flow-worker writes browse screenshots into. */
@@ -320,21 +328,31 @@ export async function listAiFlowRunSteps(
 }
 
 /**
- * Sign a short-lived URL for each step that stored a browse screenshot
- * (`result.screenshot_path`). The bucket is private, so the dashboard can only
- * render a screenshot via a signed URL. Best-effort: a signing failure leaves
- * `screenshot_url` undefined rather than failing the whole run-detail read.
+ * Sign short-lived URLs for each step that stored a browse screenshot
+ * (`result.screenshot_path` / `screenshot_before_path`) and/or its paired page
+ * source (`result.source_path` / `source_before_path`). The bucket is private,
+ * so the dashboard can only reach either via a signed URL. Best-effort: a signing
+ * failure leaves the URLs undefined rather than failing the whole run-detail read.
  */
 async function attachScreenshotUrls(
   db: SupabaseClient,
   steps: AiFlowRunStepRow[]
 ): Promise<AiFlowRunStepRow[]> {
-  const pathOf = (s: AiFlowRunStepRow, key: "screenshot_path" | "screenshot_before_path") =>
+  type PathKey =
+    | "screenshot_path"
+    | "screenshot_before_path"
+    | "source_path"
+    | "source_before_path";
+  const allKeys: PathKey[] = [
+    "screenshot_path",
+    "screenshot_before_path",
+    "source_path",
+    "source_before_path"
+  ];
+  const pathOf = (s: AiFlowRunStepRow, key: PathKey) =>
     typeof s.result?.[key] === "string" ? (s.result[key] as string) : "";
   const paths = steps.flatMap((s) =>
-    [pathOf(s, "screenshot_path"), pathOf(s, "screenshot_before_path")].filter(
-      (p): p is string => p.length > 0
-    )
+    allKeys.map((k) => pathOf(s, k)).filter((p): p is string => p.length > 0)
   );
   if (paths.length === 0) return steps;
   const signedByPath = new Map<string, string>();
@@ -347,15 +365,17 @@ async function attachScreenshotUrls(
     }
   }
   return steps.map((s) => {
-    const main = pathOf(s, "screenshot_path");
-    const before = pathOf(s, "screenshot_before_path");
-    const mainUrl = main ? signedByPath.get(main) : undefined;
-    const beforeUrl = before ? signedByPath.get(before) : undefined;
-    if (!mainUrl && !beforeUrl) return s;
+    const mainUrl = signedByPath.get(pathOf(s, "screenshot_path"));
+    const beforeUrl = signedByPath.get(pathOf(s, "screenshot_before_path"));
+    const sourceUrl = signedByPath.get(pathOf(s, "source_path"));
+    const sourceBeforeUrl = signedByPath.get(pathOf(s, "source_before_path"));
+    if (!mainUrl && !beforeUrl && !sourceUrl && !sourceBeforeUrl) return s;
     return {
       ...s,
       ...(mainUrl ? { screenshot_url: mainUrl } : {}),
-      ...(beforeUrl ? { screenshot_before_url: beforeUrl } : {})
+      ...(beforeUrl ? { screenshot_before_url: beforeUrl } : {}),
+      ...(sourceUrl ? { source_url: sourceUrl } : {}),
+      ...(sourceBeforeUrl ? { source_before_url: sourceBeforeUrl } : {})
     };
   });
 }
