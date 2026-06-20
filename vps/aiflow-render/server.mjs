@@ -362,9 +362,24 @@ async function resolveClickTarget(page, target, { allowSubstring = true } = {}) 
     .getByRole("button", { name: target, exact: true })
     .or(page.getByRole("link", { name: target, exact: true }));
   if ((await byRole.count()) > 0) return byRole.first();
+
   const byExactText = page.getByText(target, { exact: true });
-  if ((await byExactText.count()) > 0) return byExactText.first();
-  if (allowSubstring) return page.getByText(target, { exact: false }).first();
+  if (allowSubstring) {
+    // Single-click path: any exact-text element, then loose substring (labels
+    // may carry trailing glyphs / icons).
+    if ((await byExactText.count()) > 0) return byExactText.first();
+    return page.getByText(target, { exact: false }).first();
+  }
+
+  // Controls-only path (while-present loops): an exact-text match is only
+  // accepted when it lands on an actual interactive element, so a static node
+  // that happens to read exactly "Next" can't drive the loop. No control => null
+  // (caller treats that as "already past this step").
+  const interactive = page.locator(
+    'button, a, [role="button"], [role="link"], [role="menuitem"], [role="tab"], input[type="button"], input[type="submit"], [onclick]',
+  );
+  const byExactControl = byExactText.and(interactive);
+  if ((await byExactControl.count()) > 0) return byExactControl.first();
   return null;
 }
 
