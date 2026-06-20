@@ -22,6 +22,7 @@ import {
   isHelpKeyword,
   isStartKeyword,
   isStopKeyword,
+  telnyxSendGroupMms,
   telnyxSendSms
 } from "../supabase/functions/_shared/telnyx_sms_compliance";
 import {
@@ -360,6 +361,94 @@ describe("_shared/telnyx_sms_compliance", () => {
       expect(r.ok).toBe(false);
       expect(r.status).toBe(422);
       expect(r.body).toBe("err");
+      expect(g).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("telnyxSendGroupMms posts the group_mms endpoint with an array `to` and required `from`", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => '{"data":{"id":"grp_1"}}'
+    });
+    const r = await telnyxSendGroupMms({
+      apiKey: "KEY",
+      fromE164: "+15550001111",
+      toE164: ["+15550002222", "+15550003333"],
+      text: "group reply",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe(200);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://api.telnyx.com/v2/messages/group_mms",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer KEY" })
+      })
+    );
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      from: "+15550001111",
+      to: ["+15550002222", "+15550003333"],
+      text: "group reply"
+    });
+  });
+
+  it("telnyxSendGroupMms includes Idempotency-Key + media_urls when provided, omits when absent", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "{}"
+    });
+    await telnyxSendGroupMms({
+      apiKey: "KEY",
+      fromE164: "+15550001111",
+      toE164: ["+15550002222", "+15550003333"],
+      text: "with media",
+      mediaUrls: ["https://example.com/shot.jpg"],
+      idempotencyKey: "grp_idem_1",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    const [, withMedia] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(withMedia.headers).toMatchObject({ "Idempotency-Key": "grp_idem_1" });
+    expect(JSON.parse(withMedia.body as string)).toMatchObject({
+      media_urls: ["https://example.com/shot.jpg"]
+    });
+
+    fetchImpl.mockClear();
+    await telnyxSendGroupMms({
+      apiKey: "KEY",
+      fromE164: "+15550001111",
+      toE164: ["+15550002222", "+15550003333"],
+      text: "no media",
+      mediaUrls: [],
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    const [, noMedia] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(noMedia.headers).not.toHaveProperty("Idempotency-Key");
+    expect(JSON.parse(noMedia.body as string)).not.toHaveProperty("media_urls");
+  });
+
+  it("telnyxSendGroupMms uses global fetch when fetchImpl omitted", async () => {
+    const g = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => "grp err"
+    });
+    vi.stubGlobal("fetch", g);
+    try {
+      const r = await telnyxSendGroupMms({
+        apiKey: "K",
+        fromE164: "+1",
+        toE164: ["+2", "+3"],
+        text: "x"
+      });
+      expect(r.ok).toBe(false);
+      expect(r.status).toBe(400);
+      expect(r.body).toBe("grp err");
       expect(g).toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();

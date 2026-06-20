@@ -32,6 +32,12 @@ export type AiFlowRow = {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  /**
+   * ISO timestamp of this flow's most-recent run, or null when it has never
+   * run. Computed by {@link listAiFlows} (not a stored column) so the dashboard
+   * can sort flows by activity and show "last run X ago".
+   */
+  last_run_at?: string | null;
 };
 
 export type AiFlowRunStatus =
@@ -130,7 +136,33 @@ export async function listAiFlows(
     .eq("business_id", businessId)
     .order("created_at", { ascending: false });
   if (error) throw new Error(`listAiFlows: ${error.message}`);
-  return (data ?? []) as AiFlowRow[];
+  const flows = (data ?? []) as AiFlowRow[];
+
+  // Attach each flow's most-recent run time so the dashboard can sort by
+  // activity (most-recently-run first). Read runs newest-first and keep the
+  // first time seen per flow. A failure here must not blank the list, so on
+  // error we fall back to the created_at order above.
+  const lastRunByFlow = new Map<string, string>();
+  const { data: runRows } = await db
+    .from("ai_flow_runs")
+    .select("flow_id, created_at")
+    .eq("business_id", businessId)
+    .order("created_at", { ascending: false });
+  for (const r of (runRows ?? []) as Array<{ flow_id: string; created_at: string }>) {
+    if (!lastRunByFlow.has(r.flow_id)) lastRunByFlow.set(r.flow_id, r.created_at);
+  }
+  for (const f of flows) f.last_run_at = lastRunByFlow.get(f.id) ?? null;
+
+  // Most-recently-run first; flows that have never run sort last (by their
+  // existing created_at order, since the input array is already created_at desc).
+  return flows.sort((a, b) => {
+    const ar = a.last_run_at;
+    const br = b.last_run_at;
+    if (ar && br) return ar < br ? 1 : ar > br ? -1 : 0;
+    if (ar) return -1;
+    if (br) return 1;
+    return 0;
+  });
 }
 
 export async function getAiFlow(

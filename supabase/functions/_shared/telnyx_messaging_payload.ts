@@ -45,16 +45,21 @@ function phoneStringsFromField(raw: unknown): string[] {
 
 /**
  * Every distinct participant phone number in a Telnyx messaging webhook: the
- * sender (`from`) plus all `to` recipients. A group MMS lists multiple `to`
- * numbers (the other group members AND our own DID), so this is the raw roster
- * the AiFlow engine uses to reply into the thread. Order: `from` first, then
- * `to[]`; de-duped, preserving first-seen order. NOT E.164-normalized — the
- * caller normalizes (the inbound handler already has normalizeE164).
+ * sender (`from`) plus all `to` recipients AND any `cc` participants. On an
+ * inbound group MMS Telnyx lists the OTHER group members in `cc` (with our own
+ * DID in `to`), so reading `cc` too is what lets a group reply reach everyone
+ * in the thread, not just whoever happened to land in `to`. Order: `from`,
+ * then `to[]`, then `cc[]`; de-duped, preserving first-seen order. NOT
+ * E.164-normalized — the caller normalizes (the inbound handler has normalizeE164).
  */
 export function telnyxMessagingParticipants(payload: Record<string, unknown>): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const n of [...phoneStringsFromField(payload["from"]), ...phoneStringsFromField(payload["to"])]) {
+  for (const n of [
+    ...phoneStringsFromField(payload["from"]),
+    ...phoneStringsFromField(payload["to"]),
+    ...phoneStringsFromField(payload["cc"])
+  ]) {
     if (seen.has(n)) continue;
     seen.add(n);
     out.push(n);

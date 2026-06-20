@@ -489,6 +489,40 @@ async function performActions(page, actions) {
   return { completed };
 }
 
+// How long settlePage waits for a JS-rendered (SPA) page to actually paint
+// content before we screenshot / read / act on it. networkidle alone fires on
+// the empty app shell, which is why early captures came back blank-white and
+// extraction returned empty fields.
+const SETTLE_TIMEOUT_MS = Number(process.env.AIFLOW_SETTLE_TIMEOUT_MS ?? 8000);
+const SETTLE_MIN_TEXT = Number(process.env.AIFLOW_SETTLE_MIN_TEXT ?? 40);
+const SETTLE_POST_DELAY_MS = Number(process.env.AIFLOW_SETTLE_POST_DELAY_MS ?? 600);
+
+/**
+ * Wait for an SPA to finish painting before we capture/read/act. Best-effort
+ * and bounded — a page that never fills in still proceeds after the timeout so
+ * a slow render degrades to "maybe blank" rather than a hang. Steps:
+ *   1) wait for the `load` event (subresources), then
+ *   2) poll until the body has real visible text (> SETTLE_MIN_TEXT chars), then
+ *   3) a short fixed delay so late layout/fonts settle before the shot.
+ * Never throws.
+ */
+async function settlePage(page) {
+  try {
+    await page.waitForLoadState("load", { timeout: SETTLE_TIMEOUT_MS }).catch(() => {});
+    await page
+      .waitForFunction(
+        (min) => (document.body?.innerText?.trim().length ?? 0) > min,
+        SETTLE_MIN_TEXT,
+        { timeout: SETTLE_TIMEOUT_MS }
+      )
+      .catch(() => {});
+    if (SETTLE_POST_DELAY_MS > 0) await page.waitForTimeout(SETTLE_POST_DELAY_MS);
+  } catch {
+    // A settle failure must never break the browse — proceed with whatever
+    // rendered so text/screenshots still flow.
+  }
+}
+
 /** Capture a height-capped full-width JPEG of the page as base64, or null. */
 async function captureScreenshot(page) {
   try {
@@ -577,6 +611,7 @@ async function performForEach(page, forEachLink, actions) {
   for (const href of hrefs) {
     try {
       await page.goto(href, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
+      await settlePage(page);
     } catch (e) {
       failed++;
       errors.push(`goto ${href}: ${String(e?.message ?? e)}`.slice(0, 200));
@@ -632,6 +667,7 @@ async function respondWithActions(page, res, actions, wantScreenshot, forEachLin
     // requested (attach OR debug) so the owner can see WHERE the automation broke
     // (e.g. a wizard "Next" that never advanced). The before-shot above stays
     // debug-only. Best effort — a capture failure must not mask action_failed.
+    if (wantScreenshot || wantDebug) await settlePage(page);
     const screenshotBase64 = wantScreenshot || wantDebug ? await captureScreenshot(page) : null;
     const pageSource = wantScreenshot || wantDebug ? await capturePageSource(page) : null;
     return res.status(200).json({
@@ -649,6 +685,7 @@ async function respondWithActions(page, res, actions, wantScreenshot, forEachLin
   // (no second navigation). Best-effort: a read failure still reports success.
   let text = "";
   let html = "";
+  await settlePage(page);
   try {
     html = await page.content();
     text = await page.evaluate(() => document.body?.innerText ?? "");
@@ -705,6 +742,7 @@ app.post("/render", async (req, res) => {
       page = await context.newPage();
       await attachSsrfGuard(page);
       await page.goto(safe, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
+      await settlePage(page);
       if (actions)
         return await respondWithActions(page, res, actions, wantScreenshot, forEachLink, wantDebug);
       const html = await page.content();
@@ -778,6 +816,12 @@ app.post("/render", async (req, res) => {
         return res.status(200).json({ error: "login_failed" });
       }
     }
+
+    // Let the (post-login) SPA paint before we screenshot / read / act, so the
+    // lead page's fields and buttons (e.g. "Provide Update") are present and the
+    // debug screenshots aren't blank. Covers both the no-login and post-login
+    // navigations, which converge here.
+    await settlePage(page);
 
     // ACTION mode runs after any login. An action failure does NOT poison the
     // session — the login is still good; only the page/selectors disagreed.

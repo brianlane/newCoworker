@@ -77,6 +77,9 @@ type StubOpts = {
   // Storage.createSignedUrls stub for the run-step screenshot signer.
   signed?: unknown;
   signedError?: StubErr;
+  // Rows for the ai_flow_runs lookup inside listAiFlows (last-run sort). When
+  // present, `from("ai_flow_runs")` resolves these instead of `array`.
+  runs?: unknown;
 };
 
 function makeBuilder(opts: StubOpts) {
@@ -102,14 +105,20 @@ function makeBuilder(opts: StubOpts) {
 
 function makeDb(opts: StubOpts) {
   const b = makeBuilder(opts);
+  // Separate builder for the ai_flow_runs last-run lookup so listAiFlows can
+  // fetch flows AND runs from the same db stub without conflating their rows.
+  const runsBuilder = makeBuilder({ array: opts.runs });
   const createSignedUrls = vi.fn(() =>
     Promise.resolve({ data: opts.signed ?? null, error: opts.signedError ?? null })
   );
   return {
     builder: b,
+    runsBuilder,
     createSignedUrls,
     db: {
-      from: vi.fn(() => b),
+      from: vi.fn((table?: string) =>
+        table === "ai_flow_runs" && "runs" in opts ? runsBuilder : b
+      ),
       storage: { from: vi.fn(() => ({ createSignedUrls })) }
     }
   };
@@ -121,24 +130,90 @@ beforeEach(() => {
 
 describe("resolveDb fallback", () => {
   it("creates a service client when none is passed", async () => {
-    const { db } = makeDb({ array: [FLOW_ROW] });
+    const { db } = makeDb({ array: [FLOW_ROW], runs: [] });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(
        
       db as any
     );
-    expect(await listAiFlows("biz-1")).toEqual([FLOW_ROW]);
+    expect(await listAiFlows("biz-1")).toEqual([{ ...FLOW_ROW, last_run_at: null }]);
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("listAiFlows", () => {
-  it("returns rows", async () => {
-    const { db } = makeDb({ array: [FLOW_ROW] });
+  it("attaches last_run_at from the newest run per flow", async () => {
+    const { db } = makeDb({
+      array: [FLOW_ROW],
+      // Newest-first, as the query orders them; first-seen per flow wins.
+      runs: [
+        { flow_id: "flow-1", created_at: "2026-06-10T00:00:00Z" },
+        { flow_id: "flow-1", created_at: "2026-06-09T00:00:00Z" }
+      ]
+    });
      
-    expect(await listAiFlows("biz-1", db as any)).toEqual([FLOW_ROW]);
+    expect(await listAiFlows("biz-1", db as any)).toEqual([
+      { ...FLOW_ROW, last_run_at: "2026-06-10T00:00:00Z" }
+    ]);
+  });
+  it("sorts most-recently-run first and puts never-run flows last", async () => {
+    const flowA = { ...FLOW_ROW, id: "flow-a", name: "A" };
+    const flowB = { ...FLOW_ROW, id: "flow-b", name: "B" };
+    const flowC = { ...FLOW_ROW, id: "flow-c", name: "C (never run)" };
+    const { db } = makeDb({
+      array: [flowA, flowB, flowC],
+      runs: [
+        { flow_id: "flow-b", created_at: "2026-06-12T00:00:00Z" },
+        { flow_id: "flow-a", created_at: "2026-06-11T00:00:00Z" }
+      ]
+    });
+     
+    const out = await listAiFlows("biz-1", db as any);
+    expect(out.map((f) => f.id)).toEqual(["flow-b", "flow-a", "flow-c"]);
+    expect(out[2].last_run_at).toBeNull();
+  });
+  it("orders an out-of-order pair (later array element ran more recently)", async () => {
+    // Input is already created_at-desc; here the SECOND flow ran more recently,
+    // exercising the a<b and a-has-run/b-null comparator branches.
+    const older = { ...FLOW_ROW, id: "older", name: "older run" };
+    const newer = { ...FLOW_ROW, id: "newer", name: "newer run" };
+    const never = { ...FLOW_ROW, id: "never", name: "never run" };
+    const { db } = makeDb({
+      array: [never, newer, older],
+      runs: [
+        { flow_id: "newer", created_at: "2026-06-12T00:00:00Z" },
+        { flow_id: "older", created_at: "2026-06-11T00:00:00Z" }
+      ]
+    });
+     
+    const out = await listAiFlows("biz-1", db as any);
+    expect(out.map((f) => f.id)).toEqual(["newer", "older", "never"]);
+  });
+  it("treats a null ai_flow_runs payload as no runs (all flows never-run)", async () => {
+    const { db } = makeDb({ array: [FLOW_ROW], runs: null });
+     
+    expect(await listAiFlows("biz-1", db as any)).toEqual([
+      { ...FLOW_ROW, last_run_at: null }
+    ]);
+  });
+  it("keeps stable order for equal last-run times and for multiple never-run flows", async () => {
+    const f1 = { ...FLOW_ROW, id: "f1", name: "F1" };
+    const f2 = { ...FLOW_ROW, id: "f2", name: "F2" };
+    const f3 = { ...FLOW_ROW, id: "f3", name: "F3" };
+    const f4 = { ...FLOW_ROW, id: "f4", name: "F4" };
+    const { db } = makeDb({
+      array: [f1, f2, f3, f4],
+      // f1 and f2 share a timestamp (tie); f3 and f4 never ran (both null).
+      runs: [
+        { flow_id: "f1", created_at: "2026-06-12T00:00:00Z" },
+        { flow_id: "f2", created_at: "2026-06-12T00:00:00Z" }
+      ]
+    });
+     
+    const out = await listAiFlows("biz-1", db as any);
+    expect(out.map((f) => f.id)).toEqual(["f1", "f2", "f3", "f4"]);
   });
   it("defaults to empty when data is null", async () => {
-    const { db } = makeDb({ array: null });
+    const { db } = makeDb({ array: null, runs: [] });
      
     expect(await listAiFlows("biz-1", db as any)).toEqual([]);
   });
