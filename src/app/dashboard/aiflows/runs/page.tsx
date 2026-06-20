@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getAuthUser } from "@/lib/auth";
@@ -68,12 +69,14 @@ export default async function AiFlowRunsPage({ searchParams }: Props) {
           <p className="py-6 text-center text-sm text-parchment/60">No business found.</p>
         </Card>
       ) : (
-        <AiFlowRunsManager
-          businessId={businessId}
-          initialRuns={runs}
-          flows={flows.map((f) => ({ id: f.id, name: f.name }))}
-          flowId={flowId || undefined}
-        />
+        <Suspense fallback={null}>
+          <AiFlowRunsManager
+            businessId={businessId}
+            initialRuns={runs}
+            flows={flows.map((f) => ({ id: f.id, name: f.name }))}
+            flowId={flowId || undefined}
+          />
+        </Suspense>
       )}
     </div>
   );

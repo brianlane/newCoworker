@@ -132,7 +132,7 @@ export default async function SmsThreadPage({
               >
                 <div
                   className={[
-                    "max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
+                    "max-w-[85%] min-w-0 break-words rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
                     isInbound
                       ? "bg-parchment/10 text-parchment"
                       : "bg-claw-green/20 text-parchment"

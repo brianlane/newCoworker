@@ -188,9 +188,9 @@ describe("buildActivityFeed", () => {
     const items = buildActivityFeed(
       emptyInput({
         flows: [
-          { status: "completed", created_at: "2026-01-05T12:00:00Z", ai_flows: { name: "Lead intake" } },
-          { status: "failed", created_at: "2026-01-05T11:00:00Z", ai_flows: [{ name: "Nightly sync" }] },
-          { status: "completed", created_at: "2026-01-05T10:00:00Z", ai_flows: null }
+          { id: "run-1", flow_id: "flow-a", status: "completed", created_at: "2026-01-05T12:00:00Z", ai_flows: { name: "Lead intake" } },
+          { id: "run-2", flow_id: "flow-b", status: "failed", created_at: "2026-01-05T11:00:00Z", ai_flows: [{ name: "Nightly sync" }] },
+          { id: "run-3", flow_id: "flow-c", status: "completed", created_at: "2026-01-05T10:00:00Z", ai_flows: null }
         ]
       })
     );
@@ -199,13 +199,18 @@ describe("buildActivityFeed", () => {
       "AiFlow — Nightly sync (failed)",
       "AiFlow — AiFlow (completed)"
     ]);
-    expect(items[0]).toMatchObject({ kind: "aiflow", href: "/dashboard/aiflows" });
+    // Deep links to the exact run on the flow's runs page (not the flow list).
+    expect(items[0]).toMatchObject({
+      kind: "aiflow",
+      href: "/dashboard/aiflows/runs?flowId=flow-a&run=run-1"
+    });
+    expect(items[1].href).toBe("/dashboard/aiflows/runs?flowId=flow-b&run=run-2");
   });
 
   it("falls back to 'AiFlow' when an array join is empty", () => {
     const [item] = buildActivityFeed(
       emptyInput({
-        flows: [{ status: "completed", created_at: "2026-01-05T10:00:00Z", ai_flows: [] }]
+        flows: [{ id: "run-x", flow_id: "flow-x", status: "completed", created_at: "2026-01-05T10:00:00Z", ai_flows: [] }]
       })
     );
     expect(item.label).toBe("AiFlow — AiFlow (completed)");

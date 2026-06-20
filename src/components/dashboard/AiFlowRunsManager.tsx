@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Card } from "@/components/ui/Card";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { retrySummary, routingSummary } from "@/lib/ai-flows/run-stats";
@@ -133,21 +134,51 @@ export function AiFlowRunsManager({
     }
   };
 
+  const loadSteps = async (runId: string) => {
+    if (steps[runId]) return;
+    const res = await fetch(
+      `/api/aiflows/runs/${runId}?businessId=${encodeURIComponent(businessId)}`,
+      { cache: "no-store" }
+    );
+    const json = (await res.json()) as { ok: boolean; data?: { steps: AiFlowRunStepRow[] } };
+    if (json.ok && json.data) setSteps((s) => ({ ...s, [runId]: json.data!.steps }));
+  };
+
   const toggle = async (runId: string) => {
     if (expanded === runId) {
       setExpanded(null);
       return;
     }
     setExpanded(runId);
-    if (!steps[runId]) {
-      const res = await fetch(
-        `/api/aiflows/runs/${runId}?businessId=${encodeURIComponent(businessId)}`,
-        { cache: "no-store" }
-      );
-      const json = (await res.json()) as { ok: boolean; data?: { steps: AiFlowRunStepRow[] } };
-      if (json.ok && json.data) setSteps((s) => ({ ...s, [runId]: json.data!.steps }));
-    }
+    await loadSteps(runId);
   };
+
+  // Deep link from the dashboard "Recent activity" feed: ?run=<id> opens that
+  // run's steps/error and scrolls it into view, so a failed run lands the owner
+  // on the failure detail rather than the top of the list. Runs once per id.
+  const deepLinkedRun = useSearchParams().get("run");
+  const handledDeepLink = useRef<string | null>(null);
+  const scrolledDeepLink = useRef<string | null>(null);
+  useEffect(() => {
+    if (!deepLinkedRun || handledDeepLink.current === deepLinkedRun) return;
+    if (!runs.some((r) => r.id === deepLinkedRun)) return;
+    handledDeepLink.current = deepLinkedRun;
+    setExpanded(deepLinkedRun);
+    void loadSteps(deepLinkedRun);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLinkedRun, runs]);
+
+  // Scroll only AFTER the row is expanded and its steps have mounted, so the
+  // detail (error + steps + screenshots) is on the page when we center it —
+  // scrolling right after setExpanded would center the still-collapsed row.
+  useEffect(() => {
+    if (!deepLinkedRun || scrolledDeepLink.current === deepLinkedRun) return;
+    if (expanded !== deepLinkedRun || steps[deepLinkedRun] === undefined) return;
+    scrolledDeepLink.current = deepLinkedRun;
+    document
+      .getElementById(`run-${deepLinkedRun}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [deepLinkedRun, expanded, steps]);
 
   const decide = async (runId: string, decision: ApprovalDecision) => {
     setBusy(runId);
@@ -312,7 +343,7 @@ export function AiFlowRunsManager({
                 </span>
               </h3>
               {group.runs.map((r) => (
-                <Card key={r.id} className="space-y-2">
+                <Card key={r.id} id={`run-${r.id}`} className="space-y-2">
                   <button
                     onClick={() => toggle(r.id)}
                     className="flex w-full items-center justify-between text-left"

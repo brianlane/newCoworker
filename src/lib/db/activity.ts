@@ -73,6 +73,10 @@ export type ActivityChatRow = {
 };
 
 export type ActivityFlowRow = {
+  /** The run id — deep-links the feed item straight to this run's detail. */
+  id: string;
+  /** The owning flow id — scopes the runs page so the run is in view. */
+  flow_id: string;
   status: string;
   created_at: string;
   ai_flows: { name: string } | { name: string }[] | null;
@@ -201,7 +205,9 @@ export function buildActivityFeed(input: ActivityFeedInput): ActivityItem[] {
       id: `aiflow:${i}:${r.created_at}`,
       kind: "aiflow",
       label: `AiFlow — ${flowName(r.ai_flows)} (${r.status})`,
-      href: "/dashboard/aiflows",
+      // Deep-link to this exact run on the flow's runs page so clicking a
+      // failed run opens its steps/error (and screenshots), not the flow list.
+      href: `/dashboard/aiflows/runs?flowId=${encodeURIComponent(r.flow_id)}&run=${encodeURIComponent(r.id)}`,
       at: r.created_at
     });
   });
@@ -318,7 +324,7 @@ export async function getRecentActivity(
         .limit(limit),
       db
         .from("ai_flow_runs")
-        .select("status, created_at, ai_flows(name)")
+        .select("id, flow_id, status, created_at, ai_flows(name)")
         .eq("business_id", businessId)
         .gte("created_at", since)
         .order("created_at", { ascending: false })

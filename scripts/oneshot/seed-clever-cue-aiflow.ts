@@ -19,8 +19,9 @@
  * Required env: NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY.
  * Business id: AIFLOW_SEED_BUSINESS_ID or --business-id <uuid> (defaults to Amy's).
  * Optional overrides:
- *   AIFLOW_CLEVER_CUE_FROM   (default "3149071456")
- *   AIFLOW_CLEVER_CUE_REPLY  (default "Y")
+ *   AIFLOW_CLEVER_CUE_FROM     (default "3149071456")
+ *   AIFLOW_CLEVER_CUE_REPLY    (default "Y")
+ *   AIFLOW_CLEVER_CUE_KEYWORD  (default "LIVE TRANSFER")
  */
 import { createClient } from "@supabase/supabase-js";
 import {
@@ -49,13 +50,23 @@ function parseArgs(argv: readonly string[]): Args {
 
 const DEFAULT_BUSINESS_ID = "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
 
-function buildDefinition(opts: { from: string; reply: string }): unknown {
+function buildDefinition(opts: { from: string; reply: string; keyword: string }): unknown {
   return {
     version: 1,
     trigger: {
       channel: "sms",
-      correlationWindowMinutes: 15,
-      conditions: [{ type: "from_matches", value: opts.from }]
+      // Window 0 = match ONLY the message that just arrived, never the
+      // correlation window. Clever's "LIVE TRANSFER … Reply Y" prompt is a
+      // single self-contained text, so no window is needed — and a window would
+      // re-fire the "Y" on Clever's follow-up ("Awesome! You've been added…")
+      // because that prompt's text still sits inside the window. Keep at 0.
+      correlationWindowMinutes: 0,
+      conditions: [
+        { type: "from_matches", value: opts.from },
+        // Only the actual transfer prompt asks for a "Y"; gate on its banner so
+        // confirmations/acks from the same number never trigger another reply.
+        { type: "contains", value: opts.keyword, caseInsensitive: true }
+      ]
     },
     steps: [{ id: "cue", type: "send_sms", to: "{{trigger.from}}", body: opts.reply }],
     options: { suppressDefaultReply: true }
@@ -81,7 +92,8 @@ async function main(): Promise<void> {
   const name = process.env.AIFLOW_SEED_NAME ?? "Clever Cue Text";
   const definitionInput = buildDefinition({
     from: process.env.AIFLOW_CLEVER_CUE_FROM ?? "3149071456",
-    reply: process.env.AIFLOW_CLEVER_CUE_REPLY ?? "Y"
+    reply: process.env.AIFLOW_CLEVER_CUE_REPLY ?? "Y",
+    keyword: process.env.AIFLOW_CLEVER_CUE_KEYWORD ?? "LIVE TRANSFER"
   });
 
   let definition;
