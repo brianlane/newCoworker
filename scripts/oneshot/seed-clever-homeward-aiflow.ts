@@ -80,7 +80,9 @@ function buildDefinition(opts: { from: string; agentName: string; preamble: stri
         id: "tell_agent",
         type: "send_sms",
         toAgentName: opts.agentName,
-        body: `${opts.preamble}\n\nHomeward offer received:\n{{trigger.windowText}}`
+        body:
+          `${opts.preamble}\n\nLead source: Clever (listwithclever.com)\n` +
+          `Homeward offer received:\n{{trigger.windowText}}`
       }
     ],
     options: { suppressDefaultReply: true }

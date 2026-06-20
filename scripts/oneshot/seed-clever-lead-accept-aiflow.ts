@@ -153,24 +153,31 @@ function buildDefinition(opts: {
         ],
         screenshot: true
       },
-      // Email the QT (screenshot) to Amy.
+      // Email the QT (screenshot) to Amy. Include the extracted lead fields AND
+      // the full original lead text ({{trigger.windowText}}) plus the source so
+      // she has everything Clever sent, not just name/phone/email.
       {
         id: "qt_email",
         type: "send_email",
         to: opts.qtEmailTo,
         subject: "{{vars.lead_name}} QT, Clever",
         body:
-          "New Clever lead accepted: {{vars.lead_name}} ({{vars.lead_phone}}) " +
-          "{{vars.lead_email}}. QT attached.",
+          "New Clever lead accepted: {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
+          "Lead source: Clever (listwithclever.com)\n\n" +
+          "Full lead details:\n{{trigger.windowText}}\n\nQT attached.",
         attachScreenshot: true
       },
       // Hand the lead to Dave Lane (mirrors the ReferralExchange seller routing).
+      // Team/owner messages carry the extracted fields, the source label, and the
+      // full original lead text so whoever claims it has the complete context.
       {
         id: "route",
         type: "route_to_team",
         agentName: opts.agentName,
         offerTemplate:
-          "New Clever lead: {{vars.lead_name}} ({{vars.lead_phone}}). " +
+          "New Clever lead: {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
+          "Lead source: Clever (listwithclever.com)\n" +
+          "Details: {{trigger.windowText}}\n" +
           "Reply 1 to claim or 2 to pass by {{offer.deadline}}, or it goes to the next agent.",
         responseMinutes: 10,
         offerWindow: {
@@ -180,9 +187,12 @@ function buildDefinition(opts: {
           graceMinutes: 10
         },
         ownerFallbackTemplate:
-          "No agent claimed the Clever lead {{vars.lead_name}} ({{vars.lead_phone}}). It's back to you.",
+          "No agent claimed the Clever lead {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
+          "Lead source: Clever (listwithclever.com)\n" +
+          "Details: {{trigger.windowText}}\nIt's back to you.",
         claimedNotifyTemplate:
-          "{{agent.name}} claimed the Clever lead {{vars.lead_name}} ({{vars.lead_phone}}).",
+          "{{agent.name}} claimed the Clever lead {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
+          "Lead source: Clever (listwithclever.com)",
         attachScreenshot: true
       },
       // Leave a status update back on Clever.
