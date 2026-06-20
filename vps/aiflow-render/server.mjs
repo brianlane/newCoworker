@@ -341,45 +341,57 @@ function parseActions(raw) {
 }
 
 /**
- * Resolve a "click this text" target to an actual control, in preference order:
- *   1. a button/link whose ACCESSIBLE NAME is exactly `target`,
- *   2. an element whose visible text is exactly `target`,
- *   3. (only when `allowSubstring`) any element merely CONTAINING `target`.
+ * Resolve a "click this text" target to an actual control. The whole point is to
+ * stop the matcher from latching onto descriptive body copy that merely contains
+ * the word — e.g. a "click Accept" action hitting the subtitle "…then accept or
+ * reject." or a "Next" wizard loop hitting the sentence "…on the next screen…".
  *
- * Steps 1–2 are what stop the matcher from latching onto descriptive body copy
- * that merely contains the word — e.g. a "click Accept" action matching the
- * subtitle "…then accept or reject." or a "Next" wizard loop matching the
- * sentence "…read the details on the next screen…". The substring fallback is
- * kept for single `click_text` clicks so existing flows (whose labels may carry
- * trailing glyphs) keep working; `click_text_while_present` opts OUT of it so a
- * wizard loop only ever clicks a real control and treats "no control" as done.
+ * Two modes:
+ *   - `allowSubstring: true`  (single `click_text`): role/exact-text first, then
+ *     a loose substring match anywhere, preserving legacy single-click behavior.
+ *   - `allowSubstring: false` (`click_text_while_present`): only ever resolves to
+ *     a real INTERACTIVE control — by exact name, exact text, substring name, or
+ *     substring text scoped to interactive elements — so wizard buttons like
+ *     "Next →" / "Next Page" still match while prose (<p>/<span>) never does.
+ *     Returns null when no control matches (caller treats that as "step done").
  *
- * Returns a Locator (callers .click()/.waitFor() it) or null when nothing matched
- * and substring fallback was disabled.
+ * Returns a Locator (callers .click()/.waitFor() it) or null.
  */
 async function resolveClickTarget(page, target, { allowSubstring = true } = {}) {
-  const byRole = page
+  // 1) A real control whose ACCESSIBLE NAME is exactly the target.
+  const byRoleExact = page
     .getByRole("button", { name: target, exact: true })
     .or(page.getByRole("link", { name: target, exact: true }));
-  if ((await byRole.count()) > 0) return byRole.first();
+  if ((await byRoleExact.count()) > 0) return byRoleExact.first();
 
   const byExactText = page.getByText(target, { exact: true });
   if (allowSubstring) {
-    // Single-click path: any exact-text element, then loose substring (labels
-    // may carry trailing glyphs / icons).
+    // 2) Single-click path: any exact-text element, then loose substring (labels
+    //    may carry trailing glyphs / icons).
     if ((await byExactText.count()) > 0) return byExactText.first();
     return page.getByText(target, { exact: false }).first();
   }
 
-  // Controls-only path (while-present loops): an exact-text match is only
-  // accepted when it lands on an actual interactive element, so a static node
-  // that happens to read exactly "Next" can't drive the loop. No control => null
-  // (caller treats that as "already past this step").
+  // Controls-only path: text matches must land on an actual interactive element,
+  // so a static node reading "Next" can't drive the loop and prose is ignored.
   const interactive = page.locator(
     'button, a, [role="button"], [role="link"], [role="menuitem"], [role="tab"], input[type="button"], input[type="submit"], [onclick]',
   );
+
+  // 2) Exact visible text, but only on an interactive element.
   const byExactControl = byExactText.and(interactive);
   if ((await byExactControl.count()) > 0) return byExactControl.first();
+
+  // 3) Control whose label CONTAINS the target (e.g. "Next →", "Next Page"):
+  //    substring accessible name, or any interactive element whose text contains
+  //    the target. `interactive` keeps this off sentences like "…next screen…".
+  const byRoleSubstr = page
+    .getByRole("button", { name: target })
+    .or(page.getByRole("link", { name: target }));
+  if ((await byRoleSubstr.count()) > 0) return byRoleSubstr.first();
+  const bySubstrControl = page.getByText(target, { exact: false }).and(interactive);
+  if ((await bySubstrControl.count()) > 0) return bySubstrControl.first();
+
   return null;
 }
 
