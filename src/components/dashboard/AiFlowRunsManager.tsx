@@ -158,20 +158,27 @@ export function AiFlowRunsManager({
   // on the failure detail rather than the top of the list. Runs once per id.
   const deepLinkedRun = useSearchParams().get("run");
   const handledDeepLink = useRef<string | null>(null);
+  const scrolledDeepLink = useRef<string | null>(null);
   useEffect(() => {
     if (!deepLinkedRun || handledDeepLink.current === deepLinkedRun) return;
     if (!runs.some((r) => r.id === deepLinkedRun)) return;
     handledDeepLink.current = deepLinkedRun;
     setExpanded(deepLinkedRun);
     void loadSteps(deepLinkedRun);
-    // Defer the scroll a frame so the expanded section has rendered.
-    requestAnimationFrame(() => {
-      document
-        .getElementById(`run-${deepLinkedRun}`)
-        ?.scrollIntoView({ behavior: "smooth", block: "center" });
-    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deepLinkedRun, runs]);
+
+  // Scroll only AFTER the row is expanded and its steps have mounted, so the
+  // detail (error + steps + screenshots) is on the page when we center it —
+  // scrolling right after setExpanded would center the still-collapsed row.
+  useEffect(() => {
+    if (!deepLinkedRun || scrolledDeepLink.current === deepLinkedRun) return;
+    if (expanded !== deepLinkedRun || steps[deepLinkedRun] === undefined) return;
+    scrolledDeepLink.current = deepLinkedRun;
+    document
+      .getElementById(`run-${deepLinkedRun}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [deepLinkedRun, expanded, steps]);
 
   const decide = async (runId: string, decision: ApprovalDecision) => {
     setBusy(runId);
