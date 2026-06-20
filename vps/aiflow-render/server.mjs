@@ -341,6 +341,61 @@ function parseActions(raw) {
 }
 
 /**
+ * Resolve a "click this text" target to an actual control. The whole point is to
+ * stop the matcher from latching onto descriptive body copy that merely contains
+ * the word — e.g. a "click Accept" action hitting the subtitle "…then accept or
+ * reject." or a "Next" wizard loop hitting the sentence "…on the next screen…".
+ *
+ * Two modes:
+ *   - `allowSubstring: true`  (single `click_text`): role/exact-text first, then
+ *     a loose substring match anywhere, preserving legacy single-click behavior.
+ *   - `allowSubstring: false` (`click_text_while_present`): only ever resolves to
+ *     a real INTERACTIVE control — by exact name, exact text, substring name, or
+ *     substring text scoped to interactive elements — so wizard buttons like
+ *     "Next →" / "Next Page" still match while prose (<p>/<span>) never does.
+ *     Returns null when no control matches (caller treats that as "step done").
+ *
+ * Returns a Locator (callers .click()/.waitFor() it) or null.
+ */
+async function resolveClickTarget(page, target, { allowSubstring = true } = {}) {
+  // 1) A real control whose ACCESSIBLE NAME is exactly the target.
+  const byRoleExact = page
+    .getByRole("button", { name: target, exact: true })
+    .or(page.getByRole("link", { name: target, exact: true }));
+  if ((await byRoleExact.count()) > 0) return byRoleExact.first();
+
+  const byExactText = page.getByText(target, { exact: true });
+  if (allowSubstring) {
+    // 2) Single-click path: any exact-text element, then loose substring (labels
+    //    may carry trailing glyphs / icons).
+    if ((await byExactText.count()) > 0) return byExactText.first();
+    return page.getByText(target, { exact: false }).first();
+  }
+
+  // Controls-only path: text matches must land on an actual interactive element,
+  // so a static node reading "Next" can't drive the loop and prose is ignored.
+  const interactive = page.locator(
+    'button, a, [role="button"], [role="link"], [role="menuitem"], [role="tab"], input[type="button"], input[type="submit"], [onclick]',
+  );
+
+  // 2) Exact visible text, but only on an interactive element.
+  const byExactControl = byExactText.and(interactive);
+  if ((await byExactControl.count()) > 0) return byExactControl.first();
+
+  // 3) Control whose label CONTAINS the target (e.g. "Next →", "Next Page"):
+  //    substring accessible name, or any interactive element whose text contains
+  //    the target. `interactive` keeps this off sentences like "…next screen…".
+  const byRoleSubstr = page
+    .getByRole("button", { name: target })
+    .or(page.getByRole("link", { name: target }));
+  if ((await byRoleSubstr.count()) > 0) return byRoleSubstr.first();
+  const bySubstrControl = page.getByText(target, { exact: false }).and(interactive);
+  if ((await bySubstrControl.count()) > 0) return bySubstrControl.first();
+
+  return null;
+}
+
+/**
  * Run the ordered click/fill sequence. Stops at the FIRST failing action and
  * reports how far it got, so the worker can surface exactly which action broke
  * (a changed page is a permanent error, not a retry). After every action we
@@ -352,17 +407,21 @@ async function performActions(page, actions) {
   for (const a of actions) {
     try {
       if (a.kind === "click_text") {
-        await page.getByText(a.target, { exact: false }).first().click({ timeout: ACTION_TIMEOUT_MS });
+        // Prefer a real button/link (or exact-text element); substring fallback
+        // kept so labels with trailing glyphs still resolve.
+        const loc = await resolveClickTarget(page, a.target, { allowSubstring: true });
+        await loc.click({ timeout: ACTION_TIMEOUT_MS });
       } else if (a.kind === "click_text_while_present") {
-        // Wizard-style "Next" loop: click the target as long as it is visible,
-        // bounded by MAX_WHILE_PRESENT_CLICKS. Zero matches is SUCCESS (the page
-        // is already past the step).
+        // Wizard-style "Next" loop: click the control as long as it is visible,
+        // bounded by MAX_WHILE_PRESENT_CLICKS. Resolves ONLY to real controls
+        // (no substring fallback) so it can't latch onto prose that contains the
+        // word (e.g. "…on the next screen…"). Zero matches is SUCCESS — the page
+        // is already past the step.
         const isPresent = async () => {
+          const loc = await resolveClickTarget(page, a.target, { allowSubstring: false });
+          if (!loc) return false;
           try {
-            await page
-              .getByText(a.target, { exact: false })
-              .first()
-              .waitFor({ state: "visible", timeout: WHILE_PRESENT_PROBE_MS });
+            await loc.waitFor({ state: "visible", timeout: WHILE_PRESENT_PROBE_MS });
             return true;
           } catch {
             return false;
@@ -370,7 +429,9 @@ async function performActions(page, actions) {
         };
         let clicks = 0;
         while (clicks < MAX_WHILE_PRESENT_CLICKS && (await isPresent())) {
-          await page.getByText(a.target, { exact: false }).first().click({ timeout: ACTION_TIMEOUT_MS });
+          const loc = await resolveClickTarget(page, a.target, { allowSubstring: false });
+          if (!loc) break;
+          await loc.click({ timeout: ACTION_TIMEOUT_MS });
           await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
           clicks++;
         }
