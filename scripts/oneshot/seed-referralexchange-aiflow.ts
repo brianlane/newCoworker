@@ -110,16 +110,19 @@ const DEFAULT_BOTH =
 
 const DEFAULT_OFFER =
   "New {{vars.lead_type}} lead: {{vars.lead_name}} ({{vars.lead_phone}}) in " +
-  "{{vars.location}}, around {{vars.price}}. Reply 1 to claim or 2 to pass " +
-  "within 10 minutes, or it goes to the next agent.";
+  "{{vars.location}}, around {{vars.price}}.\n" +
+  "Lead source: ReferralExchange (referralexchange.com)\n" +
+  "Reply 1 to claim or 2 to pass within 10 minutes, or it goes to the next agent.";
 
 const DEFAULT_OWNER_FALLBACK =
   "No agent claimed the {{vars.lead_type}} lead {{vars.lead_name}} " +
-  "({{vars.lead_phone}}) in {{vars.location}}. It's back to you.";
+  "({{vars.lead_phone}}) in {{vars.location}}.\n" +
+  "Lead source: ReferralExchange (referralexchange.com)\nIt's back to you.";
 
 const DEFAULT_CLAIMED_NOTIFY =
   "{{agent.name}} claimed the {{vars.lead_type}} lead {{vars.lead_name}} " +
-  "({{vars.lead_phone}}).";
+  "({{vars.lead_phone}}).\n" +
+  "Lead source: ReferralExchange (referralexchange.com)";
 
 function buildDefinition(opts: {
   matchText: string;

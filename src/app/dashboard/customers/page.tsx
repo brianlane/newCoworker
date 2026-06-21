@@ -12,17 +12,19 @@
  * are obvious follow-ups but neither is needed for the v1 surface.
  */
 
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
-import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { listCustomerMemories, DEFAULT_LIST_LIMIT } from "@/lib/customer-memory/db";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { listContactOverrides } from "@/lib/db/contact-overrides";
 import { AddCustomerForm } from "@/components/dashboard/AddCustomerForm";
 import { OtherContactsManager } from "@/components/dashboard/OtherContactsManager";
+import {
+  CustomersList,
+  type CustomerListRow
+} from "@/components/dashboard/CustomersList";
 
 export const dynamic = "force-dynamic";
 
@@ -77,6 +79,26 @@ export default async function DashboardCustomersPage() {
     db
   ).catch(() => new Map<string, ContactName>());
 
+  // Resolve the display name/badge per row on the server (owner/employee/
+  // contact overrides win over the stored display_name), so the client list
+  // can sort by the same name the user sees.
+  const customerRows: CustomerListRow[] = customers.map((c) => {
+    const contact = contactNames.get(c.customer_e164);
+    return {
+      e164: c.customer_e164,
+      name: contact?.name ?? c.display_name ?? c.customer_e164,
+      badge:
+        contact?.kind === "employee" ? "employee" : contact?.kind === "owner" ? "owner" : null,
+      lastChannel: c.last_channel,
+      pinned: Boolean(c.pinned_md?.trim()),
+      summary: c.summary_md,
+      totalInteractions: c.total_interaction_count,
+      lastInteractionAt: c.last_interaction_at,
+      createdAt: c.created_at,
+      updatedAt: c.updated_at
+    };
+  });
+
   return (
     <div className="space-y-6 max-w-4xl">
       <div>
@@ -98,86 +120,7 @@ export default async function DashboardCustomersPage() {
 
       <AddCustomerForm businessId={business.id} />
 
-      {customers.length === 0 ? (
-        <Card>
-          <div className="text-center py-8">
-            <p className="text-parchment/60">No customer interactions yet.</p>
-            <p className="text-xs text-parchment/40 mt-2">
-              Once a customer texts or calls, their profile will appear here.
-            </p>
-          </div>
-        </Card>
-      ) : (
-        <Card padding="sm">
-          <ul className="divide-y divide-parchment/10">
-            {customers.map((c) => {
-              const contact = contactNames.get(c.customer_e164);
-              const name = contact?.name ?? c.display_name ?? c.customer_e164;
-              const badge =
-                contact?.kind === "employee"
-                  ? "employee"
-                  : contact?.kind === "owner"
-                    ? "owner"
-                    : null;
-              return (
-              <li key={c.customer_e164}>
-                <Link
-                  href={`/dashboard/customers/${encodeURIComponent(c.customer_e164)}`}
-                  className="flex items-center justify-between gap-4 px-3 py-3 rounded-lg hover:bg-parchment/5 transition-colors"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-semibold text-parchment truncate">
-                        {name}
-                      </span>
-                      {badge && (
-                        <span className="text-[10px] uppercase tracking-wide text-parchment/40">
-                          {badge}
-                        </span>
-                      )}
-                      {name !== c.customer_e164 && (
-                        <span className="text-xs text-parchment/50 font-mono">
-                          {c.customer_e164}
-                        </span>
-                      )}
-                      {c.last_channel && (
-                        <span className="text-[10px] uppercase tracking-wide text-parchment/60 bg-parchment/10 rounded px-1.5 py-0.5">
-                          {c.last_channel}
-                        </span>
-                      )}
-                      {c.pinned_md?.trim() && (
-                        <span
-                          className="text-[10px] uppercase tracking-wide text-claw-green/90 bg-claw-green/10 rounded px-1.5 py-0.5"
-                          title="Has pinned notes"
-                        >
-                          pinned
-                        </span>
-                      )}
-                    </div>
-                    {c.summary_md?.trim() && (
-                      <p className="text-xs text-parchment/60 mt-0.5 line-clamp-2">
-                        {c.summary_md.trim()}
-                      </p>
-                    )}
-                    <p className="text-[10px] text-parchment/40 mt-0.5">
-                      {c.total_interaction_count} interaction
-                      {c.total_interaction_count === 1 ? "" : "s"}
-                      {c.last_interaction_at && (
-                        <>
-                          {" • last "}
-                          <LocalDateTime iso={c.last_interaction_at} />
-                        </>
-                      )}
-                    </p>
-                  </div>
-                  <span className="text-parchment/40 text-sm shrink-0">View →</span>
-                </Link>
-              </li>
-              );
-            })}
-          </ul>
-        </Card>
-      )}
+      <CustomersList rows={customerRows} />
 
       <div className="border-t border-parchment/10 pt-6">
         <OtherContactsManager

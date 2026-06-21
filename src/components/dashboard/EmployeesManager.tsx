@@ -9,6 +9,14 @@ import type {
   TimeOffRow
 } from "@/lib/db/employees";
 import { formatScheduleText } from "@/lib/employees/schedule-text";
+import { SortControl, type SortOption } from "@/components/dashboard/SortControl";
+import { sortRows, type SortDir } from "@/lib/dashboard/sort";
+
+const EMPLOYEE_SORT_OPTIONS: SortOption[] = [
+  { key: "name", label: "Name" },
+  { key: "created_at", label: "Added" },
+  { key: "last_claimed_at", label: "Last claim" }
+];
 
 type SharedCalendarStatus = {
   calendarId: string | null;
@@ -40,6 +48,12 @@ function todayIso(): string {
 
 export function EmployeesManager(props: Props) {
   const [members, setMembers] = useState(props.initialMembers);
+  // Default matches listTeamMembers' server order (created_at asc) so first
+  // paint is unchanged; the user can switch to Name/Last claim from the control.
+  const [sort, setSort] = useState<{ field: string; dir: SortDir }>({
+    field: "created_at",
+    dir: "asc"
+  });
   const [timeOff, setTimeOff] = useState(props.initialTimeOff);
   const [stats, setStats] = useState(props.initialStats);
   const [sharedCalendar, setSharedCalendar] = useState(props.initialSharedCalendar);
@@ -137,19 +151,30 @@ export function EmployeesManager(props: Props) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <h2 className="text-sm font-semibold text-parchment">
           Roster ({members.length})
         </h2>
-        {!addOpen && (
-          <button
-            type="button"
-            onClick={() => setAddOpen(true)}
-            className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-opacity-90 transition-colors"
-          >
-            Add employee
-          </button>
-        )}
+        <div className="flex items-center gap-3">
+          {members.length > 0 && (
+            <SortControl
+              options={EMPLOYEE_SORT_OPTIONS}
+              field={sort.field}
+              dir={sort.dir}
+              onChange={(field, dir) => setSort({ field, dir })}
+              idPrefix="employee-sort"
+            />
+          )}
+          {!addOpen && (
+            <button
+              type="button"
+              onClick={() => setAddOpen(true)}
+              className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-opacity-90 transition-colors shrink-0"
+            >
+              Add employee
+            </button>
+          )}
+        </div>
       </div>
 
       {errorMsg && <p className="text-xs text-red-300">{errorMsg}</p>}
@@ -241,7 +266,15 @@ export function EmployeesManager(props: Props) {
           </div>
         </Card>
       ) : (
-        members.map((m) => (
+        sortRows(
+          members,
+          (m) => {
+            if (sort.field === "created_at") return m.created_at;
+            if (sort.field === "last_claimed_at") return stats[m.phone_e164]?.lastClaimedAt ?? null;
+            return m.name;
+          },
+          sort.dir
+        ).map((m) => (
           <EmployeeCard
             key={m.id}
             member={m}
