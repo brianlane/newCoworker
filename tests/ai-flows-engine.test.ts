@@ -5,6 +5,7 @@ import {
   buildNowScope,
   evaluateSmsTrigger,
   evaluateStepCondition,
+  extractLeadIdentity,
   extractPhones,
   filterRosterByAvailability,
   firstUrlInText,
@@ -30,6 +31,41 @@ import type {
   SmsTrigger,
   TriggerContext
 } from "../supabase/functions/_shared/ai_flows/types";
+
+describe("extractLeadIdentity", () => {
+  it("reads the canonical lead_name / lead_email keys, trimming + lowercasing email", () => {
+    expect(
+      extractLeadIdentity({ lead_name: "  William Unger ", lead_email: " Will@X.COM " })
+    ).toEqual({ name: "William Unger", email: "will@x.com" });
+  });
+
+  it("falls back to alternate conventional keys (e.g. seller_first_name)", () => {
+    expect(extractLeadIdentity({ seller_first_name: "William" })).toEqual({
+      name: "William",
+      email: null
+    });
+    expect(extractLeadIdentity({ contact_email: "a@b.co" })).toEqual({
+      name: null,
+      email: "a@b.co"
+    });
+  });
+
+  it("prefers the higher-priority key when several are present", () => {
+    expect(
+      extractLeadIdentity({ name: "Generic", lead_name: "Specific", seller_first_name: "Mid" })
+    ).toEqual({ name: "Specific", email: null });
+  });
+
+  it("ignores blank, whitespace-only, and non-string values", () => {
+    expect(
+      extractLeadIdentity({ lead_name: "   ", name: 42, lead_email: "", email: null })
+    ).toEqual({ name: null, email: null });
+  });
+
+  it("returns nulls when nothing matches", () => {
+    expect(extractLeadIdentity({ unrelated: "x" })).toEqual({ name: null, email: null });
+  });
+});
 
 describe("firstUrlInText", () => {
   it("finds a url and trims trailing punctuation", () => {

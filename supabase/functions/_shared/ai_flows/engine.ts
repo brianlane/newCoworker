@@ -220,6 +220,64 @@ export function extractPhones(text: string): string[] {
   return out;
 }
 
+// Conventional variable keys an extraction step might capture a lead's name /
+// email under, in priority order (specific keys first; the bare "name"/"email"
+// fall back last so a generic var doesn't beat a purpose-named one). Lets the
+// worker enrich a customer from ANY flow that captured the info, without every
+// flow having to use the exact `lead_name`/`lead_email` keys.
+const LEAD_NAME_KEYS = [
+  "lead_name",
+  "lead_full_name",
+  "full_name",
+  "contact_name",
+  "seller_name",
+  "buyer_name",
+  "customer_name",
+  "lead_first_name",
+  "seller_first_name",
+  "buyer_first_name",
+  "first_name",
+  "name"
+] as const;
+
+const LEAD_EMAIL_KEYS = [
+  "lead_email",
+  "contact_email",
+  "seller_email",
+  "buyer_email",
+  "customer_email",
+  "email"
+] as const;
+
+export type LeadIdentity = { name: string | null; email: string | null };
+
+/** First non-empty trimmed string value among `keys`, or null. */
+function firstStringValue(
+  vars: Record<string, unknown>,
+  keys: readonly string[]
+): string | null {
+  for (const key of keys) {
+    const value = vars[key];
+    if (typeof value === "string" && value.trim().length > 0) return value.trim();
+  }
+  return null;
+}
+
+/**
+ * Pull a lead's display name + email out of a flow's extracted vars, scanning a
+ * prioritized set of conventional keys so enrichment works regardless of which
+ * key a particular flow used (e.g. `seller_first_name` vs `lead_name`). Name is
+ * trimmed; email is trimmed + lowercased. Missing/blank/non-string values yield
+ * null.
+ */
+export function extractLeadIdentity(vars: Record<string, unknown>): LeadIdentity {
+  const email = firstStringValue(vars, LEAD_EMAIL_KEYS);
+  return {
+    name: firstStringValue(vars, LEAD_NAME_KEYS),
+    email: email ? email.toLowerCase() : null
+  };
+}
+
 /**
  * Build the Gemini extraction prompt: ask for a strict JSON object with exactly
  * the requested field names, from the provided page text. Page text is truncated
