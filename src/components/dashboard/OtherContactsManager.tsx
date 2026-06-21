@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { Card } from "@/components/ui/Card";
+import { SortControl, type SortOption } from "@/components/dashboard/SortControl";
+import { sortRows, type SortDir } from "@/lib/dashboard/sort";
 
 export type ContactRow = {
   e164: string;
@@ -9,6 +11,12 @@ export type ContactRow = {
   email: string | null;
   updated_at: string;
 };
+
+const CONTACT_SORT_OPTIONS: SortOption[] = [
+  { key: "name", label: "Name" },
+  { key: "email", label: "Email" },
+  { key: "updated_at", label: "Updated" }
+];
 
 type Props = {
   businessId: string;
@@ -30,6 +38,10 @@ async function readError(res: Response): Promise<string> {
  */
 export function OtherContactsManager({ businessId, initialContacts }: Props) {
   const [contacts, setContacts] = useState<ContactRow[]>(initialContacts);
+  const [sort, setSort] = useState<{ field: string; dir: SortDir }>({
+    field: "updated_at",
+    dir: "desc"
+  });
   const [addOpen, setAddOpen] = useState(false);
   const [name, setName] = useState("");
   const [number, setNumber] = useState("");
@@ -103,15 +115,26 @@ export function OtherContactsManager({ businessId, initialContacts }: Props) {
             customers — they show by name wherever their number appears.
           </p>
         </div>
-        {!addOpen && (
-          <button
-            type="button"
-            onClick={() => setAddOpen(true)}
-            className="rounded-lg border border-parchment/20 text-parchment/80 px-3 py-1.5 text-sm hover:bg-parchment/5 transition-colors shrink-0"
-          >
-            Add contact
-          </button>
-        )}
+        <div className="flex items-center gap-3 shrink-0">
+          {contacts.length > 0 && (
+            <SortControl
+              options={CONTACT_SORT_OPTIONS}
+              field={sort.field}
+              dir={sort.dir}
+              onChange={(field, dir) => setSort({ field, dir })}
+              idPrefix="contact-sort"
+            />
+          )}
+          {!addOpen && (
+            <button
+              type="button"
+              onClick={() => setAddOpen(true)}
+              className="rounded-lg border border-parchment/20 text-parchment/80 px-3 py-1.5 text-sm hover:bg-parchment/5 transition-colors shrink-0"
+            >
+              Add contact
+            </button>
+          )}
+        </div>
       </div>
 
       {error && <p className="text-xs text-red-300">{error}</p>}
@@ -179,7 +202,16 @@ export function OtherContactsManager({ businessId, initialContacts }: Props) {
       ) : (
         <Card padding="sm">
           <ul className="divide-y divide-parchment/10">
-            {contacts.map((c) => (
+            {sortRows(
+              contacts,
+              (c) =>
+                sort.field === "email"
+                  ? c.email
+                  : sort.field === "updated_at"
+                    ? c.updated_at
+                    : c.name,
+              sort.dir
+            ).map((c) => (
               <li
                 key={c.e164}
                 className="flex items-center justify-between gap-4 px-3 py-2.5"

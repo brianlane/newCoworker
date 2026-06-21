@@ -25,6 +25,24 @@ import {
   BROWSE_ACTION_LABELS
 } from "@/components/dashboard/aiflow-labels";
 import { getAiFlowExampleCopy, type AiFlowExampleCopy } from "@/lib/ai-flows/examples";
+import { SortControl, type SortOption } from "@/components/dashboard/SortControl";
+import { sortRows, type SortDir } from "@/lib/dashboard/sort";
+
+// Sort fields for the flows list. Default is "last run" desc, matching the
+// server's activity ordering so the list opens unchanged.
+const AIFLOW_SORT_OPTIONS: SortOption[] = [
+  { key: "last_run_at", label: "Last run" },
+  { key: "name", label: "Name" },
+  { key: "created_at", label: "Created" },
+  { key: "updated_at", label: "Updated" }
+];
+
+function aiFlowSortValue(row: AiFlowRow, field: string): string | number | null | undefined {
+  if (field === "name") return row.name;
+  if (field === "created_at") return row.created_at;
+  if (field === "updated_at") return row.updated_at;
+  return row.last_run_at;
+}
 
 // Mirrors EMAIL_PROVIDER_CONFIG_KEYS in src/lib/voice-tools/connections.ts —
 // that module is server-only (it pulls in the service-role Supabase client),
@@ -334,6 +352,10 @@ export function AiFlowsManager({
 }) {
   const examples = getAiFlowExampleCopy(businessType);
   const [flows, setFlows] = useState<AiFlowRow[]>(initialFlows);
+  const [sort, setSort] = useState<{ field: string; dir: SortDir }>({
+    field: "last_run_at",
+    dir: "desc"
+  });
   const [editor, setEditor] = useState<EditorState | null>(() => {
     if (!initialEditId) return null;
     const row = initialFlows.find((f) => f.id === initialEditId);
@@ -1014,7 +1036,18 @@ export function AiFlowsManager({
           {error}
         </p>
       )}
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between gap-3">
+        {flows.length > 0 ? (
+          <SortControl
+            options={AIFLOW_SORT_OPTIONS}
+            field={sort.field}
+            dir={sort.dir}
+            onChange={(field, dir) => setSort({ field, dir })}
+            idPrefix="aiflow-sort"
+          />
+        ) : (
+          <span />
+        )}
         <button
           onClick={() => setEditor(emptyEditor())}
           className="inline-flex items-center gap-1 rounded-md bg-signal-teal px-3 py-2 text-sm font-semibold text-deep-ink hover:bg-signal-teal/90"
@@ -1035,7 +1068,7 @@ export function AiFlowsManager({
           </p>
         </Card>
       ) : (
-        flows.map((row) => (
+        sortRows(flows, (row) => aiFlowSortValue(row, sort.field), sort.dir).map((row) => (
           <Card key={row.id} className="space-y-3">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
