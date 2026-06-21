@@ -31,6 +31,7 @@ import {
   buildExtractionPrompt,
   buildNowScope,
   evaluateStepCondition,
+  extractLeadIdentity,
   extractPhones,
   filterRosterByAvailability,
   htmlToText,
@@ -749,6 +750,31 @@ async function logFlowEmail(
 const LEAD_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
+ * True when this number is already saved as an "other contact"
+ * (contact_overrides) for the business — i.e. a known vendor/integration
+ * sender (Clever's numbers, a title company) or the owner, not a lead. Used to
+ * keep such numbers off the Customers page. Best-effort: on a query error we
+ * return false so a transient DB blip never silently drops a real lead profile.
+ */
+async function isKnownBusinessContact(
+  supabase: Supabase,
+  businessId: string,
+  e164: string
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("contact_overrides")
+    .select("e164")
+    .eq("business_id", businessId)
+    .eq("e164", e164)
+    .maybeSingle();
+  if (error) {
+    console.error("isKnownBusinessContact (aiflow lead)", error);
+    return false;
+  }
+  return data != null;
+}
+
+/**
  * Upsert a customer profile for a lead the flow just contacted, so every
  * AiFlow lead shows up on the dashboard Customers page like SMS/voice
  * customers do. Uses the same alias-aware RPC as the SMS worker. Best-effort:
@@ -760,25 +786,33 @@ async function recordLeadCustomerProfile(
   scope: Scope,
   customerE164: string
 ): Promise<void> {
-  const rawName = scope.vars.lead_name;
-  const displayName =
-    typeof rawName === "string" && rawName.trim().length > 0 ? rawName.trim() : null;
+  // Known business contacts (Clever's own numbers, the owner, vendors saved as
+  // "other contacts") are not leads — never file them as a customer. This both
+  // keeps the Customers page clean and prevents a group reply from stamping the
+  // lead's extracted name onto a Clever sender number that happens to be a
+  // co-recipient.
+  if (await isKnownBusinessContact(supabase, run.business_id, customerE164)) return;
+
+  // Enrich from whatever the flow captured: scan conventional name/email keys
+  // (lead_name, seller_first_name, full_name, …) so any extracting flow fills
+  // the customer in, not just ones using the exact `lead_name` key.
+  const identity = extractLeadIdentity(scope.vars);
   const { data: interaction, error } = await supabase.rpc("record_customer_interaction", {
     p_business_id: run.business_id,
     p_customer_e164: customerE164,
     p_channel: "sms",
-    p_display_name: displayName
+    p_display_name: identity.name
   });
   if (error) console.error("record_customer_interaction (aiflow lead)", error);
 
   // Going-forward phone↔email link: a lead intake run carries the lead's email
-  // in `vars.lead_email`; persist it onto THEIR profile so SMS/voice/email all
-  // roll up to one customer. Guard strictly to the lead's own number — this
-  // helper also runs for every group-reply recipient (agent + owner), and the
-  // lead's email must never be stamped onto a teammate. Only fill when empty so
-  // a later run or an owner edit is never clobbered. Best-effort.
-  const rawEmail = scope.vars.lead_email;
-  const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
+  // in `vars.lead_email` (or another conventional key); persist it onto THEIR
+  // profile so SMS/voice/email all roll up to one customer. Guard strictly to
+  // the lead's own number — this helper also runs for every group-reply
+  // recipient (agent + owner), and the lead's email must never be stamped onto
+  // a teammate. Only fill when empty so a later run or an owner edit is never
+  // clobbered. Best-effort.
+  const email = identity.email ?? "";
   // Compare normalized E.164 (the helper handles NANP/raw extracted numbers), so
   // a format mismatch between vars.lead_phone and the send target doesn't silently
   // skip the link.
