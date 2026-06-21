@@ -48,8 +48,10 @@ function todayIso(): string {
 
 export function EmployeesManager(props: Props) {
   const [members, setMembers] = useState(props.initialMembers);
+  // Default matches listTeamMembers' server order (created_at asc) so first
+  // paint is unchanged; the user can switch to Name/Last claim from the control.
   const [sort, setSort] = useState<{ field: string; dir: SortDir }>({
-    field: "name",
+    field: "created_at",
     dir: "asc"
   });
   const [timeOff, setTimeOff] = useState(props.initialTimeOff);
