@@ -797,26 +797,28 @@ async function recordLeadCustomerProfile(
   // (lead_name, seller_first_name, full_name, …) so any extracting flow fills
   // the customer in, not just ones using the exact `lead_name` key.
   const identity = extractLeadIdentity(scope.vars);
+  // This helper also runs for every group-reply recipient (a teammate, the
+  // owner) — only the LEAD should get the extracted name/email, never a
+  // co-recipient. The lead is the recipient matching vars.lead_phone when the
+  // flow captured it; when it didn't (e.g. the Clever group reply, which only
+  // has seller_first_name), known business contacts are already skipped above,
+  // so the remaining recipient is the lead. Compare normalized E.164 so a
+  // format mismatch between vars.lead_phone and the send target doesn't skip it.
+  const leadPhone = leadPhoneE164(scope);
+  const isLeadNumber = !leadPhone || leadPhone === customerE164;
   const { data: interaction, error } = await supabase.rpc("record_customer_interaction", {
     p_business_id: run.business_id,
     p_customer_e164: customerE164,
     p_channel: "sms",
-    p_display_name: identity.name
+    p_display_name: isLeadNumber ? identity.name : null
   });
   if (error) console.error("record_customer_interaction (aiflow lead)", error);
 
-  // Going-forward phone↔email link: a lead intake run carries the lead's email
-  // in `vars.lead_email` (or another conventional key); persist it onto THEIR
-  // profile so SMS/voice/email all roll up to one customer. Guard strictly to
-  // the lead's own number — this helper also runs for every group-reply
-  // recipient (agent + owner), and the lead's email must never be stamped onto
-  // a teammate. Only fill when empty so a later run or an owner edit is never
+  // Going-forward phone↔email link: persist the lead's email onto THEIR profile
+  // so SMS/voice/email all roll up to one customer. Same lead-only gate as the
+  // name; fill only when empty so a later run or an owner edit is never
   // clobbered. Best-effort.
   const email = identity.email ?? "";
-  // Compare normalized E.164 (the helper handles NANP/raw extracted numbers), so
-  // a format mismatch between vars.lead_phone and the send target doesn't silently
-  // skip the link.
-  const leadPhone = leadPhoneE164(scope);
   // The RPC returns the row it actually bumped — which is the SURVIVING profile
   // when customerE164 was a merged-away alias. Target the email update at that
   // row's primary key so the link lands even after a merge (the merged-away
@@ -824,7 +826,7 @@ async function recordLeadCustomerProfile(
   const profile = Array.isArray(interaction) ? interaction[0] : interaction;
   const targetE164 =
     profile && typeof profile.customer_e164 === "string" ? profile.customer_e164 : null;
-  if (email && LEAD_EMAIL_RE.test(email) && leadPhone && leadPhone === customerE164 && targetE164) {
+  if (isLeadNumber && email && LEAD_EMAIL_RE.test(email) && targetE164) {
     const { error: emailErr } = await supabase
       .from("customer_memories")
       .update({ email, updated_at: new Date().toISOString() })
