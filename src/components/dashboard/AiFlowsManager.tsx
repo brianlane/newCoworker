@@ -311,7 +311,8 @@ function editorTrigger(s: EditorState): FlowTrigger {
  * save time, so the persisted definition is always valid.
  */
 function sanitizeStepForSave(step: FlowStep): FlowStep {
-  if (step.type === "browse_action" && step.forEachLink) {
+  if (step.type !== "browse_action") return step;
+  if (step.forEachLink) {
     return {
       id: step.id,
       type: step.type,
@@ -322,6 +323,13 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
       ...(step.auth ? { auth: step.auth } : {}),
       ...(step.when ? { when: step.when } : {})
     };
+  }
+  // forEachLinkMatchVar is only valid alongside forEachLink. The editor hides
+  // (but keeps) it when the selector is cleared, so drop a stale value here —
+  // otherwise parseAiFlowDefinition rejects the otherwise-valid flow on save.
+  if (step.forEachLinkMatchVar) {
+    const { forEachLinkMatchVar: _drop, ...rest } = step;
+    return rest;
   }
   return step;
 }
