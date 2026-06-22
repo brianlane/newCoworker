@@ -3,33 +3,35 @@
  *
  * Background: inbound SMS replies now run on Gemini (the workflow `Coworker`
  * agent was repointed off local Qwen), so SMS bills per token. The owner picked
- * a single SHARED monthly pool across owner-dashboard chat + SMS: both surfaces
- * meter estimated per-turn cost into `owner_chat_model_spend` (period-keyed) and
- * fall back to the local Qwen agent once the COMBINED spend crosses the cap for
- * the period. The fuse auto-resets each billing period (spend is keyed by the
- * Stripe period start).
+ * a single SHARED monthly pool across owner-dashboard chat + SMS: spend is
+ * recorded into `owner_chat_model_spend` (period-keyed) and both surfaces fall
+ * back to the local Qwen agent once the COMBINED spend crosses the cap for the
+ * period. The fuse auto-resets each billing period (spend is keyed by the Stripe
+ * period start).
  *
- * This mirrors the owner chat-worker fuse (vps/chat-worker/worker.mjs) but in
- * the Deno/Edge runtime where the SMS path lives. The pure functions
- * (`estimateChatCostMicros`, `pickSmsTurn`, `monthStartIso`) are unit-tested;
- * the IO helpers take a minimal structural Supabase client so they can be
- * stubbed without importing the supabase-js types (same approach as
+ * Spend RECORDING moved to the per-tenant llm-router sidecar (the only component
+ * that sees Gemini's exact `usage`), which POSTs billed tokens to
+ * /api/internal/meter-gemini-spend. This module now only provides the cap READ
+ * + turn-routing decision (`resolveSmsChatCap`, `pickSmsTurn`) plus the pricing
+ * table shared with the platform meter. The pure functions are unit-tested; the
+ * IO helpers take a minimal structural Supabase client so they can be stubbed
+ * without importing the supabase-js types (same approach as
  * _shared/telemetry.ts's RpcSupabase).
  */
-
-// Gemini 2.5 Flash-Lite list price, USD per 1M tokens (matches the owner
-// chat-worker constants in vps/chat-worker/worker.mjs).
-export const DEFAULT_CHAT_PRICE_IN_PER_1M = 0.1;
-export const DEFAULT_CHAT_PRICE_OUT_PER_1M = 0.4;
 
 // Per-model Google list prices (USD per 1M tokens, standard tier). Unknown
 // models fall back to the priciest tier we deploy so the fuse never
 // undercounts. Mirrors src/lib/billing/ai-spend-meter.ts on the Next side.
+// The gemini-3.1-* entries are the voice path (excluded from the chat budget at
+// the llm-router); they're listed defensively so a stray non-voice 3.1 call
+// prices in the flash tier instead of the priciest default.
 export const GEMINI_PRICES_PER_1M: Record<string, { in: number; out: number }> = {
   "gemini-2.5-flash-lite": { in: 0.1, out: 0.4 },
   "gemini-2.5-flash": { in: 0.3, out: 2.5 },
   "gemini-3-flash": { in: 0.5, out: 3.0 },
-  "gemini-3-flash-preview": { in: 0.5, out: 3.0 }
+  "gemini-3-flash-preview": { in: 0.5, out: 3.0 },
+  "gemini-3.1-flash": { in: 0.5, out: 3.0 },
+  "gemini-3.1-flash-live-preview": { in: 0.5, out: 3.0 }
 };
 export const DEFAULT_GEMINI_PRICE_PER_1M = { in: 0.5, out: 3.0 };
 
@@ -63,37 +65,6 @@ export function geminiCostMicrosFromTokens(
   return Math.ceil(
     Math.max(0, promptTokens) * price.in + Math.max(0, outputTokens) * price.out
   );
-}
-// Flat token overhead added to the text-only estimate. Rowboat prepends the
-// agent instructions (synced memory + persona) AND — because SMS turns resume a
-// stateful thread — the server-side conversation history, none of which is in
-// the worker's input text. A safety fuse may under-count without this; it is a
-// fuse, not an invoice, so an approximate flat add is fine. Tunable per surface.
-export const DEFAULT_SMS_PROMPT_OVERHEAD_TOKENS = 1200;
-
-export type ChatCostConfig = {
-  priceInPer1M?: number;
-  priceOutPer1M?: number;
-  promptOverheadTokens?: number;
-};
-
-/**
- * Estimate the Gemini cost (micro-USD) of one chat turn from raw text lengths.
- * tokens ~ chars/4; cost_micros = inTokens*priceIn + outTokens*priceOut because
- * price is per-1M-tokens and 1 USD = 1e6 micros (the 1e6 factors cancel).
- * Negative inputs are clamped to 0.
- */
-export function estimateChatCostMicros(
-  inputChars: number,
-  outputChars: number,
-  cfg: ChatCostConfig = {}
-): number {
-  const priceIn = cfg.priceInPer1M ?? DEFAULT_CHAT_PRICE_IN_PER_1M;
-  const priceOut = cfg.priceOutPer1M ?? DEFAULT_CHAT_PRICE_OUT_PER_1M;
-  const overhead = cfg.promptOverheadTokens ?? DEFAULT_SMS_PROMPT_OVERHEAD_TOKENS;
-  const inTokens = Math.max(0, inputChars) / 4 + Math.max(0, overhead);
-  const outTokens = Math.max(0, outputChars) / 4;
-  return Math.ceil(inTokens * priceIn + outTokens * priceOut);
 }
 
 export type SmsTurnPlan = {
@@ -254,80 +225,9 @@ export async function resolveSmsChatCap(
   }
 }
 
-export type MeterResult = {
-  metered: boolean;
-  reason?: "disabled" | "already_metered" | "claim_failed" | "rpc_failed";
-  costMicros?: number;
-  spendMicros?: number;
-  fuseNewlyTripped?: boolean;
-  error?: string;
-};
-
-/**
- * Record estimated SMS Gemini spend for one turn into the shared meter and trip
- * the period fuse on first cap crossing. Exactly-once: atomically claims
- * `sms_inbound_jobs.metered_at` (WHERE metered_at IS NULL) before the RPC, so a
- * retried/reclaimed run (e.g. a cached-reply re-send) never double-counts. If the
- * RPC fails after the claim, the claim is released so a later retry can re-meter.
- * NEVER throws — metering must never fail a turn whose reply already went out.
- */
-export async function recordSmsChatSpend(
-  supabase: SpendSupabase,
-  args: {
-    jobId: string;
-    businessId: string;
-    periodStart: string | null;
-    inputChars: number;
-    outputChars: number;
-    capMicros: number;
-    enabled: boolean;
-    costConfig?: ChatCostConfig;
-  }
-): Promise<MeterResult> {
-  if (!args.enabled) return { metered: false, reason: "disabled" };
-
-  const claimRes = await supabase
-    .from("sms_inbound_jobs")
-    .update({ metered_at: new Date().toISOString() })
-    .eq("id", args.jobId)
-    .is("metered_at", null)
-    .select("id");
-  if (claimRes.error) {
-    return { metered: false, reason: "claim_failed", error: claimRes.error.message };
-  }
-  const claimed = Array.isArray(claimRes.data) ? claimRes.data : [];
-  if (claimed.length === 0) {
-    // Already metered by an earlier (retried/reclaimed) run.
-    return { metered: false, reason: "already_metered" };
-  }
-
-  const ps = args.periodStart ?? (await resolveChatPeriodStart(supabase, args.businessId));
-  const costMicros = estimateChatCostMicros(args.inputChars, args.outputChars, args.costConfig);
-  // Trip the fuse against the EFFECTIVE cap (base + purchased credit) so a
-  // Gemini pack purchase moves the trip point along with the routing check.
-  const credits = await readActiveChatCreditMicros(supabase, args.businessId);
-  const { data, error } = await supabase.rpc("owner_chat_record_spend", {
-    p_business_id: args.businessId,
-    p_period_start: ps,
-    p_cost_micros: costMicros,
-    p_cap_micros: args.capMicros + credits
-  });
-  if (error) {
-    // Release the claim so a reclaim can retry metering this turn's spend.
-    await supabase
-      .from("sms_inbound_jobs")
-      .update({ metered_at: null })
-      .eq("id", args.jobId);
-    return { metered: false, reason: "rpc_failed", costMicros, error: error.message };
-  }
-  const row = (Array.isArray(data) ? data[0] : data) as
-    | { spend_micros?: number | string; fuse_newly_tripped?: boolean }
-    | null
-    | undefined;
-  return {
-    metered: true,
-    costMicros,
-    spendMicros: Number(row?.spend_micros ?? 0),
-    fuseNewlyTripped: Boolean(row?.fuse_newly_tripped)
-  };
-}
+// NOTE: SMS spend is no longer metered in this module. Exact billed tokens for
+// every Gemini turn (owner chat / SMS / summarizers) are recorded by the
+// llm-router sidecar → /api/internal/meter-gemini-spend → owner_chat_model_spend,
+// and the cap-tripped owner alert fires there too (via _shared/cap_alerts.ts).
+// This module now only provides the cap READ (resolveSmsChatCap) the SMS worker
+// uses to route Gemini→local once the shared period cap is hit.

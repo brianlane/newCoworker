@@ -39,6 +39,47 @@ const GEMINI_BASE_URL = (
 ).replace(/\/+$/, "");
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || "";
 
+// ── Exact AI-chat-budget metering ─────────────────────────────────────────
+// This sidecar is the ONLY component on the box that sees both the request
+// `model` and the response token `usage` for every Gemini call Rowboat makes
+// (Rowboat's /chat reply hides usage from the chat-worker / SMS worker, which
+// is why those surfaces previously metered a chars/4 ESTIMATE). We meter the
+// exact billed tokens here by POSTing them to the platform, which records them
+// into the same `owner_chat_model_spend` pool the billing page reads.
+//
+// All three come from /opt/rowboat/.env (env_file on this service) which
+// deploy-client.sh already writes. When any is absent we silently skip
+// metering — a misconfigured box must never break model proxying.
+const BUSINESS_ID = process.env.BUSINESS_ID || "";
+const APP_BASE_URL = (process.env.APP_BASE_URL || "").replace(/\/+$/, "");
+const GATEWAY_TOKEN = process.env.ROWBOAT_GATEWAY_TOKEN || "";
+// Voice_task model (default gemini-3.1-flash); its spend is voice minutes, not
+// the chat budget, so isChatBudgetModel() excludes it. Mirrors deploy-client.sh.
+const VOICE_MODEL = process.env.GEMINI_ROWBOAT_MODEL || "gemini-3.1-flash";
+const METER_ENABLED = Boolean(BUSINESS_ID && APP_BASE_URL && GATEWAY_TOKEN);
+
+/**
+ * Fire-and-forget: report one exact Gemini turn's billed tokens to the
+ * platform meter endpoint. Never awaited and never throws — the model reply
+ * already streamed to Rowboat, so a metering hiccup may only under-count the
+ * fuse, never fail a turn. (The app endpoint is idempotent-safe per call: each
+ * proxied completion is a distinct spend event.)
+ */
+function reportGeminiSpend(model, usage) {
+  if (!METER_ENABLED || !usage) return;
+  const url = `${APP_BASE_URL}/api/internal/meter-gemini-spend`;
+  fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${GATEWAY_TOKEN}`
+    },
+    body: JSON.stringify({ businessId: BUSINESS_ID, model, usage })
+  }).catch((err) => {
+    console.warn(`llm-router: meter report failed: ${err instanceof Error ? err.message : err}`);
+  });
+}
+
 const ROUTED_PATHS = new Set([
   "/v1/chat/completions",
   "/v1/completions",
@@ -50,14 +91,20 @@ import {
   filterUpstreamHeaders,
   mergeSystemMessages,
   addToolCallIndices,
-  createSseToolCallIndexNormalizer
+  createSseToolCallIndexNormalizer,
+  isChatBudgetModel,
+  extractOpenAiUsage,
+  createSseUsageCollector
 } from "./routing.js";
 export {
   pickUpstream,
   filterUpstreamHeaders,
   mergeSystemMessages,
   addToolCallIndices,
-  createSseToolCallIndexNormalizer
+  createSseToolCallIndexNormalizer,
+  isChatBudgetModel,
+  extractOpenAiUsage,
+  createSseUsageCollector
 };
 
 function buildUpstreamTarget(upstream, pathname) {
@@ -122,15 +169,36 @@ async function handleRoutedRequest(req, res) {
   }
 
   const upstream = pickUpstream(parsed?.model);
+  const requestPath = req.url?.split("?")[0] ?? "/v1/chat/completions";
+  // Meter this turn's exact tokens into the chat budget unless it's the voice
+  // path (see isChatBudgetModel). Scoped to /v1/chat/completions: the agentic
+  // chat surfaces (owner chat / SMS / summarizers) all run there; /v1/embeddings
+  // and /v1/completions are a different cost line and stay out of this budget.
+  // Decided pre-fetch so we know whether to accumulate the response body for
+  // usage and whether to request usage on a streamed turn.
+  const meterGemini =
+    upstream === "gemini" &&
+    requestPath === "/v1/chat/completions" &&
+    isChatBudgetModel(parsed?.model, VOICE_MODEL);
 
-  // Gemini's OpenAI-compat endpoint keeps only the LAST system message, which
-  // silently dropped Rowboat's vault-grounded agent instructions whenever a
-  // second system message (ensureSystemMessage default / caller preamble) was
-  // present. Collapse them into one before forwarding — see routing.js.
-  if (parsed && Array.isArray(parsed.messages)) {
-    const mergedBody = mergeSystemMessages(parsed);
-    if (mergedBody !== parsed) {
-      bodyBuf = Buffer.from(JSON.stringify(mergedBody), "utf8");
+  // Build the outgoing body once, applying two rewrites where needed:
+  //  1) Collapse multiple system messages — Gemini's OpenAI-compat keeps only
+  //     the LAST, which silently dropped Rowboat's vault-grounded agent
+  //     instructions when a second system message was present (see routing.js).
+  //  2) On a metered streamed turn, ask for `stream_options.include_usage` so
+  //     the upstream emits a terminal `{choices:[],usage:{...}}` chunk we can
+  //     harvest exact tokens from. (OpenAI-compat consumers like Rowboat's AI
+  //     SDK ignore the usage-only chunk, so this is transparent to Rowboat.)
+  if (parsed) {
+    let outgoing = Array.isArray(parsed.messages) ? mergeSystemMessages(parsed) : parsed;
+    if (meterGemini && parsed.stream === true) {
+      outgoing = {
+        ...outgoing,
+        stream_options: { ...(outgoing.stream_options ?? {}), include_usage: true }
+      };
+    }
+    if (outgoing !== parsed) {
+      bodyBuf = Buffer.from(JSON.stringify(outgoing), "utf8");
     }
   }
 
@@ -144,7 +212,7 @@ async function handleRoutedRequest(req, res) {
     return;
   }
 
-  const target = buildUpstreamTarget(upstream, req.url?.split("?")[0] ?? "/v1/chat/completions");
+  const target = buildUpstreamTarget(upstream, requestPath);
 
   let upstreamResp;
   try {
@@ -188,6 +256,13 @@ async function handleRoutedRequest(req, res) {
   const normalizer = isSse ? createSseToolCallIndexNormalizer() : null;
   const decoder = isSse ? new TextDecoder("utf-8") : null;
 
+  // Usage harvesting (only for metered gemini turns): SSE streams feed an SSE
+  // usage collector; buffered JSON bodies accumulate into a string we parse
+  // once at end-of-stream. The bytes forwarded downstream are unchanged.
+  const usageCollector = meterGemini && isSse ? createSseUsageCollector() : null;
+  const jsonDecoder = meterGemini && !isSse ? new TextDecoder("utf-8") : null;
+  let jsonBuf = meterGemini && !isSse ? "" : null;
+
   const reader = upstreamResp.body.getReader();
   try {
     while (true) {
@@ -195,18 +270,40 @@ async function handleRoutedRequest(req, res) {
       if (done) break;
       if (!value) continue;
       if (normalizer) {
-        const out = normalizer.transform(decoder.decode(value, { stream: true }));
+        const text = decoder.decode(value, { stream: true });
+        if (usageCollector) usageCollector.collect(text);
+        const out = normalizer.transform(text);
         if (out) res.write(out);
       } else {
         res.write(Buffer.from(value));
+        if (jsonBuf !== null) jsonBuf += jsonDecoder.decode(value, { stream: true });
       }
     }
     if (normalizer) {
-      const tail = normalizer.transform(decoder.decode()) + normalizer.flush();
+      const tailText = decoder.decode();
+      if (usageCollector) usageCollector.collect(tailText);
+      const tail = normalizer.transform(tailText) + normalizer.flush();
       if (tail) res.write(tail);
     }
+    // Stream completed cleanly — extract the exact usage and report it.
+    if (meterGemini) {
+      let usage = null;
+      if (usageCollector) {
+        usageCollector.flush();
+        usage = usageCollector.result();
+      } else if (jsonBuf !== null) {
+        jsonBuf += jsonDecoder.decode();
+        try {
+          usage = extractOpenAiUsage(JSON.parse(jsonBuf));
+        } catch {
+          usage = null;
+        }
+      }
+      if (usage) reportGeminiSpend(parsed?.model, usage);
+    }
   } catch (err) {
-    // Client likely disconnected mid-stream. Nothing useful to send.
+    // Client likely disconnected mid-stream. Nothing useful to send, and we
+    // skip metering a turn we couldn't fully observe (never over-counts).
   } finally {
     res.end();
   }

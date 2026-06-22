@@ -18,6 +18,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { chatSpendBaseCapMicrosForTier } from "@/lib/db/chat-usage";
 import type { PlanTier } from "@/lib/plans/tier";
 import type { GeminiUsage } from "@/lib/gemini-generate-content";
+import { sendCapAlertOnce } from "../../../supabase/functions/_shared/cap_alerts";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -29,6 +30,13 @@ export const GEMINI_PRICES_PER_1M: Record<string, GeminiPricePer1M> = {
   "gemini-2.5-flash": { in: 0.3, out: 2.5 },
   "gemini-3-flash": { in: 0.5, out: 3.0 },
   "gemini-3-flash-preview": { in: 0.5, out: 3.0 },
+  // Voice-path models (Rowboat voice_task / Gemini Live). Their spend is billed
+  // as voice minutes and the llm-router EXCLUDES them from the chat budget, so
+  // these entries are purely defensive: if a stray non-voice 3.1 call ever
+  // reaches this meter it prices in the flash tier instead of the priciest
+  // default. Same flash-tier rate as gemini-3-flash.
+  "gemini-3.1-flash": { in: 0.5, out: 3.0 },
+  "gemini-3.1-flash-live-preview": { in: 0.5, out: 3.0 },
   // Gemini 3.5 Flash (GA May 2026). Output price includes thinking tokens, so
   // a medium/high reasoning compile is billed entirely at this rate.
   "gemini-3.5-flash": { in: 1.5, out: 9.0 }
@@ -130,13 +138,34 @@ export async function meterGeminiSpendForBusiness(args: MeterGeminiSpendArgs): P
       if (Number.isFinite(n) && n > 0) creditMicros = n;
     }
 
-    const { error } = await db.rpc("owner_chat_record_spend", {
+    const { data, error } = await db.rpc("owner_chat_record_spend", {
       p_business_id: args.businessId,
       p_period_start: periodStart,
       p_cost_micros: costMicros,
       p_cap_micros: chatSpendBaseCapMicrosForTier(tier) + creditMicros
     });
     if (error) throw new Error(error.message);
+
+    // First crossing of the shared period cap → one urgent owner alert. This is
+    // the SAME shared fuse the chat-worker (owner chat) and SMS worker route
+    // against; the alert used to fire from those workers' estimate-writes, but
+    // metering is now centralized here, so the alert is too. `mark_usage_cap_alert`
+    // dedupes once-per-period (keyed by the subscription period start), so every
+    // surface that meters can call this and the owner still hears about it once.
+    const row = (Array.isArray(data) ? data[0] : data) as
+      | { fuse_newly_tripped?: boolean; spend_micros?: number | string }
+      | null
+      | undefined;
+    if (row?.fuse_newly_tripped) {
+      await sendCapAlertOnce(db, {
+        businessId: args.businessId,
+        kind: "chat_spend",
+        periodKey: periodStart,
+        notifyUrl: `${process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""}/functions/v1/notifications`,
+        bearer: process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
+        payload: { surface: args.surface, spend_micros: Number(row.spend_micros) || null }
+      });
+    }
   } catch (err) {
     console.error(
       `meterGeminiSpendForBusiness(${args.surface})`,

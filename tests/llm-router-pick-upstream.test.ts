@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 // @ts-expect-error — sidecar is plain JS without types; importing the pure
 // helper module avoids booting the HTTP server that index.js binds at load.
 // prettier-ignore — single line so the ts-expect-error covers the untyped import
-import { pickUpstream, filterUpstreamHeaders, mergeSystemMessages, addToolCallIndices, createSseToolCallIndexNormalizer } from "../vps/llm-router/src/routing.js";
+import { pickUpstream, filterUpstreamHeaders, mergeSystemMessages, addToolCallIndices, createSseToolCallIndexNormalizer, isChatBudgetModel, extractOpenAiUsage, createSseUsageCollector } from "../vps/llm-router/src/routing.js";
 
 describe("llm-router pickUpstream", () => {
   it("routes gemini-* models to Gemini", () => {
@@ -30,6 +30,125 @@ describe("llm-router pickUpstream", () => {
     // anchored at the start of the name so mis-tagged models don't jump
     // providers.
     expect(pickUpstream("my-gemini-custom")).toBe("ollama");
+  });
+});
+
+describe("llm-router isChatBudgetModel", () => {
+  it("meters the chat agent models (owner chat / SMS / summarizers run on these)", () => {
+    expect(isChatBudgetModel("gemini-2.5-flash-lite", "gemini-3.1-flash")).toBe(true);
+    expect(isChatBudgetModel("gemini-2.5-flash", "gemini-3.1-flash")).toBe(true);
+    expect(isChatBudgetModel("Gemini-2.5-Flash-Lite", "gemini-3.1-flash")).toBe(true); // case-insensitive
+  });
+
+  it("excludes the configured voice model (voice_task spend is billed as minutes)", () => {
+    expect(isChatBudgetModel("gemini-3.1-flash", "gemini-3.1-flash")).toBe(false);
+    expect(isChatBudgetModel(" GEMINI-3.1-FLASH ", "gemini-3.1-flash")).toBe(false); // trim + case
+  });
+
+  it("always excludes live (real-time audio) models, regardless of the voice-model env", () => {
+    expect(isChatBudgetModel("gemini-3.1-flash-live-preview", "gemini-2.5-flash-lite")).toBe(false);
+    expect(isChatBudgetModel("gemini-3.1-flash-live-preview", "")).toBe(false);
+  });
+
+  it("never meters non-gemini (ollama) traffic — it's $0", () => {
+    expect(isChatBudgetModel("qwen3:4b-instruct", "gemini-3.1-flash")).toBe(false);
+    expect(isChatBudgetModel("llama3.2:3b", "gemini-3.1-flash")).toBe(false);
+  });
+
+  it("returns false for missing / blank / non-string models", () => {
+    expect(isChatBudgetModel(undefined, "gemini-3.1-flash")).toBe(false);
+    expect(isChatBudgetModel(null, "gemini-3.1-flash")).toBe(false);
+    expect(isChatBudgetModel("", "gemini-3.1-flash")).toBe(false);
+    expect(isChatBudgetModel(42, "gemini-3.1-flash")).toBe(false);
+  });
+
+  it("still meters a gemini chat model when the voice-model env is missing/blank", () => {
+    expect(isChatBudgetModel("gemini-2.5-flash-lite", undefined)).toBe(true);
+    expect(isChatBudgetModel("gemini-2.5-flash-lite", "")).toBe(true);
+  });
+});
+
+describe("llm-router extractOpenAiUsage", () => {
+  it("maps OpenAI-compat usage onto { promptTokens, outputTokens }", () => {
+    expect(
+      extractOpenAiUsage({ usage: { prompt_tokens: 1200, completion_tokens: 340, total_tokens: 1540 } })
+    ).toEqual({ promptTokens: 1200, outputTokens: 340 });
+  });
+
+  it("clamps negatives and tolerates a missing field (other side still counts)", () => {
+    expect(extractOpenAiUsage({ usage: { prompt_tokens: -5, completion_tokens: 10 } })).toEqual({
+      promptTokens: 0,
+      outputTokens: 10
+    });
+    expect(extractOpenAiUsage({ usage: { prompt_tokens: 7 } })).toEqual({
+      promptTokens: 7,
+      outputTokens: 0
+    });
+  });
+
+  it("returns null when there is no usable usage (so the turn simply isn't metered)", () => {
+    expect(extractOpenAiUsage(null)).toBeNull();
+    expect(extractOpenAiUsage({})).toBeNull();
+    expect(extractOpenAiUsage({ usage: null })).toBeNull();
+    expect(extractOpenAiUsage({ usage: {} })).toBeNull();
+    expect(extractOpenAiUsage({ usage: { prompt_tokens: 0, completion_tokens: 0 } })).toBeNull();
+    expect(extractOpenAiUsage({ usage: { prompt_tokens: "x", completion_tokens: "y" } })).toBeNull();
+  });
+});
+
+describe("llm-router createSseUsageCollector", () => {
+  const usageEvent =
+    'data: {"choices":[],"usage":{"prompt_tokens":1500,"completion_tokens":420,"total_tokens":1920}}';
+
+  it("harvests the terminal usage chunk from a streamed completion", () => {
+    const c = createSseUsageCollector();
+    c.collect('data: {"choices":[{"delta":{"content":"Hi"},"index":0}]}\n\n');
+    c.collect(usageEvent + "\n\ndata: [DONE]\n\n");
+    c.flush();
+    expect(c.result()).toEqual({ promptTokens: 1500, outputTokens: 420 });
+  });
+
+  it("keeps the LAST usage seen when several chunks carry it", () => {
+    const c = createSseUsageCollector();
+    c.collect('data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}\n');
+    c.collect('data: {"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":9}}\n');
+    c.flush();
+    expect(c.result()).toEqual({ promptTokens: 9, outputTokens: 9 });
+  });
+
+  it("reassembles a usage event split across network chunks", () => {
+    const c = createSseUsageCollector();
+    const mid = Math.floor(usageEvent.length / 2);
+    c.collect(usageEvent.slice(0, mid));
+    c.collect(usageEvent.slice(mid) + "\n\n");
+    c.flush();
+    expect(c.result()).toEqual({ promptTokens: 1500, outputTokens: 420 });
+  });
+
+  it("drains a trailing unterminated usage line via flush()", () => {
+    const c = createSseUsageCollector();
+    c.collect(usageEvent); // no trailing newline
+    expect(c.result()).toBeNull(); // still buffered
+    c.flush();
+    expect(c.result()).toEqual({ promptTokens: 1500, outputTokens: 420 });
+  });
+
+  it("tolerates CRLF endings, comments, malformed data lines, and [DONE]", () => {
+    const c = createSseUsageCollector();
+    c.collect(": keep-alive\r\n");
+    c.collect("data: {not json}\r\n");
+    c.collect("data: [DONE]\r\n");
+    c.collect(usageEvent + "\r\n");
+    c.flush();
+    expect(c.result()).toEqual({ promptTokens: 1500, outputTokens: 420 });
+  });
+
+  it("stays null for a stream that never reports usage", () => {
+    const c = createSseUsageCollector();
+    c.collect('data: {"choices":[{"delta":{"content":"only text"},"index":0}]}\n\n');
+    c.collect("data: [DONE]\n\n");
+    c.flush();
+    expect(c.result()).toBeNull();
   });
 });
 

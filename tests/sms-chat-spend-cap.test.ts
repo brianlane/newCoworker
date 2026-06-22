@@ -4,53 +4,15 @@ import {
   DEFAULT_GEMINI_PRICE_PER_1M,
   STARTER_CHAT_SPEND_CAP_MICROS,
   capMicrosForTier,
-  estimateChatCostMicros,
   geminiCostMicrosFromTokens,
   monthStartIso,
   pickSmsTurn,
   readActiveChatCreditMicros,
   readChatSpendMicros,
-  recordSmsChatSpend,
   resolveSmsChatCap,
   type SpendSupabase
 } from "../supabase/functions/_shared/chat_spend_cap";
 import { callRowboatChatOnce } from "../supabase/functions/_shared/sms_rowboat";
-
-// --- estimateChatCostMicros --------------------------------------------------
-
-describe("estimateChatCostMicros", () => {
-  it("computes inTokens*priceIn + outTokens*priceOut (chars/4), overhead-free", () => {
-    // 400 chars => 100 tokens each side. 100*0.1 + 100*0.4 = 50 micros.
-    const cost = estimateChatCostMicros(400, 400, {
-      priceInPer1M: 0.1,
-      priceOutPer1M: 0.4,
-      promptOverheadTokens: 0
-    });
-    expect(cost).toBe(50);
-  });
-
-  it("adds the flat prompt overhead to the input side", () => {
-    // inTokens = 100 + 1200 = 1300; 1300*0.1 + 100*0.4 = 170.
-    const cost = estimateChatCostMicros(400, 400, {
-      priceInPer1M: 0.1,
-      priceOutPer1M: 0.4,
-      promptOverheadTokens: 1200
-    });
-    expect(cost).toBe(170);
-  });
-
-  it("clamps negative inputs to zero", () => {
-    expect(
-      estimateChatCostMicros(-100, -100, { promptOverheadTokens: 0 })
-    ).toBe(0);
-  });
-
-  it("uses all defaults when no config is passed", () => {
-    // defaults: priceIn 0.1, priceOut 0.4, overhead 1200.
-    // inTokens = 100 + 1200 = 1300; 1300*0.1 + 100*0.4 = 170.
-    expect(estimateChatCostMicros(400, 400)).toBe(170);
-  });
-});
 
 // --- geminiCostMicrosFromTokens ------------------------------------------------
 
@@ -69,6 +31,17 @@ describe("geminiCostMicrosFromTokens", () => {
   it("falls back to the priciest deployed tier for unknown models", () => {
     expect(geminiCostMicrosFromTokens("gemini-99-ultra", 1000, 100)).toBe(
       Math.ceil(1000 * DEFAULT_GEMINI_PRICE_PER_1M.in + 100 * DEFAULT_GEMINI_PRICE_PER_1M.out)
+    );
+  });
+
+  it("prices the (voice-path, defensively listed) 3.1 models in the flash tier, not the default", () => {
+    // 0.5 in / 3.0 out — same as gemini-3-flash, and cheaper than the 1.5/9.0
+    // unknown-model default that a missing entry would have hit.
+    expect(geminiCostMicrosFromTokens("gemini-3.1-flash", 1000, 100)).toBe(
+      Math.ceil(1000 * 0.5 + 100 * 3.0)
+    );
+    expect(geminiCostMicrosFromTokens("gemini-3.1-flash-live-preview", 1000, 100)).toBe(
+      Math.ceil(1000 * 0.5 + 100 * 3.0)
     );
   });
 
@@ -144,13 +117,6 @@ type Scenario = {
   // owner_chat_model_spend.spend_micros (maybeSingle on owner_chat_model_spend)
   spendMicros?: number | null;
   spendError?: string;
-  // result of the metered_at claim (update...select("id") on sms_inbound_jobs)
-  claimRows?: Array<{ id: string }>;
-  // make the claim return a non-array `data` (exercise the Array.isArray false side)
-  claimDataNonArray?: boolean;
-  claimError?: string;
-  // owner_chat_record_spend rpc result
-  rpc?: { data: unknown; error: { message: string } | null };
   // chat_active_credit_micros rpc result (purchased Gemini credit)
   creditMicros?: unknown;
   creditError?: string;
@@ -159,27 +125,15 @@ type Scenario = {
 
 function makeStub(s: Scenario) {
   const calls = {
-    rpc: [] as Array<{ fn: string; args: Record<string, unknown> }>,
-    meteredAtSet: [] as Array<unknown>
+    rpc: [] as Array<{ fn: string; args: Record<string, unknown> }>
   };
 
   function builder(table: string) {
-    let op: "select" | "update" = "select";
-    let values: Record<string, unknown> | null = null;
-
     const api = {
       select() {
         return api;
       },
-      update(v: Record<string, unknown>) {
-        op = "update";
-        values = v;
-        return api;
-      },
       eq() {
-        return api;
-      },
-      is() {
         return api;
       },
       order() {
@@ -211,30 +165,6 @@ function makeStub(s: Scenario) {
           });
         }
         return Promise.resolve({ data: null, error: null });
-      },
-      // Awaitable builder (used by update(...).select("id") + release update).
-      then(
-        resolve: (v: { data: unknown; error: { message: string } | null }) => unknown,
-        reject?: (e: unknown) => unknown
-      ) {
-        let result: { data: unknown; error: { message: string } | null };
-        if (table === "sms_inbound_jobs" && op === "update") {
-          const meteredAt = (values ?? {}).metered_at;
-          calls.meteredAtSet.push(meteredAt);
-          if (meteredAt == null) {
-            // release path
-            result = { data: null, error: null };
-          } else if (s.claimError) {
-            result = { data: null, error: { message: s.claimError } };
-          } else if (s.claimDataNonArray) {
-            result = { data: null, error: null };
-          } else {
-            result = { data: s.claimRows ?? [{ id: "job-1" }], error: null };
-          }
-        } else {
-          result = { data: null, error: null };
-        }
-        return Promise.resolve(result).then(resolve, reject);
       }
     };
     return api;
@@ -253,7 +183,7 @@ function makeStub(s: Scenario) {
         }
         return Promise.resolve({ data: s.creditMicros ?? null, error: null });
       }
-      return Promise.resolve(s.rpc ?? { data: null, error: null });
+      return Promise.resolve({ data: null, error: null });
     },
     _calls: calls
   };
@@ -357,132 +287,6 @@ describe("readChatSpendMicros", () => {
     await expect(readChatSpendMicros(stub, "biz", "2026-06-01T00:00:00.000Z")).rejects.toThrow(
       "db down"
     );
-  });
-});
-
-// --- recordSmsChatSpend ------------------------------------------------------
-
-describe("recordSmsChatSpend", () => {
-  const base = {
-    jobId: "job-1",
-    businessId: "biz",
-    periodStart: "2026-06-01T00:00:00.000Z",
-    inputChars: 400,
-    outputChars: 400,
-    capMicros: 10_000_000,
-    costConfig: { priceInPer1M: 0.1, priceOutPer1M: 0.4, promptOverheadTokens: 0 }
-  };
-
-  it("disabled → no claim, no rpc", async () => {
-    const stub = makeStub({});
-    const r = await recordSmsChatSpend(stub, { ...base, enabled: false });
-    expect(r).toEqual({ metered: false, reason: "disabled" });
-    expect(stub._calls.rpc).toHaveLength(0);
-    expect(stub._calls.meteredAtSet).toHaveLength(0);
-  });
-
-  it("happy path: claims metered_at, records spend, returns total + cost", async () => {
-    const stub = makeStub({
-      claimRows: [{ id: "job-1" }],
-      rpc: { data: [{ spend_micros: 50, turn_count: 1, fuse_newly_tripped: false }], error: null }
-    });
-    const r = await recordSmsChatSpend(stub, { ...base, enabled: true });
-    expect(r.metered).toBe(true);
-    expect(r.costMicros).toBe(50);
-    expect(r.spendMicros).toBe(50);
-    expect(r.fuseNewlyTripped).toBe(false);
-    const spendCall = stub._calls.rpc.find((c) => c.fn === "owner_chat_record_spend");
-    expect(spendCall?.args).toMatchObject({
-      p_business_id: "biz",
-      p_period_start: "2026-06-01T00:00:00.000Z",
-      p_cost_micros: 50,
-      p_cap_micros: 10_000_000
-    });
-  });
-
-  it("passes base + purchased credit as p_cap_micros so the fuse trips at the raised cap", async () => {
-    const stub = makeStub({
-      claimRows: [{ id: "job-1" }],
-      creditMicros: 5_000_000,
-      rpc: { data: [{ spend_micros: 50, fuse_newly_tripped: false }], error: null }
-    });
-    const r = await recordSmsChatSpend(stub, { ...base, enabled: true });
-    expect(r.metered).toBe(true);
-    const spendCall = stub._calls.rpc.find((c) => c.fn === "owner_chat_record_spend");
-    expect(spendCall?.args.p_cap_micros).toBe(15_000_000);
-  });
-
-  it("surfaces fuse_newly_tripped", async () => {
-    const stub = makeStub({
-      claimRows: [{ id: "job-1" }],
-      rpc: { data: [{ spend_micros: 10_000_050, fuse_newly_tripped: true }], error: null }
-    });
-    const r = await recordSmsChatSpend(stub, { ...base, enabled: true });
-    expect(r.fuseNewlyTripped).toBe(true);
-  });
-
-  it("handles a non-array (object) rpc result and a null row", async () => {
-    const objStub = makeStub({
-      claimRows: [{ id: "job-1" }],
-      rpc: { data: { spend_micros: 50, fuse_newly_tripped: false }, error: null }
-    });
-    const r1 = await recordSmsChatSpend(objStub, { ...base, enabled: true });
-    expect(r1.metered).toBe(true);
-    expect(r1.spendMicros).toBe(50);
-
-    const nullStub = makeStub({ claimRows: [{ id: "job-1" }], rpc: { data: null, error: null } });
-    const r2 = await recordSmsChatSpend(nullStub, { ...base, enabled: true });
-    expect(r2.metered).toBe(true);
-    expect(r2.spendMicros).toBe(0);
-    expect(r2.fuseNewlyTripped).toBe(false);
-  });
-
-  it("resolves the period when none is supplied (periodStart null)", async () => {
-    const stub = makeStub({
-      periodStart: "2026-06-01T00:00:00.000Z",
-      claimRows: [{ id: "job-1" }],
-      rpc: { data: [{ spend_micros: 50 }], error: null }
-    });
-    const r = await recordSmsChatSpend(stub, { ...base, periodStart: null, enabled: true });
-    expect(r.metered).toBe(true);
-    const spendCall = stub._calls.rpc.find((c) => c.fn === "owner_chat_record_spend");
-    expect(spendCall?.args.p_period_start).toBe("2026-06-01T00:00:00.000Z");
-  });
-
-  it("non-array claim data is treated as already-metered", async () => {
-    const stub = makeStub({ claimDataNonArray: true });
-    const r = await recordSmsChatSpend(stub, { ...base, enabled: true });
-    expect(r).toEqual({ metered: false, reason: "already_metered" });
-    expect(stub._calls.rpc).toHaveLength(0);
-  });
-
-  it("already metered (claim matched 0 rows) → skip rpc", async () => {
-    const stub = makeStub({ claimRows: [] });
-    const r = await recordSmsChatSpend(stub, { ...base, enabled: true });
-    expect(r).toEqual({ metered: false, reason: "already_metered" });
-    expect(stub._calls.rpc).toHaveLength(0);
-  });
-
-  it("claim error → no rpc", async () => {
-    const stub = makeStub({ claimError: "lock timeout" });
-    const r = await recordSmsChatSpend(stub, { ...base, enabled: true });
-    expect(r.metered).toBe(false);
-    expect(r.reason).toBe("claim_failed");
-    expect(stub._calls.rpc).toHaveLength(0);
-  });
-
-  it("rpc error → releases the metered_at claim (set back to null)", async () => {
-    const stub = makeStub({
-      claimRows: [{ id: "job-1" }],
-      rpc: { data: null, error: { message: "rpc boom" } }
-    });
-    const r = await recordSmsChatSpend(stub, { ...base, enabled: true });
-    expect(r.metered).toBe(false);
-    expect(r.reason).toBe("rpc_failed");
-    // First metered_at set = timestamp (claim); second = null (release).
-    expect(stub._calls.meteredAtSet).toHaveLength(2);
-    expect(stub._calls.meteredAtSet[0]).toBeTypeOf("string");
-    expect(stub._calls.meteredAtSet[1]).toBeNull();
   });
 });
 
