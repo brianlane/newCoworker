@@ -441,6 +441,30 @@ fi
 #
 # `--remove-orphans` drops the legacy `ollama` compose service from
 # pre-2026-04 layouts that ran ollama inside the same compose project.
+#
+# Re-stage the llm-router source from the refreshed repo FIRST. The router's
+# compose `build:` context is /opt/rowboat/llm-router, which bootstrap.sh
+# populates on first boot but deploy-client.sh historically never refreshed.
+# A fleet redeploy (redeploy-deploy-client.ts) re-pins /opt/newcoworker-repo
+# to the requested ref, but `docker compose up --build` rebuilds the router
+# from the STALE /opt/rowboat/llm-router copy — silently shipping pre-merge
+# router code (e.g. the router never picks up exact AI-chat-budget metering)
+# while still stamping a fresh image timestamp. Mirror bootstrap.sh's staging
+# so every deploy rebuilds the sidecar from THIS deploy's code.
+LLM_ROUTER_SRC="${LLM_ROUTER_SRC:-/opt/newcoworker-repo/vps/llm-router}"
+LLM_ROUTER_DEST="/opt/rowboat/llm-router"
+if [[ -d "${LLM_ROUTER_SRC}" ]]; then
+  mkdir -p "${LLM_ROUTER_DEST}"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete --exclude "node_modules" "${LLM_ROUTER_SRC}/" "${LLM_ROUTER_DEST}/"
+  else
+    cp -R "${LLM_ROUTER_SRC}/." "${LLM_ROUTER_DEST}/"
+  fi
+  log "llm-router source re-staged at ${LLM_ROUTER_DEST}"
+else
+  log "WARN: llm-router source not found at ${LLM_ROUTER_SRC}; compose build will reuse existing ${LLM_ROUTER_DEST}"
+fi
+
 docker compose -f /opt/rowboat/docker-compose.yml up -d --build --force-recreate --remove-orphans || true
 log "Rowboat stack updated."
 
