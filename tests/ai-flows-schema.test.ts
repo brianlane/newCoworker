@@ -1094,6 +1094,63 @@ describe("Clever weekly update: browse_action forEachLink", () => {
     expect(issues).toContain('Step "loop" can\'t combine forEachLink with screenshot.');
     expect(issues).toContain('Step "loop" can\'t combine forEachLink with rememberUrlKeyedByVar.');
   });
+
+  it("accepts forEachLinkMatchVar pointing at an earlier-produced var", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [{ type: "from_matches", value: "3142077635" }] },
+      steps: [
+        { id: "u", type: "extract_url", saveAs: "portal_url" },
+        { id: "n", type: "extract_text", fields: [{ name: "lead_names" }] },
+        {
+          id: "loop",
+          type: "browse_action",
+          urlVar: "portal_url",
+          auth: { integrationLabel: "Clever" },
+          forEachLink: "a.needs-action-lead",
+          forEachLinkMatchVar: "lead_names",
+          actions: [{ kind: "click_text", target: "Provide Update" }]
+        }
+      ]
+    });
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects forEachLinkMatchVar without forEachLink", () => {
+    const def = baseDef();
+    def.steps = [
+      { id: "u", type: "extract_url", saveAs: "portal_url" },
+      { id: "n", type: "extract_text", fields: [{ name: "lead_names" }] },
+      {
+        id: "loop",
+        type: "browse_action",
+        urlVar: "portal_url",
+        forEachLinkMatchVar: "lead_names",
+        actions: [{ kind: "click_text", target: "Provide Update" }]
+      }
+    ] as AiFlowDefinition["steps"];
+    expect(validateDefinitionSemantics(def)).toContain(
+      'Step "loop" sets forEachLinkMatchVar but has no forEachLink to filter.'
+    );
+  });
+
+  it("rejects forEachLinkMatchVar referencing a var no earlier step produces", () => {
+    const def = baseDef();
+    def.steps = [
+      { id: "u", type: "extract_url", saveAs: "portal_url" },
+      {
+        id: "loop",
+        type: "browse_action",
+        urlVar: "portal_url",
+        forEachLink: "a.needs-action-lead",
+        forEachLinkMatchVar: "lead_names",
+        actions: [{ kind: "click_text", target: "Provide Update" }]
+      }
+    ] as AiFlowDefinition["steps"];
+    expect(validateDefinitionSemantics(def)).toContain(
+      'Step "loop" filters its forEachLink by {{vars.lead_names}} which no earlier step produces.'
+    );
+  });
 });
 
 describe("Clever auto-update: recall_url + rememberUrlKeyedByVar", () => {

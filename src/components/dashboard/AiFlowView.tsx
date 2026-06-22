@@ -294,6 +294,13 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           {step.forEachLink && (
             <Row label="Repeats for each list link matching" value={step.forEachLink} mono />
           )}
+          {step.forEachLinkMatchVar && (
+            <Row
+              label="Only for links named in"
+              value={`{{vars.${step.forEachLinkMatchVar}}}`}
+              mono
+            />
+          )}
           {step.rememberUrlKeyedByVar && (
             <Row label="Remembers link keyed by" value={`{{vars.${step.rememberUrlKeyedByVar}}}`} mono />
           )}

@@ -386,6 +386,10 @@ const stepSchema = z.discriminatedUnion("type", [
     // so it's incompatible with fields/screenshot/rememberUrlKeyedByVar (enforced
     // in validateDefinitionSemantics).
     forEachLink: z.string().min(1).max(200).optional(),
+    // Restrict the forEachLink loop to rows whose text contains one of the names
+    // in this earlier-produced var (split on commas/newlines/semicolons). Only
+    // valid alongside forEachLink (enforced in validateDefinitionSemantics).
+    forEachLinkMatchVar: varName.optional(),
     when: whenSchema.optional()
   }),
   // Recall a URL a PRIOR run persisted (browse_action.rememberUrlKeyedByVar) for
@@ -583,6 +587,22 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       }
       if (step.rememberUrlKeyedByVar) {
         issues.push(`Step "${step.id}" can't combine forEachLink with rememberUrlKeyedByVar.`);
+      }
+    }
+
+    // forEachLinkMatchVar narrows a forEachLink loop to rows naming one of the
+    // values in an EARLIER-produced var. It's meaningless without forEachLink,
+    // and (like urlVar) the var must already be in scope.
+    if (step.type === "browse_action" && step.forEachLinkMatchVar) {
+      if (!step.forEachLink) {
+        issues.push(
+          `Step "${step.id}" sets forEachLinkMatchVar but has no forEachLink to filter.`
+        );
+      }
+      if (!vars.has(step.forEachLinkMatchVar) && !ENGINE_VARS.has(step.forEachLinkMatchVar)) {
+        issues.push(
+          `Step "${step.id}" filters its forEachLink by {{vars.${step.forEachLinkMatchVar}}} which no earlier step produces.`
+        );
       }
     }
 

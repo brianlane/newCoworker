@@ -1092,7 +1092,10 @@ async function browseActionStep(
         // dashboard "investigate" view. Default off so other flows pay nothing.
         ...(action.screenshot ? { screenshot: true } : {}),
         ...(scope.captureScreenshots ? { debugScreenshots: true } : {}),
-        ...(action.forEachLink ? { forEachLink: action.forEachLink } : {})
+        ...(action.forEachLink ? { forEachLink: action.forEachLink } : {}),
+        // Forward the name filter even when it's an EMPTY array: a requested
+        // filter that resolved to no names must update NOTHING, not every row.
+        ...(Array.isArray(action.forEachMatch) ? { forEachMatch: action.forEachMatch } : {})
       }),
       signal: ctrl.signal
     });
