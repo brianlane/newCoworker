@@ -183,7 +183,8 @@ function buildDefinition(opts: {
         type: "approval_gate",
         prompt:
           "New buyer lead: {{vars.lead_name}} in {{vars.location}} " +
-          "(around {{vars.price}}). Send the buyer intro to {{vars.lead_phone}}?",
+          "(around {{vars.price}}). Send the buyer intro to {{vars.lead_phone}}?\n" +
+          "Lead source: ReferralExchange (referralexchange.com)",
         when: { var: "lead_type", equals: "buyer" }
       },
       {
@@ -198,7 +199,8 @@ function buildDefinition(opts: {
         type: "approval_gate",
         prompt:
           "New seller lead: {{vars.lead_name}} in {{vars.location}} " +
-          "({{vars.price}}). Send the seller intro to {{vars.lead_phone}}?",
+          "({{vars.price}}). Send the seller intro to {{vars.lead_phone}}?\n" +
+          "Lead source: ReferralExchange (referralexchange.com)",
         when: { var: "lead_type", equals: "seller" }
       },
       {
@@ -213,7 +215,8 @@ function buildDefinition(opts: {
         type: "approval_gate",
         prompt:
           "New buyer+seller lead: {{vars.lead_name}} in {{vars.location}} " +
-          "({{vars.price}}). Send the buy-and-sell intro to {{vars.lead_phone}}?",
+          "({{vars.price}}). Send the buy-and-sell intro to {{vars.lead_phone}}?\n" +
+          "Lead source: ReferralExchange (referralexchange.com)",
         when: { var: "lead_type", equals: "both" }
       },
       {
