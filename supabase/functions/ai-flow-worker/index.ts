@@ -1093,7 +1093,9 @@ async function browseActionStep(
         ...(action.screenshot ? { screenshot: true } : {}),
         ...(scope.captureScreenshots ? { debugScreenshots: true } : {}),
         ...(action.forEachLink ? { forEachLink: action.forEachLink } : {}),
-        ...(action.forEachMatch ? { forEachMatch: action.forEachMatch } : {})
+        // Forward the name filter even when it's an EMPTY array: a requested
+        // filter that resolved to no names must update NOTHING, not every row.
+        ...(Array.isArray(action.forEachMatch) ? { forEachMatch: action.forEachMatch } : {})
       }),
       signal: ctrl.signal
     });

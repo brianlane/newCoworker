@@ -390,15 +390,17 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         value: a.valueTemplate ? renderTemplate(a.valueTemplate, scope).trim() : ""
       }));
       // Resolve the forEachLink name filter: split the var's value on
-      // commas/newlines/semicolons, trim, drop empties, dedupe. Only attach when
-      // forEachLink is set and >= 1 name resolves — an empty list would update
-      // nothing, which the worker reports as "no matching items".
+      // commas/newlines/semicolons, trim, drop empties, dedupe. When the author
+      // requested a filter (forEachLinkMatchVar set) we ALWAYS attach the list —
+      // even when it resolves to EMPTY — so the render service updates NOTHING
+      // rather than silently falling back to acting on every row. An empty list
+      // is reported by the worker as "found no matching list items".
       let forEachMatch: string[] | undefined;
       if (step.forEachLink && step.forEachLinkMatchVar) {
         const raw = scope.vars?.[step.forEachLinkMatchVar];
+        const seen = new Set<string>();
+        const names: string[] = [];
         if (typeof raw === "string") {
-          const seen = new Set<string>();
-          const names: string[] = [];
           for (const part of raw.split(/[,\n;]+/)) {
             const name = part.trim();
             const key = name.toLowerCase();
@@ -407,8 +409,8 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
               names.push(name);
             }
           }
-          if (names.length > 0) forEachMatch = names;
         }
+        forEachMatch = names;
       }
       // Pass the remember-key VAR NAME (not a resolved value): the worker reads
       // and normalizes it AFTER any same-pass extraction, so a phone this step
@@ -424,7 +426,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           screenshot: step.screenshot === true,
           ...(step.rememberUrlKeyedByVar ? { rememberKeyVar: step.rememberUrlKeyedByVar } : {}),
           ...(step.forEachLink ? { forEachLink: step.forEachLink } : {}),
-          ...(forEachMatch ? { forEachMatch } : {})
+          ...(forEachMatch !== undefined ? { forEachMatch } : {})
         }
       };
     }

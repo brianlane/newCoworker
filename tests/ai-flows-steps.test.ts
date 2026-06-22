@@ -700,7 +700,7 @@ describe("planStep: browse_action rememberUrlKeyedByVar", () => {
       "Bo"
     ]);
   });
-  it("omits forEachMatch when the match var resolves to no names", () => {
+  it("attaches an EMPTY forEachMatch when the match var resolves to no names (filter nothing, not all)", () => {
     const loop: FlowStep = {
       id: "loop",
       type: "browse_action",
@@ -710,9 +710,9 @@ describe("planStep: browse_action rememberUrlKeyedByVar", () => {
       actions: [{ kind: "click_text", target: "Provide Update" }]
     };
     const r = planStep(loop, { vars: { lead_url: "https://x", lead_names: "  , ; \n " } });
-    expect(r.ok && r.action.kind === "browse_action" && "forEachMatch" in r.action).toBe(false);
+    expect(r.ok && r.action.kind === "browse_action" && r.action.forEachMatch).toEqual([]);
   });
-  it("omits forEachMatch when the match var is not a string in scope", () => {
+  it("attaches an EMPTY forEachMatch when the match var is not a string in scope", () => {
     const loop: FlowStep = {
       id: "loop",
       type: "browse_action",
@@ -722,7 +722,7 @@ describe("planStep: browse_action rememberUrlKeyedByVar", () => {
       actions: [{ kind: "click_text", target: "Provide Update" }]
     };
     const r = planStep(loop, { vars: { lead_url: "https://x" } });
-    expect(r.ok && r.action.kind === "browse_action" && "forEachMatch" in r.action).toBe(false);
+    expect(r.ok && r.action.kind === "browse_action" && r.action.forEachMatch).toEqual([]);
   });
   it("omits forEachMatch when forEachLinkMatchVar is unset", () => {
     const loop: FlowStep = {

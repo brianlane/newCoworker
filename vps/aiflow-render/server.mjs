@@ -572,9 +572,12 @@ async function performForEach(page, forEachLink, actions, matchNames) {
   try {
     hrefs = await page.evaluate(
       ({ sel, names }) => {
-        // Lower-cased name list to filter rows by their visible text. Empty =>
-        // no filter (act on every row), preserving the original bulk behavior.
-        const wanted = Array.isArray(names)
+        // `names` is an ARRAY when the caller requested a name filter (act only
+        // on rows naming one of them) or NULL when no filter was requested (act
+        // on every row). A filter that's present but empty therefore matches
+        // NOTHING — we never silently fall back to acting on every row.
+        const filtering = Array.isArray(names);
+        const wanted = filtering
           ? names.map((n) => String(n).toLowerCase()).filter(Boolean)
           : [];
         const out = [];
@@ -583,7 +586,7 @@ async function performForEach(page, forEachLink, actions, matchNames) {
           const a = el.matches("a[href]") ? el : el.closest("a[href]");
           const href = a && a.href ? a.href : null;
           if (!href || seen.has(href)) continue;
-          if (wanted.length > 0) {
+          if (filtering) {
             // Match against the row's text (the anchor when available, else the
             // matched element) so we only act on rows naming a requested lead.
             const text = ((a || el).textContent || "").toLowerCase();
@@ -753,17 +756,19 @@ app.post("/render", async (req, res) => {
     return res.status(400).json({ error: "invalid_actions" });
   }
   // Optional name filter for the forEachLink loop: a list of strings; rows whose
-  // text contains one of them are acted on. Non-arrays/empties => no filter.
-  // Each name is trimmed and capped defensively; the whole list is bounded.
+  // text contains one of them are acted on. An ABSENT filter (undefined) means
+  // "act on every row" (the weekly bulk update); a PRESENT-but-empty array means
+  // the caller asked to filter and nothing matched, so we must act on NOTHING.
+  // We therefore keep `forEachMatch` as null (no filter) vs an array (filter,
+  // possibly empty). Each name is trimmed/capped defensively; the list is bounded.
   const forEachMatchRaw = req.body?.forEachMatch;
   let forEachMatch = null;
   if (Array.isArray(forEachMatchRaw)) {
-    const names = forEachMatchRaw
+    forEachMatch = forEachMatchRaw
       .filter((n) => typeof n === "string")
       .map((n) => n.trim().slice(0, 120))
       .filter(Boolean)
       .slice(0, 100);
-    if (names.length > 0) forEachMatch = names;
   } else if (forEachMatchRaw !== undefined) {
     return res.status(400).json({ error: "invalid_for_each_match" });
   }
