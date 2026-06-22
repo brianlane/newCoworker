@@ -18,6 +18,106 @@ export function pickUpstream(model) {
 }
 
 /**
+ * Decide whether a gemini-* completion routed through this sidecar should be
+ * metered into the tenant's shared "AI chat budget" (`owner_chat_model_spend`).
+ *
+ * The budget covers the AGENTIC CHAT surfaces that flow through Rowboat: owner
+ * dashboard chat + inbound SMS replies + the rolling conversation/customer
+ * summarizers (all on `OWNER_CHAT_MODEL`/`SMS_CHAT_MODEL`, default
+ * gemini-2.5-flash-lite). It deliberately EXCLUDES the voice path: Rowboat's
+ * `voice_task` agent uses `GEMINI_ROWBOAT_MODEL` (default gemini-3.1-flash) and
+ * that spend is billed to the customer as voice minutes, not the chat budget.
+ * (Gemini Live — gemini-3.1-flash-live-preview — never reaches this router; the
+ * voice bridge holds that WebSocket directly.)
+ *
+ * Rule: a `gemini-*` model is metered UNLESS it is the configured voice model
+ * (`voiceModel`, exact case-insensitive match) or a `live`-flavored model.
+ * Non-gemini (ollama) traffic is $0 and never metered. Kept pure + exported so
+ * the metering decision is unit-tested without booting the HTTP server.
+ */
+export function isChatBudgetModel(model, voiceModel) {
+  if (typeof model !== "string") return false;
+  const m = model.trim().toLowerCase();
+  if (m === "") return false;
+  if (pickUpstream(model) !== "gemini") return false;
+  // Live (real-time audio) models are always voice — never chat budget.
+  if (m.includes("live")) return false;
+  const voice = typeof voiceModel === "string" ? voiceModel.trim().toLowerCase() : "";
+  if (voice && m === voice) return false;
+  return true;
+}
+
+/**
+ * Extract OpenAI-compatible billed token usage from a parsed chat-completions
+ * object (either the buffered JSON body or one streamed chunk). Gemini's
+ * OpenAI-compat endpoint reports `usage.completion_tokens` INCLUSIVE of
+ * reasoning/thinking tokens, so it maps straight onto the platform's
+ * `GeminiUsage { promptTokens, outputTokens }` shape (which the app prices
+ * with `geminiCostMicrosFromUsage`). Returns null when no usable usage is
+ * present (so a usage-less response simply isn't metered — never over-counts).
+ */
+export function extractOpenAiUsage(obj) {
+  if (!obj || typeof obj !== "object") return null;
+  const u = obj.usage;
+  if (!u || typeof u !== "object") return null;
+  const prompt = Number(u.prompt_tokens);
+  const completion = Number(u.completion_tokens);
+  const promptTokens = Number.isFinite(prompt) ? Math.max(0, prompt) : 0;
+  const outputTokens = Number.isFinite(completion) ? Math.max(0, completion) : 0;
+  if (promptTokens === 0 && outputTokens === 0) return null;
+  return { promptTokens, outputTokens };
+}
+
+/**
+ * Stateful, line-buffered collector that harvests the final `usage` object
+ * from an OpenAI-compatible SSE stream. The router injects
+ * `stream_options:{include_usage:true}` on metered gemini streams so the
+ * upstream emits a terminal `{choices:[],usage:{...}}` chunk; this scans every
+ * `data:` line and keeps the LAST usage seen. Mirrors the chunk-splitting of
+ * `createSseToolCallIndexNormalizer` (handles events split across network
+ * chunks; `flush()` drains any trailing unterminated line at end-of-stream).
+ */
+export function createSseUsageCollector() {
+  let buf = "";
+  let usage = null;
+
+  const scanLine = (line) => {
+    const bare = line.endsWith("\r") ? line.slice(0, -1) : line;
+    if (!bare.startsWith("data:")) return;
+    const data = bare.slice(5).trim();
+    if (!data || data === "[DONE]") return;
+    let parsed;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      return;
+    }
+    const u = extractOpenAiUsage(parsed);
+    if (u) usage = u;
+  };
+
+  return {
+    collect(text) {
+      buf += text;
+      const lastNl = buf.lastIndexOf("\n");
+      if (lastNl === -1) return;
+      const complete = buf.slice(0, lastNl);
+      buf = buf.slice(lastNl + 1);
+      for (const line of complete.split("\n")) scanLine(line);
+    },
+    flush() {
+      if (buf) {
+        for (const line of buf.split("\n")) scanLine(line);
+        buf = "";
+      }
+    },
+    result() {
+      return usage;
+    }
+  };
+}
+
+/**
  * Collapse multiple `system` messages in an OpenAI chat-completions body into
  * a single one (contents joined with a blank line, placed at the position of
  * the first system message; all other messages keep their relative order).

@@ -28,8 +28,6 @@ import { currentDateTimeLine } from "../_shared/datetime_line.ts";
 import {
   pickSmsTurn,
   capMicrosForTier,
-  recordSmsChatSpend,
-  resolveChatPeriodStart,
   resolveSmsChatCap
 } from "../_shared/chat_spend_cap.ts";
 import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
@@ -624,22 +622,16 @@ serve(async (req: Request) => {
         // the same UPDATE as rowboat_reply_cached to avoid an extra
         // round-trip per job.
         //
-        // For the over-cap LOCAL ($0) turn we also settle metering in this SAME
-        // UPDATE (metered_at = now). Doing it atomically with the reply cache
-        // closes the window where a crash between "cache" and "stamp" would
-        // leave a cached local reply with metered_at null — which a Telnyx retry
-        // (cached path below) would then mis-charge as an unmetered Gemini turn.
-        // Gemini turns deliberately leave metered_at null here; they are metered
-        // separately via recordSmsChatSpend so a failed/crashed meter can be
-        // retried from the cached path.
+        // Model spend is NO LONGER metered here: the llm-router sidecar meters
+        // the exact billed tokens for every Gemini turn (owner chat / SMS /
+        // summarizers) and POSTs them to /api/internal/meter-gemini-spend. This
+        // worker only READS that shared spend (resolveSmsChatCap) to route
+        // Gemini→local once the period cap is hit.
         const cachePatch: Record<string, unknown> = {
           rowboat_reply_cached: reply,
           customer_e164: fromE164,
           updated_at: new Date().toISOString()
         };
-        if (!turnPlan.meter && SMS_CHAT_SPEND_METERING_ENABLED) {
-          cachePatch.metered_at = new Date().toISOString();
-        }
         const { error: cacheErr } = await supabase
           .from("sms_inbound_jobs")
           .update(cachePatch)
@@ -648,13 +640,11 @@ serve(async (req: Request) => {
           // Caching the reply is a PREREQUISITE for sending: the cached reply is
           // what lets a Telnyx-send retry re-deliver without re-running Rowboat.
           // If we can't persist it, abort the turn (→ catch → retry/dead-letter)
-          // instead of sending. Sending now would (a) risk a double-SMS on retry
-          // — with no cached reply the retry re-runs Rowboat and sends again —
-          // and (b) leave metering inconsistent (meter-now double-counts the
-          // retry's billed turn; skip-now under-counts a delivered Gemini turn).
+          // instead of sending. Sending now would risk a double-SMS on retry —
+          // with no cached reply the retry re-runs Rowboat and sends again.
           // Aborting keeps it simple and correct: the retry re-runs, re-caches,
-          // meters, and sends exactly once. Cache failures are a rare DB-write
-          // error, so the wasted re-run is acceptable.
+          // and sends exactly once. Cache failures are a rare DB-write error, so
+          // the wasted re-run is acceptable.
           console.error("rowboat_reply_cached", cacheErr);
           throw new Error(`rowboat_reply_cache_failed: ${cacheErr.message}`);
         }
@@ -685,87 +675,14 @@ serve(async (req: Request) => {
           });
         }
 
-        // Meter the Gemini turn into the shared spend fuse (no-op for the
-        // over-cap local turn, which sets meter=false). We only reach here once
-        // the reply is durably cached (cacheErr throws above), so the invariant
-        // holds: metered ⟺ cached ⟺ (about to be) sent. Exactly-once via
-        // sms_inbound_jobs.metered_at, so a cached-reply re-send (Telnyx retry)
-        // never double-counts. Never throws — metering must not fail a reply that
-        // is already cached and about to be sent. Cost is estimated from the text
-        // we sent (preamble + user line) + the reply; resumed-thread history
-        // Rowboat prepends is approximated by the flat overhead.
-        if (turnPlan.meter) {
-          const meterRes = await recordSmsChatSpend(supabase, {
-            jobId: job.id,
-            businessId: job.business_id,
-            periodStart: cap.periodStart,
-            inputChars: (customerPreamble?.length ?? 0) + userText.length,
-            outputChars: reply.length,
-            capMicros: capMicrosForTier(businessTier, CHAT_SPEND_CAP_MICROS, CHAT_SPEND_CAP_MICROS_STARTER),
-            enabled: SMS_CHAT_SPEND_METERING_ENABLED
-          });
-          if (meterRes.fuseNewlyTripped) {
-            await telemetryRecord(supabase, "sms_chat_spend_cap_tripped", {
-              job_id: job.id,
-              business_id: job.business_id,
-              spend_micros: meterRes.spendMicros ?? null
-            });
-            // Same billing-period key the spend RPC used: cap.periodStart
-            // when the cap read resolved it, otherwise re-resolve (matching
-            // recordSmsChatSpend's internal fallback) instead of assuming
-            // the UTC month start.
-            await sendCapAlertOnce(supabase, {
-              businessId: job.business_id,
-              kind: "chat_spend",
-              periodKey: cap.periodStart ?? (await resolveChatPeriodStart(supabase, job.business_id)),
-              notifyUrl: `${supabaseUrl}/functions/v1/notifications`,
-              bearer: serviceKey,
-              payload: { surface: "sms_worker", spend_micros: meterRes.spendMicros ?? null }
-            });
-          }
-        }
-        // Over-cap local ($0) turns need no metering call: metered_at was set
-        // atomically with the reply cache above.
+        // Model spend + the cap-tripped owner alert are handled by the
+        // llm-router meter (→ /api/internal/meter-gemini-spend), not here. This
+        // worker only routes Gemini→local via resolveSmsChatCap above.
       } else {
         convId = thread?.rowboat_conversation_id;
         // Cached-reply re-send (Telnyx retry, or a crash after caching): the
-        // turn already ran, so metering normally happened then and this is a
-        // no-op (metered_at already set → already_metered). But if a crash or a
-        // failed spend RPC left metered_at null, meter it now. Local turns stamp
-        // metered_at above, so a null marker here implies an UNMETERED Gemini
-        // turn — safe to charge. Exactly-once via metered_at; never throws.
-        if (SMS_CHAT_SPEND_METERING_ENABLED) {
-          const meterRes = await recordSmsChatSpend(supabase, {
-            jobId: job.id,
-            businessId: job.business_id,
-            periodStart: null,
-            inputChars: (customerPreamble?.length ?? 0) + userText.length,
-            outputChars: reply.length,
-            capMicros: capMicrosForTier(businessTier, CHAT_SPEND_CAP_MICROS, CHAT_SPEND_CAP_MICROS_STARTER),
-            enabled: SMS_CHAT_SPEND_METERING_ENABLED
-          });
-          if (meterRes.fuseNewlyTripped) {
-            await telemetryRecord(supabase, "sms_chat_spend_cap_tripped", {
-              job_id: job.id,
-              business_id: job.business_id,
-              spend_micros: meterRes.spendMicros ?? null
-            });
-            // Dedupe key must be the SAME billing period the spend was
-            // recorded under (Stripe period start, month-start fallback) —
-            // recordSmsChatSpend resolved it internally because periodStart
-            // was null here. A bare monthStartIso() could mint a second key
-            // for one Stripe period (double alert) or collide with a prior
-            // period's key (missed alert).
-            await sendCapAlertOnce(supabase, {
-              businessId: job.business_id,
-              kind: "chat_spend",
-              periodKey: await resolveChatPeriodStart(supabase, job.business_id),
-              notifyUrl: `${supabaseUrl}/functions/v1/notifications`,
-              bearer: serviceKey,
-              payload: { surface: "sms_worker", spend_micros: meterRes.spendMicros ?? null }
-            });
-          }
-        }
+        // turn already ran; nothing to meter here either (the llm-router meters
+        // the real Gemini turn when it runs).
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

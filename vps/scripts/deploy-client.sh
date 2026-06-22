@@ -313,6 +313,15 @@ PROVIDER_DEFAULT_MODEL=${OLLAMA_MODEL}
 PROVIDER_COPILOT_MODEL=${OLLAMA_MODEL}
 
 # Gemini model used by the voice_task agent via the llm-router.
+#
+# The llm-router sidecar (env_file: this file) ALSO meters exact AI-chat-budget
+# spend: for every gemini-* completion it proxies for the chat surfaces (owner
+# chat, SMS, summarizers — NOT voice_task, which is GEMINI_ROWBOAT_MODEL and
+# billed as voice minutes) it POSTs the billed tokens to
+# ${APP_BASE_URL}/api/internal/meter-gemini-spend using ROWBOAT_GATEWAY_TOKEN.
+# It therefore relies on BUSINESS_ID, APP_BASE_URL, ROWBOAT_GATEWAY_TOKEN (all
+# written above) and GEMINI_ROWBOAT_MODEL (to exclude the voice path) being
+# present in this env file — keep them here when editing.
 GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
 GEMINI_ROWBOAT_MODEL=${GEMINI_ROWBOAT_MODEL:-${GEMINI_ROWBOAT_MODEL_DEFAULT}}
 OLLAMA_MODEL=${OLLAMA_MODEL}

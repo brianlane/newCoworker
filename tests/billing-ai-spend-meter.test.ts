@@ -21,9 +21,12 @@ function stubDb(opts: {
   businessRow?: unknown;
   creditResult?: DbResult;
   recordResult?: DbResult;
+  markResult?: DbResult;
 }) {
   const rpc = vi.fn(async (fn: string, _args?: Record<string, unknown>) => {
     if (fn === "chat_active_credit_micros") return opts.creditResult ?? { data: 0, error: null };
+    if (fn === "mark_usage_cap_alert") return opts.markResult ?? { data: false, error: null };
+    if (fn === "unmark_usage_cap_alert") return { data: null, error: null };
     return opts.recordResult ?? { data: null, error: null };
   });
   const from = vi.fn((table: string) => {
@@ -90,6 +93,8 @@ describe("estimateGeminiCostMicrosFromChars", () => {
 
 describe("meterGeminiSpendForBusiness", () => {
   const savedCap = process.env.OWNER_CHAT_SPEND_CAP_MICROS;
+  const savedSbUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const savedSvcKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   beforeEach(() => {
     delete process.env.OWNER_CHAT_SPEND_CAP_MICROS;
@@ -98,6 +103,10 @@ describe("meterGeminiSpendForBusiness", () => {
   afterEach(() => {
     if (savedCap === undefined) delete process.env.OWNER_CHAT_SPEND_CAP_MICROS;
     else process.env.OWNER_CHAT_SPEND_CAP_MICROS = savedCap;
+    if (savedSbUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    else process.env.NEXT_PUBLIC_SUPABASE_URL = savedSbUrl;
+    if (savedSvcKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    else process.env.SUPABASE_SERVICE_ROLE_KEY = savedSvcKey;
     vi.clearAllMocks();
     vi.restoreAllMocks();
   });
@@ -233,6 +242,84 @@ describe("meterGeminiSpendForBusiness", () => {
       })
     ).resolves.toBeUndefined();
     expect(errSpy).toHaveBeenCalledWith("meterGeminiSpendForBusiness(aiflow_compile)", "weird");
+  });
+
+  it("sends a one-time owner alert when the shared spend cap is newly tripped", async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://sb.example";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "svc-key";
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    const db = stubDb({
+      subscriptionRow: { stripe_current_period_start: "2026-05-29T21:33:49+00:00" },
+      recordResult: { data: [{ spend_micros: 10_000_050, fuse_newly_tripped: true }], error: null },
+      markResult: { data: true, error: null }
+    });
+
+    await meterGeminiSpendForBusiness({
+      businessId: "biz-1",
+      model: "gemini-2.5-flash-lite",
+      surface: "vps_rowboat",
+      usage: { promptTokens: 100, outputTokens: 10 },
+      client: db as never
+    });
+
+    // Dedupe claim keyed by the subscription period start, then the urgent post.
+    expect(db.rpc).toHaveBeenCalledWith("mark_usage_cap_alert", {
+      p_business_id: "biz-1",
+      p_cap_kind: "chat_spend",
+      p_period_key: "2026-05-29T21:33:49+00:00"
+    });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://sb.example/functions/v1/notifications",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("tolerates missing notify env and absent spend_micros in the alert payload", async () => {
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    const db = stubDb({
+      // fuse tripped but the RPC row carries no spend_micros → payload null.
+      recordResult: { data: [{ fuse_newly_tripped: true }], error: null },
+      markResult: { data: true, error: null }
+    });
+
+    await meterGeminiSpendForBusiness({
+      businessId: "biz-1",
+      model: "gemini-2.5-flash-lite",
+      surface: "vps_rowboat",
+      usage: { promptTokens: 100, outputTokens: 10 },
+      client: db as never
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/functions/v1/notifications",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("does not alert when the fuse was already tripped (no new crossing)", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    const db = stubDb({
+      recordResult: { data: [{ spend_micros: 10_000_050, fuse_newly_tripped: false }], error: null }
+    });
+
+    await meterGeminiSpendForBusiness({
+      businessId: "biz-1",
+      model: "gemini-2.5-flash-lite",
+      surface: "vps_rowboat",
+      usage: { promptTokens: 100, outputTokens: 10 },
+      client: db as never
+    });
+
+    expect(db.rpc).not.toHaveBeenCalledWith("mark_usage_cap_alert", expect.anything());
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("creates a service client when none is injected", async () => {

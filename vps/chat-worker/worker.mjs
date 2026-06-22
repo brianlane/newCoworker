@@ -116,10 +116,13 @@ const OWNER_START_AGENT_OPTS = OWNER_START_AGENT
 // The Gemini-backed OwnerCoworker agent bills per token. We meter estimated
 // per-turn cost into owner_chat_model_spend (period-keyed) and the enqueue
 // route flips jobs to the local Qwen agent once the period cap is hit. This
-// is the metering half; it estimates cost from message text at Gemini list
-// price (a safety fuse, not an invoice — approximate is fine) and records it.
+// is the ROUTING half — it READS live period spend to decide Gemini vs local.
+// It no longer WRITES spend: exact billed tokens are now metered by the
+// llm-router sidecar (the only component that sees Gemini's real `usage`),
+// which POSTs them to /api/internal/meter-gemini-spend. Metering a chars/4
+// estimate here on top of that would double-count the same turn.
 // The local-agent name MUST match the agent deploy-client.sh seeds for the
-// Qwen fallback; turns on it are $0 and skip metering.
+// Qwen fallback; turns on it are $0.
 const OWNER_CHAT_LOCAL_AGENT = (process.env.CHAT_WORKER_OWNER_LOCAL_AGENT ?? "OwnerCoworkerLocal").trim();
 const OWNER_CHAT_SPEND_CAP_MICROS = intEnv("OWNER_CHAT_SPEND_CAP_MICROS", 10_000_000); // $10 (standard/enterprise)
 // Starter tenants get a lower included AI budget ($5). The cap is derived from
@@ -127,15 +130,9 @@ const OWNER_CHAT_SPEND_CAP_MICROS = intEnv("OWNER_CHAT_SPEND_CAP_MICROS", 10_000
 // with the platform (src/lib/db/chat-usage.ts) and Edge (_shared/chat_spend_cap.ts)
 // mappings without depending on a per-tenant .env redeploy. Env-tunable base.
 const OWNER_CHAT_SPEND_CAP_MICROS_STARTER = intEnv("OWNER_CHAT_SPEND_CAP_MICROS_STARTER", 5_000_000); // $5
-// Gemini 2.5 Flash-Lite list price, USD per 1M tokens (see debug/bench-cloud.ts).
-const OWNER_CHAT_PRICE_IN_PER_1M = Number(process.env.OWNER_CHAT_PRICE_IN_PER_1M ?? 0.1);
-const OWNER_CHAT_PRICE_OUT_PER_1M = Number(process.env.OWNER_CHAT_PRICE_OUT_PER_1M ?? 0.4);
-// Rowboat prepends the OwnerCoworker agent instructions (synced memory +
-// persona) that aren't in the worker's input_messages, so a text-only estimate
-// undercounts the true prompt. Add a flat token overhead so the fuse isn't
-// grossly optimistic. Tunable; ~1500 tokens approximates a typical seeded
-// instruction block.
-const OWNER_CHAT_PROMPT_OVERHEAD_TOKENS = intEnv("OWNER_CHAT_PROMPT_OVERHEAD_TOKENS", 1500);
+// Gates the spend-cap ROUTING read (Gemini→local fallback once the period cap
+// is hit). The cap WRITE moved to the llm-router → app meter; this flag stays
+// the on/off switch for the routing behavior. Off ⇒ never downgrade to local.
 const OWNER_CHAT_SPEND_METERING_ENABLED =
   (process.env.OWNER_CHAT_SPEND_METERING_ENABLED ?? "true").trim().toLowerCase() !== "false";
 const VERCEL_BASE_URL = (process.env.WORKER_VERCEL_BASE_URL || "").replace(/\/+$/, "");
@@ -469,164 +466,12 @@ async function resolveOwnerChatCap() {
   }
 }
 
-// Estimate the Gemini cost of one owner-chat turn (micro-USD) from the message
-// text. tokens ~ chars/4; add a flat overhead for the agent instructions
-// Rowboat prepends that aren't in our input_messages. cost_micros simplifies
-// to inTokens*priceIn + outTokens*priceOut because price is per-1M-tokens and
-// 1 USD = 1e6 micros (the 1e6 factors cancel).
-function estimateOwnerChatCostMicros(inputMessages, replyContent) {
-  let inputChars = 0;
-  for (const m of inputMessages ?? []) {
-    if (m && typeof m.content === "string") inputChars += m.content.length;
-  }
-  const outputChars = typeof replyContent === "string" ? replyContent.length : 0;
-  const inTokens = inputChars / 4 + OWNER_CHAT_PROMPT_OVERHEAD_TOKENS;
-  const outTokens = outputChars / 4;
-  return Math.ceil(inTokens * OWNER_CHAT_PRICE_IN_PER_1M + outTokens * OWNER_CHAT_PRICE_OUT_PER_1M);
-}
-
-// Record estimated owner-chat model spend for a successful Gemini turn and
-// trip the period fuse on first cap crossing. No-op for local-agent turns
-// ($0) and when metering is disabled. NEVER throws — metering must never block
-// or fail a turn whose reply is already persisted.
-async function recordOwnerChatSpend(job, inputMessages, replyContent, usedAgent, periodStart) {
-  if (!OWNER_CHAT_SPEND_METERING_ENABLED) return;
-  // Local Qwen turns cost nothing; only meter the Gemini agent.
-  if (usedAgent && usedAgent === OWNER_CHAT_LOCAL_AGENT) return;
-
-  // Release a previously-claimed metering slot back to null so a later reclaim
-  // can retry. Used when the spend RPC fails AFTER we claimed metered_at, so a
-  // failed RPC never permanently loses this turn's spend. Best-effort.
-  const releaseMeterClaim = async () => {
-    const { error: relErr } = await sb
-      .from("dashboard_chat_jobs")
-      .update({ metered_at: null })
-      .eq("id", job.id);
-    if (relErr) {
-      log("warn", "owner_chat_spend_meter_release_failed", { jobId: job.id, error: relErr.message });
-    }
-  };
-
-  let claimed = false;
-  try {
-    // Exactly-once metering: atomically claim the right to meter this job by
-    // stamping metered_at, but only if it is still null. If a prior run already
-    // metered (e.g. the worker crashed after recording spend but before marking
-    // the job 'done', and reclaim_stale_chat_jobs re-queued it), this update
-    // matches zero rows and we skip — so a reclaimed re-run never double-counts
-    // period spend or trips the fuse early. We claim BEFORE the RPC (so concurrent
-    // reclaims can't both meter) and release the claim if the RPC fails/throws.
-    const { data: claim, error: claimErr } = await sb
-      .from("dashboard_chat_jobs")
-      .update({ metered_at: new Date().toISOString() })
-      .eq("id", job.id)
-      .is("metered_at", null)
-      .select("id");
-    if (claimErr) {
-      log("warn", "owner_chat_spend_meter_claim_failed", { jobId: job.id, error: claimErr.message });
-      return;
-    }
-    if (!claim || claim.length === 0) {
-      // Already metered by an earlier (crashed/reclaimed) run — do not re-meter.
-      log("info", "owner_chat_spend_already_metered", { jobId: job.id });
-      return;
-    }
-    claimed = true;
-    // Reuse the period resolved at the start of the turn when available so we
-    // don't re-query subscriptions; fall back to resolving it if absent.
-    const ps = periodStart ?? (await resolveOwnerChatPeriodStart());
-    const costMicros = estimateOwnerChatCostMicros(inputMessages, replyContent);
-    // Trip the fuse against the EFFECTIVE cap (base + purchased credit) so a
-    // Gemini pack purchase moves the trip point along with the routing check.
-    const baseCapMicros = await resolveTierCapMicros();
-    const effectiveCapMicros = baseCapMicros + (await readActiveChatCreditMicros());
-    const { data, error } = await sb.rpc("owner_chat_record_spend", {
-      p_business_id: job.business_id,
-      p_period_start: ps,
-      p_cost_micros: costMicros,
-      p_cap_micros: effectiveCapMicros
-    });
-    if (error) {
-      // RPC failed after we claimed — release so a reclaim can retry metering.
-      log("warn", "owner_chat_spend_record_failed", { jobId: job.id, error: error.message });
-      await releaseMeterClaim();
-      return;
-    }
-    const row = Array.isArray(data) ? data[0] : data;
-    if (row?.fuse_newly_tripped) {
-      // Operator alert: this turn pushed the business over the period cap; all
-      // subsequent owner-chat turns this period route to the local Qwen model
-      // until the next billing period resets the meter.
-      log("error", "owner_chat_spend_cap_tripped", {
-        businessId: job.business_id,
-        periodStart: ps,
-        spendUsd: (Number(row.spend_micros) / 1_000_000).toFixed(4),
-        capUsd: (baseCapMicros / 1_000_000).toFixed(2),
-        turnCount: row.turn_count
-      });
-      await sendChatCapAlertOnce(job.business_id, ps, Number(row.spend_micros) || null);
-    }
-  } catch (err) {
-    log("warn", "owner_chat_spend_record_unexpected", {
-      jobId: job.id,
-      error: err?.message || String(err)
-    });
-    // If we claimed metered_at before the throw, release it so the spend isn't
-    // permanently lost — a reclaim can retry metering.
-    if (claimed) {
-      try {
-        await releaseMeterClaim();
-      } catch {
-        // Best-effort; releaseMeterClaim already logs its own failures.
-      }
-    }
-  }
-}
-
-// One-time-per-period urgent owner alert when the Gemini spend fuse trips.
-// Postgres-side dedupe (mark_usage_cap_alert, unique on business+kind+period)
-// keeps this race-safe with the SMS worker, which shares the same fuse.
-// Mirrors supabase/functions/_shared/cap_alerts.ts (worker.mjs is standalone JS
-// and cannot import the Deno module). Never throws — alerting must never fail
-// the turn that discovered the cap.
-async function sendChatCapAlertOnce(businessId, periodKey, spendMicros) {
-  try {
-    const { data, error } = await sb.rpc("mark_usage_cap_alert", {
-      p_business_id: businessId,
-      p_cap_kind: "chat_spend",
-      p_period_key: periodKey
-    });
-    if (error) {
-      log("warn", "chat_cap_alert_mark_failed", { businessId, error: error.message });
-      return;
-    }
-    if (data !== true) return; // already alerted this period
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/notifications`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
-      },
-      body: JSON.stringify({
-        type: "INSERT",
-        table: "coworker_logs",
-        record: {
-          id: crypto.randomUUID(),
-          business_id: businessId,
-          task_type: "chat_spend_cap_reached",
-          status: "urgent_alert",
-          log_payload: { period_key: periodKey, surface: "chat_worker", spend_micros: spendMicros },
-          created_at: new Date().toISOString()
-        }
-      })
-    });
-    if (!res.ok) {
-      log("warn", "chat_cap_alert_post_failed", { businessId, status: res.status });
-    }
-  } catch (err) {
-    log("warn", "chat_cap_alert_unexpected", { businessId, error: err?.message || String(err) });
-  }
-}
+// NOTE: owner-chat spend is no longer metered here. Exact billed tokens are
+// recorded by the llm-router sidecar (the only component that sees Gemini's
+// real `usage`), which POSTs them to /api/internal/meter-gemini-spend →
+// owner_chat_model_spend. The fuse-tripped owner alert moved there too
+// (src/lib/billing/ai-spend-meter.ts via _shared/cap_alerts.ts). This worker
+// only READS that spend (resolveOwnerChatCap, above) to route Gemini→local.
 
 // Fire-and-forget callback to Vercel after a job successfully
 // persists an assistant message. The endpoint runs shouldSummarize +
@@ -969,7 +814,7 @@ async function processJob(job) {
     // fuse tripped still downgrade once it has, and the cap lives in exactly
     // one place (this worker + the RPC). Fails open to the Gemini agent on a
     // read error (quality over fuse on a transient DB blip).
-    const { periodStart: capPeriodStart, overCap } = await resolveOwnerChatCap();
+    const { overCap } = await resolveOwnerChatCap();
     const jobStartAgent =
       overCap && OWNER_CHAT_LOCAL_AGENT ? OWNER_CHAT_LOCAL_AGENT : OWNER_START_AGENT;
     const jobStartAgentOpts = jobStartAgent ? { startAgent: jobStartAgent } : {};
@@ -1052,11 +897,9 @@ async function processJob(job) {
       throw new Error(`message_insert_failed:${insertErr.message}`);
     }
 
-    // Reply is durably stored — meter the (Gemini) model spend for this turn
-    // and trip the period fuse if it crosses the cap. Awaited but non-fatal:
-    // recordOwnerChatSpend never throws. Estimate from the exact messages sent
-    // to Rowboat this turn (turnMessages).
-    await recordOwnerChatSpend(job, turnMessages, content, usedAgent, capPeriodStart);
+    // Reply is durably stored. Model spend for this (Gemini) turn is metered
+    // exactly by the llm-router sidecar → /api/internal/meter-gemini-spend, not
+    // here (a chars/4 estimate on top of that would double-count the turn).
 
     // Persist whatever Rowboat returned this turn. We never RESUME this id —
     // every owner turn is stateless-forced above — so it is NOT used to
