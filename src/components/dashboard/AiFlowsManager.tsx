@@ -240,6 +240,8 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
       };
     case "recall_url":
       return { id, type, keyFromTrigger: "participants", saveAs: "saved_url" };
+    case "upsert_customer":
+      return { id, type, phoneVar: "lead_phone", nameVar: "lead_name", emailVar: "lead_email" };
   }
 }
 
@@ -1868,6 +1870,27 @@ function StepFields({
           }}
         />
         <Field label="Save the link as" value={step.saveAs} onChange={(v) => patchStep(index, { saveAs: v })} />
+      </div>
+    );
+  }
+  if (step.type === "upsert_customer") {
+    return (
+      <div className="space-y-2">
+        <Field
+          label="Phone variable (keys the contact)"
+          value={step.phoneVar}
+          onChange={(v) => patchStep(index, { phoneVar: v })}
+        />
+        <Field
+          label="Name variable (optional)"
+          value={step.nameVar ?? ""}
+          onChange={(v) => patchStep(index, { nameVar: v || undefined })}
+        />
+        <Field
+          label="Email variable (optional)"
+          value={step.emailVar ?? ""}
+          onChange={(v) => patchStep(index, { emailVar: v || undefined })}
+        />
       </div>
     );
   }

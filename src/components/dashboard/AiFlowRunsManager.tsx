@@ -111,8 +111,12 @@ export function AiFlowRunsManager({
   const [runs, setRuns] = useState<AiFlowRunRow[]>(initialRuns);
   const [flowList, setFlowList] = useState<AiFlowRef[]>(flows);
   // Set of expanded run ids. Multiple runs can be open at once (per-group
-  // "Expand all"); default empty = everything collapsed.
+  // "Expand details"); default empty = every run's detail collapsed.
   const [expandedRuns, setExpandedRuns] = useState<Set<string>>(new Set());
+  // Set of expanded flow-group ids. The group header toggles whether that
+  // flow's RUN LIST is shown; default empty = every group collapsed, so the
+  // page opens as a compact list of flows with their run counts.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [steps, setSteps] = useState<Record<string, AiFlowRunStepRow[]>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -174,6 +178,18 @@ export function AiFlowRunsManager({
     if (expand) await Promise.all(runIds.map((id) => loadSteps(id)));
   };
 
+  // Show/hide a whole flow's run list (the primary expand/collapse). Cheap —
+  // the runs are already loaded; only their per-run step details are fetched
+  // lazily when an individual run (or "Expand details") opens.
+  const toggleGroup = (groupId: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  };
+
   // Deep link from the dashboard "Recent activity" feed: ?run=<id> opens that
   // run's steps/error and scrolls it into view, so a failed run lands the owner
   // on the failure detail rather than the top of the list. Runs once per id.
@@ -182,8 +198,11 @@ export function AiFlowRunsManager({
   const scrolledDeepLink = useRef<string | null>(null);
   useEffect(() => {
     if (!deepLinkedRun || handledDeepLink.current === deepLinkedRun) return;
-    if (!runs.some((r) => r.id === deepLinkedRun)) return;
+    const run = runs.find((r) => r.id === deepLinkedRun);
+    if (!run) return;
     handledDeepLink.current = deepLinkedRun;
+    // Open the containing flow group (so the run renders) AND the run's detail.
+    setExpandedGroups((prev) => new Set(prev).add(run.flow_id));
     setExpandedRuns((prev) => new Set(prev).add(deepLinkedRun));
     void loadSteps(deepLinkedRun);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -357,21 +376,35 @@ export function AiFlowRunsManager({
           grouped.map((group) => {
             const groupRunIds = group.runs.map((r) => r.id);
             const allExpanded = groupRunIds.every((id) => expandedRuns.has(id));
+            const groupOpen = expandedGroups.has(group.id);
             return (
             <div key={group.id} className="space-y-2">
-              <h3 className="flex items-baseline gap-2 pt-1 text-sm font-semibold text-parchment">
-                {group.name}
-                <span className="text-xs font-normal text-parchment/40">
-                  {group.runs.length} run{group.runs.length === 1 ? "" : "s"}
-                </span>
+              <h3 className="flex items-center gap-2 pt-1 text-sm font-semibold text-parchment">
                 <button
-                  onClick={() => setGroupExpanded(groupRunIds, !allExpanded)}
-                  className="ml-auto text-xs font-normal text-signal-teal hover:underline"
+                  onClick={() => toggleGroup(group.id)}
+                  className="flex items-center gap-2 text-left"
+                  aria-expanded={groupOpen}
                 >
-                  {allExpanded ? "Collapse all" : "Expand all"}
+                  {groupOpen ? (
+                    <ChevronDown className="h-4 w-4 text-parchment/40" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4 text-parchment/40" />
+                  )}
+                  {group.name}
+                  <span className="text-xs font-normal text-parchment/40">
+                    {group.runs.length} run{group.runs.length === 1 ? "" : "s"}
+                  </span>
                 </button>
+                {groupOpen && (
+                  <button
+                    onClick={() => setGroupExpanded(groupRunIds, !allExpanded)}
+                    className="ml-auto text-xs font-normal text-signal-teal hover:underline"
+                  >
+                    {allExpanded ? "Collapse details" : "Expand details"}
+                  </button>
+                )}
               </h3>
-              {group.runs.map((r) => (
+              {groupOpen && group.runs.map((r) => (
                 <Card key={r.id} id={`run-${r.id}`} className="space-y-2">
                   <button
                     onClick={() => toggle(r.id)}

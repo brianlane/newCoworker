@@ -30,7 +30,8 @@ export const STEP_TYPE_LABELS: Record<StepType, string> = {
   http_call: "Call another service (API)",
   route_to_team: "Hand off to team/employees",
   browse_action: "Do something on a web page (click / type)",
-  recall_url: "Recall a saved link from an earlier run"
+  recall_url: "Recall a saved link from an earlier run",
+  upsert_customer: "Save / update a customer contact"
 };
 
 /** One-line explanation of what each step does, shown under the step header. */
@@ -47,7 +48,9 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
   route_to_team: "Offers the lead to a teammate to claim, and falls back to you if no one does.",
   browse_action: "Clicks buttons or types into fields on a web page on your behalf.",
   recall_url:
-    "Looks up a link a previous run saved for this same person (by phone) so this run can reuse it."
+    "Looks up a link a previous run saved for this same person (by phone) so this run can reuse it.",
+  upsert_customer:
+    "Creates or updates a customer on your Customers page from details earlier steps found (phone, name, email)."
 };
 
 /** Friendly name for each inbound trigger condition. */

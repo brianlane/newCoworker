@@ -670,6 +670,8 @@ async function runStep(
       return browseActionStep(supabase, run, index, scope, action);
     case "recall_url":
       return recallUrlStep(supabase, run, scope, action);
+    case "upsert_customer":
+      return upsertCustomerStep(supabase, run, action);
   }
 }
 
@@ -775,10 +777,58 @@ async function isKnownBusinessContact(
 }
 
 /**
+ * Create/enrich a customer profile keyed by an E.164 number, filling display
+ * name + email best-effort. Shared by the lead-contact side effect
+ * (recordLeadCustomerProfile) and the explicit `upsert_customer` step. Known
+ * business contacts (Clever's own numbers, the owner, vendors saved as "other
+ * contacts") are never filed — this keeps the Customers page clean and prevents
+ * stamping a lead's name onto a co-recipient business number. Fill-only on
+ * email so a later run / owner edit is never clobbered. Best-effort: a profile
+ * failure only logs (the contact/extraction already succeeded).
+ */
+async function enrichCustomerProfile(
+  supabase: Supabase,
+  businessId: string,
+  customerE164: string,
+  name: string,
+  email: string
+): Promise<void> {
+  if (await isKnownBusinessContact(supabase, businessId, customerE164)) return;
+
+  const { data: interaction, error } = await supabase.rpc("record_customer_interaction", {
+    p_business_id: businessId,
+    p_customer_e164: customerE164,
+    p_channel: "sms",
+    p_display_name: name ? name : null
+  });
+  if (error) {
+    console.error("record_customer_interaction (aiflow lead)", error);
+    return;
+  }
+
+  // The RPC returns the row it actually bumped — which is the SURVIVING profile
+  // when customerE164 was a merged-away alias. Target the email update at that
+  // row's primary key so the link lands even after a merge (the merged-away
+  // number no longer exists as a customer_e164).
+  const profile = Array.isArray(interaction) ? interaction[0] : interaction;
+  const targetE164 =
+    profile && typeof profile.customer_e164 === "string" ? profile.customer_e164 : null;
+  if (email && LEAD_EMAIL_RE.test(email) && targetE164) {
+    const { error: emailErr } = await supabase
+      .from("customer_memories")
+      .update({ email, updated_at: new Date().toISOString() })
+      .eq("business_id", businessId)
+      .eq("customer_e164", targetE164)
+      .is("email", null);
+    if (emailErr) console.error("record lead email (aiflow lead)", emailErr);
+  }
+}
+
+/**
  * Upsert a customer profile for a lead the flow just contacted, so every
  * AiFlow lead shows up on the dashboard Customers page like SMS/voice
- * customers do. Uses the same alias-aware RPC as the SMS worker. Best-effort:
- * the contact already succeeded, so a profile failure only logs.
+ * customers do. Best-effort: the contact already succeeded, so a profile
+ * failure only logs.
  */
 async function recordLeadCustomerProfile(
   supabase: Supabase,
@@ -786,13 +836,6 @@ async function recordLeadCustomerProfile(
   scope: Scope,
   customerE164: string
 ): Promise<void> {
-  // Known business contacts (Clever's own numbers, the owner, vendors saved as
-  // "other contacts") are not leads — never file them as a customer. This both
-  // keeps the Customers page clean and prevents a group reply from stamping the
-  // lead's extracted name onto a Clever sender number that happens to be a
-  // co-recipient.
-  if (await isKnownBusinessContact(supabase, run.business_id, customerE164)) return;
-
   // Enrich from whatever the flow captured: scan conventional name/email keys
   // (lead_name, seller_first_name, full_name, …) so any extracting flow fills
   // the customer in, not just ones using the exact `lead_name` key.
@@ -801,40 +844,41 @@ async function recordLeadCustomerProfile(
   // owner) — only the LEAD should get the extracted name/email, never a
   // co-recipient. The lead is the recipient matching vars.lead_phone when the
   // flow captured it; when it didn't (e.g. the Clever group reply, which only
-  // has seller_first_name), known business contacts are already skipped above,
-  // so the remaining recipient is the lead. Compare normalized E.164 so a
-  // format mismatch between vars.lead_phone and the send target doesn't skip it.
+  // has seller_first_name), known business contacts are skipped inside
+  // enrichCustomerProfile, so the remaining recipient is the lead. Compare
+  // normalized E.164 so a format mismatch between vars.lead_phone and the send
+  // target doesn't skip it.
   const leadPhone = leadPhoneE164(scope);
   const isLeadNumber = !leadPhone || leadPhone === customerE164;
-  const { data: interaction, error } = await supabase.rpc("record_customer_interaction", {
-    p_business_id: run.business_id,
-    p_customer_e164: customerE164,
-    p_channel: "sms",
-    p_display_name: isLeadNumber ? identity.name : null
-  });
-  if (error) console.error("record_customer_interaction (aiflow lead)", error);
+  await enrichCustomerProfile(
+    supabase,
+    run.business_id,
+    customerE164,
+    isLeadNumber ? (identity.name ?? "") : "",
+    isLeadNumber ? (identity.email ?? "") : ""
+  );
+}
 
-  // Going-forward phone↔email link: persist the lead's email onto THEIR profile
-  // so SMS/voice/email all roll up to one customer. Same lead-only gate as the
-  // name; fill only when empty so a later run or an owner edit is never
-  // clobbered. Best-effort.
-  const email = identity.email ?? "";
-  // The RPC returns the row it actually bumped — which is the SURVIVING profile
-  // when customerE164 was a merged-away alias. Target the email update at that
-  // row's primary key so the link lands even after a merge (the merged-away
-  // number no longer exists as a customer_e164).
-  const profile = Array.isArray(interaction) ? interaction[0] : interaction;
-  const targetE164 =
-    profile && typeof profile.customer_e164 === "string" ? profile.customer_e164 : null;
-  if (isLeadNumber && email && LEAD_EMAIL_RE.test(email) && targetE164) {
-    const { error: emailErr } = await supabase
-      .from("customer_memories")
-      .update({ email, updated_at: new Date().toISOString() })
-      .eq("business_id", run.business_id)
-      .eq("customer_e164", targetE164)
-      .is("email", null);
-    if (emailErr) console.error("record lead email (aiflow lead)", emailErr);
-  }
+/**
+ * `upsert_customer` step: file/fill the customer keyed by the resolved phone,
+ * using the name/email the planner read from earlier-step vars. Unlike
+ * recordLeadCustomerProfile (a side effect of a send), this is an explicit
+ * step, so the phone IS the lead — no co-recipient gating needed.
+ */
+async function upsertCustomerStep(
+  supabase: Supabase,
+  run: RunRow,
+  action: Extract<StepAction, { kind: "upsert_customer" }>
+): Promise<StepOutcome> {
+  await enrichCustomerProfile(supabase, run.business_id, action.e164, action.name, action.email);
+  return {
+    kind: "ok",
+    result: {
+      customer_e164: action.e164,
+      display_name: action.name || null,
+      email: action.email || null
+    }
+  };
 }
 
 /**
