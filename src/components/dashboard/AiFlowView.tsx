@@ -315,6 +315,14 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           <Row label="Saves link as" value={step.saveAs} mono />
         </>
       );
+    case "upsert_customer":
+      return (
+        <>
+          <Row label="Phone variable" value={`{{vars.${step.phoneVar}}}`} mono />
+          {step.nameVar && <Row label="Name variable" value={`{{vars.${step.nameVar}}}`} mono />}
+          {step.emailVar && <Row label="Email variable" value={`{{vars.${step.emailVar}}}`} mono />}
+        </>
+      );
   }
 }
 

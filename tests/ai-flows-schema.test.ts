@@ -221,6 +221,63 @@ describe("validateDefinitionSemantics", () => {
   });
 });
 
+describe("upsert_customer step", () => {
+  const withUpsert = (phoneVar: string, nameVar?: string, emailVar?: string) => ({
+    version: 1,
+    trigger: { channel: "sms", conditions: [{ type: "has_url" }] },
+    steps: [
+      { id: "u", type: "extract_url", saveAs: "lead_url" },
+      {
+        id: "b",
+        type: "browse_extract",
+        urlVar: "lead_url",
+        fields: [{ name: "lead_phone" }, { name: "lead_name" }, { name: "lead_email" }]
+      },
+      { id: "save", type: "upsert_customer", phoneVar, nameVar, emailVar }
+    ]
+  });
+
+  it("parses and round-trips an upsert_customer step", () => {
+    const def = parseAiFlowDefinition(
+      JSON.parse(JSON.stringify(withUpsert("lead_phone", "lead_name", "lead_email")))
+    );
+    expect(def.steps[2]).toEqual({
+      id: "save",
+      type: "upsert_customer",
+      phoneVar: "lead_phone",
+      nameVar: "lead_name",
+      emailVar: "lead_email"
+    });
+  });
+
+  it("accepts an upsert_customer whose vars an earlier step produced", () => {
+    const def = parseAiFlowDefinition(
+      JSON.parse(JSON.stringify(withUpsert("lead_phone", "lead_name", "lead_email")))
+    );
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("accepts an upsert_customer with only the required phoneVar", () => {
+    const def = parseAiFlowDefinition(JSON.parse(JSON.stringify(withUpsert("lead_phone"))));
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("flags phoneVar/nameVar/emailVar that no earlier step produces", () => {
+    const def = aiFlowDefinitionSchema.parse(
+      JSON.parse(JSON.stringify(withUpsert("ghost_phone", "ghost_name", "ghost_email")))
+    );
+    const issues = validateDefinitionSemantics(def);
+    expect(issues.some((i) => i.includes("phoneVar {{vars.ghost_phone}}"))).toBe(true);
+    expect(issues.some((i) => i.includes("nameVar {{vars.ghost_name}}"))).toBe(true);
+    expect(issues.some((i) => i.includes("emailVar {{vars.ghost_email}}"))).toBe(true);
+  });
+
+  it("summarizes a flow ending in upsert_customer", () => {
+    const def = parseAiFlowDefinition(JSON.parse(JSON.stringify(withUpsert("lead_phone"))));
+    expect(summarizeDefinition(def)).toContain("upsert_customer");
+  });
+});
+
 describe("step `when` guard", () => {
   const branchedInput = {
     version: 1,

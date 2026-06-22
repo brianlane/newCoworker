@@ -4,19 +4,26 @@
  *
  * This is Flow A of the two-flow Clever design (see the Clever lead AI flow
  * plan). It fires on the inbound "Clever referral" alert that carries the
- * listwithclever lead link, then in ONE credentialed browser pass it:
- *   1. accepts the lead (clicks "Next" until the multi-step wizard is done),
- *   2. extracts the lead's name/phone/email from the accepted page, and
- *   3. screenshots the page (the "QT" Amy forwards),
- * using the engine capabilities shipped in the Clever engine PR
- * (`click_text_while_present` + `browse_action.fields`).
+ * listwithclever lead link, then:
+ *   1. accepts the lead in a credentialed pass (clicks "Accept", then "Next"
+ *      until the multi-step wizard is done),
+ *   2. RE-READS the claimed lead page (browse_extract) to pull the seller's
+ *      name/phone/email/address off the contact card and screenshot THAT page
+ *      (the "QT" Amy forwards) — extracting from the claimed details page, not
+ *      the half-rendered wizard, is what makes Amy's email + Dave's offer carry
+ *      the real data,
+ *   3. files/fills the customer contact from those fields (upsert_customer).
  *
  * Then it:
- *   - emails the QT to amy@amylaidlaw.com (subject "<lead> QT, Clever"),
+ *   - emails the QT to amy@amylaidlaw.com (subject "<lead> QT, Clever"), and
  *   - hands the lead to Dave Lane via route_to_team (mirrors the
  *     ReferralExchange seller routing: 10-min offer window, owner fallback,
- *     screenshot MMS), and
- *   - leaves a status update back on Clever (second credentialed browse_action).
+ *     screenshot MMS).
+ *
+ * It intentionally does NOT leave a Clever status update inline: "Provide
+ * Update" only exists on the portal Needs-Action cards (not at the c2c lead
+ * URL), so that work is owned by the separate, enabled weekly "Clever Update
+ * Leads" flow which drives the portal list directly.
  *
  * IMPORTANT — prerequisites before --apply / --enable:
  *   - The ai-flow-worker Edge function AND the tenant's render VPS must be on
@@ -46,7 +53,6 @@
  *   AIFLOW_CLEVER_INTEGRATION_LABEL   (default "Clever")
  *   AIFLOW_CLEVER_MATCH_TEXT          (default "Clever referral")
  *   AIFLOW_CLEVER_ACCEPT_ACTIONS_JSON (default: click "Next" while present)
- *   AIFLOW_CLEVER_UPDATE_ACTIONS_JSON (default: leave-an-update click+fill)
  *   AIFLOW_CLEVER_QT_EMAIL_TO         (default "amy@amylaidlaw.com")
  *   AIFLOW_CLEVER_AGENT_NAME          (default "Dave Lane")
  */
@@ -86,25 +92,6 @@ const DEFAULT_ACCEPT_ACTIONS = [
   { kind: "click_text_while_present", target: "Next" }
 ];
 
-// Leaving a Clever status update on the just-accepted lead page, using the SAME
-// live-verified Provide Update sequence proven in the Clever Update Leads flow
-// (Provide Update -> We Spoke -> meeting "No" -> follow-up 7 days out -> notes
-// -> Submit). Exact labels/placeholders stay env-overridable for the live test.
-const MEETING_SELECT = 'select[id="Did you schedule a time to meet in person?"]';
-const NOTES_PLACEHOLDER = "Type additional details about this update";
-const DATE_INPUT = 'input[placeholder="Select a date and time"]';
-const FOLLOWUP_DAY_LABEL =
-  "Choose {{now.in7Days.weekday}}, {{now.in7Days.month}} {{now.in7Days.dayOrdinal}}, {{now.in7Days.year}}";
-const DEFAULT_UPDATE_ACTIONS = [
-  { kind: "click_text", target: "Provide Update" },
-  { kind: "click_text", target: "We Spoke" },
-  { kind: "select_option", target: MEETING_SELECT, valueTemplate: "No" },
-  { kind: "click_selector", target: DATE_INPUT },
-  { kind: "click_role", target: "option", valueTemplate: FOLLOWUP_DAY_LABEL },
-  { kind: "fill_placeholder", target: NOTES_PLACEHOLDER, valueTemplate: "call, texted, and emailed" },
-  { kind: "click_text", target: "Submit Update" }
-];
-
 function parseActionsEnv(name: string, fallback: unknown): unknown {
   const raw = process.env[name];
   if (!raw) return fallback;
@@ -120,7 +107,6 @@ function buildDefinition(opts: {
   integrationLabel: string;
   matchText: string;
   acceptActions: unknown;
-  updateActions: unknown;
   qtEmailTo: string;
   agentName: string;
 }): unknown {
@@ -136,22 +122,45 @@ function buildDefinition(opts: {
     },
     steps: [
       { id: "url", type: "extract_url", saveAs: "lead_url" },
-      // ONE credentialed pass: accept (click Next while present), then extract
-      // the lead fields from the accepted page, and screenshot it (the QT).
+      // Credentialed pass 1: accept the lead (click "Accept", then "Next" while
+      // present). No extraction/screenshot here — the wizard page is the
+      // half-rendered "too white" view; we read the real data on the next step.
       {
         id: "accept",
         type: "browse_action",
         urlVar: "lead_url",
         auth: { integrationLabel: opts.integrationLabel },
-        actions: opts.acceptActions,
+        actions: opts.acceptActions
+      },
+      // Credentialed pass 2: re-open the (now claimed) lead URL, which redirects
+      // to the claimed details card, and read the seller's real contact info +
+      // screenshot THAT page (the QT). This is what fixes Amy's empty/early
+      // screenshot, Dave's missing phone, and the half-filled contact.
+      {
+        id: "read_details",
+        type: "browse_extract",
+        urlVar: "lead_url",
+        auth: { integrationLabel: opts.integrationLabel },
         fields: [
-          { name: "lead_first_name", description: "The lead's first name" },
-          { name: "lead_last_name", description: "The lead's last name" },
-          { name: "lead_name", description: "The lead's full name" },
-          { name: "lead_phone", description: "The lead's phone number in E.164 if possible" },
-          { name: "lead_email", description: "The lead's email address, or 'none'" }
+          { name: "lead_name", description: "The seller's full name from the contact card" },
+          {
+            name: "lead_phone",
+            description:
+              "The seller's mobile phone from the contact card in E.164 if possible — NOT Clever support (614-363-2845)"
+          },
+          { name: "lead_email", description: "The seller's email address from the contact card, or 'none'" },
+          { name: "lead_address", description: "The property street address from the contact card" }
         ],
         screenshot: true
+      },
+      // File/fill the customer contact from the extracted fields so the lead
+      // shows on the Customers page with a name + email, not a bare number.
+      {
+        id: "save_contact",
+        type: "upsert_customer",
+        phoneVar: "lead_phone",
+        nameVar: "lead_name",
+        emailVar: "lead_email"
       },
       // Email the QT (screenshot) to Amy. Include the extracted lead fields AND
       // the full original lead text ({{trigger.windowText}}) plus the source so
@@ -163,6 +172,7 @@ function buildDefinition(opts: {
         subject: "{{vars.lead_name}} QT, Clever",
         body:
           "New Clever lead accepted: {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
+          "Address: {{vars.lead_address}}\n" +
           "Lead source: Clever (listwithclever.com)\n\n" +
           "Full lead details:\n{{trigger.windowText}}\n\nQT attached.",
         attachScreenshot: true
@@ -176,6 +186,7 @@ function buildDefinition(opts: {
         agentName: opts.agentName,
         offerTemplate:
           "New Clever lead: {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
+          "Address: {{vars.lead_address}}\n" +
           "Lead source: Clever (listwithclever.com)\n" +
           "Details: {{trigger.windowText}}\n" +
           "Reply 1 to claim or 2 to pass by {{offer.deadline}}, or it goes to the next agent.",
@@ -188,20 +199,13 @@ function buildDefinition(opts: {
         },
         ownerFallbackTemplate:
           "No agent claimed the Clever lead {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
+          "Address: {{vars.lead_address}}\n" +
           "Lead source: Clever (listwithclever.com)\n" +
           "Details: {{trigger.windowText}}\nIt's back to you.",
         claimedNotifyTemplate:
           "{{agent.name}} claimed the Clever lead {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
           "Lead source: Clever (listwithclever.com)",
         attachScreenshot: true
-      },
-      // Leave a status update back on Clever.
-      {
-        id: "update",
-        type: "browse_action",
-        urlVar: "lead_url",
-        auth: { integrationLabel: opts.integrationLabel },
-        actions: opts.updateActions
       }
     ],
     options: { suppressDefaultReply: true }
@@ -229,7 +233,6 @@ async function main(): Promise<void> {
     integrationLabel: process.env.AIFLOW_CLEVER_INTEGRATION_LABEL ?? "Clever",
     matchText: process.env.AIFLOW_CLEVER_MATCH_TEXT ?? "Clever referral",
     acceptActions: parseActionsEnv("AIFLOW_CLEVER_ACCEPT_ACTIONS_JSON", DEFAULT_ACCEPT_ACTIONS),
-    updateActions: parseActionsEnv("AIFLOW_CLEVER_UPDATE_ACTIONS_JSON", DEFAULT_UPDATE_ACTIONS),
     qtEmailTo: process.env.AIFLOW_CLEVER_QT_EMAIL_TO ?? "amy@amylaidlaw.com",
     agentName: process.env.AIFLOW_CLEVER_AGENT_NAME ?? "Dave Lane"
   });

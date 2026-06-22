@@ -8,7 +8,7 @@
  * ai-flow-worker (supabase/functions/ai-flow-worker/index.ts) stays a thin IO
  * dispatcher that switches on `action.kind`.
  */
-import { firstUrlInText, normalizeNanpToE164, renderTemplate } from "./engine.ts";
+import { firstUrlInText, isE164, normalizeNanpToE164, renderTemplate } from "./engine.ts";
 import type { BrowseAuth, ExtractField, FlowStep, RouteOfferWindow } from "./types.ts";
 
 export type StepScope = {
@@ -133,6 +133,15 @@ export type StepAction =
       /** Candidate (normalized) phone keys to look up, in priority order. */
       keys: string[];
       saveAs: string;
+    }
+  | {
+      // Enrich/create a customer profile. The planner resolves the phone (key)
+      // and reads the name/email vars; the worker does the alias-aware, fill-only
+      // write (and skips known business contacts).
+      kind: "upsert_customer";
+      e164: string;
+      name: string;
+      email: string;
     };
 
 export type StepPlan =
@@ -410,6 +419,34 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       }
       for (const v of step.keyVars ?? []) add(scope.vars?.[v]);
       return { ok: true, action: { kind: "recall_url", keys, saveAs: step.saveAs } };
+    }
+    case "upsert_customer": {
+      const raw = scope.vars?.[step.phoneVar];
+      const phone = typeof raw === "string" ? raw.trim() : "";
+      // Accept an already-E.164 phone or a loose North-American number; the
+      // customer record is keyed by E.164, so an unusable value is a recoverable
+      // "missing input" (skip-able), not a thrown error.
+      const e164 = phone ? (isE164(phone) ? phone : normalizeNanpToE164(phone)) : null;
+      if (!e164) {
+        return {
+          ok: false,
+          error: `upsert_customer: phoneVar "${step.phoneVar}" is not a usable phone number`
+        };
+      }
+      const readVar = (name?: string): string => {
+        if (!name) return "";
+        const v = scope.vars?.[name];
+        return typeof v === "string" ? v.trim() : "";
+      };
+      return {
+        ok: true,
+        action: {
+          kind: "upsert_customer",
+          e164,
+          name: readVar(step.nameVar),
+          email: readVar(step.emailVar)
+        }
+      };
     }
   }
 }

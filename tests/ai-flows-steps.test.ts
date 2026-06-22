@@ -755,3 +755,61 @@ describe("planStep: recall_url", () => {
     });
   });
 });
+
+describe("planStep: upsert_customer", () => {
+  const base: FlowStep = {
+    id: "save",
+    type: "upsert_customer",
+    phoneVar: "lead_phone",
+    nameVar: "lead_name",
+    emailVar: "lead_email"
+  };
+  it("passes an already-E.164 phone through and reads name/email vars", () => {
+    const r = planStep(base, {
+      vars: { lead_phone: "+14804929641", lead_name: "Manny Rosales", lead_email: "m@example.com" }
+    });
+    expect(r).toEqual({
+      ok: true,
+      action: {
+        kind: "upsert_customer",
+        e164: "+14804929641",
+        name: "Manny Rosales",
+        email: "m@example.com"
+      }
+    });
+  });
+  it("normalizes a loose North-American number and trims the name/email", () => {
+    const r = planStep(base, {
+      vars: { lead_phone: "(480) 492-9641", lead_name: "  Manny  ", lead_email: "  M@Example.com " }
+    });
+    expect(r).toEqual({
+      ok: true,
+      action: { kind: "upsert_customer", e164: "+14804929641", name: "Manny", email: "M@Example.com" }
+    });
+  });
+  it("yields empty name/email when those vars are absent or non-string", () => {
+    const noNames: FlowStep = { id: "save", type: "upsert_customer", phoneVar: "lead_phone" };
+    expect(planStep(noNames, { vars: { lead_phone: "+14804929641" } })).toEqual({
+      ok: true,
+      action: { kind: "upsert_customer", e164: "+14804929641", name: "", email: "" }
+    });
+    const r = planStep(base, { vars: { lead_phone: "+14804929641", lead_name: 42, lead_email: null } });
+    expect(r).toEqual({
+      ok: true,
+      action: { kind: "upsert_customer", e164: "+14804929641", name: "", email: "" }
+    });
+  });
+  it("fails when the phone var is missing", () => {
+    expect(planStep(base, { vars: {} })).toEqual({
+      ok: false,
+      error: 'upsert_customer: phoneVar "lead_phone" is not a usable phone number'
+    });
+  });
+  it("fails when the phone var is not a usable number", () => {
+    const r = planStep(base, { vars: { lead_phone: "call me", lead_name: "X" } });
+    expect(r).toEqual({
+      ok: false,
+      error: 'upsert_customer: phoneVar "lead_phone" is not a usable phone number'
+    });
+  });
+});

@@ -363,6 +363,24 @@ export type FlowStep =
   | {
       id: string;
       /**
+       * Create or enrich a customer profile keyed by an extracted phone var, so a
+       * flow that LEARNS a lead's details (e.g. a credentialed browse_extract of
+       * an accepted lead page) can file/fill the contact even when it never texts
+       * them. `phoneVar` holds the lead's phone (E.164 or a North-American
+       * number); `nameVar`/`emailVar` name vars an EARLIER step produced. Fill
+       * behavior mirrors the SMS lead profile: the display name is set via the
+       * alias-aware RPC, the email is filled only when empty, and a known
+       * business contact (saved as an "other contact") is never recorded.
+       */
+      type: "upsert_customer";
+      phoneVar: string;
+      nameVar?: string;
+      emailVar?: string;
+      when?: StepCondition;
+    }
+  | {
+      id: string;
+      /**
        * Recall a URL a PRIOR flow run persisted (via browse_action
        * `rememberUrlKeyedByVar`) for the same person, into {{vars.<saveAs>}}.
        * Keys are gathered from the inbound group thread participants

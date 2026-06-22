@@ -34,7 +34,8 @@ export const FLOW_STEP_TYPES = [
   "http_call",
   "route_to_team",
   "browse_action",
-  "recall_url"
+  "recall_url",
+  "upsert_customer"
 ] as const;
 
 /** Keys available as `{{agent.x}}` inside a route_to_team step's templates. */
@@ -397,6 +398,17 @@ const stepSchema = z.discriminatedUnion("type", [
     keyVars: z.array(varName).max(10).optional(),
     saveAs: varName,
     when: whenSchema.optional()
+  }),
+  // Create/enrich a customer profile from vars an earlier step produced: the
+  // phone (phoneVar) keys the record; name/email fill it in. Lets an extracting
+  // flow build the contact even when it never texts the lead. No templates.
+  z.object({
+    id: stepId,
+    type: z.literal("upsert_customer"),
+    phoneVar: varName,
+    nameVar: varName.optional(),
+    emailVar: varName.optional(),
+    when: whenSchema.optional()
   })
 ]);
 
@@ -470,6 +482,7 @@ function templateStringsForStep(step: FlowStep): string[] {
     case "browse_extract":
     case "extract_text":
     case "recall_url":
+    case "upsert_customer":
       return [];
   }
 }
@@ -608,6 +621,23 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
         issues.push(
           `Step "${step.id}" recalls by group participants, which only works on an SMS-triggered flow.`
         );
+      }
+    }
+
+    // upsert_customer keys/fills the customer from vars an EARLIER step
+    // produced (the phone is required; name/email are optional fills).
+    if (step.type === "upsert_customer") {
+      const refs: Array<[string, string | undefined]> = [
+        ["phoneVar", step.phoneVar],
+        ["nameVar", step.nameVar],
+        ["emailVar", step.emailVar]
+      ];
+      for (const [label, v] of refs) {
+        if (v && !vars.has(v) && !ENGINE_VARS.has(v)) {
+          issues.push(
+            `Step "${step.id}" upserts a customer using ${label} {{vars.${v}}} which no earlier step produces.`
+          );
+        }
       }
     }
 
