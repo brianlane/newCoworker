@@ -9,11 +9,11 @@
  *             lead source) within a correlation window — handles the common
  *             "text then link" two-message case.
  *   steps   : extract_url -> browse_extract (lead type + contact/details) ->
- *             three gated approval_gate+send_sms branches (buyer copy when
- *             lead_type equals "buyer", seller copy when "seller", buy-and-sell
- *             copy when "both"; only the matching branch is approved + sent) ->
- *             route_to_team (offer the lead to a team agent over SMS with timed
- *             escalation + owner fallback) -> notify_owner.
+ *             three send_sms branches (buyer copy when lead_type equals "buyer",
+ *             seller copy when "seller", buy-and-sell copy when "both"; only the
+ *             matching branch sends — the intro goes out automatically, no
+ *             approval gate) -> route_to_team (offer the lead to a team agent
+ *             over SMS with timed escalation + owner fallback) -> notify_owner.
  *   options : suppressDefaultReply so the lead-source message does NOT also
  *             get a normal Coworker reply.
  *
@@ -170,23 +170,12 @@ function buildDefinition(opts: {
         // integration credentials. Requires AIFLOW_RENDER_URL_TEMPLATE on the worker.
         auth: { integrationLabel: opts.integrationLabel }
       },
-      // Branch on lead_type: each branch is an approval_gate + send_sms pair
-      // sharing the SAME `when` guard, so only the matching branch fires. The
-      // approval is gated too (not a single shared gate) so the owner is only
-      // asked to approve a send that will actually go out — if lead_type matches
-      // neither branch, nothing is approved and nothing is sent. `equals` (not
-      // `contains`) keeps the two guards mutually exclusive so a lead is never
-      // double-approved or double-texted. Matching is case-insensitive and the
-      // extraction prompt normalizes lead_type to a single lowercase word.
-      {
-        id: "approve_buyer",
-        type: "approval_gate",
-        prompt:
-          "New buyer lead: {{vars.lead_name}} in {{vars.location}} " +
-          "(around {{vars.price}}). Send the buyer intro to {{vars.lead_phone}}?\n" +
-          "Lead source: ReferralExchange (referralexchange.com)",
-        when: { var: "lead_type", equals: "buyer" }
-      },
+      // Branch on lead_type: one send_sms per branch sharing a `when` guard so
+      // only the matching branch fires. The intro is sent automatically (no
+      // approval gate) — if lead_type matches neither branch, nothing is sent.
+      // `equals` (not `contains`) keeps the guards mutually exclusive so a lead
+      // is never double-texted. Matching is case-insensitive and the extraction
+      // prompt normalizes lead_type to a single lowercase word.
       {
         id: "send_buyer",
         type: "send_sms",
@@ -195,29 +184,11 @@ function buildDefinition(opts: {
         when: { var: "lead_type", equals: "buyer" }
       },
       {
-        id: "approve_seller",
-        type: "approval_gate",
-        prompt:
-          "New seller lead: {{vars.lead_name}} in {{vars.location}} " +
-          "({{vars.price}}). Send the seller intro to {{vars.lead_phone}}?\n" +
-          "Lead source: ReferralExchange (referralexchange.com)",
-        when: { var: "lead_type", equals: "seller" }
-      },
-      {
         id: "send_seller",
         type: "send_sms",
         to: "{{vars.lead_phone}}",
         body: opts.sellerTemplate,
         when: { var: "lead_type", equals: "seller" }
-      },
-      {
-        id: "approve_both",
-        type: "approval_gate",
-        prompt:
-          "New buyer+seller lead: {{vars.lead_name}} in {{vars.location}} " +
-          "({{vars.price}}). Send the buy-and-sell intro to {{vars.lead_phone}}?\n" +
-          "Lead source: ReferralExchange (referralexchange.com)",
-        when: { var: "lead_type", equals: "both" }
       },
       {
         id: "send_both",
