@@ -358,6 +358,14 @@ export type FlowStep =
        * one page).
        */
       forEachLink?: string;
+      /**
+       * Restrict a `forEachLink` loop to rows whose visible text contains one of
+       * the names in this var (produced by an earlier step, e.g. an extract_text
+       * list of lead names). Only meaningful with `forEachLink`; the var's value
+       * is split on commas/newlines/semicolons into a match list, and a row is
+       * acted on only when its text contains one of those names (case-insensitive).
+       */
+      forEachLinkMatchVar?: string;
       when?: StepCondition;
     }
   | {

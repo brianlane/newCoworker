@@ -567,22 +567,35 @@ async function capturePageSource(page) {
  * SAME action sequence. Per-item failures are recorded but DON'T abort the loop
  * — a weekly bulk update shouldn't stop because one lead's page changed.
  */
-async function performForEach(page, forEachLink, actions) {
+async function performForEach(page, forEachLink, actions, matchNames) {
   let hrefs = [];
   try {
-    hrefs = await page.evaluate((sel) => {
-      const out = [];
-      const seen = new Set();
-      for (const el of document.querySelectorAll(sel)) {
-        const a = el.matches("a[href]") ? el : el.closest("a[href]");
-        const href = a && a.href ? a.href : null;
-        if (href && !seen.has(href)) {
+    hrefs = await page.evaluate(
+      ({ sel, names }) => {
+        // Lower-cased name list to filter rows by their visible text. Empty =>
+        // no filter (act on every row), preserving the original bulk behavior.
+        const wanted = Array.isArray(names)
+          ? names.map((n) => String(n).toLowerCase()).filter(Boolean)
+          : [];
+        const out = [];
+        const seen = new Set();
+        for (const el of document.querySelectorAll(sel)) {
+          const a = el.matches("a[href]") ? el : el.closest("a[href]");
+          const href = a && a.href ? a.href : null;
+          if (!href || seen.has(href)) continue;
+          if (wanted.length > 0) {
+            // Match against the row's text (the anchor when available, else the
+            // matched element) so we only act on rows naming a requested lead.
+            const text = ((a || el).textContent || "").toLowerCase();
+            if (!wanted.some((n) => text.includes(n))) continue;
+          }
           seen.add(href);
           out.push(href);
         }
-      }
-      return out;
-    }, forEachLink);
+        return out;
+      },
+      { sel: forEachLink, names: matchNames }
+    );
   } catch (e) {
     return {
       items: 0,
@@ -636,9 +649,17 @@ async function performForEach(page, forEachLink, actions) {
  * a selector that no longer matches. When `forEachLink` is set, loops the
  * sequence over every matching list row instead.
  */
-async function respondWithActions(page, res, actions, wantScreenshot, forEachLink, wantDebug) {
+async function respondWithActions(
+  page,
+  res,
+  actions,
+  wantScreenshot,
+  forEachLink,
+  wantDebug,
+  forEachMatch
+) {
   if (forEachLink) {
-    const fe = await performForEach(page, forEachLink, actions);
+    const fe = await performForEach(page, forEachLink, actions, forEachMatch);
     return res.json({
       finalUrl: page.url(),
       actionsCompleted: fe.actionsCompleted,
@@ -731,6 +752,24 @@ app.post("/render", async (req, res) => {
   if (forEachLink && !actions) {
     return res.status(400).json({ error: "invalid_actions" });
   }
+  // Optional name filter for the forEachLink loop: a list of strings; rows whose
+  // text contains one of them are acted on. Non-arrays/empties => no filter.
+  // Each name is trimmed and capped defensively; the whole list is bounded.
+  const forEachMatchRaw = req.body?.forEachMatch;
+  let forEachMatch = null;
+  if (Array.isArray(forEachMatchRaw)) {
+    const names = forEachMatchRaw
+      .filter((n) => typeof n === "string")
+      .map((n) => n.trim().slice(0, 120))
+      .filter(Boolean)
+      .slice(0, 100);
+    if (names.length > 0) forEachMatch = names;
+  } else if (forEachMatchRaw !== undefined) {
+    return res.status(400).json({ error: "invalid_for_each_match" });
+  }
+  if (forEachMatch && !forEachLink) {
+    return res.status(400).json({ error: "invalid_for_each_match" });
+  }
 
   // --- Unauthenticated render: stateless context, no session reuse. ---
   if (!auth) {
@@ -744,7 +783,15 @@ app.post("/render", async (req, res) => {
       await page.goto(safe, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
       await settlePage(page);
       if (actions)
-        return await respondWithActions(page, res, actions, wantScreenshot, forEachLink, wantDebug);
+        return await respondWithActions(
+          page,
+          res,
+          actions,
+          wantScreenshot,
+          forEachLink,
+          wantDebug,
+          forEachMatch
+        );
       const html = await page.content();
       const text = await page.evaluate(() => document.body?.innerText ?? "");
       const screenshotBase64 =
@@ -826,7 +873,15 @@ app.post("/render", async (req, res) => {
     // ACTION mode runs after any login. An action failure does NOT poison the
     // session — the login is still good; only the page/selectors disagreed.
     if (actions)
-      return await respondWithActions(page, res, actions, wantScreenshot, forEachLink, wantDebug);
+      return await respondWithActions(
+        page,
+        res,
+        actions,
+        wantScreenshot,
+        forEachLink,
+        wantDebug,
+        forEachMatch
+      );
 
     const html = await page.content();
     const text = await page.evaluate(() => document.body?.innerText ?? "");

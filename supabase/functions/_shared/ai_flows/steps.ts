@@ -127,6 +127,12 @@ export type StepAction =
        * fields/screenshot/rememberKeyVar don't apply.
        */
       forEachLink?: string;
+      /**
+       * Names to restrict a forEachLink loop to (rows whose text contains one of
+       * these). Resolved by the planner from forEachLinkMatchVar; only present
+       * when forEachLink is set AND the var yielded >= 1 name.
+       */
+      forEachMatch?: string[];
     }
   | {
       kind: "recall_url";
@@ -383,6 +389,27 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         target: a.target,
         value: a.valueTemplate ? renderTemplate(a.valueTemplate, scope).trim() : ""
       }));
+      // Resolve the forEachLink name filter: split the var's value on
+      // commas/newlines/semicolons, trim, drop empties, dedupe. Only attach when
+      // forEachLink is set and >= 1 name resolves — an empty list would update
+      // nothing, which the worker reports as "no matching items".
+      let forEachMatch: string[] | undefined;
+      if (step.forEachLink && step.forEachLinkMatchVar) {
+        const raw = scope.vars?.[step.forEachLinkMatchVar];
+        if (typeof raw === "string") {
+          const seen = new Set<string>();
+          const names: string[] = [];
+          for (const part of raw.split(/[,\n;]+/)) {
+            const name = part.trim();
+            const key = name.toLowerCase();
+            if (name && !seen.has(key)) {
+              seen.add(key);
+              names.push(name);
+            }
+          }
+          if (names.length > 0) forEachMatch = names;
+        }
+      }
       // Pass the remember-key VAR NAME (not a resolved value): the worker reads
       // and normalizes it AFTER any same-pass extraction, so a phone this step
       // itself extracts can serve as the key.
@@ -396,7 +423,8 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           ...(step.fields && step.fields.length > 0 ? { fields: step.fields } : {}),
           screenshot: step.screenshot === true,
           ...(step.rememberUrlKeyedByVar ? { rememberKeyVar: step.rememberUrlKeyedByVar } : {}),
-          ...(step.forEachLink ? { forEachLink: step.forEachLink } : {})
+          ...(step.forEachLink ? { forEachLink: step.forEachLink } : {}),
+          ...(forEachMatch ? { forEachMatch } : {})
         }
       };
     }

@@ -318,6 +318,7 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
       urlVar: step.urlVar,
       actions: step.actions,
       forEachLink: step.forEachLink,
+      ...(step.forEachLinkMatchVar ? { forEachLinkMatchVar: step.forEachLinkMatchVar } : {}),
       ...(step.auth ? { auth: step.auth } : {}),
       ...(step.when ? { when: step.when } : {})
     };
@@ -1768,10 +1769,20 @@ function StepFields({
           help="Leave blank to act on a single page. When set, the actions run on every matching link — extraction fields, screenshot, and remember-link are hidden and dropped on save (they're kept in the editor so clearing the selector restores them)."
         />
         {step.forEachLink ? (
-          <p className="text-xs text-parchment/50">
-            Looping over each matching link, so per-page field extraction, screenshot, and
-            remember-link are unavailable. Clear the selector above to re-enable them.
-          </p>
+          <>
+            <Field
+              label="Only loop over links naming one of these (optional; variable name)"
+              value={step.forEachLinkMatchVar ?? ""}
+              onChange={(v) =>
+                patchStep(index, { forEachLinkMatchVar: v.trim() ? v.trim() : undefined })
+              }
+              help="A variable from an earlier step holding a list of names (comma/newline/semicolon separated). Only list links whose text contains one of those names are acted on. Leave blank to act on every matching link."
+            />
+            <p className="text-xs text-parchment/50">
+              Looping over each matching link, so per-page field extraction, screenshot, and
+              remember-link are unavailable. Clear the selector above to re-enable them.
+            </p>
+          </>
         ) : (
           <>
             <label className={labelClass}>Fields to extract after the actions (optional)</label>

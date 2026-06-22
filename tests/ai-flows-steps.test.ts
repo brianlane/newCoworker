@@ -682,6 +682,59 @@ describe("planStep: browse_action rememberUrlKeyedByVar", () => {
     const r = planStep(loop, { vars: { lead_url: "https://x" } });
     expect(r.ok && r.action.kind === "browse_action" && r.action.forEachLink).toBe("a.needs-action");
   });
+  it("resolves forEachLinkMatchVar into a deduped, trimmed forEachMatch list", () => {
+    const loop: FlowStep = {
+      id: "loop",
+      type: "browse_action",
+      urlVar: "lead_url",
+      forEachLink: "a.needs-action",
+      forEachLinkMatchVar: "lead_names",
+      actions: [{ kind: "click_text", target: "Provide Update" }]
+    };
+    const r = planStep(loop, {
+      vars: { lead_url: "https://x", lead_names: "Jane Doe, John Smith\nJane Doe; Bo" }
+    });
+    expect(r.ok && r.action.kind === "browse_action" && r.action.forEachMatch).toEqual([
+      "Jane Doe",
+      "John Smith",
+      "Bo"
+    ]);
+  });
+  it("omits forEachMatch when the match var resolves to no names", () => {
+    const loop: FlowStep = {
+      id: "loop",
+      type: "browse_action",
+      urlVar: "lead_url",
+      forEachLink: "a.needs-action",
+      forEachLinkMatchVar: "lead_names",
+      actions: [{ kind: "click_text", target: "Provide Update" }]
+    };
+    const r = planStep(loop, { vars: { lead_url: "https://x", lead_names: "  , ; \n " } });
+    expect(r.ok && r.action.kind === "browse_action" && "forEachMatch" in r.action).toBe(false);
+  });
+  it("omits forEachMatch when the match var is not a string in scope", () => {
+    const loop: FlowStep = {
+      id: "loop",
+      type: "browse_action",
+      urlVar: "lead_url",
+      forEachLink: "a.needs-action",
+      forEachLinkMatchVar: "lead_names",
+      actions: [{ kind: "click_text", target: "Provide Update" }]
+    };
+    const r = planStep(loop, { vars: { lead_url: "https://x" } });
+    expect(r.ok && r.action.kind === "browse_action" && "forEachMatch" in r.action).toBe(false);
+  });
+  it("omits forEachMatch when forEachLinkMatchVar is unset", () => {
+    const loop: FlowStep = {
+      id: "loop",
+      type: "browse_action",
+      urlVar: "lead_url",
+      forEachLink: "a.needs-action",
+      actions: [{ kind: "click_text", target: "Provide Update" }]
+    };
+    const r = planStep(loop, { vars: { lead_url: "https://x", lead_names: "Jane" } });
+    expect(r.ok && r.action.kind === "browse_action" && "forEachMatch" in r.action).toBe(false);
+  });
   it("renders click_role / select_option values", () => {
     const step: FlowStep = {
       id: "a",

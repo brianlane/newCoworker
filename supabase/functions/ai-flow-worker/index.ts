@@ -1092,7 +1092,8 @@ async function browseActionStep(
         // dashboard "investigate" view. Default off so other flows pay nothing.
         ...(action.screenshot ? { screenshot: true } : {}),
         ...(scope.captureScreenshots ? { debugScreenshots: true } : {}),
-        ...(action.forEachLink ? { forEachLink: action.forEachLink } : {})
+        ...(action.forEachLink ? { forEachLink: action.forEachLink } : {}),
+        ...(action.forEachMatch ? { forEachMatch: action.forEachMatch } : {})
       }),
       signal: ctrl.signal
     });
