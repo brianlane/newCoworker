@@ -209,15 +209,21 @@ function buildDefinition(opts: {
         ownerFallbackTemplate: opts.ownerFallbackTemplate,
         claimedNotifyTemplate: opts.claimedNotifyTemplate
       },
-      // Ungated so the owner is always told a lead came in; worded as "processed"
-      // (not "sent") because if lead_type matched neither branch both sends are
-      // skipped and no intro went out.
+      // Ungated so the owner is always told a lead came in; worded as "handled"
+      // (not "sent") because if lead_type matched neither branch no intro went
+      // out — the Outcome line below reflects exactly what happened.
       {
         id: "notify",
         type: "notify_owner",
+        // Names the lead source and ends with the engine-maintained
+        // {{vars.actions_taken}} so the owner always sees the outcome —
+        // including "lead claimed by <agent>" when a teammate accepts it.
         message:
-          "AiFlow processed a {{vars.lead_type}} lead: {{vars.lead_name}} " +
-          "({{vars.lead_phone}}) in {{vars.location}}."
+          "AiFlow handled a {{vars.lead_type}} lead.\n" +
+          "Lead: {{vars.lead_name}} ({{vars.lead_phone}}) " +
+          "in {{vars.location}} for {{vars.price}}.\n" +
+          "Lead source: ReferralExchange (referralexchange.com)\n" +
+          "Outcome: {{vars.actions_taken}}."
       }
     ],
     options: { suppressDefaultReply: true }
