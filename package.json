@@ -75,7 +75,7 @@
     "@emnapi/core": "^1.11.1",
     "@emnapi/runtime": "^1.11.1",
     "@emnapi/wasi-threads": "^2.0.0",
-    "@napi-rs/wasm-runtime": "^0.2.12",
+    "@napi-rs/wasm-runtime": "^1.1.5",
     "@tybys/wasm-util": "^0.10.1"
   },
   "overrides": {
