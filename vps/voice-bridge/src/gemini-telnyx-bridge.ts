@@ -630,6 +630,17 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     }
   };
 
+  // Compact, bounded trail of Gemini Live message/send tags. The 1007
+  // "invalid argument" close that kills calls after the greeting can't be
+  // reproduced synthetically, so we record what actually crosses the wire
+  // (tool calls, tool responses, server-content flags, goAway) and emit the
+  // whole trail on close. Capped so a long call can't grow it unbounded.
+  const msgTrail: string[] = [];
+  const pushTrail = (tag: string): void => {
+    msgTrail.push(tag);
+    if (msgTrail.length > 60) msgTrail.shift();
+  };
+
   const voiceToolsReady =
     Boolean(opts.voiceTools?.appBaseUrl) && Boolean(opts.voiceTools?.gatewayToken);
 
@@ -758,6 +769,41 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     callbacks: {
       onmessage: (message: LiveServerMessage) => {
         if (ended || opts.ws.readyState !== WebSocket.OPEN) return;
+        // Message tap (debug): classify what Gemini sends so the trail emitted
+        // on close shows the exact sequence leading to the 1007 invalid-argument
+        // kill. Kept allocation-light; only tags are recorded, not payloads.
+        {
+          const m = message as unknown as {
+            setupComplete?: unknown;
+            toolCall?: { functionCalls?: Array<{ name?: string }> };
+            toolCallCancellation?: unknown;
+            goAway?: { timeLeft?: unknown };
+            serverContent?: {
+              interrupted?: unknown;
+              turnComplete?: unknown;
+              generationComplete?: unknown;
+              modelTurn?: { parts?: unknown[] };
+            };
+          };
+          if (m.setupComplete) pushTrail("setup");
+          const tcNames = m.toolCall?.functionCalls?.map((c) => c.name ?? "?").join("+");
+          if (tcNames) pushTrail("toolCall:" + tcNames);
+          if (m.toolCallCancellation) pushTrail("toolCancel");
+          if (m.goAway) {
+            pushTrail("goAway");
+            emitDiag("voice_bridge_gemini_go_away", {
+              time_left: typeof m.goAway.timeLeft === "string" ? m.goAway.timeLeft : JSON.stringify(m.goAway.timeLeft ?? null)
+            });
+          }
+          const sc = m.serverContent;
+          if (sc) {
+            const hasAudio = Array.isArray(sc.modelTurn?.parts) && sc.modelTurn!.parts!.length > 0;
+            if (sc.interrupted) pushTrail("interrupted");
+            if (hasAudio) pushTrail("modelAudio");
+            if (sc.generationComplete) pushTrail("genComplete");
+            if (sc.turnComplete) pushTrail("turnComplete");
+          }
+        }
         if (!diag.setupCompleteLogged && message.setupComplete) {
           diag.setupCompleteLogged = true;
           console.log("gemini-bridge: setupComplete", { callControlId: opts.callControlId });
@@ -847,7 +893,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         emitDiag("voice_bridge_gemini_close", {
           code: e?.code ?? null,
           reason: e?.reason ?? null,
-          was_clean: e?.wasClean ?? null
+          was_clean: e?.wasClean ?? null,
+          msg_trail: msgTrail.join(",")
         });
         ended = true;
         clearTimers();
@@ -877,6 +924,26 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   });
 
   function sendToolResponse(id: string | undefined, name: string, response: ToolResult): void {
+    // Debug: capture exactly what we send back to Gemini for each tool. The
+    // 1007 invalid-argument kill happens right around the tool round trip and
+    // can't be reproduced synthetically, so we log the response shape (types,
+    // not full PII) to catch a malformed functionResponse payload.
+    let dataType = "none";
+    if (response.data !== undefined) {
+      dataType = Array.isArray(response.data) ? "array" : typeof response.data;
+    }
+    emitDiag("voice_bridge_gemini_tool_response", {
+      name,
+      has_id: Boolean(id),
+      ok: response.ok,
+      detail: typeof response.detail === "string" ? response.detail.slice(0, 120) : null,
+      data_type: dataType,
+      data_keys:
+        response.data && typeof response.data === "object" && !Array.isArray(response.data)
+          ? Object.keys(response.data as Record<string, unknown>).slice(0, 20)
+          : null
+    });
+    pushTrail("toolResp:" + name);
     try {
       session.sendToolResponse({
         functionResponses: [
@@ -893,6 +960,10 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       });
     } catch (err) {
       console.error("gemini-bridge: sendToolResponse failed", { name, err });
+      emitDiag("voice_bridge_gemini_tool_response_throw", {
+        name,
+        error: err instanceof Error ? err.message : String(err)
+      });
     }
   }
 
@@ -910,6 +981,13 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     if (!calls || calls.length === 0) return;
     for (const call of calls) {
       const name = call.name ?? "unknown";
+      // Debug: which tool the model invoked + its arg keys (not values, to
+      // limit PII). Pinpoints whether a specific tool triggers the 1007.
+      emitDiag("voice_bridge_gemini_tool_call", {
+        name,
+        has_id: Boolean(call.id),
+        arg_keys: call.args && typeof call.args === "object" ? Object.keys(call.args).slice(0, 20) : []
+      });
       if (name === "transfer_to_owner" && opts.transfer) {
         const reason = typeof call.args?.reason === "string" ? (call.args.reason as string) : undefined;
         // `execute` may throw on network-layer failures; catching here stops
