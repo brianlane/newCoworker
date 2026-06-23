@@ -345,6 +345,37 @@ function main(): void {
       }
 
       wss.handleUpgrade(req, socket, head, async (ws) => {
+      // Diagnostics sink → telemetry_events (queryable from the dashboard /
+      // Supabase). The Gemini bridge lifecycle (session start, greeting, close
+      // code/reason, frame counters) previously only existed in VPS stdout,
+      // which we can't read from here. Routing it through `telemetry_record`
+      // lets us diagnose "greeting then dead air" from a single SQL query
+      // after a test call. Fire-and-forget; never blocks the media pipe.
+      const recordDiag = (eventType: string, payload: Record<string, unknown> = {}): void => {
+        void Promise.resolve(
+          supabase.rpc("telemetry_record", {
+            p_event_type: eventType,
+            p_payload: {
+              call_control_id: callControlId,
+              business_id: businessId,
+              caller_e164: fromE164Info || null,
+              ts: new Date().toISOString(),
+              ...payload
+            }
+          })
+        ).then(
+          (res) => {
+            const err = (res as { error?: { message?: string } | null } | null)?.error;
+            if (err) console.error("voice-bridge: telemetry_record error", err.message);
+          },
+          (err) =>
+            console.error(
+              "voice-bridge: telemetry_record threw",
+              err instanceof Error ? err.message : String(err)
+            )
+        );
+      };
+
       await supabase.from("voice_active_sessions").upsert(
         {
           call_control_id: callControlId,
@@ -391,6 +422,11 @@ function main(): void {
       const geminiFlag = (process.env.GEMINI_LIVE_ENABLED ?? "true").trim().toLowerCase();
       const geminiLiveEnabled = geminiFlag !== "false" && geminiFlag !== "0";
       const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
+
+      recordDiag("voice_bridge_ws_attached", {
+        gemini_live_enabled: geminiLiveEnabled,
+        has_api_key: Boolean(apiKey)
+      });
 
       const tenantSettings = await loadTenantTelnyxSettings(supabase, businessId);
       const { data: biz } = await supabase
@@ -541,13 +577,15 @@ function main(): void {
             callerE164: fromE164Info || "",
             voiceTools,
             transcriptAdapter,
-            customerMemorySummary
+            customerMemorySummary,
+            recordDiag
           });
           onTelnyxGemini = bridge.onTelnyxMessage;
           geminiTeardown = bridge.teardown;
         } catch (e) {
           const reason = e instanceof Error ? e.message : String(e);
           console.error("voice-bridge: Gemini Live unavailable (continuing without AI audio)", reason);
+          recordDiag("voice_bridge_gemini_init_failed", { reason });
           await sendMissedCallSms({
             settings: tenantSettings,
             callerE164: fromE164Info || "unknown",
@@ -600,6 +638,10 @@ function main(): void {
       ws.on("close", (code: number, reason: Buffer) => {
         console.log("voice-bridge: telnyx ws close", {
           callControlId,
+          code,
+          reason: reason?.toString?.("utf8") ?? ""
+        });
+        recordDiag("voice_bridge_ws_close", {
           code,
           reason: reason?.toString?.("utf8") ?? ""
         });

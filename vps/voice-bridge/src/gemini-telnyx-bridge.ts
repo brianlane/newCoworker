@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import WebSocket from "ws";
 import { GoogleGenAI, Modality, Type, type LiveServerMessage, type Session } from "@google/genai";
 import { parsePcmRateFromMime, resamplePCM16Mono } from "./audio-resample.js";
@@ -13,6 +14,26 @@ import {
 
 const TELNYX_PCM_RATE = 16000;
 const GEMINI_OUTPUT_DEFAULT_RATE = 24000;
+
+/**
+ * Resolved `@google/genai` package version at boot. Persisted in the
+ * `voice_bridge_gemini_session_start` telemetry so we can confirm — without
+ * SSHing the VPS — which SDK the running container actually has. A major
+ * bump (1.x → 2.x) changed the Live API contract and is the prime suspect
+ * for the May-2026 "greeting then dead air" regression; this lets us verify
+ * a redeploy actually reverted the pin. Resolved defensively: some package
+ * `exports` maps don't expose `./package.json`, in which case we report
+ * "unknown" rather than crashing the bridge import.
+ */
+const GENAI_SDK_VERSION: string = (() => {
+  try {
+    const req = createRequire(import.meta.url);
+    const pkg = req("@google/genai/package.json") as { version?: string };
+    return pkg.version ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+})();
 
 /**
  * WebSocket downlink backpressure threshold (bytes buffered in the send queue before we
@@ -107,6 +128,17 @@ export type GeminiBridgeOptions = {
    * yet), the prompt is identical to the pre-3b shape.
    */
   customerMemorySummary?: string;
+  /**
+   * Optional diagnostics sink. When set, the bridge emits a structured
+   * timeline of Gemini Live lifecycle events (session start, setup complete,
+   * greeting sent, error, close, teardown) including the close code/reason and
+   * audio frame counters. Wired in index.ts to `telemetry_record` so the
+   * timeline lands in `telemetry_events` and can be queried after a test call
+   * — the VPS stdout where these previously lived is not reachable from here.
+   * Implementations MUST NOT throw; the bridge invokes this defensively but
+   * a throwing sink should never tear down a live call.
+   */
+  recordDiag?: (eventType: string, payload: Record<string, unknown>) => void;
 };
 
 /**
@@ -578,6 +610,26 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     lastHeartbeatDownlinkFrames: 0
   };
 
+  // Defensive diagnostics emitter. Snapshots the live pipeline counters into
+  // every event so a single telemetry row tells the whole story (did setup
+  // complete? did the greeting fire? how many frames moved before the close?).
+  // Never throws — a broken sink must not affect the call.
+  const emitDiag = (eventType: string, extra: Record<string, unknown> = {}): void => {
+    if (!opts.recordDiag) return;
+    try {
+      opts.recordDiag(eventType, {
+        setup_complete: diag.setupCompleteLogged,
+        greeting_triggered: diag.greetingTriggered,
+        uplink_frames: diag.uplinkFrames,
+        downlink_frames: diag.downlinkFrames,
+        dropped_frames: downlinkTelemetry.droppedFrames,
+        ...extra
+      });
+    } catch (err) {
+      console.error("gemini-bridge: recordDiag threw", err);
+    }
+  };
+
   const voiceToolsReady =
     Boolean(opts.voiceTools?.appBaseUrl) && Boolean(opts.voiceTools?.gatewayToken);
 
@@ -620,6 +672,11 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       uplinkBytesPostHeader: diag.uplinkBytesPostHeader,
       downlinkFrames: diag.downlinkFrames,
       downlinkBytesPostHeader: diag.downlinkBytesPostHeader
+    });
+    emitDiag("voice_bridge_gemini_teardown", {
+      ended_flag_prior_to_teardown: ended,
+      uplink_bytes: diag.uplinkBytesPostHeader,
+      downlink_bytes: diag.downlinkBytesPostHeader
     });
     if (!ended) {
       ended = true;
@@ -704,6 +761,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         if (!diag.setupCompleteLogged && message.setupComplete) {
           diag.setupCompleteLogged = true;
           console.log("gemini-bridge: setupComplete", { callControlId: opts.callControlId });
+          emitDiag("voice_bridge_gemini_setup_complete");
           // Gemini Live waits for the user to speak by default. On a phone
           // call the caller expects the assistant to greet first — without
           // this nudge they hear silence after ringback (no audio activity
@@ -720,8 +778,12 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
               console.log("gemini-bridge: greeting prompt sent", {
                 callControlId: opts.callControlId
               });
+              emitDiag("voice_bridge_gemini_greeting_sent", { method: "sendClientContent" });
             } catch (err) {
               console.error("gemini-bridge: greeting prompt failed", err);
+              emitDiag("voice_bridge_gemini_greeting_failed", {
+                error: err instanceof Error ? err.message : String(err)
+              });
             }
           }
         }
@@ -761,6 +823,9 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           uplinkFrames: diag.uplinkFrames,
           downlinkFrames: diag.downlinkFrames
         });
+        emitDiag("voice_bridge_gemini_error", {
+          message: e?.message ?? String(e)
+        });
         if (transcriptRecorder) {
           void transcriptRecorder.finalize({ errored: true });
         }
@@ -779,6 +844,11 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           uplinkFrames: diag.uplinkFrames,
           downlinkFrames: diag.downlinkFrames
         });
+        emitDiag("voice_bridge_gemini_close", {
+          code: e?.code ?? null,
+          reason: e?.reason ?? null,
+          was_clean: e?.wasClean ?? null
+        });
         ended = true;
         clearTimers();
         // Kick the recorder finalize as soon as the Live session closes.
@@ -792,6 +862,18 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         }
       }
     }
+  });
+
+  // Live session connected. Record the SDK version + model + capability flags
+  // so a single telemetry row confirms exactly what code path this call took
+  // (and which @google/genai is deployed — the regression suspect).
+  emitDiag("voice_bridge_gemini_session_start", {
+    sdk_version: GENAI_SDK_VERSION,
+    model: opts.model,
+    transcription_enabled: Boolean(transcriptRecorder),
+    transfer_enabled: Boolean(opts.transfer),
+    voice_tools_ready: voiceToolsReady,
+    session_max_ms: opts.sessionMaxMs
   });
 
   function sendToolResponse(id: string | undefined, name: string, response: ToolResult): void {
