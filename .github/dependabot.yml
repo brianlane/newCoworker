@@ -41,6 +41,14 @@ updates:
     groups:
       minor-and-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # The bridge targets the @google/genai 1.x Gemini Live API. The 2.x major
+      # changed the Live contract (sendClientContent is no longer used for
+      # conversational turns on gemini-3.1-flash-live-preview — sendRealtimeInput
+      # is required), which silently broke calls right after the greeting. Keep
+      # on 1.x until the bridge is migrated to the v2 Live API.
+      - dependency-name: "@google/genai"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: "/vps/aiflow-render"
