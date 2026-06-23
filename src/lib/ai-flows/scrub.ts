@@ -58,11 +58,13 @@ const PROSE_KEYS: ReadonlySet<string> = new Set([
   "description",
   "emailSubject",
   "integrationLabel",
-  // Trigger condition (`value`) and per-step gate (`equals`/`contains`)
-  // comparison literals — free text that can carry names/addresses/locations.
+  // Trigger condition (`value`) and per-step gate (`equals`/`contains`/
+  // `notEquals`) comparison literals — free text that can carry names/
+  // addresses/locations.
   "value",
   "equals",
-  "contains"
+  "contains",
+  "notEquals"
 ]);
 
 function blankProse(value: unknown): unknown {

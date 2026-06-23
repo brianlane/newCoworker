@@ -268,6 +268,21 @@ describe("evaluateStepCondition", () => {
     expect(evaluateStepCondition({ var: "t", equals: "buyer" }, {})).toBe(false);
     expect(evaluateStepCondition({ var: "t", contains: "x" }, { vars: { t: { a: 1 } } })).toBe(false);
   });
+  it("notEquals is the inverse of equals, case-insensitive by default", () => {
+    expect(evaluateStepCondition({ var: "t", notEquals: "none" }, { vars: { t: "buyer" } })).toBe(true);
+    expect(evaluateStepCondition({ var: "t", notEquals: "None" }, { vars: { t: "none" } })).toBe(false);
+  });
+  it("notEquals respects caseInsensitive=false", () => {
+    expect(
+      evaluateStepCondition({ var: "t", notEquals: "None", caseInsensitive: false }, { vars: { t: "none" } })
+    ).toBe(true);
+    expect(
+      evaluateStepCondition({ var: "t", notEquals: "none", caseInsensitive: false }, { vars: { t: "none" } })
+    ).toBe(false);
+  });
+  it("notEquals passes for a missing var against a non-empty needle (absent ≠ value)", () => {
+    expect(evaluateStepCondition({ var: "t", notEquals: "none" }, { vars: {} })).toBe(true);
+  });
   it("falls back to a presence check when neither equals nor contains is set", () => {
     expect(evaluateStepCondition({ var: "t" }, { vars: { t: "anything" } })).toBe(true);
     expect(evaluateStepCondition({ var: "t" }, { vars: { t: "" } })).toBe(false);

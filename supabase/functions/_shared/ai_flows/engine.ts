@@ -147,14 +147,17 @@ export function renderTemplate(template: string, scope: Record<string, unknown>)
 
 /**
  * Evaluate a per-step `when` guard against the run vars. Returns true when the
- * step should RUN. `equals` is a whole-value match, `contains` is a substring;
- * both are case-insensitive unless `caseInsensitive === false`. String values
+ * step should RUN. `equals` is a whole-value match, `contains` is a substring,
+ * `notEquals` is the inverse of `equals`; all are case-insensitive unless
+ * `caseInsensitive === false` (so two steps gated on `equals X` / `notEquals X`
+ * form an exhaustive either/or branch). String values
  * are trimmed first, since LLM-extracted vars often carry surrounding whitespace
  * or newlines that would otherwise make an `equals` guard silently miss. A
  * missing / non-scalar var resolves to "" so an absent value never accidentally
- * matches a non-empty needle. When neither `equals` nor `contains` is set (the
- * schema normally forbids this), the guard is a presence check: pass iff the var
- * is non-empty.
+ * matches a non-empty needle (and a `notEquals` against a present needle then
+ * passes, since "" differs from it). When none of `equals`/`contains`/`notEquals`
+ * is set (the schema normally forbids this), the guard is a presence check: pass
+ * iff the var is non-empty.
  */
 export function evaluateStepCondition(
   cond: StepCondition,
@@ -174,6 +177,9 @@ export function evaluateStepCondition(
   }
   if (cond.contains !== undefined) {
     return hay.includes(ci ? cond.contains.toLowerCase() : cond.contains);
+  }
+  if (cond.notEquals !== undefined) {
+    return hay !== (ci ? cond.notEquals.toLowerCase() : cond.notEquals);
   }
   return value.length > 0;
 }

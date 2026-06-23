@@ -256,20 +256,23 @@ const browseActionItemSchema = z
 /**
  * Optional per-step guard. The step only runs when the condition holds against a
  * var produced by an EARLIER step; otherwise the worker skips it. Exactly one of
- * `equals`/`contains` must be set (XOR), so two gated steps give simple branching
- * (e.g. a buyer vs. seller `send_sms`). MUST be part of the schema so the
- * dashboard editor's save round-trips it instead of zod stripping it.
+ * `equals`/`contains`/`notEquals` must be set, so two gated steps give simple
+ * branching (e.g. a buyer vs. seller `send_sms`, or `equals none` vs.
+ * `notEquals none` for an exhaustive either/or). MUST be part of the schema so
+ * the dashboard editor's save round-trips it instead of zod stripping it.
  */
 const whenSchema = z
   .object({
     var: varName,
     equals: z.string().min(1).max(200).optional(),
     contains: z.string().min(1).max(200).optional(),
+    notEquals: z.string().min(1).max(200).optional(),
     caseInsensitive: z.boolean().optional()
   })
-  .refine((w) => (w.equals === undefined) !== (w.contains === undefined), {
-    message: "set exactly one of equals/contains"
-  });
+  .refine(
+    (w) => [w.equals, w.contains, w.notEquals].filter((v) => v !== undefined).length === 1,
+    { message: "set exactly one of equals/contains/notEquals" }
+  );
 
 const stepSchema = z.discriminatedUnion("type", [
   z.object({ id: stepId, type: z.literal("extract_url"), saveAs: varName, when: whenSchema.optional() }),

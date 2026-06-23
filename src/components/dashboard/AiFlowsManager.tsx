@@ -1946,11 +1946,15 @@ function StepFields({
   );
 }
 
+/** The comparison a `when` guard can use; mirrors whenSchema's mutually-exclusive keys. */
+type WhenOperator = "contains" | "equals" | "notEquals";
+
 /**
  * Optional "Only run when" guard per step. Lets the author gate a step on a var
  * an EARLIER step produced (e.g. run the buyer SMS only when lead_type contains
- * "buyer"). Writes `when` straight onto the step so the zod schema round-trips
- * it; toggling off clears it (undefined → dropped on JSON save).
+ * "buyer", or notify differently when phone_lead_type does not equal "none").
+ * Writes `when` straight onto the step so the zod schema round-trips it; toggling
+ * off clears it (undefined → dropped on JSON save).
  */
 function WhenEditor({
   step,
@@ -1966,17 +1970,22 @@ function WhenEditor({
   examples: AiFlowExampleCopy;
 }) {
   const when = step.when;
-  const operator: "contains" | "equals" = when?.equals !== undefined ? "equals" : "contains";
-  const value = when?.equals ?? when?.contains ?? "";
+  const operator: WhenOperator =
+    when?.equals !== undefined ? "equals" : when?.notEquals !== undefined ? "notEquals" : "contains";
+  const value = when?.equals ?? when?.notEquals ?? when?.contains ?? "";
 
   const setWhen = (next: StepCondition) => patchStep(index, { when: next });
 
-  const buildWhen = (over: Partial<{ var: string; operator: "contains" | "equals"; value: string }>) => {
+  const buildWhen = (over: Partial<{ var: string; operator: WhenOperator; value: string }>) => {
     const v = over.var ?? when?.var ?? earlierVars[0] ?? "";
     const op = over.operator ?? operator;
     const val = over.value ?? value;
     const base: StepCondition =
-      op === "equals" ? { var: v, equals: val } : { var: v, contains: val };
+      op === "equals"
+        ? { var: v, equals: val }
+        : op === "notEquals"
+          ? { var: v, notEquals: val }
+          : { var: v, contains: val };
     // Carry through a non-default caseInsensitive flag set elsewhere (e.g. AI
     // authoring or a hand-edited definition); the editor doesn't surface it, so
     // rebuilding the object would otherwise silently reset it to the default.
@@ -2016,12 +2025,11 @@ function WhenEditor({
           <select
             className={`${inputClass} w-auto`}
             value={operator}
-            onChange={(ev) =>
-              setWhen(buildWhen({ operator: ev.target.value as "contains" | "equals" }))
-            }
+            onChange={(ev) => setWhen(buildWhen({ operator: ev.target.value as WhenOperator }))}
           >
             <option value="contains">contains</option>
             <option value="equals">equals</option>
+            <option value="notEquals">does not equal</option>
           </select>
           <input
             className={`${inputClass} flex-1`}

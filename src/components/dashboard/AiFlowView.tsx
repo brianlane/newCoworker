@@ -126,8 +126,9 @@ function ConditionsView({ conditions }: { conditions: TriggerCondition[] }) {
 }
 
 function WhenView({ when }: { when: StepCondition }) {
-  const operator = when.equals !== undefined ? "equals" : "contains";
-  const value = when.equals ?? when.contains ?? "";
+  const operator =
+    when.equals !== undefined ? "equals" : when.notEquals !== undefined ? "does not equal" : "contains";
+  const value = when.equals ?? when.notEquals ?? when.contains ?? "";
   return (
     <Row label="Only runs when" value={`${when.var} ${operator} "${value}"`} />
   );

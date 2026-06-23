@@ -312,6 +312,19 @@ describe("step `when` guard", () => {
     expect(() => parseAiFlowDefinition(bad)).toThrow(AiFlowValidationError);
   });
 
+  it("parses and preserves a `notEquals` guard", () => {
+    const input = JSON.parse(JSON.stringify(branchedInput));
+    input.steps[2].when = { var: "lead_type", notEquals: "none" };
+    const def = parseAiFlowDefinition(input);
+    expect(def.steps[2].when).toEqual({ var: "lead_type", notEquals: "none" });
+  });
+
+  it("rejects a `when` with both equals and notEquals set", () => {
+    const bad = JSON.parse(JSON.stringify(branchedInput));
+    bad.steps[2].when = { var: "lead_type", equals: "buyer", notEquals: "none" };
+    expect(() => parseAiFlowDefinition(bad)).toThrow(AiFlowValidationError);
+  });
+
   it("rejects a `when` with neither equals nor contains set", () => {
     const bad = JSON.parse(JSON.stringify(branchedInput));
     bad.steps[2].when = { var: "lead_type" };
