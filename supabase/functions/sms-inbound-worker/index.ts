@@ -15,7 +15,7 @@
  *          INTERNAL_CRON_SECRET (Authorization: Bearer) for this endpoint.
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { telnyxMessagingPhoneString } from "../_shared/telnyx_messaging_payload.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
@@ -124,7 +124,7 @@ function inboundPayloadText(p: Record<string, unknown>): string {
 }
 
 async function clearJobReplyCache(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient<any, any, any>,
   jobId: string
 ): Promise<void> {
   await supabase
@@ -145,7 +145,7 @@ async function clearJobReplyCache(
  * so the dashboard never shows an outbound message that was never sent.
  */
 async function finalizeDeliveredReply(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient<any, any, any>,
   jobId: string,
   replyText: string
 ): Promise<void> {
@@ -422,10 +422,9 @@ serve(async (req: Request) => {
       .eq("business_id", job.business_id)
       .maybeSingle();
 
+    const rawProjectId = cfg?.rowboat_project_id as string | null | undefined;
     const projectId =
-      (cfg?.rowboat_project_id as string | null) && String(cfg.rowboat_project_id).length > 0
-        ? String(cfg.rowboat_project_id)
-        : defaultProjectId;
+      rawProjectId && String(rawProjectId).length > 0 ? String(rawProjectId) : defaultProjectId;
 
     if (!projectId || !bearer) {
       await supabase.rpc("complete_sms_inbound_job", {
@@ -481,7 +480,7 @@ serve(async (req: Request) => {
     const memoryPreamble =
       memoryRow == null
         ? null
-        : buildCustomerPreambleForEdge(memoryRow as EdgeCustomerMemoryRow);
+        : buildCustomerPreambleForEdge(memoryRow as unknown as EdgeCustomerMemoryRow);
     // The texter's E.164 is ALWAYS stated, even on first contact with no
     // memory row: the Rowboat tool webhook (/api/rowboat/tool-call) has no
     // caller context, so the customer tools require an explicit `phone`
@@ -736,8 +735,9 @@ serve(async (req: Request) => {
         ? String(tset?.telnyx_messaging_profile_id)
         : baseProf;
 
-    if ((tset?.telnyx_sms_from_e164 as string | null)?.length) {
-      platformFrom = String(tset.telnyx_sms_from_e164);
+    const rawPlatformFrom = tset?.telnyx_sms_from_e164 as string | null | undefined;
+    if (rawPlatformFrom && String(rawPlatformFrom).length) {
+      platformFrom = String(rawPlatformFrom);
     }
 
     if (!apiKey || !messagingProfileId) {

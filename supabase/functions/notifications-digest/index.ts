@@ -37,7 +37,7 @@
 //   NEXT_PUBLIC_APP_URL (for unsubscribe URL + dashboard link)
 
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { buildBrandedEmailHtml, type BrandedBodyBlock } from "../_shared/branded_email_html.ts";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 import {
@@ -56,7 +56,9 @@ import {
   type DigestWindow
 } from "../_shared/digest_builder.ts";
 
-type SupaClient = ReturnType<typeof createClient>;
+// See ai-flow-worker: ReturnType<typeof createClient> mis-resolves vs the real
+// createClient() call, so use a permissive client type for helper params.
+type SupaClient = SupabaseClient<any, any, any>;
 
 type DigestTarget = {
   business_id: string;

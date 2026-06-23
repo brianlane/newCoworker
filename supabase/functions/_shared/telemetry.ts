@@ -1,8 +1,10 @@
 type RpcSupabase = {
+  // PromiseLike (not Promise) so supabase-js's thenable PostgrestFilterBuilder
+  // satisfies the interface structurally (same approach as _shared/cap_alerts.ts).
   rpc: (
     fn: string,
     args?: Record<string, unknown>
-  ) => Promise<{ error: { message: string } | null }>;
+  ) => PromiseLike<{ error: { message: string } | null }>;
 };
 
 export async function telemetryRecord(

@@ -3,7 +3,7 @@
  * STOP/HELP keywords: auto-reply when TELNYX_API_KEY + messaging env are set (carrier compliance).
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { header, verifyTelnyxWebhook } from "../_shared/telnyx_webhook.ts";
 import {
   telnyxMessagingParticipants,
@@ -55,7 +55,7 @@ type AiFlowEval = { suppress: boolean; matched: MatchedAiFlow[] };
  * failure as "no flows matched" so the inbound SMS path is never broken.
  */
 async function evaluateAiFlows(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient<any, any, any>,
   businessId: string,
   current: { from: string; text: string; nowMs: number }
 ): Promise<AiFlowEval> {
@@ -153,7 +153,7 @@ function normalizedParticipants(payload: Record<string, unknown>): string[] {
 }
 
 async function evaluateAndEnqueueAiFlows(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient<any, any, any>,
   businessId: string,
   ctx: {
     from: string | null;

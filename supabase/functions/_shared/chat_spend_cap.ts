@@ -111,19 +111,29 @@ export function monthStartIso(now: Date = new Date()): string {
 
 type DbResult = { data: unknown; error: { message: string } | null };
 
-interface QueryBuilder extends PromiseLike<DbResult> {
-  select(cols?: string): QueryBuilder;
-  update(values: Record<string, unknown>): QueryBuilder;
-  eq(col: string, val: unknown): QueryBuilder;
-  is(col: string, val: unknown): QueryBuilder;
-  order(col: string, opts: { ascending: boolean }): QueryBuilder;
-  limit(n: number): QueryBuilder;
-  maybeSingle(): Promise<DbResult>;
+// Mirrors supabase-js's two-stage builder: `from()` exposes the table verbs
+// (select/update), and only the result of those exposes the row filters. Modeling
+// it this way (rather than a single flat QueryBuilder) lets the real
+// PostgrestQueryBuilder satisfy this interface structurally — it has no
+// eq/is/order directly on the from() result either.
+interface FilterBuilder extends PromiseLike<DbResult> {
+  eq(col: string, val: unknown): FilterBuilder;
+  is(col: string, val: unknown): FilterBuilder;
+  order(col: string, opts: { ascending: boolean }): FilterBuilder;
+  limit(n: number): FilterBuilder;
+  maybeSingle(): PromiseLike<DbResult>;
+}
+
+interface QueryBuilder {
+  select(cols?: string): FilterBuilder;
+  update(values: Record<string, unknown>): FilterBuilder;
 }
 
 export interface SpendSupabase {
   from(table: string): QueryBuilder;
-  rpc(fn: string, args: Record<string, unknown>): Promise<DbResult>;
+  // PromiseLike (not Promise) so supabase-js's thenable PostgrestFilterBuilder
+  // satisfies the interface structurally (same approach as _shared/cap_alerts.ts).
+  rpc(fn: string, args: Record<string, unknown>): PromiseLike<DbResult>;
 }
 
 /**
