@@ -1984,9 +1984,8 @@ async function sendGroupSmsStep(
 ): Promise<StepOutcome> {
   const cfg = await messagingConfig(supabase, run.business_id);
   if (!cfg) return { kind: "fail", error: "send_sms: Telnyx messaging is not configured" };
-  if (!cfg.from) return { kind: "fail", error: "send_sms: no Telnyx from number configured" };
 
-  const own = cfg.from.trim();
+  const own = (cfg.from ?? "").trim();
   const seen = new Set<string>();
   const recipients: string[] = [];
   for (const r of action.recipients ?? []) {
@@ -2003,8 +2002,11 @@ async function sendGroupSmsStep(
   // 2+ recipients must go out as a Telnyx group MMS (the standard /messages
   // endpoint rejects a multi-destination `to`). Group MMS requires an explicit
   // MMS-enabled sender, so a missing from-number is a permanent config error.
+  // Group MMS requires an explicit MMS-enabled sender (`own`), so a missing
+  // from-number is a permanent config error. The 1:1 path below may omit `from`
+  // and fall back to the messaging-profile number pool, so it is NOT guarded.
   const isGroup = recipients.length >= 2;
-  if (isGroup && !(cfg.from ?? "").trim()) {
+  if (isGroup && !own) {
     return {
       kind: "fail",
       error: "send_sms: group reply needs a configured from-number (MMS-enabled)"
@@ -2037,7 +2039,7 @@ async function sendGroupSmsStep(
     const send = isGroup
       ? await telnyxSendGroupMms({
           apiKey: cfg.apiKey,
-          fromE164: cfg.from,
+          fromE164: own,
           toE164: recipients,
           text,
           idempotencyKey: `aiflow:${run.id}:${index}`
