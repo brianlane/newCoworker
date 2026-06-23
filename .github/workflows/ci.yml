@@ -103,6 +103,28 @@ jobs:
           path: coverage
           if-no-files-found: ignore
 
+  deno-check:
+    name: Edge Functions Typecheck (Deno)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.8.3
+
+      # The repo-root `tsc --noEmit` EXCLUDES supabase/functions (it can't resolve
+      # the Deno https:// URL imports), so app typecheck can't catch missing
+      # exports / type breakage in the edge functions — exactly the class of bug
+      # that boot-crashed ai-flow-worker in prod. `deno check` on each entrypoint
+      # transitively type-checks the function and its _shared deps the same way
+      # the Supabase CLI bundles them at deploy.
+      - name: Type-check Supabase Edge functions
+        run: deno check supabase/functions/*/index.ts
+
   security:
     name: Security Audit
     runs-on: ubuntu-latest

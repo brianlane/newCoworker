@@ -22,7 +22,7 @@
  *   - approval_gate (not yet approved) → awaiting_approval, run paused.
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
@@ -78,7 +78,11 @@ import {
 } from "../_shared/chat_spend_cap.ts";
 import type { AiFlowDefinition, BrowseAuth, ExtractField, FlowStep } from "../_shared/ai_flows/types.ts";
 
-type Supabase = ReturnType<typeof createClient>;
+// The actual createClient(url, key) call infers SupabaseClient<any, "public", any>,
+// but `ReturnType<typeof createClient>` resolves to <unknown, never, GenericSchema>
+// (TS instantiates the generic at its constraints, not its defaults), which is NOT
+// assignable. Use a permissive client type so helpers accept the real client.
+type Supabase = SupabaseClient<any, any, any>;
 
 const MAX_ATTEMPTS = 4;
 const CLAIM_LIMIT = 3;
@@ -1998,8 +2002,11 @@ async function sendGroupSmsStep(
   // 2+ recipients must go out as a Telnyx group MMS (the standard /messages
   // endpoint rejects a multi-destination `to`). Group MMS requires an explicit
   // MMS-enabled sender, so a missing from-number is a permanent config error.
+  // Group MMS requires an explicit MMS-enabled sender (`own`), so a missing
+  // from-number is a permanent config error. The 1:1 path below may omit `from`
+  // and fall back to the messaging-profile number pool, so it is NOT guarded.
   const isGroup = recipients.length >= 2;
-  if (isGroup && !(cfg.from ?? "").trim()) {
+  if (isGroup && !own) {
     return {
       kind: "fail",
       error: "send_sms: group reply needs a configured from-number (MMS-enabled)"
@@ -2032,7 +2039,7 @@ async function sendGroupSmsStep(
     const send = isGroup
       ? await telnyxSendGroupMms({
           apiKey: cfg.apiKey,
-          fromE164: cfg.from,
+          fromE164: own,
           toE164: recipients,
           text,
           idempotencyKey: `aiflow:${run.id}:${index}`

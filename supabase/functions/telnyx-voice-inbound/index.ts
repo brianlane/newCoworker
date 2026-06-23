@@ -12,7 +12,7 @@
  * Some paths after answer may return **5xx**; use logs/telemetry to distinguish.
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { header, verifyTelnyxWebhook } from "../_shared/telnyx_webhook.ts";
 import { signStreamUrlMac, type StreamPayloadV1 } from "../_shared/stream_url.ts";
 import { resolveEnterpriseVoiceReservation } from "../_shared/enterprise_limits.ts";
@@ -81,7 +81,7 @@ async function fetchStripeSubscriptionPeriods(
 }
 
 async function persistSubscriptionPeriodCache(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient<any, any, any>,
   row: SubscriptionPeriodRow,
   start: string,
   end: string
