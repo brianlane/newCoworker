@@ -131,8 +131,8 @@ export type BrowseAuth = {
  * holds against the current run vars (a var produced by an EARLIER step);
  * otherwise the worker SKIPS the step (records "skipped") and continues. Two
  * gated steps give simple branching (e.g. a buyer vs. seller `send_sms`) without
- * nested control flow. Exactly one of `equals`/`contains` is set; matching is
- * case-insensitive unless `caseInsensitive` is false.
+ * nested control flow. Exactly one of `equals`/`contains`/`notEquals` is set;
+ * matching is case-insensitive unless `caseInsensitive` is false.
  */
 export type StepCondition = {
   /** Name of a var produced by an earlier step (e.g. "lead_type"). */
@@ -141,6 +141,8 @@ export type StepCondition = {
   equals?: string;
   /** Substring match. */
   contains?: string;
+  /** Whole-value (case-insensitive) inequality — the inverse of `equals`. */
+  notEquals?: string;
   /** Default true. Set false for case-sensitive matching. */
   caseInsensitive?: boolean;
 };
