@@ -71,7 +71,6 @@ import {
 } from "../_shared/ai_flows/quiet_hours.ts";
 import { scheduleDue } from "../_shared/ai_flows/schedule.ts";
 import {
-  estimateChatCostMicros,
   geminiCostMicrosFromTokens,
   readChatSpendMicros,
   resolveChatPeriodStart,
@@ -1716,12 +1715,18 @@ async function meterAiFlowSpend(
   try {
     const spend = supabase as unknown as SpendSupabase;
     const periodStart = await resolveChatPeriodStart(spend, run.business_id);
+    // No exact usageMetadata tokens — estimate from text length (~4 chars/token)
+    // and price with the same per-model table as the exact path above. Pass the
+    // fractional chars/4 (no per-side rounding) so geminiCostMicrosFromTokens'
+    // single trailing Math.ceil rounds once, avoiding an overcount on short text.
     const costMicros =
       exactCostMicros !== null && exactCostMicros > 0
         ? exactCostMicros
-        : estimateChatCostMicros(inputChars, outputChars, {
-            promptOverheadTokens: 0
-          });
+        : geminiCostMicrosFromTokens(
+            GEMINI_MODEL,
+            Math.max(0, inputChars) / 4,
+            Math.max(0, outputChars) / 4
+          );
     const { data, error } = await supabase.rpc("owner_chat_record_spend", {
       p_business_id: run.business_id,
       p_period_start: periodStart,
