@@ -91,6 +91,7 @@ describe("decodeTelnyxMediaPayload", () => {
     const out = decodeTelnyxMediaPayload(packet.toString("base64"));
     expect(out.payload.equals(audio)).toBe(true);
     expect(out.payloadType).toBe(96);
+    expect(out.wasRtp).toBe(true);
   });
 
   it("respects the CSRC count when computing header length", () => {
@@ -117,7 +118,9 @@ describe("decodeTelnyxMediaPayload", () => {
   });
 
   it("skips a zero-word extension header (X=1, length=0 — header only)", () => {
-    const audio = Buffer.from([0x99]);
+    // L16 payloads are always a whole number of 16-bit samples (even length);
+    // use 2 bytes so the decoder's even-length plausibility gate accepts it.
+    const audio = Buffer.from([0x99, 0xaa]);
     const packet = buildRtpPacket({
       extension: true,
       extWords: 0,
@@ -125,6 +128,7 @@ describe("decodeTelnyxMediaPayload", () => {
     });
     const out = decodeTelnyxMediaPayload(packet.toString("base64"));
     expect(out.payload.equals(audio)).toBe(true);
+    expect(out.wasRtp).toBe(true);
   });
 
   it("handles X=1 + CSRC together (extension follows the CSRC list)", () => {
@@ -140,16 +144,19 @@ describe("decodeTelnyxMediaPayload", () => {
     expect(out.payload.equals(audio)).toBe(true);
   });
 
-  it("returns empty payload + observed PT when X=1 but the packet is too short for the ext header", () => {
-    // 12-byte header, X=1, but no extension header bytes follow.
+  it("treats an X=1 packet too short for its ext header as raw L16, not RTP", () => {
+    // 12-byte header, X=1, but no extension header bytes follow. A real RTP
+    // packet can't be shaped like this, so byte 0 only *looked* like V=2 —
+    // fall back to raw passthrough rather than emitting an empty/garbled chunk.
     const truncated = buildRtpPacket({ extension: true, payload: Buffer.alloc(0) }).subarray(0, 12);
     const out = decodeTelnyxMediaPayload(truncated.toString("base64"));
-    expect(out.payload.length).toBe(0);
-    expect(out.payloadType).toBe(96);
+    expect(out.payload.equals(truncated)).toBe(true);
+    expect(out.payloadType).toBe(11);
+    expect(out.wasRtp).toBe(false);
   });
 
   it("strips trailing padding when P=1 (RFC 3550 §5.1)", () => {
-    const audio = Buffer.from([0x01, 0x02, 0x03]);
+    const audio = Buffer.from([0x01, 0x02, 0x03, 0x04]);
     const packet = buildRtpPacket({
       padding: true,
       paddingBytes: 4,
@@ -157,6 +164,7 @@ describe("decodeTelnyxMediaPayload", () => {
     });
     const out = decodeTelnyxMediaPayload(packet.toString("base64"));
     expect(out.payload.equals(audio)).toBe(true);
+    expect(out.wasRtp).toBe(true);
   });
 
   it("ignores nonsensical pad-count (>= payload.length) rather than corrupting the buffer", () => {
@@ -164,10 +172,11 @@ describe("decodeTelnyxMediaPayload", () => {
     const header = Buffer.alloc(12);
     header[0] = (2 << 6) | (1 << 5);
     header[1] = 96;
-    const payload = Buffer.from([0x01, 0x02, 0xff]); // pad-count says 255
+    const payload = Buffer.from([0x01, 0x02, 0x03, 0xff]); // pad-count says 255
     const packet = Buffer.concat([header, payload]);
     const out = decodeTelnyxMediaPayload(packet.toString("base64"));
     expect(out.payload.equals(payload)).toBe(true);
+    expect(out.wasRtp).toBe(true);
   });
 
   it("falls back to passthrough when version != 2 (legacy / non-RTP frame)", () => {
@@ -175,6 +184,7 @@ describe("decodeTelnyxMediaPayload", () => {
     const out = decodeTelnyxMediaPayload(buf.toString("base64"));
     expect(out.payload.equals(buf)).toBe(true);
     expect(out.payloadType).toBe(11);
+    expect(out.wasRtp).toBe(false);
   });
 
   it("falls back to passthrough when buffer is shorter than 12 bytes", () => {
@@ -182,12 +192,31 @@ describe("decodeTelnyxMediaPayload", () => {
     const out = decodeTelnyxMediaPayload(tiny.toString("base64"));
     expect(out.payload.equals(tiny)).toBe(true);
     expect(out.payloadType).toBe(11);
+    expect(out.wasRtp).toBe(false);
   });
 
-  it("returns empty payload when the buffer ends exactly at headerLen", () => {
+  it("treats a header-only RTP packet (empty payload) as raw, not RTP", () => {
     const headerOnly = buildRtpPacket({ payload: Buffer.alloc(0) });
     const out = decodeTelnyxMediaPayload(headerOnly.toString("base64"));
-    expect(out.payload.length).toBe(0);
+    expect(out.payload.equals(headerOnly)).toBe(true);
+    expect(out.wasRtp).toBe(false);
+  });
+
+  it("never reports wasRtp with an odd-length payload (the post-#67 1007 trigger)", () => {
+    // Regression for the 1007 outage: a raw L16 frame is just 16-bit samples,
+    // and ~25% of first sample bytes land in 0x80–0xBF (V=2 bits set). The
+    // per-frame heuristic would treat such a frame as RTP and splice real audio
+    // off the front — and when the strip came out odd, Gemini Live closed the
+    // socket with 1007 "Request contains an invalid argument." Any buffer the
+    // decoder claims as RTP must be a whole number of 16-bit samples.
+    for (const len of [13, 15, 583, 597, 639, 640, 628]) {
+      const buf = Buffer.alloc(len);
+      buf[0] = 0x80; // V=2, P=0, X=0, CC=0
+      buf[1] = 0x60;
+      for (let i = 2; i < len; i++) buf[i] = (i * 13) & 0xff;
+      const out = decodeTelnyxMediaPayload(buf.toString("base64"));
+      if (out.wasRtp) expect(out.payload.length % 2).toBe(0);
+    }
   });
 });
 

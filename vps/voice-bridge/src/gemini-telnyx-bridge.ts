@@ -584,6 +584,16 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // PT is adopted from the first uplink frame so the synthetic stream's
   // RTP type matches what Telnyx negotiated.
   const rtpEncoder = new RtpEncoder();
+  // Uplink framing is a per-stream property, but the only per-frame signal is
+  // the RTP V=2 bits in byte 0 — which raw L16 sample bytes hit ~25% of the
+  // time, causing sporadic header-mis-strips that ship malformed PCM to Gemini
+  // (WS 1007). Lock the mode from the first decoded frame and reuse it.
+  let uplinkRtpMode: boolean | null = null;
+  // Gemini Live's L16 input must be a whole number of 16-bit samples. If a
+  // decoded frame ever has an odd byte length we hold the trailing byte and
+  // prepend it to the next frame, keeping perfect sample alignment instead of
+  // dropping audio. (Belt-and-suspenders behind the mode lock above.)
+  let uplinkCarryByte: Buffer | null = null;
   // Diagnostic counters (logged at first occurrence and on teardown). The
   // counters are kept inexpensive — incrementing booleans/integers — but
   // are critical for diagnosing "ring then silence" in production where
@@ -1197,8 +1207,27 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       // sees clean PCM, and mirror the observed payload type onto our
       // downlink encoder so Telnyx accepts our synthetic frames.
       const decoded = decodeTelnyxMediaPayload(b64);
-      if (decoded.payload.length === 0) return;
-      rtpEncoder.adoptPayloadType(decoded.payloadType);
+      // Lock RTP-vs-raw from the first frame, then stop re-guessing: a stream
+      // is one or the other for its whole life, and per-frame guessing is what
+      // mis-strips raw L16 into malformed PCM.
+      if (uplinkRtpMode === null) uplinkRtpMode = decoded.wasRtp;
+      let payload =
+        uplinkRtpMode && decoded.wasRtp ? decoded.payload : Buffer.from(b64, "base64");
+      if (payload.length === 0) return;
+      if (uplinkRtpMode && decoded.wasRtp) rtpEncoder.adoptPayloadType(decoded.payloadType);
+      // Guarantee whole 16-bit samples to Gemini. Prepend any carried-over odd
+      // byte from the previous frame, then carry this frame's trailing byte if
+      // the running length is odd. This is the definitive guard against the
+      // 1007 "invalid argument" close caused by half-sample PCM chunks.
+      if (uplinkCarryByte) {
+        payload = Buffer.concat([uplinkCarryByte, payload]);
+        uplinkCarryByte = null;
+      }
+      if (payload.length % 2 !== 0) {
+        uplinkCarryByte = Buffer.from([payload[payload.length - 1]!]);
+        payload = payload.subarray(0, payload.length - 1);
+      }
+      if (payload.length === 0) return;
       // One-shot first-frame log so we can confirm Telnyx is delivering
       // the negotiated codec/cadence (640 bytes = 20 ms of L16 16 kHz; the
       // header hex starts with `0xff`/`0x80` for RTP, anything else means
@@ -1210,20 +1239,21 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           callControlId: opts.callControlId,
           rawBytes: rawBytes.length,
           rawHeaderHex: rawBytes.subarray(0, 16).toString("hex"),
-          payloadBytes: decoded.payload.length,
+          payloadBytes: payload.length,
+          uplinkRtpMode,
           rtpPayloadType: decoded.payloadType
         });
       }
       diag.uplinkFrames += 1;
-      diag.uplinkBytesPostHeader += decoded.payload.length;
+      diag.uplinkBytesPostHeader += payload.length;
       // Track peak amplitude across this heartbeat window. Pure silence
       // stays <100; speech routinely peaks >5000. Reported by the heartbeat
       // tick and reset there.
-      if (decoded.payload.length >= 2 && decoded.payload.length % 2 === 0) {
+      if (payload.length >= 2 && payload.length % 2 === 0) {
         const samples = new Int16Array(
-          decoded.payload.buffer,
-          decoded.payload.byteOffset,
-          decoded.payload.length / 2
+          payload.buffer,
+          payload.byteOffset,
+          payload.length / 2
         );
         let peak = 0;
         for (let i = 0; i < samples.length; i++) {
@@ -1245,7 +1275,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       session.sendRealtimeInput({
         audio: {
           mimeType: `audio/pcm;rate=${TELNYX_PCM_RATE}`,
-          data: decoded.payload.toString("base64")
+          data: payload.toString("base64")
         }
       });
     } catch (e) {
