@@ -43,6 +43,15 @@ export function StaffSmsToggle({
     setError(null);
     setSaving(field);
     // Optimistic: reflect the click immediately, roll back on failure.
+    // Snapshot the PRE-CLICK values so a failed save reverts ONLY the toggle
+    // we touched — back to its current value (which already includes any
+    // earlier successful save this session), never the stale page-load props.
+    const prevAssistant = assistantReply;
+    const prevForward = forwardToOwner;
+    const rollback = () => {
+      if (patch.assistantReplyEnabled !== undefined) setAssistantReply(prevAssistant);
+      if (patch.forwardToOwnerEnabled !== undefined) setForwardToOwner(prevForward);
+    };
     if (patch.assistantReplyEnabled !== undefined) setAssistantReply(patch.assistantReplyEnabled);
     if (patch.forwardToOwnerEnabled !== undefined) setForwardToOwner(patch.forwardToOwnerEnabled);
     try {
@@ -57,9 +66,7 @@ export function StaffSmsToggle({
       }>(res);
       if (!env.ok) {
         setError(env.error.message);
-        // Roll back to the server's last-known truth.
-        setAssistantReply(initialAssistantReplyEnabled);
-        setForwardToOwner(initialForwardToOwnerEnabled);
+        rollback();
         return;
       }
       setAssistantReply(env.data.assistantReplyEnabled);
@@ -67,8 +74,7 @@ export function StaffSmsToggle({
       router.refresh();
     } catch {
       setError("Network error");
-      setAssistantReply(initialAssistantReplyEnabled);
-      setForwardToOwner(initialForwardToOwnerEnabled);
+      rollback();
     } finally {
       setSaving(null);
     }

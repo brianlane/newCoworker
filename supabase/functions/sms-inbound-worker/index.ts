@@ -248,6 +248,29 @@ serve(async (req: Request) => {
       businessTier = typeof biz?.tier === "string" ? biz.tier : null;
 
       if (biz?.is_paused || biz?.customer_channels_enabled === false) {
+        // Staff jobs were already handled at inbound time (audit row + optional
+        // "[Team] …" owner relay). If Safe Mode / pause flips on before the
+        // worker runs, the generic customer forward below would send a SECOND
+        // owner SMS ("[Safe Mode] …") for a staff text that may already have
+        // been relayed — and we don't want an assistant reply while paused.
+        // Close staff jobs out as audit-only here, before the customer gate.
+        if (job.staff_kind) {
+          await supabase.rpc("complete_sms_inbound_job", {
+            p_job_id: job.id,
+            p_status: "done",
+            p_telnyx_outbound_message_id: null,
+            p_rowboat_conversation_id: null,
+            p_last_error: "staff_safe_mode_noop"
+          });
+          await clearJobReplyCache(supabase, job.id);
+          await telemetryRecord(supabase, "sms_worker_staff_safe_mode_noop", {
+            job_id: job.id,
+            business_id: job.business_id,
+            staff_kind: job.staff_kind
+          });
+          processed += 1;
+          continue;
+        }
         const { data: settingsRow } = await supabase
           .from("business_telnyx_settings")
           .select(

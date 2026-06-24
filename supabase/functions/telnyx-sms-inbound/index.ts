@@ -970,6 +970,17 @@ serve(async (req: Request) => {
       });
       if (tmJobErr && (tmJobErr as { code?: string }).code !== "23505") {
         console.error("team member inbound persist", tmJobErr);
+        // When we PROMISED an assistant reply (reply=true), a lost `pending`
+        // job means the texter would get nothing AND Telnyx would stop
+        // retrying after our 200. Fail loudly so Telnyx retries; the insert is
+        // idempotent on telnyx_event_id (a later success dedups via 23505) and
+        // the owner forward below is idempotency-keyed, so no double-send.
+        if (opts.reply) {
+          return new Response(
+            JSON.stringify({ ok: false, error: "staff_job_persist_failed" }),
+            { status: 500, headers: { "Content-Type": "application/json" } }
+          );
+        }
       }
       // Optional owner forward (mirrors the Safe Mode forward contract,
       // including its truncation caps). Skipped when the sender IS the
