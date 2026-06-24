@@ -202,10 +202,10 @@ describe("getCustomerMemory", () => {
 });
 
 describe("linkCustomerEmail", () => {
-  // linkCustomerEmail calls `from("customer_memories")` up to twice (an
-  // email-fill UPDATE, then a minimal-profile INSERT). A sequence client
-  // hands each from() call its own terminator so we can model "row exists"
-  // vs "no row → insert" independently.
+  // linkCustomerEmail calls `from("customer_memories")` up to twice: an
+  // alias-aware SELECT, then either an UPDATE (by id) or a minimal INSERT. A
+  // sequence client hands each from() call its own terminator so we can model
+  // "row exists / has email / missing" independently.
   function makeSeqClient(terminators: Array<{ data?: unknown; error?: unknown }>) {
     const fromCalls: Array<{ table: string; calls: CallLog[] }> = [];
     let i = 0;
@@ -226,21 +226,44 @@ describe("linkCustomerEmail", () => {
     expect(fromCalls).toHaveLength(0);
   });
 
-  it("fills an empty email on an existing row and stops (never inserts)", async () => {
-    const { client, fromCalls } = makeSeqClient([{ data: [{ id: "row-1" }], error: null }]);
-    await linkCustomerEmail(BIZ, CUSTOMER, "  joe@acme.com  ", client);
-    expect(fromCalls).toHaveLength(1);
-    const upd = fromCalls[0]!;
-    expect(upd.table).toBe("customer_memories");
-    const updateArg = upd.calls.find((c) => c.name === "update")?.args[0] as Record<string, unknown>;
-    expect(updateArg.email).toBe("joe@acme.com");
-    // Only fill rows whose email is still null — never clobber an owner edit.
-    expect(upd.calls.find((c) => c.name === "is")?.args).toEqual(["email", null]);
+  it("resolves the contact alias-aware (e164 OR alias) before writing", async () => {
+    const { client, fromCalls } = makeSeqClient([
+      { data: { id: "row-1", email: null }, error: null },
+      { data: null, error: null }
+    ]);
+    await linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client);
+    const sel = fromCalls[0]!;
+    expect(sel.calls.find((c) => c.name === "or")?.args[0]).toBe(
+      `customer_e164.eq.${CUSTOMER},alias_e164s.cs.{${CUSTOMER}}`
+    );
   });
 
-  it("inserts a minimal profile when no row was updated", async () => {
+  it("fills an empty email on the matched row by id (never inserts)", async () => {
     const { client, fromCalls } = makeSeqClient([
-      { data: [], error: null },
+      { data: { id: "row-1", email: null }, error: null },
+      { data: null, error: null }
+    ]);
+    await linkCustomerEmail(BIZ, CUSTOMER, "  joe@acme.com  ", client);
+    expect(fromCalls).toHaveLength(2);
+    const upd = fromCalls[1]!;
+    const updateArg = upd.calls.find((c) => c.name === "update")?.args[0] as Record<string, unknown>;
+    expect(updateArg.email).toBe("joe@acme.com");
+    // Targets the resolved row id (covers the merged-alias case).
+    expect(upd.calls.find((c) => c.name === "eq")?.args).toEqual(["id", "row-1"]);
+  });
+
+  it("leaves an existing email untouched (never clobbers an owner edit)", async () => {
+    const { client, fromCalls } = makeSeqClient([
+      { data: { id: "row-1", email: "owner@set.com" }, error: null }
+    ]);
+    await linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client);
+    // Only the SELECT ran — no UPDATE, no INSERT.
+    expect(fromCalls).toHaveLength(1);
+  });
+
+  it("inserts a minimal profile when no row exists", async () => {
+    const { client, fromCalls } = makeSeqClient([
+      { data: null, error: null },
       { data: null, error: null }
     ]);
     await linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client);
@@ -254,9 +277,9 @@ describe("linkCustomerEmail", () => {
     });
   });
 
-  it("swallows a unique-violation on insert (a row already exists, email preserved)", async () => {
+  it("swallows a unique-violation on insert (a concurrent writer won the race)", async () => {
     const { client } = makeSeqClient([
-      { data: [], error: null },
+      { data: null, error: null },
       { data: null, error: { code: "23505", message: "duplicate key" } }
     ]);
     await expect(linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client)).resolves.toBeUndefined();
@@ -264,7 +287,7 @@ describe("linkCustomerEmail", () => {
 
   it("throws on a non-unique insert error", async () => {
     const { client } = makeSeqClient([
-      { data: [], error: null },
+      { data: null, error: null },
       { data: null, error: { code: "42501", message: "rls denied" } }
     ]);
     await expect(linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client)).rejects.toThrow(
@@ -272,15 +295,27 @@ describe("linkCustomerEmail", () => {
     );
   });
 
+  it("throws on a select error", async () => {
+    const { client } = makeSeqClient([{ data: null, error: { message: "select boom" } }]);
+    await expect(linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client)).rejects.toThrow(
+      /linkCustomerEmail: select boom/
+    );
+  });
+
   it("throws on an update error", async () => {
-    const { client } = makeSeqClient([{ data: null, error: { message: "update boom" } }]);
+    const { client } = makeSeqClient([
+      { data: { id: "row-1", email: null }, error: null },
+      { data: null, error: { message: "update boom" } }
+    ]);
     await expect(linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client)).rejects.toThrow(
       /linkCustomerEmail: update boom/
     );
   });
 
   it("falls back to the default service client when none is provided", async () => {
-    const { client, fromCalls } = makeSeqClient([{ data: [{ id: "row-1" }], error: null }]);
+    const { client, fromCalls } = makeSeqClient([
+      { data: { id: "row-1", email: "x@y.com" }, error: null }
+    ]);
     defaultClientSpy.mockReturnValueOnce(client);
     await linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com");
     expect(createSupabaseServiceClient).toHaveBeenCalled();

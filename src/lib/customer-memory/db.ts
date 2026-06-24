@@ -172,19 +172,30 @@ export async function linkCustomerEmail(
   const normalized = email.trim();
   if (!normalized) return;
   const db = client ?? (await createSupabaseServiceClient());
-  // 1) Fill an empty email on an existing row.
-  const { data: updated, error: updErr } = await db
+  // 1) Resolve the contact ALIAS-AWARE: after a profile merge the caller's
+  //    number lives in `alias_e164s` on the surviving row, not as
+  //    `customer_e164`. Matching only the raw number would miss that row and
+  //    (below) insert a duplicate profile, splitting voice/SMS identity from
+  //    the email rollup. Mirror getCustomerMemory's (e164 OR alias) filter.
+  const { data: existing, error: selErr } = await db
     .from("customer_memories")
-    .update({ email: normalized, updated_at: new Date().toISOString() })
+    .select("id, email")
     .eq("business_id", businessId)
-    .eq("customer_e164", customerE164)
-    .is("email", null)
-    .select("id");
-  if (updErr) throw new Error(`linkCustomerEmail: ${updErr.message}`);
-  if (updated && updated.length > 0) return;
-  // 2) No row was updated: it either doesn't exist or already has an email.
-  //    Insert a fresh profile; a unique violation means a row already exists
-  //    (with an email we deliberately preserve) — swallow it.
+    .or(`customer_e164.eq.${customerE164},alias_e164s.cs.{${customerE164}}`)
+    .maybeSingle();
+  if (selErr) throw new Error(`linkCustomerEmail: ${selErr.message}`);
+  if (existing) {
+    // Never clobber an address the OWNER (or an earlier capture) already set.
+    if (existing.email) return;
+    const { error: updErr } = await db
+      .from("customer_memories")
+      .update({ email: normalized, updated_at: new Date().toISOString() })
+      .eq("id", existing.id);
+    if (updErr) throw new Error(`linkCustomerEmail: ${updErr.message}`);
+    return;
+  }
+  // 2) No profile exists yet for this number. Insert a minimal one; a unique
+  //    violation means a concurrent writer just created it — swallow it.
   const { error: insErr } = await db.from("customer_memories").insert({
     business_id: businessId,
     customer_e164: customerE164,
