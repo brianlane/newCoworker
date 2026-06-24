@@ -70,11 +70,16 @@ export async function POST(request: Request) {
       const message = err instanceof Error ? err.message : String(err);
       const isQuota = /Monthly SMS limit|SMS quota blocked|throttled/i.test(message);
       logger.warn("dashboard-sms-send: send failed", { businessId, error: message });
-      // Surface a quota block as a 409 (actionable) vs. a generic send failure.
+      if (isQuota) {
+        return errorResponse("CONFLICT", message, 409);
+      }
+      // Surface the underlying Telnyx failure (e.g. a rejected short code or
+      // invalid destination) so the owner knows WHY it didn't send, rather than
+      // a generic message. Trimmed to stay readable; the owner is trusted.
       return errorResponse(
-        isQuota ? "CONFLICT" : "INTERNAL_SERVER_ERROR",
-        isQuota ? message : "Could not send the message. Please try again.",
-        isQuota ? 409 : 502
+        "INTERNAL_SERVER_ERROR",
+        `Could not send: ${message}`.slice(0, 300),
+        502
       );
     }
 
@@ -101,7 +106,12 @@ export async function POST(request: Request) {
       });
     }
 
-    return successResponse({ telnyxMessageId, logId: logRow?.id ?? null });
+    // `logged` tells the client whether the message will actually appear in the
+    // thread. The SMS already went out and was billed, so we still return ok —
+    // but when logging failed (e.g. the owner_manual migration isn't applied
+    // yet) the UI must NOT navigate to a thread that would 404 on an empty
+    // history, and should tell the owner it sent without being saved.
+    return successResponse({ telnyxMessageId, logId: logRow?.id ?? null, logged: !logErr });
   } catch (err) {
     return handleRouteError(err);
   }

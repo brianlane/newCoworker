@@ -35,6 +35,7 @@ export function SmsThreadComposer({ businessId, toE164 }: Props) {
       });
       const json = (await res.json().catch(() => null)) as {
         ok?: boolean;
+        data?: { logged?: boolean };
         error?: { message?: string };
       } | null;
       if (!res.ok || !json?.ok) {
@@ -42,6 +43,12 @@ export function SmsThreadComposer({ businessId, toE164 }: Props) {
         return;
       }
       setText("");
+      // Sent but not saved to history (e.g. owner_manual migration not applied
+      // yet): a refresh wouldn't show it, so warn instead of silently dropping.
+      if (json.data?.logged === false) {
+        setError("Sent, but it couldn't be saved to history yet — it may not appear above.");
+        return;
+      }
       router.refresh();
     } catch {
       setError("Network error — please try again.");

@@ -38,10 +38,20 @@ export function SmsComposeNew({ businessId }: Props) {
       });
       const json = (await res.json().catch(() => null)) as {
         ok?: boolean;
+        data?: { logged?: boolean };
         error?: { message?: string };
       } | null;
       if (!res.ok || !json?.ok) {
         setError(json?.error?.message || `Could not send (${res.status}).`);
+        return;
+      }
+      // The send succeeded but couldn't be saved to history (e.g. the
+      // owner_manual migration isn't applied yet). Navigating to the thread
+      // would 404 on an empty history, so stay put and tell the owner the
+      // message went out without being recorded.
+      if (json.data?.logged === false) {
+        setError("Sent, but it couldn't be saved to history yet — it may not appear in the thread.");
+        setText("");
         return;
       }
       setOpen(false);
