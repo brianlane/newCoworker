@@ -1,4 +1,6 @@
 import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import WebSocket from "ws";
 import { GoogleGenAI, Modality, Type, type LiveServerMessage, type Session } from "@google/genai";
 import { parsePcmRateFromMime, StreamingResampler } from "./audio-resample.js";
@@ -26,13 +28,31 @@ const GEMINI_OUTPUT_DEFAULT_RATE = 24000;
  * "unknown" rather than crashing the bridge import.
  */
 const GENAI_SDK_VERSION: string = (() => {
+  const req = createRequire(import.meta.url);
+  // 1.x exposed ./package.json directly; try that first.
   try {
-    const req = createRequire(import.meta.url);
     const pkg = req("@google/genai/package.json") as { version?: string };
-    return pkg.version ?? "unknown";
+    if (pkg.version) return pkg.version;
   } catch {
-    return "unknown";
+    // 2.x tightened its `exports` map and no longer publishes ./package.json,
+    // so fall through to resolving the package root from its entry point.
   }
+  try {
+    let dir = dirname(req.resolve("@google/genai"));
+    for (let i = 0; i < 8; i++) {
+      const p = join(dir, "package.json");
+      if (existsSync(p)) {
+        const j = JSON.parse(readFileSync(p, "utf8")) as { name?: string; version?: string };
+        if (j.name === "@google/genai" && j.version) return j.version;
+      }
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch {
+    // ignore — reported as "unknown" below
+  }
+  return "unknown";
 })();
 
 /**
