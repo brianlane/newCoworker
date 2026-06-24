@@ -854,6 +854,9 @@ serve(async (req: Request) => {
     // redelivers): silently treating an employee as a customer is exactly
     // what this gate exists to prevent.
     let teamMember: { name?: string | null } | null = null;
+    // Owner vs employee — drives staff_kind on the queued job and the persona
+    // the worker builds. Null whenever teamMember is null (ordinary customer).
+    let teamMemberKind: "owner" | "team" | null = null;
     if (from) {
       const { data: memberRow, error: memberErr } = await supabase
         .from("ai_flow_team_members")
@@ -870,6 +873,7 @@ serve(async (req: Request) => {
         );
       }
       teamMember = memberRow as { name?: string | null } | null;
+      if (teamMember) teamMemberKind = "team";
       // The OWNER's own numbers get the same gate: a free text from the
       // owner is never a customer message, and without this the worker
       // would AI-chat with the owner and auto-create a customer profile for
@@ -907,70 +911,131 @@ serve(async (req: Request) => {
         ].map((n) => normalizeE164(n ?? ""));
         if (ownerNumbers.some((n) => n && from === n)) {
           teamMember = { name: biz?.owner_name?.trim() || "Owner" };
+          teamMemberKind = "owner";
         }
       }
     }
 
-    // Persist the employee text for the thread audit trail, forward it to
-    // the owner's cell, and stop — shared by the Safe Mode and normal paths.
+    // Staff-SMS behavior flags (default: assistant replies, no owner forward).
+    // Only read when the sender is staff — customers never hit this path.
+    let staffReplyEnabled = true;
+    let staffForwardEnabled = false;
+    if (teamMember) {
+      const { data: staffCfg } = await supabase
+        .from("business_telnyx_settings")
+        .select(
+          "staff_sms_assistant_reply_enabled, staff_sms_forward_to_owner_enabled"
+        )
+        .eq("business_id", businessId)
+        .maybeSingle();
+      if (staffCfg) {
+        staffReplyEnabled =
+          (staffCfg as { staff_sms_assistant_reply_enabled?: boolean | null })
+            .staff_sms_assistant_reply_enabled !== false;
+        staffForwardEnabled =
+          (staffCfg as { staff_sms_forward_to_owner_enabled?: boolean | null })
+            .staff_sms_forward_to_owner_enabled === true;
+      }
+    }
+
+    // Owner/employee gate, shared by the Safe Mode and normal paths. Two
+    // behaviors, controlled by the caller:
+    //   reply=true   → enqueue a STAFF job (suppress_reply=false, staff_kind/
+    //                  staff_name set). The worker answers in internal-assistant
+    //                  mode — no lead intake, no customer profile — so staff can
+    //                  text the assistant like they do in the dashboard chat.
+    //   reply=false  → the legacy behavior: persist a suppressed `done` job so
+    //                  there is no AI reply (used in Safe Mode, or when the
+    //                  owner turns the staff reply off).
+    //   forward=true → ALSO relay the text to the owner's cell ("[Team] …").
+    // Either way the message never starts an AiFlow lead run and never creates
+    // a customer-memory profile for a staff number.
     const respondTeamMemberGate = async (
-      member: { name?: string | null }
+      member: { name?: string | null },
+      kind: "owner" | "team",
+      opts: { reply: boolean; forward: boolean }
     ): Promise<Response> => {
       const { error: tmJobErr } = await supabase.from("sms_inbound_jobs").insert({
         business_id: businessId,
         telnyx_event_id: eventId,
         payload: envelope as unknown as Record<string, unknown>,
-        status: "done",
-        suppress_reply: true,
+        // reply → leave the job claimable so the worker generates a staff reply;
+        // otherwise mark it done so it stays audit-only with no outbound.
+        status: opts.reply ? "pending" : "done",
+        suppress_reply: !opts.reply,
         customer_e164: from,
+        staff_kind: kind,
+        staff_name: member.name?.trim() || null,
         outbound_idempotency_key: crypto.randomUUID()
       });
       if (tmJobErr && (tmJobErr as { code?: string }).code !== "23505") {
         console.error("team member inbound persist", tmJobErr);
+        // When we PROMISED an assistant reply (reply=true), a lost `pending`
+        // job means the texter would get nothing AND Telnyx would stop
+        // retrying after our 200. Fail loudly so Telnyx retries; the insert is
+        // idempotent on telnyx_event_id (a later success dedups via 23505) and
+        // the owner forward below is idempotency-keyed, so no double-send.
+        if (opts.reply) {
+          return new Response(
+            JSON.stringify({ ok: false, error: "staff_job_persist_failed" }),
+            { status: 500, headers: { "Content-Type": "application/json" } }
+          );
+        }
       }
-      // Best-effort owner forward (mirrors the Safe Mode forward contract,
+      // Optional owner forward (mirrors the Safe Mode forward contract,
       // including its truncation caps). Skipped when the sender IS the
       // owner's forward number — no point forwarding to themselves.
-      const { data: fwdSettingsRow } = await supabase
-        .from("business_telnyx_settings")
-        .select("forward_to_e164, telnyx_messaging_profile_id, telnyx_sms_from_e164")
-        .eq("business_id", businessId)
-        .maybeSingle();
-      const fwdSettings = fwdSettingsRow as
-        | {
-            forward_to_e164?: string | null;
-            telnyx_messaging_profile_id?: string | null;
-            telnyx_sms_from_e164?: string | null;
+      if (opts.forward) {
+        const { data: fwdSettingsRow } = await supabase
+          .from("business_telnyx_settings")
+          .select("forward_to_e164, telnyx_messaging_profile_id, telnyx_sms_from_e164")
+          .eq("business_id", businessId)
+          .maybeSingle();
+        const fwdSettings = fwdSettingsRow as
+          | {
+              forward_to_e164?: string | null;
+              telnyx_messaging_profile_id?: string | null;
+              telnyx_sms_from_e164?: string | null;
+            }
+          | null;
+        const ownerCell = normalizeE164(fwdSettings?.forward_to_e164 ?? "");
+        const fwdProfile =
+          (fwdSettings?.telnyx_messaging_profile_id &&
+            fwdSettings.telnyx_messaging_profile_id.trim()) ||
+          messagingProfileId;
+        const fwdFrom =
+          (fwdSettings?.telnyx_sms_from_e164 && fwdSettings.telnyx_sms_from_e164.trim()) ||
+          smsFromE164;
+        if (telnyxApiKey && fwdProfile && ownerCell && from !== ownerCell) {
+          const rawBody = inboundSmsBody(payload).slice(0, 1000);
+          const who = member.name?.trim() || from;
+          const send = await telnyxSendSms({
+            apiKey: telnyxApiKey,
+            messagingProfileId: fwdProfile,
+            fromE164: fwdFrom,
+            toE164: ownerCell,
+            text: `[Team] ${who}: ${rawBody}`.slice(0, 1600),
+            idempotencyKey: `${eventId}:team-forward`
+          });
+          if (!send.ok) {
+            console.error("team member forward", send.status, send.body.slice(0, 300));
           }
-        | null;
-      const ownerCell = normalizeE164(fwdSettings?.forward_to_e164 ?? "");
-      const fwdProfile =
-        (fwdSettings?.telnyx_messaging_profile_id &&
-          fwdSettings.telnyx_messaging_profile_id.trim()) ||
-        messagingProfileId;
-      const fwdFrom =
-        (fwdSettings?.telnyx_sms_from_e164 && fwdSettings.telnyx_sms_from_e164.trim()) ||
-        smsFromE164;
-      if (telnyxApiKey && fwdProfile && ownerCell && from !== ownerCell) {
-        const rawBody = inboundSmsBody(payload).slice(0, 1000);
-        const who = member.name?.trim() || from;
-        const send = await telnyxSendSms({
-          apiKey: telnyxApiKey,
-          messagingProfileId: fwdProfile,
-          fromE164: fwdFrom,
-          toE164: ownerCell,
-          text: `[Team] ${who}: ${rawBody}`.slice(0, 1600),
-          idempotencyKey: `${eventId}:team-forward`
-        });
-        if (!send.ok) {
-          console.error("team member forward", send.status, send.body.slice(0, 300));
         }
       }
       await telemetryRecord(supabase, "sms_inbound_team_member", {
         business_id: businessId,
         event_id: eventId,
-        member_e164: from
+        member_e164: from,
+        staff_kind: kind,
+        reply: opts.reply,
+        forwarded: opts.forward
       });
+      if (opts.reply) {
+        return new Response(
+          JSON.stringify({ ok: true, staff: kind }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
       return new Response(JSON.stringify({ ok: true, skip: "team_member" }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
@@ -1015,9 +1080,15 @@ serve(async (req: Request) => {
       if (gate.kind === "safe_mode_forward") {
         // Team-member gate outranks Safe Mode handling (only the kill switch
         // above outranks the gate): an employee's text must not enqueue
-        // AiFlow lead runs or be forwarded as a customer message — it gets
-        // the suppressed job + "[Team]" forward instead.
-        if (teamMember) return await respondTeamMemberGate(teamMember);
+        // AiFlow lead runs or be answered/forwarded as a customer message.
+        // Safe Mode means the AI is off for everyone, so staff get the legacy
+        // forward-and-suppress here regardless of the staff-reply toggle.
+        if (teamMember) {
+          return await respondTeamMemberGate(teamMember, teamMemberKind ?? "team", {
+            reply: false,
+            forward: true
+          });
+        }
         // Label is "[Safe Mode]" — Safe Mode is NOT the kill switch (paused path
         // is handled above), so saying "paused" would mislead the owner reading
         // the forwarded text on their phone.
@@ -1131,8 +1202,14 @@ serve(async (req: Request) => {
     }
 
     // Team-member gate, normal path (the Safe Mode branch above applies the
-    // same gate before its forward).
-    if (teamMember) return await respondTeamMemberGate(teamMember);
+    // same gate before its forward). Staff get an internal-assistant reply
+    // when enabled (the default), with an optional owner forward.
+    if (teamMember) {
+      return await respondTeamMemberGate(teamMember, teamMemberKind ?? "team", {
+        reply: staffReplyEnabled,
+        forward: staffForwardEnabled
+      });
+    }
 
     // Evaluate AiFlow triggers + enqueue runs up front so we only suppress the
     // default Coworker reply when an automation is actually queued to handle it.

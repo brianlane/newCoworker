@@ -13,7 +13,8 @@ import {
   setForwardToE164,
   setBusinessMessagingCampaignStatus,
   listBusinessesPendingTendlcAttach,
-  upsertBusinessTelnyxSettings
+  upsertBusinessTelnyxSettings,
+  setStaffSmsSettings
 } from "@/lib/db/telnyx-routes";
 
 type Chain = {
@@ -79,6 +80,8 @@ const sampleSettings = {
   forward_to_e164: null,
   transfer_enabled: true,
   sms_fallback_enabled: true,
+  staff_sms_assistant_reply_enabled: true,
+  staff_sms_forward_to_owner_enabled: false,
   updated_at: "2026-01-01T00:00:00Z"
 };
 
@@ -616,6 +619,63 @@ describe("telnyx-routes DB layer", () => {
           makeDb(c) as never
         )
       ).rejects.toThrow(/fk constraint/);
+    });
+  });
+
+  describe("setStaffSmsSettings", () => {
+    it("writes both flags when both are provided", async () => {
+      const c = chain();
+      c.single.mockResolvedValue({ data: sampleSettings, error: null });
+      const db = makeDb(c);
+      await setStaffSmsSettings(
+        "biz",
+        { assistantReplyEnabled: false, forwardToOwnerEnabled: true },
+        db as never
+      );
+      const [row, opts] = c.upsert.mock.calls[0];
+      expect(row as Record<string, unknown>).toMatchObject({
+        business_id: "biz",
+        staff_sms_assistant_reply_enabled: false,
+        staff_sms_forward_to_owner_enabled: true
+      });
+      expect(opts).toEqual({ onConflict: "business_id" });
+    });
+
+    it("writes only the assistant-reply flag when forward is omitted", async () => {
+      const c = chain();
+      c.single.mockResolvedValue({ data: sampleSettings, error: null });
+      await setStaffSmsSettings("biz", { assistantReplyEnabled: true }, makeDb(c) as never);
+      const [row] = c.upsert.mock.calls[0];
+      const r = row as Record<string, unknown>;
+      expect(r.staff_sms_assistant_reply_enabled).toBe(true);
+      expect(r).not.toHaveProperty("staff_sms_forward_to_owner_enabled");
+    });
+
+    it("writes only the forward flag when assistant-reply is omitted", async () => {
+      const c = chain();
+      c.single.mockResolvedValue({ data: sampleSettings, error: null });
+      await setStaffSmsSettings("biz", { forwardToOwnerEnabled: false }, makeDb(c) as never);
+      const [row] = c.upsert.mock.calls[0];
+      const r = row as Record<string, unknown>;
+      expect(r.staff_sms_forward_to_owner_enabled).toBe(false);
+      expect(r).not.toHaveProperty("staff_sms_assistant_reply_enabled");
+    });
+
+    it("surfaces underlying DB errors", async () => {
+      const c = chain();
+      c.single.mockResolvedValue({ data: null, error: { message: "staff boom" } });
+      await expect(
+        setStaffSmsSettings("biz", { assistantReplyEnabled: true }, makeDb(c) as never)
+      ).rejects.toThrow(/staff boom/);
+    });
+
+    it("uses the default service client when none is provided", async () => {
+      const c = chain();
+      c.single.mockResolvedValue({ data: sampleSettings, error: null });
+      defaultClientSpy.mockReturnValueOnce(makeDb(c));
+      await expect(
+        setStaffSmsSettings("biz", { assistantReplyEnabled: true })
+      ).resolves.toEqual(sampleSettings);
     });
   });
 

@@ -48,8 +48,38 @@ export type BusinessTelnyxSettingsRow = {
   forward_to_e164: string | null;
   transfer_enabled: boolean;
   sms_fallback_enabled: boolean;
+  /** When true, owner/team texts get an internal-assistant reply (staff mode). */
+  staff_sms_assistant_reply_enabled: boolean;
+  /** When true, also relay owner/team texts to the owner cell. */
+  staff_sms_forward_to_owner_enabled: boolean;
   updated_at: string;
 };
+
+/** Persist the staff-SMS behavior toggles (owner settings UI). */
+export async function setStaffSmsSettings(
+  businessId: string,
+  input: { assistantReplyEnabled?: boolean; forwardToOwnerEnabled?: boolean },
+  client?: SupabaseClient
+): Promise<BusinessTelnyxSettingsRow> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const row: Record<string, unknown> = {
+    business_id: businessId,
+    updated_at: new Date().toISOString(),
+    ...(input.assistantReplyEnabled !== undefined
+      ? { staff_sms_assistant_reply_enabled: input.assistantReplyEnabled }
+      : {}),
+    ...(input.forwardToOwnerEnabled !== undefined
+      ? { staff_sms_forward_to_owner_enabled: input.forwardToOwnerEnabled }
+      : {})
+  };
+  const { data, error } = await db
+    .from("business_telnyx_settings")
+    .upsert(row, { onConflict: "business_id" })
+    .select()
+    .single();
+  if (error) throw new Error(`setStaffSmsSettings: ${error.message}`);
+  return data as BusinessTelnyxSettingsRow;
+}
 
 export async function getTelnyxVoiceRouteForBusiness(
   businessId: string,
