@@ -10,7 +10,11 @@ import {
 import { insertCoworkerLog } from "@/lib/db/logs";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
+import { linkCustomerEmail } from "@/lib/customer-memory/db";
 import { logger } from "@/lib/logger";
+
+/** Structural E.164 guard — only link the profile when we have a real number. */
+const E164_RE = /^\+[1-9]\d{6,14}$/;
 
 /**
  * `capture_caller_details` — writes caller information (name, phone, email,
@@ -87,6 +91,20 @@ export async function POST(request: Request) {
       status: args.urgency === "high" ? "urgent_alert" : "success",
       log_payload: logPayload
     });
+
+    // Cross-channel link: when the caller shares an email, attach it to their
+    // profile (keyed by the real caller E.164) so future inbound mail from that
+    // address rolls up to this same contact and feeds their rolling summary.
+    // Best-effort — never fail the capture over a link write.
+    if (args.email && envelope.callerE164 && E164_RE.test(envelope.callerE164)) {
+      try {
+        await linkCustomerEmail(envelope.businessId, envelope.callerE164, args.email);
+      } catch (err) {
+        logger.warn("voice-tools/capture: linkCustomerEmail failed", {
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
 
     if (args.urgency === "high") {
       // High-urgency captures fan out to email/SMS via the shared dispatcher

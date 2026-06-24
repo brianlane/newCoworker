@@ -151,6 +151,50 @@ export async function findCustomerByEmail(
   return { customerE164: row.customer_e164, displayName: row.display_name };
 }
 
+/**
+ * Best-effort: attach an email to a customer's cross-channel profile so future
+ * inbound mail from that address rolls up to the same contact (and the
+ * summarizer can fold the correspondence in). Used when a caller/texter shares
+ * their email with the assistant.
+ *
+ * Precedence: never clobber an address the OWNER already set on the profile.
+ * We only fill an empty `email`; if the row already has one (owner edit, lead
+ * backfill, an earlier capture), we leave it untouched. Creates a minimal
+ * profile when none exists yet — counters/last_channel stay at their defaults
+ * (the inbound recorder owns those), so this can't fake an interaction.
+ */
+export async function linkCustomerEmail(
+  businessId: string,
+  customerE164: string,
+  email: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const normalized = email.trim();
+  if (!normalized) return;
+  const db = client ?? (await createSupabaseServiceClient());
+  // 1) Fill an empty email on an existing row.
+  const { data: updated, error: updErr } = await db
+    .from("customer_memories")
+    .update({ email: normalized, updated_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .eq("customer_e164", customerE164)
+    .is("email", null)
+    .select("id");
+  if (updErr) throw new Error(`linkCustomerEmail: ${updErr.message}`);
+  if (updated && updated.length > 0) return;
+  // 2) No row was updated: it either doesn't exist or already has an email.
+  //    Insert a fresh profile; a unique violation means a row already exists
+  //    (with an email we deliberately preserve) — swallow it.
+  const { error: insErr } = await db.from("customer_memories").insert({
+    business_id: businessId,
+    customer_e164: customerE164,
+    email: normalized
+  });
+  if (insErr && insErr.code !== PG_UNIQUE_VIOLATION) {
+    throw new Error(`linkCustomerEmail: ${insErr.message}`);
+  }
+}
+
 export type ListCustomerMemoriesOptions = {
   limit?: number;
   /** Filter by display_name OR customer_e164 substring (case-insensitive). */

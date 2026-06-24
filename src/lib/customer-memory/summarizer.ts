@@ -35,6 +35,10 @@ import { resolveOutboundRowboatBearer } from "@/lib/rowboat/gateway-token";
 import { callRowboatChat, type RowboatChatMessage } from "@/lib/rowboat/chat";
 import { listVoiceTurnsForCustomer as defaultListVoiceTurns } from "@/lib/db/voice-transcripts";
 import {
+  listEmailLogForAddress as defaultListEmailLogForAddress,
+  type EmailLogRow
+} from "@/lib/db/email-log";
+import {
   getCustomerMemory,
   listSmsHistoryForCustomer,
   updateCustomerSummary,
@@ -64,10 +68,17 @@ export const SUMMARY_TIMEOUT_MS = 60_000;
 /** Recent voice calls / SMS pulled into the summarizer prompt. */
 export const SUMMARY_INPUT_VOICE_CALLS = 5;
 export const SUMMARY_INPUT_SMS_TURNS = 30;
+/**
+ * Recent emails pulled in — but ONLY the ones to/from THIS contact's own
+ * linked address (`customer_memories.email`). Never a business-wide mail
+ * roll-up: the feed is `listEmailLogForAddress(businessId, memory.email)`, so
+ * one customer's summary can never absorb another contact's correspondence.
+ */
+export const SUMMARY_INPUT_EMAILS = 10;
 
 const SUMMARIZER_SYSTEM_INSTRUCTION = `SUMMARIZER MODE — DO NOT respond as the persona, agent, or assistant.
 
-You will receive context about a customer's prior interactions with a business across SMS and voice. Produce a concise factual digest the agent can use to maintain continuity in future interactions across either channel.
+You will receive context about a customer's prior interactions with a business across SMS, voice, and email. Produce a concise factual digest the agent can use to maintain continuity in future interactions across any of those channels.
 
 Output ONLY the summary text. Do NOT include preamble, sign-offs, or meta-commentary. Hard limit: ~${SUMMARY_MAX_CHARS} characters.
 
@@ -91,7 +102,14 @@ export type SummarizeFailureReason =
   | "db_failed";
 
 export type SummarizeResult =
-  | { ok: true; summary: string; voiceTurnCount: number; smsTurnCount: number; projectId: string }
+  | {
+      ok: true;
+      summary: string;
+      voiceTurnCount: number;
+      smsTurnCount: number;
+      emailCount: number;
+      projectId: string;
+    }
   | { ok: false; reason: SummarizeFailureReason; detail?: string };
 
 export type SummarizeDeps = {
@@ -108,6 +126,11 @@ export type SummarizeDeps = {
     customerE164: string,
     limit: number
   ) => Promise<VoiceTurnEntry[]>;
+  /**
+   * Email feeder. Scoped to the contact's own linked address — the production
+   * default reads `email_log` for messages to/from that one address only.
+   */
+  listEmailLogForAddress?: typeof defaultListEmailLogForAddress;
   updateCustomerSummary?: typeof updateCustomerSummary;
   getBusinessConfig?: typeof getBusinessConfig;
   /** Pulled from process.env at call time by default; overridable for tests. */
@@ -142,6 +165,18 @@ function joinVoiceTurns(rows: VoiceTurnEntry[]): string {
     .map((r) => {
       const label = r.role === "caller" ? "Customer" : "AI assistant";
       return `[${r.callStartedAt} VOICE ${label}]: ${r.content}`;
+    })
+    .join("\n");
+}
+
+function joinEmailHistory(rows: EmailLogRow[]): string {
+  return rows
+    .map((r) => {
+      const who = r.direction === "inbound" ? "Customer" : "Business";
+      const subject = (r.subject ?? "").trim();
+      const body = (r.body_preview ?? "").trim();
+      const subjectPart = subject ? ` "${subject}"` : "";
+      return `[${r.created_at} EMAIL ${who}${subjectPart}]: ${body}`;
     })
     .join("\n");
 }
@@ -227,6 +262,7 @@ export async function summarizeCustomerMemory(
 
   let voiceTurns: VoiceTurnEntry[] = [];
   let smsHistory: SmsHistoryEntry[] = [];
+  let emailHistory: EmailLogRow[] = [];
   try {
     const _listVoiceTurns =
       deps.listVoiceTurnsForCustomer ??
@@ -251,6 +287,17 @@ export async function summarizeCustomerMemory(
       customerE164,
       { limit: SUMMARY_INPUT_SMS_TURNS }
     );
+    // Email is pulled only when this contact has a linked address, and only
+    // for THAT address — never a business-wide mailbox scan. Keeps the
+    // cross-channel summary about this one person.
+    const contactEmail = memory.email?.trim();
+    if (contactEmail) {
+      const _listEmailLogForAddress =
+        deps.listEmailLogForAddress ?? defaultListEmailLogForAddress;
+      emailHistory = await _listEmailLogForAddress(businessId, contactEmail, {
+        limit: SUMMARY_INPUT_EMAILS
+      });
+    }
   } catch (err) {
     return {
       ok: false,
@@ -262,7 +309,12 @@ export async function summarizeCustomerMemory(
   // If we have *no* fresh source material AND no prior summary, the
   // model has nothing to compress — abort rather than run an empty
   // prompt that might hallucinate.
-  if (voiceTurns.length === 0 && smsHistory.length === 0 && !memory.summary_md?.trim()) {
+  if (
+    voiceTurns.length === 0 &&
+    smsHistory.length === 0 &&
+    emailHistory.length === 0 &&
+    !memory.summary_md?.trim()
+  ) {
     return { ok: false, reason: "no_inputs" };
   }
 
@@ -280,6 +332,13 @@ export async function summarizeCustomerMemory(
   if (smsHistory.length > 0) {
     inputs.push("Recent SMS exchanges (oldest first):");
     inputs.push(joinSmsHistory(smsHistory));
+    inputs.push("");
+  }
+  if (emailHistory.length > 0) {
+    // email_log returns newest-first; flip to chronological so the digest
+    // reads in conversation order like the SMS/voice sections.
+    inputs.push("Recent emails with this contact (oldest first):");
+    inputs.push(joinEmailHistory(emailHistory.slice().reverse()));
   }
 
   const summarizerMessages: RowboatChatMessage[] = [
@@ -339,6 +398,7 @@ export async function summarizeCustomerMemory(
     summary,
     voiceTurnCount: voiceTurns.length,
     smsTurnCount: smsHistory.length,
+    emailCount: emailHistory.length,
     projectId
   };
 }
@@ -375,6 +435,7 @@ export async function summarizeCustomerMemoryAndLog(
       projectId: result.projectId,
       voiceTurnCount: result.voiceTurnCount,
       smsTurnCount: result.smsTurnCount,
+      emailCount: result.emailCount,
       summaryChars: result.summary.length
     });
   } else {
