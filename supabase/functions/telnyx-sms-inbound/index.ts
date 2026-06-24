@@ -311,8 +311,6 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
         ? (row.context.routing as Record<string, unknown>)
         : null;
     if (!routing) return false;
-    // Only runs that recorded which step to rewind to are claimable.
-    if (typeof routing.step_index !== "number") return false;
     if (nowMs - Date.parse(row.updated_at) > LATE_CLAIM_WINDOW_MS) return false;
     const claimedBy = typeof routing.claimed_by === "string" ? routing.claimed_by : "";
     // Claimed by someone else → not available to this teammate.
@@ -321,9 +319,22 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     const tried = Array.isArray(routing.tried)
       ? (routing.tried as unknown[]).filter((x): x is string => typeof x === "string")
       : [];
-    const wasOffered = offered === from || row.awaiting_agent_e164 === from || tried.includes(from);
-    if (wasOffered && claimedBy === from) alreadyMine = true;
-    return wasOffered;
+    const wasOffered =
+      offered === from ||
+      row.awaiting_agent_e164 === from ||
+      tried.includes(from) ||
+      claimedBy === from;
+    if (!wasOffered) return false;
+    // Already this teammate's lead (claimed via 1, or a prior 86): re-ack
+    // without re-opening. The worker clears routing.step_index when it
+    // finalizes a claim, so this idempotent path must NOT require step_index —
+    // gating on it here was why a repeat "86" fell through to the customer path.
+    if (claimedBy === from) {
+      alreadyMine = true;
+      return true;
+    }
+    // A fresh late claim needs a rewind target stamped by the worker on park.
+    return typeof routing.step_index === "number";
   });
 
   if (!match) return null;
