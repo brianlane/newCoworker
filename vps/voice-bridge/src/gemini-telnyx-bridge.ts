@@ -641,6 +641,53 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     if (msgTrail.length > 60) msgTrail.shift();
   };
 
+  // Outbound-frame tap (debug): the 1007 invalid-argument kill is on a message
+  // WE send to Gemini, but it can't be reproduced synthetically. Tap the Live
+  // session's own WebSocket `send` so the trail shows exactly which frames went
+  // out (and in what order) right before the close. We record frame *kind* +
+  // size only — never the base64 audio or caller PII.
+  const sendTrail: string[] = [];
+  const pushSend = (tag: string): void => {
+    sendTrail.push(tag);
+    if (sendTrail.length > 40) sendTrail.shift();
+  };
+  const tapSessionSocket = (sess: Session): void => {
+    try {
+      const holder = sess as unknown as { conn?: { send?: unknown }; ws?: { send?: unknown } };
+      const sock =
+        holder.conn && typeof holder.conn.send === "function"
+          ? holder.conn
+          : holder.ws && typeof holder.ws.send === "function"
+            ? holder.ws
+            : null;
+      if (!sock) {
+        pushSend("no-socket");
+        return;
+      }
+      const target = sock as { send: (...a: unknown[]) => unknown };
+      const orig = target.send.bind(target);
+      target.send = (...args: unknown[]) => {
+        try {
+          const data = args[0];
+          if (typeof data === "string") {
+            if (data.includes("realtimeInput") || data.includes("realtime_input")) pushSend("rt:" + data.length);
+            else if (data.includes("clientContent") || data.includes("client_content")) pushSend("cc:" + data.length);
+            else if (data.includes("toolResponse") || data.includes("tool_response")) pushSend("tr:" + data.length);
+            else if (data.includes("setup")) pushSend("setup:" + data.length);
+            else pushSend("other:" + data.slice(0, 60));
+          } else {
+            pushSend("bin:" + (data && typeof (data as { length?: number }).length === "number" ? (data as { length: number }).length : "?"));
+          }
+        } catch {
+          /* never let the tap break the send */
+        }
+        return orig(...args);
+      };
+    } catch (err) {
+      pushSend("tap-failed:" + (err instanceof Error ? err.message : String(err)));
+    }
+  };
+
   const voiceToolsReady =
     Boolean(opts.voiceTools?.appBaseUrl) && Boolean(opts.voiceTools?.gatewayToken);
 
@@ -894,7 +941,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           code: e?.code ?? null,
           reason: e?.reason ?? null,
           was_clean: e?.wasClean ?? null,
-          msg_trail: msgTrail.join(",")
+          msg_trail: msgTrail.join(","),
+          send_trail: sendTrail.slice(-16).join(",")
         });
         ended = true;
         clearTimers();
@@ -910,6 +958,10 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       }
     }
   });
+
+  // Tap the Live session's outbound WebSocket so the close telemetry shows the
+  // exact frame sequence we sent (debug for the unreproducible 1007).
+  tapSessionSocket(session);
 
   // Live session connected. Record the SDK version + model + capability flags
   // so a single telemetry row confirms exactly what code path this call took
