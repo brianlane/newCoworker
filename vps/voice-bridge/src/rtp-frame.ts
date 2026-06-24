@@ -45,6 +45,13 @@ export type RtpDecoded = {
    * downlink so Telnyx accepts the synthetic frames.
    */
   payloadType: number;
+  /**
+   * Whether the buffer was actually decoded as an RTP packet (vs. passed
+   * through as raw L16). The caller uses this to *lock* the per-stream
+   * framing mode after the first frame — see the false-positive note on
+   * `decodeTelnyxMediaPayload`.
+   */
+  wasRtp: boolean;
 };
 
 /**
@@ -52,17 +59,31 @@ export type RtpDecoded = {
  * like an RTP packet (V=2 in the high two bits of byte 0), strip the header
  * and return the audio. When they don't (legacy / non-bidi-rtp mode), pass
  * through unchanged with a default PT.
+ *
+ * ⚠️ False-positive hazard: the only cheap per-frame signal that a buffer is
+ * RTP is the V=2 bits in byte 0. But byte 0 of a *raw* L16 frame is just the
+ * low byte of the first 16-bit sample, which lands in the 0x80–0xBF (V=2)
+ * range for ~25% of samples. Mistaking raw L16 for RTP splices real audio
+ * bytes off the front and — when the stripped header length is odd — yields a
+ * PCM chunk that isn't a whole number of 16-bit samples. Gemini Live rejects
+ * that with WS close 1007 "Request contains an invalid argument." (the exact
+ * failure that killed every call after #67 added uplink RTP-stripping).
+ *
+ * Two guards here: (1) require the stripped payload to be a non-empty, even
+ * (whole-sample) length before believing it's RTP; (2) report `wasRtp` so the
+ * caller can lock the framing mode for the whole stream from the first frame
+ * rather than re-guessing — RTP-vs-raw is a per-stream property.
  */
 export function decodeTelnyxMediaPayload(base64: string): RtpDecoded {
   const buf = Buffer.from(base64, "base64");
   if (buf.length < RTP_HEADER_BYTES) {
-    return { payload: buf, payloadType: 11 };
+    return { payload: buf, payloadType: 11, wasRtp: false };
   }
   const versionFlags = buf[0] ?? 0;
   const version = (versionFlags >> 6) & 0x03;
   if (version !== 2) {
     // Not an RTP packet — fall back to treating the whole buffer as audio.
-    return { payload: buf, payloadType: 11 };
+    return { payload: buf, payloadType: 11, wasRtp: false };
   }
   const padding = ((versionFlags >> 5) & 0x01) === 1;
   const extensionFlag = ((versionFlags >> 4) & 0x01) === 1;
@@ -81,14 +102,16 @@ export function decodeTelnyxMediaPayload(base64: string): RtpDecoded {
   if (extensionFlag) {
     const extHeaderStart = headerLen;
     if (buf.length < extHeaderStart + 4) {
-      return { payload: Buffer.alloc(0), payloadType: (buf[1] ?? 0) & 0x7f };
+      // Header claims an extension that doesn't fit — not a real RTP packet.
+      return { payload: buf, payloadType: 11, wasRtp: false };
     }
     const extWords = buf.readUInt16BE(extHeaderStart + 2);
     headerLen = extHeaderStart + 4 + extWords * 4;
   }
 
   if (buf.length <= headerLen) {
-    return { payload: Buffer.alloc(0), payloadType: (buf[1] ?? 0) & 0x7f };
+    // Nothing left after the claimed header — treat as raw L16, not RTP.
+    return { payload: buf, payloadType: 11, wasRtp: false };
   }
 
   const payloadType = (buf[1] ?? 0) & 0x7f;
@@ -106,7 +129,16 @@ export function decodeTelnyxMediaPayload(base64: string): RtpDecoded {
     }
   }
 
-  return { payload, payloadType };
+  // Final plausibility gate: a genuine L16 RTP payload is a whole number of
+  // 16-bit samples (even length) and non-empty. If "stripping the header"
+  // produced an odd or empty buffer, byte 0 only *looked* like RTP V=2 — it's
+  // really raw L16. Returning the untouched buffer here both prevents the
+  // malformed-PCM 1007 and preserves the audio we'd otherwise have chopped.
+  if (payload.length === 0 || payload.length % 2 !== 0) {
+    return { payload: buf, payloadType: 11, wasRtp: false };
+  }
+
+  return { payload, payloadType, wasRtp: true };
 }
 
 /**
