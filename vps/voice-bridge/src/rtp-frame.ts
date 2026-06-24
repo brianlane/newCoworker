@@ -146,6 +146,17 @@ export function decodeTelnyxMediaPayload(base64: string): RtpDecoded {
  * a stable SSRC so Telnyx treats every emitted frame as part of the same
  * synthetic RTP stream.
  */
+/**
+ * Builds a full RTP packet (12-byte header + L16 payload).
+ *
+ * NOTE: do NOT use this for the Telnyx `stream_bidirectional_mode: "rtp"`
+ * downlink. Telnyx's `media.payload` is the RTP *payload* with NO header
+ * (per the media-streaming spec, and symmetric with the header-less inbound
+ * frames); sending a full packet makes Telnyx play the 12 header bytes as
+ * audio — an audible click at every chunk boundary. The bridge sends raw L16
+ * directly. This class is retained only for RTP-format tests / potential
+ * non-Telnyx transports.
+ */
 export class RtpEncoder {
   private seq: number;
   private ts: number;

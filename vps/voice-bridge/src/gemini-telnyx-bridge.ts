@@ -5,7 +5,7 @@ import WebSocket from "ws";
 import { GoogleGenAI, Modality, Type, type LiveServerMessage, type Session } from "@google/genai";
 import { parsePcmRateFromMime, StreamingResampler } from "./audio-resample.js";
 import { parseTelnyxFrame, telnyxMediaMessageFromPcmBase64 } from "./telnyx-media-json.js";
-import { decodeTelnyxMediaPayload, RtpEncoder } from "./rtp-frame.js";
+import { decodeTelnyxMediaPayload } from "./rtp-frame.js";
 import { composeVaultPromptSection, type VaultSnapshot } from "./vault-loader.js";
 import { currentDateTimeLine } from "./datetime-line.js";
 import {
@@ -271,8 +271,7 @@ type DownlinkTelemetry = {
 function sendPcmToTelnyx(
   ws: WebSocket,
   pcm16le: Int16Array,
-  telemetry: DownlinkTelemetry,
-  rtp: RtpEncoder
+  telemetry: DownlinkTelemetry
 ): void {
   if (ws.readyState !== WebSocket.OPEN) return;
   // Backpressure guard: drop frames once the socket's buffered-but-unsent bytes exceed
@@ -292,10 +291,16 @@ function sendPcmToTelnyx(
     }
     return;
   }
-  // RTP-frame the PCM (Telnyx is in `stream_bidirectional_mode: "rtp"`,
-  // which expects RTP-wrapped payloads — bare PCM is silently discarded).
-  const rtpPacket = rtp.encode(pcm16le);
-  ws.send(telnyxMediaMessageFromPcmBase64(rtpPacket.toString("base64")));
+  // Telnyx's `stream_bidirectional_mode: "rtp"` `media.payload` is the base64
+  // RTP *payload* — raw codec samples with NO 12-byte RTP header. The Telnyx
+  // media-streaming spec says so explicitly ("base64-encoded RTP payload
+  // without RTP headers") and it's symmetric with the inbound frames, which we
+  // already consume as header-less raw L16. Prepending an RTP header here made
+  // Telnyx render the 12 header bytes as 6 L16 samples of noise at the start of
+  // every chunk — an audible click/"typing" sound under the assistant's voice.
+  // Send the raw little-endian L16 samples (16 kHz, mono) instead.
+  const audio = Buffer.from(pcm16le.buffer, pcm16le.byteOffset, pcm16le.byteLength);
+  ws.send(telnyxMediaMessageFromPcmBase64(audio.toString("base64")));
 }
 
 // ---------------------------------------------------------------------------
@@ -602,10 +607,6 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     droppedFrames: 0,
     lastDropWarnAtMs: 0
   };
-  // Per-call RTP encoder for Gemini → Telnyx audio (bidirectional_mode=rtp).
-  // PT is adopted from the first uplink frame so the synthetic stream's
-  // RTP type matches what Telnyx negotiated.
-  const rtpEncoder = new RtpEncoder();
   // Per-call streaming resampler for the Gemini (24 kHz) → Telnyx (16 kHz)
   // downlink. Stateful across chunks so the phase stays continuous — a stateless
   // per-chunk resample injects a step discontinuity at every chunk boundary,
@@ -963,7 +964,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             }
             diag.downlinkFrames += 1;
             diag.downlinkBytesPostHeader += outSamples.byteLength;
-            sendPcmToTelnyx(opts.ws, outSamples, downlinkTelemetry, rtpEncoder);
+            sendPcmToTelnyx(opts.ws, outSamples, downlinkTelemetry);
           } catch (e) {
             console.error("gemini-bridge: downlink chunk", e);
           }
@@ -1263,7 +1264,6 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       const stripThisFrame = (uplinkRtpMode ?? decoded.wasRtp) && decoded.wasRtp;
       let payload = stripThisFrame ? decoded.payload : Buffer.from(b64, "base64");
       if (payload.length === 0) return;
-      if (stripThisFrame) rtpEncoder.adoptPayloadType(decoded.payloadType);
       // Guarantee whole 16-bit samples to Gemini. Prepend any carried-over odd
       // byte from the previous frame, then carry this frame's trailing byte if
       // the running length is odd. This is the definitive guard against the
