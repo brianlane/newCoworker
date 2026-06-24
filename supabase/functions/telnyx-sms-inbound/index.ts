@@ -368,7 +368,15 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   routing.reply_from = from;
   routing.offered = from;
   if (memberName) routing.offered_name = memberName;
-  routing.late_claim = true;
+  // Only a run that already FELL BACK to the owner (status "done", whose
+  // post-route steps already executed) is a TRUE late claim: flag it so the
+  // worker re-runs just the route step's claim/notify and then ends WITHOUT
+  // replaying email/browse/notify. A still-live offer ("awaiting_agent") or an
+  // in-flight run ("queued") hasn't run those steps yet, so an "86" there must
+  // behave exactly like a "1" claim — rewind to the route step and let the
+  // flow continue. Flagging late_claim for those would skip customer SMS,
+  // browse, and owner notifications.
+  if (match.status === "done") routing.late_claim = true;
   const stepIndex = routing.step_index as number;
   const nextContext = { ...(match.context ?? {}), routing };
 
