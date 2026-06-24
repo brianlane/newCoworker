@@ -117,7 +117,7 @@ export function StaffSmsToggle({
         {/* Forward to owner */}
         <div className="border-t border-parchment/10 pt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
-            <p className="text-sm font-medium text-parchment">Forward to owner's cell</p>
+            <p className="text-sm font-medium text-parchment">Forward to owner&apos;s cell</p>
             <p className="text-xs text-parchment/50 mt-0.5">
               {forwardToOwner
                 ? "Staff texts are also relayed to your forwarding number."
