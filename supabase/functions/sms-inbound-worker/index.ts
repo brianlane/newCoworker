@@ -108,6 +108,13 @@ type JobRow = {
   rowboat_reply_cached?: string | null;
   /** Set by the AiFlow trigger hook: skip the normal Coworker reply for this job. */
   suppress_reply?: boolean | null;
+  /**
+   * Set by telnyx-sms-inbound when the sender is the owner or a roster team
+   * member. Drives the internal-assistant persona (no lead intake, no customer
+   * profile). Null = ordinary customer job.
+   */
+  staff_kind?: "owner" | "team" | null;
+  staff_name?: string | null;
 };
 
 type ThreadRow = {
@@ -460,37 +467,10 @@ serve(async (req: Request) => {
 
     const thread = threadRow as ThreadRow | null;
 
-    // Phase 3: customer memory preamble. Pulled from the cross-channel
-    // rollup so SMS replies see the same context as voice + dashboard.
-    // Cheap if the row doesn't exist (single indexed lookup); preamble
-    // is null when there's no summary/pinned content yet, which keeps
-    // first-contact SMS exactly as it was pre-Phase-3 (no empty
-    // "Customer profile:" header in the prompt).
-    // Alias-aware: a number merged into another profile (alias_e164s) must
-    // resolve to the surviving row so the merged context follows the texter.
-    const { data: memoryRow } = await supabase
-      .from("customer_memories")
-      .select(
-        "customer_e164, display_name, summary_md, pinned_md, " +
-          "total_interaction_count, last_channel, last_interaction_at"
-      )
-      .eq("business_id", job.business_id)
-      .or(`customer_e164.eq.${fromE164},alias_e164s.cs.{${fromE164}}`)
-      .maybeSingle();
-    const memoryPreamble =
-      memoryRow == null
-        ? null
-        : buildCustomerPreambleForEdge(memoryRow as unknown as EdgeCustomerMemoryRow);
-    // The texter's E.164 is ALWAYS stated, even on first contact with no
-    // memory row: the Rowboat tool webhook (/api/rowboat/tool-call) has no
-    // caller context, so the customer tools require an explicit `phone`
-    // argument — without this line the model has nothing to pass and every
-    // tool call fails validation.
-    const phoneLine =
-      `Current texter phone: ${fromE164}. When calling customer tools ` +
-      `(customer_lookup_by_phone, customer_set_display_name, ` +
-      `customer_append_pinned_note), pass this exact value as the phone ` +
-      `argument unless the texter explicitly refers to a different number.`;
+    // Staff texts (owner/team) get the internal-assistant persona — never the
+    // customer lead-intake script — and never a customer-memory profile.
+    const isStaff = Boolean(job.staff_kind);
+
     // Identity: present as a member of the team, never as software. The owner
     // wants texters to see "the assistant", not "the AI assistant". Injected
     // on every SMS turn (this preamble is always sent) so the model never
@@ -505,10 +485,64 @@ serve(async (req: Request) => {
     // Date awareness: without this the model cannot resolve "tomorrow at
     // 2pm" into the ISO times the calendar tools require. Business-local
     // when the owner set a timezone; UTC fallback otherwise.
-    const dateAndPhoneLines = `${identityLine}\n\n${currentDateTimeLine(new Date(), businessTimezone)}\n\n${phoneLine}`;
-    const customerPreamble = memoryPreamble
-      ? `${dateAndPhoneLines}\n\n${memoryPreamble}`
-      : dateAndPhoneLines;
+    const dateLine = currentDateTimeLine(new Date(), businessTimezone);
+
+    let customerPreamble: string;
+    if (isStaff) {
+      // Internal-assistant mode (mirrors the voice staff persona): the texter
+      // is the owner or a team member, so help them like a colleague and skip
+      // the customer playbook entirely.
+      const staffName = job.staff_name?.trim();
+      const role =
+        job.staff_kind === "owner" ? "the business owner" : "a member of the team";
+      const staffLines = [
+        `You are texting with ${staffName ? `${staffName}, ` : ""}${role} — this person is NOT a customer or a lead.`,
+        "Talk to them like a trusted colleague. Do NOT run the customer intake script: never ask them for their name, contact info, address, timeline, or budget, and never try to qualify them. If you know their name, use it.",
+        "Help them as their internal assistant: answer questions about the business from what you know, help look something up, take a message for someone on the team, or help them schedule. Keep replies concise and natural for text.",
+        // Staff are not customers — do not create or edit a customer profile
+        // for their number.
+        "Do NOT use the customer CRM tools (customer_lookup_by_phone, customer_set_display_name, customer_append_pinned_note) on this texter.",
+        identityLine,
+        dateLine
+      ];
+      customerPreamble = staffLines.join("\n\n");
+    } else {
+      // Phase 3: customer memory preamble. Pulled from the cross-channel
+      // rollup so SMS replies see the same context as voice + dashboard.
+      // Cheap if the row doesn't exist (single indexed lookup); preamble
+      // is null when there's no summary/pinned content yet, which keeps
+      // first-contact SMS exactly as it was pre-Phase-3 (no empty
+      // "Customer profile:" header in the prompt).
+      // Alias-aware: a number merged into another profile (alias_e164s) must
+      // resolve to the surviving row so the merged context follows the texter.
+      const { data: memoryRow } = await supabase
+        .from("customer_memories")
+        .select(
+          "customer_e164, display_name, summary_md, pinned_md, " +
+            "total_interaction_count, last_channel, last_interaction_at"
+        )
+        .eq("business_id", job.business_id)
+        .or(`customer_e164.eq.${fromE164},alias_e164s.cs.{${fromE164}}`)
+        .maybeSingle();
+      const memoryPreamble =
+        memoryRow == null
+          ? null
+          : buildCustomerPreambleForEdge(memoryRow as unknown as EdgeCustomerMemoryRow);
+      // The texter's E.164 is ALWAYS stated, even on first contact with no
+      // memory row: the Rowboat tool webhook (/api/rowboat/tool-call) has no
+      // caller context, so the customer tools require an explicit `phone`
+      // argument — without this line the model has nothing to pass and every
+      // tool call fails validation.
+      const phoneLine =
+        `Current texter phone: ${fromE164}. When calling customer tools ` +
+        `(customer_lookup_by_phone, customer_set_display_name, ` +
+        `customer_append_pinned_note), pass this exact value as the phone ` +
+        `argument unless the texter explicitly refers to a different number.`;
+      const dateAndPhoneLines = `${identityLine}\n\n${dateLine}\n\n${phoneLine}`;
+      customerPreamble = memoryPreamble
+        ? `${dateAndPhoneLines}\n\n${memoryPreamble}`
+        : dateAndPhoneLines;
+    }
 
     let convId: string | undefined;
     let reply = (job.rowboat_reply_cached ?? "").trim();
@@ -665,17 +699,21 @@ serve(async (req: Request) => {
         // sweep (Phase 2 batch) so it never preempts the live SMS
         // path. Owner-confirmed gating: 3-interaction threshold +
         // 30s debounce + low-priority queue.
-        const { error: memErr } = await supabase.rpc("record_customer_interaction", {
-          p_business_id: job.business_id,
-          p_customer_e164: fromE164,
-          p_channel: "sms",
-          p_display_name: null
-        });
-        if (memErr) {
-          // Memory tracking is best-effort — a degraded customer page
-          // is acceptable; failing the SMS reply because we couldn't
-          // bump a counter is not.
-          console.error("record_customer_interaction (sms)", memErr);
+        // Skipped for staff: an owner/employee text must never create or bump
+        // a customer profile for their own number.
+        if (!isStaff) {
+          const { error: memErr } = await supabase.rpc("record_customer_interaction", {
+            p_business_id: job.business_id,
+            p_customer_e164: fromE164,
+            p_channel: "sms",
+            p_display_name: null
+          });
+          if (memErr) {
+            // Memory tracking is best-effort — a degraded customer page
+            // is acceptable; failing the SMS reply because we couldn't
+            // bump a counter is not.
+            console.error("record_customer_interaction (sms)", memErr);
+          }
         }
 
         if (parsed.retriedStateless) {

@@ -20,6 +20,7 @@ import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { KillSwitch } from "@/components/dashboard/KillSwitch";
 import { SafeModeToggle } from "@/components/dashboard/SafeModeToggle";
+import { StaffSmsToggle } from "@/components/dashboard/StaffSmsToggle";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
@@ -284,6 +285,16 @@ export default async function DashboardPage() {
             businessId={business.id}
             initiallyEnabled={business.customer_channels_enabled === false}
             initialForwardToE164={telnyxSettings?.forward_to_e164 ?? null}
+          />
+
+          <StaffSmsToggle
+            businessId={business.id}
+            initialAssistantReplyEnabled={
+              telnyxSettings?.staff_sms_assistant_reply_enabled ?? true
+            }
+            initialForwardToOwnerEnabled={
+              telnyxSettings?.staff_sms_forward_to_owner_enabled ?? false
+            }
           />
 
           {/* Quick Links */}
