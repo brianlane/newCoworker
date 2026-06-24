@@ -886,8 +886,23 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       }
     });
   }
+  // Staff (owner/team) callers are NOT customers: never register the customer
+  // CRM tools for their session. Relying on the prompt alone ("don't use these")
+  // still lets the model call them and create/edit a customer_memories profile
+  // for a staff number. Withholding the declarations makes that impossible.
+  const callerIsStaff =
+    opts.callerIdentity != null && opts.callerIdentity.kind !== "customer";
+  const STAFF_EXCLUDED_TOOLS = new Set([
+    "capture_caller_details",
+    "customer_lookup_by_phone",
+    "customer_set_display_name",
+    "customer_append_pinned_note"
+  ]);
   if (voiceToolsReady) {
-    for (const decl of buildVoiceToolDeclarations()) declarations.push(decl);
+    for (const decl of buildVoiceToolDeclarations()) {
+      if (callerIsStaff && STAFF_EXCLUDED_TOOLS.has(decl.name)) continue;
+      declarations.push(decl);
+    }
   }
   const toolsForSession =
     declarations.length > 0
@@ -982,13 +997,26 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           if (!diag.greetingTriggered) {
             diag.greetingTriggered = true;
             try {
-              const staffGreetName =
-                opts.callerIdentity && opts.callerIdentity.kind !== "customer"
-                  ? opts.callerIdentity.name?.trim()
-                  : undefined;
-              const greetingText = staffGreetName
-                ? `[Coordinator — speak aloud now] ${staffGreetName} (a member of the team, not a customer) has just connected. Greet them warmly by name in one short sentence (e.g. "Hey ${staffGreetName}, what can I do for you?") — do not run the customer intake script — and wait for their reply.`
-                : `[Coordinator — speak aloud now] The caller has just connected. Greet them warmly in one short sentence (e.g. "Hi, thanks for calling ${opts.businessName} — how can I help?") and wait for their reply.`;
+              const greetIdentity = opts.callerIdentity;
+              const greetIsStaff = greetIdentity != null && greetIdentity.kind !== "customer";
+              let greetingText: string;
+              if (greetIsStaff) {
+                // Owner vs team wording, and handle staff WITHOUT a stored name
+                // (otherwise they'd get the customer receptionist greeting that
+                // contradicts the staff system instruction).
+                const staffName = greetIdentity!.name?.trim();
+                const role =
+                  greetIdentity!.kind === "owner" ? "the business owner" : "a member of the team";
+                const subject = staffName
+                  ? `${staffName} (${role}, not a customer)`
+                  : `${role} (not a customer)`;
+                const example = staffName
+                  ? `e.g. "Hey ${staffName}, what can I do for you?"`
+                  : `e.g. "Hey, what can I do for you?"`;
+                greetingText = `[Coordinator — speak aloud now] ${subject} has just connected. Greet them warmly${staffName ? " by name" : ""} in one short sentence (${example}) — do not run the customer intake script — and wait for their reply.`;
+              } else {
+                greetingText = `[Coordinator — speak aloud now] The caller has just connected. Greet them warmly in one short sentence (e.g. "Hi, thanks for calling ${opts.businessName} — how can I help?") and wait for their reply.`;
+              }
               session.sendRealtimeInput({ text: greetingText });
               console.log("gemini-bridge: greeting prompt sent", {
                 callControlId: opts.callControlId
