@@ -119,22 +119,38 @@ function b64url(buf: Buffer): string {
     .replace(/=+$/, "");
 }
 
+// Mirrors the signers in supabase/functions/_shared/stream_url.ts and
+// src/lib/telnyx/stream-url.ts. Key order is the security contract and must
+// match byte-for-byte. v2 adds the signed caller number (from_e164) between
+// to_e164 and exp; v1 omits it (legacy, drained within the 120s URL TTL).
 function signMac(payload: {
   v: number;
   call_control_id: string;
   business_id: string;
   to_e164: string;
+  from_e164?: string;
   exp: number;
   nonce: string;
 }): string {
-  const canonical = JSON.stringify({
-    v: payload.v,
-    call_control_id: payload.call_control_id,
-    business_id: payload.business_id,
-    to_e164: payload.to_e164,
-    exp: payload.exp,
-    nonce: payload.nonce
-  });
+  const canonical =
+    payload.v === 2
+      ? JSON.stringify({
+          v: payload.v,
+          call_control_id: payload.call_control_id,
+          business_id: payload.business_id,
+          to_e164: payload.to_e164,
+          from_e164: payload.from_e164 ?? "",
+          exp: payload.exp,
+          nonce: payload.nonce
+        })
+      : JSON.stringify({
+          v: payload.v,
+          call_control_id: payload.call_control_id,
+          business_id: payload.business_id,
+          to_e164: payload.to_e164,
+          exp: payload.exp,
+          nonce: payload.nonce
+        });
   return b64url(createHmac("sha256", STREAM_SECRET).update(canonical).digest());
 }
 
@@ -362,11 +378,13 @@ function main(): void {
     const exp = Number(url.searchParams.get("exp") ?? "0");
     const nonce = url.searchParams.get("nonce") ?? "";
     const mac = url.searchParams.get("mac") ?? "";
-    // Informational only (unsigned). See telnyx-voice-inbound: used to craft
-    // operator SMS fallback; never a routing key.
+    // Transported as `from_e164_info`. SIGNED in v2 (trusted for staff +
+    // memory below); merely informational in legacy v1 (display/SMS only).
     const fromE164Info = url.searchParams.get("from_e164_info") ?? "";
 
-    if (v !== 1 || !callControlId || !businessId || !toE164 || !nonce || !mac) {
+    // Accept both v1 (legacy, no signed caller) and v2 (signed caller). v1
+    // URLs drain within the 120s TTL after telnyx-voice-inbound is deployed.
+    if ((v !== 1 && v !== 2) || !callControlId || !businessId || !toE164 || !nonce || !mac) {
       socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
       socket.destroy();
       return;
@@ -379,13 +397,21 @@ function main(): void {
     }
 
     const expected = signMac({
-      v: 1,
+      v,
       call_control_id: callControlId,
       business_id: businessId,
       to_e164: toE164,
+      // Only part of the canonical for v2; signMac ignores it for v1.
+      from_e164: fromE164Info,
       exp,
       nonce
     });
+    // The caller number is only trustworthy when it was inside the verified v2
+    // canonical. For v1 we must NOT trust the unsigned param for any security
+    // decision (staff persona, memory recognition) — see issue #268. Empty
+    // string makes the caller resolve as a first-time customer (safe default).
+    const callerTrusted = v === 2;
+    const trustedFromE164 = callerTrusted ? fromE164Info : "";
     try {
       const a = Buffer.from(expected, "utf8");
       const b = Buffer.from(mac, "utf8");
@@ -526,7 +552,9 @@ function main(): void {
       const callerIdentity = await resolveCallerIdentity(
         supabase,
         businessId,
-        fromE164Info,
+        // Trusted (v2-signed) number only — a spoofed v1 caller must never get
+        // the staff persona or skip record_customer_interaction.
+        trustedFromE164,
         [
           tenantSettings.forwardToE164,
           (notifPrefs as { phone_number?: string | null } | null)?.phone_number,
@@ -605,7 +633,9 @@ function main(): void {
                   appBaseUrl,
                   gatewayToken,
                   callControlId,
-                  callerE164: fromE164Info || ""
+                  // Trusted number only: voice tools (and the interaction
+                  // write-through they feed) must not act on a spoofed v1 caller.
+                  callerE164: trustedFromE164
                 }
               : undefined;
 
@@ -638,7 +668,9 @@ function main(): void {
           // Staff (owner/team) are not customers — don't pull a customer
           // continuity note for them (mirrors the SMS gate not treating them
           // as a customer profile).
-          if (fromE164Info && !callerIsStaff) {
+          // trustedFromE164 (not fromE164Info): never surface another contact's
+          // rolling summary off a spoofed, unsigned v1 caller number (#268).
+          if (trustedFromE164 && !callerIsStaff) {
             try {
               // Alias-aware: a number merged into another profile
               // (alias_e164s) resolves to the surviving row. On a Supabase
@@ -648,7 +680,7 @@ function main(): void {
                 .from("customer_memories")
                 .select("summary_md, pinned_md, display_name, total_interaction_count")
                 .eq("business_id", businessId)
-                .or(`customer_e164.eq.${fromE164Info},alias_e164s.cs.{${fromE164Info}}`)
+                .or(`customer_e164.eq.${trustedFromE164},alias_e164s.cs.{${trustedFromE164}}`)
                 .maybeSingle();
               if (memRow) {
                 const segments: string[] = [];
@@ -685,7 +717,10 @@ function main(): void {
             businessTimezone,
             transfer,
             vault,
-            callerE164: fromE164Info || "",
+            // Trusted number only: this flows into the transcript's caller_e164
+            // and record_customer_interaction. A spoofed v1 caller resolves to
+            // "" → no interaction is written against another contact (#268).
+            callerE164: trustedFromE164,
             voiceTools,
             transcriptAdapter,
             customerMemorySummary,

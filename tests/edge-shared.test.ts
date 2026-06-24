@@ -155,6 +155,22 @@ describe("_shared/stream_url", () => {
     const secret = "test-secret";
     expect(await signStreamUrlMac(payload, secret)).toBe(signStreamUrlPayload(payload, secret));
   });
+
+  it("matches Node HMAC canonical JSON for v2 (signed from_e164)", async () => {
+    const payload = {
+      v: 2 as const,
+      call_control_id: "cc1",
+      business_id: "b1",
+      to_e164: "+15550001111",
+      from_e164: "+15557654321",
+      exp: 2000000000,
+      nonce: "n1"
+    };
+    const secret = "test-secret";
+    // Deno and Node signers must agree byte-for-byte on the v2 canonical, or
+    // the bridge (which mirrors this canonical) would reject every URL.
+    expect(await signStreamUrlMac(payload, secret)).toBe(signStreamUrlPayload(payload, secret));
+  });
 });
 
 describe("_shared/telnyx_sms_compliance", () => {
