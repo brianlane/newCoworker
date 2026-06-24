@@ -277,12 +277,34 @@ describe("linkCustomerEmail", () => {
     });
   });
 
-  it("swallows a unique-violation on insert (a concurrent writer won the race)", async () => {
-    const { client } = makeSeqClient([
-      { data: null, error: null },
-      { data: null, error: { code: "23505", message: "duplicate key" } }
+  it("on insert unique-violation, fills the racing row's email (alias-aware, only-if-null)", async () => {
+    const { client, fromCalls } = makeSeqClient([
+      { data: null, error: null }, // SELECT: no row yet
+      { data: null, error: { code: "23505", message: "duplicate key" } }, // INSERT loses the race
+      { data: null, error: null } // recovery UPDATE
     ]);
     await expect(linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client)).resolves.toBeUndefined();
+    expect(fromCalls).toHaveLength(3);
+    const recover = fromCalls[2]!;
+    expect(recover.calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      email: "joe@acme.com"
+    });
+    expect(recover.calls.find((c) => c.name === "or")?.args[0]).toBe(
+      `customer_e164.eq.${CUSTOMER},alias_e164s.cs.{${CUSTOMER}}`
+    );
+    // Never clobber an owner-set value: the recovery update is gated on email IS NULL.
+    expect(recover.calls.find((c) => c.name === "is")?.args).toEqual(["email", null]);
+  });
+
+  it("throws when the post-violation recovery update errors", async () => {
+    const { client } = makeSeqClient([
+      { data: null, error: null },
+      { data: null, error: { code: "23505", message: "duplicate key" } },
+      { data: null, error: { message: "recover boom" } }
+    ]);
+    await expect(linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client)).rejects.toThrow(
+      /linkCustomerEmail: recover boom/
+    );
   });
 
   it("throws on a non-unique insert error", async () => {

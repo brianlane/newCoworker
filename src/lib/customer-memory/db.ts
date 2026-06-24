@@ -194,16 +194,27 @@ export async function linkCustomerEmail(
     if (updErr) throw new Error(`linkCustomerEmail: ${updErr.message}`);
     return;
   }
-  // 2) No profile exists yet for this number. Insert a minimal one; a unique
-  //    violation means a concurrent writer just created it — swallow it.
+  // 2) No profile exists yet for this number. Insert a minimal one.
   const { error: insErr } = await db.from("customer_memories").insert({
     business_id: businessId,
     customer_e164: customerE164,
     email: normalized
   });
-  if (insErr && insErr.code !== PG_UNIQUE_VIOLATION) {
+  if (!insErr) return;
+  if (insErr.code !== PG_UNIQUE_VIOLATION) {
     throw new Error(`linkCustomerEmail: ${insErr.message}`);
   }
+  // Unique violation: a concurrent writer (e.g. record_customer_interaction)
+  // created the profile between our SELECT and INSERT — almost certainly with
+  // a null email. Don't drop the captured address: fill it now, alias-aware,
+  // but only while still empty so we never clobber an owner-set value.
+  const { error: raceErr } = await db
+    .from("customer_memories")
+    .update({ email: normalized, updated_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .or(`customer_e164.eq.${customerE164},alias_e164s.cs.{${customerE164}}`)
+    .is("email", null);
+  if (raceErr) throw new Error(`linkCustomerEmail: ${raceErr.message}`);
 }
 
 export type ListCustomerMemoriesOptions = {
