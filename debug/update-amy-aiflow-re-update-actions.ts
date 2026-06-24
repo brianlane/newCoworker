@@ -43,7 +43,7 @@ const NEW_ACTIONS = [
   {
     kind: "fill_selector",
     target: 'textarea[name="message"]',
-    valueTemplate: "Update from Amy's AI assistant: {{vars.actions_taken}}. Will keep following up."
+    valueTemplate: "Update from Amy's assistant: {{vars.actions_taken}}. Will keep following up."
   },
   { kind: "click_selector", target: ".update-status-container .submit.action-details button" }
 ] as const;

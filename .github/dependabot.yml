@@ -42,11 +42,14 @@ updates:
       minor-and-patch:
         update-types: ["minor", "patch"]
     ignore:
-      # The bridge targets the @google/genai 1.x Gemini Live API. The 2.x major
-      # changed the Live contract (sendClientContent is no longer used for
-      # conversational turns on gemini-3.1-flash-live-preview — sendRealtimeInput
-      # is required), which silently broke calls right after the greeting. Keep
-      # on 1.x until the bridge is migrated to the v2 Live API.
+      # The bridge is built and tested against the @google/genai 1.x Gemini Live
+      # API and 1.x is the current known-good runtime in production. The 2.x
+      # major reworks the Live contract, which we have NOT migrated or validated
+      # end-to-end on gemini-3.1-flash-live-preview. (Note: the "calls die right
+      # after the greeting" outage was NOT the SDK major — root cause was the
+      # bridge shipping odd-length PCM frames to Gemini Live, fixed in #259.)
+      # Keep on 1.x; minor/patch updates still flow via the group above. Lift
+      # this only as part of a deliberate, tested v2 Live migration.
       - dependency-name: "@google/genai"
         update-types: ["version-update:semver-major"]
 

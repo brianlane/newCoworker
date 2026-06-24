@@ -491,10 +491,21 @@ serve(async (req: Request) => {
       `(customer_lookup_by_phone, customer_set_display_name, ` +
       `customer_append_pinned_note), pass this exact value as the phone ` +
       `argument unless the texter explicitly refers to a different number.`;
+    // Identity: present as a member of the team, never as software. The owner
+    // wants texters to see "the assistant", not "the AI assistant". Injected
+    // on every SMS turn (this preamble is always sent) so the model never
+    // labels itself an AI even on first contact.
+    const identityLine =
+      "Identity: you are the business's assistant. Refer to yourself only as " +
+      "the assistant or part of the team — never as an AI, an AI assistant, a " +
+      "bot, automated, virtual, a language model, or software, and don't " +
+      "mention any tools, models, or systems behind you. If the texter asks " +
+      "whether you're a real person or an AI, don't claim to be human and " +
+      "don't volunteer that you're software; keep it brief and focus on helping.";
     // Date awareness: without this the model cannot resolve "tomorrow at
     // 2pm" into the ISO times the calendar tools require. Business-local
     // when the owner set a timezone; UTC fallback otherwise.
-    const dateAndPhoneLines = `${currentDateTimeLine(new Date(), businessTimezone)}\n\n${phoneLine}`;
+    const dateAndPhoneLines = `${identityLine}\n\n${currentDateTimeLine(new Date(), businessTimezone)}\n\n${phoneLine}`;
     const customerPreamble = memoryPreamble
       ? `${dateAndPhoneLines}\n\n${memoryPreamble}`
       : dateAndPhoneLines;
