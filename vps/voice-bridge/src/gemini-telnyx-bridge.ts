@@ -244,6 +244,12 @@ export function systemInstructionForBusiness(
     base.push(
       "If the caller explicitly asks to speak to a human, a manager, the owner, or indicates the matter is urgent/sensitive (emergencies, complaints, legal, medical), briefly acknowledge it, tell them you're connecting them now, then call the `transfer_to_owner` tool. Do not call the tool for routine questions you can answer yourself."
     );
+  } else if (isStaff) {
+    // Staff are not customers — never run the customer callback-intake script.
+    // If they want to reach someone specific, note who/what and relay it.
+    base.push(
+      "This account has not set up human transfer. If they want to reach someone specific on the team, briefly note who they're trying to reach and what it's about, and tell them you'll pass the message along — do not ask them for their name or number."
+    );
   } else {
     base.push(
       "This account has not set up human transfer. If the caller asks for a human, take a clear callback message (name, number, best time, reason) and tell them someone will follow up soon."
