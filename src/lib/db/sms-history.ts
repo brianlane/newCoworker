@@ -69,7 +69,7 @@ export function outboundReplyFromRow(
 const SMS_JOB_SELECT =
   "id, business_id, payload, status, assistant_reply_text, rowboat_reply_cached, telnyx_outbound_message_id, last_error, created_at, updated_at";
 
-export type OutboundLogSource = "ai_flow" | "agent_offer" | "owner_notify";
+export type OutboundLogSource = "ai_flow" | "agent_offer" | "owner_notify" | "owner_manual";
 
 export type OutboundLogRow = {
   id: string;

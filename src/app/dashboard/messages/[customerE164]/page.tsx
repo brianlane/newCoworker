@@ -16,6 +16,7 @@ import { listMessagesForCustomer } from "@/lib/db/sms-history";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { ContactNameEditor } from "@/components/dashboard/ContactNameEditor";
+import { SmsThreadComposer } from "@/components/dashboard/SmsThreadComposer";
 
 export const dynamic = "force-dynamic";
 
@@ -148,7 +149,9 @@ export default async function SmsThreadPage({
                             ? "AiFlow · team offer"
                             : m.source === "owner_notify"
                               ? "AiFlow · notification"
-                              : "Assistant"}
+                              : m.source === "owner_manual"
+                                ? "You"
+                                : "Assistant"}
                     </span>
                     <span className="text-parchment/30 normal-case font-normal">
                       <LocalDateTime iso={m.timestamp} />
@@ -170,6 +173,10 @@ export default async function SmsThreadPage({
             );
           })}
         </ul>
+      </Card>
+
+      <Card padding="md">
+        <SmsThreadComposer businessId={business.id} toE164={customerE164} />
       </Card>
     </div>
   );
