@@ -38,6 +38,7 @@ import {
   deleteCustomerMemory,
   findCustomerByEmail,
   getCustomerMemory,
+  linkCustomerEmail,
   listCustomerMemories,
   listSmsHistoryForCustomer,
   mergeCustomerMemories,
@@ -197,6 +198,93 @@ describe("getCustomerMemory", () => {
     await expect(getCustomerMemory(BIZ, CUSTOMER, client)).rejects.toThrow(
       /getCustomerMemory: rls denied/
     );
+  });
+});
+
+describe("linkCustomerEmail", () => {
+  // linkCustomerEmail calls `from("customer_memories")` up to twice (an
+  // email-fill UPDATE, then a minimal-profile INSERT). A sequence client
+  // hands each from() call its own terminator so we can model "row exists"
+  // vs "no row → insert" independently.
+  function makeSeqClient(terminators: Array<{ data?: unknown; error?: unknown }>) {
+    const fromCalls: Array<{ table: string; calls: CallLog[] }> = [];
+    let i = 0;
+    const client = {
+      from(table: string) {
+        const terminator = terminators[i++] ?? { data: null, error: null };
+        const { builder, calls } = makeBuilder(terminator);
+        fromCalls.push({ table, calls });
+        return builder;
+      }
+    } as unknown as Parameters<typeof linkCustomerEmail>[3];
+    return { client, fromCalls };
+  }
+
+  it("no-ops on a blank email without touching the DB", async () => {
+    const { client, fromCalls } = makeSeqClient([]);
+    await linkCustomerEmail(BIZ, CUSTOMER, "   ", client);
+    expect(fromCalls).toHaveLength(0);
+  });
+
+  it("fills an empty email on an existing row and stops (never inserts)", async () => {
+    const { client, fromCalls } = makeSeqClient([{ data: [{ id: "row-1" }], error: null }]);
+    await linkCustomerEmail(BIZ, CUSTOMER, "  joe@acme.com  ", client);
+    expect(fromCalls).toHaveLength(1);
+    const upd = fromCalls[0]!;
+    expect(upd.table).toBe("customer_memories");
+    const updateArg = upd.calls.find((c) => c.name === "update")?.args[0] as Record<string, unknown>;
+    expect(updateArg.email).toBe("joe@acme.com");
+    // Only fill rows whose email is still null — never clobber an owner edit.
+    expect(upd.calls.find((c) => c.name === "is")?.args).toEqual(["email", null]);
+  });
+
+  it("inserts a minimal profile when no row was updated", async () => {
+    const { client, fromCalls } = makeSeqClient([
+      { data: [], error: null },
+      { data: null, error: null }
+    ]);
+    await linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client);
+    expect(fromCalls).toHaveLength(2);
+    const ins = fromCalls[1]!;
+    const insertArg = ins.calls.find((c) => c.name === "insert")?.args[0] as Record<string, unknown>;
+    expect(insertArg).toMatchObject({
+      business_id: BIZ,
+      customer_e164: CUSTOMER,
+      email: "joe@acme.com"
+    });
+  });
+
+  it("swallows a unique-violation on insert (a row already exists, email preserved)", async () => {
+    const { client } = makeSeqClient([
+      { data: [], error: null },
+      { data: null, error: { code: "23505", message: "duplicate key" } }
+    ]);
+    await expect(linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client)).resolves.toBeUndefined();
+  });
+
+  it("throws on a non-unique insert error", async () => {
+    const { client } = makeSeqClient([
+      { data: [], error: null },
+      { data: null, error: { code: "42501", message: "rls denied" } }
+    ]);
+    await expect(linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client)).rejects.toThrow(
+      /linkCustomerEmail: rls denied/
+    );
+  });
+
+  it("throws on an update error", async () => {
+    const { client } = makeSeqClient([{ data: null, error: { message: "update boom" } }]);
+    await expect(linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client)).rejects.toThrow(
+      /linkCustomerEmail: update boom/
+    );
+  });
+
+  it("falls back to the default service client when none is provided", async () => {
+    const { client, fromCalls } = makeSeqClient([{ data: [{ id: "row-1" }], error: null }]);
+    defaultClientSpy.mockReturnValueOnce(client);
+    await linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com");
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+    expect(fromCalls).toHaveLength(1);
   });
 });
 

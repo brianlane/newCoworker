@@ -831,6 +831,38 @@ describe("summarizeCustomerMemory — per-contact email feed (scoped, never busi
     expect(listEmailLogForAddress).not.toHaveBeenCalled();
   });
 
+  it("renders outbound emails as 'Business' and tolerates a null subject/body", async () => {
+    const callRowboatChat = vi.fn(async () => ({
+      reply: "ok",
+      conversationId: undefined,
+      state: undefined,
+      hasStateKey: false
+    }));
+    const result = await summarizeCustomerMemory(BIZ, CUSTOMER, {
+      getCustomerMemory: (async () =>
+        memory({ interaction_count: 3, email: "joe@acme.com" })) as never,
+      getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,
+      callRowboatChat: callRowboatChat as never,
+      listSmsHistoryForCustomer: (async () => []) as never,
+      listVoiceTurnsForCustomer: vi.fn(async () => []),
+      listEmailLogForAddress: (async () => [
+        emailRow({ direction: "outbound", subject: null, body_preview: null })
+      ]) as never,
+      updateCustomerSummary: vi.fn(async () => {}) as never,
+      rowboatBearer: "tok"
+    });
+    expect(result.ok).toBe(true);
+    const args = (callRowboatChat.mock.calls[0] as unknown as [
+      Parameters<typeof import("../src/lib/rowboat/chat").callRowboatChat>[0]
+    ])[0];
+    const user = args.messages[1]?.content ?? "";
+    // Outbound → "Business"; null subject collapses to no quoted subject part;
+    // null body renders as an empty trailer (never the literal "null").
+    expect(user).toContain("EMAIL Business]: ");
+    expect(user).not.toContain('Business "');
+    expect(user).not.toContain("null");
+  });
+
   it("summarizes a contact whose only source material is email (no_inputs guard counts email)", async () => {
     const result = await summarizeCustomerMemory(BIZ, CUSTOMER, {
       getCustomerMemory: (async () =>
