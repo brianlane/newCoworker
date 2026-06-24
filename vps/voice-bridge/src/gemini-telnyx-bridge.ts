@@ -587,8 +587,16 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // Uplink framing is a per-stream property, but the only per-frame signal is
   // the RTP V=2 bits in byte 0 — which raw L16 sample bytes hit ~25% of the
   // time, causing sporadic header-mis-strips that ship malformed PCM to Gemini
-  // (WS 1007). Lock the mode from the first decoded frame and reuse it.
+  // (WS 1007). Decide the mode by majority vote over the first frames, then
+  // lock: a single ambiguous first frame (e.g. a header-only RTP packet, which
+  // the decoder reports as wasRtp:false) can't mislock the stream, and a real
+  // RTP stream votes ~100% RTP while raw L16's coincidental false positives
+  // stay a clear minority. Until locked we honor the per-frame decision (the
+  // carry guard below keeps that 1007-safe either way).
+  const UPLINK_MODE_LOCK_FRAMES = 25;
   let uplinkRtpMode: boolean | null = null;
+  let uplinkRtpVotes = 0;
+  let uplinkFramesForVote = 0;
   // Gemini Live's L16 input must be a whole number of 16-bit samples. If a
   // decoded frame ever has an odd byte length we hold the trailing byte and
   // prepend it to the next frame, keeping perfect sample alignment instead of
@@ -1207,14 +1215,22 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       // sees clean PCM, and mirror the observed payload type onto our
       // downlink encoder so Telnyx accepts our synthetic frames.
       const decoded = decodeTelnyxMediaPayload(b64);
-      // Lock RTP-vs-raw from the first frame, then stop re-guessing: a stream
-      // is one or the other for its whole life, and per-frame guessing is what
-      // mis-strips raw L16 into malformed PCM.
-      if (uplinkRtpMode === null) uplinkRtpMode = decoded.wasRtp;
-      let payload =
-        uplinkRtpMode && decoded.wasRtp ? decoded.payload : Buffer.from(b64, "base64");
+      // Tally votes until we lock the per-stream framing mode (see the
+      // declaration above for why a single-frame lock is unsafe).
+      if (uplinkRtpMode === null) {
+        uplinkFramesForVote += 1;
+        if (decoded.wasRtp) uplinkRtpVotes += 1;
+        if (uplinkFramesForVote >= UPLINK_MODE_LOCK_FRAMES) {
+          uplinkRtpMode = uplinkRtpVotes * 2 >= uplinkFramesForVote;
+        }
+      }
+      // Strip only when the stream is (or is leaning) RTP AND this specific
+      // frame actually decoded as RTP — never strip a frame the decoder
+      // couldn't parse as RTP.
+      const stripThisFrame = (uplinkRtpMode ?? decoded.wasRtp) && decoded.wasRtp;
+      let payload = stripThisFrame ? decoded.payload : Buffer.from(b64, "base64");
       if (payload.length === 0) return;
-      if (uplinkRtpMode && decoded.wasRtp) rtpEncoder.adoptPayloadType(decoded.payloadType);
+      if (stripThisFrame) rtpEncoder.adoptPayloadType(decoded.payloadType);
       // Guarantee whole 16-bit samples to Gemini. Prepend any carried-over odd
       // byte from the previous frame, then carry this frame's trailing byte if
       // the running length is odd. This is the definitive guard against the
@@ -1240,7 +1256,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           rawBytes: rawBytes.length,
           rawHeaderHex: rawBytes.subarray(0, 16).toString("hex"),
           payloadBytes: payload.length,
-          uplinkRtpMode,
+          frameWasRtp: decoded.wasRtp,
+          strippedThisFrame: stripThisFrame,
           rtpPayloadType: decoded.payloadType
         });
       }
