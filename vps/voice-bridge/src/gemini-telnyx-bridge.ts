@@ -102,6 +102,19 @@ export type VoiceToolsConfig = {
   callerE164?: string;
 };
 
+/**
+ * Who is on the line. Drives whether the assistant runs the customer-facing
+ * intake/qualification script or treats the caller as internal staff. Mirrors
+ * the SMS worker's owner/team gate (telnyx-sms-inbound): a call from the owner
+ * or a team member is never a customer, so we don't qualify them or CRM their
+ * number.
+ */
+export type CallerIdentity = {
+  kind: "owner" | "team" | "customer";
+  /** Best-known name (businesses.owner_name or ai_flow_team_members.name). */
+  name?: string;
+};
+
 export type GeminiBridgeOptions = {
   ws: WebSocket;
   businessId: string;
@@ -149,6 +162,13 @@ export type GeminiBridgeOptions = {
    */
   customerMemorySummary?: string;
   /**
+   * Who the caller is (owner / team member / customer). When the caller is
+   * staff, the system instruction switches from the customer receptionist
+   * script to an internal-assistant persona — same intent as the SMS worker's
+   * team/owner gate. Undefined is treated as a customer (backwards compatible).
+   */
+  callerIdentity?: CallerIdentity;
+  /**
    * Optional diagnostics sink. When set, the bridge emits a structured
    * timeline of Gemini Live lifecycle events (session start, setup complete,
    * greeting sent, error, close, teardown) including the close code/reason and
@@ -183,17 +203,43 @@ export function systemInstructionForBusiness(
   hasVoiceTools: boolean,
   vault?: VaultSnapshot,
   customerMemorySummary?: string,
-  businessTimezone?: string | null
+  businessTimezone?: string | null,
+  callerIdentity?: CallerIdentity
 ): string {
-  const base = [
-    `You are the phone receptionist for ${businessName}.`,
-    "You are on a live phone call with a human caller. Keep replies concise, natural, and spoken (not bulleted).",
-    "Be warm and professional. If you don't know something specific to this business, say you'll have someone follow up.",
-    // Identity: present as a member of the team, never as software. The owner
-    // wants callers to hear "the assistant", not "the AI assistant".
-    `Refer to yourself only as the assistant or "${businessName}'s assistant" — never call yourself an AI, an AI assistant, a bot, automated, virtual, a language model, or software. Do not mention APIs, models, tokens, or internal session limits to the caller unless a coordinator message explicitly tells you what to say. If the caller asks whether you're a real person or an AI, don't claim to be human and don't volunteer that you're software — keep it light and steer back to helping (e.g. "I'm the assistant here at ${businessName} — what can I help you with?").`,
-    currentDateTimeLine(new Date(), businessTimezone)
-  ];
+  // Identity: present as a member of the team, never as software. The owner
+  // wants callers to hear "the assistant", not "the AI assistant". Shared by
+  // the customer and staff personas below.
+  const identityLine =
+    `Refer to yourself only as the assistant or "${businessName}'s assistant" — never call yourself an AI, an AI assistant, a bot, automated, virtual, a language model, or software. Do not mention APIs, models, tokens, or internal session limits to the caller unless a coordinator message explicitly tells you what to say. If the caller asks whether you're a real person or an AI, don't claim to be human and don't volunteer that you're software — keep it light and steer back to helping.`;
+
+  // Owner/team callers are NOT customers (mirrors the SMS worker's gate): drop
+  // the lead-intake/qualification script and talk to them as internal staff.
+  const isStaff = callerIdentity != null && callerIdentity.kind !== "customer";
+  const staffName = callerIdentity?.name?.trim();
+
+  const base: string[] = [];
+  if (isStaff) {
+    const role =
+      callerIdentity!.kind === "owner"
+        ? `the owner of ${businessName}`
+        : `a member of the ${businessName} team`;
+    base.push(
+      `You are the phone assistant for ${businessName}.`,
+      `You are on a live phone call with ${staffName ? `${staffName}, ` : ""}${role} — this caller is NOT a customer or a lead.`,
+      "Talk to them like a trusted colleague. Do NOT run the customer intake script: never ask them for their name, contact details, address, timeline, or budget, and never try to qualify them as a lead. If you know their name, greet them by it.",
+      "Act as their internal assistant: answer questions about the business from your briefing below, help look things up, take a message for someone on the team, or help them schedule. Keep replies concise, natural, and spoken (not bulleted).",
+      identityLine,
+      currentDateTimeLine(new Date(), businessTimezone)
+    );
+  } else {
+    base.push(
+      `You are the phone receptionist for ${businessName}.`,
+      "You are on a live phone call with a human caller. Keep replies concise, natural, and spoken (not bulleted).",
+      "Be warm and professional. If you don't know something specific to this business, say you'll have someone follow up.",
+      `${identityLine} (e.g. "I'm the assistant here at ${businessName} — what can I help you with?").`,
+      currentDateTimeLine(new Date(), businessTimezone)
+    );
+  }
   if (hasTransfer) {
     base.push(
       "If the caller explicitly asks to speak to a human, a manager, the owner, or indicates the matter is urgent/sensitive (emergencies, complaints, legal, medical), briefly acknowledge it, tell them you're connecting them now, then call the `transfer_to_owner` tool. Do not call the tool for routine questions you can answer yourself."
@@ -203,7 +249,20 @@ export function systemInstructionForBusiness(
       "This account has not set up human transfer. If the caller asks for a human, take a clear callback message (name, number, best time, reason) and tell them someone will follow up soon."
     );
   }
-  if (hasVoiceTools) {
+  if (hasVoiceTools && isStaff) {
+    base.push(
+      [
+        "You can act on this call by calling these tools:",
+        "- `business_knowledge_lookup` when they ask something about the business that your briefing below doesn't already answer.",
+        "- `calendar_find_slots` then `calendar_book_appointment` to help them schedule something.",
+        "- `send_follow_up_sms` to text them a short summary or link, and `send_follow_up_email` to email them; if email returns `email_not_connected`, send it by text instead.",
+        // Staff are not customers: do not create/edit a customer profile for
+        // their number (the SMS gate avoids this too).
+        "Do NOT use the customer CRM tools (`customer_lookup_by_phone`, `customer_set_display_name`, `customer_append_pinned_note`, `capture_caller_details`) on this caller — they are staff, not a customer.",
+        "Always explain what you're about to do in plain language before calling a tool, and never read a tool's raw response aloud."
+      ].join(" ")
+    );
+  } else if (hasVoiceTools) {
     base.push(
       [
         "You can act on the caller's behalf by calling these tools:",
@@ -230,7 +289,7 @@ export function systemInstructionForBusiness(
   // first, then refines for this specific caller. Trimmed inline (we
   // also enforce trimming at the call site, but defense-in-depth is
   // cheap and protects callers that bypass index.ts).
-  if (customerMemorySummary) {
+  if (!isStaff && customerMemorySummary) {
     const trimmed = customerMemorySummary.trim();
     if (trimmed.length > 0) {
       const clipped =
@@ -857,7 +916,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         voiceToolsReady,
         opts.vault,
         opts.customerMemorySummary,
-        opts.businessTimezone
+        opts.businessTimezone,
+        opts.callerIdentity
       ),
       tools: toolsForSession
     },
@@ -922,9 +982,14 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           if (!diag.greetingTriggered) {
             diag.greetingTriggered = true;
             try {
-              session.sendRealtimeInput({
-                text: `[Coordinator — speak aloud now] The caller has just connected. Greet them warmly in one short sentence (e.g. "Hi, thanks for calling ${opts.businessName} — how can I help?") and wait for their reply.`
-              });
+              const staffGreetName =
+                opts.callerIdentity && opts.callerIdentity.kind !== "customer"
+                  ? opts.callerIdentity.name?.trim()
+                  : undefined;
+              const greetingText = staffGreetName
+                ? `[Coordinator — speak aloud now] ${staffGreetName} (a member of the team, not a customer) has just connected. Greet them warmly by name in one short sentence (e.g. "Hey ${staffGreetName}, what can I do for you?") — do not run the customer intake script — and wait for their reply.`
+                : `[Coordinator — speak aloud now] The caller has just connected. Greet them warmly in one short sentence (e.g. "Hi, thanks for calling ${opts.businessName} — how can I help?") and wait for their reply.`;
+              session.sendRealtimeInput({ text: greetingText });
               console.log("gemini-bridge: greeting prompt sent", {
                 callControlId: opts.callControlId
               });

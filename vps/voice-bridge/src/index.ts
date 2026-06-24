@@ -8,7 +8,11 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData } from "ws";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { loadEnv } from "./load-env.js";
-import { createGeminiTelnyxBridge, type TransferCapability } from "./gemini-telnyx-bridge.js";
+import {
+  createGeminiTelnyxBridge,
+  type TransferCapability,
+  type CallerIdentity
+} from "./gemini-telnyx-bridge.js";
 import { loadVaultForPrompt } from "./vault-loader.js";
 import { telnyxTransferCall, telnyxSendPlainSms } from "./telnyx-call-actions.js";
 import type { TranscriptAdapter } from "./voice-transcript.js";
@@ -30,6 +34,71 @@ const LAST_SEEN_UPDATE_INTERVAL_MS = (() => {
 function readPositiveMs(envKey: string, fallback: number): number {
   const v = Number(process.env[envKey]);
   return Number.isFinite(v) && v > 0 ? v : fallback;
+}
+
+/**
+ * Coerce a raw phone string to E.164 (US-centric), mirroring the SMS worker's
+ * `_shared/normalize_e164.ts`. Bare 10-digit inputs are assumed NANP (+1),
+ * 11-digit `1...` are NANP, anything else must already start with '+'. Returns
+ * null for empty / structurally invalid inputs so caller-identity comparisons
+ * can't false-match on junk. Needed because owner numbers in the DB are stored
+ * inconsistently (e.g. `businesses.phone` may be a bare 10-digit string while
+ * the caller arrives as `+1...`).
+ */
+function normalizeE164(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const cleaned = raw.trim().replace(/[^\d+]/g, "");
+  if (!cleaned) return null;
+  let candidate: string;
+  if (cleaned.startsWith("+")) candidate = cleaned;
+  else if (cleaned.length === 10) candidate = `+1${cleaned}`;
+  else if (cleaned.length === 11 && cleaned.startsWith("1")) candidate = `+${cleaned}`;
+  else return null;
+  if (!/^\+[1-9]\d{0,14}$/.test(candidate)) return null;
+  if (candidate.slice(1).length < 7) return null;
+  return candidate;
+}
+
+/**
+ * Decide whether the caller is the business owner, a team member, or a regular
+ * customer. Mirrors the SMS worker's gate (telnyx-sms-inbound): a call from a
+ * known team member or one of the owner's configured numbers (Safe Mode
+ * forward cell, notification alert phone, or the business's own number) is
+ * never a customer. Best-effort — any DB hiccup degrades to "customer" so a
+ * lookup failure never blocks a live call. Returns `{ kind: "customer" }` for
+ * anonymous/unknown callers.
+ */
+async function resolveCallerIdentity(
+  supabase: SupabaseClient,
+  businessId: string,
+  callerE164: string,
+  ownerCandidates: Array<string | null | undefined>,
+  ownerName: string | null | undefined
+): Promise<CallerIdentity> {
+  const callerNorm = normalizeE164(callerE164);
+  if (!callerNorm) return { kind: "customer" };
+  try {
+    const { data: member } = await supabase
+      .from("ai_flow_team_members")
+      .select("name")
+      .eq("business_id", businessId)
+      .eq("phone_e164", callerNorm)
+      .eq("active", true)
+      .maybeSingle();
+    if (member) {
+      const name = (member as { name?: string | null }).name?.trim();
+      return { kind: "team", name: name || undefined };
+    }
+  } catch (err) {
+    console.warn("voice-bridge: team member lookup failed (non-fatal)", err);
+  }
+  const ownerNorm = ownerCandidates
+    .map((n) => normalizeE164(n ?? ""))
+    .filter((n): n is string => Boolean(n));
+  if (ownerNorm.includes(callerNorm)) {
+    return { kind: "owner", name: ownerName?.trim() || "the owner" };
+  }
+  return { kind: "customer" };
 }
 
 function rawDataToUtf8(data: RawData): string {
@@ -80,8 +149,12 @@ type TenantTelnyxSettings = {
  * failure and never throw; a DB issue must not crash the media pipe.
  */
 function createSupabaseTranscriptAdapter(
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  options?: { recordCustomerInteraction?: boolean }
 ): TranscriptAdapter {
+  // Staff callers (owner/team) aren't customers, so don't bump/create a
+  // customer_memories row for their number. Defaults to true (customer).
+  const recordCustomerInteraction = options?.recordCustomerInteraction !== false;
   return {
     createTranscript: async (input) => {
       // Best-effort FK to the reservation. Transcript is still usable if the
@@ -159,6 +232,7 @@ function createSupabaseTranscriptAdapter(
       //   - A missing customer_memories table (VPS Supabase predates
       //     migration 20260507000000) returns a 4xx that we swallow,
       //     same shape as the read path above.
+      if (!recordCustomerInteraction) return;
       try {
         const { data: t } = await supabase
           .from("voice_call_transcripts")
@@ -431,11 +505,40 @@ function main(): void {
       const tenantSettings = await loadTenantTelnyxSettings(supabase, businessId);
       const { data: biz } = await supabase
         .from("businesses")
-        .select("name, timezone")
+        .select("name, timezone, owner_name, phone")
         .eq("id", businessId)
         .maybeSingle();
       const businessName = typeof biz?.name === "string" && biz.name.length > 0 ? biz.name : "your business";
       const businessTimezone = typeof biz?.timezone === "string" && biz.timezone.length > 0 ? biz.timezone : null;
+
+      // Owner / team / customer gate — same intent as the SMS worker. Owner
+      // numbers are the Safe Mode forward cell, the notification alert phone,
+      // and the business's own number. Resolved up front so it can both pick
+      // the staff persona and suppress customer-CRM side effects below.
+      const { data: notifPrefs } = await supabase
+        .from("notification_preferences")
+        .select("phone_number")
+        .eq("business_id", businessId)
+        .maybeSingle();
+      const callerIdentity = await resolveCallerIdentity(
+        supabase,
+        businessId,
+        fromE164Info,
+        [
+          tenantSettings.forwardToE164,
+          (notifPrefs as { phone_number?: string | null } | null)?.phone_number,
+          (biz as { phone?: string | null } | null)?.phone
+        ],
+        (biz as { owner_name?: string | null } | null)?.owner_name
+      );
+      const callerIsStaff = callerIdentity.kind !== "customer";
+      if (callerIsStaff) {
+        console.log("voice-bridge: caller recognized as staff", {
+          callControlId,
+          kind: callerIdentity.kind,
+          name: callerIdentity.name ?? null
+        });
+      }
 
       /** Compose the Gemini tool capability only when admin opted in + a forwarding target exists. */
       let transfer: TransferCapability | undefined;
@@ -510,7 +613,9 @@ function main(): void {
           const transcriptionEnabled =
             (process.env.VOICE_TRANSCRIPTION_ENABLED ?? "").toLowerCase() === "true";
           const transcriptAdapter = transcriptionEnabled
-            ? createSupabaseTranscriptAdapter(supabase)
+            ? createSupabaseTranscriptAdapter(supabase, {
+                recordCustomerInteraction: !callerIsStaff
+              })
             : undefined;
 
           // Phase 3b: cross-channel customer memory read. If we recognize
@@ -527,7 +632,10 @@ function main(): void {
           // again, a degraded prompt is acceptable, a refused call is
           // not.
           let customerMemorySummary: string | undefined;
-          if (fromE164Info) {
+          // Staff (owner/team) are not customers — don't pull a customer
+          // continuity note for them (mirrors the SMS gate not treating them
+          // as a customer profile).
+          if (fromE164Info && !callerIsStaff) {
             try {
               // Alias-aware: a number merged into another profile
               // (alias_e164s) resolves to the surviving row. On a Supabase
@@ -578,6 +686,7 @@ function main(): void {
             voiceTools,
             transcriptAdapter,
             customerMemorySummary,
+            callerIdentity,
             recordDiag
           });
           onTelnyxGemini = bridge.onTelnyxMessage;
