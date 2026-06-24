@@ -284,7 +284,10 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   };
 
   // Recent route_to_team runs for this business (route steps stamp
-  // context.routing). Newest first; 25 is plenty for a human texting "86".
+  // context.routing). Newest first; 25 routing runs is plenty for a human
+  // texting "86". Filter to context.routing IS NOT NULL so unrelated runs
+  // (send_sms-only flows, approvals with no route step, etc.) don't consume
+  // the cap and hide an eligible late-claim run within the 24h window.
   // Include awaiting_approval: after the owner fallback the worker can advance
   // past route_to_team and park a LATER step on an approval gate — that run is
   // still the teammate's most recent offered lead and must be visible to "86",
@@ -294,6 +297,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     .select("id, status, context, awaiting_agent_e164, current_step, updated_at")
     .eq("business_id", businessId)
     .in("status", ["done", "awaiting_agent", "queued", "awaiting_approval"])
+    .not("context->routing", "is", null)
     .order("updated_at", { ascending: false })
     .limit(25);
   const candidates =
@@ -310,20 +314,22 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
 
   const nowMs = Date.now();
   type Cand = (typeof candidates)[number];
-  // A teammate can plausibly have more than one eligible run at once (a LIVE
-  // offer on one lead, a late-claimable one on another). Classify each and
-  // pick by PRECEDENCE rather than raw recency: a live offer is what reply "1"
-  // would target, so it must win even when an older late-claimable run was
-  // touched more recently. Within the non-live bucket take the newest.
+  // A teammate can plausibly have more than one eligible run at once. Classify
+  // each into three buckets and pick by PRECEDENCE rather than raw recency:
+  //   1. live  — an active offer to this teammate (what reply "1" targets);
+  //              wins even if an older eligible run was touched more recently.
+  //   2. late  — a lapsed offer whose post-route steps already ran (re-open,
+  //              the actual intent of "86"); beats a stale re-ack.
+  //   3. mine  — a lead already claimed by this teammate (idempotent re-ack),
+  //              only used when there's nothing fresh to claim.
+  // Within each bucket the newest wins (candidates are newest-first).
   let liveMatch: Cand | null = null;
   let liveStep = -1;
-  let secondaryMatch: Cand | null = null;
-  let secondaryStep = -1;
-  let secondaryMine = false;
-  let secondaryLate = false;
+  let lateMatch: Cand | null = null;
+  let lateStep = -1;
+  let mineMatch: Cand | null = null;
   for (const row of candidates) {
-    // Candidates are newest-first; keep only the first hit per bucket.
-    if (liveMatch && secondaryMatch) break;
+    if (liveMatch && lateMatch && mineMatch) break;
     const routing =
       row.context?.routing && typeof row.context.routing === "object"
         ? (row.context.routing as Record<string, unknown>)
@@ -338,10 +344,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     // finalizes a claim, so this idempotent path must NOT require step_index —
     // gating on it here was why a repeat "86" fell through to the customer path.
     if (claimedBy === from) {
-      if (!secondaryMatch) {
-        secondaryMatch = row;
-        secondaryMine = true;
-      }
+      if (!mineMatch) mineMatch = row;
       continue;
     }
     // A fresh claim needs the rewind target the worker stamped on park.
@@ -362,10 +365,9 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     if (postRouteRan) {
       // Any teammate who was ever offered this lead can take it now; the worker
       // re-runs only the route claim/notify and then ends (no step replay).
-      if (!secondaryMatch) {
-        secondaryMatch = row;
-        secondaryStep = stepIndex;
-        secondaryLate = true;
+      if (!lateMatch) {
+        lateMatch = row;
+        lateStep = stepIndex;
       }
       continue;
     }
@@ -378,7 +380,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     }
   }
 
-  // Live offer wins over a late claim / re-ack on a different (older) lead.
+  // Precedence: live offer → fresh late claim → idempotent re-ack.
   let alreadyMine = false;
   let isLate = false;
   let matchStepIndex = -1;
@@ -386,11 +388,13 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   if (liveMatch) {
     match = liveMatch;
     matchStepIndex = liveStep;
-  } else if (secondaryMatch) {
-    match = secondaryMatch;
-    alreadyMine = secondaryMine;
-    isLate = secondaryLate;
-    matchStepIndex = secondaryStep;
+  } else if (lateMatch) {
+    match = lateMatch;
+    isLate = true;
+    matchStepIndex = lateStep;
+  } else if (mineMatch) {
+    match = mineMatch;
+    alreadyMine = true;
   }
 
   if (!match) return null;
