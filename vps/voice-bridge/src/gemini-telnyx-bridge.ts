@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import WebSocket from "ws";
 import { GoogleGenAI, Modality, Type, type LiveServerMessage, type Session } from "@google/genai";
-import { parsePcmRateFromMime, resamplePCM16Mono } from "./audio-resample.js";
+import { parsePcmRateFromMime, StreamingResampler } from "./audio-resample.js";
 import { parseTelnyxFrame, telnyxMediaMessageFromPcmBase64 } from "./telnyx-media-json.js";
 import { decodeTelnyxMediaPayload, RtpEncoder } from "./rtp-frame.js";
 import { composeVaultPromptSection, type VaultSnapshot } from "./vault-loader.js";
@@ -586,6 +586,13 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // PT is adopted from the first uplink frame so the synthetic stream's
   // RTP type matches what Telnyx negotiated.
   const rtpEncoder = new RtpEncoder();
+  // Per-call streaming resampler for the Gemini (24 kHz) → Telnyx (16 kHz)
+  // downlink. Stateful across chunks so the phase stays continuous — a stateless
+  // per-chunk resample injects a step discontinuity at every chunk boundary,
+  // which is audible as a periodic click/"typing" sound during AI speech.
+  // Lazily constructed on the first chunk so it locks onto the model's actual
+  // output rate (parsed from the chunk mime type), and rebuilt if that changes.
+  let downlinkResampler: StreamingResampler | null = null;
   // Uplink framing is a per-stream property, but the only per-frame signal is
   // the RTP V=2 bits in byte 0 — which raw L16 sample bytes hit ~25% of the
   // time, causing sporadic header-mis-strips that ship malformed PCM to Gemini
@@ -919,7 +926,11 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             if (raw.length < 2 || raw.length % 2 !== 0) continue;
             const inSamples = new Int16Array(raw.buffer, raw.byteOffset, raw.length / 2);
             const inRate = parsePcmRateFromMime(chunk.mimeType, GEMINI_OUTPUT_DEFAULT_RATE);
-            const outSamples = resamplePCM16Mono(inSamples, inRate, TELNYX_PCM_RATE);
+            if (!downlinkResampler || !downlinkResampler.matchesRate(inRate)) {
+              downlinkResampler = new StreamingResampler(inRate, TELNYX_PCM_RATE);
+            }
+            const outSamples = downlinkResampler.process(inSamples);
+            if (outSamples.length === 0) continue;
             if (!diag.firstDownlinkLogged) {
               diag.firstDownlinkLogged = true;
               console.log("gemini-bridge: first downlink chunk", {
