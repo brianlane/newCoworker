@@ -14,7 +14,7 @@
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { header, verifyTelnyxWebhook } from "../_shared/telnyx_webhook.ts";
-import { signStreamUrlMac, type StreamPayloadV1 } from "../_shared/stream_url.ts";
+import { signStreamUrlMac, type StreamPayloadV2 } from "../_shared/stream_url.ts";
 import { resolveEnterpriseVoiceReservation } from "../_shared/enterprise_limits.ts";
 import { VOICE_RES_LIMITS } from "../_shared/voice_reservation_limits.ts";
 import {
@@ -845,11 +845,17 @@ serve(async (req: Request) => {
 
   const exp = Math.floor(Date.now() / 1000) + 120;
   const nonce = crypto.randomUUID().replace(/-/g, "");
-  const streamPayload: StreamPayloadV1 = {
-    v: 1,
+  // v2: the caller number is part of the signed canonical so the bridge can
+  // trust it for staff detection + customer-memory recognition (issue #268).
+  // Empty string when Telnyx gave no caller id — still signed so the bridge's
+  // verify matches exactly.
+  const signedFromE164 = fromE164Informational ?? "";
+  const streamPayload: StreamPayloadV2 = {
+    v: 2,
     call_control_id: callControlId,
     business_id: businessId,
     to_e164: toE164,
+    from_e164: signedFromE164,
     exp,
     nonce
   };
@@ -876,7 +882,7 @@ serve(async (req: Request) => {
   const base = origin.replace(/\/$/, "");
   const pth = path;
   const qs = new URLSearchParams({
-    v: "1",
+    v: "2",
     call_control_id: callControlId,
     business_id: businessId,
     to_e164: toE164,
@@ -884,11 +890,13 @@ serve(async (req: Request) => {
     nonce,
     mac
   });
-  // Informational only — the bridge uses this to compose an SMS fallback to
-  // the business owner when Gemini Live can't start. Not signed because it
-  // is never used as a routing key or security boundary.
-  if (fromE164Informational) {
-    qs.set("from_e164_info", fromE164Informational);
+  // Caller number, transported as `from_e164_info` (unchanged param name) but
+  // now SIGNED in the v2 canonical above — the bridge only trusts it (for staff
+  // persona + memory recognition) when the v2 mac verifies. Set it whenever the
+  // signed value is non-empty so the param round-trips into the canonical the
+  // bridge rebuilds.
+  if (signedFromE164) {
+    qs.set("from_e164_info", signedFromE164);
   }
   const streamUrl = `${base}${pth}?${qs.toString()}`.replace(/^http:/i, "ws:").replace(/^https:/i, "wss:");
 

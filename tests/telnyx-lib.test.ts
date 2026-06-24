@@ -94,6 +94,33 @@ describe("telnyx stream-url", () => {
     expect(verifyStreamUrlPayload(p, mac.slice(0, 4), secret)).toBe(false);
   });
 
+  const v2Payload = {
+    v: 2 as const,
+    call_control_id: "cc1",
+    business_id: "b1",
+    to_e164: "+15550001111",
+    from_e164: "+15557654321",
+    exp: 2000000000,
+    nonce: newStreamNonce()
+  };
+
+  it("v2 sign and verify roundtrip (signed caller number)", () => {
+    const mac = signStreamUrlPayload(v2Payload, secret);
+    expect(verifyStreamUrlPayload(v2Payload, mac, secret)).toBe(true);
+    expect(verifyStreamUrlPayload(v2Payload, "wrong", secret)).toBe(false);
+  });
+
+  it("v2 mac is bound to from_e164 (tampering the caller fails verify)", () => {
+    const mac = signStreamUrlPayload(v2Payload, secret);
+    const spoofed = { ...v2Payload, from_e164: "+19998887777" };
+    expect(verifyStreamUrlPayload(spoofed, mac, secret)).toBe(false);
+  });
+
+  it("v1 and v2 macs differ for the same core fields", () => {
+    const v1Mac = signStreamUrlPayload(payload, secret);
+    const v2Mac = signStreamUrlPayload({ ...v2Payload, nonce: payload.nonce }, secret);
+    expect(v1Mac).not.toBe(v2Mac);
+  });
 });
 
 describe("telnyx call-control", () => {
