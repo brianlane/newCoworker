@@ -98,41 +98,52 @@ export async function POST(request: Request) {
     }
 
     // Best-effort durable log so the email renders in the list (source
-    // 'owner_manual'). A failed insert must not imply the email didn't go out
-    // (it did) — report logged:false so the UI can warn without promising the
-    // row will appear (e.g. before the owner_manual migration is applied).
-    const db = await createSupabaseServiceClient();
-    const { error: logErr } = await db.from("email_log").insert({
-      business_id: businessId,
-      direction: "outbound",
-      to_email: toEmail,
-      from_email: null,
-      subject,
-      body_preview: bodyText.slice(0, 500),
-      body_full: bodyText,
-      cc_email: recipientsCsv(ccEmails),
-      bcc_email: recipientsCsv(bccEmails),
-      source: "owner_manual",
-      run_id: null,
-      flow_id: null,
-      provider_message_id: result.messageId
-    });
-    if (logErr) {
-      logger.error("dashboard-email-send: email_log insert failed", {
+    // 'owner_manual'). The email already went out, so this MUST NOT be able to
+    // fail the request — a 500 here would make the owner retry and send a
+    // duplicate. Any throw (client creation, insert) is swallowed to
+    // logged:false; the UI then warns instead of promising the row will appear.
+    let logged = false;
+    try {
+      const db = await createSupabaseServiceClient();
+      const { error: logErr } = await db.from("email_log").insert({
+        business_id: businessId,
+        direction: "outbound",
+        to_email: toEmail,
+        from_email: null,
+        subject,
+        body_preview: bodyText.slice(0, 500),
+        body_full: bodyText,
+        cc_email: recipientsCsv(ccEmails),
+        bcc_email: recipientsCsv(bccEmails),
+        source: "owner_manual",
+        run_id: null,
+        flow_id: null,
+        provider_message_id: result.messageId
+      });
+      if (logErr) {
+        logger.error("dashboard-email-send: email_log insert failed", {
+          businessId,
+          error: logErr.message
+        });
+      } else {
+        logged = true;
+      }
+    } catch (logErr) {
+      logger.error("dashboard-email-send: email_log insert threw", {
         businessId,
-        error: logErr.message
+        error: logErr instanceof Error ? logErr.message : String(logErr)
       });
     }
 
     logger.info("dashboard-email-send: sent", {
       businessId,
       provider: result.provider,
-      logged: !logErr
+      logged
     });
     return successResponse({
       messageId: result.messageId,
       provider: result.provider,
-      logged: !logErr
+      logged
     });
   } catch (err) {
     return handleRouteError(err);

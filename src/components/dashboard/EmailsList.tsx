@@ -268,7 +268,9 @@ function ReadingPane({
 
 type ComposerState =
   | { mode: "new" }
-  | { mode: "reply"; to: string; subject: string };
+  // sourceId binds the draft to the message being replied to, so switching
+  // messages can't leave a stale recipient/subject in the composer.
+  | { mode: "reply"; sourceId: string; to: string; subject: string };
 
 /** The address to reply to: the other party on the message. */
 function replyRecipient(row: EmailLogRow): string {
@@ -296,6 +298,15 @@ export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; business
     return () => window.removeEventListener("keydown", onKey);
   }, [selected]);
 
+  // Close an open reply draft when the reading pane moves to a different
+  // message. Otherwise the composer would keep replying to the prior thread's
+  // recipient/subject while the user reads a new email (wrong-recipient send).
+  useEffect(() => {
+    if (composer?.mode === "reply" && composer.sourceId !== selectedId) {
+      setComposer(null);
+    }
+  }, [composer, selectedId]);
+
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
@@ -314,7 +325,11 @@ export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; business
         <EmailComposer
           // Remount with fresh prefill whenever the target changes (new vs a
           // specific reply), so initialTo/initialSubject take effect.
-          key={composer.mode === "reply" ? `reply:${composer.to}:${composer.subject}` : "new"}
+          key={
+            composer.mode === "reply"
+              ? `reply:${composer.sourceId}:${composer.to}:${composer.subject}`
+              : "new"
+          }
           businessId={businessId}
           title={composer.mode === "reply" ? "Reply" : "New email"}
           initialTo={composer.mode === "reply" ? composer.to : ""}
@@ -411,7 +426,12 @@ export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; business
             businessId={businessId}
             onClose={() => setSelectedId(null)}
             onReply={() =>
-              setComposer({ mode: "reply", to: replyRecipient(selected), subject: replySubject(selected) })
+              setComposer({
+                mode: "reply",
+                sourceId: selected.id,
+                to: replyRecipient(selected),
+                subject: replySubject(selected)
+              })
             }
           />
         </div>
