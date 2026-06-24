@@ -151,14 +151,19 @@ export function AiFlowRunsManager({
   };
 
   const toggle = async (runId: string) => {
-    let willExpand = false;
+    // Decide expand-vs-collapse from the CURRENT committed state, not from a
+    // flag mutated inside the setState updater. React runs functional updaters
+    // lazily during render, so a `willExpand` set inside the updater is still
+    // false when the line after setExpandedRuns runs — which meant loadSteps
+    // never fired on an individual run click and the row showed "No steps
+    // recorded" until the group-level "Expand details" (which loads directly)
+    // was used. `toggle` is recreated each render, so `expandedRuns` here is
+    // the latest committed state and is accurate at click time.
+    const willExpand = !expandedRuns.has(runId);
     setExpandedRuns((prev) => {
       const next = new Set(prev);
       if (next.has(runId)) next.delete(runId);
-      else {
-        next.add(runId);
-        willExpand = true;
-      }
+      else next.add(runId);
       return next;
     });
     if (willExpand) await loadSteps(runId);
