@@ -285,11 +285,15 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
 
   // Recent route_to_team runs for this business (route steps stamp
   // context.routing). Newest first; 25 is plenty for a human texting "86".
+  // Include awaiting_approval: after the owner fallback the worker can advance
+  // past route_to_team and park a LATER step on an approval gate — that run is
+  // still the teammate's most recent offered lead and must be visible to "86",
+  // otherwise an older eligible run within 24h would be claimed instead.
   const { data: rows } = await supabase
     .from("ai_flow_runs")
-    .select("id, status, context, awaiting_agent_e164, updated_at")
+    .select("id, status, context, awaiting_agent_e164, current_step, updated_at")
     .eq("business_id", businessId)
-    .in("status", ["done", "awaiting_agent", "queued"])
+    .in("status", ["done", "awaiting_agent", "queued", "awaiting_approval"])
     .order("updated_at", { ascending: false })
     .limit(25);
   const candidates =
@@ -299,12 +303,17 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
           status: string;
           context: Record<string, unknown> | null;
           awaiting_agent_e164: string | null;
+          current_step: number | null;
           updated_at: string;
         }>
       | null) ?? [];
 
   const nowMs = Date.now();
   let alreadyMine = false;
+  // Whether the matched run already executed the steps AFTER route_to_team
+  // (true late claim → worker re-runs only the route claim/notify then ends).
+  let isLate = false;
+  let matchStepIndex = -1;
   const match = candidates.find((row) => {
     const routing =
       row.context?.routing && typeof row.context.routing === "object"
@@ -315,16 +324,6 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     const claimedBy = typeof routing.claimed_by === "string" ? routing.claimed_by : "";
     // Claimed by someone else → not available to this teammate.
     if (claimedBy && claimedBy !== from) return false;
-    const offered = typeof routing.offered === "string" ? routing.offered : "";
-    const tried = Array.isArray(routing.tried)
-      ? (routing.tried as unknown[]).filter((x): x is string => typeof x === "string")
-      : [];
-    const wasOffered =
-      offered === from ||
-      row.awaiting_agent_e164 === from ||
-      tried.includes(from) ||
-      claimedBy === from;
-    if (!wasOffered) return false;
     // Already this teammate's lead (claimed via 1, or a prior 86): re-ack
     // without re-opening. The worker clears routing.step_index when it
     // finalizes a claim, so this idempotent path must NOT require step_index —
@@ -333,8 +332,37 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
       alreadyMine = true;
       return true;
     }
-    // A fresh late claim needs a rewind target stamped by the worker on park.
-    return typeof routing.step_index === "number";
+    // A fresh claim needs the rewind target the worker stamped on park.
+    const stepIndex = typeof routing.step_index === "number" ? routing.step_index : -1;
+    if (stepIndex < 0) return false;
+    const offered = typeof routing.offered === "string" ? routing.offered : "";
+    const tried = Array.isArray(routing.tried)
+      ? (routing.tried as unknown[]).filter((x): x is string => typeof x === "string")
+      : [];
+    const everOffered = offered === from || row.awaiting_agent_e164 === from || tried.includes(from);
+    if (!everOffered) return false;
+    // Did the steps AFTER route_to_team already run? They did if the run
+    // completed (status "done") OR the worker advanced current_step past the
+    // route step (owner fallback ran later steps, then parked on e.g. a
+    // quiet-hours defer or approval gate). Those are TRUE late claims.
+    const currentStep = typeof row.current_step === "number" ? row.current_step : stepIndex;
+    const postRouteRan = row.status === "done" || currentStep > stepIndex;
+    if (postRouteRan) {
+      // Any teammate who was ever offered this lead can take it now; the worker
+      // re-runs only the route claim/notify and then ends (no step replay).
+      isLate = true;
+      matchStepIndex = stepIndex;
+      return true;
+    }
+    // Still a LIVE offer parked at the route step (later steps not run yet).
+    // Mirror reply "1": only the CURRENTLY offered teammate may claim, so a
+    // teammate who already passed (in `tried`) can't preempt the active offer.
+    if (offered === from) {
+      isLate = false;
+      matchStepIndex = stepIndex;
+      return true;
+    }
+    return false;
   });
 
   if (!match) return null;
@@ -368,19 +396,20 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   routing.reply_from = from;
   routing.offered = from;
   if (memberName) routing.offered_name = memberName;
-  // Only a run that already FELL BACK to the owner (status "done", whose
-  // post-route steps already executed) is a TRUE late claim: flag it so the
-  // worker re-runs just the route step's claim/notify and then ends WITHOUT
-  // replaying email/browse/notify. A still-live offer ("awaiting_agent") or an
-  // in-flight run ("queued") hasn't run those steps yet, so an "86" there must
-  // behave exactly like a "1" claim — rewind to the route step and let the
-  // flow continue. Flagging late_claim for those would skip customer SMS,
-  // browse, and owner notifications.
-  if (match.status === "done") routing.late_claim = true;
-  const stepIndex = routing.step_index as number;
+  // late_claim flags a run whose post-route steps ALREADY ran (see matcher):
+  // the worker re-runs just the route claim/notify and then ends, so
+  // email/browse/notify aren't replayed. A still-live offer is left unflagged
+  // so "86" continues the flow exactly like a "1" claim.
+  if (isLate) routing.late_claim = true;
+  const stepIndex = matchStepIndex;
   const nextContext = { ...(match.context ?? {}), routing };
 
-  const { error: reopenErr } = await supabase
+  // Optimistic concurrency: gate the reopen on the exact updated_at we read.
+  // Two teammates in `tried` can both text "86" before claimed_by is set;
+  // this makes the FIRST write win (it changes updated_at, so the second
+  // matches no row) instead of both overwriting routing and both being told
+  // they got the lead. .select() lets us see whether we won.
+  const { data: reopened, error: reopenErr } = await supabase
     .from("ai_flow_runs")
     .update({
       status: "queued",
@@ -392,11 +421,29 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
       updated_at: new Date().toISOString()
     })
     .eq("id", match.id)
-    .in("status", ["done", "awaiting_agent", "queued"]);
+    .eq("updated_at", match.updated_at)
+    .in("status", ["done", "awaiting_agent", "queued", "awaiting_approval"])
+    .select("id");
   if (reopenErr) {
     console.error("ai_flow_runs late-claim reopen", reopenErr);
     return new Response(JSON.stringify({ ok: false, error: "late_claim_failed" }), {
       status: 503,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  if (!reopened || (reopened as unknown[]).length === 0) {
+    // Lost the race — a concurrent "86" or the worker mutated the row first.
+    // Consume the message (it's still a teammate reply, never a customer text)
+    // but don't claim a second time.
+    await ack("Thanks — looks like this lead's already been handled.", "late-claim-race");
+    await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
+      business_id: businessId,
+      run_id: match.id,
+      event_id: eventId,
+      decision: "late_claim_raced"
+    });
+    return new Response(JSON.stringify({ ok: true, agent_offer: "late_claim_raced" }), {
+      status: 200,
       headers: { "Content-Type": "application/json" }
     });
   }
@@ -406,7 +453,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     business_id: businessId,
     run_id: match.id,
     event_id: eventId,
-    decision: "late_claim"
+    decision: isLate ? "late_claim" : "claim_86_live"
   });
   return new Response(JSON.stringify({ ok: true, agent_offer: "late_claimed" }), {
     status: 200,
