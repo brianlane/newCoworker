@@ -18,6 +18,7 @@ import { Card } from "@/components/ui/Card";
 import { listConversationsForBusiness } from "@/lib/db/sms-history";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
+import { SmsComposeNew } from "@/components/dashboard/SmsComposeNew";
 
 export const dynamic = "force-dynamic";
 
@@ -67,11 +68,14 @@ export default async function DashboardMessagesPage() {
 
   return (
     <div className="space-y-6 max-w-4xl">
-      <div>
-        <h1 className="text-2xl font-bold text-parchment">Text history</h1>
-        <p className="text-sm text-parchment/50 mt-1">
-          SMS conversations handled by your AI coworker
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-parchment">Text history</h1>
+          <p className="text-sm text-parchment/50 mt-1">
+            SMS conversations handled by your AI coworker
+          </p>
+        </div>
+        <SmsComposeNew businessId={business.id} />
       </div>
 
       <Card padding="sm" className="border-signal-teal/30 bg-signal-teal/5">
