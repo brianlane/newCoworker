@@ -41,6 +41,7 @@ import {
   SUMMARY_DEBOUNCE_MS,
   SUMMARY_INPUT_VOICE_CALLS,
   SUMMARY_INPUT_SMS_TURNS,
+  SUMMARY_INPUT_EMAILS,
   SUMMARY_TIMEOUT_MS
 } from "../src/lib/customer-memory/summarizer";
 import type { CustomerMemoryRow } from "../src/lib/customer-memory/types";
@@ -755,6 +756,131 @@ describe("summarizeCustomerMemory — joinSmsHistory branch coverage", () => {
     const user = args.messages[1]?.content ?? "";
     expect(user).toContain("[2026-05-05T08:00:00Z SMS AI assistant]: Hi Liz, re your inquiry...");
     expect(user).not.toContain("[2026-05-05T08:00:00Z SMS Customer]:");
+  });
+});
+
+describe("summarizeCustomerMemory — per-contact email feed (scoped, never business-wide)", () => {
+  const emailRow = (overrides: Record<string, unknown> = {}) => ({
+    id: "e1",
+    business_id: BIZ,
+    direction: "inbound" as const,
+    to_email: "biz@example.com",
+    from_email: "joe@acme.com",
+    subject: "Quote?",
+    body_preview: "Can you send a quote?",
+    cc_email: null,
+    bcc_email: null,
+    source: "tenant_mailbox_inbound" as const,
+    run_id: null,
+    flow_id: null,
+    provider_message_id: null,
+    created_at: "2026-05-04T00:00:00Z",
+    ...overrides
+  });
+
+  it("pulls ONLY the contact's linked address into the prompt", async () => {
+    const listEmailLogForAddress = vi.fn(async () => [emailRow()]);
+    const callRowboatChat = vi.fn(async () => ({
+      reply: "ok",
+      conversationId: undefined,
+      state: undefined,
+      hasStateKey: false
+    }));
+    const result = await summarizeCustomerMemory(BIZ, CUSTOMER, {
+      getCustomerMemory: (async () =>
+        memory({ interaction_count: 3, email: "joe@acme.com" })) as never,
+      getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,
+      callRowboatChat: callRowboatChat as never,
+      listSmsHistoryForCustomer: (async () => []) as never,
+      listVoiceTurnsForCustomer: vi.fn(async () => []),
+      listEmailLogForAddress: listEmailLogForAddress as never,
+      updateCustomerSummary: vi.fn(async () => {}) as never,
+      rowboatBearer: "tok"
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.emailCount).toBe(1);
+    // The feeder is queried with this contact's email — never a mailbox-wide scan.
+    expect(listEmailLogForAddress).toHaveBeenCalledWith(BIZ, "joe@acme.com", {
+      limit: SUMMARY_INPUT_EMAILS
+    });
+    const args = (callRowboatChat.mock.calls[0] as unknown as [
+      Parameters<typeof import("../src/lib/rowboat/chat").callRowboatChat>[0]
+    ])[0];
+    expect(args.messages[1]?.content).toContain("Recent emails with this contact");
+    expect(args.messages[1]?.content).toContain("Can you send a quote?");
+  });
+
+  it("never queries email when the contact has no linked address", async () => {
+    const listEmailLogForAddress = vi.fn(async () => [] as never);
+    await summarizeCustomerMemory(BIZ, CUSTOMER, {
+      getCustomerMemory: (async () =>
+        memory({ interaction_count: 3, email: null, summary_md: "prior" })) as never,
+      getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,
+      callRowboatChat: (async () => ({
+        reply: "ok",
+        conversationId: undefined,
+        state: undefined,
+        hasStateKey: false
+      })) as never,
+      listSmsHistoryForCustomer: (async () => []) as never,
+      listVoiceTurnsForCustomer: vi.fn(async () => []),
+      listEmailLogForAddress: listEmailLogForAddress as never,
+      updateCustomerSummary: vi.fn(async () => {}) as never,
+      rowboatBearer: "tok"
+    });
+    expect(listEmailLogForAddress).not.toHaveBeenCalled();
+  });
+
+  it("renders outbound emails as 'Business' and tolerates a null subject/body", async () => {
+    const callRowboatChat = vi.fn(async () => ({
+      reply: "ok",
+      conversationId: undefined,
+      state: undefined,
+      hasStateKey: false
+    }));
+    const result = await summarizeCustomerMemory(BIZ, CUSTOMER, {
+      getCustomerMemory: (async () =>
+        memory({ interaction_count: 3, email: "joe@acme.com" })) as never,
+      getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,
+      callRowboatChat: callRowboatChat as never,
+      listSmsHistoryForCustomer: (async () => []) as never,
+      listVoiceTurnsForCustomer: vi.fn(async () => []),
+      listEmailLogForAddress: (async () => [
+        emailRow({ direction: "outbound", subject: null, body_preview: null })
+      ]) as never,
+      updateCustomerSummary: vi.fn(async () => {}) as never,
+      rowboatBearer: "tok"
+    });
+    expect(result.ok).toBe(true);
+    const args = (callRowboatChat.mock.calls[0] as unknown as [
+      Parameters<typeof import("../src/lib/rowboat/chat").callRowboatChat>[0]
+    ])[0];
+    const user = args.messages[1]?.content ?? "";
+    // Outbound → "Business"; null subject collapses to no quoted subject part;
+    // null body renders as an empty trailer (never the literal "null").
+    expect(user).toContain("EMAIL Business]: ");
+    expect(user).not.toContain('Business "');
+    expect(user).not.toContain("null");
+  });
+
+  it("summarizes a contact whose only source material is email (no_inputs guard counts email)", async () => {
+    const result = await summarizeCustomerMemory(BIZ, CUSTOMER, {
+      getCustomerMemory: (async () =>
+        memory({ interaction_count: 1, email: "joe@acme.com", summary_md: null })) as never,
+      getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,
+      callRowboatChat: (async () => ({
+        reply: "digest",
+        conversationId: undefined,
+        state: undefined,
+        hasStateKey: false
+      })) as never,
+      listSmsHistoryForCustomer: (async () => []) as never,
+      listVoiceTurnsForCustomer: vi.fn(async () => []),
+      listEmailLogForAddress: (async () => [emailRow()]) as never,
+      updateCustomerSummary: vi.fn(async () => {}) as never,
+      rowboatBearer: "tok"
+    });
+    expect(result.ok).toBe(true);
   });
 });
 

@@ -151,6 +151,72 @@ export async function findCustomerByEmail(
   return { customerE164: row.customer_e164, displayName: row.display_name };
 }
 
+/**
+ * Best-effort: attach an email to a customer's cross-channel profile so future
+ * inbound mail from that address rolls up to the same contact (and the
+ * summarizer can fold the correspondence in). Used when a caller/texter shares
+ * their email with the assistant.
+ *
+ * Precedence: never clobber an address the OWNER already set on the profile.
+ * We only fill an empty `email`; if the row already has one (owner edit, lead
+ * backfill, an earlier capture), we leave it untouched. Creates a minimal
+ * profile when none exists yet — counters/last_channel stay at their defaults
+ * (the inbound recorder owns those), so this can't fake an interaction.
+ */
+export async function linkCustomerEmail(
+  businessId: string,
+  customerE164: string,
+  email: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const normalized = email.trim();
+  if (!normalized) return;
+  const db = client ?? (await createSupabaseServiceClient());
+  // 1) Resolve the contact ALIAS-AWARE: after a profile merge the caller's
+  //    number lives in `alias_e164s` on the surviving row, not as
+  //    `customer_e164`. Matching only the raw number would miss that row and
+  //    (below) insert a duplicate profile, splitting voice/SMS identity from
+  //    the email rollup. Mirror getCustomerMemory's (e164 OR alias) filter.
+  const { data: existing, error: selErr } = await db
+    .from("customer_memories")
+    .select("id, email")
+    .eq("business_id", businessId)
+    .or(`customer_e164.eq.${customerE164},alias_e164s.cs.{${customerE164}}`)
+    .maybeSingle();
+  if (selErr) throw new Error(`linkCustomerEmail: ${selErr.message}`);
+  if (existing) {
+    // Never clobber an address the OWNER (or an earlier capture) already set.
+    if (existing.email) return;
+    const { error: updErr } = await db
+      .from("customer_memories")
+      .update({ email: normalized, updated_at: new Date().toISOString() })
+      .eq("id", existing.id);
+    if (updErr) throw new Error(`linkCustomerEmail: ${updErr.message}`);
+    return;
+  }
+  // 2) No profile exists yet for this number. Insert a minimal one.
+  const { error: insErr } = await db.from("customer_memories").insert({
+    business_id: businessId,
+    customer_e164: customerE164,
+    email: normalized
+  });
+  if (!insErr) return;
+  if (insErr.code !== PG_UNIQUE_VIOLATION) {
+    throw new Error(`linkCustomerEmail: ${insErr.message}`);
+  }
+  // Unique violation: a concurrent writer (e.g. record_customer_interaction)
+  // created the profile between our SELECT and INSERT — almost certainly with
+  // a null email. Don't drop the captured address: fill it now, alias-aware,
+  // but only while still empty so we never clobber an owner-set value.
+  const { error: raceErr } = await db
+    .from("customer_memories")
+    .update({ email: normalized, updated_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .or(`customer_e164.eq.${customerE164},alias_e164s.cs.{${customerE164}}`)
+    .is("email", null);
+  if (raceErr) throw new Error(`linkCustomerEmail: ${raceErr.message}`);
+}
+
 export type ListCustomerMemoriesOptions = {
   limit?: number;
   /** Filter by display_name OR customer_e164 substring (case-insensitive). */

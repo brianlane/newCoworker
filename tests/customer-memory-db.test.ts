@@ -38,6 +38,7 @@ import {
   deleteCustomerMemory,
   findCustomerByEmail,
   getCustomerMemory,
+  linkCustomerEmail,
   listCustomerMemories,
   listSmsHistoryForCustomer,
   mergeCustomerMemories,
@@ -197,6 +198,150 @@ describe("getCustomerMemory", () => {
     await expect(getCustomerMemory(BIZ, CUSTOMER, client)).rejects.toThrow(
       /getCustomerMemory: rls denied/
     );
+  });
+});
+
+describe("linkCustomerEmail", () => {
+  // linkCustomerEmail calls `from("customer_memories")` up to twice: an
+  // alias-aware SELECT, then either an UPDATE (by id) or a minimal INSERT. A
+  // sequence client hands each from() call its own terminator so we can model
+  // "row exists / has email / missing" independently.
+  function makeSeqClient(terminators: Array<{ data?: unknown; error?: unknown }>) {
+    const fromCalls: Array<{ table: string; calls: CallLog[] }> = [];
+    let i = 0;
+    const client = {
+      from(table: string) {
+        const terminator = terminators[i++] ?? { data: null, error: null };
+        const { builder, calls } = makeBuilder(terminator);
+        fromCalls.push({ table, calls });
+        return builder;
+      }
+    } as unknown as Parameters<typeof linkCustomerEmail>[3];
+    return { client, fromCalls };
+  }
+
+  it("no-ops on a blank email without touching the DB", async () => {
+    const { client, fromCalls } = makeSeqClient([]);
+    await linkCustomerEmail(BIZ, CUSTOMER, "   ", client);
+    expect(fromCalls).toHaveLength(0);
+  });
+
+  it("resolves the contact alias-aware (e164 OR alias) before writing", async () => {
+    const { client, fromCalls } = makeSeqClient([
+      { data: { id: "row-1", email: null }, error: null },
+      { data: null, error: null }
+    ]);
+    await linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client);
+    const sel = fromCalls[0]!;
+    expect(sel.calls.find((c) => c.name === "or")?.args[0]).toBe(
+      `customer_e164.eq.${CUSTOMER},alias_e164s.cs.{${CUSTOMER}}`
+    );
+  });
+
+  it("fills an empty email on the matched row by id (never inserts)", async () => {
+    const { client, fromCalls } = makeSeqClient([
+      { data: { id: "row-1", email: null }, error: null },
+      { data: null, error: null }
+    ]);
+    await linkCustomerEmail(BIZ, CUSTOMER, "  joe@acme.com  ", client);
+    expect(fromCalls).toHaveLength(2);
+    const upd = fromCalls[1]!;
+    const updateArg = upd.calls.find((c) => c.name === "update")?.args[0] as Record<string, unknown>;
+    expect(updateArg.email).toBe("joe@acme.com");
+    // Targets the resolved row id (covers the merged-alias case).
+    expect(upd.calls.find((c) => c.name === "eq")?.args).toEqual(["id", "row-1"]);
+  });
+
+  it("leaves an existing email untouched (never clobbers an owner edit)", async () => {
+    const { client, fromCalls } = makeSeqClient([
+      { data: { id: "row-1", email: "owner@set.com" }, error: null }
+    ]);
+    await linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client);
+    // Only the SELECT ran — no UPDATE, no INSERT.
+    expect(fromCalls).toHaveLength(1);
+  });
+
+  it("inserts a minimal profile when no row exists", async () => {
+    const { client, fromCalls } = makeSeqClient([
+      { data: null, error: null },
+      { data: null, error: null }
+    ]);
+    await linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client);
+    expect(fromCalls).toHaveLength(2);
+    const ins = fromCalls[1]!;
+    const insertArg = ins.calls.find((c) => c.name === "insert")?.args[0] as Record<string, unknown>;
+    expect(insertArg).toMatchObject({
+      business_id: BIZ,
+      customer_e164: CUSTOMER,
+      email: "joe@acme.com"
+    });
+  });
+
+  it("on insert unique-violation, fills the racing row's email (alias-aware, only-if-null)", async () => {
+    const { client, fromCalls } = makeSeqClient([
+      { data: null, error: null }, // SELECT: no row yet
+      { data: null, error: { code: "23505", message: "duplicate key" } }, // INSERT loses the race
+      { data: null, error: null } // recovery UPDATE
+    ]);
+    await expect(linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client)).resolves.toBeUndefined();
+    expect(fromCalls).toHaveLength(3);
+    const recover = fromCalls[2]!;
+    expect(recover.calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      email: "joe@acme.com"
+    });
+    expect(recover.calls.find((c) => c.name === "or")?.args[0]).toBe(
+      `customer_e164.eq.${CUSTOMER},alias_e164s.cs.{${CUSTOMER}}`
+    );
+    // Never clobber an owner-set value: the recovery update is gated on email IS NULL.
+    expect(recover.calls.find((c) => c.name === "is")?.args).toEqual(["email", null]);
+  });
+
+  it("throws when the post-violation recovery update errors", async () => {
+    const { client } = makeSeqClient([
+      { data: null, error: null },
+      { data: null, error: { code: "23505", message: "duplicate key" } },
+      { data: null, error: { message: "recover boom" } }
+    ]);
+    await expect(linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client)).rejects.toThrow(
+      /linkCustomerEmail: recover boom/
+    );
+  });
+
+  it("throws on a non-unique insert error", async () => {
+    const { client } = makeSeqClient([
+      { data: null, error: null },
+      { data: null, error: { code: "42501", message: "rls denied" } }
+    ]);
+    await expect(linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client)).rejects.toThrow(
+      /linkCustomerEmail: rls denied/
+    );
+  });
+
+  it("throws on a select error", async () => {
+    const { client } = makeSeqClient([{ data: null, error: { message: "select boom" } }]);
+    await expect(linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client)).rejects.toThrow(
+      /linkCustomerEmail: select boom/
+    );
+  });
+
+  it("throws on an update error", async () => {
+    const { client } = makeSeqClient([
+      { data: { id: "row-1", email: null }, error: null },
+      { data: null, error: { message: "update boom" } }
+    ]);
+    await expect(linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com", client)).rejects.toThrow(
+      /linkCustomerEmail: update boom/
+    );
+  });
+
+  it("falls back to the default service client when none is provided", async () => {
+    const { client, fromCalls } = makeSeqClient([
+      { data: { id: "row-1", email: "x@y.com" }, error: null }
+    ]);
+    defaultClientSpy.mockReturnValueOnce(client);
+    await linkCustomerEmail(BIZ, CUSTOMER, "joe@acme.com");
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+    expect(fromCalls).toHaveLength(1);
   });
 });
 
