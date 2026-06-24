@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
+import { EmailComposer } from "@/components/dashboard/EmailComposer";
 import type { EmailLogRow, EmailLogSource } from "@/lib/db/email-log";
 
 /**
@@ -29,7 +30,8 @@ const SOURCE_META: Record<EmailLogSource, SourceMeta> = {
   dashboard_chat: { label: "Chat", tagClass: "text-parchment/45" },
   sms_assistant: { label: "Texts", tagClass: "text-parchment/45" },
   voice_assistant: { label: "Call", tagClass: "text-parchment/45" },
-  ai_flow: { label: "AiFlow", tagClass: "text-parchment/45" }
+  ai_flow: { label: "AiFlow", tagClass: "text-parchment/45" },
+  owner_manual: { label: "You", tagClass: "text-claw-green" }
 };
 
 function sourceMeta(source: EmailLogSource): SourceMeta {
@@ -89,11 +91,13 @@ function formatBytes(bytes: number): string {
 function ReadingPane({
   row,
   businessId,
-  onClose
+  onClose,
+  onReply
 }: {
   row: EmailLogRow;
   businessId: string;
   onClose: () => void;
+  onReply: () => void;
 }) {
   const meta = sourceMeta(row.source);
   const [state, setState] = useState<BodyState>({ status: "loading" });
@@ -142,13 +146,22 @@ function ReadingPane({
             {meta.label}
           </span>
         </div>
-        <button
-          onClick={onClose}
-          aria-label="Close"
-          className="text-parchment/40 hover:text-parchment text-xl leading-none"
-        >
-          ×
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={onReply}
+            className="rounded-lg border border-claw-green/40 px-3 py-1 text-xs font-semibold text-claw-green transition-colors hover:bg-claw-green/10"
+          >
+            Reply
+          </button>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="text-parchment/40 hover:text-parchment text-xl leading-none"
+          >
+            ×
+          </button>
+        </div>
       </div>
 
       <h2 className="text-lg font-bold text-parchment mb-4 break-words">
@@ -253,8 +266,25 @@ function ReadingPane({
   );
 }
 
+type ComposerState =
+  | { mode: "new" }
+  | { mode: "reply"; to: string; subject: string };
+
+/** The address to reply to: the other party on the message. */
+function replyRecipient(row: EmailLogRow): string {
+  return (row.direction === "inbound" ? row.from_email : row.to_email) ?? "";
+}
+
+/** Prefix "Re: " unless the subject already carries one. */
+function replySubject(row: EmailLogRow): string {
+  const subject = (row.subject ?? "").trim();
+  if (!subject) return "Re:";
+  return /^re:/i.test(subject) ? subject : `Re: ${subject}`;
+}
+
 export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; businessId: string }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [composer, setComposer] = useState<ComposerState | null>(null);
   const selected = rows.find((r) => r.id === selectedId) ?? null;
 
   useEffect(() => {
@@ -267,7 +297,34 @@ export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; business
   }, [selected]);
 
   return (
-    <div className="flex gap-4 items-start">
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        {!composer && (
+          <button
+            type="button"
+            onClick={() => setComposer({ mode: "new" })}
+            className="rounded-lg bg-claw-green px-4 py-2 text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90"
+          >
+            Compose
+          </button>
+        )}
+      </div>
+
+      {composer && (
+        <EmailComposer
+          // Remount with fresh prefill whenever the target changes (new vs a
+          // specific reply), so initialTo/initialSubject take effect.
+          key={composer.mode === "reply" ? `reply:${composer.to}:${composer.subject}` : "new"}
+          businessId={businessId}
+          title={composer.mode === "reply" ? "Reply" : "New email"}
+          initialTo={composer.mode === "reply" ? composer.to : ""}
+          initialSubject={composer.mode === "reply" ? composer.subject : ""}
+          onCancel={() => setComposer(null)}
+          onSent={() => setComposer(null)}
+        />
+      )}
+
+      <div className="flex gap-4 items-start">
       {/* List column: full-width until a message is opened, then it collapses to
           a narrow left rail (hidden on mobile while reading). */}
       <div
@@ -277,6 +334,15 @@ export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; business
         ].join(" ")}
       >
         <Card padding="sm">
+          {rows.length === 0 && (
+            <div className="text-center py-8">
+              <p className="text-parchment/60">No email activity yet.</p>
+              <p className="text-xs text-parchment/40 mt-2">
+                Use Compose to send one, or it will appear here once your coworker sends or
+                receives email.
+              </p>
+            </div>
+          )}
           <ul className="divide-y divide-parchment/10">
             {rows.map((r) => {
               const meta = sourceMeta(r.source);
@@ -344,9 +410,13 @@ export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; business
             row={selected}
             businessId={businessId}
             onClose={() => setSelectedId(null)}
+            onReply={() =>
+              setComposer({ mode: "reply", to: replyRecipient(selected), subject: replySubject(selected) })
+            }
           />
         </div>
       )}
+      </div>
     </div>
   );
 }

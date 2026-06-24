@@ -28,7 +28,10 @@ export type EmailLogSource =
   | "sms_assistant"
   | "voice_assistant"
   | "tenant_mailbox_inbound"
-  | "tenant_mailbox_outbound";
+  | "tenant_mailbox_outbound"
+  // Owner typed + sent this email by hand from the dashboard Emails page
+  // (reply-in-thread or compose-new), sent from their connected mailbox.
+  | "owner_manual";
 
 /**
  * Attachment metadata as stored inline on email_log.attachments. `storage_path`
@@ -188,6 +191,63 @@ export async function getEmailBody(
     body_full: row.body_full,
     attachments: row.attachments ?? []
   };
+}
+
+export type RecordOutboundOwnerManualEmailInput = {
+  businessId: string;
+  toEmail: string;
+  subject: string;
+  bodyText: string;
+  providerMessageId?: string | null;
+  ccEmails?: string[];
+  bccEmails?: string[];
+};
+
+/**
+ * Record an owner-typed dashboard email (reply-in-thread / compose-new) so it
+ * renders inline with the rest of the email activity. Unlike the best-effort
+ * recorders above, this returns the inserted id and whether the insert
+ * succeeded: the email already went out, but the caller surfaces `logged:
+ * false` to the UI (e.g. when this migration hasn't been applied yet) so it
+ * doesn't promise the message will appear in the list.
+ */
+export async function recordOutboundOwnerManualEmail(
+  input: RecordOutboundOwnerManualEmailInput,
+  client?: SupabaseClient
+): Promise<{ id: string | null; logged: boolean }> {
+  try {
+    const db = client ?? (await createSupabaseServiceClient());
+    const { data, error } = await db
+      .from("email_log")
+      .insert({
+        business_id: input.businessId,
+        direction: "outbound",
+        to_email: input.toEmail,
+        from_email: null,
+        subject: input.subject,
+        body_preview: input.bodyText.slice(0, 500),
+        body_full: input.bodyText,
+        cc_email: recipientsToCsv(input.ccEmails),
+        bcc_email: recipientsToCsv(input.bccEmails),
+        source: "owner_manual",
+        run_id: null,
+        flow_id: null,
+        provider_message_id: input.providerMessageId ?? null
+      })
+      .select("id")
+      .single();
+    if (error) {
+      console.error("recordOutboundOwnerManualEmail", error.message);
+      return { id: null, logged: false };
+    }
+    return { id: (data as { id: string }).id, logged: true };
+  } catch (err) {
+    console.error(
+      "recordOutboundOwnerManualEmail",
+      err instanceof Error ? err.message : String(err)
+    );
+    return { id: null, logged: false };
+  }
 }
 
 export type RecordInboundTriggerEmailInput = {

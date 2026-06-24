@@ -70,18 +70,7 @@ export default async function DashboardEmailsPage() {
         </p>
       </Card>
 
-      {rows.length === 0 ? (
-        <Card>
-          <div className="text-center py-8">
-            <p className="text-parchment/60">No email activity yet.</p>
-            <p className="text-xs text-parchment/40 mt-2">
-              Once an email is sent or received, it will appear here.
-            </p>
-          </div>
-        </Card>
-      ) : (
-        <EmailsList rows={rows} businessId={business.id} />
-      )}
+      <EmailsList rows={rows} businessId={business.id} />
     </div>
   );
 }
