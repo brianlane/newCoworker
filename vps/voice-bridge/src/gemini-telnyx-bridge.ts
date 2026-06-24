@@ -859,19 +859,28 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           // call the caller expects the assistant to greet first — without
           // this nudge they hear silence after ringback (no audio activity
           // means VAD never marks a turn complete and the model stays mute).
-          // Sending a coordinator-style prompt with `turnComplete: true`
-          // makes Gemini emit its first audio chunk immediately.
+          //
+          // This MUST go through `sendRealtimeInput({ text })`, not
+          // `sendClientContent`. The caller's audio is streamed via
+          // `sendRealtimeInput` with Gemini's automatic VAD, so the whole
+          // session lives in the "realtime" turn regime. Injecting a manual
+          // `sendClientContent` turn mixes the two turn models: the greeting
+          // turn itself succeeds, but the *next* auto-VAD turn (the caller's
+          // first real reply) is then rejected by the server with WS close
+          // 1007 "Request contains an invalid argument." — i.e. the AI speaks
+          // its opening line and the call dies the moment the caller answers.
+          // `sendRealtimeInput({ text })` injects the greeting cue inside the
+          // realtime stream, keeping every turn consistent.
           if (!diag.greetingTriggered) {
             diag.greetingTriggered = true;
             try {
-              session.sendClientContent({
-                turns: `[Coordinator — speak aloud now] The caller has just connected. Greet them warmly in one short sentence (e.g. "Hi, thanks for calling ${opts.businessName} — how can I help?") and wait for their reply.`,
-                turnComplete: true
+              session.sendRealtimeInput({
+                text: `[Coordinator — speak aloud now] The caller has just connected. Greet them warmly in one short sentence (e.g. "Hi, thanks for calling ${opts.businessName} — how can I help?") and wait for their reply.`
               });
               console.log("gemini-bridge: greeting prompt sent", {
                 callControlId: opts.callControlId
               });
-              emitDiag("voice_bridge_gemini_greeting_sent", { method: "sendClientContent" });
+              emitDiag("voice_bridge_gemini_greeting_sent", { method: "sendRealtimeInput" });
             } catch (err) {
               console.error("gemini-bridge: greeting prompt failed", err);
               emitDiag("voice_bridge_gemini_greeting_failed", {
@@ -1119,9 +1128,11 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     setTimeout(() => {
       if (ended) return;
       const mins = Math.max(1, Math.round(warnBeforeMs / 60000));
-      session.sendClientContent({
-        turns: `[Coordinator — speak aloud] The AI session will end in about ${mins} minute(s). Give the caller a warm heads-up that you're wrapping up, and that ${name} can help them directly afterward if needed.`,
-        turnComplete: true
+      // Realtime text (not sendClientContent) so this coordinator cue stays in
+      // the same auto-VAD turn regime as the caller's audio; a manual turn here
+      // would make the caller's next reply close the session with 1007.
+      session.sendRealtimeInput({
+        text: `[Coordinator — speak aloud] The AI session will end in about ${mins} minute(s). Give the caller a warm heads-up that you're wrapping up, and that ${name} can help them directly afterward if needed.`
       });
     }, warnAt)
   );
@@ -1129,9 +1140,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   timers.push(
     setTimeout(() => {
       if (ended) return;
-      session.sendClientContent({
-        turns: `[Coordinator — speak aloud] Finish your thought and deliver a very brief, warm goodbye now. Let them know someone at ${name} can follow up if they still need help.`,
-        turnComplete: true
+      session.sendRealtimeInput({
+        text: `[Coordinator — speak aloud] Finish your thought and deliver a very brief, warm goodbye now. Let them know someone at ${name} can follow up if they still need help.`
       });
     }, nudgeAt)
   );
@@ -1141,9 +1151,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       if (ended) return;
       void (async () => {
         try {
-          session.sendClientContent({
-            turns: `[Coordinator — speak aloud] Session time limit reached. Say one short, friendly goodbye and thank them for calling ${name}.`,
-            turnComplete: true
+          session.sendRealtimeInput({
+            text: `[Coordinator — speak aloud] Session time limit reached. Say one short, friendly goodbye and thank them for calling ${name}.`
           });
           await new Promise((r) => setTimeout(r, 1200));
         } catch {
