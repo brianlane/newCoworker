@@ -96,7 +96,10 @@ async function resolveCallerIdentity(
     .map((n) => normalizeE164(n ?? ""))
     .filter((n): n is string => Boolean(n));
   if (ownerNorm.includes(callerNorm)) {
-    return { kind: "owner", name: ownerName?.trim() || "the owner" };
+    // Leave name unset when owner_name is blank (don't fabricate "the owner" —
+    // the greeting would then literally say "Hey the owner"). The greeting and
+    // system prompt both handle a nameless staff caller gracefully.
+    return { kind: "owner", name: ownerName?.trim() || undefined };
   }
   return { kind: "customer" };
 }
