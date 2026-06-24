@@ -309,38 +309,50 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
       | null) ?? [];
 
   const nowMs = Date.now();
-  let alreadyMine = false;
-  // Whether the matched run already executed the steps AFTER route_to_team
-  // (true late claim → worker re-runs only the route claim/notify then ends).
-  let isLate = false;
-  let matchStepIndex = -1;
-  const match = candidates.find((row) => {
+  type Cand = (typeof candidates)[number];
+  // A teammate can plausibly have more than one eligible run at once (a LIVE
+  // offer on one lead, a late-claimable one on another). Classify each and
+  // pick by PRECEDENCE rather than raw recency: a live offer is what reply "1"
+  // would target, so it must win even when an older late-claimable run was
+  // touched more recently. Within the non-live bucket take the newest.
+  let liveMatch: Cand | null = null;
+  let liveStep = -1;
+  let secondaryMatch: Cand | null = null;
+  let secondaryStep = -1;
+  let secondaryMine = false;
+  let secondaryLate = false;
+  for (const row of candidates) {
+    // Candidates are newest-first; keep only the first hit per bucket.
+    if (liveMatch && secondaryMatch) break;
     const routing =
       row.context?.routing && typeof row.context.routing === "object"
         ? (row.context.routing as Record<string, unknown>)
         : null;
-    if (!routing) return false;
-    if (nowMs - Date.parse(row.updated_at) > LATE_CLAIM_WINDOW_MS) return false;
+    if (!routing) continue;
+    if (nowMs - Date.parse(row.updated_at) > LATE_CLAIM_WINDOW_MS) continue;
     const claimedBy = typeof routing.claimed_by === "string" ? routing.claimed_by : "";
     // Claimed by someone else → not available to this teammate.
-    if (claimedBy && claimedBy !== from) return false;
+    if (claimedBy && claimedBy !== from) continue;
     // Already this teammate's lead (claimed via 1, or a prior 86): re-ack
     // without re-opening. The worker clears routing.step_index when it
     // finalizes a claim, so this idempotent path must NOT require step_index —
     // gating on it here was why a repeat "86" fell through to the customer path.
     if (claimedBy === from) {
-      alreadyMine = true;
-      return true;
+      if (!secondaryMatch) {
+        secondaryMatch = row;
+        secondaryMine = true;
+      }
+      continue;
     }
     // A fresh claim needs the rewind target the worker stamped on park.
     const stepIndex = typeof routing.step_index === "number" ? routing.step_index : -1;
-    if (stepIndex < 0) return false;
+    if (stepIndex < 0) continue;
     const offered = typeof routing.offered === "string" ? routing.offered : "";
     const tried = Array.isArray(routing.tried)
       ? (routing.tried as unknown[]).filter((x): x is string => typeof x === "string")
       : [];
     const everOffered = offered === from || row.awaiting_agent_e164 === from || tried.includes(from);
-    if (!everOffered) return false;
+    if (!everOffered) continue;
     // Did the steps AFTER route_to_team already run? They did if the run
     // completed (status "done") OR the worker advanced current_step past the
     // route step (owner fallback ran later steps, then parked on e.g. a
@@ -350,20 +362,36 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     if (postRouteRan) {
       // Any teammate who was ever offered this lead can take it now; the worker
       // re-runs only the route claim/notify and then ends (no step replay).
-      isLate = true;
-      matchStepIndex = stepIndex;
-      return true;
+      if (!secondaryMatch) {
+        secondaryMatch = row;
+        secondaryStep = stepIndex;
+        secondaryLate = true;
+      }
+      continue;
     }
     // Still a LIVE offer parked at the route step (later steps not run yet).
     // Mirror reply "1": only the CURRENTLY offered teammate may claim, so a
     // teammate who already passed (in `tried`) can't preempt the active offer.
-    if (offered === from) {
-      isLate = false;
-      matchStepIndex = stepIndex;
-      return true;
+    if (offered === from && !liveMatch) {
+      liveMatch = row;
+      liveStep = stepIndex;
     }
-    return false;
-  });
+  }
+
+  // Live offer wins over a late claim / re-ack on a different (older) lead.
+  let alreadyMine = false;
+  let isLate = false;
+  let matchStepIndex = -1;
+  let match: Cand | null = null;
+  if (liveMatch) {
+    match = liveMatch;
+    matchStepIndex = liveStep;
+  } else if (secondaryMatch) {
+    match = secondaryMatch;
+    alreadyMine = secondaryMine;
+    isLate = secondaryLate;
+    matchStepIndex = secondaryStep;
+  }
 
   if (!match) return null;
 
@@ -417,6 +445,10 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
       awaiting_agent_e164: null,
       respond_by_at: null,
       claimed_at: null,
+      // Clear any stale quiet-hours deferral from an earlier park; otherwise
+      // claim_ai_flow_runs would skip this run until that future time and the
+      // claim/owner-notify would lag behind the teammate's immediate ack.
+      earliest_claim_at: null,
       context: nextContext,
       updated_at: new Date().toISOString()
     })
