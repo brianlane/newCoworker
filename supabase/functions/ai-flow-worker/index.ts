@@ -474,6 +474,11 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     }
     if (outcome.kind === "pause_agent") {
       await recordStep(supabase, run, index, step, "pending");
+      // Stamp which step this offer parked on so a later "86" late-claim can
+      // rewind the run precisely to THIS route_to_team step (a flow may have
+      // several, only one of which ran). Survives the owner fallback so the
+      // run stays late-claimable after it's handed back.
+      routing.step_index = index;
       // Persist the parked state BEFORE sending the offer so an inbound 1/2
       // reply can always be matched to this run (state before side effect).
       await updateRun(supabase, run.id, {
@@ -559,7 +564,11 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     }
     await recordStep(supabase, run, index, step, outcome.skipped ? "skipped" : "done", outcome.result);
     index += 1;
-    if (outcome.skipNextStep && index < def.steps.length) {
+    if (outcome.endRun) {
+      // Late claim: jump to the end so the run completes as done without
+      // replaying the steps after route_to_team.
+      index = def.steps.length;
+    } else if (outcome.skipNextStep && index < def.steps.length) {
       // Approval gate decided "skip": the step the gate guards (the one
       // directly after it) is recorded as skipped without running.
       await recordStep(supabase, run, index, def.steps[index], "skipped", {
@@ -606,7 +615,10 @@ type StepOutcome =
   // skipNextStep: set by an approval gate decided "skip" — the step directly
   // after the gate (the action it guards) is recorded as skipped and never
   // runs, while the rest of the flow continues.
-  | { kind: "ok"; result?: Record<string, unknown>; skipped?: boolean; skipNextStep?: boolean }
+  // endRun: finalize the run immediately after this step WITHOUT running any
+  // remaining steps. Used by a route_to_team LATE claim ("86") so the claim
+  // path notifies the owner but later steps (email/browse/notify) don't replay.
+  | { kind: "ok"; result?: Record<string, unknown>; skipped?: boolean; skipNextStep?: boolean; endRun?: boolean }
   // `result` lets a failing step attach diagnostics (e.g. a screenshot_path of
   // the stuck page) onto the recorded failed step so the dashboard can show it.
   | { kind: "fail"; error: string; result?: Record<string, unknown> }
@@ -2492,8 +2504,13 @@ async function routeToTeamStep(
     : [];
   routing.tried = tried;
 
-  // An agent claimed (inbound '1'): finalize and optionally tell the owner.
+  // An agent claimed (inbound '1', or a late '86'): finalize and optionally
+  // tell the owner.
   if (routing.last_event === "claim") {
+    // Late claim: the offer had already lapsed (and likely fallen back to the
+    // owner) when the agent texted "86". Notify the owner the same way, then
+    // finalize WITHOUT replaying the steps after route_to_team.
+    const lateClaim = routing.late_claim === true;
     const claimedBy =
       typeof routing.reply_from === "string" && routing.reply_from
         ? routing.reply_from
@@ -2507,15 +2524,28 @@ async function routeToTeamStep(
     delete routing.reply_from;
     delete routing.offered;
     delete routing.offered_name;
+    delete routing.late_claim;
+    delete routing.step_index;
+    if (lateClaim) routing.late_claimed = true;
     if (action.claimedNotifyTemplate) {
       const body = renderTemplate(
         action.claimedNotifyTemplate,
         agentScope(scope, { name: claimedName, phone: claimedBy })
       );
-      await sendOwnerSms(supabase, run, body, `aiflow-claimed:${run.id}`);
+      // Distinct idempotency key for a late claim so it isn't deduped against an
+      // earlier owner-fallback/claim notice on the same run.
+      const notifyKey = lateClaim ? `aiflow-late-claimed:${run.id}` : `aiflow-claimed:${run.id}`;
+      await sendOwnerSms(supabase, run, body, notifyKey);
     }
-    appendActionTaken(scope, `lead claimed by ${claimedName || claimedBy}`);
-    return { kind: "ok", result: { routed: "claimed", claimed_by: claimedBy } };
+    appendActionTaken(
+      scope,
+      `lead ${lateClaim ? "claimed late (86) by" : "claimed by"} ${claimedName || claimedBy}`
+    );
+    return {
+      kind: "ok",
+      result: { routed: lateClaim ? "late_claimed" : "claimed", claimed_by: claimedBy },
+      ...(lateClaim ? { endRun: true } : {})
+    };
   }
 
   // First entry, reject ('2'), or timeout: retire the agent we last offered, then

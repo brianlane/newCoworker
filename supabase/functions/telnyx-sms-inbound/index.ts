@@ -222,6 +222,179 @@ async function evaluateAndEnqueueAiFlows(
   return { suppressingRunQueued };
 }
 
+/**
+ * How long after a lead was last offered/handed back a teammate may still
+ * claim it with "86". Bounds a stray "86" from reviving an ancient lead.
+ */
+const LATE_CLAIM_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+type LateClaimArgs = {
+  // deno-lint-ignore no-explicit-any
+  supabase: any;
+  businessId: string;
+  from: string;
+  /** DID the inbound arrived on — safest ack/notify sender fallback. */
+  ackTo: string;
+  eventId: string;
+  telnyxApiKey: string;
+  messagingProfileId: string;
+  smsFromE164: string;
+};
+
+/**
+ * Handle a teammate's "86" late-claim. Returns a Response when the message was
+ * consumed (claimed or already-yours), or null when no eligible offer exists so
+ * the caller can fall through to the normal inbound path.
+ *
+ * Re-opens the most recent route_to_team run this teammate was offered (live or
+ * already handed back to the owner) within LATE_CLAIM_WINDOW_MS, rewinds it to
+ * the route step (routing.step_index, stamped by the worker on park), and marks
+ * routing.late_claim so the worker's claim path notifies the owner and then
+ * finalizes WITHOUT replaying later steps.
+ */
+async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
+  const { supabase, businessId, from, ackTo, eventId, telnyxApiKey, messagingProfileId, smsFromE164 } =
+    args;
+
+  // Sender resolution mirrors the 1/2 ack path: per-tenant settings win, then
+  // the DID the message arrived on, then the global from.
+  const { data: bizRow } = await supabase
+    .from("business_telnyx_settings")
+    .select("telnyx_messaging_profile_id, telnyx_sms_from_e164")
+    .eq("business_id", businessId)
+    .maybeSingle();
+  const biz = bizRow as
+    | { telnyx_messaging_profile_id?: string | null; telnyx_sms_from_e164?: string | null }
+    | null;
+  const ackProfile =
+    (biz?.telnyx_messaging_profile_id && biz.telnyx_messaging_profile_id.trim()) || messagingProfileId;
+  const ackFrom = (biz?.telnyx_sms_from_e164 && biz.telnyx_sms_from_e164.trim()) || ackTo || smsFromE164;
+  const canAck = Boolean(telnyxApiKey && ackProfile && from);
+  const ack = async (text: string, keySuffix: string): Promise<void> => {
+    if (!canAck) return;
+    const send = await telnyxSendSms({
+      apiKey: telnyxApiKey,
+      messagingProfileId: ackProfile,
+      fromE164: ackFrom,
+      toE164: from,
+      text,
+      idempotencyKey: `${eventId}:${keySuffix}`
+    });
+    if (!send.ok) console.error("late-claim ack reply", send.status, send.body.slice(0, 300));
+  };
+
+  // Recent route_to_team runs for this business (route steps stamp
+  // context.routing). Newest first; 25 is plenty for a human texting "86".
+  const { data: rows } = await supabase
+    .from("ai_flow_runs")
+    .select("id, status, context, awaiting_agent_e164, updated_at")
+    .eq("business_id", businessId)
+    .in("status", ["done", "awaiting_agent", "queued"])
+    .order("updated_at", { ascending: false })
+    .limit(25);
+  const candidates =
+    (rows as
+      | Array<{
+          id: string;
+          status: string;
+          context: Record<string, unknown> | null;
+          awaiting_agent_e164: string | null;
+          updated_at: string;
+        }>
+      | null) ?? [];
+
+  const nowMs = Date.now();
+  let alreadyMine = false;
+  const match = candidates.find((row) => {
+    const routing =
+      row.context?.routing && typeof row.context.routing === "object"
+        ? (row.context.routing as Record<string, unknown>)
+        : null;
+    if (!routing) return false;
+    // Only runs that recorded which step to rewind to are claimable.
+    if (typeof routing.step_index !== "number") return false;
+    if (nowMs - Date.parse(row.updated_at) > LATE_CLAIM_WINDOW_MS) return false;
+    const claimedBy = typeof routing.claimed_by === "string" ? routing.claimed_by : "";
+    // Claimed by someone else → not available to this teammate.
+    if (claimedBy && claimedBy !== from) return false;
+    const offered = typeof routing.offered === "string" ? routing.offered : "";
+    const tried = Array.isArray(routing.tried)
+      ? (routing.tried as unknown[]).filter((x): x is string => typeof x === "string")
+      : [];
+    const wasOffered = offered === from || row.awaiting_agent_e164 === from || tried.includes(from);
+    if (wasOffered && claimedBy === from) alreadyMine = true;
+    return wasOffered;
+  });
+
+  if (!match) return null;
+
+  if (alreadyMine) {
+    await ack("You've already got this lead — thanks!", "late-claim-mine");
+    await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
+      business_id: businessId,
+      run_id: match.id,
+      event_id: eventId,
+      decision: "late_claim_repeat"
+    });
+    return new Response(JSON.stringify({ ok: true, agent_offer: "already_claimed" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  // Resolve the teammate's roster name so the owner's claimed-notify reads
+  // "<name> claimed …" (offered_name was cleared on the owner fallback).
+  const { data: memberRow } = await supabase
+    .from("ai_flow_team_members")
+    .select("name")
+    .eq("business_id", businessId)
+    .eq("phone_e164", from)
+    .maybeSingle();
+  const memberName = (memberRow as { name?: string } | null)?.name ?? "";
+
+  const routing = { ...(match.context!.routing as Record<string, unknown>) };
+  routing.last_event = "claim";
+  routing.reply_from = from;
+  routing.offered = from;
+  if (memberName) routing.offered_name = memberName;
+  routing.late_claim = true;
+  const stepIndex = routing.step_index as number;
+  const nextContext = { ...(match.context ?? {}), routing };
+
+  const { error: reopenErr } = await supabase
+    .from("ai_flow_runs")
+    .update({
+      status: "queued",
+      current_step: stepIndex,
+      awaiting_agent_e164: null,
+      respond_by_at: null,
+      claimed_at: null,
+      context: nextContext,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", match.id)
+    .in("status", ["done", "awaiting_agent", "queued"]);
+  if (reopenErr) {
+    console.error("ai_flow_runs late-claim reopen", reopenErr);
+    return new Response(JSON.stringify({ ok: false, error: "late_claim_failed" }), {
+      status: 503,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  await ack("Got it — you've got this lead. We'll let the team know.", "late-claim-ack");
+  await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
+    business_id: businessId,
+    run_id: match.id,
+    event_id: eventId,
+    decision: "late_claim"
+  });
+  return new Response(JSON.stringify({ ok: true, agent_offer: "late_claimed" }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" }
+  });
+}
+
 const HELP_REPLY_TEXT =
   "New Coworker: For help, use your business dashboard or contact support. Msg&data rates may apply. Reply STOP to opt out.";
 const STOP_REPLY_TEXT =
@@ -588,6 +761,32 @@ serve(async (req: Request) => {
     // collide with STOP/HELP/START keywords (handled above).
     if (from) {
       const replyBody = inboundSmsBody(payload).trim();
+
+      // route_to_team LATE claim ("86"): a teammate takes a lead AFTER its
+      // offer window lapsed and it was handed back to the owner. Unlike 1/2
+      // (which only resolve a LIVE offer), 86 re-opens a recently-offered run —
+      // even one that already fell back to the owner — and re-routes it to this
+      // teammate. The worker re-runs the route step's CLAIM path (so the owner
+      // gets the normal "<agent> claimed …" notice) and then completes WITHOUT
+      // re-running later steps (no duplicate email/browse/notify), gated by
+      // routing.late_claim. Matched BEFORE the 1-9 owner/agent block so a
+      // multi-digit "86" is never misread as an approval digit.
+      if (replyBody === "86") {
+        const handled = await tryLateClaim({
+          supabase,
+          businessId,
+          from,
+          ackTo: to,
+          eventId,
+          telnyxApiKey,
+          messagingProfileId,
+          smsFromE164
+        });
+        if (handled) return handled;
+        // No eligible offer for this teammate — fall through to the normal
+        // path so a stray "86" is still handled like any other inbound text.
+      }
+
       // Single digits 1-9: agent offers understand 1/2; owner approvals map
       // the digit against the option list stored on the pending run (gates
       // offer up to 4 options today — approve / skip / bypass quiet hours /
