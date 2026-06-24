@@ -25,10 +25,15 @@ import { z } from "zod";
 import { getAuthUser, requireOwner } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { normalizeRecipients } from "@/lib/email/recipients";
-import { recordOutboundOwnerManualEmail } from "@/lib/db/email-log";
 import { logger } from "@/lib/logger";
+
+/** Join a recipient list into the stored CSV form, or null when empty. */
+function recipientsCsv(recipients: string[]): string | null {
+  return recipients.length > 0 ? recipients.join(", ") : null;
+}
 
 export const dynamic = "force-dynamic";
 
@@ -92,21 +97,43 @@ export async function POST(request: Request) {
       );
     }
 
-    // Best-effort durable log so the email renders in the list. A failed insert
-    // must not imply the email didn't go out (it did) — report logged:false so
-    // the UI can warn without promising it will appear.
-    const { id: logId, logged } = await recordOutboundOwnerManualEmail({
-      businessId,
-      toEmail,
+    // Best-effort durable log so the email renders in the list (source
+    // 'owner_manual'). A failed insert must not imply the email didn't go out
+    // (it did) — report logged:false so the UI can warn without promising the
+    // row will appear (e.g. before the owner_manual migration is applied).
+    const db = await createSupabaseServiceClient();
+    const { error: logErr } = await db.from("email_log").insert({
+      business_id: businessId,
+      direction: "outbound",
+      to_email: toEmail,
+      from_email: null,
       subject,
-      bodyText,
-      providerMessageId: result.messageId,
-      ccEmails,
-      bccEmails
+      body_preview: bodyText.slice(0, 500),
+      body_full: bodyText,
+      cc_email: recipientsCsv(ccEmails),
+      bcc_email: recipientsCsv(bccEmails),
+      source: "owner_manual",
+      run_id: null,
+      flow_id: null,
+      provider_message_id: result.messageId
     });
+    if (logErr) {
+      logger.error("dashboard-email-send: email_log insert failed", {
+        businessId,
+        error: logErr.message
+      });
+    }
 
-    logger.info("dashboard-email-send: sent", { businessId, provider: result.provider, logged });
-    return successResponse({ messageId: result.messageId, provider: result.provider, logId, logged });
+    logger.info("dashboard-email-send: sent", {
+      businessId,
+      provider: result.provider,
+      logged: !logErr
+    });
+    return successResponse({
+      messageId: result.messageId,
+      provider: result.provider,
+      logged: !logErr
+    });
   } catch (err) {
     return handleRouteError(err);
   }

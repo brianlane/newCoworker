@@ -13,7 +13,6 @@ import {
   listEmailLogForAddress,
   recordInboundTriggerEmail,
   recordOutboundAssistantEmail,
-  recordOutboundOwnerManualEmail,
   recordTenantMailboxInbound
 } from "@/lib/db/email-log";
 
@@ -415,69 +414,3 @@ describe("recordOutboundAssistantEmail", () => {
   });
 });
 
-describe("recordOutboundOwnerManualEmail", () => {
-  const input = {
-    businessId: "biz",
-    toEmail: "lead@example.com",
-    subject: "Re: Your inquiry",
-    bodyText: "y".repeat(600),
-    providerMessageId: "gm-1"
-  };
-
-  /** insert → select("id") → single() */
-  function insertChain(result: { data: unknown; error: { message: string } | null }) {
-    const single = vi.fn().mockResolvedValue(result);
-    const select = vi.fn(() => ({ single }));
-    const insert = vi.fn(() => ({ select }));
-    return { insert, select, single };
-  }
-
-  it("inserts an outbound owner_manual row and returns the id + logged:true", async () => {
-    const c = insertChain({ data: { id: "e9" }, error: null });
-    const db = { from: vi.fn(() => c) };
-    const res = await recordOutboundOwnerManualEmail(
-      { ...input, ccEmails: ["a@x.com", "b@x.com"] },
-      db as never
-    );
-    expect(res).toEqual({ id: "e9", logged: true });
-    expect(db.from).toHaveBeenCalledWith("email_log");
-    expect(c.insert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        business_id: "biz",
-        direction: "outbound",
-        source: "owner_manual",
-        to_email: "lead@example.com",
-        from_email: null,
-        subject: "Re: Your inquiry",
-        body_preview: "y".repeat(500),
-        body_full: "y".repeat(600),
-        cc_email: "a@x.com, b@x.com",
-        bcc_email: null,
-        run_id: null,
-        flow_id: null,
-        provider_message_id: "gm-1"
-      })
-    );
-  });
-
-  it("returns logged:false on insert error (email already went out)", async () => {
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const c = insertChain({ data: null, error: { message: "down" } });
-    const db = { from: vi.fn(() => c) };
-    const res = await recordOutboundOwnerManualEmail(input, db as never);
-    expect(res).toEqual({ id: null, logged: false });
-    expect(errSpy).toHaveBeenCalledWith("recordOutboundOwnerManualEmail", "down");
-    errSpy.mockRestore();
-  });
-
-  it("returns logged:false (never throws) when the client cannot be created", async () => {
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    defaultClientSpy.mockRejectedValueOnce(new Error("no env"));
-    await expect(recordOutboundOwnerManualEmail(input)).resolves.toEqual({
-      id: null,
-      logged: false
-    });
-    expect(errSpy).toHaveBeenCalledWith("recordOutboundOwnerManualEmail", "no env");
-    errSpy.mockRestore();
-  });
-});
