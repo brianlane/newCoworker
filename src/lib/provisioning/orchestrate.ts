@@ -10,6 +10,7 @@ import { TelnyxNumbersClient } from "@/lib/telnyx/numbers";
 import {
   orderAndAssignDidForBusiness,
   OrderAndAssignError,
+  extractNanpAreaCode,
   type PlatformTelnyxDefaults
 } from "@/lib/telnyx/assign-did";
 import {
@@ -778,20 +779,86 @@ async function runOrchestrator(
         // the config gap as a deploy-time error instead of a silent
         // production regression at first call.
         assertPlatformTelnyxDefaults(platformDefaults);
-        const { toE164 } = await didProvisioner({
-          businessId,
-          platformDefaults,
-          search: {
-            countryCode: process.env.TELNYX_DEFAULT_COUNTRY ?? "US",
-            areaCode: process.env.TELNYX_DEFAULT_AREA_CODE,
-            administrativeArea: process.env.TELNYX_DEFAULT_STATE
+
+        const countryCode = process.env.TELNYX_DEFAULT_COUNTRY ?? "US";
+        // Bias the number search toward the owner's local area code, derived
+        // from the phone they entered during onboarding, so a new tenant gets
+        // a number that looks local to them. We reuse the `businessRow` already
+        // loaded above (no second DB round-trip — and no risk of a transient
+        // re-read failing and silently dropping a valid local area code). A
+        // non-NANP / missing phone falls back to the platform default.
+        const localAreaCode = extractNanpAreaCode(businessRow?.phone);
+        const primaryAreaCode = localAreaCode ?? process.env.TELNYX_DEFAULT_AREA_CODE;
+        const primarySearch = {
+          countryCode,
+          areaCode: primaryAreaCode,
+          // When we have a concrete local area code, drop the env-default
+          // state filter — an area code already pins the locale, and a
+          // contradictory `administrativeArea` (e.g. tenant in 602/AZ but
+          // TELNYX_DEFAULT_STATE=NY) would zero out the search.
+          administrativeArea: localAreaCode ? undefined : process.env.TELNYX_DEFAULT_STATE
+        };
+
+        let toE164: string;
+        let usedFallbackAreaCode = false;
+        try {
+          ({ toE164 } = await didProvisioner({
+            businessId,
+            platformDefaults,
+            search: primarySearch
+          }));
+        } catch (orderErr) {
+          // No number available in the owner's local area code: retry once
+          // with the platform default area code (or any US number when no
+          // default is set). Only retry when we actually narrowed to a
+          // derived local area code — otherwise the primary search already
+          // used the fallback criteria and a retry would be identical.
+          if (
+            orderErr instanceof OrderAndAssignError &&
+            orderErr.reason === "no_numbers_available" &&
+            localAreaCode
+          ) {
+            usedFallbackAreaCode = true;
+            // Make sure the retry actually broadens inventory. If the platform
+            // default area code is the same NPA we just failed on, reusing it
+            // (and re-adding the env state filter the primary search dropped)
+            // would re-run an identical/narrower search. In that case drop the
+            // area-code + state filters so Telnyx can return any available US
+            // number instead.
+            let fallbackAreaCode = process.env.TELNYX_DEFAULT_AREA_CODE;
+            if (fallbackAreaCode === localAreaCode) {
+              fallbackAreaCode = undefined;
+            }
+            logger.warn("No DID available in local area code; retrying with default", {
+              businessId,
+              localAreaCode,
+              fallbackAreaCode
+            });
+            ({ toE164 } = await didProvisioner({
+              businessId,
+              platformDefaults,
+              search: {
+                countryCode,
+                areaCode: fallbackAreaCode,
+                administrativeArea: fallbackAreaCode ? process.env.TELNYX_DEFAULT_STATE : undefined
+              }
+            }));
+          } else {
+            throw orderErr;
           }
-        });
+        }
+
         await recordProvisioningProgress({
           businessId,
           phase: "did_assigned",
           percent: 38,
-          message: `Per-tenant DID assigned (${toE164})`,
+          // Only claim a local number when we actually bought one in the
+          // owner's area code — after a fallback retry the number came from
+          // TELNYX_DEFAULT_AREA_CODE, so don't imply it's local.
+          message:
+            localAreaCode && !usedFallbackAreaCode
+              ? `Per-tenant DID assigned (${toE164}); local area code ${localAreaCode}`
+              : `Per-tenant DID assigned (${toE164})`,
           source: "orchestrator"
         });
 

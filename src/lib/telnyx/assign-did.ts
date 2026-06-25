@@ -114,6 +114,28 @@ export function coerceOwnerPhoneToE164(raw: string | null | undefined): string |
   return /^\+[1-9]\d{7,14}$/.test(candidate) ? candidate : null;
 }
 
+/**
+ * Extract the NANP area code (NPA) from a free-form onboarding phone string.
+ *
+ * Used to bias the auto-purchase DID search toward the owner's local area so a
+ * new tenant gets a number that looks local to them. Coerces via
+ * {@link coerceOwnerPhoneToE164}, then returns the 3-digit NPA ONLY when the
+ * result is a US/NANP `+1` number (`+1` followed by exactly 10 digits). The
+ * NPA's first digit must be 2-9 (real area codes never start with 0/1), so we
+ * never hand Telnyx a `filter[national_destination_code]` value it would
+ * reject. Returns `null` for non-`+1`, malformed, or otherwise unusable input
+ * — callers fall back to the platform default area code in that case.
+ */
+export function extractNanpAreaCode(raw: string | null | undefined): string | null {
+  const e164 = coerceOwnerPhoneToE164(raw);
+  if (!e164) return null;
+  // NANP numbers are exactly `+1` + 10 national digits.
+  const match = /^\+1(\d{10})$/.exec(e164);
+  if (!match) return null;
+  const npa = match[1].slice(0, 3);
+  return /^[2-9]\d{2}$/.test(npa) ? npa : null;
+}
+
 function resolveBridgeOriginFromRow(
   existing: BusinessTelnyxSettingsRow | null,
   platformDefaults: PlatformTelnyxDefaults | undefined

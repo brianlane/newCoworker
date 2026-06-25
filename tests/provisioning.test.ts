@@ -77,7 +77,7 @@ vi.mock("@/lib/db/telnyx-routes", () => ({
   setBusinessMessagingCampaignStatus: vi.fn().mockResolvedValue(undefined)
 }));
 
-import { updateBusinessStatus } from "@/lib/db/businesses";
+import { updateBusinessStatus, getBusiness } from "@/lib/db/businesses";
 import {
   getActiveGatewayTokenForBusiness,
   issueGatewayToken,
@@ -985,6 +985,150 @@ describe("provisioning/orchestrate", () => {
           search: expect.objectContaining({ countryCode: "US" })
         })
       );
+    });
+
+    it("derives search.areaCode from the owner's onboarding phone (local number)", async () => {
+      process.env.TELNYX_AUTO_PURCHASE_DID = "true";
+      // Env defaults are present but should be OVERRIDDEN by the local code.
+      process.env.TELNYX_DEFAULT_AREA_CODE = "212";
+      process.env.TELNYX_DEFAULT_STATE = "NY";
+      // getBusiness is loaded once during the run; the DID phase reuses that
+      // businessRow to derive the local area code.
+      const biz = { business_type: "real_estate", phone: "(602) 555-0100" } as never;
+      vi.mocked(getBusiness).mockResolvedValueOnce(biz);
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+16025550100" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      await orchestrateProvisioning(
+        { businessId: "biz-did-local", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(didProvisioner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // Local area code wins, and the contradictory env state filter is
+          // dropped so the two filters can't zero out the search.
+          search: expect.objectContaining({ areaCode: "602", administrativeArea: undefined })
+        })
+      );
+    });
+
+    it("falls back to TELNYX_DEFAULT_AREA_CODE when the owner phone is not a NANP number", async () => {
+      process.env.TELNYX_AUTO_PURCHASE_DID = "true";
+      process.env.TELNYX_DEFAULT_AREA_CODE = "212";
+      process.env.TELNYX_DEFAULT_STATE = "NY";
+      const biz = { business_type: "real_estate", phone: "+447911123456" } as never;
+      vi.mocked(getBusiness).mockResolvedValueOnce(biz);
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+12125550100" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      await orchestrateProvisioning(
+        { businessId: "biz-did-intl", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(didProvisioner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          search: expect.objectContaining({ areaCode: "212", administrativeArea: "NY" })
+        })
+      );
+    });
+
+    it("retries with the default area code when no number is available in the local area code", async () => {
+      process.env.TELNYX_AUTO_PURCHASE_DID = "true";
+      process.env.TELNYX_DEFAULT_AREA_CODE = "212";
+      process.env.TELNYX_DEFAULT_STATE = "NY";
+      const biz = { business_type: "real_estate", phone: "(602) 555-0100" } as never;
+      vi.mocked(getBusiness).mockResolvedValueOnce(biz);
+      const { OrderAndAssignError } = await import("@/lib/telnyx/assign-did");
+      const didProvisioner = vi
+        .fn()
+        .mockRejectedValueOnce(new OrderAndAssignError("no_numbers_available", "none local"))
+        .mockResolvedValueOnce({ toE164: "+12125550100" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-did-retry", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(didProvisioner).toHaveBeenCalledTimes(2);
+      // First attempt used the owner's local area code…
+      expect(didProvisioner.mock.calls[0][0].search.areaCode).toBe("602");
+      // …the retry fell back to the platform default (+ its state filter).
+      expect(didProvisioner.mock.calls[1][0].search.areaCode).toBe("212");
+      expect(didProvisioner.mock.calls[1][0].search.administrativeArea).toBe("NY");
+      expect(result.vpsId).toBe("42");
+      // The number actually came from the fallback area code, so the
+      // did_assigned progress must NOT claim it's local.
+      const didAssigned = vi
+        .mocked(recordProvisioningProgress)
+        .mock.calls.map((c) => c[0])
+        .find((p) => p.phase === "did_assigned");
+      expect(didAssigned?.message).not.toContain("local area code");
+    });
+
+    it("retry broadens to any US number when the default area code equals the local one", async () => {
+      process.env.TELNYX_AUTO_PURCHASE_DID = "true";
+      // Platform default is the SAME NPA the owner is in, so reusing it would
+      // re-run the identical (failed) search instead of broadening.
+      process.env.TELNYX_DEFAULT_AREA_CODE = "602";
+      process.env.TELNYX_DEFAULT_STATE = "AZ";
+      const biz = { business_type: "real_estate", phone: "(602) 555-0100" } as never;
+      vi.mocked(getBusiness).mockResolvedValueOnce(biz);
+      const { OrderAndAssignError } = await import("@/lib/telnyx/assign-did");
+      const didProvisioner = vi
+        .fn()
+        .mockRejectedValueOnce(new OrderAndAssignError("no_numbers_available", "none local"))
+        .mockResolvedValueOnce({ toE164: "+15125550100" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-did-broaden", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(didProvisioner).toHaveBeenCalledTimes(2);
+      expect(didProvisioner.mock.calls[0][0].search.areaCode).toBe("602");
+      // The retry drops the area-code + state filters so it can pull any US
+      // number instead of re-running the identical failed search.
+      expect(didProvisioner.mock.calls[1][0].search.areaCode).toBeUndefined();
+      expect(didProvisioner.mock.calls[1][0].search.administrativeArea).toBeUndefined();
+      expect(result.vpsId).toBe("42");
+    });
+
+    it("falls back to env area code when the business row is missing (no phone to derive from)", async () => {
+      process.env.TELNYX_AUTO_PURCHASE_DID = "true";
+      process.env.TELNYX_DEFAULT_AREA_CODE = "305";
+      process.env.TELNYX_DEFAULT_STATE = "FL";
+      // No business row at all → nothing to derive a local area code from, so
+      // the search falls back to the platform default (exercises the
+      // `businessRow?.phone` short-circuit).
+      vi.mocked(getBusiness).mockResolvedValueOnce(null as never);
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+13055550100" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-did-norow", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(didProvisioner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          search: expect.objectContaining({ areaCode: "305", administrativeArea: "FL" })
+        })
+      );
+      expect(result.vpsId).toBe("42");
     });
 
     it("survives a thrown 10DLC attach (catch path: log warn + record `thinking` progress, don't fail orchestrator)", async () => {
