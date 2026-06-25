@@ -992,10 +992,10 @@ describe("provisioning/orchestrate", () => {
       // Env defaults are present but should be OVERRIDDEN by the local code.
       process.env.TELNYX_DEFAULT_AREA_CODE = "212";
       process.env.TELNYX_DEFAULT_STATE = "NY";
-      // getBusiness is called twice (compliance prompt + area-code lookup);
-      // both Once values carry the phone so the lookup is order-independent.
+      // getBusiness is loaded once during the run; the DID phase reuses that
+      // businessRow to derive the local area code.
       const biz = { business_type: "real_estate", phone: "(602) 555-0100" } as never;
-      vi.mocked(getBusiness).mockResolvedValueOnce(biz).mockResolvedValueOnce(biz);
+      vi.mocked(getBusiness).mockResolvedValueOnce(biz);
       const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+16025550100" });
       vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
       await orchestrateProvisioning(
@@ -1020,7 +1020,7 @@ describe("provisioning/orchestrate", () => {
       process.env.TELNYX_DEFAULT_AREA_CODE = "212";
       process.env.TELNYX_DEFAULT_STATE = "NY";
       const biz = { business_type: "real_estate", phone: "+447911123456" } as never;
-      vi.mocked(getBusiness).mockResolvedValueOnce(biz).mockResolvedValueOnce(biz);
+      vi.mocked(getBusiness).mockResolvedValueOnce(biz);
       const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+12125550100" });
       vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
       await orchestrateProvisioning(
@@ -1043,7 +1043,7 @@ describe("provisioning/orchestrate", () => {
       process.env.TELNYX_DEFAULT_AREA_CODE = "212";
       process.env.TELNYX_DEFAULT_STATE = "NY";
       const biz = { business_type: "real_estate", phone: "(602) 555-0100" } as never;
-      vi.mocked(getBusiness).mockResolvedValueOnce(biz).mockResolvedValueOnce(biz);
+      vi.mocked(getBusiness).mockResolvedValueOnce(biz);
       const { OrderAndAssignError } = await import("@/lib/telnyx/assign-did");
       const didProvisioner = vi
         .fn()
@@ -1065,21 +1065,27 @@ describe("provisioning/orchestrate", () => {
       expect(didProvisioner.mock.calls[1][0].search.areaCode).toBe("212");
       expect(didProvisioner.mock.calls[1][0].search.administrativeArea).toBe("NY");
       expect(result.vpsId).toBe("42");
+      // The number actually came from the fallback area code, so the
+      // did_assigned progress must NOT claim it's local.
+      const didAssigned = vi
+        .mocked(recordProvisioningProgress)
+        .mock.calls.map((c) => c[0])
+        .find((p) => p.phase === "did_assigned");
+      expect(didAssigned?.message).not.toContain("local area code");
     });
 
-    it("tolerates a getBusiness read failure during the DID phase (falls back to env area code)", async () => {
+    it("falls back to env area code when the business row is missing (no phone to derive from)", async () => {
       process.env.TELNYX_AUTO_PURCHASE_DID = "true";
       process.env.TELNYX_DEFAULT_AREA_CODE = "305";
       process.env.TELNYX_DEFAULT_STATE = "FL";
-      // First lookup (compliance prompt) succeeds; the second lookup (area-code
-      // derivation) rejects, exercising the best-effort `.catch(() => null)`.
-      vi.mocked(getBusiness)
-        .mockResolvedValueOnce({ business_type: "real_estate" } as never)
-        .mockRejectedValueOnce(new Error("supabase read blip"));
+      // No business row at all → nothing to derive a local area code from, so
+      // the search falls back to the platform default (exercises the
+      // `businessRow?.phone` short-circuit).
+      vi.mocked(getBusiness).mockResolvedValueOnce(null as never);
       const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+13055550100" });
       vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
       const result = await orchestrateProvisioning(
-        { businessId: "biz-did-readfail", tier: "starter" },
+        { businessId: "biz-did-norow", tier: "starter" },
         {
           vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
           remoteExec: vi.fn().mockResolvedValue(okExec()),

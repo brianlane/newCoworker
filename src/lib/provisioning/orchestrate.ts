@@ -783,11 +783,11 @@ async function runOrchestrator(
         const countryCode = process.env.TELNYX_DEFAULT_COUNTRY ?? "US";
         // Bias the number search toward the owner's local area code, derived
         // from the phone they entered during onboarding, so a new tenant gets
-        // a number that looks local to them. Best-effort: a read failure or a
-        // non-NANP / malformed phone falls back to the platform default and
-        // never aborts the deploy.
-        const business = await getBusiness(businessId).catch(() => null);
-        const localAreaCode = extractNanpAreaCode(business?.phone);
+        // a number that looks local to them. We reuse the `businessRow` already
+        // loaded above (no second DB round-trip — and no risk of a transient
+        // re-read failing and silently dropping a valid local area code). A
+        // non-NANP / missing phone falls back to the platform default.
+        const localAreaCode = extractNanpAreaCode(businessRow?.phone);
         const primaryAreaCode = localAreaCode ?? process.env.TELNYX_DEFAULT_AREA_CODE;
         const primarySearch = {
           countryCode,
@@ -800,6 +800,7 @@ async function runOrchestrator(
         };
 
         let toE164: string;
+        let usedFallbackAreaCode = false;
         try {
           ({ toE164 } = await didProvisioner({
             businessId,
@@ -817,6 +818,7 @@ async function runOrchestrator(
             orderErr.reason === "no_numbers_available" &&
             localAreaCode
           ) {
+            usedFallbackAreaCode = true;
             logger.warn("No DID available in local area code; retrying with default", {
               businessId,
               localAreaCode,
@@ -840,9 +842,13 @@ async function runOrchestrator(
           businessId,
           phase: "did_assigned",
           percent: 38,
-          message: localAreaCode
-            ? `Per-tenant DID assigned (${toE164}); local area code ${localAreaCode}`
-            : `Per-tenant DID assigned (${toE164})`,
+          // Only claim a local number when we actually bought one in the
+          // owner's area code — after a fallback retry the number came from
+          // TELNYX_DEFAULT_AREA_CODE, so don't imply it's local.
+          message:
+            localAreaCode && !usedFallbackAreaCode
+              ? `Per-tenant DID assigned (${toE164}); local area code ${localAreaCode}`
+              : `Per-tenant DID assigned (${toE164})`,
           source: "orchestrator"
         });
 
