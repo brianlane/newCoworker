@@ -156,7 +156,11 @@ export function verifyKeypairRoundTrip(
       const { rawPub: derivedPub } = parseOpensshEd25519PrivateKey(privateKeyPem);
       rawPub = derivedPub;
     } else {
-      const derived = createPublicKey(createPrivateKey(privateKeyPem));
+      // Derive the public key straight from the private PEM. createPublicKey
+      // accepts a private key and returns its public half; passing the PEM
+      // (rather than a KeyObject) keeps the call typed across @types/node
+      // majors, where the KeyObject overload was dropped.
+      const derived = createPublicKey({ key: privateKeyPem, format: "pem" });
       const jwk = derived.export({ format: "jwk" }) as { x?: string };
       /* c8 ignore next -- defensive; node:crypto always populates jwk.x for valid ed25519 */
       if (typeof jwk.x !== "string") return false;
