@@ -29,14 +29,17 @@ import {
   listSmsHistoryForCustomer,
   updateCustomerOwnerFields
 } from "@/lib/customer-memory/db";
+import { CONTACT_TYPES } from "@/lib/customer-memory/types";
 
 export const dynamic = "force-dynamic";
 
 const READ_RATE = { interval: 60 * 1000, maxRequests: 60 };
 const WRITE_RATE = { interval: 60 * 1000, maxRequests: 20 };
 
+// E.164 or a bare 3-8 digit short code — service/lead-source contacts (folded
+// from the old overrides) are keyed by short codes and must be viewable too.
 const paramsSchema = z.object({
-  customerE164: z.string().regex(/^\+[1-9]\d{6,15}$/)
+  customerE164: z.string().regex(/^(\+[1-9]\d{6,15}|\d{3,8})$/)
 });
 
 const querySchema = z.object({
@@ -47,11 +50,16 @@ const patchBodySchema = z
   .object({
     displayName: z.string().trim().max(120).nullable().optional(),
     pinnedMd: z.string().trim().max(2000).nullable().optional(),
-    email: z.string().trim().email("Enter a valid email").max(254).nullable().optional()
+    email: z.string().trim().email("Enter a valid email").max(254).nullable().optional(),
+    type: z.enum(CONTACT_TYPES).optional()
   })
   .refine(
-    (b) => b.displayName !== undefined || b.pinnedMd !== undefined || b.email !== undefined,
-    { message: "Provide at least one of displayName, pinnedMd, email" }
+    (b) =>
+      b.displayName !== undefined ||
+      b.pinnedMd !== undefined ||
+      b.email !== undefined ||
+      b.type !== undefined,
+    { message: "Provide at least one of displayName, pinnedMd, email, type" }
   );
 
 async function decodePathParam(raw: string): Promise<string> {
@@ -96,6 +104,7 @@ export async function GET(
     return successResponse({
       memory: {
         customerE164: memory.customer_e164,
+        type: memory.type,
         displayName: memory.display_name,
         email: memory.email,
         summaryMd: memory.summary_md,
@@ -150,7 +159,8 @@ export async function PATCH(
     await updateCustomerOwnerFields(businessId, customerE164, {
       ...(body.displayName !== undefined ? { displayName: body.displayName } : {}),
       ...(body.pinnedMd !== undefined ? { pinnedMd: body.pinnedMd } : {}),
-      ...(body.email !== undefined ? { email: body.email } : {})
+      ...(body.email !== undefined ? { email: body.email } : {}),
+      ...(body.type !== undefined ? { type: body.type } : {})
     });
 
     return successResponse({ ok: true });

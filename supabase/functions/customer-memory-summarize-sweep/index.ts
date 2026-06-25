@@ -119,7 +119,7 @@ serve(async (req: Request) => {
   // table.
   const cutoff = new Date(Date.now() - SUMMARY_DEBOUNCE_MS).toISOString();
   const { data: rowsData, error: queryErr } = await supabase
-    .from("customer_memories")
+    .from("contacts")
     .select("id, business_id, customer_e164, interaction_count, last_summarized_at")
     .gte("interaction_count", SUMMARY_INTERACTION_THRESHOLD)
     .or(`last_summarized_at.is.null,last_summarized_at.lt.${cutoff}`)

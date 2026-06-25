@@ -767,11 +767,13 @@ async function logFlowEmail(
 const LEAD_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
- * True when this number is already saved as an "other contact"
- * (contact_overrides) for the business — i.e. a known vendor/integration
- * sender (Clever's numbers, a title company) or the owner, not a lead. Used to
- * keep such numbers off the Customers page. Best-effort: on a query error we
- * return false so a transient DB blip never silently drops a real lead profile.
+ * True when this number is saved as a manual (non-customer) contact on the
+ * unified `contacts` table — i.e. a known vendor/integration sender (Clever's
+ * numbers, a title company), the owner, or a tester, not a lead. Used to keep
+ * such numbers off the Customers page. A row with type='customer' is a real
+ * customer profile, so it does NOT count as a business contact. Best-effort: on
+ * a query error we return false so a transient DB blip never silently drops a
+ * real lead profile.
  */
 async function isKnownBusinessContact(
   supabase: Supabase,
@@ -779,16 +781,16 @@ async function isKnownBusinessContact(
   e164: string
 ): Promise<boolean> {
   const { data, error } = await supabase
-    .from("contact_overrides")
-    .select("e164")
+    .from("contacts")
+    .select("type")
     .eq("business_id", businessId)
-    .eq("e164", e164)
+    .eq("customer_e164", e164)
     .maybeSingle();
   if (error) {
     console.error("isKnownBusinessContact (aiflow lead)", error);
     return false;
   }
-  return data != null;
+  return data != null && (data as { type?: string }).type !== "customer";
 }
 
 /**
@@ -830,7 +832,7 @@ async function enrichCustomerProfile(
     profile && typeof profile.customer_e164 === "string" ? profile.customer_e164 : null;
   if (email && LEAD_EMAIL_RE.test(email) && targetE164) {
     const { error: emailErr } = await supabase
-      .from("customer_memories")
+      .from("contacts")
       .update({ email, updated_at: new Date().toISOString() })
       .eq("business_id", businessId)
       .eq("customer_e164", targetE164)

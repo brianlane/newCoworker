@@ -330,9 +330,12 @@ export async function getRecentActivity(
         .order("created_at", { ascending: false })
         .limit(limit),
       db
-        .from("customer_memories")
+        .from("contacts")
+        // Only real customer profiles count as "new customer" activity — folded
+        // manual contacts (vendors, services, testers) are not interactions.
         .select("display_name, customer_e164, created_at")
         .eq("business_id", businessId)
+        .eq("type", "customer")
         .gte("created_at", since)
         .order("created_at", { ascending: false })
         .limit(limit),

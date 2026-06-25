@@ -8,14 +8,15 @@ import { SortControl, type SortOption } from "@/components/dashboard/SortControl
 import { sortRows, type SortDir } from "@/lib/dashboard/sort";
 
 /**
- * One customer row, pre-resolved on the server: `name`/`badge` already account
- * for owner/employee/contact overrides so the client can sort by display name
- * without re-resolving anything.
+ * One contact row, pre-resolved on the server: `name`/`type` already account for
+ * owner/employee/manual-label overrides so the client can sort by display name
+ * or type without re-resolving anything. `type` is the unified classification
+ * (owner/employee/customer/tester/service/other).
  */
 export type CustomerListRow = {
   e164: string;
   name: string;
-  badge: "employee" | "owner" | null;
+  type: string;
   lastChannel: string | null;
   pinned: boolean;
   summary: string | null;
@@ -28,12 +29,24 @@ export type CustomerListRow = {
 const CUSTOMER_SORT_OPTIONS: SortOption[] = [
   { key: "lastInteractionAt", label: "Last interaction" },
   { key: "name", label: "Name" },
+  { key: "type", label: "Type" },
   { key: "createdAt", label: "Created" },
   { key: "updatedAt", label: "Updated" }
 ];
 
+// Owner/employee read as identity badges; the rest are plain classifications.
+const TYPE_BADGE_CLASS: Record<string, string> = {
+  owner: "text-signal-teal/90 bg-signal-teal/10",
+  employee: "text-amber-300/80 bg-amber-300/10",
+  customer: "text-parchment/60 bg-parchment/10",
+  tester: "text-fuchsia-300/80 bg-fuchsia-300/10",
+  service: "text-sky-300/80 bg-sky-300/10",
+  other: "text-parchment/60 bg-parchment/10"
+};
+
 function sortValue(row: CustomerListRow, field: string): string | number | null | undefined {
   if (field === "name") return row.name;
+  if (field === "type") return row.type;
   if (field === "createdAt") return row.createdAt;
   if (field === "updatedAt") return row.updatedAt;
   return row.lastInteractionAt;
@@ -54,9 +67,9 @@ export function CustomersList({ rows }: { rows: CustomerListRow[] }) {
     return (
       <Card>
         <div className="text-center py-8">
-          <p className="text-parchment/60">No customer interactions yet.</p>
+          <p className="text-parchment/60">No contacts yet.</p>
           <p className="text-xs text-parchment/40 mt-2">
-            Once a customer texts or calls, their profile will appear here.
+            Once someone texts or calls — or you add a contact — they&apos;ll appear here.
           </p>
         </div>
       </Card>
@@ -89,11 +102,13 @@ export function CustomersList({ rows }: { rows: CustomerListRow[] }) {
                     <span className="text-sm font-semibold text-parchment truncate">
                       {c.name}
                     </span>
-                    {c.badge && (
-                      <span className="text-[10px] uppercase tracking-wide text-parchment/40">
-                        {c.badge}
-                      </span>
-                    )}
+                    <span
+                      className={`text-[10px] uppercase tracking-wide rounded px-1.5 py-0.5 ${
+                        TYPE_BADGE_CLASS[c.type] ?? "text-parchment/60 bg-parchment/10"
+                      }`}
+                    >
+                      {c.type}
+                    </span>
                     {c.name !== c.e164 && (
                       <span className="text-xs text-parchment/50 font-mono">{c.e164}</span>
                     )}

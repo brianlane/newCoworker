@@ -42,7 +42,8 @@ export default async function CustomerDetailPage({ params }: Props) {
   } catch {
     customerE164 = raw;
   }
-  if (!/^\+[1-9]\d{6,15}$/.test(customerE164)) {
+  // E.164 or a 3-8 digit short code (service/lead-source contacts).
+  if (!/^(\+[1-9]\d{6,15}|\d{3,8})$/.test(customerE164)) {
     notFound();
   }
 
@@ -86,8 +87,12 @@ export default async function CustomerDetailPage({ params }: Props) {
   const emailHistory = memory.email
     ? await listEmailLogForAddress(business.id, memory.email, { limit: 20 }).catch(() => [])
     : [];
+  // Merge is "same person, two numbers" — only ever fold a customer into another
+  // customer. Exclude self and any non-customer directory row (service short
+  // codes, vendors, testers, owner/employee) so an irreversible merge can never
+  // collapse a real person into a lead-source or vendor entry.
   const mergeCandidates = allCustomers
-    .filter((c) => c.customer_e164 !== memory.customer_e164)
+    .filter((c) => c.customer_e164 !== memory.customer_e164 && c.type === "customer")
     .map((c) => ({ customerE164: c.customer_e164, displayName: c.display_name }));
 
   // Owner/employee/manual-override names win over the stored display_name for
@@ -108,12 +113,11 @@ export default async function CustomerDetailPage({ params }: Props) {
       .find((c): c is ContactName => Boolean(c));
   const headerName =
     headerContact?.name ?? (memory.display_name?.trim() || memory.customer_e164);
+  // Overlaid identity wins for the badge; otherwise show the stored type.
   const headerBadge =
-    headerContact?.kind === "employee"
-      ? "employee"
-      : headerContact?.kind === "owner"
-        ? "owner"
-        : null;
+    headerContact?.kind === "owner" || headerContact?.kind === "employee"
+      ? headerContact.kind
+      : memory.type;
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -122,7 +126,7 @@ export default async function CustomerDetailPage({ params }: Props) {
           href="/dashboard/customers"
           className="text-xs text-parchment/50 hover:text-parchment/80 transition-colors"
         >
-          ← Customers
+          ← Contacts
         </Link>
         <div className="flex items-center gap-2 mt-2 flex-wrap">
           <h1 className="text-2xl font-bold text-parchment">{headerName}</h1>
@@ -170,13 +174,20 @@ export default async function CustomerDetailPage({ params }: Props) {
         initialDisplayName={memory.display_name}
         initialPinnedMd={memory.pinned_md}
         initialEmail={memory.email}
+        initialType={memory.type}
       />
 
-      <CustomerMergeAction
-        businessId={business.id}
-        customerE164={memory.customer_e164}
-        candidates={mergeCandidates}
-      />
+      {/* Merge is customer-to-customer only. Hide it when THIS profile is a
+          non-customer (service short code, vendor, tester, owner/employee) so a
+          directory row can never be folded into a customer and deleted — the
+          target list is already restricted to customers above. */}
+      {memory.type === "customer" && (
+        <CustomerMergeAction
+          businessId={business.id}
+          customerE164={memory.customer_e164}
+          candidates={mergeCandidates}
+        />
+      )}
 
       {memory.summary_md?.trim() ? (
         <Card>

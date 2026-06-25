@@ -3,7 +3,7 @@
  * One-shot: label an inbound caller AND forward their calls straight to a human.
  *
  * Two writes, both keyed by (business_id, from_e164), both idempotent upserts:
- *   1. contact_overrides — gives the caller a display name everywhere their
+ *   1. contacts — gives the caller a display name everywhere their
  *      number appears in the dashboard (calls, texts, contacts).
  *   2. voice_caller_transfer_rules — when that number calls the business DID,
  *      telnyx-voice-inbound answers and bridges the caller straight to `--to`
@@ -159,20 +159,36 @@ async function main(): Promise<void> {
 
   const db = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
 
-  const { error: contactErr } = await db.from("contact_overrides").upsert(
-    {
-      business_id: businessId,
-      e164: fromE164,
-      name,
-      updated_at: new Date().toISOString()
-    },
-    { onConflict: "business_id,e164" }
-  );
-  if (contactErr) {
-    console.error(`contact_overrides upsert failed: ${contactErr.message}`);
+  // Unified contacts table: a manual label is type 'other' (a non-customer type
+  // so it wins over any derived owner/employee name in the dashboard).
+  //
+  // Update-then-insert (NOT a blind upsert): a blind upsert would set
+  // type='other' on conflict and could demote an existing real customer to
+  // 'other'. So relabel an existing row first (preserving its type), and only
+  // create a type='other' row when none exists. Mirrors setContactOverride.
+  const { data: relabeled, error: relabelErr } = await db
+    .from("contacts")
+    .update({ display_name: name, updated_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .eq("customer_e164", fromE164)
+    .select("id");
+  if (relabelErr) {
+    console.error(`contacts relabel failed: ${relabelErr.message}`);
     process.exit(1);
   }
-  console.log(`Upserted contact override ${fromE164} → "${name}".`);
+  if (!relabeled || relabeled.length === 0) {
+    const { error: insertErr } = await db.from("contacts").insert({
+      business_id: businessId,
+      customer_e164: fromE164,
+      display_name: name,
+      type: "other"
+    });
+    if (insertErr) {
+      console.error(`contacts insert failed: ${insertErr.message}`);
+      process.exit(1);
+    }
+  }
+  console.log(`Upserted contact ${fromE164} → "${name}".`);
 
   const { error: ruleErr } = await db
     .from("voice_caller_transfer_rules")

@@ -19,6 +19,7 @@ import { z } from "zod";
 import { getAuthUser, requireOwner } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
+import { normalizeContactNumber } from "@/lib/telnyx/format";
 import {
   createCustomerMemory,
   CustomerExistsError,
@@ -26,7 +27,7 @@ import {
   DEFAULT_LIST_LIMIT,
   MAX_LIST_LIMIT
 } from "@/lib/customer-memory/db";
-import type { CustomerMemoryRow } from "@/lib/customer-memory/types";
+import { CONTACT_TYPES, type CustomerMemoryRow } from "@/lib/customer-memory/types";
 
 export const dynamic = "force-dynamic";
 
@@ -39,21 +40,29 @@ const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(MAX_LIST_LIMIT).optional()
 });
 
-const E164_RE = /^\+[1-9]\d{6,15}$/;
+// Accept whatever the owner typed and coerce to E.164 or a short code (service
+// contacts / lead sources text from short codes). Mirrors the contacts label API.
+const contactNumberField = z.string().transform((val, ctx) => {
+  const result = normalizeContactNumber(val);
+  if (!result.ok) {
+    ctx.addIssue({ code: "custom", message: result.reason });
+    return z.NEVER;
+  }
+  return result.value;
+});
 
 const createSchema = z.object({
   businessId: z.string().uuid(),
-  customerE164: z
-    .string()
-    .trim()
-    .regex(E164_RE, "Phone must be E.164, e.g. +16025551234"),
+  customerE164: contactNumberField,
   displayName: z.string().trim().min(1).max(120).optional(),
   email: z.string().trim().email("Enter a valid email").max(254).optional(),
-  pinnedMd: z.string().trim().max(4000).optional()
+  pinnedMd: z.string().trim().max(4000).optional(),
+  type: z.enum(CONTACT_TYPES).optional()
 });
 
 export type CustomerListItem = {
   customerE164: string;
+  type: CustomerMemoryRow["type"];
   displayName: string | null;
   lastChannel: CustomerMemoryRow["last_channel"];
   lastInteractionAt: string | null;
@@ -65,6 +74,7 @@ export type CustomerListItem = {
 function summarize(row: CustomerMemoryRow): CustomerListItem {
   return {
     customerE164: row.customer_e164,
+    type: row.type,
     displayName: row.display_name,
     lastChannel: row.last_channel,
     lastInteractionAt: row.last_interaction_at,
@@ -116,7 +126,8 @@ export async function POST(request: Request) {
       customerE164: body.customerE164,
       displayName: body.displayName === "" ? undefined : body.displayName,
       email: body.email === "" ? undefined : body.email,
-      pinnedMd: body.pinnedMd === "" ? undefined : body.pinnedMd
+      pinnedMd: body.pinnedMd === "" ? undefined : body.pinnedMd,
+      type: body.type === "" ? undefined : body.type
     });
 
     if (!user.isAdmin) await requireOwner(parsed.businessId);
@@ -130,7 +141,8 @@ export async function POST(request: Request) {
       customerE164: parsed.customerE164,
       displayName: parsed.displayName ?? null,
       email: parsed.email ?? null,
-      pinnedMd: parsed.pinnedMd ?? null
+      pinnedMd: parsed.pinnedMd ?? null,
+      ...(parsed.type ? { type: parsed.type } : {})
     });
 
     return successResponse({ customer: summarize(row) }, 201);

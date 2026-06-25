@@ -539,7 +539,7 @@ serve(async (req: Request) => {
       // Alias-aware: a number merged into another profile (alias_e164s) must
       // resolve to the surviving row so the merged context follows the texter.
       const { data: memoryRow } = await supabase
-        .from("customer_memories")
+        .from("contacts")
         .select(
           "customer_e164, display_name, summary_md, pinned_md, " +
             "total_interaction_count, last_channel, last_interaction_at"

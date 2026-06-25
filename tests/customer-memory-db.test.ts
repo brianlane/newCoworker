@@ -65,6 +65,7 @@ function memory(overrides: Partial<CustomerMemoryRow> = {}): CustomerMemoryRow {
     id: "00000000-0000-0000-0000-0000000000aa",
     business_id: BIZ,
     customer_e164: CUSTOMER,
+    type: "customer",
     display_name: null,
     email: null,
     summary_md: null,
@@ -166,7 +167,7 @@ describe("getCustomerMemory", () => {
     expect(result).toEqual(row);
 
     const fr = fromCalls[0]!;
-    expect(fr.table).toBe("customer_memories");
+    expect(fr.table).toBe("contacts");
     // Column list pinning: changing this list MUST be a deliberate
     // schema migration, not a casual edit.
     expect(fr.calls.find((c) => c.name === "select")?.args[0]).toContain("display_name");
@@ -513,7 +514,7 @@ describe("createCustomerMemory", () => {
     );
     expect(result).toEqual(row);
     const fr = fromCalls[0]!;
-    expect(fr.table).toBe("customer_memories");
+    expect(fr.table).toBe("contacts");
     const insert = fr.calls.find((c) => c.name === "insert")?.args[0] as Record<string, unknown>;
     expect(insert).toMatchObject({
       business_id: BIZ,
@@ -526,6 +527,22 @@ describe("createCustomerMemory", () => {
     expect(insert).not.toHaveProperty("interaction_count");
     expect(insert).not.toHaveProperty("last_channel");
     expect(fr.calls.find((c) => c.name === "single")).toBeDefined();
+  });
+
+  it("sets `type` on the insert only when provided (omitted → DB default 'customer')", async () => {
+    const { client, fromCalls } = makeClient({
+      fromTerminator: { data: memory({ type: "service" }), error: null }
+    });
+    await createCustomerMemory(
+      BIZ,
+      { customerE164: CUSTOMER, displayName: "Lead Source", type: "service" },
+      client
+    );
+    const insert = fromCalls[0]!.calls.find((c) => c.name === "insert")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(insert.type).toBe("service");
   });
 
   it("trims fields and coerces blank/omitted optionals to null", async () => {
@@ -665,7 +682,7 @@ describe("updateCustomerSummary", () => {
       client
     );
     const fr = fromCalls[0]!;
-    expect(fr.table).toBe("customer_memories");
+    expect(fr.table).toBe("contacts");
     const updateCall = fr.calls.find((c) => c.name === "update");
     expect(updateCall?.args[0]).toMatchObject({
       summary_md: "Joe wants a garage door spring.",
@@ -704,6 +721,17 @@ describe("updateCustomerOwnerFields", () => {
     expect(patch.updated_at).toBeTruthy();
     expect(patch).not.toHaveProperty("summary_md");
     expect(patch).not.toHaveProperty("interaction_count");
+  });
+
+  it("writes `type` when re-classifying a contact, and only when a truthy type is given", async () => {
+    const { client, fromCalls } = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { type: "service" }, client);
+    const patch = fromCalls[0]!.calls.find((c) => c.name === "update")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(patch).toHaveProperty("type", "service");
+    expect(patch).not.toHaveProperty("display_name");
   });
 
   it("writes email only when the key is present, and supports clearing it with null", async () => {

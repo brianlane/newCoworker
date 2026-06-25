@@ -387,7 +387,7 @@ const ALL_EMPTY = {
   sms_outbound_log: { data: [], error: null },
   dashboard_chat_jobs: { data: [], error: null },
   ai_flow_runs: { data: [], error: null },
-  customer_memories: { data: [], error: null },
+  contacts: { data: [], error: null },
   coworker_logs: { data: [], error: null }
 };
 
@@ -452,7 +452,7 @@ describe("getRecentActivity", () => {
   it("handles a source returning null data without error", async () => {
     const db = mockDbByTable({
       ...ALL_EMPTY,
-      customer_memories: { data: null, error: null }
+      contacts: { data: null, error: null }
     });
 
     const items = await getRecentActivity("biz-1", 10, db as never);
@@ -490,7 +490,7 @@ describe("getRecentActivity", () => {
         data: [{ to_e164: "+15550003333", created_at: "2026-02-01T07:00:00Z" }],
         error: null
       },
-      customer_memories: {
+      contacts: {
         data: [{ display_name: null, customer_e164: "+15550004444", created_at: "2026-02-01T06:00:00Z" }],
         error: null
       }
