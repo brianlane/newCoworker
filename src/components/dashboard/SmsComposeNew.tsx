@@ -2,12 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { normalizeContactNumber } from "@/lib/telnyx/format";
 
 type Props = { businessId: string };
-
-// Mirror the server-side validation so the button disables before a doomed
-// round-trip: E.164 or a bare 3-8 digit short code.
-const PHONE_RE = /^(\+[1-9]\d{6,15}|\d{3,8})$/;
 
 /**
  * "New message" composer on the Text history index. Sends a brand-new SMS to
@@ -22,19 +19,23 @@ export function SmsComposeNew({ businessId }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const toTrimmed = to.trim();
   const textTrimmed = text.trim();
-  const canSend = PHONE_RE.test(toTrimmed) && textTrimmed.length > 0 && !busy;
+  // Normalize as the owner types so "(305) 613-3412" enables Send and we both
+  // send and navigate using the canonical +13056133412 (the thread is keyed by
+  // the normalized value, so navigating to the raw input would 404).
+  const normalized = normalizeContactNumber(to);
+  const toE164 = normalized.ok ? normalized.value : null;
+  const canSend = Boolean(toE164) && textTrimmed.length > 0 && !busy;
 
   async function send() {
-    if (!canSend) return;
+    if (!canSend || !toE164) return;
     setBusy(true);
     setError(null);
     try {
       const res = await fetch("/api/dashboard/messages/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ businessId, toE164: toTrimmed, text })
+        body: JSON.stringify({ businessId, toE164, text })
       });
       const json = (await res.json().catch(() => null)) as {
         ok?: boolean;
@@ -56,7 +57,7 @@ export function SmsComposeNew({ businessId }: Props) {
       }
       setOpen(false);
       setText("");
-      router.push(`/dashboard/messages/${encodeURIComponent(toTrimmed)}`);
+      router.push(`/dashboard/messages/${encodeURIComponent(toE164)}`);
     } catch {
       setError("Network error — please try again.");
     } finally {
@@ -99,10 +100,15 @@ export function SmsComposeNew({ businessId }: Props) {
         type="tel"
         value={to}
         onChange={(e) => setTo(e.target.value)}
-        placeholder="+15551234567 or short code"
+        placeholder="(305) 613-3412, +1…, or short code"
         disabled={busy}
         className="w-full rounded-lg border border-parchment/15 bg-deep-ink/60 px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:border-claw-green/60 focus:outline-none disabled:opacity-50"
       />
+      {to.trim() && toE164 && toE164 !== to.trim() && (
+        <p className="text-xs text-parchment/40">
+          Sends to <span className="font-mono text-parchment/70">{toE164}</span>
+        </p>
+      )}
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
