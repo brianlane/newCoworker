@@ -177,11 +177,17 @@ export default async function CustomerDetailPage({ params }: Props) {
         initialType={memory.type}
       />
 
-      <CustomerMergeAction
-        businessId={business.id}
-        customerE164={memory.customer_e164}
-        candidates={mergeCandidates}
-      />
+      {/* Merge is customer-to-customer only. Hide it when THIS profile is a
+          non-customer (service short code, vendor, tester, owner/employee) so a
+          directory row can never be folded into a customer and deleted — the
+          target list is already restricted to customers above. */}
+      {memory.type === "customer" && (
+        <CustomerMergeAction
+          businessId={business.id}
+          customerE164={memory.customer_e164}
+          candidates={mergeCandidates}
+        />
+      )}
 
       {memory.summary_md?.trim() ? (
         <Card>
