@@ -10,12 +10,12 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import type { CustomerMemoryChannel, CustomerMemoryRow } from "./types";
+import type { ContactType, CustomerMemoryChannel, CustomerMemoryRow } from "./types";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 const ALL_COLUMNS =
-  "id,business_id,customer_e164,display_name,email,summary_md,pinned_md," +
+  "id,business_id,customer_e164,type,display_name,email,summary_md,pinned_md," +
   "interaction_count,total_interaction_count,last_interaction_at," +
   "last_summarized_at,last_channel,alias_e164s,created_at,updated_at";
 
@@ -31,7 +31,7 @@ export async function getCustomerMemory(
   // string (no commas/dots/braces to escape). `cs` = array contains, served
   // by the GIN index on alias_e164s.
   const { data, error } = await db
-    .from("customer_memories")
+    .from("contacts")
     .select(ALL_COLUMNS)
     .eq("business_id", businessId)
     .or(`customer_e164.eq.${customerE164},alias_e164s.cs.{${customerE164}}`)
@@ -45,6 +45,8 @@ export type CreateCustomerInput = {
   displayName?: string | null;
   pinnedMd?: string | null;
   email?: string | null;
+  /** Contact classification; defaults to 'customer' (the DB default) when omitted. */
+  type?: ContactType;
 };
 
 /** Postgres unique-violation SQLSTATE — a profile already exists for this number. */
@@ -71,13 +73,14 @@ export async function createCustomerMemory(
 ): Promise<CustomerMemoryRow> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
-    .from("customer_memories")
+    .from("contacts")
     .insert({
       business_id: businessId,
       customer_e164: input.customerE164,
       display_name: input.displayName?.trim() || null,
       email: input.email?.trim() || null,
-      pinned_md: input.pinnedMd?.trim() || null
+      pinned_md: input.pinnedMd?.trim() || null,
+      ...(input.type ? { type: input.type } : {})
     })
     .select(ALL_COLUMNS)
     .single();
@@ -132,7 +135,7 @@ export async function findCustomerByEmail(
   // result is never a wildcard false positive.
   const pattern = normalized.replace(/[%_\\]/g, (m) => `\\${m}`);
   const { data, error } = await db
-    .from("customer_memories")
+    .from("contacts")
     .select("customer_e164, display_name, email")
     .eq("business_id", businessId)
     .ilike("email", pattern)
@@ -178,7 +181,7 @@ export async function linkCustomerEmail(
   //    (below) insert a duplicate profile, splitting voice/SMS identity from
   //    the email rollup. Mirror getCustomerMemory's (e164 OR alias) filter.
   const { data: existing, error: selErr } = await db
-    .from("customer_memories")
+    .from("contacts")
     .select("id, email")
     .eq("business_id", businessId)
     .or(`customer_e164.eq.${customerE164},alias_e164s.cs.{${customerE164}}`)
@@ -188,14 +191,14 @@ export async function linkCustomerEmail(
     // Never clobber an address the OWNER (or an earlier capture) already set.
     if (existing.email) return;
     const { error: updErr } = await db
-      .from("customer_memories")
+      .from("contacts")
       .update({ email: normalized, updated_at: new Date().toISOString() })
       .eq("id", existing.id);
     if (updErr) throw new Error(`linkCustomerEmail: ${updErr.message}`);
     return;
   }
   // 2) No profile exists yet for this number. Insert a minimal one.
-  const { error: insErr } = await db.from("customer_memories").insert({
+  const { error: insErr } = await db.from("contacts").insert({
     business_id: businessId,
     customer_e164: customerE164,
     email: normalized
@@ -209,7 +212,7 @@ export async function linkCustomerEmail(
   // a null email. Don't drop the captured address: fill it now, alias-aware,
   // but only while still empty so we never clobber an owner-set value.
   const { error: raceErr } = await db
-    .from("customer_memories")
+    .from("contacts")
     .update({ email: normalized, updated_at: new Date().toISOString() })
     .eq("business_id", businessId)
     .or(`customer_e164.eq.${customerE164},alias_e164s.cs.{${customerE164}}`)
@@ -237,7 +240,7 @@ export async function listCustomerMemories(
     MAX_LIST_LIMIT
   );
   let query = db
-    .from("customer_memories")
+    .from("contacts")
     .select(ALL_COLUMNS)
     .eq("business_id", businessId)
     .order("last_interaction_at", { ascending: false, nullsFirst: false })
@@ -336,7 +339,7 @@ export async function updateCustomerSummary(
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db
-    .from("customer_memories")
+    .from("contacts")
     .update({
       summary_md: input.summaryMd,
       interaction_count: 0,
@@ -352,9 +355,11 @@ export type CustomerOwnerEdit = {
   displayName?: string | null;
   pinnedMd?: string | null;
   email?: string | null;
+  /** Re-classify the contact (customer/tester/service/other/...). */
+  type?: ContactType;
 };
 
-/** Owner-driven edit (customers page). Only writes the fields the owner controls. */
+/** Owner-driven edit (contacts page). Only writes the fields the owner controls. */
 export async function updateCustomerOwnerFields(
   businessId: string,
   customerE164: string,
@@ -366,10 +371,11 @@ export async function updateCustomerOwnerFields(
     updated_at: new Date().toISOString(),
     ...("displayName" in edit ? { display_name: edit.displayName } : {}),
     ...("pinnedMd" in edit ? { pinned_md: edit.pinnedMd } : {}),
-    ...("email" in edit ? { email: edit.email } : {})
+    ...("email" in edit ? { email: edit.email } : {}),
+    ...("type" in edit && edit.type ? { type: edit.type } : {})
   };
   const { error } = await db
-    .from("customer_memories")
+    .from("contacts")
     .update(patch)
     .eq("business_id", businessId)
     .eq("customer_e164", customerE164);
@@ -383,7 +389,7 @@ export async function deleteCustomerMemory(
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db
-    .from("customer_memories")
+    .from("contacts")
     .delete()
     .eq("business_id", businessId)
     .eq("customer_e164", customerE164);

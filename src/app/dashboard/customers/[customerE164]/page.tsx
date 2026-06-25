@@ -42,7 +42,8 @@ export default async function CustomerDetailPage({ params }: Props) {
   } catch {
     customerE164 = raw;
   }
-  if (!/^\+[1-9]\d{6,15}$/.test(customerE164)) {
+  // E.164 or a 3-8 digit short code (service/lead-source contacts).
+  if (!/^(\+[1-9]\d{6,15}|\d{3,8})$/.test(customerE164)) {
     notFound();
   }
 
@@ -108,12 +109,11 @@ export default async function CustomerDetailPage({ params }: Props) {
       .find((c): c is ContactName => Boolean(c));
   const headerName =
     headerContact?.name ?? (memory.display_name?.trim() || memory.customer_e164);
+  // Overlaid identity wins for the badge; otherwise show the stored type.
   const headerBadge =
-    headerContact?.kind === "employee"
-      ? "employee"
-      : headerContact?.kind === "owner"
-        ? "owner"
-        : null;
+    headerContact?.kind === "owner" || headerContact?.kind === "employee"
+      ? headerContact.kind
+      : memory.type;
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -122,7 +122,7 @@ export default async function CustomerDetailPage({ params }: Props) {
           href="/dashboard/customers"
           className="text-xs text-parchment/50 hover:text-parchment/80 transition-colors"
         >
-          ← Customers
+          ← Contacts
         </Link>
         <div className="flex items-center gap-2 mt-2 flex-wrap">
           <h1 className="text-2xl font-bold text-parchment">{headerName}</h1>
@@ -170,6 +170,7 @@ export default async function CustomerDetailPage({ params }: Props) {
         initialDisplayName={memory.display_name}
         initialPinnedMd={memory.pinned_md}
         initialEmail={memory.email}
+        initialType={memory.type}
       />
 
       <CustomerMergeAction

@@ -14,8 +14,9 @@ type Result = { data: unknown; error: { message: string } | null };
 
 /**
  * Chainable stub whose terminal result depends on the table queried —
- * resolveContactNames hits `ai_flow_team_members` and `customer_memories`
- * in parallel with different chain shapes (`.in` only on the team query).
+ * resolveContactNames hits `ai_flow_team_members` and the unified `contacts`
+ * table in parallel with different chain shapes (`.in` only on the team query).
+ * Manual labels are `contacts` rows whose `type` is not 'customer'.
  */
 function makeDb(perTable: Record<string, Result>) {
   const calls: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -58,9 +59,14 @@ describe("resolveContactNames", () => {
         data: [{ phone_e164: "+15550000001", name: "Dave Lane" }],
         error: null
       },
-      customer_memories: {
+      contacts: {
         data: [
-          { customer_e164: "+15550000002", alias_e164s: [], display_name: "Liz Wharton" }
+          {
+            customer_e164: "+15550000002",
+            alias_e164s: [],
+            display_name: "Liz Wharton",
+            type: "customer"
+          }
         ],
         error: null
       }
@@ -81,9 +87,14 @@ describe("resolveContactNames", () => {
         data: [{ phone_e164: "+15550000001", name: "Dave Lane" }],
         error: null
       },
-      customer_memories: {
+      contacts: {
         data: [
-          { customer_e164: "+15550000001", alias_e164s: [], display_name: "Some Customer" }
+          {
+            customer_e164: "+15550000001",
+            alias_e164s: [],
+            display_name: "Some Customer",
+            type: "customer"
+          }
         ],
         error: null
       }
@@ -94,12 +105,13 @@ describe("resolveContactNames", () => {
 
   it("matches merged-away aliases to the profile's display name", async () => {
     const { db } = makeDb({
-      customer_memories: {
+      contacts: {
         data: [
           {
             customer_e164: "+15550000010",
             alias_e164s: ["+15550000011"],
-            display_name: "Terry"
+            display_name: "Terry",
+            type: "customer"
           }
         ],
         error: null
@@ -111,11 +123,16 @@ describe("resolveContactNames", () => {
 
   it("skips blank and 'Unknown caller' placeholder display names", async () => {
     const { db } = makeDb({
-      customer_memories: {
+      contacts: {
         data: [
-          { customer_e164: "+15550000020", alias_e164s: [], display_name: "Unknown caller" },
-          { customer_e164: "+15550000021", alias_e164s: [], display_name: "   " },
-          { customer_e164: "+15550000022", alias_e164s: [], display_name: null }
+          {
+            customer_e164: "+15550000020",
+            alias_e164s: [],
+            display_name: "Unknown caller",
+            type: "customer"
+          },
+          { customer_e164: "+15550000021", alias_e164s: [], display_name: "   ", type: "customer" },
+          { customer_e164: "+15550000022", alias_e164s: [], display_name: null, type: "customer" }
         ],
         error: null
       }
@@ -131,8 +148,7 @@ describe("resolveContactNames", () => {
   it("tolerates null data payloads and null alias arrays / names", async () => {
     const a = makeDb({
       ai_flow_team_members: { data: null, error: null },
-      customer_memories: { data: null, error: null },
-      contact_overrides: { data: null, error: null }
+      contacts: { data: null, error: null }
     });
     expect(
       (await resolveContactNames(BIZ, ["+1555"], a.db as unknown as Client)).size
@@ -143,9 +159,9 @@ describe("resolveContactNames", () => {
         data: [{ phone_e164: "+15550000030", name: null }],
         error: null
       },
-      customer_memories: {
+      contacts: {
         data: [
-          { customer_e164: "+15550000031", alias_e164s: null, display_name: "Pat" }
+          { customer_e164: "+15550000031", alias_e164s: null, display_name: "Pat", type: "customer" }
         ],
         error: null
       }
@@ -161,12 +177,13 @@ describe("resolveContactNames", () => {
 
   it("ignores customer profiles whose numbers were not asked about", async () => {
     const { db } = makeDb({
-      customer_memories: {
+      contacts: {
         data: [
           {
             customer_e164: "+15550000040",
             alias_e164s: ["+15550000041"],
-            display_name: "Unrelated"
+            display_name: "Unrelated",
+            type: "customer"
           }
         ],
         error: null
@@ -192,10 +209,10 @@ describe("resolveContactNames", () => {
     expect(eqCalls.map((c) => c.args)).toContainEqual(["active", true]);
   });
 
-  it("filters customer_memories in SQL by primary number OR alias overlap (no full-table scan)", async () => {
+  it("filters contacts in SQL by primary number OR alias overlap (no full-table scan)", async () => {
     const { db, calls } = makeDb({});
     await resolveContactNames(BIZ, ["+1555", "+1666"], db as unknown as Client);
-    const orCall = calls.find((c) => c.table === "customer_memories" && c.method === "or");
+    const orCall = calls.find((c) => c.table === "contacts" && c.method === "or");
     expect(orCall?.args).toEqual([
       "customer_e164.in.(+1555,+1666),alias_e164s.ov.{+1555,+1666}"
     ]);
@@ -210,9 +227,9 @@ describe("resolveContactNames", () => {
     ).rejects.toThrow(/resolveContactNames: team rls/);
   });
 
-  it("throws on customer query errors", async () => {
+  it("throws on contacts query errors", async () => {
     const { db } = makeDb({
-      customer_memories: { data: null, error: { message: "cust rls" } }
+      contacts: { data: null, error: { message: "cust rls" } }
     });
     await expect(
       resolveContactNames(BIZ, ["+1555"], db as unknown as Client)
@@ -232,9 +249,14 @@ describe("resolveContactNames", () => {
         data: [{ phone_e164: "+16026951142", name: "Amy L" }],
         error: null
       },
-      customer_memories: {
+      contacts: {
         data: [
-          { customer_e164: "+16026951142", alias_e164s: [], display_name: "Stale Profile" }
+          {
+            customer_e164: "+16026951142",
+            alias_e164s: [],
+            display_name: "Stale Profile",
+            type: "customer"
+          }
         ],
         error: null
       },
@@ -281,13 +303,20 @@ describe("resolveContactNames", () => {
     expect(out.size).toBe(0);
   });
 
-  it("manual contact override wins over the derived owner name but keeps the derived kind", async () => {
+  it("manual label (non-customer contact) wins over the derived owner name but keeps the derived kind", async () => {
     const { db } = makeDb({
       businesses: { data: { owner_name: "Brian Lane", phone: null }, error: null },
       business_telnyx_settings: { data: { forward_to_e164: "+16026951142" }, error: null },
       notification_preferences: { data: null, error: null },
-      contact_overrides: {
-        data: [{ e164: "+16026951142", name: "Amy Laidlaw" }],
+      contacts: {
+        data: [
+          {
+            customer_e164: "+16026951142",
+            alias_e164s: [],
+            display_name: "Amy Laidlaw",
+            type: "other"
+          }
+        ],
         error: null
       }
     });
@@ -299,13 +328,13 @@ describe("resolveContactNames", () => {
     });
   });
 
-  it("labels an override on an unidentified number (short-code lead source) as kind 'contact'", async () => {
+  it("labels a manual contact on an unidentified number (short-code lead source) as kind 'contact'", async () => {
     const { db } = makeDb({
-      contact_overrides: {
+      contacts: {
         data: [
-          { e164: "73339", name: "ReferralExchange" },
-          { e164: "+15550000088", name: "" },
-          { e164: "+15550000089", name: null }
+          { customer_e164: "73339", alias_e164s: [], display_name: "ReferralExchange", type: "service" },
+          { customer_e164: "+15550000088", alias_e164s: [], display_name: "", type: "other" },
+          { customer_e164: "+15550000089", alias_e164s: [], display_name: null, type: "other" }
         ],
         error: null
       }
@@ -320,7 +349,7 @@ describe("resolveContactNames", () => {
       kind: "contact",
       override: true
     });
-    // Blank / null override names are ignored rather than rendering "".
+    // Blank / null names are ignored rather than rendering "".
     expect(out.has("+15550000088")).toBe(false);
     expect(out.has("+15550000089")).toBe(false);
   });

@@ -18,9 +18,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { listCustomerMemories, DEFAULT_LIST_LIMIT } from "@/lib/customer-memory/db";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
-import { listContactOverrides } from "@/lib/db/contact-overrides";
 import { AddCustomerForm } from "@/components/dashboard/AddCustomerForm";
-import { OtherContactsManager } from "@/components/dashboard/OtherContactsManager";
 import {
   CustomersList,
   type CustomerListRow
@@ -66,29 +64,30 @@ export default async function DashboardCustomersPage() {
     );
   }
 
-  const [customers, otherContacts] = await Promise.all([
-    listCustomerMemories(business.id, { limit: DEFAULT_LIST_LIMIT }),
-    listContactOverrides(business.id).catch(() => [])
-  ]);
-  // Owner/employee/manual-override names win over the stored customer
-  // display_name, so the owner's own number reads "Brian Lane (owner)" instead
-  // of a bare number, and roster members get their names here too.
+  // One unified list: every contact (customers + manual contacts) lives on the
+  // contacts table now, so a single query is the whole directory — no separate
+  // "other contacts" list and no cross-dedupe needed.
+  const contacts = await listCustomerMemories(business.id, { limit: DEFAULT_LIST_LIMIT });
+  // Owner/employee/manual-label names win over the stored display_name, so the
+  // owner's own number reads "Brian Lane (owner)" instead of a bare number, and
+  // roster members get their names + badges here too.
   const contactNames = await resolveContactNames(
     business.id,
-    customers.map((c) => c.customer_e164),
+    contacts.map((c) => c.customer_e164),
     db
   ).catch(() => new Map<string, ContactName>());
 
-  // Resolve the display name/badge per row on the server (owner/employee/
-  // contact overrides win over the stored display_name), so the client list
-  // can sort by the same name the user sees.
-  const customerRows: CustomerListRow[] = customers.map((c) => {
+  // Resolve the display name + type badge per row on the server. The overlaid
+  // kind (owner/employee) wins for the badge; otherwise the stored type
+  // (customer/tester/service/other) is shown.
+  const customerRows: CustomerListRow[] = contacts.map((c) => {
     const contact = contactNames.get(c.customer_e164);
+    const type =
+      contact?.kind === "owner" || contact?.kind === "employee" ? contact.kind : c.type;
     return {
       e164: c.customer_e164,
       name: contact?.name ?? c.display_name ?? c.customer_e164,
-      badge:
-        contact?.kind === "employee" ? "employee" : contact?.kind === "owner" ? "owner" : null,
+      type,
       lastChannel: c.last_channel,
       pinned: Boolean(c.pinned_md?.trim()),
       summary: c.summary_md,
@@ -102,32 +101,26 @@ export default async function DashboardCustomersPage() {
   return (
     <div className="space-y-6 max-w-4xl">
       <div>
-        <h1 className="text-2xl font-bold text-parchment">Customers</h1>
+        <h1 className="text-2xl font-bold text-parchment">Contacts</h1>
         <p className="text-sm text-parchment/50 mt-1">
-          Everyone your AI coworker has talked to across SMS and voice
+          Everyone in one place — customers, your team, the owner, and the people
+          and services you work with
         </p>
       </div>
 
       <Card padding="sm" className="border-signal-teal/30 bg-signal-teal/5">
         <p className="text-xs text-parchment/70 leading-relaxed">
-          Your coworker uses these profiles to maintain continuity across
-          channels. Pin notes about a customer to make them stick across
-          every future SMS or call. Removing a customer here just clears
-          the rollup — the underlying SMS and voice history stays in the
-          per-channel dashboards.
+          Each contact has a type (customer, employee, owner, tester, service,
+          other). Your coworker uses customer profiles to maintain continuity
+          across channels — pin notes to make them stick across every future SMS
+          or call. Removing a contact clears the rollup; the underlying SMS and
+          voice history stays in the per-channel dashboards.
         </p>
       </Card>
 
       <AddCustomerForm businessId={business.id} />
 
       <CustomersList rows={customerRows} />
-
-      <div className="border-t border-parchment/10 pt-6">
-        <OtherContactsManager
-          businessId={business.id}
-          initialContacts={otherContacts}
-        />
-      </div>
     </div>
   );
 }

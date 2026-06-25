@@ -196,7 +196,7 @@ async function fetchActivity(
         .order("created_at", { ascending: false })
         .limit(25),
       supa
-        .from("customer_memories")
+        .from("contacts")
         .select("display_name, customer_e164")
         .eq("business_id", businessId)
         .gte("created_at", sinceIso)

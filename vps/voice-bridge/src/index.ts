@@ -677,7 +677,7 @@ function main(): void {
               // predating the merge migration this errors like a missing
               // table would — swallowed below, degraded prompt.
               const { data: memRow } = await supabase
-                .from("customer_memories")
+                .from("contacts")
                 .select("summary_md, pinned_md, display_name, total_interaction_count")
                 .eq("business_id", businessId)
                 .or(`customer_e164.eq.${trustedFromE164},alias_e164s.cs.{${trustedFromE164}}`)

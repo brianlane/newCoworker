@@ -65,6 +65,7 @@ function memory(overrides: Partial<CustomerMemoryRow> = {}): CustomerMemoryRow {
     id: "00000000-0000-0000-0000-0000000000aa",
     business_id: BIZ,
     customer_e164: CUSTOMER,
+    type: "customer",
     display_name: null,
     email: null,
     summary_md: null,
@@ -166,7 +167,7 @@ describe("getCustomerMemory", () => {
     expect(result).toEqual(row);
 
     const fr = fromCalls[0]!;
-    expect(fr.table).toBe("customer_memories");
+    expect(fr.table).toBe("contacts");
     // Column list pinning: changing this list MUST be a deliberate
     // schema migration, not a casual edit.
     expect(fr.calls.find((c) => c.name === "select")?.args[0]).toContain("display_name");
@@ -513,7 +514,7 @@ describe("createCustomerMemory", () => {
     );
     expect(result).toEqual(row);
     const fr = fromCalls[0]!;
-    expect(fr.table).toBe("customer_memories");
+    expect(fr.table).toBe("contacts");
     const insert = fr.calls.find((c) => c.name === "insert")?.args[0] as Record<string, unknown>;
     expect(insert).toMatchObject({
       business_id: BIZ,
@@ -665,7 +666,7 @@ describe("updateCustomerSummary", () => {
       client
     );
     const fr = fromCalls[0]!;
-    expect(fr.table).toBe("customer_memories");
+    expect(fr.table).toBe("contacts");
     const updateCall = fr.calls.find((c) => c.name === "update");
     expect(updateCall?.args[0]).toMatchObject({
       summary_md: "Joe wants a garage door spring.",

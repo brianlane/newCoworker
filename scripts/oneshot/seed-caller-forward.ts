@@ -3,7 +3,7 @@
  * One-shot: label an inbound caller AND forward their calls straight to a human.
  *
  * Two writes, both keyed by (business_id, from_e164), both idempotent upserts:
- *   1. contact_overrides — gives the caller a display name everywhere their
+ *   1. contacts — gives the caller a display name everywhere their
  *      number appears in the dashboard (calls, texts, contacts).
  *   2. voice_caller_transfer_rules — when that number calls the business DID,
  *      telnyx-voice-inbound answers and bridges the caller straight to `--to`
@@ -159,20 +159,23 @@ async function main(): Promise<void> {
 
   const db = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
 
-  const { error: contactErr } = await db.from("contact_overrides").upsert(
+  // Unified contacts table: a manual label is type 'other' (a non-customer type
+  // so it wins over any derived owner/employee name in the dashboard).
+  const { error: contactErr } = await db.from("contacts").upsert(
     {
       business_id: businessId,
-      e164: fromE164,
-      name,
+      customer_e164: fromE164,
+      display_name: name,
+      type: "other",
       updated_at: new Date().toISOString()
     },
-    { onConflict: "business_id,e164" }
+    { onConflict: "business_id,customer_e164" }
   );
   if (contactErr) {
-    console.error(`contact_overrides upsert failed: ${contactErr.message}`);
+    console.error(`contacts upsert failed: ${contactErr.message}`);
     process.exit(1);
   }
-  console.log(`Upserted contact override ${fromE164} → "${name}".`);
+  console.log(`Upserted contact ${fromE164} → "${name}".`);
 
   const { error: ruleErr } = await db
     .from("voice_caller_transfer_rules")

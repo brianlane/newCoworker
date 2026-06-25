@@ -13,11 +13,16 @@ async function readError(res: Response): Promise<string> {
   return json?.error?.message || `HTTP ${res.status}`;
 }
 
+/** Owner-settable contact types (owner/employee are derived from their own
+ * tables, so they aren't offered here). */
+const ADDABLE_TYPES = ["customer", "tester", "service", "other"] as const;
+
 /**
- * Manual "Add customer" form for the customers index. Customers are normally
- * auto-created on the first SMS/voice interaction; this lets the owner seed one
- * ahead of time (and link an email so the profile spans channels). On success
- * it refreshes the server-rendered list.
+ * Manual "Add contact" form for the unified contacts index. Customers are
+ * normally auto-created on the first SMS/voice interaction; this lets the owner
+ * seed any contact ahead of time with a type (customer, tester, service, other),
+ * optionally linking an email so the profile spans channels. On success it
+ * refreshes the server-rendered list.
  */
 export function AddCustomerForm({ businessId }: Props) {
   const router = useRouter();
@@ -26,6 +31,7 @@ export function AddCustomerForm({ businessId }: Props) {
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [note, setNote] = useState("");
+  const [type, setType] = useState<(typeof ADDABLE_TYPES)[number]>("customer");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,6 +40,7 @@ export function AddCustomerForm({ businessId }: Props) {
     setPhone("");
     setEmail("");
     setNote("");
+    setType("customer");
     setError(null);
   }
 
@@ -48,6 +55,7 @@ export function AddCustomerForm({ businessId }: Props) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             customerE164: phone.trim(),
+            type,
             ...(name.trim() ? { displayName: name.trim() } : {}),
             ...(email.trim() ? { email: email.trim() } : {}),
             ...(note.trim() ? { pinnedMd: note.trim() } : {})
@@ -73,7 +81,7 @@ export function AddCustomerForm({ businessId }: Props) {
           onClick={() => setOpen(true)}
           className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-opacity-90 transition-colors"
         >
-          Add customer
+          Add contact
         </button>
       </div>
     );
@@ -81,9 +89,9 @@ export function AddCustomerForm({ businessId }: Props) {
 
   return (
     <Card>
-      <h3 className="text-sm font-semibold text-parchment mb-3">New customer</h3>
+      <h3 className="text-sm font-semibold text-parchment mb-3">New contact</h3>
       {error && <p className="text-xs text-red-300 mb-3">{error}</p>}
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-4">
         <input
           type="text"
           value={name}
@@ -94,8 +102,8 @@ export function AddCustomerForm({ businessId }: Props) {
         <input
           type="tel"
           value={phone}
-          onChange={(e) => setPhone(e.target.value.slice(0, 16))}
-          placeholder="+16025551234"
+          onChange={(e) => setPhone(e.target.value.slice(0, 24))}
+          placeholder="(305) 613-3412 or short code"
           className="bg-deep-ink/60 border border-parchment/15 rounded-lg px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:outline-none focus:border-claw-green/60 font-mono"
         />
         <input
@@ -105,6 +113,18 @@ export function AddCustomerForm({ businessId }: Props) {
           placeholder="Email (optional)"
           className="bg-deep-ink/60 border border-parchment/15 rounded-lg px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:outline-none focus:border-claw-green/60"
         />
+        <select
+          value={type}
+          onChange={(e) => setType(e.target.value as (typeof ADDABLE_TYPES)[number])}
+          className="bg-deep-ink/60 border border-parchment/15 rounded-lg px-3 py-2 text-sm text-parchment focus:outline-none focus:border-claw-green/60"
+          aria-label="Contact type"
+        >
+          {ADDABLE_TYPES.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </select>
       </div>
       <textarea
         value={note}

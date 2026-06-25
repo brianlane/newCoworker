@@ -103,7 +103,7 @@ async function buildEvents(
         .order("created_at", { ascending: false })
         .limit(25),
       db
-        .from("customer_memories")
+        .from("contacts")
         .select("display_name, customer_e164")
         .eq("business_id", businessId)
         .gte("created_at", sinceIso)

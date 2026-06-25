@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/Card";
+import { CONTACT_TYPES, type ContactType } from "@/lib/customer-memory/types";
 
 type Props = {
   businessId: string;
@@ -10,6 +11,7 @@ type Props = {
   initialDisplayName: string | null;
   initialPinnedMd: string | null;
   initialEmail: string | null;
+  initialType: ContactType;
 };
 
 const PINNED_MAX = 2000;
@@ -21,6 +23,7 @@ export function CustomerProfileEditor(props: Props) {
   const [displayName, setDisplayName] = useState(props.initialDisplayName ?? "");
   const [pinnedMd, setPinnedMd] = useState(props.initialPinnedMd ?? "");
   const [email, setEmail] = useState(props.initialEmail ?? "");
+  const [type, setType] = useState<ContactType>(props.initialType);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
@@ -29,7 +32,8 @@ export function CustomerProfileEditor(props: Props) {
   const nameChanged = (props.initialDisplayName ?? "") !== displayName;
   const pinnedChanged = (props.initialPinnedMd ?? "") !== pinnedMd;
   const emailChanged = (props.initialEmail ?? "") !== email;
-  const dirty = nameChanged || pinnedChanged || emailChanged;
+  const typeChanged = props.initialType !== type;
+  const dirty = nameChanged || pinnedChanged || emailChanged || typeChanged;
 
   async function save() {
     setSaving(true);
@@ -44,6 +48,7 @@ export function CustomerProfileEditor(props: Props) {
       if (nameChanged) body.displayName = displayName.trim() === "" ? null : displayName.trim();
       if (pinnedChanged) body.pinnedMd = pinnedMd.trim() === "" ? null : pinnedMd.trim();
       if (emailChanged) body.email = email.trim() === "" ? null : email.trim();
+      if (typeChanged) body.type = type;
       const res = await fetch(
         `/api/dashboard/customers/${encodeURIComponent(
           props.customerE164
@@ -115,6 +120,25 @@ export function CustomerProfileEditor(props: Props) {
         maxLength={NAME_MAX}
         className="w-full bg-deep-ink/60 border border-parchment/15 rounded-lg px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:outline-none focus:border-claw-green/60"
       />
+
+      <label className="block text-xs text-parchment/70 mb-1 mt-4">
+        Type
+        <span className="ml-1 text-parchment/40">
+          (owner &amp; employee are set from your team roster, but you can
+          override)
+        </span>
+      </label>
+      <select
+        value={type}
+        onChange={(e) => setType(e.target.value as ContactType)}
+        className="w-full bg-deep-ink/60 border border-parchment/15 rounded-lg px-3 py-2 text-sm text-parchment focus:outline-none focus:border-claw-green/60"
+      >
+        {CONTACT_TYPES.map((t) => (
+          <option key={t} value={t}>
+            {t}
+          </option>
+        ))}
+      </select>
 
       <label className="block text-xs text-parchment/70 mb-1 mt-4">
         Email

@@ -12,10 +12,29 @@
 
 export type CustomerMemoryChannel = "sms" | "voice" | "dashboard" | "email";
 
+/**
+ * Contact classification (the `contacts.type` column). `customer` is the default
+ * for any auto-created profile; `owner`/`employee` are ALSO surfaced at read time
+ * from their authoritative tables (businesses / ai_flow_team_members) by
+ * resolveContactNames, so a stored value of those is just a hint. Extend this
+ * list AND the DB check constraint together to add a type.
+ */
+export const CONTACT_TYPES = [
+  "owner",
+  "employee",
+  "customer",
+  "tester",
+  "service",
+  "other"
+] as const;
+export type ContactType = (typeof CONTACT_TYPES)[number];
+
 export type CustomerMemoryRow = {
   id: string;
   business_id: string;
   customer_e164: string;
+  /** Contact classification; NOT NULL in the DB (default 'customer'). */
+  type: ContactType;
   display_name: string | null;
   /** Owner-set email linked to this customer, so email rolls up to the profile. */
   email: string | null;
