@@ -77,7 +77,7 @@ async function main(): Promise<void> {
       steps[i] = {
         id: s.id,
         type: "extract_text",
-        fields: s.fields,
+        fields: s.fields ?? [],
         ...(s.when ? { when: s.when } : {})
       };
       swappedId = s.id;

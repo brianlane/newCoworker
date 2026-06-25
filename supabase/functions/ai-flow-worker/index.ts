@@ -32,6 +32,7 @@ import {
   buildNowScope,
   evaluateStepCondition,
   extractLeadIdentity,
+  extractLinkByText,
   extractPhones,
   filterRosterByAvailability,
   htmlToText,
@@ -968,36 +969,46 @@ async function browseStep(
     throw e;
   }
   const pageText = page.text || htmlToText(page.html);
-  let extracted: Record<string, string>;
-  try {
-    extracted = await extractFields(supabase, run, action.fields, pageText);
-  } catch (e) {
-    // The shared AI budget being exhausted is a permanent, owner-actionable
-    // state for this period — fail the run instead of retrying into the cap.
-    // Persist the page screenshot (when one was captured) onto the failed step
-    // so the investigate view isn't empty for a cap-hit mid-extraction.
-    if (e instanceof SpendCapError) {
-      const shotPath = await storeScreenshotBestEffort(supabase, run, index, page.screenshotBase64);
-      const srcPath = await storeSourceBestEffort(supabase, run, index, page.html);
-      const diag: Record<string, unknown> = {};
-      if (shotPath) diag.screenshot_path = shotPath;
-      if (srcPath) diag.source_path = srcPath;
-      return {
-        kind: "fail",
-        error: `browse: ${e.message}`,
-        ...(Object.keys(diag).length > 0 ? { result: diag } : {})
-      };
+  let extracted: Record<string, string> = {};
+  // Only run the (AI-budgeted) field extraction when the step actually asks for
+  // fields — a links-only browse_extract skips Gemini entirely.
+  if (action.fields && action.fields.length > 0) {
+    try {
+      extracted = await extractFields(supabase, run, action.fields, pageText);
+    } catch (e) {
+      // The shared AI budget being exhausted is a permanent, owner-actionable
+      // state for this period — fail the run instead of retrying into the cap.
+      // Persist the page screenshot (when one was captured) onto the failed step
+      // so the investigate view isn't empty for a cap-hit mid-extraction.
+      if (e instanceof SpendCapError) {
+        const shotPath = await storeScreenshotBestEffort(supabase, run, index, page.screenshotBase64);
+        const srcPath = await storeSourceBestEffort(supabase, run, index, page.html);
+        const diag: Record<string, unknown> = {};
+        if (shotPath) diag.screenshot_path = shotPath;
+        if (srcPath) diag.source_path = srcPath;
+        return {
+          kind: "fail",
+          error: `browse: ${e.message}`,
+          ...(Object.keys(diag).length > 0 ? { result: diag } : {})
+        };
+      }
+      throw e;
     }
-    throw e;
   }
 
   const out: Record<string, string> = {};
-  for (const f of action.fields) {
+  for (const f of action.fields ?? []) {
     let val = extracted[f.name] ?? "";
     if (!val && /phone|mobile|cell|tel/i.test(f.name)) {
       val = extractPhones(pageText)[0] ?? "";
     }
     out[f.name] = val;
+  }
+  // Capture link hrefs by their visible button text from the page HTML (parsed
+  // here in the worker; the render service already returns html). Empty string
+  // when no anchor's visible text contains the matchText.
+  for (const link of action.extractLinks ?? []) {
+    out[link.name] = extractLinkByText(page.html, link.matchText, page.finalUrl);
   }
 
   // Screenshot is captured on every browse for run-timeline visibility.
@@ -2522,6 +2533,10 @@ async function routeToTeamStep(
     const claimedName = typeof routing.offered_name === "string" ? routing.offered_name : "";
     routing.claimed_by = claimedBy;
     routing.claimed_name = claimedName;
+    // Engine-provided var so LATER steps can gate on "a teammate accepted" via
+    // `when: { var: "claimed_agent", notEquals: "none" }`. Mirrors routing into
+    // scope.vars (which `when` guards read). Name preferred, phone as fallback.
+    scope.vars.claimed_agent = claimedName || claimedBy || "none";
     delete routing.last_event;
     delete routing.reply_from;
     delete routing.offered;
@@ -2605,7 +2620,10 @@ async function routeToTeamStep(
     };
   }
 
-  // Roster exhausted: hand the lead to the owner so it is never dropped.
+  // Roster exhausted: hand the lead to the owner so it is never dropped. Mark
+  // claimed_agent="none" so claim-gated LATER steps (e.g. the lead marketing
+  // text/email) are skipped — only ungated steps like notify_owner still run.
+  scope.vars.claimed_agent = "none";
   const body = renderTemplate(action.ownerFallbackTemplate, scope);
   await sendOwnerSms(supabase, run, body, `aiflow-owner-fallback:${run.id}`);
   appendActionTaken(scope, "no agent claimed the lead; handed back to the owner");
