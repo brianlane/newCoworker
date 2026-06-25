@@ -820,7 +820,7 @@ async function runOrchestrator(
             logger.warn("No DID available in local area code; retrying with default", {
               businessId,
               localAreaCode,
-              fallbackAreaCode: process.env.TELNYX_DEFAULT_AREA_CODE ?? null
+              fallbackAreaCode: process.env.TELNYX_DEFAULT_AREA_CODE
             });
             ({ toE164 } = await didProvisioner({
               businessId,

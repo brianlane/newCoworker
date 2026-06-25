@@ -1067,6 +1067,33 @@ describe("provisioning/orchestrate", () => {
       expect(result.vpsId).toBe("42");
     });
 
+    it("tolerates a getBusiness read failure during the DID phase (falls back to env area code)", async () => {
+      process.env.TELNYX_AUTO_PURCHASE_DID = "true";
+      process.env.TELNYX_DEFAULT_AREA_CODE = "305";
+      process.env.TELNYX_DEFAULT_STATE = "FL";
+      // First lookup (compliance prompt) succeeds; the second lookup (area-code
+      // derivation) rejects, exercising the best-effort `.catch(() => null)`.
+      vi.mocked(getBusiness)
+        .mockResolvedValueOnce({ business_type: "real_estate" } as never)
+        .mockRejectedValueOnce(new Error("supabase read blip"));
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+13055550100" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-did-readfail", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(didProvisioner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          search: expect.objectContaining({ areaCode: "305", administrativeArea: "FL" })
+        })
+      );
+      expect(result.vpsId).toBe("42");
+    });
+
     it("survives a thrown 10DLC attach (catch path: log warn + record `thinking` progress, don't fail orchestrator)", async () => {
       // Force the attach helper's internal DB write to throw — the
       // orchestrator catch block at orchestrate.ts:727-740 must absorb
