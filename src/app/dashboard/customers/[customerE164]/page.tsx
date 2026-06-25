@@ -87,8 +87,12 @@ export default async function CustomerDetailPage({ params }: Props) {
   const emailHistory = memory.email
     ? await listEmailLogForAddress(business.id, memory.email, { limit: 20 }).catch(() => [])
     : [];
+  // Merge is "same person, two numbers" — only ever fold a customer into another
+  // customer. Exclude self and any non-customer directory row (service short
+  // codes, vendors, testers, owner/employee) so an irreversible merge can never
+  // collapse a real person into a lead-source or vendor entry.
   const mergeCandidates = allCustomers
-    .filter((c) => c.customer_e164 !== memory.customer_e164)
+    .filter((c) => c.customer_e164 !== memory.customer_e164 && c.type === "customer")
     .map((c) => ({ customerE164: c.customer_e164, displayName: c.display_name }));
 
   // Owner/employee/manual-override names win over the stored display_name for
