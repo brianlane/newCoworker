@@ -3,6 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
+/** A selectable sender: id "" = AI coworker mailbox, else a connection id. */
+export type FromOption = { id: string; label: string };
+
 type Props = {
   businessId: string;
   /** Heading for the panel, e.g. "New email" or "Reply". */
@@ -13,6 +16,14 @@ type Props = {
   initialSubject?: string;
   /** Prefilled cc, comma-separated. */
   initialCc?: string;
+  /**
+   * Sender options for the "From" picker. id "" = the AI coworker mailbox
+   * (always first). When omitted or only the coworker is available the picker
+   * is hidden and mail sends as the coworker.
+   */
+  fromOptions?: FromOption[];
+  /** Which sender id to preselect (defaults to "" — the AI coworker mailbox). */
+  initialFromId?: string;
   onCancel: () => void;
   /** Called after a fully-logged send so the parent can collapse/refresh. */
   onSent?: () => void;
@@ -24,9 +35,10 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * Owner email composer — used for both "compose new" and "reply in thread".
- * Sends from the owner's connected mailbox via /api/dashboard/emails/send and
- * refreshes the server-rendered Emails list so the new `owner_manual` row
- * appears. The subject + body go out exactly as typed (plain text).
+ * Sends via /api/dashboard/emails/send from the chosen mailbox (the AI
+ * coworker's own address by default, or a connected Gmail/Outlook) and
+ * refreshes the server-rendered Emails list so the new row appears. The
+ * subject + body go out exactly as typed (plain text).
  */
 export function EmailComposer({
   businessId,
@@ -34,6 +46,8 @@ export function EmailComposer({
   initialTo = "",
   initialSubject = "",
   initialCc = "",
+  fromOptions = [],
+  initialFromId = "",
   onCancel,
   onSent
 }: Props) {
@@ -43,6 +57,9 @@ export function EmailComposer({
   const [showCc, setShowCc] = useState(initialCc.trim().length > 0);
   const [subject, setSubject] = useState(initialSubject);
   const [body, setBody] = useState("");
+  // The selected sender id ("" = AI coworker mailbox). Only meaningful when
+  // there's more than one option to choose from.
+  const [fromId, setFromId] = useState(initialFromId);
   const [busy, setBusy] = useState(false);
   // Latches true once a send succeeds but the row couldn't be logged. The
   // message already went out, so we lock the form to stop the owner editing +
@@ -90,6 +107,7 @@ export function EmailComposer({
           toEmail: toTrimmed,
           subject,
           bodyText: body,
+          fromConnectionId: fromId,
           ...(cc.trim() ? { cc: cc.trim() } : {})
         })
       });
@@ -142,6 +160,25 @@ export function EmailComposer({
           {sent ? "Close" : "Cancel"}
         </button>
       </div>
+      {fromOptions.length > 1 && (
+        <label className="block">
+          <span className="mb-1 block text-[11px] uppercase tracking-wide text-parchment/40">
+            From
+          </span>
+          <select
+            value={fromId}
+            onChange={(e) => setFromId(e.target.value)}
+            disabled={locked}
+            className="w-full rounded-lg border border-parchment/15 bg-deep-ink/60 px-3 py-2 text-sm text-parchment focus:border-claw-green/60 focus:outline-none disabled:opacity-50"
+          >
+            {fromOptions.map((opt) => (
+              <option key={opt.id || "coworker"} value={opt.id}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <input
         ref={toRef}
         type="email"

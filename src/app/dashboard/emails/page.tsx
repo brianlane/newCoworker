@@ -12,6 +12,7 @@ import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { listEmailLog } from "@/lib/db/email-log";
+import { listSendFromOptions } from "@/lib/email/mailbox-options";
 import { EmailsList } from "@/components/dashboard/EmailsList";
 
 export const dynamic = "force-dynamic";
@@ -53,7 +54,11 @@ export default async function DashboardEmailsPage() {
     );
   }
 
-  const rows = await listEmailLog(business.id, { limit: 100 });
+  const [rows, fromOptions] = await Promise.all([
+    listEmailLog(business.id, { limit: 100 }),
+    // Best-effort: on any failure the composer falls back to coworker-only send.
+    listSendFromOptions(business.id).catch(() => [])
+  ]);
 
   return (
     <div className="space-y-6 max-w-6xl">
@@ -70,7 +75,7 @@ export default async function DashboardEmailsPage() {
         </p>
       </Card>
 
-      <EmailsList rows={rows} businessId={business.id} />
+      <EmailsList rows={rows} businessId={business.id} fromOptions={fromOptions} />
     </div>
   );
 }

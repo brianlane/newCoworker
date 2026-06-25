@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
-import { EmailComposer } from "@/components/dashboard/EmailComposer";
+import { EmailComposer, type FromOption } from "@/components/dashboard/EmailComposer";
 import type { EmailLogRow, EmailLogSource } from "@/lib/db/email-log";
 
 /**
@@ -295,7 +295,27 @@ function replySubject(row: EmailLogRow): string {
   return full.length > MAX_SUBJECT_LEN ? full.slice(0, MAX_SUBJECT_LEN) : full;
 }
 
-export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; businessId: string }) {
+/**
+ * Default sender for a reply: reply AS the identity the thread used. Coworker
+ * mailbox threads (tenant_mailbox_*) reply as the coworker (""); threads on the
+ * owner's connected mailbox reply from the first connected mailbox when one is
+ * available, falling back to the coworker. The owner can still change it.
+ */
+function replyFromId(row: EmailLogRow | undefined, fromOptions: FromOption[]): string {
+  if (!row || row.source.startsWith("tenant_mailbox")) return "";
+  return fromOptions.find((o) => o.id !== "")?.id ?? "";
+}
+
+export function EmailsList({
+  rows,
+  businessId,
+  fromOptions = []
+}: {
+  rows: EmailLogRow[];
+  businessId: string;
+  /** Sender options for the composer's "From" picker (coworker mailbox first). */
+  fromOptions?: FromOption[];
+}) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [composer, setComposer] = useState<ComposerState | null>(null);
   const selected = rows.find((r) => r.id === selectedId) ?? null;
@@ -344,6 +364,15 @@ export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; business
           title={composer.mode === "reply" ? "Reply" : "New email"}
           initialTo={composer.mode === "reply" ? composer.to : ""}
           initialSubject={composer.mode === "reply" ? composer.subject : ""}
+          fromOptions={fromOptions}
+          initialFromId={
+            composer.mode === "reply"
+              ? replyFromId(
+                  rows.find((r) => r.id === composer.sourceId),
+                  fromOptions
+                )
+              : ""
+          }
           onCancel={() => setComposer(null)}
           onSent={() => setComposer(null)}
         />
