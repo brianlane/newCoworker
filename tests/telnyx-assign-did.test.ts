@@ -19,6 +19,7 @@ vi.mock("@/lib/db/businesses", () => mockedBusinesses);
 import {
   normalizeE164,
   coerceOwnerPhoneToE164,
+  extractNanpAreaCode,
   resolveDefaultForwardToE164,
   assignExistingDidToBusiness,
   orderAndAssignDidForBusiness,
@@ -146,6 +147,27 @@ describe("coerceOwnerPhoneToE164", () => {
     ]
   ])("%s → %s", (_label, raw, expected) => {
     expect(coerceOwnerPhoneToE164(raw as string | null | undefined)).toBe(expected);
+  });
+});
+
+describe("extractNanpAreaCode", () => {
+  it.each([
+    ["null", null, null],
+    ["undefined", undefined, null],
+    ["empty string", "", null],
+    ["bare 10-digit NANP", "6025550100", "602"],
+    ["formatted NANP", "(602) 555-0100", "602"],
+    ["11-digit 1-prefixed", "16025550100", "602"],
+    ["already E.164 US", "+16025550100", "602"],
+    ["international (+44) → null", "+447911123456", null],
+    ["7-digit local → null", "5551234", null],
+    ["junk → null", "not-a-phone", null],
+    // coerceOwnerPhoneToE164 happily accepts a leading-0 area code (Telnyx's
+    // job to reject), but a real NPA never starts with 0/1 so we drop it here.
+    ["leading-zero area code → null", "0234567890", null],
+    ["leading-one area code → null", "1234567890", null]
+  ])("%s → %s", (_label, raw, expected) => {
+    expect(extractNanpAreaCode(raw as string | null | undefined)).toBe(expected);
   });
 });
 
