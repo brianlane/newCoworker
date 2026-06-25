@@ -104,8 +104,11 @@ async function buildEvents(
         .limit(25),
       db
         .from("contacts")
+        // Match getRecentActivity/the digest: only real customer profiles count
+        // as "new customer" events, not folded manual contacts.
         .select("display_name, customer_e164")
         .eq("business_id", businessId)
+        .eq("type", "customer")
         .gte("created_at", sinceIso)
         .lt("created_at", untilIso)
         .order("created_at", { ascending: false })

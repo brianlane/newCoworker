@@ -197,8 +197,11 @@ async function fetchActivity(
         .limit(25),
       supa
         .from("contacts")
+        // Only real customer profiles are "new customer" digest items — folded
+        // manual contacts (other/service/tester) are not new customers.
         .select("display_name, customer_e164")
         .eq("business_id", businessId)
+        .eq("type", "customer")
         .gte("created_at", sinceIso)
         .order("created_at", { ascending: false })
         .limit(25),

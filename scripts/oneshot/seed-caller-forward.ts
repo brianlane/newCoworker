@@ -161,19 +161,32 @@ async function main(): Promise<void> {
 
   // Unified contacts table: a manual label is type 'other' (a non-customer type
   // so it wins over any derived owner/employee name in the dashboard).
-  const { error: contactErr } = await db.from("contacts").upsert(
-    {
+  //
+  // Update-then-insert (NOT a blind upsert): a blind upsert would set
+  // type='other' on conflict and could demote an existing real customer to
+  // 'other'. So relabel an existing row first (preserving its type), and only
+  // create a type='other' row when none exists. Mirrors setContactOverride.
+  const { data: relabeled, error: relabelErr } = await db
+    .from("contacts")
+    .update({ display_name: name, updated_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .eq("customer_e164", fromE164)
+    .select("id");
+  if (relabelErr) {
+    console.error(`contacts relabel failed: ${relabelErr.message}`);
+    process.exit(1);
+  }
+  if (!relabeled || relabeled.length === 0) {
+    const { error: insertErr } = await db.from("contacts").insert({
       business_id: businessId,
       customer_e164: fromE164,
       display_name: name,
-      type: "other",
-      updated_at: new Date().toISOString()
-    },
-    { onConflict: "business_id,customer_e164" }
-  );
-  if (contactErr) {
-    console.error(`contacts upsert failed: ${contactErr.message}`);
-    process.exit(1);
+      type: "other"
+    });
+    if (insertErr) {
+      console.error(`contacts insert failed: ${insertErr.message}`);
+      process.exit(1);
+    }
   }
   console.log(`Upserted contact ${fromE164} → "${name}".`);
 
