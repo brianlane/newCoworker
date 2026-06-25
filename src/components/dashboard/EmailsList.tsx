@@ -91,11 +91,13 @@ function formatBytes(bytes: number): string {
 function ReadingPane({
   row,
   businessId,
+  canReply,
   onClose,
   onReply
 }: {
   row: EmailLogRow;
   businessId: string;
+  canReply: boolean;
   onClose: () => void;
   onReply: () => void;
 }) {
@@ -147,13 +149,15 @@ function ReadingPane({
           </span>
         </div>
         <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={onReply}
-            className="rounded-lg border border-claw-green/40 px-3 py-1 text-xs font-semibold text-claw-green transition-colors hover:bg-claw-green/10"
-          >
-            Reply
-          </button>
+          {canReply && (
+            <button
+              type="button"
+              onClick={onReply}
+              className="rounded-lg border border-claw-green/40 px-3 py-1 text-xs font-semibold text-claw-green transition-colors hover:bg-claw-green/10"
+            >
+              Reply
+            </button>
+          )}
           <button
             onClick={onClose}
             aria-label="Close"
@@ -296,20 +300,17 @@ export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; business
   const [composer, setComposer] = useState<ComposerState | null>(null);
   const selected = rows.find((r) => r.id === selectedId) ?? null;
 
-  // Change the open message and discard any in-progress reply draft: a reply is
-  // bound to one message, so navigating away (open another, close, Escape) must
-  // not leave a stale recipient/subject/body that could send to the wrong
-  // person or reopen unexpectedly when the same message is re-selected. A
-  // "new email" draft is not tied to a message, so it survives navigation.
-  const selectMessage = (id: string | null) => {
-    setSelectedId(id);
-    setComposer((c) => (c?.mode === "reply" ? null : c));
-  };
-
+  // The composer is intentionally independent of which message is open in the
+  // reading pane: navigating (open another, close, Escape) never touches an
+  // in-progress draft, so we can't silently drop unsent text. A reply is bound
+  // to its source message via `sourceId` (in the remount key + prefill), and
+  // only one composer is open at a time (the Reply/Compose buttons hide while
+  // one is open), so a draft can't bleed across messages or send to the wrong
+  // recipient. The composer is dismissed only by its own Cancel/Send.
   useEffect(() => {
     if (!selected) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") selectMessage(null);
+      if (e.key === "Escape") setSelectedId(null);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -375,7 +376,7 @@ export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; business
                 <li key={r.id}>
                   <button
                     type="button"
-                    onClick={() => selectMessage(r.id)}
+                    onClick={() => setSelectedId(r.id)}
                     aria-current={isActive ? "true" : undefined}
                     className={[
                       "w-full text-left px-3 py-3 rounded-md transition-colors focus:outline-none",
@@ -424,7 +425,7 @@ export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; business
         <div className="flex-1 min-w-0">
           <button
             type="button"
-            onClick={() => selectMessage(null)}
+            onClick={() => setSelectedId(null)}
             className="md:hidden mb-3 text-xs text-parchment/60 hover:text-parchment"
           >
             ← Back to inbox
@@ -433,7 +434,8 @@ export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; business
             key={selected.id}
             row={selected}
             businessId={businessId}
-            onClose={() => selectMessage(null)}
+            canReply={!composer}
+            onClose={() => setSelectedId(null)}
             onReply={() =>
               setComposer({
                 mode: "reply",
