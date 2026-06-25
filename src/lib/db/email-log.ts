@@ -28,7 +28,10 @@ export type EmailLogSource =
   | "sms_assistant"
   | "voice_assistant"
   | "tenant_mailbox_inbound"
-  | "tenant_mailbox_outbound";
+  | "tenant_mailbox_outbound"
+  // Owner typed + sent this email by hand from the dashboard Emails page
+  // (reply-in-thread or compose-new), sent from their connected mailbox.
+  | "owner_manual";
 
 /**
  * Attachment metadata as stored inline on email_log.attachments. `storage_path`
