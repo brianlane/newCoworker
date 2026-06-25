@@ -11,33 +11,46 @@ import {
   listContactOverrides,
   setContactOverride
 } from "@/lib/db/contact-overrides";
+import { PG_UNIQUE_VIOLATION } from "@/lib/customer-memory/db";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
-type OpResult = { data?: unknown; error: { message: string } | null };
+type OpResult = { data?: unknown; error: { message: string; code?: string } | null };
+// setContactOverride can issue TWO updates (relabel, then a race-recovery
+// relabel after a unique violation), so each op accepts a queue consumed in
+// order; a single value is reused for every call of that op.
 type Results = {
-  update?: OpResult;
-  insert?: OpResult;
-  select?: OpResult;
-  delete?: OpResult;
+  update?: OpResult | OpResult[];
+  insert?: OpResult | OpResult[];
+  select?: OpResult | OpResult[];
+  delete?: OpResult | OpResult[];
 };
+
+function toQueue(v: OpResult | OpResult[] | undefined, def: OpResult): OpResult[] {
+  if (v === undefined) return [def];
+  return Array.isArray(v) ? v.slice() : [v];
+}
 
 // Manual contacts now live on the unified `contacts` table, so the lib uses
 // update-then-insert (not a blind upsert) to avoid demoting an existing
 // customer's type. The mock resolves the awaited chain by the write op invoked.
 function makeDb(results: Results = {}) {
   const calls: Array<{ table: string; method: string; args: unknown[] }> = [];
-  const resolved: Required<Results> = {
-    update: results.update ?? { data: [{ id: "row-1" }], error: null },
-    insert: results.insert ?? { error: null },
-    select: results.select ?? { data: [], error: null },
-    delete: results.delete ?? { error: null }
+  const queues: Record<"update" | "insert" | "select" | "delete", OpResult[]> = {
+    update: toQueue(results.update, { data: [{ id: "row-1" }], error: null }),
+    insert: toQueue(results.insert, { error: null }),
+    select: toQueue(results.select, { data: [], error: null }),
+    delete: toQueue(results.delete, { error: null })
   };
+  function next(op: keyof typeof queues): OpResult {
+    const q = queues[op];
+    return q.length > 1 ? q.shift()! : q[0]!;
+  }
   const db = {
     from(table: string) {
       const chain: Record<string, unknown> = {};
-      let op: keyof Results | null = null;
+      let op: keyof typeof queues | null = null;
       for (const m of ["upsert", "update", "insert", "delete", "eq", "neq", "select", "order"]) {
         chain[m] = (...args: unknown[]) => {
           calls.push({ table, method: m, args });
@@ -47,7 +60,7 @@ function makeDb(results: Results = {}) {
         };
       }
       chain["then"] = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
-        Promise.resolve(resolved[op ?? "select"]).then(resolve, reject);
+        Promise.resolve(next(op ?? "select")).then(resolve, reject);
       return chain;
     }
   };
@@ -98,6 +111,56 @@ describe("setContactOverride", () => {
       display_name: "ReferralExchange",
       type: "other"
     });
+  });
+
+  it("honors an explicit type for a newly-created contact (overrides the 'other' default)", async () => {
+    const { db, calls } = makeDb({ update: { data: [], error: null } });
+    await setContactOverride(
+      BIZ,
+      "73339",
+      "ReferralExchange",
+      { type: "service" },
+      db as unknown as Client
+    );
+    expect(calls.find((c) => c.method === "insert")?.args[0]).toMatchObject({ type: "service" });
+  });
+
+  it("throws on a non-unique insert failure", async () => {
+    const { db } = makeDb({
+      update: { data: [], error: null },
+      insert: { error: { message: "disk full", code: "53100" } }
+    });
+    await expect(
+      setContactOverride(BIZ, "73339", "ReferralExchange", {}, db as unknown as Client)
+    ).rejects.toThrow(/setContactOverride: disk full/);
+  });
+
+  it("recovers from a unique-violation race by relabeling the row a concurrent writer created", async () => {
+    const { db, calls } = makeDb({
+      // 1st update: no row yet. 2nd update (race recovery): succeeds.
+      update: [
+        { data: [], error: null },
+        { data: null, error: null }
+      ],
+      insert: { error: { message: "duplicate key", code: PG_UNIQUE_VIOLATION } }
+    });
+    await setContactOverride(BIZ, "73339", "ReferralExchange", {}, db as unknown as Client);
+    const updates = calls.filter((c) => c.method === "update");
+    expect(updates).toHaveLength(2);
+    expect(updates[1]?.args[0]).toMatchObject({ display_name: "ReferralExchange" });
+  });
+
+  it("surfaces an error from the race-recovery relabel", async () => {
+    const { db } = makeDb({
+      update: [
+        { data: [], error: null },
+        { error: { message: "race rls" } }
+      ],
+      insert: { error: { message: "duplicate key", code: PG_UNIQUE_VIOLATION } }
+    });
+    await expect(
+      setContactOverride(BIZ, "73339", "ReferralExchange", {}, db as unknown as Client)
+    ).rejects.toThrow(/setContactOverride: race rls/);
   });
 
   it("rejects invalid numbers", async () => {

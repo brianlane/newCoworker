@@ -529,6 +529,22 @@ describe("createCustomerMemory", () => {
     expect(fr.calls.find((c) => c.name === "single")).toBeDefined();
   });
 
+  it("sets `type` on the insert only when provided (omitted → DB default 'customer')", async () => {
+    const { client, fromCalls } = makeClient({
+      fromTerminator: { data: memory({ type: "service" }), error: null }
+    });
+    await createCustomerMemory(
+      BIZ,
+      { customerE164: CUSTOMER, displayName: "Lead Source", type: "service" },
+      client
+    );
+    const insert = fromCalls[0]!.calls.find((c) => c.name === "insert")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(insert.type).toBe("service");
+  });
+
   it("trims fields and coerces blank/omitted optionals to null", async () => {
     const { client, fromCalls } = makeClient({ fromTerminator: { data: memory(), error: null } });
     await createCustomerMemory(
@@ -705,6 +721,17 @@ describe("updateCustomerOwnerFields", () => {
     expect(patch.updated_at).toBeTruthy();
     expect(patch).not.toHaveProperty("summary_md");
     expect(patch).not.toHaveProperty("interaction_count");
+  });
+
+  it("writes `type` when re-classifying a contact, and only when a truthy type is given", async () => {
+    const { client, fromCalls } = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { type: "service" }, client);
+    const patch = fromCalls[0]!.calls.find((c) => c.name === "update")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(patch).toHaveProperty("type", "service");
+    expect(patch).not.toHaveProperty("display_name");
   });
 
   it("writes email only when the key is present, and supports clearing it with null", async () => {

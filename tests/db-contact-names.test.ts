@@ -103,6 +103,32 @@ describe("resolveContactNames", () => {
     expect(out.get("+15550000001")).toEqual({ name: "Dave Lane", kind: "employee" });
   });
 
+  it("a manual label on an employee's number wins over the roster name but keeps kind 'employee'", async () => {
+    const { db } = makeDb({
+      ai_flow_team_members: {
+        data: [{ phone_e164: "+15550000001", name: "Dave Lane" }],
+        error: null
+      },
+      contacts: {
+        data: [
+          {
+            customer_e164: "+15550000001",
+            alias_e164s: [],
+            display_name: "Dave (cell)",
+            type: "other"
+          }
+        ],
+        error: null
+      }
+    });
+    const out = await resolveContactNames(BIZ, ["+15550000001"], db as unknown as Client);
+    expect(out.get("+15550000001")).toEqual({
+      name: "Dave (cell)",
+      kind: "employee",
+      override: true
+    });
+  });
+
   it("matches merged-away aliases to the profile's display name", async () => {
     const { db } = makeDb({
       contacts: {
