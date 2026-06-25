@@ -298,19 +298,17 @@ export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; business
     return () => window.removeEventListener("keydown", onKey);
   }, [selected]);
 
-  // Close an open reply draft when the reading pane moves to a different
-  // message. Otherwise the composer would keep replying to the prior thread's
-  // recipient/subject while the user reads a new email (wrong-recipient send).
-  useEffect(() => {
-    if (composer?.mode === "reply" && composer.sourceId !== selectedId) {
-      setComposer(null);
-    }
-  }, [composer, selectedId]);
+  // A reply draft is only valid for the message it was opened from. If the
+  // reading pane has since moved to a different message, treat the draft as
+  // closed (derive, don't setState-in-effect) so it can never send a reply to
+  // the wrong recipient or leak its body into another thread.
+  const activeComposer =
+    composer?.mode === "reply" && composer.sourceId !== selectedId ? null : composer;
 
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
-        {!composer && (
+        {!activeComposer && (
           <button
             type="button"
             onClick={() => setComposer({ mode: "new" })}
@@ -321,19 +319,20 @@ export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; business
         )}
       </div>
 
-      {composer && (
+      {activeComposer && (
         <EmailComposer
           // Remount with fresh prefill whenever the target changes (new vs a
-          // specific reply), so initialTo/initialSubject take effect.
+          // specific reply to a specific message), so initialTo/initialSubject
+          // take effect and a stale draft can't carry over.
           key={
-            composer.mode === "reply"
-              ? `reply:${composer.sourceId}:${composer.to}:${composer.subject}`
+            activeComposer.mode === "reply"
+              ? `reply:${activeComposer.sourceId}:${activeComposer.to}:${activeComposer.subject}`
               : "new"
           }
           businessId={businessId}
-          title={composer.mode === "reply" ? "Reply" : "New email"}
-          initialTo={composer.mode === "reply" ? composer.to : ""}
-          initialSubject={composer.mode === "reply" ? composer.subject : ""}
+          title={activeComposer.mode === "reply" ? "Reply" : "New email"}
+          initialTo={activeComposer.mode === "reply" ? activeComposer.to : ""}
+          initialSubject={activeComposer.mode === "reply" ? activeComposer.subject : ""}
           onCancel={() => setComposer(null)}
           onSent={() => setComposer(null)}
         />
