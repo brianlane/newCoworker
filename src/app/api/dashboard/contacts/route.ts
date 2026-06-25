@@ -16,8 +16,8 @@ import { z } from "zod";
 import { getAuthUser, requireOwner } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
+import { normalizeContactNumber } from "@/lib/telnyx/format";
 import {
-  CONTACT_NUMBER_RE,
   deleteContactOverride,
   listContactOverrides,
   setContactOverride
@@ -30,14 +30,28 @@ const READ_RATE = { interval: 60 * 1000, maxRequests: 60 };
 
 const querySchema = z.object({ businessId: z.string().uuid() });
 
+// Coerce whatever the owner typed ("(305) 613-3412", "305-613-3412", "+44 20…")
+// into a canonical E.164 number or short code, so the stored value is always
+// clean and the owner never has to pre-format. Assumes US when no country code.
+const contactNumberField = z
+  .string()
+  .transform((val, ctx) => {
+    const result = normalizeContactNumber(val);
+    if (!result.ok) {
+      ctx.addIssue({ code: "custom", message: result.reason });
+      return z.NEVER;
+    }
+    return result.value;
+  });
+
 const setSchema = z.object({
-  e164: z.string().regex(CONTACT_NUMBER_RE, "Must be E.164 (+1602...) or a short code"),
+  e164: contactNumberField,
   name: z.string().trim().min(1).max(120),
   email: z.string().trim().email("Enter a valid email").max(254).optional()
 });
 
 const deleteSchema = z.object({
-  e164: z.string().regex(CONTACT_NUMBER_RE, "Must be E.164 (+1602...) or a short code")
+  e164: contactNumberField
 });
 
 async function authorize(request: Request) {

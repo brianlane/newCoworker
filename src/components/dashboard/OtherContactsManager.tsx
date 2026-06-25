@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { SortControl, type SortOption } from "@/components/dashboard/SortControl";
 import { sortRows, type SortDir } from "@/lib/dashboard/sort";
+import { normalizeContactNumber } from "@/lib/telnyx/format";
 
 export type ContactRow = {
   e164: string;
@@ -51,6 +52,13 @@ export function OtherContactsManager({ businessId, initialContacts }: Props) {
 
   const qs = `businessId=${encodeURIComponent(businessId)}`;
 
+  // Normalize as the owner types so the form is forgiving about formatting:
+  // "(305) 613-3412" is accepted and saved as +13056133412 (US assumed when no
+  // country code). The server normalizes again, so this is purely UX.
+  const normalized = normalizeContactNumber(number);
+  const normalizedNumber = normalized.ok ? normalized.value : null;
+  const canAdd = Boolean(name.trim()) && Boolean(normalizedNumber) && !busy;
+
   async function refresh() {
     const res = await fetch(`/api/dashboard/contacts?${qs}`, { cache: "no-store" });
     if (!res.ok) return;
@@ -66,7 +74,7 @@ export function OtherContactsManager({ businessId, initialContacts }: Props) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          e164: number.trim(),
+          e164: normalizedNumber ?? number.trim(),
           name: name.trim(),
           ...(email.trim() ? { email: email.trim() } : {})
         })
@@ -153,8 +161,8 @@ export function OtherContactsManager({ businessId, initialContacts }: Props) {
             <input
               type="tel"
               value={number}
-              onChange={(e) => setNumber(e.target.value.slice(0, 16))}
-              placeholder="+16025551234 or short code"
+              onChange={(e) => setNumber(e.target.value.slice(0, 24))}
+              placeholder="(305) 613-3412, +1…, or short code"
               className="bg-deep-ink/60 border border-parchment/15 rounded-lg px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:outline-none focus:border-claw-green/60 font-mono"
             />
             <input
@@ -165,11 +173,17 @@ export function OtherContactsManager({ businessId, initialContacts }: Props) {
               className="bg-deep-ink/60 border border-parchment/15 rounded-lg px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:outline-none focus:border-claw-green/60"
             />
           </div>
+          {number.trim() && normalizedNumber && normalizedNumber !== number.trim() && (
+            <p className="text-xs text-parchment/40 mt-2">
+              Saved as{" "}
+              <span className="font-mono text-parchment/70">{normalizedNumber}</span>
+            </p>
+          )}
           <div className="flex items-center gap-3 mt-3">
             <button
               type="button"
               onClick={add}
-              disabled={busy || !name.trim() || !number.trim()}
+              disabled={!canAdd}
               className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {busy ? "Saving…" : "Add"}

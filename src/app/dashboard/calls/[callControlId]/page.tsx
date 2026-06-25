@@ -21,6 +21,8 @@ import {
   formatDuration
 } from "@/components/dashboard/voice-transcript-helpers";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
+import { ContactNameEditor } from "@/components/dashboard/ContactNameEditor";
+import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +62,18 @@ export default async function CallTranscriptPage({
 
   const turns = await listTurns(transcript.id);
 
+  // Name the caller (owner / roster member / manual override) and let the owner
+  // set or edit that name inline, mirroring the SMS thread header. Only a real
+  // caller number is editable — a missing/anonymous caller has nothing to key on.
+  const callerE164 = transcript.caller_e164?.trim() || null;
+  const contact = callerE164
+    ? (
+        await resolveContactNames(business.id, [callerE164], db).catch(
+          () => new Map<string, ContactName>()
+        )
+      ).get(callerE164)
+    : undefined;
+
   return (
     <div className="space-y-6 max-w-3xl">
       <div>
@@ -72,8 +86,30 @@ export default async function CallTranscriptPage({
         <h1 className="text-2xl font-bold text-parchment mt-2">Call transcript</h1>
         <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-parchment/60">
           <span className="font-semibold text-parchment">
-            {callerLabel(transcript.caller_e164)}
+            {contact?.name ?? callerLabel(transcript.caller_e164)}
           </span>
+          {contact?.kind === "employee" && (
+            <span className="text-[10px] uppercase tracking-wide text-amber-300/80 bg-amber-300/10 rounded px-1.5 py-0.5">
+              employee
+            </span>
+          )}
+          {contact?.kind === "owner" && (
+            <span className="text-[10px] uppercase tracking-wide text-signal-teal/90 bg-signal-teal/10 rounded px-1.5 py-0.5">
+              owner
+            </span>
+          )}
+          {contact && callerE164 && (
+            <span className="font-mono text-xs">{callerE164}</span>
+          )}
+          {callerE164 && (
+            <ContactNameEditor
+              key={callerE164}
+              businessId={business.id}
+              e164={callerE164}
+              currentName={contact?.name ?? null}
+              hasOverride={Boolean(contact?.override)}
+            />
+          )}
           <span>·</span>
           <LocalDateTime iso={transcript.started_at} style="detail" />
           <span>·</span>

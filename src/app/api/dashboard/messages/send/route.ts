@@ -26,6 +26,7 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import { rateLimit } from "@/lib/rate-limit";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
+import { normalizeContactNumber } from "@/lib/telnyx/format";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
@@ -36,10 +37,20 @@ const SMS_SEND_RATE = { interval: 60 * 1000, maxRequests: 20 };
 
 const bodySchema = z.object({
   businessId: z.string().uuid(),
-  // E.164 or a bare 3-8 digit short code — lead sources (ReferralExchange,
-  // realtor.com) text from short codes and owners need to reply "CONFIRM" to
-  // them. Telnyx rejects unsupported destinations; we surface that error.
-  toE164: z.string().regex(/^(\+[1-9]\d{6,15}|\d{3,8})$/, "Enter a valid phone number"),
+  // Coerce whatever the owner typed into a canonical E.164 number or short
+  // code (US assumed when no country code). Short codes are kept because lead
+  // sources (ReferralExchange, realtor.com) text from them and owners reply
+  // "CONFIRM" to them. Telnyx rejects unsupported destinations; we surface that.
+  toE164: z
+    .string()
+    .transform((val, ctx) => {
+      const result = normalizeContactNumber(val);
+      if (!result.ok) {
+        ctx.addIssue({ code: "custom", message: result.reason });
+        return z.NEVER;
+      }
+      return result.value;
+    }),
   text: z.string().min(1, "Message can't be empty").max(1600)
 });
 
