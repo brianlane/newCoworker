@@ -140,7 +140,9 @@ describe("Telnyx webhook golden vector (deterministic seed)", () => {
   const seed = Buffer.from(SEED32_HEX, "hex");
   const pkcs8 = Buffer.concat([Buffer.from(PKCS8_PREFIX_HEX, "hex"), seed]);
   const priv = createPrivateKey({ key: pkcs8, format: "der", type: "pkcs8" });
-  const pub = createPublicKey(priv);
+  // Derive the public half from the private key's PEM rather than the KeyObject:
+  // @types/node 26 dropped createPublicKey's KeyObject overload.
+  const pub = createPublicKey(priv.export({ type: "pkcs8", format: "pem" }));
   const spki = pub.export({ format: "der", type: "spki" }) as Buffer;
   const raw32 = spki.subarray(spki.length - 32);
 
