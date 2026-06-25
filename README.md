@@ -282,4 +282,4 @@ The `telnyx-voice-inbound` function may return **HTTP 200** with a Telnyx `hangu
 
 ## All work and code modifications must follow this flow
 
-For any changes always Branch -> PR -> babysit CI + Bugbot to green -> merge (per PR merge policy). Then after the successful merge apply migrations, deploy functions, vps needed redeploy, seed etc
+For any changes without stopping always continue with your work by using this flow: Branch -> PR -> babysit CI + Bugbot to green -> merge (per PR merge policy). Then after the successful merge apply migrations, deploy functions, vps needed redeploy, seed etc then return back to main.
