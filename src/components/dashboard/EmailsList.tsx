@@ -277,11 +277,18 @@ function replyRecipient(row: EmailLogRow): string {
   return (row.direction === "inbound" ? row.from_email : row.to_email) ?? "";
 }
 
-/** Prefix "Re: " unless the subject already carries one. */
+// Keep in sync with the `subject` max in POST /api/dashboard/emails/send.
+const MAX_SUBJECT_LEN = 150;
+
+/**
+ * Prefix "Re: " unless the subject already carries one, capped to the send
+ * route's subject limit so replying to a near-limit subject can't produce a
+ * prefilled value the API rejects.
+ */
 function replySubject(row: EmailLogRow): string {
   const subject = (row.subject ?? "").trim();
-  if (!subject) return "Re:";
-  return /^re:/i.test(subject) ? subject : `Re: ${subject}`;
+  const full = !subject ? "Re:" : /^re:/i.test(subject) ? subject : `Re: ${subject}`;
+  return full.length > MAX_SUBJECT_LEN ? full.slice(0, MAX_SUBJECT_LEN) : full;
 }
 
 export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; businessId: string }) {
@@ -289,26 +296,29 @@ export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; business
   const [composer, setComposer] = useState<ComposerState | null>(null);
   const selected = rows.find((r) => r.id === selectedId) ?? null;
 
+  // Change the open message and discard any in-progress reply draft: a reply is
+  // bound to one message, so navigating away (open another, close, Escape) must
+  // not leave a stale recipient/subject/body that could send to the wrong
+  // person or reopen unexpectedly when the same message is re-selected. A
+  // "new email" draft is not tied to a message, so it survives navigation.
+  const selectMessage = (id: string | null) => {
+    setSelectedId(id);
+    setComposer((c) => (c?.mode === "reply" ? null : c));
+  };
+
   useEffect(() => {
     if (!selected) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setSelectedId(null);
+      if (e.key === "Escape") selectMessage(null);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [selected]);
 
-  // A reply draft is only valid for the message it was opened from. If the
-  // reading pane has since moved to a different message, treat the draft as
-  // closed (derive, don't setState-in-effect) so it can never send a reply to
-  // the wrong recipient or leak its body into another thread.
-  const activeComposer =
-    composer?.mode === "reply" && composer.sourceId !== selectedId ? null : composer;
-
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
-        {!activeComposer && (
+        {!composer && (
           <button
             type="button"
             onClick={() => setComposer({ mode: "new" })}
@@ -319,20 +329,20 @@ export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; business
         )}
       </div>
 
-      {activeComposer && (
+      {composer && (
         <EmailComposer
           // Remount with fresh prefill whenever the target changes (new vs a
           // specific reply to a specific message), so initialTo/initialSubject
           // take effect and a stale draft can't carry over.
           key={
-            activeComposer.mode === "reply"
-              ? `reply:${activeComposer.sourceId}:${activeComposer.to}:${activeComposer.subject}`
+            composer.mode === "reply"
+              ? `reply:${composer.sourceId}:${composer.to}:${composer.subject}`
               : "new"
           }
           businessId={businessId}
-          title={activeComposer.mode === "reply" ? "Reply" : "New email"}
-          initialTo={activeComposer.mode === "reply" ? activeComposer.to : ""}
-          initialSubject={activeComposer.mode === "reply" ? activeComposer.subject : ""}
+          title={composer.mode === "reply" ? "Reply" : "New email"}
+          initialTo={composer.mode === "reply" ? composer.to : ""}
+          initialSubject={composer.mode === "reply" ? composer.subject : ""}
           onCancel={() => setComposer(null)}
           onSent={() => setComposer(null)}
         />
@@ -365,7 +375,7 @@ export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; business
                 <li key={r.id}>
                   <button
                     type="button"
-                    onClick={() => setSelectedId(r.id)}
+                    onClick={() => selectMessage(r.id)}
                     aria-current={isActive ? "true" : undefined}
                     className={[
                       "w-full text-left px-3 py-3 rounded-md transition-colors focus:outline-none",
@@ -414,7 +424,7 @@ export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; business
         <div className="flex-1 min-w-0">
           <button
             type="button"
-            onClick={() => setSelectedId(null)}
+            onClick={() => selectMessage(null)}
             className="md:hidden mb-3 text-xs text-parchment/60 hover:text-parchment"
           >
             ← Back to inbox
@@ -423,7 +433,7 @@ export function EmailsList({ rows, businessId }: { rows: EmailLogRow[]; business
             key={selected.id}
             row={selected}
             businessId={businessId}
-            onClose={() => setSelectedId(null)}
+            onClose={() => selectMessage(null)}
             onReply={() =>
               setComposer({
                 mode: "reply",
