@@ -1074,6 +1074,37 @@ describe("provisioning/orchestrate", () => {
       expect(didAssigned?.message).not.toContain("local area code");
     });
 
+    it("retry broadens to any US number when the default area code equals the local one", async () => {
+      process.env.TELNYX_AUTO_PURCHASE_DID = "true";
+      // Platform default is the SAME NPA the owner is in, so reusing it would
+      // re-run the identical (failed) search instead of broadening.
+      process.env.TELNYX_DEFAULT_AREA_CODE = "602";
+      process.env.TELNYX_DEFAULT_STATE = "AZ";
+      const biz = { business_type: "real_estate", phone: "(602) 555-0100" } as never;
+      vi.mocked(getBusiness).mockResolvedValueOnce(biz);
+      const { OrderAndAssignError } = await import("@/lib/telnyx/assign-did");
+      const didProvisioner = vi
+        .fn()
+        .mockRejectedValueOnce(new OrderAndAssignError("no_numbers_available", "none local"))
+        .mockResolvedValueOnce({ toE164: "+15125550100" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-did-broaden", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(didProvisioner).toHaveBeenCalledTimes(2);
+      expect(didProvisioner.mock.calls[0][0].search.areaCode).toBe("602");
+      // The retry drops the area-code + state filters so it can pull any US
+      // number instead of re-running the identical failed search.
+      expect(didProvisioner.mock.calls[1][0].search.areaCode).toBeUndefined();
+      expect(didProvisioner.mock.calls[1][0].search.administrativeArea).toBeUndefined();
+      expect(result.vpsId).toBe("42");
+    });
+
     it("falls back to env area code when the business row is missing (no phone to derive from)", async () => {
       process.env.TELNYX_AUTO_PURCHASE_DID = "true";
       process.env.TELNYX_DEFAULT_AREA_CODE = "305";

@@ -819,18 +819,28 @@ async function runOrchestrator(
             localAreaCode
           ) {
             usedFallbackAreaCode = true;
+            // Make sure the retry actually broadens inventory. If the platform
+            // default area code is the same NPA we just failed on, reusing it
+            // (and re-adding the env state filter the primary search dropped)
+            // would re-run an identical/narrower search. In that case drop the
+            // area-code + state filters so Telnyx can return any available US
+            // number instead.
+            let fallbackAreaCode = process.env.TELNYX_DEFAULT_AREA_CODE;
+            if (fallbackAreaCode === localAreaCode) {
+              fallbackAreaCode = undefined;
+            }
             logger.warn("No DID available in local area code; retrying with default", {
               businessId,
               localAreaCode,
-              fallbackAreaCode: process.env.TELNYX_DEFAULT_AREA_CODE
+              fallbackAreaCode
             });
             ({ toE164 } = await didProvisioner({
               businessId,
               platformDefaults,
               search: {
                 countryCode,
-                areaCode: process.env.TELNYX_DEFAULT_AREA_CODE,
-                administrativeArea: process.env.TELNYX_DEFAULT_STATE
+                areaCode: fallbackAreaCode,
+                administrativeArea: fallbackAreaCode ? process.env.TELNYX_DEFAULT_STATE : undefined
               }
             }));
           } else {
