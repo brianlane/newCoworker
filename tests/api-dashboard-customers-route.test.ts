@@ -246,6 +246,42 @@ describe("PATCH /api/dashboard/customers/:e164", () => {
       pinnedMd: "VIP — escalate to owner"
     });
   });
+
+  it("stamps name_source='manual' when the owner sets a non-empty name (wins over the derived overlay)", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ userId: "u", email: "o@o.com", isAdmin: true });
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce({
+      id: "x",
+      business_id: BIZ,
+      customer_e164: CUSTOMER
+    } as never);
+    const res = await DETAIL_PATCH(
+      patchReq({ displayName: "Amy (cell)" }),
+      params(encodeURIComponent(CUSTOMER))
+    );
+    expect(res.status).toBe(200);
+    expect(updateCustomerOwnerFields).toHaveBeenCalledWith(BIZ, CUSTOMER, {
+      displayName: "Amy (cell)",
+      nameSource: "manual"
+    });
+  });
+
+  it("resets name_source to 'auto' when the owner CLEARS the name (null), so a later auto-capture isn't treated as a manual override", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ userId: "u", email: "o@o.com", isAdmin: true });
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce({
+      id: "x",
+      business_id: BIZ,
+      customer_e164: CUSTOMER
+    } as never);
+    const res = await DETAIL_PATCH(
+      patchReq({ displayName: null }),
+      params(encodeURIComponent(CUSTOMER))
+    );
+    expect(res.status).toBe(200);
+    expect(updateCustomerOwnerFields).toHaveBeenCalledWith(BIZ, CUSTOMER, {
+      displayName: null,
+      nameSource: "auto"
+    });
+  });
 });
 
 describe("DELETE /api/dashboard/customers/:e164", () => {
