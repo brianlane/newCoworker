@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { SortControl, type SortOption } from "@/components/dashboard/SortControl";
-import { sortRows, type SortDir } from "@/lib/dashboard/sort";
+import { sortRows } from "@/lib/dashboard/sort";
+import { usePersistentSort } from "@/components/dashboard/usePersistentSort";
 
 /**
  * One contact row, pre-resolved on the server: `name`/`type` already account for
@@ -58,10 +58,11 @@ function sortValue(row: CustomerListRow, field: string): string | number | null 
  * matching the server query) via the shared SortControl.
  */
 export function CustomersList({ rows }: { rows: CustomerListRow[] }) {
-  const [sort, setSort] = useState<{ field: string; dir: SortDir }>({
-    field: "lastInteractionAt",
-    dir: "desc"
-  });
+  const [sort, setSort] = usePersistentSort(
+    "dashboard.contacts.sort",
+    { field: "lastInteractionAt", dir: "desc" },
+    CUSTOMER_SORT_OPTIONS.map((o) => o.key)
+  );
 
   if (rows.length === 0) {
     return (
@@ -85,7 +86,7 @@ export function CustomersList({ rows }: { rows: CustomerListRow[] }) {
           options={CUSTOMER_SORT_OPTIONS}
           field={sort.field}
           dir={sort.dir}
-          onChange={(field, dir) => setSort({ field, dir })}
+          onChange={setSort}
           idPrefix="customer-sort"
         />
       </div>

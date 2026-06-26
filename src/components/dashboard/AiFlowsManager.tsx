@@ -26,7 +26,8 @@ import {
 } from "@/components/dashboard/aiflow-labels";
 import { getAiFlowExampleCopy, type AiFlowExampleCopy } from "@/lib/ai-flows/examples";
 import { SortControl, type SortOption } from "@/components/dashboard/SortControl";
-import { sortRows, type SortDir } from "@/lib/dashboard/sort";
+import { sortRows } from "@/lib/dashboard/sort";
+import { usePersistentSort } from "@/components/dashboard/usePersistentSort";
 
 // Sort fields for the flows list. Default is "last run" desc, matching the
 // server's activity ordering so the list opens unchanged.
@@ -367,10 +368,11 @@ export function AiFlowsManager({
 }) {
   const examples = getAiFlowExampleCopy(businessType);
   const [flows, setFlows] = useState<AiFlowRow[]>(initialFlows);
-  const [sort, setSort] = useState<{ field: string; dir: SortDir }>({
-    field: "last_run_at",
-    dir: "desc"
-  });
+  const [sort, setSort] = usePersistentSort(
+    "dashboard.aiflows.sort",
+    { field: "last_run_at", dir: "desc" },
+    AIFLOW_SORT_OPTIONS.map((o) => o.key)
+  );
   const [editor, setEditor] = useState<EditorState | null>(() => {
     if (!initialEditId) return null;
     const row = initialFlows.find((f) => f.id === initialEditId);
@@ -1057,7 +1059,7 @@ export function AiFlowsManager({
             options={AIFLOW_SORT_OPTIONS}
             field={sort.field}
             dir={sort.dir}
-            onChange={(field, dir) => setSort({ field, dir })}
+            onChange={setSort}
             idPrefix="aiflow-sort"
           />
         ) : (
