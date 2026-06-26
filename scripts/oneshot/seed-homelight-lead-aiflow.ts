@@ -179,7 +179,9 @@ function buildDefinition(opts: {
       },
       // 3. Open the lead link, screenshot it, and capture the claim button's href.
       //    Links-only browse_extract (no AI field extraction) — just the screenshot
-      //    for Dave's offer MMS and the direct claim URL.
+      //    and the direct claim URL. This pre-claim referral-page screenshot lands
+      //    in {{vars.screenshot_path}} and is what step 4 (route) attaches to
+      //    Dave's offer MMS, because route runs BEFORE the step-5 card re-shoots it.
       {
         id: "open",
         type: "browse_extract",
@@ -213,7 +215,12 @@ function buildDefinition(opts: {
           "({{vars.lead_type}} in {{vars.city}})."
       },
       // 5. Re-open the (now claimed) lead link and read the real contact card off
-      //    the portal. GATED — only runs after Dave accepted.
+      //    the portal. GATED — only runs after Dave accepted. screenshot:true here
+      //    DELIBERATELY overwrites {{vars.screenshot_path}} with the post-claim
+      //    contact-card image (lead name/phone/email/address) — that richer "QT"
+      //    is exactly what step 8 attaches to Amy's email. Dave's offer MMS already
+      //    fired in step 4 with the pre-claim referral-page shot, so re-shooting
+      //    here doesn't affect what he received.
       {
         id: "card",
         type: "browse_extract",
@@ -251,7 +258,8 @@ function buildDefinition(opts: {
           "({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}})",
         when: gateOnClaim
       },
-      // 8. Email Amy the "QT" with the portal screenshot attached.
+      // 8. Email Amy the "QT" — the post-claim contact-card screenshot captured in
+      //    step 5 (the latest {{vars.screenshot_path}}), i.e. the lead's details.
       {
         id: "qt_email",
         type: "send_email",
