@@ -171,7 +171,13 @@ export default async function CustomerDetailPage({ params }: Props) {
       <CustomerProfileEditor
         businessId={business.id}
         customerE164={memory.customer_e164}
-        initialDisplayName={memory.display_name}
+        // Prefill with the EFFECTIVE name shown in the header (resolved
+        // owner/employee/manual-label identity), falling back to the stored
+        // display_name — so editing starts from the current value instead of a
+        // blank box for derived names. Never seed the bare E.164 (headerName's
+        // last-resort fallback): a contact with no name keeps the field empty so
+        // the placeholder shows and an unchanged save writes nothing.
+        initialDisplayName={headerContact?.name ?? memory.display_name}
         initialPinnedMd={memory.pinned_md}
         initialEmail={memory.email}
         initialType={memory.type}
