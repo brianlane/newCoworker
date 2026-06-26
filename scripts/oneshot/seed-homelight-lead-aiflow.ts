@@ -53,7 +53,8 @@
  * Required env: NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY.
  * Business id: AIFLOW_SEED_BUSINESS_ID or --business-id <uuid> (defaults to Amy's).
  * Optional overrides:
- *   AIFLOW_HOMELIGHT_INTEGRATION_LABEL    (default "HomeLight")
+ *   AIFLOW_HOMELIGHT_INTEGRATION_LABEL    (default "Home Light" — must match the
+ *                                          stored custom_integrations label EXACTLY)
  *   AIFLOW_HOMELIGHT_MATCH_TEXT           (default "HomeLight Referral")
  *   AIFLOW_HOMELIGHT_CLAIM_BUTTON_TEXT    (default "Call me to claim referral")
  *   AIFLOW_HOMELIGHT_AGENT_NAME           (default "Dave Lane")
@@ -345,7 +346,7 @@ async function main(): Promise<void> {
   }
 
   const definitionInput = buildDefinition({
-    integrationLabel: process.env.AIFLOW_HOMELIGHT_INTEGRATION_LABEL ?? "HomeLight",
+    integrationLabel: process.env.AIFLOW_HOMELIGHT_INTEGRATION_LABEL ?? "Home Light",
     matchText: process.env.AIFLOW_HOMELIGHT_MATCH_TEXT ?? "HomeLight Referral",
     claimButtonText:
       process.env.AIFLOW_HOMELIGHT_CLAIM_BUTTON_TEXT ?? "Call me to claim referral",
