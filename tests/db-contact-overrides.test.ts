@@ -119,10 +119,10 @@ describe("setContactOverride", () => {
       BIZ,
       "73339",
       "ReferralExchange",
-      { type: "service" },
+      { type: "company" },
       db as unknown as Client
     );
-    expect(calls.find((c) => c.method === "insert")?.args[0]).toMatchObject({ type: "service" });
+    expect(calls.find((c) => c.method === "insert")?.args[0]).toMatchObject({ type: "company" });
   });
 
   it("throws on a non-unique insert failure", async () => {

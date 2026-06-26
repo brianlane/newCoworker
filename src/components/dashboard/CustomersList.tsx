@@ -11,7 +11,7 @@ import { sortRows, type SortDir } from "@/lib/dashboard/sort";
  * One contact row, pre-resolved on the server: `name`/`type` already account for
  * owner/employee/manual-label overrides so the client can sort by display name
  * or type without re-resolving anything. `type` is the unified classification
- * (owner/employee/customer/tester/service/other).
+ * (owner/employee/customer/tester/company/other).
  */
 export type CustomerListRow = {
   e164: string;
@@ -40,7 +40,7 @@ const TYPE_BADGE_CLASS: Record<string, string> = {
   employee: "text-amber-300/80 bg-amber-300/10",
   customer: "text-parchment/60 bg-parchment/10",
   tester: "text-fuchsia-300/80 bg-fuchsia-300/10",
-  service: "text-sky-300/80 bg-sky-300/10",
+  company: "text-sky-300/80 bg-sky-300/10",
   other: "text-parchment/60 bg-parchment/10"
 };
 
