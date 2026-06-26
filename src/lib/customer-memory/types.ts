@@ -29,12 +29,23 @@ export const CONTACT_TYPES = [
 ] as const;
 export type ContactType = (typeof CONTACT_TYPES)[number];
 
+/**
+ * Provenance of `display_name`, independent of `type`. `manual` = the owner set
+ * the name (contacts UI / set-contact / add-customer); `auto` = captured from a
+ * channel (SMS/voice) or derived. A `manual` name wins over the read-time
+ * owner/employee overlay in src/lib/db/contact-names.ts; an `auto` one does not.
+ */
+export const CONTACT_NAME_SOURCES = ["auto", "manual"] as const;
+export type ContactNameSource = (typeof CONTACT_NAME_SOURCES)[number];
+
 export type CustomerMemoryRow = {
   id: string;
   business_id: string;
   customer_e164: string;
   /** Contact classification; NOT NULL in the DB (default 'customer'). */
   type: ContactType;
+  /** Provenance of display_name; NOT NULL in the DB (default 'auto'). */
+  name_source: ContactNameSource;
   display_name: string | null;
   /** Owner-set email linked to this customer, so email rolls up to the profile. */
   email: string | null;

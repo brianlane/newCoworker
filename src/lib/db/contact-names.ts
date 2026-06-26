@@ -51,12 +51,13 @@ export async function resolveContactNames(
       .in("phone_e164", unique),
     // Unified contacts (customers + folded manual overrides). Filter in SQL
     // (primary number IN list, or alias array overlaps it) so the query scales
-    // with the numbers shown, not the tenant's total contact count. `type`
-    // tells customer (auto profile name) from a manual label (owner/tester/
-    // service/other) — the latter wins over a derived owner/employee name.
+    // with the numbers shown, not the tenant's total contact count.
+    // `name_source` tells an owner-set name (manual) from an auto-captured one;
+    // a manual name wins over a derived owner/employee identity. `type` is the
+    // contact category (drives the displayed kind), independent of provenance.
     db
       .from("contacts")
-      .select("customer_e164, alias_e164s, display_name, type")
+      .select("customer_e164, alias_e164s, display_name, type, name_source")
       .eq("business_id", businessId)
       .or(`customer_e164.in.(${inList}),alias_e164s.ov.{${inList}}`),
     // Owner numbers come from three places: the onboarding phone, the Safe
@@ -86,22 +87,25 @@ export async function resolveContactNames(
 
   const out = new Map<string, ContactName>();
   const wanted = new Set(unique);
-  // A contacts row whose type is NOT 'customer' is a manual label (the old
-  // contact_overrides), so its name wins even over a derived owner/employee
-  // name. Keyed by number (primary + aliases) for the owner/employee overlay.
+  // A contacts row whose name_source is 'manual' is an owner-set label, so its
+  // name wins even over a derived owner/employee name — regardless of `type`
+  // (an owner/employee number can carry a manual name that should stick, the
+  // case the old "set type to other" workaround existed for). An 'auto' name
+  // (captured from a channel) loses to the overlay. `type` only drives the
+  // displayed kind. Keyed by number (primary + aliases) for the overlay below.
   const manualLabel = new Map<string, string>();
   for (const row of (contactRes.data as Array<{
     customer_e164: string;
     alias_e164s: string[] | null;
     display_name: string | null;
     type: string;
+    name_source: string;
   }> | null) ?? []) {
     const name = row.display_name?.trim();
     if (!name || name.toLowerCase() === "unknown caller") continue;
-    const isManual = row.type !== "customer";
-    // `contact` = a manual label with no derived identity; `customer` = an
-    // auto/owner-edited profile name.
-    const kind = isManual ? "contact" : "customer";
+    const isManual = row.name_source === "manual";
+    // `contact` = a non-customer category row; `customer` = a customer profile.
+    const kind = row.type === "customer" ? "customer" : "contact";
     for (const num of [row.customer_e164, ...(row.alias_e164s ?? [])]) {
       if (!wanted.has(num)) continue;
       out.set(num, isManual ? { name, kind, override: true } : { name, kind });

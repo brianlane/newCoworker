@@ -10,12 +10,17 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import type { ContactType, CustomerMemoryChannel, CustomerMemoryRow } from "./types";
+import type {
+  ContactNameSource,
+  ContactType,
+  CustomerMemoryChannel,
+  CustomerMemoryRow
+} from "./types";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 const ALL_COLUMNS =
-  "id,business_id,customer_e164,type,display_name,email,summary_md,pinned_md," +
+  "id,business_id,customer_e164,type,name_source,display_name,email,summary_md,pinned_md," +
   "interaction_count,total_interaction_count,last_interaction_at," +
   "last_summarized_at,last_channel,alias_e164s,created_at,updated_at";
 
@@ -72,12 +77,17 @@ export async function createCustomerMemory(
   client?: SupabaseClient
 ): Promise<CustomerMemoryRow> {
   const db = client ?? (await createSupabaseServiceClient());
+  const trimmedName = input.displayName?.trim() || null;
   const { data, error } = await db
     .from("contacts")
     .insert({
       business_id: businessId,
       customer_e164: input.customerE164,
-      display_name: input.displayName?.trim() || null,
+      display_name: trimmedName,
+      // Owner-driven "Add customer": a name typed here is a deliberate label, so
+      // it wins over the read-time owner/employee overlay (name_source='manual').
+      // A nameless add stays 'auto' (the DB default) — nothing to protect yet.
+      ...(trimmedName ? { name_source: "manual" satisfies ContactNameSource } : {}),
       email: input.email?.trim() || null,
       pinned_md: input.pinnedMd?.trim() || null,
       ...(input.type ? { type: input.type } : {})
@@ -357,6 +367,13 @@ export type CustomerOwnerEdit = {
   email?: string | null;
   /** Re-classify the contact (customer/tester/service/other/...). */
   type?: ContactType;
+  /**
+   * Provenance to stamp on display_name. The dashboard owner-edit passes
+   * 'manual' (the name should stick over the owner/employee overlay); the
+   * agent-discovered path (setCustomerDisplayName) omits it so the captured
+   * name stays 'auto'. Only meaningful alongside `displayName`.
+   */
+  nameSource?: ContactNameSource;
 };
 
 /** Owner-driven edit (contacts page). Only writes the fields the owner controls. */
@@ -370,6 +387,7 @@ export async function updateCustomerOwnerFields(
   const patch: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
     ...("displayName" in edit ? { display_name: edit.displayName } : {}),
+    ...("nameSource" in edit && edit.nameSource ? { name_source: edit.nameSource } : {}),
     ...("pinnedMd" in edit ? { pinned_md: edit.pinnedMd } : {}),
     ...("email" in edit ? { email: edit.email } : {}),
     ...("type" in edit && edit.type ? { type: edit.type } : {})

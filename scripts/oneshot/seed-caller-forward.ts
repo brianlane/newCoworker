@@ -159,8 +159,9 @@ async function main(): Promise<void> {
 
   const db = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
 
-  // Unified contacts table: a manual label is type 'other' (a non-customer type
-  // so it wins over any derived owner/employee name in the dashboard).
+  // Unified contacts table: a manual label is an owner-set name, so stamp
+  // name_source='manual' (it wins over any derived owner/employee name in the
+  // dashboard) and type 'other' for a freshly-created row.
   //
   // Update-then-insert (NOT a blind upsert): a blind upsert would set
   // type='other' on conflict and could demote an existing real customer to
@@ -168,7 +169,7 @@ async function main(): Promise<void> {
   // create a type='other' row when none exists. Mirrors setContactOverride.
   const { data: relabeled, error: relabelErr } = await db
     .from("contacts")
-    .update({ display_name: name, updated_at: new Date().toISOString() })
+    .update({ display_name: name, name_source: "manual", updated_at: new Date().toISOString() })
     .eq("business_id", businessId)
     .eq("customer_e164", fromE164)
     .select("id");
@@ -181,6 +182,7 @@ async function main(): Promise<void> {
       business_id: businessId,
       customer_e164: fromE164,
       display_name: name,
+      name_source: "manual",
       type: "other"
     });
     if (insertErr) {

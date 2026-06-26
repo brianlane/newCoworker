@@ -62,12 +62,20 @@ export async function setContactOverride(
   }
   const db = client ?? (await createSupabaseServiceClient());
   const emailPatch = "email" in options ? { email: options.email?.trim() || null } : {};
+  // This is the owner's manual label, so the name wins over a derived
+  // owner/employee identity at read time — stamp name_source='manual' on every
+  // write path below (relabel-existing, fresh insert, and the race relabel).
+  const namePatch = {
+    display_name: trimmed,
+    name_source: "manual" as const,
+    ...emailPatch
+  };
 
   // 1) Try to relabel an existing row first — preserves its type (a customer
   //    stays a customer) and never disturbs the memory fields.
   const { data: updated, error: updErr } = await db
     .from("contacts")
-    .update({ display_name: trimmed, ...emailPatch, updated_at: new Date().toISOString() })
+    .update({ ...namePatch, updated_at: new Date().toISOString() })
     .eq("business_id", businessId)
     .eq("customer_e164", e164)
     .select("id");
@@ -78,9 +86,8 @@ export async function setContactOverride(
   const { error: insErr } = await db.from("contacts").insert({
     business_id: businessId,
     customer_e164: e164,
-    display_name: trimmed,
     type: options.type ?? "other",
-    ...emailPatch
+    ...namePatch
   });
   if (!insErr) return;
   if (insErr.code !== PG_UNIQUE_VIOLATION) {
@@ -90,7 +97,7 @@ export async function setContactOverride(
   // between our update and insert. Relabel it now; keep its type.
   const { error: raceErr } = await db
     .from("contacts")
-    .update({ display_name: trimmed, ...emailPatch, updated_at: new Date().toISOString() })
+    .update({ ...namePatch, updated_at: new Date().toISOString() })
     .eq("business_id", businessId)
     .eq("customer_e164", e164);
   if (raceErr) throw new Error(`setContactOverride: ${raceErr.message}`);

@@ -157,7 +157,17 @@ export async function PATCH(
     if (!existing) return errorResponse("NOT_FOUND", "Customer not found");
 
     await updateCustomerOwnerFields(businessId, customerE164, {
-      ...(body.displayName !== undefined ? { displayName: body.displayName } : {}),
+      // A non-empty name the owner types is a deliberate label → 'manual' (wins
+      // over the derived owner/employee overlay). CLEARING the name (null/empty)
+      // resets provenance to 'auto' so a later auto-capture isn't mistaken for an
+      // owner override on the now-nameless row (a manual stamp on "no name" would
+      // make record_customer_interaction's fill look manual).
+      ...(body.displayName !== undefined
+        ? {
+            displayName: body.displayName,
+            nameSource: body.displayName ? ("manual" as const) : ("auto" as const)
+          }
+        : {}),
       ...(body.pinnedMd !== undefined ? { pinnedMd: body.pinnedMd } : {}),
       ...(body.email !== undefined ? { email: body.email } : {}),
       ...(body.type !== undefined ? { type: body.type } : {})
