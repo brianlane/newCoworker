@@ -9,7 +9,7 @@
  * dispatcher that switches on `action.kind`.
  */
 import { firstUrlInText, isE164, normalizeNanpToE164, renderTemplate } from "./engine.ts";
-import type { BrowseAuth, ExtractField, FlowStep, RouteOfferWindow } from "./types.ts";
+import type { BrowseAuth, ExtractField, ExtractLink, FlowStep, RouteOfferWindow } from "./types.ts";
 
 export type StepScope = {
   vars?: Record<string, unknown>;
@@ -51,7 +51,14 @@ export type BrowseActionPlanned = {
 
 export type StepAction =
   | { kind: "set_vars"; vars: Record<string, string> }
-  | { kind: "browse"; url: string; fields: ExtractField[]; auth?: BrowseAuth; screenshot?: boolean }
+  | {
+      kind: "browse";
+      url: string;
+      fields?: ExtractField[];
+      extractLinks?: ExtractLink[];
+      auth?: BrowseAuth;
+      screenshot?: boolean;
+    }
   | { kind: "extract_text"; text: string; fields: ExtractField[] }
   | {
       kind: "send_sms";
@@ -212,7 +219,10 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         action: {
           kind: "browse",
           url,
-          fields: step.fields,
+          ...(step.fields && step.fields.length > 0 ? { fields: step.fields } : {}),
+          ...(step.extractLinks && step.extractLinks.length > 0
+            ? { extractLinks: step.extractLinks }
+            : {}),
           auth: step.auth,
           screenshot: step.screenshot
         }

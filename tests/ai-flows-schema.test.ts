@@ -80,6 +80,45 @@ describe("parseAiFlowDefinition", () => {
     );
   });
 
+  it("accepts a links-only browse_extract whose captured link feeds a later step", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [{ type: "has_url" }] },
+      steps: [
+        { id: "s1", type: "extract_url", saveAs: "lead_url" },
+        {
+          id: "s2",
+          type: "browse_extract",
+          urlVar: "lead_url",
+          extractLinks: [{ name: "claim_link", matchText: "Call me to claim referral" }]
+        },
+        { id: "s3", type: "notify_owner", message: "claim at {{vars.claim_link}}" }
+      ]
+    });
+    // The link var is in scope for the later step → no semantic issues.
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+    const browse = def.steps[1];
+    expect(browse.type === "browse_extract" && browse.extractLinks?.[0]?.name).toBe("claim_link");
+  });
+
+  it("accepts a browse_extract carrying both fields and extractLinks", () => {
+    const withBoth = JSON.parse(JSON.stringify(validInput));
+    withBoth.steps[1].extractLinks = [{ name: "claim_link", matchText: "claim" }];
+    const def = parseAiFlowDefinition(withBoth);
+    const browse = def.steps[1];
+    expect(
+      browse.type === "browse_extract" &&
+        (browse.fields?.length ?? 0) > 0 &&
+        browse.extractLinks?.length
+    ).toBe(1);
+  });
+
+  it("rejects a browse_extract with neither fields nor extractLinks", () => {
+    const bad = JSON.parse(JSON.stringify(validInput));
+    delete bad.steps[1].fields;
+    expect(() => parseAiFlowDefinition(bad)).toThrow(AiFlowValidationError);
+  });
+
   it("accepts an extract_text step whose fields feed a later step (no URL needed)", () => {
     const def = parseAiFlowDefinition({
       version: 1,

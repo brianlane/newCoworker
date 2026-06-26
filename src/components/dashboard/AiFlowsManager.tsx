@@ -248,7 +248,11 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
 /** Vars a single step produces (visible to LATER steps). Mirrors schema scope. */
 function varsProducedByStep(step: FlowStep): string[] {
   if (step.type === "extract_url") return [step.saveAs];
-  if (step.type === "browse_extract") return step.fields.map((f) => f.name).filter(Boolean);
+  if (step.type === "browse_extract")
+    return [
+      ...(step.fields ?? []).map((f) => f.name),
+      ...(step.extractLinks ?? []).map((l) => l.name)
+    ].filter(Boolean);
   if (step.type === "extract_text") return step.fields.map((f) => f.name).filter(Boolean);
   if (step.type === "browse_action") return (step.fields ?? []).map((f) => f.name).filter(Boolean);
   if (step.type === "http_call" && step.saveAs) return [step.saveAs];
@@ -1292,6 +1296,8 @@ function StepFields({
     );
   }
   if (step.type === "browse_extract") {
+    const fields = step.fields ?? [];
+    const links = step.extractLinks ?? [];
     return (
       <div className="space-y-2">
         <Field
@@ -1301,7 +1307,7 @@ function StepFields({
           help="The name of a link an earlier step saved (e.g. lead_url)."
         />
         <label className={labelClass}>Fields to extract</label>
-        {step.fields.map((f, fi) => (
+        {fields.map((f, fi) => (
           <div key={fi} className="flex gap-2">
             <input
               className={inputClass}
@@ -1309,7 +1315,7 @@ function StepFields({
               placeholder={examples.contactVar}
               onChange={(ev) =>
                 patchStep(index, {
-                  fields: step.fields.map((x, xi) =>
+                  fields: fields.map((x, xi) =>
                     xi === fi ? { ...x, name: ev.target.value } : x
                   )
                 })
@@ -1321,19 +1327,82 @@ function StepFields({
               placeholder="description (optional)"
               onChange={(ev) =>
                 patchStep(index, {
-                  fields: step.fields.map((x, xi) =>
+                  fields: fields.map((x, xi) =>
                     xi === fi ? { ...x, description: ev.target.value } : x
                   )
                 })
               }
             />
+            <button
+              onClick={() =>
+                patchStep(index, {
+                  // Drop the key entirely when the last field is removed so an
+                  // empty array doesn't trip the schema's min(1)-when-present
+                  // (a links-only browse_extract is valid).
+                  fields: fields.length === 1 ? undefined : fields.filter((_, xi) => xi !== fi)
+                })
+              }
+              className="text-xs text-parchment/40 hover:text-rust"
+              aria-label="Remove field"
+            >
+              ✕
+            </button>
           </div>
         ))}
         <button
-          onClick={() => patchStep(index, { fields: [...step.fields, { name: "", description: "" }] })}
+          onClick={() => patchStep(index, { fields: [...fields, { name: "", description: "" }] })}
           className="text-xs text-signal-teal hover:underline"
         >
           + field
+        </button>
+        <label className={labelClass}>Links to capture (by button text)</label>
+        {links.map((l, li) => (
+          <div key={li} className="flex gap-2">
+            <input
+              className={inputClass}
+              value={l.name}
+              placeholder="claim_link"
+              onChange={(ev) =>
+                patchStep(index, {
+                  extractLinks: links.map((x, xi) =>
+                    xi === li ? { ...x, name: ev.target.value } : x
+                  )
+                })
+              }
+            />
+            <input
+              className={inputClass}
+              value={l.matchText}
+              placeholder="button text, e.g. Call me to claim referral"
+              onChange={(ev) =>
+                patchStep(index, {
+                  extractLinks: links.map((x, xi) =>
+                    xi === li ? { ...x, matchText: ev.target.value } : x
+                  )
+                })
+              }
+            />
+            <button
+              onClick={() =>
+                patchStep(index, {
+                  // Drop the key entirely when the last link is removed so an
+                  // empty array doesn't trip the schema's min(1)-when-present.
+                  extractLinks:
+                    links.length === 1 ? undefined : links.filter((_, xi) => xi !== li)
+                })
+              }
+              className="text-xs text-parchment/40 hover:text-rust"
+              aria-label="Remove link"
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+        <button
+          onClick={() => patchStep(index, { extractLinks: [...links, { name: "", matchText: "" }] })}
+          className="text-xs text-signal-teal hover:underline"
+        >
+          + link
         </button>
         <label className="flex items-center gap-2 text-xs text-parchment/70">
           <input

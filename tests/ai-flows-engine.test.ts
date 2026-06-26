@@ -6,6 +6,7 @@ import {
   evaluateSmsTrigger,
   evaluateStepCondition,
   extractLeadIdentity,
+  extractLinkByText,
   extractPhones,
   filterRosterByAvailability,
   firstUrlInText,
@@ -394,6 +395,61 @@ describe("htmlToText", () => {
   it("decodes &amp; last so it does not double-unescape", () => {
     // "&amp;lt;" must become the literal "&lt;", not "<".
     expect(htmlToText("a &amp;lt; b")).toBe("a &lt; b");
+  });
+});
+
+describe("extractLinkByText", () => {
+  const base = "https://portal.example.com/leads/abc";
+
+  it("returns the resolved href of the first anchor whose visible text contains the match (the motivating case)", () => {
+    const html =
+      '<div><a href="/claim?id=9">Some other link</a>' +
+      '<a href="https://hmlt.co/claim/9">Call me to claim referral</a></div>';
+    expect(extractLinkByText(html, "Call me to claim referral", base)).toBe(
+      "https://hmlt.co/claim/9"
+    );
+  });
+
+  it("matches case-insensitively and ignores nested tags in the visible text", () => {
+    const html = '<a href="/x"><span>CALL ME</span> to <b>claim</b></a>';
+    expect(extractLinkByText(html, "call me to claim", base)).toBe(
+      "https://portal.example.com/x"
+    );
+  });
+
+  it("resolves a relative href against the page's final URL", () => {
+    const html = '<a href="next/step">Continue</a>';
+    expect(extractLinkByText(html, "Continue", base)).toBe(
+      "https://portal.example.com/leads/next/step"
+    );
+  });
+
+  it("supports single-quoted and unquoted hrefs", () => {
+    expect(extractLinkByText("<a href='/q'>Quote</a>", "Quote", base)).toBe(
+      "https://portal.example.com/q"
+    );
+    expect(extractLinkByText("<a href=https://e.com/u >Unq</a>", "Unq", base)).toBe(
+      "https://e.com/u"
+    );
+  });
+
+  it("returns empty string when no anchor's text matches", () => {
+    expect(extractLinkByText('<a href="/x">Nope</a>', "claim referral", base)).toBe("");
+  });
+
+  it("returns empty string for empty html or empty matchText", () => {
+    expect(extractLinkByText("", "anything", base)).toBe("");
+    expect(extractLinkByText('<a href="/x">Hi</a>', "   ", base)).toBe("");
+  });
+
+  it("skips anchors with no usable href and keeps scanning for a resolvable one", () => {
+    const html =
+      '<a href="">Claim it</a>' + '<a href="javascript:void(0)">Claim it</a>' + '<a href="/real">Claim it</a>';
+    expect(extractLinkByText(html, "Claim it", base)).toBe("https://portal.example.com/real");
+  });
+
+  it("returns empty string when a relative href can't be resolved without a base", () => {
+    expect(extractLinkByText('<a href="rel/path">Go</a>', "Go", "")).toBe("");
   });
 });
 

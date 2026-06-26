@@ -76,6 +76,43 @@ describe("planStep: browse_extract", () => {
       }
     });
   });
+  it("carries extractLinks alongside fields into the browse action", () => {
+    const withLinks: FlowStep = {
+      id: "b",
+      type: "browse_extract",
+      urlVar: "lead_url",
+      fields: [{ name: "seller_phone" }],
+      extractLinks: [{ name: "claim_link", matchText: "Call me to claim referral" }]
+    };
+    const r = planStep(withLinks, { vars: { lead_url: "https://rfrl.to/x" } });
+    expect(r).toEqual({
+      ok: true,
+      action: {
+        kind: "browse",
+        url: "https://rfrl.to/x",
+        fields: [{ name: "seller_phone" }],
+        extractLinks: [{ name: "claim_link", matchText: "Call me to claim referral" }]
+      }
+    });
+  });
+  it("supports a links-only browse_extract (no fields key in the action)", () => {
+    const linksOnly: FlowStep = {
+      id: "b",
+      type: "browse_extract",
+      urlVar: "lead_url",
+      extractLinks: [{ name: "claim_link", matchText: "claim" }]
+    };
+    const r = planStep(linksOnly, { vars: { lead_url: "https://rfrl.to/x" } });
+    expect(r.ok && "fields" in r.action).toBe(false);
+    expect(r).toEqual({
+      ok: true,
+      action: {
+        kind: "browse",
+        url: "https://rfrl.to/x",
+        extractLinks: [{ name: "claim_link", matchText: "claim" }]
+      }
+    });
+  });
 });
 
 describe("planStep: extract_text", () => {

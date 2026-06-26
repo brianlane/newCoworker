@@ -143,17 +143,31 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
       return (
         <>
           <Row label="URL variable" value={step.urlVar} mono />
-          <div className="space-y-1">
-            <div className="text-xs font-medium text-parchment/50">Fields to extract</div>
-            <div className="flex flex-wrap gap-1.5">
-              {step.fields.map((f, i) => (
-                <Chip key={i}>
-                  {f.name}
-                  {f.description ? ` — ${f.description}` : ""}
-                </Chip>
-              ))}
+          {step.fields && step.fields.length > 0 && (
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-parchment/50">Fields to extract</div>
+              <div className="flex flex-wrap gap-1.5">
+                {step.fields.map((f, i) => (
+                  <Chip key={i}>
+                    {f.name}
+                    {f.description ? ` — ${f.description}` : ""}
+                  </Chip>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
+          {step.extractLinks && step.extractLinks.length > 0 && (
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-parchment/50">Links to capture</div>
+              <div className="flex flex-wrap gap-1.5">
+                {step.extractLinks.map((l, i) => (
+                  <Chip key={i}>
+                    {l.name} — “{l.matchText}”
+                  </Chip>
+                ))}
+              </div>
+            </div>
+          )}
           {step.auth?.integrationLabel && (
             <Row label="Login integration" value={step.auth.integrationLabel} />
           )}

@@ -45,12 +45,16 @@ export const AGENT_SCOPE_KEYS = ["name", "phone"] as const;
 export const OFFER_SCOPE_KEYS = ["deadline"] as const;
 
 /**
- * Vars the ENGINE itself maintains (not produced by any step): the worker
- * appends a human description of each outbound contact (SMS / email / routing)
- * to `actions_taken`, so a later step — e.g. a browse_action timeline note —
- * can template "what did this flow actually do". Always in scope.
+ * Vars the ENGINE itself maintains (not produced by any step). Always in scope:
+ *   - `actions_taken`: the worker appends a human description of each outbound
+ *     contact (SMS / email / routing), so a later step — e.g. a browse_action
+ *     timeline note — can template "what did this flow actually do".
+ *   - `claimed_agent`: set by `route_to_team` to the claiming teammate's name
+ *     (or "none" on owner-fallback / no claim), so LATER steps can gate on
+ *     `when: { var: "claimed_agent", notEquals: "none" }` to run only after a
+ *     teammate accepted the lead. Empty string before any route_to_team runs.
  */
-export const ENGINE_PROVIDED_VARS = ["actions_taken"] as const;
+export const ENGINE_PROVIDED_VARS = ["actions_taken", "claimed_agent"] as const;
 
 /** The UI action kinds a browse_action step may perform. */
 export const BROWSE_ACTION_KINDS = [
@@ -195,6 +199,18 @@ const extractFieldSchema = z.object({
 });
 
 /**
+ * A browse_extract link capture: find the first `<a>` on the page whose visible
+ * text contains `matchText` and save its resolved href as `{{vars.<name>}}`
+ * (empty string if no match). Used to grab a button's destination URL — e.g.
+ * HomeLight's "Call me to claim referral" link — which plain text extraction
+ * loses.
+ */
+const extractLinkSchema = z.object({
+  name: varName,
+  matchText: z.string().min(1).max(200)
+});
+
+/**
  * Optional credentialed-browse config. `integrationLabel` names a stored custom
  * integration whose credentials the render service uses to log in before reading
  * the page (so a flow can read a login-gated lead). The selector overrides are
@@ -276,15 +292,22 @@ const whenSchema = z
 
 const stepSchema = z.discriminatedUnion("type", [
   z.object({ id: stepId, type: z.literal("extract_url"), saveAs: varName, when: whenSchema.optional() }),
-  z.object({
-    id: stepId,
-    type: z.literal("browse_extract"),
-    urlVar: varName,
-    fields: z.array(extractFieldSchema).min(1).max(15),
-    auth: browseAuthSchema.optional(),
-    screenshot: z.boolean().optional(),
-    when: whenSchema.optional()
-  }),
+  z
+    .object({
+      id: stepId,
+      type: z.literal("browse_extract"),
+      urlVar: varName,
+      // Either pull structured text fields, capture link hrefs by button text,
+      // or both — but the step must do at least one (refined below).
+      fields: z.array(extractFieldSchema).min(1).max(15).optional(),
+      extractLinks: z.array(extractLinkSchema).min(1).max(10).optional(),
+      auth: browseAuthSchema.optional(),
+      screenshot: z.boolean().optional(),
+      when: whenSchema.optional()
+    })
+    .refine((s) => (s.fields?.length ?? 0) > 0 || (s.extractLinks?.length ?? 0) > 0, {
+      message: "browse_extract needs at least one of fields or extractLinks"
+    }),
   // Browser-free sibling of browse_extract: pull the same structured fields out
   // of the inbound message text ({{trigger.windowText}}) instead of a fetched
   // page. No urlVar/auth/screenshot — the worker runs the SAME Gemini
@@ -735,7 +758,8 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     if (step.type === "extract_url") {
       vars.add(step.saveAs);
     } else if (step.type === "browse_extract") {
-      for (const f of step.fields) vars.add(f.name);
+      for (const f of step.fields ?? []) vars.add(f.name);
+      for (const l of step.extractLinks ?? []) vars.add(l.name);
       if (step.screenshot) screenshotCaptured = true;
     } else if (step.type === "extract_text") {
       for (const f of step.fields) vars.add(f.name);

@@ -107,6 +107,17 @@ export type ExtractField = {
 };
 
 /**
+ * A browse_extract link capture: the worker finds the first `<a>` whose visible
+ * text contains `matchText` and saves its resolved href as `{{vars.<name>}}`
+ * (empty string if not found). Captures a button's destination URL that plain
+ * text extraction drops (e.g. HomeLight's "Call me to claim referral" link).
+ */
+export type ExtractLink = {
+  name: string;
+  matchText: string;
+};
+
+/**
  * Optional credentialed-browse config for a `browse_extract` step. When set, the
  * worker routes the fetch through the headless render service, which logs in with
  * the named custom integration's stored credentials before reading the page. This
@@ -218,7 +229,13 @@ export type FlowStep =
       id: string;
       type: "browse_extract";
       urlVar: string;
-      fields: ExtractField[];
+      /** Structured text fields (Gemini extraction). Optional when only capturing links. */
+      fields?: ExtractField[];
+      /**
+       * Capture link hrefs by their visible button text (parsed from the page
+       * HTML). At least one of `fields`/`extractLinks` is present.
+       */
+      extractLinks?: ExtractLink[];
       auth?: BrowseAuth;
       /**
        * When true, the render service also captures a screenshot of the page.

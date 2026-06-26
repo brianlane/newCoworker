@@ -85,8 +85,11 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const browse = steps[browseIdx];
-  if (browse.type === "browse_extract" && !browse.fields.some((f) => f.name === SMS_LEAD_TYPE_FIELD.name)) {
-    steps[browseIdx] = { ...browse, fields: [...browse.fields, SMS_LEAD_TYPE_FIELD] };
+  if (
+    browse.type === "browse_extract" &&
+    !(browse.fields ?? []).some((f) => f.name === SMS_LEAD_TYPE_FIELD.name)
+  ) {
+    steps[browseIdx] = { ...browse, fields: [...(browse.fields ?? []), SMS_LEAD_TYPE_FIELD] };
   }
 
   // 2. Re-point the SMS branch (approval gates + lead texts) at sms_lead_type.

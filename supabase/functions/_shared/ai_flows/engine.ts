@@ -678,6 +678,45 @@ export function htmlToText(html: string): string {
     .trim();
 }
 
+const ANCHOR_RE = /<a\b[^>]*?\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s">]+))[^>]*>([\s\S]*?)<\/a>/gi;
+
+/**
+ * Find the first `<a>` in `html` whose VISIBLE text contains `matchText`
+ * (case-insensitive, tags/entities stripped) and return its href resolved
+ * against `baseUrl` (the page's final URL). Returns "" when nothing matches or
+ * the href can't be resolved to an absolute URL. Used by browse_extract's
+ * `extractLinks` to capture a button's destination (e.g. a "claim referral"
+ * link) that plain text extraction drops. Regex-based on purpose: the Deno
+ * worker has no DOM, and the inputs are small rendered pages.
+ */
+export function extractLinkByText(html: string, matchText: string, baseUrl: string): string {
+  const needle = matchText.trim().toLowerCase();
+  if (!needle || !html) return "";
+  ANCHOR_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = ANCHOR_RE.exec(html)) !== null) {
+    // Exactly one of the three href groups participates per match; an empty
+    // value (href="") falls through the `!href` guard below.
+    const href = m[1] ?? m[2] ?? m[3];
+    if (!href) continue;
+    /* c8 ignore next -- ANCHOR_RE's inner-text group always participates (may be "") */
+    const visible = htmlToText(m[4] ?? "").toLowerCase();
+    if (!visible.includes(needle)) continue;
+    try {
+      const resolved = new URL(href, baseUrl || undefined);
+      // Only http(s) destinations are useful as a captured link — skip
+      // javascript:/mailto:/tel: and keep scanning for a real navigable URL.
+      if (resolved.protocol !== "http:" && resolved.protocol !== "https:") continue;
+      return resolved.toString();
+    } catch {
+      // Unresolvable href (e.g. a relative href with no base): keep scanning
+      // for a later matching anchor with a usable URL.
+      continue;
+    }
+  }
+  return "";
+}
+
 /**
  * Runtime guard the worker runs before executing a stored definition (the rich
  * authoring validation lives in src/lib/ai-flows/schema.ts). Confirms the basic
