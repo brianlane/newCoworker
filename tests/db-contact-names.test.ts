@@ -16,7 +16,8 @@ type Result = { data: unknown; error: { message: string } | null };
  * Chainable stub whose terminal result depends on the table queried —
  * resolveContactNames hits `ai_flow_team_members` and the unified `contacts`
  * table in parallel with different chain shapes (`.in` only on the team query).
- * Manual labels are `contacts` rows whose `type` is not 'customer'.
+ * Manual labels are `contacts` rows whose `name_source` is 'manual' (the name
+ * wins over the derived owner/employee overlay regardless of `type`).
  */
 function makeDb(perTable: Record<string, Result>) {
   const calls: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -115,7 +116,8 @@ describe("resolveContactNames", () => {
             customer_e164: "+15550000001",
             alias_e164s: [],
             display_name: "Dave (cell)",
-            type: "other"
+            type: "other",
+            name_source: "manual"
           }
         ],
         error: null
@@ -340,7 +342,8 @@ describe("resolveContactNames", () => {
             customer_e164: "+16026951142",
             alias_e164s: [],
             display_name: "Amy Laidlaw",
-            type: "other"
+            type: "other",
+            name_source: "manual"
           }
         ],
         error: null
@@ -358,9 +361,15 @@ describe("resolveContactNames", () => {
     const { db } = makeDb({
       contacts: {
         data: [
-          { customer_e164: "73339", alias_e164s: [], display_name: "ReferralExchange", type: "service" },
-          { customer_e164: "+15550000088", alias_e164s: [], display_name: "", type: "other" },
-          { customer_e164: "+15550000089", alias_e164s: [], display_name: null, type: "other" }
+          {
+            customer_e164: "73339",
+            alias_e164s: [],
+            display_name: "ReferralExchange",
+            type: "service",
+            name_source: "manual"
+          },
+          { customer_e164: "+15550000088", alias_e164s: [], display_name: "", type: "other", name_source: "manual" },
+          { customer_e164: "+15550000089", alias_e164s: [], display_name: null, type: "other", name_source: "manual" }
         ],
         error: null
       }
@@ -378,6 +387,74 @@ describe("resolveContactNames", () => {
     // Blank / null names are ignored rather than rendering "".
     expect(out.has("+15550000088")).toBe(false);
     expect(out.has("+15550000089")).toBe(false);
+  });
+
+  it("a manual name on a CUSTOMER-typed owner number sticks over the derived owner name (removed legacy: no more 'set type to other' workaround)", async () => {
+    const { db } = makeDb({
+      businesses: { data: { owner_name: "Amy Laidlaw", phone: null }, error: null },
+      business_telnyx_settings: { data: { forward_to_e164: "+16026951142" }, error: null },
+      notification_preferences: { data: null, error: null },
+      contacts: {
+        data: [
+          {
+            customer_e164: "+16026951142",
+            alias_e164s: [],
+            display_name: "Amy (personal cell)",
+            type: "customer",
+            name_source: "manual"
+          }
+        ],
+        error: null
+      }
+    });
+    const out = await resolveContactNames(BIZ, ["+16026951142"], db as unknown as Client);
+    expect(out.get("+16026951142")).toEqual({
+      name: "Amy (personal cell)",
+      kind: "owner",
+      override: true
+    });
+  });
+
+  it("an AUTO name on a non-customer number still loses to the derived owner identity (provenance, not type, decides)", async () => {
+    const { db } = makeDb({
+      businesses: { data: { owner_name: "Amy Laidlaw", phone: null }, error: null },
+      business_telnyx_settings: { data: { forward_to_e164: "+16026951142" }, error: null },
+      notification_preferences: { data: null, error: null },
+      contacts: {
+        data: [
+          {
+            customer_e164: "+16026951142",
+            alias_e164s: [],
+            display_name: "Auto Captured",
+            type: "service",
+            name_source: "auto"
+          }
+        ],
+        error: null
+      }
+    });
+    const out = await resolveContactNames(BIZ, ["+16026951142"], db as unknown as Client);
+    // No `override`: the auto name did not win, the derived owner name did.
+    expect(out.get("+16026951142")).toEqual({ name: "Amy Laidlaw", kind: "owner" });
+  });
+
+  it("renders an auto name on a non-customer contact as kind 'contact' WITHOUT override (no identity to beat)", async () => {
+    const { db } = makeDb({
+      contacts: {
+        data: [
+          {
+            customer_e164: "+15550000077",
+            alias_e164s: [],
+            display_name: "Vendor Co",
+            type: "other",
+            name_source: "auto"
+          }
+        ],
+        error: null
+      }
+    });
+    const out = await resolveContactNames(BIZ, ["+15550000077"], db as unknown as Client);
+    expect(out.get("+15550000077")).toEqual({ name: "Vendor Co", kind: "contact" });
   });
 
   it("throws on owner-source query errors", async () => {

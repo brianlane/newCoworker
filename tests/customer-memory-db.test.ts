@@ -66,6 +66,7 @@ function memory(overrides: Partial<CustomerMemoryRow> = {}): CustomerMemoryRow {
     business_id: BIZ,
     customer_e164: CUSTOMER,
     type: "customer",
+    name_source: "auto",
     display_name: null,
     email: null,
     summary_md: null,
@@ -520,6 +521,8 @@ describe("createCustomerMemory", () => {
       business_id: BIZ,
       customer_e164: CUSTOMER,
       display_name: "Joe",
+      // Owner-typed name on "Add customer" → manual provenance.
+      name_source: "manual",
       email: "joe@x.com",
       pinned_md: "VIP"
     });
@@ -557,6 +560,8 @@ describe("createCustomerMemory", () => {
       unknown
     >;
     expect(insert.display_name).toBeNull();
+    // No name set → nothing to protect, stays at the DB default ('auto').
+    expect(insert).not.toHaveProperty("name_source");
     expect(insert.email).toBe("A@B.com");
     expect(insert.pinned_md).toBeNull();
   });
@@ -791,6 +796,31 @@ describe("updateCustomerOwnerFields", () => {
     >;
     expect(patch).toHaveProperty("pinned_md", "VIP");
     expect(patch).not.toHaveProperty("display_name");
+  });
+
+  it("stamps name_source when provided (owner edit = 'manual'), and omits it when absent", async () => {
+    const withSource = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(
+      BIZ,
+      CUSTOMER,
+      { displayName: "Amy (cell)", nameSource: "manual" },
+      withSource.client
+    );
+    const patch = withSource.fromCalls[0]!.calls.find((c) => c.name === "update")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(patch).toHaveProperty("name_source", "manual");
+    expect(patch).toHaveProperty("display_name", "Amy (cell)");
+
+    // Agent-discovered path omits nameSource → never upgrades provenance.
+    const without = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { displayName: "Joe" }, without.client);
+    const plain = without.fromCalls[0]!.calls.find((c) => c.name === "update")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(plain).not.toHaveProperty("name_source");
   });
 
   it("propagates PostgREST errors", async () => {

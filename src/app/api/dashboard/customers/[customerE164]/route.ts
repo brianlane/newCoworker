@@ -157,7 +157,11 @@ export async function PATCH(
     if (!existing) return errorResponse("NOT_FOUND", "Customer not found");
 
     await updateCustomerOwnerFields(businessId, customerE164, {
-      ...(body.displayName !== undefined ? { displayName: body.displayName } : {}),
+      // An owner editing the name here is a deliberate label → stamp it 'manual'
+      // so it wins over the derived owner/employee overlay (name resolver).
+      ...(body.displayName !== undefined
+        ? { displayName: body.displayName, nameSource: "manual" as const }
+        : {}),
       ...(body.pinnedMd !== undefined ? { pinnedMd: body.pinnedMd } : {}),
       ...(body.email !== undefined ? { email: body.email } : {}),
       ...(body.type !== undefined ? { type: body.type } : {})
