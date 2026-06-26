@@ -368,6 +368,15 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     trigger: asRecord(run.context.trigger),
     captureScreenshots: def.options?.captureStepScreenshots === true
   };
+  // Default the claim sentinel to "none" so a claim-gated step
+  // (when: { var: "claimed_agent", notEquals: "none" }) stays CLOSED until a
+  // route_to_team actually records a claim — an absent var would otherwise trim
+  // to "" and spuriously satisfy notEquals. Only seed when missing so a resume
+  // (route_to_team waits across invocations) never clobbers a real claim that
+  // was already persisted into run.context.vars.
+  if (scope.vars.claimed_agent === undefined) {
+    scope.vars.claimed_agent = "none";
+  }
   // Resolve (and self-heal) the business's dedicated AI mailbox up front so every
   // outbound email sends AS the coworker — never the platform identity — and so
   // flows can reference {{coworker.email}} in templates.
