@@ -1336,7 +1336,10 @@ function StepFields({
             <button
               onClick={() =>
                 patchStep(index, {
-                  fields: fields.filter((_, xi) => xi !== fi)
+                  // Drop the key entirely when the last field is removed so an
+                  // empty array doesn't trip the schema's min(1)-when-present
+                  // (a links-only browse_extract is valid).
+                  fields: fields.length === 1 ? undefined : fields.filter((_, xi) => xi !== fi)
                 })
               }
               className="text-xs text-parchment/40 hover:text-rust"
