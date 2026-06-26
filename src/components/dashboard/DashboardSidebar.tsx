@@ -31,7 +31,7 @@ const ownerNavItems = [
   // channel-specific dashboards and the business-level Memory page so
   // owners can find a person without remembering which channel they
   // came in on.
-  { label: "Customers", href: "/dashboard/customers", icon: Users },
+  { label: "Contacts", href: "/dashboard/customers", icon: Users },
   // Team roster shared with AiFlow route_to_team: who leads rotate through,
   // their schedules/preferred times, and time off (which supersedes routing).
   { label: "Employees", href: "/dashboard/employees", icon: UserCog },

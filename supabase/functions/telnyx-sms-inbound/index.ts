@@ -1468,6 +1468,10 @@ serve(async (req: Request) => {
             payload: envelope as unknown as Record<string, unknown>,
             status: "done",
             suppress_reply: true,
+            // Safe Mode persists the job as `done`, so the worker never claims it
+            // to denormalize the sender. Stamp it here so the contact page still
+            // surfaces these inbound texts.
+            customer_e164: from,
             outbound_idempotency_key: crypto.randomUUID()
           });
           if (smJobErr && (smJobErr as { code?: string }).code !== "23505") {
@@ -1529,6 +1533,11 @@ serve(async (req: Request) => {
       status: "pending",
       // Only suppress when a flow that requested it actually has a queued run.
       suppress_reply: suppressingRunQueued,
+      // Stamp the sender up front so the contact page + summarizer (which query
+      // by this column, not the JSONB payload) see the message even when an
+      // AiFlow suppresses the reply — the worker's suppression branch returns
+      // before it would otherwise denormalize this.
+      customer_e164: from,
       outbound_idempotency_key: crypto.randomUUID()
     });
 

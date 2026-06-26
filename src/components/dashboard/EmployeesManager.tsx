@@ -10,7 +10,8 @@ import type {
 } from "@/lib/db/employees";
 import { formatScheduleText } from "@/lib/employees/schedule-text";
 import { SortControl, type SortOption } from "@/components/dashboard/SortControl";
-import { sortRows, type SortDir } from "@/lib/dashboard/sort";
+import { sortRows } from "@/lib/dashboard/sort";
+import { usePersistentSort } from "@/components/dashboard/usePersistentSort";
 
 const EMPLOYEE_SORT_OPTIONS: SortOption[] = [
   { key: "name", label: "Name" },
@@ -50,10 +51,11 @@ export function EmployeesManager(props: Props) {
   const [members, setMembers] = useState(props.initialMembers);
   // Default matches listTeamMembers' server order (created_at asc) so first
   // paint is unchanged; the user can switch to Name/Last claim from the control.
-  const [sort, setSort] = useState<{ field: string; dir: SortDir }>({
-    field: "created_at",
-    dir: "asc"
-  });
+  const [sort, setSort] = usePersistentSort(
+    "dashboard.employees.sort",
+    { field: "created_at", dir: "asc" },
+    EMPLOYEE_SORT_OPTIONS.map((o) => o.key)
+  );
   const [timeOff, setTimeOff] = useState(props.initialTimeOff);
   const [stats, setStats] = useState(props.initialStats);
   const [sharedCalendar, setSharedCalendar] = useState(props.initialSharedCalendar);
@@ -161,7 +163,7 @@ export function EmployeesManager(props: Props) {
               options={EMPLOYEE_SORT_OPTIONS}
               field={sort.field}
               dir={sort.dir}
-              onChange={(field, dir) => setSort({ field, dir })}
+              onChange={setSort}
               idPrefix="employee-sort"
             />
           )}

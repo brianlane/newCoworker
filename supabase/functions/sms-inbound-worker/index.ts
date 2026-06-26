@@ -438,6 +438,32 @@ serve(async (req: Request) => {
         p_last_error: "suppressed_by_ai_flow"
       });
       await clearJobReplyCache(supabase, job.id);
+      // The AiFlow owns the reply, but this is still a real inbound from a
+      // contact. The normal reply path below denormalizes the sender and bumps
+      // the customer-memory counters; since we return early here, do both now so
+      // the message shows on the contact page and counts as an interaction.
+      // Skip staff (an owner/employee text must never seed a customer profile) —
+      // suppressed jobs come from the customer path, but guard defensively.
+      if (fromE164 && !job.staff_kind) {
+        // Stamp the column for rows queued before the webhook started doing it.
+        const { error: stampErr } = await supabase
+          .from("sms_inbound_jobs")
+          .update({ customer_e164: fromE164 })
+          .eq("id", job.id)
+          .is("customer_e164", null);
+        if (stampErr) {
+          console.error("suppressed customer_e164 stamp", stampErr);
+        }
+        const { error: memErr } = await supabase.rpc("record_customer_interaction", {
+          p_business_id: job.business_id,
+          p_customer_e164: fromE164,
+          p_channel: "sms",
+          p_display_name: null
+        });
+        if (memErr) {
+          console.error("record_customer_interaction (suppressed sms)", memErr);
+        }
+      }
       await telemetryRecord(supabase, "sms_worker_suppressed_ai_flow", {
         job_id: job.id,
         business_id: job.business_id
