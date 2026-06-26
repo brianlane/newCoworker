@@ -96,7 +96,7 @@ export async function POST(
       return errorResponse("VALIDATION_ERROR", "That number already belongs to this customer.");
     }
     // Merge is "same person, two numbers" and is irreversible. Refuse to fold a
-    // non-customer directory row (service short code, vendor, tester,
+    // non-customer directory row (company short code, vendor, tester,
     // owner/employee) in either direction — the UI hides the action for these,
     // this is the authoritative guard.
     if (source.type !== "customer" || target.type !== "customer") {

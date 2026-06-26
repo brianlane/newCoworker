@@ -88,7 +88,7 @@ export default async function CustomerDetailPage({ params }: Props) {
     ? await listEmailLogForAddress(business.id, memory.email, { limit: 20 }).catch(() => [])
     : [];
   // Merge is "same person, two numbers" — only ever fold a customer into another
-  // customer. Exclude self and any non-customer directory row (service short
+  // customer. Exclude self and any non-customer directory row (company short
   // codes, vendors, testers, owner/employee) so an irreversible merge can never
   // collapse a real person into a lead-source or vendor entry.
   const mergeCandidates = allCustomers
@@ -180,11 +180,16 @@ export default async function CustomerDetailPage({ params }: Props) {
         initialDisplayName={headerContact?.name ?? memory.display_name}
         initialPinnedMd={memory.pinned_md}
         initialEmail={memory.email}
-        initialType={memory.type}
+        // Prefill with the EFFECTIVE type shown in the header badge — the
+        // owner/employee overlay wins over the stored type — so editing starts
+        // from the displayed value, not the raw stored one. (As with the name,
+        // an unchanged save writes nothing because this is also the dirty-check
+        // baseline.)
+        initialType={headerBadge}
       />
 
       {/* Merge is customer-to-customer only. Hide it when THIS profile is a
-          non-customer (service short code, vendor, tester, owner/employee) so a
+          non-customer (company short code, vendor, tester, owner/employee) so a
           directory row can never be folded into a customer and deleted — the
           target list is already restricted to customers above. */}
       {memory.type === "customer" && (

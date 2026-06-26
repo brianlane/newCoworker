@@ -15,12 +15,12 @@ async function readError(res: Response): Promise<string> {
 
 /** Owner-settable contact types (owner/employee are derived from their own
  * tables, so they aren't offered here). */
-const ADDABLE_TYPES = ["customer", "tester", "service", "other"] as const;
+const ADDABLE_TYPES = ["customer", "tester", "company", "other"] as const;
 
 /**
  * Manual "Add contact" form for the unified contacts index. Customers are
  * normally auto-created on the first SMS/voice interaction; this lets the owner
- * seed any contact ahead of time with a type (customer, tester, service, other),
+ * seed any contact ahead of time with a type (customer, tester, company, other),
  * optionally linking an email so the profile spans channels. On success it
  * refreshes the server-rendered list.
  */

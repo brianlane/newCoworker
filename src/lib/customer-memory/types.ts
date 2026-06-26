@@ -24,7 +24,7 @@ export const CONTACT_TYPES = [
   "employee",
   "customer",
   "tester",
-  "service",
+  "company",
   "other"
 ] as const;
 export type ContactType = (typeof CONTACT_TYPES)[number];

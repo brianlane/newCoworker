@@ -79,7 +79,7 @@ export default async function DashboardCustomersPage() {
 
   // Resolve the display name + type badge per row on the server. The overlaid
   // kind (owner/employee) wins for the badge; otherwise the stored type
-  // (customer/tester/service/other) is shown.
+  // (customer/tester/company/other) is shown.
   const customerRows: CustomerListRow[] = contacts.map((c) => {
     const contact = contactNames.get(c.customer_e164);
     const type =
@@ -110,7 +110,7 @@ export default async function DashboardCustomersPage() {
 
       <Card padding="sm" className="border-signal-teal/30 bg-signal-teal/5">
         <p className="text-xs text-parchment/70 leading-relaxed">
-          Each contact has a type (customer, employee, owner, tester, service,
+          Each contact has a type (customer, employee, owner, tester, company,
           other). Your coworker uses customer profiles to maintain continuity
           across channels — pin notes to make them stick across every future SMS
           or call. Removing a contact clears the rollup; the underlying SMS and

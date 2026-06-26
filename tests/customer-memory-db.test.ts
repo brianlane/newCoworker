@@ -534,18 +534,18 @@ describe("createCustomerMemory", () => {
 
   it("sets `type` on the insert only when provided (omitted → DB default 'customer')", async () => {
     const { client, fromCalls } = makeClient({
-      fromTerminator: { data: memory({ type: "service" }), error: null }
+      fromTerminator: { data: memory({ type: "company" }), error: null }
     });
     await createCustomerMemory(
       BIZ,
-      { customerE164: CUSTOMER, displayName: "Lead Source", type: "service" },
+      { customerE164: CUSTOMER, displayName: "Lead Source", type: "company" },
       client
     );
     const insert = fromCalls[0]!.calls.find((c) => c.name === "insert")?.args[0] as Record<
       string,
       unknown
     >;
-    expect(insert.type).toBe("service");
+    expect(insert.type).toBe("company");
   });
 
   it("trims fields and coerces blank/omitted optionals to null", async () => {
@@ -730,12 +730,12 @@ describe("updateCustomerOwnerFields", () => {
 
   it("writes `type` when re-classifying a contact, and only when a truthy type is given", async () => {
     const { client, fromCalls } = makeClient({ fromTerminator: { data: null, error: null } });
-    await updateCustomerOwnerFields(BIZ, CUSTOMER, { type: "service" }, client);
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { type: "company" }, client);
     const patch = fromCalls[0]!.calls.find((c) => c.name === "update")?.args[0] as Record<
       string,
       unknown
     >;
-    expect(patch).toHaveProperty("type", "service");
+    expect(patch).toHaveProperty("type", "company");
     expect(patch).not.toHaveProperty("display_name");
   });
 
