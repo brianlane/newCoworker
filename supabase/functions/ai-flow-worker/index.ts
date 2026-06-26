@@ -2139,6 +2139,18 @@ async function sendEmailStep(
   scope: Scope,
   action: Extract<StepAction, { kind: "send_email" }>
 ): Promise<StepOutcome> {
+  // Extraction-derived recipients (e.g. a lead-marketing email to
+  // {{vars.lead_email}}) commonly resolve to the literal "none" when the lead
+  // has no address. A non-deliverable `to` 4xxs at Resend and would fail the
+  // whole run after a successful claim, so skip the send instead — the owner
+  // still learns the outcome via actions_taken / notify_owner. The planner only
+  // rejects an EMPTY `to`, and cc/bcc are already EMAIL_RE-validated there, so
+  // this just adds the address-shape check the send_sms email fallback also
+  // applies (it requires an "@").
+  if (!LEAD_EMAIL_RE.test(action.to)) {
+    appendActionTaken(scope, `skipped email to "${action.to}" (no valid address)`);
+    return { kind: "ok", skipped: true, result: { skipped: "invalid_recipient", to: action.to } };
+  }
   const sent = await deliverFlowEmail(supabase, run, index, scope, action);
   if (sent.kind === "ok") appendActionTaken(scope, `emailed ${action.to}`);
   return sent;

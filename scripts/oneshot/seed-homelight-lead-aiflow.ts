@@ -286,7 +286,10 @@ function buildDefinition(opts: {
         },
         when: gateOnClaim
       },
-      // 10. Email the lead the full HomeLight inquiry marketing email.
+      // 10. Email the lead the full HomeLight inquiry marketing email. If the
+      //     portal card had no email, {{vars.lead_email}} is "none" and the
+      //     worker skips the send (it doesn't fail the run) — the SMS in step 9
+      //     still reaches the lead.
       {
         id: "lead_email",
         type: "send_email",
