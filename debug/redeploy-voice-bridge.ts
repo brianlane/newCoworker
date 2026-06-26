@@ -75,7 +75,24 @@ sleep 5
 echo "== voice-bridge logs (tail) =="
 docker compose logs --no-color --tail 25 voice-bridge 2>&1 | tail -25
 echo "== voice-bridge health =="
-curl -fsS -m 5 http://127.0.0.1:8090/ >/dev/null && echo "health=ok" || echo "(health check not ready yet)"
+# Fail the redeploy (exit 1) if the bridge never serves 200 — a swallowed probe
+# would contradict the "exit 0 on a clean rebuild, 1 otherwise" contract and let
+# a dead bridge look deployed. Retry across the container's start_period (~15s in
+# docker-compose.yml) so a slow warmup isn't a false negative.
+healthy=0
+for attempt in 1 2 3 4 5 6; do
+  if curl -fsS -m 5 http://127.0.0.1:8090/ >/dev/null; then
+    echo "health=ok (attempt $attempt)"
+    healthy=1
+    break
+  fi
+  echo "health not ready (attempt $attempt/6), retrying in 5s..."
+  sleep 5
+done
+if [ "$healthy" -ne 1 ]; then
+  echo "ERROR: voice-bridge never returned 200 on :8090 after rebuild" >&2
+  exit 1
+fi
 `;
 
 const { getActiveVpsSshKeyForBusiness } = await import("../src/lib/db/vps-ssh-keys.ts");
