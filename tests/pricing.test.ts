@@ -8,7 +8,9 @@ import {
   getRenewalRateDisplay,
   getFirstCycleDiscountCents,
   hasFirstCycleDiscount,
-  getFirstCycleDiscountDisplay
+  getFirstCycleDiscountDisplay,
+  getExistingCustomerMonthlyCents,
+  getExistingCustomerMonthlyDisplay
 } from "@/lib/pricing";
 import { getPeriodPricing, PlanTier, BillingPeriod } from "@/lib/plans/tier";
 
@@ -169,6 +171,29 @@ describe("pricing", () => {
       expect(getFirstCycleDiscountDisplay("standard", "monthly")).toBe("$84");
       expect(getFirstCycleDiscountDisplay("starter", "annual")).toBe("$0");
       expect(getFirstCycleDiscountDisplay("enterprise", "monthly")).toBe("$0");
+    });
+  });
+
+  describe("existing-customer (no first-month discount) rate", () => {
+    it("uses the regular renewal rate for monthly (intro discount removed)", () => {
+      // Existing customers changing plan don't get the first-month intro, so the
+      // monthly rate is the full renewal price, not the $15.99/$195 intro.
+      expect(getExistingCustomerMonthlyCents("starter", "monthly")).toBe(2699);
+      expect(getExistingCustomerMonthlyCents("standard", "monthly")).toBe(27900);
+    });
+
+    it("uses the committed monthly rate for annual/biennial (no intro discount)", () => {
+      expect(getExistingCustomerMonthlyCents("starter", "annual")).toBe(1099);
+      expect(getExistingCustomerMonthlyCents("starter", "biennial")).toBe(999);
+      expect(getExistingCustomerMonthlyCents("standard", "annual")).toBe(10900);
+      expect(getExistingCustomerMonthlyCents("standard", "biennial")).toBe(9900);
+    });
+
+    it("formats the existing-customer rate, omitting a .00 suffix", () => {
+      expect(getExistingCustomerMonthlyDisplay("starter", "monthly")).toBe("$26.99");
+      expect(getExistingCustomerMonthlyDisplay("standard", "monthly")).toBe("$279");
+      expect(getExistingCustomerMonthlyDisplay("standard", "annual")).toBe("$109");
+      expect(getExistingCustomerMonthlyDisplay("starter", "biennial")).toBe("$9.99");
     });
   });
 

@@ -141,6 +141,55 @@ describe("planStep: extract_text", () => {
   });
 });
 
+describe("planStep: email_extract", () => {
+  const base: FlowStep = {
+    id: "e",
+    type: "email_extract",
+    connectionId: "11111111-1111-1111-1111-111111111111",
+    fromContains: "homelight.com",
+    matchTemplates: ["{{vars.lead_first_name}}", "{{vars.city}}"],
+    lookbackMinutes: 30,
+    fillOnlyEmpty: true,
+    fields: [{ name: "lead_phone" }, { name: "lead_address" }]
+  };
+  it("renders every body-match term and carries the mailbox config", () => {
+    const scope: StepScope = { vars: { lead_first_name: "Javier", city: "Mesa, AZ" } };
+    expect(planStep(base, scope)).toEqual({
+      ok: true,
+      action: {
+        kind: "email_extract",
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        fromContains: "homelight.com",
+        bodyContains: ["Javier", "Mesa, AZ"],
+        lookbackMinutes: 30,
+        fields: [{ name: "lead_phone" }, { name: "lead_address" }],
+        fillOnlyEmpty: true
+      }
+    });
+  });
+  it("drops terms that render blank so a missing optional var never blocks the match", () => {
+    const r = planStep(base, { vars: { lead_first_name: "Javier" } });
+    expect(r.ok && r.action.kind === "email_extract" && r.action.bodyContains).toEqual(["Javier"]);
+  });
+  it("treats a missing matchTemplates as no body filter", () => {
+    const step: FlowStep = { ...base, matchTemplates: undefined };
+    const r = planStep(step, { vars: {} });
+    expect(r.ok && r.action.kind === "email_extract" && r.action.bodyContains).toEqual([]);
+  });
+  it("defaults lookback to 60 minutes and fillOnlyEmpty to false when omitted", () => {
+    const step: FlowStep = {
+      id: "e",
+      type: "email_extract",
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      fields: [{ name: "lead_phone" }]
+    };
+    const r = planStep(step, { vars: {} });
+    expect(r.ok && r.action.kind === "email_extract" && r.action.lookbackMinutes).toBe(60);
+    expect(r.ok && r.action.kind === "email_extract" && r.action.fillOnlyEmpty).toBe(false);
+    expect(r.ok && r.action.kind === "email_extract" && r.action.fromContains).toBe("");
+  });
+});
+
 describe("planStep: send_sms", () => {
   const step: FlowStep = {
     id: "x",

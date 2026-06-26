@@ -261,6 +261,37 @@ export type FlowStep =
     }
   | {
       id: string;
+      /**
+       * Read a recent message from a connected mailbox (workspace_oauth_connections.id
+       * via Nango Gmail/Outlook — the same connections the email trigger uses) and
+       * run the SAME Gemini extraction as extract_text over it. The worker calls
+       * back into the app (/api/internal/aiflow-email-fetch, which holds the Nango
+       * client) to find the most recent inbox message whose sender contains
+       * `fromContains` AND whose text contains EVERY rendered `matchTemplates`
+       * term, within `lookbackMinutes`. Used to backfill lead details from an alert
+       * email when a portal/browse extraction was delayed or empty. Produces
+       * {{vars.<field>}}.
+       */
+      type: "email_extract";
+      /** Mailbox to read (workspace_oauth_connections.id). */
+      connectionId: string;
+      /** Only consider mail whose sender address contains this (case-insensitive). */
+      fromContains?: string;
+      /**
+       * Templates the message text must ALL contain to be THIS lead's email (e.g.
+       * ["{{vars.lead_first_name}}", "{{vars.city}}"]). All required → tighter
+       * disambiguation when leads share a first name.
+       */
+      matchTemplates?: string[];
+      /** How far back to look. Default 60. */
+      lookbackMinutes?: number;
+      fields: ExtractField[];
+      /** When true, a field is written only if its var is currently empty/"none" (backfill, never clobber). */
+      fillOnlyEmpty?: boolean;
+      when?: StepCondition;
+    }
+  | {
+      id: string;
       type: "send_sms";
       /** Recipient (templatable). Optional when `replyToGroup`/`toAgentName` supplies recipients. */
       to?: string;

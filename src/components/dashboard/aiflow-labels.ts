@@ -23,6 +23,7 @@ export const STEP_TYPE_LABELS: Record<StepType, string> = {
   extract_url: "Get the link from the text",
   browse_extract: "Read details from a web page",
   extract_text: "Read details from the message text",
+  email_extract: "Read details from an email",
   send_sms: "Send a text",
   send_email: "Send an email",
   approval_gate: "Ask me to approve first",
@@ -40,6 +41,8 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
   browse_extract: "Opens a saved link and reads the details you ask for (like a phone number).",
   extract_text:
     "Reads the details you ask for (like a name or phone number) straight from the incoming message - no link needed.",
+  email_extract:
+    "Reads details from a recent email in a connected mailbox - used to backfill lead info (like a phone or address) from an alert email when a web page was slow or empty.",
   send_sms: "Sends a text message. You can reuse details earlier steps found.",
   send_email: "Sends an email. You can reuse details earlier steps found.",
   approval_gate: "Pauses and texts you to approve before continuing.",

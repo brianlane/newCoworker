@@ -679,6 +679,8 @@ async function runStep(
       return browseStep(supabase, run, index, scope, action);
     case "extract_text":
       return extractTextStep(supabase, run, scope, action);
+    case "email_extract":
+      return emailExtractStep(supabase, run, scope, action);
     case "send_sms":
       return sendSmsStep(supabase, run, index, scope, action);
     case "send_email":
@@ -1077,6 +1079,101 @@ async function extractTextStep(
 
   Object.assign(scope.vars, out);
   return { kind: "ok", result: { vars: out } };
+}
+
+/**
+ * Treat an absent/blank/"none"-class value as empty, so the email_extract
+ * backfill (fillOnlyEmpty) only overwrites vars a prior step couldn't fill.
+ * Mirrors how the lead-email branches read "none" from extraction as "no value".
+ */
+function isEmptyVarValue(v: unknown): boolean {
+  if (typeof v !== "string") return true;
+  const t = v.trim().toLowerCase();
+  return t === "" || t === "none" || t === "n/a" || t === "na" || t === "null" || t === "unknown";
+}
+
+/**
+ * email_extract: read the best-matching recent inbound message from a connected
+ * mailbox (via the gateway-guarded /api/internal/aiflow-email-fetch — the worker
+ * can't reach Nango) and run the SAME Gemini extraction over it as extract_text.
+ * Used as a FALLBACK source for lead details (e.g. HomeLight's "Client Details"
+ * email) when a portal browse_extract was delayed/empty: with `fillOnlyEmpty`,
+ * it only writes a field whose var is still empty/"none", so the browse wins.
+ * A clean miss (the alert hasn't arrived) backfills nothing and continues.
+ */
+async function emailExtractStep(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "email_extract" }>
+): Promise<StepOutcome> {
+  const base = Deno.env.get("AIFLOW_PLATFORM_URL") ?? "";
+  const token = Deno.env.get("ROWBOAT_GATEWAY_TOKEN") ?? "";
+  if (!base || !token) {
+    return { kind: "fail", error: "email_extract: platform proxy not configured for mailbox read" };
+  }
+  let res: Response;
+  try {
+    res = await fetch(`${base}/api/internal/aiflow-email-fetch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        businessId: run.business_id,
+        connectionId: action.connectionId,
+        ...(action.fromContains ? { fromContains: action.fromContains } : {}),
+        ...(action.bodyContains.length ? { bodyContains: action.bodyContains } : {}),
+        lookbackMinutes: action.lookbackMinutes
+      })
+    });
+  } catch (e) {
+    throw new Error(
+      `email_extract: mailbox read request failed: ${e instanceof Error ? e.message : String(e)}`
+    );
+  }
+  // 5xx = provider/transport fault → throw so the run retries.
+  if (res.status >= 500) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`email_extract: mailbox read ${res.status}: ${t.slice(0, 200)}`);
+  }
+  const payload = (await res.json().catch(() => null)) as
+    | { ok?: boolean; detail?: string; data?: { found?: boolean; bodyText?: string } }
+    | null;
+  // ok:false on a 2xx is a permanent setup error (connection missing / wrong type
+  // / bad args) → fail without retrying.
+  if (!payload || payload.ok !== true) {
+    return { kind: "fail", error: `email_extract: ${payload?.detail ?? "mailbox read rejected"}` };
+  }
+  const data = payload.data;
+  // No matching email yet (the alert may still be in flight): this is a fallback,
+  // not a hard dependency — backfill nothing and let the run continue.
+  if (!data?.found || typeof data.bodyText !== "string" || !data.bodyText.trim()) {
+    return { kind: "ok", result: { found: false } };
+  }
+
+  let extracted: Record<string, string>;
+  try {
+    extracted = await extractFields(supabase, run, action.fields, data.bodyText);
+  } catch (e) {
+    if (e instanceof SpendCapError) return { kind: "fail", error: `email_extract: ${e.message}` };
+    throw e;
+  }
+
+  const out: Record<string, string> = {};
+  for (const f of action.fields) {
+    // Backfill: keep a meaningful existing value (an earlier browse already
+    // filled it); only fall through to the email value when it's empty/"none".
+    if (action.fillOnlyEmpty && !isEmptyVarValue(scope.vars[f.name])) {
+      out[f.name] = scope.vars[f.name] as string;
+      continue;
+    }
+    let val = extracted[f.name] ?? "";
+    if (!val && /phone|mobile|cell|tel/i.test(f.name)) {
+      val = extractPhones(data.bodyText)[0] ?? "";
+    }
+    out[f.name] = val;
+  }
+  Object.assign(scope.vars, out);
+  return { kind: "ok", result: { found: true, vars: out } };
 }
 
 /**
@@ -2552,6 +2649,11 @@ async function routeToTeamStep(
           ? routing.offered
           : "";
     const claimedName = typeof routing.offered_name === "string" ? routing.offered_name : "";
+    // Optional ETA the teammate stated when claiming ("4, 20 min" → "20 min"),
+    // stamped on routing by the inbound webhook. Surfaced to the owner (claim
+    // notice + actions_taken/notify_owner) so they know WHEN the lead is contacted.
+    const claimTimeframe =
+      typeof routing.claim_timeframe === "string" ? routing.claim_timeframe.trim() : "";
     routing.claimed_by = claimedBy;
     routing.claimed_name = claimedName;
     // Engine-provided var so LATER steps can gate on "a teammate accepted" via
@@ -2564,12 +2666,16 @@ async function routeToTeamStep(
     delete routing.offered_name;
     delete routing.late_claim;
     delete routing.step_index;
+    delete routing.claim_timeframe;
     if (lateClaim) routing.late_claimed = true;
     if (action.claimedNotifyTemplate) {
-      const body = renderTemplate(
+      let body = renderTemplate(
         action.claimedNotifyTemplate,
         agentScope(scope, { name: claimedName, phone: claimedBy })
       );
+      // Appended (not templated) so EVERY Dave-routed flow's claim notice carries
+      // the ETA without editing each template, and an empty ETA adds nothing.
+      if (claimTimeframe) body += `\nETA to contact lead: ${claimTimeframe}`;
       // Distinct idempotency key for a late claim so it isn't deduped against an
       // earlier owner-fallback/claim notice on the same run.
       const notifyKey = lateClaim ? `aiflow-late-claimed:${run.id}` : `aiflow-claimed:${run.id}`;
@@ -2577,7 +2683,8 @@ async function routeToTeamStep(
     }
     appendActionTaken(
       scope,
-      `lead ${lateClaim ? "claimed late (86) by" : "claimed by"} ${claimedName || claimedBy}`
+      `lead ${lateClaim ? "claimed late (86) by" : "claimed by"} ${claimedName || claimedBy}` +
+        (claimTimeframe ? ` (ETA: ${claimTimeframe})` : "")
     );
     return {
       kind: "ok",

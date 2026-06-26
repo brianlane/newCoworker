@@ -189,7 +189,9 @@ function buildDefinition(opts: {
           "Address: {{vars.lead_address}}\n" +
           "Lead source: Clever (listwithclever.com)\n" +
           "Details: {{trigger.windowText}}\n" +
-          "Reply 1 to claim or 2 to pass by {{offer.deadline}}, or it goes to the next agent.",
+          "Reply 1 to claim or 2 to pass by {{offer.deadline}}, or it goes to the next agent.\n" +
+          'Reply 3 with a timeframe to claim and tell us when you\'ll reach out ' +
+          '(e.g. "3, 20 min").',
         responseMinutes: 10,
         offerWindow: {
           timezone: "America/Phoenix",

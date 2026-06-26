@@ -61,6 +61,20 @@ export type StepAction =
     }
   | { kind: "extract_text"; text: string; fields: ExtractField[] }
   | {
+      // Read + extract from a connected mailbox. The planner resolves the
+      // body-match terms (rendered matchTemplates, blanks dropped); the worker
+      // performs the IO (mailbox read via the platform proxy, then the same Gemini
+      // extraction).
+      kind: "email_extract";
+      connectionId: string;
+      fromContains: string;
+      /** Rendered terms the message text must ALL contain ([] → no body filter). */
+      bodyContains: string[];
+      lookbackMinutes: number;
+      fields: ExtractField[];
+      fillOnlyEmpty: boolean;
+    }
+  | {
       kind: "send_sms";
       /** Primary recipient (used for logging / opt-out; recipients[0] for a group). */
       to: string;
@@ -237,6 +251,28 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         return { ok: false, error: "extract_text: no message text to read" };
       }
       return { ok: true, action: { kind: "extract_text", text, fields: step.fields } };
+    }
+    case "email_extract": {
+      // The body-match terms narrow the inbox read to THIS lead's email; render
+      // them now (the worker does only IO) and drop any that render blank (e.g. a
+      // city var that wasn't captured) so a missing optional term never blocks the
+      // match. No terms means "no body filter" — fromContains + recency still
+      // scope the read.
+      const bodyContains = (step.matchTemplates ?? [])
+        .map((t) => renderTemplate(t, scope).trim())
+        .filter((t) => t.length > 0);
+      return {
+        ok: true,
+        action: {
+          kind: "email_extract",
+          connectionId: step.connectionId,
+          fromContains: (step.fromContains ?? "").trim(),
+          bodyContains,
+          lookbackMinutes: Math.max(1, Math.round(step.lookbackMinutes ?? 60)),
+          fields: step.fields,
+          fillOnlyEmpty: step.fillOnlyEmpty === true
+        }
+      };
     }
     case "send_sms": {
       let quiet: SendSmsQuietPlan | undefined;

@@ -209,6 +209,16 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
       return { id, type, urlVar: "lead_url", fields: [{ name: examples.contactVar, description: "" }] };
     case "extract_text":
       return { id, type, fields: [{ name: examples.contactVar, description: "" }] };
+    case "email_extract":
+      return {
+        id,
+        type,
+        connectionId: "",
+        fromContains: "",
+        lookbackMinutes: 60,
+        fillOnlyEmpty: true,
+        fields: [{ name: examples.contactVar, description: "" }]
+      };
     case "send_sms":
       return { id, type, to: `{{vars.${examples.contactVar}}}`, body: "" };
     case "send_email":
@@ -255,6 +265,7 @@ function varsProducedByStep(step: FlowStep): string[] {
       ...(step.extractLinks ?? []).map((l) => l.name)
     ].filter(Boolean);
   if (step.type === "extract_text") return step.fields.map((f) => f.name).filter(Boolean);
+  if (step.type === "email_extract") return step.fields.map((f) => f.name).filter(Boolean);
   if (step.type === "browse_action") return (step.fields ?? []).map((f) => f.name).filter(Boolean);
   if (step.type === "http_call" && step.saveAs) return [step.saveAs];
   if (step.type === "recall_url") return [step.saveAs];
@@ -1426,6 +1437,89 @@ function StepFields({
         <p className="text-xs text-parchment/50">
           Reads these details straight from the incoming message - no link needed.
         </p>
+        <label className={labelClass}>Fields to extract</label>
+        {step.fields.map((f, fi) => (
+          <div key={fi} className="flex gap-2">
+            <input
+              className={inputClass}
+              value={f.name}
+              placeholder={examples.contactVar}
+              onChange={(ev) =>
+                patchStep(index, {
+                  fields: step.fields.map((x, xi) =>
+                    xi === fi ? { ...x, name: ev.target.value } : x
+                  )
+                })
+              }
+            />
+            <input
+              className={inputClass}
+              value={f.description ?? ""}
+              placeholder="description (optional)"
+              onChange={(ev) =>
+                patchStep(index, {
+                  fields: step.fields.map((x, xi) =>
+                    xi === fi ? { ...x, description: ev.target.value } : x
+                  )
+                })
+              }
+            />
+          </div>
+        ))}
+        <button
+          onClick={() => patchStep(index, { fields: [...step.fields, { name: "", description: "" }] })}
+          className="text-xs text-signal-teal hover:underline"
+        >
+          + field
+        </button>
+      </div>
+    );
+  }
+  if (step.type === "email_extract") {
+    return (
+      <div className="space-y-2">
+        <p className="text-xs text-parchment/50">
+          Reads a recent email from a connected mailbox and pulls these details out
+          of it - handy as a fallback when a web page was slow or empty.
+        </p>
+        <Field
+          label="Mailbox connection ID"
+          value={step.connectionId}
+          onChange={(v) => patchStep(index, { connectionId: v })}
+        />
+        <Field
+          label="From contains (sender filter, optional)"
+          value={step.fromContains ?? ""}
+          onChange={(v) => patchStep(index, { fromContains: v || undefined })}
+        />
+        <Field
+          label="Match terms (one per line; the email must contain ALL of them)"
+          value={(step.matchTemplates ?? []).join("\n")}
+          onChange={(v) => {
+            const terms = v
+              .split("\n")
+              .map((t) => t.trim())
+              .filter((t) => t.length > 0);
+            patchStep(index, { matchTemplates: terms.length > 0 ? terms : undefined });
+          }}
+          textarea
+        />
+        <Field
+          label="Look back (minutes)"
+          value={String(step.lookbackMinutes ?? 60)}
+          onChange={(v) => {
+            const n = Number(v);
+            patchStep(index, { lookbackMinutes: Number.isFinite(n) && n > 0 ? n : undefined });
+          }}
+        />
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={step.fillOnlyEmpty !== false}
+            onChange={(ev) => patchStep(index, { fillOnlyEmpty: ev.target.checked })}
+          />
+          Only fill in details that earlier steps left empty (recommended)
+        </label>
         <label className={labelClass}>Fields to extract</label>
         {step.fields.map((f, fi) => (
           <div key={fi} className="flex gap-2">
