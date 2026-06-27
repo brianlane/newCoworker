@@ -66,6 +66,10 @@
  *   AIFLOW_HOMELIGHT_LEAD_SMS             (default condensed of the email)
  *   AIFLOW_HOMELIGHT_LEAD_EMAIL_CONNECTION_ID (Amy's Outlook connection uuid; omit = default mailbox)
  *   AIFLOW_HOMELIGHT_OWNER_TZ             (default "America/Phoenix")
+ *   AIFLOW_HOMELIGHT_EMAIL_CONNECTION_ID  (mailbox the HomeLight alert lands in for the
+ *                                          address/phone email FALLBACK; default Amy's Outlook)
+ *   AIFLOW_HOMELIGHT_EMAIL_FROM_CONTAINS  (default "homelight.com")
+ *   AIFLOW_HOMELIGHT_EMAIL_LOOKBACK_MIN   (default 60)
  *
  * Exit codes: 0 seeded/no-op/dry-run · 1 Supabase error · 2 bad env/arg or invalid definition.
  */
@@ -95,6 +99,11 @@ function parseArgs(argv: readonly string[]): Args {
 }
 
 const DEFAULT_BUSINESS_ID = "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
+
+// Amy's connected Outlook mailbox (workspace_oauth_connections.id) where the
+// HomeLight "Client Details" alert emails arrive — the email_extract fallback
+// reads it. Override with AIFLOW_HOMELIGHT_EMAIL_CONNECTION_ID for another tenant.
+const DEFAULT_EMAIL_CONNECTION_ID = "9ddd5344-14f2-46df-a89d-dddc2d50e944";
 
 const DEFAULT_LEAD_EMAIL_SUBJECT =
   "Regarding your recent Inquiry to Sell your Home on HomeLight";
@@ -139,6 +148,12 @@ function buildDefinition(opts: {
   leadSms: string;
   leadEmailConnectionId: string | null;
   ownerTimezone: string;
+  /** Connected mailbox (workspace_oauth_connections.id) HomeLight alerts land in; "" disables the email fallback. */
+  emailConnectionId: string;
+  /** Sender filter for the HomeLight alert email. */
+  emailFromContains: string;
+  /** How far back to look for the alert email (minutes). */
+  emailLookbackMinutes: number;
 }): unknown {
   // Gate for every post-claim step: run only when a teammate accepted the lead.
   const gateOnClaim = { var: "claimed_agent", notEquals: "none" } as const;
@@ -201,12 +216,17 @@ function buildDefinition(opts: {
         responseMinutes: opts.responseMinutes,
         offerWindow,
         attachScreenshot: true,
+        // "2, <eta>" (or a bare "2") is the accept-with-timeframe option; there is
+        // no "pass" digit on this pinned, Dave-only offer.
+        claimTimeframeOption: 2,
         offerTemplate:
           "New HomeLight referral: {{vars.lead_first_name}} — {{vars.lead_type}} in " +
           "{{vars.city}} (~{{vars.price}}).\n" +
           "Tap to claim: {{vars.leadUrl}}\n" +
           "Direct claim button: {{vars.claim_link}}\n" +
-          "Reply 1 to confirm you're taking it by {{offer.deadline}}.",
+          "Reply 1 to confirm you're taking it by {{offer.deadline}}.\n" +
+          'Reply 2 with a timeframe to claim and tell us when you\'ll reach out ' +
+          '(e.g. "2, 20 min").',
         ownerFallbackTemplate:
           "Dave didn't claim the HomeLight referral {{vars.lead_first_name}} " +
           "({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}) in time — it's back to you.\n" +
@@ -239,6 +259,43 @@ function buildDefinition(opts: {
           { name: "lead_address", description: "The property street address from the contact card" }
         ]
       },
+      // 5b. Fallback: if the portal contact card was delayed/empty, read the
+      //     HomeLight "Client Details" alert email (it lists Phone/Email/Address
+      //     in plain labels) from Amy's connected mailbox and BACKFILL the missing
+      //     fields, so Dave always has the phone + property address to call back
+      //     on. fillOnlyEmpty means the portal values (step 5) win; the email only
+      //     fills gaps. Matched to THIS lead by first name AND city within the
+      //     window (both must appear), so two leads who share a first name in the
+      //     same window don't collide. Gated on claim and only when a mailbox is
+      //     configured.
+      ...(opts.emailConnectionId
+        ? [
+            {
+              id: "email_card",
+              type: "email_extract",
+              connectionId: opts.emailConnectionId,
+              fromContains: opts.emailFromContains,
+              matchTemplates: ["{{vars.lead_first_name}}", "{{vars.city}}"],
+              lookbackMinutes: opts.emailLookbackMinutes,
+              fillOnlyEmpty: true,
+              when: gateOnClaim,
+              fields: [
+                {
+                  name: "lead_phone",
+                  description: "The lead's phone number, labeled 'Phone' in the HomeLight email"
+                },
+                {
+                  name: "lead_email",
+                  description: "The lead's email, labeled 'Email' in the HomeLight email, or 'none'"
+                },
+                {
+                  name: "lead_address",
+                  description: "The property street address, labeled 'Address' in the HomeLight email"
+                }
+              ]
+            }
+          ]
+        : []),
       // 6. File the lead so it shows on the Contacts page with a name + email.
       {
         id: "save_contact",
@@ -359,7 +416,11 @@ async function main(): Promise<void> {
     leadEmailBody: process.env.AIFLOW_HOMELIGHT_LEAD_EMAIL_BODY ?? DEFAULT_LEAD_EMAIL_BODY,
     leadSms: process.env.AIFLOW_HOMELIGHT_LEAD_SMS ?? DEFAULT_LEAD_SMS,
     leadEmailConnectionId: process.env.AIFLOW_HOMELIGHT_LEAD_EMAIL_CONNECTION_ID ?? null,
-    ownerTimezone: process.env.AIFLOW_HOMELIGHT_OWNER_TZ ?? "America/Phoenix"
+    ownerTimezone: process.env.AIFLOW_HOMELIGHT_OWNER_TZ ?? "America/Phoenix",
+    emailConnectionId:
+      process.env.AIFLOW_HOMELIGHT_EMAIL_CONNECTION_ID ?? DEFAULT_EMAIL_CONNECTION_ID,
+    emailFromContains: process.env.AIFLOW_HOMELIGHT_EMAIL_FROM_CONTAINS ?? "homelight.com",
+    emailLookbackMinutes: Number(process.env.AIFLOW_HOMELIGHT_EMAIL_LOOKBACK_MIN ?? "60")
   });
 
   let definition;

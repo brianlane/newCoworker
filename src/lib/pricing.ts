@@ -71,6 +71,28 @@ export function getFirstCycleDiscountCents(tier: PlanTier, period: BillingPeriod
   return Math.max(pricing.renewalMonthlyCents - pricing.monthlyCents, 0);
 }
 
+/**
+ * The monthly rate an EXISTING customer pays for a plan — i.e. WITHOUT the
+ * first-month intro discount, which is offered to brand-new customers only
+ * (the change-plan checkout deliberately omits the intro coupon, and Stripe
+ * charges the full price). For monthly this is the regular renewal rate; for
+ * annual/biennial there is no first-cycle discount so it is the committed
+ * monthly rate. Used by the dashboard change-plan UI so existing customers see
+ * what they will actually be billed.
+ */
+export function getExistingCustomerMonthlyCents(tier: PlanTier, period: BillingPeriod): number {
+  const pricing = getPeriodPricing(tier, period);
+  return pricing.monthlyCents + getFirstCycleDiscountCents(tier, period);
+}
+
+/**
+ * `getExistingCustomerMonthlyCents` formatted as a price string (e.g. "$26.99",
+ * "$279", "$109"). Omits a .00 suffix.
+ */
+export function getExistingCustomerMonthlyDisplay(tier: PlanTier, period: BillingPeriod): string {
+  return formatPriceCents(getExistingCustomerMonthlyCents(tier, period));
+}
+
 export function hasFirstCycleDiscount(tier: PlanTier, period: BillingPeriod): boolean {
   return getFirstCycleDiscountCents(tier, period) > 0;
 }

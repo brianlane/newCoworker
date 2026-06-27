@@ -19,9 +19,9 @@ import { Button } from "@/components/ui/Button";
 import {
   type BillingPeriod,
   type PlanTier,
-  getPeriodPricing,
   calculateSavingsPercentage
 } from "@/lib/plans/tier";
+import { getExistingCustomerMonthlyDisplay } from "@/lib/pricing";
 
 type ChangeablePlan = Exclude<PlanTier, "enterprise">;
 
@@ -35,13 +35,6 @@ type Props = {
 const TIERS: ChangeablePlan[] = ["starter", "standard"];
 const PERIODS: BillingPeriod[] = ["monthly", "annual", "biennial"];
 
-const currency = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 0
-});
-
 function tierLabel(tier: ChangeablePlan): string {
   return tier === "starter" ? "Starter" : "Standard";
 }
@@ -52,8 +45,10 @@ function periodLabel(period: BillingPeriod): string {
   return "24 months";
 }
 
-function formatMonthlyDollars(cents: number): string {
-  return `${currency.format(cents / 100)}/mo`;
+// Existing customers don't get the first-month intro discount, so show (and
+// they're charged) the regular rate for the period.
+function monthlyRateLabel(tier: ChangeablePlan, period: BillingPeriod): string {
+  return `${getExistingCustomerMonthlyDisplay(tier, period)}/mo`;
 }
 
 export function ChangePlanSelector({
@@ -107,7 +102,6 @@ export function ChangePlanSelector({
   }
 
   const pending = selectedTier && selectedPeriod;
-  const pendingPricing = pending ? getPeriodPricing(selectedTier, selectedPeriod) : null;
   const pendingSavings =
     pending && selectedPeriod !== "monthly"
       ? calculateSavingsPercentage(selectedTier, selectedPeriod)
@@ -133,7 +127,6 @@ export function ChangePlanSelector({
           <div key={tier} className="contents">
             <div className="flex items-center font-semibold text-parchment">{tierLabel(tier)}</div>
             {PERIODS.map((period) => {
-              const pricing = getPeriodPricing(tier, period);
               const current = isCurrent(tier, period);
               const selected = selectedTier === tier && selectedPeriod === period;
               return (
@@ -152,7 +145,7 @@ export function ChangePlanSelector({
                     disabled && !current ? "opacity-50 cursor-not-allowed" : ""
                   ].join(" ")}
                 >
-                  <div className="text-sm font-mono">{formatMonthlyDollars(pricing.monthlyCents)}</div>
+                  <div className="text-sm font-mono">{monthlyRateLabel(tier, period)}</div>
                   {period !== "monthly" && (
                     <div className="text-[10px] text-parchment/50 mt-0.5">
                       save {calculateSavingsPercentage(tier, period)}%
@@ -168,13 +161,13 @@ export function ChangePlanSelector({
         ))}
       </div>
 
-      {pending && pendingPricing && (
+      {pending && (
         <div className="rounded-lg border border-signal-teal/40 bg-signal-teal/5 p-4 space-y-3">
           <p className="text-sm font-semibold text-parchment">
             Switch to {tierLabel(selectedTier!)} · {periodLabel(selectedPeriod!)}
           </p>
           <p className="text-xs text-parchment/60">
-            You&apos;ll be charged <span className="font-mono">{formatMonthlyDollars(pendingPricing.monthlyCents)}</span>
+            You&apos;ll be charged <span className="font-mono">{monthlyRateLabel(selectedTier!, selectedPeriod!)}</span>
             {selectedPeriod !== "monthly" && pendingSavings > 0 ? ` (save ${pendingSavings}% vs. monthly)` : ""}.
             Your current plan will be canceled immediately with no proration or refund, and we&apos;ll
             migrate your workspace data to a fresh VPS at the new tier.

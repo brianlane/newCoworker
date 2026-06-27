@@ -27,6 +27,7 @@ export const FLOW_STEP_TYPES = [
   "extract_url",
   "browse_extract",
   "extract_text",
+  "email_extract",
   "send_sms",
   "send_email",
   "approval_gate",
@@ -318,6 +319,31 @@ const stepSchema = z.discriminatedUnion("type", [
     fields: z.array(extractFieldSchema).min(1).max(15),
     when: whenSchema.optional()
   }),
+  // Read a recent message from a connected mailbox (the same Nango Gmail/Outlook
+  // connections the email trigger + send_email "From" dropdown use) and run the
+  // SAME Gemini extraction over it as extract_text — for pulling lead details out
+  // of an alert email mid-flow (e.g. HomeLight's "Client Details" email as a
+  // fallback when the portal contact card is delayed). The worker finds the most
+  // recent inbox message whose sender contains `fromContains` AND whose text
+  // contains EVERY rendered `matchTemplates` term (so e.g. first name AND city
+  // both must appear — this disambiguates two leads who share a first name within
+  // the window), within `lookbackMinutes`. With `fillOnlyEmpty`, a field is
+  // written only when its var is currently empty/"none" — so an earlier
+  // browse_extract's values win and the email merely backfills the gaps. Produces
+  // {{vars.<field>}} like extract_text.
+  z.object({
+    id: stepId,
+    type: z.literal("email_extract"),
+    connectionId: z.string().uuid(),
+    fromContains: z.string().min(1).max(200).optional(),
+    // Each entry is a template rendered then required (case-insensitive substring)
+    // in the email; ALL must match. More terms = tighter lead disambiguation.
+    matchTemplates: z.array(z.string().min(1).max(200)).min(1).max(5).optional(),
+    lookbackMinutes: z.number().int().min(1).max(1440).optional(),
+    fields: z.array(extractFieldSchema).min(1).max(15),
+    fillOnlyEmpty: z.boolean().optional(),
+    when: whenSchema.optional()
+  }),
   z.object({
     id: stepId,
     type: z.literal("send_sms"),
@@ -391,6 +417,12 @@ const stepSchema = z.discriminatedUnion("type", [
     agentName: z.string().min(1).max(120).optional(),
     offerWindow: routeOfferWindowSchema.optional(),
     attachScreenshot: z.boolean().optional(),
+    // The reply digit that means "accept WITH a timeframe" (e.g. 2 or 3). A
+    // teammate replies "<digit>, <eta>" to claim and state when they'll reach
+    // out. The inbound webhook only treats the comma form as a claim when the
+    // digit is "1" (plain accept) or this option, so a flow whose "2" means PASS
+    // (round-robin) never mis-records a "2, can't take it" reply as a claim.
+    claimTimeframeOption: z.number().int().min(1).max(9).optional(),
     when: whenSchema.optional()
   }),
   z.object({
@@ -508,6 +540,8 @@ function templateStringsForStep(step: FlowStep): string[] {
       return [step.offerTemplate, step.ownerFallbackTemplate, step.claimedNotifyTemplate ?? ""];
     case "browse_action":
       return step.actions.map((a) => a.valueTemplate ?? "");
+    case "email_extract":
+      return step.matchTemplates ?? [];
     case "extract_url":
     case "browse_extract":
     case "extract_text":
@@ -762,6 +796,8 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       for (const l of step.extractLinks ?? []) vars.add(l.name);
       if (step.screenshot) screenshotCaptured = true;
     } else if (step.type === "extract_text") {
+      for (const f of step.fields) vars.add(f.name);
+    } else if (step.type === "email_extract") {
       for (const f of step.fields) vars.add(f.name);
     } else if (step.type === "browse_action") {
       // Same-pass extraction registers its produced vars for LATER steps, just

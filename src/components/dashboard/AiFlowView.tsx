@@ -190,6 +190,33 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           </div>
         </div>
       );
+    case "email_extract":
+      return (
+        <div className="space-y-1">
+          {step.fromContains && <Row label="From contains" value={step.fromContains} />}
+          {step.matchTemplates && step.matchTemplates.length > 0 && (
+            <Row label="Email must contain all of" value={step.matchTemplates.join(", ")} mono />
+          )}
+          <Row label="Look back" value={`${step.lookbackMinutes ?? 60} minutes`} />
+          <Row
+            label="Fill mode"
+            value={
+              step.fillOnlyEmpty === true
+                ? "Only fills details earlier steps left empty"
+                : "Overwrites details from earlier steps"
+            }
+          />
+          <div className="text-xs font-medium text-parchment/50">Fields read from the email</div>
+          <div className="flex flex-wrap gap-1.5">
+            {step.fields.map((f, i) => (
+              <Chip key={i}>
+                {f.name}
+                {f.description ? ` — ${f.description}` : ""}
+              </Chip>
+            ))}
+          </div>
+        </div>
+      );
     case "send_sms":
       return (
         <>

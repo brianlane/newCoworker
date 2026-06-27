@@ -184,12 +184,16 @@ function buildDefinition(opts: {
         id: "route",
         type: "route_to_team",
         agentName: opts.agentName,
+        // 1 = claim, 2 = pass, 3 = accept WITH a timeframe ("3, 20 min").
+        claimTimeframeOption: 3,
         offerTemplate:
           "New Clever lead: {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
           "Address: {{vars.lead_address}}\n" +
           "Lead source: Clever (listwithclever.com)\n" +
           "Details: {{trigger.windowText}}\n" +
-          "Reply 1 to claim or 2 to pass by {{offer.deadline}}, or it goes to the next agent.",
+          "Reply 1 to claim or 2 to pass by {{offer.deadline}}, or it goes to the next agent.\n" +
+          'Reply 3 with a timeframe to claim and tell us when you\'ll reach out ' +
+          '(e.g. "3, 20 min").',
         responseMinutes: 10,
         offerWindow: {
           timezone: "America/Phoenix",

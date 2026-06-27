@@ -25,6 +25,7 @@ import {
 } from "../_shared/telnyx_edge_guard.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 import { evaluateSmsTrigger, isExecutableDefinition } from "../_shared/ai_flows/engine.ts";
+import { parseClaimWithTimeframe } from "../_shared/ai_flows/claim_timeframe.ts";
 import {
   APPROVAL_OPTION_DECISIONS,
   approvalOptionForReply,
@@ -228,6 +229,131 @@ async function evaluateAndEnqueueAiFlows(
  */
 const LATE_CLAIM_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+type LiveClaimArgs = {
+  // deno-lint-ignore no-explicit-any
+  supabase: any;
+  businessId: string;
+  from: string;
+  /** DID the inbound arrived on — safest ack sender fallback. */
+  ackTo: string;
+  eventId: string;
+  telnyxApiKey: string;
+  messagingProfileId: string;
+  smsFromE164: string;
+  /** The leading reply digit ("3" in "3, 20 min"). */
+  digit: string;
+  /** The stated ETA (already parsed/trimmed). */
+  timeframe: string;
+};
+
+/**
+ * Handle a teammate's "claim WITH a timeframe" reply to a LIVE offer — the
+ * "<n>, <eta>" option (e.g. "3, 20 min"). Resolves the teammate's currently
+ * offered run and finalizes it as a claim with the ETA stamped on
+ * routing.claim_timeframe (the worker appends it to the owner's claim notice +
+ * the outcome). Returns a Response when consumed, or null when it should fall
+ * through to the normal path — either this sender has no live offer, OR the
+ * leading digit isn't an ACCEPT digit for that offer. The accept digits are
+ * "1" (plain claim) and the offer's stamped `tf_digit` (the "accept with a
+ * timeframe" option). This is what stops a round-robin "2, can't take it" (where
+ * 2 means PASS) from being mis-recorded as a claim: digit 2 ≠ accept, so it
+ * falls through and a real pass stays a bare "2".
+ */
+async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response | null> {
+  const {
+    supabase,
+    businessId,
+    from,
+    ackTo,
+    eventId,
+    telnyxApiKey,
+    messagingProfileId,
+    smsFromE164,
+    digit,
+    timeframe
+  } = args;
+
+  // Ack sender resolution mirrors the 1/2 path: per-tenant settings win, then
+  // the DID the message arrived on, then the global from.
+  const { data: bizRow } = await supabase
+    .from("business_telnyx_settings")
+    .select("telnyx_messaging_profile_id, telnyx_sms_from_e164")
+    .eq("business_id", businessId)
+    .maybeSingle();
+  const biz = bizRow as
+    | { telnyx_messaging_profile_id?: string | null; telnyx_sms_from_e164?: string | null }
+    | null;
+  const ackProfile =
+    (biz?.telnyx_messaging_profile_id && biz.telnyx_messaging_profile_id.trim()) || messagingProfileId;
+  const ackFrom = (biz?.telnyx_sms_from_e164 && biz.telnyx_sms_from_e164.trim()) || ackTo || smsFromE164;
+  const canAck = Boolean(telnyxApiKey && ackProfile && from);
+
+  const { data: offerRow } = await supabase
+    .from("ai_flow_runs")
+    .select("id, context")
+    .eq("business_id", businessId)
+    .in("status", ["awaiting_agent", "queued"])
+    .eq("context->routing->>offered", from)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const offer = offerRow as { id: string; context: Record<string, unknown> | null } | null;
+  if (!offer) return null;
+
+  const prevRouting =
+    offer.context?.routing && typeof offer.context.routing === "object"
+      ? { ...(offer.context.routing as Record<string, unknown>) }
+      : {};
+  // Only "1" (plain accept) or this offer's stamped timeframe option count as a
+  // claim. Any other comma'd digit (e.g. a round-robin "2" = pass) falls through
+  // so it's never mis-recorded as a claim; a real pass is a bare digit.
+  const tfDigit = typeof prevRouting.tf_digit === "string" ? prevRouting.tf_digit : "";
+  if (digit !== "1" && !(tfDigit && digit === tfDigit)) return null;
+  prevRouting.last_event = "claim";
+  prevRouting.reply_from = from;
+  prevRouting.claim_timeframe = timeframe;
+  const nextContext = { ...(offer.context ?? {}), routing: prevRouting };
+  const { error: resumeErr } = await supabase
+    .from("ai_flow_runs")
+    .update({
+      status: "queued",
+      awaiting_agent_e164: null,
+      respond_by_at: null,
+      context: nextContext,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", offer.id)
+    .in("status", ["awaiting_agent", "queued"]);
+  if (resumeErr) {
+    console.error("ai_flow_runs claim+timeframe resume", resumeErr);
+    return new Response(JSON.stringify({ ok: false, error: "agent_resume_failed" }), {
+      status: 503,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  if (canAck) {
+    const send = await telnyxSendSms({
+      apiKey: telnyxApiKey,
+      messagingProfileId: ackProfile,
+      fromE164: ackFrom,
+      toE164: from,
+      text: `Got it — you've claimed this lead. We'll tell the team you'll reach out: ${timeframe}.`,
+      idempotencyKey: `${eventId}:agent-ack`
+    });
+    if (!send.ok) console.error("agent claim+timeframe ack", send.status, send.body.slice(0, 300));
+  }
+  await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
+    business_id: businessId,
+    run_id: offer.id,
+    event_id: eventId,
+    decision: "claim_timeframe"
+  });
+  return new Response(JSON.stringify({ ok: true, agent_offer: "claimed" }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" }
+  });
+}
+
 type LateClaimArgs = {
   // deno-lint-ignore no-explicit-any
   supabase: any;
@@ -239,6 +365,8 @@ type LateClaimArgs = {
   telnyxApiKey: string;
   messagingProfileId: string;
   smsFromE164: string;
+  /** Optional ETA the teammate stated ("86, 2 hours" → "2 hours"); "" when none. */
+  timeframe?: string;
 };
 
 /**
@@ -253,8 +381,18 @@ type LateClaimArgs = {
  * finalizes WITHOUT replaying later steps.
  */
 async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
-  const { supabase, businessId, from, ackTo, eventId, telnyxApiKey, messagingProfileId, smsFromE164 } =
-    args;
+  const {
+    supabase,
+    businessId,
+    from,
+    ackTo,
+    eventId,
+    telnyxApiKey,
+    messagingProfileId,
+    smsFromE164,
+    timeframe
+  } = args;
+  const claimTimeframe = (timeframe ?? "").trim();
 
   // Sender resolution mirrors the 1/2 ack path: per-tenant settings win, then
   // the DID the message arrived on, then the global from.
@@ -428,6 +566,10 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   routing.reply_from = from;
   routing.offered = from;
   if (memberName) routing.offered_name = memberName;
+  // ETA the teammate stated ("86, 2 hours") → the worker appends it to the owner's
+  // claim notice. Cleared when none so a re-claim never carries a stale ETA.
+  if (claimTimeframe) routing.claim_timeframe = claimTimeframe;
+  else delete routing.claim_timeframe;
   // late_claim flags a run whose post-route steps ALREADY ran (see matcher):
   // the worker re-runs just the route claim/notify and then ends, so
   // email/browse/notify aren't replayed. A still-live offer is left unflagged
@@ -484,7 +626,12 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     });
   }
 
-  await ack("Got it — you've got this lead. We'll let the team know.", "late-claim-ack");
+  await ack(
+    claimTimeframe
+      ? `Got it — you've got this lead. We'll tell the team you'll reach out: ${claimTimeframe}.`
+      : "Got it — you've got this lead. We'll let the team know.",
+    "late-claim-ack"
+  );
   await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
     business_id: businessId,
     run_id: match.id,
@@ -863,17 +1010,23 @@ serve(async (req: Request) => {
     // collide with STOP/HELP/START keywords (handled above).
     if (from) {
       const replyBody = inboundSmsBody(payload).trim();
+      // "claim WITH a timeframe": "<n>, <eta>" (e.g. "4, 20 min"). The comma'd
+      // ETA is the "accept and say when you'll reach out" option Dave-routed
+      // offers advertise. Parsed here so "86, 2 hours" routes to the late-claim
+      // path and any other "<digit>, <eta>" resolves a live offer (the digit is
+      // just the displayed option number — the comma is the real signal).
+      const claimTf = parseClaimWithTimeframe(replyBody);
 
-      // route_to_team LATE claim ("86"): a teammate takes a lead AFTER its
-      // offer window lapsed and it was handed back to the owner. Unlike 1/2
-      // (which only resolve a LIVE offer), 86 re-opens a recently-offered run —
-      // even one that already fell back to the owner — and re-routes it to this
+      // route_to_team LATE claim ("86" or "86, <eta>"): a teammate takes a lead
+      // AFTER its offer window lapsed and it was handed back to the owner. Unlike
+      // 1/2 (which only resolve a LIVE offer), 86 re-opens a recently-offered run
+      // — even one that already fell back to the owner — and re-routes it to this
       // teammate. The worker re-runs the route step's CLAIM path (so the owner
       // gets the normal "<agent> claimed …" notice) and then completes WITHOUT
       // re-running later steps (no duplicate email/browse/notify), gated by
       // routing.late_claim. Matched BEFORE the 1-9 owner/agent block so a
       // multi-digit "86" is never misread as an approval digit.
-      if (replyBody === "86") {
+      if (replyBody === "86" || (claimTf && claimTf.digit === "86")) {
         const handled = await tryLateClaim({
           supabase,
           businessId,
@@ -882,11 +1035,33 @@ serve(async (req: Request) => {
           eventId,
           telnyxApiKey,
           messagingProfileId,
-          smsFromE164
+          smsFromE164,
+          ...(claimTf ? { timeframe: claimTf.timeframe } : {})
         });
         if (handled) return handled;
         // No eligible offer for this teammate — fall through to the normal
         // path so a stray "86" is still handled like any other inbound text.
+      }
+
+      // Live agent claim WITH a timeframe ("3, 20 min"): only the ACCEPT digits
+      // ("1" or the offer's timeframe option) claim — a same-digit PASS like a
+      // round-robin "2, can't take it" is left to fall through (see
+      // tryAgentClaimWithTimeframe). Captures the ETA for the owner. A stray
+      // "<n>, …" from someone with no live offer also falls through.
+      if (claimTf && claimTf.digit !== "86") {
+        const handled = await tryAgentClaimWithTimeframe({
+          supabase,
+          businessId,
+          from,
+          ackTo: to,
+          eventId,
+          telnyxApiKey,
+          messagingProfileId,
+          smsFromE164,
+          digit: claimTf.digit,
+          timeframe: claimTf.timeframe
+        });
+        if (handled) return handled;
       }
 
       // Single digits 1-9: agent offers understand 1/2; owner approvals map
@@ -934,15 +1109,23 @@ serve(async (req: Request) => {
         const offer = offerRow as
           | { id: string; context: Record<string, unknown> | null }
           | null;
-        // Agent offers only understand 1 (claim) / 2 (pass); a "3" from an
-        // agent falls through to the owner-approval check (the owner may also
-        // be a roster agent) and then to the normal customer path.
-        if (offer && (replyBody === "1" || replyBody === "2")) {
-          const claimed = replyBody === "1";
-          const prevRouting =
-            offer.context?.routing && typeof offer.context.routing === "object"
-              ? { ...(offer.context.routing as Record<string, unknown>) }
-              : {};
+        // Agent offers: "1" always claims. "2" is the PASS digit for round-robin
+        // flows — UNLESS this offer's timeframe option IS "2" (a pinned, no-pass
+        // flow like HomeLight: "Reply 1 to confirm, or 2 with a timeframe"), in
+        // which case a bare "2" CLAIMS (no ETA) instead of being mis-read as a
+        // pass that escalates to the owner. The offer's stamped tf_digit also lets
+        // a bare timeframe digit (e.g. "3") claim. Any other digit falls through
+        // to the owner-approval check and then the normal customer path.
+        const offRouting =
+          offer?.context?.routing && typeof offer.context.routing === "object"
+            ? (offer.context.routing as Record<string, unknown>)
+            : {};
+        const offerTfDigit = typeof offRouting.tf_digit === "string" ? offRouting.tf_digit : "";
+        const bareClaim = replyBody === "1" || (offerTfDigit !== "" && replyBody === offerTfDigit);
+        const barePass = replyBody === "2" && offerTfDigit !== "2";
+        if (offer && (bareClaim || barePass)) {
+          const claimed = bareClaim;
+          const prevRouting = { ...offRouting };
           prevRouting.last_event = claimed ? "claim" : "reject";
           prevRouting.reply_from = from;
           const nextContext = { ...(offer.context ?? {}), routing: prevRouting };
