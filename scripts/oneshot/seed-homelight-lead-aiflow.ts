@@ -7,8 +7,10 @@
  *             (the "New HomeLight Referral: <name> - $<price> <type> in <city>"
  *             alert that carries the hmlt.co link).
  *   1. extract_url      -> leadUrl (the hmlt.co link).
- *   2. extract_text     -> lead_first_name / price / city / lead_type, read from
- *                          the alert text (no browser needed).
+ *   2. extract_text     -> lead_first_name / price / price_digits / city /
+ *                          lead_type, read from the alert text (no browser needed).
+ *                          price_digits (e.g. "429") is the lead-matching token for
+ *                          the email fallback in step 5b.
  *   3. browse_extract   -> open leadUrl (credentialed), screenshot it, and
  *                          capture the "Call me to claim referral" button's href
  *                          into {{vars.claim_link}} via the new extractLinks.
@@ -185,6 +187,14 @@ function buildDefinition(opts: {
         fields: [
           { name: "lead_first_name", description: "The lead's first name from the alert" },
           { name: "price", description: "The listing/asking price from the alert, e.g. $429K" },
+          {
+            name: "price_digits",
+            description:
+              "The price's leading digits ONLY — no $, commas, K or M. For $429K answer " +
+              "429; for $264,000 answer 264. Used to match this lead against the portal " +
+              "alert email, which writes the price in full (e.g. $429,000), so the bare " +
+              "leading digits are the token that reliably appears in BOTH."
+          },
           { name: "city", description: "The city/area from the alert, e.g. Mesa, AZ" },
           {
             name: "lead_type",
@@ -264,10 +274,14 @@ function buildDefinition(opts: {
       //     in plain labels) from Amy's connected mailbox and BACKFILL the missing
       //     fields, so Dave always has the phone + property address to call back
       //     on. fillOnlyEmpty means the portal values (step 5) win; the email only
-      //     fills gaps. Matched to THIS lead by first name AND city within the
+      //     fills gaps. Matched to THIS lead by first name AND price within the
       //     window (both must appear), so two leads who share a first name in the
-      //     same window don't collide. Gated on claim and only when a mailbox is
-      //     configured.
+      //     same window don't collide. Price beats city as the second term because a
+      //     realtor works one city (so city repeats across leads) while the exact
+      //     price is near-unique. We match price_digits (e.g. "429"), not "$429K",
+      //     because the portal email writes the price in full ("$429,000") — the
+      //     bare leading digits are the token present in BOTH. Gated on claim and
+      //     only when a mailbox is configured.
       ...(opts.emailConnectionId
         ? [
             {
@@ -275,7 +289,7 @@ function buildDefinition(opts: {
               type: "email_extract",
               connectionId: opts.emailConnectionId,
               fromContains: opts.emailFromContains,
-              matchTemplates: ["{{vars.lead_first_name}}", "{{vars.city}}"],
+              matchTemplates: ["{{vars.lead_first_name}}", "{{vars.price_digits}}"],
               lookbackMinutes: opts.emailLookbackMinutes,
               fillOnlyEmpty: true,
               when: gateOnClaim,
