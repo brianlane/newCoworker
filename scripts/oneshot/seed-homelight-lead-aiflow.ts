@@ -216,6 +216,9 @@ function buildDefinition(opts: {
         responseMinutes: opts.responseMinutes,
         offerWindow,
         attachScreenshot: true,
+        // "2, <eta>" (or a bare "2") is the accept-with-timeframe option; there is
+        // no "pass" digit on this pinned, Dave-only offer.
+        claimTimeframeOption: 2,
         offerTemplate:
           "New HomeLight referral: {{vars.lead_first_name}} — {{vars.lead_type}} in " +
           "{{vars.city}} (~{{vars.price}}).\n" +

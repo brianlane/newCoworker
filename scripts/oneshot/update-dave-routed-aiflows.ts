@@ -91,7 +91,11 @@ export function addTimeframeOption(def: Definition, agentName: string): boolean 
     if (typeof step.agentName !== "string" || step.agentName.trim() !== agentName) continue;
     const offer = typeof step.offerTemplate === "string" ? step.offerTemplate : "";
     if (!offer || offer.includes(TIMEFRAME_OPTION_MARKER)) continue;
-    step.offerTemplate = offer + timeframeOptionLine(highestOptionDigit(offer) + 1);
+    const n = highestOptionDigit(offer) + 1;
+    step.offerTemplate = offer + timeframeOptionLine(n);
+    // Stamp the digit so the engine treats "<n>, <eta>" (and a bare <n>) as the
+    // accept-with-timeframe option — never as a pass.
+    step.claimTimeframeOption = n;
     changed = true;
   }
   return changed;

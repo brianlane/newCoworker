@@ -78,8 +78,11 @@ describe("addTimeframeOption", () => {
   it("appends a timeframe option one greater than the last to a Dave-pinned route", () => {
     const def = daveRouteDef("New lead. Reply 1 to claim or 2 to pass by {{offer.deadline}}.");
     expect(addTimeframeOption(def, "Dave Lane")).toBe(true);
-    const offer = (def.steps[0] as { offerTemplate: string }).offerTemplate;
-    expect(offer).toContain("Reply 3 with a timeframe to claim");
+    const step = def.steps[0] as { offerTemplate: string; claimTimeframeOption?: number };
+    expect(step.offerTemplate).toContain("Reply 3 with a timeframe to claim");
+    // Stamps the digit so the engine treats "3, <eta>"/bare "3" as the accept
+    // option (and never as a pass).
+    expect(step.claimTimeframeOption).toBe(3);
     // Patched definition stays valid against the canonical schema.
     expect(() => parseAiFlowDefinition(def)).not.toThrow();
   });

@@ -198,9 +198,14 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
             <Row label="Email must contain all of" value={step.matchTemplates.join(", ")} mono />
           )}
           <Row label="Look back" value={`${step.lookbackMinutes ?? 60} minutes`} />
-          {step.fillOnlyEmpty !== false && (
-            <Row label="Fill mode" value="Only fills details earlier steps left empty" />
-          )}
+          <Row
+            label="Fill mode"
+            value={
+              step.fillOnlyEmpty === true
+                ? "Only fills details earlier steps left empty"
+                : "Overwrites details from earlier steps"
+            }
+          />
           <div className="text-xs font-medium text-parchment/50">Fields read from the email</div>
           <div className="flex flex-wrap gap-1.5">
             {step.fields.map((f, i) => (

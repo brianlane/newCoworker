@@ -417,6 +417,12 @@ const stepSchema = z.discriminatedUnion("type", [
     agentName: z.string().min(1).max(120).optional(),
     offerWindow: routeOfferWindowSchema.optional(),
     attachScreenshot: z.boolean().optional(),
+    // The reply digit that means "accept WITH a timeframe" (e.g. 2 or 3). A
+    // teammate replies "<digit>, <eta>" to claim and state when they'll reach
+    // out. The inbound webhook only treats the comma form as a claim when the
+    // digit is "1" (plain accept) or this option, so a flow whose "2" means PASS
+    // (round-robin) never mis-records a "2, can't take it" reply as a claim.
+    claimTimeframeOption: z.number().int().min(1).max(9).optional(),
     when: whenSchema.optional()
   }),
   z.object({

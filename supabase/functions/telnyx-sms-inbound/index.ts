@@ -240,18 +240,24 @@ type LiveClaimArgs = {
   telnyxApiKey: string;
   messagingProfileId: string;
   smsFromE164: string;
+  /** The leading reply digit ("3" in "3, 20 min"). */
+  digit: string;
   /** The stated ETA (already parsed/trimmed). */
   timeframe: string;
 };
 
 /**
  * Handle a teammate's "claim WITH a timeframe" reply to a LIVE offer — the
- * "<n>, <eta>" option (e.g. "4, 20 min"). Resolves the teammate's currently
- * offered run (same match as a bare "1" claim) and finalizes it as a claim with
- * the ETA stamped on routing.claim_timeframe (the worker appends it to the
- * owner's claim notice + the outcome). Returns a Response when consumed, or null
- * when this sender has no live offer so a stray "3, foo" falls through to the
- * normal customer path.
+ * "<n>, <eta>" option (e.g. "3, 20 min"). Resolves the teammate's currently
+ * offered run and finalizes it as a claim with the ETA stamped on
+ * routing.claim_timeframe (the worker appends it to the owner's claim notice +
+ * the outcome). Returns a Response when consumed, or null when it should fall
+ * through to the normal path — either this sender has no live offer, OR the
+ * leading digit isn't an ACCEPT digit for that offer. The accept digits are
+ * "1" (plain claim) and the offer's stamped `tf_digit` (the "accept with a
+ * timeframe" option). This is what stops a round-robin "2, can't take it" (where
+ * 2 means PASS) from being mis-recorded as a claim: digit 2 ≠ accept, so it
+ * falls through and a real pass stays a bare "2".
  */
 async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response | null> {
   const {
@@ -263,6 +269,7 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
     telnyxApiKey,
     messagingProfileId,
     smsFromE164,
+    digit,
     timeframe
   } = args;
 
@@ -297,6 +304,11 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
     offer.context?.routing && typeof offer.context.routing === "object"
       ? { ...(offer.context.routing as Record<string, unknown>) }
       : {};
+  // Only "1" (plain accept) or this offer's stamped timeframe option count as a
+  // claim. Any other comma'd digit (e.g. a round-robin "2" = pass) falls through
+  // so it's never mis-recorded as a claim; a real pass is a bare digit.
+  const tfDigit = typeof prevRouting.tf_digit === "string" ? prevRouting.tf_digit : "";
+  if (digit !== "1" && !(tfDigit && digit === tfDigit)) return null;
   prevRouting.last_event = "claim";
   prevRouting.reply_from = from;
   prevRouting.claim_timeframe = timeframe;
@@ -1031,10 +1043,11 @@ serve(async (req: Request) => {
         // path so a stray "86" is still handled like any other inbound text.
       }
 
-      // Live agent claim WITH a timeframe ("4, 20 min"): the comma form always
-      // means "I'm taking it, here's my ETA" (never a bare "2" pass), so resolve
-      // this teammate's live offer and claim it, capturing the ETA for the owner.
-      // A stray "<n>, …" from someone with no live offer falls through.
+      // Live agent claim WITH a timeframe ("3, 20 min"): only the ACCEPT digits
+      // ("1" or the offer's timeframe option) claim — a same-digit PASS like a
+      // round-robin "2, can't take it" is left to fall through (see
+      // tryAgentClaimWithTimeframe). Captures the ETA for the owner. A stray
+      // "<n>, …" from someone with no live offer also falls through.
       if (claimTf && claimTf.digit !== "86") {
         const handled = await tryAgentClaimWithTimeframe({
           supabase,
@@ -1045,6 +1058,7 @@ serve(async (req: Request) => {
           telnyxApiKey,
           messagingProfileId,
           smsFromE164,
+          digit: claimTf.digit,
           timeframe: claimTf.timeframe
         });
         if (handled) return handled;
@@ -1095,15 +1109,23 @@ serve(async (req: Request) => {
         const offer = offerRow as
           | { id: string; context: Record<string, unknown> | null }
           | null;
-        // Agent offers only understand 1 (claim) / 2 (pass); a "3" from an
-        // agent falls through to the owner-approval check (the owner may also
-        // be a roster agent) and then to the normal customer path.
-        if (offer && (replyBody === "1" || replyBody === "2")) {
-          const claimed = replyBody === "1";
-          const prevRouting =
-            offer.context?.routing && typeof offer.context.routing === "object"
-              ? { ...(offer.context.routing as Record<string, unknown>) }
-              : {};
+        // Agent offers: "1" always claims. "2" is the PASS digit for round-robin
+        // flows — UNLESS this offer's timeframe option IS "2" (a pinned, no-pass
+        // flow like HomeLight: "Reply 1 to confirm, or 2 with a timeframe"), in
+        // which case a bare "2" CLAIMS (no ETA) instead of being mis-read as a
+        // pass that escalates to the owner. The offer's stamped tf_digit also lets
+        // a bare timeframe digit (e.g. "3") claim. Any other digit falls through
+        // to the owner-approval check and then the normal customer path.
+        const offRouting =
+          offer?.context?.routing && typeof offer.context.routing === "object"
+            ? (offer.context.routing as Record<string, unknown>)
+            : {};
+        const offerTfDigit = typeof offRouting.tf_digit === "string" ? offRouting.tf_digit : "";
+        const bareClaim = replyBody === "1" || (offerTfDigit !== "" && replyBody === offerTfDigit);
+        const barePass = replyBody === "2" && offerTfDigit !== "2";
+        if (offer && (bareClaim || barePass)) {
+          const claimed = bareClaim;
+          const prevRouting = { ...offRouting };
           prevRouting.last_event = claimed ? "claim" : "reject";
           prevRouting.reply_from = from;
           const nextContext = { ...(offer.context ?? {}), routing: prevRouting };

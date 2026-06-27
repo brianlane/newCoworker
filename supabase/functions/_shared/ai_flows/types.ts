@@ -373,6 +373,13 @@ export type FlowStep =
        * without media when no screenshot was captured.
        */
       attachScreenshot?: boolean;
+      /**
+       * Reply digit (1-9) that means "accept WITH a timeframe" (e.g. 2 or 3).
+       * Stored on the offer's routing so the inbound webhook treats only "1" or
+       * this digit + comma as a claim — a round-robin flow's "2" (pass) is never
+       * mis-read as a claim.
+       */
+      claimTimeframeOption?: number;
       when?: StepCondition;
     }
   | {

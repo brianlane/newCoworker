@@ -2667,6 +2667,7 @@ async function routeToTeamStep(
     delete routing.late_claim;
     delete routing.step_index;
     delete routing.claim_timeframe;
+    delete routing.tf_digit;
     if (lateClaim) routing.late_claimed = true;
     if (action.claimedNotifyTemplate) {
       let body = renderTemplate(
@@ -2724,6 +2725,12 @@ async function routeToTeamStep(
     }
     routing.offered = agent.phone;
     routing.offered_name = agent.name;
+    // Stamp the "accept with a timeframe" reply digit on the offer so the inbound
+    // webhook can tell a timeframe-claim ("3, 20 min") from a same-digit PASS
+    // ("2") without re-parsing the offer copy. Cleared when the step doesn't
+    // define the option (legacy / no-timeframe flows).
+    if (action.claimTimeframeOption) routing.tf_digit = String(action.claimTimeframeOption);
+    else delete routing.tf_digit;
     // After-hours offer window: the offer SMS still goes out now, but inside
     // the quiet window the claim deadline extends to quietEnd + grace so the
     // countdown effectively starts in the morning. The resolved deadline is

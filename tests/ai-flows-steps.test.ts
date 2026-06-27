@@ -553,6 +553,16 @@ describe("planStep: route_to_team", () => {
       false
     );
   });
+  it("carries claimTimeframeOption when set, omits it otherwise", () => {
+    const r = planStep({ ...base, claimTimeframeOption: 3 }, {});
+    expect(r.ok && r.action.kind === "route_to_team" && r.action.claimTimeframeOption).toBe(3);
+    const without = planStep(base, {});
+    expect(
+      without.ok &&
+        without.action.kind === "route_to_team" &&
+        "claimTimeframeOption" in without.action
+    ).toBe(false);
+  });
 });
 
 describe("planStep: browse_action", () => {

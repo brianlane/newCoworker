@@ -184,6 +184,8 @@ function buildDefinition(opts: {
         id: "route",
         type: "route_to_team",
         agentName: opts.agentName,
+        // 1 = claim, 2 = pass, 3 = accept WITH a timeframe ("3, 20 min").
+        claimTimeframeOption: 3,
         offerTemplate:
           "New Clever lead: {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
           "Address: {{vars.lead_address}}\n" +
