@@ -3,7 +3,8 @@ import {
   highestOptionDigit,
   timeframeOptionLine,
   addTimeframeOption,
-  addHomeLightEmailFallback
+  addHomeLightEmailFallback,
+  migrateEmailMatchToPrice
 } from "../scripts/oneshot/update-dave-routed-aiflows";
 import { parseAiFlowDefinition } from "../src/lib/ai-flows/schema";
 import {
@@ -122,7 +123,7 @@ describe("addHomeLightEmailFallback", () => {
         {
           id: "alert",
           type: "extract_text",
-          fields: [{ name: "lead_first_name" }, { name: "city" }]
+          fields: [{ name: "lead_first_name" }, { name: "price" }, { name: "city" }]
         },
         {
           id: "card",
@@ -155,8 +156,20 @@ describe("addHomeLightEmailFallback", () => {
     };
     expect(inserted.type).toBe("email_extract");
     expect(inserted.connectionId).toBe(cfg.connectionId);
-    expect(inserted.matchTemplates).toEqual(["{{vars.lead_first_name}}", "{{vars.city}}"]);
+    expect(inserted.matchTemplates).toEqual([
+      "{{vars.lead_first_name}}",
+      "{{vars.price_digits}}"
+    ]);
     expect(inserted.when).toEqual({ var: "claimed_agent", notEquals: "none" });
+    // The match token must be produced by an earlier step: price_digits is added
+    // to the alert extract right after `price`.
+    const alertFields = (def.steps[1] as unknown as { fields: Array<{ name: string }> }).fields;
+    expect(alertFields.map((f) => f.name)).toEqual([
+      "lead_first_name",
+      "price",
+      "price_digits",
+      "city"
+    ]);
     expect(() => parseAiFlowDefinition(def)).not.toThrow();
   });
 
@@ -187,5 +200,93 @@ describe("addHomeLightEmailFallback", () => {
       steps: [{ id: "url", type: "extract_url", saveAs: "lead_url" }]
     };
     expect(addHomeLightEmailFallback(noCard, cfg)).toBe(false);
+  });
+});
+
+describe("migrateEmailMatchToPrice", () => {
+  // A live HomeLight flow whose email_card still matches on first name + city.
+  function cityMatchedDef(alertFields: Array<{ name: string }>) {
+    return {
+      version: 1 as const,
+      trigger: { channel: "sms" as const, conditions: [{ type: "has_url" as const }] },
+      steps: [
+        { id: "url", type: "extract_url", saveAs: "lead_url" },
+        { id: "alert", type: "extract_text", fields: alertFields },
+        {
+          id: "card",
+          type: "browse_extract",
+          urlVar: "lead_url",
+          fields: [{ name: "lead_phone" }, { name: "lead_address" }]
+        },
+        {
+          id: "email_card",
+          type: "email_extract",
+          connectionId: "9ddd5344-14f2-46df-a89d-dddc2d50e944",
+          fromContains: "homelight.com",
+          matchTemplates: ["{{vars.lead_first_name}}", "{{vars.city}}"],
+          fields: [{ name: "lead_phone" }, { name: "lead_address" }]
+        },
+        {
+          id: "route",
+          type: "route_to_team",
+          agentName: "Dave Lane",
+          offerTemplate: "Reply 1 to claim by {{offer.deadline}}.",
+          responseMinutes: 5,
+          ownerFallbackTemplate: "Back to you."
+        }
+      ]
+    };
+  }
+
+  it("migrates city -> price and inserts price_digits after price", () => {
+    const def = cityMatchedDef([
+      { name: "lead_first_name" },
+      { name: "price" },
+      { name: "city" }
+    ]);
+    expect(migrateEmailMatchToPrice(def)).toBe(true);
+    const emailCard = def.steps[3] as unknown as { matchTemplates: string[] };
+    expect(emailCard.matchTemplates).toEqual([
+      "{{vars.lead_first_name}}",
+      "{{vars.price_digits}}"
+    ]);
+    const alertFields = (def.steps[1] as unknown as { fields: Array<{ name: string }> }).fields;
+    expect(alertFields.map((f) => f.name)).toEqual([
+      "lead_first_name",
+      "price",
+      "price_digits",
+      "city"
+    ]);
+    expect(() => parseAiFlowDefinition(def)).not.toThrow();
+  });
+
+  it("appends price_digits when the alert has no price field", () => {
+    const def = cityMatchedDef([{ name: "lead_first_name" }, { name: "city" }]);
+    expect(migrateEmailMatchToPrice(def)).toBe(true);
+    const alertFields = (def.steps[1] as unknown as { fields: Array<{ name: string }> }).fields;
+    expect(alertFields.map((f) => f.name)).toEqual([
+      "lead_first_name",
+      "city",
+      "price_digits"
+    ]);
+  });
+
+  it("is idempotent once migrated", () => {
+    const def = cityMatchedDef([
+      { name: "lead_first_name" },
+      { name: "price" },
+      { name: "city" }
+    ]);
+    expect(migrateEmailMatchToPrice(def)).toBe(true);
+    expect(migrateEmailMatchToPrice(def)).toBe(false);
+  });
+
+  it("no-ops when the flow has no email_card", () => {
+    const def = {
+      version: 1 as const,
+      trigger: { channel: "sms" as const, conditions: [{ type: "has_url" as const }] },
+      steps: [{ id: "url", type: "extract_url", saveAs: "lead_url" }]
+    };
+    expect(migrateEmailMatchToPrice(def)).toBe(false);
   });
 });

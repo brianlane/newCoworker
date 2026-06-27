@@ -15,6 +15,12 @@
  *    backfilled (phone/email/address) from the HomeLight alert email. Skips when
  *    the flow already has an "email_card" step.
  *
+ * 3. HomeLight lead-match -> PRICE: migrate an existing "email_card" that matched
+ *    on first name + city over to first name + price_digits (a realtor works one
+ *    city, so city repeats across leads; the exact price is near-unique). Adds the
+ *    "price_digits" field to the "alert" extract_text step when missing (the schema
+ *    requires the matched var to be produced earlier). No-ops once migrated.
+ *
  * Patches the existing rows (no re-seed) so any manual edits are preserved, and
  * re-validates each modified definition through the SAME parseAiFlowDefinition the
  * dashboard uses before writing. Dry-run by default; prints the before/after
@@ -63,8 +69,68 @@ const DEFAULT_EMAIL_CONNECTION_ID = "9ddd5344-14f2-46df-a89d-dddc2d50e944";
 /** Idempotency marker: this exact phrase appears only in the appended option. */
 const TIMEFRAME_OPTION_MARKER = "with a timeframe to claim";
 
+/**
+ * The lead-match terms for the HomeLight email fallback: first name + price.
+ * price_digits (e.g. "429"), NOT "$429K", because the portal email writes the
+ * price in full ("$429,000") — the bare leading digits are the token in BOTH.
+ */
+const EMAIL_MATCH_TEMPLATES = ["{{vars.lead_first_name}}", "{{vars.price_digits}}"];
+
+/** The extract_text field that produces the price-match token. */
+const PRICE_DIGITS_FIELD = {
+  name: "price_digits",
+  description:
+    "The price's leading digits ONLY — no $, commas, K or M. For $429K answer 429; " +
+    "for $264,000 answer 264. Used to match this lead against the portal alert email, " +
+    "which writes the price in full (e.g. $429,000), so the bare leading digits are " +
+    "the token that reliably appears in BOTH."
+};
+
 type Step = Record<string, unknown> & { id?: string; type?: string };
 type Definition = { steps?: Step[] } & Record<string, unknown>;
+
+type ExtractField = { name?: string; description?: string };
+
+/**
+ * Ensure the "alert" extract_text step produces `price_digits` (the schema
+ * requires the matched var to be produced by an earlier step). Returns whether
+ * anything changed.
+ */
+function ensurePriceDigitsField(steps: Step[]): boolean {
+  const alert = steps.find((s) => s.id === "alert" && s.type === "extract_text");
+  if (!alert) return false;
+  const fields = Array.isArray(alert.fields) ? (alert.fields as ExtractField[]) : [];
+  if (fields.some((f) => f.name === "price_digits")) return false;
+  // Insert right after `price` for readability, else append.
+  const priceIdx = fields.findIndex((f) => f.name === "price");
+  if (priceIdx >= 0) fields.splice(priceIdx + 1, 0, { ...PRICE_DIGITS_FIELD });
+  else fields.push({ ...PRICE_DIGITS_FIELD });
+  alert.fields = fields;
+  return true;
+}
+
+/**
+ * Migrate an existing HomeLight "email_card" lead-match from first name + city
+ * (or any earlier shape) to first name + price_digits, adding the price_digits
+ * field to the "alert" step when missing. No-ops if there's no email_card or it
+ * already matches on price. Returns whether anything changed.
+ */
+export function migrateEmailMatchToPrice(def: Definition): boolean {
+  const steps = def.steps ?? [];
+  const emailCard = steps.find((s) => s.id === "email_card" && s.type === "email_extract");
+  if (!emailCard) return false;
+  const current = Array.isArray(emailCard.matchTemplates)
+    ? (emailCard.matchTemplates as string[])
+    : [];
+  const alreadyPrice =
+    current.length === EMAIL_MATCH_TEMPLATES.length &&
+    current.every((t, i) => t === EMAIL_MATCH_TEMPLATES[i]);
+  if (alreadyPrice) return false;
+  ensurePriceDigitsField(steps);
+  emailCard.matchTemplates = [...EMAIL_MATCH_TEMPLATES];
+  def.steps = steps;
+  return true;
+}
 
 /** Highest single-digit option already shown in the offer (86 excluded), or 1. */
 export function highestOptionDigit(offerTemplate: string): number {
@@ -114,12 +180,14 @@ export function addHomeLightEmailFallback(
   if (steps.some((s) => s.id === "email_card")) return false;
   const cardIdx = steps.findIndex((s) => s.id === "card" && s.type === "browse_extract");
   if (cardIdx < 0) return false;
+  // The match token (price_digits) must be produced by an earlier step.
+  ensurePriceDigitsField(steps);
   const emailCard: Step = {
     id: "email_card",
     type: "email_extract",
     connectionId: cfg.connectionId,
     fromContains: cfg.fromContains,
-    matchTemplates: ["{{vars.lead_first_name}}", "{{vars.city}}"],
+    matchTemplates: [...EMAIL_MATCH_TEMPLATES],
     lookbackMinutes: cfg.lookbackMinutes,
     fillOnlyEmpty: true,
     when: { var: "claimed_agent", notEquals: "none" },
@@ -186,7 +254,9 @@ async function main(): Promise<void> {
     // The email fallback only applies to the HomeLight flow (the one with the
     // portal contact-card step); addHomeLightEmailFallback no-ops otherwise.
     const email = addHomeLightEmailFallback(def, emailCfg);
-    if (!tf && !email) continue;
+    // Migrate an already-inserted email_card from city to price matching.
+    const price = migrateEmailMatchToPrice(def);
+    if (!tf && !email && !price) continue;
 
     // Re-validate the patched definition exactly like the dashboard/CRUD path.
     try {
@@ -202,6 +272,7 @@ async function main(): Promise<void> {
     console.log(`\n=== ${row.name} (${row.id}) ===`);
     console.log(`  timeframe option: ${tf ? "added" : "unchanged"}`);
     console.log(`  homelight email fallback: ${email ? "added" : "n/a"}`);
+    console.log(`  email lead-match -> price: ${price ? "migrated" : "n/a"}`);
     console.log(`  BEFORE: ${before}`);
     console.log(`  AFTER : ${JSON.stringify(def)}`);
 
