@@ -279,6 +279,8 @@ callable surfaces go through service-role clients, never `anon`/`authenticated` 
 
 The `telnyx-voice-inbound` function may return **HTTP 200** with a Telnyx `hangup`/`reject` action for logical failures (missing fields, subscription/period gating) for the same reason. Hard failures after answer may still surface as **5xx**; rely on logs and telemetry for diagnosis.
 
+##Subagents
+Never use a subagent.
 
 ## All work and code modifications must follow this flow
 
