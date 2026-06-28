@@ -231,6 +231,21 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
   const aLeg = sess.call_control_id;
   const ctx = sess.context;
   const failedStep = sess.current_step;
+
+  // Every advancement action (transfer / DTMF / streaming_start / hangup) needs
+  // the Telnyx API key. telnyx-voice-call-end historically ran settlement-only,
+  // where the key was optional — but a handoff session can't proceed without it.
+  // Make the misconfiguration loud (telemetry + log) instead of silently
+  // stalling the chain with the inbound leg still up.
+  if (!apiKey) {
+    console.error("handoff: TELNYX_API_KEY missing; cannot advance chain", { call: aLeg });
+    await telemetryRecord(deps.supabase, "voice_handoff_failed", {
+      business_id: sess.business_id,
+      call_control_id: aLeg,
+      stage: "missing_api_key"
+    });
+    return jsonOk("handoff_no_api_key");
+  }
   const plan = planHandoffAdvance({
     steps: ctx.steps ?? [],
     failedStep,
