@@ -375,6 +375,11 @@ serve(async (req: Request) => {
       });
       const first = ctx.steps[0];
       if (first) {
+        // Normalize the ring window the same way planHandoffAdvance does for
+        // later steps: a 0/missing ring_secs must NOT omit timeout_secs (Telnyx
+        // would then ring the first human forever and the chain would never
+        // advance to Amy / AI takeout).
+        const firstRingSecs = first.ring_secs > 0 ? Math.floor(first.ring_secs) : 20;
         // Persist the session FIRST — the chain can only advance (call.bridged /
         // call.hangup → telnyx-voice-call-end) if a session row keyed by this
         // A-leg call_control_id exists. If the write fails, skip the handoff and
@@ -419,7 +424,7 @@ serve(async (req: Request) => {
           return jsonOk("handoff_answer_failed");
         }
         const tf = await telnyxTransferCall(apiKey, callControlId, first.to_e164, {
-          timeoutSecs: first.ring_secs,
+          timeoutSecs: firstRingSecs,
           clientState: encodeHandoffClientState(callControlId, 0)
         });
         if (!tf.ok) {
@@ -455,6 +460,22 @@ serve(async (req: Request) => {
         });
         return jsonOk("handoff_chain_start");
         }
+      } else {
+        // Enabled chain with no usable human steps. AI-only chains aren't
+        // supported (the product flow always rings a human first, then the AI
+        // takes over on no-answer), so make the misconfiguration observable
+        // instead of silently honoring `enabled` — then fall through to the
+        // normal voice path.
+        console.warn("handoff: enabled chain has no usable steps; falling through", {
+          businessId,
+          from: fromE164Informational,
+          has_ai_takeover: Boolean(ctx.ai_takeover)
+        });
+        await telemetryRecord(supabase, "voice_handoff_failed", {
+          business_id: businessId,
+          call_control_id: callControlId,
+          stage: "no_steps"
+        });
       }
     }
   }

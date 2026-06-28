@@ -853,29 +853,39 @@ function main(): void {
           const reason = e instanceof Error ? e.message : String(e);
           console.error("voice-bridge: Gemini Live unavailable (continuing without AI audio)", reason);
           recordDiag("voice_bridge_gemini_init_failed", { reason });
+          // For a HomeLight ai_intake call the missed-call SMS would text the
+          // tenant's forward number and label the caller as HomeLight's transfer
+          // line — wrong recipient and wrong story for a connected live seller.
+          // Skip it; the no-lead intake SMS below still notifies the intake owner.
+          if (!intake) {
+            await sendMissedCallSms({
+              settings: tenantSettings,
+              callerE164: fromE164Info || "unknown",
+              businessName,
+              reason: `Gemini Live init failed: ${reason}`
+            });
+          }
+        }
+      } else if (!geminiLiveEnabled) {
+        console.warn("voice-bridge: GEMINI_LIVE_ENABLED=false; AI audio pipe disabled (media stream still accepted)");
+        if (!intake) {
           await sendMissedCallSms({
             settings: tenantSettings,
             callerE164: fromE164Info || "unknown",
             businessName,
-            reason: `Gemini Live init failed: ${reason}`
+            reason: "AI audio disabled (flag off)"
           });
         }
-      } else if (!geminiLiveEnabled) {
-        console.warn("voice-bridge: GEMINI_LIVE_ENABLED=false; AI audio pipe disabled (media stream still accepted)");
-        await sendMissedCallSms({
-          settings: tenantSettings,
-          callerE164: fromE164Info || "unknown",
-          businessName,
-          reason: "AI audio disabled (flag off)"
-        });
       } else {
         console.warn("voice-bridge: GOOGLE_API_KEY or GEMINI_API_KEY unset; AI audio pipe disabled");
-        await sendMissedCallSms({
-          settings: tenantSettings,
-          callerE164: fromE164Info || "unknown",
-          businessName,
-          reason: "AI audio disabled (no API key)"
-        });
+        if (!intake) {
+          await sendMissedCallSms({
+            settings: tenantSettings,
+            callerE164: fromE164Info || "unknown",
+            businessName,
+            reason: "AI audio disabled (no API key)"
+          });
+        }
       }
 
       let lastLastSeenWriteMs = Date.now();
