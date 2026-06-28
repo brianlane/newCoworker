@@ -352,11 +352,12 @@ async function sendIntakeLeadSms(params: {
   settings: TenantTelnyxSettings;
   notifyE164: string;
   callControlId: string;
-  clientE164: string;
+  /** The live-transfer line the call arrived on (transfer partner), not the seller. */
+  transferFromE164: string;
   businessName: string;
   lead: CapturedLead;
 }): Promise<void> {
-  const { supabase, settings, notifyE164, callControlId, clientE164, businessName, lead } = params;
+  const { supabase, settings, notifyE164, callControlId, transferFromE164, businessName, lead } = params;
   const apiKey = process.env.TELNYX_API_KEY ?? "";
   if (!apiKey || !settings.smsFromE164 || !notifyE164) {
     console.warn("voice-bridge: intake SMS skipped (missing api key / from / notify number)");
@@ -392,7 +393,7 @@ async function sendIntakeLeadSms(params: {
   const text = composeIntakeLeadSms({
     businessName,
     lead,
-    clientE164,
+    transferFromE164,
     transcript,
     maxChars: INTAKE_SMS_MAX_CHARS
   });
@@ -933,16 +934,22 @@ function main(): void {
           } catch (err) {
             console.error("voice-bridge: teardown error", err);
           }
-          if (intake && intakeNotifyE164) {
+          // Only notify when the Gemini bridge actually ran (geminiGetLead is
+          // set on successful bridge init). If Gemini never started (init
+          // failure / disabled / no key) we must NOT text the owner a phantom
+          // "lead" with no captured fields and no transcript.
+          if (intake && intakeNotifyE164 && geminiGetLead) {
             try {
               await sendIntakeLeadSms({
                 supabase,
                 settings: tenantSettings,
                 notifyE164: intakeNotifyE164,
                 callControlId,
-                clientE164: trustedFromE164 || fromE164Info || "",
+                // The ANI is the transfer partner's line (e.g. HomeLight), not
+                // the seller — pass it only as the "transferred via" reference.
+                transferFromE164: trustedFromE164 || fromE164Info || "",
                 businessName,
-                lead: geminiGetLead ? geminiGetLead() : {}
+                lead: geminiGetLead()
               });
             } catch (err) {
               console.error("voice-bridge: intake SMS error", err);

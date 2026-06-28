@@ -27,44 +27,68 @@ describe("intakeSystemInstruction", () => {
 });
 
 describe("composeIntakeLeadSms", () => {
-  it("includes header, captured fields, client number, and transcript", () => {
+  it("includes a generic header, captured fields, transfer line, and transcript", () => {
     const text = composeIntakeLeadSms({
       businessName: "Amy Laidlaw",
-      lead: { name: "Javier", address: "123 Main St", timeframe: "3 months" },
-      clientE164: "+19178628675",
+      lead: { name: "Javier", phone: "+15551112222", address: "123 Main St", timeframe: "3 months" },
+      transferFromE164: "+14159851909",
       transcript: "AI: Hi\nClient: I want to sell",
       maxChars: 3000
     });
-    expect(text).toContain("HomeLight lead (AI intake)");
+    expect(text).toContain("New live-transfer lead (AI intake)");
+    // Generic wording: no hardcoded agent names in the header.
+    expect(text).not.toContain("Dave");
     expect(text).toContain("Name: Javier");
+    expect(text).toContain("Callback: +15551112222");
     expect(text).toContain("Address: 123 Main St");
     expect(text).toContain("Timeframe: 3 months");
-    // No captured phone, so it falls back to the client's call number.
-    expect(text).toContain("Callback: +19178628675");
-    expect(text).toContain("Call from: +19178628675");
+    // The transfer partner's line is labeled as such — never as the callback.
+    expect(text).toContain("Transferred via: +14159851909");
     expect(text).toContain("Transcript:");
     expect(text).toContain("Client: I want to sell");
   });
 
-  it("prefers a captured callback phone over the client ANI", () => {
+  it("never presents the transfer ANI as the seller's callback", () => {
     const text = composeIntakeLeadSms({
       businessName: "Acme",
-      lead: { phone: "+15551112222" },
-      clientE164: "+19178628675",
+      lead: {},
+      transferFromE164: "+14159851909",
       transcript: "",
       maxChars: 3000
     });
-    expect(text).toContain("Callback: +15551112222");
-    expect(text).not.toContain("Callback: +19178628675");
-    expect(text).toContain("Call from: +19178628675");
+    // No captured phone and no fabricated callback from the transfer line.
+    expect(text).not.toContain("Callback:");
+    expect(text).toContain("Transferred via: +14159851909");
     expect(text).not.toContain("Transcript:");
+  });
+
+  it("omits the transfer line when none is provided", () => {
+    const text = composeIntakeLeadSms({
+      businessName: "Acme",
+      lead: { name: "Sam" },
+      transcript: "",
+      maxChars: 3000
+    });
+    expect(text).toContain("Name: Sam");
+    expect(text).not.toContain("Transferred via:");
+  });
+
+  it("omits the transfer line when it is blank/whitespace", () => {
+    const text = composeIntakeLeadSms({
+      businessName: "Acme",
+      lead: { name: "Sam" },
+      transferFromE164: "   ",
+      transcript: "",
+      maxChars: 3000
+    });
+    expect(text).not.toContain("Transferred via:");
   });
 
   it("truncates to maxChars", () => {
     const text = composeIntakeLeadSms({
       businessName: "Acme",
       lead: {},
-      clientE164: "+1555",
+      transferFromE164: "+1555",
       transcript: "x".repeat(5000),
       maxChars: 200
     });

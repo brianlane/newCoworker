@@ -32,7 +32,7 @@ export function intakeSystemInstruction(
     `Collect these details, one or two at a time, confirming as you go: ${fields.join(", ")}. Get their best callback number, the property address, and roughly when they're looking to sell.`,
     "As soon as you have any of these details, call the `capture_lead` tool with what you have (you can call it again as you learn more). Always call it before you say goodbye.",
     "Do NOT claim to be a person if asked directly, and do not say you're an AI unless asked — keep it light and steer back to helping. Never read a tool's raw response aloud.",
-    "When you have what you need, let them know Amy will call them back shortly about their home, thank them, and wrap up.",
+    `When you have what you need, let them know someone from ${businessName} will call them back shortly about their home, thank them, and wrap up.`,
     currentDateTimeLine(new Date(), businessTimezone)
   ].join(" ");
 }
@@ -47,25 +47,36 @@ const INTAKE_FIELD_LABELS: Record<string, string> = {
 
 /**
  * Build the owner-facing SMS body for a completed intake call: a short header,
- * the structured captured fields, the client's number, and the transcript.
- * Truncated to `maxChars` (Telnyx segments long bodies automatically).
+ * the structured captured fields, and the transcript. Truncated to `maxChars`
+ * (Telnyx segments long bodies automatically).
+ *
+ * The only trustworthy callback is the phone the AI captured via `capture_lead`
+ * (`lead.phone`). The inbound ANI on a live-transfer call is the transfer
+ * partner's line (e.g. HomeLight `+14159851909`), NOT the seller — so it is
+ * shown only as `transferFromE164` ("Transferred via"), never as the callback,
+ * to avoid handing the owner a wrong number/identity.
+ *
+ * Wording is generic (no hardcoded agent names) because `voice_handoff_chains`
+ * is a per-tenant table any business can configure.
  */
 export function composeIntakeLeadSms(input: {
   businessName: string;
   lead: CapturedLead;
-  clientE164: string;
+  /** The live-transfer line the call arrived on (transfer partner), not the seller. */
+  transferFromE164?: string;
   transcript: string;
   maxChars: number;
 }): string {
   const lines: string[] = [
-    `${input.businessName}: HomeLight lead (AI intake) — Dave and Amy both missed the live transfer.`
+    `${input.businessName}: New live-transfer lead (AI intake) — the team missed the warm handoff, so I captured this on the call.`
   ];
   for (const [key, label] of Object.entries(INTAKE_FIELD_LABELS)) {
     const v = input.lead[key];
     if (typeof v === "string" && v.trim()) lines.push(`${label}: ${v.trim()}`);
   }
-  if (!input.lead.phone && input.clientE164) lines.push(`Callback: ${input.clientE164}`);
-  if (input.clientE164) lines.push(`Call from: ${input.clientE164}`);
+  if (input.transferFromE164 && input.transferFromE164.trim()) {
+    lines.push(`Transferred via: ${input.transferFromE164.trim()}`);
+  }
   if (input.transcript.trim()) {
     lines.push("", "Transcript:", input.transcript.trim());
   }
