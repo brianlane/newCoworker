@@ -229,6 +229,51 @@ async function evaluateAndEnqueueAiFlows(
  */
 const LATE_CLAIM_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Persist a teammate/owner offer reply (claim "1", pass "2", "86" late-claim,
+ * "<n>, <eta>", or an owner approval digit) to `sms_inbound_jobs` so it appears
+ * in the dashboard Texts thread alongside the offer that prompted it.
+ *
+ * These replies are intercepted BEFORE the normal inbound path and resume an
+ * AiFlow run directly (they must never be treated as customer messages), so
+ * without this they never reach the SMS log and the thread shows only the
+ * outbound offer. We store a terminal row (`status:'done'`, `suppress_reply`) so
+ * the worker never re-processes it, with the confirmation we sent as the durable
+ * `assistant_reply_text` — that renders BOTH the teammate's reply and our ack in
+ * one conversational unit. Best-effort and idempotent on `telnyx_event_id`
+ * (23505 = a Telnyx redelivery already logged it); a failure here never blocks
+ * the offer resume that already happened.
+ */
+async function persistOfferReplyJob(args: {
+  // deno-lint-ignore no-explicit-any
+  supabase: any;
+  businessId: string;
+  eventId: string;
+  envelope: unknown;
+  from: string;
+  staffKind: "owner" | "team";
+  staffName?: string | null;
+  /** The confirmation text we actually sent back, or null when none was sent. */
+  ackSent: string | null;
+}): Promise<void> {
+  const ack = args.ackSent && args.ackSent.trim() ? args.ackSent : null;
+  const { error } = await args.supabase.from("sms_inbound_jobs").insert({
+    business_id: args.businessId,
+    telnyx_event_id: args.eventId,
+    payload: args.envelope as Record<string, unknown>,
+    status: "done",
+    suppress_reply: true,
+    customer_e164: args.from,
+    staff_kind: args.staffKind,
+    staff_name: args.staffName?.trim() || null,
+    assistant_reply_text: ack,
+    outbound_idempotency_key: crypto.randomUUID()
+  });
+  if (error && (error as { code?: string }).code !== "23505") {
+    console.error("offer reply persist", error);
+  }
+}
+
 type LiveClaimArgs = {
   // deno-lint-ignore no-explicit-any
   supabase: any;
@@ -237,6 +282,8 @@ type LiveClaimArgs = {
   /** DID the inbound arrived on — safest ack sender fallback. */
   ackTo: string;
   eventId: string;
+  /** Full Telnyx webhook envelope — persisted so the reply shows in Texts. */
+  envelope: unknown;
   telnyxApiKey: string;
   messagingProfileId: string;
   smsFromE164: string;
@@ -266,6 +313,7 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
     from,
     ackTo,
     eventId,
+    envelope,
     telnyxApiKey,
     messagingProfileId,
     smsFromE164,
@@ -331,17 +379,30 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
       headers: { "Content-Type": "application/json" }
     });
   }
+  const ackText = `Got it — you've claimed this lead. We'll tell the team you'll reach out: ${timeframe}.`;
+  let ackSent: string | null = null;
   if (canAck) {
     const send = await telnyxSendSms({
       apiKey: telnyxApiKey,
       messagingProfileId: ackProfile,
       fromE164: ackFrom,
       toE164: from,
-      text: `Got it — you've claimed this lead. We'll tell the team you'll reach out: ${timeframe}.`,
+      text: ackText,
       idempotencyKey: `${eventId}:agent-ack`
     });
     if (!send.ok) console.error("agent claim+timeframe ack", send.status, send.body.slice(0, 300));
+    else ackSent = ackText;
   }
+  // Make the claim reply (+ our ack) visible in the dashboard Texts thread.
+  await persistOfferReplyJob({
+    supabase,
+    businessId,
+    eventId,
+    envelope,
+    from,
+    staffKind: "team",
+    ackSent
+  });
   await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
     business_id: businessId,
     run_id: offer.id,
@@ -362,6 +423,8 @@ type LateClaimArgs = {
   /** DID the inbound arrived on — safest ack/notify sender fallback. */
   ackTo: string;
   eventId: string;
+  /** Full Telnyx webhook envelope — persisted so the reply shows in Texts. */
+  envelope: unknown;
   telnyxApiKey: string;
   messagingProfileId: string;
   smsFromE164: string;
@@ -387,6 +450,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     from,
     ackTo,
     eventId,
+    envelope,
     telnyxApiKey,
     messagingProfileId,
     smsFromE164,
@@ -408,17 +472,33 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     (biz?.telnyx_messaging_profile_id && biz.telnyx_messaging_profile_id.trim()) || messagingProfileId;
   const ackFrom = (biz?.telnyx_sms_from_e164 && biz.telnyx_sms_from_e164.trim()) || ackTo || smsFromE164;
   const canAck = Boolean(telnyxApiKey && ackProfile && from);
+  // Send the confirmation AND log the teammate's reply (+ our ack) to the Texts
+  // thread. Each consumed late-claim return calls this exactly once, so one row
+  // is persisted per event; the no-match path returns without calling it (and
+  // falls through to the normal inbound path, which logs its own row).
   const ack = async (text: string, keySuffix: string): Promise<void> => {
-    if (!canAck) return;
-    const send = await telnyxSendSms({
-      apiKey: telnyxApiKey,
-      messagingProfileId: ackProfile,
-      fromE164: ackFrom,
-      toE164: from,
-      text,
-      idempotencyKey: `${eventId}:${keySuffix}`
+    let ackSent: string | null = null;
+    if (canAck) {
+      const send = await telnyxSendSms({
+        apiKey: telnyxApiKey,
+        messagingProfileId: ackProfile,
+        fromE164: ackFrom,
+        toE164: from,
+        text,
+        idempotencyKey: `${eventId}:${keySuffix}`
+      });
+      if (!send.ok) console.error("late-claim ack reply", send.status, send.body.slice(0, 300));
+      else ackSent = text;
+    }
+    await persistOfferReplyJob({
+      supabase,
+      businessId,
+      eventId,
+      envelope,
+      from,
+      staffKind: "team",
+      ackSent
     });
-    if (!send.ok) console.error("late-claim ack reply", send.status, send.body.slice(0, 300));
   };
 
   // Recent route_to_team runs for this business (route steps stamp
@@ -1033,6 +1113,7 @@ serve(async (req: Request) => {
           from,
           ackTo: to,
           eventId,
+          envelope,
           telnyxApiKey,
           messagingProfileId,
           smsFromE164,
@@ -1055,6 +1136,7 @@ serve(async (req: Request) => {
           from,
           ackTo: to,
           eventId,
+          envelope,
           telnyxApiKey,
           messagingProfileId,
           smsFromE164,
@@ -1154,6 +1236,7 @@ serve(async (req: Request) => {
           const ack = claimed
             ? "Got it — you've claimed this lead. We'll send you the details."
             : "Okay — routing this lead to the next agent. Thanks!";
+          let ackSent: string | null = null;
           if (canAck) {
             const send = await telnyxSendSms({
               apiKey: telnyxApiKey,
@@ -1165,8 +1248,20 @@ serve(async (req: Request) => {
             });
             if (!send.ok) {
               console.error("agent offer ack reply", send.status, send.body.slice(0, 300));
+            } else {
+              ackSent = ack;
             }
           }
+          // Make the claim/pass reply (+ our ack) visible in the Texts thread.
+          await persistOfferReplyJob({
+            supabase,
+            businessId,
+            eventId,
+            envelope,
+            from,
+            staffKind: "team",
+            ackSent
+          });
           await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
             business_id: businessId,
             run_id: offer.id,
@@ -1255,6 +1350,7 @@ serve(async (req: Request) => {
                     : decision === "skip"
                       ? "Skipped — I won't send that, but the rest of the workflow continues."
                       : "Canceled — I stopped the whole workflow.";
+              let ackSent: string | null = null;
               if (canAck) {
                 const send = await telnyxSendSms({
                   apiKey: telnyxApiKey,
@@ -1266,8 +1362,20 @@ serve(async (req: Request) => {
                 });
                 if (!send.ok) {
                   console.error("approval ack reply", send.status, send.body.slice(0, 300));
+                } else {
+                  ackSent = ack;
                 }
               }
+              // Make the owner's approval reply (+ our ack) visible in Texts.
+              await persistOfferReplyJob({
+                supabase,
+                businessId,
+                eventId,
+                envelope,
+                from,
+                staffKind: "owner",
+                ackSent
+              });
               await telemetryRecord(supabase, "ai_flow_approval_sms_reply", {
                 business_id: businessId,
                 run_id: appr.id,
