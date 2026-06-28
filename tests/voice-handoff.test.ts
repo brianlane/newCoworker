@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildHandoffContext,
+  coerceRingSecs,
   encodeHandoffClientState,
   parseHandoffClientState,
   planHandoffAdvance,
@@ -117,5 +118,41 @@ describe("buildHandoffContext", () => {
       persona: undefined,
       capture_fields: undefined
     });
+  });
+
+  it("coerces numeric-string ring_secs from JSONB instead of forcing 20", () => {
+    const ctx = buildHandoffContext({
+      toE164: "+1a",
+      steps: [
+        { to_e164: "+16025245719", ring_secs: "45" },
+        { to_e164: "+16026951142", ring_secs: 30 }
+      ],
+      aiTakeover: null
+    });
+    expect(ctx.steps).toEqual([
+      { to_e164: "+16025245719", ring_secs: 45 },
+      { to_e164: "+16026951142", ring_secs: 30 }
+    ]);
+  });
+});
+
+describe("coerceRingSecs", () => {
+  it("accepts positive numbers and floors them", () => {
+    expect(coerceRingSecs(20)).toBe(20);
+    expect(coerceRingSecs(45.9)).toBe(45);
+  });
+
+  it("parses positive numeric strings", () => {
+    expect(coerceRingSecs("45")).toBe(45);
+  });
+
+  it("defaults to 20 for non-positive, non-finite, or non-numeric input", () => {
+    expect(coerceRingSecs(0)).toBe(20);
+    expect(coerceRingSecs(-5)).toBe(20);
+    expect(coerceRingSecs("abc")).toBe(20);
+    expect(coerceRingSecs(NaN)).toBe(20);
+    expect(coerceRingSecs(null)).toBe(20);
+    expect(coerceRingSecs(undefined)).toBe(20);
+    expect(coerceRingSecs({})).toBe(20);
   });
 });

@@ -84,6 +84,19 @@ describe("composeIntakeLeadSms", () => {
     expect(text).not.toContain("Transferred via:");
   });
 
+  it("renders custom captured fields (not just the standard five)", () => {
+    const text = composeIntakeLeadSms({
+      businessName: "Acme",
+      lead: { name: "Sam", budget_range: "500k-600k", hoa_status: "none" },
+      transcript: "",
+      maxChars: 3000
+    });
+    expect(text).toContain("Name: Sam");
+    // Custom keys are title-cased and included.
+    expect(text).toContain("Budget Range: 500k-600k");
+    expect(text).toContain("Hoa Status: none");
+  });
+
   it("truncates to maxChars", () => {
     const text = composeIntakeLeadSms({
       businessName: "Acme",

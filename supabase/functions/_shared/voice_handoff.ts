@@ -82,6 +82,16 @@ export function planHandoffAdvance(args: {
   return { kind: "hangup" };
 }
 
+/**
+ * Coerce a step's `ring_secs` to a positive integer, defaulting to 20. JSONB
+ * values can arrive as numbers OR numeric strings (e.g. `"45"`), so accept both;
+ * anything non-finite or <= 0 falls back to the 20s default.
+ */
+export function coerceRingSecs(raw: unknown): number {
+  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 20;
+}
+
 /** Normalize a raw chain row's `steps`/`ai_takeover` into a typed context. */
 export function buildHandoffContext(input: {
   toE164: string;
@@ -93,8 +103,7 @@ export function buildHandoffContext(input: {
         .map((s) => {
           const o = (s ?? {}) as Record<string, unknown>;
           const to = typeof o.to_e164 === "string" ? o.to_e164 : "";
-          const ring = typeof o.ring_secs === "number" ? o.ring_secs : 20;
-          return { to_e164: to, ring_secs: ring };
+          return { to_e164: to, ring_secs: coerceRingSecs(o.ring_secs) };
         })
         .filter((s) => s.to_e164.length > 0)
     : [];

@@ -45,6 +45,15 @@ const INTAKE_FIELD_LABELS: Record<string, string> = {
   notes: "Notes"
 };
 
+/** Human label for a captured field: a known label, else a Title-Cased key. */
+function fieldLabel(key: string): string {
+  if (INTAKE_FIELD_LABELS[key]) return INTAKE_FIELD_LABELS[key];
+  return key
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 /**
  * Build the owner-facing SMS body for a completed intake call: a short header,
  * the structured captured fields, and the transcript. Truncated to `maxChars`
@@ -70,9 +79,20 @@ export function composeIntakeLeadSms(input: {
   const lines: string[] = [
     `${input.businessName}: New live-transfer lead (AI intake) — the team missed the warm handoff, so I captured this on the call.`
   ];
-  for (const [key, label] of Object.entries(INTAKE_FIELD_LABELS)) {
+  // Render known fields first in a stable order, then any custom captured
+  // fields (capture_lead honors the chain's ai_takeover.capture_fields, so the
+  // SMS must surface whatever the AI stored — not just the standard five).
+  const rendered = new Set<string>();
+  for (const key of Object.keys(INTAKE_FIELD_LABELS)) {
     const v = input.lead[key];
-    if (typeof v === "string" && v.trim()) lines.push(`${label}: ${v.trim()}`);
+    if (typeof v === "string" && v.trim()) {
+      lines.push(`${fieldLabel(key)}: ${v.trim()}`);
+      rendered.add(key);
+    }
+  }
+  for (const [key, v] of Object.entries(input.lead)) {
+    if (rendered.has(key)) continue;
+    if (typeof v === "string" && v.trim()) lines.push(`${fieldLabel(key)}: ${v.trim()}`);
   }
   if (input.transferFromE164 && input.transferFromE164.trim()) {
     lines.push(`Transferred via: ${input.transferFromE164.trim()}`);
