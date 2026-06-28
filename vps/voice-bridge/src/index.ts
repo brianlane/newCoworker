@@ -653,13 +653,37 @@ function main(): void {
       // number so we can text the owner a summary + transcript at call end.
       let intake: IntakeCapability | undefined;
       let intakeNotifyE164 = "";
-      try {
-        const { data: sess } = await supabase
-          .from("voice_handoff_sessions")
-          .select("status, context")
-          .eq("call_control_id", callControlId)
-          .maybeSingle();
-        const row = sess as { status?: string; context?: unknown } | null;
+      {
+        // The edge already flipped the session to ai_intake and pressed 1 for a
+        // live seller, so getting this read wrong means Gemini would run the
+        // normal receptionist persona (and expose transfer/CRM tools) to that
+        // seller. Retry transient failures (throw OR PostgREST error) a few
+        // times before giving up, and log loudly if we never resolve it.
+        let row: { status?: string; context?: unknown } | null = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            const { data: sess, error } = await supabase
+              .from("voice_handoff_sessions")
+              .select("status, context")
+              .eq("call_control_id", callControlId)
+              .maybeSingle();
+            if (error) throw new Error(error.message);
+            row = sess as { status?: string; context?: unknown } | null;
+            break;
+          } catch (err) {
+            if (attempt === 2) {
+              console.error(
+                "voice-bridge: handoff session lookup failed after retries",
+                { callControlId, error: err instanceof Error ? err.message : String(err) }
+              );
+              recordDiag("voice_bridge_intake_lookup_failed", {
+                error: err instanceof Error ? err.message : String(err)
+              });
+            } else {
+              await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
+            }
+          }
+        }
         if (row?.status === "ai_intake") {
           const ctx = (row.context ?? {}) as {
             ai_takeover?: {
@@ -681,8 +705,6 @@ function main(): void {
             notify: intakeNotifyE164 || null
           });
         }
-      } catch (err) {
-        console.warn("voice-bridge: handoff session lookup failed (non-fatal)", err);
       }
 
       /** Compose the Gemini tool capability only when admin opted in + a forwarding target exists. */

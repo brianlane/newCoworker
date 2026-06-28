@@ -73,6 +73,15 @@ async function resolveBridgeTarget(
     console.warn("handoff: AI stream disabled by flag; skipping takeover");
     return null;
   }
+  // Without the signing secret attachAiStream would mint a stream URL with an
+  // empty/invalid MAC; Telnyx streaming_start would still return 200 but the VPS
+  // bridge rejects the WebSocket, leaving the connected seller in silence with no
+  // cleanup. Gate the takeover here (before any DTMF) so the caller aborts and
+  // ends the call cleanly instead.
+  if (!deps.streamSecret) {
+    console.error("handoff: STREAM_URL_SIGNING_SECRET missing; cannot AI-takeover", { businessId });
+    return null;
+  }
   const { supabase, defaultBridgeOrigin } = deps;
   const [{ data: route }, { data: settings }] = await Promise.all([
     supabase
@@ -187,20 +196,29 @@ type HandoffSession = {
   context: HandoffContext;
 };
 
-/** Atomically claim an advancement so concurrent no-answer hangups can't double-act. */
+/**
+ * Atomically claim an advancement so concurrent no-answer hangups can't
+ * double-act. Returns true only when this caller won the race (a row matched and
+ * updated). A real Supabase error is NOT a lost race — it throws so the caller
+ * ends the call cleanly instead of silently stalling on `handoff_already_advanced`.
+ */
 async function claimStep(
   deps: HandoffDeps,
   aLeg: string,
   failedStep: number,
   patch: Record<string, unknown>
 ): Promise<boolean> {
-  const { data } = await deps.supabase
+  const { data, error } = await deps.supabase
     .from("voice_handoff_sessions")
     .update(patch)
     .eq("call_control_id", aLeg)
     .eq("status", "ringing")
     .eq("current_step", failedStep)
     .select("call_control_id");
+  if (error) {
+    console.error("handoff: claimStep update failed", error);
+    throw new Error(`claimStep failed: ${error.message}`);
+  }
   return Array.isArray(data) && data.length > 0;
 }
 
@@ -252,6 +270,10 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
     hasAiTakeover: Boolean(ctx.ai_takeover)
   });
 
+  // Outer safety net: a claimStep DB error (now thrown, not swallowed) or any
+  // other unexpected failure must end the call cleanly rather than 500 the
+  // webhook and leave the caller on the answered inbound leg.
+  try {
   if (plan.kind === "transfer") {
     // Atomic claim: only the first concurrent hangup advances from this step.
     if (!(await claimStep(deps, aLeg, failedStep, { current_step: plan.step }))) {
@@ -333,6 +355,11 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
     await telnyxHangupCall(apiKey, aLeg);
   }
   return jsonOk("handoff_exhausted");
+  } catch (err) {
+    console.error("handoff: advance threw", err);
+    await endHandoff(deps, aLeg);
+    return jsonOk("handoff_error");
+  }
 }
 
 /**
