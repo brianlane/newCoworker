@@ -204,9 +204,30 @@ async function claimStep(
   return Array.isArray(data) && data.length > 0;
 }
 
+/**
+ * Terminal cleanup for a handoff that can't continue: mark the session done and
+ * hang up the inbound A-leg so the caller is never stranded on an answered leg.
+ * Both steps swallow their own errors — this is already the failure path.
+ */
+async function endHandoff(deps: HandoffDeps, aLeg: string): Promise<void> {
+  try {
+    await deps.supabase
+      .from("voice_handoff_sessions")
+      .update({ status: "done" })
+      .eq("call_control_id", aLeg);
+  } catch (e) {
+    console.error("handoff: mark done failed", e);
+  }
+  try {
+    await telnyxHangupCall(deps.apiKey, aLeg);
+  } catch (e) {
+    console.error("handoff: hangup failed", e);
+  }
+}
+
 /** Advance a handoff session after the current step rang out with no answer. */
 async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<Response> {
-  const { supabase, apiKey } = deps;
+  const { apiKey } = deps;
   const aLeg = sess.call_control_id;
   const ctx = sess.context;
   const failedStep = sess.current_step;
@@ -221,17 +242,26 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
     if (!(await claimStep(deps, aLeg, failedStep, { current_step: plan.step }))) {
       return jsonOk("handoff_already_advanced");
     }
-    const tf = await telnyxTransferCall(apiKey, aLeg, plan.toE164, {
-      timeoutSecs: plan.ringSecs,
-      clientState: encodeHandoffClientState(aLeg, plan.step)
-    });
-    if (!tf.ok) {
-      console.error("handoff: advance transfer failed", tf.status, (await tf.text()).slice(0, 300));
-      await supabase.from("voice_handoff_sessions").update({ status: "done" }).eq("call_control_id", aLeg);
-      await telnyxHangupCall(apiKey, aLeg);
+    // The claim already advanced current_step, so a thrown network error (not
+    // just a non-OK status) would otherwise strand the caller: retried hangups
+    // hit handoff_stale_step and nothing rings the next target. Wrap the Telnyx
+    // call so any failure ends the call cleanly instead.
+    try {
+      const tf = await telnyxTransferCall(apiKey, aLeg, plan.toE164, {
+        timeoutSecs: plan.ringSecs,
+        clientState: encodeHandoffClientState(aLeg, plan.step)
+      });
+      if (!tf.ok) {
+        console.error("handoff: advance transfer failed", tf.status, (await tf.text()).slice(0, 300));
+        await endHandoff(deps, aLeg);
+        return jsonOk("handoff_advance_failed");
+      }
+      return jsonOk("handoff_advance", { step: plan.step });
+    } catch (err) {
+      console.error("handoff: advance transfer threw", err);
+      await endHandoff(deps, aLeg);
       return jsonOk("handoff_advance_failed");
     }
-    return jsonOk("handoff_advance", { step: plan.step });
   }
 
   if (plan.kind === "ai_takeover" && ctx.ai_takeover) {
@@ -249,31 +279,38 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
     if (!(await claimStep(deps, aLeg, failedStep, { status: "ai_intake" }))) {
       return jsonOk("handoff_already_advanced");
     }
-    // Press "1" FIRST so HomeLight connects the live client, THEN attach the
-    // bridge — otherwise the AI greeting plays to the IVR / dead air. If the
-    // DTMF fails the client is never bridged, so abort rather than run the
-    // intake assistant against hold music (and text Amy a phantom lead).
-    const dt = await telnyxSendDtmf(apiKey, aLeg, "1");
-    if (!dt.ok) {
-      console.error("handoff: send_dtmf failed", dt.status, (await dt.text()).slice(0, 300));
-      await supabase.from("voice_handoff_sessions").update({ status: "done" }).eq("call_control_id", aLeg);
-      await telnyxHangupCall(apiKey, aLeg);
-      return jsonOk("handoff_dtmf_failed");
-    }
-    const ok = await attachAiStream(deps, {
-      businessId: sess.business_id,
-      callControlId: aLeg,
-      toE164: ctx.to_e164,
-      fromE164: sess.from_e164,
-      origin: target.origin,
-      path: target.path
-    });
-    if (!ok) {
-      await supabase.from("voice_handoff_sessions").update({ status: "done" }).eq("call_control_id", aLeg);
-      await telnyxHangupCall(apiKey, aLeg);
+    // Past the claim the session is committed to ai_intake; any thrown error
+    // below must end the call cleanly (retried hangups would see
+    // handoff_not_ringing) rather than leave the seller on a silent leg.
+    try {
+      // Press "1" FIRST so HomeLight connects the live client, THEN attach the
+      // bridge — otherwise the AI greeting plays to the IVR / dead air. If the
+      // DTMF fails the client is never bridged, so abort rather than run the
+      // intake assistant against hold music (and text Amy a phantom lead).
+      const dt = await telnyxSendDtmf(apiKey, aLeg, "1");
+      if (!dt.ok) {
+        console.error("handoff: send_dtmf failed", dt.status, (await dt.text()).slice(0, 300));
+        await endHandoff(deps, aLeg);
+        return jsonOk("handoff_dtmf_failed");
+      }
+      const ok = await attachAiStream(deps, {
+        businessId: sess.business_id,
+        callControlId: aLeg,
+        toE164: ctx.to_e164,
+        fromE164: sess.from_e164,
+        origin: target.origin,
+        path: target.path
+      });
+      if (!ok) {
+        await endHandoff(deps, aLeg);
+        return jsonOk("handoff_ai_takeover_unavailable");
+      }
+      return jsonOk("handoff_ai_takeover");
+    } catch (err) {
+      console.error("handoff: ai takeover threw", err);
+      await endHandoff(deps, aLeg);
       return jsonOk("handoff_ai_takeover_unavailable");
     }
-    return jsonOk("handoff_ai_takeover");
   }
 
   // No more steps and no AI takeover: hang up cleanly.

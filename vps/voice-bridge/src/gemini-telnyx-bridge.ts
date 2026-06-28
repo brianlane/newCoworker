@@ -916,25 +916,30 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   if (intake) {
     // Intake sessions get ONLY the capture tool — no transfer / customer CRM
     // tools. The lead is being captured for a manual call-back, not bridged.
+    // Build the schema from the chain's configured capture_fields so a tenant
+    // that adds/changes fields can actually persist them (the tool handler and
+    // post-call SMS already key off intakeCaptureFields).
+    const KNOWN_FIELD_DESCRIPTIONS: Record<string, string> = {
+      name: "Seller's full name.",
+      phone: "Best callback phone number.",
+      address: "Property address they're selling.",
+      timeframe: "Roughly when they want to sell (e.g. 'ASAP', '3 months', '6-12 months').",
+      notes: "Anything else useful — price expectations, motivation, condition, constraints."
+    };
+    const captureProperties: Record<string, { type: Type; description: string }> = {};
+    for (const field of intakeCaptureFields) {
+      captureProperties[field] = {
+        type: Type.STRING,
+        description: KNOWN_FIELD_DESCRIPTIONS[field] ?? `The lead's ${field}.`
+      };
+    }
     declarations.push({
       name: "capture_lead",
       description:
         "Record details about this seller lead so the owner can call them back. Call as soon as you learn any field, and again as you learn more. Always call before saying goodbye.",
       parameters: {
         type: Type.OBJECT,
-        properties: {
-          name: { type: Type.STRING, description: "Seller's full name." },
-          phone: { type: Type.STRING, description: "Best callback phone number." },
-          address: { type: Type.STRING, description: "Property address they're selling." },
-          timeframe: {
-            type: Type.STRING,
-            description: "Roughly when they want to sell (e.g. 'ASAP', '3 months', '6-12 months')."
-          },
-          notes: {
-            type: Type.STRING,
-            description: "Anything else useful — price expectations, motivation, condition, constraints."
-          }
-        },
+        properties: captureProperties,
         required: []
       }
     });
