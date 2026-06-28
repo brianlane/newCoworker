@@ -36,17 +36,12 @@ import {
   telnyxAnswerPlain,
   telnyxAnswerWithStream,
   telnyxHangupCall,
-  telnyxSendDtmf,
   telnyxSpeak,
-  telnyxStreamingStart,
   telnyxTransferCall
 } from "../_shared/telnyx_call_actions.ts";
 import {
   buildHandoffContext,
-  encodeHandoffClientState,
-  type HandoffContext,
-  parseHandoffClientState,
-  planHandoffAdvance
+  encodeHandoffClientState
 } from "../_shared/voice_handoff.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 import {
@@ -141,253 +136,6 @@ function jsonOk(path: string, extra: Record<string, unknown> = {}): Response {
     status: 200,
     headers: { "Content-Type": "application/json" }
   });
-}
-
-type HandoffDeps = {
-  supabase: SupabaseClient<any, any, any>;
-  apiKey: string;
-  streamSecret: string;
-  defaultBridgeOrigin: string;
-};
-
-/**
- * Mint a signed v2 media-stream URL and attach the Gemini bridge to an
- * already-answered leg via streaming_start. Mirrors the URL signing the main
- * inbound path does at answer time. Returns false (with logs) on any failure so
- * the caller can recover (apology + hangup). Unlike the main path this does NOT
- * reserve/bill — the warm-handoff fallback is treated like the per-caller
- * transfer rules (unmetered); these calls only happen when both humans missed a
- * HomeLight live transfer.
- */
-async function startAiStreamOnLeg(
-  deps: HandoffDeps,
-  args: { businessId: string; callControlId: string; toE164: string; fromE164: string }
-): Promise<boolean> {
-  const { supabase, apiKey, streamSecret, defaultBridgeOrigin } = deps;
-  if (!envVoiceAiStreamEnabled()) {
-    console.warn("handoff: AI stream disabled by flag; skipping takeover");
-    return false;
-  }
-
-  const [{ data: route }, { data: settings }] = await Promise.all([
-    supabase
-      .from("telnyx_voice_routes")
-      .select("media_wss_origin, media_path")
-      .eq("to_e164", args.toE164)
-      .maybeSingle(),
-    supabase
-      .from("business_telnyx_settings")
-      .select("bridge_last_heartbeat_at, bridge_media_wss_origin, bridge_media_path")
-      .eq("business_id", args.businessId)
-      .maybeSingle()
-  ]);
-
-  // Bridge health: same hysteresis as the main path. A dead bridge means the
-  // client would hear silence, so bail and let the caller hang up / SMS Amy.
-  const heartbeatTtlSec = (() => {
-    const raw = Number(Deno.env.get("BRIDGE_HEARTBEAT_TTL_SEC") ?? "150");
-    return Number.isFinite(raw) && raw >= 60 ? Math.floor(raw) : 150;
-  })();
-  const hb = settings?.bridge_last_heartbeat_at
-    ? new Date(settings.bridge_last_heartbeat_at as string).getTime()
-    : 0;
-  if (!hb || Date.now() - hb > heartbeatTtlSec * 1000) {
-    console.error("handoff: bridge down, cannot AI-takeover", { businessId: args.businessId });
-    return false;
-  }
-
-  const origin =
-    (route?.media_wss_origin as string | null) ??
-    (settings?.bridge_media_wss_origin as string | null) ??
-    defaultBridgeOrigin;
-  if (!origin) {
-    console.error("handoff: no bridge origin for AI-takeover", { businessId: args.businessId });
-    return false;
-  }
-  const pathRaw =
-    (route?.media_path as string | null) ??
-    (settings?.bridge_media_path as string | null) ??
-    "/voice/stream";
-  const pathTrimmed = pathRaw.trim().replace(/\/+$/, "") || "/voice/stream";
-  const path = pathTrimmed.startsWith("/") ? pathTrimmed : `/${pathTrimmed}`;
-
-  const exp = Math.floor(Date.now() / 1000) + 120;
-  const nonce = crypto.randomUUID().replace(/-/g, "");
-  const streamPayload: StreamPayloadV2 = {
-    v: 2,
-    call_control_id: args.callControlId,
-    business_id: args.businessId,
-    to_e164: args.toE164,
-    from_e164: args.fromE164,
-    exp,
-    nonce
-  };
-  const mac = await signStreamUrlMac(streamPayload, streamSecret);
-  const expiresAt = new Date((exp + 60) * 1000).toISOString();
-  const { error: nonceErr } = await supabase
-    .from("stream_url_nonces")
-    .insert({ nonce, expires_at: expiresAt });
-  if (nonceErr) {
-    console.error("handoff: nonce insert failed", nonceErr);
-    return false;
-  }
-
-  const qs = new URLSearchParams({
-    v: "2",
-    call_control_id: args.callControlId,
-    business_id: args.businessId,
-    to_e164: args.toE164,
-    exp: String(exp),
-    nonce,
-    mac
-  });
-  if (args.fromE164) qs.set("from_e164_info", args.fromE164);
-  const streamUrl = `${origin.replace(/\/$/, "")}${path}?${qs.toString()}`
-    .replace(/^http:/i, "ws:")
-    .replace(/^https:/i, "wss:");
-
-  const res = await telnyxStreamingStart(apiKey, args.callControlId, { streamUrl });
-  if (!res.ok) {
-    console.error("handoff: streaming_start failed", res.status, (await res.text()).slice(0, 300));
-    return false;
-  }
-  return true;
-}
-
-/** Advance a handoff session after the current step rang out with no answer. */
-async function advanceHandoff(
-  deps: HandoffDeps,
-  sess: { call_control_id: string; business_id: string; from_e164: string; current_step: number; context: HandoffContext }
-): Promise<Response> {
-  const { supabase, apiKey } = deps;
-  const aLeg = sess.call_control_id;
-  const ctx = sess.context;
-  const plan = planHandoffAdvance({
-    steps: ctx.steps ?? [],
-    failedStep: sess.current_step,
-    hasAiTakeover: Boolean(ctx.ai_takeover)
-  });
-
-  if (plan.kind === "transfer") {
-    const { error: upErr } = await supabase
-      .from("voice_handoff_sessions")
-      .update({ current_step: plan.step })
-      .eq("call_control_id", aLeg)
-      .eq("status", "ringing");
-    if (upErr) console.error("handoff: step update failed", upErr);
-    const tf = await telnyxTransferCall(apiKey, aLeg, plan.toE164, {
-      timeoutSecs: plan.ringSecs,
-      clientState: encodeHandoffClientState(aLeg, plan.step)
-    });
-    if (!tf.ok) {
-      console.error("handoff: advance transfer failed", tf.status, (await tf.text()).slice(0, 300));
-      await supabase.from("voice_handoff_sessions").update({ status: "done" }).eq("call_control_id", aLeg);
-      await telnyxHangupCall(apiKey, aLeg);
-      return jsonOk("handoff_advance_failed");
-    }
-    return jsonOk("handoff_advance", { step: plan.step });
-  }
-
-  if (plan.kind === "ai_takeover" && ctx.ai_takeover) {
-    // Flip to ai_intake BEFORE attaching the stream so the bridge sees intake
-    // mode the moment it connects, then press "1" so HomeLight connects the
-    // live client to us.
-    await supabase
-      .from("voice_handoff_sessions")
-      .update({ status: "ai_intake" })
-      .eq("call_control_id", aLeg)
-      .eq("status", "ringing");
-    const started = await startAiStreamOnLeg(deps, {
-      businessId: sess.business_id,
-      callControlId: aLeg,
-      toE164: ctx.to_e164,
-      fromE164: sess.from_e164
-    });
-    if (!started) {
-      await supabase.from("voice_handoff_sessions").update({ status: "done" }).eq("call_control_id", aLeg);
-      await telnyxHangupCall(apiKey, aLeg);
-      return jsonOk("handoff_ai_takeover_unavailable");
-    }
-    const dtmfDelayMs = (() => {
-      const raw = Number(Deno.env.get("VOICE_HOMELIGHT_DTMF_DELAY_MS") ?? "1500");
-      return Number.isFinite(raw) && raw >= 0 ? raw : 1500;
-    })();
-    if (dtmfDelayMs > 0) {
-      await new Promise<void>((resolve) => setTimeout(resolve, dtmfDelayMs));
-    }
-    const dt = await telnyxSendDtmf(apiKey, aLeg, "1");
-    if (!dt.ok) {
-      console.error("handoff: send_dtmf failed", dt.status, (await dt.text()).slice(0, 300));
-    }
-    return jsonOk("handoff_ai_takeover");
-  }
-
-  // No more steps and no AI takeover: hang up cleanly.
-  await supabase.from("voice_handoff_sessions").update({ status: "done" }).eq("call_control_id", aLeg);
-  await telnyxHangupCall(apiKey, aLeg);
-  return jsonOk("handoff_exhausted");
-}
-
-/**
- * Handle Telnyx call.bridged / call.hangup for warm-handoff sessions.
- *   - call.bridged carrying our transfer client_state => a human answered;
- *     mark the session bridged so a later hangup can't advance it.
- *   - call.hangup carrying our client_state => that step's leg ended; advance
- *     the chain if the session is still ringing on that step.
- *   - call.hangup on the inbound A-leg (no client_state) => terminal; close it.
- */
-async function handleHandoffLifecycle(
-  deps: HandoffDeps,
-  eventType: string,
-  payload: Record<string, unknown>
-): Promise<Response> {
-  const { supabase } = deps;
-  const callControlId = String(payload["call_control_id"] ?? "");
-  const parsed = parseHandoffClientState(payload["client_state"] as string | undefined);
-
-  if (eventType === "call.bridged") {
-    if (!parsed) return jsonOk("ignored_bridged");
-    await supabase
-      .from("voice_handoff_sessions")
-      .update({ status: "bridged" })
-      .eq("call_control_id", parsed.aLegCallId)
-      .eq("status", "ringing");
-    return jsonOk("handoff_bridged");
-  }
-
-  // call.hangup
-  if (parsed) {
-    const { data: sessRow } = await supabase
-      .from("voice_handoff_sessions")
-      .select("call_control_id, business_id, from_e164, status, current_step, context")
-      .eq("call_control_id", parsed.aLegCallId)
-      .maybeSingle();
-    const sess = sessRow as
-      | { call_control_id: string; business_id: string; from_e164: string; status: string; current_step: number; context: HandoffContext }
-      | null;
-    if (!sess) return jsonOk("handoff_no_session");
-    // Only advance from an active ring on this exact step. A hangup after a
-    // successful bridge (status !== 'ringing') or a stale/duplicate step must
-    // not re-trigger the chain.
-    if (sess.status !== "ringing") return jsonOk("handoff_not_ringing");
-    if (sess.current_step !== parsed.step) return jsonOk("handoff_stale_step");
-    return await advanceHandoff(deps, sess);
-  }
-
-  // No client_state: this may be the inbound A-leg hanging up. If a session is
-  // keyed by this call id, mark it terminal so nothing advances afterward.
-  if (!callControlId) return jsonOk("ignored_hangup");
-  const { data: sessRow } = await supabase
-    .from("voice_handoff_sessions")
-    .select("call_control_id")
-    .eq("call_control_id", callControlId)
-    .maybeSingle();
-  if (!sessRow) return jsonOk("ignored_hangup");
-  await supabase
-    .from("voice_handoff_sessions")
-    .update({ status: "done" })
-    .eq("call_control_id", callControlId);
-  return jsonOk("handoff_session_closed");
 }
 
 serve(async (req: Request) => {
@@ -541,21 +289,7 @@ serve(async (req: Request) => {
     return new Response("Webhook begin state error", { status: 500 });
   }
 
-  const handoffDeps: HandoffDeps = {
-    supabase,
-    apiKey,
-    streamSecret,
-    defaultBridgeOrigin
-  };
-
   const response = await (async (): Promise<Response> => {
-  // Warm-handoff chain lifecycle (HomeLight live transfer): advance the chain
-  // on the transfer legs' bridged/hangup events. Other businesses/calls simply
-  // have no matching session row and fall through as no-ops.
-  if (eventType === "call.bridged" || eventType === "call.hangup") {
-    return await handleHandoffLifecycle(handoffDeps, eventType, data?.payload ?? {});
-  }
-
   if (eventType !== "call.initiated") {
     return new Response(JSON.stringify({ ok: true, skipped: eventType }), {
       status: 200,
@@ -641,20 +375,11 @@ serve(async (req: Request) => {
       });
       const first = ctx.steps[0];
       if (first) {
-        // A warm transfer bridges an *answered* leg. Answer first (HomeLight's
-        // IVR keeps looping while we ring), then transfer to the first step.
-        const ans = await telnyxAnswerPlain(apiKey, callControlId);
-        if (!ans.ok) {
-          const errText = (await ans.text()).slice(0, 300);
-          console.error("handoff: answer failed", ans.status, errText);
-          await telemetryRecord(supabase, "voice_handoff_failed", {
-            business_id: businessId,
-            call_control_id: callControlId,
-            stage: "answer",
-            http_status: ans.status
-          });
-          return jsonOk("handoff_answer_failed");
-        }
+        // Persist the session FIRST — the chain can only advance (call.bridged /
+        // call.hangup → telnyx-voice-call-end) if a session row keyed by this
+        // A-leg call_control_id exists. If the write fails, skip the handoff and
+        // fall through to the normal path rather than ringing a single dead-end
+        // leg with no Amy/AI fallback.
         const { error: sessErr } = await supabase.from("voice_handoff_sessions").upsert(
           {
             call_control_id: callControlId,
@@ -667,7 +392,32 @@ serve(async (req: Request) => {
           },
           { onConflict: "call_control_id" }
         );
-        if (sessErr) console.error("handoff: session upsert failed", sessErr);
+        if (sessErr) {
+          console.error("handoff: session upsert failed; skipping handoff", sessErr);
+          await telemetryRecord(supabase, "voice_handoff_failed", {
+            business_id: businessId,
+            call_control_id: callControlId,
+            stage: "session_upsert"
+          });
+        } else {
+        // A warm transfer bridges an *answered* leg. Answer first (HomeLight's
+        // IVR keeps looping while we ring), then transfer to the first step.
+        const ans = await telnyxAnswerPlain(apiKey, callControlId);
+        if (!ans.ok) {
+          const errText = (await ans.text()).slice(0, 300);
+          console.error("handoff: answer failed", ans.status, errText);
+          await supabase
+            .from("voice_handoff_sessions")
+            .update({ status: "done" })
+            .eq("call_control_id", callControlId);
+          await telemetryRecord(supabase, "voice_handoff_failed", {
+            business_id: businessId,
+            call_control_id: callControlId,
+            stage: "answer",
+            http_status: ans.status
+          });
+          return jsonOk("handoff_answer_failed");
+        }
         const tf = await telnyxTransferCall(apiKey, callControlId, first.to_e164, {
           timeoutSecs: first.ring_secs,
           clientState: encodeHandoffClientState(callControlId, 0)
@@ -704,6 +454,7 @@ serve(async (req: Request) => {
           payload: { call_control_id: callControlId, from: fromE164Informational }
         });
         return jsonOk("handoff_chain_start");
+        }
       }
     }
   }

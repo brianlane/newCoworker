@@ -21,6 +21,9 @@
 
 export const TELNYX_VOICE_ROUTES: Readonly<Record<string, string>> = Object.freeze({
   "call.initiated": "telnyx-voice-inbound",
+  // call.bridged is needed by the warm-handoff chain (telnyx-voice-call-end)
+  // to mark a step as answered so a later hangup can't advance the chain.
+  "call.bridged": "telnyx-voice-call-end",
   "call.hangup": "telnyx-voice-call-end",
   "call.ended": "telnyx-voice-call-end"
 });
