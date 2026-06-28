@@ -250,10 +250,15 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
       return jsonOk("handoff_already_advanced");
     }
     // Press "1" FIRST so HomeLight connects the live client, THEN attach the
-    // bridge — otherwise the AI greeting plays to the IVR / dead air.
+    // bridge — otherwise the AI greeting plays to the IVR / dead air. If the
+    // DTMF fails the client is never bridged, so abort rather than run the
+    // intake assistant against hold music (and text Amy a phantom lead).
     const dt = await telnyxSendDtmf(apiKey, aLeg, "1");
     if (!dt.ok) {
       console.error("handoff: send_dtmf failed", dt.status, (await dt.text()).slice(0, 300));
+      await supabase.from("voice_handoff_sessions").update({ status: "done" }).eq("call_control_id", aLeg);
+      await telnyxHangupCall(apiKey, aLeg);
+      return jsonOk("handoff_dtmf_failed");
     }
     const ok = await attachAiStream(deps, {
       businessId: sess.business_id,
@@ -296,11 +301,16 @@ async function handleHandoffLifecycle(
     // A human answered the step leg → mark bridged so a later hangup can't
     // advance the chain. No client_state ⇒ not a handoff leg.
     if (!parsed) return { handled: false, response: jsonOk("ignored_bridged") };
+    // Match the exact ringing step encoded in client_state. A delayed bridged
+    // webhook from an EARLIER step's leg must not mark the session bridged while
+    // a LATER step is ringing — that would freeze the chain (subsequent
+    // no-answer hangups would be ignored as "not ringing").
     await supabase
       .from("voice_handoff_sessions")
       .update({ status: "bridged" })
       .eq("call_control_id", parsed.aLegCallId)
-      .eq("status", "ringing");
+      .eq("status", "ringing")
+      .eq("current_step", parsed.step);
     return { handled: true, response: jsonOk("handoff_bridged") };
   }
 
