@@ -123,26 +123,116 @@ export async function answerThenSpeak(
   }
 }
 
+export type TelnyxTransferOptions = {
+  /**
+   * Ring timeout (seconds) for the transfer target. When the target does not
+   * answer within this window Telnyx hangs up the new (B) leg with a no-answer
+   * cause and leaves the original (A) leg under our control — that is what lets
+   * the handoff chain fall through to the next step. Omit for an open-ended ring.
+   */
+  timeoutSecs?: number;
+  /**
+   * Opaque state echoed back on this transfer's resulting call-control webhooks
+   * (e.g. call.bridged / call.hangup for the B leg). The handoff state machine
+   * uses it to correlate a no-answer hangup back to the chain step that issued
+   * the transfer. Telnyx requires this be base64; callers pass plain text and we
+   * encode it here.
+   */
+  clientState?: string;
+};
+
+function encodeClientState(raw: string): string {
+  // Deno/edge runtime has btoa; mirror what the SMS worker does for client_state.
+  return btoa(unescape(encodeURIComponent(raw)));
+}
+
 /**
  * Transfer (bridge) an already-answered inbound call to `toE164`.
  * Used by Safe Mode to hand the caller to the owner's forwarding number after
- * a short spoken confirmation. We do not set `from` explicitly — Telnyx will
- * present the original DID as the caller ID by default.
+ * a short spoken confirmation, and by the warm-handoff chain to ring each step
+ * with a `timeoutSecs` ring window + `clientState` so a no-answer can advance
+ * the chain. We do not set `from` explicitly — Telnyx presents the original DID
+ * as the caller ID by default.
  */
 export async function telnyxTransferCall(
   apiKey: string,
   callControlId: string,
   toE164: string,
+  opts: TelnyxTransferOptions = {},
   fetchImpl: typeof fetch = fetch
 ): Promise<Response> {
   const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/transfer`;
+  const body: Record<string, unknown> = { to: toE164 };
+  if (typeof opts.timeoutSecs === "number" && opts.timeoutSecs > 0) {
+    body.timeout_secs = Math.floor(opts.timeoutSecs);
+  }
+  if (opts.clientState) {
+    body.client_state = encodeClientState(opts.clientState);
+  }
   return fetchImpl(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ to: toE164 })
+    body: JSON.stringify(body)
+  });
+}
+
+/**
+ * Start a bidirectional media stream on an ALREADY-answered call. The inbound
+ * (A) leg of a handoff chain is answered up front (so HomeLight's IVR keeps
+ * looping while we ring humans); when every human misses we attach the Gemini
+ * bridge to that same leg via streaming_start rather than re-answering. The
+ * stream params mirror telnyxAnswerWithStream so the bridge sees the same
+ * L16 @ 16 kHz contract.
+ */
+export async function telnyxStreamingStart(
+  apiKey: string,
+  callControlId: string,
+  opts: { streamUrl: string; clientState?: string },
+  fetchImpl: typeof fetch = fetch
+): Promise<Response> {
+  const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/streaming_start`;
+  const body: Record<string, unknown> = {
+    stream_url: opts.streamUrl,
+    stream_track: "both_tracks",
+    stream_codec: "L16",
+    stream_bidirectional_mode: "rtp",
+    stream_bidirectional_codec: "L16",
+    stream_bidirectional_sampling_rate: 16000
+  };
+  if (opts.clientState) {
+    body.client_state = encodeClientState(opts.clientState);
+  }
+  return fetchImpl(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+}
+
+/**
+ * Send DTMF tones on a call. Used by the handoff chain's AI takeover to press
+ * "1" on the HomeLight leg so HomeLight connects the live client to us.
+ */
+export async function telnyxSendDtmf(
+  apiKey: string,
+  callControlId: string,
+  digits: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<Response> {
+  const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/send_dtmf`;
+  return fetchImpl(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ digits })
   });
 }
 
