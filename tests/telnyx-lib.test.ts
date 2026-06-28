@@ -8,7 +8,9 @@ import {
   telnyxAnswerPlain,
   telnyxAnswerWithStream,
   telnyxHangupCall,
+  telnyxSendDtmf,
   telnyxSpeak,
+  telnyxStreamingStart,
   telnyxTransferCall
 } from "../supabase/functions/_shared/telnyx_call_actions";
 
@@ -242,6 +244,7 @@ describe("telnyx call-control", () => {
       "key",
       "cc3",
       "+15551234567",
+      {},
       fetchMock as typeof fetch
     );
     expect(res.ok).toBe(true);
@@ -251,6 +254,91 @@ describe("telnyx call-control", () => {
     expect(init.method).toBe("POST");
     expect(init.headers.Authorization).toBe("Bearer key");
     expect(JSON.parse(init.body as string)).toEqual({ to: "+15551234567" });
+  });
+
+  it("telnyxTransferCall includes timeout_secs and base64 client_state when provided", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, text: () => Promise.resolve("") });
+    await telnyxTransferCall(
+      "key",
+      "cc-tf",
+      "+15551234567",
+      { timeoutSecs: 20, clientState: "hl:cc-a:0" },
+      fetchMock as typeof fetch
+    );
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body as string);
+    expect(body.to).toBe("+15551234567");
+    expect(body.timeout_secs).toBe(20);
+    // client_state must be base64 of the plain text we passed.
+    expect(typeof body.client_state).toBe("string");
+    expect(Buffer.from(body.client_state as string, "base64").toString("utf8")).toBe(
+      "hl:cc-a:0"
+    );
+  });
+
+  it("telnyxTransferCall omits timeout_secs when it is not positive", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, text: () => Promise.resolve("") });
+    await telnyxTransferCall(
+      "key",
+      "cc-tf0",
+      "+15551234567",
+      { timeoutSecs: 0 },
+      fetchMock as typeof fetch
+    );
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body as string);
+    expect(body.timeout_secs).toBeUndefined();
+    expect(body.client_state).toBeUndefined();
+  });
+
+  it("telnyxStreamingStart base64-encodes client_state when provided", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, text: () => Promise.resolve("") });
+    await telnyxStreamingStart(
+      "key",
+      "cc-ss2",
+      { streamUrl: "wss://b/voice/stream", clientState: "hl:cc-a:2" },
+      fetchMock as typeof fetch
+    );
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body as string);
+    expect(Buffer.from(body.client_state as string, "base64").toString("utf8")).toBe("hl:cc-a:2");
+  });
+
+  it("telnyxStreamingStart posts /actions/streaming_start with the bridge stream contract", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, text: () => Promise.resolve("") });
+    await telnyxStreamingStart(
+      "key",
+      "cc-ss",
+      { streamUrl: "wss://bridge.example/voice/stream?x=1" },
+      fetchMock as typeof fetch
+    );
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://api.telnyx.com/v2/calls/cc-ss/actions/streaming_start");
+    const body = JSON.parse(init.body as string);
+    expect(body.stream_url).toBe("wss://bridge.example/voice/stream?x=1");
+    expect(body.stream_track).toBe("both_tracks");
+    expect(body.stream_codec).toBe("L16");
+    expect(body.stream_bidirectional_mode).toBe("rtp");
+    expect(body.stream_bidirectional_codec).toBe("L16");
+    expect(body.stream_bidirectional_sampling_rate).toBe(16000);
+  });
+
+  it("telnyxSendDtmf posts /actions/send_dtmf with the digits", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, text: () => Promise.resolve("") });
+    await telnyxSendDtmf("key", "cc-dtmf", "1", fetchMock as typeof fetch);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://api.telnyx.com/v2/calls/cc-dtmf/actions/send_dtmf");
+    expect(JSON.parse(init.body as string)).toEqual({ digits: "1" });
   });
 
   it("telnyxTransferCall uses default global fetch when fetchImpl omitted", async () => {

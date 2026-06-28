@@ -9,6 +9,7 @@ import {
 describe("telnyx_voice_dispatch route table", () => {
   it("maps Telnyx call event types to the matching Edge function", () => {
     expect(TELNYX_VOICE_ROUTES["call.initiated"]).toBe("telnyx-voice-inbound");
+    expect(TELNYX_VOICE_ROUTES["call.bridged"]).toBe("telnyx-voice-call-end");
     expect(TELNYX_VOICE_ROUTES["call.hangup"]).toBe("telnyx-voice-call-end");
     expect(TELNYX_VOICE_ROUTES["call.ended"]).toBe("telnyx-voice-call-end");
   });
@@ -28,6 +29,14 @@ describe("decideTelnyxVoiceRoute", () => {
       kind: "route",
       target: "telnyx-voice-inbound",
       eventType: "call.initiated"
+    });
+  });
+
+  it("routes call.bridged → call-end (warm-handoff chain)", () => {
+    expect(decideTelnyxVoiceRoute(envelope("call.bridged"))).toEqual({
+      kind: "route",
+      target: "telnyx-voice-call-end",
+      eventType: "call.bridged"
     });
   });
 

@@ -11,10 +11,13 @@ import { loadEnv } from "./load-env.js";
 import {
   createGeminiTelnyxBridge,
   type TransferCapability,
-  type CallerIdentity
+  type CallerIdentity,
+  type CapturedLead,
+  type IntakeCapability
 } from "./gemini-telnyx-bridge.js";
 import { loadVaultForPrompt } from "./vault-loader.js";
 import { telnyxTransferCall, telnyxSendPlainSms } from "./telnyx-call-actions.js";
+import { composeIntakeLeadSms } from "./intake.js";
 import type { TranscriptAdapter } from "./voice-transcript.js";
 import { startIdleHeartbeatLoop, writeHeartbeat } from "./heartbeat.js";
 
@@ -336,6 +339,78 @@ async function sendMissedCallSms(params: {
   }
 }
 
+/** Max characters of transcript to include in the intake SMS (Telnyx segments long bodies). */
+const INTAKE_SMS_MAX_CHARS = 3000;
+
+/**
+ * After a HomeLight AI-takeover call ends, text the owner (notify number) a
+ * structured lead summary plus the full transcript. Best-effort: a missing SMS
+ * config or transcript just trims the message; we never throw.
+ */
+async function sendIntakeLeadSms(params: {
+  supabase: SupabaseClient;
+  settings: TenantTelnyxSettings;
+  notifyE164: string;
+  callControlId: string;
+  /** The live-transfer line the call arrived on (transfer partner), not the seller. */
+  transferFromE164: string;
+  businessName: string;
+  lead: CapturedLead;
+}): Promise<void> {
+  const { supabase, settings, notifyE164, callControlId, transferFromE164, businessName, lead } = params;
+  const apiKey = process.env.TELNYX_API_KEY ?? "";
+  if (!apiKey || !settings.smsFromE164 || !notifyE164) {
+    console.warn("voice-bridge: intake SMS skipped (missing api key / from / notify number)");
+    return;
+  }
+
+  let transcript = "";
+  try {
+    const { data: t } = await supabase
+      .from("voice_call_transcripts")
+      .select("id")
+      .eq("call_control_id", callControlId)
+      .maybeSingle();
+    const transcriptId = (t as { id?: string } | null)?.id;
+    if (transcriptId) {
+      const { data: turns } = await supabase
+        .from("voice_call_transcript_turns")
+        .select("role, content, turn_index")
+        .eq("transcript_id", transcriptId)
+        .order("turn_index", { ascending: true });
+      transcript = (turns ?? [])
+        .map((r) => {
+          const row = r as { role?: string; content?: string };
+          const who = row.role === "assistant" ? "AI" : "Client";
+          return `${who}: ${row.content ?? ""}`;
+        })
+        .join("\n");
+    }
+  } catch (err) {
+    console.warn("voice-bridge: intake transcript read failed (non-fatal)", err);
+  }
+
+  const text = composeIntakeLeadSms({
+    businessName,
+    lead,
+    transferFromE164,
+    transcript,
+    maxChars: INTAKE_SMS_MAX_CHARS
+  });
+
+  const res = await telnyxSendPlainSms(apiKey, {
+    toE164: notifyE164,
+    fromE164: settings.smsFromE164,
+    messagingProfileId: settings.messagingProfileId ?? undefined,
+    text
+  });
+  if (!res.ok) {
+    console.error("voice-bridge: intake SMS failed", res.status, res.body);
+  } else {
+    console.log("voice-bridge: intake lead SMS sent", { callControlId, to: notifyE164 });
+  }
+}
+
 function main(): void {
   if (!STREAM_SECRET || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
     console.error("voice-bridge: set STREAM_URL_SIGNING_SECRET, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY");
@@ -521,6 +596,7 @@ function main(): void {
 
       let geminiTeardown: (() => Promise<void>) | undefined;
       let onTelnyxGemini: ((rawUtf8: string) => void) | undefined;
+      let geminiGetLead: (() => CapturedLead) | undefined;
 
       const geminiFlag = (process.env.GEMINI_LIVE_ENABLED ?? "true").trim().toLowerCase();
       const geminiLiveEnabled = geminiFlag !== "false" && geminiFlag !== "0";
@@ -569,6 +645,66 @@ function main(): void {
           kind: callerIdentity.kind,
           name: callerIdentity.name ?? null
         });
+      }
+
+      // HomeLight AI-takeover intake: telnyx-voice-inbound flips the handoff
+      // session to status='ai_intake' right before attaching this stream. When
+      // that's the case, run the lead-intake persona and remember the notify
+      // number so we can text the owner a summary + transcript at call end.
+      let intake: IntakeCapability | undefined;
+      let intakeNotifyE164 = "";
+      {
+        // The edge already flipped the session to ai_intake and pressed 1 for a
+        // live seller, so getting this read wrong means Gemini would run the
+        // normal receptionist persona (and expose transfer/CRM tools) to that
+        // seller. Retry transient failures (throw OR PostgREST error) a few
+        // times before giving up, and log loudly if we never resolve it.
+        let row: { status?: string; context?: unknown } | null = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            const { data: sess, error } = await supabase
+              .from("voice_handoff_sessions")
+              .select("status, context")
+              .eq("call_control_id", callControlId)
+              .maybeSingle();
+            if (error) throw new Error(error.message);
+            row = sess as { status?: string; context?: unknown } | null;
+            break;
+          } catch (err) {
+            if (attempt === 2) {
+              console.error(
+                "voice-bridge: handoff session lookup failed after retries",
+                { callControlId, error: err instanceof Error ? err.message : String(err) }
+              );
+              recordDiag("voice_bridge_intake_lookup_failed", {
+                error: err instanceof Error ? err.message : String(err)
+              });
+            } else {
+              await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
+            }
+          }
+        }
+        if (row?.status === "ai_intake") {
+          const ctx = (row.context ?? {}) as {
+            ai_takeover?: {
+              notify_e164?: string;
+              persona?: string;
+              capture_fields?: unknown;
+            } | null;
+          };
+          const ai = ctx.ai_takeover ?? undefined;
+          intakeNotifyE164 = typeof ai?.notify_e164 === "string" ? ai.notify_e164 : "";
+          intake = {
+            persona: typeof ai?.persona === "string" ? ai.persona : undefined,
+            captureFields: Array.isArray(ai?.capture_fields)
+              ? (ai!.capture_fields as unknown[]).filter((x): x is string => typeof x === "string")
+              : undefined
+          };
+          console.log("voice-bridge: HomeLight intake mode", {
+            callControlId,
+            notify: intakeNotifyE164 || null
+          });
+        }
       }
 
       /** Compose the Gemini tool capability only when admin opted in + a forwarding target exists. */
@@ -643,11 +779,16 @@ function main(): void {
           // Default off for one release; setting it to "true" (any casing)
           // enables inputAudioTranscription + outputAudioTranscription on the
           // Live session and persists turn rows.
+          // HomeLight intake calls always need the transcript (we text it to
+          // the owner), so force it on for those regardless of the rollout flag.
           const transcriptionEnabled =
+            Boolean(intake) ||
             (process.env.VOICE_TRANSCRIPTION_ENABLED ?? "").toLowerCase() === "true";
           const transcriptAdapter = transcriptionEnabled
             ? createSupabaseTranscriptAdapter(supabase, {
-                recordCustomerInteraction: !callerIsStaff
+                // Intake leads aren't existing customers and shouldn't bump a
+                // customer_memories row for HomeLight's transfer line.
+                recordCustomerInteraction: !callerIsStaff && !intake
               })
             : undefined;
 
@@ -725,37 +866,49 @@ function main(): void {
             transcriptAdapter,
             customerMemorySummary,
             callerIdentity,
+            intake,
             recordDiag
           });
           onTelnyxGemini = bridge.onTelnyxMessage;
           geminiTeardown = bridge.teardown;
+          geminiGetLead = bridge.getLead;
         } catch (e) {
           const reason = e instanceof Error ? e.message : String(e);
           console.error("voice-bridge: Gemini Live unavailable (continuing without AI audio)", reason);
           recordDiag("voice_bridge_gemini_init_failed", { reason });
+          // For a HomeLight ai_intake call the missed-call SMS would text the
+          // tenant's forward number and label the caller as HomeLight's transfer
+          // line — wrong recipient and wrong story for a connected live seller.
+          // Skip it; the no-lead intake SMS below still notifies the intake owner.
+          if (!intake) {
+            await sendMissedCallSms({
+              settings: tenantSettings,
+              callerE164: fromE164Info || "unknown",
+              businessName,
+              reason: `Gemini Live init failed: ${reason}`
+            });
+          }
+        }
+      } else if (!geminiLiveEnabled) {
+        console.warn("voice-bridge: GEMINI_LIVE_ENABLED=false; AI audio pipe disabled (media stream still accepted)");
+        if (!intake) {
           await sendMissedCallSms({
             settings: tenantSettings,
             callerE164: fromE164Info || "unknown",
             businessName,
-            reason: `Gemini Live init failed: ${reason}`
+            reason: "AI audio disabled (flag off)"
           });
         }
-      } else if (!geminiLiveEnabled) {
-        console.warn("voice-bridge: GEMINI_LIVE_ENABLED=false; AI audio pipe disabled (media stream still accepted)");
-        await sendMissedCallSms({
-          settings: tenantSettings,
-          callerE164: fromE164Info || "unknown",
-          businessName,
-          reason: "AI audio disabled (flag off)"
-        });
       } else {
         console.warn("voice-bridge: GOOGLE_API_KEY or GEMINI_API_KEY unset; AI audio pipe disabled");
-        await sendMissedCallSms({
-          settings: tenantSettings,
-          callerE164: fromE164Info || "unknown",
-          businessName,
-          reason: "AI audio disabled (no API key)"
-        });
+        if (!intake) {
+          await sendMissedCallSms({
+            settings: tenantSettings,
+            callerE164: fromE164Info || "unknown",
+            businessName,
+            reason: "AI audio disabled (no API key)"
+          });
+        }
       }
 
       let lastLastSeenWriteMs = Date.now();
@@ -793,9 +946,37 @@ function main(): void {
           reason: reason?.toString?.("utf8") ?? ""
         });
         clearInterval(hb);
-        void geminiTeardown?.();
         const endedAt = new Date().toISOString();
         void (async () => {
+          // Finalize the Gemini session/transcript first. For HomeLight intake
+          // we then text the owner the captured lead + transcript, which needs
+          // the transcript rows flushed (finalize awaits its in-flight writes).
+          try {
+            await geminiTeardown?.();
+          } catch (err) {
+            console.error("voice-bridge: teardown error", err);
+          }
+          // Only notify when the Gemini bridge actually ran (geminiGetLead is
+          // set on successful bridge init). If Gemini never started (init
+          // failure / disabled / no key) we must NOT text the owner a phantom
+          // "lead" with no captured fields and no transcript.
+          if (intake && intakeNotifyE164 && geminiGetLead) {
+            try {
+              await sendIntakeLeadSms({
+                supabase,
+                settings: tenantSettings,
+                notifyE164: intakeNotifyE164,
+                callControlId,
+                // The ANI is the transfer partner's line (e.g. HomeLight), not
+                // the seller — pass it only as the "transferred via" reference.
+                transferFromE164: trustedFromE164 || fromE164Info || "",
+                businessName,
+                lead: geminiGetLead()
+              });
+            } catch (err) {
+              console.error("voice-bridge: intake SMS error", err);
+            }
+          }
           await supabase
             .from("voice_active_sessions")
             .update({ ended_at: endedAt })

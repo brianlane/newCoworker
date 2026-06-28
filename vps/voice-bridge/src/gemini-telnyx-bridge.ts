@@ -9,6 +9,11 @@ import { decodeTelnyxMediaPayload } from "./rtp-frame.js";
 import { composeVaultPromptSection, type VaultSnapshot } from "./vault-loader.js";
 import { currentDateTimeLine } from "./datetime-line.js";
 import {
+  DEFAULT_INTAKE_CAPTURE_FIELDS,
+  intakeSystemInstruction,
+  type CapturedLead
+} from "./intake.js";
+import {
   createTranscriptRecorder,
   type TranscriptAdapter,
   type TranscriptRecorder
@@ -81,6 +86,22 @@ export type TransferCapability = {
 };
 
 /**
+ * HomeLight live-transfer "AI takeover" intake. When set, the bridge runs a
+ * dedicated lead-intake persona instead of the receptionist persona: it greets
+ * as the owner's office, registers a `capture_lead` tool, and accumulates the
+ * lead fields so the caller (index.ts) can text the owner a summary + the
+ * transcript after the call. See voice_handoff_chains.ai_takeover.
+ */
+export type IntakeCapability = {
+  /** Opening line / persona the AI worker should lead with. */
+  persona?: string;
+  /** Lead fields to collect (defaults to name, phone, address, timeframe, notes). */
+  captureFields?: string[];
+};
+
+export type { CapturedLead } from "./intake.js";
+
+/**
  * Configuration for the voice tool suite — a small set of HTTP adapters the
  * platform Next.js app exposes under `/api/voice/tools/*`. The bridge passes
  * every Gemini Live tool call through these adapters, which in turn broker
@@ -132,6 +153,13 @@ export type GeminiBridgeOptions = {
   businessTimezone?: string | null;
   /** When set, registers a `transfer_to_owner` function tool on the Live session. */
   transfer?: TransferCapability;
+  /**
+   * When set, the session runs the HomeLight lead-intake persona instead of the
+   * normal receptionist/staff personas (the live client was connected after both
+   * Dave and Amy missed the warm transfer). Mutually exclusive with the customer
+   * CRM/transfer tools — only `capture_lead` is registered.
+   */
+  intake?: IntakeCapability;
   /** Vault markdown (soul/identity/memory/website) rendered into the system prompt. */
   vault?: VaultSnapshot;
   /**
@@ -664,6 +692,8 @@ function buildVoiceToolDeclarations() {
 export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promise<{
   onTelnyxMessage: (rawUtf8: string) => void;
   teardown: () => Promise<void>;
+  /** Lead fields captured during a HomeLight intake call (empty otherwise). */
+  getLead: () => CapturedLead;
 }> {
   const ai = new GoogleGenAI({ apiKey: opts.apiKey });
   let ended = false;
@@ -873,8 +903,48 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     }
   };
 
+  const intake = opts.intake;
+  const intakeCaptureFields =
+    intake?.captureFields && intake.captureFields.length > 0
+      ? intake.captureFields
+      : DEFAULT_INTAKE_CAPTURE_FIELDS;
+  // Lead fields accumulated from `capture_lead` calls; surfaced via getLead()
+  // so index.ts can text the owner a structured summary after the call.
+  const leadData: CapturedLead = {};
+
   const declarations: Array<{ name: string; description: string; parameters: unknown }> = [];
-  if (opts.transfer) {
+  if (intake) {
+    // Intake sessions get ONLY the capture tool — no transfer / customer CRM
+    // tools. The lead is being captured for a manual call-back, not bridged.
+    // Build the schema from the chain's configured capture_fields so a tenant
+    // that adds/changes fields can actually persist them (the tool handler and
+    // post-call SMS already key off intakeCaptureFields).
+    const KNOWN_FIELD_DESCRIPTIONS: Record<string, string> = {
+      name: "Seller's full name.",
+      phone: "Best callback phone number.",
+      address: "Property address they're selling.",
+      timeframe: "Roughly when they want to sell (e.g. 'ASAP', '3 months', '6-12 months').",
+      notes: "Anything else useful — price expectations, motivation, condition, constraints."
+    };
+    const captureProperties: Record<string, { type: Type; description: string }> = {};
+    for (const field of intakeCaptureFields) {
+      captureProperties[field] = {
+        type: Type.STRING,
+        description: KNOWN_FIELD_DESCRIPTIONS[field] ?? `The lead's ${field}.`
+      };
+    }
+    declarations.push({
+      name: "capture_lead",
+      description:
+        "Record details about this seller lead so the owner can call them back. Call as soon as you learn any field, and again as you learn more. Always call before saying goodbye.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: captureProperties,
+        required: []
+      }
+    });
+  }
+  if (!intake && opts.transfer) {
     declarations.push({
       name: "transfer_to_owner",
       description:
@@ -904,7 +974,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     "customer_set_display_name",
     "customer_append_pinned_note"
   ]);
-  if (voiceToolsReady) {
+  if (!intake && voiceToolsReady) {
     for (const decl of buildVoiceToolDeclarations()) {
       if (callerIsStaff && STAFF_EXCLUDED_TOOLS.has(decl.name)) continue;
       declarations.push(decl);
@@ -931,15 +1001,22 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     config: {
       responseModalities: [Modality.AUDIO],
       ...(transcriptionConfig as Record<string, unknown>),
-      systemInstruction: systemInstructionForBusiness(
-        opts.businessName,
-        Boolean(opts.transfer),
-        voiceToolsReady,
-        opts.vault,
-        opts.customerMemorySummary,
-        opts.businessTimezone,
-        opts.callerIdentity
-      ),
+      systemInstruction: intake
+        ? intakeSystemInstruction(
+            opts.businessName,
+            intake.persona,
+            opts.businessTimezone,
+            intakeCaptureFields
+          )
+        : systemInstructionForBusiness(
+            opts.businessName,
+            Boolean(opts.transfer),
+            voiceToolsReady,
+            opts.vault,
+            opts.customerMemorySummary,
+            opts.businessTimezone,
+            opts.callerIdentity
+          ),
       tools: toolsForSession
     },
     callbacks: {
@@ -1006,7 +1083,12 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
               const greetIdentity = opts.callerIdentity;
               const greetIsStaff = greetIdentity != null && greetIdentity.kind !== "customer";
               let greetingText: string;
-              if (greetIsStaff) {
+              if (intake) {
+                const opener =
+                  (intake.persona && intake.persona.trim()) ||
+                  `Hi, this is ${opts.businessName}'s office — I'd love to grab a few details about your home.`;
+                greetingText = `[Coordinator — speak aloud now] A seller lead has just been connected. Greet them warmly with your opening line ("${opener}") and begin the short intake — get their name, callback number, property address, and timeframe, calling capture_lead as you go.`;
+              } else if (greetIsStaff) {
                 // Owner vs team wording, and handle staff WITHOUT a stored name
                 // (otherwise they'd get the customer receptionist greeting that
                 // contradicts the staff system instruction).
@@ -1200,6 +1282,25 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         has_id: Boolean(call.id),
         arg_keys: call.args && typeof call.args === "object" ? Object.keys(call.args).slice(0, 20) : []
       });
+      if (name === "capture_lead" && intake) {
+        // Bridge-local: merge the captured fields so getLead() can return them
+        // for the post-call SMS. Non-empty string values only.
+        const args = (call.args ?? {}) as Record<string, unknown>;
+        const merged: string[] = [];
+        for (const field of intakeCaptureFields) {
+          const v = args[field];
+          if (typeof v === "string" && v.trim()) {
+            leadData[field] = v.trim();
+            merged.push(field);
+          }
+        }
+        sendToolResponse(call.id, name, {
+          ok: merged.length > 0,
+          detail: merged.length > 0 ? `captured: ${merged.join(", ")}` : "empty_capture"
+        });
+        continue;
+      }
+
       if (name === "transfer_to_owner" && opts.transfer) {
         const reason = typeof call.args?.reason === "string" ? (call.args.reason as string) : undefined;
         // `execute` may throw on network-layer failures; catching here stops
@@ -1432,5 +1533,5 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     }
   };
 
-  return { onTelnyxMessage, teardown };
+  return { onTelnyxMessage, teardown, getLead: () => ({ ...leadData }) };
 }
