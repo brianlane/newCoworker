@@ -6,6 +6,7 @@ import { z } from "zod";
 import { getAuthUser, requireOwner } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { listAiFlowRuns, type AiFlowRunStatus } from "@/lib/ai-flows/db";
+import { resolveContactNames } from "@/lib/db/contact-names";
 
 const idSchema = z.string().uuid();
 const RUN_STATUSES = [
@@ -41,7 +42,17 @@ export async function GET(request: Request) {
       status,
       limit
     });
-    return successResponse(rows);
+    // Resolve the offered employees' numbers to roster/contact names so the
+    // routing card can stay labelled after an in-page reload (not just the
+    // initial server render). Best-effort: on failure the UI falls back to the
+    // raw number.
+    const employeeNames = await resolveContactNames(
+      parsed.data,
+      rows.map((r) => r.awaiting_agent_e164).filter((p): p is string => Boolean(p))
+    )
+      .then((map) => Object.fromEntries([...map.entries()].map(([e164, c]) => [e164, c.name])))
+      .catch(() => ({} as Record<string, string>));
+    return successResponse({ runs: rows, employeeNames });
   } catch (err) {
     return handleRouteError(err);
   }

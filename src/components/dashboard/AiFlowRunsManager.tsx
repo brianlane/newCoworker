@@ -124,6 +124,10 @@ export function AiFlowRunsManager({
 }) {
   const [runs, setRuns] = useState<AiFlowRunRow[]>(initialRuns);
   const [flowList, setFlowList] = useState<AiFlowRef[]>(flows);
+  // Kept in state (not just the prop) so a reload() can MERGE in names for
+  // newly offered employees that weren't in the initial server snapshot —
+  // otherwise an escalated offer would show a raw E.164 until a full reload.
+  const [names, setNames] = useState<Record<string, string>>(employeeNames);
   // Set of expanded run ids. Multiple runs can be open at once (per-group
   // "Expand details"); default empty = every run's detail collapsed.
   const [expandedRuns, setExpandedRuns] = useState<Set<string>>(new Set());
@@ -146,8 +150,18 @@ export function AiFlowRunsManager({
       fetch(runsUrl, { cache: "no-store" }),
       fetch(`/api/aiflows?businessId=${encodeURIComponent(businessId)}`, { cache: "no-store" })
     ]);
-    const runsJson = (await runsRes.json()) as { ok: boolean; data?: AiFlowRunRow[] };
-    if (runsJson.ok && runsJson.data) setRuns(runsJson.data);
+    const runsJson = (await runsRes.json()) as {
+      ok: boolean;
+      data?: { runs: AiFlowRunRow[]; employeeNames?: Record<string, string> };
+    };
+    if (runsJson.ok && runsJson.data) {
+      setRuns(runsJson.data.runs);
+      if (runsJson.data.employeeNames) {
+        // Merge (don't replace): a name resolved on the first paint stays even
+        // if a later reload's snapshot no longer includes that number.
+        setNames((prev) => ({ ...prev, ...runsJson.data!.employeeNames }));
+      }
+    }
     const flowsJson = (await flowsRes.json()) as { ok: boolean; data?: AiFlowRef[] };
     if (flowsJson.ok && flowsJson.data) {
       setFlowList(flowsJson.data.map((f) => ({ id: f.id, name: f.name })));
@@ -366,7 +380,7 @@ export function AiFlowRunsManager({
                 <p className="mt-1 text-sm text-parchment">
                   Offered to{" "}
                   <span className="font-semibold">
-                    {(r.awaiting_agent_e164 && employeeNames[r.awaiting_agent_e164]) ??
+                    {(r.awaiting_agent_e164 && names[r.awaiting_agent_e164]) ??
                       r.awaiting_agent_e164 ??
                       "an employee"}
                   </span>
