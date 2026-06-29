@@ -63,8 +63,6 @@ function requireEnv(name: string, fallback?: string): string {
   return v;
 }
 
-type Db = ReturnType<typeof createClient>;
-
 type ChainRow = {
   business_id: string;
   from_e164: string;
@@ -142,43 +140,46 @@ function ruleToDefinition(row: RuleRow): AiFlowDefinition {
   });
 }
 
-/** All enabled+disabled voice-flow caller numbers already in ai_flows for a business. */
-async function existingVoiceFroms(db: Db, businessId: string): Promise<Set<string>> {
-  const { data, error } = await db
-    .from("ai_flows")
-    .select("definition")
-    .eq("business_id", businessId)
-    .eq("definition->trigger->>channel", "voice");
-  if (error) throw new Error(`existingVoiceFroms: ${error.message}`);
-  const out = new Set<string>();
-  for (const r of (data ?? []) as Array<{ definition?: { trigger?: { fromE164?: string } } }>) {
-    const from = r.definition?.trigger?.fromE164;
-    if (typeof from === "string" && from) out.add(from);
-  }
-  return out;
-}
-
-async function insertFlow(
-  db: Db,
-  businessId: string,
-  name: string,
-  enabled: boolean,
-  definition: AiFlowDefinition
-): Promise<void> {
-  const { error } = await db.from("ai_flows").insert({
-    business_id: businessId,
-    name: name.slice(0, 120),
-    enabled,
-    definition
-  });
-  if (error) throw new Error(`insert ${name}: ${error.message}`);
-}
-
 async function main(): Promise<void> {
   const args = parseArgs(process.argv);
   const supabaseUrl = requireEnv("NEXT_PUBLIC_SUPABASE_URL", process.env.SUPABASE_URL);
   const serviceKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
   const db = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
+
+  // Defined as closures over `db` (rather than typed top-level helpers) so they
+  // use the client's inferred schema type — aliasing it via ReturnType erases
+  // it to `never` rows under the current supabase-js typings.
+
+  /** All voice-flow caller numbers already in ai_flows for a business. */
+  const existingVoiceFroms = async (businessId: string): Promise<Set<string>> => {
+    const { data, error } = await db
+      .from("ai_flows")
+      .select("definition")
+      .eq("business_id", businessId)
+      .eq("definition->trigger->>channel", "voice");
+    if (error) throw new Error(`existingVoiceFroms: ${error.message}`);
+    const out = new Set<string>();
+    for (const r of (data ?? []) as Array<{ definition?: { trigger?: { fromE164?: string } } }>) {
+      const from = r.definition?.trigger?.fromE164;
+      if (typeof from === "string" && from) out.add(from);
+    }
+    return out;
+  };
+
+  const insertFlow = async (
+    businessId: string,
+    name: string,
+    enabled: boolean,
+    definition: AiFlowDefinition
+  ): Promise<void> => {
+    const { error } = await db.from("ai_flows").insert({
+      business_id: businessId,
+      name: name.slice(0, 120),
+      enabled,
+      definition
+    });
+    if (error) throw new Error(`insert ${name}: ${error.message}`);
+  };
 
   const scopeBusiness = args.all
     ? null
@@ -212,7 +213,7 @@ async function main(): Promise<void> {
     ...rules.map((r) => r.business_id)
   ]);
   const existingByBiz = new Map<string, Set<string>>();
-  for (const bid of businessIds) existingByBiz.set(bid, await existingVoiceFroms(db, bid));
+  for (const bid of businessIds) existingByBiz.set(bid, await existingVoiceFroms(bid));
 
   let planned = 0;
   let skipped = 0;
@@ -283,7 +284,7 @@ async function main(): Promise<void> {
   }
 
   for (const p of plans) {
-    await insertFlow(db, p.businessId, p.name, p.enabled, p.definition);
+    await insertFlow(p.businessId, p.name, p.enabled, p.definition);
     console.log(`OK    inserted "${p.name}" (${p.fromE164}) for ${p.businessId}`);
   }
   console.log(`\nDone. Inserted ${plans.length} voice flow(s).`);

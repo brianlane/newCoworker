@@ -92,6 +92,23 @@ describe("compileVoiceFlow", () => {
     expect(plan).toBeNull();
   });
 
+  it("returns null when voice_transfer destination is not a string", () => {
+    const plan = compileVoiceFlow(
+      def([{ id: "t", type: "voice_transfer", toE164: 16026951142 } as never]),
+      TO
+    );
+    expect(plan).toBeNull();
+  });
+
+  it("treats a non-array steps payload as empty (returns null)", () => {
+    const malformed = {
+      version: 1,
+      trigger: { channel: "voice", fromE164: "+14159851909" },
+      steps: undefined
+    } as unknown as AiFlowDefinition;
+    expect(compileVoiceFlow(malformed, TO)).toBeNull();
+  });
+
   it("drops ring steps with a blank destination", () => {
     const plan = compileVoiceFlow(
       def([

@@ -1496,6 +1496,18 @@ describe("voice trigger + voice steps", () => {
     );
   });
 
+  it("flags duplicate step ids inside a voice flow", () => {
+    const parsed = aiFlowDefinitionSchema.parse({
+      version: 1,
+      trigger: { channel: "voice", fromE164: "+14159851909" },
+      steps: [
+        { id: "dup", type: "ring_handoff", toE164: "+16025245719" },
+        { id: "dup", type: "ring_handoff", toE164: "+16026951142" }
+      ]
+    });
+    expect(validateDefinitionSemantics(parsed)).toContain('Duplicate step id "dup".');
+  });
+
   it("rejects a voice flow with no ringable step", () => {
     const parsed = aiFlowDefinitionSchema.parse({
       version: 1,
