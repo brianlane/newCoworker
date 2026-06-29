@@ -307,34 +307,7 @@ type LiveClaimArgs = {
  * falls through and a real pass stays a bare "2".
  */
 async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response | null> {
-  const {
-    supabase,
-    businessId,
-    from,
-    ackTo,
-    eventId,
-    envelope,
-    telnyxApiKey,
-    messagingProfileId,
-    smsFromE164,
-    digit,
-    timeframe
-  } = args;
-
-  // Ack sender resolution mirrors the 1/2 path: per-tenant settings win, then
-  // the DID the message arrived on, then the global from.
-  const { data: bizRow } = await supabase
-    .from("business_telnyx_settings")
-    .select("telnyx_messaging_profile_id, telnyx_sms_from_e164")
-    .eq("business_id", businessId)
-    .maybeSingle();
-  const biz = bizRow as
-    | { telnyx_messaging_profile_id?: string | null; telnyx_sms_from_e164?: string | null }
-    | null;
-  const ackProfile =
-    (biz?.telnyx_messaging_profile_id && biz.telnyx_messaging_profile_id.trim()) || messagingProfileId;
-  const ackFrom = (biz?.telnyx_sms_from_e164 && biz.telnyx_sms_from_e164.trim()) || ackTo || smsFromE164;
-  const canAck = Boolean(telnyxApiKey && ackProfile && from);
+  const { supabase, businessId, from, eventId, envelope, digit, timeframe } = args;
 
   const { data: offerRow } = await supabase
     .from("ai_flow_runs")
@@ -379,21 +352,11 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
       headers: { "Content-Type": "application/json" }
     });
   }
-  const ackText = `Got it — you've claimed this lead. We'll tell the team you'll reach out: ${timeframe}.`;
-  let ackSent: string | null = null;
-  if (canAck) {
-    const send = await telnyxSendSms({
-      apiKey: telnyxApiKey,
-      messagingProfileId: ackProfile,
-      fromE164: ackFrom,
-      toE164: from,
-      text: ackText,
-      idempotencyKey: `${eventId}:agent-ack`
-    });
-    if (!send.ok) console.error("agent claim+timeframe ack", send.status, send.body.slice(0, 300));
-    else ackSent = ackText;
-  }
-  // Make the claim reply (+ our ack) visible in the dashboard Texts thread.
+  // No claim acknowledgement is texted back: the offer SMS already carried the
+  // lead details, so "you've claimed this lead, we'll tell the team..." only
+  // promised a recap that never came. The reply is still logged (ackSent:null)
+  // so the claim shows in the dashboard Texts thread, and the worker still
+  // notifies the owner with the stated timeframe (routing.claim_timeframe).
   await persistOfferReplyJob({
     supabase,
     businessId,
@@ -401,7 +364,7 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
     envelope,
     from,
     staffKind: "team",
-    ackSent
+    ackSent: null
   });
   await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
     business_id: businessId,
@@ -510,6 +473,21 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
       ackSent
     });
   };
+  // Log the teammate's reply to the Texts thread WITHOUT texting any
+  // confirmation back. Used for successful/idempotent claims: the offer SMS
+  // already carried the lead details, so a "you've got this lead" ack only
+  // promised a recap that never came. `ack` (which DOES text) is still used for
+  // negative outcomes like losing the claim race.
+  const logReply = (): Promise<void> =>
+    persistOfferReplyJob({
+      supabase,
+      businessId,
+      eventId,
+      envelope,
+      from,
+      staffKind: "team",
+      ackSent: null
+    });
 
   // Recent route_to_team runs for this business (route steps stamp
   // context.routing). Newest first; 25 routing runs is plenty for a human
@@ -633,7 +611,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   if (!match) return null;
 
   if (alreadyMine) {
-    await ack("You've already got this lead — thanks!", "late-claim-mine");
+    await logReply();
     await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
       business_id: businessId,
       run_id: match.id,
@@ -721,12 +699,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     });
   }
 
-  await ack(
-    claimTimeframe
-      ? `Got it — you've got this lead. We'll tell the team you'll reach out: ${claimTimeframe}.`
-      : "Got it — you've got this lead. We'll let the team know.",
-    "late-claim-ack"
-  );
+  await logReply();
   await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
     business_id: businessId,
     run_id: match.id,
@@ -1436,26 +1409,12 @@ serve(async (req: Request) => {
           }
           // A teammate's offer reply is NEVER a customer message: short-circuit
           // regardless of how many rows the guarded update touched.
-          const ack = claimed
-            ? "Got it — you've claimed this lead. We'll send you the details."
-            : "Okay — routing this lead to the next agent. Thanks!";
-          let ackSent: string | null = null;
-          if (canAck) {
-            const send = await telnyxSendSms({
-              apiKey: telnyxApiKey,
-              messagingProfileId: ackProfile,
-              fromE164: ackFrom,
-              toE164: from,
-              text: ack,
-              idempotencyKey: `${eventId}:agent-ack`
-            });
-            if (!send.ok) {
-              console.error("agent offer ack reply", send.status, send.body.slice(0, 300));
-            } else {
-              ackSent = ack;
-            }
-          }
-          // Make the claim/pass reply (+ our ack) visible in the Texts thread.
+          //
+          // No claim/pass acknowledgement is texted back: the offer SMS already
+          // carried the lead details, so "you've claimed this lead, we'll send
+          // you the details" only promised a recap that never came. The reply is
+          // still logged (ackSent:null) so the claim/pass shows in the Texts
+          // thread; the owner is still notified of the claim by the worker.
           await persistOfferReplyJob({
             supabase,
             businessId,
@@ -1463,7 +1422,7 @@ serve(async (req: Request) => {
             envelope,
             from,
             staffKind: "team",
-            ackSent
+            ackSent: null
           });
           await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
             business_id: businessId,
