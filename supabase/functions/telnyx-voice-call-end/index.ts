@@ -231,6 +231,21 @@ async function claimStep(
  * Both steps swallow their own errors — this is already the failure path.
  */
 async function endHandoff(deps: HandoffDeps, aLeg: string): Promise<void> {
+  // Release any voice budget reserved for an AI takeover that never reached the
+  // bridge. endHandoff marks the session `done` before the self-initiated
+  // hangup, so the A-leg hangup webhook can't recognize it as `ai_intake` and
+  // settle/release it — without this the reservation would sit in
+  // `pending_answer` holding a concurrency slot until a maintenance sweep. The
+  // RPC is a no-op for the pre-reserve transfer paths and defensively refuses to
+  // release once the bridge has attached, so it is always safe here.
+  try {
+    const { error } = await deps.supabase.rpc("voice_release_reservation_on_answer_fail", {
+      p_call_control_id: aLeg
+    });
+    if (error) console.error("handoff: release reservation failed", error);
+  } catch (e) {
+    console.error("handoff: release reservation threw", e);
+  }
   try {
     await deps.supabase
       .from("voice_handoff_sessions")
