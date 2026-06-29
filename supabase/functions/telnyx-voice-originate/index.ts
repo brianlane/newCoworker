@@ -2,10 +2,14 @@
  * Telnyx Programmable Voice: OUTBOUND origination for an `outbound_call` AiFlow.
  *
  * Invoked server-to-server (NOT by Telnyx) from the app's "Place call" action
- * (src/app/api/aiflows/[id]/place-call). It validates the outbound voice flow,
- * dials the callee, then RESERVES voice budget under the real call_control_id
- * BEFORE any media. If the reservation is refused (over budget / concurrency),
- * it hangs the leg up before answer so no minutes are billed. It also writes a
+ * (src/app/api/aiflows/[id]/place-call) AND from the ai-flow-worker schedule
+ * sweep for scheduled outbound flows. It validates the outbound voice flow,
+ * runs a READ-ONLY pre-dial budget probe (so an over-budget tenant's callee is
+ * never even rung), dials the callee, then RESERVES voice budget under the real
+ * call_control_id BEFORE any media. If the reservation is refused (over budget /
+ * concurrency), it hangs the leg up before answer so no minutes are billed. The
+ * post-dial reserve is the AUTHORITATIVE gate; the pre-dial probe is a
+ * best-effort optimization. It also writes a
  * voice_handoff_sessions row (status=ai_intake) carrying the step's persona /
  * capture fields / notify number so the VPS bridge runs the configured outbound
  * AI and texts the post-call summary. The AI bridge is attached later by
@@ -14,6 +18,13 @@
  *
  * Metering is therefore a system-level invariant for outbound exactly as for
  * inbound: the same voice_reserve_for_call RPC + the same settlement lifecycle.
+ *
+ * Response contract: success is { ok:true, callControlId, ... }. Every refusal
+ * is { ok:false, error/reason, ... } and carries `dialed: false` when the callee
+ * was NEVER rung (auth/validation/config refusals and the pre-dial budget
+ * block) so a scheduled caller may safely retry the occurrence; refusals that
+ * happen AFTER the dial (post-dial budget refusal, lost call id,
+ * session_persist_failed) omit `dialed` and must NOT be retried.
  *
  * Auth: Authorization: Bearer <SUPABASE_SERVICE_ROLE_KEY>. The caller is our own
  * Next.js server route (which already authenticated the owner). No public access.
@@ -24,7 +35,7 @@
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { telnyxDialCall, telnyxHangupCall } from "../_shared/telnyx_call_actions.ts";
-import { reserveVoiceBudget } from "../_shared/voice_reserve.ts";
+import { checkVoiceBudgetAvailable, reserveVoiceBudget } from "../_shared/voice_reserve.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
@@ -77,7 +88,7 @@ serve(async (req: Request) => {
   }
 
   if (!bearerMatches(req.headers.get("authorization"), serviceKey)) {
-    return json(401, { ok: false, error: "unauthorized" });
+    return json(401, { ok: false, error: "unauthorized", dialed: false });
   }
 
   const len = Number(req.headers.get("content-length") ?? "0");
@@ -93,16 +104,16 @@ serve(async (req: Request) => {
   try {
     body = JSON.parse(rawBody);
   } catch {
-    return json(400, { ok: false, error: "bad_json" });
+    return json(400, { ok: false, error: "bad_json", dialed: false });
   }
   const businessId = typeof body.businessId === "string" ? body.businessId.trim() : "";
   const flowId = typeof body.flowId === "string" ? body.flowId.trim() : "";
   if (!businessId || !flowId) {
-    return json(422, { ok: false, error: "missing_business_or_flow" });
+    return json(422, { ok: false, error: "missing_business_or_flow", dialed: false });
   }
 
   if (!envVoiceAiStreamEnabled()) {
-    return json(409, { ok: false, error: "voice_ai_disabled" });
+    return json(409, { ok: false, error: "voice_ai_disabled", dialed: false });
   }
 
   const supabase = createClient(supabaseUrl, serviceKey);
@@ -117,11 +128,11 @@ serve(async (req: Request) => {
     .maybeSingle();
   if (flowErr) {
     console.error("originate: flow lookup", flowErr);
-    return json(500, { ok: false, error: "flow_lookup_failed" });
+    return json(500, { ok: false, error: "flow_lookup_failed", dialed: false });
   }
   const flow = flowRow as { definition?: unknown; enabled?: boolean } | null;
-  if (!flow) return json(404, { ok: false, error: "flow_not_found" });
-  if (flow.enabled !== true) return json(409, { ok: false, error: "flow_disabled" });
+  if (!flow) return json(404, { ok: false, error: "flow_not_found", dialed: false });
+  if (flow.enabled !== true) return json(409, { ok: false, error: "flow_disabled", dialed: false });
 
   const plan = (() => {
     try {
@@ -131,12 +142,12 @@ serve(async (req: Request) => {
       return null;
     }
   })();
-  if (!plan) return json(422, { ok: false, error: "not_an_outbound_flow" });
+  if (!plan) return json(422, { ok: false, error: "not_an_outbound_flow", dialed: false });
 
   // Callee: per-call override wins, else the step default.
   const overrideTo = typeof body.toE164 === "string" ? body.toE164 : "";
   const callee = normalizeE164(overrideTo || plan.toE164);
-  if (!callee) return json(422, { ok: false, error: "invalid_callee" });
+  if (!callee) return json(422, { ok: false, error: "invalid_callee", dialed: false });
 
   // Caller ID + connection: the business's own DID (a telnyx_voice_routes row)
   // presented as `from`, dialed on its Call Control connection.
@@ -157,8 +168,37 @@ serve(async (req: Request) => {
   const connectionId = (settingsRow as { telnyx_connection_id?: string | null } | null)
     ?.telnyx_connection_id;
   const fromDid = (routeRow as { to_e164?: string | null } | null)?.to_e164;
-  if (!connectionId) return json(422, { ok: false, error: "no_telnyx_connection" });
-  if (!fromDid) return json(422, { ok: false, error: "no_caller_id" });
+  if (!connectionId) return json(422, { ok: false, error: "no_telnyx_connection", dialed: false });
+  if (!fromDid) return json(422, { ok: false, error: "no_caller_id", dialed: false });
+
+  // Pre-dial budget gate (honor "metered before spend" before a leg exists).
+  // voice_reserve_for_call keys a reservation by a Telnyx call_control_id, which
+  // only exists once dialing starts; so we probe the read-only availability RPC
+  // first and NEVER ring the callee for an over-budget tenant. This is
+  // best-effort: an `indeterminate` result (stale/missing cached period, etc.)
+  // falls through to the dial because the post-dial reserve below — which does
+  // the authoritative JIT period refresh — is the real gate, and it hangs the
+  // leg up before answer so a slip-through is never billed.
+  const availability = await checkVoiceBudgetAvailable(supabase, { businessId });
+  if (availability.status === "blocked") {
+    await telemetryRecord(supabase, "voice_outbound_blocked", {
+      business_id: businessId,
+      flow_id: flowId,
+      reason: availability.reason,
+      phase: "pre_dial"
+    });
+    await systemLog(supabase, {
+      businessId,
+      source: "voice",
+      level: "warn",
+      event: "voice_outbound_blocked",
+      message: `Outbound call not placed (pre-dial): ${availability.reason}`,
+      payload: { reason: availability.reason, to: callee, phase: "pre_dial" }
+    });
+    // dialed:false — the callee was never rung, so a scheduled caller may safely
+    // retry this occurrence later (budget may free up within its window).
+    return json(200, { ok: false, error: "budget", reason: availability.reason, dialed: false });
+  }
 
   const sessionId = crypto.randomUUID();
   const clientState = encodeOutboundClientState(businessId, sessionId);
@@ -181,7 +221,9 @@ serve(async (req: Request) => {
       flow_id: flowId,
       http_status: dialRes.status
     });
-    return json(502, { ok: false, error: "dial_failed", http_status: dialRes.status });
+    // dialed:false — Telnyx rejected POST /v2/calls so NO call leg was created
+    // and the callee was not rung; a scheduled caller may safely retry.
+    return json(502, { ok: false, error: "dial_failed", http_status: dialRes.status, dialed: false });
   }
   const dialJson = (await dialRes.json().catch(() => null)) as
     | { data?: { call_control_id?: string } }

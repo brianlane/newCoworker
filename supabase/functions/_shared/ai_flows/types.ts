@@ -113,6 +113,15 @@ export type VoiceTrigger = {
    * by the origination edge function. Omitted ⇒ inbound.
    */
   direction?: "outbound";
+  /**
+   * Optional auto-dial schedule (OUTBOUND only) — same daily/interval shape as
+   * ScheduleTrigger. When set, the ai-flow-worker sweep places the call on each
+   * due occurrence (exactly-once via voice_outbound_dial_log). Omitted ⇒ manual.
+   */
+  timezone?: string;
+  time?: string;
+  daysOfWeek?: number[];
+  everyMinutes?: number;
 };
 
 export type FlowTrigger =

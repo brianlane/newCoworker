@@ -97,6 +97,8 @@ type EditorState = {
   voiceFromE164: string;
   /** Voice trigger direction: "inbound" matches a caller; "outbound" places a call. */
   voiceDirection: "inbound" | "outbound";
+  /** Outbound voice only: auto-dial on the schedule fields above (else manual). */
+  voiceOutboundScheduled: boolean;
   steps: FlowStep[];
 };
 
@@ -126,6 +128,7 @@ function emptyEditor(): EditorState {
     emailConnectionId: "",
     voiceFromE164: "",
     voiceDirection: "inbound",
+    voiceOutboundScheduled: false,
     steps: []
   };
 }
@@ -144,6 +147,7 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
   | "emailConnectionId"
   | "voiceFromE164"
   | "voiceDirection"
+  | "voiceOutboundScheduled"
 > {
   const base = {
     channel: trigger.channel,
@@ -156,7 +160,8 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
     scheduleEvery: 60,
     emailConnectionId: "",
     voiceFromE164: "",
-    voiceDirection: "inbound" as const
+    voiceDirection: "inbound" as const,
+    voiceOutboundScheduled: false
   };
   switch (trigger.channel) {
     case "sms":
@@ -185,12 +190,29 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
       };
     case "tenant_email":
       return { ...base, conditions: trigger.conditions };
-    case "voice":
+    case "voice": {
+      const scheduled =
+        trigger.direction === "outbound" &&
+        (trigger.everyMinutes !== undefined ||
+          (trigger.time !== undefined && trigger.timezone !== undefined));
+      const sched = scheduled
+        ? trigger.everyMinutes !== undefined
+          ? { scheduleMode: "every" as const, scheduleEvery: trigger.everyMinutes }
+          : {
+              scheduleMode: "daily" as const,
+              scheduleTime: trigger.time ?? "08:30",
+              scheduleTimezone: trigger.timezone ?? browserTimezone(),
+              scheduleDays: trigger.daysOfWeek ?? []
+            }
+        : {};
       return {
         ...base,
+        ...sched,
         voiceFromE164: trigger.fromE164 ?? "",
-        voiceDirection: trigger.direction === "outbound" ? "outbound" : "inbound"
+        voiceDirection: trigger.direction === "outbound" ? "outbound" : "inbound",
+        voiceOutboundScheduled: scheduled
       };
+    }
   }
 }
 
@@ -362,9 +384,21 @@ function editorTrigger(s: EditorState): FlowTrigger {
     case "tenant_email":
       return { channel: "tenant_email", conditions: s.conditions };
     case "voice":
-      return s.voiceDirection === "outbound"
-        ? { channel: "voice", direction: "outbound" }
-        : { channel: "voice", fromE164: s.voiceFromE164.trim() };
+      if (s.voiceDirection !== "outbound") {
+        return { channel: "voice", fromE164: s.voiceFromE164.trim() };
+      }
+      if (!s.voiceOutboundScheduled) {
+        return { channel: "voice", direction: "outbound" };
+      }
+      return s.scheduleMode === "every"
+        ? { channel: "voice", direction: "outbound", everyMinutes: s.scheduleEvery }
+        : {
+            channel: "voice",
+            direction: "outbound",
+            time: s.scheduleTime,
+            timezone: s.scheduleTimezone,
+            ...(s.scheduleDays.length > 0 ? { daysOfWeek: [...s.scheduleDays].sort() } : {})
+          };
   }
 }
 
@@ -990,12 +1024,99 @@ export function AiFlowsManager({
                   </p>
                 </>
               ) : (
-                <p className="text-[11px] text-parchment/40">
-                  An outbound flow places a call when you press Place call on the flow. Add a single
-                  Place an outbound call step below — when the callee answers, the AI talks to them,
-                  captures the details, and texts you a summary. Voice budget is checked first, so an
-                  over-budget account can&apos;t place AI calls.
-                </p>
+                <>
+                  <p className="text-[11px] text-parchment/40">
+                    An outbound flow places a call when you press Place call on the flow. Add a single
+                    Place an outbound call step below — when the callee answers, the AI talks to them,
+                    captures the details, and texts you a summary. Voice budget is checked first, so an
+                    over-budget account can&apos;t place AI calls.
+                  </p>
+                  <label className="flex items-center gap-2 text-xs text-parchment/70">
+                    <input
+                      type="checkbox"
+                      checked={editor.voiceOutboundScheduled}
+                      onChange={(ev) =>
+                        setEditor({ ...editor, voiceOutboundScheduled: ev.target.checked })
+                      }
+                    />
+                    Auto-dial on a schedule (otherwise place calls manually)
+                  </label>
+                  {editor.voiceOutboundScheduled && (
+                    <div className="space-y-2 rounded-md border border-parchment/10 bg-deep-ink/20 p-3">
+                      <select
+                        className={inputClass}
+                        value={editor.scheduleMode}
+                        onChange={(ev) =>
+                          setEditor({ ...editor, scheduleMode: ev.target.value as "daily" | "every" })
+                        }
+                      >
+                        <option value="daily">Daily at a time</option>
+                        <option value="every">Every N minutes</option>
+                      </select>
+                      {editor.scheduleMode === "daily" ? (
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className={labelClass}>Time (24h HH:MM)</label>
+                            <input
+                              className={inputClass}
+                              value={editor.scheduleTime}
+                              onChange={(ev) =>
+                                setEditor({ ...editor, scheduleTime: ev.target.value })
+                              }
+                            />
+                          </div>
+                          <div>
+                            <label className={labelClass}>Time zone</label>
+                            <input
+                              className={inputClass}
+                              value={editor.scheduleTimezone}
+                              onChange={(ev) =>
+                                setEditor({ ...editor, scheduleTimezone: ev.target.value })
+                              }
+                            />
+                          </div>
+                          <div className="col-span-2">
+                            <label className={labelClass}>Days (default: every day)</label>
+                            <div className="flex flex-wrap gap-2">
+                              {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d, di) => (
+                                <label
+                                  key={d}
+                                  className="flex items-center gap-1 text-xs text-parchment/70"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={editor.scheduleDays.includes(di)}
+                                    onChange={(ev) =>
+                                      setEditor({
+                                        ...editor,
+                                        scheduleDays: ev.target.checked
+                                          ? [...editor.scheduleDays, di]
+                                          : editor.scheduleDays.filter((x) => x !== di)
+                                      })
+                                    }
+                                  />
+                                  {d}
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <label className={labelClass}>Every N minutes (min 15)</label>
+                          <input
+                            type="number"
+                            className={inputClass}
+                            value={editor.scheduleEvery}
+                            onChange={(ev) =>
+                              setEditor({ ...editor, scheduleEvery: Number(ev.target.value) || 60 })
+                            }
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}

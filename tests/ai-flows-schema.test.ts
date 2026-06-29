@@ -1573,4 +1573,72 @@ describe("voice trigger + voice steps", () => {
       "An inbound voice flow needs a caller number (fromE164) on its trigger."
     );
   });
+
+  const outboundStep = {
+    id: "c",
+    type: "outbound_call" as const,
+    toE164: "+19178628675",
+    notifyE164: "+16026951142"
+  };
+
+  it("accepts a daily-scheduled outbound voice flow", () => {
+    const parsed = aiFlowDefinitionSchema.parse({
+      version: 1,
+      trigger: {
+        channel: "voice",
+        direction: "outbound",
+        time: "09:00",
+        timezone: "America/Phoenix",
+        daysOfWeek: [1, 2, 3, 4, 5]
+      },
+      steps: [outboundStep]
+    });
+    expect(validateDefinitionSemantics(parsed)).toEqual([]);
+    expect(parsed.trigger.channel).toBe("voice");
+  });
+
+  it("accepts an interval-scheduled outbound voice flow", () => {
+    const parsed = aiFlowDefinitionSchema.parse({
+      version: 1,
+      trigger: { channel: "voice", direction: "outbound", everyMinutes: 60 },
+      steps: [outboundStep]
+    });
+    expect(validateDefinitionSemantics(parsed)).toEqual([]);
+  });
+
+  it("rejects a schedule on an inbound voice flow", () => {
+    expect(() =>
+      aiFlowDefinitionSchema.parse({
+        version: 1,
+        trigger: { channel: "voice", fromE164: "+14159851909", everyMinutes: 60 },
+        steps: [{ id: "r", type: "ring_handoff", toE164: "+16025245719" }]
+      })
+    ).toThrow(/Only outbound voice flows can be scheduled/);
+  });
+
+  it("rejects mixing a daily time and everyMinutes on an outbound voice flow", () => {
+    expect(() =>
+      aiFlowDefinitionSchema.parse({
+        version: 1,
+        trigger: {
+          channel: "voice",
+          direction: "outbound",
+          time: "09:00",
+          timezone: "America/Phoenix",
+          everyMinutes: 60
+        },
+        steps: [outboundStep]
+      })
+    ).toThrow(/use either a daily time or everyMinutes, not both/);
+  });
+
+  it("rejects a daily schedule missing the timezone on an outbound voice flow", () => {
+    expect(() =>
+      aiFlowDefinitionSchema.parse({
+        version: 1,
+        trigger: { channel: "voice", direction: "outbound", time: "09:00" },
+        steps: [outboundStep]
+      })
+    ).toThrow(/daily mode needs both time and timezone/);
+  });
 });
