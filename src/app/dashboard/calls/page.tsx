@@ -6,18 +6,13 @@
  * Each row links into `/dashboard/calls/[callControlId]` for the full turn view.
  */
 
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { listTranscriptsForBusiness } from "@/lib/db/voice-transcripts";
-import {
-  StatusBadge,
-  callerLabel,
-  formatDuration
-} from "@/components/dashboard/voice-transcript-helpers";
-import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
+import { callerLabel } from "@/components/dashboard/voice-transcript-helpers";
+import { CallsList, type CallListRow } from "@/components/dashboard/CallsList";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 
 export const dynamic = "force-dynamic";
@@ -69,6 +64,24 @@ export default async function DashboardCallsPage() {
     db
   ).catch(() => new Map<string, ContactName>());
 
+  const rows: CallListRow[] = transcripts.map((row) => {
+    const contact = row.caller_e164 ? contactNames.get(row.caller_e164) : undefined;
+    return {
+      id: row.id,
+      label: contact?.name ?? callerLabel(row.caller_e164),
+      e164: row.caller_e164,
+      badgeKind:
+        contact?.kind === "employee"
+          ? "employee"
+          : contact?.kind === "owner"
+            ? "owner"
+            : null,
+      status: row.status,
+      startedAt: row.started_at,
+      endedAt: row.ended_at
+    };
+  });
+
   return (
     <div className="space-y-6 max-w-4xl">
       <div>
@@ -88,61 +101,7 @@ export default async function DashboardCallsPage() {
           </div>
         </Card>
       ) : (
-        <Card padding="sm">
-          <ul className="divide-y divide-parchment/10">
-            {transcripts.map((row) => {
-              const contact = row.caller_e164
-                ? contactNames.get(row.caller_e164)
-                : undefined;
-              const label = contact?.name ?? callerLabel(row.caller_e164);
-              const badge =
-                contact?.kind === "employee"
-                  ? "employee"
-                  : contact?.kind === "owner"
-                    ? "owner"
-                    : null;
-              return (
-              <li key={row.id}>
-                <Link
-                  // Link by transcript row UUID rather than the Telnyx
-                  // call_control_id. The latter starts with `v3:`, and the
-                  // literal `:` is a URL sub-delim that Cloudflare/Vercel
-                  // sometimes pre-decode before Next.js matches the dynamic
-                  // segment — producing a 404 even though the row exists.
-                  // UUIDs are URL-safe everywhere and uniquely identify a
-                  // transcript without exposing the internal Telnyx id.
-                  href={`/dashboard/calls/${row.id}`}
-                  className="flex items-center justify-between gap-4 px-3 py-3 rounded-lg hover:bg-parchment/5 transition-colors"
-                >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-parchment truncate">
-                        {label}
-                      </span>
-                      {badge && (
-                        <span className="text-[10px] uppercase tracking-wide text-parchment/40">
-                          {badge}
-                        </span>
-                      )}
-                      {contact && row.caller_e164 && (
-                        <span className="text-[10px] text-parchment/40 font-mono">
-                          {row.caller_e164}
-                        </span>
-                      )}
-                      <StatusBadge status={row.status} />
-                    </div>
-                    <p className="text-xs text-parchment/50 mt-0.5">
-                      <LocalDateTime iso={row.started_at} /> ·{" "}
-                      {formatDuration(row.started_at, row.ended_at)}
-                    </p>
-                  </div>
-                  <span className="text-parchment/40 text-sm shrink-0">View →</span>
-                </Link>
-              </li>
-              );
-            })}
-          </ul>
-        </Card>
+        <CallsList rows={rows} />
       )}
     </div>
   );

@@ -10,14 +10,13 @@
  * and again decoded automatically by Next on the receiving route.
  */
 
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { listConversationsForBusiness } from "@/lib/db/sms-history";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
-import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
+import { MessagesList, type MessageListRow } from "@/components/dashboard/MessagesList";
 import { SmsComposeNew } from "@/components/dashboard/SmsComposeNew";
 
 export const dynamic = "force-dynamic";
@@ -66,6 +65,23 @@ export default async function DashboardMessagesPage() {
     conversations.map((c) => c.customerE164)
   ).catch(() => new Map<string, ContactName>());
 
+  const rows: MessageListRow[] = conversations.map((c) => {
+    const contact = contactNames.get(c.customerE164);
+    return {
+      customerE164: c.customerE164,
+      name: contact?.name ?? c.customerE164,
+      badgeKind:
+        contact?.kind === "employee"
+          ? "employee"
+          : contact?.kind === "owner"
+            ? "owner"
+            : null,
+      lastMessage: c.lastMessage,
+      lastMessageAt: c.lastMessageAt,
+      messageCount: c.messageCount
+    };
+  });
+
   return (
     <div className="space-y-6 max-w-4xl">
       <div className="flex items-start justify-between gap-4">
@@ -88,53 +104,7 @@ export default async function DashboardMessagesPage() {
           </div>
         </Card>
       ) : (
-        <Card padding="sm">
-          <ul className="divide-y divide-parchment/10">
-            {conversations.map((c) => {
-              const contact = contactNames.get(c.customerE164);
-              return (
-              <li key={c.customerE164}>
-                <Link
-                  href={`/dashboard/messages/${encodeURIComponent(c.customerE164)}`}
-                  className="flex items-center justify-between gap-4 px-3 py-3 rounded-lg hover:bg-parchment/5 transition-colors"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-parchment truncate">
-                        {contact?.name ?? c.customerE164}
-                      </span>
-                      {contact && (
-                        <span className="text-[10px] uppercase tracking-wide text-parchment/40">
-                          {contact.kind === "employee"
-                            ? "employee"
-                            : contact.kind === "owner"
-                              ? "owner"
-                              : null}
-                        </span>
-                      )}
-                      {contact && (
-                        <span className="text-[10px] text-parchment/40 font-mono">
-                          {c.customerE164}
-                        </span>
-                      )}
-                      <span className="text-[10px] uppercase tracking-wide text-parchment/40 font-mono">
-                        {c.messageCount} msg{c.messageCount === 1 ? "" : "s"}
-                      </span>
-                    </div>
-                    <p className="text-xs text-parchment/60 mt-0.5 truncate">
-                      {c.lastMessage}
-                    </p>
-                    <p className="text-[10px] text-parchment/40 mt-0.5">
-                      <LocalDateTime iso={c.lastMessageAt} />
-                    </p>
-                  </div>
-                  <span className="text-parchment/40 text-sm shrink-0">View →</span>
-                </Link>
-              </li>
-              );
-            })}
-          </ul>
-        </Card>
+        <MessagesList rows={rows} />
       )}
     </div>
   );
