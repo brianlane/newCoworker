@@ -10,6 +10,10 @@
  *    ai-flow-worker, this PR) parses the comma'd reply as a claim and surfaces the
  *    ETA to the owner. Skips a step whose offer already advertises it.
  *
+ * 1a. Drop the LEGACY "Reply 86 ... retroactively" offer line: "86" is now
+ *    reserved for retroactive UNCLAIM, so that stale instruction is removed from
+ *    every Dave-pinned route step before the retro option below is appended.
+ *
  * 1b. RETRO (late) claim option: append a SEPARATE numbered option at the next
  *    sequential digit for claiming a lead AFTER its window lapsed, stamping
  *    `lateClaimOption`. Replaces the old magic "86" (now reserved for retroactive
@@ -179,6 +183,30 @@ export function addTimeframeOption(def: Definition, agentName: string): boolean 
 const RETRO_OPTION_MARKER = "triple tap this lead";
 
 /**
+ * Remove the LEGACY "Reply 86 ... retroactively" line from every route_to_team
+ * step pinned to `agentName`. "86" is now reserved for retroactive UNCLAIM, so
+ * the old "reply 86 to take it retroactively" copy is wrong and must be dropped
+ * (the retro claim moved to lateClaimOption). Idempotent: no-ops once gone.
+ * Returns whether anything changed.
+ */
+export function stripLegacy86Line(def: Definition, agentName: string): boolean {
+  let changed = false;
+  for (const step of def.steps ?? []) {
+    if (step.type !== "route_to_team") continue;
+    if (typeof step.agentName !== "string" || step.agentName.trim() !== agentName) continue;
+    const offer = typeof step.offerTemplate === "string" ? step.offerTemplate : "";
+    if (!offer) continue;
+    const lines = offer.split("\n");
+    const kept = lines.filter((l) => !/reply\s*86/i.test(l));
+    if (kept.length !== lines.length) {
+      step.offerTemplate = kept.join("\n");
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/**
  * The appended retroactive (late) claim option line for option number `n`.
  * Advertises ONLY the comma/ETA form ("n, <ETA>") — a retro claim always
  * requires the ETA (the worker keys it on the comma reply), so the copy never
@@ -298,6 +326,8 @@ async function main(): Promise<void> {
     const before = JSON.stringify(row.definition);
 
     const tf = addTimeframeOption(def, agentName);
+    // Drop the legacy "Reply 86 ... retroactively" line: 86 is now UNCLAIM.
+    const legacy86 = stripLegacy86Line(def, agentName);
     // Retro/late claim option (must run AFTER addTimeframeOption so it numbers
     // at the next sequential digit and never collides with the live option).
     const retro = addRetroClaimOption(def, agentName);
@@ -306,7 +336,7 @@ async function main(): Promise<void> {
     const email = addHomeLightEmailFallback(def, emailCfg);
     // Migrate an already-inserted email_card from city to price matching.
     const price = migrateEmailMatchToPrice(def);
-    if (!tf && !retro && !email && !price) continue;
+    if (!tf && !legacy86 && !retro && !email && !price) continue;
 
     // Re-validate the patched definition exactly like the dashboard/CRUD path.
     try {
@@ -321,6 +351,7 @@ async function main(): Promise<void> {
     changedCount += 1;
     console.log(`\n=== ${row.name} (${row.id}) ===`);
     console.log(`  timeframe option: ${tf ? "added" : "unchanged"}`);
+    console.log(`  legacy 86 line: ${legacy86 ? "removed" : "unchanged"}`);
     console.log(`  retro-claim option: ${retro ? "added" : "unchanged"}`);
     console.log(`  homelight email fallback: ${email ? "added" : "n/a"}`);
     console.log(`  email lead-match -> price: ${price ? "migrated" : "n/a"}`);

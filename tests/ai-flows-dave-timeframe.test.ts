@@ -5,6 +5,7 @@ import {
   addTimeframeOption,
   retroClaimOptionLine,
   addRetroClaimOption,
+  stripLegacy86Line,
   addHomeLightEmailFallback,
   migrateEmailMatchToPrice
 } from "../scripts/oneshot/update-dave-routed-aiflows";
@@ -151,6 +152,34 @@ describe("addRetroClaimOption", () => {
     const other = daveRouteDef("Reply 1 to claim or 2 to pass.");
     (other.steps[0] as { agentName?: string }).agentName = "Someone Else";
     expect(addRetroClaimOption(other, "Dave Lane")).toBe(false);
+  });
+});
+
+describe("stripLegacy86Line", () => {
+  it("removes the legacy 'Reply 86 ... retroactively' line and keeps the rest", () => {
+    const def = daveRouteDef(
+      "New lead. Reply 1 to claim or 2 to pass by {{offer.deadline}}.\n" +
+        "Missed the window? Reply 86 to still take it retroactively.\n" +
+        'Reply 3 with a timeframe to claim (e.g. "3, 20 min").'
+    );
+    expect(stripLegacy86Line(def, "Dave Lane")).toBe(true);
+    const offer = (def.steps[0] as { offerTemplate: string }).offerTemplate;
+    expect(offer).not.toContain("Reply 86");
+    expect(offer).toContain("Reply 1 to claim or 2 to pass");
+    expect(offer).toContain("Reply 3 with a timeframe to claim");
+    expect(() => parseAiFlowDefinition(def)).not.toThrow();
+  });
+
+  it("is idempotent / no-op when there is no 86 line", () => {
+    const def = daveRouteDef("Reply 1 to claim or 2 to pass by {{offer.deadline}}.");
+    expect(stripLegacy86Line(def, "Dave Lane")).toBe(false);
+  });
+
+  it("skips a different agent", () => {
+    const other = daveRouteDef("Reply 1.\nReply 86 to take it retroactively.");
+    (other.steps[0] as { agentName?: string }).agentName = "Someone Else";
+    expect(stripLegacy86Line(other, "Dave Lane")).toBe(false);
+    expect((other.steps[0] as { offerTemplate: string }).offerTemplate).toContain("Reply 86");
   });
 });
 
