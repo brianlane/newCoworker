@@ -3466,7 +3466,17 @@ async function placeOutboundCall(
   supabaseUrl: string,
   serviceKey: string,
   body: { businessId: string; flowId: string }
-): Promise<{ ok: boolean; callControlId?: string; reason?: string; blocked?: boolean }> {
+): Promise<{
+  ok: boolean;
+  callControlId?: string;
+  reason?: string;
+  blocked?: boolean;
+  // True when originate returned an HTTP response (success OR a definitive
+  // refusal that means NO live call exists). False only when the request never
+  // got a response (timeout/network) — i.e. it's AMBIGUOUS whether a call was
+  // placed, so the occurrence must NOT be retried (could double-dial).
+  definitive: boolean;
+}> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), OUTBOUND_ORIGINATE_TIMEOUT_MS);
   try {
@@ -3482,15 +3492,18 @@ async function placeOutboundCall(
     const out = (await res.json().catch(() => null)) as
       | { ok?: boolean; error?: string; reason?: string; callControlId?: string }
       | null;
-    if (res.ok && out?.ok) return { ok: true, callControlId: out.callControlId };
+    if (res.ok && out?.ok) return { ok: true, callControlId: out.callControlId, definitive: true };
+    // A parsed HTTP response (budget refusal or a 4xx/5xx with a body) means
+    // originate ran and no live call resulted, so the occurrence is retryable.
     return {
       ok: false,
       reason: out?.reason ?? out?.error ?? `http_${res.status}`,
-      blocked: out?.error === "budget"
+      blocked: out?.error === "budget",
+      definitive: true
     };
   } catch (e) {
     console.error("placeOutboundCall", e);
-    return { ok: false, reason: "originate_unreachable" };
+    return { ok: false, reason: "originate_unreachable", definitive: false };
   } finally {
     clearTimeout(timer);
   }
@@ -3565,23 +3578,44 @@ async function enqueueDueOutboundCalls(
         businessId: row.business_id,
         flowId: row.id
       });
-      const finalStatus = result.ok ? "placed" : result.blocked ? "blocked" : "failed";
-      const { error: updErr } = await supabase
-        .from("voice_outbound_dial_log")
-        .update({
-          status: finalStatus,
-          call_control_id: result.callControlId ?? null,
-          reason: result.ok ? null : result.reason ?? null
-        })
-        .eq("flow_id", row.id)
-        .eq("dedupe_key", dedupeKey);
-      if (updErr) console.error("outbound sweep ledger update", updErr);
+
+      // The pre-inserted row is a dedupe LOCK that prevents overlapping ticks
+      // from double-dialing. Resolve it by outcome:
+      //   - placed (ok): keep the row terminal (at-most-once for a real call).
+      //   - ambiguous (no HTTP response): keep it terminal too — a call MAY have
+      //     gone through, so retrying could double-dial. Record as failed.
+      //   - definitive non-placed (budget block or a 4xx/5xx with a body): NO
+      //     live call exists, so RELEASE the lock (delete the row) and let a
+      //     later tick retry this occurrence within its catch-up window. Budget
+      //     blocks re-probe cheaply (the pre-dial check refuses without dialing).
+      const retryable = !result.ok && result.definitive;
+      if (retryable) {
+        const { error: delErr } = await supabase
+          .from("voice_outbound_dial_log")
+          .delete()
+          .eq("flow_id", row.id)
+          .eq("dedupe_key", dedupeKey);
+        if (delErr) console.error("outbound sweep ledger release", delErr);
+      } else {
+        const finalStatus = result.ok ? "placed" : "failed";
+        const { error: updErr } = await supabase
+          .from("voice_outbound_dial_log")
+          .update({
+            status: finalStatus,
+            call_control_id: result.callControlId ?? null,
+            reason: result.ok ? null : result.reason ?? null
+          })
+          .eq("flow_id", row.id)
+          .eq("dedupe_key", dedupeKey);
+        if (updErr) console.error("outbound sweep ledger update", updErr);
+      }
 
       await telemetryRecord(supabase, "ai_flow_outbound_call_swept", {
         business_id: row.business_id,
         flow_id: row.id,
         scheduled_for: due.scheduledForIso,
-        status: finalStatus
+        status: result.ok ? "placed" : retryable ? "retryable" : "failed",
+        reason: result.ok ? null : result.reason ?? null
       });
       await systemLog(supabase, {
         businessId: row.business_id,
@@ -3590,8 +3624,10 @@ async function enqueueDueOutboundCalls(
         event: "ai_flow_outbound_call_swept",
         message: result.ok
           ? `Scheduled outbound call placed (${due.scheduledForIso})`
-          : `Scheduled outbound call not placed: ${result.reason ?? "error"}`,
-        payload: { flow_id: row.id, dedupe_key: dedupeKey, status: finalStatus }
+          : retryable
+            ? `Scheduled outbound call not placed (will retry): ${result.reason ?? "error"}`
+            : `Scheduled outbound call not placed: ${result.reason ?? "error"}`,
+        payload: { flow_id: row.id, dedupe_key: dedupeKey }
       });
     }
   } catch (e) {
