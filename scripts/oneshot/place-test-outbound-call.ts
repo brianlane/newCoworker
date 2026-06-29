@@ -19,7 +19,8 @@
  *   npx tsx scripts/oneshot/place-test-outbound-call.ts --apply --to +1602...   # dial another #
  *   npx tsx scripts/oneshot/place-test-outbound-call.ts --apply --flow-id <uuid>  # use an existing flow
  *
- * Required env: NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY.
+ * Required env: NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY
+ * (for the DB client), INTERNAL_CRON_SECRET (the originate caller bearer).
  * Business id: AIFLOW_SEED_BUSINESS_ID or --business-id <uuid> (defaults to Amy's).
  */
 import { createClient } from "@supabase/supabase-js";
@@ -69,6 +70,7 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv);
   const supabaseUrl = requireEnv("NEXT_PUBLIC_SUPABASE_URL", process.env.SUPABASE_URL);
   const serviceKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
+  const cronSecret = requireEnv("INTERNAL_CRON_SECRET");
   const businessId =
     args.businessId ?? process.env.AIFLOW_SEED_BUSINESS_ID ?? DEFAULT_BUSINESS_ID;
 
@@ -139,7 +141,7 @@ async function main(): Promise<void> {
 
   const res = await fetch(`${supabaseUrl.replace(/\/$/, "")}/functions/v1/telnyx-voice-originate`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${cronSecret}`, "Content-Type": "application/json" },
     body: JSON.stringify({ businessId, flowId, toE164: args.to })
   });
   const out = (await res.json().catch(() => null)) as

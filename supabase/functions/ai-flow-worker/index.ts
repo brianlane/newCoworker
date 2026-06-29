@@ -240,8 +240,10 @@ serve(async (req: Request): Promise<Response> => {
   // the tick from stretching by that long (kickEmailTriggerPoll never throws).
   await enqueueDueScheduledRuns(supabase);
   // Scheduled outbound voice calls run on the call path (not the run engine),
-  // so they get their own sweep. Failure-isolated like the schedule sweep.
-  await enqueueDueOutboundCalls(supabase, supabaseUrl, serviceKey);
+  // so they get their own sweep. It calls telnyx-voice-originate with the shared
+  // INTERNAL_CRON_SECRET bearer (the same secret this worker is authed with),
+  // NOT the service-role key. Failure-isolated like the schedule sweep.
+  await enqueueDueOutboundCalls(supabase, supabaseUrl, Deno.env.get("INTERNAL_CRON_SECRET") ?? "");
   const emailPoll = kickEmailTriggerPoll();
 
   const { data: claimed, error: claimErr } = await supabase.rpc("claim_ai_flow_runs", {
@@ -3464,7 +3466,7 @@ async function enqueueDueScheduledRuns(supabase: Supabase): Promise<void> {
  */
 async function placeOutboundCall(
   supabaseUrl: string,
-  serviceKey: string,
+  bearer: string,
   body: { businessId: string; flowId: string }
 ): Promise<{
   ok: boolean;
@@ -3486,7 +3488,7 @@ async function placeOutboundCall(
       `${supabaseUrl.replace(/\/$/, "")}/functions/v1/telnyx-voice-originate`,
       {
         method: "POST",
-        headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${bearer}`, "Content-Type": "application/json" },
         body: JSON.stringify(body),
         signal: ctl.signal
       }
@@ -3523,7 +3525,7 @@ async function placeOutboundCall(
 async function enqueueDueOutboundCalls(
   supabase: Supabase,
   supabaseUrl: string,
-  serviceKey: string
+  bearer: string
 ): Promise<void> {
   try {
     const PAGE = 200;
@@ -3575,7 +3577,7 @@ async function enqueueDueOutboundCalls(
         continue;
       }
 
-      const result = await placeOutboundCall(supabaseUrl, serviceKey, {
+      const result = await placeOutboundCall(supabaseUrl, bearer, {
         businessId: row.business_id,
         flowId: row.id
       });

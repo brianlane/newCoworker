@@ -44,15 +44,19 @@ export async function POST(request: Request, { params }: Ctx) {
     }
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-    if (!supabaseUrl || !serviceKey) {
+    // Authenticate to telnyx-voice-originate with the shared INTERNAL_CRON_SECRET
+    // (assertCronAuth), NOT the service-role key: the platform-injected
+    // service-role key inside the function can differ from this app's copy on
+    // projects using the new API-key system, which would 401 every call.
+    const cronSecret = process.env.INTERNAL_CRON_SECRET?.trim();
+    if (!supabaseUrl || !cronSecret) {
       return errorResponse("INTERNAL_SERVER_ERROR", "Voice origination is not configured");
     }
 
     const res = await fetch(`${supabaseUrl}/functions/v1/telnyx-voice-originate`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${serviceKey}`,
+        Authorization: `Bearer ${cronSecret}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
