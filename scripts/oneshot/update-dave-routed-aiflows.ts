@@ -13,8 +13,10 @@
  * 1b. RETRO (late) claim option: append a SEPARATE numbered option at the next
  *    sequential digit for claiming a lead AFTER its window lapsed, stamping
  *    `lateClaimOption`. Replaces the old magic "86" (now reserved for retroactive
- *    UNCLAIM). Includes the clarity copy "ETA of when you can please triple tap
- *    this lead?". Idempotent via its own marker; runs after option 1.
+ *    UNCLAIM). Advertises ONLY the comma/ETA form (`"<n>, <ETA>"`) with the
+ *    clarity copy "ETA of when you can please triple tap this lead?" — a retro
+ *    claim always requires the ETA. Idempotent via its own marker; runs after
+ *    option 1.
  *
  * 2. HomeLight email FALLBACK: insert the `email_extract` step ("email_card")
  *    after the portal contact-card browse so a delayed/empty portal card is
@@ -176,10 +178,15 @@ export function addTimeframeOption(def: Definition, agentName: string): boolean 
 /** Idempotency marker: this phrase appears only in the appended RETRO option. */
 const RETRO_OPTION_MARKER = "triple tap this lead";
 
-/** The appended retroactive (late) claim option line for option number `n`. */
+/**
+ * The appended retroactive (late) claim option line for option number `n`.
+ * Advertises ONLY the comma/ETA form ("n, <ETA>") — a retro claim always
+ * requires the ETA (the worker keys it on the comma reply), so the copy never
+ * suggests a bare "n" that wouldn't re-open a lapsed lead.
+ */
 export function retroClaimOptionLine(n: number): string {
   return (
-    `\nReply ${n} to claim a lead AFTER its window lapsed — ` +
+    `\nLapsed lead? Reply "${n}, <ETA>" to claim it after its window — ` +
     `ETA of when you can please triple tap this lead? (e.g. "${n}, tomorrow am").`
   );
 }

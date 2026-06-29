@@ -110,11 +110,13 @@ describe("addTimeframeOption", () => {
 });
 
 describe("retroClaimOptionLine", () => {
-  it("renders the appended retro option with the triple-tap clarity copy", () => {
+  it("renders the appended retro option advertising only the comma/ETA form", () => {
     const line = retroClaimOptionLine(4);
-    expect(line).toContain("Reply 4 to claim a lead AFTER its window lapsed");
+    expect(line).toContain('Reply "4, <ETA>" to claim it after its window');
     expect(line).toContain("ETA of when you can please triple tap this lead?");
     expect(line).toContain('"4, tomorrow am"');
+    // Never suggests a bare "Reply 4" that wouldn't re-open a lapsed lead.
+    expect(line).not.toContain("Reply 4 to claim");
   });
 });
 
@@ -131,7 +133,7 @@ describe("addRetroClaimOption", () => {
     };
     expect(step.claimTimeframeOption).toBe(3);
     expect(step.lateClaimOption).toBe(4);
-    expect(step.offerTemplate).toContain("Reply 4 to claim a lead AFTER its window lapsed");
+    expect(step.offerTemplate).toContain('Reply "4, <ETA>" to claim it after its window');
     // The two option digits differ, so the patched definition stays valid.
     expect(() => parseAiFlowDefinition(def)).not.toThrow();
   });
