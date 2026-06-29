@@ -121,7 +121,12 @@ export default async function SmsThreadPage({
       </div>
 
       <Card padding="md">
-        <ConversationScroll maxHeightClass="max-h-[60vh]" anchorBottom className="pr-1">
+        <ConversationScroll
+          key={customerE164}
+          maxHeightClass="max-h-[60vh]"
+          anchorBottom
+          className="pr-1"
+        >
         <ul className="space-y-4">
           {messages.map((m) => {
             const isInbound = m.direction === "inbound";
