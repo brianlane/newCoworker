@@ -1386,3 +1386,136 @@ describe("{{now.*}} template scope", () => {
     );
   });
 });
+
+describe("voice trigger + voice steps", () => {
+  it("accepts a handoff chain (ring_handoff x2 + trailing voice_ai_intake)", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "voice", fromE164: "+14159851909" },
+      steps: [
+        { id: "r1", type: "ring_handoff", toE164: "+16025245719", ringSeconds: 20 },
+        { id: "r2", type: "ring_handoff", toE164: "+16026951142", ringSeconds: 20 },
+        {
+          id: "ai",
+          type: "voice_ai_intake",
+          notifyE164: "+16026951142",
+          persona: "Amy's assistant",
+          captureFields: ["name", "phone"]
+        }
+      ]
+    });
+    expect(def.trigger.channel).toBe("voice");
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+    expect(summarizeDefinition(def)).toContain("+14159851909");
+  });
+
+  it("accepts a single voice_transfer flow", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "voice", fromE164: "+13056133412" },
+      steps: [{ id: "t", type: "voice_transfer", toE164: "+16026951142", whisper: "Connecting you now." }]
+    });
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects an E.164 that isn't well-formed", () => {
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "voice", fromE164: "4159851909" },
+        steps: [{ id: "r", type: "ring_handoff", toE164: "+16025245719" }]
+      })
+    ).toThrow(AiFlowValidationError);
+  });
+
+  it("rejects a non-voice step under a voice trigger", () => {
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "voice", fromE164: "+14159851909" },
+        steps: [
+          { id: "r", type: "ring_handoff", toE164: "+16025245719" },
+          { id: "n", type: "notify_owner", message: "hi" }
+        ]
+      })
+    ).toThrow(AiFlowValidationError);
+  });
+
+  it("rejects a voice step under a non-voice trigger", () => {
+    const parsed = aiFlowDefinitionSchema.parse({
+      version: 1,
+      trigger: { channel: "sms", conditions: [] },
+      steps: [{ id: "r", type: "ring_handoff", toE164: "+16025245719" }]
+    });
+    expect(validateDefinitionSemantics(parsed)).toContain(
+      'Step "r" is a voice step ("ring_handoff") but the trigger is "sms" — voice steps need a voice trigger.'
+    );
+  });
+
+  it("rejects voice_ai_intake that isn't the last step", () => {
+    const parsed = aiFlowDefinitionSchema.parse({
+      version: 1,
+      trigger: { channel: "voice", fromE164: "+14159851909" },
+      steps: [
+        { id: "r", type: "ring_handoff", toE164: "+16025245719" },
+        { id: "ai", type: "voice_ai_intake", notifyE164: "+16026951142" },
+        { id: "r2", type: "ring_handoff", toE164: "+16026951142" }
+      ]
+    });
+    expect(validateDefinitionSemantics(parsed)).toContain(
+      "voice_ai_intake must be the last step — it only takes over after every ring_handoff missed."
+    );
+  });
+
+  it("rejects more than one voice_ai_intake", () => {
+    const parsed = aiFlowDefinitionSchema.parse({
+      version: 1,
+      trigger: { channel: "voice", fromE164: "+14159851909" },
+      steps: [
+        { id: "r", type: "ring_handoff", toE164: "+16025245719" },
+        { id: "ai1", type: "voice_ai_intake", notifyE164: "+16026951142" },
+        { id: "ai2", type: "voice_ai_intake", notifyE164: "+16026951142" }
+      ]
+    });
+    expect(validateDefinitionSemantics(parsed)).toContain(
+      "A voice flow can have at most one voice_ai_intake."
+    );
+  });
+
+  it("rejects a voice_transfer mixed with other steps", () => {
+    const parsed = aiFlowDefinitionSchema.parse({
+      version: 1,
+      trigger: { channel: "voice", fromE164: "+14159851909" },
+      steps: [
+        { id: "t", type: "voice_transfer", toE164: "+16026951142" },
+        { id: "r", type: "ring_handoff", toE164: "+16025245719" }
+      ]
+    });
+    expect(validateDefinitionSemantics(parsed)).toContain(
+      "A voice_transfer flow connects the caller straight to one number — it must be the only step (no ring_handoff/voice_ai_intake)."
+    );
+  });
+
+  it("flags duplicate step ids inside a voice flow", () => {
+    const parsed = aiFlowDefinitionSchema.parse({
+      version: 1,
+      trigger: { channel: "voice", fromE164: "+14159851909" },
+      steps: [
+        { id: "dup", type: "ring_handoff", toE164: "+16025245719" },
+        { id: "dup", type: "ring_handoff", toE164: "+16026951142" }
+      ]
+    });
+    expect(validateDefinitionSemantics(parsed)).toContain('Duplicate step id "dup".');
+  });
+
+  it("rejects a voice flow with no ringable step", () => {
+    const parsed = aiFlowDefinitionSchema.parse({
+      version: 1,
+      trigger: { channel: "voice", fromE164: "+14159851909" },
+      steps: [{ id: "ai", type: "voice_ai_intake", notifyE164: "+16026951142" }]
+    });
+    expect(validateDefinitionSemantics(parsed)).toContain(
+      "A voice flow needs at least one ring_handoff (or a single voice_transfer)."
+    );
+  });
+});

@@ -92,6 +92,17 @@ describe("api/aiflows/[id]/run route", () => {
     );
   });
 
+  it("400 for a voice flow (it runs on the real-time call path, not the worker)", async () => {
+    vi.mocked(getAiFlow).mockResolvedValue({
+      id: FLOW,
+      enabled: true,
+      definition: { version: 1, trigger: { channel: "voice", fromE164: "+14159851909" }, steps: [] }
+    } as never);
+    const res = await POST(req({ businessId: BIZ }), ctx());
+    expect(res.status).toBe(400);
+    expect(enqueueAiFlowRun).not.toHaveBeenCalled();
+  });
+
   it("admin bypasses requireOwner; empty input yields an empty scope", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({ ...OWNER, isAdmin: true } as never);
     const res = await POST(req({ businessId: BIZ }), ctx());

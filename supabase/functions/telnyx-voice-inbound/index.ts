@@ -40,8 +40,11 @@ import {
 } from "../_shared/telnyx_call_actions.ts";
 import {
   buildHandoffContext,
-  encodeHandoffClientState
+  encodeHandoffClientState,
+  type HandoffContext
 } from "../_shared/voice_handoff.ts";
+import { compileVoiceFlow } from "../_shared/ai_flows/voice.ts";
+import type { AiFlowDefinition } from "../_shared/ai_flows/types.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 import {
   readTelnyxWebhookRateLimits,
@@ -273,12 +276,264 @@ serve(async (req: Request) => {
 
   const businessId = routeRow.business_id as string;
 
-  // Warm-handoff chain (§voice_handoff_chains). The HomeLight live-transfer
-  // line rings Dave, then Amy, then hands to the AI worker. Runs BEFORE the
-  // single-transfer caller rules and the kill switch / reserve / Stripe checks
-  // so it never consumes concurrency or bills minutes. Matched on the
-  // (normalized) caller id; a missing/garbled `from` can't match and falls
-  // through to the normal path.
+  // ── Reusable voice-routing primitives ──────────────────────────────────────
+  // Both the new AiFlow voice path and the legacy tables drive the SAME Telnyx
+  // call-control machine; these helpers are the single implementation so the two
+  // sources can never diverge. Both run BEFORE the kill switch / reserve / Stripe
+  // / bridge checks so a routed call never consumes concurrency or bills minutes.
+
+  /**
+   * Start a warm-handoff chain for `ctx`: persist the session, answer the leg,
+   * and transfer to the first human. Returns a terminal Response when it acted
+   * (started, or failed after answering), or null when it could NOT start
+   * (no steps / session write failed) so the caller falls through to the next
+   * routing source / the normal AI path.
+   */
+  const runHandoffChain = async (ctx: HandoffContext): Promise<Response | null> => {
+    const first = ctx.steps[0];
+    if (!first) {
+      // No ringable human — make the misconfiguration observable, then fall
+      // through (AI-only chains aren't supported; we always ring a human first).
+      console.warn("handoff: chain has no usable steps; falling through", {
+        businessId,
+        from: fromE164Informational,
+        has_ai_takeover: Boolean(ctx.ai_takeover)
+      });
+      await telemetryRecord(supabase, "voice_handoff_failed", {
+        business_id: businessId,
+        call_control_id: callControlId,
+        stage: "no_steps"
+      });
+      return null;
+    }
+    // Normalize the ring window the same way planHandoffAdvance does for later
+    // steps: a 0/missing ring_secs must NOT omit timeout_secs (Telnyx would then
+    // ring the first human forever and the chain would never advance).
+    const firstRingSecs = first.ring_secs > 0 ? Math.floor(first.ring_secs) : 20;
+    // Persist the session FIRST — the chain can only advance (call.bridged /
+    // call.hangup → telnyx-voice-call-end) if a session row keyed by this A-leg
+    // call_control_id exists. If the write fails, fall through rather than ringing
+    // a single dead-end leg with no Amy/AI fallback.
+    const { error: sessErr } = await supabase.from("voice_handoff_sessions").upsert(
+      {
+        call_control_id: callControlId,
+        business_id: businessId,
+        from_e164: fromE164Informational,
+        chain_from_e164: fromE164Informational,
+        status: "ringing",
+        current_step: 0,
+        context: ctx as unknown as Record<string, unknown>
+      },
+      { onConflict: "call_control_id" }
+    );
+    if (sessErr) {
+      console.error("handoff: session upsert failed; skipping handoff", sessErr);
+      await telemetryRecord(supabase, "voice_handoff_failed", {
+        business_id: businessId,
+        call_control_id: callControlId,
+        stage: "session_upsert"
+      });
+      return null;
+    }
+    // A warm transfer bridges an *answered* leg. Answer first (HomeLight's IVR
+    // keeps looping while we ring), then transfer to the first step.
+    const ans = await telnyxAnswerPlain(apiKey, callControlId);
+    if (!ans.ok) {
+      const errText = (await ans.text()).slice(0, 300);
+      console.error("handoff: answer failed", ans.status, errText);
+      await supabase
+        .from("voice_handoff_sessions")
+        .update({ status: "done" })
+        .eq("call_control_id", callControlId);
+      await telemetryRecord(supabase, "voice_handoff_failed", {
+        business_id: businessId,
+        call_control_id: callControlId,
+        stage: "answer",
+        http_status: ans.status
+      });
+      return jsonOk("handoff_answer_failed");
+    }
+    const tf = await telnyxTransferCall(apiKey, callControlId, first.to_e164, {
+      timeoutSecs: firstRingSecs,
+      clientState: encodeHandoffClientState(callControlId, 0)
+    });
+    if (!tf.ok) {
+      const errText = (await tf.text()).slice(0, 300);
+      console.error("handoff: first transfer failed", tf.status, errText);
+      await supabase
+        .from("voice_handoff_sessions")
+        .update({ status: "done" })
+        .eq("call_control_id", callControlId);
+      await telnyxHangupCall(apiKey, callControlId);
+      await telemetryRecord(supabase, "voice_handoff_failed", {
+        business_id: businessId,
+        call_control_id: callControlId,
+        stage: "first_transfer",
+        http_status: tf.status
+      });
+      return jsonOk("handoff_first_transfer_failed");
+    }
+    await telemetryRecord(supabase, "voice_handoff_started", {
+      business_id: businessId,
+      call_control_id: callControlId,
+      from: fromE164Informational,
+      steps: ctx.steps.length,
+      has_ai_takeover: Boolean(ctx.ai_takeover)
+    });
+    await systemLog(supabase, {
+      businessId,
+      source: "voice",
+      level: "info",
+      event: "voice_handoff_started",
+      message: `Started warm-handoff chain for ${fromE164Informational} (${ctx.steps.length} step(s), ai_takeover=${Boolean(ctx.ai_takeover)})`,
+      payload: { call_control_id: callControlId, from: fromE164Informational }
+    });
+    return jsonOk("handoff_chain_start");
+  };
+
+  /**
+   * Single blind warm transfer: answer, optionally whisper to the caller, then
+   * bridge straight to `toDst`. Always returns a terminal Response (it answered
+   * the leg, so we can't fall through after that).
+   */
+  const runBlindTransfer = async (toDst: string, whisper: string): Promise<Response> => {
+    // A warm transfer bridges an *answered* leg. Answer first and gate the
+    // whisper + transfer on it — transferring an unanswered call is rejected by
+    // Telnyx and strands the caller on dead air.
+    const ans = await telnyxAnswerPlain(apiKey, callControlId);
+    if (!ans.ok) {
+      const errText = (await ans.text()).slice(0, 300);
+      console.error("caller-rule answer failed", ans.status, errText);
+      await telemetryRecord(supabase, "voice_caller_transfer_failed", {
+        business_id: businessId,
+        call_control_id: callControlId,
+        http_status: ans.status
+      });
+      await systemLog(supabase, {
+        businessId,
+        source: "voice",
+        level: "error",
+        event: "voice_caller_transfer_failed",
+        message: `Caller-rule answer refused by Telnyx (HTTP ${ans.status}); transfer skipped: ${errText}`,
+        payload: { call_control_id: callControlId, http_status: ans.status, to: toDst }
+      });
+      return new Response(JSON.stringify({ ok: true, path: "caller_transfer_answer_failed" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    if (whisper) {
+      // Speak the short prompt to the caller, then pause long enough for it to
+      // play before bridging (the same pacing the Safe Mode forward uses).
+      const sp = await telnyxSpeak(apiKey, callControlId, whisper);
+      if (!sp.ok) {
+        console.error("caller-rule whisper failed", sp.status, (await sp.text()).slice(0, 300));
+      }
+      const delayRaw = Deno.env.get("VOICE_SAFE_MODE_TRANSFER_DELAY_MS");
+      const delayMs = delayRaw ? Number(delayRaw) : 2500;
+      if (Number.isFinite(delayMs) && delayMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+    const transferRes = await telnyxTransferCall(apiKey, callControlId, toDst);
+    if (!transferRes.ok) {
+      const errText = await transferRes.text();
+      console.error("caller-rule transfer failed", transferRes.status, errText.slice(0, 300));
+      await telemetryRecord(supabase, "voice_caller_transfer_failed", {
+        business_id: businessId,
+        call_control_id: callControlId,
+        http_status: transferRes.status
+      });
+      await systemLog(supabase, {
+        businessId,
+        source: "voice",
+        level: "error",
+        event: "voice_caller_transfer_failed",
+        message: `Caller-rule transfer refused by Telnyx (HTTP ${transferRes.status}): ${errText.slice(0, 300)}`,
+        payload: { call_control_id: callControlId, http_status: transferRes.status, to: toDst }
+      });
+      // Answered but the bridge was refused; hang up cleanly so the caller isn't
+      // stranded on silent audio.
+      const hup = await telnyxHangupCall(apiKey, callControlId);
+      if (!hup.ok) {
+        console.error("caller-rule hangup failed", hup.status, (await hup.text()).slice(0, 300));
+      }
+      return new Response(JSON.stringify({ ok: true, path: "caller_transfer_failed" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    await telemetryRecord(supabase, "voice_caller_transferred", {
+      business_id: businessId,
+      call_control_id: callControlId
+    });
+    await systemLog(supabase, {
+      businessId,
+      source: "voice",
+      level: "info",
+      event: "voice_caller_transferred",
+      message: `Warm-transferred caller ${fromE164Informational} to ${toDst} (voice routing)`,
+      payload: { call_control_id: callControlId, from: fromE164Informational, to: toDst }
+    });
+    return new Response(JSON.stringify({ ok: true, path: "caller_transfer" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+
+  // ── Voice routing as an AiFlow (preferred source) ──────────────────────────
+  // A `voice`-triggered AiFlow whose trigger.fromE164 matches the caller is the
+  // authored, CRUD-able replacement for the legacy voice_handoff_chains /
+  // voice_caller_transfer_rules rows. Resolve it FIRST; the legacy tables remain
+  // a fallback for any caller not yet migrated. A lookup/compile failure must
+  // not strand the caller — log and fall through.
+  if (fromE164Informational) {
+    const { data: flowRows, error: flowErr } = await supabase
+      .from("ai_flows")
+      .select("id, definition")
+      .eq("business_id", businessId)
+      .eq("enabled", true)
+      .eq("definition->trigger->>channel", "voice")
+      .eq("definition->trigger->>fromE164", fromE164Informational)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (flowErr) {
+      console.error("ai_flows voice lookup", flowErr);
+    }
+    const flowRow = (flowRows ?? [])[0] as { id?: string; definition?: unknown } | undefined;
+    if (flowRow?.definition) {
+      let plan: ReturnType<typeof compileVoiceFlow> = null;
+      try {
+        plan = compileVoiceFlow(flowRow.definition as AiFlowDefinition, toE164);
+      } catch (e) {
+        console.error("compileVoiceFlow", e);
+      }
+      if (plan?.kind === "transfer") {
+        await telemetryRecord(supabase, "voice_flow_matched", {
+          business_id: businessId,
+          call_control_id: callControlId,
+          flow_id: flowRow.id,
+          kind: "transfer"
+        });
+        return await runBlindTransfer(plan.toE164, plan.whisper);
+      }
+      if (plan?.kind === "handoff") {
+        await telemetryRecord(supabase, "voice_flow_matched", {
+          business_id: businessId,
+          call_control_id: callControlId,
+          flow_id: flowRow.id,
+          kind: "handoff"
+        });
+        const handled = await runHandoffChain(plan.context);
+        if (handled) return handled;
+        // Could not start (no steps / session write) — fall through to legacy.
+      }
+    }
+  }
+
+  // Warm-handoff chain (§voice_handoff_chains) — LEGACY fallback for callers not
+  // yet migrated to a voice AiFlow above. The HomeLight live-transfer line rings
+  // Dave, then Amy, then hands to the AI worker.
   if (fromE164Informational) {
     const { data: chainRow, error: chainErr } = await supabase
       .from("voice_handoff_chains")
@@ -299,119 +554,14 @@ serve(async (req: Request) => {
         steps: chain.steps,
         aiTakeover: chain.ai_takeover
       });
-      const first = ctx.steps[0];
-      if (first) {
-        // Normalize the ring window the same way planHandoffAdvance does for
-        // later steps: a 0/missing ring_secs must NOT omit timeout_secs (Telnyx
-        // would then ring the first human forever and the chain would never
-        // advance to Amy / AI takeout).
-        const firstRingSecs = first.ring_secs > 0 ? Math.floor(first.ring_secs) : 20;
-        // Persist the session FIRST — the chain can only advance (call.bridged /
-        // call.hangup → telnyx-voice-call-end) if a session row keyed by this
-        // A-leg call_control_id exists. If the write fails, skip the handoff and
-        // fall through to the normal path rather than ringing a single dead-end
-        // leg with no Amy/AI fallback.
-        const { error: sessErr } = await supabase.from("voice_handoff_sessions").upsert(
-          {
-            call_control_id: callControlId,
-            business_id: businessId,
-            from_e164: fromE164Informational,
-            chain_from_e164: fromE164Informational,
-            status: "ringing",
-            current_step: 0,
-            context: ctx as unknown as Record<string, unknown>
-          },
-          { onConflict: "call_control_id" }
-        );
-        if (sessErr) {
-          console.error("handoff: session upsert failed; skipping handoff", sessErr);
-          await telemetryRecord(supabase, "voice_handoff_failed", {
-            business_id: businessId,
-            call_control_id: callControlId,
-            stage: "session_upsert"
-          });
-        } else {
-        // A warm transfer bridges an *answered* leg. Answer first (HomeLight's
-        // IVR keeps looping while we ring), then transfer to the first step.
-        const ans = await telnyxAnswerPlain(apiKey, callControlId);
-        if (!ans.ok) {
-          const errText = (await ans.text()).slice(0, 300);
-          console.error("handoff: answer failed", ans.status, errText);
-          await supabase
-            .from("voice_handoff_sessions")
-            .update({ status: "done" })
-            .eq("call_control_id", callControlId);
-          await telemetryRecord(supabase, "voice_handoff_failed", {
-            business_id: businessId,
-            call_control_id: callControlId,
-            stage: "answer",
-            http_status: ans.status
-          });
-          return jsonOk("handoff_answer_failed");
-        }
-        const tf = await telnyxTransferCall(apiKey, callControlId, first.to_e164, {
-          timeoutSecs: firstRingSecs,
-          clientState: encodeHandoffClientState(callControlId, 0)
-        });
-        if (!tf.ok) {
-          const errText = (await tf.text()).slice(0, 300);
-          console.error("handoff: first transfer failed", tf.status, errText);
-          await supabase
-            .from("voice_handoff_sessions")
-            .update({ status: "done" })
-            .eq("call_control_id", callControlId);
-          await telnyxHangupCall(apiKey, callControlId);
-          await telemetryRecord(supabase, "voice_handoff_failed", {
-            business_id: businessId,
-            call_control_id: callControlId,
-            stage: "first_transfer",
-            http_status: tf.status
-          });
-          return jsonOk("handoff_first_transfer_failed");
-        }
-        await telemetryRecord(supabase, "voice_handoff_started", {
-          business_id: businessId,
-          call_control_id: callControlId,
-          from: fromE164Informational,
-          steps: ctx.steps.length,
-          has_ai_takeover: Boolean(ctx.ai_takeover)
-        });
-        await systemLog(supabase, {
-          businessId,
-          source: "voice",
-          level: "info",
-          event: "voice_handoff_started",
-          message: `Started warm-handoff chain for ${fromE164Informational} (${ctx.steps.length} step(s), ai_takeover=${Boolean(ctx.ai_takeover)})`,
-          payload: { call_control_id: callControlId, from: fromE164Informational }
-        });
-        return jsonOk("handoff_chain_start");
-        }
-      } else {
-        // Enabled chain with no usable human steps. AI-only chains aren't
-        // supported (the product flow always rings a human first, then the AI
-        // takes over on no-answer), so make the misconfiguration observable
-        // instead of silently honoring `enabled` — then fall through to the
-        // normal voice path.
-        console.warn("handoff: enabled chain has no usable steps; falling through", {
-          businessId,
-          from: fromE164Informational,
-          has_ai_takeover: Boolean(ctx.ai_takeover)
-        });
-        await telemetryRecord(supabase, "voice_handoff_failed", {
-          business_id: businessId,
-          call_control_id: callControlId,
-          stage: "no_steps"
-        });
-      }
+      const handled = await runHandoffChain(ctx);
+      if (handled) return handled;
     }
   }
 
-  // Per-caller warm-transfer rules (§voice_caller_transfer_rules). Certain
-  // inbound numbers (e.g. Clever's live-transfer line) should bypass the AI
-  // bridge entirely and connect straight to a human. Runs BEFORE the kill
-  // switch / reserve / Stripe / bridge checks so it never consumes concurrency
-  // or bills minutes. Matched on the (normalized) caller id; a missing/garbled
-  // `from` simply can't match a rule and falls through to the normal path.
+  // Per-caller warm-transfer rules (§voice_caller_transfer_rules) — LEGACY
+  // fallback. Certain inbound numbers (e.g. Clever's live-transfer line) connect
+  // straight to a human, bypassing the AI bridge.
   if (fromE164Informational) {
     const { data: ruleRow, error: ruleErr } = await supabase
       .from("voice_caller_transfer_rules")
@@ -426,90 +576,7 @@ serve(async (req: Request) => {
     }
     const rule = ruleRow as { to_e164?: string; whisper?: string | null } | null;
     if (rule?.to_e164) {
-      const whisper = (rule.whisper ?? "").trim();
-      // A warm transfer bridges an *answered* leg. Answer first and gate the
-      // whisper + transfer on it — transferring an unanswered call is rejected
-      // by Telnyx and strands the caller on dead air. (answerThenSpeak swallows
-      // the answer result, so we answer explicitly here to act on a failure.)
-      const ans = await telnyxAnswerPlain(apiKey, callControlId);
-      if (!ans.ok) {
-        const errText = (await ans.text()).slice(0, 300);
-        console.error("caller-rule answer failed", ans.status, errText);
-        await telemetryRecord(supabase, "voice_caller_transfer_failed", {
-          business_id: businessId,
-          call_control_id: callControlId,
-          http_status: ans.status
-        });
-        await systemLog(supabase, {
-          businessId,
-          source: "voice",
-          level: "error",
-          event: "voice_caller_transfer_failed",
-          message: `Caller-rule answer refused by Telnyx (HTTP ${ans.status}); transfer skipped: ${errText}`,
-          payload: { call_control_id: callControlId, http_status: ans.status, to: rule.to_e164 }
-        });
-        return new Response(JSON.stringify({ ok: true, path: "caller_transfer_answer_failed" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" }
-        });
-      }
-      if (whisper) {
-        // Speak the short prompt to the caller, then pause long enough for it to
-        // play before bridging (the same pacing the Safe Mode forward uses).
-        const sp = await telnyxSpeak(apiKey, callControlId, whisper);
-        if (!sp.ok) {
-          console.error("caller-rule whisper failed", sp.status, (await sp.text()).slice(0, 300));
-        }
-        const delayRaw = Deno.env.get("VOICE_SAFE_MODE_TRANSFER_DELAY_MS");
-        const delayMs = delayRaw ? Number(delayRaw) : 2500;
-        if (Number.isFinite(delayMs) && delayMs > 0) {
-          await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
-        }
-      }
-      const transferRes = await telnyxTransferCall(apiKey, callControlId, rule.to_e164);
-      if (!transferRes.ok) {
-        const errText = await transferRes.text();
-        console.error("caller-rule transfer failed", transferRes.status, errText.slice(0, 300));
-        await telemetryRecord(supabase, "voice_caller_transfer_failed", {
-          business_id: businessId,
-          call_control_id: callControlId,
-          http_status: transferRes.status
-        });
-        await systemLog(supabase, {
-          businessId,
-          source: "voice",
-          level: "error",
-          event: "voice_caller_transfer_failed",
-          message: `Caller-rule transfer refused by Telnyx (HTTP ${transferRes.status}): ${errText.slice(0, 300)}`,
-          payload: { call_control_id: callControlId, http_status: transferRes.status, to: rule.to_e164 }
-        });
-        // The call is answered but the bridge was refused; hang up cleanly so the
-        // caller isn't stranded on silent audio.
-        const hup = await telnyxHangupCall(apiKey, callControlId);
-        if (!hup.ok) {
-          console.error("caller-rule hangup failed", hup.status, (await hup.text()).slice(0, 300));
-        }
-        return new Response(JSON.stringify({ ok: true, path: "caller_transfer_failed" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" }
-        });
-      }
-      await telemetryRecord(supabase, "voice_caller_transferred", {
-        business_id: businessId,
-        call_control_id: callControlId
-      });
-      await systemLog(supabase, {
-        businessId,
-        source: "voice",
-        level: "info",
-        event: "voice_caller_transferred",
-        message: `Warm-transferred caller ${fromE164Informational} to ${rule.to_e164} (per-caller rule)`,
-        payload: { call_control_id: callControlId, from: fromE164Informational, to: rule.to_e164 }
-      });
-      return new Response(JSON.stringify({ ok: true, path: "caller_transfer" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      });
+      return await runBlindTransfer(rule.to_e164, (rule.whisper ?? "").trim());
     }
   }
 

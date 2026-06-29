@@ -32,7 +32,10 @@ export const STEP_TYPE_LABELS: Record<StepType, string> = {
   route_to_team: "Hand off to team/employees",
   browse_action: "Do something on a web page (click / type)",
   recall_url: "Recall a saved link from an earlier run",
-  upsert_customer: "Save / update a customer contact"
+  upsert_customer: "Save / update a customer contact",
+  ring_handoff: "Ring a person (warm transfer)",
+  voice_ai_intake: "AI takes the call (capture the lead)",
+  voice_transfer: "Connect the caller to a number"
 };
 
 /** One-line explanation of what each step does, shown under the step header. */
@@ -53,7 +56,13 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
   recall_url:
     "Looks up a link a previous run saved for this same person (by phone) so this run can reuse it.",
   upsert_customer:
-    "Creates or updates a customer on your Customers page from details earlier steps found (phone, name, email)."
+    "Creates or updates a customer on your Customers page from details earlier steps found (phone, name, email).",
+  ring_handoff:
+    "Warm-transfers the live caller to a person and rings them. If they don't answer, the next ring step (or AI takeover) runs.",
+  voice_ai_intake:
+    "After everyone misses the call, a person presses 1 to hand it to the AI, which talks to the caller, captures the lead, and texts you a summary.",
+  voice_transfer:
+    "Connects the caller straight to one number (optionally saying a short message first). Use this alone for a simple forward."
 };
 
 /** Friendly name for each inbound trigger condition. */

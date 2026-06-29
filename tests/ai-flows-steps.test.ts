@@ -2,6 +2,19 @@ import { describe, expect, it } from "vitest";
 import { planStep, type StepScope } from "../supabase/functions/_shared/ai_flows/steps";
 import type { FlowStep } from "../supabase/functions/_shared/ai_flows/types";
 
+describe("planStep: voice steps are rejected by the async worker", () => {
+  it.each<FlowStep>([
+    { id: "r", type: "ring_handoff", toE164: "+16025245719" },
+    { id: "a", type: "voice_ai_intake", notifyE164: "+16026951142" },
+    { id: "t", type: "voice_transfer", toE164: "+16026951142" }
+  ])("fails for %s (runs on the call path, not the worker)", (step) => {
+    const r = planStep(step, { trigger: {} });
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected failure");
+    expect(r.error).toContain("voice steps run on the call path");
+  });
+});
+
 describe("planStep: extract_url", () => {
   const step: FlowStep = { id: "s", type: "extract_url", saveAs: "lead_url" };
   it("uses the engine-extracted trigger.url", () => {

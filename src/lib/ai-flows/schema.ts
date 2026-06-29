@@ -36,7 +36,25 @@ export const FLOW_STEP_TYPES = [
   "route_to_team",
   "browse_action",
   "recall_url",
-  "upsert_customer"
+  "upsert_customer",
+  // Voice-channel steps (real-time call routing, executed by the Telnyx voice
+  // webhook state machine — NOT the async ai-flow-worker). Only valid under a
+  // `voice` trigger; see VOICE_STEP_TYPES and validateVoiceFlow.
+  "ring_handoff",
+  "voice_ai_intake",
+  "voice_transfer"
+] as const;
+
+/**
+ * The subset of step types that run on the real-time voice path (Telnyx call
+ * control) instead of the async batch worker. A `voice` trigger uses ONLY these;
+ * every other trigger uses ONLY the non-voice steps. Enforced in
+ * validateDefinitionSemantics so the two execution models never mix in one flow.
+ */
+export const VOICE_STEP_TYPES = [
+  "ring_handoff",
+  "voice_ai_intake",
+  "voice_transfer"
 ] as const;
 
 /** Keys available as `{{agent.x}}` inside a route_to_team step's templates. */
@@ -125,6 +143,11 @@ const hhmm = z
 /** IANA zone name; validity is enforced at runtime (helpers fail open). */
 const timezone = z.string().min(1).max(60);
 
+/** E.164 phone (voice routing): leading "+", country digit, 6-15 more digits. */
+const e164 = z
+  .string()
+  .regex(/^\+[1-9]\d{6,15}$/, 'must be an E.164 number like "+14155551234"');
+
 const smsTriggerSchema = z.object({
   channel: z.literal("sms"),
   correlationWindowMinutes: z.number().int().min(0).max(1440).optional(),
@@ -186,12 +209,26 @@ const tenantEmailTriggerSchema = z.object({
   conditions: z.array(conditionSchema).max(20)
 });
 
+/**
+ * Inbound-voice trigger: a call FROM `fromE164` to one of the business's voice
+ * numbers fires this flow. Unlike every other channel this does NOT enqueue an
+ * ai_flow_run — the Telnyx voice webhook (telnyx-voice-inbound) resolves the
+ * matching enabled voice flow in real time and drives the call-control state
+ * machine directly from its compiled steps. The flow row exists purely so the
+ * routing is authored/visible/CRUD-able in the AiFlows UI like any other flow.
+ */
+const voiceTriggerSchema = z.object({
+  channel: z.literal("voice"),
+  fromE164: e164
+});
+
 const triggerSchema = z.discriminatedUnion("channel", [
   smsTriggerSchema,
   manualTriggerSchema,
   scheduleTriggerSchema,
   emailTriggerSchema,
-  tenantEmailTriggerSchema
+  tenantEmailTriggerSchema,
+  voiceTriggerSchema
 ]);
 
 const extractFieldSchema = z.object({
@@ -479,6 +516,41 @@ const stepSchema = z.discriminatedUnion("type", [
     nameVar: varName.optional(),
     emailVar: varName.optional(),
     when: whenSchema.optional()
+  }),
+  // ── Voice steps (real-time call routing; see VOICE_STEP_TYPES) ──
+  // Ring a human and wait for them to answer. The voice webhook warm-transfers
+  // the live caller to `toE164` and rings for `ringSeconds`; on no-answer it
+  // advances to the next ring_handoff, then the voice_ai_intake (if any). Order
+  // in `steps` is the ring order.
+  z.object({
+    id: stepId,
+    type: z.literal("ring_handoff"),
+    toE164: e164,
+    ringSeconds: z.number().int().min(5).max(120).optional(),
+    when: whenSchema.optional()
+  }),
+  // AI takeover after every ring_handoff missed: a human presses 1 to hand the
+  // live caller to the AI worker, which captures the lead and texts a summary
+  // (+ transcript) to `notifyE164`. At most one per flow, and it must come AFTER
+  // the ring_handoff steps (enforced in validateVoiceFlow).
+  z.object({
+    id: stepId,
+    type: z.literal("voice_ai_intake"),
+    notifyE164: e164,
+    persona: z.string().min(1).max(500).optional(),
+    captureFields: z.array(z.string().min(1).max(60)).min(1).max(15).optional(),
+    when: whenSchema.optional()
+  }),
+  // Single blind warm transfer (e.g. a known partner line that should connect
+  // straight to a person, bypassing the AI). Optional `whisper` is spoken to the
+  // caller before the bridge. A voice_transfer flow has exactly one step and no
+  // ring_handoff/voice_ai_intake (enforced in validateVoiceFlow).
+  z.object({
+    id: stepId,
+    type: z.literal("voice_transfer"),
+    toE164: e164,
+    whisper: z.string().min(1).max(300).optional(),
+    when: whenSchema.optional()
   })
 ]);
 
@@ -504,7 +576,7 @@ export type StepCondition = z.infer<typeof whenSchema>;
 export type AiFlowDefinition = z.infer<typeof aiFlowDefinitionSchema>;
 
 /** The trigger channels the builder offers. */
-export const TRIGGER_CHANNELS = ["sms", "manual", "schedule", "email", "tenant_email"] as const;
+export const TRIGGER_CHANNELS = ["sms", "manual", "schedule", "email", "tenant_email", "voice"] as const;
 
 export class AiFlowValidationError extends Error {
   constructor(
@@ -555,6 +627,11 @@ function templateStringsForStep(step: FlowStep): string[] {
     case "extract_text":
     case "recall_url":
     case "upsert_customer":
+    // Voice steps carry no `{{vars.x}}` templates (phone numbers + a persona
+    // string captured live), so there is nothing to scope-check here.
+    case "ring_handoff":
+    case "voice_ai_intake":
+    case "voice_transfer":
       return [];
   }
 }
@@ -564,6 +641,68 @@ const AGENT_KEYS = new Set<string>(AGENT_SCOPE_KEYS);
 const OFFER_KEYS = new Set<string>(OFFER_SCOPE_KEYS);
 const ENGINE_VARS = new Set<string>(ENGINE_PROVIDED_VARS);
 const NOW_KEYS = new Set<string>(NOW_SCOPE_KEYS);
+const VOICE_STEPS = new Set<string>(VOICE_STEP_TYPES);
+
+/**
+ * Cross-step invariants for a `voice`-triggered flow (real-time call routing).
+ * Voice flows have no vars/templates, so they get their own rules instead of the
+ * scope checks below:
+ *   - every step must be a voice step (ring_handoff/voice_ai_intake/voice_transfer);
+ *   - a flow is EITHER a single blind transfer (exactly one voice_transfer, nothing
+ *     else) OR a handoff chain (>= 1 ring_handoff, then an OPTIONAL single trailing
+ *     voice_ai_intake) — the two shapes never mix;
+ *   - voice_ai_intake must be the LAST step and needs a preceding ring_handoff
+ *     (the product always rings a human before the AI takes over).
+ * Returns human-readable issues (step-id uniqueness is checked by the caller).
+ */
+export function validateVoiceFlow(def: AiFlowDefinition): string[] {
+  const issues: string[] = [];
+  const steps = def.steps;
+  const nonVoice = steps.filter((s) => !VOICE_STEPS.has(s.type));
+  for (const s of nonVoice) {
+    issues.push(
+      `Step "${s.id}" is a "${s.type}" step but this is a voice flow — voice flows use only ring_handoff, voice_ai_intake, or voice_transfer.`
+    );
+  }
+  // If any non-voice step slipped in, the shape rules below would be misleading.
+  if (nonVoice.length > 0) return issues;
+
+  const transfers = steps.filter((s) => s.type === "voice_transfer");
+  const rings = steps.filter((s) => s.type === "ring_handoff");
+  const intakes = steps.filter((s) => s.type === "voice_ai_intake");
+
+  if (transfers.length > 0) {
+    // Blind-transfer flow: it must be the ONLY step.
+    if (steps.length !== 1) {
+      issues.push(
+        "A voice_transfer flow connects the caller straight to one number — it must be the only step (no ring_handoff/voice_ai_intake)."
+      );
+    }
+    return issues;
+  }
+
+  // Otherwise it's a handoff chain: at least one ring_handoff.
+  if (rings.length === 0) {
+    issues.push(
+      "A voice flow needs at least one ring_handoff (or a single voice_transfer)."
+    );
+  }
+  if (intakes.length > 1) {
+    issues.push("A voice flow can have at most one voice_ai_intake.");
+  }
+  if (intakes.length === 1) {
+    const last = steps[steps.length - 1];
+    if (last.type !== "voice_ai_intake") {
+      issues.push(
+        "voice_ai_intake must be the last step — it only takes over after every ring_handoff missed."
+      );
+    }
+    if (rings.length === 0) {
+      issues.push("voice_ai_intake needs a preceding ring_handoff (ring a human first).");
+    }
+  }
+  return issues;
+}
 
 /**
  * Cross-step invariants zod cannot express:
@@ -577,6 +716,29 @@ const NOW_KEYS = new Set<string>(NOW_SCOPE_KEYS);
 export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
   const issues: string[] = [];
   const seenIds = new Set<string>();
+
+  // Voice flows run on the real-time call path and have no vars/templates — they
+  // get their own shape rules. We still enforce step-id uniqueness here so the
+  // editor's per-step errors stay consistent across channels.
+  if (def.trigger.channel === "voice") {
+    for (const step of def.steps) {
+      if (seenIds.has(step.id)) issues.push(`Duplicate step id "${step.id}".`);
+      seenIds.add(step.id);
+    }
+    issues.push(...validateVoiceFlow(def));
+    return issues;
+  }
+
+  // A voice step under a non-voice trigger can never execute (the batch worker
+  // has no handler for it) — reject it rather than silently no-op at run time.
+  for (const step of def.steps) {
+    if (VOICE_STEPS.has(step.type)) {
+      issues.push(
+        `Step "${step.id}" is a voice step ("${step.type}") but the trigger is "${def.trigger.channel}" — voice steps need a voice trigger.`
+      );
+    }
+  }
+
   const vars = new Set<string>();
   // True once an earlier browse step (browse_extract or browse_action) has
   // `screenshot: true` — the prerequisite for any later step's attachScreenshot.
@@ -887,6 +1049,9 @@ export function summarizeDefinition(def: AiFlowDefinition): string {
         t.conditions.length === 0
           ? "When the AI mailbox receives any email"
           : `When AI mailbox email matches ${t.conditions.length} condition(s)`;
+      break;
+    case "voice":
+      trigPart = `When a call comes in from ${t.fromE164}`;
       break;
   }
   const stepTypes = def.steps.map((s) => s.type).join(" -> ");

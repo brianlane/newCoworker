@@ -17,7 +17,8 @@ const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
   manual: "Manual — Run now button",
   schedule: "On a schedule",
   email: "Inbound email (your connected inbox)",
-  tenant_email: "Inbound email (AI coworker's mailbox)"
+  tenant_email: "Inbound email (AI coworker's mailbox)",
+  voice: "Inbound call (voice routing)"
 };
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -104,6 +105,9 @@ function TriggerView({ trigger }: { trigger: FlowTrigger }) {
           <Row label="Watched mailbox" value="AI coworker's dedicated mailbox" />
           <ConditionsView conditions={trigger.conditions} />
         </>
+      )}
+      {trigger.channel === "voice" && (
+        <Row label="Caller number" value={trigger.fromE164} mono />
       )}
     </section>
   );
@@ -370,6 +374,37 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           <Row label="Phone variable" value={`{{vars.${step.phoneVar}}}`} mono />
           {step.nameVar && <Row label="Name variable" value={`{{vars.${step.nameVar}}}`} mono />}
           {step.emailVar && <Row label="Email variable" value={`{{vars.${step.emailVar}}}`} mono />}
+        </>
+      );
+    case "ring_handoff":
+      return (
+        <>
+          <Row label="Ring" value={step.toE164} mono />
+          <Row label="Ring for" value={`${step.ringSeconds ?? 20} seconds`} />
+        </>
+      );
+    case "voice_ai_intake":
+      return (
+        <>
+          <Row label="Texts summary to" value={step.notifyE164} mono />
+          {step.persona && <Row label="AI persona" value={step.persona} />}
+          {step.captureFields && step.captureFields.length > 0 && (
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-parchment/50">Captures from the caller</div>
+              <div className="flex flex-wrap gap-1.5">
+                {step.captureFields.map((f, i) => (
+                  <Chip key={i}>{f}</Chip>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      );
+    case "voice_transfer":
+      return (
+        <>
+          <Row label="Connect caller to" value={step.toE164} mono />
+          {step.whisper && <Row label="Says first" value={step.whisper} />}
         </>
       );
   }

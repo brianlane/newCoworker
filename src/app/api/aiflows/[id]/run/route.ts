@@ -40,6 +40,16 @@ export async function POST(request: Request, { params }: Ctx) {
     if (!flow.enabled) {
       return errorResponse("VALIDATION_ERROR", "Enable the flow before running it");
     }
+    // Voice flows run on the real-time Telnyx call path (telnyx-voice-inbound),
+    // not the async worker — there's nothing for a "Run now" run to execute, and
+    // the worker has no handler for voice steps. Refuse rather than enqueue a run
+    // that would only fail. Place a test call from the trigger number instead.
+    if (flow.definition?.trigger?.channel === "voice") {
+      return errorResponse(
+        "VALIDATION_ERROR",
+        "Voice flows run when a call comes in — place a call from the trigger number to test."
+      );
+    }
 
     const run = await enqueueAiFlowRun({
       businessId: body.businessId,
