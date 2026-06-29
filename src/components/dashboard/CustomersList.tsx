@@ -92,7 +92,7 @@ export function CustomersList({ rows }: { rows: CustomerListRow[] }) {
         <SearchControl
           value={query}
           onChange={setQuery}
-          placeholder="Search by name, number, or note…"
+          placeholder="Search by name or number…"
           idPrefix="customer-search"
         />
         <SortControl

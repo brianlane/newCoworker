@@ -55,7 +55,7 @@ export function MessagesList({ rows }: { rows: MessageListRow[] }) {
         <SearchControl
           value={query}
           onChange={setQuery}
-          placeholder="Search by name, number, or text…"
+          placeholder="Search by name or number…"
           idPrefix="messages-search"
         />
         <SortControl
