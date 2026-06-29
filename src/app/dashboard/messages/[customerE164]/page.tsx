@@ -17,6 +17,7 @@ import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { ContactNameEditor } from "@/components/dashboard/ContactNameEditor";
 import { SmsThreadComposer } from "@/components/dashboard/SmsThreadComposer";
+import { ConversationScroll } from "@/components/dashboard/ConversationScroll";
 
 export const dynamic = "force-dynamic";
 
@@ -120,6 +121,12 @@ export default async function SmsThreadPage({
       </div>
 
       <Card padding="md">
+        <ConversationScroll
+          key={customerE164}
+          maxHeightClass="max-h-[60vh]"
+          anchorBottom
+          className="pr-1"
+        >
         <ul className="space-y-4">
           {messages.map((m) => {
             const isInbound = m.direction === "inbound";
@@ -173,6 +180,7 @@ export default async function SmsThreadPage({
             );
           })}
         </ul>
+        </ConversationScroll>
       </Card>
 
       <Card padding="md">
