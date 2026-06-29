@@ -92,9 +92,14 @@ function chainToDefinition(row: ChainRow): AiFlowDefinition {
     const o = (s ?? {}) as Record<string, unknown>;
     const to = typeof o.to_e164 === "string" ? o.to_e164 : "";
     if (!to) continue;
+    // Legacy coerceRingSecs honors ANY positive ring_secs (else defaults 20). The
+    // AiFlow schema bounds ringSeconds to [5,120], so clamp positive legacy values
+    // into that range (3 -> 5, 200 -> 120) to preserve timing intent rather than
+    // dropping them (which would silently fall back to 20s). Non-positive/NaN ->
+    // undefined, which the compiler defaults to 20 — matching legacy behavior.
     const ringRaw = typeof o.ring_secs === "number" ? o.ring_secs : Number(o.ring_secs);
-    const ringSeconds = Number.isFinite(ringRaw) && ringRaw >= 5 && ringRaw <= 120
-      ? Math.floor(ringRaw)
+    const ringSeconds = Number.isFinite(ringRaw) && ringRaw > 0
+      ? Math.min(120, Math.max(5, Math.floor(ringRaw)))
       : undefined;
     steps.push({
       id: stepId("ring"),
@@ -217,6 +222,9 @@ async function main(): Promise<void> {
 
   let planned = 0;
   let skipped = 0;
+  let failed = 0;
+
+  const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
   type Plan = {
     businessId: string;
@@ -235,7 +243,17 @@ async function main(): Promise<void> {
       console.log(`SKIP chain  ${c.business_id} ${c.from_e164} (voice flow already exists)`);
       continue;
     }
-    const definition = chainToDefinition(c);
+    // One unmigratable legacy row (e.g. a malformed E.164 that fails the
+    // authoring schema) must NOT abort the whole run — log it and keep going so
+    // later businesses/rows still migrate.
+    let definition: AiFlowDefinition;
+    try {
+      definition = chainToDefinition(c);
+    } catch (err) {
+      failed += 1;
+      console.error(`FAIL chain  ${c.business_id} ${c.from_e164}: ${errMsg(err)}`);
+      continue;
+    }
     const rings = definition.steps.filter((s) => s.type === "ring_handoff").length;
     const hasAi = definition.steps.some((s) => s.type === "voice_ai_intake");
     plans.push({
@@ -257,7 +275,14 @@ async function main(): Promise<void> {
       console.log(`SKIP rule   ${r.business_id} ${r.from_e164} (voice flow already exists)`);
       continue;
     }
-    const definition = ruleToDefinition(r);
+    let definition: AiFlowDefinition;
+    try {
+      definition = ruleToDefinition(r);
+    } catch (err) {
+      failed += 1;
+      console.error(`FAIL rule   ${r.business_id} ${r.from_e164}: ${errMsg(err)}`);
+      continue;
+    }
     plans.push({
       businessId: r.business_id,
       name: `Voice routing — calls from ${r.from_e164}`,
@@ -276,10 +301,13 @@ async function main(): Promise<void> {
     );
   }
 
-  console.log(`\nPlanned ${planned} new voice flow(s), skipped ${skipped} existing.`);
+  console.log(
+    `\nPlanned ${planned} new voice flow(s), skipped ${skipped} existing, failed ${failed}.`
+  );
 
   if (!args.apply) {
     console.log("\n[dry-run] Not writing. Re-run with --apply.");
+    if (failed > 0) process.exit(1);
     return;
   }
 
@@ -288,6 +316,9 @@ async function main(): Promise<void> {
     console.log(`OK    inserted "${p.name}" (${p.fromE164}) for ${p.businessId}`);
   }
   console.log(`\nDone. Inserted ${plans.length} voice flow(s).`);
+  // Exit non-zero if any legacy row couldn't be migrated, so the failure is loud
+  // even though the migratable rows were still processed.
+  if (failed > 0) process.exit(1);
 }
 
 main().catch((err) => {
