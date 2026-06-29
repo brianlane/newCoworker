@@ -3,6 +3,8 @@ import {
   highestOptionDigit,
   timeframeOptionLine,
   addTimeframeOption,
+  retroClaimOptionLine,
+  addRetroClaimOption,
   addHomeLightEmailFallback,
   migrateEmailMatchToPrice
 } from "../scripts/oneshot/update-dave-routed-aiflows";
@@ -104,6 +106,49 @@ describe("addTimeframeOption", () => {
     const roundRobin = daveRouteDef("Reply 1 to claim or 2 to pass.");
     delete (roundRobin.steps[0] as { agentName?: string }).agentName;
     expect(addTimeframeOption(roundRobin, "Dave Lane")).toBe(false);
+  });
+});
+
+describe("retroClaimOptionLine", () => {
+  it("renders the appended retro option with the triple-tap clarity copy", () => {
+    const line = retroClaimOptionLine(4);
+    expect(line).toContain("Reply 4 to claim a lead AFTER its window lapsed");
+    expect(line).toContain("ETA of when you can please triple tap this lead?");
+    expect(line).toContain('"4, tomorrow am"');
+  });
+});
+
+describe("addRetroClaimOption", () => {
+  it("appends the retro option at the next digit after the timeframe option and stamps lateClaimOption", () => {
+    const def = daveRouteDef("New lead. Reply 1 to claim or 2 to pass by {{offer.deadline}}.");
+    // Live timeframe option lands on 3; the retro option must follow on 4.
+    expect(addTimeframeOption(def, "Dave Lane")).toBe(true);
+    expect(addRetroClaimOption(def, "Dave Lane")).toBe(true);
+    const step = def.steps[0] as {
+      offerTemplate: string;
+      claimTimeframeOption?: number;
+      lateClaimOption?: number;
+    };
+    expect(step.claimTimeframeOption).toBe(3);
+    expect(step.lateClaimOption).toBe(4);
+    expect(step.offerTemplate).toContain("Reply 4 to claim a lead AFTER its window lapsed");
+    // The two option digits differ, so the patched definition stays valid.
+    expect(() => parseAiFlowDefinition(def)).not.toThrow();
+  });
+
+  it("is idempotent (no double-append on a second run)", () => {
+    const def = daveRouteDef("Reply 1 to confirm by {{offer.deadline}}.");
+    addTimeframeOption(def, "Dave Lane");
+    expect(addRetroClaimOption(def, "Dave Lane")).toBe(true);
+    const once = (def.steps[0] as { offerTemplate: string }).offerTemplate;
+    expect(addRetroClaimOption(def, "Dave Lane")).toBe(false);
+    expect((def.steps[0] as { offerTemplate: string }).offerTemplate).toBe(once);
+  });
+
+  it("skips a different agent or round-robin route step", () => {
+    const other = daveRouteDef("Reply 1 to claim or 2 to pass.");
+    (other.steps[0] as { agentName?: string }).agentName = "Someone Else";
+    expect(addRetroClaimOption(other, "Dave Lane")).toBe(false);
   });
 });
 

@@ -484,11 +484,16 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     }
     if (outcome.kind === "pause_agent") {
       await recordStep(supabase, run, index, step, "pending");
-      // Stamp which step this offer parked on so a later "86" late-claim can
-      // rewind the run precisely to THIS route_to_team step (a flow may have
-      // several, only one of which ran). Survives the owner fallback so the
-      // run stays late-claimable after it's handed back.
+      // Stamp which step this offer parked on so a later late-claim can rewind
+      // the run precisely to THIS route_to_team step (a flow may have several,
+      // only one of which ran). Survives the owner fallback so the run stays
+      // late-claimable after it's handed back.
       routing.step_index = index;
+      // Durable copy of the route step index that is NOT cleared when a claim
+      // finalizes (unlike step_index). A retroactive UNCLAIM ("86") re-opens a
+      // claimed-and-completed run and rewinds it to this step, so it needs the
+      // index to survive past the claim.
+      routing.route_step_index = index;
       // Persist the parked state BEFORE sending the offer so an inbound 1/2
       // reply can always be matched to this run (state before side effect).
       await updateRun(supabase, run.id, {
@@ -2635,8 +2640,52 @@ async function routeToTeamStep(
     : [];
   routing.tried = tried;
 
-  // An agent claimed (inbound '1', or a late '86'): finalize and optionally
-  // tell the owner.
+  // A teammate retroactively UNCLAIMED a lead they'd taken (inbound "86"): clear
+  // the claim, hand it back to the owner, and finalize WITHOUT replaying the
+  // steps after route_to_team. The inbound webhook re-opened the run at this
+  // step and stamped last_event='unclaim' + reply_from. Handled before the
+  // claim block so an unclaim is never mistaken for a claim.
+  if (routing.last_event === "unclaim") {
+    const releasedBy =
+      typeof routing.reply_from === "string" && routing.reply_from
+        ? routing.reply_from
+        : typeof routing.claimed_by === "string"
+          ? routing.claimed_by
+          : "";
+    const releasedName =
+      typeof routing.claimed_name === "string" && routing.claimed_name
+        ? routing.claimed_name
+        : typeof routing.offered_name === "string"
+          ? routing.offered_name
+          : "";
+    const who = releasedName || releasedBy || "A teammate";
+    // The lead is no longer claimed by anyone: clear claim state and reset the
+    // gating var so claim-gated steps would NOT run (we end the run anyway).
+    delete routing.last_event;
+    delete routing.reply_from;
+    delete routing.offered;
+    delete routing.offered_name;
+    delete routing.claimed_by;
+    delete routing.claimed_name;
+    delete routing.late_claimed;
+    delete routing.claim_timeframe;
+    scope.vars.claimed_agent = "none";
+    // Notify the owner the lead bounced back. Reuse the tenant's owner-fallback
+    // copy (their "back to you" wording) with a leading line naming who let it
+    // go, so the owner knows it was claimed-then-released (not never claimed).
+    const fallbackBody = renderTemplate(action.ownerFallbackTemplate, scope);
+    const body = `${who} released this lead — it's back with you.\n${fallbackBody}`;
+    await sendOwnerSms(supabase, run, body, `aiflow-unclaimed:${run.id}`);
+    appendActionTaken(scope, `lead unclaimed by ${who}; returned to the owner`);
+    return {
+      kind: "ok",
+      result: { routed: "unclaimed", unclaimed_by: releasedBy },
+      endRun: true
+    };
+  }
+
+  // An agent claimed (inbound '1', or a late claim option): finalize and
+  // optionally tell the owner.
   if (routing.last_event === "claim") {
     // Late claim: the offer had already lapsed (and likely fallen back to the
     // owner) when the agent texted "86". Notify the owner the same way, then
@@ -2668,6 +2717,7 @@ async function routeToTeamStep(
     delete routing.step_index;
     delete routing.claim_timeframe;
     delete routing.tf_digit;
+    delete routing.late_digit;
     if (lateClaim) routing.late_claimed = true;
     if (action.claimedNotifyTemplate) {
       let body = renderTemplate(
@@ -2731,6 +2781,11 @@ async function routeToTeamStep(
     // define the option (legacy / no-timeframe flows).
     if (action.claimTimeframeOption) routing.tf_digit = String(action.claimTimeframeOption);
     else delete routing.tf_digit;
+    // Stamp the retroactive (late) claim digit too, so the inbound webhook can
+    // tell a lapsed-offer claim ("<lateOpt>, eta") for THIS run from any other
+    // comma'd reply. Cleared when the step doesn't define the option.
+    if (action.lateClaimOption) routing.late_digit = String(action.lateClaimOption);
+    else delete routing.late_digit;
     // After-hours offer window: the offer SMS still goes out now, but inside
     // the quiet window the claim deadline extends to quietEnd + grace so the
     // countdown effectively starts in the morning. The resolved deadline is

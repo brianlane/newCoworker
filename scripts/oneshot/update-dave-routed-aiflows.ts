@@ -10,6 +10,12 @@
  *    ai-flow-worker, this PR) parses the comma'd reply as a claim and surfaces the
  *    ETA to the owner. Skips a step whose offer already advertises it.
  *
+ * 1b. RETRO (late) claim option: append a SEPARATE numbered option at the next
+ *    sequential digit for claiming a lead AFTER its window lapsed, stamping
+ *    `lateClaimOption`. Replaces the old magic "86" (now reserved for retroactive
+ *    UNCLAIM). Includes the clarity copy "ETA of when you can please triple tap
+ *    this lead?". Idempotent via its own marker; runs after option 1.
+ *
  * 2. HomeLight email FALLBACK: insert the `email_extract` step ("email_card")
  *    after the portal contact-card browse so a delayed/empty portal card is
  *    backfilled (phone/email/address) from the HomeLight alert email. Skips when
@@ -167,6 +173,40 @@ export function addTimeframeOption(def: Definition, agentName: string): boolean 
   return changed;
 }
 
+/** Idempotency marker: this phrase appears only in the appended RETRO option. */
+const RETRO_OPTION_MARKER = "triple tap this lead";
+
+/** The appended retroactive (late) claim option line for option number `n`. */
+export function retroClaimOptionLine(n: number): string {
+  return (
+    `\nReply ${n} to claim a lead AFTER its window lapsed — ` +
+    `ETA of when you can please triple tap this lead? (e.g. "${n}, tomorrow am").`
+  );
+}
+
+/**
+ * Append the retroactive (late) claim option to every route_to_team step pinned
+ * to `agentName` that doesn't already have it, stamping `lateClaimOption` so the
+ * engine treats "<n>, <eta>" as a claim of a LAPSED offer. Numbered at the next
+ * sequential digit (after the live timeframe option), kept distinct from
+ * claimTimeframeOption. Run AFTER addTimeframeOption so the digits don't collide.
+ * Returns whether anything changed.
+ */
+export function addRetroClaimOption(def: Definition, agentName: string): boolean {
+  let changed = false;
+  for (const step of def.steps ?? []) {
+    if (step.type !== "route_to_team") continue;
+    if (typeof step.agentName !== "string" || step.agentName.trim() !== agentName) continue;
+    const offer = typeof step.offerTemplate === "string" ? step.offerTemplate : "";
+    if (!offer || offer.includes(RETRO_OPTION_MARKER)) continue;
+    const n = highestOptionDigit(offer) + 1;
+    step.offerTemplate = offer + retroClaimOptionLine(n);
+    step.lateClaimOption = n;
+    changed = true;
+  }
+  return changed;
+}
+
 /**
  * Insert the HomeLight email-fallback step after the portal contact-card step
  * ("card") when the flow doesn't already have an "email_card". Returns whether
@@ -251,12 +291,15 @@ async function main(): Promise<void> {
     const before = JSON.stringify(row.definition);
 
     const tf = addTimeframeOption(def, agentName);
+    // Retro/late claim option (must run AFTER addTimeframeOption so it numbers
+    // at the next sequential digit and never collides with the live option).
+    const retro = addRetroClaimOption(def, agentName);
     // The email fallback only applies to the HomeLight flow (the one with the
     // portal contact-card step); addHomeLightEmailFallback no-ops otherwise.
     const email = addHomeLightEmailFallback(def, emailCfg);
     // Migrate an already-inserted email_card from city to price matching.
     const price = migrateEmailMatchToPrice(def);
-    if (!tf && !email && !price) continue;
+    if (!tf && !retro && !email && !price) continue;
 
     // Re-validate the patched definition exactly like the dashboard/CRUD path.
     try {
@@ -271,6 +314,7 @@ async function main(): Promise<void> {
     changedCount += 1;
     console.log(`\n=== ${row.name} (${row.id}) ===`);
     console.log(`  timeframe option: ${tf ? "added" : "unchanged"}`);
+    console.log(`  retro-claim option: ${retro ? "added" : "unchanged"}`);
     console.log(`  homelight email fallback: ${email ? "added" : "n/a"}`);
     console.log(`  email lead-match -> price: ${price ? "migrated" : "n/a"}`);
     console.log(`  BEFORE: ${before}`);

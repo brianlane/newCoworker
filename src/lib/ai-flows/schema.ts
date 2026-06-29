@@ -423,6 +423,14 @@ const stepSchema = z.discriminatedUnion("type", [
     // digit is "1" (plain accept) or this option, so a flow whose "2" means PASS
     // (round-robin) never mis-records a "2, can't take it" reply as a claim.
     claimTimeframeOption: z.number().int().min(1).max(9).optional(),
+    // The reply digit that means "claim a lead AFTER its offer window lapsed"
+    // (retroactive/late claim) WITH a timeframe — a teammate replies
+    // "<digit>, <eta>" to re-open a lapsed offer and state when they'll reach
+    // out. Distinct from claimTimeframeOption (the live option) so a lapsed
+    // lead has its own numbered affordance instead of the old magic "86" (which
+    // is now reserved for retroactive UNCLAIM). Must differ from
+    // claimTimeframeOption (enforced in validateDefinitionSemantics).
+    lateClaimOption: z.number().int().min(1).max(9).optional(),
     when: whenSchema.optional()
   }),
   z.object({
@@ -776,6 +784,20 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     ) {
       issues.push(
         `Step "${step.id}" attaches a screenshot but no earlier browse step captures one.`
+      );
+    }
+
+    // The live "accept with a timeframe" digit and the retroactive late-claim
+    // digit must be distinct, or a single reply digit would be ambiguous
+    // between claiming a live offer and re-opening a lapsed one.
+    if (
+      step.type === "route_to_team" &&
+      step.claimTimeframeOption !== undefined &&
+      step.lateClaimOption !== undefined &&
+      step.claimTimeframeOption === step.lateClaimOption
+    ) {
+      issues.push(
+        `Step "${step.id}" uses the same digit for claimTimeframeOption and lateClaimOption — they must differ.`
       );
     }
 
