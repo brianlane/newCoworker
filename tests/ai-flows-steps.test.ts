@@ -563,6 +563,16 @@ describe("planStep: route_to_team", () => {
         "claimTimeframeOption" in without.action
     ).toBe(false);
   });
+  it("carries lateClaimOption when set, omits it otherwise", () => {
+    const r = planStep({ ...base, lateClaimOption: 4 }, {});
+    expect(r.ok && r.action.kind === "route_to_team" && r.action.lateClaimOption).toBe(4);
+    const without = planStep(base, {});
+    expect(
+      without.ok &&
+        without.action.kind === "route_to_team" &&
+        "lateClaimOption" in without.action
+    ).toBe(false);
+  });
 });
 
 describe("planStep: browse_action", () => {

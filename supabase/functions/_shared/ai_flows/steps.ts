@@ -129,6 +129,8 @@ export type StepAction =
       attachScreenshot: boolean;
       /** Reply digit meaning "accept with a timeframe"; stored on the offer. */
       claimTimeframeOption?: number;
+      /** Reply digit meaning "retroactive (late) claim with a timeframe". */
+      lateClaimOption?: number;
     }
   | {
       kind: "browse_action";
@@ -423,7 +425,8 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           attachScreenshot: step.attachScreenshot === true,
           ...(step.claimTimeframeOption
             ? { claimTimeframeOption: step.claimTimeframeOption }
-            : {})
+            : {}),
+          ...(step.lateClaimOption ? { lateClaimOption: step.lateClaimOption } : {})
         }
       };
     }

@@ -42,3 +42,4 @@ test-results/
 .vercel
 debug/.bench-*.json
 vps/voice-bridge/dist/
+deno.lock

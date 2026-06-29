@@ -380,6 +380,14 @@ export type FlowStep =
        * mis-read as a claim.
        */
       claimTimeframeOption?: number;
+      /**
+       * Reply digit (1-9) that means "claim a lead AFTER its offer window
+       * lapsed" (retroactive/late claim) WITH a timeframe — a teammate replies
+       * "<digit>, <eta>" to re-open a lapsed offer. Stamped on the offer's
+       * routing as `late_digit`; replaces the old magic "86" (now reserved for
+       * retroactive UNCLAIM). Must differ from claimTimeframeOption.
+       */
+      lateClaimOption?: number;
       when?: StepCondition;
     }
   | {

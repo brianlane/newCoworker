@@ -601,6 +601,29 @@ describe("route_to_team step", () => {
     expect(step.type === "route_to_team" && step.claimedNotifyTemplate).toBeUndefined();
     expect(validateDefinitionSemantics(def)).toEqual([]);
   });
+
+  it("preserves distinct claimTimeframeOption and lateClaimOption", () => {
+    const withOpts = JSON.parse(JSON.stringify(routedInput));
+    withOpts.steps[2].claimTimeframeOption = 3;
+    withOpts.steps[2].lateClaimOption = 4;
+    const def = parseAiFlowDefinition(withOpts);
+    const step = def.steps[2];
+    expect(step.type === "route_to_team" && step.claimTimeframeOption).toBe(3);
+    expect(step.type === "route_to_team" && step.lateClaimOption).toBe(4);
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects claimTimeframeOption equal to lateClaimOption", () => {
+    const clash = JSON.parse(JSON.stringify(routedInput));
+    clash.steps[2].claimTimeframeOption = 3;
+    clash.steps[2].lateClaimOption = 3;
+    const def = aiFlowDefinitionSchema.parse(clash);
+    expect(
+      validateDefinitionSemantics(def).some((i) =>
+        i.includes("same digit for claimTimeframeOption and lateClaimOption")
+      )
+    ).toBe(true);
+  });
 });
 
 describe("route_to_team offerWindow + agentName + {{offer.deadline}}", () => {
