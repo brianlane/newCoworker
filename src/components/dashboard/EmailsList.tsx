@@ -7,6 +7,7 @@ import { EmailComposer, type FromOption } from "@/components/dashboard/EmailComp
 import type { EmailLogRow, EmailLogSource } from "@/lib/db/email-log";
 import { SortControl, type SortOption } from "@/components/dashboard/SortControl";
 import { SearchControl } from "@/components/dashboard/SearchControl";
+import { ConversationScroll } from "@/components/dashboard/ConversationScroll";
 import { sortRows } from "@/lib/dashboard/sort";
 import { usePersistentSort } from "@/components/dashboard/usePersistentSort";
 import { matchesQuery } from "@/lib/dashboard/search";
@@ -451,6 +452,7 @@ export function EmailsList({
               No emails match “{query}”.
             </div>
           )}
+          <ConversationScroll maxHeightClass="max-h-[70vh]" className="pr-1">
           <ul className="divide-y divide-parchment/10">
             {visibleRows.map((r) => {
               const meta = sourceMeta(r.source);
@@ -500,6 +502,7 @@ export function EmailsList({
               );
             })}
           </ul>
+          </ConversationScroll>
         </Card>
       </div>
 
