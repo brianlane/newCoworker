@@ -1390,28 +1390,32 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         if (!endCallRequested) {
           endCallRequested = true;
           const graceMs = opts.hangup.graceMs ?? 3000;
-          timers.push(
-            setTimeout(() => {
-              void (async () => {
-                try {
-                  const result = await opts.hangup!.execute({ reason });
-                  if (!result.ok) {
-                    console.error("gemini-bridge: end_call hangup failed", result.detail);
-                    emitDiag("voice_bridge_end_call_failed", { detail: result.detail ?? null });
-                  } else {
-                    emitDiag("voice_bridge_end_call", { reason: reason ?? null });
-                  }
-                } catch (err) {
-                  console.error("gemini-bridge: end_call execute threw", err);
-                } finally {
-                  // Tear down regardless: even if the Telnyx hangup failed, the
-                  // model believes the call is over, so don't keep the Live
-                  // session (and its billing) open. teardown is idempotent.
-                  await teardown();
+          // Deliberately a STANDALONE timer — NOT pushed to `timers`. The PSTN
+          // leg is still up during the goodbye grace, so the hangup MUST survive
+          // a clearTimers() (which fires on Gemini Live `onclose` and on
+          // session-limit teardown). If the Live session drops mid-grace we
+          // still need to hang the caller up rather than leave a live, silent
+          // leg billing against the reservation.
+          setTimeout(() => {
+            void (async () => {
+              try {
+                const result = await opts.hangup!.execute({ reason });
+                if (!result.ok) {
+                  console.error("gemini-bridge: end_call hangup failed", result.detail);
+                  emitDiag("voice_bridge_end_call_failed", { detail: result.detail ?? null });
+                } else {
+                  emitDiag("voice_bridge_end_call", { reason: reason ?? null });
                 }
-              })();
-            }, graceMs)
-          );
+              } catch (err) {
+                console.error("gemini-bridge: end_call execute threw", err);
+              } finally {
+                // Tear down regardless: even if the Telnyx hangup failed, the
+                // model believes the call is over, so don't keep the Live
+                // session (and its billing) open. teardown is idempotent.
+                await teardown();
+              }
+            })();
+          }, graceMs);
         }
         continue;
       }
