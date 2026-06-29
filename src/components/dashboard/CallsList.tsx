@@ -97,7 +97,7 @@ export function CallsList({ rows }: { rows: CallListRow[] }) {
                           {row.badgeKind}
                         </span>
                       )}
-                      {row.badgeKind && row.e164 && (
+                      {row.e164 && row.label !== row.e164 && (
                         <span className="text-[10px] text-parchment/40 font-mono">
                           {row.e164}
                         </span>
