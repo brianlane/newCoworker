@@ -134,10 +134,14 @@ function alertLabel(row: ActivityAlertRow): string {
 }
 
 /**
- * Merge every activity source into one chronological (newest-first) feed,
- * capped at `limit`. Pure — callers pass already-fetched plain rows.
+ * Build the unsorted list of activity items from every source. Pure and shared
+ * by both the dashboard card ({@link buildActivityFeed}, which then reserves
+ * slots for alerts) and the full "See all activity" page
+ * ({@link buildFullActivityFeed}, which sorts strictly by recency). Splitting
+ * the collection from the ordering keeps the two surfaces in lockstep on what
+ * counts as activity while letting each pick its own ranking.
  */
-export function buildActivityFeed(input: ActivityFeedInput): ActivityItem[] {
+export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
   const items: ActivityItem[] = [];
   // Show a known contact's name instead of the raw E.164 wherever we have one.
   const named = (e164: string): string => input.contactNames?.get(e164)?.name ?? e164;
@@ -237,12 +241,27 @@ export function buildActivityFeed(input: ActivityFeedInput): ActivityItem[] {
     });
   });
 
-  // Alerts are high-signal but mustn't dominate: reserve at most half the feed
-  // for the newest alerts so a backlog of urgent items can't hide the latest
-  // calls/texts, fill the rest by recency, then backfill any unused slots with
-  // extra alerts when there isn't enough other activity. Displayed newest-first.
-  const byRecency = (a: ActivityItem, b: ActivityItem) =>
-    a.at < b.at ? 1 : a.at > b.at ? -1 : 0;
+  return items;
+}
+
+/** Newest-first comparator on the ISO `at` field; stable for equal timestamps. */
+function byRecency(a: ActivityItem, b: ActivityItem): number {
+  return a.at < b.at ? 1 : a.at > b.at ? -1 : 0;
+}
+
+/**
+ * Merge every activity source into one chronological (newest-first) feed,
+ * capped at `limit`. Pure — callers pass already-fetched plain rows.
+ *
+ * Used by the dashboard's compact Recent Activity card: alerts are high-signal
+ * but mustn't dominate, so reserve at most half the feed for the newest alerts
+ * (a backlog of urgent items can't hide the latest calls/texts), fill the rest
+ * by recency, then backfill any unused slots with extra alerts when there isn't
+ * enough other activity. The full "See all activity" page uses
+ * {@link buildFullActivityFeed} instead, which ranks purely by recency.
+ */
+export function buildActivityFeed(input: ActivityFeedInput): ActivityItem[] {
+  const items = collectActivityItems(input);
   const alerts = items.filter((i) => i.kind === "alert").sort(byRecency);
   const rest = items.filter((i) => i.kind !== "alert").sort(byRecency);
   const reserve = Math.ceil(input.limit / 2);
@@ -250,6 +269,17 @@ export function buildActivityFeed(input: ActivityFeedInput): ActivityItem[] {
   const keptRest = rest.slice(0, input.limit - reservedAlerts.length);
   const extraAlerts = alerts.slice(reservedAlerts.length, input.limit - keptRest.length);
   return [...reservedAlerts, ...extraAlerts, ...keptRest].sort(byRecency);
+}
+
+/**
+ * Like {@link buildActivityFeed} but ranks strictly by recency (no alert
+ * reservation), for the full-page "See all activity" view that paginates the
+ * complete feed. The card's alert-reservation logic exists only to protect a
+ * 10-item summary; on a paginated page every item is reachable, so a plain
+ * newest-first ordering is what the owner expects.
+ */
+export function buildFullActivityFeed(input: ActivityFeedInput): ActivityItem[] {
+  return collectActivityItems(input).sort(byRecency).slice(0, input.limit);
 }
 
 /** Treat a failed query as "no rows" so one broken source never blanks the feed. */
@@ -260,6 +290,15 @@ function rowsOf<T>(res: { data: unknown; error: unknown }): T[] {
 export const DEFAULT_ACTIVITY_LIMIT = 10;
 
 /**
+ * Upper bound on rows loaded for the full "See all activity" page. The page
+ * paginates client-side over an already-bounded set (mirroring the calls/texts/
+ * emails list views), so this caps memory + query cost while still being deep
+ * enough that AiFlow runs and other lower-frequency events — which the 10-item
+ * dashboard card crowds out — are actually reachable.
+ */
+export const ACTIVITY_FEED_MAX = 200;
+
+/**
  * How far back the feed looks. Bounding the window keeps "Recent Activity"
  * actually recent — without it, a long-idle business would surface months-old
  * rows (e.g. a stale `customer_memories` row mislabeled "New customer").
@@ -268,18 +307,18 @@ export const DEFAULT_ACTIVITY_LIMIT = 10;
 export const ACTIVITY_WINDOW_DAYS = 30;
 
 /**
- * Fetch the most-recent activity across calls, texts, dashboard chat, AiFlow
- * runs, new customers, and urgent alerts for a business, merged into one
- * chronological feed and bounded to the last {@link ACTIVITY_WINDOW_DAYS} days.
- * Each source is over-fetched to `limit` so the merge can't starve a source;
- * the builder caps the merged result back to `limit`.
+ * Fetch every activity source for a business, bounded to the last
+ * {@link ACTIVITY_WINDOW_DAYS} days and over-fetched to `limit` per source so
+ * the downstream merge can't starve any one source. Resolves contact names for
+ * every phone-bearing row. Shared by {@link getRecentActivity} (card) and
+ * {@link getAllRecentActivity} (full page) so the two surfaces read identical
+ * data and differ only in how they rank/cap it.
  */
-export async function getRecentActivity(
+async function fetchActivityFeedInput(
   businessId: string,
-  limit: number = DEFAULT_ACTIVITY_LIMIT,
-  client?: SupabaseClient
-): Promise<ActivityItem[]> {
-  const db = client ?? (await createSupabaseServiceClient());
+  limit: number,
+  db: SupabaseClient
+): Promise<ActivityFeedInput> {
   const since = new Date(Date.now() - ACTIVITY_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
   const [callsRes, smsInRes, smsReplyRes, smsOutRes, chatRes, flowsRes, custRes, alertRes] =
@@ -375,7 +414,7 @@ export async function getRecentActivity(
     () => new Map<string, ContactName>()
   );
 
-  return buildActivityFeed({
+  return {
     calls,
     smsInbound,
     smsReplies,
@@ -386,5 +425,35 @@ export async function getRecentActivity(
     alerts: rowsOf<ActivityAlertRow>(alertRes),
     contactNames,
     limit
-  });
+  };
+}
+
+/**
+ * Fetch the most-recent activity across calls, texts, dashboard chat, AiFlow
+ * runs, new customers, and urgent alerts for a business, merged into one
+ * chronological feed for the dashboard's compact Recent Activity card. Alerts
+ * are slot-reserved (see {@link buildActivityFeed}) and the result is capped to
+ * `limit`.
+ */
+export async function getRecentActivity(
+  businessId: string,
+  limit: number = DEFAULT_ACTIVITY_LIMIT,
+  client?: SupabaseClient
+): Promise<ActivityItem[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  return buildActivityFeed(await fetchActivityFeedInput(businessId, limit, db));
+}
+
+/**
+ * Like {@link getRecentActivity} but for the full "See all activity" page:
+ * loads up to {@link ACTIVITY_FEED_MAX} rows and ranks strictly by recency (no
+ * alert reservation), so the page can paginate the complete recent feed.
+ */
+export async function getAllRecentActivity(
+  businessId: string,
+  limit: number = ACTIVITY_FEED_MAX,
+  client?: SupabaseClient
+): Promise<ActivityItem[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  return buildFullActivityFeed(await fetchActivityFeedInput(businessId, limit, db));
 }

@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getRecentActivity, type ActivityItem } from "@/lib/db/activity";
+import { ACTIVITY_BADGE } from "@/components/dashboard/activity-badge";
 import {
   getLatestProvisioningStatus,
   shouldMountProvisioningWidget,
@@ -30,19 +31,6 @@ import { getCalendarMonthUsageTotals } from "@/lib/db/usage";
 import { getTierLimits } from "@/lib/plans/limits";
 
 export const dynamic = "force-dynamic";
-
-const ACTIVITY_BADGE: Record<
-  ActivityItem["kind"],
-  { label: string; variant: "online" | "pending" | "neutral" | "success" | "urgent" }
-> = {
-  call: { label: "Call", variant: "online" },
-  sms_inbound: { label: "Text in", variant: "pending" },
-  sms_outbound: { label: "Text out", variant: "neutral" },
-  chat: { label: "Chat", variant: "neutral" },
-  aiflow: { label: "AiFlow", variant: "success" },
-  customer: { label: "Customer", variant: "pending" },
-  alert: { label: "Alert", variant: "urgent" }
-};
 
 export default async function DashboardPage() {
   const user = await getAuthUser();
@@ -248,9 +236,17 @@ export default async function DashboardPage() {
 
           {/* Recent Activity */}
           <Card>
-            <h2 className="text-sm font-semibold text-parchment/60 uppercase tracking-wider mb-4">
-              Recent Activity
-            </h2>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold text-parchment/60 uppercase tracking-wider">
+                Recent Activity
+              </h2>
+              <a
+                href="/dashboard/activity"
+                className="text-xs font-medium text-signal-teal hover:underline"
+              >
+                See all activity →
+              </a>
+            </div>
             {recentActivity.length === 0 ? (
               <p className="text-sm text-parchment/40">No activity yet.</p>
             ) : (

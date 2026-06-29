@@ -1,8 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   buildActivityFeed,
+  buildFullActivityFeed,
+  collectActivityItems,
   getRecentActivity,
+  getAllRecentActivity,
   DEFAULT_ACTIVITY_LIMIT,
+  ACTIVITY_FEED_MAX,
   type ActivityFeedInput
 } from "@/lib/db/activity";
 
@@ -360,6 +364,56 @@ describe("buildActivityFeed", () => {
   });
 });
 
+describe("collectActivityItems", () => {
+  it("returns every source unranked (no alert reservation/cap)", () => {
+    const items = collectActivityItems(
+      emptyInput({
+        // A tiny limit would force the card's reservation logic to drop items;
+        // collect ignores limit entirely and keeps all of them.
+        limit: 1,
+        calls: [{ caller_e164: "+1", status: "ok", started_at: "2026-01-02T00:00:00Z" }],
+        alerts: [{ task_type: "call", log_payload: { reason: "X" }, created_at: "2026-01-01T00:00:00Z" }]
+      })
+    );
+    expect(items).toHaveLength(2);
+    // Insertion order (calls before alerts), NOT recency-sorted.
+    expect(items.map((i) => i.kind)).toEqual(["call", "alert"]);
+  });
+});
+
+describe("buildFullActivityFeed", () => {
+  it("ranks strictly by recency with no alert reservation", () => {
+    const items = buildFullActivityFeed(
+      emptyInput({
+        // Three newer routine calls plus one old alert; the card would reserve a
+        // slot for the alert, but the full feed is pure recency.
+        alerts: [{ task_type: "call", log_payload: { reason: "Old" }, created_at: "2026-01-01T00:00:00Z" }],
+        calls: [
+          { caller_e164: "+1", status: "ok", started_at: "2026-01-09T00:00:00Z" },
+          { caller_e164: "+2", status: "ok", started_at: "2026-01-08T00:00:00Z" },
+          { caller_e164: "+3", status: "ok", started_at: "2026-01-07T00:00:00Z" }
+        ],
+        limit: 3
+      })
+    );
+    expect(items.map((i) => i.kind)).toEqual(["call", "call", "call"]);
+  });
+
+  it("caps the merged feed to limit", () => {
+    const items = buildFullActivityFeed(
+      emptyInput({
+        chat: [
+          { created_at: "2026-01-03T00:00:00Z" },
+          { created_at: "2026-01-02T00:00:00Z" },
+          { created_at: "2026-01-01T00:00:00Z" }
+        ],
+        limit: 2
+      })
+    );
+    expect(items.map((i) => i.at)).toEqual(["2026-01-03T00:00:00Z", "2026-01-02T00:00:00Z"]);
+  });
+});
+
 function chainResult(result: { data: unknown; error: unknown }) {
   return {
     select: vi.fn().mockReturnThis(),
@@ -525,5 +579,59 @@ describe("getRecentActivity", () => {
 
     const items = await getRecentActivity("biz-1", 10, db as never);
     expect(items.map((i) => i.label)).toEqual(["Text to +15550002222"]);
+  });
+});
+
+describe("getAllRecentActivity", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(resolveContactNames).mockResolvedValue(new Map<string, ContactName>());
+  });
+
+  it("ranks strictly by recency (no alert reservation) so AiFlow runs surface", async () => {
+    const db = mockDbByTable({
+      ...ALL_EMPTY,
+      // An older AiFlow run plus a newer alert: the recency-only full feed keeps
+      // both and orders the alert first (it is newer), unlike the card which
+      // would slot-reserve the alert regardless of age.
+      ai_flow_runs: {
+        data: [
+          {
+            id: "run-1",
+            flow_id: "flow-a",
+            status: "completed",
+            created_at: "2026-02-01T08:00:00Z",
+            ai_flows: { name: "ReferralExchange lead" }
+          }
+        ],
+        error: null
+      },
+      coworker_logs: {
+        data: [
+          {
+            task_type: "call",
+            status: "urgent_alert",
+            log_payload: { reason: "Flood" },
+            created_at: "2026-02-01T10:00:00Z"
+          }
+        ],
+        error: null
+      }
+    });
+
+    const items = await getAllRecentActivity("biz-1", 50, db as never);
+    expect(items.map((i) => i.kind)).toEqual(["alert", "aiflow"]);
+    expect(items[1].label).toBe("AiFlow — ReferralExchange lead (completed)");
+  });
+
+  it("creates a service client and uses ACTIVITY_FEED_MAX when no limit is given", async () => {
+    const db = mockDbByTable(ALL_EMPTY);
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const items = await getAllRecentActivity("biz-1");
+    expect(items).toEqual([]);
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+    const chain = db.from.mock.results[0].value;
+    expect(chain.limit).toHaveBeenCalledWith(ACTIVITY_FEED_MAX);
   });
 });
