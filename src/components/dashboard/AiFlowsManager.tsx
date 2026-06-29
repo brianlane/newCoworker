@@ -8,6 +8,7 @@ import {
   BROWSE_ACTION_KINDS,
   ENGINE_PROVIDED_VARS,
   FLOW_STEP_TYPES,
+  VOICE_STEP_TYPES,
   TRIGGER_CONDITION_TYPES,
   HTTP_METHODS,
   summarizeDefinition,
@@ -66,8 +67,13 @@ const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
   manual: "Manual — Run now button",
   schedule: "On a schedule",
   email: "Inbound email (your connected inbox)",
-  tenant_email: "Inbound email (AI coworker's mailbox)"
+  tenant_email: "Inbound email (AI coworker's mailbox)",
+  voice: "Inbound call (voice routing)"
 };
+
+/** Step types available for a voice flow vs. every other (batch) channel. */
+const VOICE_STEP_TYPE_SET = new Set<string>(VOICE_STEP_TYPES);
+const NON_VOICE_STEP_TYPES = FLOW_STEP_TYPES.filter((t) => !VOICE_STEP_TYPE_SET.has(t));
 
 type EditorState = {
   id: string | null;
@@ -84,6 +90,8 @@ type EditorState = {
   scheduleDays: number[];
   scheduleEvery: number;
   emailConnectionId: string;
+  /** Voice trigger: the E.164 caller id that fires the routing. */
+  voiceFromE164: string;
   steps: FlowStep[];
 };
 
@@ -111,6 +119,7 @@ function emptyEditor(): EditorState {
     scheduleDays: [],
     scheduleEvery: 60,
     emailConnectionId: "",
+    voiceFromE164: "",
     steps: []
   };
 }
@@ -127,6 +136,7 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
   | "scheduleDays"
   | "scheduleEvery"
   | "emailConnectionId"
+  | "voiceFromE164"
 > {
   const base = {
     channel: trigger.channel,
@@ -137,7 +147,8 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
     scheduleTimezone: browserTimezone(),
     scheduleDays: [] as number[],
     scheduleEvery: 60,
-    emailConnectionId: ""
+    emailConnectionId: "",
+    voiceFromE164: ""
   };
   switch (trigger.channel) {
     case "sms":
@@ -166,6 +177,8 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
       };
     case "tenant_email":
       return { ...base, conditions: trigger.conditions };
+    case "voice":
+      return { ...base, voiceFromE164: trigger.fromE164 };
   }
 }
 
@@ -253,6 +266,18 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
       return { id, type, keyFromTrigger: "participants", saveAs: "saved_url" };
     case "upsert_customer":
       return { id, type, phoneVar: "lead_phone", nameVar: "lead_name", emailVar: "lead_email" };
+    case "ring_handoff":
+      return { id, type, toE164: "", ringSeconds: 20 };
+    case "voice_ai_intake":
+      return {
+        id,
+        type,
+        notifyE164: "",
+        persona: "",
+        captureFields: ["name", "phone", "reason for calling"]
+      };
+    case "voice_transfer":
+      return { id, type, toE164: "", whisper: "" };
   }
 }
 
@@ -315,6 +340,8 @@ function editorTrigger(s: EditorState): FlowTrigger {
       return { channel: "email", connectionId: s.emailConnectionId, conditions: s.conditions };
     case "tenant_email":
       return { channel: "tenant_email", conditions: s.conditions };
+    case "voice":
+      return { channel: "voice", fromE164: s.voiceFromE164.trim() };
   }
 }
 
@@ -327,6 +354,13 @@ function editorTrigger(s: EditorState): FlowTrigger {
  * save time, so the persisted definition is always valid.
  */
 function sanitizeStepForSave(step: FlowStep): FlowStep {
+  // voice_ai_intake: drop blank capture-detail rows (the editor leaves an empty
+  // input when you click "+ detail"); an empty string fails the schema's
+  // min(1)-per-item rule, and an empty array fails min(1)-when-present.
+  if (step.type === "voice_ai_intake") {
+    const captureFields = (step.captureFields ?? []).map((f) => f.trim()).filter(Boolean);
+    return { ...step, captureFields: captureFields.length > 0 ? captureFields : undefined };
+  }
   if (step.type !== "browse_action") return step;
   if (step.forEachLink) {
     return {
@@ -852,6 +886,25 @@ export function AiFlowsManager({
               </p>
             </div>
           )}
+          {editor.channel === "voice" && (
+            <div className="space-y-2">
+              <div>
+                <label className={labelClass}>Caller number (E.164, e.g. +14155551234)</label>
+                <input
+                  className={inputClass}
+                  value={editor.voiceFromE164}
+                  onChange={(ev) => setEditor({ ...editor, voiceFromE164: ev.target.value.trim() })}
+                  placeholder="+14155551234"
+                />
+              </div>
+              <p className="text-[11px] text-parchment/40">
+                When a call comes in from this number, the steps below route it in real time — ring
+                people in order, then optionally hand off to your AI, or connect straight to one
+                number. Voice flows run on the call as it happens, so Run now and the batch
+                conditions don&apos;t apply.
+              </p>
+            </div>
+          )}
           {editor.channel === "sms" && (
             <div>
               <label className={labelClass}>Combine related texts that arrive within (minutes)</label>
@@ -990,17 +1043,21 @@ export function AiFlowsManager({
                 employees={employees}
                 examples={examples}
               />
-              <WhenEditor
-                step={step}
-                index={i}
-                earlierVars={[...varsProducedBefore(editor.steps, i), ...ENGINE_PROVIDED_VARS]}
-                patchStep={patchStep}
-                examples={examples}
-              />
+              {/* Voice steps have no `when` guard (they run on the real-time call
+                  path, not the var-producing batch engine), so hide it for them. */}
+              {!VOICE_STEP_TYPE_SET.has(step.type) && (
+                <WhenEditor
+                  step={step}
+                  index={i}
+                  earlierVars={[...varsProducedBefore(editor.steps, i), ...ENGINE_PROVIDED_VARS]}
+                  patchStep={patchStep}
+                  examples={examples}
+                />
+              )}
             </div>
           ))}
           <div className="flex flex-wrap gap-2">
-            {FLOW_STEP_TYPES.map((t) => (
+            {(editor.channel === "voice" ? VOICE_STEP_TYPES : NON_VOICE_STEP_TYPES).map((t) => (
               <button
                 key={t}
                 onClick={() => setEditor({ ...editor, steps: [...editor.steps, newStep(t, examples)] })}
@@ -2074,6 +2131,96 @@ function StepFields({
           label="Email variable (optional)"
           value={step.emailVar ?? ""}
           onChange={(v) => patchStep(index, { emailVar: v || undefined })}
+        />
+      </div>
+    );
+  }
+  if (step.type === "ring_handoff") {
+    return (
+      <div className="space-y-2">
+        <Field
+          label="Ring this number (E.164, e.g. +16025551234)"
+          value={step.toE164}
+          onChange={(v) => patchStep(index, { toE164: v.trim() })}
+        />
+        <Field
+          label="Ring for (seconds before moving on)"
+          value={String(step.ringSeconds ?? 20)}
+          onChange={(v) => {
+            const n = Number(v);
+            patchStep(index, {
+              ringSeconds: Number.isFinite(n) && n > 0 ? Math.round(n) : undefined
+            });
+          }}
+          help="If they don't pick up within this time, the next ring step (or AI takeover) runs."
+        />
+      </div>
+    );
+  }
+  if (step.type === "voice_ai_intake") {
+    const fields = step.captureFields ?? [];
+    return (
+      <div className="space-y-2">
+        <Field
+          label="Text the summary to (E.164, e.g. +16025551234)"
+          value={step.notifyE164}
+          onChange={(v) => patchStep(index, { notifyE164: v.trim() })}
+          help="After the AI talks to the caller, it texts this number a summary and transcript."
+        />
+        <Field
+          label="AI persona / instructions (optional)"
+          value={step.persona ?? ""}
+          onChange={(v) => patchStep(index, { persona: v.trim() ? v : undefined })}
+          textarea
+          help="How the AI should introduce itself and what to ask, e.g. 'Amy's assistant taking a message.'"
+        />
+        <label className={labelClass}>Details to capture from the caller</label>
+        {fields.map((f, fi) => (
+          <div key={fi} className="flex gap-2">
+            <input
+              className={inputClass}
+              value={f}
+              placeholder="e.g. name"
+              onChange={(ev) =>
+                patchStep(index, {
+                  captureFields: fields.map((x, xi) => (xi === fi ? ev.target.value : x))
+                })
+              }
+            />
+            <button
+              onClick={() => {
+                const next = fields.filter((_, xi) => xi !== fi);
+                patchStep(index, { captureFields: next.length ? next : undefined });
+              }}
+              className="text-parchment/40 hover:text-spark-orange"
+              aria-label="Remove field"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
+        ))}
+        <button
+          onClick={() => patchStep(index, { captureFields: [...fields, ""] })}
+          className="text-xs text-signal-teal hover:underline"
+        >
+          + detail
+        </button>
+      </div>
+    );
+  }
+  if (step.type === "voice_transfer") {
+    return (
+      <div className="space-y-2">
+        <Field
+          label="Connect the caller to (E.164, e.g. +16025551234)"
+          value={step.toE164}
+          onChange={(v) => patchStep(index, { toE164: v.trim() })}
+        />
+        <Field
+          label="Say this to the caller first (optional)"
+          value={step.whisper ?? ""}
+          onChange={(v) => patchStep(index, { whisper: v.trim() ? v : undefined })}
+          help="A short message played to the caller before they're connected, e.g. 'Connecting you now.'"
         />
       </div>
     );

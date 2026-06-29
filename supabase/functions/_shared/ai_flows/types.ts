@@ -94,12 +94,26 @@ export type TenantEmailTrigger = {
   conditions: TriggerCondition[];
 };
 
+/**
+ * Inbound-voice trigger: a call FROM `fromE164` to a business voice number fires
+ * this flow. Unlike every other channel it does NOT enqueue an ai_flow_run — the
+ * Telnyx voice webhook resolves the matching enabled voice flow in real time and
+ * drives the call-control state machine from its compiled steps. The async
+ * worker never claims a voice flow (the cron/sms/email enqueue paths skip them).
+ */
+export type VoiceTrigger = {
+  channel: "voice";
+  /** E.164 caller id that fires the routing (e.g. a partner's transfer line). */
+  fromE164: string;
+};
+
 export type FlowTrigger =
   | SmsTrigger
   | ManualTrigger
   | ScheduleTrigger
   | EmailTrigger
-  | TenantEmailTrigger;
+  | TenantEmailTrigger
+  | VoiceTrigger;
 
 export type ExtractField = {
   name: string;
@@ -475,6 +489,46 @@ export type FlowStep =
       path?: string;
       bodyTemplate?: string;
       saveAs?: string;
+      when?: StepCondition;
+    }
+  // ── Voice steps (real-time call routing; executed by the Telnyx voice webhook
+  // state machine, NOT the async ai-flow-worker). Only valid under a VoiceTrigger. ──
+  | {
+      id: string;
+      /**
+       * Ring a human and warm-transfer the live caller to them for `ringSeconds`
+       * (default 20). On no-answer the voice webhook advances to the next
+       * ring_handoff, then the voice_ai_intake (if any). Step order = ring order.
+       */
+      type: "ring_handoff";
+      toE164: string;
+      ringSeconds?: number;
+      when?: StepCondition;
+    }
+  | {
+      id: string;
+      /**
+       * AI takeover after every ring_handoff missed: a human presses 1 to hand
+       * the live caller to the AI worker, which captures the lead and texts a
+       * summary (+ transcript) to `notifyE164`. At most one per flow; must be the
+       * last step and preceded by a ring_handoff.
+       */
+      type: "voice_ai_intake";
+      notifyE164: string;
+      persona?: string;
+      captureFields?: string[];
+      when?: StepCondition;
+    }
+  | {
+      id: string;
+      /**
+       * Single blind warm transfer: connect the caller straight to `toE164`,
+       * optionally speaking `whisper` first. A voice_transfer flow has exactly
+       * one step (no ring_handoff/voice_ai_intake).
+       */
+      type: "voice_transfer";
+      toE164: string;
+      whisper?: string;
       when?: StepCondition;
     };
 

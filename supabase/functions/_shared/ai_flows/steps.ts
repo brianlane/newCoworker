@@ -532,5 +532,16 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         }
       };
     }
+    // Voice steps execute on the real-time Telnyx call path (telnyx-voice-inbound),
+    // never on the async worker — they are only valid under a voice trigger, which
+    // the batch enqueue paths skip and the worker rejects via isExecutableDefinition.
+    // If one somehow reaches here, fail the step rather than silently no-op.
+    case "ring_handoff":
+    case "voice_ai_intake":
+    case "voice_transfer":
+      return {
+        ok: false,
+        error: `${step.type}: voice steps run on the call path, not the flow worker`
+      };
   }
 }
