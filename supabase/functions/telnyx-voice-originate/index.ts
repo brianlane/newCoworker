@@ -26,14 +26,19 @@
  * happen AFTER the dial (post-dial budget refusal, lost call id,
  * session_persist_failed) omit `dialed` and must NOT be retried.
  *
- * Auth: Authorization: Bearer <SUPABASE_SERVICE_ROLE_KEY>. The caller is our own
- * Next.js server route (which already authenticated the owner). No public access.
+ * Auth: Authorization: Bearer <INTERNAL_CRON_SECRET> (assertCronAuth) — the
+ * shared server-to-server secret. Callers are our own Next.js Place-call route
+ * (which already authenticated the owner) and the ai-flow-worker schedule
+ * sweep. No public access. (We deliberately do NOT authenticate against
+ * SUPABASE_SERVICE_ROLE_KEY: the platform-injected service-role key can differ
+ * from the one callers hold under the new API-key system.)
  *
- * Secrets: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TELNYX_API_KEY.
+ * Secrets: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TELNYX_API_KEY, INTERNAL_CRON_SECRET.
  * Optional: STRIPE_SECRET_KEY (JIT period refresh), VOICE_AI_STREAM_ENABLED.
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telnyxDialCall, telnyxHangupCall } from "../_shared/telnyx_call_actions.ts";
 import { checkVoiceBudgetAvailable, reserveVoiceBudget } from "../_shared/voice_reserve.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
@@ -60,20 +65,6 @@ function envVoiceAiStreamEnabled(): boolean {
   return v !== "false" && v !== "0" && v !== "no";
 }
 
-/** Constant-time-ish bearer compare (avoids early-exit length leak on the token). */
-function bearerMatches(header: string | null, expected: string): boolean {
-  if (!header || !expected) return false;
-  const prefix = "Bearer ";
-  if (!header.startsWith(prefix)) return false;
-  const token = header.slice(prefix.length);
-  if (token.length !== expected.length) return false;
-  let diff = 0;
-  for (let i = 0; i < token.length; i++) {
-    diff |= token.charCodeAt(i) ^ expected.charCodeAt(i);
-  }
-  return diff === 0;
-}
-
 serve(async (req: Request) => {
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
@@ -87,7 +78,14 @@ serve(async (req: Request) => {
     return new Response("Server misconfigured", { status: 500 });
   }
 
-  if (!bearerMatches(req.headers.get("authorization"), serviceKey)) {
+  // Caller auth: the shared INTERNAL_CRON_SECRET bearer (assertCronAuth), the
+  // same server-to-server secret the worker sweep is itself authed with. We do
+  // NOT compare against SUPABASE_SERVICE_ROLE_KEY: on projects using the new API
+  // key / JWT-signing-key system the platform injects a service-role key into
+  // the function that differs from the legacy service_role key external callers
+  // (the Next.js Place-call route, this worker) hold, so that compare 401s every
+  // real caller. serviceKey below is still used for the privileged DB client.
+  if (!(await assertCronAuth(req))) {
     return json(401, { ok: false, error: "unauthorized", dialed: false });
   }
 
