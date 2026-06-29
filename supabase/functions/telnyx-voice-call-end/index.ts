@@ -224,6 +224,43 @@ async function handleOutboundAnswered(
     return jsonOk("outbound_no_api_key");
   }
 
+  // Respect an aborted origination. telnyx-voice-originate writes an
+  // `ai_intake` session right after the dial and flips it to `done` if it then
+  // refuses budget (and hangs the leg up). A `call.answered` can still race in
+  // while that teardown is in flight — if the session is anything other than
+  // `ai_intake` (terminal `done`, or belongs to another business) we must NOT
+  // reserve/attach: that would bridge AI media onto a call we already aborted
+  // and reported as failed to Place call. Hang up and bail. A missing session
+  // is the inverse race (answer beat the session write) — fall through and let
+  // the reservation logic below decide, so we never drop a valid call.
+  const { data: sessRow, error: sessErr } = await supabase
+    .from("voice_handoff_sessions")
+    .select("status, business_id")
+    .eq("call_control_id", callControlId)
+    .maybeSingle();
+  if (sessErr) {
+    console.error("outbound: session lookup failed", sessErr);
+    return jsonOk("outbound_session_lookup_error");
+  }
+  const sess = sessRow as { status?: string; business_id?: string } | null;
+  if (sess && (sess.business_id !== businessId || sess.status !== "ai_intake")) {
+    console.warn("outbound: answered for non-active session; hanging up", {
+      callControlId,
+      status: sess.status ?? null
+    });
+    try {
+      await telnyxHangupCall(apiKey, callControlId);
+    } catch (e) {
+      console.error("outbound: hangup (session not active) failed", e);
+    }
+    await telemetryRecord(supabase, "voice_outbound_answer_session_inactive", {
+      business_id: businessId,
+      call_control_id: callControlId,
+      status: sess.status ?? null
+    });
+    return jsonOk("outbound_session_not_active", { status: sess.status ?? null });
+  }
+
   // The reservation normally already exists (telnyx-voice-originate reserves
   // right after the dial). But the callee CAN answer in the brief gap before
   // that reservation commits, so a missing row here is a race — not a signal to
