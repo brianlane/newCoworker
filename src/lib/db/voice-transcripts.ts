@@ -12,6 +12,8 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 export type VoiceTranscriptStatus = "in_progress" | "completed" | "errored";
 
+export type VoiceTranscriptDirection = "inbound" | "outbound";
+
 export type VoiceTranscriptTurnRole = "caller" | "assistant";
 
 export type VoiceCallTranscriptRow = {
@@ -22,6 +24,8 @@ export type VoiceCallTranscriptRow = {
   caller_e164: string | null;
   model: string;
   status: VoiceTranscriptStatus;
+  /** Whether the business received the call (inbound) or placed it (outbound). */
+  direction: VoiceTranscriptDirection;
   started_at: string;
   ended_at: string | null;
   created_at: string;

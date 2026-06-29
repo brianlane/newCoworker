@@ -8,7 +8,10 @@
  */
 
 import { Badge } from "@/components/ui/Badge";
-import type { VoiceTranscriptStatus } from "@/lib/db/voice-transcripts";
+import type {
+  VoiceTranscriptDirection,
+  VoiceTranscriptStatus
+} from "@/lib/db/voice-transcripts";
 
 export type FormatDateTimeStyle = "list" | "detail" | "date";
 
@@ -82,4 +85,24 @@ export function StatusBadge({ status }: { status: VoiceTranscriptStatus }) {
 
 export function callerLabel(callerE164: string | null): string {
   return callerE164?.trim() ? callerE164 : "Unknown caller";
+}
+
+/**
+ * Incoming / Outgoing pill for a call row + the transcript header. Outbound
+ * (the coworker placed the call) reads as the assistant's accent (claw-green),
+ * inbound (the business received it) as signal-teal — mirroring the email
+ * list's Received/Sent direction badge.
+ */
+export function CallDirectionBadge({ direction }: { direction: VoiceTranscriptDirection }) {
+  const outbound = direction === "outbound";
+  return (
+    <span
+      className={[
+        "text-[10px] uppercase tracking-wide font-semibold rounded px-1.5 py-0.5",
+        outbound ? "bg-claw-green/15 text-claw-green" : "bg-signal-teal/15 text-signal-teal"
+      ].join(" ")}
+    >
+      {outbound ? "Outgoing" : "Incoming"}
+    </span>
+  );
 }

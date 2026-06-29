@@ -11,12 +11,17 @@ import { loadEnv } from "./load-env.js";
 import {
   createGeminiTelnyxBridge,
   type TransferCapability,
+  type HangupCapability,
   type CallerIdentity,
   type CapturedLead,
   type IntakeCapability
 } from "./gemini-telnyx-bridge.js";
 import { loadVaultForPrompt } from "./vault-loader.js";
-import { telnyxTransferCall, telnyxSendPlainSms } from "./telnyx-call-actions.js";
+import {
+  telnyxTransferCall,
+  telnyxSendPlainSms,
+  telnyxHangupCall
+} from "./telnyx-call-actions.js";
 import { composeIntakeLeadSms } from "./intake.js";
 import type { TranscriptAdapter } from "./voice-transcript.js";
 import { startIdleHeartbeatLoop, writeHeartbeat } from "./heartbeat.js";
@@ -200,6 +205,7 @@ function createSupabaseTranscriptAdapter(
           reservation_id: reservationId,
           caller_e164: input.callerE164 || null,
           model: input.model,
+          direction: input.direction,
           status: "in_progress"
         })
         .select("id")
@@ -653,6 +659,11 @@ function main(): void {
       // number so we can text the owner a summary + transcript at call end.
       let intake: IntakeCapability | undefined;
       let intakeNotifyE164 = "";
+      // Outbound AiFlow legs are placed by telnyx-voice-originate, which writes
+      // the handoff session context with `outbound: true`. Everything else is a
+      // customer dialing the DID (inbound). Recorded on the transcript so the
+      // dashboard can tag the call.
+      let callDirection: "inbound" | "outbound" = "inbound";
       {
         // The edge already flipped the session to ai_intake and pressed 1 for a
         // live seller, so getting this read wrong means Gemini would run the
@@ -686,12 +697,14 @@ function main(): void {
         }
         if (row?.status === "ai_intake") {
           const ctx = (row.context ?? {}) as {
+            outbound?: boolean;
             ai_takeover?: {
               notify_e164?: string;
               persona?: string;
               capture_fields?: unknown;
             } | null;
           };
+          if (ctx.outbound === true) callDirection = "outbound";
           const ai = ctx.ai_takeover ?? undefined;
           intakeNotifyE164 = typeof ai?.notify_e164 === "string" ? ai.notify_e164 : "";
           intake = {
@@ -706,6 +719,28 @@ function main(): void {
           });
         }
       }
+
+      // Let the assistant hang up when the conversation is over. Available on
+      // every call (inbound + outbound) whenever we have a Telnyx API key — the
+      // bridge gates the `end_call` tool on this capability being present.
+      const hangupApiKey = process.env.TELNYX_API_KEY ?? "";
+      const hangup: HangupCapability | undefined = hangupApiKey
+        ? {
+            graceMs: readPositiveMs("VOICE_END_CALL_GRACE_MS", 3000),
+            execute: async ({ reason }) => {
+              const result = await telnyxHangupCall(hangupApiKey, callControlId);
+              if (!result.ok) {
+                console.error("voice-bridge: end_call hangup failed", result.status, result.body);
+                return { ok: false, detail: `telnyx ${result.status}` };
+              }
+              console.log("voice-bridge: end_call hangup", {
+                callControlId,
+                reason: reason ?? ""
+              });
+              return { ok: true, detail: "hung up" };
+            }
+          }
+        : undefined;
 
       /** Compose the Gemini tool capability only when admin opted in + a forwarding target exists. */
       let transfer: TransferCapability | undefined;
@@ -857,6 +892,8 @@ function main(): void {
             businessName,
             businessTimezone,
             transfer,
+            hangup,
+            direction: callDirection,
             vault,
             // Trusted number only: this flows into the transcript's caller_e164
             // and record_customer_interaction. A spoofed v1 caller resolves to

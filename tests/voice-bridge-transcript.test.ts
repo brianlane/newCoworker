@@ -54,7 +54,8 @@ const INIT = {
   businessId: "biz-1",
   callControlId: "cc-1",
   callerE164: "+15551234567",
-  model: "gemini-live"
+  model: "gemini-live",
+  direction: "inbound" as const
 };
 
 function frame(input: {

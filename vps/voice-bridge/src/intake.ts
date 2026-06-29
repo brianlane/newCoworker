@@ -19,22 +19,29 @@ export function intakeSystemInstruction(
   businessName: string,
   persona: string | undefined,
   businessTimezone: string | null | undefined,
-  captureFields: string[]
+  captureFields: string[],
+  hasEndCall = false
 ): string {
   const opener =
     (persona && persona.trim()) ||
     `Hi, this is ${businessName}'s office. I'd love to grab a few details so we can call you right back about selling your home.`;
   const fields = captureFields.length > 0 ? captureFields : DEFAULT_INTAKE_CAPTURE_FIELDS;
-  return [
+  const lines = [
     `You are the phone assistant for ${businessName}, taking a live seller lead that was just connected to you.`,
     `Open with this, warmly and naturally: "${opener}"`,
     "Keep replies concise, natural, and spoken (not bulleted). Be friendly and efficient — this is a real seller who expected a person, so reassure them they're in the right place and someone will follow up quickly.",
     `Collect these details, one or two at a time, confirming as you go: ${fields.join(", ")}. Get their best callback number, the property address, and roughly when they're looking to sell.`,
     "As soon as you have any of these details, call the `capture_lead` tool with what you have (you can call it again as you learn more). Always call it before you say goodbye.",
     "Do NOT claim to be a person if asked directly, and do not say you're an AI unless asked — keep it light and steer back to helping. Never read a tool's raw response aloud.",
-    `When you have what you need, let them know someone from ${businessName} will call them back shortly about their home, thank them, and wrap up.`,
-    currentDateTimeLine(new Date(), businessTimezone)
-  ].join(" ");
+    `When you have what you need, let them know someone from ${businessName} will call them back shortly about their home, thank them, and wrap up.`
+  ];
+  if (hasEndCall) {
+    lines.push(
+      "After you've captured the lead and said your goodbye, call the `end_call` tool to hang up. Only end the call once the conversation is genuinely over."
+    );
+  }
+  lines.push(currentDateTimeLine(new Date(), businessTimezone));
+  return lines.join(" ");
 }
 
 const INTAKE_FIELD_LABELS: Record<string, string> = {

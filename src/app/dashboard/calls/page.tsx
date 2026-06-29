@@ -77,6 +77,7 @@ export default async function DashboardCallsPage() {
             ? "owner"
             : null,
       status: row.status,
+      direction: row.direction,
       startedAt: row.started_at,
       endedAt: row.ended_at
     };
