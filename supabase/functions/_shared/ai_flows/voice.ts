@@ -38,6 +38,9 @@ export function compileVoiceFlow(
   toE164: string
 ): VoicePlan | null {
   if (!def || def.trigger?.channel !== "voice") return null;
+  // Outbound flows are placed by the origination edge function, not matched by
+  // an inbound caller — they have no inbound VoicePlan.
+  if (def.trigger?.direction === "outbound") return null;
   const steps: FlowStep[] = Array.isArray(def.steps) ? def.steps : [];
 
   // Blind transfer wins if present: connect the caller straight to the number.

@@ -68,12 +68,15 @@ const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
   schedule: "On a schedule",
   email: "Inbound email (your connected inbox)",
   tenant_email: "Inbound email (AI coworker's mailbox)",
-  voice: "Inbound call (voice routing)"
+  voice: "Voice call routing"
 };
 
 /** Step types available for a voice flow vs. every other (batch) channel. */
 const VOICE_STEP_TYPE_SET = new Set<string>(VOICE_STEP_TYPES);
 const NON_VOICE_STEP_TYPES = FLOW_STEP_TYPES.filter((t) => !VOICE_STEP_TYPE_SET.has(t));
+/** Inbound voice flows route a live caller; outbound flows place one call. */
+const INBOUND_VOICE_STEP_TYPES = VOICE_STEP_TYPES.filter((t) => t !== "outbound_call");
+const OUTBOUND_VOICE_STEP_TYPES = ["outbound_call"] as const;
 
 type EditorState = {
   id: string | null;
@@ -90,8 +93,10 @@ type EditorState = {
   scheduleDays: number[];
   scheduleEvery: number;
   emailConnectionId: string;
-  /** Voice trigger: the E.164 caller id that fires the routing. */
+  /** Voice trigger: the E.164 caller id that fires inbound routing. */
   voiceFromE164: string;
+  /** Voice trigger direction: "inbound" matches a caller; "outbound" places a call. */
+  voiceDirection: "inbound" | "outbound";
   steps: FlowStep[];
 };
 
@@ -120,6 +125,7 @@ function emptyEditor(): EditorState {
     scheduleEvery: 60,
     emailConnectionId: "",
     voiceFromE164: "",
+    voiceDirection: "inbound",
     steps: []
   };
 }
@@ -137,6 +143,7 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
   | "scheduleEvery"
   | "emailConnectionId"
   | "voiceFromE164"
+  | "voiceDirection"
 > {
   const base = {
     channel: trigger.channel,
@@ -148,7 +155,8 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
     scheduleDays: [] as number[],
     scheduleEvery: 60,
     emailConnectionId: "",
-    voiceFromE164: ""
+    voiceFromE164: "",
+    voiceDirection: "inbound" as const
   };
   switch (trigger.channel) {
     case "sms":
@@ -178,7 +186,11 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
     case "tenant_email":
       return { ...base, conditions: trigger.conditions };
     case "voice":
-      return { ...base, voiceFromE164: trigger.fromE164 };
+      return {
+        ...base,
+        voiceFromE164: trigger.fromE164 ?? "",
+        voiceDirection: trigger.direction === "outbound" ? "outbound" : "inbound"
+      };
   }
 }
 
@@ -278,6 +290,15 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
       };
     case "voice_transfer":
       return { id, type, toE164: "", whisper: "" };
+    case "outbound_call":
+      return {
+        id,
+        type,
+        toE164: "",
+        notifyE164: "",
+        persona: "",
+        captureFields: ["name", "phone", "reason for calling"]
+      };
   }
 }
 
@@ -341,7 +362,9 @@ function editorTrigger(s: EditorState): FlowTrigger {
     case "tenant_email":
       return { channel: "tenant_email", conditions: s.conditions };
     case "voice":
-      return { channel: "voice", fromE164: s.voiceFromE164.trim() };
+      return s.voiceDirection === "outbound"
+        ? { channel: "voice", direction: "outbound" }
+        : { channel: "voice", fromE164: s.voiceFromE164.trim() };
   }
 }
 
@@ -360,6 +383,17 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
   if (step.type === "voice_ai_intake") {
     const captureFields = (step.captureFields ?? []).map((f) => f.trim()).filter(Boolean);
     return { ...step, captureFields: captureFields.length > 0 ? captureFields : undefined };
+  }
+  // outbound_call: same blank-row cleanup, plus drop an empty default toE164 (it
+  // is optional and the entry point supplies the callee when omitted).
+  if (step.type === "outbound_call") {
+    const captureFields = (step.captureFields ?? []).map((f) => f.trim()).filter(Boolean);
+    const toE164 = step.toE164?.trim();
+    return {
+      ...step,
+      ...(toE164 ? { toE164 } : { toE164: undefined }),
+      captureFields: captureFields.length > 0 ? captureFields : undefined
+    };
   }
   if (step.type !== "browse_action") return step;
   if (step.forEachLink) {
@@ -433,6 +467,10 @@ export function AiFlowsManager({
   const [runFor, setRunFor] = useState<string | null>(null);
   const [runInput, setRunInput] = useState("");
   const [runNotice, setRunNotice] = useState<string | null>(null);
+  // Place-call panel (outbound voice flows): which flow's panel is open + the
+  // optional one-off callee override.
+  const [callFor, setCallFor] = useState<string | null>(null);
+  const [callTo, setCallTo] = useState("");
 
   // "Adapt with AI" hand-off: the library detail page stashes the adapted
   // definition in sessionStorage then navigates here with ?adapt=1. Load it
@@ -650,6 +688,33 @@ export function AiFlowsManager({
       setRunNotice("Run queued — see View runs for progress.");
       setRunInput("");
       setRunFor(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Place one outbound call for a voice flow with direction "outbound". */
+  const placeCall = async (row: AiFlowRow) => {
+    setBusy(true);
+    setRunNotice(null);
+    try {
+      const res = await fetch(`/api/aiflows/${row.id}/place-call`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId, toE164: callTo.trim() || undefined })
+      });
+      const json = (await res.json()) as {
+        ok: boolean;
+        data?: { to?: string };
+        error?: { message: string };
+      };
+      if (!json.ok) {
+        setRunNotice(json.error?.message ?? "Could not place the call");
+        return;
+      }
+      setRunNotice(`Calling ${json.data?.to ?? "the number"} now…`);
+      setCallTo("");
+      setCallFor(null);
     } finally {
       setBusy(false);
     }
@@ -889,20 +954,49 @@ export function AiFlowsManager({
           {editor.channel === "voice" && (
             <div className="space-y-2">
               <div>
-                <label className={labelClass}>Caller number (E.164, e.g. +14155551234)</label>
-                <input
+                <label className={labelClass}>Direction</label>
+                <select
                   className={inputClass}
-                  value={editor.voiceFromE164}
-                  onChange={(ev) => setEditor({ ...editor, voiceFromE164: ev.target.value.trim() })}
-                  placeholder="+14155551234"
-                />
+                  value={editor.voiceDirection}
+                  onChange={(ev) =>
+                    setEditor({
+                      ...editor,
+                      voiceDirection: ev.target.value === "outbound" ? "outbound" : "inbound"
+                    })
+                  }
+                >
+                  <option value="inbound">Inbound — a call comes in</option>
+                  <option value="outbound">Outbound — you place a call</option>
+                </select>
               </div>
-              <p className="text-[11px] text-parchment/40">
-                When a call comes in from this number, the steps below route it in real time — ring
-                people in order, then optionally hand off to your AI, or connect straight to one
-                number. Voice flows run on the call as it happens, so Run now and the batch
-                conditions don&apos;t apply.
-              </p>
+              {editor.voiceDirection === "inbound" ? (
+                <>
+                  <div>
+                    <label className={labelClass}>Caller number (E.164, e.g. +14155551234)</label>
+                    <input
+                      className={inputClass}
+                      value={editor.voiceFromE164}
+                      onChange={(ev) =>
+                        setEditor({ ...editor, voiceFromE164: ev.target.value.trim() })
+                      }
+                      placeholder="+14155551234"
+                    />
+                  </div>
+                  <p className="text-[11px] text-parchment/40">
+                    When a call comes in from this number, the steps below route it in real time — ring
+                    people in order, then optionally hand off to your AI, or connect straight to one
+                    number. Voice flows run on the call as it happens, so Run now and the batch
+                    conditions don&apos;t apply.
+                  </p>
+                </>
+              ) : (
+                <p className="text-[11px] text-parchment/40">
+                  An outbound flow places a call when you press Place call on the flow. Add a single
+                  Place an outbound call step below — when the callee answers, the AI talks to them,
+                  captures the details, and texts you a summary. Voice budget is checked first, so an
+                  over-budget account can&apos;t place AI calls.
+                </p>
+              )}
             </div>
           )}
           {editor.channel === "sms" && (
@@ -1057,7 +1151,12 @@ export function AiFlowsManager({
             </div>
           ))}
           <div className="flex flex-wrap gap-2">
-            {(editor.channel === "voice" ? VOICE_STEP_TYPES : NON_VOICE_STEP_TYPES).map((t) => (
+            {(editor.channel === "voice"
+              ? editor.voiceDirection === "outbound"
+                ? OUTBOUND_VOICE_STEP_TYPES
+                : INBOUND_VOICE_STEP_TYPES
+              : NON_VOICE_STEP_TYPES
+            ).map((t) => (
               <button
                 key={t}
                 onClick={() => setEditor({ ...editor, steps: [...editor.steps, newStep(t, examples)] })}
@@ -1193,6 +1292,22 @@ export function AiFlowsManager({
                     Run now
                   </button>
                 )}
+                {/* Outbound voice flows are started on demand here — the call is
+                    placed and metered by telnyx-voice-originate. */}
+                {row.enabled &&
+                  row.definition.trigger.channel === "voice" &&
+                  row.definition.trigger.direction === "outbound" && (
+                    <button
+                      onClick={() => {
+                        setRunNotice(null);
+                        setCallTo("");
+                        setCallFor(callFor === row.id ? null : row.id);
+                      }}
+                      className="text-xs text-signal-teal hover:underline"
+                    >
+                      Place call
+                    </button>
+                  )}
                 <button onClick={() => toggleEnabled(row)} className="text-xs hover:text-parchment">
                   {row.enabled ? "Disable" : "Enable"}
                 </button>
@@ -1226,6 +1341,23 @@ export function AiFlowsManager({
                   className="shrink-0 rounded-md bg-spark-orange px-3 py-2 text-sm font-semibold text-deep-ink hover:bg-spark-orange/90 disabled:opacity-50"
                 >
                   {busy ? "Starting…" : "Start run"}
+                </button>
+              </div>
+            )}
+            {callFor === row.id && (
+              <div className="flex items-center gap-2 border-t border-parchment/10 pt-3">
+                <input
+                  className={inputClass}
+                  value={callTo}
+                  onChange={(ev) => setCallTo(ev.target.value)}
+                  placeholder="Number to call (leave blank to use the flow's default)"
+                />
+                <button
+                  onClick={() => placeCall(row)}
+                  disabled={busy}
+                  className="shrink-0 rounded-md bg-spark-orange px-3 py-2 text-sm font-semibold text-deep-ink hover:bg-spark-orange/90 disabled:opacity-50"
+                >
+                  {busy ? "Calling…" : "Place call"}
                 </button>
               </div>
             )}
@@ -2224,6 +2356,63 @@ function StepFields({
           onChange={(v) => patchStep(index, { whisper: v.trim() ? v : undefined })}
           help="A short message played to the caller before they're connected, e.g. 'Connecting you now.'"
         />
+      </div>
+    );
+  }
+  if (step.type === "outbound_call") {
+    const fields = step.captureFields ?? [];
+    return (
+      <div className="space-y-2">
+        <Field
+          label="Default number to call (E.164, e.g. +16025551234)"
+          value={step.toE164 ?? ""}
+          onChange={(v) => patchStep(index, { toE164: v.trim() ? v.trim() : undefined })}
+          help="Pre-fills the callee when you press Place call. You can override it for a one-off call."
+        />
+        <Field
+          label="Text the summary to (E.164, e.g. +16025551234)"
+          value={step.notifyE164}
+          onChange={(v) => patchStep(index, { notifyE164: v.trim() })}
+          help="After the AI talks to the callee, it texts this number a summary and transcript."
+        />
+        <Field
+          label="AI persona / instructions (optional)"
+          value={step.persona ?? ""}
+          onChange={(v) => patchStep(index, { persona: v.trim() ? v : undefined })}
+          textarea
+          help="How the AI should introduce itself and what to say, e.g. 'Amy's assistant following up on your inquiry.'"
+        />
+        <label className={labelClass}>Details to capture from the callee</label>
+        {fields.map((f, fi) => (
+          <div key={fi} className="flex gap-2">
+            <input
+              className={inputClass}
+              value={f}
+              placeholder="e.g. name"
+              onChange={(ev) =>
+                patchStep(index, {
+                  captureFields: fields.map((x, xi) => (xi === fi ? ev.target.value : x))
+                })
+              }
+            />
+            <button
+              onClick={() => {
+                const next = fields.filter((_, xi) => xi !== fi);
+                patchStep(index, { captureFields: next.length ? next : undefined });
+              }}
+              className="text-parchment/40 hover:text-spark-orange"
+              aria-label="Remove field"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
+        ))}
+        <button
+          onClick={() => patchStep(index, { captureFields: [...fields, ""] })}
+          className="text-xs text-signal-teal hover:underline"
+        >
+          + detail
+        </button>
       </div>
     );
   }

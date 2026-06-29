@@ -10,6 +10,7 @@ describe("telnyx_voice_dispatch route table", () => {
   it("maps Telnyx call event types to the matching Edge function", () => {
     expect(TELNYX_VOICE_ROUTES["call.initiated"]).toBe("telnyx-voice-inbound");
     expect(TELNYX_VOICE_ROUTES["call.bridged"]).toBe("telnyx-voice-call-end");
+    expect(TELNYX_VOICE_ROUTES["call.answered"]).toBe("telnyx-voice-call-end");
     expect(TELNYX_VOICE_ROUTES["call.hangup"]).toBe("telnyx-voice-call-end");
     expect(TELNYX_VOICE_ROUTES["call.ended"]).toBe("telnyx-voice-call-end");
   });
@@ -53,11 +54,15 @@ describe("decideTelnyxVoiceRoute", () => {
     });
   });
 
-  it("returns skip for unknown event types so Telnyx does not retry", () => {
+  it("routes call.answered → call-end (outbound origination stream attach)", () => {
     expect(decideTelnyxVoiceRoute(envelope("call.answered"))).toEqual({
-      kind: "skip",
+      kind: "route",
+      target: "telnyx-voice-call-end",
       eventType: "call.answered"
     });
+  });
+
+  it("returns skip for unknown event types so Telnyx does not retry", () => {
     expect(decideTelnyxVoiceRoute(envelope("call.recording.saved"))).toEqual({
       kind: "skip",
       eventType: "call.recording.saved"

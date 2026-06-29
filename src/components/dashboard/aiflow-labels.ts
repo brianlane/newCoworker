@@ -35,7 +35,8 @@ export const STEP_TYPE_LABELS: Record<StepType, string> = {
   upsert_customer: "Save / update a customer contact",
   ring_handoff: "Ring a person (warm transfer)",
   voice_ai_intake: "AI takes the call (capture the lead)",
-  voice_transfer: "Connect the caller to a number"
+  voice_transfer: "Connect the caller to a number",
+  outbound_call: "Place an outbound call (AI talks)"
 };
 
 /** One-line explanation of what each step does, shown under the step header. */
@@ -62,7 +63,9 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
   voice_ai_intake:
     "After everyone misses the call, a person presses 1 to hand it to the AI, which talks to the caller, captures the lead, and texts you a summary.",
   voice_transfer:
-    "Connects the caller straight to one number (optionally saying a short message first). Use this alone for a simple forward."
+    "Connects the caller straight to one number (optionally saying a short message first). Use this alone for a simple forward.",
+  outbound_call:
+    "Places a call to a number you choose; when they answer, the AI talks to them, captures the details, and texts you a summary. Use the Place call button to start it (budget is checked first)."
 };
 
 /** Friendly name for each inbound trigger condition. */

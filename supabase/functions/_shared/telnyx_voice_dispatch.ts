@@ -24,6 +24,11 @@ export const TELNYX_VOICE_ROUTES: Readonly<Record<string, string>> = Object.free
   // call.bridged is needed by the warm-handoff chain (telnyx-voice-call-end)
   // to mark a step as answered so a later hangup can't advance the chain.
   "call.bridged": "telnyx-voice-call-end",
+  // call.answered drives the OUTBOUND origination path: when an AiFlow-placed
+  // call (vob client_state) is answered by the callee, telnyx-voice-call-end
+  // attaches the Gemini media stream. Inbound answers carry no vob state and are
+  // ignored there, so routing them here is safe.
+  "call.answered": "telnyx-voice-call-end",
   "call.hangup": "telnyx-voice-call-end",
   "call.ended": "telnyx-voice-call-end"
 });

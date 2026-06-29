@@ -539,6 +539,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
     case "ring_handoff":
     case "voice_ai_intake":
     case "voice_transfer":
+    case "outbound_call":
       return {
         ok: false,
         error: `${step.type}: voice steps run on the call path, not the flow worker`
