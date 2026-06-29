@@ -188,7 +188,9 @@ serve(async (req: Request) => {
       message: `Outbound call not placed (pre-dial): ${availability.reason}`,
       payload: { reason: availability.reason, to: callee, phase: "pre_dial" }
     });
-    return json(200, { ok: false, error: "budget", reason: availability.reason });
+    // dialed:false — the callee was never rung, so a scheduled caller may safely
+    // retry this occurrence later (budget may free up within its window).
+    return json(200, { ok: false, error: "budget", reason: availability.reason, dialed: false });
   }
 
   const sessionId = crypto.randomUUID();
@@ -212,7 +214,9 @@ serve(async (req: Request) => {
       flow_id: flowId,
       http_status: dialRes.status
     });
-    return json(502, { ok: false, error: "dial_failed", http_status: dialRes.status });
+    // dialed:false — Telnyx rejected POST /v2/calls so NO call leg was created
+    // and the callee was not rung; a scheduled caller may safely retry.
+    return json(502, { ok: false, error: "dial_failed", http_status: dialRes.status, dialed: false });
   }
   const dialJson = (await dialRes.json().catch(() => null)) as
     | { data?: { call_control_id?: string } }

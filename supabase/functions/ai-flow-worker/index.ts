@@ -3470,12 +3470,13 @@ async function placeOutboundCall(
   ok: boolean;
   callControlId?: string;
   reason?: string;
-  blocked?: boolean;
-  // True when originate returned an HTTP response (success OR a definitive
-  // refusal that means NO live call exists). False only when the request never
-  // got a response (timeout/network) — i.e. it's AMBIGUOUS whether a call was
-  // placed, so the occurrence must NOT be retried (could double-dial).
-  definitive: boolean;
+  // Whether this occurrence is safe to dial again. True ONLY when originate
+  // explicitly reports it never rang the callee (`dialed === false`: a pre-dial
+  // budget block, or Telnyx rejecting POST /v2/calls so no leg was created).
+  // Anything that already rang the callee (post-dial budget refusal,
+  // session_persist_failed, lost call id) or a no-response timeout is NOT
+  // retryable, or the same occurrence would dial the callee again.
+  retryable: boolean;
 }> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), OUTBOUND_ORIGINATE_TIMEOUT_MS);
@@ -3490,20 +3491,19 @@ async function placeOutboundCall(
       }
     );
     const out = (await res.json().catch(() => null)) as
-      | { ok?: boolean; error?: string; reason?: string; callControlId?: string }
+      | { ok?: boolean; error?: string; reason?: string; callControlId?: string; dialed?: boolean }
       | null;
-    if (res.ok && out?.ok) return { ok: true, callControlId: out.callControlId, definitive: true };
-    // A parsed HTTP response (budget refusal or a 4xx/5xx with a body) means
-    // originate ran and no live call resulted, so the occurrence is retryable.
+    if (res.ok && out?.ok) return { ok: true, callControlId: out.callControlId, retryable: false };
+    // Retry ONLY when originate explicitly reports it never dialed the callee.
     return {
       ok: false,
       reason: out?.reason ?? out?.error ?? `http_${res.status}`,
-      blocked: out?.error === "budget",
-      definitive: true
+      retryable: out?.dialed === false
     };
   } catch (e) {
+    // No response: a dial MAY have gone through — never retry (could double-dial).
     console.error("placeOutboundCall", e);
-    return { ok: false, reason: "originate_unreachable", definitive: false };
+    return { ok: false, reason: "originate_unreachable", retryable: false };
   } finally {
     clearTimeout(timer);
   }
@@ -3582,13 +3582,15 @@ async function enqueueDueOutboundCalls(
       // The pre-inserted row is a dedupe LOCK that prevents overlapping ticks
       // from double-dialing. Resolve it by outcome:
       //   - placed (ok): keep the row terminal (at-most-once for a real call).
-      //   - ambiguous (no HTTP response): keep it terminal too — a call MAY have
-      //     gone through, so retrying could double-dial. Record as failed.
-      //   - definitive non-placed (budget block or a 4xx/5xx with a body): NO
-      //     live call exists, so RELEASE the lock (delete the row) and let a
-      //     later tick retry this occurrence within its catch-up window. Budget
-      //     blocks re-probe cheaply (the pre-dial check refuses without dialing).
-      const retryable = !result.ok && result.definitive;
+      //   - failed AFTER a dial / ambiguous no-response: keep it terminal — the
+      //     callee was (or may have been) rung, so retrying would dial again.
+      //   - failed BEFORE any dial (originate reports dialed:false — a pre-dial
+      //     budget block, or Telnyx rejecting the dial so no leg exists): RELEASE
+      //     the lock (delete the row) so a later tick retries this occurrence
+      //     within its window. Budget blocks re-probe cheaply (the pre-dial check
+      //     refuses without dialing), so this never rings the callee until budget
+      //     frees; other (post-dial) failures keep the lock and are not retried.
+      const retryable = !result.ok && result.retryable;
       if (retryable) {
         const { error: delErr } = await supabase
           .from("voice_outbound_dial_log")
