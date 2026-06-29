@@ -1179,7 +1179,9 @@ export function AiFlowsManager({
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-3 text-parchment/50">
-                {row.enabled && (
+                {/* Voice flows run on the real-time call path; the /run API rejects
+                    them, so don't offer Run now (it would always error). */}
+                {row.enabled && row.definition.trigger.channel !== "voice" && (
                   <button
                     onClick={() => {
                       setRunNotice(null);

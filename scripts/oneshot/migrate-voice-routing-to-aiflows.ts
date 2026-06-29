@@ -265,7 +265,12 @@ async function main(): Promise<void> {
       summary: `ring ${rings} human(s)${hasAi ? " + AI takeover" : ""}`,
       definition
     });
-    existing.add(c.from_e164); // guard against a dup chain+rule on the same from
+    // Only an ENABLED legacy chain wins over a transfer rule at runtime — the
+    // voice webhook skips a disabled chain and falls through to the rule. So a
+    // disabled chain must NOT reserve from_e164 against the rule loop, or the
+    // live blind-transfer rule for the same caller would never migrate. (The
+    // disabled chain itself still migrates above, as a disabled flow.)
+    if (c.enabled) existing.add(c.from_e164);
   }
 
   for (const r of rules) {
