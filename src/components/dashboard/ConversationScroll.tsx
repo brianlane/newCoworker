@@ -38,18 +38,19 @@ export function ConversationScroll({
   className?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   // Whether the user was at the bottom as of the last scroll, sampled from
-  // scroll events so it reflects the position BEFORE any content growth. The
-  // MutationObserver fires after the list has already grown, and adding content
-  // doesn't move scrollTop, so measuring distance-from-bottom inside the
-  // observer would misread an at-bottom user as scrolled away once a new bubble
-  // is taller than the threshold. Seeded true because we pin to the bottom on
-  // mount.
+  // scroll events so it reflects the position BEFORE any content growth. A
+  // reflow doesn't move scrollTop, so measuring distance-from-bottom only after
+  // the content grew would misread an at-bottom user as scrolled away once the
+  // new content is taller than the threshold. Seeded true because we pin to the
+  // bottom on mount.
   const nearBottomRef = useRef(true);
   useIsomorphicLayoutEffect(() => {
     if (!anchorBottom) return;
     const el = ref.current;
-    if (!el) return;
+    const content = contentRef.current;
+    if (!el || !content) return;
     const THRESHOLD_PX = 120;
     const pinToBottom = () => {
       el.scrollTop = el.scrollHeight;
@@ -61,13 +62,15 @@ export function ConversationScroll({
     el.addEventListener("scroll", onScroll, { passive: true });
     // Open scrolled to the newest message (before paint, so no flash).
     pinToBottom();
-    // Re-pin when the list grows (a new bubble after a send + router.refresh),
-    // but only when the user was already near the bottom so reading history
-    // isn't interrupted.
-    const observer = new MutationObserver(() => {
+    // Re-pin on ANY content reflow while the user was near the bottom: a new
+    // bubble after a send + router.refresh, a client LocalDateTime label
+    // swapping its text in after hydration, a late image/font load. A
+    // ResizeObserver on the content wrapper catches height changes that a
+    // MutationObserver(childList) would miss (e.g. text-only swaps).
+    const observer = new ResizeObserver(() => {
       if (nearBottomRef.current) pinToBottom();
     });
-    observer.observe(el, { childList: true, subtree: true });
+    observer.observe(content);
     return () => {
       el.removeEventListener("scroll", onScroll);
       observer.disconnect();
@@ -75,7 +78,7 @@ export function ConversationScroll({
   }, [anchorBottom]);
   return (
     <div ref={ref} className={`${maxHeightClass} overflow-y-auto ${className}`.trim()}>
-      {children}
+      <div ref={contentRef}>{children}</div>
     </div>
   );
 }
