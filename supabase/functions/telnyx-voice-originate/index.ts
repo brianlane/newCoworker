@@ -5,9 +5,12 @@
  * (src/app/api/aiflows/[id]/place-call). It validates the outbound voice flow,
  * dials the callee, then RESERVES voice budget under the real call_control_id
  * BEFORE any media. If the reservation is refused (over budget / concurrency),
- * it hangs the leg up before answer so no minutes are billed. The AI bridge is
- * attached later by telnyx-voice-call-end on the call.answered webhook (the
- * dispatcher routes call.answered there); this function never touches media.
+ * it hangs the leg up before answer so no minutes are billed. It also writes a
+ * voice_handoff_sessions row (status=ai_intake) carrying the step's persona /
+ * capture fields / notify number so the VPS bridge runs the configured outbound
+ * AI and texts the post-call summary. The AI bridge is attached later by
+ * telnyx-voice-call-end on the call.answered webhook (the dispatcher routes
+ * call.answered there); this function never touches media.
  *
  * Metering is therefore a system-level invariant for outbound exactly as for
  * inbound: the same voice_reserve_for_call RPC + the same settlement lifecycle.
@@ -27,6 +30,7 @@ import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
 import {
   encodeOutboundClientState,
+  outboundSessionContext,
   resolveOutboundCallPlan
 } from "../_shared/voice_outbound.ts";
 import type { AiFlowDefinition } from "../_shared/ai_flows/types.ts";
@@ -188,6 +192,35 @@ serve(async (req: Request) => {
     return json(502, { ok: false, error: "no_call_control_id" });
   }
 
+  // Persist the intake session FIRST (before the reservation, which may do a
+  // slow Stripe JIT refresh). The VPS bridge reads this row by call_control_id
+  // on connect to switch into intake mode — run the configured persona, capture
+  // the configured fields, and text the post-call summary to notifyE164. Writing
+  // it immediately after the dial (tens of ms) keeps it in place well before the
+  // callee can answer, so the bridge never falls back to the receptionist.
+  const { error: sessErr } = await supabase.from("voice_handoff_sessions").upsert(
+    {
+      call_control_id: callControlId,
+      business_id: businessId,
+      from_e164: callee,
+      chain_from_e164: callee,
+      status: "ai_intake",
+      current_step: 0,
+      context: { ...outboundSessionContext(plan), session_id: sessionId }
+    },
+    { onConflict: "call_control_id" }
+  );
+  if (sessErr) {
+    // Non-fatal for billing, but the bridge would run the default persona and
+    // skip the summary SMS — surface it loudly so a misconfig is visible.
+    console.error("originate: intake session upsert failed", sessErr);
+    await telemetryRecord(supabase, "voice_outbound_session_upsert_failed", {
+      business_id: businessId,
+      flow_id: flowId,
+      call_control_id: callControlId
+    });
+  }
+
   // Reserve budget under the REAL leg id BEFORE any answer/media. The callee can
   // only ring in the brief window before this resolves; on refusal we hang up
   // before answer so no minutes are billed.
@@ -202,6 +235,13 @@ serve(async (req: Request) => {
     } catch (e) {
       console.error("originate: hangup after refused reservation failed", e);
     }
+    // The leg is being torn down — mark the intake session terminal so a stray
+    // late answer can't connect the bridge to an unmetered call.
+    const { error: doneErr } = await supabase
+      .from("voice_handoff_sessions")
+      .update({ status: "done" })
+      .eq("call_control_id", callControlId);
+    if (doneErr) console.error("originate: mark session done after refusal failed", doneErr);
     await telemetryRecord(supabase, "voice_outbound_blocked", {
       business_id: businessId,
       flow_id: flowId,

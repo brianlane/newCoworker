@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   encodeOutboundClientState,
+  outboundSessionContext,
   parseOutboundClientState,
   resolveOutboundCallPlan
 } from "../supabase/functions/_shared/voice_outbound";
@@ -111,5 +112,46 @@ describe("resolveOutboundCallPlan", () => {
       steps: undefined
     } as unknown as AiFlowDefinition;
     expect(resolveOutboundCallPlan(malformed)).toBeNull();
+  });
+});
+
+describe("outboundSessionContext", () => {
+  it("includes persona + capture_fields when present", () => {
+    const ctx = outboundSessionContext({
+      toE164: "+19178628675",
+      notifyE164: "+16026951142",
+      persona: "Amy's assistant",
+      captureFields: ["name", "timeline"]
+    });
+    expect(ctx).toEqual({
+      outbound: true,
+      ai_takeover: {
+        notify_e164: "+16026951142",
+        persona: "Amy's assistant",
+        capture_fields: ["name", "timeline"]
+      }
+    });
+  });
+
+  it("omits persona + capture_fields when null/empty (bridge uses defaults)", () => {
+    const ctx = outboundSessionContext({
+      toE164: "",
+      notifyE164: "+16026951142",
+      persona: null,
+      captureFields: null
+    });
+    expect(ctx).toEqual({ outbound: true, ai_takeover: { notify_e164: "+16026951142" } });
+    expect(ctx.ai_takeover).not.toHaveProperty("persona");
+    expect(ctx.ai_takeover).not.toHaveProperty("capture_fields");
+  });
+
+  it("omits capture_fields for an empty array", () => {
+    const ctx = outboundSessionContext({
+      toE164: "",
+      notifyE164: "+16026951142",
+      persona: null,
+      captureFields: []
+    });
+    expect(ctx.ai_takeover).not.toHaveProperty("capture_fields");
   });
 });

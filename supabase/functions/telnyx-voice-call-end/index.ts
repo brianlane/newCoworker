@@ -193,11 +193,13 @@ async function attachAiStream(
 
 /**
  * Outbound origination: a `call.answered` for an AiFlow-placed call (vob
- * client_state) means the callee picked up. Budget was already reserved under
- * this call_control_id by telnyx-voice-originate BEFORE the dial, so here we
- * just attach the Gemini bridge (streaming_start) and flip the reservation to
- * active. Inbound answers carry no vob state and are ignored. Always returns a
- * 200 Response (Telnyx must not retry a delivered webhook).
+ * client_state) means the callee picked up. Budget was normally reserved under
+ * this call_control_id by telnyx-voice-originate right after the dial; if the
+ * callee answered before that committed (a race) we reserve here instead so the
+ * call is still metered and a valid call is never dropped. Then we attach the
+ * Gemini bridge (streaming_start) and flip the reservation to active. Inbound
+ * answers carry no vob state and are ignored. Always returns a 200 Response
+ * (Telnyx must not retry a delivered webhook).
  */
 async function handleOutboundAnswered(
   deps: HandoffDeps,
@@ -222,9 +224,12 @@ async function handleOutboundAnswered(
     return jsonOk("outbound_no_api_key");
   }
 
-  // The reservation MUST already exist (originate reserved before dialing). No
-  // reservation ⇒ either the budget gate refused (then we never dialed) or this
-  // is not our metered leg — never open an unmetered AI bridge. Hang up.
+  // The reservation normally already exists (telnyx-voice-originate reserves
+  // right after the dial). But the callee CAN answer in the brief gap before
+  // that reservation commits, so a missing row here is a race — not a signal to
+  // drop a valid call. When it's missing we reserve now under this leg id
+  // (idempotent per call_control_id) so metering still holds; we only hang up if
+  // the account is genuinely over budget.
   const { data: resvRow, error: resvErr } = await supabase
     .from("voice_reservations")
     .select("business_id, state, answer_issued_at")
@@ -238,16 +243,32 @@ async function handleOutboundAnswered(
     | { business_id?: string; state?: string; answer_issued_at?: string | null }
     | null;
   if (!resv || resv.business_id !== businessId) {
-    console.error("outbound: no reservation for answered leg; hanging up", { callControlId });
-    try {
-      await telnyxHangupCall(apiKey, callControlId);
-    } catch (e) {
-      console.error("outbound: hangup (no reservation) failed", e);
+    const reserve = await reserveVoiceBudget(supabase, {
+      businessId,
+      callControlId,
+      stripeSecret: deps.stripeSecret
+    });
+    if (!reserve.ok) {
+      console.warn("outbound: no budget on answer; hanging up", {
+        callControlId,
+        reason: reserve.reason
+      });
+      try {
+        await telnyxHangupCall(apiKey, callControlId);
+      } catch (e) {
+        console.error("outbound: hangup (no budget on answer) failed", e);
+      }
+      await telemetryRecord(supabase, "voice_outbound_blocked", {
+        business_id: businessId,
+        call_control_id: callControlId,
+        reason: reserve.reason
+      });
+      return jsonOk("outbound_no_budget_on_answer", { reason: reserve.reason });
     }
-    return jsonOk("outbound_no_reservation");
+  } else if (resv.answer_issued_at) {
+    // Idempotent: a retried call.answered after we already attached is a no-op.
+    return jsonOk("outbound_already_attached");
   }
-  // Idempotent: a retried call.answered after we already attached is a no-op.
-  if (resv.answer_issued_at) return jsonOk("outbound_already_attached");
 
   const target = await resolveBridgeTarget(deps, businessId, ourDid);
   if (!target) {

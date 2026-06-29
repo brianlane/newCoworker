@@ -90,3 +90,32 @@ export function resolveOutboundCallPlan(def: AiFlowDefinition): OutboundCallPlan
     captureFields: captureFields && captureFields.length > 0 ? captureFields : null
   };
 }
+
+/** voice_handoff_sessions.context for an outbound AI call (intake mode). */
+export type OutboundSessionContext = {
+  /** Distinguishes an outbound-placed session from a HomeLight inbound takeover. */
+  outbound: true;
+  /** Same shape the VPS bridge reads for HomeLight intake mode. */
+  ai_takeover: {
+    notify_e164: string;
+    persona?: string;
+    capture_fields?: string[];
+  };
+};
+
+/**
+ * Build the `voice_handoff_sessions.context` for an outbound AI call so the VPS
+ * bridge switches into intake mode exactly like a HomeLight `ai_takeover`: it
+ * runs the configured persona, captures the configured fields, and texts the
+ * post-call summary + transcript to `notify_e164`. Without this the bridge finds
+ * no `ai_takeover` context and falls back to the default receptionist persona
+ * (and never sends the summary), so the outbound flow's whole purpose is lost.
+ */
+export function outboundSessionContext(plan: OutboundCallPlan): OutboundSessionContext {
+  const ai_takeover: OutboundSessionContext["ai_takeover"] = { notify_e164: plan.notifyE164 };
+  if (plan.persona) ai_takeover.persona = plan.persona;
+  if (plan.captureFields && plan.captureFields.length > 0) {
+    ai_takeover.capture_fields = plan.captureFields;
+  }
+  return { outbound: true, ai_takeover };
+}
