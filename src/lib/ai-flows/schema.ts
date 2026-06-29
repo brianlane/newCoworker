@@ -222,17 +222,46 @@ const tenantEmailTriggerSchema = z.object({
  * machine directly from its compiled steps. The flow row exists purely so the
  * routing is authored/visible/CRUD-able in the AiFlows UI like any other flow.
  */
-const voiceTriggerSchema = z.object({
-  channel: z.literal("voice"),
-  // Inbound flows: a call FROM `fromE164` fires the flow (resolved by
-  // telnyx-voice-inbound). Required for inbound, omitted for outbound — enforced
-  // by direction in validateVoiceFlow.
-  fromE164: e164.optional(),
-  // "outbound" marks an owner-placed call flow whose single `outbound_call` step
-  // is run on demand by the origination edge function (not by an inbound caller
-  // and not by the batch worker). Omitted ⇒ inbound, preserving existing rows.
-  direction: z.literal("outbound").optional()
-});
+const voiceTriggerSchema = z
+  .object({
+    channel: z.literal("voice"),
+    // Inbound flows: a call FROM `fromE164` fires the flow (resolved by
+    // telnyx-voice-inbound). Required for inbound, omitted for outbound — enforced
+    // by direction in validateVoiceFlow.
+    fromE164: e164.optional(),
+    // "outbound" marks an owner-placed call flow whose single `outbound_call` step
+    // is run on demand by the origination edge function (not by an inbound caller
+    // and not by the batch worker). Omitted ⇒ inbound, preserving existing rows.
+    direction: z.literal("outbound").optional(),
+    // Optional auto-dial schedule (OUTBOUND only). Same daily/interval shape as
+    // the `schedule` channel: the ai-flow-worker sweep places the call on each
+    // due occurrence (exactly-once via the voice_outbound_dial_log ledger).
+    // Omitted ⇒ manual-only ("Place call" button).
+    timezone: timezone.optional(),
+    time: hhmm.optional(),
+    daysOfWeek: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional(),
+    everyMinutes: z.number().int().min(15).max(10080).optional()
+  })
+  .superRefine((t, ctx) => {
+    const interval = t.everyMinutes !== undefined;
+    const dailyFields =
+      t.time !== undefined || t.timezone !== undefined || t.daysOfWeek !== undefined;
+    const hasSchedule = interval || dailyFields;
+    if (!hasSchedule) return;
+    if (t.direction !== "outbound") {
+      ctx.addIssue({ code: "custom", message: "Only outbound voice flows can be scheduled." });
+      return;
+    }
+    // Same exclusivity as scheduleTriggerSchema: exactly one mode.
+    if (interval && dailyFields) {
+      ctx.addIssue({ code: "custom", message: "use either a daily time or everyMinutes, not both" });
+    } else if (!interval && (t.time === undefined || t.timezone === undefined)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "daily mode needs both time and timezone (or set everyMinutes)"
+      });
+    }
+  });
 
 const triggerSchema = z.discriminatedUnion("channel", [
   smsTriggerSchema,

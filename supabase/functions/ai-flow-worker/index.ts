@@ -70,7 +70,7 @@ import {
   offerRespondByMs,
   smsQuietDecision
 } from "../_shared/ai_flows/quiet_hours.ts";
-import { scheduleDue } from "../_shared/ai_flows/schedule.ts";
+import { scheduleDue, type ScheduleConfig } from "../_shared/ai_flows/schedule.ts";
 import {
   geminiCostMicrosFromTokens,
   readChatSpendMicros,
@@ -91,6 +91,9 @@ const FETCH_TIMEOUT_MS = 20_000;
 // /api/internal/aiflow-email-poll declares maxDuration = 60; give the kick
 // headroom beyond that so the worker never aborts a still-running poll.
 const EMAIL_POLL_KICK_TIMEOUT_MS = 75_000;
+// telnyx-voice-originate dials Telnyx (POST /v2/calls) then reserves budget; a
+// few seconds is typical, so allow generous headroom before aborting a sweep.
+const OUTBOUND_ORIGINATE_TIMEOUT_MS = 25_000;
 // route_to_team: how many times one step entry will ask Rowboat for a sendable
 // next agent (skipping opted-out picks) before giving up to the owner fallback.
 const ROUTE_MAX_LOOKUPS = 6;
@@ -236,6 +239,9 @@ serve(async (req: Request): Promise<Response> => {
   // route most of its 60s budget, and overlapping it with run execution keeps
   // the tick from stretching by that long (kickEmailTriggerPoll never throws).
   await enqueueDueScheduledRuns(supabase);
+  // Scheduled outbound voice calls run on the call path (not the run engine),
+  // so they get their own sweep. Failure-isolated like the schedule sweep.
+  await enqueueDueOutboundCalls(supabase, supabaseUrl, serviceKey);
   const emailPoll = kickEmailTriggerPoll();
 
   const { data: claimed, error: claimErr } = await supabase.rpc("claim_ai_flow_runs", {
@@ -3447,6 +3453,149 @@ async function enqueueDueScheduledRuns(supabase: Supabase): Promise<void> {
     }
   } catch (e) {
     console.error("enqueueDueScheduledRuns", e);
+  }
+}
+
+/**
+ * Place one outbound call via the telnyx-voice-originate Edge fn (same metering
+ * as the manual "Place call"). Returns a normalized result. Never throws.
+ * `blocked` distinguishes a budget refusal (200 { ok:false, error:"budget" })
+ * from a hard failure so the ledger can record the right status.
+ */
+async function placeOutboundCall(
+  supabaseUrl: string,
+  serviceKey: string,
+  body: { businessId: string; flowId: string }
+): Promise<{ ok: boolean; callControlId?: string; reason?: string; blocked?: boolean }> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), OUTBOUND_ORIGINATE_TIMEOUT_MS);
+  try {
+    const res = await fetch(
+      `${supabaseUrl.replace(/\/$/, "")}/functions/v1/telnyx-voice-originate`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: ctl.signal
+      }
+    );
+    const out = (await res.json().catch(() => null)) as
+      | { ok?: boolean; error?: string; reason?: string; callControlId?: string }
+      | null;
+    if (res.ok && out?.ok) return { ok: true, callControlId: out.callControlId };
+    return {
+      ok: false,
+      reason: out?.reason ?? out?.error ?? `http_${res.status}`,
+      blocked: out?.error === "budget"
+    };
+  } catch (e) {
+    console.error("placeOutboundCall", e);
+    return { ok: false, reason: "originate_unreachable" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Outbound-voice schedule sweep: place a call for every enabled OUTBOUND voice
+ * flow whose trigger carries a schedule and is due this tick. Outbound voice
+ * flows never enqueue an ai_flow_run (the batch engine has no outbound_call
+ * processor), so exactly-once is enforced by the voice_outbound_dial_log ledger
+ * (unique flow_id, dedupe_key): insert the occurrence row FIRST (a 23505 means
+ * "already dialed this occurrence" → skip), then call telnyx-voice-originate,
+ * which runs the same pre-dial probe + post-dial reserve metering as the manual
+ * "Place call". Never throws — a bad flow logs and is skipped.
+ */
+async function enqueueDueOutboundCalls(
+  supabase: Supabase,
+  supabaseUrl: string,
+  serviceKey: string
+): Promise<void> {
+  try {
+    const PAGE = 200;
+    const rows: { id: string; business_id: string; definition: unknown }[] = [];
+    for (let offset = 0; ; offset += PAGE) {
+      const { data, error } = await supabase
+        .from("ai_flows")
+        .select("id, business_id, definition")
+        .eq("enabled", true)
+        .eq("definition->trigger->>channel", "voice")
+        .eq("definition->trigger->>direction", "outbound")
+        .order("id", { ascending: true })
+        .range(offset, offset + PAGE - 1);
+      if (error) {
+        console.error("outbound sweep list", error);
+        if (rows.length === 0) return;
+        break;
+      }
+      const batch = (data ?? []) as typeof rows;
+      rows.push(...batch);
+      if (batch.length < PAGE) break;
+    }
+    const nowMs = Date.now();
+    for (const row of rows) {
+      const def = row.definition as { trigger?: Record<string, unknown> } | null;
+      const trig = def?.trigger;
+      if (!trig || trig.channel !== "voice" || trig.direction !== "outbound") continue;
+      // Only SCHEDULED outbound flows participate; manual-only flows carry no
+      // schedule fields and are placed via the "Place call" button.
+      const hasSchedule =
+        typeof trig.everyMinutes === "number" ||
+        (typeof trig.time === "string" && typeof trig.timezone === "string");
+      if (!hasSchedule) continue;
+      const due = scheduleDue(nowMs, trig as ScheduleConfig);
+      if (!due) continue;
+
+      const dedupeKey = `osched:${due.key}`;
+      const { error: insErr } = await supabase.from("voice_outbound_dial_log").insert({
+        flow_id: row.id,
+        business_id: row.business_id,
+        dedupe_key: dedupeKey,
+        status: "placed"
+      });
+      if (insErr) {
+        // 23505 = this occurrence was already dialed on an earlier tick — expected.
+        if ((insErr as { code?: string }).code !== "23505") {
+          console.error("outbound sweep ledger insert", insErr);
+        }
+        continue;
+      }
+
+      const result = await placeOutboundCall(supabaseUrl, serviceKey, {
+        businessId: row.business_id,
+        flowId: row.id
+      });
+      const finalStatus = result.ok ? "placed" : result.blocked ? "blocked" : "failed";
+      const { error: updErr } = await supabase
+        .from("voice_outbound_dial_log")
+        .update({
+          status: finalStatus,
+          call_control_id: result.callControlId ?? null,
+          reason: result.ok ? null : result.reason ?? null
+        })
+        .eq("flow_id", row.id)
+        .eq("dedupe_key", dedupeKey);
+      if (updErr) console.error("outbound sweep ledger update", updErr);
+
+      await telemetryRecord(supabase, "ai_flow_outbound_call_swept", {
+        business_id: row.business_id,
+        flow_id: row.id,
+        scheduled_for: due.scheduledForIso,
+        status: finalStatus
+      });
+      await systemLog(supabase, {
+        businessId: row.business_id,
+        source: "voice",
+        level: result.ok ? "info" : "warn",
+        event: "ai_flow_outbound_call_swept",
+        message: result.ok
+          ? `Scheduled outbound call placed (${due.scheduledForIso})`
+          : `Scheduled outbound call not placed: ${result.reason ?? "error"}`,
+        payload: { flow_id: row.id, dedupe_key: dedupeKey, status: finalStatus }
+      });
+    }
+  } catch (e) {
+    console.error("enqueueDueOutboundCalls", e);
   }
 }
 

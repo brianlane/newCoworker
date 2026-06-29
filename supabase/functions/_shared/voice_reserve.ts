@@ -316,3 +316,115 @@ export async function reserveVoiceBudget(
     duplicate: Boolean(res.duplicate)
   };
 }
+
+/**
+ * Result of a pre-dial availability probe.
+ *   - ok: a reservation of at least minGrantSeconds could be granted now.
+ *   - blocked: definitively over budget / at the concurrency cap — the caller
+ *     should NOT dial (don't ring the callee for an over-budget tenant).
+ *   - indeterminate: we couldn't decide cheaply (no/stale cached billing
+ *     period, missing rows, RPC error). The caller should proceed to dial and
+ *     rely on the authoritative post-dial reserveVoiceBudget (which performs the
+ *     JIT Stripe refresh) as the real gate — failing OPEN here only risks one
+ *     wasted pre-answer dial, never billed minutes.
+ */
+export type VoiceAvailability =
+  | { status: "ok"; remainingSeconds: number; bonusSeconds: number }
+  | { status: "blocked"; reason: "concurrent_limit" | "quota_exhausted" }
+  | {
+      status: "indeterminate";
+      reason: "no_business" | "no_period_bounds" | "period_stale" | "check_error";
+    };
+
+/**
+ * READ-ONLY pre-dial budget gate for outbound voice. Resolves the tenant's
+ * tier cap + concurrency and the CACHED Stripe period (no JIT refresh — the
+ * post-dial reserve owns that), then calls the read-only
+ * `voice_check_availability` RPC. Never throws: anything it can't resolve maps
+ * to `indeterminate` so origination falls through to the authoritative reserve.
+ *
+ * Why this exists: `reserveVoiceBudget` keys a reservation by a Telnyx
+ * call_control_id, which only exists once dialing has started. To honor
+ * "metered before spend" WITHOUT minting a reservation, callers probe here
+ * first and skip dialing entirely when the answer is a definitive refusal.
+ */
+export async function checkVoiceBudgetAvailable(
+  supabase: ReserveSupabase,
+  opts: { businessId: string; minGrantSeconds?: number }
+): Promise<VoiceAvailability> {
+  const { businessId } = opts;
+  const minGrantSeconds = opts.minGrantSeconds ?? 60;
+
+  const { data: biz, error: bizErr } = await supabase
+    .from("businesses")
+    .select("tier, enterprise_limits")
+    .eq("id", businessId)
+    .single();
+  if (bizErr || !biz) {
+    console.error("voice_check: business", bizErr);
+    return { status: "indeterminate", reason: "no_business" };
+  }
+  const bizRow = biz as { tier?: unknown; enterprise_limits?: unknown };
+  const tier = String(bizRow.tier ?? "starter");
+  const entRaw = tier === "enterprise" ? bizRow.enterprise_limits : null;
+  const cap = tierCapSeconds(tier, entRaw);
+  const concurrent = maxConcurrent(tier, entRaw);
+
+  const { data: sub, error: subErr } = await supabase
+    .from("subscriptions")
+    .select("stripe_current_period_start, stripe_current_period_end")
+    .eq("business_id", businessId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (subErr) {
+    console.error("voice_check: subscription", subErr);
+    return { status: "indeterminate", reason: "check_error" };
+  }
+  const subRow = sub as {
+    stripe_current_period_start?: unknown;
+    stripe_current_period_end?: unknown;
+  } | null;
+  const periodStartRaw = (subRow?.stripe_current_period_start as string | null) ?? null;
+  const periodEndRaw = (subRow?.stripe_current_period_end as string | null) ?? null;
+  if (!periodStartRaw || !periodEndRaw) {
+    return { status: "indeterminate", reason: "no_period_bounds" };
+  }
+
+  // A stale cached period would make the headroom math wrong; defer to the
+  // post-dial reserve, which refreshes the period from Stripe before deciding.
+  if (Date.now() > new Date(periodEndRaw).getTime() + STRIPE_PERIOD_ROLLOVER_GRACE_MS) {
+    return { status: "indeterminate", reason: "period_stale" };
+  }
+
+  const periodStart = new Date(periodStartRaw).toISOString();
+  const { data: availData, error: availErr } = await supabase.rpc("voice_check_availability", {
+    p_business_id: businessId,
+    p_max_concurrent: concurrent,
+    p_stripe_period_start: periodStart,
+    p_tier_cap_seconds: cap,
+    p_min_grant_seconds: minGrantSeconds
+  });
+  if (availErr) {
+    console.error("voice_check: rpc", availErr);
+    return { status: "indeterminate", reason: "check_error" };
+  }
+  const avail = availData as {
+    ok?: boolean;
+    reason?: string;
+    remaining_seconds?: number;
+    bonus_seconds_available?: number;
+  } | null;
+  if (avail?.ok === true) {
+    return {
+      status: "ok",
+      remainingSeconds: typeof avail.remaining_seconds === "number" ? avail.remaining_seconds : 0,
+      bonusSeconds:
+        typeof avail.bonus_seconds_available === "number" ? avail.bonus_seconds_available : 0
+    };
+  }
+  return {
+    status: "blocked",
+    reason: avail?.reason === "concurrent_limit" ? "concurrent_limit" : "quota_exhausted"
+  };
+}

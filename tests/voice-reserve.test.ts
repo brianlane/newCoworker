@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   reserveVoiceBudget,
+  checkVoiceBudgetAvailable,
   tierCapSeconds,
   maxConcurrent,
   STRIPE_JIT_FETCH_MS
@@ -14,9 +15,11 @@ function makeSupabase(cfg: {
   subscription?: Result<unknown>;
   subUpdateError?: { message: string } | null;
   reserve?: Result<unknown>;
+  availability?: Result<unknown>;
 }) {
   const telemetry: Array<{ p_event_type: string; p_payload: Record<string, unknown> }> = [];
   const reserveArgs: Array<Record<string, unknown>> = [];
+  const availabilityArgs: Array<Record<string, unknown>> = [];
   const supabase = {
     from(table: string) {
       if (table === "businesses") {
@@ -47,11 +50,15 @@ function makeSupabase(cfg: {
         reserveArgs.push(args);
         return cfg.reserve ?? { data: { ok: true }, error: null };
       }
+      if (fn === "voice_check_availability") {
+        availabilityArgs.push(args);
+        return cfg.availability ?? { data: { ok: true }, error: null };
+      }
       throw new Error(`unexpected rpc ${fn}`);
     }
   };
   // deno SupabaseClient typing is structural here; tests only use from/rpc.
-  return { supabase: supabase as never, telemetry, reserveArgs };
+  return { supabase: supabase as never, telemetry, reserveArgs, availabilityArgs };
 }
 
 function stubFetch(impl: () => unknown) {
@@ -431,5 +438,155 @@ describe("reserveVoiceBudget", () => {
       stripeSecret: ""
     });
     expect(r).toEqual({ ok: false, reason: "quota_exhausted" });
+  });
+});
+
+describe("checkVoiceBudgetAvailable", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** A subscription row with valid, in-window cached period bounds. */
+  function periodSub(start = PAST_START, end = FUTURE_END) {
+    return {
+      data: { stripe_current_period_start: start, stripe_current_period_end: end },
+      error: null
+    };
+  }
+
+  it("returns ok with remaining/bonus when budget is available", async () => {
+    const { supabase, availabilityArgs } = makeSupabase({
+      business: bizStarter,
+      subscription: periodSub(),
+      availability: {
+        data: { ok: true, remaining_seconds: 1200, bonus_seconds_available: 300 },
+        error: null
+      }
+    });
+    const r = await checkVoiceBudgetAvailable(supabase, { businessId: "b1", minGrantSeconds: 90 });
+    expect(r).toEqual({ status: "ok", remainingSeconds: 1200, bonusSeconds: 300 });
+    expect(availabilityArgs[0]).toMatchObject({
+      p_business_id: "b1",
+      p_min_grant_seconds: 90
+    });
+  });
+
+  it("defaults numeric fields to 0 when the RPC omits them", async () => {
+    const { supabase } = makeSupabase({
+      business: bizStarter,
+      subscription: periodSub(),
+      availability: { data: { ok: true }, error: null }
+    });
+    const r = await checkVoiceBudgetAvailable(supabase, { businessId: "b1" });
+    expect(r).toEqual({ status: "ok", remainingSeconds: 0, bonusSeconds: 0 });
+  });
+
+  it("uses enterprise caps when tier is enterprise", async () => {
+    const { supabase, availabilityArgs } = makeSupabase({
+      business: { data: { tier: "enterprise", enterprise_limits: null }, error: null },
+      subscription: periodSub(),
+      availability: { data: { ok: true }, error: null }
+    });
+    await checkVoiceBudgetAvailable(supabase, { businessId: "b1" });
+    expect(availabilityArgs[0]).toMatchObject({
+      p_tier_cap_seconds: VOICE_RES_LIMITS.enterprise.voiceIncludedSecondsPerStripePeriod,
+      p_max_concurrent: VOICE_RES_LIMITS.enterprise.maxConcurrentCalls
+    });
+  });
+
+  it("maps a concurrent_limit refusal to blocked", async () => {
+    const { supabase } = makeSupabase({
+      business: bizStarter,
+      subscription: periodSub(),
+      availability: { data: { ok: false, reason: "concurrent_limit" }, error: null }
+    });
+    const r = await checkVoiceBudgetAvailable(supabase, { businessId: "b1" });
+    expect(r).toEqual({ status: "blocked", reason: "concurrent_limit" });
+  });
+
+  it("maps any other refusal (incl. null) to blocked quota_exhausted", async () => {
+    const { supabase } = makeSupabase({
+      business: bizStarter,
+      subscription: periodSub(),
+      availability: { data: null, error: null }
+    });
+    const r = await checkVoiceBudgetAvailable(supabase, { businessId: "b1" });
+    expect(r).toEqual({ status: "blocked", reason: "quota_exhausted" });
+  });
+
+  it("indeterminate(no_business) on business DB error", async () => {
+    const { supabase } = makeSupabase({ business: { data: null, error: { message: "db" } } });
+    const r = await checkVoiceBudgetAvailable(supabase, { businessId: "b1" });
+    expect(r).toEqual({ status: "indeterminate", reason: "no_business" });
+  });
+
+  it("indeterminate(no_business) when business row missing", async () => {
+    const { supabase } = makeSupabase({ business: { data: null, error: null } });
+    const r = await checkVoiceBudgetAvailable(supabase, { businessId: "b1" });
+    expect(r).toEqual({ status: "indeterminate", reason: "no_business" });
+  });
+
+  it("defaults tier to starter when business.tier is null", async () => {
+    const { supabase, availabilityArgs } = makeSupabase({
+      business: { data: { tier: null, enterprise_limits: null }, error: null },
+      subscription: periodSub(),
+      availability: { data: { ok: true }, error: null }
+    });
+    await checkVoiceBudgetAvailable(supabase, { businessId: "b1" });
+    expect(availabilityArgs[0]).toMatchObject({
+      p_tier_cap_seconds: VOICE_RES_LIMITS.starter.voiceIncludedSecondsPerStripePeriod
+    });
+  });
+
+  it("indeterminate(check_error) on subscription DB error", async () => {
+    const { supabase } = makeSupabase({
+      business: bizStarter,
+      subscription: { data: null, error: { message: "db" } }
+    });
+    const r = await checkVoiceBudgetAvailable(supabase, { businessId: "b1" });
+    expect(r).toEqual({ status: "indeterminate", reason: "check_error" });
+  });
+
+  it("indeterminate(no_period_bounds) when subscription row missing", async () => {
+    const { supabase } = makeSupabase({
+      business: bizStarter,
+      subscription: { data: null, error: null }
+    });
+    const r = await checkVoiceBudgetAvailable(supabase, { businessId: "b1" });
+    expect(r).toEqual({ status: "indeterminate", reason: "no_period_bounds" });
+  });
+
+  it("indeterminate(no_period_bounds) when only the period end is present", async () => {
+    const { supabase } = makeSupabase({
+      business: bizStarter,
+      subscription: {
+        data: { stripe_current_period_start: null, stripe_current_period_end: FUTURE_END },
+        error: null
+      }
+    });
+    const r = await checkVoiceBudgetAvailable(supabase, { businessId: "b1" });
+    expect(r).toEqual({ status: "indeterminate", reason: "no_period_bounds" });
+  });
+
+  it("indeterminate(period_stale) when the cached period is past end", async () => {
+    const { supabase } = makeSupabase({
+      business: bizStarter,
+      subscription: periodSub(PAST_START, PAST_END)
+    });
+    const r = await checkVoiceBudgetAvailable(supabase, { businessId: "b1" });
+    expect(r).toEqual({ status: "indeterminate", reason: "period_stale" });
+  });
+
+  it("indeterminate(check_error) when the availability RPC errors", async () => {
+    const { supabase } = makeSupabase({
+      business: bizStarter,
+      subscription: periodSub(),
+      availability: { data: null, error: { message: "rpc" } }
+    });
+    const r = await checkVoiceBudgetAvailable(supabase, { businessId: "b1" });
+    expect(r).toEqual({ status: "indeterminate", reason: "check_error" });
   });
 });

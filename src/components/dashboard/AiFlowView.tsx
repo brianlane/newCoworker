@@ -107,7 +107,26 @@ function TriggerView({ trigger }: { trigger: FlowTrigger }) {
         </>
       )}
       {trigger.channel === "voice" && trigger.direction === "outbound" && (
-        <Row label="Direction" value="Outbound — you place the call" />
+        <>
+          <Row label="Direction" value="Outbound — you place the call" />
+          {trigger.everyMinutes !== undefined ? (
+            <Row label="Auto-dial" value={`Every ${trigger.everyMinutes} minutes`} />
+          ) : trigger.time !== undefined && trigger.timezone !== undefined ? (
+            <>
+              <Row label="Auto-dial" value={`${trigger.time} (${trigger.timezone})`} />
+              <Row
+                label="Days"
+                value={
+                  trigger.daysOfWeek && trigger.daysOfWeek.length > 0
+                    ? [...trigger.daysOfWeek].sort().map((d) => DAY_NAMES[d]).join(", ")
+                    : "Every day"
+                }
+              />
+            </>
+          ) : (
+            <Row label="Auto-dial" value="Manual (Place call button)" />
+          )}
+        </>
       )}
       {trigger.channel === "voice" && trigger.direction !== "outbound" && (
         <Row label="Caller number" value={trigger.fromE164 ?? ""} mono />

@@ -2,10 +2,14 @@
  * Telnyx Programmable Voice: OUTBOUND origination for an `outbound_call` AiFlow.
  *
  * Invoked server-to-server (NOT by Telnyx) from the app's "Place call" action
- * (src/app/api/aiflows/[id]/place-call). It validates the outbound voice flow,
- * dials the callee, then RESERVES voice budget under the real call_control_id
- * BEFORE any media. If the reservation is refused (over budget / concurrency),
- * it hangs the leg up before answer so no minutes are billed. It also writes a
+ * (src/app/api/aiflows/[id]/place-call) AND from the ai-flow-worker schedule
+ * sweep for scheduled outbound flows. It validates the outbound voice flow,
+ * runs a READ-ONLY pre-dial budget probe (so an over-budget tenant's callee is
+ * never even rung), dials the callee, then RESERVES voice budget under the real
+ * call_control_id BEFORE any media. If the reservation is refused (over budget /
+ * concurrency), it hangs the leg up before answer so no minutes are billed. The
+ * post-dial reserve is the AUTHORITATIVE gate; the pre-dial probe is a
+ * best-effort optimization. It also writes a
  * voice_handoff_sessions row (status=ai_intake) carrying the step's persona /
  * capture fields / notify number so the VPS bridge runs the configured outbound
  * AI and texts the post-call summary. The AI bridge is attached later by
@@ -24,7 +28,7 @@
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { telnyxDialCall, telnyxHangupCall } from "../_shared/telnyx_call_actions.ts";
-import { reserveVoiceBudget } from "../_shared/voice_reserve.ts";
+import { checkVoiceBudgetAvailable, reserveVoiceBudget } from "../_shared/voice_reserve.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
@@ -159,6 +163,33 @@ serve(async (req: Request) => {
   const fromDid = (routeRow as { to_e164?: string | null } | null)?.to_e164;
   if (!connectionId) return json(422, { ok: false, error: "no_telnyx_connection" });
   if (!fromDid) return json(422, { ok: false, error: "no_caller_id" });
+
+  // Pre-dial budget gate (honor "metered before spend" before a leg exists).
+  // voice_reserve_for_call keys a reservation by a Telnyx call_control_id, which
+  // only exists once dialing starts; so we probe the read-only availability RPC
+  // first and NEVER ring the callee for an over-budget tenant. This is
+  // best-effort: an `indeterminate` result (stale/missing cached period, etc.)
+  // falls through to the dial because the post-dial reserve below — which does
+  // the authoritative JIT period refresh — is the real gate, and it hangs the
+  // leg up before answer so a slip-through is never billed.
+  const availability = await checkVoiceBudgetAvailable(supabase, { businessId });
+  if (availability.status === "blocked") {
+    await telemetryRecord(supabase, "voice_outbound_blocked", {
+      business_id: businessId,
+      flow_id: flowId,
+      reason: availability.reason,
+      phase: "pre_dial"
+    });
+    await systemLog(supabase, {
+      businessId,
+      source: "voice",
+      level: "warn",
+      event: "voice_outbound_blocked",
+      message: `Outbound call not placed (pre-dial): ${availability.reason}`,
+      payload: { reason: availability.reason, to: callee, phase: "pre_dial" }
+    });
+    return json(200, { ok: false, error: "budget", reason: availability.reason });
+  }
 
   const sessionId = crypto.randomUUID();
   const clientState = encodeOutboundClientState(businessId, sessionId);
