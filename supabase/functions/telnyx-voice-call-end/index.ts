@@ -221,7 +221,15 @@ async function handleOutboundAnswered(
     console.error("outbound: TELNYX_API_KEY missing; cannot attach or hang up", { callControlId });
     return jsonOk("outbound_no_api_key");
   }
+  // Tear down a leg we won't bridge: release any reservation origination may have
+  // taken (idempotent — a no-op if none exists, and the RPC defensively refuses
+  // once a stream has attached) so a refused/aborted/raced leg never holds a
+  // concurrency slot until the stale-settlement sweep, then hang up.
   const hangUpAnd = async (path: string, extra: Record<string, unknown> = {}): Promise<Response> => {
+    const { error: relErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
+      p_call_control_id: callControlId
+    });
+    if (relErr) console.error(`outbound: release (${path}) failed`, relErr);
     try {
       await telnyxHangupCall(apiKey, callControlId);
     } catch (e) {
@@ -243,22 +251,29 @@ async function handleOutboundAnswered(
   // The `ai_intake` session is the SINGLE authoritative gate. telnyx-voice-
   // originate writes it ONLY after a successful budget reservation, so its
   // presence proves the leg is both budgeted and configured. Anything else —
-  // missing (origination refused budget / not our leg / not yet written),
   // terminal `done`, or another business — means we must NOT bridge: doing so
   // could meter a call the UI already refused, or attach AI media to an aborted
-  // leg. In every such case we hang up. (Choosing "hang up when unconfirmed"
-  // over "reserve here" keeps budget enforcement authoritative: a refused call
-  // can never proceed behind the UI's back.)
-  const { data: sessRow, error: sessErr } = await supabase
-    .from("voice_handoff_sessions")
-    .select("status, business_id")
-    .eq("call_control_id", callControlId)
-    .maybeSingle();
-  if (sessErr) {
-    console.error("outbound: session lookup failed; hanging up", sessErr);
-    return hangUpAnd("outbound_session_lookup_error");
+  // leg. (Choosing "hang up when unconfirmed" over "reserve here" keeps budget
+  // enforcement authoritative: a refused call can never proceed behind the UI's
+  // back.) A *missing* row is the benign race where origination has reserved but
+  // its session upsert (tens of ms later) hasn't landed when a very fast answer
+  // arrives — retry briefly so we don't drop an otherwise-valid call before
+  // concluding the leg is unconfirmed.
+  let sess: { status?: string; business_id?: string } | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { data: sessRow, error: sessErr } = await supabase
+      .from("voice_handoff_sessions")
+      .select("status, business_id")
+      .eq("call_control_id", callControlId)
+      .maybeSingle();
+    if (sessErr) {
+      console.error("outbound: session lookup failed; hanging up", sessErr);
+      return hangUpAnd("outbound_session_lookup_error");
+    }
+    sess = sessRow as { status?: string; business_id?: string } | null;
+    if (sess) break;
+    if (attempt < 2) await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
   }
-  const sess = sessRow as { status?: string; business_id?: string } | null;
   if (!sess || sess.business_id !== businessId || sess.status !== "ai_intake") {
     console.warn("outbound: no active intake session for answered leg; hanging up", {
       callControlId,
@@ -329,12 +344,39 @@ async function handleOutboundAnswered(
     return jsonOk("outbound_attach_failed");
   }
 
-  // Stream attached → flip pending_answer → active so settlement bills the
-  // media minutes (signal 1 of 2 is the later call.hangup).
-  const { error: markErr } = await supabase.rpc("voice_mark_answer_issued", {
+  // Stream attached → flip pending_answer → active so settlement bills the media
+  // minutes (signal 1 of 2 is the later call.hangup). Mirror the inbound path:
+  // a failed or not-ok mark is a HARD failure — return 500 so Telnyx retries the
+  // webhook rather than leaving a live stream on a reservation stuck in
+  // pending_answer (which would weaken billing/concurrency accounting).
+  const { error: markErr, data: markData } = await supabase.rpc("voice_mark_answer_issued", {
     p_call_control_id: callControlId
   });
-  if (markErr) console.error("outbound: voice_mark_answer_issued failed", markErr);
+  if (markErr) {
+    console.error("outbound: voice_mark_answer_issued rpc error", markErr);
+    await telemetryRecord(supabase, "voice_mark_answer_issued_fail", {
+      business_id: businessId,
+      call_control_id: callControlId,
+      transport: "rpc_error"
+    });
+    return new Response(JSON.stringify({ ok: false, error: "mark_answer_issued" }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  const mark = markData as { ok?: boolean; reason?: string } | null;
+  if (!mark || mark.ok !== true) {
+    console.error("outbound: voice_mark_answer_issued not ok", markData);
+    await telemetryRecord(supabase, "voice_mark_answer_issued_fail", {
+      business_id: businessId,
+      call_control_id: callControlId,
+      reason: mark?.reason ?? "not_ok"
+    });
+    return new Response(JSON.stringify({ ok: false, error: "mark_answer_issued", detail: mark?.reason }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
   await telemetryRecord(supabase, "voice_outbound_stream_answered", {
     business_id: businessId,
     call_control_id: callControlId
@@ -583,6 +625,35 @@ async function handleHandoffLifecycle(
       .eq("status", "ringing")
       .eq("current_step", parsed.step);
     return { handled: true, response: jsonOk("handoff_bridged") };
+  }
+
+  // call.hangup — outbound AiFlow leg. Unlike inbound (which always answers and
+  // engages the AI within ms), an outbound call commonly rings out unanswered.
+  // call.answered then never runs, so its pre-answer reservation would sit in
+  // `pending_answer` holding a concurrency slot until the stale-settlement sweep.
+  // Release it now when the leg ended without ever attaching the stream
+  // (answer_issued_at is null). If it WAS answered, fall through to normal
+  // settlement so the media minutes are billed.
+  const outbound = parseOutboundClientState(payload["client_state"] as string | undefined);
+  if (outbound && callControlId) {
+    await supabase
+      .from("voice_handoff_sessions")
+      .update({ status: "done" })
+      .eq("call_control_id", callControlId);
+    const { data: resvRow } = await supabase
+      .from("voice_reservations")
+      .select("answer_issued_at")
+      .eq("call_control_id", callControlId)
+      .maybeSingle();
+    if (!(resvRow as { answer_issued_at?: string | null } | null)?.answer_issued_at) {
+      const { error: relErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
+        p_call_control_id: callControlId
+      });
+      if (relErr) console.error("outbound: release on no-answer hangup failed", relErr);
+      return { handled: true, response: jsonOk("outbound_no_answer_released") };
+    }
+    // Answered → let settlement bill the media (do not short-circuit).
+    return { handled: false, response: jsonOk("outbound_answered_hangup") };
   }
 
   // call.hangup
