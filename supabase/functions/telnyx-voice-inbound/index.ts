@@ -12,11 +12,10 @@
  * Some paths after answer may return **5xx**; use logs/telemetry to distinguish.
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
-import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { header, verifyTelnyxWebhook } from "../_shared/telnyx_webhook.ts";
 import { signStreamUrlMac, type StreamPayloadV2 } from "../_shared/stream_url.ts";
-import { resolveEnterpriseVoiceReservation } from "../_shared/enterprise_limits.ts";
-import { VOICE_RES_LIMITS } from "../_shared/voice_reservation_limits.ts";
+import { reserveVoiceBudget } from "../_shared/voice_reserve.ts";
 import {
   VOICE_MSG_BRIDGE_DEGRADED,
   VOICE_MSG_CONCURRENT_LIMIT,
@@ -45,12 +44,6 @@ import {
 } from "../_shared/voice_handoff.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 import {
-  cacheLooksValidForQuotaAfterJitFailure,
-  STRIPE_PERIOD_ROLLOVER_GRACE_MS,
-  subscriptionPeriodNeedsRefresh,
-  type SubscriptionPeriodRow
-} from "../_shared/stripe_voice_period.ts";
-import {
   readTelnyxWebhookRateLimits,
   telnyxWebhookClientIp,
   telnyxWebhookRateAllow
@@ -58,73 +51,6 @@ import {
 
 const MAX_BODY = 256 * 1024;
 const HANDLER_MS = 8000;
-const STRIPE_JIT_FETCH_MS = 4500;
-
-async function fetchStripeSubscriptionPeriods(
-  stripeSecret: string,
-  stripeSubscriptionId: string
-): Promise<{ start: string; end: string } | null> {
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), STRIPE_JIT_FETCH_MS);
-  const res = await fetch(
-    `https://api.stripe.com/v1/subscriptions/${encodeURIComponent(stripeSubscriptionId)}`,
-    { headers: { Authorization: `Bearer ${stripeSecret}` }, signal: ac.signal }
-  ).finally(() => clearTimeout(t));
-  if (!res.ok) {
-    console.error("Stripe subscription HTTP", res.status, (await res.text()).slice(0, 500));
-    return null;
-  }
-  const j = (await res.json()) as { current_period_start?: unknown; current_period_end?: unknown };
-  if (typeof j.current_period_start !== "number" || typeof j.current_period_end !== "number") {
-    return null;
-  }
-  return {
-    start: new Date(j.current_period_start * 1000).toISOString(),
-    end: new Date(j.current_period_end * 1000).toISOString()
-  };
-}
-
-async function persistSubscriptionPeriodCache(
-  supabase: SupabaseClient<any, any, any>,
-  row: SubscriptionPeriodRow,
-  start: string,
-  end: string
-): Promise<boolean> {
-  const stripe_subscription_cached_at = new Date().toISOString();
-  const { error } = await supabase
-    .from("subscriptions")
-    .update({
-      stripe_current_period_start: start,
-      stripe_current_period_end: end,
-      stripe_subscription_cached_at
-    })
-    .eq("id", row.id);
-  if (error) {
-    console.error("subscriptions period cache update", error);
-    return false;
-  }
-  return true;
-}
-
-function tierCapSeconds(tier: string, enterpriseLimitsRaw: unknown): number {
-  if (tier === "enterprise") {
-    return resolveEnterpriseVoiceReservation(enterpriseLimitsRaw).tierCapSeconds;
-  }
-  if (tier === "standard") {
-    return VOICE_RES_LIMITS.standard.voiceIncludedSecondsPerStripePeriod;
-  }
-  return VOICE_RES_LIMITS.starter.voiceIncludedSecondsPerStripePeriod;
-}
-
-function maxConcurrent(tier: string, enterpriseLimitsRaw: unknown): number {
-  if (tier === "enterprise") {
-    return resolveEnterpriseVoiceReservation(enterpriseLimitsRaw).maxConcurrent;
-  }
-  if (tier === "standard") {
-    return VOICE_RES_LIMITS.standard.maxConcurrentCalls;
-  }
-  return VOICE_RES_LIMITS.starter.maxConcurrentCalls;
-}
 
 function envVoiceAiStreamEnabled(): boolean {
   const v = (Deno.env.get("VOICE_AI_STREAM_ENABLED") ?? "true").trim().toLowerCase();
@@ -721,195 +647,56 @@ serve(async (req: Request) => {
     }
   }
 
-  const { data: biz, error: bizErr } = await supabase
-    .from("businesses")
-    .select("tier, enterprise_limits")
-    .eq("id", businessId)
-    .single();
-  if (bizErr || !biz) {
-    console.error("business", bizErr);
-    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SYSTEM_ERROR);
-    return new Response(JSON.stringify({ ok: true, path: "no_business" }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" }
-    });
-  }
-
-  const tier = String(biz.tier ?? "starter");
-  const entRaw = tier === "enterprise" ? biz.enterprise_limits : null;
-  const cap = tierCapSeconds(tier, entRaw);
-  const concurrent = maxConcurrent(tier, entRaw);
-
-  const { data: sub, error: subErr } = await supabase
-    .from("subscriptions")
-    .select(
-      "id, stripe_subscription_id, stripe_current_period_start, stripe_current_period_end, stripe_subscription_cached_at"
-    )
-    .eq("business_id", businessId)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (subErr) {
-    console.error("subscription", subErr);
-    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SYSTEM_ERROR);
-    return new Response(JSON.stringify({ ok: true, path: "sub_db_error" }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" }
-    });
-  }
-
-  if (!sub?.id) {
-    console.error(
-      "voice inbound: no subscription row (ops: ensure subscriptions row exists for business or use comp flow with period cache)",
-      { businessId }
-    );
-    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SYSTEM_ERROR);
-    return new Response(JSON.stringify({ ok: true, path: "no_subscription" }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" }
-    });
-  }
-
-  const stripeSecret = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
-
-  let periodRow: SubscriptionPeriodRow = {
-    id: sub.id as string,
-    stripe_subscription_id: (sub.stripe_subscription_id as string | null) ?? null,
-    stripe_current_period_start: (sub.stripe_current_period_start as string | null) ?? null,
-    stripe_current_period_end: (sub.stripe_current_period_end as string | null) ?? null,
-    stripe_subscription_cached_at: (sub.stripe_subscription_cached_at as string | null) ?? null
-  };
-
-  const needsJit = subscriptionPeriodNeedsRefresh(periodRow, stripeSecret);
-  let jitFailed = false;
-  if (needsJit) {
-    const sid = periodRow.stripe_subscription_id;
-    if (sid) {
-      const fetched = await fetchStripeSubscriptionPeriods(stripeSecret, sid);
-      if (fetched) {
-        periodRow = {
-          ...periodRow,
-          stripe_current_period_start: fetched.start,
-          stripe_current_period_end: fetched.end,
-          stripe_subscription_cached_at: new Date().toISOString()
-        };
-        const ok = await persistSubscriptionPeriodCache(supabase, periodRow, fetched.start, fetched.end);
-        if (!ok) {
-          console.error(
-            "voice inbound: Stripe period refreshed in-process but DB cache write failed",
-            { businessId }
-          );
-        }
-      } else {
-        jitFailed = true;
-        console.error("voice inbound: JIT Stripe subscription fetch failed (§4.2)", { businessId });
-      }
-    } else {
-      jitFailed = true;
-      console.error("voice inbound: period cache refresh required but no stripe_subscription_id", {
-        businessId
-      });
-    }
-  }
-
-  if (jitFailed && needsJit) {
-    const nowMs = Date.now();
-    if (cacheLooksValidForQuotaAfterJitFailure(periodRow, nowMs)) {
-      console.warn("voice inbound: jit_stripe_fail_proceed_cached", { businessId });
-      await telemetryRecord(supabase, "jit_stripe_fail_proceed_cached", { business_id: businessId });
-    } else {
-      console.error("voice inbound: jit_stripe_fail_block", { businessId });
-      await telemetryRecord(supabase, "jit_stripe_fail_block", { business_id: businessId });
-      await systemLog(supabase, {
-        businessId,
-        source: "voice",
-        level: "error",
-        event: "voice_jit_stripe_fail_block",
-        message: "Call blocked: Stripe period lookup failed and no valid cached quota",
-        payload: { call_control_id: callControlId }
-      });
-      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SYSTEM_ERROR);
-      return new Response(JSON.stringify({ ok: true, path: "jit_stripe_fail_block" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      });
-    }
-  }
-
-  const pastEnd =
-    !!periodRow.stripe_current_period_end &&
-    Date.now() >
-      new Date(periodRow.stripe_current_period_end as string).getTime() + STRIPE_PERIOD_ROLLOVER_GRACE_MS;
-  if (pastEnd) {
-    console.error("voice inbound: stripe period cache past period_end", { businessId });
-    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SYSTEM_ERROR);
-    return new Response(JSON.stringify({ ok: true, path: "period_cache_stale" }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" }
-    });
-  }
-
-  if (!periodRow.stripe_current_period_start || !periodRow.stripe_current_period_end) {
-    console.error(
-      "voice inbound: missing cached Stripe billing period bounds (ops: comp/manual accounts need stripe_current_period_* set, e.g. Stripe sync or admin backfill)",
-      { businessId }
-    );
-    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SYSTEM_ERROR);
-    return new Response(JSON.stringify({ ok: true, path: "no_period_bounds" }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" }
-    });
-  }
-
-  const periodStart = new Date(periodRow.stripe_current_period_start as string).toISOString();
-
-  const { data: reserveResult, error: resErr } = await supabase.rpc("voice_reserve_for_call", {
-    p_business_id: businessId,
-    p_call_control_id: callControlId,
-    p_tier: tier,
-    p_max_concurrent: concurrent,
-    p_stripe_period_start: periodStart,
-    p_tier_cap_seconds: cap,
-    p_min_grant_seconds: 60,
-    p_max_grant_seconds: 900
+  // System-level voice budget gate: every path that will spend Gemini voice
+  // minutes reserves through the same helper (telnyx-voice-call-end's AI takeover
+  // does too). A non-ok result means we must not open the AI bridge.
+  const reserve = await reserveVoiceBudget(supabase, {
+    businessId,
+    callControlId,
+    stripeSecret: Deno.env.get("STRIPE_SECRET_KEY") ?? ""
   });
 
-  if (resErr) {
-    console.error("reserve", resErr);
-    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SYSTEM_ERROR);
-    return new Response(JSON.stringify({ ok: true, path: "reserve_error" }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" }
-    });
-  }
-
-  const res = reserveResult as {
-    ok?: boolean;
-    reason?: string;
-    grant_seconds?: number;
-    duplicate?: boolean;
-  };
-
-  if (!res?.ok) {
-    if (res?.reason === "concurrent_limit") {
+  if (!reserve.ok) {
+    const reason = reserve.reason;
+    if (reason === "concurrent_limit") {
       await answerThenSpeak(apiKey, callControlId, VOICE_MSG_CONCURRENT_LIMIT);
       await telemetryRecord(supabase, "voice_concurrent_limit_spoken", {
         business_id: businessId,
         call_control_id: callControlId
       });
-    } else {
+      await systemLog(supabase, {
+        businessId,
+        source: "voice",
+        level: "warn",
+        event: "voice_call_blocked",
+        message: `Inbound call refused: ${reason}`,
+        payload: { call_control_id: callControlId, reason }
+      });
+    } else if (reason === "quota_exhausted") {
       await answerThenSpeak(apiKey, callControlId, VOICE_MSG_QUOTA_EXHAUSTED);
+      await systemLog(supabase, {
+        businessId,
+        source: "voice",
+        level: "warn",
+        event: "voice_call_blocked",
+        message: `Inbound call refused: ${reason}`,
+        payload: { call_control_id: callControlId, reason }
+      });
+    } else {
+      // System fault (business/subscription/period/RPC) → generic error message.
+      if (reason === "jit_stripe_fail_block") {
+        await systemLog(supabase, {
+          businessId,
+          source: "voice",
+          level: "error",
+          event: "voice_jit_stripe_fail_block",
+          message: "Call blocked: Stripe period lookup failed and no valid cached quota",
+          payload: { call_control_id: callControlId }
+        });
+      }
+      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SYSTEM_ERROR);
     }
-    await systemLog(supabase, {
-      businessId,
-      source: "voice",
-      level: "warn",
-      event: "voice_call_blocked",
-      message: `Inbound call refused: ${res?.reason ?? "blocked"}`,
-      payload: { call_control_id: callControlId, reason: res?.reason ?? "blocked" }
-    });
-    return new Response(JSON.stringify({ ok: true, path: res?.reason ?? "blocked" }), {
+    return new Response(JSON.stringify({ ok: true, path: reason }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
     });

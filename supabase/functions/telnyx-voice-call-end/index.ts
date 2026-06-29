@@ -23,6 +23,7 @@ import {
   planHandoffAdvance
 } from "../_shared/voice_handoff.ts";
 import { signStreamUrlMac, type StreamPayloadV2 } from "../_shared/stream_url.ts";
+import { reserveVoiceBudget } from "../_shared/voice_reserve.ts";
 
 const MAX_BODY = 256 * 1024;
 
@@ -51,6 +52,8 @@ type HandoffDeps = {
   apiKey: string;
   streamSecret: string;
   defaultBridgeOrigin: string;
+  /** STRIPE_SECRET_KEY for the system-level voice budget gate (AI takeover). */
+  stripeSecret: string;
 };
 
 function envVoiceAiStreamEnabled(): boolean {
@@ -228,6 +231,21 @@ async function claimStep(
  * Both steps swallow their own errors — this is already the failure path.
  */
 async function endHandoff(deps: HandoffDeps, aLeg: string): Promise<void> {
+  // Release any voice budget reserved for an AI takeover that never reached the
+  // bridge. endHandoff marks the session `done` before the self-initiated
+  // hangup, so the A-leg hangup webhook can't recognize it as `ai_intake` and
+  // settle/release it — without this the reservation would sit in
+  // `pending_answer` holding a concurrency slot until a maintenance sweep. The
+  // RPC is a no-op for the pre-reserve transfer paths and defensively refuses to
+  // release once the bridge has attached, so it is always safe here.
+  try {
+    const { error } = await deps.supabase.rpc("voice_release_reservation_on_answer_fail", {
+      p_call_control_id: aLeg
+    });
+    if (error) console.error("handoff: release reservation failed", error);
+  } catch (e) {
+    console.error("handoff: release reservation threw", e);
+  }
   try {
     await deps.supabase
       .from("voice_handoff_sessions")
@@ -320,6 +338,28 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
     // below must end the call cleanly (retried hangups would see
     // handoff_not_ringing) rather than leave the seller on a silent leg.
     try {
+      // System-level voice metering: the AI takeover spends Gemini minutes, so
+      // it goes through the SAME budget gate as the inbound receptionist. No
+      // budget (quota/concurrency) ⇒ never press 1 / attach the bridge; end the
+      // call cleanly. Settlement of this reservation happens on the A-leg hangup.
+      const reserve = await reserveVoiceBudget(deps.supabase, {
+        businessId: sess.business_id,
+        callControlId: aLeg,
+        stripeSecret: deps.stripeSecret
+      });
+      if (!reserve.ok) {
+        console.warn("handoff: AI takeover blocked, no voice budget", {
+          call: aLeg,
+          reason: reserve.reason
+        });
+        await telemetryRecord(deps.supabase, "voice_handoff_ai_blocked", {
+          business_id: sess.business_id,
+          call_control_id: aLeg,
+          reason: reserve.reason
+        });
+        await endHandoff(deps, aLeg);
+        return jsonOk("handoff_ai_no_budget", { reason: reserve.reason });
+      }
       // Press "1" FIRST so HomeLight connects the live client, THEN attach the
       // bridge — otherwise the AI greeting plays to the IVR / dead air. If the
       // DTMF fails the client is never bridged, so abort rather than run the
@@ -428,14 +468,22 @@ async function handleHandoffLifecycle(
   if (!callControlId) return { handled: false, response: jsonOk("ignored_hangup") };
   const { data: sessRow } = await supabase
     .from("voice_handoff_sessions")
-    .select("call_control_id")
+    .select("call_control_id, status")
     .eq("call_control_id", callControlId)
     .maybeSingle();
   if (!sessRow) return { handled: false, response: jsonOk("ignored_hangup") };
+  const priorStatus = String((sessRow as { status?: string }).status ?? "");
   await supabase
     .from("voice_handoff_sessions")
     .update({ status: "done" })
     .eq("call_control_id", callControlId);
+  // An AI takeover reserved voice budget for this A-leg, so its hangup MUST flow
+  // into settlement (signal 1 of 2) to bill the Gemini minutes. Human-only
+  // handoffs never reserved, so settlement is a no-op for them — short-circuit
+  // to avoid an extra "unknown_call" round-trip.
+  if (priorStatus === "ai_intake") {
+    return { handled: false, response: jsonOk("handoff_session_closed") };
+  }
   return { handled: true, response: jsonOk("handoff_session_closed") };
 }
 
@@ -467,13 +515,15 @@ serve(async (req: Request) => {
   const telnyxApiKey = Deno.env.get("TELNYX_API_KEY") ?? "";
   const streamSecret = Deno.env.get("STREAM_URL_SIGNING_SECRET") ?? "";
   const defaultBridgeOrigin = Deno.env.get("BRIDGE_MEDIA_WSS_ORIGIN") ?? "";
+  const stripeSecret = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
 
   const supabase = createClient(supabaseUrl, serviceKey);
   const handoffDeps: HandoffDeps = {
     supabase,
     apiKey: telnyxApiKey,
     streamSecret,
-    defaultBridgeOrigin
+    defaultBridgeOrigin,
+    stripeSecret
   };
 
   const len = Number(req.headers.get("content-length") ?? "0");
