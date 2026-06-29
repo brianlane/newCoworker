@@ -5,9 +5,9 @@
  */
 
 /**
- * One-line routing summary from a run's context.routing: how many agents were
- * offered the lead and who (if anyone) claimed it. `tried` holds retired
- * offers; the agent currently offered / the claimer is one more on top.
+ * One-line routing summary from a run's context.routing: how many employees
+ * were offered the lead and who (if anyone) claimed it. `tried` holds retired
+ * offers; the employee currently offered / the claimer is one more on top.
  */
 export function routingSummary(context: Record<string, unknown>): string | null {
   const routing = context.routing as Record<string, unknown> | undefined;
@@ -19,7 +19,7 @@ export function routingSummary(context: Record<string, unknown>): string | null 
   const claimed = claimedName || claimedBy;
   const offers = tried + (hasCurrentOffer || claimed ? 1 : 0);
   if (offers === 0) return null;
-  const offersPart = `offered to ${offers} agent${offers === 1 ? "" : "s"}`;
+  const offersPart = `offered to ${offers} employee${offers === 1 ? "" : "s"}`;
   if (claimed) return `${offersPart} · claimed by ${claimed}`;
   if (hasCurrentOffer) return `${offersPart} · awaiting reply`;
   return `${offersPart} · no claim (owner fallback)`;

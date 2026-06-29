@@ -4,6 +4,7 @@ import Link from "next/link";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { listAiFlowRuns, listAiFlows } from "@/lib/ai-flows/db";
+import { resolveContactNames } from "@/lib/db/contact-names";
 import { Card } from "@/components/ui/Card";
 import { AiFlowRunsManager } from "@/components/dashboard/AiFlowRunsManager";
 
@@ -38,6 +39,20 @@ export default async function AiFlowRunsPage({ searchParams }: Props) {
         listAiFlows(businessId)
       ])
     : [[], []];
+
+  // Resolve the offered employees' numbers to their roster/contact names so the
+  // routing section reads "Offered to Jordan Reyes" instead of a bare E.164.
+  const employeeNames = businessId
+    ? await resolveContactNames(
+        businessId,
+        runs.map((r) => r.awaiting_agent_e164).filter((p): p is string => Boolean(p)),
+        db
+      )
+        .then((map) =>
+          Object.fromEntries([...map.entries()].map(([e164, c]) => [e164, c.name]))
+        )
+        .catch(() => ({} as Record<string, string>))
+    : ({} as Record<string, string>);
 
   // When filtered to one flow, title the page after it and offer a way back to
   // that flow's detail view (rather than the whole AiFlows list).
@@ -75,6 +90,7 @@ export default async function AiFlowRunsPage({ searchParams }: Props) {
             initialRuns={runs}
             flows={flows.map((f) => ({ id: f.id, name: f.name }))}
             flowId={flowId || undefined}
+            employeeNames={employeeNames}
           />
         </Suspense>
       )}

@@ -314,7 +314,7 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
     case "route_to_team":
       return (
         <>
-          <Row label="Agent offer SMS" value={step.offerTemplate} />
+          <Row label="Employee offer SMS" value={step.offerTemplate} />
           <Row label="Minutes to respond" value={String(step.responseMinutes ?? 10)} />
           {step.agentName && <Row label="Pinned to" value={step.agentName} />}
           <Row label="Owner fallback SMS" value={step.ownerFallbackTemplate} />

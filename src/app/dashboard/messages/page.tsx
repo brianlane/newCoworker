@@ -78,13 +78,6 @@ export default async function DashboardMessagesPage() {
         <SmsComposeNew businessId={business.id} />
       </div>
 
-      <Card padding="sm" className="border-signal-teal/30 bg-signal-teal/5">
-        <p className="text-xs text-parchment/70 leading-relaxed">
-          Texts answered by your AI assistant are stored so you can review
-          them later. Conversations are visible to you only.
-        </p>
-      </Card>
-
       {conversations.length === 0 ? (
         <Card>
           <div className="text-center py-8">

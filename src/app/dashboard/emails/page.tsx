@@ -69,12 +69,6 @@ export default async function DashboardEmailsPage() {
         </p>
       </div>
 
-      <Card padding="sm" className="border-signal-teal/30 bg-signal-teal/5">
-        <p className="text-xs text-parchment/70 leading-relaxed">
-          Every email your coworker handles is recorded here
-        </p>
-      </Card>
-
       <EmailsList rows={rows} businessId={business.id} fromOptions={fromOptions} />
     </div>
   );

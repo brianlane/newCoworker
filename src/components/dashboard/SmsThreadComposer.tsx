@@ -86,9 +86,6 @@ export function SmsThreadComposer({ businessId, toE164 }: Props) {
         </button>
       </div>
       {error && <p className="text-xs text-red-300">{error}</p>}
-      <p className="text-[10px] text-parchment/40">
-        Sends exactly what you type to {toE164}. Counts against your monthly SMS allowance.
-      </p>
     </div>
   );
 }

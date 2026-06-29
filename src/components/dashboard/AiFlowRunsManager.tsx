@@ -39,6 +39,17 @@ const STATUS_STYLES: Record<string, string> = {
   canceled: "bg-parchment/10 text-parchment/40"
 };
 
+// Display label overrides for statuses whose stored value differs from how we
+// want to talk about it in the UI. The DB status stays `awaiting_agent`; the
+// owner-facing badge reads "AWAITING EMPLOYEE".
+const STATUS_LABELS: Record<string, string> = {
+  awaiting_agent: "Awaiting employee"
+};
+
+function statusLabel(status: string): string {
+  return (STATUS_LABELS[status] ?? status.replace(/_/g, " ")).toUpperCase();
+}
+
 export type AiFlowRef = { id: string; name: string };
 
 /** A labeled, clickable screenshot thumbnail shown in the run "investigate" view. */
@@ -100,16 +111,23 @@ export function AiFlowRunsManager({
   businessId,
   initialRuns,
   flows,
-  flowId
+  flowId,
+  employeeNames = {}
 }: {
   businessId: string;
   initialRuns: AiFlowRunRow[];
   flows: AiFlowRef[];
   /** When set, the page is scoped to one flow — keep the filter on reload. */
   flowId?: string;
+  /** E.164 → roster/contact name for the employees offered a lead (routing). */
+  employeeNames?: Record<string, string>;
 }) {
   const [runs, setRuns] = useState<AiFlowRunRow[]>(initialRuns);
   const [flowList, setFlowList] = useState<AiFlowRef[]>(flows);
+  // Kept in state (not just the prop) so a reload() can MERGE in names for
+  // newly offered employees that weren't in the initial server snapshot —
+  // otherwise an escalated offer would show a raw E.164 until a full reload.
+  const [names, setNames] = useState<Record<string, string>>(employeeNames);
   // Set of expanded run ids. Multiple runs can be open at once (per-group
   // "Expand details"); default empty = every run's detail collapsed.
   const [expandedRuns, setExpandedRuns] = useState<Set<string>>(new Set());
@@ -132,8 +150,18 @@ export function AiFlowRunsManager({
       fetch(runsUrl, { cache: "no-store" }),
       fetch(`/api/aiflows?businessId=${encodeURIComponent(businessId)}`, { cache: "no-store" })
     ]);
-    const runsJson = (await runsRes.json()) as { ok: boolean; data?: AiFlowRunRow[] };
-    if (runsJson.ok && runsJson.data) setRuns(runsJson.data);
+    const runsJson = (await runsRes.json()) as {
+      ok: boolean;
+      data?: { runs: AiFlowRunRow[]; employeeNames?: Record<string, string> };
+    };
+    if (runsJson.ok && runsJson.data) {
+      setRuns(runsJson.data.runs);
+      if (runsJson.data.employeeNames) {
+        // Merge (don't replace): a name resolved on the first paint stays even
+        // if a later reload's snapshot no longer includes that number.
+        setNames((prev) => ({ ...prev, ...runsJson.data!.employeeNames }));
+      }
+    }
     const flowsJson = (await flowsRes.json()) as { ok: boolean; data?: AiFlowRef[] };
     if (flowsJson.ok && flowsJson.data) {
       setFlowList(flowsJson.data.map((f) => ({ id: f.id, name: f.name })));
@@ -351,7 +379,11 @@ export function AiFlowRunsManager({
                 </p>
                 <p className="mt-1 text-sm text-parchment">
                   Offered to{" "}
-                  <span className="font-semibold">{r.awaiting_agent_e164 ?? "an agent"}</span>
+                  <span className="font-semibold">
+                    {(r.awaiting_agent_e164 && names[r.awaiting_agent_e164]) ??
+                      r.awaiting_agent_e164 ??
+                      "an employee"}
+                  </span>
                   {deadline && (
                     <span className="text-parchment/60">
                       {" "}
@@ -360,7 +392,7 @@ export function AiFlowRunsManager({
                   )}
                 </p>
                 <p className="mt-1 text-xs text-parchment/50">
-                  Waiting for the agent to reply 1 (claim) or 2 (pass). Escalates
+                  Waiting for the employee to reply 1 (claim) or 2 (pass). Escalates
                   automatically if they don&apos;t respond in time.
                 </p>
               </Card>
@@ -435,7 +467,7 @@ export function AiFlowRunsManager({
                         STATUS_STYLES[r.status] ?? "bg-parchment/10 text-parchment/50"
                       }`}
                     >
-                      {r.status.toUpperCase()}
+                      {statusLabel(r.status)}
                     </span>
                   </button>
                   {routingSummary(r.context) && (
