@@ -19,6 +19,13 @@
  * Metering is therefore a system-level invariant for outbound exactly as for
  * inbound: the same voice_reserve_for_call RPC + the same settlement lifecycle.
  *
+ * Response contract: success is { ok:true, callControlId, ... }. Every refusal
+ * is { ok:false, error/reason, ... } and carries `dialed: false` when the callee
+ * was NEVER rung (auth/validation/config refusals and the pre-dial budget
+ * block) so a scheduled caller may safely retry the occurrence; refusals that
+ * happen AFTER the dial (post-dial budget refusal, lost call id,
+ * session_persist_failed) omit `dialed` and must NOT be retried.
+ *
  * Auth: Authorization: Bearer <SUPABASE_SERVICE_ROLE_KEY>. The caller is our own
  * Next.js server route (which already authenticated the owner). No public access.
  *
@@ -81,7 +88,7 @@ serve(async (req: Request) => {
   }
 
   if (!bearerMatches(req.headers.get("authorization"), serviceKey)) {
-    return json(401, { ok: false, error: "unauthorized" });
+    return json(401, { ok: false, error: "unauthorized", dialed: false });
   }
 
   const len = Number(req.headers.get("content-length") ?? "0");
@@ -97,16 +104,16 @@ serve(async (req: Request) => {
   try {
     body = JSON.parse(rawBody);
   } catch {
-    return json(400, { ok: false, error: "bad_json" });
+    return json(400, { ok: false, error: "bad_json", dialed: false });
   }
   const businessId = typeof body.businessId === "string" ? body.businessId.trim() : "";
   const flowId = typeof body.flowId === "string" ? body.flowId.trim() : "";
   if (!businessId || !flowId) {
-    return json(422, { ok: false, error: "missing_business_or_flow" });
+    return json(422, { ok: false, error: "missing_business_or_flow", dialed: false });
   }
 
   if (!envVoiceAiStreamEnabled()) {
-    return json(409, { ok: false, error: "voice_ai_disabled" });
+    return json(409, { ok: false, error: "voice_ai_disabled", dialed: false });
   }
 
   const supabase = createClient(supabaseUrl, serviceKey);
@@ -121,11 +128,11 @@ serve(async (req: Request) => {
     .maybeSingle();
   if (flowErr) {
     console.error("originate: flow lookup", flowErr);
-    return json(500, { ok: false, error: "flow_lookup_failed" });
+    return json(500, { ok: false, error: "flow_lookup_failed", dialed: false });
   }
   const flow = flowRow as { definition?: unknown; enabled?: boolean } | null;
-  if (!flow) return json(404, { ok: false, error: "flow_not_found" });
-  if (flow.enabled !== true) return json(409, { ok: false, error: "flow_disabled" });
+  if (!flow) return json(404, { ok: false, error: "flow_not_found", dialed: false });
+  if (flow.enabled !== true) return json(409, { ok: false, error: "flow_disabled", dialed: false });
 
   const plan = (() => {
     try {
@@ -135,12 +142,12 @@ serve(async (req: Request) => {
       return null;
     }
   })();
-  if (!plan) return json(422, { ok: false, error: "not_an_outbound_flow" });
+  if (!plan) return json(422, { ok: false, error: "not_an_outbound_flow", dialed: false });
 
   // Callee: per-call override wins, else the step default.
   const overrideTo = typeof body.toE164 === "string" ? body.toE164 : "";
   const callee = normalizeE164(overrideTo || plan.toE164);
-  if (!callee) return json(422, { ok: false, error: "invalid_callee" });
+  if (!callee) return json(422, { ok: false, error: "invalid_callee", dialed: false });
 
   // Caller ID + connection: the business's own DID (a telnyx_voice_routes row)
   // presented as `from`, dialed on its Call Control connection.
@@ -161,8 +168,8 @@ serve(async (req: Request) => {
   const connectionId = (settingsRow as { telnyx_connection_id?: string | null } | null)
     ?.telnyx_connection_id;
   const fromDid = (routeRow as { to_e164?: string | null } | null)?.to_e164;
-  if (!connectionId) return json(422, { ok: false, error: "no_telnyx_connection" });
-  if (!fromDid) return json(422, { ok: false, error: "no_caller_id" });
+  if (!connectionId) return json(422, { ok: false, error: "no_telnyx_connection", dialed: false });
+  if (!fromDid) return json(422, { ok: false, error: "no_caller_id", dialed: false });
 
   // Pre-dial budget gate (honor "metered before spend" before a leg exists).
   // voice_reserve_for_call keys a reservation by a Telnyx call_control_id, which

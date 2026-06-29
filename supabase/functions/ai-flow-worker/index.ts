@@ -3471,11 +3471,12 @@ async function placeOutboundCall(
   callControlId?: string;
   reason?: string;
   // Whether this occurrence is safe to dial again. True ONLY when originate
-  // explicitly reports it never rang the callee (`dialed === false`: a pre-dial
-  // budget block, or Telnyx rejecting POST /v2/calls so no leg was created).
-  // Anything that already rang the callee (post-dial budget refusal,
-  // session_persist_failed, lost call id) or a no-response timeout is NOT
-  // retryable, or the same occurrence would dial the callee again.
+  // explicitly reports it never rang the callee (`dialed === false`: any
+  // auth/validation/config refusal, the pre-dial budget block, or Telnyx
+  // rejecting POST /v2/calls so no leg was created). Anything that already rang
+  // the callee (post-dial budget refusal, session_persist_failed, lost call id)
+  // or a no-response timeout is NOT retryable, or the same occurrence would
+  // dial the callee again.
   retryable: boolean;
 }> {
   const ctl = new AbortController();
@@ -3584,12 +3585,13 @@ async function enqueueDueOutboundCalls(
       //   - placed (ok): keep the row terminal (at-most-once for a real call).
       //   - failed AFTER a dial / ambiguous no-response: keep it terminal — the
       //     callee was (or may have been) rung, so retrying would dial again.
-      //   - failed BEFORE any dial (originate reports dialed:false — a pre-dial
-      //     budget block, or Telnyx rejecting the dial so no leg exists): RELEASE
-      //     the lock (delete the row) so a later tick retries this occurrence
-      //     within its window. Budget blocks re-probe cheaply (the pre-dial check
-      //     refuses without dialing), so this never rings the callee until budget
-      //     frees; other (post-dial) failures keep the lock and are not retried.
+      //   - failed BEFORE any dial (originate reports dialed:false — a config/
+      //     validation refusal, the pre-dial budget block, or Telnyx rejecting
+      //     the dial so no leg exists): RELEASE the lock (delete the row) so a
+      //     later tick retries this occurrence within its window. Budget blocks
+      //     re-probe cheaply (the pre-dial check refuses without dialing), so
+      //     this never rings the callee until budget frees; post-dial failures
+      //     keep the lock and are not retried.
       const retryable = !result.ok && result.retryable;
       if (retryable) {
         const { error: delErr } = await supabase
