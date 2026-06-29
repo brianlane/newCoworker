@@ -11,7 +11,8 @@ import {
   telnyxSendDtmf,
   telnyxSpeak,
   telnyxStreamingStart,
-  telnyxTransferCall
+  telnyxTransferCall,
+  telnyxDialCall
 } from "../supabase/functions/_shared/telnyx_call_actions";
 
 describe("telnyx webhook-verify", () => {
@@ -386,6 +387,78 @@ describe("telnyx call-control", () => {
       expect(res.status).toBe(200);
       expect(spy).toHaveBeenCalledWith(
         "https://api.telnyx.com/v2/calls/cc-default/actions/hangup",
+        expect.objectContaining({ method: "POST" })
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("telnyxDialCall posts /v2/calls with connection_id/to/from", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({ data: {} }) });
+    const res = await telnyxDialCall(
+      "key",
+      { connectionId: "conn-1", to: "+15551234567", from: "+16025550100" },
+      fetchMock as typeof fetch
+    );
+    expect(res.ok).toBe(true);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://api.telnyx.com/v2/calls");
+    expect(init.method).toBe("POST");
+    expect(init.headers.Authorization).toBe("Bearer key");
+    expect(JSON.parse(init.body as string)).toEqual({
+      connection_id: "conn-1",
+      to: "+15551234567",
+      from: "+16025550100"
+    });
+  });
+
+  it("telnyxDialCall includes timeout_secs, base64 client_state, and command_id when set", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    await telnyxDialCall(
+      "key",
+      {
+        connectionId: "conn-2",
+        to: "+15551234567",
+        from: "+16025550100",
+        timeoutSecs: 30,
+        clientState: "ob:sess-abc",
+        commandId: "cmd-xyz"
+      },
+      fetchMock as typeof fetch
+    );
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.timeout_secs).toBe(30);
+    expect(body.command_id).toBe("cmd-xyz");
+    expect(Buffer.from(body.client_state as string, "base64").toString("utf8")).toBe("ob:sess-abc");
+  });
+
+  it("telnyxDialCall omits timeout_secs when not positive", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    await telnyxDialCall(
+      "key",
+      { connectionId: "c", to: "+15551234567", from: "+16025550100", timeoutSecs: 0 },
+      fetchMock as typeof fetch
+    );
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.timeout_secs).toBeUndefined();
+    expect(body.client_state).toBeUndefined();
+    expect(body.command_id).toBeUndefined();
+  });
+
+  it("telnyxDialCall uses default global fetch when fetchImpl omitted", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 200 }));
+    try {
+      const res = await telnyxDialCall("k", {
+        connectionId: "c",
+        to: "+15550000001",
+        from: "+16025550100"
+      });
+      expect(res.status).toBe(200);
+      expect(spy).toHaveBeenCalledWith(
+        "https://api.telnyx.com/v2/calls",
         expect.objectContaining({ method: "POST" })
       );
     } finally {

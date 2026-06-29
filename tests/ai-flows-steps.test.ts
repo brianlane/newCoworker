@@ -6,7 +6,8 @@ describe("planStep: voice steps are rejected by the async worker", () => {
   it.each<FlowStep>([
     { id: "r", type: "ring_handoff", toE164: "+16025245719" },
     { id: "a", type: "voice_ai_intake", notifyE164: "+16026951142" },
-    { id: "t", type: "voice_transfer", toE164: "+16026951142" }
+    { id: "t", type: "voice_transfer", toE164: "+16026951142" },
+    { id: "o", type: "outbound_call", notifyE164: "+16026951142" }
   ])("fails for %s (runs on the call path, not the worker)", (step) => {
     const r = planStep(step, { trigger: {} });
     expect(r.ok).toBe(false);

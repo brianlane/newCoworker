@@ -18,7 +18,7 @@ const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
   schedule: "On a schedule",
   email: "Inbound email (your connected inbox)",
   tenant_email: "Inbound email (AI coworker's mailbox)",
-  voice: "Inbound call (voice routing)"
+  voice: "Voice call routing"
 };
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -106,8 +106,11 @@ function TriggerView({ trigger }: { trigger: FlowTrigger }) {
           <ConditionsView conditions={trigger.conditions} />
         </>
       )}
-      {trigger.channel === "voice" && (
-        <Row label="Caller number" value={trigger.fromE164} mono />
+      {trigger.channel === "voice" && trigger.direction === "outbound" && (
+        <Row label="Direction" value="Outbound — you place the call" />
+      )}
+      {trigger.channel === "voice" && trigger.direction !== "outbound" && (
+        <Row label="Caller number" value={trigger.fromE164 ?? ""} mono />
       )}
     </section>
   );
@@ -405,6 +408,24 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
         <>
           <Row label="Connect caller to" value={step.toE164} mono />
           {step.whisper && <Row label="Says first" value={step.whisper} />}
+        </>
+      );
+    case "outbound_call":
+      return (
+        <>
+          {step.toE164 && <Row label="Default number to call" value={step.toE164} mono />}
+          <Row label="Texts summary to" value={step.notifyE164} mono />
+          {step.persona && <Row label="AI persona" value={step.persona} />}
+          {step.captureFields && step.captureFields.length > 0 && (
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-parchment/50">Captures from the callee</div>
+              <div className="flex flex-wrap gap-1.5">
+                {step.captureFields.map((f, i) => (
+                  <Chip key={i}>{f}</Chip>
+                ))}
+              </div>
+            </div>
+          )}
         </>
       );
   }

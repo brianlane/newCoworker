@@ -42,7 +42,11 @@ export const FLOW_STEP_TYPES = [
   // `voice` trigger; see VOICE_STEP_TYPES and validateVoiceFlow.
   "ring_handoff",
   "voice_ai_intake",
-  "voice_transfer"
+  "voice_transfer",
+  // Outbound origination: place a call and let the AI talk to the callee on
+  // answer. Runs on the real-time call path (the origination edge function),
+  // never the batch worker; only valid under an outbound voice trigger.
+  "outbound_call"
 ] as const;
 
 /**
@@ -54,7 +58,8 @@ export const FLOW_STEP_TYPES = [
 export const VOICE_STEP_TYPES = [
   "ring_handoff",
   "voice_ai_intake",
-  "voice_transfer"
+  "voice_transfer",
+  "outbound_call"
 ] as const;
 
 /** Keys available as `{{agent.x}}` inside a route_to_team step's templates. */
@@ -219,7 +224,14 @@ const tenantEmailTriggerSchema = z.object({
  */
 const voiceTriggerSchema = z.object({
   channel: z.literal("voice"),
-  fromE164: e164
+  // Inbound flows: a call FROM `fromE164` fires the flow (resolved by
+  // telnyx-voice-inbound). Required for inbound, omitted for outbound — enforced
+  // by direction in validateVoiceFlow.
+  fromE164: e164.optional(),
+  // "outbound" marks an owner-placed call flow whose single `outbound_call` step
+  // is run on demand by the origination edge function (not by an inbound caller
+  // and not by the batch worker). Omitted ⇒ inbound, preserving existing rows.
+  direction: z.literal("outbound").optional()
 });
 
 const triggerSchema = z.discriminatedUnion("channel", [
@@ -551,6 +563,22 @@ const stepSchema = z.discriminatedUnion("type", [
     toE164: e164,
     whisper: z.string().min(1).max(300).optional(),
     when: whenSchema.optional()
+  }),
+  // Outbound origination: place a call and, when the callee answers, let the AI
+  // bridge talk to them (mirrors voice_ai_intake but on a dialed-out leg). The
+  // origination edge function reserves voice budget BEFORE the AI media attaches
+  // (so an over-budget account can't place AI calls) and texts the captured
+  // summary + transcript to `notifyE164`. `toE164` is the default callee; the
+  // "Place call" entry point may override it per call. Only valid as the single
+  // step of an outbound voice flow (enforced in validateVoiceFlow).
+  z.object({
+    id: stepId,
+    type: z.literal("outbound_call"),
+    toE164: e164.optional(),
+    notifyE164: e164,
+    persona: z.string().min(1).max(500).optional(),
+    captureFields: z.array(z.string().min(1).max(60)).min(1).max(15).optional(),
+    when: whenSchema.optional()
   })
 ]);
 
@@ -632,6 +660,7 @@ function templateStringsForStep(step: FlowStep): string[] {
     case "ring_handoff":
     case "voice_ai_intake":
     case "voice_transfer":
+    case "outbound_call":
       return [];
   }
 }
@@ -661,11 +690,39 @@ export function validateVoiceFlow(def: AiFlowDefinition): string[] {
   const nonVoice = steps.filter((s) => !VOICE_STEPS.has(s.type));
   for (const s of nonVoice) {
     issues.push(
-      `Step "${s.id}" is a "${s.type}" step but this is a voice flow — voice flows use only ring_handoff, voice_ai_intake, or voice_transfer.`
+      `Step "${s.id}" is a "${s.type}" step but this is a voice flow — voice flows use only ring_handoff, voice_ai_intake, voice_transfer, or outbound_call.`
     );
   }
   // If any non-voice step slipped in, the shape rules below would be misleading.
   if (nonVoice.length > 0) return issues;
+
+  const trigger = def.trigger as Extract<FlowTrigger, { channel: "voice" }>;
+  const outboundCalls = steps.filter((s) => s.type === "outbound_call");
+
+  // Outbound origination flow: triggered on demand (the "Place call" entry), not
+  // by an inbound caller. Exactly one outbound_call step, nothing else.
+  if (trigger.direction === "outbound") {
+    if (steps.length !== 1 || outboundCalls.length !== 1) {
+      issues.push(
+        "An outbound voice flow must contain exactly one outbound_call step (and no inbound voice steps)."
+      );
+    }
+    return issues;
+  }
+
+  // Inbound voice flow. outbound_call is outbound-only; and an inbound flow needs
+  // a caller number to match against.
+  if (outboundCalls.length > 0) {
+    issues.push(
+      'outbound_call is only valid in an outbound voice flow (set the trigger direction to "outbound").'
+    );
+    return issues;
+  }
+  if (!trigger.fromE164) {
+    issues.push(
+      "An inbound voice flow needs a caller number (fromE164) on its trigger."
+    );
+  }
 
   const transfers = steps.filter((s) => s.type === "voice_transfer");
   const rings = steps.filter((s) => s.type === "ring_handoff");
@@ -1051,7 +1108,10 @@ export function summarizeDefinition(def: AiFlowDefinition): string {
           : `When AI mailbox email matches ${t.conditions.length} condition(s)`;
       break;
     case "voice":
-      trigPart = `When a call comes in from ${t.fromE164}`;
+      trigPart =
+        t.direction === "outbound"
+          ? "When you place an outbound call"
+          : `When a call comes in from ${t.fromE164}`;
       break;
   }
   const stepTypes = def.steps.map((s) => s.type).join(" -> ");

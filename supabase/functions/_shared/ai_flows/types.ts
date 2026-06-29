@@ -103,8 +103,16 @@ export type TenantEmailTrigger = {
  */
 export type VoiceTrigger = {
   channel: "voice";
-  /** E.164 caller id that fires the routing (e.g. a partner's transfer line). */
-  fromE164: string;
+  /**
+   * E.164 caller id that fires inbound routing (e.g. a partner's transfer line).
+   * Present for inbound flows; omitted for outbound (direction === "outbound").
+   */
+  fromE164?: string;
+  /**
+   * "outbound" marks an owner-placed call flow (a single outbound_call step) run
+   * by the origination edge function. Omitted ⇒ inbound.
+   */
+  direction?: "outbound";
 };
 
 export type FlowTrigger =
@@ -529,6 +537,21 @@ export type FlowStep =
       type: "voice_transfer";
       toE164: string;
       whisper?: string;
+      when?: StepCondition;
+    }
+  | {
+      id: string;
+      /**
+       * Outbound origination: place a call to `toE164` (or an entry-supplied
+       * number) and let the AI bridge talk to the callee on answer. Budget is
+       * reserved before the AI media attaches; the captured summary + transcript
+       * text to `notifyE164`. The single step of an outbound voice flow.
+       */
+      type: "outbound_call";
+      toE164?: string;
+      notifyE164: string;
+      persona?: string;
+      captureFields?: string[];
       when?: StepCondition;
     };
 

@@ -1518,4 +1518,59 @@ describe("voice trigger + voice steps", () => {
       "A voice flow needs at least one ring_handoff (or a single voice_transfer)."
     );
   });
+
+  it("accepts an outbound voice flow with a single outbound_call step", () => {
+    const parsed = aiFlowDefinitionSchema.parse({
+      version: 1,
+      trigger: { channel: "voice", direction: "outbound" },
+      steps: [
+        {
+          id: "c",
+          type: "outbound_call",
+          toE164: "+19178628675",
+          notifyE164: "+16026951142",
+          persona: "Amy's assistant",
+          captureFields: ["name", "timeline"]
+        }
+      ]
+    });
+    expect(validateDefinitionSemantics(parsed)).toEqual([]);
+    expect(summarizeDefinition(parsed)).toBe("When you place an outbound call: outbound_call");
+  });
+
+  it("rejects an outbound voice flow that has more than the outbound_call step", () => {
+    const parsed = aiFlowDefinitionSchema.parse({
+      version: 1,
+      trigger: { channel: "voice", direction: "outbound" },
+      steps: [
+        { id: "c", type: "outbound_call", notifyE164: "+16026951142" },
+        { id: "r", type: "ring_handoff", toE164: "+16025245719" }
+      ]
+    });
+    expect(validateDefinitionSemantics(parsed)).toContain(
+      "An outbound voice flow must contain exactly one outbound_call step (and no inbound voice steps)."
+    );
+  });
+
+  it("rejects outbound_call inside an inbound voice flow", () => {
+    const parsed = aiFlowDefinitionSchema.parse({
+      version: 1,
+      trigger: { channel: "voice", fromE164: "+14159851909" },
+      steps: [{ id: "c", type: "outbound_call", notifyE164: "+16026951142" }]
+    });
+    expect(validateDefinitionSemantics(parsed)).toContain(
+      'outbound_call is only valid in an outbound voice flow (set the trigger direction to "outbound").'
+    );
+  });
+
+  it("rejects an inbound voice flow with no caller number", () => {
+    const parsed = aiFlowDefinitionSchema.parse({
+      version: 1,
+      trigger: { channel: "voice" },
+      steps: [{ id: "r", type: "ring_handoff", toE164: "+16025245719" }]
+    });
+    expect(validateDefinitionSemantics(parsed)).toContain(
+      "An inbound voice flow needs a caller number (fromE164) on its trigger."
+    );
+  });
 });

@@ -257,6 +257,75 @@ export async function telnyxHangupCall(
   });
 }
 
+export type TelnyxDialOptions = {
+  /**
+   * Call Control Application (connection) id that owns the originating DID and
+   * the single voice webhook URL. The originated call's events (call.initiated,
+   * call.answered, call.hangup) come back to that same webhook, so the dispatch
+   * + call-end machine can drive the leg exactly like an inbound call.
+   */
+  connectionId: string;
+  /** Callee in E.164. */
+  to: string;
+  /** Caller ID presented to the callee — a DID on the connection, in E.164. */
+  from: string;
+  /**
+   * Ring timeout (seconds) before Telnyx abandons an unanswered callee and
+   * fires call.hangup with a no-answer cause. Omit for the Telnyx default.
+   */
+  timeoutSecs?: number;
+  /**
+   * Opaque state echoed back on THIS call's webhooks (call.answered / hangup).
+   * The origination flow packs the outbound session id here so the webhook can
+   * correlate the answered leg back to its reserved budget + plan. base64 per
+   * Telnyx; callers pass plain text and we encode it here (like transfer).
+   */
+  clientState?: string;
+  /**
+   * Telnyx command idempotency key. Re-dialing with the same command_id is a
+   * no-op on Telnyx's side, so an at-least-once origination trigger can retry
+   * safely without placing duplicate calls.
+   */
+  commandId?: string;
+};
+
+/**
+ * Originate an OUTBOUND call (POST /v2/calls). Returns the raw Telnyx response;
+ * the caller reads `data.call_control_id` from the JSON to drive the leg. We do
+ * NOT answer/stream here — the originated leg is answered + bridged by the
+ * call-control state machine when Telnyx delivers call.answered, exactly like an
+ * inbound A-leg. Budget MUST already be reserved before calling this (see
+ * reserveVoiceBudget); on a no-budget result the caller must not dial.
+ */
+export async function telnyxDialCall(
+  apiKey: string,
+  opts: TelnyxDialOptions,
+  fetchImpl: typeof fetch = fetch
+): Promise<Response> {
+  const body: Record<string, unknown> = {
+    connection_id: opts.connectionId,
+    to: opts.to,
+    from: opts.from
+  };
+  if (typeof opts.timeoutSecs === "number" && opts.timeoutSecs > 0) {
+    body.timeout_secs = Math.floor(opts.timeoutSecs);
+  }
+  if (opts.clientState) {
+    body.client_state = encodeClientState(opts.clientState);
+  }
+  if (opts.commandId) {
+    body.command_id = opts.commandId;
+  }
+  return fetchImpl("https://api.telnyx.com/v2/calls", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+}
+
 /** Reject without answering so carrier/PBX can apply busy treatment (e.g. voicemail). */
 export async function rejectIncomingCall(
   apiKey: string,

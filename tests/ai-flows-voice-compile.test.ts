@@ -109,6 +109,15 @@ describe("compileVoiceFlow", () => {
     expect(compileVoiceFlow(malformed, TO)).toBeNull();
   });
 
+  it("returns null for an outbound voice flow (placed, not matched on inbound)", () => {
+    const outbound = {
+      version: 1,
+      trigger: { channel: "voice", direction: "outbound" },
+      steps: [{ id: "c", type: "outbound_call", notifyE164: "+16026951142" }]
+    } as unknown as AiFlowDefinition;
+    expect(compileVoiceFlow(outbound, TO)).toBeNull();
+  });
+
   it("drops ring steps with a blank destination", () => {
     const plan = compileVoiceFlow(
       def([
