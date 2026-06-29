@@ -38,24 +38,40 @@ export function ConversationScroll({
   className?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // Whether the user was at the bottom as of the last scroll, sampled from
+  // scroll events so it reflects the position BEFORE any content growth. The
+  // MutationObserver fires after the list has already grown, and adding content
+  // doesn't move scrollTop, so measuring distance-from-bottom inside the
+  // observer would misread an at-bottom user as scrolled away once a new bubble
+  // is taller than the threshold. Seeded true because we pin to the bottom on
+  // mount.
+  const nearBottomRef = useRef(true);
   useIsomorphicLayoutEffect(() => {
     if (!anchorBottom) return;
     const el = ref.current;
     if (!el) return;
+    const THRESHOLD_PX = 120;
     const pinToBottom = () => {
       el.scrollTop = el.scrollHeight;
+      nearBottomRef.current = true;
     };
+    const onScroll = () => {
+      nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < THRESHOLD_PX;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
     // Open scrolled to the newest message (before paint, so no flash).
     pinToBottom();
     // Re-pin when the list grows (a new bubble after a send + router.refresh),
-    // but only when the user is already near the bottom so reading history isn't
-    // interrupted.
+    // but only when the user was already near the bottom so reading history
+    // isn't interrupted.
     const observer = new MutationObserver(() => {
-      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      if (distanceFromBottom < 120) pinToBottom();
+      if (nearBottomRef.current) pinToBottom();
     });
     observer.observe(el, { childList: true, subtree: true });
-    return () => observer.disconnect();
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      observer.disconnect();
+    };
   }, [anchorBottom]);
   return (
     <div ref={ref} className={`${maxHeightClass} overflow-y-auto ${className}`.trim()}>
