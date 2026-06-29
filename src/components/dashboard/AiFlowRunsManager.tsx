@@ -50,6 +50,11 @@ function statusLabel(status: string): string {
   return (STATUS_LABELS[status] ?? status.replace(/_/g, " ")).toUpperCase();
 }
 
+// Terminal statuses never update again, so their `updated_at` is a faithful
+// "completed at" timestamp. Non-terminal runs (queued/running/awaiting_*) have
+// no completion yet, so we only show "triggered at" for them.
+const TERMINAL_STATUSES = new Set(["done", "failed", "canceled"]);
+
 export type AiFlowRef = { id: string; name: string };
 
 /** A labeled, clickable screenshot thumbnail shown in the run "investigate" view. */
@@ -453,8 +458,18 @@ export function AiFlowRunsManager({
                       ) : (
                         <ChevronRight className="h-4 w-4 text-parchment/40" />
                       )}
-                      <span className="text-sm text-parchment/80">
-                        {new Date(r.created_at).toLocaleString()}
+                      <span className="flex flex-col text-sm text-parchment/80 sm:flex-row sm:items-center sm:gap-2">
+                        <span>
+                          <span className="text-parchment/40">Triggered</span>{" "}
+                          {new Date(r.created_at).toLocaleString()}
+                        </span>
+                        {TERMINAL_STATUSES.has(r.status) && (
+                          <span className="text-xs text-parchment/60">
+                            <span className="hidden sm:inline">· </span>
+                            <span className="text-parchment/40">Completed</span>{" "}
+                            {new Date(r.updated_at).toLocaleString()}
+                          </span>
+                        )}
                       </span>
                       {retrySummary(r.error_retry_count) && (
                         <span className="text-[10px] text-spark-orange/80">
