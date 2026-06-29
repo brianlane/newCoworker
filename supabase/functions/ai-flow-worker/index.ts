@@ -2717,7 +2717,10 @@ async function routeToTeamStep(
     delete routing.step_index;
     delete routing.claim_timeframe;
     delete routing.tf_digit;
-    delete routing.late_digit;
+    // Keep routing.late_digit AND route_step_index past the claim: a duplicate
+    // late-option reply ("<lateOpt>, eta") must still match this run in
+    // tryLateClaim (gated on late_digit) to get the idempotent "already yours"
+    // re-ack instead of falling through to the customer SMS path.
     if (lateClaim) routing.late_claimed = true;
     if (action.claimedNotifyTemplate) {
       let body = renderTemplate(
