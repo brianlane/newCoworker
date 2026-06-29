@@ -279,6 +279,23 @@ callable surfaces go through service-role clients, never `anon`/`authenticated` 
 
 The `telnyx-voice-inbound` function may return **HTTP 200** with a Telnyx `hangup`/`reject` action for logical failures (missing fields, subscription/period gating) for the same reason. Hard failures after answer may still surface as **5xx**; rely on logs and telemetry for diagnosis.
 
+## Budget enforcement (SMS / voice / AI)
+
+System-level, per-business budget gates apply to ALL relevant traffic regardless of whether an AiFlow is involved:
+
+- **Voice (hard refuse):** every inbound/outbound call that uses Google/Gemini voice must pass `voice_reserve_for_call` / `reserveVoiceBudget` ([supabase/functions/_shared/voice_reserve.ts](supabase/functions/_shared/voice_reserve.ts)) BEFORE the leg is established. No budget → the call/leg is not established (see the Telnyx voice inbound ops note above).
+- **SMS (hard stop at the monthly cap):** every customer-facing outbound SMS atomically reserves a slot via `try_reserve_sms_outbound_slot` (row-locked monthly cap + pre-increment) before hitting Telnyx; on `monthly_sms_limit` the send is refused (the reply is suppressed and the owner gets a one-time cap alert). This is parity with voice — a hard stop on the actual SMS limit, independent of how the reply text was generated. Enforced at every customer-facing send site:
+  - Node: `sendTelnyxSms(..., { meterBusinessId })` — `app/api/dashboard/messages/send`, `app/api/voice/tools/sms`, `app/api/rowboat/tool-call`.
+  - Edge: `sms-inbound-worker` (AI reply) and `ai-flow-worker` (`send_sms` / group SMS to the lead, and team-offer SMS) reserve via the `try_reserve_sms_outbound_slot` RPC.
+- **AI chat spend (graceful degrade, NOT a hard stop):** when a business is over its AI token budget, the SMS/chat reply degrades to the local model ([supabase/functions/_shared/chat_spend_cap.ts](supabase/functions/_shared/chat_spend_cap.ts)) rather than refusing. The SMS SEND that carries that reply is still hard-gated by the SMS cap above.
+
+Intentional operational exemptions (NOT metered against the customer's monthly SMS pool, because they are platform/owner/compliance traffic, never customer-facing):
+
+- Owner alerts ([src/lib/notifications/dispatch.ts](src/lib/notifications/dispatch.ts)) and AiFlow owner notices (`sendOwnerSms` / `notify_owner` forward in [ai-flow-worker](supabase/functions/ai-flow-worker/index.ts)).
+- The one-time provisioning "your Coworker is live" SMS to the owner ([src/lib/provisioning/orchestrate.ts](src/lib/provisioning/orchestrate.ts)).
+- Teammate offer-reply acks and the Safe-Mode inbound forward to the owner ([telnyx-sms-inbound](supabase/functions/telnyx-sms-inbound/index.ts) / [sms-inbound-worker](supabase/functions/sms-inbound-worker/index.ts)).
+- STOP / HELP / START compliance auto-replies (legally required; must never be capped).
+
 ## Subagents
 Never use a subagent.
 
