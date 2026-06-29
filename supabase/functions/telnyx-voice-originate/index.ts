@@ -190,11 +190,11 @@ serve(async (req: Request) => {
   if (!callControlId) {
     // Telnyx's POST /v2/calls always returns data.call_control_id on a 2xx, so
     // this is a defensive branch. Without the id we cannot hang up, reserve, or
-    // attach this leg directly — but it was dialed with our `vob:` client_state,
-    // so if it ever materializes it self-identifies on every webhook: a
-    // call.answered hits handleOutboundAnswered (reserve-if-missing → metered or
-    // hung up), and a no-answer rings out and settles with no reservation to
-    // leak. Log + meter visibility, then fail the Place call.
+    // write a session for this leg directly — but it was dialed with our `vob:`
+    // client_state, so if it ever materializes it self-identifies on every
+    // webhook: a call.answered hits handleOutboundAnswered, finds no `ai_intake`
+    // session (we never wrote one), and hangs the leg up; a no-answer rings out
+    // and settles with no reservation to leak. Log for visibility, then fail.
     console.error("originate: dial response missing call_control_id", dialJson);
     await telemetryRecord(supabase, "voice_outbound_dial_no_call_control_id", {
       business_id: businessId,
@@ -203,46 +203,12 @@ serve(async (req: Request) => {
     return json(502, { ok: false, error: "no_call_control_id" });
   }
 
-  // Persist the intake session FIRST (before the reservation, which may do a
-  // slow Stripe JIT refresh). The VPS bridge reads this row by call_control_id
-  // on connect to switch into intake mode — run the configured persona, capture
-  // the configured fields, and text the post-call summary to notifyE164. Writing
-  // it immediately after the dial (tens of ms) keeps it in place well before the
-  // callee can answer, so the bridge never falls back to the receptionist.
-  const { error: sessErr } = await supabase.from("voice_handoff_sessions").upsert(
-    {
-      call_control_id: callControlId,
-      business_id: businessId,
-      from_e164: callee,
-      chain_from_e164: callee,
-      status: "ai_intake",
-      current_step: 0,
-      context: { ...outboundSessionContext(plan), session_id: sessionId }
-    },
-    { onConflict: "call_control_id" }
-  );
-  if (sessErr) {
-    // The intake session IS the call: without it the bridge runs the default
-    // receptionist persona and never texts the summary. Reporting success here
-    // would silently place a misconfigured call, so abort — hang up the leg and
-    // return an error the UI can surface so the owner can retry.
-    console.error("originate: intake session upsert failed; aborting", sessErr);
-    try {
-      await telnyxHangupCall(apiKey, callControlId);
-    } catch (e) {
-      console.error("originate: hangup after session upsert failure failed", e);
-    }
-    await telemetryRecord(supabase, "voice_outbound_session_upsert_failed", {
-      business_id: businessId,
-      flow_id: flowId,
-      call_control_id: callControlId
-    });
-    return json(500, { ok: false, error: "session_persist_failed" });
-  }
-
-  // Reserve budget under the REAL leg id BEFORE any answer/media. The callee can
-  // only ring in the brief window before this resolves; on refusal we hang up
-  // before answer so no minutes are billed.
+  // Reserve budget under the REAL leg id BEFORE we make the leg bridgeable. The
+  // reservation is the AUTHORITATIVE budget gate: only after it succeeds do we
+  // write the `ai_intake` session that lets call.answered attach the AI bridge.
+  // On refusal we never write a session, so a racing call.answered finds no
+  // active intake session and hangs up — the refused call can never be metered
+  // or bridged behind the UI's back.
   const reserve = await reserveVoiceBudget(supabase, {
     businessId,
     callControlId,
@@ -254,13 +220,6 @@ serve(async (req: Request) => {
     } catch (e) {
       console.error("originate: hangup after refused reservation failed", e);
     }
-    // The leg is being torn down — mark the intake session terminal so a stray
-    // late answer can't connect the bridge to an unmetered call.
-    const { error: doneErr } = await supabase
-      .from("voice_handoff_sessions")
-      .update({ status: "done" })
-      .eq("call_control_id", callControlId);
-    if (doneErr) console.error("originate: mark session done after refusal failed", doneErr);
     await telemetryRecord(supabase, "voice_outbound_blocked", {
       business_id: businessId,
       flow_id: flowId,
@@ -276,6 +235,47 @@ serve(async (req: Request) => {
       payload: { call_control_id: callControlId, reason: reserve.reason, to: callee }
     });
     return json(200, { ok: false, error: "budget", reason: reserve.reason });
+  }
+
+  // Budget held → make the leg bridgeable. The VPS bridge reads this row by
+  // call_control_id on connect to switch into intake mode (run the configured
+  // persona, capture the configured fields, text the post-call summary to
+  // notifyE164). Because we only reach here AFTER a successful reservation,
+  // `status='ai_intake'` is the single signal call.answered needs that the leg
+  // is both budgeted and configured.
+  const { error: sessErr } = await supabase.from("voice_handoff_sessions").upsert(
+    {
+      call_control_id: callControlId,
+      business_id: businessId,
+      from_e164: callee,
+      chain_from_e164: callee,
+      status: "ai_intake",
+      current_step: 0,
+      context: { ...outboundSessionContext(plan), session_id: sessionId }
+    },
+    { onConflict: "call_control_id" }
+  );
+  if (sessErr) {
+    // The intake session IS the call's config: without it the bridge runs the
+    // default receptionist and never texts the summary, so reporting success
+    // would silently place a misconfigured call. Abort: release the reservation
+    // we just made (so we don't hold a slot for a dead leg) and hang up.
+    console.error("originate: intake session upsert failed; aborting", sessErr);
+    const { error: relErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
+      p_call_control_id: callControlId
+    });
+    if (relErr) console.error("originate: release reservation after session fail failed", relErr);
+    try {
+      await telnyxHangupCall(apiKey, callControlId);
+    } catch (e) {
+      console.error("originate: hangup after session upsert failure failed", e);
+    }
+    await telemetryRecord(supabase, "voice_outbound_session_upsert_failed", {
+      business_id: businessId,
+      flow_id: flowId,
+      call_control_id: callControlId
+    });
+    return json(500, { ok: false, error: "session_persist_failed" });
   }
 
   await telemetryRecord(supabase, "voice_outbound_originated", {

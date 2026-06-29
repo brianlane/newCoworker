@@ -193,13 +193,13 @@ async function attachAiStream(
 
 /**
  * Outbound origination: a `call.answered` for an AiFlow-placed call (vob
- * client_state) means the callee picked up. Budget was normally reserved under
- * this call_control_id by telnyx-voice-originate right after the dial; if the
- * callee answered before that committed (a race) we reserve here instead so the
- * call is still metered and a valid call is never dropped. Then we attach the
- * Gemini bridge (streaming_start) and flip the reservation to active. Inbound
- * answers carry no vob state and are ignored. Always returns a 200 Response
- * (Telnyx must not retry a delivered webhook).
+ * client_state) means the callee picked up. telnyx-voice-originate reserves
+ * budget and only then writes an `ai_intake` voice_handoff_sessions row, so that
+ * row is the single gate: present+ai_intake ⇒ budgeted and configured ⇒ attach
+ * the Gemini bridge (streaming_start) and flip the reservation to active;
+ * anything else ⇒ hang up (never bridge an unconfirmed/refused/aborted leg).
+ * Inbound answers carry no vob state and are ignored. Always returns a 200
+ * Response (Telnyx must not retry a delivered webhook).
  */
 async function handleOutboundAnswered(
   deps: HandoffDeps,
@@ -212,98 +212,75 @@ async function handleOutboundAnswered(
   const callControlId = String(payload["call_control_id"] ?? "");
   if (!callControlId) return jsonOk("outbound_no_call_control_id");
   const businessId = parsed.businessId;
+
+  // Telnyx has already moved this leg to `answered`, so every bail-out below
+  // must hang the leg up — otherwise the callee sits connected to silence with
+  // no cleanup. The one exception is a missing TELNYX_API_KEY, where we have no
+  // way to issue the hangup at all.
+  if (!apiKey) {
+    console.error("outbound: TELNYX_API_KEY missing; cannot attach or hang up", { callControlId });
+    return jsonOk("outbound_no_api_key");
+  }
+  const hangUpAnd = async (path: string, extra: Record<string, unknown> = {}): Promise<Response> => {
+    try {
+      await telnyxHangupCall(apiKey, callControlId);
+    } catch (e) {
+      console.error(`outbound: hangup (${path}) failed`, e);
+    }
+    return jsonOk(path, extra);
+  };
+
   // On an outbound leg, `to` is the callee we dialed and `from` is the business
   // DID we presented. Mirror inbound's signed-URL semantics: to_e164 = business
   // DID (route key), from_e164 = the remote party so the bridge recognizes them.
   const ourDid = String(payload["from"] ?? "").trim();
   const callee = String(payload["to"] ?? "").trim();
-  if (!ourDid) return jsonOk("outbound_missing_from");
-
-  if (!apiKey) {
-    console.error("outbound: TELNYX_API_KEY missing; cannot attach stream", { callControlId });
-    return jsonOk("outbound_no_api_key");
+  if (!ourDid) {
+    console.error("outbound: answered payload missing `from`; hanging up", { callControlId });
+    return hangUpAnd("outbound_missing_from");
   }
 
-  // Respect an aborted origination. telnyx-voice-originate writes an
-  // `ai_intake` session right after the dial and flips it to `done` if it then
-  // refuses budget (and hangs the leg up). A `call.answered` can still race in
-  // while that teardown is in flight — if the session is anything other than
-  // `ai_intake` (terminal `done`, or belongs to another business) we must NOT
-  // reserve/attach: that would bridge AI media onto a call we already aborted
-  // and reported as failed to Place call. Hang up and bail. A missing session
-  // is the inverse race (answer beat the session write) — fall through and let
-  // the reservation logic below decide, so we never drop a valid call.
+  // The `ai_intake` session is the SINGLE authoritative gate. telnyx-voice-
+  // originate writes it ONLY after a successful budget reservation, so its
+  // presence proves the leg is both budgeted and configured. Anything else —
+  // missing (origination refused budget / not our leg / not yet written),
+  // terminal `done`, or another business — means we must NOT bridge: doing so
+  // could meter a call the UI already refused, or attach AI media to an aborted
+  // leg. In every such case we hang up. (Choosing "hang up when unconfirmed"
+  // over "reserve here" keeps budget enforcement authoritative: a refused call
+  // can never proceed behind the UI's back.)
   const { data: sessRow, error: sessErr } = await supabase
     .from("voice_handoff_sessions")
     .select("status, business_id")
     .eq("call_control_id", callControlId)
     .maybeSingle();
   if (sessErr) {
-    console.error("outbound: session lookup failed", sessErr);
-    return jsonOk("outbound_session_lookup_error");
+    console.error("outbound: session lookup failed; hanging up", sessErr);
+    return hangUpAnd("outbound_session_lookup_error");
   }
   const sess = sessRow as { status?: string; business_id?: string } | null;
-  if (sess && (sess.business_id !== businessId || sess.status !== "ai_intake")) {
-    console.warn("outbound: answered for non-active session; hanging up", {
+  if (!sess || sess.business_id !== businessId || sess.status !== "ai_intake") {
+    console.warn("outbound: no active intake session for answered leg; hanging up", {
       callControlId,
-      status: sess.status ?? null
+      status: sess?.status ?? null
     });
-    try {
-      await telnyxHangupCall(apiKey, callControlId);
-    } catch (e) {
-      console.error("outbound: hangup (session not active) failed", e);
-    }
-    await telemetryRecord(supabase, "voice_outbound_answer_session_inactive", {
+    await telemetryRecord(supabase, "voice_outbound_answer_no_active_session", {
       business_id: businessId,
       call_control_id: callControlId,
-      status: sess.status ?? null
+      status: sess?.status ?? null
     });
-    return jsonOk("outbound_session_not_active", { status: sess.status ?? null });
+    return hangUpAnd("outbound_no_active_session", { status: sess?.status ?? null });
   }
 
-  // The reservation normally already exists (telnyx-voice-originate reserves
-  // right after the dial). But the callee CAN answer in the brief gap before
-  // that reservation commits, so a missing row here is a race — not a signal to
-  // drop a valid call. When it's missing we reserve now under this leg id
-  // (idempotent per call_control_id) so metering still holds; we only hang up if
-  // the account is genuinely over budget.
-  const { data: resvRow, error: resvErr } = await supabase
+  // Idempotent: a retried call.answered after we already attached is a no-op.
+  // (We don't re-read for budget — the ai_intake session above already proves
+  // origination reserved this leg.)
+  const { data: resvRow } = await supabase
     .from("voice_reservations")
-    .select("business_id, state, answer_issued_at")
+    .select("answer_issued_at")
     .eq("call_control_id", callControlId)
     .maybeSingle();
-  if (resvErr) {
-    console.error("outbound: reservation lookup failed", resvErr);
-    return jsonOk("outbound_reservation_lookup_error");
-  }
-  const resv = resvRow as
-    | { business_id?: string; state?: string; answer_issued_at?: string | null }
-    | null;
-  if (!resv || resv.business_id !== businessId) {
-    const reserve = await reserveVoiceBudget(supabase, {
-      businessId,
-      callControlId,
-      stripeSecret: deps.stripeSecret
-    });
-    if (!reserve.ok) {
-      console.warn("outbound: no budget on answer; hanging up", {
-        callControlId,
-        reason: reserve.reason
-      });
-      try {
-        await telnyxHangupCall(apiKey, callControlId);
-      } catch (e) {
-        console.error("outbound: hangup (no budget on answer) failed", e);
-      }
-      await telemetryRecord(supabase, "voice_outbound_blocked", {
-        business_id: businessId,
-        call_control_id: callControlId,
-        reason: reserve.reason
-      });
-      return jsonOk("outbound_no_budget_on_answer", { reason: reserve.reason });
-    }
-  } else if (resv.answer_issued_at) {
-    // Idempotent: a retried call.answered after we already attached is a no-op.
+  if ((resvRow as { answer_issued_at?: string | null } | null)?.answer_issued_at) {
     return jsonOk("outbound_already_attached");
   }
 
