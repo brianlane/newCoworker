@@ -5,6 +5,21 @@ import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { EmailComposer, type FromOption } from "@/components/dashboard/EmailComposer";
 import type { EmailLogRow, EmailLogSource } from "@/lib/db/email-log";
+import { SortControl, type SortOption } from "@/components/dashboard/SortControl";
+import { SearchControl } from "@/components/dashboard/SearchControl";
+import { sortRows } from "@/lib/dashboard/sort";
+import { usePersistentSort } from "@/components/dashboard/usePersistentSort";
+import { matchesQuery } from "@/lib/dashboard/search";
+
+const EMAIL_SORT_OPTIONS: SortOption[] = [
+  { key: "created_at", label: "Date" },
+  { key: "subject", label: "Subject" }
+];
+
+function emailSortValue(row: EmailLogRow, field: string): string | number | null | undefined {
+  if (field === "subject") return row.subject;
+  return row.created_at;
+}
 
 /**
  * Owner-facing email inbox.
@@ -318,7 +333,24 @@ export function EmailsList({
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [composer, setComposer] = useState<ComposerState | null>(null);
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = usePersistentSort(
+    "dashboard.emails.sort",
+    { field: "created_at", dir: "desc" },
+    EMAIL_SORT_OPTIONS.map((o) => o.key)
+  );
   const selected = rows.find((r) => r.id === selectedId) ?? null;
+
+  // Filter + sort the already-loaded page in the browser. Selection still
+  // resolves against the full `rows`, so an open message stays open even if a
+  // later query would hide it from the list.
+  const visibleRows = sortRows(
+    rows.filter((r) =>
+      matchesQuery(query, [r.subject, r.from_email, r.to_email, r.body_preview])
+    ),
+    (r) => emailSortValue(r, sort.field),
+    sort.dir
+  );
 
   // The composer is intentionally independent of which message is open in the
   // reading pane: navigating (open another, close, Escape) never touches an
@@ -387,6 +419,23 @@ export function EmailsList({
           selected ? "hidden md:block md:w-72 lg:w-80 shrink-0" : "w-full"
         ].join(" ")}
       >
+        {rows.length > 0 && (
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <SearchControl
+              value={query}
+              onChange={setQuery}
+              placeholder="Search subject, sender, or body…"
+              idPrefix="emails-search"
+            />
+            <SortControl
+              options={EMAIL_SORT_OPTIONS}
+              field={sort.field}
+              dir={sort.dir}
+              onChange={setSort}
+              idPrefix="emails-sort"
+            />
+          </div>
+        )}
         <Card padding="sm">
           {rows.length === 0 && (
             <div className="text-center py-8">
@@ -397,8 +446,13 @@ export function EmailsList({
               </p>
             </div>
           )}
+          {rows.length > 0 && visibleRows.length === 0 && (
+            <div className="py-6 text-center text-sm text-parchment/50">
+              No emails match “{query}”.
+            </div>
+          )}
           <ul className="divide-y divide-parchment/10">
-            {rows.map((r) => {
+            {visibleRows.map((r) => {
               const meta = sourceMeta(r.source);
               const isActive = r.id === selectedId;
               return (

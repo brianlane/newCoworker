@@ -1,11 +1,14 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { SortControl, type SortOption } from "@/components/dashboard/SortControl";
+import { SearchControl } from "@/components/dashboard/SearchControl";
 import { sortRows } from "@/lib/dashboard/sort";
 import { usePersistentSort } from "@/components/dashboard/usePersistentSort";
+import { matchesQuery } from "@/lib/dashboard/search";
 
 /**
  * One contact row, pre-resolved on the server: `name`/`type` already account for
@@ -63,6 +66,7 @@ export function CustomersList({ rows }: { rows: CustomerListRow[] }) {
     { field: "lastInteractionAt", dir: "desc" },
     CUSTOMER_SORT_OPTIONS.map((o) => o.key)
   );
+  const [query, setQuery] = useState("");
 
   if (rows.length === 0) {
     return (
@@ -77,11 +81,20 @@ export function CustomersList({ rows }: { rows: CustomerListRow[] }) {
     );
   }
 
-  const sorted = sortRows(rows, (r) => sortValue(r, sort.field), sort.dir);
+  const filtered = rows.filter((r) =>
+    matchesQuery(query, [r.name, r.e164, r.type, r.summary])
+  );
+  const sorted = sortRows(filtered, (r) => sortValue(r, sort.field), sort.dir);
 
   return (
     <div className="space-y-2">
-      <div className="flex justify-end">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <SearchControl
+          value={query}
+          onChange={setQuery}
+          placeholder="Search by name, number, or note…"
+          idPrefix="customer-search"
+        />
         <SortControl
           options={CUSTOMER_SORT_OPTIONS}
           field={sort.field}
@@ -91,6 +104,11 @@ export function CustomersList({ rows }: { rows: CustomerListRow[] }) {
         />
       </div>
       <Card padding="sm">
+        {sorted.length === 0 && (
+          <div className="py-6 text-center text-sm text-parchment/50">
+            No contacts match “{query}”.
+          </div>
+        )}
         <ul className="divide-y divide-parchment/10">
           {sorted.map((c) => (
             <li key={c.e164}>

@@ -1,0 +1,121 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+import { Card } from "@/components/ui/Card";
+import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
+import {
+  StatusBadge,
+  formatDuration
+} from "@/components/dashboard/voice-transcript-helpers";
+import type { VoiceTranscriptStatus } from "@/lib/db/voice-transcripts";
+import { SortControl, type SortOption } from "@/components/dashboard/SortControl";
+import { SearchControl } from "@/components/dashboard/SearchControl";
+import { sortRows } from "@/lib/dashboard/sort";
+import { usePersistentSort } from "@/components/dashboard/usePersistentSort";
+import { matchesQuery } from "@/lib/dashboard/search";
+
+/**
+ * One call row, pre-resolved on the server: `label` already accounts for
+ * owner/employee/contact-name overrides so the client can sort/search by the
+ * display name without re-resolving anything.
+ */
+export type CallListRow = {
+  id: string;
+  label: string;
+  e164: string | null;
+  /** owner/employee badge, or null for a plain caller. */
+  badgeKind: "owner" | "employee" | null;
+  status: VoiceTranscriptStatus;
+  startedAt: string;
+  endedAt: string | null;
+};
+
+const CALL_SORT_OPTIONS: SortOption[] = [
+  { key: "startedAt", label: "Date" },
+  { key: "label", label: "Name" },
+  { key: "status", label: "Status" }
+];
+
+function sortValue(row: CallListRow, field: string): string | number | null | undefined {
+  if (field === "label") return row.label;
+  if (field === "status") return row.status;
+  return row.startedAt;
+}
+
+export function CallsList({ rows }: { rows: CallListRow[] }) {
+  const [sort, setSort] = usePersistentSort(
+    "dashboard.calls.sort",
+    { field: "startedAt", dir: "desc" },
+    CALL_SORT_OPTIONS.map((o) => o.key)
+  );
+  const [query, setQuery] = useState("");
+
+  const filtered = rows.filter((r) => matchesQuery(query, [r.label, r.e164]));
+  const sorted = sortRows(filtered, (r) => sortValue(r, sort.field), sort.dir);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <SearchControl
+          value={query}
+          onChange={setQuery}
+          placeholder="Search by name or number…"
+          idPrefix="calls-search"
+        />
+        <SortControl
+          options={CALL_SORT_OPTIONS}
+          field={sort.field}
+          dir={sort.dir}
+          onChange={setSort}
+          idPrefix="calls-sort"
+        />
+      </div>
+      <Card padding="sm">
+        {sorted.length === 0 ? (
+          <div className="py-6 text-center text-sm text-parchment/50">
+            No calls match “{query}”.
+          </div>
+        ) : (
+          <ul className="divide-y divide-parchment/10">
+            {sorted.map((row) => (
+              <li key={row.id}>
+                <Link
+                  // Link by transcript row UUID rather than the Telnyx
+                  // call_control_id (which starts with `v3:` — the `:` is a URL
+                  // sub-delim some edges pre-decode, 404ing on rows that exist).
+                  href={`/dashboard/calls/${row.id}`}
+                  className="flex items-center justify-between gap-4 px-3 py-3 rounded-lg hover:bg-parchment/5 transition-colors"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-parchment truncate">
+                        {row.label}
+                      </span>
+                      {row.badgeKind && (
+                        <span className="text-[10px] uppercase tracking-wide text-parchment/40">
+                          {row.badgeKind}
+                        </span>
+                      )}
+                      {row.badgeKind && row.e164 && (
+                        <span className="text-[10px] text-parchment/40 font-mono">
+                          {row.e164}
+                        </span>
+                      )}
+                      <StatusBadge status={row.status} />
+                    </div>
+                    <p className="text-xs text-parchment/50 mt-0.5">
+                      <LocalDateTime iso={row.startedAt} /> ·{" "}
+                      {formatDuration(row.startedAt, row.endedAt)}
+                    </p>
+                  </div>
+                  <span className="text-parchment/40 text-sm shrink-0">View →</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    </div>
+  );
+}
