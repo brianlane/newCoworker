@@ -75,16 +75,6 @@ export default async function DashboardEmployeesPage() {
         </p>
       </div>
 
-      <Card padding="sm" className="border-signal-teal/30 bg-signal-teal/5">
-        <p className="text-xs text-parchment/70 leading-relaxed">
-          Leads are offered to active employees in fair rotation. Time off
-          always wins — an employee who is out today is never offered a lead,
-          even when a flow routes directly to them. A weekly schedule (when
-          set) limits offers to working hours; preferred times only move
-          someone to the front of the line, never out of it.
-        </p>
-      </Card>
-
       <EmployeesManager
         businessId={business.id}
         initialMembers={members}

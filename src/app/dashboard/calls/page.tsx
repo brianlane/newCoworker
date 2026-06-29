@@ -78,13 +78,6 @@ export default async function DashboardCallsPage() {
         </p>
       </div>
 
-      <Card padding="sm" className="border-signal-teal/30 bg-signal-teal/5">
-        <p className="text-xs text-parchment/70 leading-relaxed">
-          Calls handled by your AI assistant are transcribed and stored so you
-          can review them later. Transcripts are visible to you only.
-        </p>
-      </Card>
-
       {transcripts.length === 0 ? (
         <Card>
           <div className="text-center py-8">
