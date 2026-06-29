@@ -188,7 +188,18 @@ serve(async (req: Request) => {
     | null;
   const callControlId = dialJson?.data?.call_control_id ?? "";
   if (!callControlId) {
+    // Telnyx's POST /v2/calls always returns data.call_control_id on a 2xx, so
+    // this is a defensive branch. Without the id we cannot hang up, reserve, or
+    // attach this leg directly — but it was dialed with our `vob:` client_state,
+    // so if it ever materializes it self-identifies on every webhook: a
+    // call.answered hits handleOutboundAnswered (reserve-if-missing → metered or
+    // hung up), and a no-answer rings out and settles with no reservation to
+    // leak. Log + meter visibility, then fail the Place call.
     console.error("originate: dial response missing call_control_id", dialJson);
+    await telemetryRecord(supabase, "voice_outbound_dial_no_call_control_id", {
+      business_id: businessId,
+      flow_id: flowId
+    });
     return json(502, { ok: false, error: "no_call_control_id" });
   }
 
@@ -211,14 +222,22 @@ serve(async (req: Request) => {
     { onConflict: "call_control_id" }
   );
   if (sessErr) {
-    // Non-fatal for billing, but the bridge would run the default persona and
-    // skip the summary SMS — surface it loudly so a misconfig is visible.
-    console.error("originate: intake session upsert failed", sessErr);
+    // The intake session IS the call: without it the bridge runs the default
+    // receptionist persona and never texts the summary. Reporting success here
+    // would silently place a misconfigured call, so abort — hang up the leg and
+    // return an error the UI can surface so the owner can retry.
+    console.error("originate: intake session upsert failed; aborting", sessErr);
+    try {
+      await telnyxHangupCall(apiKey, callControlId);
+    } catch (e) {
+      console.error("originate: hangup after session upsert failure failed", e);
+    }
     await telemetryRecord(supabase, "voice_outbound_session_upsert_failed", {
       business_id: businessId,
       flow_id: flowId,
       call_control_id: callControlId
     });
+    return json(500, { ok: false, error: "session_persist_failed" });
   }
 
   // Reserve budget under the REAL leg id BEFORE any answer/media. The callee can
