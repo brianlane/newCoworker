@@ -5,10 +5,14 @@ import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import {
+  CallDirectionBadge,
   StatusBadge,
   formatDuration
 } from "@/components/dashboard/voice-transcript-helpers";
-import type { VoiceTranscriptStatus } from "@/lib/db/voice-transcripts";
+import type {
+  VoiceTranscriptDirection,
+  VoiceTranscriptStatus
+} from "@/lib/db/voice-transcripts";
 import { SortControl, type SortOption } from "@/components/dashboard/SortControl";
 import { SearchControl } from "@/components/dashboard/SearchControl";
 import { sortRows } from "@/lib/dashboard/sort";
@@ -27,6 +31,7 @@ export type CallListRow = {
   /** owner/employee badge, or null for a plain caller. */
   badgeKind: "owner" | "employee" | null;
   status: VoiceTranscriptStatus;
+  direction: VoiceTranscriptDirection;
   startedAt: string;
   endedAt: string | null;
 };
@@ -34,12 +39,14 @@ export type CallListRow = {
 const CALL_SORT_OPTIONS: SortOption[] = [
   { key: "startedAt", label: "Date" },
   { key: "label", label: "Name" },
+  { key: "direction", label: "Direction" },
   { key: "status", label: "Status" }
 ];
 
 function sortValue(row: CallListRow, field: string): string | number | null | undefined {
   if (field === "label") return row.label;
   if (field === "status") return row.status;
+  if (field === "direction") return row.direction;
   return row.startedAt;
 }
 
@@ -89,6 +96,7 @@ export function CallsList({ rows }: { rows: CallListRow[] }) {
                 >
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
+                      <CallDirectionBadge direction={row.direction} />
                       <span className="text-sm font-semibold text-parchment truncate">
                         {row.label}
                       </span>

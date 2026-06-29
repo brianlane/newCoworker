@@ -27,12 +27,15 @@ export type LiveTranscriptMessage = {
 
 export type TranscriptRole = "caller" | "assistant";
 
+export type TranscriptDirection = "inbound" | "outbound";
+
 export type TranscriptAdapter = {
   createTranscript: (input: {
     businessId: string;
     callControlId: string;
     callerE164: string;
     model: string;
+    direction: TranscriptDirection;
   }) => Promise<string | null>;
   insertTurn: (input: {
     transcriptId: string;
@@ -56,6 +59,7 @@ export type TranscriptRecorderInit = {
   callControlId: string;
   callerE164: string;
   model: string;
+  direction: TranscriptDirection;
 };
 
 /**

@@ -54,6 +54,37 @@ export async function telnyxTransferCall(
   }
 }
 
+/**
+ * Hang up a live call leg. Used by the bridge's `end_call` tool so the
+ * assistant can end the conversation cleanly. Telnyx closes the media stream
+ * once the leg hangs up, which fires the bridge's ws `close` handler (transcript
+ * finalize + reservation settlement), so this is the only network call needed.
+ */
+export async function telnyxHangupCall(
+  apiKey: string,
+  callControlId: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<TelnyxActionResult> {
+  if (!apiKey) return { ok: false, status: 0, body: "missing TELNYX_API_KEY" };
+  if (!callControlId) return { ok: false, status: 0, body: "missing call_control_id" };
+
+  const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/hangup`;
+  try {
+    const res = await fetchImpl(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: "{}"
+    });
+    const text = await res.text().catch(() => "");
+    return { ok: res.ok, status: res.status, body: text.slice(0, 500) };
+  } catch (err) {
+    return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export type TelnyxSmsOptions = {
   toE164: string;
   fromE164: string;

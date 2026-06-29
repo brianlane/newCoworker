@@ -16,6 +16,7 @@ import {
   listTurns
 } from "@/lib/db/voice-transcripts";
 import {
+  CallDirectionBadge,
   StatusBadge,
   callerLabel,
   formatDuration
@@ -85,6 +86,7 @@ export default async function CallTranscriptPage({
         </Link>
         <h1 className="text-2xl font-bold text-parchment mt-2">Call transcript</h1>
         <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-parchment/60">
+          <CallDirectionBadge direction={transcript.direction} />
           <span className="font-semibold text-parchment">
             {contact?.name ?? callerLabel(transcript.caller_e164)}
           </span>

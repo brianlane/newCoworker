@@ -37,6 +37,7 @@ const TRANSCRIPT = {
   caller_e164: "+15551234567",
   model: "gemini-live",
   status: "completed" as const,
+  direction: "inbound" as const,
   started_at: "2026-04-23T00:00:00Z",
   ended_at: "2026-04-23T00:03:00Z",
   created_at: "2026-04-23T00:00:00Z",

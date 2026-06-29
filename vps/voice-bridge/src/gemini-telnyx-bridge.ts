@@ -86,6 +86,20 @@ export type TransferCapability = {
 };
 
 /**
+ * Lets the assistant hang up the live call once the conversation is genuinely
+ * over (the caller said goodbye / there's nothing left to do). When set, the
+ * bridge registers an `end_call` tool; on invocation it acknowledges, waits a
+ * short grace period so the spoken goodbye plays out, then `execute()` hangs
+ * the Telnyx leg up (which closes the media WS and settles the reservation).
+ */
+export type HangupCapability = {
+  /** Hang the Telnyx call up. Resolved value is for logging only. */
+  execute: (args: { reason?: string }) => Promise<{ ok: boolean; detail?: string }>;
+  /** Ms to wait after the model calls end_call before hanging up (goodbye playout). */
+  graceMs?: number;
+};
+
+/**
  * HomeLight live-transfer "AI takeover" intake. When set, the bridge runs a
  * dedicated lead-intake persona instead of the receptionist persona: it greets
  * as the owner's office, registers a `capture_lead` tool, and accumulates the
@@ -153,6 +167,14 @@ export type GeminiBridgeOptions = {
   businessTimezone?: string | null;
   /** When set, registers a `transfer_to_owner` function tool on the Live session. */
   transfer?: TransferCapability;
+  /** When set, registers an `end_call` tool so the assistant can hang up when done. */
+  hangup?: HangupCapability;
+  /**
+   * Whether the business received this call (inbound) or placed it (outbound).
+   * Recorded on the transcript so the dashboard can tag the call. Defaults to
+   * inbound (the historical behaviour) when omitted.
+   */
+  direction?: "inbound" | "outbound";
   /**
    * When set, the session runs the HomeLight lead-intake persona instead of the
    * normal receptionist/staff personas (the live client was connected after both
@@ -232,7 +254,8 @@ export function systemInstructionForBusiness(
   vault?: VaultSnapshot,
   customerMemorySummary?: string,
   businessTimezone?: string | null,
-  callerIdentity?: CallerIdentity
+  callerIdentity?: CallerIdentity,
+  hasEndCall = false
 ): string {
   // Identity: present as a member of the team, never as software. The owner
   // wants callers to hear "the assistant", not "the AI assistant". Shared by
@@ -310,6 +333,12 @@ export function systemInstructionForBusiness(
         "- `customer_append_pinned_note` for facts the owner needs to remember across conversations (preferences, allergies, recurring scheduling constraints). Use sparingly — only for facts that should reach the next conversation unchanged.",
         "Always explain what you're about to do in plain language before calling a tool (e.g. 'Let me pull up openings on Thursday — one moment.'). Never read a tool's raw response aloud."
       ].join(" ")
+    );
+  }
+
+  if (hasEndCall) {
+    base.push(
+      "When the conversation is clearly finished — the caller says goodbye, confirms they have everything they need, or there is nothing left to help with — give a brief, warm goodbye out loud and THEN call the `end_call` tool to hang up. Only end the call when it is genuinely over: never hang up mid-conversation, while the caller may still have a question, or before you've said goodbye."
     );
   }
 
@@ -697,6 +726,9 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
 }> {
   const ai = new GoogleGenAI({ apiKey: opts.apiKey });
   let ended = false;
+  // Set once the model invokes `end_call` so a repeated/duplicate call can't
+  // schedule two hangups (the second would race teardown on a dead leg).
+  let endCallRequested = false;
   const timers: ReturnType<typeof setTimeout>[] = [];
   const downlinkTelemetry: DownlinkTelemetry = {
     droppedFrames: 0,
@@ -839,7 +871,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         businessId: opts.businessId,
         callControlId: opts.callControlId,
         callerE164: opts.callerE164 ?? "",
-        model: opts.model
+        model: opts.model,
+        direction: opts.direction ?? "inbound"
       })
     : null;
 
@@ -980,6 +1013,27 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       declarations.push(decl);
     }
   }
+  // `end_call` is available to every persona (receptionist, staff, and intake)
+  // whenever the host wired a hangup capability — so the assistant can cleanly
+  // end any call once it's over instead of leaving dead air on the line.
+  const hasEndCall = Boolean(opts.hangup);
+  if (hasEndCall) {
+    declarations.push({
+      name: "end_call",
+      description:
+        "Hang up the live phone call. Call this ONLY when the conversation is genuinely over (the caller said goodbye, confirmed they're all set, or there's nothing left to do) and AFTER you have spoken a brief goodbye. Never call it mid-conversation.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          reason: {
+            type: Type.STRING,
+            description: "One short phrase on why the call is ending (e.g. 'caller said goodbye')."
+          }
+        },
+        required: []
+      }
+    });
+  }
   const toolsForSession =
     declarations.length > 0
       ? [{ functionDeclarations: declarations as never }]
@@ -1006,7 +1060,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             opts.businessName,
             intake.persona,
             opts.businessTimezone,
-            intakeCaptureFields
+            intakeCaptureFields,
+            hasEndCall
           )
         : systemInstructionForBusiness(
             opts.businessName,
@@ -1015,7 +1070,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             opts.vault,
             opts.customerMemorySummary,
             opts.businessTimezone,
-            opts.callerIdentity
+            opts.callerIdentity,
+            hasEndCall
           ),
       tools: toolsForSession
     },
@@ -1322,6 +1378,41 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             detail: result.detail ?? (result.ok ? "transfer initiated" : "transfer failed")
           });
         })();
+        continue;
+      }
+
+      if (name === "end_call" && opts.hangup) {
+        const reason =
+          typeof call.args?.reason === "string" ? (call.args.reason as string) : undefined;
+        // Acknowledge immediately so the model's turn completes cleanly, then
+        // hang up after a short grace so the spoken goodbye finishes playing.
+        sendToolResponse(call.id, name, { ok: true, detail: "ending call" });
+        if (!endCallRequested) {
+          endCallRequested = true;
+          const graceMs = opts.hangup.graceMs ?? 3000;
+          timers.push(
+            setTimeout(() => {
+              void (async () => {
+                try {
+                  const result = await opts.hangup!.execute({ reason });
+                  if (!result.ok) {
+                    console.error("gemini-bridge: end_call hangup failed", result.detail);
+                    emitDiag("voice_bridge_end_call_failed", { detail: result.detail ?? null });
+                  } else {
+                    emitDiag("voice_bridge_end_call", { reason: reason ?? null });
+                  }
+                } catch (err) {
+                  console.error("gemini-bridge: end_call execute threw", err);
+                } finally {
+                  // Tear down regardless: even if the Telnyx hangup failed, the
+                  // model believes the call is over, so don't keep the Live
+                  // session (and its billing) open. teardown is idempotent.
+                  await teardown();
+                }
+              })();
+            }, graceMs)
+          );
+        }
         continue;
       }
 
