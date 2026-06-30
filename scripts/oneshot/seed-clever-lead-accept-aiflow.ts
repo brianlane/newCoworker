@@ -53,6 +53,9 @@
  *   AIFLOW_CLEVER_INTEGRATION_LABEL   (default "Clever")
  *   AIFLOW_CLEVER_MATCH_TEXT          (default "Clever referral")
  *   AIFLOW_CLEVER_ACCEPT_ACTIONS_JSON (default: click "Next" while present)
+ *   AIFLOW_CLEVER_SKIP_WHEN_TEXT      (default "already been claimed" — when the
+ *                                      accept page shows this, end the run as a
+ *                                      graceful skip instead of a failure)
  *   AIFLOW_CLEVER_QT_EMAIL_TO         (default "amy@amylaidlaw.com")
  *   AIFLOW_CLEVER_AGENT_NAME          (default "Dave Lane")
  */
@@ -107,6 +110,7 @@ function buildDefinition(opts: {
   integrationLabel: string;
   matchText: string;
   acceptActions: unknown;
+  skipWhenText: string;
   qtEmailTo: string;
   agentName: string;
 }): unknown {
@@ -130,7 +134,13 @@ function buildDefinition(opts: {
         type: "browse_action",
         urlVar: "lead_url",
         auth: { integrationLabel: opts.integrationLabel },
-        actions: opts.acceptActions
+        actions: opts.acceptActions,
+        // When the lead was already claimed by another agent the page shows
+        // "Sorry! This referral opportunity has already been claimed." and there
+        // is no Accept button — the click times out. That's not a failure: end
+        // the run gracefully (this step "skipped", run "done") instead of
+        // dead-lettering it. Match a distinctive substring of that banner.
+        skipWhenText: opts.skipWhenText
       },
       // Credentialed pass 2: re-open the (now claimed) lead URL, which redirects
       // to the claimed details card, and read the seller's real contact info +
@@ -237,6 +247,7 @@ async function main(): Promise<void> {
     integrationLabel: process.env.AIFLOW_CLEVER_INTEGRATION_LABEL ?? "Clever",
     matchText: process.env.AIFLOW_CLEVER_MATCH_TEXT ?? "Clever referral",
     acceptActions: parseActionsEnv("AIFLOW_CLEVER_ACCEPT_ACTIONS_JSON", DEFAULT_ACCEPT_ACTIONS),
+    skipWhenText: process.env.AIFLOW_CLEVER_SKIP_WHEN_TEXT ?? "already been claimed",
     qtEmailTo: process.env.AIFLOW_CLEVER_QT_EMAIL_TO ?? "amy@amylaidlaw.com",
     agentName: process.env.AIFLOW_CLEVER_AGENT_NAME ?? "Dave Lane"
   });
