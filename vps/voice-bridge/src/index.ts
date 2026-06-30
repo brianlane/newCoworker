@@ -20,7 +20,8 @@ import { loadVaultForPrompt } from "./vault-loader.js";
 import {
   telnyxTransferCall,
   telnyxSendPlainSms,
-  telnyxHangupCall
+  telnyxHangupCall,
+  telnyxStreamingStop
 } from "./telnyx-call-actions.js";
 import { composeIntakeLeadSms } from "./intake.js";
 import type { TranscriptAdapter } from "./voice-transcript.js";
@@ -769,6 +770,20 @@ function main(): void {
               reason: reason ?? ""
             });
             return { ok: true, detail: "transfer initiated" };
+          },
+          // After a successful transfer, remove the AI's media fork so the
+          // caller can talk to the human privately. Stops the Telnyx stream
+          // (does NOT hang up the caller leg). Best-effort: even if this fails,
+          // the bridge still closes the Gemini session so the AI goes silent.
+          detach: async () => {
+            if (!telnyxApiKey) return { ok: false, detail: "transfer not configured" };
+            const result = await telnyxStreamingStop(telnyxApiKey, callControlId);
+            if (!result.ok) {
+              console.error("voice-bridge: telnyx streaming_stop failed", result.status, result.body);
+              return { ok: false, detail: `telnyx ${result.status}` };
+            }
+            console.log("voice-bridge: transfer detach (streaming_stop)", { callControlId });
+            return { ok: true, detail: "streaming stopped" };
           }
         };
       }

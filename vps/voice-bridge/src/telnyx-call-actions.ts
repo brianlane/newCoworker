@@ -85,6 +85,38 @@ export async function telnyxHangupCall(
   }
 }
 
+/**
+ * Stop the bidirectional media stream on a call leg WITHOUT hanging it up.
+ * Used after a successful warm transfer so the AI's media fork is removed while
+ * the caller stays bridged to the human. Telnyx closes our media WebSocket when
+ * the stream stops, which fires the bridge's ws `close` handler (transcript
+ * finalize + reservation settlement). The PSTN leg itself stays up.
+ */
+export async function telnyxStreamingStop(
+  apiKey: string,
+  callControlId: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<TelnyxActionResult> {
+  if (!apiKey) return { ok: false, status: 0, body: "missing TELNYX_API_KEY" };
+  if (!callControlId) return { ok: false, status: 0, body: "missing call_control_id" };
+
+  const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/streaming_stop`;
+  try {
+    const res = await fetchImpl(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: "{}"
+    });
+    const text = await res.text().catch(() => "");
+    return { ok: res.ok, status: res.status, body: text.slice(0, 500) };
+  } catch (err) {
+    return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export type TelnyxSmsOptions = {
   toE164: string;
   fromE164: string;
