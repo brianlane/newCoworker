@@ -2109,7 +2109,29 @@ async function sendSmsStep(
     // teammate.
     bodyText = renderTemplate(action.body, agentScope(scope, agent)).trim();
     if (!bodyText) return { kind: "fail", error: "send_sms: body is empty after templating" };
+  } else if (action.toRef) {
+    // Dynamic recipient (saved employee/contact): resolve the LIVE number, then
+    // render the (raw) body. An employee ref puts {{agent.*}} in scope like
+    // toAgentName; a contact ref renders against plain run vars.
+    const resolved = await resolveContactRef(supabase, run.business_id, action.toRef);
+    if (!resolved) {
+      return {
+        kind: "fail",
+        error: `send_sms: ${action.toRef.source} reference could not be resolved (removed or no phone)`
+      };
+    }
+    toE164 = resolved.phone;
+    bodyText = renderTemplate(
+      action.body,
+      action.toRef.source === "employee" ? agentScope(scope, resolved) : scope
+    ).trim();
+    if (!bodyText) return { kind: "fail", error: "send_sms: body is empty after templating" };
   }
+  // An employee recipient (named or referenced) is an internal teammate text:
+  // never quiet-hours-deferred and never filed as a lead. A contact ref is a
+  // lead-side recipient, so it is treated like a plain `to`.
+  const internalAgentSend = Boolean(action.toAgentName) || action.toRef?.source === "employee";
+  const recipientLabel = action.toAgentName ?? action.toRef?.label ?? "the lead";
   // Lead-contact quiet hours: inside the configured overnight window the lead
   // is never texted. With an extracted lead email we email the same message
   // right away (email is not time-gated) AND still defer the run so the text
@@ -2120,7 +2142,7 @@ async function sendSmsStep(
   // protections; an agent-directed text (toAgentName) is an internal
   // notification that must not be parked until morning or copied to the lead's
   // email with content meant for a roster member.
-  if (action.quiet && !action.toAgentName && scope.vars[BYPASS_QUIET_HOURS_VAR] !== true) {
+  if (action.quiet && !internalAgentSend && scope.vars[BYPASS_QUIET_HOURS_VAR] !== true) {
     const decision = smsQuietDecision(Date.now(), {
       timezone: action.quiet.timezone,
       noSendAfter: action.quiet.noSendAfter,
@@ -2212,7 +2234,7 @@ async function sendSmsStep(
     } catch {
       messageId = null;
     }
-    appendActionTaken(scope, `texted ${action.toAgentName ?? "the lead"} at ${toE164}`);
+    appendActionTaken(scope, `texted ${recipientLabel} at ${toE164}`);
     await logOutboundSms(supabase, run, {
       to: toE164,
       from: cfg.from || null,
@@ -2221,8 +2243,8 @@ async function sendSmsStep(
       telnyxMessageId: messageId
     });
     // An agent recipient is a teammate, not a lead — don't file them as a lead
-    // customer profile.
-    if (!action.toAgentName) {
+    // customer profile. A contact ref is still a lead-side recipient.
+    if (!internalAgentSend) {
       await recordLeadCustomerProfile(supabase, run, scope, toE164);
     }
     return { kind: "ok", result: { to: toE164, messageId } };
@@ -2758,6 +2780,12 @@ function approvalStep(
  * SELECTION (its vault memory holds the roster + rotation); the engine owns the
  * ORCHESTRATION (offer SMS, deadline, escalation, owner fallback).
  */
+// Sentinel pinned-name used when an agentRef can't be resolved: it matches no
+// real roster row (names are compared trimmed/lower-cased), so the offer falls
+// through to the owner fallback — the same "pinned agent missing" path as a
+// stale agentName — instead of round-robin to an unintended teammate.
+const UNRESOLVED_AGENT_REF = "\u0000__unresolved_agent_ref__";
+
 async function routeToTeamStep(
   supabase: Supabase,
   run: RunRow,
@@ -2769,6 +2797,16 @@ async function routeToTeamStep(
     ? (routing.tried as unknown[]).filter((x): x is string => typeof x === "string")
     : [];
   routing.tried = tried;
+
+  // Dynamic pin (agentRef): resolve the referenced roster member's CURRENT name
+  // and pin to it (stable across renames). agentRef is always an employee
+  // (enforced at author time); an unresolved ref pins to a sentinel so the offer
+  // falls through to the owner fallback rather than to an unintended teammate.
+  let pinnedAgentName = action.agentName;
+  if (action.agentRef) {
+    const referenced = await resolveContactRef(supabase, run.business_id, action.agentRef);
+    pinnedAgentName = referenced?.name ?? UNRESOLVED_AGENT_REF;
+  }
 
   // A teammate retroactively UNCLAIMED a lead they'd taken (inbound "86"): clear
   // the claim, hand it back to the owner, and finalize WITHOUT replaying the
@@ -2888,7 +2926,7 @@ async function routeToTeamStep(
 
   const leadPhone = leadPhoneE164(scope);
   for (let i = 0; i < ROUTE_MAX_LOOKUPS; i++) {
-    const agent = await pickNextAgent(supabase, run, scope, tried, action.agentName);
+    const agent = await pickNextAgent(supabase, run, scope, tried, pinnedAgentName);
     // No agent at all (none / parse fail / unconfigured / pinned agent missing):
     // roster is exhausted.
     if (!agent) break;
@@ -2995,6 +3033,47 @@ async function resolveAgentByName(
   const phone = match?.phone_e164?.trim();
   if (!match || !phone) return null;
   return { name: match.name, phone };
+}
+
+/**
+ * Resolve a ContactRef to {name, phone} from its LIVE row, so a number stays
+ * correct as rosters/contacts change (and a contact ref survives a merge — the
+ * surviving row keeps the canonical customer_e164). Employees come from
+ * ai_flow_team_members (active only); contacts from the unified contacts table
+ * (keyed by customer_e164). Returns null when the row is gone / inactive / has
+ * no usable phone; THROWS on a query error so the run retries rather than
+ * silently mis-sending.
+ */
+async function resolveContactRef(
+  supabase: Supabase,
+  businessId: string,
+  ref: { source: "employee" | "contact"; id: string }
+): Promise<RoutedAgent | null> {
+  if (ref.source === "employee") {
+    const { data, error } = await supabase
+      .from("ai_flow_team_members")
+      .select("name, phone_e164")
+      .eq("business_id", businessId)
+      .eq("id", ref.id)
+      .eq("active", true)
+      .maybeSingle();
+    if (error) throw new Error(`contact ref: roster query failed: ${error.message}`);
+    const row = data as { name?: string; phone_e164?: string } | null;
+    const phone = row?.phone_e164?.trim();
+    if (!row || !phone) return null;
+    return { name: (row.name ?? "").trim() || "teammate", phone };
+  }
+  const { data, error } = await supabase
+    .from("contacts")
+    .select("display_name, customer_e164")
+    .eq("business_id", businessId)
+    .eq("id", ref.id)
+    .maybeSingle();
+  if (error) throw new Error(`contact ref: contact query failed: ${error.message}`);
+  const row = data as { display_name?: string; customer_e164?: string } | null;
+  const phone = row?.customer_e164?.trim();
+  if (!row || !phone) return null;
+  return { name: (row.display_name ?? "").trim() || "contact", phone };
 }
 
 /** The lead's own phone (from vars.lead_phone) normalized to E.164, or null. */

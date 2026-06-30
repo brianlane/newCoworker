@@ -153,6 +153,21 @@ const e164 = z
   .string()
   .regex(/^\+[1-9]\d{6,15}$/, 'must be an E.164 number like "+14155551234"');
 
+/**
+ * A dynamic contact reference: a saved person whose phone is resolved LIVE at
+ * run time (see ContactRef in _shared/ai_flows/types). `id` is a uuid row key in
+ * ai_flow_team_members (employee) or contacts (contact). `label` is an
+ * editor-only display hint captured when the ref was picked. Used as an
+ * alternative to a hardcoded number on every recipient/dial field; the
+ * "exactly one source" rules live in validateDefinitionSemantics (a
+ * discriminatedUnion member can't hold a refine).
+ */
+const contactRefSchema = z.object({
+  source: z.enum(["employee", "contact"]),
+  id: z.string().uuid(),
+  label: z.string().min(1).max(120).optional()
+});
+
 const smsTriggerSchema = z.object({
   channel: z.literal("sms"),
   correlationWindowMinutes: z.number().int().min(0).max(1440).optional(),
@@ -446,6 +461,10 @@ const stepSchema = z.discriminatedUnion("type", [
      * reference {{agent.name}}/{{agent.phone}} (the resolved member).
      */
     toAgentName: z.string().min(1).max(120).optional(),
+    // Dynamic recipient: resolve a saved employee/contact's current phone at run
+    // time. Mutually exclusive with to/toAgentName/replyToGroup (enforced in
+    // validateDefinitionSemantics alongside the other recipient sources).
+    toRef: contactRefSchema.optional(),
     when: whenSchema.optional()
   }),
   z.object({
@@ -493,6 +512,9 @@ const stepSchema = z.discriminatedUnion("type", [
     ownerFallbackTemplate: z.string().min(1).max(1600),
     claimedNotifyTemplate: z.string().min(1).max(1600).optional(),
     agentName: z.string().min(1).max(120).optional(),
+    // Pin the offer to a saved roster member by reference (employee source only;
+    // mutually exclusive with agentName — enforced in validateDefinitionSemantics).
+    agentRef: contactRefSchema.optional(),
     offerWindow: routeOfferWindowSchema.optional(),
     attachScreenshot: z.boolean().optional(),
     // The reply digit that means "accept WITH a timeframe" (e.g. 2 or 3). A
@@ -859,7 +881,8 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
           // send_sms { toAgentName } step (the named recipient).
           const hasAgent =
             step.type === "route_to_team" ||
-            (step.type === "send_sms" && Boolean(step.toAgentName));
+            (step.type === "send_sms" &&
+              (Boolean(step.toAgentName) || step.toRef?.source === "employee"));
           if (!hasAgent) {
             issues.push(
               `Step "${step.id}" uses {{agent.${ref.key}}} but only a route_to_team or send_sms toAgentName step has an agent.`
@@ -996,16 +1019,22 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     // that can carry participants.
     if (step.type === "send_sms") {
       // `to` is either absent or (by schema) a non-empty string, so a truthy
-      // `to` means a recipient is configured.
-      const sources = [Boolean(step.to), Boolean(step.toAgentName), Boolean(step.replyToGroup)];
+      // `to` means a recipient is configured. `toRef` is a fourth source (a
+      // saved employee/contact resolved to a number at run time).
+      const sources = [
+        Boolean(step.to),
+        Boolean(step.toAgentName),
+        Boolean(step.replyToGroup),
+        Boolean(step.toRef)
+      ];
       const count = sources.filter(Boolean).length;
       if (count === 0) {
         issues.push(
-          `Step "${step.id}" sends a text but has no recipient — set "to", "toAgentName", or turn on replyToGroup.`
+          `Step "${step.id}" sends a text but has no recipient — set "to", "toAgentName", "toRef", or turn on replyToGroup.`
         );
       } else if (count > 1) {
         issues.push(
-          `Step "${step.id}" sets more than one recipient — use only one of "to", "toAgentName", or replyToGroup.`
+          `Step "${step.id}" sets more than one recipient — use only one of "to", "toAgentName", "toRef", or replyToGroup.`
         );
       }
       if (step.replyToGroup && def.trigger.channel !== "sms") {
@@ -1052,6 +1081,22 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       issues.push(
         `Step "${step.id}" uses the same digit for claimTimeframeOption and lateClaimOption — they must differ.`
       );
+    }
+
+    // route_to_team pins an offer to ONE roster member: by name (agentName) or by
+    // a saved reference (agentRef). Use at most one, and a ref must be an EMPLOYEE
+    // — a contact is not on the roster and could never claim the offer.
+    if (step.type === "route_to_team") {
+      if (step.agentName && step.agentRef) {
+        issues.push(
+          `Step "${step.id}" pins to both agentName and agentRef — use only one.`
+        );
+      }
+      if (step.agentRef && step.agentRef.source !== "employee") {
+        issues.push(
+          `Step "${step.id}" routes to a contact, but route_to_team can only pin a team member — use an employee reference.`
+        );
+      }
     }
 
     // A `when` guard may only reference a var an EARLIER step produced (same

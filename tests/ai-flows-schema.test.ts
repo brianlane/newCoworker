@@ -1085,7 +1085,7 @@ describe("Clever engine: send_sms replyToGroup", () => {
     const def = baseDef();
     def.steps = [{ id: "g", type: "send_sms", body: "hi" }] as AiFlowDefinition["steps"];
     expect(validateDefinitionSemantics(def)).toEqual([
-      'Step "g" sends a text but has no recipient — set "to", "toAgentName", or turn on replyToGroup.'
+      'Step "g" sends a text but has no recipient — set "to", "toAgentName", "toRef", or turn on replyToGroup.'
     ]);
   });
 
@@ -1124,7 +1124,7 @@ describe("Clever engine: send_sms toAgentName", () => {
       { id: "g", type: "send_sms", to: "{{vars.x}}", toAgentName: "Dave", body: "hi" }
     ] as AiFlowDefinition["steps"];
     expect(validateDefinitionSemantics(def)).toContain(
-      'Step "g" sets more than one recipient — use only one of "to", "toAgentName", or replyToGroup.'
+      'Step "g" sets more than one recipient — use only one of "to", "toAgentName", "toRef", or replyToGroup.'
     );
   });
 
@@ -1135,6 +1135,142 @@ describe("Clever engine: send_sms toAgentName", () => {
     ] as AiFlowDefinition["steps"];
     expect(validateDefinitionSemantics(def)).toContain(
       'Step "g" uses {{agent.name}} but only a route_to_team or send_sms toAgentName step has an agent.'
+    );
+  });
+});
+
+describe("Dynamic contact refs: send_sms toRef", () => {
+  const employeeRef = {
+    source: "employee",
+    id: "11111111-1111-4111-8111-111111111111",
+    label: "Dave"
+  };
+  const contactRef = { source: "contact", id: "22222222-2222-4222-8222-222222222222" };
+
+  it("accepts an employee toRef as the sole recipient", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [{ id: "g", type: "send_sms", toRef: employeeRef, body: "Hi {{agent.name}}" }]
+    });
+    const step = def.steps[0];
+    expect(step.type === "send_sms" && step.toRef?.source).toBe("employee");
+    expect(step.type === "send_sms" && step.toRef?.label).toBe("Dave");
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("accepts a contact toRef (no label) as the sole recipient", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [{ id: "g", type: "send_sms", toRef: contactRef, body: "Hi there" }]
+    });
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects {{agent.*}} in a body sent to a contact toRef (no agent in scope)", () => {
+    const def = aiFlowDefinitionSchema.parse({
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [{ id: "g", type: "send_sms", toRef: contactRef, body: "Hi {{agent.name}}" }]
+    });
+    expect(validateDefinitionSemantics(def)).toContain(
+      'Step "g" uses {{agent.name}} but only a route_to_team or send_sms toAgentName step has an agent.'
+    );
+  });
+
+  it("rejects toRef combined with another recipient source", () => {
+    const def = baseDef();
+    def.steps = [
+      { id: "g", type: "send_sms", to: "{{vars.x}}", toRef: contactRef, body: "hi" }
+    ] as AiFlowDefinition["steps"];
+    expect(validateDefinitionSemantics(def)).toContain(
+      'Step "g" sets more than one recipient — use only one of "to", "toAgentName", "toRef", or replyToGroup.'
+    );
+  });
+
+  it("rejects a toRef with a non-uuid id at parse time", () => {
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "manual" },
+        steps: [
+          {
+            id: "g",
+            type: "send_sms",
+            toRef: { source: "contact", id: "not-a-uuid" },
+            body: "hi"
+          }
+        ]
+      })
+    ).toThrow(AiFlowValidationError);
+  });
+
+  it("rejects a toRef with an unknown source at parse time", () => {
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "manual" },
+        steps: [
+          {
+            id: "g",
+            type: "send_sms",
+            toRef: { source: "owner", id: "22222222-2222-4222-8222-222222222222" },
+            body: "hi"
+          }
+        ]
+      })
+    ).toThrow(AiFlowValidationError);
+  });
+});
+
+describe("Dynamic contact refs: route_to_team agentRef", () => {
+  const employeeRef = {
+    source: "employee",
+    id: "33333333-3333-4333-8333-333333333333",
+    label: "Dave"
+  };
+
+  function routedWith(extra: Record<string, unknown>) {
+    return {
+      version: 1,
+      trigger: { channel: "sms", conditions: [{ type: "has_url" }] },
+      steps: [
+        {
+          id: "r",
+          type: "route_to_team",
+          offerTemplate: "Offer to {{agent.name}}",
+          ownerFallbackTemplate: "No one took it",
+          ...extra
+        }
+      ]
+    };
+  }
+
+  it("accepts an employee agentRef as the sole pin", () => {
+    const def = parseAiFlowDefinition(routedWith({ agentRef: employeeRef }));
+    const step = def.steps[0];
+    expect(step.type === "route_to_team" && step.agentRef?.id).toBe(employeeRef.id);
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects setting both agentName and agentRef", () => {
+    const def = aiFlowDefinitionSchema.parse(
+      routedWith({ agentName: "Dave", agentRef: employeeRef })
+    );
+    expect(validateDefinitionSemantics(def)).toContain(
+      'Step "r" pins to both agentName and agentRef — use only one.'
+    );
+  });
+
+  it("rejects a contact-sourced agentRef (not on the roster)", () => {
+    const def = aiFlowDefinitionSchema.parse(
+      routedWith({
+        agentRef: { source: "contact", id: "44444444-4444-4444-8444-444444444444" }
+      })
+    );
+    expect(validateDefinitionSemantics(def)).toContain(
+      'Step "r" routes to a contact, but route_to_team can only pin a team member — use an employee reference.'
     );
   });
 });

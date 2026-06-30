@@ -303,6 +303,51 @@ describe("planStep: send_sms", () => {
       }
     });
   });
+
+  it("passes toRef + UNRENDERED body through (worker resolves the number/source)", () => {
+    const refSend: FlowStep = {
+      id: "x",
+      type: "send_sms",
+      toRef: { source: "employee", id: "11111111-1111-1111-1111-111111111111", label: "Dave" },
+      body: "{{agent.name}}, offers: {{trigger.windowText}}"
+    };
+    expect(planStep(refSend, { trigger: { windowText: "Cash: $400k" } })).toEqual({
+      ok: true,
+      action: {
+        kind: "send_sms",
+        to: "",
+        toRef: { source: "employee", id: "11111111-1111-1111-1111-111111111111", label: "Dave" },
+        body: "{{agent.name}}, offers: {{trigger.windowText}}"
+      }
+    });
+  });
+
+  it("carries quiet hours into a toRef send", () => {
+    const refSend: FlowStep = {
+      id: "x",
+      type: "send_sms",
+      toRef: { source: "contact", id: "22222222-2222-2222-2222-222222222222" },
+      body: "Hi there",
+      quietHours: { timezone: "America/Phoenix", noSendAfter: "22:00", resumeAt: "08:30" }
+    };
+    const r = planStep(refSend, {});
+    expect(r).toEqual({
+      ok: true,
+      action: {
+        kind: "send_sms",
+        to: "",
+        toRef: { source: "contact", id: "22222222-2222-2222-2222-222222222222" },
+        body: "Hi there",
+        quiet: {
+          timezone: "America/Phoenix",
+          noSendAfter: "22:00",
+          resumeAt: "08:30",
+          emailTo: "",
+          emailSubject: "Following up on your inquiry"
+        }
+      }
+    });
+  });
 });
 
 describe("planStep: send_sms quietHours", () => {
@@ -564,6 +609,15 @@ describe("planStep: route_to_team", () => {
     expect(r.ok && r.action.kind === "route_to_team" && r.action.offerWindow).toEqual(window);
     const blank = planStep({ ...base, agentName: "   " }, {});
     expect(blank.ok && blank.action.kind === "route_to_team" && "agentName" in blank.action).toBe(
+      false
+    );
+  });
+  it("carries agentRef through when set, omits it otherwise", () => {
+    const ref = { source: "employee", id: "33333333-3333-3333-3333-333333333333", label: "Dave" } as const;
+    const r = planStep({ ...base, agentRef: ref }, {});
+    expect(r.ok && r.action.kind === "route_to_team" && r.action.agentRef).toEqual(ref);
+    const without = planStep({ ...base }, {});
+    expect(without.ok && without.action.kind === "route_to_team" && "agentRef" in without.action).toBe(
       false
     );
   });

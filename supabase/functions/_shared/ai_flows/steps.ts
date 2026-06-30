@@ -9,7 +9,14 @@
  * dispatcher that switches on `action.kind`.
  */
 import { firstUrlInText, isE164, normalizeNanpToE164, renderTemplate } from "./engine.ts";
-import type { BrowseAuth, ExtractField, ExtractLink, FlowStep, RouteOfferWindow } from "./types.ts";
+import type {
+  BrowseAuth,
+  ContactRef,
+  ExtractField,
+  ExtractLink,
+  FlowStep,
+  RouteOfferWindow
+} from "./types.ts";
 
 export type StepScope = {
   vars?: Record<string, unknown>;
@@ -86,6 +93,13 @@ export type StepAction =
        * in scope. `to` is left empty until then.
        */
       toAgentName?: string;
+      /**
+       * When set, the worker resolves this saved employee/contact's current
+       * phone at run time (see ContactRef). The planner passes it through with a
+       * RAW body (like toAgentName) because only the worker knows whether to put
+       * {{agent.*}} in scope (employee) or render against plain vars (contact).
+       */
+      toRef?: ContactRef;
       body: string;
       quiet?: SendSmsQuietPlan;
     }
@@ -123,6 +137,9 @@ export type StepAction =
       claimedNotifyTemplate?: string;
       /** Pin offers to the single roster member with this name. */
       agentName?: string;
+      /** Pin offers to a saved roster member by reference (worker resolves the
+       * current name, then routes exactly like agentName). Employee source only. */
+      agentRef?: ContactRef;
       /** After-hours claim-deadline extension. */
       offerWindow?: RouteOfferWindow;
       /** Attach the stored browse screenshot to each agent offer as MMS. */
@@ -320,6 +337,21 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           }
         };
       }
+      // Dynamic recipient (saved employee/contact). Like toAgentName, the worker
+      // resolves the number AND renders the body (it alone knows the source), so
+      // the planner passes the raw body through.
+      if (step.toRef) {
+        return {
+          ok: true,
+          action: {
+            kind: "send_sms",
+            to: "",
+            body: step.body,
+            toRef: step.toRef,
+            ...(quiet ? { quiet } : {})
+          }
+        };
+      }
       const body = renderTemplate(step.body, scope).trim();
       if (!body) return { ok: false, error: "send_sms: body is empty after templating" };
       // Group reply: recipients come from the inbound thread roster, not `to`.
@@ -427,6 +459,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           ownerFallbackTemplate,
           claimedNotifyTemplate: claimed ? claimed : undefined,
           ...(agentName ? { agentName } : {}),
+          ...(step.agentRef ? { agentRef: step.agentRef } : {}),
           ...(step.offerWindow ? { offerWindow: step.offerWindow } : {}),
           attachScreenshot: step.attachScreenshot === true,
           ...(step.claimTimeframeOption
