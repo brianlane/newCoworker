@@ -1325,7 +1325,7 @@ export function AiFlowsManager({
           <button
             onClick={save}
             disabled={busy}
-            className="rounded-md bg-spark-orange px-4 py-2 text-sm font-semibold text-deep-ink hover:bg-spark-orange/90 disabled:opacity-50"
+            className="rounded-md bg-signal-teal px-4 py-2 text-sm font-semibold text-deep-ink hover:bg-signal-teal/90 disabled:opacity-50"
           >
             {busy ? "Saving…" : "Save AiFlow"}
           </button>
