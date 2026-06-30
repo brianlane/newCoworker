@@ -83,6 +83,19 @@ export type TransferCapability = {
   toE164: string;
   /** Called when the model invokes the transfer tool. Resolved value is echoed back to the model. */
   execute: (args: { reason?: string }) => Promise<{ ok: boolean; detail?: string }>;
+  /**
+   * Detach the AI from the call after a SUCCESSFUL warm transfer: stop the
+   * Telnyx media fork so the bridge stops injecting/hearing audio, while the
+   * caller stays bridged to the transfer target. MUST NOT hang up the caller's
+   * leg (that would drop the human-to-human bridge). Best-effort; the bridge
+   * tears the Gemini session down regardless so the AI goes silent either way.
+   */
+  detach?: () => Promise<{ ok: boolean; detail?: string }>;
+  /**
+   * Ms to wait after a successful transfer before detaching, so the assistant's
+   * brief "connecting you now" line finishes playing first. Defaults to 2000.
+   */
+  graceMs?: number;
 };
 
 /**
@@ -730,6 +743,9 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // Set once the model invokes `end_call` so a repeated/duplicate call can't
   // schedule two hangups (the second would race teardown on a dead leg).
   let endCallRequested = false;
+  // Set once a warm transfer succeeds so we detach the AI exactly once (a
+  // duplicate transfer tool-call can't schedule two teardowns).
+  let transferDetachRequested = false;
   const timers: ReturnType<typeof setTimeout>[] = [];
   const downlinkTelemetry: DownlinkTelemetry = {
     droppedFrames: 0,
@@ -1378,6 +1394,41 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             ok: result.ok,
             detail: result.detail ?? (result.ok ? "transfer initiated" : "transfer failed")
           });
+          // On a SUCCESSFUL warm transfer the caller is now bridged to a human,
+          // so the AI must leave the line — otherwise it keeps injecting audio
+          // into (and hearing) the bridged leg, talking over both parties. We
+          // detach instead of hanging up: hanging up `callControlId` would drop
+          // the caller's leg and kill the human-to-human bridge.
+          if (result.ok && !transferDetachRequested) {
+            transferDetachRequested = true;
+            const graceMs = opts.transfer!.graceMs ?? 2000;
+            // STANDALONE timer (not pushed to `timers`): teardown/clearTimers
+            // must not cancel the detach, mirroring the end_call grace timer.
+            setTimeout(() => {
+              void (async () => {
+                try {
+                  if (opts.transfer!.detach) {
+                    const d = await opts.transfer!.detach();
+                    if (!d.ok) {
+                      console.error("gemini-bridge: transfer detach failed", d.detail);
+                      emitDiag("voice_bridge_transfer_detach_failed", { detail: d.detail ?? null });
+                    } else {
+                      emitDiag("voice_bridge_transfer_detach", { reason: reason ?? null });
+                    }
+                  } else {
+                    emitDiag("voice_bridge_transfer_detach", { reason: reason ?? null });
+                  }
+                } catch (err) {
+                  console.error("gemini-bridge: transfer detach threw", err);
+                } finally {
+                  // Close the Gemini session + finalize the transcript so the AI
+                  // goes silent and the transcript captures everything up to the
+                  // handoff. teardown is idempotent and does NOT hang up the leg.
+                  await teardown();
+                }
+              })();
+            }, graceMs);
+          }
         })();
         continue;
       }
