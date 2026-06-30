@@ -1352,9 +1352,11 @@ async function browseActionStep(
         // at the failure (and the before-source as a fallback).
         if (action.skipWhenText) {
           const marker = action.skipWhenText.toLowerCase();
-          const pageText = `${readPageSource(parsedBody) ?? ""}\n${
-            readPageSourceBefore(parsedBody) ?? ""
-          }`.toLowerCase();
+          // Match ONLY the FAILURE-page source (the stuck page captured after the
+          // action failed) — never the debug-only "before actions" page. A marker
+          // present only on the pre-action page must not skip a run that then
+          // failed for an unrelated reason without reaching the terminal state.
+          const pageText = (readPageSource(parsedBody) ?? "").toLowerCase();
           if (pageText.includes(marker)) {
             await systemLog(supabase, {
               businessId: run.business_id,
@@ -1978,8 +1980,16 @@ async function meterAiFlowSpend(
   }
 }
 
-/** Max attempts (1 initial + retries) for a transient Gemini response. */
-const GEMINI_MAX_ATTEMPTS = Number(Deno.env.get("AIFLOW_GEMINI_MAX_ATTEMPTS") ?? 3);
+/**
+ * Max attempts (1 initial + retries) for a transient Gemini response. Clamped to
+ * a finite 1..5: a bad/non-finite env var (e.g. "Infinity" or unparseable) must
+ * never become an unbounded loop bound that spins on a persistently-failing call
+ * and blocks the worker on that run.
+ */
+const GEMINI_MAX_ATTEMPTS = (() => {
+  const raw = Number(Deno.env.get("AIFLOW_GEMINI_MAX_ATTEMPTS") ?? 3);
+  return Number.isFinite(raw) ? Math.min(5, Math.max(1, Math.round(raw))) : 3;
+})();
 
 /**
  * POST with bounded retry on TRANSIENT upstream failures (HTTP 429 / 5xx, and a
@@ -1990,7 +2000,7 @@ const GEMINI_MAX_ATTEMPTS = Number(Deno.env.get("AIFLOW_GEMINI_MAX_ATTEMPTS") ??
  * final rethrow of the underlying fetch error.
  */
 async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<Response> {
-  const attempts = Math.max(1, Math.round(GEMINI_MAX_ATTEMPTS));
+  const attempts = GEMINI_MAX_ATTEMPTS;
   let lastErr: unknown;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
