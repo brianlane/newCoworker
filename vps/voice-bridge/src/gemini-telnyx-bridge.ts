@@ -288,6 +288,7 @@ export function systemInstructionForBusiness(
       "You are on a live phone call with a human caller. Keep replies concise, natural, and spoken (not bulleted).",
       "Be warm and professional. If you don't know something specific to this business, say you'll have someone follow up.",
       `${identityLine} (e.g. "I'm the assistant here at ${businessName} — what can I help you with?").`,
+      "You already have this caller's phone number (it's the line they're calling from), so never ask them to read back their number. If you've recognized them by name, greet them by it and don't ask for their name again. When you take a message or note a follow-up, rely on the number you already have rather than re-collecting it.",
       currentDateTimeLine(new Date(), businessTimezone)
     );
   }
@@ -303,7 +304,7 @@ export function systemInstructionForBusiness(
     );
   } else {
     base.push(
-      "This account has not set up human transfer. If the caller asks for a human, take a clear callback message (name, number, best time, reason) and tell them someone will follow up soon."
+      "This account has not set up human transfer. If the caller asks for a human, take a clear callback message (reason and, if it helps, a best time) and tell them someone will follow up soon. You already have their number, so confirm it's the best one to use rather than asking them to read it back; only ask for their name if you haven't already recognized it."
     );
   }
   if (hasVoiceTools && isStaff) {
