@@ -1213,6 +1213,11 @@ GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
 GEMINI_LIVE_MODEL=${GEMINI_LIVE_MODEL:-gemini-3.1-flash-live-preview}
 GEMINI_LIVE_ENABLED=${effective_gemini_live_enabled}
 VOICE_TRANSCRIPTION_ENABLED=${effective_voice_transcription_enabled}
+# TELNYX_API_KEY powers the bridge's Telnyx Call Control actions: the `end_call`
+# hangup tool, the `transfer_to_owner` warm transfer, and the missed-call SMS
+# fallback (see vps/voice-bridge/src/index.ts). Without it the bridge silently
+# omits the hangup tool and every transfer returns "transfer not configured".
+TELNYX_API_KEY=${TELNYX_API_KEY:-}
 
 # Vault + Rowboat + platform app endpoints for Gemini Live tool calls.
 # VAULT_PATH: where the bridge reads soul/identity/memory/website md.
@@ -1256,6 +1261,10 @@ VBENV_EOF
       # effective_* fallback above always resolves to "true" or "false", so a
       # blank line would indicate the env block was tampered with.
       VOICE_TRANSCRIPTION_ENABLED
+      # Required because every voice tenant is on Telnyx: a blank key disables
+      # the AI's hangup (`end_call`) and warm-transfer (`transfer_to_owner`)
+      # tools plus the missed-call SMS fallback, all silently.
+      TELNYX_API_KEY
     )
     missing_keys=()
     for key in "${bridge_required_keys[@]}"; do
