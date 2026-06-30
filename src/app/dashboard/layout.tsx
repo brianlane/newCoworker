@@ -1,3 +1,4 @@
+import type { Viewport } from "next";
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
 import { DashboardSidebar } from "@/components/dashboard/DashboardSidebar";
@@ -6,6 +7,14 @@ import { isCanceledInGrace } from "@/lib/db/subscriptions";
 import type { CancelReason, SubscriptionRow } from "@/lib/db/subscriptions";
 import { GraceBanner } from "@/components/billing/GraceBanner";
 import { reconcilePendingEmailChange } from "@/lib/account/email-change";
+
+// `cover` lets the h-dvh shell paint edge-to-edge under the notch / home
+// indicator; the shell's safe-area padding (globals.css) keeps content clear.
+// Scoped to this segment so marketing/auth/onboarding routes keep the default
+// (safe) viewport and never render under the notch.
+export const viewport: Viewport = {
+  viewportFit: "cover"
+};
 
 type EmbeddedSubscriptionRow = Pick<
   SubscriptionRow,
@@ -63,7 +72,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   return (
     <div className="flex h-dvh bg-deep-ink">
       <DashboardSidebar userEmail={user.email} businessId={businessId} />
-      <main className="flex-1 overflow-y-auto p-4 pt-16 lg:p-6">
+      <main data-app-main className="flex-1 overflow-y-auto p-4 pt-16 lg:p-6">
         {grace && (
           <div className="mb-6">
             <GraceBanner graceEndsAt={grace.graceEndsAt} reason={grace.reason} />

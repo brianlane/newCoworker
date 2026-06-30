@@ -72,6 +72,17 @@ button:disabled {
   [data-mobile-nav-trigger] {
     top: calc(0.75rem + env(safe-area-inset-top));
   }
+
+  /* The fixed hamburger drops by the top inset and `viewportFit: cover` lets
+     main paint under the status bar, so fold the insets into main's padding
+     (base p-4 / pt-16) to keep content below the trigger and inside the notch.
+     Insets are 0 on non-notched devices, so this is a no-op there. */
+  [data-app-main] {
+    padding-top: calc(4rem + env(safe-area-inset-top));
+    padding-right: calc(1rem + env(safe-area-inset-right));
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+    padding-left: calc(1rem + env(safe-area-inset-left));
+  }
 }
 
 /* Mobile-only enhancements. Everything lives inside max-width media queries so

@@ -4,8 +4,7 @@ import "./globals.css";
 
 export const viewport: Viewport = {
   width: "device-width",
-  initialScale: 1,
-  viewportFit: "cover"
+  initialScale: 1
 };
 
 export const metadata: Metadata = {
