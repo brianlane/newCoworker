@@ -230,6 +230,22 @@ export type RouteOfferWindow = {
 };
 
 /**
+ * A dynamic reference to a saved person whose phone number is resolved LIVE at
+ * run time, instead of a hardcoded number. `source` selects the table:
+ *   - "employee": ai_flow_team_members (roster) → {name, phone_e164}
+ *   - "contact":  contacts (unified directory)  → {display_name, customer_e164}
+ * `id` is that row's primary key. `label` is an editor-only display hint (the
+ * name captured when the ref was picked); the worker always re-reads the live
+ * row, so a rename / renumber / contact-merge after authoring is reflected
+ * automatically (a stale hardcoded number would not be).
+ */
+export type ContactRef = {
+  source: "employee" | "contact";
+  id: string;
+  label?: string;
+};
+
+/**
  * One UI action a `browse_action` step performs on the (optionally logged-in)
  * page, in order. `valueTemplate` is rendered against run vars before the
  * action runs (only meaningful for fill kinds).
@@ -341,6 +357,14 @@ export type FlowStep =
        * `to`/`replyToGroup`.
        */
       toAgentName?: string;
+      /**
+       * Dynamic recipient: resolve a saved employee/contact's CURRENT phone at
+       * run time (see ContactRef). Mutually exclusive with to/toAgentName/
+       * replyToGroup. An employee ref is treated like `toAgentName` (internal
+       * teammate text: {{agent.*}} in scope, no quiet-hours deferral, not filed
+       * as a lead); a contact ref is a normal 1:1 lead recipient.
+       */
+      toRef?: ContactRef;
       when?: StepCondition;
     }
   | {
@@ -396,6 +420,14 @@ export type FlowStep =
        * that member is missing/opted out — never silently to someone else.
        */
       agentName?: string;
+      /**
+       * Pin the offer to a saved roster member by reference (resolved to their
+       * CURRENT name at run time, then routed exactly like `agentName`). Employee
+       * source only (a contact is not on the roster). Mutually exclusive with
+       * agentName. An unresolved ref falls through to the owner fallback, never
+       * silently to a different teammate.
+       */
+      agentRef?: ContactRef;
       /** After-hours claim-deadline extension; see RouteOfferWindow. */
       offerWindow?: RouteOfferWindow;
       /**
