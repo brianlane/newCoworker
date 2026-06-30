@@ -53,6 +53,7 @@ export function Sidebar({ items, userEmail, renderTrailing }: SidebarProps) {
         aria-label="Open menu"
         aria-expanded={open}
         onClick={() => setOpen(true)}
+        data-mobile-nav-trigger
         className="fixed left-3 top-3 z-50 inline-flex h-11 w-11 items-center justify-center rounded-lg border border-parchment/10 bg-deep-ink/90 text-parchment backdrop-blur-sm lg:hidden"
       >
         <Menu size={20} />
@@ -68,8 +69,9 @@ export function Sidebar({ items, userEmail, renderTrailing }: SidebarProps) {
       )}
 
       <aside
+        data-app-sidebar
         className={[
-          "fixed inset-y-0 left-0 z-40 flex h-screen w-60 flex-col border-r border-parchment/10 bg-deep-ink transition-transform duration-300 ease-in-out",
+          "fixed inset-y-0 left-0 z-40 flex h-dvh w-60 flex-col border-r border-parchment/10 bg-deep-ink transition-transform duration-300 ease-in-out",
           "lg:static lg:translate-x-0",
           open ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         ].join(" ")}

@@ -8,7 +8,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   if (!user.isAdmin) redirect("/admin/login?next=/admin/dashboard");
 
   return (
-    <div className="flex h-screen bg-deep-ink">
+    <div className="flex h-dvh bg-deep-ink">
       <AdminSidebar userEmail={user.email} />
       <main className="flex-1 overflow-y-auto p-4 pt-16 lg:p-6">{children}</main>
     </div>

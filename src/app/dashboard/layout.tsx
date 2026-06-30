@@ -61,7 +61,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   }
 
   return (
-    <div className="flex h-screen bg-deep-ink">
+    <div className="flex h-dvh bg-deep-ink">
       <DashboardSidebar userEmail={user.email} businessId={businessId} />
       <main className="flex-1 overflow-y-auto p-4 pt-16 lg:p-6">
         {grace && (

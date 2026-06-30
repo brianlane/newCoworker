@@ -60,6 +60,20 @@ button:disabled {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Safe-area insets for the off-canvas nav (notch / home-indicator). Scoped
+   below lg (1024px) so the static desktop sidebar is byte-for-byte unchanged.
+   Pairs with `viewportFit: "cover"` in the root viewport export. */
+@media (max-width: 1023px) {
+  [data-app-sidebar] {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  [data-mobile-nav-trigger] {
+    top: calc(0.75rem + env(safe-area-inset-top));
+  }
+}
+
 /* Mobile-only enhancements. Everything lives inside max-width media queries so
    the desktop (>= 1024px) presentation is byte-for-byte unchanged. */
 @media (max-width: 767px) {
