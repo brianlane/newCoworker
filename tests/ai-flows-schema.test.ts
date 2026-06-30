@@ -817,6 +817,21 @@ describe("browse_action step", () => {
     ).toBe(true);
   });
 
+  it("accepts an optional skipWhenText terminal-state marker", () => {
+    const withSkip = JSON.parse(JSON.stringify(actionInput));
+    withSkip.steps[1].skipWhenText = "already been claimed";
+    const def = parseAiFlowDefinition(withSkip);
+    const step = def.steps[1];
+    expect(step.type === "browse_action" && step.skipWhenText).toBe("already been claimed");
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects an empty skipWhenText", () => {
+    const bad = JSON.parse(JSON.stringify(actionInput));
+    bad.steps[1].skipWhenText = "";
+    expect(() => aiFlowDefinitionSchema.parse(bad)).toThrow();
+  });
+
   it("validates {{vars.x}} ordering inside fill values", () => {
     const bad = JSON.parse(JSON.stringify(actionInput));
     bad.steps[1].actions[1].valueTemplate = "{{vars.ghost}}";

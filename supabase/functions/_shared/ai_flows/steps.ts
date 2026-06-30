@@ -158,6 +158,12 @@ export type StepAction =
        * when forEachLink is set AND the var yielded >= 1 name.
        */
       forEachMatch?: string[];
+      /**
+       * Terminal-state marker: when an action fails and the page contains this
+       * (case-insensitive) text, the worker ends the run gracefully (step
+       * "skipped", run "done") instead of failing — see FlowStep.skipWhenText.
+       */
+      skipWhenText?: string;
     }
   | {
       kind: "recall_url";
@@ -480,7 +486,10 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           screenshot: step.screenshot === true,
           ...(step.rememberUrlKeyedByVar ? { rememberKeyVar: step.rememberUrlKeyedByVar } : {}),
           ...(step.forEachLink ? { forEachLink: step.forEachLink } : {}),
-          ...(forEachMatch !== undefined ? { forEachMatch } : {})
+          ...(forEachMatch !== undefined ? { forEachMatch } : {}),
+          ...(step.skipWhenText && step.skipWhenText.trim()
+            ? { skipWhenText: step.skipWhenText.trim() }
+            : {})
         }
       };
     }

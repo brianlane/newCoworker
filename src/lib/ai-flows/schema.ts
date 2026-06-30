@@ -534,6 +534,11 @@ const stepSchema = z.discriminatedUnion("type", [
     // in this earlier-produced var (split on commas/newlines/semicolons). Only
     // valid alongside forEachLink (enforced in validateDefinitionSemantics).
     forEachLinkMatchVar: varName.optional(),
+    // Terminal-state guard: when an action fails AND the page contains this
+    // marker text (case-insensitive), the goal is already met (e.g. a lead
+    // another agent already claimed) so the run ENDS gracefully — the step is
+    // recorded "skipped" and the run finishes as done — instead of failing.
+    skipWhenText: z.string().min(1).max(200).optional(),
     when: whenSchema.optional()
   }),
   // Recall a URL a PRIOR run persisted (browse_action.rememberUrlKeyedByVar) for

@@ -175,6 +175,23 @@ class RenderFailedError extends Error {
  * fails immediately instead of burning retries.
  */
 class SpendCapError extends Error {}
+
+/**
+ * A THROWN (transient → retryable) step error that still carries diagnostics
+ * (e.g. a screenshot/source path of the page the step failed on) so the run
+ * loop can record them on the failed step row. Without this, a thrown error
+ * goes through the silent retry path and the eventual dead-lettered step shows
+ * no page state. `message` is preserved verbatim so last_error / retry
+ * classification are unchanged.
+ */
+class StepDiagnosticError extends Error {
+  result?: Record<string, unknown>;
+  constructor(message: string, result?: Record<string, unknown>) {
+    super(message);
+    this.name = "StepDiagnosticError";
+    if (result && Object.keys(result).length > 0) this.result = result;
+  }
+}
 const GEMINI_MODEL = Deno.env.get("AIFLOW_EXTRACT_MODEL") ?? "gemini-2.5-flash-lite";
 
 // AiFlow Gemini/Rowboat usage meters into the SAME owner_chat_model_spend pool
@@ -412,7 +429,28 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   let index = run.current_step;
   while (index < def.steps.length) {
     const step = def.steps[index];
-    const outcome = await runStep(supabase, run, step, index, scope, approval, routing);
+    let outcome: StepOutcome;
+    try {
+      outcome = await runStep(supabase, run, step, index, scope, approval, routing);
+    } catch (e) {
+      // A THROWN (transient) error otherwise leaves the step row stuck at
+      // "running" — so a dead-lettered run shows a phantom in-progress step.
+      // Finalize the row as "failed" (carrying any diagnostics the step
+      // attached, e.g. a screenshot of the page extraction failed on) before
+      // re-throwing into the retry/dead-letter handler. On a re-queue the next
+      // attempt flips it back to "running" via recordStep at the step's start.
+      const diag = e instanceof StepDiagnosticError ? e.result : undefined;
+      await recordStep(
+        supabase,
+        run,
+        index,
+        step,
+        "failed",
+        diag,
+        e instanceof Error ? e.message : String(e)
+      );
+      throw e;
+    }
     if (outcome.kind === "fail") {
       await recordStep(supabase, run, index, step, "failed", outcome.result, outcome.error);
       await failRun(supabase, run, outcome.error, scope, approval, routing);
@@ -1000,23 +1038,29 @@ async function browseStep(
     try {
       extracted = await extractFields(supabase, run, action.fields, pageText);
     } catch (e) {
+      // Persist the page we ALREADY fetched (screenshot when captured + source,
+      // which is always available) onto the failed step for ANY extraction
+      // failure — not just the budget cap. Previously a transient Gemini error
+      // (e.g. 503) re-threw and discarded the in-hand page, leaving the
+      // dead-lettered step with no screenshot/source for the investigate view.
+      const shotPath = await storeScreenshotBestEffort(supabase, run, index, page.screenshotBase64);
+      const srcPath = await storeSourceBestEffort(supabase, run, index, page.html);
+      const diag: Record<string, unknown> = {};
+      if (shotPath) diag.screenshot_path = shotPath;
+      if (srcPath) diag.source_path = srcPath;
       // The shared AI budget being exhausted is a permanent, owner-actionable
-      // state for this period — fail the run instead of retrying into the cap.
-      // Persist the page screenshot (when one was captured) onto the failed step
-      // so the investigate view isn't empty for a cap-hit mid-extraction.
+      // state for this period — fail the run now instead of retrying into the cap.
       if (e instanceof SpendCapError) {
-        const shotPath = await storeScreenshotBestEffort(supabase, run, index, page.screenshotBase64);
-        const srcPath = await storeSourceBestEffort(supabase, run, index, page.html);
-        const diag: Record<string, unknown> = {};
-        if (shotPath) diag.screenshot_path = shotPath;
-        if (srcPath) diag.source_path = srcPath;
         return {
           kind: "fail",
           error: `browse: ${e.message}`,
           ...(Object.keys(diag).length > 0 ? { result: diag } : {})
         };
       }
-      throw e;
+      // Other errors are transient (retry). Carry the diagnostics on the thrown
+      // error so the eventual dead-lettered step row still shows the page state
+      // (the run loop records them when finalizing the failed step).
+      throw new StepDiagnosticError(e instanceof Error ? e.message : String(e), diag);
     }
   }
 
@@ -1300,6 +1344,36 @@ async function browseActionStep(
         if (beforeShot) diag.screenshot_before_path = beforeShot;
         if (failSrc) diag.source_path = failSrc;
         if (beforeSrc) diag.source_before_path = beforeSrc;
+        // Terminal-state guard: if the action failed only because the page is
+        // already in the desired end-state (e.g. a lead another agent claimed,
+        // so there's no "Accept" button), end the run gracefully — recorded as a
+        // "skipped" step on a done run — instead of dead-lettering it as a
+        // failure. Match the configured marker against the page source captured
+        // at the failure (and the before-source as a fallback).
+        if (action.skipWhenText) {
+          const marker = action.skipWhenText.toLowerCase();
+          // Match ONLY the FAILURE-page source (the stuck page captured after the
+          // action failed) — never the debug-only "before actions" page. A marker
+          // present only on the pre-action page must not skip a run that then
+          // failed for an unrelated reason without reaching the terminal state.
+          const pageText = (readPageSource(parsedBody) ?? "").toLowerCase();
+          if (pageText.includes(marker)) {
+            await systemLog(supabase, {
+              businessId: run.business_id,
+              source: "aiflow",
+              level: "info",
+              event: "ai_flow_browse_action_skipped_terminal",
+              message: `browse_action skipped: page already in terminal state ("${action.skipWhenText}")`,
+              payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
+            });
+            return {
+              kind: "ok",
+              skipped: true,
+              endRun: true,
+              result: { skipped: "already_done", marker: action.skipWhenText, ...diag }
+            };
+          }
+        }
         return {
           kind: "fail",
           error: `browse_action: ${detail || "a page action failed"}`,
@@ -1906,6 +1980,48 @@ async function meterAiFlowSpend(
   }
 }
 
+/**
+ * Max attempts (1 initial + retries) for a transient Gemini response. Clamped to
+ * a finite 1..5: a bad/non-finite env var (e.g. "Infinity" or unparseable) must
+ * never become an unbounded loop bound that spins on a persistently-failing call
+ * and blocks the worker on that run.
+ */
+const GEMINI_MAX_ATTEMPTS = (() => {
+  const raw = Number(Deno.env.get("AIFLOW_GEMINI_MAX_ATTEMPTS") ?? 3);
+  return Number.isFinite(raw) ? Math.min(5, Math.max(1, Math.round(raw))) : 3;
+})();
+
+/**
+ * POST with bounded retry on TRANSIENT upstream failures (HTTP 429 / 5xx, and a
+ * fetch that throws — a network blip). Exponential backoff with jitter
+ * (~0.5s, ~1s, …). Returns the last response (even if not ok) so the caller's
+ * existing `!res.ok` handling still applies; a permanent 4xx (≠429) returns
+ * immediately without retrying. Best-effort: never throws on its own beyond a
+ * final rethrow of the underlying fetch error.
+ */
+async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<Response> {
+  const attempts = GEMINI_MAX_ATTEMPTS;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const res = await fetch(url, init);
+      const transient = res.status === 429 || res.status >= 500;
+      if (res.ok || !transient || attempt === attempts) return res;
+      // Drain the body so the connection can be reused before we back off.
+      await res.text().catch(() => {});
+    } catch (e) {
+      lastErr = e;
+      if (attempt === attempts) throw e;
+    }
+    // Exponential backoff with jitter: ~500ms, ~1000ms, ~2000ms, …
+    const backoffMs = 500 * 2 ** (attempt - 1) + Math.floor(Math.random() * 250);
+    await new Promise((resolve) => setTimeout(resolve, backoffMs));
+  }
+  // Unreachable in practice (the loop returns/throws), but satisfies the type.
+  if (lastErr) throw lastErr;
+  return await fetch(url, init);
+}
+
 /** Gemini structured extraction; empty map when no API key (regex fallback covers it). */
 async function extractFields(
   supabase: Supabase,
@@ -1926,7 +2042,13 @@ async function extractFields(
   const url =
     `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=` +
     encodeURIComponent(apiKey);
-  const res = await fetch(url, {
+  // Inner retry/backoff for TRANSIENT upstream errors (429 / 5xx — Gemini
+  // "model overloaded" returns 503). A single 503 used to bubble straight out
+  // and burn a whole run-level retry, and an overloaded window could dead-letter
+  // a run AFTER an irreversible earlier step (e.g. a lead already accepted on
+  // Clever) — orphaning it. Riding out a brief overload here avoids that. A 4xx
+  // (other than 429) is permanent, so it fails fast without retrying.
+  const res = await fetchWithTransientRetry(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

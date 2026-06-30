@@ -462,6 +462,16 @@ export type FlowStep =
        * acted on only when its text contains one of those names (case-insensitive).
        */
       forEachLinkMatchVar?: string;
+      /**
+       * Terminal-state guard: when a UI action fails AND the loaded page contains
+       * this marker text (case-insensitive substring of the page source), the
+       * automation's goal is already met (e.g. a lead another agent already
+       * claimed, so there's no "Accept" button). The run then ENDS gracefully —
+       * the step is recorded "skipped" and the run finishes as done — instead of
+       * dead-lettering as a failure. Use for pages whose action can be a legitimate
+       * no-op (e.g. Clever's "this referral opportunity has already been claimed").
+       */
+      skipWhenText?: string;
       when?: StepCondition;
     }
   | {
