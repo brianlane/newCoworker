@@ -873,6 +873,31 @@ describe("planStep: browse_action rememberUrlKeyedByVar", () => {
   });
 });
 
+describe("planStep: browse_action skipWhenText", () => {
+  const base: FlowStep = {
+    id: "acc",
+    type: "browse_action",
+    urlVar: "lead_url",
+    actions: [{ kind: "click_text", target: "Accept" }]
+  };
+  it("carries a trimmed skipWhenText marker through to the action", () => {
+    const step: FlowStep = { ...base, skipWhenText: "  already been claimed  " };
+    const r = planStep(step, { vars: { lead_url: "https://x" } });
+    expect(r.ok && r.action.kind === "browse_action" && r.action.skipWhenText).toBe(
+      "already been claimed"
+    );
+  });
+  it("omits skipWhenText when unset", () => {
+    const r = planStep(base, { vars: { lead_url: "https://x" } });
+    expect(r.ok && r.action.kind === "browse_action" && "skipWhenText" in r.action).toBe(false);
+  });
+  it("omits skipWhenText when blank after trim", () => {
+    const step: FlowStep = { ...base, skipWhenText: "   " };
+    const r = planStep(step, { vars: { lead_url: "https://x" } });
+    expect(r.ok && r.action.kind === "browse_action" && "skipWhenText" in r.action).toBe(false);
+  });
+});
+
 describe("planStep: recall_url", () => {
   it("gathers normalized, deduped keys from participants and keyVars", () => {
     const step: FlowStep = {

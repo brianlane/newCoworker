@@ -687,13 +687,17 @@ async function respondWithActions(
   const acted = await performActions(page, actions);
   if (acted.error) {
     console.error(`[render] action_failed after ${acted.completed} actions: ${acted.error}`);
-    // Grab a diagnostic screenshot of the stuck page whenever ANY screenshot was
-    // requested (attach OR debug) so the owner can see WHERE the automation broke
-    // (e.g. a wizard "Next" that never advanced). The before-shot above stays
-    // debug-only. Best effort — a capture failure must not mask action_failed.
-    if (wantScreenshot || wantDebug) await settlePage(page);
-    const screenshotBase64 = wantScreenshot || wantDebug ? await captureScreenshot(page) : null;
-    const pageSource = wantScreenshot || wantDebug ? await capturePageSource(page) : null;
+    // ALWAYS grab a diagnostic screenshot + source of the stuck page on an action
+    // failure (the rare path), regardless of the screenshot/debug opt-in: the
+    // owner needs to see WHERE the automation broke (e.g. a wizard "Next" that
+    // never advanced), and the worker matches this source against a step's
+    // skipWhenText to recognize terminal pages (e.g. a lead already claimed) and
+    // end the run gracefully. The before-shot above stays debug-only to bound
+    // cost on the happy path. Best effort — a capture failure must not mask
+    // action_failed.
+    await settlePage(page);
+    const screenshotBase64 = await captureScreenshot(page);
+    const pageSource = await capturePageSource(page);
     return res.status(200).json({
       error: "action_failed",
       detail: acted.error,
