@@ -126,7 +126,7 @@ export function DashboardSidebar({
         return (
           <span
             data-testid="sidebar-unread-badge"
-            className="ml-auto inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-spark-orange px-1.5 py-0.5 text-[10px] font-semibold leading-none text-deep-ink"
+            className="ml-auto inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-signal-teal px-1.5 py-0.5 text-[10px] font-semibold leading-none text-deep-ink"
           >
             {unread > 99 ? "99+" : unread}
           </span>
