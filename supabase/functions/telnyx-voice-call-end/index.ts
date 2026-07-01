@@ -848,29 +848,41 @@ async function sendWarmTransferNotifications(
   const recipientLabel = labelFor(recipName, recipientE164, "your teammate");
   const from = fromE164 || undefined;
 
-  try {
-    await telnyxSendSms({
-      apiKey,
-      messagingProfileId,
-      fromE164: from,
-      toE164: recipientE164,
-      text: buildRecipientMessage(outcome, callerLabel)
-    });
-  } catch (err) {
+  const recip = await telnyxSendSms({
+    apiKey,
+    messagingProfileId,
+    fromE164: from,
+    toE164: recipientE164,
+    text: buildRecipientMessage(outcome, callerLabel)
+  }).catch((err) => {
     console.error("warm-transfer notify: recipient SMS threw", err);
+    return { ok: false, status: 0, body: "threw" };
+  });
+  if (!recip.ok) {
+    console.error("warm-transfer notify: recipient SMS failed", recip.status, recip.body);
+    // The recipient text is the primary alert. Roll back the dedup claim so a
+    // later delivery of the same event (or a manual re-drive) can retry instead
+    // of being permanently suppressed by the claim we just wrote.
+    await supabase.from("voice_transfer_notifications").delete().eq("dedupe_key", dedupeKey);
+    return { sent: false, reason: "recipient_send_failed" };
   }
 
   if (shouldNotifyOwner(recipientE164, ownerE164)) {
-    try {
-      await telnyxSendSms({
-        apiKey,
-        messagingProfileId,
-        fromE164: from,
-        toE164: ownerE164,
-        text: buildOwnerMessage(outcome, recipientLabel, callerLabel)
-      });
-    } catch (err) {
+    // Owner copy is secondary: a failure here is logged but does NOT roll back
+    // the claim (the recipient was already texted, and a retry would double-text
+    // them). At-most-once for the recipient wins over the owner copy.
+    const owner = await telnyxSendSms({
+      apiKey,
+      messagingProfileId,
+      fromE164: from,
+      toE164: ownerE164,
+      text: buildOwnerMessage(outcome, recipientLabel, callerLabel)
+    }).catch((err) => {
       console.error("warm-transfer notify: owner SMS threw", err);
+      return { ok: false, status: 0, body: "threw" };
+    });
+    if (!owner.ok) {
+      console.error("warm-transfer notify: owner SMS failed", owner.status, owner.body);
     }
   }
 
@@ -916,21 +928,22 @@ async function handleWarmTransferLifecycle(
   }
 
   // call.hangup on the transfer leg. A normal_clearing cause means the recipient
-  // answered and the call completed — skip (defence in depth if call.bridged was
-  // dropped). Otherwise attempt the failure claim: if call.bridged already
-  // claimed the shared key the insert conflicts and no failure SMS is sent.
+  // answered and the call completed → send SUCCESS as defence in depth for a
+  // dropped call.bridged. The shared dedup key means this is a no-op when
+  // call.bridged already sent success. Any other cause = no-answer → FAILURE
+  // (also blocked by the shared key if success already went out).
   const cause = String(payload["hangup_cause"] ?? "").toLowerCase();
-  if (cause === "normal_clearing") {
-    return { handled: true, response: jsonOk("wt_answered_hangup") };
-  }
   await sendWarmTransferNotifications(deps.supabase, deps.apiKey, {
     businessId: wt.businessId,
     callerE164: wt.callerE164,
     recipientE164: wt.recipientE164,
-    outcome: "failed",
+    outcome: cause === "normal_clearing" ? "success" : "failed",
     dedupeKey
   });
-  return { handled: true, response: jsonOk("wt_failed") };
+  return {
+    handled: true,
+    response: jsonOk(cause === "normal_clearing" ? "wt_answered_hangup" : "wt_failed")
+  };
 }
 
 function parseCallDurationSeconds(payload: Record<string, unknown>): number | null {
