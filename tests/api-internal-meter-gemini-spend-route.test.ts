@@ -55,6 +55,47 @@ describe("POST /api/internal/meter-gemini-spend", () => {
     });
   });
 
+  it("accepts and forwards the optional Gemini Live audio token split", async () => {
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
+    const body = {
+      businessId: VALID_BIZ,
+      model: "gemini-3.1-flash-live-preview",
+      usage: {
+        promptTokens: 10_000,
+        outputTokens: 20_000,
+        promptAudioTokens: 9_000,
+        outputAudioTokens: 19_500
+      }
+    };
+    const res = await post(body, { Authorization: "Bearer per-tenant" });
+    expect(res.status).toBe(200);
+    expect(meterGeminiSpendForBusiness).toHaveBeenCalledWith({
+      businessId: VALID_BIZ,
+      model: "gemini-3.1-flash-live-preview",
+      surface: "vps_rowboat",
+      usage: {
+        promptTokens: 10_000,
+        outputTokens: 20_000,
+        promptAudioTokens: 9_000,
+        outputAudioTokens: 19_500
+      }
+    });
+  });
+
+  it("400s on a negative audio token count", async () => {
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
+    const res = await post(
+      {
+        businessId: VALID_BIZ,
+        model: "gemini-3.1-flash-live-preview",
+        usage: { promptTokens: 10, outputTokens: 10, promptAudioTokens: -1 }
+      },
+      { Authorization: "Bearer per-tenant" }
+    );
+    expect(res.status).toBe(400);
+    expect(meterGeminiSpendForBusiness).not.toHaveBeenCalled();
+  });
+
   it("400s on an invalid body (and never meters)", async () => {
     vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
     const res = await post(

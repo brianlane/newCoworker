@@ -19,31 +19,35 @@ export function pickUpstream(model) {
 
 /**
  * Decide whether a gemini-* completion routed through this sidecar should be
- * metered into the tenant's shared "AI chat budget" (`owner_chat_model_spend`).
+ * metered into the tenant's shared "AI budget" (`owner_chat_model_spend`).
  *
- * The budget covers the AGENTIC CHAT surfaces that flow through Rowboat: owner
+ * The budget covers EVERY Gemini call that flows through Rowboat: owner
  * dashboard chat + inbound SMS replies + the rolling conversation/customer
- * summarizers (all on `OWNER_CHAT_MODEL`/`SMS_CHAT_MODEL`, default
- * gemini-2.5-flash-lite). It deliberately EXCLUDES the voice path: Rowboat's
- * `voice_task` agent uses `GEMINI_ROWBOAT_MODEL` (default gemini-3.1-flash) and
- * that spend is billed to the customer as voice minutes, not the chat budget.
- * (Gemini Live — gemini-3.1-flash-live-preview — never reaches this router; the
- * voice bridge holds that WebSocket directly.)
+ * summarizers (`OWNER_CHAT_MODEL`/`SMS_CHAT_MODEL`, default gemini-2.5-flash-lite)
+ * AND the voice `voice_task` agent (`GEMINI_ROWBOAT_MODEL`, default
+ * gemini-3.1-flash). All of it is Google AI spend and belongs in the one AI
+ * budget the dashboard shows.
  *
- * Rule: a `gemini-*` model is metered UNLESS it is the configured voice model
- * (`voiceModel`, exact case-insensitive match) or a `live`-flavored model.
+ * The ONLY gemini spend NOT metered here is Gemini Live (the real-time
+ * audio-to-audio model, e.g. gemini-3.1-flash-live-preview): it never reaches
+ * this router — the voice-bridge holds that WebSocket directly and meters it
+ * separately from the exact `usageMetadata` it sees. We guard on the `live`
+ * substring defensively so a stray Live completion here could never
+ * double-count against the bridge's meter.
+ *
+ * Rule: any `gemini-*` model is metered UNLESS it is a `live`-flavored model.
  * Non-gemini (ollama) traffic is $0 and never metered. Kept pure + exported so
  * the metering decision is unit-tested without booting the HTTP server.
  */
-export function isChatBudgetModel(model, voiceModel) {
+export function isAiBudgetModel(model) {
   if (typeof model !== "string") return false;
   const m = model.trim().toLowerCase();
   if (m === "") return false;
-  if (pickUpstream(model) !== "gemini") return false;
-  // Live (real-time audio) models are always voice — never chat budget.
+  // Check the trimmed/normalized name so a stray leading space can't misroute
+  // (pickUpstream anchors on `^gemini`); pickUpstream is already case-insensitive.
+  if (pickUpstream(m) !== "gemini") return false;
+  // Gemini Live never routes through here (bridge meters it); guard defensively.
   if (m.includes("live")) return false;
-  const voice = typeof voiceModel === "string" ? voiceModel.trim().toLowerCase() : "";
-  if (voice && m === voice) return false;
   return true;
 }
 

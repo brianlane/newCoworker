@@ -14,7 +14,8 @@ import {
   type HangupCapability,
   type CallerIdentity,
   type CapturedLead,
-  type IntakeCapability
+  type IntakeCapability,
+  type GeminiLiveUsage
 } from "./gemini-telnyx-bridge.js";
 import { loadVaultForPrompt } from "./vault-loader.js";
 import {
@@ -43,6 +44,91 @@ const LAST_SEEN_UPDATE_INTERVAL_MS = (() => {
 function readPositiveMs(envKey: string, fallback: number): number {
   const v = Number(process.env[envKey]);
   return Number.isFinite(v) && v > 0 ? v : fallback;
+}
+
+/**
+ * Derive a per-call Gemini Live time cap (ms) from the tenant's REMAINING shared
+ * AI budget (`owner_chat_model_spend` vs the $5/$10 tier cap + purchased credit)
+ * so a single long call can't blow the whole pool. This is the mid-call half of
+ * the hard stop: the pre-call gate in telnyx-voice-inbound already refuses when
+ * the pool is fully exhausted; this shortens the session when only a little
+ * budget is left, and the bridge's graceful wind-down (with budget wording)
+ * closes the call before it overspends.
+ *
+ * Combined two-way audio costs ~0.375 micro-USD/ms (25 tok/s each way at the
+ * $3-in/$12-out audio rates), intentionally CONSERVATIVE — overestimating cost
+ * yields a shorter cap, never a longer one. Fails OPEN: any read error returns
+ * `envMaxMs` (never shorten a call over a DB blip), and the result is clamped to
+ * a small floor so we never answer-then-immediately-hang-up.
+ */
+async function computeBudgetDerivedSessionMaxMs(
+  supabase: SupabaseClient,
+  businessId: string,
+  envMaxMs: number
+): Promise<number> {
+  try {
+    const microsPerMs = readPositiveMs("GEMINI_LIVE_MICROS_PER_MS", 0.375);
+    const minMs = readPositiveMs("GEMINI_LIVE_SESSION_MIN_MS", 30_000);
+
+    const { data: bizRow } = await supabase
+      .from("businesses")
+      .select("tier")
+      .eq("id", businessId)
+      .maybeSingle();
+    const tier = String((bizRow as { tier?: string | null } | null)?.tier ?? "");
+    // $5 starter / $10 otherwise — must match chatSpendBaseCapMicrosForTier and
+    // _shared/chat_spend_cap.ts so every surface trips the same shared fuse.
+    const baseCapMicros = tier === "starter" ? 5_000_000 : 10_000_000;
+
+    const now = new Date();
+    let periodStart = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)
+    ).toISOString();
+    const { data: subRow } = await supabase
+      .from("subscriptions")
+      .select("stripe_current_period_start, created_at")
+      .eq("business_id", businessId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const subStart = (subRow as { stripe_current_period_start?: string | null } | null)
+      ?.stripe_current_period_start;
+    if (subStart) periodStart = subStart;
+
+    const { data: spendRow } = await supabase
+      .from("owner_chat_model_spend")
+      .select("spend_micros")
+      .eq("business_id", businessId)
+      .eq("period_start", periodStart)
+      .maybeSingle();
+    const spent = Number(
+      (spendRow as { spend_micros?: number | string } | null)?.spend_micros ?? 0
+    );
+
+    let creditMicros = 0;
+    const { data: creditRaw, error: creditErr } = await supabase.rpc("chat_active_credit_micros", {
+      p_business_id: businessId
+    });
+    if (!creditErr) {
+      const n = Number(creditRaw ?? 0);
+      if (Number.isFinite(n) && n > 0) creditMicros = n;
+    }
+
+    const remainingMicros = baseCapMicros + creditMicros - spent;
+    if (!Number.isFinite(remainingMicros) || remainingMicros <= 0) {
+      // The pre-call gate should have refused an over-budget call, but clamp to
+      // the floor (not 0) rather than trust a racy read to zero out the session.
+      return Math.min(envMaxMs, minMs);
+    }
+    const budgetMs = Math.floor(remainingMicros / microsPerMs);
+    return Math.min(envMaxMs, Math.max(minMs, budgetMs));
+  } catch (err) {
+    console.warn(
+      "voice-bridge: budget-derived session cap failed (using env cap)",
+      err instanceof Error ? err.message : String(err)
+    );
+    return envMaxMs;
+  }
 }
 
 /**
@@ -346,6 +432,64 @@ async function sendMissedCallSms(params: {
   }
 }
 
+/**
+ * Meter a completed Gemini Live session's exact token usage into the shared AI
+ * budget (`owner_chat_model_spend`) via the same app endpoint the llm-router
+ * uses for chat/SMS/voice_task. This is the SECOND Gemini voice metering point:
+ * `voice_task` (Rowboat text turns) meter through the router, while the Live
+ * audio-to-audio model holds its WebSocket here in the bridge, so its usage is
+ * only visible to us. Audio tokens are forwarded separately so the app can
+ * price them at the audio rate (in $3/1M, out $12/1M) vs the small text
+ * remainder. Best-effort: a metering failure can only under-count the fuse.
+ */
+async function meterGeminiLiveSpend(params: {
+  businessId: string;
+  model: string;
+  usage: GeminiLiveUsage;
+}): Promise<void> {
+  const appBaseUrl = (process.env.APP_BASE_URL ?? "").replace(/\/+$/, "");
+  const gatewayToken = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
+  if (!appBaseUrl || !gatewayToken) return;
+  // Nothing billable (session never produced tokens) — skip the round trip.
+  if (params.usage.promptTokens <= 0 && params.usage.outputTokens <= 0) return;
+  try {
+    const res = await fetch(`${appBaseUrl}/api/internal/meter-gemini-spend`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${gatewayToken}`
+      },
+      body: JSON.stringify({
+        businessId: params.businessId,
+        model: params.model,
+        usage: {
+          promptTokens: params.usage.promptTokens,
+          outputTokens: params.usage.outputTokens,
+          promptAudioTokens: params.usage.promptAudioTokens,
+          outputAudioTokens: params.usage.outputAudioTokens
+        }
+      })
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.error("voice-bridge: meter-gemini-spend failed", res.status, body.slice(0, 200));
+    } else {
+      console.log("voice-bridge: Gemini Live spend metered", {
+        model: params.model,
+        promptTokens: params.usage.promptTokens,
+        outputTokens: params.usage.outputTokens,
+        promptAudioTokens: params.usage.promptAudioTokens,
+        outputAudioTokens: params.usage.outputAudioTokens
+      });
+    }
+  } catch (err) {
+    console.error(
+      "voice-bridge: meter-gemini-spend threw",
+      err instanceof Error ? err.message : String(err)
+    );
+  }
+}
+
 /** Max characters of transcript to include in the intake SMS (Telnyx segments long bodies). */
 const INTAKE_SMS_MAX_CHARS = 3000;
 
@@ -604,6 +748,9 @@ function main(): void {
       let geminiTeardown: (() => Promise<void>) | undefined;
       let onTelnyxGemini: ((rawUtf8: string) => void) | undefined;
       let geminiGetLead: (() => CapturedLead) | undefined;
+      // Captured at session end for AI-budget metering (Gemini Live path).
+      let geminiGetUsage: (() => GeminiLiveUsage | null) | undefined;
+      let geminiLiveModel: string | undefined;
 
       const geminiFlag = (process.env.GEMINI_LIVE_ENABLED ?? "true").trim().toLowerCase();
       const geminiLiveEnabled = geminiFlag !== "false" && geminiFlag !== "0";
@@ -795,7 +942,23 @@ function main(): void {
 
       if (geminiLiveEnabled && apiKey) {
         try {
-          const sessionMaxMs = readPositiveMs("GEMINI_LIVE_SESSION_MAX_MS", 14 * 60 * 1000);
+          const envSessionMaxMs = readPositiveMs("GEMINI_LIVE_SESSION_MAX_MS", 14 * 60 * 1000);
+          // Shorten the session when the shared AI budget is nearly gone (mid-call
+          // half of the hard stop). budgetCapped drives the bridge's wind-down
+          // wording ("the owner isn't available right now" vs the normal time cap).
+          const sessionMaxMs = await computeBudgetDerivedSessionMaxMs(
+            supabase,
+            businessId,
+            envSessionMaxMs
+          );
+          const budgetCapped = sessionMaxMs < envSessionMaxMs;
+          if (budgetCapped) {
+            console.log("voice-bridge: session shortened by AI budget", {
+              callControlId,
+              envSessionMaxMs,
+              sessionMaxMs
+            });
+          }
           const warnBeforeMs = readPositiveMs("GEMINI_LIVE_SESSION_WARN_BEFORE_MS", 60 * 1000);
           const finalNudgeBeforeMs = readPositiveMs("GEMINI_LIVE_SESSION_FINAL_NUDGE_MS", 15 * 1000);
           const model = process.env.GEMINI_LIVE_MODEL ?? "gemini-3.1-flash-live-preview";
@@ -907,6 +1070,7 @@ function main(): void {
             apiKey,
             model,
             sessionMaxMs,
+            budgetCapped,
             warnBeforeMs,
             finalNudgeBeforeMs,
             businessName,
@@ -929,6 +1093,8 @@ function main(): void {
           onTelnyxGemini = bridge.onTelnyxMessage;
           geminiTeardown = bridge.teardown;
           geminiGetLead = bridge.getLead;
+          geminiGetUsage = bridge.getUsage;
+          geminiLiveModel = model;
         } catch (e) {
           const reason = e instanceof Error ? e.message : String(e);
           console.error("voice-bridge: Gemini Live unavailable (continuing without AI audio)", reason);
@@ -1012,6 +1178,21 @@ function main(): void {
             await geminiTeardown?.();
           } catch (err) {
             console.error("voice-bridge: teardown error", err);
+          }
+          // Meter this Live session's exact Gemini spend into the shared AI
+          // budget. Done after teardown so `getUsage()` returns the final
+          // cumulative frame. Best-effort — never blocks reservation settle.
+          try {
+            const usage = geminiGetUsage?.();
+            if (usage && geminiLiveModel) {
+              await meterGeminiLiveSpend({
+                businessId,
+                model: geminiLiveModel,
+                usage
+              });
+            }
+          } catch (err) {
+            console.error("voice-bridge: meter Gemini Live spend error", err);
           }
           // Only notify when the Gemini bridge actually ran (geminiGetLead is
           // set on successful bridge init). If Gemini never started (init

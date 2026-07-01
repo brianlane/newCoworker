@@ -59,6 +59,15 @@ describe("geminiPriceFor", () => {
     expect(geminiPriceFor("gemini-99-ultra")).toBe(DEFAULT_GEMINI_PRICE_PER_1M);
     expect(DEFAULT_GEMINI_PRICE_PER_1M).toEqual({ in: 1.5, out: 9.0 });
   });
+
+  it("carries modality-aware audio rates for the Gemini Live voice model", () => {
+    expect(geminiPriceFor("gemini-3.1-flash-live-preview")).toEqual({
+      in: 0.75,
+      out: 4.5,
+      audioIn: 3.0,
+      audioOut: 12.0
+    });
+  });
 });
 
 describe("geminiCostMicrosFromUsage", () => {
@@ -76,6 +85,57 @@ describe("geminiCostMicrosFromUsage", () => {
     expect(
       geminiCostMicrosFromUsage("gemini-2.5-flash", { promptTokens: 4, outputTokens: -10 })
     ).toBe(2);
+  });
+
+  it("prices the AUDIO portion at the audio rate and the text remainder at the text rate (Gemini Live)", () => {
+    // 10k prompt tokens: 9k audio @ $3/1M + 1k text @ $0.75/1M.
+    // 20k output tokens: 19.5k audio @ $12/1M + 500 text @ $4.5/1M.
+    expect(
+      geminiCostMicrosFromUsage("gemini-3.1-flash-live-preview", {
+        promptTokens: 10_000,
+        outputTokens: 20_000,
+        promptAudioTokens: 9_000,
+        outputAudioTokens: 19_500
+      })
+    ).toBe(
+      Math.ceil(
+        1_000 * 0.75 + 9_000 * 3.0 + 500 * 4.5 + 19_500 * 12.0
+      )
+    );
+  });
+
+  it("treats all tokens as text when no audio split is provided (back-compat)", () => {
+    // Same Live model, but no audio fields → everything on the text rate.
+    expect(
+      geminiCostMicrosFromUsage("gemini-3.1-flash-live-preview", {
+        promptTokens: 1_000,
+        outputTokens: 500
+      })
+    ).toBe(Math.ceil(1_000 * 0.75 + 500 * 4.5));
+  });
+
+  it("clamps audio tokens to their totals so a malformed split can't over/under-count", () => {
+    // Audio counts exceed the totals → clamp to the totals (all audio-priced).
+    expect(
+      geminiCostMicrosFromUsage("gemini-3.1-flash-live-preview", {
+        promptTokens: 100,
+        outputTokens: 200,
+        promptAudioTokens: 999,
+        outputAudioTokens: 999
+      })
+    ).toBe(Math.ceil(100 * 3.0 + 200 * 12.0));
+  });
+
+  it("uses the text rate for audio tokens on a model without audio rates (fallback)", () => {
+    // gemini-2.5-flash has no audioIn/audioOut → audio tokens price at in/out.
+    expect(
+      geminiCostMicrosFromUsage("gemini-2.5-flash", {
+        promptTokens: 1_000,
+        outputTokens: 500,
+        promptAudioTokens: 400,
+        outputAudioTokens: 200
+      })
+    ).toBe(Math.ceil(1_000 * 0.3 + 500 * 2.5));
   });
 });
 

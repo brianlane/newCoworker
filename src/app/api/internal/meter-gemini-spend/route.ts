@@ -32,7 +32,11 @@ const bodySchema = z.object({
   model: z.string().min(1).max(200),
   usage: z.object({
     promptTokens: z.number().finite().nonnegative(),
-    outputTokens: z.number().finite().nonnegative()
+    outputTokens: z.number().finite().nonnegative(),
+    // Optional modality split (Gemini Live voice): the audio portion of the
+    // prompt/output tokens, priced at the audio rate. Omitted for text surfaces.
+    promptAudioTokens: z.number().finite().nonnegative().optional(),
+    outputAudioTokens: z.number().finite().nonnegative().optional()
   })
 });
 

@@ -53,9 +53,6 @@ const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || "";
 const BUSINESS_ID = process.env.BUSINESS_ID || "";
 const APP_BASE_URL = (process.env.APP_BASE_URL || "").replace(/\/+$/, "");
 const GATEWAY_TOKEN = process.env.ROWBOAT_GATEWAY_TOKEN || "";
-// Voice_task model (default gemini-3.1-flash); its spend is voice minutes, not
-// the chat budget, so isChatBudgetModel() excludes it. Mirrors deploy-client.sh.
-const VOICE_MODEL = process.env.GEMINI_ROWBOAT_MODEL || "gemini-3.1-flash";
 const METER_ENABLED = Boolean(BUSINESS_ID && APP_BASE_URL && GATEWAY_TOKEN);
 
 /**
@@ -92,7 +89,7 @@ import {
   mergeSystemMessages,
   addToolCallIndices,
   createSseToolCallIndexNormalizer,
-  isChatBudgetModel,
+  isAiBudgetModel,
   extractOpenAiUsage,
   createSseUsageCollector
 } from "./routing.js";
@@ -102,7 +99,7 @@ export {
   mergeSystemMessages,
   addToolCallIndices,
   createSseToolCallIndexNormalizer,
-  isChatBudgetModel,
+  isAiBudgetModel,
   extractOpenAiUsage,
   createSseUsageCollector
 };
@@ -170,16 +167,17 @@ async function handleRoutedRequest(req, res) {
 
   const upstream = pickUpstream(parsed?.model);
   const requestPath = req.url?.split("?")[0] ?? "/v1/chat/completions";
-  // Meter this turn's exact tokens into the chat budget unless it's the voice
-  // path (see isChatBudgetModel). Scoped to /v1/chat/completions: the agentic
-  // chat surfaces (owner chat / SMS / summarizers) all run there; /v1/embeddings
-  // and /v1/completions are a different cost line and stay out of this budget.
-  // Decided pre-fetch so we know whether to accumulate the response body for
-  // usage and whether to request usage on a streamed turn.
+  // Meter this turn's exact tokens into the shared AI budget for every gemini-*
+  // model (see isAiBudgetModel) — owner chat / SMS / summarizers AND the voice
+  // `voice_task` agent. Scoped to /v1/chat/completions: all those agentic
+  // surfaces run there; /v1/embeddings and /v1/completions are a different cost
+  // line and stay out of this budget. Decided pre-fetch so we know whether to
+  // accumulate the response body for usage and whether to request usage on a
+  // streamed turn.
   const meterGemini =
     upstream === "gemini" &&
     requestPath === "/v1/chat/completions" &&
-    isChatBudgetModel(parsed?.model, VOICE_MODEL);
+    isAiBudgetModel(parsed?.model);
 
   // Build the outgoing body once, applying two rewrites where needed:
   //  1) Collapse multiple system messages — Gemini's OpenAI-compat keeps only

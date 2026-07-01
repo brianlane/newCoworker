@@ -22,7 +22,15 @@ import { sendCapAlertOnce } from "../../../supabase/functions/_shared/cap_alerts
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-export type GeminiPricePer1M = { in: number; out: number };
+/**
+ * Per-1M-token prices. `in`/`out` are the TEXT rates. `audioIn`/`audioOut` are
+ * the modality-specific AUDIO rates for native-audio models (Gemini Live): the
+ * caller's speech in and the assistant's speech out are billed per audio token
+ * at these higher rates, while the small text remainder (system instruction,
+ * coordinator cues, tool JSON) stays on `in`/`out`. Omit the audio fields for
+ * text-only models — everything then prices at `in`/`out`.
+ */
+export type GeminiPricePer1M = { in: number; out: number; audioIn?: number; audioOut?: number };
 
 /** USD per 1M tokens, Google list prices (standard interactive tier). */
 export const GEMINI_PRICES_PER_1M: Record<string, GeminiPricePer1M> = {
@@ -30,13 +38,14 @@ export const GEMINI_PRICES_PER_1M: Record<string, GeminiPricePer1M> = {
   "gemini-2.5-flash": { in: 0.3, out: 2.5 },
   "gemini-3-flash": { in: 0.5, out: 3.0 },
   "gemini-3-flash-preview": { in: 0.5, out: 3.0 },
-  // Voice-path models (Rowboat voice_task / Gemini Live). Their spend is billed
-  // as voice minutes and the llm-router EXCLUDES them from the chat budget, so
-  // these entries are purely defensive: if a stray non-voice 3.1 call ever
-  // reaches this meter it prices in the flash tier instead of the priciest
-  // default. Same flash-tier rate as gemini-3-flash.
+  // Voice `voice_task` model (Rowboat text turns through the llm-router). Now
+  // metered into the shared AI budget like every other gemini-* text call.
   "gemini-3.1-flash": { in: 0.5, out: 3.0 },
-  "gemini-3.1-flash-live-preview": { in: 0.5, out: 3.0 },
+  // Gemini Live (native audio-to-audio) — the voice-bridge holds this session
+  // and meters it from the exact usageMetadata it sees. Priced modality-aware:
+  // text in $0.75 / out $4.50, audio in $3.00 / out $12.00 per 1M tokens
+  // (audio ≈ 25 tokens/sec). Nearly all of a call's tokens are audio.
+  "gemini-3.1-flash-live-preview": { in: 0.75, out: 4.5, audioIn: 3.0, audioOut: 12.0 },
   // Gemini 3.5 Flash (GA May 2026). Output price includes thinking tokens, so
   // a medium/high reasoning compile is billed entirely at this rate.
   "gemini-3.5-flash": { in: 1.5, out: 9.0 }
@@ -49,11 +58,31 @@ export function geminiPriceFor(model: string): GeminiPricePer1M {
   return GEMINI_PRICES_PER_1M[model.trim()] ?? DEFAULT_GEMINI_PRICE_PER_1M;
 }
 
-/** Exact cost (micro-USD) from billed token counts. */
+/**
+ * Exact cost (micro-USD) from billed token counts, modality-aware.
+ *
+ * When `usage` carries an audio split (Gemini Live), the audio portion of the
+ * prompt/output tokens is priced at the model's audio rate and the remaining
+ * (text) portion at the text rate. For text-only surfaces the audio fields are
+ * absent/0 and everything prices at `in`/`out` — identical to the old math.
+ * Audio counts are clamped to their respective totals so a malformed payload
+ * can never over- or under-count.
+ */
 export function geminiCostMicrosFromUsage(model: string, usage: GeminiUsage): number {
   const price = geminiPriceFor(model);
+  const promptTokens = Math.max(0, usage.promptTokens);
+  const outputTokens = Math.max(0, usage.outputTokens);
+  const promptAudio = Math.min(promptTokens, Math.max(0, usage.promptAudioTokens ?? 0));
+  const outputAudio = Math.min(outputTokens, Math.max(0, usage.outputAudioTokens ?? 0));
+  const promptText = promptTokens - promptAudio;
+  const outputText = outputTokens - outputAudio;
+  const audioIn = price.audioIn ?? price.in;
+  const audioOut = price.audioOut ?? price.out;
   return Math.ceil(
-    Math.max(0, usage.promptTokens) * price.in + Math.max(0, usage.outputTokens) * price.out
+    promptText * price.in +
+      promptAudio * audioIn +
+      outputText * price.out +
+      outputAudio * audioOut
   );
 }
 

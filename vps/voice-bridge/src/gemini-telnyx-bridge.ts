@@ -18,6 +18,9 @@ import {
   type TranscriptAdapter,
   type TranscriptRecorder
 } from "./voice-transcript.js";
+import { readLiveUsage, type GeminiLiveUsage } from "./live-usage.js";
+
+export { readLiveUsage, type GeminiLiveUsage };
 
 const TELNYX_PCM_RATE = 16000;
 const GEMINI_OUTPUT_DEFAULT_RATE = 24000;
@@ -171,6 +174,14 @@ export type GeminiBridgeOptions = {
   model: string;
   /** Hard stop for this Live session (ms). */
   sessionMaxMs: number;
+  /**
+   * True when `sessionMaxMs` is the AI-BUDGET-derived cap (the shared AI budget
+   * is nearly exhausted), rather than the normal env time limit. Switches the
+   * graceful wind-down wording from "someone can help you afterward" to "the
+   * owner isn't available right now, please text us" — we can't fall back to a
+   * local model on a live call, so the honest framing is unavailability.
+   */
+  budgetCapped?: boolean;
   /** First spoken coordinator prompt this many ms before `sessionMaxMs`. */
   warnBeforeMs: number;
   /** Second, firmer coordinator prompt this many ms before `sessionMaxMs`. */
@@ -737,9 +748,19 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   teardown: () => Promise<void>;
   /** Lead fields captured during a HomeLight intake call (empty otherwise). */
   getLead: () => CapturedLead;
+  /**
+   * Final cumulative Gemini Live token usage (modality-split) for this session,
+   * or null if the model never reported `usageMetadata`. Read at session end by
+   * index.ts to meter the spend into the shared AI budget.
+   */
+  getUsage: () => GeminiLiveUsage | null;
 }> {
   const ai = new GoogleGenAI({ apiKey: opts.apiKey });
   let ended = false;
+  // Latest cumulative usage frame seen from Gemini Live (running session
+  // totals). Kept by max totalTokens so a trailing zero/partial frame can't
+  // clobber the real count; metered once at session end.
+  let latestUsage: GeminiLiveUsage | null = null;
   // Set once the model invokes `end_call` so a repeated/duplicate call can't
   // schedule two hangups (the second would race teardown on a dead leg).
   let endCallRequested = false;
@@ -1095,6 +1116,15 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     callbacks: {
       onmessage: (message: LiveServerMessage) => {
         if (ended || opts.ws.readyState !== WebSocket.OPEN) return;
+        // Capture cumulative token usage for billing. Gemini Live reports
+        // running session totals, so keep the frame with the largest total —
+        // metered once at teardown by index.ts (see getUsage()).
+        {
+          const u = readLiveUsage(message);
+          if (u && (latestUsage === null || u.totalTokens >= latestUsage.totalTokens)) {
+            latestUsage = u;
+          }
+        }
         // Message tap (debug): classify what Gemini sends so the trail emitted
         // on close shows the exact sequence leading to the 1007 invalid-argument
         // kill. Kept allocation-light; only tags are recorded, not payloads.
@@ -1287,7 +1317,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     transcription_enabled: Boolean(transcriptRecorder),
     transfer_enabled: Boolean(opts.transfer),
     voice_tools_ready: voiceToolsReady,
-    session_max_ms: opts.sessionMaxMs
+    session_max_ms: opts.sessionMaxMs,
+    budget_capped: Boolean(opts.budgetCapped)
   });
 
   function sendToolResponse(id: string | undefined, name: string, response: ToolResult): void {
@@ -1493,8 +1524,23 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
 
   const { sessionMaxMs, warnBeforeMs, finalNudgeBeforeMs } = opts;
   const name = opts.businessName;
+  const budgetCapped = Boolean(opts.budgetCapped);
   const warnAt = Math.max(0, sessionMaxMs - warnBeforeMs);
   const nudgeAt = Math.max(0, sessionMaxMs - finalNudgeBeforeMs);
+
+  // Wind-down coordinator cues. When the binding limit is the AI BUDGET (not the
+  // normal time cap) we can't offer "the assistant can keep helping" or "someone
+  // will help you right after" — the AI genuinely can't continue — so we frame
+  // it as the owner being unavailable and steer the caller to text instead.
+  const warnText = budgetCapped
+    ? `[Coordinator — speak aloud] You need to start wrapping up this call now. Warmly let the caller know you have to go shortly and that the owner isn't available right now, and invite them to send ${name} a text message so someone can follow up.`
+    : `[Coordinator — speak aloud] The AI session will end in about ${Math.max(1, Math.round(warnBeforeMs / 60000))} minute(s). Give the caller a warm heads-up that you're wrapping up, and that ${name} can help them directly afterward if needed.`;
+  const nudgeText = budgetCapped
+    ? `[Coordinator — speak aloud] Finish your thought and give a very brief, warm goodbye now. Let them know the owner isn't available right now and that they can text ${name} and someone will get back to them.`
+    : `[Coordinator — speak aloud] Finish your thought and deliver a very brief, warm goodbye now. Let them know someone at ${name} can follow up if they still need help.`;
+  const finalText = budgetCapped
+    ? `[Coordinator — speak aloud] Wrap up immediately. Say one short, friendly goodbye — the owner isn't available right now, so invite them to text ${name} — and thank them for calling.`
+    : `[Coordinator — speak aloud] Session time limit reached. Say one short, friendly goodbye and thank them for calling ${name}.`;
 
   // Diagnostic heartbeat so production logs show the audio pipeline is still
   // alive throughout the call (or, more usefully, when it stalls). Fires
@@ -1526,22 +1572,17 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   timers.push(
     setTimeout(() => {
       if (ended) return;
-      const mins = Math.max(1, Math.round(warnBeforeMs / 60000));
       // Realtime text (not sendClientContent) so this coordinator cue stays in
       // the same auto-VAD turn regime as the caller's audio; a manual turn here
       // would make the caller's next reply close the session with 1007.
-      session.sendRealtimeInput({
-        text: `[Coordinator — speak aloud] The AI session will end in about ${mins} minute(s). Give the caller a warm heads-up that you're wrapping up, and that ${name} can help them directly afterward if needed.`
-      });
+      session.sendRealtimeInput({ text: warnText });
     }, warnAt)
   );
 
   timers.push(
     setTimeout(() => {
       if (ended) return;
-      session.sendRealtimeInput({
-        text: `[Coordinator — speak aloud] Finish your thought and deliver a very brief, warm goodbye now. Let them know someone at ${name} can follow up if they still need help.`
-      });
+      session.sendRealtimeInput({ text: nudgeText });
     }, nudgeAt)
   );
 
@@ -1550,9 +1591,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       if (ended) return;
       void (async () => {
         try {
-          session.sendRealtimeInput({
-            text: `[Coordinator — speak aloud] Session time limit reached. Say one short, friendly goodbye and thank them for calling ${name}.`
-          });
+          session.sendRealtimeInput({ text: finalText });
           await new Promise((r) => setTimeout(r, 1200));
         } catch {
           /* ignore */
@@ -1680,5 +1719,10 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     }
   };
 
-  return { onTelnyxMessage, teardown, getLead: () => ({ ...leadData }) };
+  return {
+    onTelnyxMessage,
+    teardown,
+    getLead: () => ({ ...leadData }),
+    getUsage: () => latestUsage
+  };
 }

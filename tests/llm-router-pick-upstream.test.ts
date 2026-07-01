@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 // @ts-expect-error — sidecar is plain JS without types; importing the pure
 // helper module avoids booting the HTTP server that index.js binds at load.
 // prettier-ignore — single line so the ts-expect-error covers the untyped import
-import { pickUpstream, filterUpstreamHeaders, mergeSystemMessages, addToolCallIndices, createSseToolCallIndexNormalizer, isChatBudgetModel, extractOpenAiUsage, createSseUsageCollector } from "../vps/llm-router/src/routing.js";
+import { pickUpstream, filterUpstreamHeaders, mergeSystemMessages, addToolCallIndices, createSseToolCallIndexNormalizer, isAiBudgetModel, extractOpenAiUsage, createSseUsageCollector } from "../vps/llm-router/src/routing.js";
 
 describe("llm-router pickUpstream", () => {
   it("routes gemini-* models to Gemini", () => {
@@ -33,38 +33,36 @@ describe("llm-router pickUpstream", () => {
   });
 });
 
-describe("llm-router isChatBudgetModel", () => {
+describe("llm-router isAiBudgetModel", () => {
   it("meters the chat agent models (owner chat / SMS / summarizers run on these)", () => {
-    expect(isChatBudgetModel("gemini-2.5-flash-lite", "gemini-3.1-flash")).toBe(true);
-    expect(isChatBudgetModel("gemini-2.5-flash", "gemini-3.1-flash")).toBe(true);
-    expect(isChatBudgetModel("Gemini-2.5-Flash-Lite", "gemini-3.1-flash")).toBe(true); // case-insensitive
+    expect(isAiBudgetModel("gemini-2.5-flash-lite")).toBe(true);
+    expect(isAiBudgetModel("gemini-2.5-flash")).toBe(true);
+    expect(isAiBudgetModel("Gemini-2.5-Flash-Lite")).toBe(true); // case-insensitive
   });
 
-  it("excludes the configured voice model (voice_task spend is billed as minutes)", () => {
-    expect(isChatBudgetModel("gemini-3.1-flash", "gemini-3.1-flash")).toBe(false);
-    expect(isChatBudgetModel(" GEMINI-3.1-FLASH ", "gemini-3.1-flash")).toBe(false); // trim + case
+  it("now ALSO meters the voice_task model (voice Gemini shares the AI budget)", () => {
+    // Previously excluded as "billed as minutes"; voice Gemini now counts
+    // toward the same shared AI budget pool as chat/SMS.
+    expect(isAiBudgetModel("gemini-3.1-flash")).toBe(true);
+    expect(isAiBudgetModel(" GEMINI-3.1-FLASH ")).toBe(true); // trim + case
   });
 
-  it("always excludes live (real-time audio) models, regardless of the voice-model env", () => {
-    expect(isChatBudgetModel("gemini-3.1-flash-live-preview", "gemini-2.5-flash-lite")).toBe(false);
-    expect(isChatBudgetModel("gemini-3.1-flash-live-preview", "")).toBe(false);
+  it("still excludes live (real-time audio) models — the voice-bridge meters those separately", () => {
+    // Gemini Live never routes through this sidecar; the guard is defensive so
+    // a stray Live completion here could never double-count the bridge's meter.
+    expect(isAiBudgetModel("gemini-3.1-flash-live-preview")).toBe(false);
   });
 
   it("never meters non-gemini (ollama) traffic — it's $0", () => {
-    expect(isChatBudgetModel("qwen3:4b-instruct", "gemini-3.1-flash")).toBe(false);
-    expect(isChatBudgetModel("llama3.2:3b", "gemini-3.1-flash")).toBe(false);
+    expect(isAiBudgetModel("qwen3:4b-instruct")).toBe(false);
+    expect(isAiBudgetModel("llama3.2:3b")).toBe(false);
   });
 
   it("returns false for missing / blank / non-string models", () => {
-    expect(isChatBudgetModel(undefined, "gemini-3.1-flash")).toBe(false);
-    expect(isChatBudgetModel(null, "gemini-3.1-flash")).toBe(false);
-    expect(isChatBudgetModel("", "gemini-3.1-flash")).toBe(false);
-    expect(isChatBudgetModel(42, "gemini-3.1-flash")).toBe(false);
-  });
-
-  it("still meters a gemini chat model when the voice-model env is missing/blank", () => {
-    expect(isChatBudgetModel("gemini-2.5-flash-lite", undefined)).toBe(true);
-    expect(isChatBudgetModel("gemini-2.5-flash-lite", "")).toBe(true);
+    expect(isAiBudgetModel(undefined)).toBe(false);
+    expect(isAiBudgetModel(null)).toBe(false);
+    expect(isAiBudgetModel("")).toBe(false);
+    expect(isAiBudgetModel(42)).toBe(false);
   });
 });
 

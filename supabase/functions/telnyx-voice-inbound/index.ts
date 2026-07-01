@@ -15,8 +15,15 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { header, verifyTelnyxWebhook } from "../_shared/telnyx_webhook.ts";
 import { signStreamUrlMac, type StreamPayloadV2 } from "../_shared/stream_url.ts";
-import { reserveVoiceBudget } from "../_shared/voice_reserve.ts";
+import { checkVoiceBudgetAvailable, reserveVoiceBudget } from "../_shared/voice_reserve.ts";
 import {
+  capMicrosForTier,
+  DEFAULT_CHAT_SPEND_CAP_MICROS,
+  resolveSmsChatCap
+} from "../_shared/chat_spend_cap.ts";
+import { telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
+import {
+  VOICE_MSG_AI_BUDGET_EXHAUSTED,
   VOICE_MSG_BRIDGE_DEGRADED,
   VOICE_MSG_CONCURRENT_LIMIT,
   VOICE_MSG_PAUSED,
@@ -66,6 +73,67 @@ function jsonOk(path: string, extra: Record<string, unknown> = {}): Response {
     status: 200,
     headers: { "Content-Type": "application/json" }
   });
+}
+
+/**
+ * Text the owner that the AI receptionist couldn't take a live call because the
+ * shared AI budget is exhausted. Reuses the tenant's existing SMS fallback
+ * config (`business_telnyx_settings`) — same gate the voice-bridge's missed-call
+ * SMS uses: only fires when `sms_fallback_enabled` is on AND a forward number +
+ * messaging profile are set. We never text the caller. Best-effort; never
+ * throws (the call is already being refused, this is a courtesy notification).
+ */
+async function sendMissedAiCallSms(
+  supabase: ReturnType<typeof createClient>,
+  params: { apiKey: string; businessId: string; callerE164: string }
+): Promise<void> {
+  try {
+    const { data: settingsRow } = await supabase
+      .from("business_telnyx_settings")
+      .select(
+        "sms_fallback_enabled, forward_to_e164, telnyx_sms_from_e164, telnyx_messaging_profile_id"
+      )
+      .eq("business_id", params.businessId)
+      .maybeSingle();
+    const s = settingsRow as
+      | {
+          sms_fallback_enabled?: boolean | null;
+          forward_to_e164?: string | null;
+          telnyx_sms_from_e164?: string | null;
+          telnyx_messaging_profile_id?: string | null;
+        }
+      | null;
+    if (!s?.sms_fallback_enabled || !s.forward_to_e164 || !s.telnyx_messaging_profile_id) {
+      return;
+    }
+    const { data: bizRow } = await supabase
+      .from("businesses")
+      .select("name")
+      .eq("id", params.businessId)
+      .maybeSingle();
+    const businessName =
+      (bizRow as { name?: string | null } | null)?.name || "your business";
+    const caller = params.callerE164 || "an unknown number";
+    const text =
+      `[${businessName}] your AI receptionist couldn't take a live call from ${caller} ` +
+      `because the AI budget for this billing period is used up. Please call them back, ` +
+      `or add budget from your dashboard.`;
+    const res = await telnyxSendSms({
+      apiKey: params.apiKey,
+      messagingProfileId: s.telnyx_messaging_profile_id,
+      fromE164: s.telnyx_sms_from_e164 ?? undefined,
+      toE164: s.forward_to_e164,
+      text
+    });
+    if (!res.ok) {
+      console.error("voice-inbound: missed AI call SMS failed", res.status, res.body.slice(0, 200));
+    }
+  } catch (err) {
+    console.error(
+      "voice-inbound: missed AI call SMS threw",
+      err instanceof Error ? err.message : String(err)
+    );
+  }
 }
 
 serve(async (req: Request) => {
@@ -634,6 +702,29 @@ serve(async (req: Request) => {
     }
 
     if (gate.kind === "safe_mode_forward") {
+      // Forwarding to the owner's cell still spends Telnyx voice minutes on the
+      // outbound leg. If the tenant is out of voice minutes, DON'T forward —
+      // speak the quota message and hang up (the cheapest path). Voice minutes
+      // are a separate meter from the AI budget; this gate is only about Telnyx
+      // minutes. Anything other than a definitive "quota_exhausted" (ok /
+      // concurrent / indeterminate) still forwards as before.
+      const fwdAvail = await checkVoiceBudgetAvailable(supabase, { businessId });
+      if (fwdAvail.status === "blocked" && fwdAvail.reason === "quota_exhausted") {
+        await answerThenSpeak(apiKey, callControlId, VOICE_MSG_QUOTA_EXHAUSTED);
+        await telemetryRecord(supabase, "voice_safe_mode_forward_skipped_no_minutes", {
+          business_id: businessId,
+          call_control_id: callControlId
+        });
+        await systemLog(supabase, {
+          businessId,
+          source: "voice",
+          level: "warn",
+          event: "voice_safe_mode_forward_skipped",
+          message: "Safe-mode forward skipped: voice minutes exhausted",
+          payload: { call_control_id: callControlId, reason: "quota_exhausted" }
+        });
+        return jsonOk("safe_mode_forward_no_minutes");
+      }
       await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SAFE_MODE_CONNECTING);
       // Telnyx `speak` returns as soon as TTS is queued, not when playback
       // finishes. If we call `transfer` immediately, the call bridges to the
@@ -776,6 +867,54 @@ serve(async (req: Request) => {
       status: 200,
       headers: { "Content-Type": "application/json" }
     });
+  }
+
+  // Shared AI-budget gate (hard stop). The AI receptionist's Gemini spend
+  // (voice_task via the router + Gemini Live via the bridge) is billed to the
+  // SAME $5/$10 AI budget pool as owner chat + SMS (`owner_chat_model_spend`).
+  // Chat/SMS degrade to a local model when the pool is exhausted, but a LIVE
+  // voice call can't — so this is a hard stop: release the voice reservation we
+  // just made, speak a short "please text us" message + hang up, and text the
+  // owner about the missed call. Voice minutes (checked above) stay a separate
+  // meter. Fails OPEN (resolveSmsChatCap never throws) so a read blip can't
+  // wrongly refuse a call.
+  {
+    const { data: tierRow } = await supabase
+      .from("businesses")
+      .select("tier")
+      .eq("id", businessId)
+      .maybeSingle();
+    const tier = (tierRow as { tier?: string | null } | null)?.tier ?? null;
+    const aiCap = await resolveSmsChatCap(supabase, businessId, {
+      capMicros: capMicrosForTier(tier, DEFAULT_CHAT_SPEND_CAP_MICROS),
+      enabled: true
+    });
+    if (aiCap.overCap) {
+      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_AI_BUDGET_EXHAUSTED);
+      const { error: relErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
+        p_call_control_id: callControlId
+      });
+      if (relErr) console.error("voice_release_reservation_on_answer_fail", relErr);
+      await sendMissedAiCallSms(supabase, {
+        apiKey,
+        businessId,
+        callerE164: fromE164Informational ?? ""
+      });
+      await telemetryRecord(supabase, "voice_ai_budget_exhausted", {
+        business_id: businessId,
+        call_control_id: callControlId,
+        effective_cap_micros: aiCap.effectiveCapMicros
+      });
+      await systemLog(supabase, {
+        businessId,
+        source: "voice",
+        level: "warn",
+        event: "voice_call_blocked",
+        message: "Inbound call refused: ai_budget_exhausted",
+        payload: { call_control_id: callControlId, reason: "ai_budget_exhausted" }
+      });
+      return jsonOk("ai_budget_exhausted");
+    }
   }
 
   const { data: issuedRow } = await supabase
