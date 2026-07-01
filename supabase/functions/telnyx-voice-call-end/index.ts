@@ -26,9 +26,16 @@ import { signStreamUrlMac, type StreamPayloadV2 } from "../_shared/stream_url.ts
 import { reserveVoiceBudget } from "../_shared/voice_reserve.ts";
 import { parseOutboundClientState } from "../_shared/voice_outbound.ts";
 import {
+  buildOwnerMessage,
+  buildRecipientMessage,
+  labelFor,
+  normE164,
   parseWtClientState,
-  sendWarmTransferNotifications
+  recipientIsOwner,
+  shouldNotifyOwner,
+  type WtOutcome
 } from "../_shared/warm_transfer_notify.ts";
+import { telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
 
 const MAX_BODY = 256 * 1024;
 
@@ -749,6 +756,122 @@ async function handleHandoffLifecycle(
     return { handled: false, response: jsonOk("handoff_session_closed") };
   }
   return { handled: true, response: jsonOk("handoff_session_closed") };
+}
+
+async function wtLookupName(
+  supabase: SupabaseClient<any, any, any>,
+  table: string,
+  match: Record<string, string>,
+  column: string
+): Promise<string> {
+  try {
+    let q = supabase.from(table).select(column);
+    for (const [k, v] of Object.entries(match)) q = q.eq(k, v);
+    const { data } = await q.maybeSingle();
+    return String((data as Record<string, unknown> | null)?.[column] ?? "").trim();
+  } catch (err) {
+    console.error("warm-transfer notify: name lookup failed", table, err);
+    return "";
+  }
+}
+
+/**
+ * Resolve display names + tenant SMS settings and, gated on a dedup claim so
+ * retried/duplicate webhooks don't double-text, send the recipient (and
+ * conditionally owner) warm-transfer SMS. Best-effort: never throws.
+ */
+async function sendWarmTransferNotifications(
+  supabase: SupabaseClient<any, any, any>,
+  apiKey: string,
+  args: {
+    businessId: string;
+    callerE164: string;
+    recipientE164: string;
+    outcome: WtOutcome;
+    dedupeKey: string;
+  }
+): Promise<{ sent: boolean; reason?: string }> {
+  const { businessId, callerE164, recipientE164, outcome, dedupeKey } = args;
+  if (!apiKey) return { sent: false, reason: "no_api_key" };
+  if (!recipientE164) return { sent: false, reason: "no_recipient" };
+
+  // Tenant SMS settings + owner number. Bail before claiming the dedup key when
+  // we can't send, so a misconfigured tenant can be retried later.
+  let settings: {
+    forward_to_e164?: string | null;
+    telnyx_sms_from_e164?: string | null;
+    telnyx_messaging_profile_id?: string | null;
+  } | null = null;
+  try {
+    const { data } = await supabase
+      .from("business_telnyx_settings")
+      .select("forward_to_e164, telnyx_sms_from_e164, telnyx_messaging_profile_id")
+      .eq("business_id", businessId)
+      .maybeSingle();
+    settings = data ?? null;
+  } catch (err) {
+    console.error("warm-transfer notify: settings load failed", err);
+    return { sent: false, reason: "settings_error" };
+  }
+  const ownerE164 = normE164(settings?.forward_to_e164);
+  const fromE164 = normE164(settings?.telnyx_sms_from_e164);
+  const messagingProfileId = normE164(settings?.telnyx_messaging_profile_id);
+  // telnyxSendSms requires a messaging profile (the `from` may be picked from
+  // the profile's number pool). No profile ⇒ we can't send.
+  if (!messagingProfileId) return { sent: false, reason: "no_sms_sender" };
+
+  // Dedup claim — only the first writer proceeds to send.
+  const { error: claimErr } = await supabase
+    .from("voice_transfer_notifications")
+    .insert({ dedupe_key: dedupeKey, business_id: businessId, outcome });
+  if (claimErr) {
+    const code = (claimErr as { code?: string }).code;
+    return { sent: false, reason: code === "23505" ? "duplicate" : "claim_error" };
+  }
+
+  // Resolve display names (best-effort; number-only fallback when unknown).
+  const callerName = callerE164
+    ? await wtLookupName(supabase, "contacts", { business_id: businessId, customer_e164: callerE164 }, "display_name")
+    : "";
+  const recipName = recipientIsOwner(recipientE164, ownerE164)
+    ? await wtLookupName(supabase, "businesses", { id: businessId }, "owner_name")
+    : await wtLookupName(
+        supabase,
+        "ai_flow_team_members",
+        { business_id: businessId, phone_e164: recipientE164 },
+        "name"
+      );
+  const callerLabel = labelFor(callerName, callerE164, "the caller");
+  const recipientLabel = labelFor(recipName, recipientE164, "your teammate");
+  const from = fromE164 || undefined;
+
+  try {
+    await telnyxSendSms({
+      apiKey,
+      messagingProfileId,
+      fromE164: from,
+      toE164: recipientE164,
+      text: buildRecipientMessage(outcome, callerLabel)
+    });
+  } catch (err) {
+    console.error("warm-transfer notify: recipient SMS threw", err);
+  }
+
+  if (shouldNotifyOwner(recipientE164, ownerE164)) {
+    try {
+      await telnyxSendSms({
+        apiKey,
+        messagingProfileId,
+        fromE164: from,
+        toE164: ownerE164,
+        text: buildOwnerMessage(outcome, recipientLabel, callerLabel)
+      });
+    } catch (err) {
+      console.error("warm-transfer notify: owner SMS threw", err);
+    }
+  }
+
+  return { sent: true };
 }
 
 /**

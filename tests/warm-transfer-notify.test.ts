@@ -52,12 +52,18 @@ describe("warm_transfer_notify client_state", () => {
   it("returns null for missing / non-wt / malformed client_state", () => {
     expect(parseWtClientState(undefined)).toBeNull();
     expect(parseWtClientState("")).toBeNull();
+    // Invalid base64 (atob throws) → null.
     expect(parseWtClientState("not-base64-and-not-wt")).toBeNull();
+    // hl: leg (invalid base64 due to ':') → null.
     expect(parseWtClientState("hl:cc-abc:1")).toBeNull();
-    // Missing recipient segment.
+    // Valid base64 that decodes to a non-wt string → null.
+    expect(parseWtClientState(Buffer.from("hello", "utf8").toString("base64"))).toBeNull();
+    // Wrong segment count.
     expect(parseWtClientState(`wt:${BIZ}:+1602`)).toBeNull();
     // Missing business id.
     expect(parseWtClientState("wt::+1602:+1603")).toBeNull();
+    // Missing recipient.
+    expect(parseWtClientState(`wt:${BIZ}:+1602:`)).toBeNull();
   });
 });
 

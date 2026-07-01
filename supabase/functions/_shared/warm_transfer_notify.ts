@@ -1,5 +1,5 @@
 /**
- * Warm-transfer SMS notifications.
+ * Pure helpers for warm-transfer SMS notifications.
  *
  * On every voice warm transfer we text the recipient (and, when the recipient
  * isn't the tenant owner, the owner too) with the outcome + caller identity.
@@ -7,12 +7,12 @@
  * leg = a human answered (success); `call.hangup` with no prior bridge =
  * no-answer (failure).
  *
- * The pure helpers (client_state encode/parse, label + message builders,
- * shouldNotifyOwner) are dependency-free so the Vitest suite can import them
- * directly. `sendWarmTransferNotifications` is impure (Supabase + Telnyx) and is
- * only invoked from the Deno edge function.
+ * These branch-free helpers (client_state encode/parse, label + message
+ * builders, owner comparisons) are isolated here so the Vitest suite can import
+ * them directly. The impure sender (Supabase name resolution + Telnyx send)
+ * lives in telnyx-voice-call-end, which owns the webhook lifecycle. This file
+ * must stay dependency-free (btoa/atob only).
  */
-import { telnyxSendSms } from "./telnyx_sms_compliance.ts";
 
 export type WtOutcome = "success" | "failed";
 
@@ -61,7 +61,8 @@ export function parseWtClientState(raw: string | null | undefined): WtClientStat
   return { businessId, callerE164, recipientE164 };
 }
 
-function normE164(e164: string | null | undefined): string {
+/** Trim to a comparable E.164 (nullish → ""). */
+export function normE164(e164: string | null | undefined): string {
   return (e164 ?? "").trim();
 }
 
@@ -85,9 +86,8 @@ export function shouldNotifyOwner(
   ownerE164: string | null | undefined
 ): boolean {
   const owner = normE164(ownerE164);
-  const recipient = normE164(recipientE164);
   if (!owner) return false;
-  return owner !== recipient;
+  return owner !== normE164(recipientE164);
 }
 
 /** True when the transfer recipient IS the tenant owner. */
@@ -96,8 +96,7 @@ export function recipientIsOwner(
   ownerE164: string | null | undefined
 ): boolean {
   const owner = normE164(ownerE164);
-  const recipient = normE164(recipientE164);
-  return owner !== "" && owner === recipient;
+  return owner !== "" && owner === normE164(recipientE164);
 }
 
 export function buildRecipientMessage(outcome: WtOutcome, callerLabel: string): string {
@@ -114,156 +113,4 @@ export function buildOwnerMessage(
   return outcome === "success"
     ? `${recipientLabel} received a successful warm transfer for ${callerLabel}.`
     : `${recipientLabel} missed a warm transfer for ${callerLabel}.`;
-}
-
-// ---------------------------------------------------------------------------
-// Impure: name resolution + dedup-gated send. Edge-only.
-// ---------------------------------------------------------------------------
-
-/** Minimal structural view of the Supabase client (avoids importing supabase-js here). */
-type SupabaseLike = {
-  from: (table: string) => any;
-};
-
-async function lookupContactName(
-  supabase: SupabaseLike,
-  businessId: string,
-  e164: string
-): Promise<string> {
-  if (!e164) return "";
-  try {
-    const { data } = await supabase
-      .from("contacts")
-      .select("display_name")
-      .eq("business_id", businessId)
-      .eq("customer_e164", e164)
-      .maybeSingle();
-    return ((data as { display_name?: string } | null)?.display_name ?? "").trim();
-  } catch {
-    return "";
-  }
-}
-
-async function lookupOwnerName(supabase: SupabaseLike, businessId: string): Promise<string> {
-  try {
-    const { data } = await supabase
-      .from("businesses")
-      .select("owner_name")
-      .eq("id", businessId)
-      .maybeSingle();
-    return ((data as { owner_name?: string } | null)?.owner_name ?? "").trim();
-  } catch {
-    return "";
-  }
-}
-
-async function lookupTeamName(
-  supabase: SupabaseLike,
-  businessId: string,
-  e164: string
-): Promise<string> {
-  if (!e164) return "";
-  try {
-    const { data } = await supabase
-      .from("ai_flow_team_members")
-      .select("name")
-      .eq("business_id", businessId)
-      .eq("phone_e164", e164)
-      .maybeSingle();
-    return ((data as { name?: string } | null)?.name ?? "").trim();
-  } catch {
-    return "";
-  }
-}
-
-/**
- * Send the recipient (and conditionally owner) warm-transfer SMS, gated on a
- * dedup claim so retried/duplicate webhooks don't double-text. Best-effort:
- * never throws; returns why it skipped for telemetry.
- */
-export async function sendWarmTransferNotifications(
-  supabase: SupabaseLike,
-  apiKey: string,
-  args: {
-    businessId: string;
-    callerE164: string;
-    recipientE164: string;
-    outcome: WtOutcome;
-    dedupeKey: string;
-  }
-): Promise<{ sent: boolean; reason?: string }> {
-  const { businessId, callerE164, recipientE164, outcome, dedupeKey } = args;
-  if (!apiKey) return { sent: false, reason: "no_api_key" };
-  if (!recipientE164) return { sent: false, reason: "no_recipient" };
-
-  // 1. Tenant SMS settings + owner number. Bail before claiming the dedup key
-  //    when we can't send, so a misconfigured tenant can be retried later.
-  let settings: {
-    forward_to_e164?: string | null;
-    telnyx_sms_from_e164?: string | null;
-    telnyx_messaging_profile_id?: string | null;
-  } | null = null;
-  try {
-    const { data } = await supabase
-      .from("business_telnyx_settings")
-      .select("forward_to_e164, telnyx_sms_from_e164, telnyx_messaging_profile_id")
-      .eq("business_id", businessId)
-      .maybeSingle();
-    settings = data ?? null;
-  } catch {
-    return { sent: false, reason: "settings_error" };
-  }
-  const ownerE164 = normE164(settings?.forward_to_e164);
-  const fromE164 = normE164(settings?.telnyx_sms_from_e164);
-  const messagingProfileId = normE164(settings?.telnyx_messaging_profile_id);
-  // telnyxSendSms requires a messaging profile (the `from` may be picked from
-  // the profile's number pool). No profile ⇒ we can't send.
-  if (!messagingProfileId) return { sent: false, reason: "no_sms_sender" };
-
-  // 2. Dedup claim — only the first writer proceeds to send.
-  const { error: claimErr } = await supabase
-    .from("voice_transfer_notifications")
-    .insert({ dedupe_key: dedupeKey, business_id: businessId, outcome });
-  if (claimErr) {
-    const code = (claimErr as { code?: string }).code;
-    return { sent: false, reason: code === "23505" ? "duplicate" : "claim_error" };
-  }
-
-  // 3. Resolve display names.
-  const callerName = await lookupContactName(supabase, businessId, callerE164);
-  const recipName = recipientIsOwner(recipientE164, ownerE164)
-    ? await lookupOwnerName(supabase, businessId)
-    : await lookupTeamName(supabase, businessId, recipientE164);
-  const callerLabel = labelFor(callerName, callerE164, "the caller");
-  const recipientLabel = labelFor(recipName, recipientE164, "your teammate");
-
-  // 4. Recipient SMS.
-  try {
-    await telnyxSendSms({
-      apiKey,
-      messagingProfileId,
-      fromE164: fromE164 || undefined,
-      toE164: recipientE164,
-      text: buildRecipientMessage(outcome, callerLabel)
-    });
-  } catch (err) {
-    console.error("warm-transfer notify: recipient SMS threw", err);
-  }
-
-  // 5. Owner copy when the recipient isn't the owner.
-  if (shouldNotifyOwner(recipientE164, ownerE164)) {
-    try {
-      await telnyxSendSms({
-        apiKey,
-        messagingProfileId,
-        fromE164: fromE164 || undefined,
-        toE164: ownerE164,
-        text: buildOwnerMessage(outcome, recipientLabel, callerLabel)
-      });
-    } catch (err) {
-      console.error("warm-transfer notify: owner SMS threw", err);
-    }
-  }
-
-  return { sent: true };
 }
