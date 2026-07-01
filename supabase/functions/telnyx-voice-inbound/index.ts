@@ -76,6 +76,23 @@ function jsonOk(path: string, extra: Record<string, unknown> = {}): Response {
 }
 
 /**
+ * Minimal structural Supabase shape for `sendMissedAiCallSms`. Typed
+ * structurally (not `SupabaseClient`) so the esm.sh createClient overloads can't
+ * trip Deno's type-checker with a `SupabaseClient<any,...>` vs
+ * `SupabaseClient<unknown, never, GenericSchema>` mismatch — same convention the
+ * _shared modules use.
+ */
+type MissedCallSupabase = {
+  from: (table: string) => {
+    select: (cols: string) => {
+      eq: (col: string, val: unknown) => {
+        maybeSingle: () => PromiseLike<{ data: unknown; error: { message: string } | null }>;
+      };
+    };
+  };
+};
+
+/**
  * Text the owner that the AI receptionist couldn't take a live call because the
  * shared AI budget is exhausted. Reuses the tenant's existing SMS fallback
  * config (`business_telnyx_settings`) — same gate the voice-bridge's missed-call
@@ -84,7 +101,7 @@ function jsonOk(path: string, extra: Record<string, unknown> = {}): Response {
  * throws (the call is already being refused, this is a courtesy notification).
  */
 async function sendMissedAiCallSms(
-  supabase: ReturnType<typeof createClient>,
+  supabase: MissedCallSupabase,
   params: { apiKey: string; businessId: string; callerE164: string }
 ): Promise<void> {
   try {
