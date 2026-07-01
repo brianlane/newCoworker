@@ -30,9 +30,16 @@ export const dynamic = "force-dynamic";
 const bodySchema = z.object({
   businessId: z.string().uuid(),
   model: z.string().min(1).max(200),
+  // Present for live-voice (Gemini Live) teardown: settles the call's AI-budget
+  // reservation (release the hold + record exact spend) instead of a plain add.
+  callControlId: z.string().min(1).max(200).optional(),
   usage: z.object({
     promptTokens: z.number().finite().nonnegative(),
-    outputTokens: z.number().finite().nonnegative()
+    outputTokens: z.number().finite().nonnegative(),
+    // Optional modality split (Gemini Live voice): the audio portion of the
+    // prompt/output tokens, priced at the audio rate. Omitted for text surfaces.
+    promptAudioTokens: z.number().finite().nonnegative().optional(),
+    outputAudioTokens: z.number().finite().nonnegative().optional()
   })
 });
 
@@ -51,8 +58,9 @@ export async function POST(request: Request) {
     await meterGeminiSpendForBusiness({
       businessId: parsed.businessId,
       model: parsed.model,
-      surface: "vps_rowboat",
-      usage: parsed.usage
+      surface: parsed.callControlId ? "vps_voice_live" : "vps_rowboat",
+      usage: parsed.usage,
+      callControlId: parsed.callControlId
     });
 
     return successResponse({ metered: true });

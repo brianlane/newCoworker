@@ -5,6 +5,16 @@ export const VOICE_MSG_UNCONFIGURED_NUMBER =
 export const VOICE_MSG_QUOTA_EXHAUSTED =
   "Sorry, included voice time for this billing period is used up. You can add more from your dashboard or reply by text message. Goodbye.";
 
+/**
+ * Shared AI budget exhausted (owner_chat_model_spend cap hit). A live voice
+ * call can't fall back to a local model, so the AI receptionist can't take the
+ * call. Kept short + friendly: apologize, point them to text, hang up. Mirrors
+ * the mid-call "owner isn't available" wording the bridge uses when the budget
+ * is hit during a call.
+ */
+export const VOICE_MSG_AI_BUDGET_EXHAUSTED =
+  "Sorry, the owner isn't available right now. Please send us a text message instead and we'll get back to you. Goodbye.";
+
 export const VOICE_MSG_BRIDGE_DEGRADED =
   "Our voice assistant is temporarily unavailable. Please try again later or send a text message. Goodbye.";
 

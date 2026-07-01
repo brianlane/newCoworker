@@ -44,6 +44,14 @@ export type GeminiGenerateTextParams = {
 export type GeminiUsage = {
   promptTokens: number;
   outputTokens: number;
+  /**
+   * Optional modality split for audio-native surfaces (Gemini Live voice). When
+   * present, this many of `promptTokens` / `outputTokens` were AUDIO tokens and
+   * are priced at the audio rate; the remainder prices at the text rate. Absent
+   * for text-only surfaces (chat/SMS/AiFlow), where everything is text-priced.
+   */
+  promptAudioTokens?: number;
+  outputAudioTokens?: number;
 };
 
 export type GeminiGenerateTextResult = {

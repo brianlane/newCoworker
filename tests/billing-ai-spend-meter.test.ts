@@ -59,6 +59,15 @@ describe("geminiPriceFor", () => {
     expect(geminiPriceFor("gemini-99-ultra")).toBe(DEFAULT_GEMINI_PRICE_PER_1M);
     expect(DEFAULT_GEMINI_PRICE_PER_1M).toEqual({ in: 1.5, out: 9.0 });
   });
+
+  it("carries modality-aware audio rates for the Gemini Live voice model", () => {
+    expect(geminiPriceFor("gemini-3.1-flash-live-preview")).toEqual({
+      in: 0.75,
+      out: 4.5,
+      audioIn: 3.0,
+      audioOut: 12.0
+    });
+  });
 });
 
 describe("geminiCostMicrosFromUsage", () => {
@@ -76,6 +85,72 @@ describe("geminiCostMicrosFromUsage", () => {
     expect(
       geminiCostMicrosFromUsage("gemini-2.5-flash", { promptTokens: 4, outputTokens: -10 })
     ).toBe(2);
+  });
+
+  it("prices the AUDIO portion at the audio rate and the text remainder at the text rate (Gemini Live)", () => {
+    // 10k prompt tokens: 9k audio @ $3/1M + 1k text @ $0.75/1M.
+    // 20k output tokens: 19.5k audio @ $12/1M + 500 text @ $4.5/1M.
+    expect(
+      geminiCostMicrosFromUsage("gemini-3.1-flash-live-preview", {
+        promptTokens: 10_000,
+        outputTokens: 20_000,
+        promptAudioTokens: 9_000,
+        outputAudioTokens: 19_500
+      })
+    ).toBe(
+      Math.ceil(
+        1_000 * 0.75 + 9_000 * 3.0 + 500 * 4.5 + 19_500 * 12.0
+      )
+    );
+  });
+
+  it("prices a native-audio model at AUDIO rates when no split is reported (conservative)", () => {
+    // Same Live model, but the modality detail rows were missing → the tokens are
+    // overwhelmingly audio, so bill the full counts at the audio rate rather than
+    // ~4x under-recording at the text rate.
+    expect(
+      geminiCostMicrosFromUsage("gemini-3.1-flash-live-preview", {
+        promptTokens: 1_000,
+        outputTokens: 500
+      })
+    ).toBe(Math.ceil(1_000 * 3.0 + 500 * 12.0));
+  });
+
+  it("honors a positive audio split on a native-audio model (text remainder stays text-priced)", () => {
+    // When Gemini DID report an audio split we keep the exact breakdown: the
+    // audio portion at audio rates, the genuine text remainder at text rates.
+    expect(
+      geminiCostMicrosFromUsage("gemini-3.1-flash-live-preview", {
+        promptTokens: 1_000,
+        outputTokens: 500,
+        promptAudioTokens: 900,
+        outputAudioTokens: 450
+      })
+    ).toBe(Math.ceil(100 * 0.75 + 900 * 3.0 + 50 * 4.5 + 450 * 12.0));
+  });
+
+  it("clamps audio tokens to their totals so a malformed split can't over/under-count", () => {
+    // Audio counts exceed the totals → clamp to the totals (all audio-priced).
+    expect(
+      geminiCostMicrosFromUsage("gemini-3.1-flash-live-preview", {
+        promptTokens: 100,
+        outputTokens: 200,
+        promptAudioTokens: 999,
+        outputAudioTokens: 999
+      })
+    ).toBe(Math.ceil(100 * 3.0 + 200 * 12.0));
+  });
+
+  it("uses the text rate for audio tokens on a model without audio rates (fallback)", () => {
+    // gemini-2.5-flash has no audioIn/audioOut → audio tokens price at in/out.
+    expect(
+      geminiCostMicrosFromUsage("gemini-2.5-flash", {
+        promptTokens: 1_000,
+        outputTokens: 500,
+        promptAudioTokens: 400,
+        outputAudioTokens: 200
+      })
+    ).toBe(Math.ceil(1_000 * 0.3 + 500 * 2.5));
   });
 });
 
@@ -131,6 +206,47 @@ describe("meterGeminiSpendForBusiness", () => {
       p_cost_micros: Math.ceil(10_000 * 0.5 + 1_000 * 3.0),
       p_cap_micros: 15_000_000
     });
+  });
+
+  it("settles a live-voice reservation (owner_chat_ai_settle) when callControlId is set", async () => {
+    const db = stubDb({
+      subscriptionRow: { stripe_current_period_start: "2026-05-29T21:33:49+00:00" },
+      creditResult: { data: 0, error: null }
+    });
+
+    await meterGeminiSpendForBusiness({
+      businessId: "biz-1",
+      model: "gemini-3.1-flash-live-preview",
+      surface: "vps_voice_live",
+      callControlId: "v3:call-1",
+      usage: { promptTokens: 5_000, outputTokens: 8_000, promptAudioTokens: 5_000, outputAudioTokens: 8_000 },
+      client: db as never
+    });
+
+    // Uses the settle RPC (release hold + record) instead of the plain increment.
+    expect(db.rpc).toHaveBeenCalledWith("owner_chat_ai_settle", {
+      p_business_id: "biz-1",
+      p_period_start: "2026-05-29T21:33:49+00:00",
+      p_call_control_id: "v3:call-1",
+      p_actual_micros: Math.ceil(5_000 * 3.0 + 8_000 * 12.0),
+      p_cap_micros: 10_000_000
+    });
+    expect(db.rpc).not.toHaveBeenCalledWith("owner_chat_record_spend", expect.anything());
+  });
+
+  it("still settles (releases the hold) on a zero-cost live call", async () => {
+    const db = stubDb({ creditResult: { data: 0, error: null } });
+    await meterGeminiSpendForBusiness({
+      businessId: "biz-1",
+      model: "gemini-3.1-flash-live-preview",
+      surface: "vps_voice_live",
+      callControlId: "v3:call-empty",
+      usage: { promptTokens: 0, outputTokens: 0 },
+      client: db as never
+    });
+    const call = db.rpc.mock.calls.find((c) => c[0] === "owner_chat_ai_settle");
+    expect(call).toBeDefined();
+    expect((call![1] as Record<string, unknown>).p_actual_micros).toBe(0);
   });
 
   it("trips against the $5 starter base cap for starter tenants", async () => {

@@ -15,8 +15,17 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { header, verifyTelnyxWebhook } from "../_shared/telnyx_webhook.ts";
 import { signStreamUrlMac, type StreamPayloadV2 } from "../_shared/stream_url.ts";
-import { reserveVoiceBudget } from "../_shared/voice_reserve.ts";
+import { checkVoiceBudgetAvailable, reserveVoiceBudget } from "../_shared/voice_reserve.ts";
 import {
+  capMicrosForTier,
+  DEFAULT_CHAT_SPEND_CAP_MICROS,
+  readActiveChatCreditMicros,
+  resolveChatPeriodStart,
+  STARTER_CHAT_SPEND_CAP_MICROS
+} from "../_shared/chat_spend_cap.ts";
+import { telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
+import {
+  VOICE_MSG_AI_BUDGET_EXHAUSTED,
   VOICE_MSG_BRIDGE_DEGRADED,
   VOICE_MSG_CONCURRENT_LIMIT,
   VOICE_MSG_PAUSED,
@@ -56,6 +65,54 @@ import {
 const MAX_BODY = 256 * 1024;
 const HANDLER_MS = 8000;
 
+// Shared AI-budget cap (micro-USD). Voice reads the SAME env vars as owner chat
+// + SMS (OWNER_CHAT_SPEND_CAP_MICROS / _STARTER) so all three surfaces trip the
+// shared owner_chat_model_spend fuse at the identical total for a tenant —
+// hardcoding $5/$10 here would let voice refuse (or allow) calls at a different
+// threshold than chat/SMS whenever ops tune the env caps. Mirrors
+// sms-inbound-worker's CHAT_SPEND_CAP_MICROS(_STARTER). Falls back to the shared
+// defaults ($10 / $5) exported from _shared/chat_spend_cap.ts.
+const AI_BUDGET_CAP_MICROS = (() => {
+  const n = Number(Deno.env.get("OWNER_CHAT_SPEND_CAP_MICROS"));
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_CHAT_SPEND_CAP_MICROS;
+})();
+const AI_BUDGET_CAP_MICROS_STARTER = (() => {
+  const n = Number(Deno.env.get("OWNER_CHAT_SPEND_CAP_MICROS_STARTER"));
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : STARTER_CHAT_SPEND_CAP_MICROS;
+})();
+
+// Gemini Live cost model, kept in lockstep with vps/voice-bridge/src/index.ts:
+// combined two-way audio ≈ 0.375 micro-USD/ms (25 tok/s each way at the $3-in /
+// $12-out audio rates). Used to size the AI-budget reservation and refusal margin.
+const GEMINI_LIVE_MICROS_PER_MS = (() => {
+  const n = Number(Deno.env.get("GEMINI_LIVE_MICROS_PER_MS"));
+  return Number.isFinite(n) && n > 0 ? n : 0.375;
+})();
+const GEMINI_LIVE_SESSION_MIN_MS = (() => {
+  const n = Number(Deno.env.get("GEMINI_LIVE_SESSION_MIN_MS"));
+  return Number.isFinite(n) && n > 0 ? n : 30_000;
+})();
+const GEMINI_LIVE_SESSION_MAX_MS = (() => {
+  const n = Number(Deno.env.get("GEMINI_LIVE_SESSION_MAX_MS"));
+  return Number.isFinite(n) && n > 0 ? n : 14 * 60 * 1000;
+})();
+// Refuse a call when the remaining budget can't cover the bridge's MINIMUM
+// session (≈ $0.011), so an answered call can always afford the min-session floor
+// and never overspends the pool.
+const AI_BUDGET_MIN_SESSION_MARGIN_MICROS = Math.ceil(
+  GEMINI_LIVE_MICROS_PER_MS * GEMINI_LIVE_SESSION_MIN_MS
+);
+// Amount to HOLD against the shared AI budget at answer time — the max a single
+// Live session could cost (env session cap × burn rate). The reserve RPC clamps
+// this to the remaining headroom, so a fresh pool holds only this (≈ $0.32) per
+// concurrent call while a near-exhausted pool holds exactly what's left.
+const AI_BUDGET_MAX_SESSION_MICROS = Math.ceil(
+  GEMINI_LIVE_MICROS_PER_MS * GEMINI_LIVE_SESSION_MAX_MS
+);
+// Reservation auto-expires (so a crashed/abandoned call frees its hold) after the
+// max session plus a grace window; the bridge settles/releases well before this.
+const AI_BUDGET_RESERVATION_TTL_SECONDS = Math.ceil(GEMINI_LIVE_SESSION_MAX_MS / 1000) + 300;
+
 function envVoiceAiStreamEnabled(): boolean {
   const v = (Deno.env.get("VOICE_AI_STREAM_ENABLED") ?? "true").trim().toLowerCase();
   return v !== "false" && v !== "0" && v !== "no";
@@ -66,6 +123,84 @@ function jsonOk(path: string, extra: Record<string, unknown> = {}): Response {
     status: 200,
     headers: { "Content-Type": "application/json" }
   });
+}
+
+/**
+ * Minimal structural Supabase shape for `sendMissedAiCallSms`. Typed
+ * structurally (not `SupabaseClient`) so the esm.sh createClient overloads can't
+ * trip Deno's type-checker with a `SupabaseClient<any,...>` vs
+ * `SupabaseClient<unknown, never, GenericSchema>` mismatch — same convention the
+ * _shared modules use.
+ */
+type MissedCallSupabase = {
+  from: (table: string) => {
+    select: (cols: string) => {
+      eq: (col: string, val: unknown) => {
+        maybeSingle: () => PromiseLike<{ data: unknown; error: { message: string } | null }>;
+      };
+    };
+  };
+};
+
+/**
+ * Text the owner that the AI receptionist couldn't take a live call because the
+ * shared AI budget is exhausted. Reuses the tenant's existing SMS fallback
+ * config (`business_telnyx_settings`) — same gate the voice-bridge's missed-call
+ * SMS uses: only fires when `sms_fallback_enabled` is on AND a forward number +
+ * messaging profile are set. We never text the caller. Best-effort; never
+ * throws (the call is already being refused, this is a courtesy notification).
+ */
+async function sendMissedAiCallSms(
+  supabase: MissedCallSupabase,
+  params: { apiKey: string; businessId: string; callerE164: string }
+): Promise<void> {
+  try {
+    const { data: settingsRow } = await supabase
+      .from("business_telnyx_settings")
+      .select(
+        "sms_fallback_enabled, forward_to_e164, telnyx_sms_from_e164, telnyx_messaging_profile_id"
+      )
+      .eq("business_id", params.businessId)
+      .maybeSingle();
+    const s = settingsRow as
+      | {
+          sms_fallback_enabled?: boolean | null;
+          forward_to_e164?: string | null;
+          telnyx_sms_from_e164?: string | null;
+          telnyx_messaging_profile_id?: string | null;
+        }
+      | null;
+    if (!s?.sms_fallback_enabled || !s.forward_to_e164 || !s.telnyx_messaging_profile_id) {
+      return;
+    }
+    const { data: bizRow } = await supabase
+      .from("businesses")
+      .select("name")
+      .eq("id", params.businessId)
+      .maybeSingle();
+    const businessName =
+      (bizRow as { name?: string | null } | null)?.name || "your business";
+    const caller = params.callerE164 || "an unknown number";
+    const text =
+      `[${businessName}] your AI receptionist couldn't take a live call from ${caller} ` +
+      `because the AI budget for this billing period is used up. Please call them back, ` +
+      `or add budget from your dashboard.`;
+    const res = await telnyxSendSms({
+      apiKey: params.apiKey,
+      messagingProfileId: s.telnyx_messaging_profile_id,
+      fromE164: s.telnyx_sms_from_e164 ?? undefined,
+      toE164: s.forward_to_e164,
+      text
+    });
+    if (!res.ok) {
+      console.error("voice-inbound: missed AI call SMS failed", res.status, res.body.slice(0, 200));
+    }
+  } catch (err) {
+    console.error(
+      "voice-inbound: missed AI call SMS threw",
+      err instanceof Error ? err.message : String(err)
+    );
+  }
 }
 
 serve(async (req: Request) => {
@@ -634,6 +769,29 @@ serve(async (req: Request) => {
     }
 
     if (gate.kind === "safe_mode_forward") {
+      // Forwarding to the owner's cell still spends Telnyx voice minutes on the
+      // outbound leg. If the tenant is out of voice minutes, DON'T forward —
+      // speak the quota message and hang up (the cheapest path). Voice minutes
+      // are a separate meter from the AI budget; this gate is only about Telnyx
+      // minutes. Anything other than a definitive "quota_exhausted" (ok /
+      // concurrent / indeterminate) still forwards as before.
+      const fwdAvail = await checkVoiceBudgetAvailable(supabase, { businessId });
+      if (fwdAvail.status === "blocked" && fwdAvail.reason === "quota_exhausted") {
+        await answerThenSpeak(apiKey, callControlId, VOICE_MSG_QUOTA_EXHAUSTED);
+        await telemetryRecord(supabase, "voice_safe_mode_forward_skipped_no_minutes", {
+          business_id: businessId,
+          call_control_id: callControlId
+        });
+        await systemLog(supabase, {
+          businessId,
+          source: "voice",
+          level: "warn",
+          event: "voice_safe_mode_forward_skipped",
+          message: "Safe-mode forward skipped: voice minutes exhausted",
+          payload: { call_control_id: callControlId, reason: "quota_exhausted" }
+        });
+        return jsonOk("safe_mode_forward_no_minutes");
+      }
       await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SAFE_MODE_CONNECTING);
       // Telnyx `speak` returns as soon as TTS is queued, not when playback
       // finishes. If we call `transfer` immediately, the call bridges to the
@@ -858,6 +1016,113 @@ serve(async (req: Request) => {
     });
   }
 
+  // Shared AI-budget gate (hard stop). Placed HERE — after every branch that
+  // exits without opening the Gemini bridge (paused/channel-off, safe-mode
+  // forward, quota, already-answered, bridge-down/degraded, no-origin, and the
+  // VOICE_AI_STREAM_ENABLED speak-only rollout) — so it only fires for calls
+  // that will actually attach the AI media stream and spend Gemini budget. Those
+  // earlier speak-only paths consume NO AI budget, so an exhausted pool must not
+  // preempt their intended messages with the "please text us" refusal.
+  //
+  // The AI receptionist's Gemini spend (voice_task via the router + Gemini Live
+  // via the bridge) is billed to the SAME $5/$10 AI budget pool as owner chat +
+  // SMS (`owner_chat_model_spend`). Chat/SMS degrade to a local model when the
+  // pool is exhausted, but a LIVE voice call can't — so this is a hard stop:
+  // release the voice reservation, speak a short "please text us" message + hang
+  // up, and text the owner about the missed call. Voice minutes (checked above)
+  // stay a separate meter. Fails OPEN (resolveSmsChatCap never throws) so a read
+  // blip can't wrongly refuse a call.
+  {
+    const { data: tierRow } = await supabase
+      .from("businesses")
+      .select("tier")
+      .eq("id", businessId)
+      .maybeSingle();
+    const tier = (tierRow as { tier?: string | null } | null)?.tier ?? null;
+    const tierCapMicros = capMicrosForTier(
+      tier,
+      AI_BUDGET_CAP_MICROS,
+      AI_BUDGET_CAP_MICROS_STARTER
+    );
+
+    // Atomically RESERVE this call's max Gemini Live cost against the shared pool
+    // (concurrency-safe: the RPC serializes per business and counts other active
+    // holds), instead of a plain read that concurrent calls could each pass. The
+    // hold makes overlapping calls see reduced budget and get shorter/refused
+    // sessions; the bridge settles it to exact spend at teardown. We refuse when
+    // the pool is fully committed OR the remaining headroom can't cover one
+    // minimum session (so any answered call can afford the bridge's min-session
+    // floor and never overspends). Fails OPEN: any RPC error proceeds without a
+    // hold so a DB blip can't wrongly refuse a call.
+    let refuseAiBudget = false;
+    let effectiveCapMicros = tierCapMicros;
+    try {
+      const periodStart = await resolveChatPeriodStart(supabase, businessId);
+      const credits = await readActiveChatCreditMicros(supabase, businessId);
+      effectiveCapMicros = tierCapMicros + credits;
+      const { data: resvData, error: resvErr } = await supabase.rpc("owner_chat_ai_reserve", {
+        p_business_id: businessId,
+        p_period_start: periodStart,
+        p_call_control_id: callControlId,
+        p_reserve_micros: AI_BUDGET_MAX_SESSION_MICROS,
+        p_cap_micros: effectiveCapMicros,
+        p_ttl_seconds: AI_BUDGET_RESERVATION_TTL_SECONDS
+      });
+      if (resvErr) {
+        console.error("owner_chat_ai_reserve", resvErr);
+      } else {
+        const row = (Array.isArray(resvData) ? resvData[0] : resvData) as
+          | { ok?: boolean; remaining_micros?: number | string; duplicate?: boolean }
+          | null;
+        const ok = Boolean(row?.ok);
+        const remaining = Number(row?.remaining_micros ?? 0);
+        const duplicate = Boolean(row?.duplicate);
+        // On a Telnyx webhook RETRY the RPC returns duplicate=true for the hold
+        // the first attempt already placed — the call was admitted (and may have
+        // already bridged) then, so we must NOT re-apply the min-session refusal
+        // (remaining excludes this call's own hold, so a now-tighter pool could
+        // wrongly drop an in-flight call's hold + run the exhausted-speak path).
+        if (!duplicate && (!ok || remaining < AI_BUDGET_MIN_SESSION_MARGIN_MICROS)) {
+          refuseAiBudget = true;
+          // Free the (clamped, sub-min-session) hold we just made before refusing.
+          const { error: relResvErr } = await supabase.rpc("owner_chat_ai_release", {
+            p_call_control_id: callControlId
+          });
+          if (relResvErr) console.error("owner_chat_ai_release", relResvErr);
+        }
+      }
+    } catch (e) {
+      console.error("ai-budget reserve failed (proceeding, fail-open)", e);
+    }
+
+    if (refuseAiBudget) {
+      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_AI_BUDGET_EXHAUSTED);
+      const { error: relErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
+        p_call_control_id: callControlId
+      });
+      if (relErr) console.error("voice_release_reservation_on_answer_fail", relErr);
+      await sendMissedAiCallSms(supabase, {
+        apiKey,
+        businessId,
+        callerE164: fromE164Informational ?? ""
+      });
+      await telemetryRecord(supabase, "voice_ai_budget_exhausted", {
+        business_id: businessId,
+        call_control_id: callControlId,
+        effective_cap_micros: effectiveCapMicros
+      });
+      await systemLog(supabase, {
+        businessId,
+        source: "voice",
+        level: "warn",
+        event: "voice_call_blocked",
+        message: "Inbound call refused: ai_budget_exhausted",
+        payload: { call_control_id: callControlId, reason: "ai_budget_exhausted" }
+      });
+      return jsonOk("ai_budget_exhausted");
+    }
+  }
+
   const exp = Math.floor(Date.now() / 1000) + 120;
   const nonce = crypto.randomUUID().replace(/-/g, "");
   // v2: the caller number is part of the signed canonical so the bridge can
@@ -888,6 +1153,11 @@ serve(async (req: Request) => {
       p_call_control_id: callControlId
     });
     if (relErr) console.error("voice_release_reservation_on_answer_fail", relErr);
+    // Free the AI-budget hold too — this call will never open the Gemini bridge.
+    const { error: relAiErr } = await supabase.rpc("owner_chat_ai_release", {
+      p_call_control_id: callControlId
+    });
+    if (relAiErr) console.error("owner_chat_ai_release", relAiErr);
     return new Response(JSON.stringify({ ok: true, path: "nonce_error" }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
@@ -936,6 +1206,11 @@ serve(async (req: Request) => {
       p_call_control_id: callControlId
     });
     if (relAnsErr) console.error("voice_release_reservation_on_answer_fail", relAnsErr);
+    // Free the AI-budget hold too — the bridge won't attach on a failed answer.
+    const { error: relAiAnsErr } = await supabase.rpc("owner_chat_ai_release", {
+      p_call_control_id: callControlId
+    });
+    if (relAiAnsErr) console.error("owner_chat_ai_release", relAiAnsErr);
     if (Date.now() > deadline) {
       return new Response("Timeout", { status: 500 });
     }

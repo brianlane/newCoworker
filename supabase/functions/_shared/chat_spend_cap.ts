@@ -22,9 +22,12 @@
 // Per-model Google list prices (USD per 1M tokens, standard tier). Unknown
 // models fall back to the priciest tier we deploy so the fuse never
 // undercounts. Mirrors src/lib/billing/ai-spend-meter.ts on the Next side.
-// The gemini-3.1-* entries are the voice path (excluded from the chat budget at
-// the llm-router); they're listed defensively so a stray non-voice 3.1 call
-// prices in the flash tier instead of the priciest default.
+// gemini-3.1-flash is the voice `voice_task` text model, now metered into the
+// SAME shared AI budget as chat/SMS. This TEXT-rate table is used by the SMS/
+// AiFlow cap read + the AiFlow worker's own cost calc; the audio-native Live
+// model (gemini-3.1-flash-live-preview) is priced modality-aware in
+// ai-spend-meter.ts (the only place that sees its audio token split), so its
+// entry here is a defensive text-rate floor only.
 export const GEMINI_PRICES_PER_1M: Record<string, { in: number; out: number }> = {
   "gemini-2.5-flash-lite": { in: 0.1, out: 0.4 },
   "gemini-2.5-flash": { in: 0.3, out: 2.5 },
