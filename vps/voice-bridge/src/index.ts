@@ -1294,16 +1294,21 @@ function main(): void {
               const useCaptured =
                 liveCostProxy(captured) >= liveCostProxy(durationEstimate);
               const usage = useCaptured ? captured : durationEstimate;
-              if (usage) {
+              // A truthy-but-zero usage (session opened, no tokens billed) must
+              // still RELEASE the hold — meterGeminiLiveSpend skips the settle
+              // POST when there's nothing billable, so route the zero case
+              // straight to release rather than leaving the hold to expire.
+              const hasBillable =
+                !!usage && (usage.promptTokens > 0 || usage.outputTokens > 0);
+              if (hasBillable) {
                 // Settles the reservation (release hold + record exact spend).
                 await meterGeminiLiveSpend({
                   businessId,
                   model: geminiLiveModel,
-                  usage,
+                  usage: usage as GeminiLiveUsage,
                   callControlId
                 });
               } else {
-                // Bridge ran but produced no billable tokens — release the hold.
                 await releaseAiBudgetReservation(supabase, callControlId);
               }
             } else {

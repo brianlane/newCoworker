@@ -1072,11 +1072,17 @@ serve(async (req: Request) => {
         console.error("owner_chat_ai_reserve", resvErr);
       } else {
         const row = (Array.isArray(resvData) ? resvData[0] : resvData) as
-          | { ok?: boolean; remaining_micros?: number | string }
+          | { ok?: boolean; remaining_micros?: number | string; duplicate?: boolean }
           | null;
         const ok = Boolean(row?.ok);
         const remaining = Number(row?.remaining_micros ?? 0);
-        if (!ok || remaining < AI_BUDGET_MIN_SESSION_MARGIN_MICROS) {
+        const duplicate = Boolean(row?.duplicate);
+        // On a Telnyx webhook RETRY the RPC returns duplicate=true for the hold
+        // the first attempt already placed — the call was admitted (and may have
+        // already bridged) then, so we must NOT re-apply the min-session refusal
+        // (remaining excludes this call's own hold, so a now-tighter pool could
+        // wrongly drop an in-flight call's hold + run the exhausted-speak path).
+        if (!duplicate && (!ok || remaining < AI_BUDGET_MIN_SESSION_MARGIN_MICROS)) {
           refuseAiBudget = true;
           // Free the (clamped, sub-min-session) hold we just made before refusing.
           const { error: relResvErr } = await supabase.rpc("owner_chat_ai_release", {
