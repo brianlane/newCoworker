@@ -921,65 +921,6 @@ serve(async (req: Request) => {
     });
   }
 
-  // Shared AI-budget gate (hard stop). The AI receptionist's Gemini spend
-  // (voice_task via the router + Gemini Live via the bridge) is billed to the
-  // SAME $5/$10 AI budget pool as owner chat + SMS (`owner_chat_model_spend`).
-  // Chat/SMS degrade to a local model when the pool is exhausted, but a LIVE
-  // voice call can't — so this is a hard stop: release the voice reservation we
-  // just made, speak a short "please text us" message + hang up, and text the
-  // owner about the missed call. Voice minutes (checked above) stay a separate
-  // meter. Fails OPEN (resolveSmsChatCap never throws) so a read blip can't
-  // wrongly refuse a call.
-  {
-    const { data: tierRow } = await supabase
-      .from("businesses")
-      .select("tier")
-      .eq("id", businessId)
-      .maybeSingle();
-    const tier = (tierRow as { tier?: string | null } | null)?.tier ?? null;
-    // Refuse when the REMAINING budget can't cover a minimum Live session, not
-    // just when the pool is fully spent: subtract the min-session margin from the
-    // cap so `overCap` trips while ~one min-session of headroom is still left.
-    // This guarantees any answered call can afford the bridge's min-session floor,
-    // so the bridge never overspends the pool (see min-session note there). Clamp
-    // to 1 so a huge margin can't invert the cap on a tiny tenant configuration.
-    const tierCapMicros = capMicrosForTier(
-      tier,
-      AI_BUDGET_CAP_MICROS,
-      AI_BUDGET_CAP_MICROS_STARTER
-    );
-    const aiCap = await resolveSmsChatCap(supabase, businessId, {
-      capMicros: Math.max(1, tierCapMicros - AI_BUDGET_MIN_SESSION_MARGIN_MICROS),
-      enabled: true
-    });
-    if (aiCap.overCap) {
-      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_AI_BUDGET_EXHAUSTED);
-      const { error: relErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
-        p_call_control_id: callControlId
-      });
-      if (relErr) console.error("voice_release_reservation_on_answer_fail", relErr);
-      await sendMissedAiCallSms(supabase, {
-        apiKey,
-        businessId,
-        callerE164: fromE164Informational ?? ""
-      });
-      await telemetryRecord(supabase, "voice_ai_budget_exhausted", {
-        business_id: businessId,
-        call_control_id: callControlId,
-        effective_cap_micros: aiCap.effectiveCapMicros
-      });
-      await systemLog(supabase, {
-        businessId,
-        source: "voice",
-        level: "warn",
-        event: "voice_call_blocked",
-        message: "Inbound call refused: ai_budget_exhausted",
-        payload: { call_control_id: callControlId, reason: "ai_budget_exhausted" }
-      });
-      return jsonOk("ai_budget_exhausted");
-    }
-  }
-
   const { data: issuedRow } = await supabase
     .from("voice_reservations")
     .select("answer_issued_at")
@@ -1058,6 +999,72 @@ serve(async (req: Request) => {
       status: 200,
       headers: { "Content-Type": "application/json" }
     });
+  }
+
+  // Shared AI-budget gate (hard stop). Placed HERE — after every branch that
+  // exits without opening the Gemini bridge (paused/channel-off, safe-mode
+  // forward, quota, already-answered, bridge-down/degraded, no-origin, and the
+  // VOICE_AI_STREAM_ENABLED speak-only rollout) — so it only fires for calls
+  // that will actually attach the AI media stream and spend Gemini budget. Those
+  // earlier speak-only paths consume NO AI budget, so an exhausted pool must not
+  // preempt their intended messages with the "please text us" refusal.
+  //
+  // The AI receptionist's Gemini spend (voice_task via the router + Gemini Live
+  // via the bridge) is billed to the SAME $5/$10 AI budget pool as owner chat +
+  // SMS (`owner_chat_model_spend`). Chat/SMS degrade to a local model when the
+  // pool is exhausted, but a LIVE voice call can't — so this is a hard stop:
+  // release the voice reservation, speak a short "please text us" message + hang
+  // up, and text the owner about the missed call. Voice minutes (checked above)
+  // stay a separate meter. Fails OPEN (resolveSmsChatCap never throws) so a read
+  // blip can't wrongly refuse a call.
+  {
+    const { data: tierRow } = await supabase
+      .from("businesses")
+      .select("tier")
+      .eq("id", businessId)
+      .maybeSingle();
+    const tier = (tierRow as { tier?: string | null } | null)?.tier ?? null;
+    // Refuse when the REMAINING budget can't cover a minimum Live session, not
+    // just when the pool is fully spent: subtract the min-session margin from the
+    // cap so `overCap` trips while ~one min-session of headroom is still left.
+    // This guarantees any answered call can afford the bridge's min-session floor,
+    // so the bridge never overspends the pool (see min-session note there). Clamp
+    // to 1 so a huge margin can't invert the cap on a tiny tenant configuration.
+    const tierCapMicros = capMicrosForTier(
+      tier,
+      AI_BUDGET_CAP_MICROS,
+      AI_BUDGET_CAP_MICROS_STARTER
+    );
+    const aiCap = await resolveSmsChatCap(supabase, businessId, {
+      capMicros: Math.max(1, tierCapMicros - AI_BUDGET_MIN_SESSION_MARGIN_MICROS),
+      enabled: true
+    });
+    if (aiCap.overCap) {
+      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_AI_BUDGET_EXHAUSTED);
+      const { error: relErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
+        p_call_control_id: callControlId
+      });
+      if (relErr) console.error("voice_release_reservation_on_answer_fail", relErr);
+      await sendMissedAiCallSms(supabase, {
+        apiKey,
+        businessId,
+        callerE164: fromE164Informational ?? ""
+      });
+      await telemetryRecord(supabase, "voice_ai_budget_exhausted", {
+        business_id: businessId,
+        call_control_id: callControlId,
+        effective_cap_micros: aiCap.effectiveCapMicros
+      });
+      await systemLog(supabase, {
+        businessId,
+        source: "voice",
+        level: "warn",
+        event: "voice_call_blocked",
+        message: "Inbound call refused: ai_budget_exhausted",
+        payload: { call_control_id: callControlId, reason: "ai_budget_exhausted" }
+      });
+      return jsonOk("ai_budget_exhausted");
+    }
   }
 
   const exp = Math.floor(Date.now() / 1000) + 120;
