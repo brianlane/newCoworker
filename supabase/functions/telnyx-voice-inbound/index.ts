@@ -19,7 +19,8 @@ import { checkVoiceBudgetAvailable, reserveVoiceBudget } from "../_shared/voice_
 import {
   capMicrosForTier,
   DEFAULT_CHAT_SPEND_CAP_MICROS,
-  resolveSmsChatCap
+  resolveSmsChatCap,
+  STARTER_CHAT_SPEND_CAP_MICROS
 } from "../_shared/chat_spend_cap.ts";
 import { telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
 import {
@@ -62,6 +63,40 @@ import {
 
 const MAX_BODY = 256 * 1024;
 const HANDLER_MS = 8000;
+
+// Shared AI-budget cap (micro-USD). Voice reads the SAME env vars as owner chat
+// + SMS (OWNER_CHAT_SPEND_CAP_MICROS / _STARTER) so all three surfaces trip the
+// shared owner_chat_model_spend fuse at the identical total for a tenant —
+// hardcoding $5/$10 here would let voice refuse (or allow) calls at a different
+// threshold than chat/SMS whenever ops tune the env caps. Mirrors
+// sms-inbound-worker's CHAT_SPEND_CAP_MICROS(_STARTER). Falls back to the shared
+// defaults ($10 / $5) exported from _shared/chat_spend_cap.ts.
+const AI_BUDGET_CAP_MICROS = (() => {
+  const n = Number(Deno.env.get("OWNER_CHAT_SPEND_CAP_MICROS"));
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_CHAT_SPEND_CAP_MICROS;
+})();
+const AI_BUDGET_CAP_MICROS_STARTER = (() => {
+  const n = Number(Deno.env.get("OWNER_CHAT_SPEND_CAP_MICROS_STARTER"));
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : STARTER_CHAT_SPEND_CAP_MICROS;
+})();
+
+// Reserve margin (micro-USD) = the cost of the bridge's MINIMUM Live session, so
+// the pre-call gate refuses a call the remaining budget can't fully cover rather
+// than answering and letting the bridge's min-session floor overspend the pool.
+// Mirrors the voice-bridge cost model (GEMINI_LIVE_MICROS_PER_MS default 0.375
+// micro-USD/ms × GEMINI_LIVE_SESSION_MIN_MS default 30_000 ms ≈ $0.011); keep the
+// env keys + defaults in lockstep with vps/voice-bridge/src/index.ts.
+const AI_BUDGET_MIN_SESSION_MARGIN_MICROS = (() => {
+  const microsPerMs = (() => {
+    const n = Number(Deno.env.get("GEMINI_LIVE_MICROS_PER_MS"));
+    return Number.isFinite(n) && n > 0 ? n : 0.375;
+  })();
+  const minMs = (() => {
+    const n = Number(Deno.env.get("GEMINI_LIVE_SESSION_MIN_MS"));
+    return Number.isFinite(n) && n > 0 ? n : 30_000;
+  })();
+  return Math.ceil(microsPerMs * minMs);
+})();
 
 function envVoiceAiStreamEnabled(): boolean {
   const v = (Deno.env.get("VOICE_AI_STREAM_ENABLED") ?? "true").trim().toLowerCase();
@@ -902,8 +937,19 @@ serve(async (req: Request) => {
       .eq("id", businessId)
       .maybeSingle();
     const tier = (tierRow as { tier?: string | null } | null)?.tier ?? null;
+    // Refuse when the REMAINING budget can't cover a minimum Live session, not
+    // just when the pool is fully spent: subtract the min-session margin from the
+    // cap so `overCap` trips while ~one min-session of headroom is still left.
+    // This guarantees any answered call can afford the bridge's min-session floor,
+    // so the bridge never overspends the pool (see min-session note there). Clamp
+    // to 1 so a huge margin can't invert the cap on a tiny tenant configuration.
+    const tierCapMicros = capMicrosForTier(
+      tier,
+      AI_BUDGET_CAP_MICROS,
+      AI_BUDGET_CAP_MICROS_STARTER
+    );
     const aiCap = await resolveSmsChatCap(supabase, businessId, {
-      capMicros: capMicrosForTier(tier, DEFAULT_CHAT_SPEND_CAP_MICROS),
+      capMicros: Math.max(1, tierCapMicros - AI_BUDGET_MIN_SESSION_MARGIN_MICROS),
       enabled: true
     });
     if (aiCap.overCap) {

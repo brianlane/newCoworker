@@ -46,6 +46,20 @@ function readPositiveMs(envKey: string, fallback: number): number {
   return Number.isFinite(v) && v > 0 ? v : fallback;
 }
 
+// Shared AI-budget cap (micro-USD), read from the SAME env vars as owner chat +
+// SMS (OWNER_CHAT_SPEND_CAP_MICROS / _STARTER) so the mid-call time cap trips
+// against the identical pool total those surfaces (and the pre-call gate in
+// telnyx-voice-inbound) use — hardcoding $5/$10 here would desync voice from an
+// ops-tuned cap. Defaults match _shared/chat_spend_cap.ts and chat-usage.ts.
+const OWNER_CHAT_SPEND_CAP_MICROS = (() => {
+  const n = Number(process.env.OWNER_CHAT_SPEND_CAP_MICROS);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 10_000_000;
+})();
+const OWNER_CHAT_SPEND_CAP_MICROS_STARTER = (() => {
+  const n = Number(process.env.OWNER_CHAT_SPEND_CAP_MICROS_STARTER);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 5_000_000;
+})();
+
 /**
  * Derive a per-call Gemini Live time cap (ms) from the tenant's REMAINING shared
  * AI budget (`owner_chat_model_spend` vs the $5/$10 tier cap + purchased credit)
@@ -76,9 +90,12 @@ async function computeBudgetDerivedSessionMaxMs(
       .eq("id", businessId)
       .maybeSingle();
     const tier = String((bizRow as { tier?: string | null } | null)?.tier ?? "");
-    // $5 starter / $10 otherwise — must match chatSpendBaseCapMicrosForTier and
-    // _shared/chat_spend_cap.ts so every surface trips the same shared fuse.
-    const baseCapMicros = tier === "starter" ? 5_000_000 : 10_000_000;
+    // Starter vs standard/enterprise, read from env (see the constants above) so
+    // every surface trips the same shared fuse at the same ops-tuned total.
+    const baseCapMicros =
+      tier === "starter"
+        ? OWNER_CHAT_SPEND_CAP_MICROS_STARTER
+        : OWNER_CHAT_SPEND_CAP_MICROS;
 
     const now = new Date();
     let periodStart = new Date(
@@ -116,10 +133,16 @@ async function computeBudgetDerivedSessionMaxMs(
 
     const remainingMicros = baseCapMicros + creditMicros - spent;
     if (!Number.isFinite(remainingMicros) || remainingMicros <= 0) {
-      // The pre-call gate should have refused an over-budget call, but clamp to
-      // the floor (not 0) rather than trust a racy read to zero out the session.
+      // The pre-call gate refuses an over-budget call, but clamp to the floor
+      // (not 0) rather than trust a racy read to zero out the session.
       return Math.min(envMaxMs, minMs);
     }
+    // The pre-call gate refuses whenever remaining budget is below one
+    // min-session's cost (it subtracts that same margin from the cap), so an
+    // answered call almost always has budgetMs >= minMs and the floor is not the
+    // binding limit. The `Math.max(minMs, …)` here only covers the small race
+    // window where spend advanced between the gate read and this read; it caps
+    // any resulting overspend at ~one min-session rather than hanging up instantly.
     const budgetMs = Math.floor(remainingMicros / microsPerMs);
     return Math.min(envMaxMs, Math.max(minMs, budgetMs));
   } catch (err) {

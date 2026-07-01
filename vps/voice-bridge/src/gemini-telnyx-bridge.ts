@@ -1525,8 +1525,17 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   const { sessionMaxMs, warnBeforeMs, finalNudgeBeforeMs } = opts;
   const name = opts.businessName;
   const budgetCapped = Boolean(opts.budgetCapped);
-  const warnAt = Math.max(0, sessionMaxMs - warnBeforeMs);
-  const nudgeAt = Math.max(0, sessionMaxMs - finalNudgeBeforeMs);
+  // Scale the lead-in offsets to the ACTUAL session length. A budget-capped
+  // session can be shorter than the default 60s `warnBeforeMs`, which would make
+  // `sessionMaxMs - warnBeforeMs` clamp to 0 and fire the "start wrapping up" cue
+  // immediately at answer — right over the greeting. Cap the warn lead-in to half
+  // the session and the final-nudge lead-in to a quarter so the wind-down always
+  // lands near the end, with the greeting given room first. (For a normal
+  // ~14-minute session these mins are no-ops.)
+  const effWarnBeforeMs = Math.min(warnBeforeMs, Math.floor(sessionMaxMs / 2));
+  const effFinalNudgeBeforeMs = Math.min(finalNudgeBeforeMs, Math.floor(sessionMaxMs / 4));
+  const warnAt = Math.max(0, sessionMaxMs - effWarnBeforeMs);
+  const nudgeAt = Math.max(0, sessionMaxMs - effFinalNudgeBeforeMs);
 
   // Wind-down coordinator cues. When the binding limit is the AI BUDGET (not the
   // normal time cap) we can't offer "the assistant can keep helping" or "someone
@@ -1534,7 +1543,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // it as the owner being unavailable and steer the caller to text instead.
   const warnText = budgetCapped
     ? `[Coordinator — speak aloud] You need to start wrapping up this call now. Warmly let the caller know you have to go shortly and that the owner isn't available right now, and invite them to send ${name} a text message so someone can follow up.`
-    : `[Coordinator — speak aloud] The AI session will end in about ${Math.max(1, Math.round(warnBeforeMs / 60000))} minute(s). Give the caller a warm heads-up that you're wrapping up, and that ${name} can help them directly afterward if needed.`;
+    : `[Coordinator — speak aloud] The AI session will end in about ${Math.max(1, Math.round(effWarnBeforeMs / 60000))} minute(s). Give the caller a warm heads-up that you're wrapping up, and that ${name} can help them directly afterward if needed.`;
   const nudgeText = budgetCapped
     ? `[Coordinator — speak aloud] Finish your thought and give a very brief, warm goodbye now. Let them know the owner isn't available right now and that they can text ${name} and someone will get back to them.`
     : `[Coordinator — speak aloud] Finish your thought and deliver a very brief, warm goodbye now. Let them know someone at ${name} can follow up if they still need help.`;
