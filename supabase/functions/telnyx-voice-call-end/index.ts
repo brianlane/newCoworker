@@ -25,6 +25,17 @@ import {
 import { signStreamUrlMac, type StreamPayloadV2 } from "../_shared/stream_url.ts";
 import { reserveVoiceBudget } from "../_shared/voice_reserve.ts";
 import { parseOutboundClientState } from "../_shared/voice_outbound.ts";
+import {
+  buildOwnerMessage,
+  buildRecipientMessage,
+  labelFor,
+  normE164,
+  parseWtClientState,
+  recipientIsOwner,
+  shouldNotifyOwner,
+  type WtOutcome
+} from "../_shared/warm_transfer_notify.ts";
+import { telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
 
 const MAX_BODY = 256 * 1024;
 
@@ -491,6 +502,16 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
     if (!(await claimStep(deps, aLeg, failedStep, { current_step: plan.step }))) {
       return jsonOk("handoff_already_advanced");
     }
+    // This human step rang out (we're advancing to the next one) → notify the
+    // recipient (and owner) that they missed the transfer. Per-step dedup key so
+    // each ringed-out step is texted exactly once.
+    await sendWarmTransferNotifications(deps.supabase, deps.apiKey, {
+      businessId: sess.business_id,
+      callerE164: sess.from_e164 ?? "",
+      recipientE164: ctx.steps?.[failedStep]?.to_e164 ?? "",
+      outcome: "failed",
+      dedupeKey: `hl:failed:${aLeg}:${failedStep}`
+    });
     // The claim already advanced current_step, so a thrown network error (not
     // just a non-OK status) would otherwise strand the caller: retried hangups
     // hit handoff_stale_step and nothing rings the next target. Wrap the Telnyx
@@ -514,6 +535,16 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
   }
 
   if (plan.kind === "ai_takeover" && ctx.ai_takeover) {
+    // The last human step rang out without a connect → the AI now takes over.
+    // Notify that step's recipient (and owner) of the miss. Per-step dedup key
+    // (ctx.to_e164 is the business DID, not a person).
+    await sendWarmTransferNotifications(deps.supabase, deps.apiKey, {
+      businessId: sess.business_id,
+      callerE164: sess.from_e164 ?? "",
+      recipientE164: ctx.steps?.[failedStep]?.to_e164 ?? "",
+      outcome: "failed",
+      dedupeKey: `hl:failed:${aLeg}:${failedStep}`
+    });
     // Resolve the bridge target (and health) BEFORE pressing 1, so we never
     // connect the live client to a dead bridge.
     const target = await resolveBridgeTarget(deps, sess.business_id, ctx.to_e164);
@@ -584,7 +615,16 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
     }
   }
 
-  // No more steps and no AI takeover: hang up cleanly.
+  // No more steps and no AI takeover: the final human step rang out → notify
+  // that recipient (and owner) of the miss (per-step dedup key; ctx.to_e164 is
+  // the business DID, not a person), then hang up cleanly.
+  await sendWarmTransferNotifications(deps.supabase, deps.apiKey, {
+    businessId: sess.business_id,
+    callerE164: sess.from_e164 ?? "",
+    recipientE164: ctx.steps?.[failedStep]?.to_e164 ?? "",
+    outcome: "failed",
+    dedupeKey: `hl:failed:${aLeg}:${failedStep}`
+  });
   if (await claimStep(deps, aLeg, failedStep, { status: "done" })) {
     await telnyxHangupCall(apiKey, aLeg);
   }
@@ -617,13 +657,32 @@ async function handleHandoffLifecycle(
     // Match the exact ringing step encoded in client_state. A delayed bridged
     // webhook from an EARLIER step's leg must not mark the session bridged while
     // a LATER step is ringing — that would freeze the chain (subsequent
-    // no-answer hangups would be ignored as "not ringing").
-    await supabase
+    // no-answer hangups would be ignored as "not ringing"). `.select()` tells us
+    // whether THIS event was the one that flipped ringing→bridged, so the
+    // success SMS fires exactly once (concurrent/duplicate bridged events get an
+    // empty result and skip).
+    const { data: bridgedRows } = await supabase
       .from("voice_handoff_sessions")
       .update({ status: "bridged" })
       .eq("call_control_id", parsed.aLegCallId)
       .eq("status", "ringing")
-      .eq("current_step", parsed.step);
+      .eq("current_step", parsed.step)
+      .select("business_id, from_e164, context");
+    const bridged = (bridgedRows ?? [])[0] as
+      | { business_id: string; from_e164: string; context: HandoffContext }
+      | undefined;
+    if (bridged) {
+      const recipientE164 = bridged.context?.steps?.[parsed.step]?.to_e164 ?? "";
+      if (recipientE164) {
+        await sendWarmTransferNotifications(supabase, deps.apiKey, {
+          businessId: bridged.business_id,
+          callerE164: bridged.from_e164 ?? "",
+          recipientE164,
+          outcome: "success",
+          dedupeKey: `hl:success:${parsed.aLegCallId}`
+        });
+      }
+    }
     return { handled: true, response: jsonOk("handoff_bridged") };
   }
 
@@ -675,11 +734,31 @@ async function handleHandoffLifecycle(
     // hangup means the human answered and the call completed — don't advance.
     const cause = String(payload["hangup_cause"] ?? "").toLowerCase();
     if (cause === "normal_clearing") {
-      await supabase
+      // `.select()` tells us whether THIS event flipped ringing→done. If it did
+      // (call.bridged was dropped but the human answered), send the success SMS
+      // that the bridged branch would have. The shared hl:success key makes it a
+      // no-op if call.bridged already notified.
+      const { data: doneRows } = await supabase
         .from("voice_handoff_sessions")
         .update({ status: "done" })
         .eq("call_control_id", parsed.aLegCallId)
-        .eq("status", "ringing");
+        .eq("status", "ringing")
+        .select("business_id, from_e164, context");
+      const done = (doneRows ?? [])[0] as
+        | { business_id: string; from_e164: string; context: HandoffContext }
+        | undefined;
+      if (done) {
+        const recipientE164 = done.context?.steps?.[parsed.step]?.to_e164 ?? "";
+        if (recipientE164) {
+          await sendWarmTransferNotifications(supabase, deps.apiKey, {
+            businessId: done.business_id,
+            callerE164: done.from_e164 ?? "",
+            recipientE164,
+            outcome: "success",
+            dedupeKey: `hl:success:${parsed.aLegCallId}`
+          });
+        }
+      }
       return { handled: true, response: jsonOk("handoff_answered_hangup") };
     }
     return { handled: true, response: await advanceHandoff(deps, sess) };
@@ -708,6 +787,191 @@ async function handleHandoffLifecycle(
     return { handled: false, response: jsonOk("handoff_session_closed") };
   }
   return { handled: true, response: jsonOk("handoff_session_closed") };
+}
+
+async function wtLookupName(
+  supabase: SupabaseClient<any, any, any>,
+  table: string,
+  match: Record<string, string>,
+  column: string
+): Promise<string> {
+  try {
+    let q = supabase.from(table).select(column);
+    for (const [k, v] of Object.entries(match)) q = q.eq(k, v);
+    const { data } = await q.maybeSingle();
+    return String((data as Record<string, unknown> | null)?.[column] ?? "").trim();
+  } catch (err) {
+    console.error("warm-transfer notify: name lookup failed", table, err);
+    return "";
+  }
+}
+
+/**
+ * Resolve display names + tenant SMS settings and, gated on a dedup claim so
+ * retried/duplicate webhooks don't double-text, send the recipient (and
+ * conditionally owner) warm-transfer SMS. Best-effort: never throws.
+ */
+async function sendWarmTransferNotifications(
+  supabase: SupabaseClient<any, any, any>,
+  apiKey: string,
+  args: {
+    businessId: string;
+    callerE164: string;
+    recipientE164: string;
+    outcome: WtOutcome;
+    dedupeKey: string;
+  }
+): Promise<{ sent: boolean; reason?: string }> {
+  const { businessId, callerE164, recipientE164, outcome, dedupeKey } = args;
+  if (!apiKey) return { sent: false, reason: "no_api_key" };
+  if (!recipientE164) return { sent: false, reason: "no_recipient" };
+
+  // Tenant SMS settings + owner number. Bail before claiming the dedup key when
+  // we can't send, so a misconfigured tenant can be retried later.
+  let settings: {
+    forward_to_e164?: string | null;
+    telnyx_sms_from_e164?: string | null;
+    telnyx_messaging_profile_id?: string | null;
+  } | null = null;
+  try {
+    const { data } = await supabase
+      .from("business_telnyx_settings")
+      .select("forward_to_e164, telnyx_sms_from_e164, telnyx_messaging_profile_id")
+      .eq("business_id", businessId)
+      .maybeSingle();
+    settings = data ?? null;
+  } catch (err) {
+    console.error("warm-transfer notify: settings load failed", err);
+    return { sent: false, reason: "settings_error" };
+  }
+  const ownerE164 = normE164(settings?.forward_to_e164);
+  const fromE164 = normE164(settings?.telnyx_sms_from_e164);
+  const messagingProfileId = normE164(settings?.telnyx_messaging_profile_id);
+  // telnyxSendSms requires a messaging profile (the `from` may be picked from
+  // the profile's number pool). No profile ⇒ we can't send.
+  if (!messagingProfileId) return { sent: false, reason: "no_sms_sender" };
+
+  // Dedup claim — only the first writer proceeds to send.
+  const { error: claimErr } = await supabase
+    .from("voice_transfer_notifications")
+    .insert({ dedupe_key: dedupeKey, business_id: businessId, outcome });
+  if (claimErr) {
+    const code = (claimErr as { code?: string }).code;
+    return { sent: false, reason: code === "23505" ? "duplicate" : "claim_error" };
+  }
+
+  // Resolve display names (best-effort; number-only fallback when unknown).
+  const callerName = callerE164
+    ? await wtLookupName(supabase, "contacts", { business_id: businessId, customer_e164: callerE164 }, "display_name")
+    : "";
+  const recipName = recipientIsOwner(recipientE164, ownerE164)
+    ? await wtLookupName(supabase, "businesses", { id: businessId }, "owner_name")
+    : await wtLookupName(
+        supabase,
+        "ai_flow_team_members",
+        { business_id: businessId, phone_e164: recipientE164 },
+        "name"
+      );
+  const callerLabel = labelFor(callerName, callerE164, "the caller");
+  const recipientLabel = labelFor(recipName, recipientE164, "your teammate");
+  const from = fromE164 || undefined;
+
+  const recip = await telnyxSendSms({
+    apiKey,
+    messagingProfileId,
+    fromE164: from,
+    toE164: recipientE164,
+    text: buildRecipientMessage(outcome, callerLabel)
+  }).catch((err) => {
+    console.error("warm-transfer notify: recipient SMS threw", err);
+    return { ok: false, status: 0, body: "threw" };
+  });
+  if (!recip.ok) {
+    console.error("warm-transfer notify: recipient SMS failed", recip.status, recip.body);
+    // The recipient text is the primary alert. Roll back the dedup claim so a
+    // later delivery of the same event (or a manual re-drive) can retry instead
+    // of being permanently suppressed by the claim we just wrote.
+    await supabase.from("voice_transfer_notifications").delete().eq("dedupe_key", dedupeKey);
+    return { sent: false, reason: "recipient_send_failed" };
+  }
+
+  if (shouldNotifyOwner(recipientE164, ownerE164)) {
+    // Owner copy is secondary: a failure here is logged but does NOT roll back
+    // the claim (the recipient was already texted, and a retry would double-text
+    // them). At-most-once for the recipient wins over the owner copy.
+    const owner = await telnyxSendSms({
+      apiKey,
+      messagingProfileId,
+      fromE164: from,
+      toE164: ownerE164,
+      text: buildOwnerMessage(outcome, recipientLabel, callerLabel)
+    }).catch((err) => {
+      console.error("warm-transfer notify: owner SMS threw", err);
+      return { ok: false, status: 0, body: "threw" };
+    });
+    if (!owner.ok) {
+      console.error("warm-transfer notify: owner SMS failed", owner.status, owner.body);
+    }
+  }
+
+  return { sent: true };
+}
+
+/**
+ * Warm-transfer SMS notifications for the single-leg transfer paths (AI
+ * receptionist `transfer_to_owner` + caller-rule blind transfer). Both tag the
+ * transfer's B leg with a `wt:` client_state. `call.bridged` on that leg = the
+ * recipient answered (success); `call.hangup` with no prior bridge = no-answer
+ * (failure). The AiFlow handoff chain has its own success/failure notifications
+ * inside `handleHandoffLifecycle`/`advanceHandoff`.
+ *
+ * Returns `handled:false` for any event that isn't a `wt:` leg so the caller can
+ * fall through to the handoff/settlement logic.
+ */
+async function handleWarmTransferLifecycle(
+  deps: HandoffDeps,
+  eventType: string,
+  payload: Record<string, unknown>
+): Promise<{ handled: boolean; response: Response }> {
+  const wt = parseWtClientState(payload["client_state"] as string | undefined);
+  if (!wt) return { handled: false, response: jsonOk("ignored_wt") };
+  const legId = String(payload["call_control_id"] ?? "");
+  if (!legId) return { handled: false, response: jsonOk("ignored_wt") };
+
+  // A SINGLE dedup key per leg (not per-outcome) so success and failure are
+  // mutually exclusive: whichever event claims the key first sends, and the
+  // other is blocked. This prevents a bridged/hangup webhook reorder from
+  // texting BOTH "successful" and "missed" for the same transfer.
+  const dedupeKey = `wt:${legId}`;
+
+  if (eventType === "call.bridged") {
+    await sendWarmTransferNotifications(deps.supabase, deps.apiKey, {
+      businessId: wt.businessId,
+      callerE164: wt.callerE164,
+      recipientE164: wt.recipientE164,
+      outcome: "success",
+      dedupeKey
+    });
+    return { handled: true, response: jsonOk("wt_bridged") };
+  }
+
+  // call.hangup on the transfer leg. A normal_clearing cause means the recipient
+  // answered and the call completed → send SUCCESS as defence in depth for a
+  // dropped call.bridged. The shared dedup key means this is a no-op when
+  // call.bridged already sent success. Any other cause = no-answer → FAILURE
+  // (also blocked by the shared key if success already went out).
+  const cause = String(payload["hangup_cause"] ?? "").toLowerCase();
+  await sendWarmTransferNotifications(deps.supabase, deps.apiKey, {
+    businessId: wt.businessId,
+    callerE164: wt.callerE164,
+    recipientE164: wt.recipientE164,
+    outcome: cause === "normal_clearing" ? "success" : "failed",
+    dedupeKey
+  });
+  return {
+    handled: true,
+    response: jsonOk(cause === "normal_clearing" ? "wt_answered_hangup" : "wt_failed")
+  };
 }
 
 function parseCallDurationSeconds(payload: Record<string, unknown>): number | null {
@@ -862,6 +1126,11 @@ serve(async (req: Request) => {
   if (eventType === "call.bridged" || eventType === "call.hangup") {
     const handoff = await handleHandoffLifecycle(handoffDeps, eventType, data?.payload ?? {});
     if (handoff.handled) return handoff.response;
+    // Single-leg warm transfers (receptionist + caller-rule) tag their B leg
+    // with a `wt:` client_state; the handoff handler ignores those, so fire the
+    // warm-transfer SMS notifications here.
+    const wt = await handleWarmTransferLifecycle(handoffDeps, eventType, data?.payload ?? {});
+    if (wt.handled) return wt.response;
   }
 
   if (!END_EVENTS.has(eventType)) {

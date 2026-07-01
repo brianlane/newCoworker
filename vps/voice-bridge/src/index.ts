@@ -756,9 +756,14 @@ function main(): void {
               console.warn("voice-bridge: transfer requested but TELNYX_API_KEY missing");
               return { ok: false, detail: "transfer not configured" };
             }
+            // Tag the transfer's B leg so telnyx-voice-call-end texts the owner
+            // (recipient here) the warm-transfer outcome. Plain text; the helper
+            // base64-encodes it for Telnyx. Format mirrors encodeWtClientState.
+            const notifyCaller = trustedFromE164 || fromE164Info || "";
             const result = await telnyxTransferCall(telnyxApiKey, callControlId, {
               toE164: forwardE164,
-              fromE164: fromDid
+              fromE164: fromDid,
+              clientState: `wt:${businessId}:${notifyCaller}:${forwardE164}`
             });
             if (!result.ok) {
               console.error("voice-bridge: telnyx transfer failed", result.status, result.body);
