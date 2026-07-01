@@ -528,10 +528,12 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
     // Every human step rang out without a connect → the warm transfer failed.
     // Notify once (the AI now takes over the live client). Dedup key is shared
     // with the hangup-exhaustion path so the failure SMS fires at most once.
+    // Recipient = the human step that just rang out (ctx.to_e164 is the business
+    // DID, not a person).
     await sendWarmTransferNotifications(deps.supabase, deps.apiKey, {
       businessId: sess.business_id,
       callerE164: sess.from_e164 ?? "",
-      recipientE164: ctx.to_e164 ?? "",
+      recipientE164: ctx.steps?.[failedStep]?.to_e164 ?? "",
       outcome: "failed",
       dedupeKey: `hl:failed:${aLeg}`
     });
@@ -606,11 +608,12 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
   }
 
   // No more steps and no AI takeover: every human rang out → warm transfer
-  // failed. Notify once, then hang up cleanly.
+  // failed. Notify once (recipient = the human step that just rang out;
+  // ctx.to_e164 is the business DID, not a person), then hang up cleanly.
   await sendWarmTransferNotifications(deps.supabase, deps.apiKey, {
     businessId: sess.business_id,
     callerE164: sess.from_e164 ?? "",
-    recipientE164: ctx.to_e164 ?? "",
+    recipientE164: ctx.steps?.[failedStep]?.to_e164 ?? "",
     outcome: "failed",
     dedupeKey: `hl:failed:${aLeg}`
   });
@@ -895,30 +898,29 @@ async function handleWarmTransferLifecycle(
   const legId = String(payload["call_control_id"] ?? "");
   if (!legId) return { handled: false, response: jsonOk("ignored_wt") };
 
+  // A SINGLE dedup key per leg (not per-outcome) so success and failure are
+  // mutually exclusive: whichever event claims the key first sends, and the
+  // other is blocked. This prevents a bridged/hangup webhook reorder from
+  // texting BOTH "successful" and "missed" for the same transfer.
+  const dedupeKey = `wt:${legId}`;
+
   if (eventType === "call.bridged") {
     await sendWarmTransferNotifications(deps.supabase, deps.apiKey, {
       businessId: wt.businessId,
       callerE164: wt.callerE164,
       recipientE164: wt.recipientE164,
       outcome: "success",
-      dedupeKey: `wt:success:${legId}`
+      dedupeKey
     });
     return { handled: true, response: jsonOk("wt_bridged") };
   }
 
-  // call.hangup on the transfer leg. Only a FAILURE if it never bridged: a
-  // success row (from call.bridged) or a normal_clearing cause means the
-  // recipient answered and the call simply ended.
+  // call.hangup on the transfer leg. A normal_clearing cause means the recipient
+  // answered and the call completed — skip (defence in depth if call.bridged was
+  // dropped). Otherwise attempt the failure claim: if call.bridged already
+  // claimed the shared key the insert conflicts and no failure SMS is sent.
   const cause = String(payload["hangup_cause"] ?? "").toLowerCase();
   if (cause === "normal_clearing") {
-    return { handled: true, response: jsonOk("wt_answered_hangup") };
-  }
-  const { data: succ } = await deps.supabase
-    .from("voice_transfer_notifications")
-    .select("dedupe_key")
-    .eq("dedupe_key", `wt:success:${legId}`)
-    .maybeSingle();
-  if (succ) {
     return { handled: true, response: jsonOk("wt_answered_hangup") };
   }
   await sendWarmTransferNotifications(deps.supabase, deps.apiKey, {
@@ -926,7 +928,7 @@ async function handleWarmTransferLifecycle(
     callerE164: wt.callerE164,
     recipientE164: wt.recipientE164,
     outcome: "failed",
-    dedupeKey: `wt:failed:${legId}`
+    dedupeKey
   });
   return { handled: true, response: jsonOk("wt_failed") };
 }
