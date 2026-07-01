@@ -502,6 +502,16 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
     if (!(await claimStep(deps, aLeg, failedStep, { current_step: plan.step }))) {
       return jsonOk("handoff_already_advanced");
     }
+    // This human step rang out (we're advancing to the next one) → notify the
+    // recipient (and owner) that they missed the transfer. Per-step dedup key so
+    // each ringed-out step is texted exactly once.
+    await sendWarmTransferNotifications(deps.supabase, deps.apiKey, {
+      businessId: sess.business_id,
+      callerE164: sess.from_e164 ?? "",
+      recipientE164: ctx.steps?.[failedStep]?.to_e164 ?? "",
+      outcome: "failed",
+      dedupeKey: `hl:failed:${aLeg}:${failedStep}`
+    });
     // The claim already advanced current_step, so a thrown network error (not
     // just a non-OK status) would otherwise strand the caller: retried hangups
     // hit handoff_stale_step and nothing rings the next target. Wrap the Telnyx
@@ -525,17 +535,15 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
   }
 
   if (plan.kind === "ai_takeover" && ctx.ai_takeover) {
-    // Every human step rang out without a connect → the warm transfer failed.
-    // Notify once (the AI now takes over the live client). Dedup key is shared
-    // with the hangup-exhaustion path so the failure SMS fires at most once.
-    // Recipient = the human step that just rang out (ctx.to_e164 is the business
-    // DID, not a person).
+    // The last human step rang out without a connect → the AI now takes over.
+    // Notify that step's recipient (and owner) of the miss. Per-step dedup key
+    // (ctx.to_e164 is the business DID, not a person).
     await sendWarmTransferNotifications(deps.supabase, deps.apiKey, {
       businessId: sess.business_id,
       callerE164: sess.from_e164 ?? "",
       recipientE164: ctx.steps?.[failedStep]?.to_e164 ?? "",
       outcome: "failed",
-      dedupeKey: `hl:failed:${aLeg}`
+      dedupeKey: `hl:failed:${aLeg}:${failedStep}`
     });
     // Resolve the bridge target (and health) BEFORE pressing 1, so we never
     // connect the live client to a dead bridge.
@@ -607,15 +615,15 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
     }
   }
 
-  // No more steps and no AI takeover: every human rang out → warm transfer
-  // failed. Notify once (recipient = the human step that just rang out;
-  // ctx.to_e164 is the business DID, not a person), then hang up cleanly.
+  // No more steps and no AI takeover: the final human step rang out → notify
+  // that recipient (and owner) of the miss (per-step dedup key; ctx.to_e164 is
+  // the business DID, not a person), then hang up cleanly.
   await sendWarmTransferNotifications(deps.supabase, deps.apiKey, {
     businessId: sess.business_id,
     callerE164: sess.from_e164 ?? "",
     recipientE164: ctx.steps?.[failedStep]?.to_e164 ?? "",
     outcome: "failed",
-    dedupeKey: `hl:failed:${aLeg}`
+    dedupeKey: `hl:failed:${aLeg}:${failedStep}`
   });
   if (await claimStep(deps, aLeg, failedStep, { status: "done" })) {
     await telnyxHangupCall(apiKey, aLeg);
