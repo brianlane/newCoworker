@@ -9,6 +9,8 @@ export type NotificationPreferencesRow = {
   email_digest_weekly: boolean;
   email_urgent: boolean;
   dashboard_alerts: boolean;
+  /** Text the recipient + owner on every voice warm transfer (success/failure). */
+  sms_warm_transfer: boolean;
   phone_number: string | null;
   alert_email: string | null;
   /** Optional daily-digest recipient override; null = alert_email → owner_email chain. */
@@ -92,6 +94,7 @@ export type NotificationPreferencesUpdate = Partial<
     | "email_digest_weekly"
     | "email_urgent"
     | "dashboard_alerts"
+    | "sms_warm_transfer"
     | "phone_number"
     | "alert_email"
     | "digest_email_daily"
@@ -106,6 +109,7 @@ const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> =
   email_digest_weekly: true,
   email_urgent: true,
   dashboard_alerts: true,
+  sms_warm_transfer: true,
   phone_number: null,
   alert_email: null,
   digest_email_daily: null,
@@ -187,6 +191,7 @@ export async function updateNotificationPreferences(
     "email_digest_weekly",
     "email_urgent",
     "dashboard_alerts",
+    "sms_warm_transfer",
     "phone_number",
     "alert_email",
     "digest_email_daily",
@@ -211,7 +216,8 @@ export async function updateNotificationPreferences(
       patch.email_digest === true ||
       patch.email_digest_weekly === true ||
       patch.email_urgent === true ||
-      patch.dashboard_alerts === true);
+      patch.dashboard_alerts === true ||
+      patch.sms_warm_transfer === true);
   if (reSubscribed) {
     update.unsubscribed_at = null;
   }

@@ -39,6 +39,7 @@ async function applyUnsubscribe(bid: string | null): Promise<ApplyResult> {
       email_digest_weekly: false,
       email_urgent: false,
       dashboard_alerts: false,
+      sms_warm_transfer: false,
       unsubscribed_at: new Date().toISOString()
     });
     return "ok";

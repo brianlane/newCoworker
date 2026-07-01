@@ -36,6 +36,7 @@ import {
   type WtOutcome
 } from "../_shared/warm_transfer_notify.ts";
 import { telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
+import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
 
 const MAX_BODY = 256 * 1024;
 
@@ -807,6 +808,70 @@ async function wtLookupName(
 }
 
 /**
+ * Send one warm-transfer SMS through the METERED outbound path: reserve a slot
+ * against the tenant's monthly cap, send via Telnyx, and release the reservation
+ * if Telnyx rejects. Every SMS sent from the AI worker's number is metered, so
+ * these operational alerts count against the same monthly pool as customer
+ * texts. Returns a coarse outcome so the caller can decide whether to roll back
+ * its dedup claim (transient send failure) or keep it (cap reached). Never
+ * throws.
+ */
+async function meteredWarmTransferSend(
+  supabase: SupabaseClient<any, any, any>,
+  apiKey: string,
+  businessId: string,
+  msg: { messagingProfileId: string; fromE164?: string; toE164: string; text: string }
+): Promise<{ ok: true } | { ok: false; reason: "quota" | "send_failed" | "reserve_error" }> {
+  const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
+    "try_reserve_sms_outbound_slot",
+    { p_business_id: businessId }
+  );
+  if (reserveErr) {
+    console.error("warm-transfer notify: reserve slot failed", reserveErr);
+    return { ok: false, reason: "reserve_error" };
+  }
+  const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string } | null;
+  if (!reserve?.ok) {
+    // Over the monthly cap: alert the owner once per period (same channel the
+    // other metered send paths use), then skip — retrying won't help this month.
+    if (reserve?.reason === "monthly_sms_limit") {
+      await sendCapAlertOnce(supabase, {
+        businessId,
+        kind: "sms_monthly",
+        periodKey: smsCapPeriodKey(),
+        notifyUrl: `${Deno.env.get("SUPABASE_URL") ?? ""}/functions/v1/notifications`,
+        bearer: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+        payload: { surface: "warm_transfer" }
+      });
+    }
+    return { ok: false, reason: "quota" };
+  }
+
+  const res = await telnyxSendSms({
+    apiKey,
+    messagingProfileId: msg.messagingProfileId,
+    fromE164: msg.fromE164,
+    toE164: msg.toE164,
+    text: msg.text
+  }).catch((err) => {
+    console.error("warm-transfer notify: SMS threw", err);
+    return { ok: false, status: 0, body: "threw" };
+  });
+  if (!res.ok) {
+    console.error("warm-transfer notify: SMS failed", res.status, res.body);
+    // Telnyx rejected the send — give the reserved slot back so the tenant isn't
+    // billed for a message that never went out.
+    const { error: relErr } = await supabase.rpc("release_sms_outbound_slot", {
+      p_business_id: businessId,
+      p_refund_bonus: reserve.source === "bonus"
+    });
+    if (relErr) console.error("warm-transfer notify: release slot failed", relErr);
+    return { ok: false, reason: "send_failed" };
+  }
+  return { ok: true };
+}
+
+/**
  * Resolve display names + tenant SMS settings and, gated on a dedup claim so
  * retried/duplicate webhooks don't double-text, send the recipient (and
  * conditionally owner) warm-transfer SMS. Best-effort: never throws.
@@ -825,6 +890,23 @@ async function sendWarmTransferNotifications(
   const { businessId, callerE164, recipientE164, outcome, dedupeKey } = args;
   if (!apiKey) return { sent: false, reason: "no_api_key" };
   if (!recipientE164) return { sent: false, reason: "no_recipient" };
+
+  // Respect the tenant's "Warm transfer SMS" notification preference. Fail open:
+  // a missing row means the feature's default (ON) applies; only an explicit
+  // false suppresses. Do this before claiming the dedup key so a re-enable can
+  // still fire on a later delivery of the same event.
+  try {
+    const { data: pref } = await supabase
+      .from("notification_preferences")
+      .select("sms_warm_transfer")
+      .eq("business_id", businessId)
+      .maybeSingle();
+    if ((pref as { sms_warm_transfer?: boolean } | null)?.sms_warm_transfer === false) {
+      return { sent: false, reason: "pref_disabled" };
+    }
+  } catch (err) {
+    console.error("warm-transfer notify: prefs load failed (defaulting on)", err);
+  }
 
   // Tenant SMS settings + owner number. Bail before claiming the dedup key when
   // we can't send, so a misconfigured tenant can be retried later.
@@ -876,41 +958,38 @@ async function sendWarmTransferNotifications(
   const recipientLabel = labelFor(recipName, recipientE164, "your teammate");
   const from = fromE164 || undefined;
 
-  const recip = await telnyxSendSms({
-    apiKey,
+  const recip = await meteredWarmTransferSend(supabase, apiKey, businessId, {
     messagingProfileId,
     fromE164: from,
     toE164: recipientE164,
     text: buildRecipientMessage(outcome, callerLabel)
-  }).catch((err) => {
-    console.error("warm-transfer notify: recipient SMS threw", err);
-    return { ok: false, status: 0, body: "threw" };
   });
   if (!recip.ok) {
-    console.error("warm-transfer notify: recipient SMS failed", recip.status, recip.body);
-    // The recipient text is the primary alert. Roll back the dedup claim so a
-    // later delivery of the same event (or a manual re-drive) can retry instead
-    // of being permanently suppressed by the claim we just wrote.
-    await supabase.from("voice_transfer_notifications").delete().eq("dedupe_key", dedupeKey);
-    return { sent: false, reason: "recipient_send_failed" };
+    if (recip.reason === "send_failed" || recip.reason === "reserve_error") {
+      // Transient failure on the primary alert. Roll back the dedup claim so a
+      // later delivery of the same event (or a manual re-drive) can retry
+      // instead of being permanently suppressed by the claim we just wrote.
+      await supabase.from("voice_transfer_notifications").delete().eq("dedupe_key", dedupeKey);
+      return { sent: false, reason: `recipient_${recip.reason}` };
+    }
+    // Over the monthly cap: nothing was sent and a retry won't help this period.
+    // Keep the claim so duplicate webhooks don't re-attempt; the owner is
+    // separately alerted about the cap inside meteredWarmTransferSend.
+    return { sent: false, reason: "monthly_sms_limit" };
   }
 
   if (shouldNotifyOwner(recipientE164, ownerE164)) {
     // Owner copy is secondary: a failure here is logged but does NOT roll back
     // the claim (the recipient was already texted, and a retry would double-text
     // them). At-most-once for the recipient wins over the owner copy.
-    const owner = await telnyxSendSms({
-      apiKey,
+    const owner = await meteredWarmTransferSend(supabase, apiKey, businessId, {
       messagingProfileId,
       fromE164: from,
       toE164: ownerE164,
       text: buildOwnerMessage(outcome, recipientLabel, callerLabel)
-    }).catch((err) => {
-      console.error("warm-transfer notify: owner SMS threw", err);
-      return { ok: false, status: 0, body: "threw" };
     });
     if (!owner.ok) {
-      console.error("warm-transfer notify: owner SMS failed", owner.status, owner.body);
+      console.error("warm-transfer notify: owner SMS not sent", owner.reason);
     }
   }
 
