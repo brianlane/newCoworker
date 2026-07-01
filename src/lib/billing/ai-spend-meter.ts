@@ -67,13 +67,28 @@ export function geminiPriceFor(model: string): GeminiPricePer1M {
  * absent/0 and everything prices at `in`/`out` — identical to the old math.
  * Audio counts are clamped to their respective totals so a malformed payload
  * can never over- or under-count.
+ *
+ * IMPORTANT: for a native-audio model (one that defines `audioIn`/`audioOut`,
+ * i.e. Gemini Live) the tokens are overwhelmingly AUDIO. If a call reports token
+ * totals but NO audio split (the modality detail rows were missing or labeled
+ * differently), pricing the full counts at the cheaper TEXT rate would ~4x
+ * under-record spend and weaken the shared AI-budget hard stop. So for those
+ * models we treat the untagged remainder as audio (the dominant, pricier
+ * modality) rather than text — conservative, never undercounts. When Gemini DID
+ * report a positive audio split we honor it exactly (audio at audio rate, the
+ * genuine text remainder at text rate).
  */
 export function geminiCostMicrosFromUsage(model: string, usage: GeminiUsage): number {
   const price = geminiPriceFor(model);
   const promptTokens = Math.max(0, usage.promptTokens);
   const outputTokens = Math.max(0, usage.outputTokens);
-  const promptAudio = Math.min(promptTokens, Math.max(0, usage.promptAudioTokens ?? 0));
-  const outputAudio = Math.min(outputTokens, Math.max(0, usage.outputAudioTokens ?? 0));
+  const isAudioModel = price.audioIn !== undefined || price.audioOut !== undefined;
+  let promptAudio = Math.min(promptTokens, Math.max(0, usage.promptAudioTokens ?? 0));
+  let outputAudio = Math.min(outputTokens, Math.max(0, usage.outputAudioTokens ?? 0));
+  if (isAudioModel) {
+    if (promptAudio === 0) promptAudio = promptTokens;
+    if (outputAudio === 0) outputAudio = outputTokens;
+  }
   const promptText = promptTokens - promptAudio;
   const outputText = outputTokens - outputAudio;
   const audioIn = price.audioIn ?? price.in;

@@ -465,10 +465,41 @@ async function sendMissedCallSms(params: {
  * price them at the audio rate (in $3/1M, out $12/1M) vs the small text
  * remainder. Best-effort: a metering failure can only under-count the fuse.
  */
+/**
+ * Estimate a Gemini Live session's usage from its DURATION when the session
+ * never reported `usageMetadata` (some sessions — very short calls, transport
+ * errors — close without a usage frame). Without this the spend POST is skipped
+ * entirely, leaving `owner_chat_model_spend` flat while Google still bills the
+ * audio, so the pre-call/mid-call budget gates would keep allowing voice on an
+ * already-exhausted pool. Gemini Live audio is ~25 tokens/sec each direction; we
+ * count both directions for the full call (conservative — never undercount) so
+ * the token math lands on the same ~0.375 micro-USD/ms the mid-call cap assumes
+ * (25 tok/s × ($3 in + $12 out)/1M). Returns null for a zero/negative duration.
+ */
+function estimateLiveUsageFromDuration(
+  startedAtMs: number | undefined,
+  endedAtMs: number
+): GeminiLiveUsage | null {
+  if (!startedAtMs || endedAtMs <= startedAtMs) return null;
+  const durationSec = (endedAtMs - startedAtMs) / 1000;
+  const perSec = readPositiveMs("GEMINI_LIVE_AUDIO_TOKENS_PER_SEC", 25);
+  const tokens = Math.round(perSec * durationSec);
+  if (tokens <= 0) return null;
+  return {
+    promptTokens: tokens,
+    outputTokens: tokens,
+    promptAudioTokens: tokens,
+    outputAudioTokens: tokens,
+    totalTokens: tokens * 2
+  };
+}
+
 async function meterGeminiLiveSpend(params: {
   businessId: string;
   model: string;
   usage: GeminiLiveUsage;
+  /** True when `usage` is a duration-based estimate (no usageMetadata frame). */
+  estimated?: boolean;
 }): Promise<void> {
   const appBaseUrl = (process.env.APP_BASE_URL ?? "").replace(/\/+$/, "");
   const gatewayToken = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
@@ -499,6 +530,7 @@ async function meterGeminiLiveSpend(params: {
     } else {
       console.log("voice-bridge: Gemini Live spend metered", {
         model: params.model,
+        estimated: Boolean(params.estimated),
         promptTokens: params.usage.promptTokens,
         outputTokens: params.usage.outputTokens,
         promptAudioTokens: params.usage.promptAudioTokens,
@@ -774,6 +806,9 @@ function main(): void {
       // Captured at session end for AI-budget metering (Gemini Live path).
       let geminiGetUsage: (() => GeminiLiveUsage | null) | undefined;
       let geminiLiveModel: string | undefined;
+      // Set when the Live bridge starts, used to estimate spend from call
+      // duration if the session ends without ever reporting usageMetadata.
+      let geminiStartedAtMs: number | undefined;
 
       const geminiFlag = (process.env.GEMINI_LIVE_ENABLED ?? "true").trim().toLowerCase();
       const geminiLiveEnabled = geminiFlag !== "false" && geminiFlag !== "0";
@@ -1118,6 +1153,7 @@ function main(): void {
           geminiGetLead = bridge.getLead;
           geminiGetUsage = bridge.getUsage;
           geminiLiveModel = model;
+          geminiStartedAtMs = Date.now();
         } catch (e) {
           const reason = e instanceof Error ? e.message : String(e);
           console.error("voice-bridge: Gemini Live unavailable (continuing without AI audio)", reason);
@@ -1202,17 +1238,31 @@ function main(): void {
           } catch (err) {
             console.error("voice-bridge: teardown error", err);
           }
-          // Meter this Live session's exact Gemini spend into the shared AI
-          // budget. Done after teardown so `getUsage()` returns the final
-          // cumulative frame. Best-effort — never blocks reservation settle.
+          // Meter this Live session's Gemini spend into the shared AI budget.
+          // Done after teardown so `getUsage()` returns the final cumulative
+          // frame. Prefer the EXACT usageMetadata; if the session closed without
+          // ever reporting billable tokens, fall back to a conservative
+          // duration-based estimate so spend still advances (Google bills the
+          // audio regardless — a skipped POST would let the budget gates keep
+          // allowing voice on an exhausted pool). Best-effort — never blocks
+          // reservation settle.
           try {
-            const usage = geminiGetUsage?.();
-            if (usage && geminiLiveModel) {
-              await meterGeminiLiveSpend({
-                businessId,
-                model: geminiLiveModel,
-                usage
-              });
+            if (geminiLiveModel) {
+              const captured = geminiGetUsage?.() ?? null;
+              const hasBilledTokens =
+                captured != null &&
+                (captured.promptTokens > 0 || captured.outputTokens > 0);
+              const usage = hasBilledTokens
+                ? captured
+                : estimateLiveUsageFromDuration(geminiStartedAtMs, Date.now());
+              if (usage) {
+                await meterGeminiLiveSpend({
+                  businessId,
+                  model: geminiLiveModel,
+                  usage,
+                  estimated: !hasBilledTokens
+                });
+              }
             }
           } catch (err) {
             console.error("voice-bridge: meter Gemini Live spend error", err);

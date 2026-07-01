@@ -104,14 +104,29 @@ describe("geminiCostMicrosFromUsage", () => {
     );
   });
 
-  it("treats all tokens as text when no audio split is provided (back-compat)", () => {
-    // Same Live model, but no audio fields → everything on the text rate.
+  it("prices a native-audio model at AUDIO rates when no split is reported (conservative)", () => {
+    // Same Live model, but the modality detail rows were missing → the tokens are
+    // overwhelmingly audio, so bill the full counts at the audio rate rather than
+    // ~4x under-recording at the text rate.
     expect(
       geminiCostMicrosFromUsage("gemini-3.1-flash-live-preview", {
         promptTokens: 1_000,
         outputTokens: 500
       })
-    ).toBe(Math.ceil(1_000 * 0.75 + 500 * 4.5));
+    ).toBe(Math.ceil(1_000 * 3.0 + 500 * 12.0));
+  });
+
+  it("honors a positive audio split on a native-audio model (text remainder stays text-priced)", () => {
+    // When Gemini DID report an audio split we keep the exact breakdown: the
+    // audio portion at audio rates, the genuine text remainder at text rates.
+    expect(
+      geminiCostMicrosFromUsage("gemini-3.1-flash-live-preview", {
+        promptTokens: 1_000,
+        outputTokens: 500,
+        promptAudioTokens: 900,
+        outputAudioTokens: 450
+      })
+    ).toBe(Math.ceil(100 * 0.75 + 900 * 3.0 + 50 * 4.5 + 450 * 12.0));
   });
 
   it("clamps audio tokens to their totals so a malformed split can't over/under-count", () => {
