@@ -43,6 +43,7 @@ import {
   encodeHandoffClientState,
   type HandoffContext
 } from "../_shared/voice_handoff.ts";
+import { encodeWtClientState } from "../_shared/warm_transfer_notify.ts";
 import { compileVoiceFlow } from "../_shared/ai_flows/voice.ts";
 import type { AiFlowDefinition } from "../_shared/ai_flows/types.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
@@ -435,7 +436,15 @@ serve(async (req: Request) => {
         await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
       }
     }
-    const transferRes = await telnyxTransferCall(apiKey, callControlId, toDst);
+    // Tag the transfer's B leg so telnyx-voice-call-end can text the recipient
+    // (and owner) the warm-transfer outcome on call.bridged / no-answer hangup.
+    const transferRes = await telnyxTransferCall(apiKey, callControlId, toDst, {
+      clientState: encodeWtClientState({
+        businessId,
+        callerE164: fromE164Informational ?? "",
+        recipientE164: toDst
+      })
+    });
     if (!transferRes.ok) {
       const errText = await transferRes.text();
       console.error("caller-rule transfer failed", transferRes.status, errText.slice(0, 300));

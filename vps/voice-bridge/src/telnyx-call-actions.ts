@@ -14,6 +14,13 @@ export type TelnyxTransferOptions = {
   timeLimitSecs?: number;
   /** Optional spoken line before the transfer connects; Telnyx uses this as a whisper greeting. */
   audioUrl?: string;
+  /**
+   * Opaque state echoed back on this transfer's resulting call-control webhooks
+   * (call.bridged / call.hangup for the B leg). Used by telnyx-voice-call-end to
+   * fire warm-transfer SMS notifications. Pass PLAIN text (e.g. `wt:<biz>:<caller>:<recipient>`);
+   * Telnyx requires base64, so we encode it here.
+   */
+  clientState?: string;
 };
 
 export type TelnyxActionResult = {
@@ -37,6 +44,7 @@ export async function telnyxTransferCall(
   if (opts.fromE164) body.from = opts.fromE164;
   if (opts.timeLimitSecs && opts.timeLimitSecs > 0) body.time_limit_secs = opts.timeLimitSecs;
   if (opts.audioUrl) body.audio_url = opts.audioUrl;
+  if (opts.clientState) body.client_state = Buffer.from(opts.clientState, "utf8").toString("base64");
 
   try {
     const res = await fetchImpl(url, {

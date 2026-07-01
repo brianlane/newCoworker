@@ -25,6 +25,10 @@ import {
 import { signStreamUrlMac, type StreamPayloadV2 } from "../_shared/stream_url.ts";
 import { reserveVoiceBudget } from "../_shared/voice_reserve.ts";
 import { parseOutboundClientState } from "../_shared/voice_outbound.ts";
+import {
+  parseWtClientState,
+  sendWarmTransferNotifications
+} from "../_shared/warm_transfer_notify.ts";
 
 const MAX_BODY = 256 * 1024;
 
@@ -514,6 +518,16 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
   }
 
   if (plan.kind === "ai_takeover" && ctx.ai_takeover) {
+    // Every human step rang out without a connect → the warm transfer failed.
+    // Notify once (the AI now takes over the live client). Dedup key is shared
+    // with the hangup-exhaustion path so the failure SMS fires at most once.
+    await sendWarmTransferNotifications(deps.supabase, deps.apiKey, {
+      businessId: sess.business_id,
+      callerE164: sess.from_e164 ?? "",
+      recipientE164: ctx.to_e164 ?? "",
+      outcome: "failed",
+      dedupeKey: `hl:failed:${aLeg}`
+    });
     // Resolve the bridge target (and health) BEFORE pressing 1, so we never
     // connect the live client to a dead bridge.
     const target = await resolveBridgeTarget(deps, sess.business_id, ctx.to_e164);
@@ -584,7 +598,15 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
     }
   }
 
-  // No more steps and no AI takeover: hang up cleanly.
+  // No more steps and no AI takeover: every human rang out → warm transfer
+  // failed. Notify once, then hang up cleanly.
+  await sendWarmTransferNotifications(deps.supabase, deps.apiKey, {
+    businessId: sess.business_id,
+    callerE164: sess.from_e164 ?? "",
+    recipientE164: ctx.to_e164 ?? "",
+    outcome: "failed",
+    dedupeKey: `hl:failed:${aLeg}`
+  });
   if (await claimStep(deps, aLeg, failedStep, { status: "done" })) {
     await telnyxHangupCall(apiKey, aLeg);
   }
@@ -617,13 +639,32 @@ async function handleHandoffLifecycle(
     // Match the exact ringing step encoded in client_state. A delayed bridged
     // webhook from an EARLIER step's leg must not mark the session bridged while
     // a LATER step is ringing — that would freeze the chain (subsequent
-    // no-answer hangups would be ignored as "not ringing").
-    await supabase
+    // no-answer hangups would be ignored as "not ringing"). `.select()` tells us
+    // whether THIS event was the one that flipped ringing→bridged, so the
+    // success SMS fires exactly once (concurrent/duplicate bridged events get an
+    // empty result and skip).
+    const { data: bridgedRows } = await supabase
       .from("voice_handoff_sessions")
       .update({ status: "bridged" })
       .eq("call_control_id", parsed.aLegCallId)
       .eq("status", "ringing")
-      .eq("current_step", parsed.step);
+      .eq("current_step", parsed.step)
+      .select("business_id, from_e164, context");
+    const bridged = (bridgedRows ?? [])[0] as
+      | { business_id: string; from_e164: string; context: HandoffContext }
+      | undefined;
+    if (bridged) {
+      const recipientE164 = bridged.context?.steps?.[parsed.step]?.to_e164 ?? "";
+      if (recipientE164) {
+        await sendWarmTransferNotifications(supabase, deps.apiKey, {
+          businessId: bridged.business_id,
+          callerE164: bridged.from_e164 ?? "",
+          recipientE164,
+          outcome: "success",
+          dedupeKey: `hl:success:${parsed.aLegCallId}`
+        });
+      }
+    }
     return { handled: true, response: jsonOk("handoff_bridged") };
   }
 
@@ -708,6 +749,63 @@ async function handleHandoffLifecycle(
     return { handled: false, response: jsonOk("handoff_session_closed") };
   }
   return { handled: true, response: jsonOk("handoff_session_closed") };
+}
+
+/**
+ * Warm-transfer SMS notifications for the single-leg transfer paths (AI
+ * receptionist `transfer_to_owner` + caller-rule blind transfer). Both tag the
+ * transfer's B leg with a `wt:` client_state. `call.bridged` on that leg = the
+ * recipient answered (success); `call.hangup` with no prior bridge = no-answer
+ * (failure). The AiFlow handoff chain has its own success/failure notifications
+ * inside `handleHandoffLifecycle`/`advanceHandoff`.
+ *
+ * Returns `handled:false` for any event that isn't a `wt:` leg so the caller can
+ * fall through to the handoff/settlement logic.
+ */
+async function handleWarmTransferLifecycle(
+  deps: HandoffDeps,
+  eventType: string,
+  payload: Record<string, unknown>
+): Promise<{ handled: boolean; response: Response }> {
+  const wt = parseWtClientState(payload["client_state"] as string | undefined);
+  if (!wt) return { handled: false, response: jsonOk("ignored_wt") };
+  const legId = String(payload["call_control_id"] ?? "");
+  if (!legId) return { handled: false, response: jsonOk("ignored_wt") };
+
+  if (eventType === "call.bridged") {
+    await sendWarmTransferNotifications(deps.supabase, deps.apiKey, {
+      businessId: wt.businessId,
+      callerE164: wt.callerE164,
+      recipientE164: wt.recipientE164,
+      outcome: "success",
+      dedupeKey: `wt:success:${legId}`
+    });
+    return { handled: true, response: jsonOk("wt_bridged") };
+  }
+
+  // call.hangup on the transfer leg. Only a FAILURE if it never bridged: a
+  // success row (from call.bridged) or a normal_clearing cause means the
+  // recipient answered and the call simply ended.
+  const cause = String(payload["hangup_cause"] ?? "").toLowerCase();
+  if (cause === "normal_clearing") {
+    return { handled: true, response: jsonOk("wt_answered_hangup") };
+  }
+  const { data: succ } = await deps.supabase
+    .from("voice_transfer_notifications")
+    .select("dedupe_key")
+    .eq("dedupe_key", `wt:success:${legId}`)
+    .maybeSingle();
+  if (succ) {
+    return { handled: true, response: jsonOk("wt_answered_hangup") };
+  }
+  await sendWarmTransferNotifications(deps.supabase, deps.apiKey, {
+    businessId: wt.businessId,
+    callerE164: wt.callerE164,
+    recipientE164: wt.recipientE164,
+    outcome: "failed",
+    dedupeKey: `wt:failed:${legId}`
+  });
+  return { handled: true, response: jsonOk("wt_failed") };
 }
 
 function parseCallDurationSeconds(payload: Record<string, unknown>): number | null {
@@ -862,6 +960,11 @@ serve(async (req: Request) => {
   if (eventType === "call.bridged" || eventType === "call.hangup") {
     const handoff = await handleHandoffLifecycle(handoffDeps, eventType, data?.payload ?? {});
     if (handoff.handled) return handoff.response;
+    // Single-leg warm transfers (receptionist + caller-rule) tag their B leg
+    // with a `wt:` client_state; the handoff handler ignores those, so fire the
+    // warm-transfer SMS notifications here.
+    const wt = await handleWarmTransferLifecycle(handoffDeps, eventType, data?.payload ?? {});
+    if (wt.handled) return wt.response;
   }
 
   if (!END_EVENTS.has(eventType)) {
