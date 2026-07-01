@@ -131,6 +131,13 @@ export type MeterGeminiSpendArgs = {
   /** Fallback estimate inputs when usage is unavailable. */
   inputChars?: number;
   outputChars?: number;
+  /**
+   * When set (live-voice teardown), SETTLE this call's AI-budget reservation
+   * instead of a plain increment: `owner_chat_ai_settle` releases the hold the
+   * inbound gate placed AND records the exact spend atomically. A zero cost still
+   * releases the hold (unlike the plain path, which skips zero-cost writes).
+   */
+  callControlId?: string;
   client?: SupabaseClient;
 };
 
@@ -150,7 +157,10 @@ export async function meterGeminiSpendForBusiness(args: MeterGeminiSpendArgs): P
           args.inputChars ?? 0,
           args.outputChars ?? 0
         );
-    if (costMicros <= 0) return;
+    const isSettle = typeof args.callControlId === "string" && args.callControlId.length > 0;
+    // Plain path skips zero-cost writes; a settle must still run to release the
+    // reservation the inbound gate placed even when the call cost nothing.
+    if (costMicros <= 0 && !isSettle) return;
 
     let periodStart = monthStartIso();
     const { data: subRow } = await db
@@ -182,12 +192,21 @@ export async function meterGeminiSpendForBusiness(args: MeterGeminiSpendArgs): P
       if (Number.isFinite(n) && n > 0) creditMicros = n;
     }
 
-    const { data, error } = await db.rpc("owner_chat_record_spend", {
-      p_business_id: args.businessId,
-      p_period_start: periodStart,
-      p_cost_micros: costMicros,
-      p_cap_micros: chatSpendBaseCapMicrosForTier(tier) + creditMicros
-    });
+    const capMicros = chatSpendBaseCapMicrosForTier(tier) + creditMicros;
+    const { data, error } = isSettle
+      ? await db.rpc("owner_chat_ai_settle", {
+          p_business_id: args.businessId,
+          p_period_start: periodStart,
+          p_call_control_id: args.callControlId,
+          p_actual_micros: costMicros,
+          p_cap_micros: capMicros
+        })
+      : await db.rpc("owner_chat_record_spend", {
+          p_business_id: args.businessId,
+          p_period_start: periodStart,
+          p_cost_micros: costMicros,
+          p_cap_micros: capMicros
+        });
     if (error) throw new Error(error.message);
 
     // First crossing of the shared period cap → one urgent owner alert. This is

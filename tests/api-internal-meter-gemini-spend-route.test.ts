@@ -82,6 +82,25 @@ describe("POST /api/internal/meter-gemini-spend", () => {
     });
   });
 
+  it("routes a live-voice teardown (callControlId) to the settle surface", async () => {
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
+    const body = {
+      businessId: VALID_BIZ,
+      model: "gemini-3.1-flash-live-preview",
+      callControlId: "v3:abc123",
+      usage: { promptTokens: 5_000, outputTokens: 8_000, promptAudioTokens: 5_000, outputAudioTokens: 8_000 }
+    };
+    const res = await post(body, { Authorization: "Bearer per-tenant" });
+    expect(res.status).toBe(200);
+    expect(meterGeminiSpendForBusiness).toHaveBeenCalledWith({
+      businessId: VALID_BIZ,
+      model: "gemini-3.1-flash-live-preview",
+      surface: "vps_voice_live",
+      callControlId: "v3:abc123",
+      usage: { promptTokens: 5_000, outputTokens: 8_000, promptAudioTokens: 5_000, outputAudioTokens: 8_000 }
+    });
+  });
+
   it("400s on a negative audio token count", async () => {
     vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
     const res = await post(

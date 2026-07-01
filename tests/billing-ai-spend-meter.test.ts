@@ -208,6 +208,47 @@ describe("meterGeminiSpendForBusiness", () => {
     });
   });
 
+  it("settles a live-voice reservation (owner_chat_ai_settle) when callControlId is set", async () => {
+    const db = stubDb({
+      subscriptionRow: { stripe_current_period_start: "2026-05-29T21:33:49+00:00" },
+      creditResult: { data: 0, error: null }
+    });
+
+    await meterGeminiSpendForBusiness({
+      businessId: "biz-1",
+      model: "gemini-3.1-flash-live-preview",
+      surface: "vps_voice_live",
+      callControlId: "v3:call-1",
+      usage: { promptTokens: 5_000, outputTokens: 8_000, promptAudioTokens: 5_000, outputAudioTokens: 8_000 },
+      client: db as never
+    });
+
+    // Uses the settle RPC (release hold + record) instead of the plain increment.
+    expect(db.rpc).toHaveBeenCalledWith("owner_chat_ai_settle", {
+      p_business_id: "biz-1",
+      p_period_start: "2026-05-29T21:33:49+00:00",
+      p_call_control_id: "v3:call-1",
+      p_actual_micros: Math.ceil(5_000 * 3.0 + 8_000 * 12.0),
+      p_cap_micros: 10_000_000
+    });
+    expect(db.rpc).not.toHaveBeenCalledWith("owner_chat_record_spend", expect.anything());
+  });
+
+  it("still settles (releases the hold) on a zero-cost live call", async () => {
+    const db = stubDb({ creditResult: { data: 0, error: null } });
+    await meterGeminiSpendForBusiness({
+      businessId: "biz-1",
+      model: "gemini-3.1-flash-live-preview",
+      surface: "vps_voice_live",
+      callControlId: "v3:call-empty",
+      usage: { promptTokens: 0, outputTokens: 0 },
+      client: db as never
+    });
+    const call = db.rpc.mock.calls.find((c) => c[0] === "owner_chat_ai_settle");
+    expect(call).toBeDefined();
+    expect((call![1] as Record<string, unknown>).p_actual_micros).toBe(0);
+  });
+
   it("trips against the $5 starter base cap for starter tenants", async () => {
     const db = stubDb({
       businessRow: { tier: "starter" },

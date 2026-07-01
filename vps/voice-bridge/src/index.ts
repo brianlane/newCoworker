@@ -62,12 +62,16 @@ const OWNER_CHAT_SPEND_CAP_MICROS_STARTER = (() => {
 
 /**
  * Derive a per-call Gemini Live time cap (ms) from the tenant's REMAINING shared
- * AI budget (`owner_chat_model_spend` vs the $5/$10 tier cap + purchased credit)
- * so a single long call can't blow the whole pool. This is the mid-call half of
- * the hard stop: the pre-call gate in telnyx-voice-inbound already refuses when
- * the pool is fully exhausted; this shortens the session when only a little
- * budget is left, and the bridge's graceful wind-down (with budget wording)
- * closes the call before it overspends.
+ * AI budget so a single (or concurrent) call can't blow the whole pool. This is
+ * the mid-call half of the hard stop: the pre-call gate in telnyx-voice-inbound
+ * reserves this call's budget and refuses when the pool is fully committed; this
+ * shortens the session when only a little budget is left, and the bridge's
+ * graceful wind-down (with budget wording) closes the call before it overspends.
+ *
+ * Remaining is read via `owner_chat_ai_remaining`, which subtracts persisted
+ * spend AND active reservations for OTHER concurrent calls (this call's own hold
+ * is excluded by `p_exclude_call_control_id`), so overlapping calls size their
+ * sessions against what's genuinely left — not the same stale pool.
  *
  * Combined two-way audio costs ~0.375 micro-USD/ms (25 tok/s each way at the
  * $3-in/$12-out audio rates), intentionally CONSERVATIVE — overestimating cost
@@ -78,6 +82,7 @@ const OWNER_CHAT_SPEND_CAP_MICROS_STARTER = (() => {
 async function computeBudgetDerivedSessionMaxMs(
   supabase: SupabaseClient,
   businessId: string,
+  callControlId: string,
   envMaxMs: number
 ): Promise<number> {
   try {
@@ -112,16 +117,6 @@ async function computeBudgetDerivedSessionMaxMs(
       ?.stripe_current_period_start;
     if (subStart) periodStart = subStart;
 
-    const { data: spendRow } = await supabase
-      .from("owner_chat_model_spend")
-      .select("spend_micros")
-      .eq("business_id", businessId)
-      .eq("period_start", periodStart)
-      .maybeSingle();
-    const spent = Number(
-      (spendRow as { spend_micros?: number | string } | null)?.spend_micros ?? 0
-    );
-
     let creditMicros = 0;
     const { data: creditRaw, error: creditErr } = await supabase.rpc("chat_active_credit_micros", {
       p_business_id: businessId
@@ -130,19 +125,27 @@ async function computeBudgetDerivedSessionMaxMs(
       const n = Number(creditRaw ?? 0);
       if (Number.isFinite(n) && n > 0) creditMicros = n;
     }
+    const capMicros = baseCapMicros + creditMicros;
 
-    const remainingMicros = baseCapMicros + creditMicros - spent;
+    // Remaining = cap - persisted spend - OTHER calls' active reservations.
+    const { data: remainingRaw, error: remErr } = await supabase.rpc("owner_chat_ai_remaining", {
+      p_business_id: businessId,
+      p_period_start: periodStart,
+      p_cap_micros: capMicros,
+      p_exclude_call_control_id: callControlId
+    });
+    if (remErr) throw new Error(remErr.message);
+    const remainingMicros = Number(remainingRaw ?? 0);
     if (!Number.isFinite(remainingMicros) || remainingMicros <= 0) {
-      // The pre-call gate refuses an over-budget call, but clamp to the floor
-      // (not 0) rather than trust a racy read to zero out the session.
+      // The pre-call gate reserves/refuses, but clamp to the floor (not 0)
+      // rather than trust a racy read to zero out the session.
       return Math.min(envMaxMs, minMs);
     }
-    // The pre-call gate refuses whenever remaining budget is below one
-    // min-session's cost (it subtracts that same margin from the cap), so an
-    // answered call almost always has budgetMs >= minMs and the floor is not the
-    // binding limit. The `Math.max(minMs, …)` here only covers the small race
-    // window where spend advanced between the gate read and this read; it caps
-    // any resulting overspend at ~one min-session rather than hanging up instantly.
+    // The pre-call gate reserved this call's budget and refuses whenever the
+    // remaining headroom is below one min-session's cost, so an answered call
+    // almost always has budgetMs >= minMs and the floor is not the binding
+    // limit. The `Math.max(minMs, …)` only covers the small race window where
+    // spend/holds advanced between the gate and this read.
     const budgetMs = Math.floor(remainingMicros / microsPerMs);
     return Math.min(envMaxMs, Math.max(minMs, budgetMs));
   } catch (err) {
@@ -494,10 +497,34 @@ function estimateLiveUsageFromDuration(
   };
 }
 
+/**
+ * Release this call's AI-budget hold WITHOUT recording spend — used when the
+ * bridge never opened or produced no billable tokens. Best-effort; the
+ * reservation also auto-expires, so a failure here can't pin budget forever.
+ */
+async function releaseAiBudgetReservation(
+  supabase: SupabaseClient,
+  callControlId: string
+): Promise<void> {
+  try {
+    const { error } = await supabase.rpc("owner_chat_ai_release", {
+      p_call_control_id: callControlId
+    });
+    if (error) console.error("voice-bridge: owner_chat_ai_release", error.message);
+  } catch (err) {
+    console.error(
+      "voice-bridge: owner_chat_ai_release threw",
+      err instanceof Error ? err.message : String(err)
+    );
+  }
+}
+
 async function meterGeminiLiveSpend(params: {
   businessId: string;
   model: string;
   usage: GeminiLiveUsage;
+  /** Settle this call's AI-budget reservation (release the hold + record actual). */
+  callControlId: string;
   /** True when `usage` is a duration-based estimate (no usageMetadata frame). */
   estimated?: boolean;
 }): Promise<void> {
@@ -516,6 +543,9 @@ async function meterGeminiLiveSpend(params: {
       body: JSON.stringify({
         businessId: params.businessId,
         model: params.model,
+        // callControlId routes the app to owner_chat_ai_settle: it releases this
+        // call's reservation AND records the exact spend in one atomic step.
+        callControlId: params.callControlId,
         usage: {
           promptTokens: params.usage.promptTokens,
           outputTokens: params.usage.outputTokens,
@@ -1007,6 +1037,7 @@ function main(): void {
           const sessionMaxMs = await computeBudgetDerivedSessionMaxMs(
             supabase,
             businessId,
+            callControlId,
             envSessionMaxMs
           );
           const budgetCapped = sessionMaxMs < envSessionMaxMs;
@@ -1249,20 +1280,36 @@ function main(): void {
           try {
             if (geminiLiveModel) {
               const captured = geminiGetUsage?.() ?? null;
-              const hasBilledTokens =
-                captured != null &&
-                (captured.promptTokens > 0 || captured.outputTokens > 0);
-              const usage = hasBilledTokens
-                ? captured
-                : estimateLiveUsageFromDuration(geminiStartedAtMs, Date.now());
+              const durationEstimate = estimateLiveUsageFromDuration(
+                geminiStartedAtMs,
+                Date.now()
+              );
+              // Meter whichever implies MORE spend (never undercount). A sparse or
+              // early cumulative usageMetadata frame can under-report a long call
+              // (e.g. only a small promptTokenCount was ever seen), so when the
+              // duration-based floor is larger we use it instead. Compare by a
+              // Live-audio cost proxy (input ≈ $3/1M, output ≈ $12/1M).
+              const liveCostProxy = (u: GeminiLiveUsage | null): number =>
+                u ? u.promptTokens * 3 + u.outputTokens * 12 : 0;
+              const useCaptured =
+                liveCostProxy(captured) >= liveCostProxy(durationEstimate);
+              const usage = useCaptured ? captured : durationEstimate;
               if (usage) {
+                // Settles the reservation (release hold + record exact spend).
                 await meterGeminiLiveSpend({
                   businessId,
                   model: geminiLiveModel,
                   usage,
-                  estimated: !hasBilledTokens
+                  callControlId
                 });
+              } else {
+                // Bridge ran but produced no billable tokens — release the hold.
+                await releaseAiBudgetReservation(supabase, callControlId);
               }
+            } else {
+              // Bridge never started (init failed / disabled): free the hold the
+              // inbound gate placed so it can't pin budget until it expires.
+              await releaseAiBudgetReservation(supabase, callControlId);
             }
           } catch (err) {
             console.error("voice-bridge: meter Gemini Live spend error", err);

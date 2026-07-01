@@ -19,7 +19,8 @@ import { checkVoiceBudgetAvailable, reserveVoiceBudget } from "../_shared/voice_
 import {
   capMicrosForTier,
   DEFAULT_CHAT_SPEND_CAP_MICROS,
-  resolveSmsChatCap,
+  readActiveChatCreditMicros,
+  resolveChatPeriodStart,
   STARTER_CHAT_SPEND_CAP_MICROS
 } from "../_shared/chat_spend_cap.ts";
 import { telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
@@ -80,23 +81,37 @@ const AI_BUDGET_CAP_MICROS_STARTER = (() => {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : STARTER_CHAT_SPEND_CAP_MICROS;
 })();
 
-// Reserve margin (micro-USD) = the cost of the bridge's MINIMUM Live session, so
-// the pre-call gate refuses a call the remaining budget can't fully cover rather
-// than answering and letting the bridge's min-session floor overspend the pool.
-// Mirrors the voice-bridge cost model (GEMINI_LIVE_MICROS_PER_MS default 0.375
-// micro-USD/ms × GEMINI_LIVE_SESSION_MIN_MS default 30_000 ms ≈ $0.011); keep the
-// env keys + defaults in lockstep with vps/voice-bridge/src/index.ts.
-const AI_BUDGET_MIN_SESSION_MARGIN_MICROS = (() => {
-  const microsPerMs = (() => {
-    const n = Number(Deno.env.get("GEMINI_LIVE_MICROS_PER_MS"));
-    return Number.isFinite(n) && n > 0 ? n : 0.375;
-  })();
-  const minMs = (() => {
-    const n = Number(Deno.env.get("GEMINI_LIVE_SESSION_MIN_MS"));
-    return Number.isFinite(n) && n > 0 ? n : 30_000;
-  })();
-  return Math.ceil(microsPerMs * minMs);
+// Gemini Live cost model, kept in lockstep with vps/voice-bridge/src/index.ts:
+// combined two-way audio ≈ 0.375 micro-USD/ms (25 tok/s each way at the $3-in /
+// $12-out audio rates). Used to size the AI-budget reservation and refusal margin.
+const GEMINI_LIVE_MICROS_PER_MS = (() => {
+  const n = Number(Deno.env.get("GEMINI_LIVE_MICROS_PER_MS"));
+  return Number.isFinite(n) && n > 0 ? n : 0.375;
 })();
+const GEMINI_LIVE_SESSION_MIN_MS = (() => {
+  const n = Number(Deno.env.get("GEMINI_LIVE_SESSION_MIN_MS"));
+  return Number.isFinite(n) && n > 0 ? n : 30_000;
+})();
+const GEMINI_LIVE_SESSION_MAX_MS = (() => {
+  const n = Number(Deno.env.get("GEMINI_LIVE_SESSION_MAX_MS"));
+  return Number.isFinite(n) && n > 0 ? n : 14 * 60 * 1000;
+})();
+// Refuse a call when the remaining budget can't cover the bridge's MINIMUM
+// session (≈ $0.011), so an answered call can always afford the min-session floor
+// and never overspends the pool.
+const AI_BUDGET_MIN_SESSION_MARGIN_MICROS = Math.ceil(
+  GEMINI_LIVE_MICROS_PER_MS * GEMINI_LIVE_SESSION_MIN_MS
+);
+// Amount to HOLD against the shared AI budget at answer time — the max a single
+// Live session could cost (env session cap × burn rate). The reserve RPC clamps
+// this to the remaining headroom, so a fresh pool holds only this (≈ $0.32) per
+// concurrent call while a near-exhausted pool holds exactly what's left.
+const AI_BUDGET_MAX_SESSION_MICROS = Math.ceil(
+  GEMINI_LIVE_MICROS_PER_MS * GEMINI_LIVE_SESSION_MAX_MS
+);
+// Reservation auto-expires (so a crashed/abandoned call frees its hold) after the
+// max session plus a grace window; the bridge settles/releases well before this.
+const AI_BUDGET_RESERVATION_TTL_SECONDS = Math.ceil(GEMINI_LIVE_SESSION_MAX_MS / 1000) + 300;
 
 function envVoiceAiStreamEnabled(): boolean {
   const v = (Deno.env.get("VOICE_AI_STREAM_ENABLED") ?? "true").trim().toLowerCase();
@@ -1024,22 +1039,57 @@ serve(async (req: Request) => {
       .eq("id", businessId)
       .maybeSingle();
     const tier = (tierRow as { tier?: string | null } | null)?.tier ?? null;
-    // Refuse when the REMAINING budget can't cover a minimum Live session, not
-    // just when the pool is fully spent: subtract the min-session margin from the
-    // cap so `overCap` trips while ~one min-session of headroom is still left.
-    // This guarantees any answered call can afford the bridge's min-session floor,
-    // so the bridge never overspends the pool (see min-session note there). Clamp
-    // to 1 so a huge margin can't invert the cap on a tiny tenant configuration.
     const tierCapMicros = capMicrosForTier(
       tier,
       AI_BUDGET_CAP_MICROS,
       AI_BUDGET_CAP_MICROS_STARTER
     );
-    const aiCap = await resolveSmsChatCap(supabase, businessId, {
-      capMicros: Math.max(1, tierCapMicros - AI_BUDGET_MIN_SESSION_MARGIN_MICROS),
-      enabled: true
-    });
-    if (aiCap.overCap) {
+
+    // Atomically RESERVE this call's max Gemini Live cost against the shared pool
+    // (concurrency-safe: the RPC serializes per business and counts other active
+    // holds), instead of a plain read that concurrent calls could each pass. The
+    // hold makes overlapping calls see reduced budget and get shorter/refused
+    // sessions; the bridge settles it to exact spend at teardown. We refuse when
+    // the pool is fully committed OR the remaining headroom can't cover one
+    // minimum session (so any answered call can afford the bridge's min-session
+    // floor and never overspends). Fails OPEN: any RPC error proceeds without a
+    // hold so a DB blip can't wrongly refuse a call.
+    let refuseAiBudget = false;
+    let effectiveCapMicros = tierCapMicros;
+    try {
+      const periodStart = await resolveChatPeriodStart(supabase, businessId);
+      const credits = await readActiveChatCreditMicros(supabase, businessId);
+      effectiveCapMicros = tierCapMicros + credits;
+      const { data: resvData, error: resvErr } = await supabase.rpc("owner_chat_ai_reserve", {
+        p_business_id: businessId,
+        p_period_start: periodStart,
+        p_call_control_id: callControlId,
+        p_reserve_micros: AI_BUDGET_MAX_SESSION_MICROS,
+        p_cap_micros: effectiveCapMicros,
+        p_ttl_seconds: AI_BUDGET_RESERVATION_TTL_SECONDS
+      });
+      if (resvErr) {
+        console.error("owner_chat_ai_reserve", resvErr);
+      } else {
+        const row = (Array.isArray(resvData) ? resvData[0] : resvData) as
+          | { ok?: boolean; remaining_micros?: number | string }
+          | null;
+        const ok = Boolean(row?.ok);
+        const remaining = Number(row?.remaining_micros ?? 0);
+        if (!ok || remaining < AI_BUDGET_MIN_SESSION_MARGIN_MICROS) {
+          refuseAiBudget = true;
+          // Free the (clamped, sub-min-session) hold we just made before refusing.
+          const { error: relResvErr } = await supabase.rpc("owner_chat_ai_release", {
+            p_call_control_id: callControlId
+          });
+          if (relResvErr) console.error("owner_chat_ai_release", relResvErr);
+        }
+      }
+    } catch (e) {
+      console.error("ai-budget reserve failed (proceeding, fail-open)", e);
+    }
+
+    if (refuseAiBudget) {
       await answerThenSpeak(apiKey, callControlId, VOICE_MSG_AI_BUDGET_EXHAUSTED);
       const { error: relErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
         p_call_control_id: callControlId
@@ -1053,7 +1103,7 @@ serve(async (req: Request) => {
       await telemetryRecord(supabase, "voice_ai_budget_exhausted", {
         business_id: businessId,
         call_control_id: callControlId,
-        effective_cap_micros: aiCap.effectiveCapMicros
+        effective_cap_micros: effectiveCapMicros
       });
       await systemLog(supabase, {
         businessId,
@@ -1097,6 +1147,11 @@ serve(async (req: Request) => {
       p_call_control_id: callControlId
     });
     if (relErr) console.error("voice_release_reservation_on_answer_fail", relErr);
+    // Free the AI-budget hold too — this call will never open the Gemini bridge.
+    const { error: relAiErr } = await supabase.rpc("owner_chat_ai_release", {
+      p_call_control_id: callControlId
+    });
+    if (relAiErr) console.error("owner_chat_ai_release", relAiErr);
     return new Response(JSON.stringify({ ok: true, path: "nonce_error" }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
@@ -1145,6 +1200,11 @@ serve(async (req: Request) => {
       p_call_control_id: callControlId
     });
     if (relAnsErr) console.error("voice_release_reservation_on_answer_fail", relAnsErr);
+    // Free the AI-budget hold too — the bridge won't attach on a failed answer.
+    const { error: relAiAnsErr } = await supabase.rpc("owner_chat_ai_release", {
+      p_call_control_id: callControlId
+    });
+    if (relAiAnsErr) console.error("owner_chat_ai_release", relAiAnsErr);
     if (Date.now() > deadline) {
       return new Response("Timeout", { status: 500 });
     }
