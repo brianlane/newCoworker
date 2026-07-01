@@ -21,6 +21,7 @@ const PREFS = {
   email_digest_weekly: true,
   email_urgent: true,
   dashboard_alerts: true,
+  sms_warm_transfer: true,
   phone_number: null,
   alert_email: null,
   digest_email_daily: null,
@@ -679,6 +680,36 @@ describe("db/notification-preferences", () => {
     await updateNotificationPreferences("biz-1", { email_digest_weekly: true });
     expect(updateChain.update).toHaveBeenCalledWith(
       expect.objectContaining({ email_digest_weekly: true, unsubscribed_at: null })
+    );
+  });
+
+  it("updateNotificationPreferences clears unsubscribed_at when re-enabling warm-transfer SMS", async () => {
+    const startingPrefs = {
+      ...PREFS,
+      sms_warm_transfer: false,
+      unsubscribed_at: "2026-05-01T00:00:00Z"
+    };
+    const selectChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: startingPrefs, error: null })
+    };
+    const updateChain = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({
+        data: { ...startingPrefs, sms_warm_transfer: true, unsubscribed_at: null },
+        error: null
+      })
+    };
+    const db = {
+      from: vi.fn().mockReturnValueOnce(selectChain).mockReturnValueOnce(updateChain)
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await updateNotificationPreferences("biz-1", { sms_warm_transfer: true });
+    expect(updateChain.update).toHaveBeenCalledWith(
+      expect.objectContaining({ sms_warm_transfer: true, unsubscribed_at: null })
     );
   });
 

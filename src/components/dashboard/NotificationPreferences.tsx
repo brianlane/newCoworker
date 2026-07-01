@@ -46,6 +46,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
   const [emailDigestWeekly, setEmailDigestWeekly] = useState(initial.email_digest_weekly);
   const [emailUrgent, setEmailUrgent] = useState(initial.email_urgent);
   const [dashboardAlerts, setDashboardAlerts] = useState(initial.dashboard_alerts);
+  const [smsWarmTransfer, setSmsWarmTransfer] = useState(initial.sms_warm_transfer);
   const [phone, setPhone] = useState(initial.phone_number ?? "");
   const [alertEmail, setAlertEmail] = useState(initial.alert_email ?? "");
   const [digestEmailDaily, setDigestEmailDaily] = useState(initial.digest_email_daily ?? "");
@@ -62,6 +63,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
     setEmailDigestWeekly(initial.email_digest_weekly);
     setEmailUrgent(initial.email_urgent);
     setDashboardAlerts(initial.dashboard_alerts);
+    setSmsWarmTransfer(initial.sms_warm_transfer);
     setPhone(initial.phone_number ?? "");
     setAlertEmail(initial.alert_email ?? "");
     setDigestEmailDaily(initial.digest_email_daily ?? "");
@@ -75,6 +77,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
     setEmailDigestWeekly(prefs.email_digest_weekly);
     setEmailUrgent(prefs.email_urgent);
     setDashboardAlerts(prefs.dashboard_alerts);
+    setSmsWarmTransfer(prefs.sms_warm_transfer);
     setPhone(prefs.phone_number ?? "");
     setAlertEmail(prefs.alert_email ?? "");
     setDigestEmailDaily(prefs.digest_email_daily ?? "");
@@ -96,6 +99,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           email_digest_weekly: emailDigestWeekly,
           email_urgent: emailUrgent,
           dashboard_alerts: dashboardAlerts,
+          sms_warm_transfer: smsWarmTransfer,
           phone_number: phone.trim() || null,
           alert_email: alertEmail.trim() || "",
           digest_email_daily: digestEmailDaily.trim() || "",
@@ -131,6 +135,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           email_digest_weekly: false,
           email_urgent: false,
           dashboard_alerts: false,
+          sms_warm_transfer: false,
           unsubscribed_at: "now"
         })
       });
@@ -196,6 +201,13 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           description="Show notifications inside this dashboard."
           checked={dashboardAlerts}
           onChange={setDashboardAlerts}
+          disabled={loading || unsubscribing}
+        />
+        <ToggleRow
+          label="Warm transfer SMS"
+          description="Text the recipient (and you) when a call is warm-transferred to a person."
+          checked={smsWarmTransfer}
+          onChange={setSmsWarmTransfer}
           disabled={loading || unsubscribing}
         />
       </div>
