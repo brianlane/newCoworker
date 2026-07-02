@@ -27,13 +27,40 @@ import { loadEnv, makeHostingerClient, resolveVpsIp } from "./_shared.ts";
 import { buildPrompt, QUESTION, EXPECTED_ANSWERS } from "./bench-prompts.ts";
 
 loadEnv();
-const positional = process.argv.slice(2).filter(
-  (a, i, all) => !a.startsWith("--") && all[i - 1] !== "--model" && all[i - 1] !== "--num-ctx"
-);
-const BUSINESS_ID = positional[0] ?? "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
+// Strict argv parse: unknown flags are fatal (a typo like --modell must not
+// silently fall through), and a flagged invocation requires an explicit
+// business id — flags mean "non-default tier config", and defaulting that to
+// Amy's production box would SSH-bench the wrong VPS for many minutes.
+const args = process.argv.slice(2);
+const KNOWN_VALUE_FLAGS = new Set(["--model", "--num-ctx"]);
+const positional: string[] = [];
+for (let i = 0; i < args.length; i++) {
+  const a = args[i];
+  if (a.startsWith("--")) {
+    if (!KNOWN_VALUE_FLAGS.has(a)) {
+      console.error(`unknown flag ${a} (known: ${[...KNOWN_VALUE_FLAGS].join(", ")})`);
+      process.exit(1);
+    }
+    i++;
+  } else {
+    positional.push(a);
+  }
+}
+if (positional.length > 1) {
+  console.error(`expected at most one positional business id, got: ${positional.join(", ")}`);
+  process.exit(1);
+}
+const DEFAULT_BUSINESS_ID = "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3"; // Amy (KVM8 baseline)
+if (positional.length === 0 && args.length > 0) {
+  console.error(
+    "pass the business id explicitly when using flags, e.g. tsx debug/bench-local.ts <cloneId> --model llama3.2:3b --num-ctx 4096"
+  );
+  process.exit(1);
+}
+const BUSINESS_ID = positional[0] ?? DEFAULT_BUSINESS_ID;
 const flagValue = (flag: string): string | null => {
-  const i = process.argv.indexOf(flag);
-  return i > -1 ? (process.argv[i + 1] ?? null) : null;
+  const i = args.indexOf(flag);
+  return i > -1 ? (args[i + 1] ?? null) : null;
 };
 const MODEL = flagValue("--model") ?? "qwen3:4b-instruct";
 const NUM_CTX = Number(flagValue("--num-ctx") ?? 16384);
