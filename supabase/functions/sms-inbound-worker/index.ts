@@ -542,9 +542,11 @@ serve(async (req: Request) => {
             (fwd?.telnyx_sms_from_e164 ?? "").trim() ||
             (Deno.env.get("TELNYX_SMS_FROM_E164") ?? "");
           if (apiKey && fwdProfile && ownerCell) {
-            // Prompt row FIRST so a crash after the send can never leave the
-            // owner replying into the void. Idempotent on inbound_job_id (a
-            // worker retry re-hits the unique index → duplicate is fine).
+            // Prompt row FIRST, and the send is GATED on it existing: an
+            // owner prompted without a prompt row would reply into the void —
+            // or worse, the webhook would attach their text to a DIFFERENT
+            // customer's newest pending prompt. Idempotent on inbound_job_id
+            // (a worker retry re-hits the unique index → duplicate is fine).
             const { error: promptErr } = await supabase
               .from("sms_owner_reply_prompts")
               .insert({
@@ -553,47 +555,72 @@ serve(async (req: Request) => {
                 inbound_job_id: job.id,
                 inbound_text: userText.slice(0, 1000)
               });
-            if (promptErr && (promptErr as { code?: string }).code !== "23505") {
+            const promptFailed =
+              Boolean(promptErr) && (promptErr as { code?: string }).code !== "23505";
+            if (promptFailed) {
               console.error("sms_owner_reply_prompts insert", promptErr);
-            }
-            const customerLabel =
-              (contactRow as { display_name?: string | null } | null)?.display_name?.trim() ||
-              fromE164;
-            const send = await telnyxSendSms({
-              apiKey,
-              messagingProfileId: fwdProfile,
-              fromE164: fwdFrom,
-              toE164: ownerCell,
-              text: buildOwnerReplyPromptSms({ customerLabel, inboundText: userText }),
-              // Keyed on the job so worker retries never double-text the owner.
-              idempotencyKey: `${job.id}:owner-reply-prompt`
-            });
-            if (!send.ok) {
-              console.error("contact forward_owner send", send.status, send.body.slice(0, 300));
-              // Transient send failure: bounded retry like the Safe-Mode
-              // forward path, so the owner doesn't silently miss the message.
+              // Transient DB failure: bounded retry WITHOUT texting the owner.
               if (job.attempt_count < MAX_ATTEMPTS) {
                 await supabase
                   .from("sms_inbound_jobs")
                   .update({
                     status: "pending",
                     processing_started_at: null,
-                    last_error: `contact_forward_owner:telnyx_${send.status}`.slice(0, 2000),
+                    last_error: "contact_forward_owner:prompt_insert_failed",
                     updated_at: new Date().toISOString()
                   })
                   .eq("id", job.id);
                 await telemetryRecord(supabase, "sms_worker_contact_forward_retry", {
                   job_id: job.id,
                   business_id: job.business_id,
-                  status: send.status
+                  stage: "prompt_insert"
                 });
                 processed += 1;
                 continue;
               }
               // Out of retry budget: fall through and close the job out as
-              // suppressed — still no default reply.
+              // suppressed — no owner SMS without a routable prompt.
             } else {
-              forwarded = true;
+              const customerLabel =
+                (contactRow as { display_name?: string | null } | null)?.display_name?.trim() ||
+                fromE164;
+              const send = await telnyxSendSms({
+                apiKey,
+                messagingProfileId: fwdProfile,
+                fromE164: fwdFrom,
+                toE164: ownerCell,
+                text: buildOwnerReplyPromptSms({ customerLabel, inboundText: userText }),
+                // Keyed on the job so worker retries never double-text the owner.
+                idempotencyKey: `${job.id}:owner-reply-prompt`
+              });
+              if (!send.ok) {
+                console.error("contact forward_owner send", send.status, send.body.slice(0, 300));
+                // Transient send failure: bounded retry like the Safe-Mode
+                // forward path, so the owner doesn't silently miss the message.
+                if (job.attempt_count < MAX_ATTEMPTS) {
+                  await supabase
+                    .from("sms_inbound_jobs")
+                    .update({
+                      status: "pending",
+                      processing_started_at: null,
+                      last_error: `contact_forward_owner:telnyx_${send.status}`.slice(0, 2000),
+                      updated_at: new Date().toISOString()
+                    })
+                    .eq("id", job.id);
+                  await telemetryRecord(supabase, "sms_worker_contact_forward_retry", {
+                    job_id: job.id,
+                    business_id: job.business_id,
+                    stage: "telnyx_send",
+                    status: send.status
+                  });
+                  processed += 1;
+                  continue;
+                }
+                // Out of retry budget: fall through and close the job out as
+                // suppressed — still no default reply.
+              } else {
+                forwarded = true;
+              }
             }
           } else {
             await systemLog(supabase, {

@@ -1641,7 +1641,14 @@ serve(async (req: Request) => {
       // phone — the same set `resolveContactNames` labels as "owner" on the
       // dashboard, so gate behavior and labeling can't disagree. The gate's
       // owner-forward is a no-op when sender === forward number.
-      if (!teamMember) {
+      //
+      // This check runs even when the roster matched: owner > employee, same
+      // precedence `resolveContactNames` applies. An owner whose cell is also
+      // on the ai_flow_team_members roster must still be classified "owner" —
+      // it drives the worker persona AND the forward_owner reply relay below
+      // (a roster-shadowed owner could otherwise never answer a "what would
+      // you like me to say?" prompt).
+      {
         const [fwdRes, prefsRes] = await Promise.all([
           supabase
             .from("business_telnyx_settings")
@@ -1669,7 +1676,11 @@ serve(async (req: Request) => {
           biz?.phone
         ].map((n) => normalizeE164(n ?? ""));
         if (ownerNumbers.some((n) => n && from === n)) {
-          teamMember = { name: biz?.owner_name?.trim() || "Owner" };
+          // Keep the roster name when it exists (it's usually more specific
+          // than the generic owner_name), but the KIND is owner.
+          teamMember = {
+            name: teamMember?.name?.trim() || biz?.owner_name?.trim() || "Owner"
+          };
           teamMemberKind = "owner";
         }
       }
