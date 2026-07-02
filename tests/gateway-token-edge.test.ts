@@ -98,4 +98,19 @@ describe("resolveRowboatBearerForBusiness", () => {
     const db = stubClient({ data: null, error: null });
     await expect(resolveRowboatBearerForBusiness(db, BIZ)).resolves.toBe("");
   });
+
+  it("reads the env fallback via the Deno global when present (edge runtime)", async () => {
+    // Under Vitest there is no `Deno`, so the resolver's edge-runtime branch
+    // needs an explicit stub. process.env is left unset to prove the value
+    // came from the Deno lookup, not the Node fallback.
+    (globalThis as { Deno?: unknown }).Deno = {
+      env: { get: (name: string) => (name === "ROWBOAT_GATEWAY_TOKEN" ? "deno-shared" : undefined) }
+    };
+    try {
+      const db = stubClient({ data: null, error: null });
+      await expect(resolveRowboatBearerForBusiness(db, BIZ)).resolves.toBe("deno-shared");
+    } finally {
+      delete (globalThis as { Deno?: unknown }).Deno;
+    }
+  });
 });

@@ -43,7 +43,10 @@ type TokenSupabase = {
               opts: { ascending: boolean }
             ): {
               limit(n: number): {
-                maybeSingle(): Promise<{ data: unknown; error: { message: string } | null }>;
+                // PromiseLike (not Promise) so supabase-js's thenable
+                // PostgrestBuilder satisfies the interface structurally
+                // (same approach as _shared/ai_flows/compliance.ts).
+                maybeSingle(): PromiseLike<{ data: unknown; error: { message: string } | null }>;
               };
             };
           };
