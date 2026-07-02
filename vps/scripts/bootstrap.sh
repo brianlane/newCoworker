@@ -133,7 +133,15 @@ log "System hardening complete."
 # ------------------------------------------------------------------
 if [[ "$TIER" == "starter" ]]; then
   log "Configuring ZRAM (mandatory for KVM 2 8GB RAM)..."
-  modprobe zram
+  # Hostinger's Ubuntu-Docker template ships a minimal kernel package set:
+  # the zram module lives in linux-modules-extra, which is NOT installed.
+  # Without this, `modprobe zram` FATALs and (under `set -euo pipefail`)
+  # kills the whole bootstrap before Docker/Ollama/Rowboat ever install.
+  if ! modprobe zram 2>/dev/null; then
+    log "zram module missing — installing linux-modules-extra-$(uname -r)..."
+    apt-get "${APT_LOCK_OPTS[@]}" install -y -qq "linux-modules-extra-$(uname -r)"
+    modprobe zram
+  fi
   echo lz4 > /sys/block/zram0/comp_algorithm
   echo 4G > /sys/block/zram0/disksize
   mkswap /dev/zram0
