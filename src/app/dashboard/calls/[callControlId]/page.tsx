@@ -24,6 +24,7 @@ import {
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { ContactNameEditor } from "@/components/dashboard/ContactNameEditor";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
+import { getCustomerMemory } from "@/lib/customer-memory/db";
 
 export const dynamic = "force-dynamic";
 
@@ -74,6 +75,12 @@ export default async function CallTranscriptPage({
         )
       ).get(callerE164)
     : undefined;
+  // Link the caller through to their contact profile when one exists
+  // (alias-aware; the profile page 404s on numbers without a contacts row,
+  // so only link when there is somewhere to land).
+  const memory = callerE164
+    ? await getCustomerMemory(business.id, callerE164, db).catch(() => null)
+    : null;
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -87,9 +94,18 @@ export default async function CallTranscriptPage({
         <h1 className="text-2xl font-bold text-parchment mt-2">Call transcript</h1>
         <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-parchment/60">
           <CallDirectionBadge direction={transcript.direction} />
-          <span className="font-semibold text-parchment">
-            {contact?.name ?? callerLabel(transcript.caller_e164)}
-          </span>
+          {memory ? (
+            <Link
+              href={`/dashboard/customers/${encodeURIComponent(memory.customer_e164)}`}
+              className="font-semibold text-parchment underline decoration-parchment/30 underline-offset-2 hover:text-claw-green transition-colors"
+            >
+              {contact?.name ?? callerLabel(transcript.caller_e164)}
+            </Link>
+          ) : (
+            <span className="font-semibold text-parchment">
+              {contact?.name ?? callerLabel(transcript.caller_e164)}
+            </span>
+          )}
           {contact?.kind === "employee" && (
             <span className="text-[10px] uppercase tracking-wide text-amber-300/80 bg-amber-300/10 rounded px-1.5 py-0.5">
               employee

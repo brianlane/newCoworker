@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Card } from "@/components/ui/Card";
+import { extractEmailAddress } from "@/lib/email/address";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { EmailComposer, type FromOption } from "@/components/dashboard/EmailComposer";
 import type { EmailLogRow, EmailLogSource } from "@/lib/db/email-log";
@@ -68,6 +70,9 @@ function DirectionBadge({ direction }: { direction: EmailLogRow["direction"] }) 
   );
 }
 
+/** Address → contact-profile link map (lowercase address keys), built server-side. */
+type EmailContacts = Record<string, { customerE164: string; displayName: string | null }>;
+
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex gap-3 py-1.5 border-b border-parchment/5 last:border-0">
@@ -75,6 +80,61 @@ function DetailRow({ label, value }: { label: string; value: string }) {
         {label}
       </span>
       <span className="text-sm text-parchment break-all">{value}</span>
+    </div>
+  );
+}
+
+/**
+ * From/To/Cc row: splits comma-separated recipient lists and links each
+ * address that belongs to a known contact through to their profile page.
+ * (Splitting on comma can separate the name half of a quoted
+ * `"Last, First" <addr>` — that segment renders as plain text while the
+ * `<addr>` half still resolves and links.)
+ */
+function RecipientsRow({
+  label,
+  value,
+  emailContacts
+}: {
+  label: string;
+  value: string | null;
+  emailContacts: EmailContacts;
+}) {
+  const parts = (value ?? "")
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  return (
+    <div className="flex gap-3 py-1.5 border-b border-parchment/5 last:border-0">
+      <span className="w-20 shrink-0 text-[11px] uppercase tracking-wide text-parchment/40">
+        {label}
+      </span>
+      <span className="text-sm text-parchment break-all">
+        {parts.length === 0
+          ? "—"
+          : parts.map((part, i) => {
+              const addr = extractEmailAddress(part);
+              const contact = addr ? emailContacts[addr] : undefined;
+              return (
+                <span key={`${part}-${i}`}>
+                  {i > 0 ? ", " : ""}
+                  {contact ? (
+                    <Link
+                      href={`/dashboard/customers/${encodeURIComponent(contact.customerE164)}`}
+                      className="underline decoration-parchment/30 underline-offset-2 hover:text-claw-green transition-colors"
+                    >
+                      {part}
+                      {contact.displayName ? (
+                        <span className="text-parchment/60"> · {contact.displayName}</span>
+                      ) : null}
+                    </Link>
+                  ) : (
+                    part
+                  )}
+                </span>
+              );
+            })}
+      </span>
     </div>
   );
 }
@@ -108,12 +168,14 @@ function ReadingPane({
   row,
   businessId,
   canReply,
+  emailContacts,
   onClose,
   onReply
 }: {
   row: EmailLogRow;
   businessId: string;
   canReply: boolean;
+  emailContacts: EmailContacts;
   onClose: () => void;
   onReply: () => void;
 }) {
@@ -189,9 +251,11 @@ function ReadingPane({
       </h2>
 
       <div className="mb-4">
-        <DetailRow label="From" value={row.from_email ?? "—"} />
-        <DetailRow label="To" value={row.to_email ?? "—"} />
-        {row.cc_email && <DetailRow label="Cc" value={row.cc_email} />}
+        <RecipientsRow label="From" value={row.from_email} emailContacts={emailContacts} />
+        <RecipientsRow label="To" value={row.to_email} emailContacts={emailContacts} />
+        {row.cc_email && (
+          <RecipientsRow label="Cc" value={row.cc_email} emailContacts={emailContacts} />
+        )}
         {row.bcc_email && <DetailRow label="Bcc" value={row.bcc_email} />}
         <div className="flex gap-3 py-1.5">
           <span className="w-20 shrink-0 text-[11px] uppercase tracking-wide text-parchment/40">
@@ -325,12 +389,15 @@ function replyFromId(row: EmailLogRow | undefined, fromOptions: FromOption[]): s
 export function EmailsList({
   rows,
   businessId,
-  fromOptions = []
+  fromOptions = [],
+  emailContacts = {}
 }: {
   rows: EmailLogRow[];
   businessId: string;
   /** Sender options for the composer's "From" picker (coworker mailbox first). */
   fromOptions?: FromOption[];
+  /** Lowercase address → contact profile link (built server-side). */
+  emailContacts?: EmailContacts;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [composer, setComposer] = useState<ComposerState | null>(null);
@@ -521,6 +588,7 @@ export function EmailsList({
             row={selected}
             businessId={businessId}
             canReply={!composer}
+            emailContacts={emailContacts}
             onClose={() => setSelectedId(null)}
             onReply={() =>
               setComposer({
