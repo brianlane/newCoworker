@@ -28,6 +28,11 @@ import {
   sharedEnvRowboatBearer
 } from "../_shared/gateway_token.ts";
 import { buildCustomerPreambleForEdge, type EdgeCustomerMemoryRow } from "../_shared/customer_memory_preamble.ts";
+import { telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
+import {
+  buildOwnerReplyPromptSms,
+  resolveSmsReplyMode
+} from "../_shared/contact_reply_mode.ts";
 import { currentDateTimeLine } from "../_shared/datetime_line.ts";
 import {
   pickSmsTurn,
@@ -490,6 +495,154 @@ serve(async (req: Request) => {
       });
       processed += 1;
       continue;
+    }
+
+    // Per-contact reply mode (contacts.sms_reply_mode). Runs AFTER the AiFlow
+    // suppress_reply branch so an AiFlow that owns the reply is untouched, and
+    // only for customer jobs (staff texting keeps the internal assistant).
+    //   suppress      → no default Coworker reply; the inbound is still logged
+    //                   and still bumps the contact's interaction counters.
+    //   forward_owner → additionally forward the text to the owner's cell with
+    //                   "What would you like me to say?" and record a pending
+    //                   prompt so the owner's reply is relayed to the customer
+    //                   (telnyx-sms-inbound resolves it). Missing forward
+    //                   config degrades to plain suppress — never a default
+    //                   reply the owner asked us not to send.
+    if (!job.staff_kind) {
+      const { data: contactRow } = await supabase
+        .from("contacts")
+        .select("display_name, sms_reply_mode")
+        .eq("business_id", job.business_id)
+        .or(`customer_e164.eq.${fromE164},alias_e164s.cs.{${fromE164}}`)
+        .maybeSingle();
+      const replyMode = resolveSmsReplyMode(
+        (contactRow as { sms_reply_mode?: unknown } | null)?.sms_reply_mode
+      );
+      if (replyMode !== "auto") {
+        let forwarded = false;
+        if (replyMode === "forward_owner") {
+          const apiKey = Deno.env.get("TELNYX_API_KEY") ?? "";
+          const { data: fwdRow } = await supabase
+            .from("business_telnyx_settings")
+            .select("forward_to_e164, telnyx_messaging_profile_id, telnyx_sms_from_e164")
+            .eq("business_id", job.business_id)
+            .maybeSingle();
+          const fwd = fwdRow as
+            | {
+                forward_to_e164?: string | null;
+                telnyx_messaging_profile_id?: string | null;
+                telnyx_sms_from_e164?: string | null;
+              }
+            | null;
+          const ownerCell = normalizeE164(fwd?.forward_to_e164 ?? "");
+          const fwdProfile =
+            (fwd?.telnyx_messaging_profile_id ?? "").trim() ||
+            (Deno.env.get("TELNYX_MESSAGING_PROFILE_ID") ?? "");
+          const fwdFrom =
+            (fwd?.telnyx_sms_from_e164 ?? "").trim() ||
+            (Deno.env.get("TELNYX_SMS_FROM_E164") ?? "");
+          if (apiKey && fwdProfile && ownerCell) {
+            // Prompt row FIRST so a crash after the send can never leave the
+            // owner replying into the void. Idempotent on inbound_job_id (a
+            // worker retry re-hits the unique index → duplicate is fine).
+            const { error: promptErr } = await supabase
+              .from("sms_owner_reply_prompts")
+              .insert({
+                business_id: job.business_id,
+                customer_e164: fromE164,
+                inbound_job_id: job.id,
+                inbound_text: userText.slice(0, 1000)
+              });
+            if (promptErr && (promptErr as { code?: string }).code !== "23505") {
+              console.error("sms_owner_reply_prompts insert", promptErr);
+            }
+            const customerLabel =
+              (contactRow as { display_name?: string | null } | null)?.display_name?.trim() ||
+              fromE164;
+            const send = await telnyxSendSms({
+              apiKey,
+              messagingProfileId: fwdProfile,
+              fromE164: fwdFrom,
+              toE164: ownerCell,
+              text: buildOwnerReplyPromptSms({ customerLabel, inboundText: userText }),
+              // Keyed on the job so worker retries never double-text the owner.
+              idempotencyKey: `${job.id}:owner-reply-prompt`
+            });
+            if (!send.ok) {
+              console.error("contact forward_owner send", send.status, send.body.slice(0, 300));
+              // Transient send failure: bounded retry like the Safe-Mode
+              // forward path, so the owner doesn't silently miss the message.
+              if (job.attempt_count < MAX_ATTEMPTS) {
+                await supabase
+                  .from("sms_inbound_jobs")
+                  .update({
+                    status: "pending",
+                    processing_started_at: null,
+                    last_error: `contact_forward_owner:telnyx_${send.status}`.slice(0, 2000),
+                    updated_at: new Date().toISOString()
+                  })
+                  .eq("id", job.id);
+                await telemetryRecord(supabase, "sms_worker_contact_forward_retry", {
+                  job_id: job.id,
+                  business_id: job.business_id,
+                  status: send.status
+                });
+                processed += 1;
+                continue;
+              }
+              // Out of retry budget: fall through and close the job out as
+              // suppressed — still no default reply.
+            } else {
+              forwarded = true;
+            }
+          } else {
+            await systemLog(supabase, {
+              businessId: job.business_id,
+              source: "sms_worker",
+              level: "warn",
+              event: "sms_contact_forward_unconfigured",
+              message:
+                "Contact is set to forward-to-owner but no forwarding number / Telnyx env is configured; suppressing only",
+              payload: { job_id: job.id }
+            });
+          }
+        }
+        await supabase.rpc("complete_sms_inbound_job", {
+          p_job_id: job.id,
+          p_status: "done",
+          p_telnyx_outbound_message_id: null,
+          p_rowboat_conversation_id: null,
+          p_last_error: forwarded ? "contact_forward_owner" : "suppressed_by_contact"
+        });
+        await clearJobReplyCache(supabase, job.id);
+        // Same bookkeeping as the AiFlow-suppressed branch: the inbound is a
+        // real customer message, so stamp the sender and bump the counters.
+        const { error: stampErr } = await supabase
+          .from("sms_inbound_jobs")
+          .update({ customer_e164: fromE164 })
+          .eq("id", job.id)
+          .is("customer_e164", null);
+        if (stampErr) {
+          console.error("contact mode customer_e164 stamp", stampErr);
+        }
+        const { error: memErr } = await supabase.rpc("record_customer_interaction", {
+          p_business_id: job.business_id,
+          p_customer_e164: fromE164,
+          p_channel: "sms",
+          p_display_name: null
+        });
+        if (memErr) {
+          console.error("record_customer_interaction (contact mode sms)", memErr);
+        }
+        await telemetryRecord(supabase, "sms_worker_contact_reply_mode", {
+          job_id: job.id,
+          business_id: job.business_id,
+          mode: replyMode,
+          forwarded
+        });
+        processed += 1;
+        continue;
+      }
     }
 
     const { data: cfg } = await supabase

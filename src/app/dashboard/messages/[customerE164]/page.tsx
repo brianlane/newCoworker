@@ -13,7 +13,9 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { ChatMarkdown } from "@/components/ui/ChatMarkdown";
 import { listMessagesForCustomer } from "@/lib/db/sms-history";
+import { getCustomerMemory } from "@/lib/customer-memory/db";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
+import { ContactReplyModeToggle } from "@/components/dashboard/ContactReplyModeToggle";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { ContactNameEditor } from "@/components/dashboard/ContactNameEditor";
 import { SmsThreadComposer } from "@/components/dashboard/SmsThreadComposer";
@@ -66,6 +68,9 @@ export default async function SmsThreadPage({
     limit: 100
   });
   if (messages.length === 0) notFound();
+  // Reply-mode toggle state: tolerate a missing profile (numbers with thread
+  // history but no contact row default to 'auto'; the PATCH creates the row).
+  const memory = await getCustomerMemory(business.id, customerE164).catch(() => null);
   const contact = (
     await resolveContactNames(business.id, [customerE164]).catch(
       () => new Map<string, ContactName>()
@@ -186,6 +191,16 @@ export default async function SmsThreadPage({
       <Card padding="md">
         <SmsThreadComposer businessId={business.id} toE164={customerE164} />
       </Card>
+
+      {/* Staff numbers are handled by the Staff texting settings, not the
+          per-contact gate (the worker skips staff jobs), so hide the toggle. */}
+      {contact?.kind !== "owner" && contact?.kind !== "employee" && (
+        <ContactReplyModeToggle
+          businessId={business.id}
+          customerE164={memory?.customer_e164 ?? customerE164}
+          initialMode={memory?.sms_reply_mode ?? "auto"}
+        />
+      )}
     </div>
   );
 }

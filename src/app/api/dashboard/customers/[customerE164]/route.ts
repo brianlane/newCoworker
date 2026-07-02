@@ -27,9 +27,10 @@ import {
   deleteCustomerMemory,
   getCustomerMemory,
   listSmsHistoryForCustomer,
+  setContactSmsReplyMode,
   updateCustomerOwnerFields
 } from "@/lib/customer-memory/db";
-import { CONTACT_TYPES } from "@/lib/customer-memory/types";
+import { CONTACT_TYPES, SMS_REPLY_MODES } from "@/lib/customer-memory/types";
 
 export const dynamic = "force-dynamic";
 
@@ -51,15 +52,17 @@ const patchBodySchema = z
     displayName: z.string().trim().max(120).nullable().optional(),
     pinnedMd: z.string().trim().max(2000).nullable().optional(),
     email: z.string().trim().email("Enter a valid email").max(254).nullable().optional(),
-    type: z.enum(CONTACT_TYPES).optional()
+    type: z.enum(CONTACT_TYPES).optional(),
+    smsReplyMode: z.enum(SMS_REPLY_MODES).optional()
   })
   .refine(
     (b) =>
       b.displayName !== undefined ||
       b.pinnedMd !== undefined ||
       b.email !== undefined ||
-      b.type !== undefined,
-    { message: "Provide at least one of displayName, pinnedMd, email, type" }
+      b.type !== undefined ||
+      b.smsReplyMode !== undefined,
+    { message: "Provide at least one of displayName, pinnedMd, email, type, smsReplyMode" }
   );
 
 async function decodePathParam(raw: string): Promise<string> {
@@ -105,6 +108,7 @@ export async function GET(
       memory: {
         customerE164: memory.customer_e164,
         type: memory.type,
+        smsReplyMode: memory.sms_reply_mode,
         displayName: memory.display_name,
         email: memory.email,
         summaryMd: memory.summary_md,
@@ -153,8 +157,21 @@ export async function PATCH(
     // Make sure the row exists before letting the owner edit it. The
     // alternative (silent update of zero rows) would let the UI think
     // a save succeeded after the row was deleted from another tab.
+    // EXCEPTION: a reply-mode-only patch may target a number that has SMS
+    // history but no contact row yet (the thread page offers the toggle for
+    // any thread) — setContactSmsReplyMode creates the minimal row.
     const existing = await getCustomerMemory(businessId, customerE164);
-    if (!existing) return errorResponse("NOT_FOUND", "Customer not found");
+    if (!existing) {
+      const onlyReplyMode =
+        body.smsReplyMode !== undefined &&
+        body.displayName === undefined &&
+        body.pinnedMd === undefined &&
+        body.email === undefined &&
+        body.type === undefined;
+      if (!onlyReplyMode) return errorResponse("NOT_FOUND", "Customer not found");
+      await setContactSmsReplyMode(businessId, customerE164, body.smsReplyMode!);
+      return successResponse({ ok: true });
+    }
 
     await updateCustomerOwnerFields(businessId, customerE164, {
       // A non-empty name the owner types is a deliberate label → 'manual' (wins
@@ -170,7 +187,8 @@ export async function PATCH(
         : {}),
       ...(body.pinnedMd !== undefined ? { pinnedMd: body.pinnedMd } : {}),
       ...(body.email !== undefined ? { email: body.email } : {}),
-      ...(body.type !== undefined ? { type: body.type } : {})
+      ...(body.type !== undefined ? { type: body.type } : {}),
+      ...(body.smsReplyMode !== undefined ? { smsReplyMode: body.smsReplyMode } : {})
     });
 
     return successResponse({ ok: true });

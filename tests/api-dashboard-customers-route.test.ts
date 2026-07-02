@@ -10,6 +10,7 @@ vi.mock("@/lib/customer-memory/db", () => ({
   getCustomerMemory: vi.fn(),
   listSmsHistoryForCustomer: vi.fn(),
   updateCustomerOwnerFields: vi.fn(),
+  setContactSmsReplyMode: vi.fn(),
   deleteCustomerMemory: vi.fn(),
   DEFAULT_LIST_LIMIT: 50,
   MAX_LIST_LIMIT: 200
@@ -31,6 +32,7 @@ import {
   getCustomerMemory,
   listCustomerMemories,
   listSmsHistoryForCustomer,
+  setContactSmsReplyMode,
   updateCustomerOwnerFields
 } from "@/lib/customer-memory/db";
 import { rateLimit } from "@/lib/rate-limit";
@@ -281,6 +283,59 @@ describe("PATCH /api/dashboard/customers/:e164", () => {
       displayName: null,
       nameSource: "auto"
     });
+  });
+
+  it("forwards smsReplyMode edits for an existing contact", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ userId: "u", email: "o@o.com", isAdmin: true });
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce({
+      id: "x",
+      business_id: BIZ,
+      customer_e164: CUSTOMER
+    } as never);
+    const res = await DETAIL_PATCH(
+      patchReq({ smsReplyMode: "suppress" }),
+      params(encodeURIComponent(CUSTOMER))
+    );
+    expect(res.status).toBe(200);
+    expect(updateCustomerOwnerFields).toHaveBeenCalledWith(BIZ, CUSTOMER, {
+      smsReplyMode: "suppress"
+    });
+    expect(setContactSmsReplyMode).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown smsReplyMode value (400)", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ userId: "u", email: "o@o.com", isAdmin: true });
+    const res = await DETAIL_PATCH(
+      patchReq({ smsReplyMode: "off" }),
+      params(encodeURIComponent(CUSTOMER))
+    );
+    expect(res.status).toBe(400);
+    expect(updateCustomerOwnerFields).not.toHaveBeenCalled();
+    expect(setContactSmsReplyMode).not.toHaveBeenCalled();
+  });
+
+  it("creates a minimal contact row on a reply-mode-ONLY patch when none exists (thread page toggle for history-only numbers)", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ userId: "u", email: "o@o.com", isAdmin: true });
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce(null);
+    const res = await DETAIL_PATCH(
+      patchReq({ smsReplyMode: "forward_owner" }),
+      params(encodeURIComponent(CUSTOMER))
+    );
+    expect(res.status).toBe(200);
+    expect(setContactSmsReplyMode).toHaveBeenCalledWith(BIZ, CUSTOMER, "forward_owner");
+    expect(updateCustomerOwnerFields).not.toHaveBeenCalled();
+  });
+
+  it("still 404s when the row is missing and the patch includes OTHER fields alongside smsReplyMode", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ userId: "u", email: "o@o.com", isAdmin: true });
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce(null);
+    const res = await DETAIL_PATCH(
+      patchReq({ smsReplyMode: "suppress", displayName: "Bot" }),
+      params(encodeURIComponent(CUSTOMER))
+    );
+    expect(res.status).toBe(404);
+    expect(setContactSmsReplyMode).not.toHaveBeenCalled();
+    expect(updateCustomerOwnerFields).not.toHaveBeenCalled();
   });
 });
 

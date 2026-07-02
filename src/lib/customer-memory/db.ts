@@ -14,13 +14,14 @@ import type {
   ContactNameSource,
   ContactType,
   CustomerMemoryChannel,
-  CustomerMemoryRow
+  CustomerMemoryRow,
+  SmsReplyMode
 } from "./types";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 const ALL_COLUMNS =
-  "id,business_id,customer_e164,type,name_source,display_name,email,summary_md,pinned_md," +
+  "id,business_id,customer_e164,type,name_source,sms_reply_mode,display_name,email,summary_md,pinned_md," +
   "interaction_count,total_interaction_count,last_interaction_at," +
   "last_summarized_at,last_channel,alias_e164s,created_at,updated_at";
 
@@ -367,6 +368,8 @@ export type CustomerOwnerEdit = {
   email?: string | null;
   /** Re-classify the contact (customer/tester/service/other/...). */
   type?: ContactType;
+  /** Default-reply behavior for this contact's inbound SMS. */
+  smsReplyMode?: SmsReplyMode;
   /**
    * Provenance to stamp on display_name. The dashboard owner-edit passes
    * 'manual' (the name should stick over the owner/employee overlay); the
@@ -390,7 +393,10 @@ export async function updateCustomerOwnerFields(
     ...("nameSource" in edit && edit.nameSource ? { name_source: edit.nameSource } : {}),
     ...("pinnedMd" in edit ? { pinned_md: edit.pinnedMd } : {}),
     ...("email" in edit ? { email: edit.email } : {}),
-    ...("type" in edit && edit.type ? { type: edit.type } : {})
+    ...("type" in edit && edit.type ? { type: edit.type } : {}),
+    ...("smsReplyMode" in edit && edit.smsReplyMode
+      ? { sms_reply_mode: edit.smsReplyMode }
+      : {})
   };
   const { error } = await db
     .from("contacts")
@@ -398,6 +404,47 @@ export async function updateCustomerOwnerFields(
     .eq("business_id", businessId)
     .eq("customer_e164", customerE164);
   if (error) throw new Error(`updateCustomerOwnerFields: ${error.message}`);
+}
+
+/**
+ * Set a contact's SMS reply mode, creating a minimal contact row when none
+ * exists yet. The SMS-thread page offers the toggle for any number with
+ * message history — including senders that never got an auto-created profile
+ * (e.g. AiFlow-suppressed lead sources) — so this must not 404 on a missing
+ * row. Alias-aware on the update path, mirroring getCustomerMemory.
+ */
+export async function setContactSmsReplyMode(
+  businessId: string,
+  customerE164: string,
+  mode: SmsReplyMode,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data: updated, error: updErr } = await db
+    .from("contacts")
+    .update({ sms_reply_mode: mode, updated_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .or(`customer_e164.eq.${customerE164},alias_e164s.cs.{${customerE164}}`)
+    .select("id");
+  if (updErr) throw new Error(`setContactSmsReplyMode: ${updErr.message}`);
+  if ((updated ?? []).length > 0) return;
+  const { error: insErr } = await db.from("contacts").insert({
+    business_id: businessId,
+    customer_e164: customerE164,
+    sms_reply_mode: mode
+  });
+  if (insErr && insErr.code !== PG_UNIQUE_VIOLATION) {
+    throw new Error(`setContactSmsReplyMode: ${insErr.message}`);
+  }
+  if (insErr) {
+    // Raced by a concurrent profile create — apply the mode to the winner.
+    const { error: raceErr } = await db
+      .from("contacts")
+      .update({ sms_reply_mode: mode, updated_at: new Date().toISOString() })
+      .eq("business_id", businessId)
+      .or(`customer_e164.eq.${customerE164},alias_e164s.cs.{${customerE164}}`);
+    if (raceErr) throw new Error(`setContactSmsReplyMode: ${raceErr.message}`);
+  }
 }
 
 export async function deleteCustomerMemory(

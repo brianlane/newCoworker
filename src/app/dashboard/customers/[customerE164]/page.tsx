@@ -22,6 +22,7 @@ import {
 import { listTranscriptsForCaller } from "@/lib/db/voice-transcripts";
 import { listEmailLogForAddress } from "@/lib/db/email-log";
 import { CustomerProfileEditor } from "@/components/dashboard/CustomerProfileEditor";
+import { ContactReplyModeToggle } from "@/components/dashboard/ContactReplyModeToggle";
 import { CustomerEmailComposer } from "@/components/dashboard/CustomerEmailComposer";
 import { CustomerMergeAction } from "@/components/dashboard/CustomerMergeAction";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
@@ -186,6 +187,12 @@ export default async function CustomerDetailPage({ params }: Props) {
         // an unchanged save writes nothing because this is also the dirty-check
         // baseline.)
         initialType={headerBadge}
+      />
+
+      <ContactReplyModeToggle
+        businessId={business.id}
+        customerE164={memory.customer_e164}
+        initialMode={memory.sms_reply_mode}
       />
 
       {/* Merge is customer-to-customer only. Hide it when THIS profile is a
