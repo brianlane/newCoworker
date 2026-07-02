@@ -1236,15 +1236,26 @@ serve(async (req: Request) => {
             to: fromE164,
             messaging_profile_id: messagingProfileId,
             type: "RCS",
-            agent_message: { content_message: { text: reply.slice(0, 1600) } },
-            sms_fallback: { from: platformFrom, text: reply.slice(0, 1600) }
+            // Full body over RCS (no 160/1600 segmenting); only the plain-text
+            // fallback leg is capped — Telnyx limits fallback text to 3072,
+            // matching sendTelnyxRcsWithFallback in telnyx_sms_compliance.ts.
+            agent_message: { content_message: { text: reply } },
+            sms_fallback: { from: platformFrom, text: reply.slice(0, 3072) }
           })
         });
         if (rcsRes.ok) {
           const rcsJson = (await rcsRes.json()) as { data?: { id?: string } };
-          mid = rcsJson.data?.id ?? "";
-          sentViaRcs = true;
-          replyChannel = "rcs";
+          const rcsMid = rcsJson.data?.id ?? "";
+          if (rcsMid) {
+            mid = rcsMid;
+            sentViaRcs = true;
+            replyChannel = "rcs";
+          } else {
+            // 2xx without a message id means Telnyx did not durably create the
+            // message — without an id the send can't be reconciled or tracked,
+            // so treat it like a rejection and deliver over plain SMS.
+            console.warn("rcs reply accepted but returned no message id, falling back to sms");
+          }
         } else {
           // RCS API rejection (agent revoked, destination not routable, …):
           // fall through to plain SMS so the customer never loses a reply to
