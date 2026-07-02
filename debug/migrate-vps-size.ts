@@ -39,6 +39,13 @@
  *   npx tsx debug/migrate-vps-size.ts --business <id> --size kvm2 --apply # ⚠️ buys a VPS
  *   Flags: --notify-owner   send the owner the provisioning-complete email/SMS
  *          --keep-old       skip step 6 (leave the old box running + renewing)
+ *          --adopt-vm <id>  NO purchase: adopt an already-paid VM stuck in
+ *                           `initial` (Hostinger sometimes charges the card
+ *                           but 402s the order API, leaving paid boxes in
+ *                           "Pending setup"). Uses the same setup→recreate
+ *                           flow provision-kvm2-smoke.ts validated, injected
+ *                           as the orchestrator's vpsProvisioner so bootstrap,
+ *                           tunnel, and deploy run identically to a purchase.
  *
  * State (for audit / manual recovery) is written to
  * debug/.migrate-vps-size-<businessId>.json after each apply run.
@@ -61,7 +68,13 @@ function argValue(flag: string): string | null {
 const BUSINESS_ID = argValue("--business");
 const TARGET_SIZE = argValue("--size");
 if (!BUSINESS_ID || (TARGET_SIZE !== "kvm2" && TARGET_SIZE !== "kvm8")) {
-  console.error("usage: migrate-vps-size.ts --business <uuid> --size kvm2|kvm8 [--apply] [--notify-owner] [--keep-old]");
+  console.error("usage: migrate-vps-size.ts --business <uuid> --size kvm2|kvm8 [--apply] [--notify-owner] [--keep-old] [--adopt-vm <vmId>]");
+  process.exit(1);
+}
+const adoptRaw = argValue("--adopt-vm");
+const ADOPT_VM_ID = adoptRaw !== null ? Number(adoptRaw) : null;
+if (adoptRaw !== null && (!Number.isInteger(ADOPT_VM_ID) || ADOPT_VM_ID! <= 0)) {
+  console.error("--adopt-vm requires a numeric Hostinger virtual machine id");
   process.exit(1);
 }
 
@@ -142,8 +155,26 @@ console.log(`== VPS size migration ==`);
 console.log(`business        : ${biz.name} (${biz.id})`);
 console.log(`tier            : ${biz.tier} (entitlements — unchanged by this migration)`);
 console.log(`size            : ${currentSize} (pin=${biz.vps_size ?? "null/tier-default"}) → ${TARGET_SIZE}`);
-console.log(`target SKU      : ${targetItem}  →  ${priceStr}`);
+console.log(
+  ADOPT_VM_ID !== null
+    ? `new box         : ADOPT paid VM ${ADOPT_VM_ID} (no purchase)`
+    : `target SKU      : ${targetItem}  →  ${priceStr}`
+);
 console.log(`old billing sub : ${oldBillingId ?? "UNKNOWN — teardown will need a manual lookup"}`);
+
+if (ADOPT_VM_ID !== null) {
+  if (ADOPT_VM_ID === oldVmId) {
+    console.error(`--adopt-vm ${ADOPT_VM_ID} is the business's CURRENT box — pick the new one.`);
+    process.exit(1);
+  }
+  try {
+    const vm = await hostinger.getVirtualMachine(ADOPT_VM_ID);
+    console.log(`adopt target    : vm=${vm.id} state=${vm.state} ip=${vm.ipv4?.[0]?.address ?? "none"}`);
+  } catch (err) {
+    console.error(`--adopt-vm ${ADOPT_VM_ID} lookup failed: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+}
 console.log(`owner notify    : ${NOTIFY_OWNER ? `YES → ${biz.owner_email}` : "no (admin email only)"}`);
 console.log(`old box         : ${KEEP_OLD ? "KEPT (renewing!)" : "stop + auto-renew off (lapses at period end)"}`);
 
@@ -156,7 +187,11 @@ if (currentSize === TARGET_SIZE) {
 
 if (!APPLY) {
   console.log(`\n[dry-run] Would: snapshot+backup old box →`);
-  console.log(`[dry-run] provision ${targetItem} (⚠️ charges the Hostinger account) → pin`);
+  console.log(
+    ADOPT_VM_ID !== null
+      ? `[dry-run] adopt + bootstrap paid VM ${ADOPT_VM_ID} (no purchase) → pin`
+      : `[dry-run] provision ${targetItem} (⚠️ charges the Hostinger account) → pin`
+  );
   console.log(`[dry-run] vps_size=${TARGET_SIZE} → restore`);
   console.log(`[dry-run] data → ${KEEP_OLD ? "leave old box running" : "stop old box + disable its billing auto-renewal"}.`);
   console.log(`[dry-run] Re-run with --apply to act.`);
@@ -185,6 +220,159 @@ console.log(`[backup] tarballing /opt/rowboat/{vault,memory} from ${oldVmIp}…`
 const backup = await backupBusinessData({ businessId: BUSINESS_ID, vpsHost: oldVmIp });
 console.log(`[backup] ok: ${backup.storagePath} (${backup.sizeBytes} bytes, sha256=${backup.sha256.slice(0, 12)}…)`);
 
+// ------------------------------------------------- adopt-mode vpsProvisioner
+// Injected into the orchestrator in place of the purchase when --adopt-vm is
+// given. Same steps as provisionVpsForBusiness minus the purchase, using the
+// setup→recreate sequence provision-kvm2-smoke.ts validated empirically
+// (standalone setup 422s on bare-label hostnames and IGNORES public_key_ids;
+// recreate with the identical payload is what actually lands the key).
+async function makeAdoptProvisioner(vmId: number): Promise<
+  (input: {
+    businessId: string;
+    tier: "starter" | "standard";
+    vpsSize: "kvm2" | "kvm8";
+  }) => Promise<import("../src/lib/hostinger/provision.ts").ProvisionVpsForBusinessResult>
+> {
+  const { generateSshKeypair } = await import("../src/lib/hostinger/keypair.ts");
+  const { insertVpsSshKey } = await import("../src/lib/db/vps-ssh-keys.ts");
+  const { buildDefaultPostInstallScript, DEFAULT_TEMPLATE_ID, DEFAULT_US_DATA_CENTER_ID } =
+    await import("../src/lib/hostinger/provision.ts");
+
+  return async (input) => {
+    const keypair = await generateSshKeypair(`newcoworker-${input.businessId}`);
+    const pubKey = await hostinger.createPublicKey(
+      `newcoworker-${input.businessId}-${Date.now().toString(36)}`,
+      keypair.publicKey.trim()
+    );
+    console.log(`  [adopt] public key uploaded id=${pubKey.id}`);
+    const script = await hostinger.createPostInstallScript(
+      `newcoworker-${input.businessId}-${Date.now().toString(36)}`,
+      buildDefaultPostInstallScript({ tier: input.tier, vpsSize: input.vpsSize })
+    );
+    console.log(`  [adopt] post-install script registered id=${script.id}`);
+
+    const setupPayload = {
+      data_center_id: DEFAULT_US_DATA_CENTER_ID,
+      template_id: DEFAULT_TEMPLATE_ID,
+      // Standalone setup validates hostname as an FQDN (bare labels 422).
+      hostname: `nc-${input.businessId.replace(/[^A-Za-z0-9-]/g, "").slice(0, 12)}.newcoworker.com`,
+      public_key_ids: [pubKey.id],
+      post_install_script_id: script.id,
+      install_monarx: false
+    };
+
+    const waitRunning = async (phase: string): Promise<string> => {
+      const deadline = Date.now() + 15 * 60 * 1000;
+      for (;;) {
+        const vm = await hostinger.getVirtualMachine(vmId);
+        const ip = vm.ipv4?.[0]?.address;
+        if (vm.state === "running" && ip) return ip;
+        if (vm.state === "error" || vm.state === "suspended") {
+          throw new Error(`VM ${vmId} entered terminal state=${vm.state} during ${phase}`);
+        }
+        if (Date.now() > deadline) throw new Error(`VM ${vmId} not running 15 min into ${phase}`);
+        console.log(`  [adopt:${phase}] state=${vm.state} ip=${ip ?? "none"}`);
+        await new Promise((r) => setTimeout(r, 10_000));
+      }
+    };
+
+    const initialState = (await hostinger.getVirtualMachine(vmId)).state;
+    if (initialState === "initial") {
+      console.log(`  [adopt] setup initiated on vm=${vmId}`);
+      await hostinger.setupVirtualMachine(vmId, setupPayload);
+      await waitRunning("setup");
+    }
+
+    const recreateOnce = async (): Promise<string> => {
+      console.log(`  [adopt] recreate initiated on vm=${vmId} (attaches key + post-install)`);
+      await hostinger.recreateVirtualMachine(vmId, setupPayload);
+      // The VM can report the pre-recreate `running` for a few polls; wait for
+      // it to leave running before waiting for it to come back.
+      const leaveDeadline = Date.now() + 3 * 60 * 1000;
+      for (;;) {
+        const vm = await hostinger.getVirtualMachine(vmId);
+        if (vm.state !== "running") break;
+        if (Date.now() > leaveDeadline) {
+          console.log(`  [adopt] vm never left running after recreate — assuming the transition was missed`);
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 5_000));
+      }
+      return waitRunning("recreate");
+    };
+
+    // Verify the key actually landed. Empirically (VM 1800980, July 2026) a
+    // recreate issued right after setup finishes does NOT attach the key —
+    // sshd comes up but rejects the keypair — while a second recreate from
+    // the settled running state does. Auth failures are not connect errors,
+    // so runWithSshConnectRetry won't retry them; probe explicitly and re-run
+    // the recreate once before giving up.
+    const { sshExec } = await import("../src/lib/hostinger/ssh.ts");
+    const sshAuthOk = async (host: string): Promise<boolean> => {
+      // sshd can lag `running` by ~a minute; give auth three probes before
+      // concluding the key is missing.
+      for (let i = 0; i < 3; i += 1) {
+        try {
+          await sshExec({
+            host,
+            username: "root",
+            privateKeyPem: keypair.privateKeyPem,
+            command: "true"
+          });
+          return true;
+        } catch {
+          await new Promise((r) => setTimeout(r, 30_000));
+        }
+      }
+      return false;
+    };
+
+    let publicIp = await recreateOnce();
+    if (!(await sshAuthOk(publicIp))) {
+      console.log(`  [adopt] key did not attach on first recreate — retrying recreate once`);
+      publicIp = await recreateOnce();
+      if (!(await sshAuthOk(publicIp))) {
+        throw new Error(`VM ${vmId}: SSH key still not attached after recreate retry`);
+      }
+    }
+    console.log(`  [adopt] vps running ip=${publicIp}, ssh key verified`);
+
+    try {
+      await hostinger.installMonarx(vmId);
+    } catch (err) {
+      console.log(`  [adopt] monarx install failed (continuing): ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    const sshKey = await insertVpsSshKey({
+      business_id: input.businessId,
+      hostinger_vps_id: String(vmId),
+      hostinger_public_key_id: pubKey.id,
+      public_key: keypair.publicKey,
+      private_key_pem: keypair.privateKeyPem,
+      fingerprint_sha256: keypair.fingerprintSha256,
+      ssh_username: "root"
+    });
+
+    let billingId: string | null = null;
+    try {
+      const subs = await hostinger.listBillingSubscriptions();
+      billingId = subs.find((s) => s.resource_id === String(vmId))?.id ?? null;
+    } catch {
+      /* the billing-swap step below warns when this stays null */
+    }
+
+    return {
+      virtualMachineId: vmId,
+      publicIp,
+      sshUsername: "root",
+      sshKey,
+      publicKeyId: pubKey.id,
+      postInstallScriptId: script.id,
+      hostingerBillingSubscriptionId: billingId
+    };
+  };
+}
+
 // ---------------------------------------------------------------- 3. provision
 // The target size is passed EXPLICITLY to the orchestrator — the
 // businesses.vps_size pin is deliberately NOT written yet. Pinning before the
@@ -194,15 +382,22 @@ console.log(`[backup] ok: ${backup.storagePath} (${backup.sizeBytes} bytes, sha2
 // The pin lands in step 4, after the orchestrator has repointed
 // hostinger_vps_id to the new VM.
 const { orchestrateProvisioning } = await import("../src/lib/provisioning/orchestrate.ts");
-console.log(`[provision] purchasing + bootstrapping ${targetItem} (this takes ~10-20 min)…`);
+console.log(
+  ADOPT_VM_ID !== null
+    ? `[provision] adopting paid VM ${ADOPT_VM_ID} + bootstrapping (no purchase; ~10-20 min)…`
+    : `[provision] purchasing + bootstrapping ${targetItem} (this takes ~10-20 min)…`
+);
 let newProv: Awaited<ReturnType<typeof orchestrateProvisioning>>;
 try {
-  newProv = await orchestrateProvisioning({
-    businessId: BUSINESS_ID,
-    tier: biz.tier,
-    vpsSize: TARGET_SIZE,
-    ...(NOTIFY_OWNER && biz.owner_email ? { ownerEmail: biz.owner_email } : {})
-  });
+  newProv = await orchestrateProvisioning(
+    {
+      businessId: BUSINESS_ID,
+      tier: biz.tier,
+      vpsSize: TARGET_SIZE,
+      ...(NOTIFY_OWNER && biz.owner_email ? { ownerEmail: biz.owner_email } : {})
+    },
+    ADOPT_VM_ID !== null ? { vpsProvisioner: await makeAdoptProvisioner(ADOPT_VM_ID) } : undefined
+  );
 } catch (err) {
   console.error(`[provision] FAILED: ${err instanceof Error ? err.message : String(err)}`);
   console.error(`[provision] The old box is untouched and still serving, and businesses.vps_size`);
