@@ -161,7 +161,11 @@ console.log(`\ncreating clone business ${cloneId} — "${cloneName}"`);
 const { error: insBizErr } = await db.from("businesses").insert({
   id: cloneId,
   name: cloneName,
-  owner_email: srcBiz.owner_email,
+  // NOT the source owner's email: businesses are keyed by owner_email (see
+  // listBusinessIdsByOwnerEmail / auth.ts), so a clone sharing it hijacks the
+  // owner's dashboard session onto the offline scratch tenant — which is
+  // exactly what happened to Amy on 2026-07-02. Synthetic, undeliverable.
+  owner_email: `kvm2-smoke+${cloneId}@invalid.newcoworker.com`,
   tier: "starter",
   // businesses_status_check allows online|offline|high_load|wiped; deploy-client
   // flips it to online at the end. Start offline.
