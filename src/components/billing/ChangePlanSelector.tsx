@@ -19,9 +19,14 @@ import { Button } from "@/components/ui/Button";
 import {
   type BillingPeriod,
   type PlanTier,
-  calculateSavingsPercentage
+  calculateSavingsPercentage,
+  getPeriodPricing
 } from "@/lib/plans/tier";
-import { getExistingCustomerMonthlyDisplay } from "@/lib/pricing";
+import {
+  getExistingCustomerMonthlyCents,
+  getExistingCustomerMonthlyDisplay,
+  getRenewalRateDisplay
+} from "@/lib/pricing";
 
 type ChangeablePlan = Exclude<PlanTier, "enterprise">;
 
@@ -49,6 +54,18 @@ function periodLabel(period: BillingPeriod): string {
 // they're charged) the regular rate for the period.
 function monthlyRateLabel(tier: ChangeablePlan, period: BillingPeriod): string {
   return `${getExistingCustomerMonthlyDisplay(tier, period)}/mo`;
+}
+
+// Committed 12/24-month terms renew at a higher rate after the first cycle;
+// null when the renewal equals what the customer pays now (monthly, where
+// existing customers already pay the renewal rate).
+function renewalRateLabel(tier: ChangeablePlan, period: BillingPeriod): string | null {
+  // Existing monthly customers already pay the renewal rate, so the extra line
+  // would be noise; compare in cents (display strings format differently).
+  if (getPeriodPricing(tier, period).renewalMonthlyCents === getExistingCustomerMonthlyCents(tier, period)) {
+    return null;
+  }
+  return getRenewalRateDisplay(tier, period); // already "/mo"-suffixed
 }
 
 export function ChangePlanSelector({
@@ -151,6 +168,11 @@ export function ChangePlanSelector({
                       save {calculateSavingsPercentage(tier, period)}%
                     </div>
                   )}
+                  {renewalRateLabel(tier, period) && (
+                    <div className="text-[10px] text-parchment/40 mt-0.5">
+                      renews at {renewalRateLabel(tier, period)}
+                    </div>
+                  )}
                   {current && (
                     <div className="text-[10px] text-claw-green mt-1 font-semibold">current</div>
                   )}
@@ -168,7 +190,10 @@ export function ChangePlanSelector({
           </p>
           <p className="text-xs text-parchment/60">
             You&apos;ll be charged <span className="font-mono">{monthlyRateLabel(selectedTier!, selectedPeriod!)}</span>
-            {selectedPeriod !== "monthly" && pendingSavings > 0 ? ` (save ${pendingSavings}% vs. monthly)` : ""}.
+            {selectedPeriod !== "monthly" && pendingSavings > 0 ? ` (save ${pendingSavings}% vs. monthly)` : ""}
+            {renewalRateLabel(selectedTier!, selectedPeriod!)
+              ? `, renewing at ${renewalRateLabel(selectedTier!, selectedPeriod!)} after the first term`
+              : ""}.
             Your current plan will be canceled immediately with no proration or refund, and we&apos;ll
             migrate your workspace data to a fresh VPS at the new tier.
           </p>
