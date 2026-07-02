@@ -219,19 +219,25 @@ try {
   /* handled below */
 }
 if (!newVmIp) {
-  console.error(`[restore] cannot resolve the new VM's IP — restore manually:`);
+  // Same fail-closed semantics as a restore failure below: the new box is on
+  // TEMPLATE state, so billing must NOT be repointed and the old box (which
+  // still has the live data) must NOT be stopped or set to lapse.
+  console.error(`[restore] ABORT: cannot resolve the new VM's IP — restore manually:`);
   console.error(`          restoreBusinessData({ businessId: '${BUSINESS_ID}', vpsHost: <ip> })`);
-} else {
-  try {
-    await restoreBusinessData({ businessId: BUSINESS_ID, vpsHost: newVmIp });
-    console.log(`[restore] durable data restored onto ${newVmIp}`);
-  } catch (err) {
-    console.error(`[restore] FAILED: ${err instanceof Error ? err.message : String(err)}`);
-    console.error(`[restore] The new box is serving TEMPLATE state. The tarball is safe at`);
-    console.error(`[restore] ${backup.storagePath} — retry restoreBusinessData before tearing`);
-    console.error(`[restore] down the old box (it still has the live data).`);
-    process.exit(1);
-  }
+  console.error(`[restore] The tarball is safe at ${backup.storagePath}. The old box is left`);
+  console.error(`[restore] running and renewing — re-run the teardown/billing steps after the`);
+  console.error(`[restore] manual restore succeeds.`);
+  process.exit(1);
+}
+try {
+  await restoreBusinessData({ businessId: BUSINESS_ID, vpsHost: newVmIp });
+  console.log(`[restore] durable data restored onto ${newVmIp}`);
+} catch (err) {
+  console.error(`[restore] FAILED: ${err instanceof Error ? err.message : String(err)}`);
+  console.error(`[restore] The new box is serving TEMPLATE state. The tarball is safe at`);
+  console.error(`[restore] ${backup.storagePath} — retry restoreBusinessData before tearing`);
+  console.error(`[restore] down the old box (it still has the live data).`);
+  process.exit(1);
 }
 
 // ------------------------------------------------- 6+7. old box + billing swap
