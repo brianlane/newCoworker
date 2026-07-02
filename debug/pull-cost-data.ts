@@ -182,6 +182,10 @@ const settlements = await fetchAllRows(
       .select("created_at, billable_seconds, telnyx_reported_duration_seconds")
       .eq("business_id", BUSINESS_ID)
       .order("created_at", { ascending: true })
+      // Unique tiebreaker: created_at alone can collide, making .range()
+      // page boundaries non-deterministic (skipped/duplicated rows).
+      // voice_settlements has no id column; its PK is call_control_id.
+      .order("call_control_id", { ascending: true })
       .range(from, to)
 );
 const settledSecondsByMonth: NumMap = {};
@@ -202,6 +206,7 @@ const smsOut = await fetchAllRows(
       .select("created_at, source")
       .eq("business_id", BUSINESS_ID)
       .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
       .range(from, to)
 );
 const smsOutByMonth: NumMap = {};
@@ -215,6 +220,7 @@ const smsIn = await fetchAllRows(
       .select("created_at")
       .eq("business_id", BUSINESS_ID)
       .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
       .range(from, to)
 );
 const smsInByMonth: NumMap = {};
@@ -292,6 +298,7 @@ if (!telnyxKey) {
         data?: Array<Record<string, unknown>>;
         meta?: { total_pages?: number };
       };
+      const pageSize = 250;
       const rows = body.data ?? [];
       for (const r of rows) {
         const num = (v: unknown): number => (typeof v === "string" || typeof v === "number" ? Number(v) || 0 : 0);
@@ -317,8 +324,12 @@ if (!telnyxKey) {
           add(agg.tenant, `${direction}/${month}`);
         }
       }
-      const totalPages = body.meta?.total_pages ?? 1;
-      if (page >= totalPages || rows.length === 0) break;
+      // Don't trust a missing meta.total_pages (defaulting it to 1 would stop
+      // after a full first page): keep paging while pages come back full, and
+      // stop early only when total_pages is present and says we're done.
+      const totalPages = body.meta?.total_pages;
+      if (rows.length < pageSize) break;
+      if (typeof totalPages === "number" && page >= totalPages) break;
       page += 1;
     }
   }
