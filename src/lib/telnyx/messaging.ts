@@ -268,18 +268,22 @@ export async function sendTelnyxSms(
       if (rcsRes.ok) {
         const json = (await rcsRes.json()) as TelnyxMessageResponse;
         const id = json.data?.id;
-        if (!id) {
-          throw new Error("Telnyx RCS: missing message id in response");
+        if (id) {
+          return { id, channel: "rcs" };
         }
-        return { id, channel: "rcs" };
+        // 2xx without a message id: Telnyx did not durably create the message
+        // (nothing to track or reconcile). Treat it like a rejection and
+        // deliver over plain SMS — same behavior as the inbound worker.
+        console.warn("sendTelnyxSms: RCS 2xx with no message id, falling back to SMS");
+      } else {
+        // RCS API rejection (agent revoked, destination not routable, …): fall
+        // through to plain SMS so channel plumbing never drops a customer
+        // message. Warn so operators see misconfigured agents.
+        const errText = await rcsRes.text();
+        console.warn(
+          `sendTelnyxSms: RCS send rejected (${rcsRes.status}), falling back to SMS: ${errText.slice(0, 300)}`
+        );
       }
-      // RCS API rejection (agent revoked, destination not routable, …): fall
-      // through to plain SMS so channel plumbing never drops a customer
-      // message. Warn so operators see misconfigured agents.
-      const errText = await rcsRes.text();
-      console.warn(
-        `sendTelnyxSms: RCS send rejected (${rcsRes.status}), falling back to SMS: ${errText.slice(0, 300)}`
-      );
     }
 
     const body: Record<string, string> = {

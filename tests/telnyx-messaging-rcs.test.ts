@@ -209,14 +209,27 @@ describe("sendTelnyxSms RCS-first", () => {
     expect(body.sms_fallback.text).toHaveLength(3072);
   });
 
-  it("throws when the RCS response has no message id", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ data: {} })
+  it("falls back to plain SMS when the RCS 2xx response has no message id", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: {} })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: { id: "sms_msg_noid" } })
+      });
+    const r = await sendTelnyxSms(cfg, "+15550001111", "Hi", {
+      fetchImpl: fetchMock as typeof fetch
     });
-    await expect(
-      sendTelnyxSms(cfg, "+15550001111", "Hi", { fetchImpl: fetchMock as typeof fetch })
-    ).rejects.toThrow("Telnyx RCS: missing message id");
+    expect(r).toEqual({ id: "sms_msg_noid", channel: "sms" });
+    expect(fetchMock.mock.calls[1][0]).toBe("https://api.telnyx.com/v2/messages");
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("RCS 2xx with no message id")
+    );
+    warnSpy.mockRestore();
   });
 
   it("falls back to plain SMS (warns) when the RCS endpoint rejects", async () => {
