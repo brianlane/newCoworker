@@ -203,9 +203,18 @@ type ProvisionResultLike = {
 
 /**
  * Adopt an already-purchased VM: same steps as provisionVpsForBusiness minus
- * the purchase — Hostinger's setup endpoint takes the identical payload the
- * purchase-time `setup` field carries, so the box comes up exactly like a
- * production one (cloud-init runs the TIER=starter bootstrap at first boot).
+ * the purchase, with two Hostinger quirks found empirically (July 2026,
+ * VM 1798257):
+ *
+ *   1. The standalone setup endpoint validates `hostname` as an FQDN — a
+ *      bare label like `nc-<uuid12>` (what purchase-embedded setup accepts)
+ *      422s with "[VPS:2004] Wrong hostname FQDN format".
+ *   2. Standalone setup IGNORES `public_key_ids` (and the retroactive
+ *      `POST /public-keys/attach/{vmId}` returns an empty zero-id action and
+ *      does nothing) — the box comes up with no authorized key and every SSH
+ *      attempt fails USERAUTH_FAILURE. `recreate` with the identical payload
+ *      DOES honor `public_key_ids`. So: setup once to leave `initial`, then
+ *      recreate to actually land the key + post-install script.
  */
 async function adoptExistingVm(vmId: number): Promise<ProvisionResultLike> {
   const { generateSshKeypair } = await import("../src/lib/hostinger/keypair.ts");
@@ -222,34 +231,57 @@ async function adoptExistingVm(vmId: number): Promise<ProvisionResultLike> {
   );
   console.log(`  [post_install_script_registered] id=${script.id}`);
 
-  console.log(`  [setup_initiated] vm=${vmId} template=${DEFAULT_TEMPLATE_ID}`);
-  await hostinger.setupVirtualMachine(vmId, {
+  const setupPayload = {
     data_center_id: DEFAULT_US_DATA_CENTER_ID,
     template_id: DEFAULT_TEMPLATE_ID,
-    hostname: `nc-${cloneId.replace(/[^A-Za-z0-9-]/g, "").slice(0, 12)}`,
+    hostname: `nc-${cloneId.replace(/[^A-Za-z0-9-]/g, "").slice(0, 12)}.newcoworker.com`,
     public_key_ids: [pubKey.id],
     post_install_script_id: script.id,
     install_monarx: false
-  });
+  };
 
   // Poll running + IPv4 (same happy path as production's waitForVpsReady,
   // same 15-min budget; error/suspended/stopped are terminal).
-  const deadline = Date.now() + 15 * 60 * 1000;
-  let publicIp: string | null = null;
+  const waitRunning = async (phase: string): Promise<string> => {
+    const deadline = Date.now() + 15 * 60 * 1000;
+    for (;;) {
+      const vm = await hostinger.getVirtualMachine(vmId);
+      const ip = vm.ipv4?.[0]?.address;
+      if (vm.state === "running" && ip) return ip;
+      if (vm.state === "error" || vm.state === "suspended" || vm.state === "stopped") {
+        throw new Error(`VM ${vmId} entered terminal state=${vm.state} during ${phase}`);
+      }
+      if (Date.now() > deadline) throw new Error(`VM ${vmId} not running 15 min into ${phase}`);
+      console.log(`  [waiting:${phase}] state=${vm.state} ip=${ip ?? "none"}`);
+      await new Promise((r) => setTimeout(r, 10_000));
+    }
+  };
+
+  const initialState = (await hostinger.getVirtualMachine(vmId)).state;
+  if (initialState === "initial") {
+    console.log(`  [setup_initiated] vm=${vmId} template=${DEFAULT_TEMPLATE_ID}`);
+    await hostinger.setupVirtualMachine(vmId, setupPayload);
+    await waitRunning("setup");
+  }
+
+  // See header quirk #2: recreate is what actually attaches the SSH key.
+  console.log(`  [recreate_initiated] vm=${vmId} (attaches key + post-install)`);
+  await hostinger.recreateVirtualMachine(vmId, setupPayload);
+  // The VM may still report the PRE-recreate `running` state for a few polls,
+  // so wait for it to LEAVE running (enter `recreating`) before waiting for it
+  // to come back — otherwise adopt can mark a mid-rebuild box as ready.
+  const leaveDeadline = Date.now() + 3 * 60 * 1000;
   for (;;) {
     const vm = await hostinger.getVirtualMachine(vmId);
-    const ip = vm.ipv4?.[0]?.address;
-    if (vm.state === "running" && ip) {
-      publicIp = ip;
+    if (vm.state !== "running") break;
+    if (Date.now() > leaveDeadline) {
+      console.log(`  [warn] vm never left running after recreate — continuing on the assumption the transition was missed`);
       break;
     }
-    if (vm.state === "error" || vm.state === "suspended" || vm.state === "stopped") {
-      throw new Error(`VM ${vmId} entered terminal state=${vm.state} during setup`);
-    }
-    if (Date.now() > deadline) throw new Error(`VM ${vmId} not running after 15 min`);
-    console.log(`  [waiting] state=${vm.state} ip=${ip ?? "none"}`);
-    await new Promise((r) => setTimeout(r, 10_000));
+    console.log(`  [waiting:recreate-start] state=${vm.state}`);
+    await new Promise((r) => setTimeout(r, 5_000));
   }
+  const publicIp = await waitRunning("recreate");
   console.log(`  [vps_running] ip=${publicIp}`);
 
   try {
