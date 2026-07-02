@@ -645,8 +645,19 @@ serve(async (req: Request) => {
                   processed += 1;
                   continue;
                 }
-                // Out of retry budget: fall through and close the job out as
-                // suppressed — still no default reply.
+                // Out of retry budget: the owner never received the prompt,
+                // so the row must not stay routable — an unanswered orphan
+                // would relay the owner's NEXT unrelated text to this
+                // customer. Delete it, then close the job out as suppressed —
+                // still no default reply.
+                const { error: orphanErr } = await supabase
+                  .from("sms_owner_reply_prompts")
+                  .delete()
+                  .eq("inbound_job_id", job.id)
+                  .is("answered_at", null);
+                if (orphanErr) {
+                  console.error("contact forward_owner orphan prompt delete", orphanErr);
+                }
               } else {
                 forwarded = true;
               }
