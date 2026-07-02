@@ -53,6 +53,12 @@
  * then continues the identical poll → Monarx → vps_ssh_keys → state-file flow:
  *   npx tsx debug/provision-kvm2-smoke.ts --adopt-vm <vmId>          # dry run
  *   npx tsx debug/provision-kvm2-smoke.ts --adopt-vm <vmId> --apply
+ *
+ * Tier flag (post vps_size decoupling): `--tier standard` creates the clone
+ * as a STANDARD-tier tenant pinned to kvm2 hardware (businesses.vps_size =
+ * 'kvm2', bootstrap runs TIER=standard VPS_SIZE=kvm2). This is the
+ * "standard-on-KVM2" validation shape: full standard entitlements — render
+ * sidecar included — on the small box. Default remains `starter`.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -71,6 +77,14 @@ const adoptArgIdx = process.argv.indexOf("--adopt-vm");
 const ADOPT_VM_ID = adoptArgIdx > -1 ? Number(process.argv[adoptArgIdx + 1]) : null;
 if (adoptArgIdx > -1 && (!Number.isInteger(ADOPT_VM_ID) || ADOPT_VM_ID! <= 0)) {
   console.error("--adopt-vm requires a numeric Hostinger virtual machine id");
+  process.exit(1);
+}
+const tierArgIdx = process.argv.indexOf("--tier");
+const CLONE_TIER = (tierArgIdx > -1 ? process.argv[tierArgIdx + 1] : "starter") as
+  | "starter"
+  | "standard";
+if (CLONE_TIER !== "starter" && CLONE_TIER !== "standard") {
+  console.error("--tier must be starter or standard");
   process.exit(1);
 }
 
@@ -142,11 +156,11 @@ if (ADOPT_VM_ID !== null) {
 if (!APPLY) {
   if (ADOPT_VM_ID !== null) {
     console.log(`\n[dry-run] Would ADOPT existing VM ${ADOPT_VM_ID} (no purchase): run Hostinger`);
-    console.log(`[dry-run] setup (Ubuntu-Docker template ${DEFAULT_TEMPLATE_ID}, fresh key, TIER=starter`);
+    console.log(`[dry-run] setup (Ubuntu-Docker template ${DEFAULT_TEMPLATE_ID}, fresh key, TIER=${CLONE_TIER} VPS_SIZE=kvm2`);
     console.log(`[dry-run] post-install), wait for running, persist the SSH key, and clone the`);
     console.log(`[dry-run] source business config onto a scratch tenant row.`);
   } else {
-    console.log(`\n[dry-run] Would purchase ONE ${KVM2_ITEM_ID} VPS, bootstrap TIER=starter,`);
+    console.log(`\n[dry-run] Would purchase ONE ${KVM2_ITEM_ID} VPS, bootstrap TIER=${CLONE_TIER} VPS_SIZE=kvm2,`);
     console.log(`[dry-run] and clone the source business config onto a scratch tenant row.`);
   }
   console.log(`[dry-run] Re-run with --apply to act.`);
@@ -166,7 +180,10 @@ const { error: insBizErr } = await db.from("businesses").insert({
   // owner's dashboard session onto the offline scratch tenant — which is
   // exactly what happened to Amy on 2026-07-02. Synthetic, undeliverable.
   owner_email: `kvm2-smoke+${cloneId}@invalid.newcoworker.com`,
-  tier: "starter",
+  tier: CLONE_TIER,
+  // Hardware pin: this experiment is always about the KVM2 box; with
+  // --tier standard this is exactly the standard-on-kvm2 shape.
+  vps_size: "kvm2",
   // businesses_status_check allows online|offline|high_load|wiped; deploy-client
   // flips it to online at the end. Start offline.
   status: "offline",
@@ -231,7 +248,7 @@ async function adoptExistingVm(vmId: number): Promise<ProvisionResultLike> {
 
   const script = await hostinger.createPostInstallScript(
     `newcoworker-${cloneId}-${Date.now().toString(36)}`,
-    buildDefaultPostInstallScript({ tier: "starter" })
+    buildDefaultPostInstallScript({ tier: CLONE_TIER, vpsSize: "kvm2" })
   );
   console.log(`  [post_install_script_registered] id=${script.id}`);
 
@@ -269,17 +286,22 @@ async function adoptExistingVm(vmId: number): Promise<ProvisionResultLike> {
   }
 
   // See header quirk #2: recreate is what actually attaches the SSH key.
-  console.log(`  [recreate_initiated] vm=${vmId} (attaches key + post-install)`);
+  // Also the re-adopt path for a previously torn-down box (state=stopped
+  // after the teardown wipe): recreate rebuilds + boots it directly.
+  const preRecreateState = (await hostinger.getVirtualMachine(vmId)).state;
+  console.log(`  [recreate_initiated] vm=${vmId} state=${preRecreateState} (attaches key + post-install)`);
   await hostinger.recreateVirtualMachine(vmId, setupPayload);
-  // The VM may still report the PRE-recreate `running` state for a few polls,
-  // so wait for it to LEAVE running (enter `recreating`) before waiting for it
-  // to come back — otherwise adopt can mark a mid-rebuild box as ready.
+  // The VM may still report the PRE-recreate state (`running`, or `stopped`
+  // on a re-adopt) for a few polls, so wait for it to LEAVE that state
+  // (enter `recreating`) before waiting for it to come back — otherwise
+  // adopt can mark a mid-rebuild box as ready, or waitRunning can misread
+  // the stale `stopped` as terminal.
   const leaveDeadline = Date.now() + 3 * 60 * 1000;
   for (;;) {
     const vm = await hostinger.getVirtualMachine(vmId);
-    if (vm.state !== "running") break;
+    if (vm.state !== preRecreateState) break;
     if (Date.now() > leaveDeadline) {
-      console.log(`  [warn] vm never left running after recreate — continuing on the assumption the transition was missed`);
+      console.log(`  [warn] vm never left state=${preRecreateState} after recreate — continuing on the assumption the transition was missed`);
       break;
     }
     console.log(`  [waiting:recreate-start] state=${vm.state}`);
@@ -332,8 +354,9 @@ if (ADOPT_VM_ID !== null) {
   result = await provisionVpsForBusiness(
     {
       businessId: cloneId,
-      tier: "starter",
-      postInstallScript: buildDefaultPostInstallScript({ tier: "starter" })
+      tier: CLONE_TIER,
+      vpsSize: "kvm2",
+      postInstallScript: buildDefaultPostInstallScript({ tier: CLONE_TIER, vpsSize: "kvm2" })
     },
     {
       client: hostinger,
@@ -369,7 +392,7 @@ fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2) + "\n");
 console.log(`\nVPS ready: vm=${result.virtualMachineId} ip=${result.publicIp}`);
 console.log(`billing subscription: ${result.hostingerBillingSubscriptionId ?? "UNKNOWN (look up before teardown!)"}`);
 console.log(`state written to ${STATE_FILE}`);
-console.log(`\nbootstrap.sh (TIER=starter) runs via cloud-init at first boot — tail it with:`);
+console.log(`\nbootstrap.sh (TIER=${CLONE_TIER} VPS_SIZE=kvm2) runs via cloud-init at first boot — tail it with:`);
 console.log(`  npx tsx debug/vps-exec.ts ${cloneId} "tail -50 /post_install.log"`);
 console.log(`then deploy the clone config (no tunnel):`);
 console.log(`  set -a && source .env && set +a`);
