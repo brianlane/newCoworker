@@ -21,6 +21,16 @@
  *   tsx debug/redeploy-aiflow-render.ts --business-id <uuid>
  *   tsx debug/redeploy-aiflow-render.ts --dry-run             # resolve target only
  *
+ * Starter-tier override (EXPERIMENT): deploy-client.sh never writes
+ * /opt/aiflow-render/.env on TIER=starter boxes (render is policy-gated off
+ * KVM2), so the missing-.env guard below aborts. `--init-env` bypasses the
+ * gate by seeding a minimal .env from the caller's environment
+ * (AIFLOW_RENDER_TOKEN required; APP_BASE_URL / ROWBOAT_GATEWAY_TOKEN
+ * optional) — mirroring the exact block deploy-client.sh writes on standard
+ * boxes. Only for capability experiments (e.g. the KVM2 render-contention
+ * test); production starter boxes stay render-free by policy.
+ *   AIFLOW_RENDER_TOKEN=<token> tsx debug/redeploy-aiflow-render.ts --business-id <cloneId> --init-env
+ *
  * Exit code: 0 on a clean rebuild, 1 otherwise.
  */
 import { loadEnv, makeHostingerClient, resolveVpsIp } from "./_shared.ts";
@@ -29,6 +39,7 @@ loadEnv();
 
 const DEFAULT_BUSINESS_ID = "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
 const DRY_RUN = process.argv.includes("--dry-run");
+const INIT_ENV = process.argv.includes("--init-env");
 
 function parseBusinessId(): string {
   const i = process.argv.indexOf("--business-id");
@@ -37,10 +48,43 @@ function parseBusinessId(): string {
 }
 const BUSINESS_ID = parseBusinessId();
 
+/** shlex-style single-quote so env values can't break out of the heredoc. */
+function bashSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+// Optional starter-tier bootstrap: seed the .env deploy-client.sh would have
+// written on a render-capable tier (see the AIRENV_EOF block in
+// vps/scripts/deploy-client.sh). Values are single-quoted at build time so
+// the remote shell never interpolates them.
+function buildInitEnvBlock(): string {
+  const renderToken = process.env.AIFLOW_RENDER_TOKEN ?? "";
+  if (!renderToken) {
+    console.error(
+      "--init-env requires AIFLOW_RENDER_TOKEN in the environment (the render bearer the worker authenticates with)"
+    );
+    process.exit(1);
+  }
+  const platformUrl = process.env.APP_BASE_URL ?? "";
+  const gatewayToken = process.env.ROWBOAT_GATEWAY_TOKEN ?? "";
+  return `
+if [ ! -f "$DEST/.env" ]; then
+  echo "== --init-env: seeding $DEST/.env (starter-tier experiment override) =="
+  mkdir -p "$DEST"
+  printf 'PORT=8080\\nAIFLOW_RENDER_TOKEN=%s\\nAIFLOW_PLATFORM_URL=%s\\nAIFLOW_GATEWAY_TOKEN=%s\\n' \\
+    ${bashSingleQuote(renderToken)} ${bashSingleQuote(platformUrl)} ${bashSingleQuote(gatewayToken)} > "$DEST/.env"
+  chmod 600 "$DEST/.env"
+fi
+`;
+}
+
 // Render-only remote sequence. `set -euo pipefail` so a failed fetch/rsync/build
 // aborts instead of falsely reporting success. The `.env` exclusion is what
 // preserves the render bearer the worker authenticates with.
-const REDEPLOY_RENDER_REMOTE = `
+//
+// Built lazily (not at module load) so `--init-env`'s AIFLOW_RENDER_TOKEN
+// requirement doesn't abort a `--dry-run`, which never SSHes or seeds anything.
+const buildRemoteCommand = (): string => `
 set -euo pipefail
 REPO=/opt/newcoworker-repo
 DEST=/opt/aiflow-render
@@ -51,8 +95,9 @@ if [ ! -d "$REPO/vps/aiflow-render" ]; then
   echo "ERROR: $REPO/vps/aiflow-render missing in repo" >&2
   exit 1
 fi
+${INIT_ENV ? buildInitEnvBlock() : ""}
 if [ ! -f "$DEST/.env" ]; then
-  echo "ERROR: $DEST/.env missing — this box never ran deploy-client.sh for render (starter tier?). Aborting so we don't deploy render without its token." >&2
+  echo "ERROR: $DEST/.env missing — this box never ran deploy-client.sh for render (starter tier?). Re-run with --init-env to seed it for a capability experiment, or use a render-capable tier." >&2
   exit 1
 fi
 echo "== rsync aiflow-render (preserve .env + node_modules) =="
@@ -99,7 +144,7 @@ const res = await sshExec({
   host: ip,
   username: key.ssh_username || "root",
   privateKeyPem: key.private_key_pem,
-  command: REDEPLOY_RENDER_REMOTE,
+  command: buildRemoteCommand(),
   timeoutMs: 12 * 60 * 1000,
   onStdout: (c) => process.stdout.write(c),
   onStderr: (c) => process.stderr.write(c)
