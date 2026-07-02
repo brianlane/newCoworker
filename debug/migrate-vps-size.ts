@@ -155,8 +155,9 @@ if (currentSize === TARGET_SIZE) {
 }
 
 if (!APPLY) {
-  console.log(`\n[dry-run] Would: snapshot+backup old box → pin vps_size=${TARGET_SIZE} →`);
-  console.log(`[dry-run] provision ${targetItem} (⚠️ charges the Hostinger account) → restore`);
+  console.log(`\n[dry-run] Would: snapshot+backup old box →`);
+  console.log(`[dry-run] provision ${targetItem} (⚠️ charges the Hostinger account) → pin`);
+  console.log(`[dry-run] vps_size=${TARGET_SIZE} → restore`);
   console.log(`[dry-run] data → ${KEEP_OLD ? "leave old box running" : "stop old box + disable its billing auto-renewal"}.`);
   console.log(`[dry-run] Re-run with --apply to act.`);
   process.exit(0);
@@ -184,12 +185,14 @@ console.log(`[backup] tarballing /opt/rowboat/{vault,memory} from ${oldVmIp}…`
 const backup = await backupBusinessData({ businessId: BUSINESS_ID, vpsHost: oldVmIp });
 console.log(`[backup] ok: ${backup.storagePath} (${backup.sizeBytes} bytes, sha256=${backup.sha256.slice(0, 12)}…)`);
 
-// ---------------------------------------------------------------- 3. pin size
-const { updateBusinessVpsSize } = await import("../src/lib/db/businesses.ts");
-await updateBusinessVpsSize(BUSINESS_ID, TARGET_SIZE as "kvm2" | "kvm8");
-console.log(`[pin] businesses.vps_size = ${TARGET_SIZE}`);
-
-// ---------------------------------------------------------------- 4. provision
+// ---------------------------------------------------------------- 3. provision
+// The target size is passed EXPLICITLY to the orchestrator — the
+// businesses.vps_size pin is deliberately NOT written yet. Pinning before the
+// cutover would make any fleet redeploy during the ~10-20 min provisioning
+// window resolve VPS_SIZE=${TARGET_SIZE} while hostinger_vps_id still points
+// at the old box, deploying the wrong hardware profile onto live hardware.
+// The pin lands in step 4, after the orchestrator has repointed
+// hostinger_vps_id to the new VM.
 const { orchestrateProvisioning } = await import("../src/lib/provisioning/orchestrate.ts");
 console.log(`[provision] purchasing + bootstrapping ${targetItem} (this takes ~10-20 min)…`);
 let newProv: Awaited<ReturnType<typeof orchestrateProvisioning>>;
@@ -202,12 +205,23 @@ try {
   });
 } catch (err) {
   console.error(`[provision] FAILED: ${err instanceof Error ? err.message : String(err)}`);
-  console.error(`[provision] The old box is untouched and still serving; the vps_size pin stays`);
-  console.error(`[provision] at ${TARGET_SIZE} (desired state) — re-run once the cause is fixed,`);
-  console.error(`[provision] or reset the pin: updateBusinessVpsSize('${BUSINESS_ID}', ${biz.vps_size === null ? "null" : `'${biz.vps_size}'`}).`);
+  console.error(`[provision] The old box is untouched and still serving, and businesses.vps_size`);
+  console.error(`[provision] was never repinned — redeploys keep targeting the old hardware`);
+  console.error(`[provision] profile. Re-run once the cause is fixed.`);
   process.exit(1);
 }
 console.log(`[provision] new VM ${newProv.vpsId}, tunnel ${newProv.tunnelUrl}`);
+
+// ---------------------------------------------------------------- 4. pin size
+// hostinger_vps_id now points at the new VM (the orchestrator repointed it
+// via updateBusinessStatus), so the pin and the registered box agree from
+// here on. The residual mismatch window — between the orchestrator's mid-run
+// repoint and this pin — has a redeploy hitting the NEW (not-yet-serving) box
+// with the old profile, which is recoverable, unlike the old ordering where a
+// redeploy pushed the target profile onto the LIVE old box.
+const { updateBusinessVpsSize } = await import("../src/lib/db/businesses.ts");
+await updateBusinessVpsSize(BUSINESS_ID, TARGET_SIZE as "kvm2" | "kvm8");
+console.log(`[pin] businesses.vps_size = ${TARGET_SIZE}`);
 
 // ---------------------------------------------------------------- 5. restore
 const newVmId = Number.parseInt(newProv.vpsId, 10);
