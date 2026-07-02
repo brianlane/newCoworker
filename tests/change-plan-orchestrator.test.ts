@@ -340,9 +340,13 @@ describe("runChangePlanFromCheckout", () => {
       getSubscriptionMock.mockResolvedValue(termOldSub());
       await runChangePlanFromCheckout(recontractSession(), "evt_recontract");
       expect(incrementLifetimeSubscriptionCountMock).not.toHaveBeenCalled();
-      // Everything else still runs (provision + old teardown).
-      expect(orchestrateProvisioningMock).toHaveBeenCalled();
+      // Same-tier re-contract takes the period-only fast path: no VPS
+      // migration, just the Stripe swap + old-sub teardown.
+      expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
       expect(stripeCancelMock).toHaveBeenCalledWith("sub_old", { prorate: false });
+      expect(createSubscriptionMock).toHaveBeenCalledWith(
+        expect.objectContaining({ hostinger_billing_subscription_id: "billing_old" })
+      );
     });
 
     it("still increments when the recontract flag fails re-verification (commitment not elapsed)", async () => {
@@ -371,6 +375,94 @@ describe("runChangePlanFromCheckout", () => {
       );
       await runChangePlanFromCheckout(recontractSession(), "evt_recontract_renewed");
       expect(incrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
+    });
+  });
+
+  describe("period-only fast path (same tier, different billing period)", () => {
+    function periodOnlySession() {
+      // Old sub fixture is starter/monthly — same tier, new period.
+      return makeSession({
+        metadata: {
+          businessId: "biz-1",
+          previousSubscriptionId: "sub-row-old",
+          tier: "starter",
+          billingPeriod: "annual",
+          lifecycleAction: "changePlan"
+        }
+      });
+    }
+
+    it("swaps Stripe billing without touching the VPS", async () => {
+      await runChangePlanFromCheckout(periodOnlySession(), "evt_period_only");
+
+      // None of the migration machinery runs.
+      expect(hostingerCreateSnapshotMock).not.toHaveBeenCalled();
+      expect(backupBusinessDataMock).not.toHaveBeenCalled();
+      expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+      expect(restoreBusinessDataMock).not.toHaveBeenCalled();
+      // CRITICAL: the old Hostinger billing sub is the LIVE box — it must
+      // never be stopped or canceled on a period-only switch.
+      expect(hostingerStopVirtualMachineMock).not.toHaveBeenCalled();
+      expect(hostingerCancelBillingSubscriptionMock).not.toHaveBeenCalled();
+
+      // The new sub row inherits the existing box's Hostinger billing id.
+      expect(createSubscriptionMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          business_id: "biz-1",
+          tier: "starter",
+          billing_period: "annual",
+          status: "active",
+          stripe_subscription_id: "sub_new",
+          hostinger_billing_subscription_id: "billing_old"
+        })
+      );
+
+      // Stripe swap + old-row bookkeeping still run in full.
+      expect(ensureCommitmentScheduleMock).toHaveBeenCalledWith(
+        expect.objectContaining({ subscriptionId: "sub_new", tier: "starter", billingPeriod: "annual" })
+      );
+      expect(stripeCancelMock).toHaveBeenCalledWith("sub_old", { prorate: false });
+      expect(updateSubscriptionMock).toHaveBeenCalledWith(
+        "sub-row-old",
+        expect.objectContaining({ status: "canceled", cancel_reason: "upgrade_switch" })
+      );
+    });
+
+    it("still counts the lifetime slot on a non-recontract period switch", async () => {
+      await runChangePlanFromCheckout(periodOnlySession(), "evt_period_only_lifetime");
+      expect(incrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
+    });
+
+    it("leaves the new row's Hostinger billing id null when the old sub had none", async () => {
+      getSubscriptionMock.mockResolvedValueOnce({
+        id: "sub-row-old",
+        business_id: "biz-1",
+        stripe_subscription_id: "sub_old",
+        hostinger_billing_subscription_id: null,
+        customer_profile_id: "prof-1",
+        tier: "starter",
+        billing_period: "monthly",
+        status: "active",
+        created_at: "2026-01-01T00:00:00.000Z",
+        cancel_at_period_end: false
+      });
+
+      await runChangePlanFromCheckout(periodOnlySession(), "evt_period_only_no_billing");
+
+      expect(createSubscriptionMock).toHaveBeenCalledWith(
+        expect.objectContaining({ hostinger_billing_subscription_id: null })
+      );
+      expect(hostingerCancelBillingSubscriptionMock).not.toHaveBeenCalled();
+    });
+
+    it("tier changes still take the full migration path", async () => {
+      // Default fixture: old starter/monthly → session standard/annual.
+      await runChangePlanFromCheckout(makeSession(), "evt_tier_change_full_path");
+      expect(orchestrateProvisioningMock).toHaveBeenCalled();
+      expect(hostingerCancelBillingSubscriptionMock).toHaveBeenCalledWith(
+        "billing_old",
+        expect.any(String)
+      );
     });
   });
 

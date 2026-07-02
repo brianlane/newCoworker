@@ -31,6 +31,12 @@
  * new provisioning on teardown failures because the customer has already
  * paid for the new plan.
  *
+ * PERIOD-ONLY FAST PATH: when the tier is unchanged (billing-period-only
+ * switch), nothing about the VPS changes — steps 1-4 and 7 are skipped
+ * entirely. The existing box keeps running under its existing Hostinger
+ * billing subscription (inherited onto the new sub row), and only the
+ * Stripe swap + DB bookkeeping (steps 5, 6, 8) execute.
+ *
  * This function is invoked fire-and-forget by the webhook; errors are
  * logged but never bubble back up so Stripe keeps receiving 200s.
  */
@@ -348,93 +354,116 @@ export async function runChangePlanFromCheckout(
 
   const hostinger = hostingerClient();
 
-  // ── Step 1: capture old VPS coordinates BEFORE provisioning overwrites them.
+  // ── Period-only fast path: when the tier is UNCHANGED, the VPS is already
+  // the right size and nothing about the box depends on the Stripe billing
+  // period — the change is purely a Stripe price swap. Skip the snapshot /
+  // backup / re-provision / restore cycle (steps 1-4) AND the old-Hostinger
+  // billing cancel (step 7: the box keeps its existing Hostinger
+  // subscription — canceling it would destroy the customer's live VPS).
+  // Only the Stripe/DB steps (5, 6, 8) run.
+  const periodOnlySwitch = tier === oldSub.tier;
+  if (periodOnlySwitch) {
+    logger.info("changePlan: same-tier period switch; skipping VPS migration", {
+      businessId,
+      tier,
+      oldBillingPeriod: oldSub.billing_period ?? null,
+      newBillingPeriod: billingPeriod
+    });
+  }
+
+  // Old VPS coordinates, captured BEFORE provisioning overwrites them.
+  // (`business` was read before `orchestrateProvisioning`, so this stays the
+  // OLD VM id even after the DB row is repointed to the new VM.)
   const oldVpsIdRaw = business.hostinger_vps_id;
   const oldVmId =
     oldVpsIdRaw && /^\d+$/.test(oldVpsIdRaw) ? Number.parseInt(oldVpsIdRaw, 10) : null;
-  const oldVpsHost = oldVmId !== null ? await resolveVmIp(oldVmId, hostinger) : null;
 
-  if (oldVmId !== null) {
-    try {
-      await hostinger.createSnapshot(oldVmId);
-      logger.info("changePlan: old VPS snapshot requested", { businessId, oldVmId });
-    } catch (err) {
-      logger.warn("changePlan: old VPS snapshot failed (continuing)", {
+  let newProv: Awaited<ReturnType<typeof orchestrateProvisioning>> | null = null;
+  if (!periodOnlySwitch) {
+    // ── Step 1: snapshot the old VPS as a safety net before migration.
+    const oldVpsHost = oldVmId !== null ? await resolveVmIp(oldVmId, hostinger) : null;
+
+    if (oldVmId !== null) {
+      try {
+        await hostinger.createSnapshot(oldVmId);
+        logger.info("changePlan: old VPS snapshot requested", { businessId, oldVmId });
+      } catch (err) {
+        logger.warn("changePlan: old VPS snapshot failed (continuing)", {
+          businessId,
+          oldVmId,
+          error: errorMessage(err)
+        });
+      }
+    }
+
+    // ── Step 2: SSH backup of durable data. If the old VPS is unreachable we
+    // continue — a missing backup means the new VM boots with fresh template
+    // state, which is better than aborting a paid plan change.
+    let backupOk = false;
+    if (oldVpsHost) {
+      try {
+        await backupBusinessData({ businessId, vpsHost: oldVpsHost });
+        backupOk = true;
+        logger.info("changePlan: old VPS backed up", { businessId, oldVpsHost });
+      } catch (err) {
+        logger.error("changePlan: backup failed (continuing without data migration)", {
+          businessId,
+          oldVpsHost,
+          error: errorMessage(err)
+        });
+      }
+    } else {
+      logger.warn("changePlan: no old VPS host resolvable; skipping backup", {
         businessId,
-        oldVmId,
-        error: errorMessage(err)
+        oldVpsIdRaw
       });
     }
-  }
 
-  // ── Step 2: SSH backup of durable data. If the old VPS is unreachable we
-  // continue — a missing backup means the new VM boots with fresh template
-  // state, which is better than aborting a paid plan change.
-  let backupOk = false;
-  if (oldVpsHost) {
+    // ── Step 3: provision a NEW VM at the new tier. `orchestrateProvisioning`
+    // internally overwrites `businesses.hostinger_vps_id` with the new VM
+    // id, mints a new SSH key, and re-registers the per-tenant Cloudflare
+    // tunnel (so DNS swings onto the new VM once the new cloudflared
+    // connects). If provisioning fails, immediately cancel the freshly paid
+    // Stripe sub so it cannot renew without a corresponding DB row/VPS
+    // AND roll back the lifetime counter we just bumped, so a transient
+    // provisioning failure doesn't permanently burn one of the customer's
+    // three lifetime slots for a subscription they never received.
     try {
-      await backupBusinessData({ businessId, vpsHost: oldVpsHost });
-      backupOk = true;
-      logger.info("changePlan: old VPS backed up", { businessId, oldVpsHost });
-    } catch (err) {
-      logger.error("changePlan: backup failed (continuing without data migration)", {
+      newProv = await orchestrateProvisioning({
         businessId,
-        oldVpsHost,
+        tier,
+        ownerEmail: business.owner_email
+      });
+    } catch (err) {
+      logger.error("changePlan: new provisioning failed; aborting without teardown", {
+        businessId,
         error: errorMessage(err)
       });
+      if (stripeSubscriptionId) {
+        await cancelStripeSubscriptionSafely(stripeSubscriptionId, businessId);
+      }
+      if (customerProfileId) {
+        await rollbackLifetimeCount(customerProfileId, businessId, "changePlan");
+      }
+      return;
     }
-  } else {
-    logger.warn("changePlan: no old VPS host resolvable; skipping backup", {
-      businessId,
-      oldVpsIdRaw
-    });
-  }
 
-  // ── Step 3: provision a NEW VM at the new tier. `orchestrateProvisioning`
-  // internally overwrites `businesses.hostinger_vps_id` with the new VM
-  // id, mints a new SSH key, and re-registers the per-tenant Cloudflare
-  // tunnel (so DNS swings onto the new VM once the new cloudflared
-  // connects). If provisioning fails, immediately cancel the freshly paid
-  // Stripe sub so it cannot renew without a corresponding DB row/VPS
-  // AND roll back the lifetime counter we just bumped, so a transient
-  // provisioning failure doesn't permanently burn one of the customer's
-  // three lifetime slots for a subscription they never received.
-  let newProv: Awaited<ReturnType<typeof orchestrateProvisioning>>;
-  try {
-    newProv = await orchestrateProvisioning({
-      businessId,
-      tier,
-      ownerEmail: business.owner_email
-    });
-  } catch (err) {
-    logger.error("changePlan: new provisioning failed; aborting without teardown", {
-      businessId,
-      error: errorMessage(err)
-    });
-    if (stripeSubscriptionId) {
-      await cancelStripeSubscriptionSafely(stripeSubscriptionId, businessId);
-    }
-    if (customerProfileId) {
-      await rollbackLifetimeCount(customerProfileId, businessId, "changePlan");
-    }
-    return;
-  }
-
-  // ── Step 4: restore durable data on the NEW VM (only if backup landed).
-  // Uses the SSH key stored by the fresh provisioning via the default
-  // sshKeyLookup (which returns the newest key for the business).
-  const newVmId = Number.parseInt(newProv.vpsId, 10);
-  const newVpsHost = Number.isFinite(newVmId) ? await resolveVmIp(newVmId, hostinger) : null;
-  if (backupOk && newVpsHost) {
-    try {
-      await restoreBusinessData({ businessId, vpsHost: newVpsHost });
-      logger.info("changePlan: data restored onto new VPS", { businessId, newVpsHost });
-    } catch (err) {
-      logger.error("changePlan: restore failed (customer may need manual recovery)", {
-        businessId,
-        newVpsHost,
-        error: errorMessage(err)
-      });
+    // ── Step 4: restore durable data on the NEW VM (only if backup landed).
+    // Uses the SSH key stored by the fresh provisioning via the default
+    // sshKeyLookup (which returns the newest key for the business).
+    const newVmId = Number.parseInt(newProv.vpsId, 10);
+    const newVpsHost = Number.isFinite(newVmId) ? await resolveVmIp(newVmId, hostinger) : null;
+    if (backupOk && newVpsHost) {
+      try {
+        await restoreBusinessData({ businessId, vpsHost: newVpsHost });
+        logger.info("changePlan: data restored onto new VPS", { businessId, newVpsHost });
+      } catch (err) {
+        logger.error("changePlan: restore failed (customer may need manual recovery)", {
+          businessId,
+          newVpsHost,
+          error: errorMessage(err)
+        });
+      }
     }
   }
 
@@ -471,7 +500,10 @@ export async function runChangePlanFromCheckout(
     renewal_at: renewalAt.toISOString(),
     commitment_months: commitmentMonths,
     customer_profile_id: customerProfileId,
-    hostinger_billing_subscription_id: newProv.hostingerBillingSubscriptionId,
+    // Period-only switch keeps the existing box, so the new sub row inherits
+    // the old Hostinger billing subscription (still paying for the same VM).
+    hostinger_billing_subscription_id:
+      newProv?.hostingerBillingSubscriptionId ?? oldSub.hostinger_billing_subscription_id ?? null,
     ...periodCache
   });
 
@@ -507,7 +539,9 @@ export async function runChangePlanFromCheckout(
 
   // ── Step 7: cancel OLD Hostinger billing subscription so we stop paying
   // as soon as the new VM is live. This is what also destroys the old VM.
-  if (oldSub.hostinger_billing_subscription_id) {
+  // NEVER runs on the period-only fast path — that box (and its Hostinger
+  // billing) is still the customer's live workspace.
+  if (!periodOnlySwitch && oldSub.hostinger_billing_subscription_id) {
     try {
       if (oldVmId !== null) {
         try {
@@ -555,7 +589,8 @@ export async function runChangePlanFromCheckout(
     businessId,
     previousSubscriptionId,
     newTier: tier,
-    newBillingPeriod: billingPeriod
+    newBillingPeriod: billingPeriod,
+    periodOnlySwitch
   });
 }
 
