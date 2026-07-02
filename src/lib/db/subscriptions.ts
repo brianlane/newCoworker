@@ -317,21 +317,44 @@ export function isCanceledInGrace(
 }
 
 /**
+ * A Stripe billing period at most this long is a MONTHLY cycle (rollover
+ * phase), not a prepaid 12/24-month term. 32 days > any calendar month.
+ */
+const MONTHLY_PERIOD_MAX_MS = 32 * 24 * 60 * 60 * 1000;
+
+/**
  * True when a term (12/24-month) subscription has finished its commitment
- * and is in the month-to-month rollover phase: the original term end
- * (`renewal_at`, stamped at checkout as start + commitment months) has
- * passed. This is when the billing page offers "Start a new contract" at the
- * contract rate, and when /api/billing/change-plan allows a same-plan
- * re-contract. Monthly plans have no commitment and never qualify.
+ * and is in the month-to-month rollover phase. This is when the billing page
+ * offers "Start a new contract" at the contract rate, and when
+ * /api/billing/change-plan allows a same-plan re-contract. Monthly plans
+ * have no commitment and never qualify.
+ *
+ * Two signals are BOTH required:
+ * - `renewal_at` (stamped at checkout as start + commitment months) has
+ *   passed — the original term is over; and
+ * - the cached Stripe billing period is monthly-length — with auto-renew ON
+ *   the subscription renews for another FULL prepaid term (12/24-month
+ *   period) but `renewal_at` is never advanced, so a past `renewal_at`
+ *   alone cannot distinguish "rolling month-to-month" from "inside a
+ *   renewed contract". Missing/unparseable period bounds fail toward
+ *   "still committed" (no cap exemption, no re-contract CTA).
  */
 export function isCommitmentElapsed(
-  row: Pick<SubscriptionRow, "billing_period" | "renewal_at">,
+  row: Pick<
+    SubscriptionRow,
+    "billing_period" | "renewal_at" | "stripe_current_period_start" | "stripe_current_period_end"
+  >,
   now: Date = new Date()
 ): boolean {
   if (!row.billing_period || row.billing_period === "monthly") return false;
   if (!row.renewal_at) return false;
   const at = new Date(row.renewal_at).getTime();
-  return Number.isFinite(at) && at <= now.getTime();
+  if (!Number.isFinite(at) || at > now.getTime()) return false;
+  if (!row.stripe_current_period_start || !row.stripe_current_period_end) return false;
+  const periodStart = new Date(row.stripe_current_period_start).getTime();
+  const periodEnd = new Date(row.stripe_current_period_end).getTime();
+  if (!Number.isFinite(periodStart) || !Number.isFinite(periodEnd)) return false;
+  return periodEnd - periodStart <= MONTHLY_PERIOD_MAX_MS;
 }
 
 /**

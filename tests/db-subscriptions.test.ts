@@ -422,20 +422,25 @@ describe("db/subscriptions", () => {
 
   describe("isCommitmentElapsed", () => {
     const now = new Date("2026-07-01T00:00:00.000Z");
+    // Rollover phase: the Stripe period is a single month.
+    const monthlyPeriod = {
+      stripe_current_period_start: "2026-06-15T00:00:00.000Z",
+      stripe_current_period_end: "2026-07-15T00:00:00.000Z"
+    };
 
-    it("is true for a term plan whose renewal_at has passed", () => {
+    it("is true for a term plan past renewal_at whose Stripe period is monthly (rollover)", () => {
       expect(
         isCommitmentElapsed(
-          { billing_period: "biennial", renewal_at: "2026-06-30T00:00:00.000Z" },
+          { billing_period: "biennial", renewal_at: "2026-06-30T00:00:00.000Z", ...monthlyPeriod },
           now
         )
       ).toBe(true);
     });
 
-    it("is true exactly at the boundary", () => {
+    it("is true exactly at the renewal_at boundary", () => {
       expect(
         isCommitmentElapsed(
-          { billing_period: "annual", renewal_at: "2026-07-01T00:00:00.000Z" },
+          { billing_period: "annual", renewal_at: "2026-07-01T00:00:00.000Z", ...monthlyPeriod },
           now
         )
       ).toBe(true);
@@ -444,7 +449,24 @@ describe("db/subscriptions", () => {
     it("is false while the commitment is still running", () => {
       expect(
         isCommitmentElapsed(
-          { billing_period: "biennial", renewal_at: "2027-01-01T00:00:00.000Z" },
+          { billing_period: "biennial", renewal_at: "2027-01-01T00:00:00.000Z", ...monthlyPeriod },
+          now
+        )
+      ).toBe(false);
+    });
+
+    it("is false inside a RENEWED full term (auto-renew ON: stale renewal_at, multi-month Stripe period)", () => {
+      // Auto-renew renewed another 24-month prepaid term; renewal_at was
+      // never advanced. The multi-month Stripe period proves the customer
+      // is inside a live contract, not rolling month-to-month.
+      expect(
+        isCommitmentElapsed(
+          {
+            billing_period: "biennial",
+            renewal_at: "2026-06-15T00:00:00.000Z",
+            stripe_current_period_start: "2026-06-15T00:00:00.000Z",
+            stripe_current_period_end: "2028-06-15T00:00:00.000Z"
+          },
           now
         )
       ).toBe(false);
@@ -453,16 +475,50 @@ describe("db/subscriptions", () => {
     it("is false for monthly plans (no commitment)", () => {
       expect(
         isCommitmentElapsed(
-          { billing_period: "monthly", renewal_at: "2026-01-01T00:00:00.000Z" },
+          { billing_period: "monthly", renewal_at: "2026-01-01T00:00:00.000Z", ...monthlyPeriod },
           now
         )
       ).toBe(false);
     });
 
     it("is false when billing_period or renewal_at is missing/unparseable", () => {
-      expect(isCommitmentElapsed({ billing_period: null, renewal_at: "2026-01-01T00:00:00.000Z" }, now)).toBe(false);
-      expect(isCommitmentElapsed({ billing_period: "annual", renewal_at: null }, now)).toBe(false);
-      expect(isCommitmentElapsed({ billing_period: "annual", renewal_at: "not-a-date" }, now)).toBe(false);
+      expect(
+        isCommitmentElapsed(
+          { billing_period: null, renewal_at: "2026-01-01T00:00:00.000Z", ...monthlyPeriod },
+          now
+        )
+      ).toBe(false);
+      expect(
+        isCommitmentElapsed({ billing_period: "annual", renewal_at: null, ...monthlyPeriod }, now)
+      ).toBe(false);
+      expect(
+        isCommitmentElapsed(
+          { billing_period: "annual", renewal_at: "not-a-date", ...monthlyPeriod },
+          now
+        )
+      ).toBe(false);
+    });
+
+    it("fails toward 'still committed' when Stripe period bounds are missing or unparseable", () => {
+      const base = { billing_period: "annual" as const, renewal_at: "2026-01-01T00:00:00.000Z" };
+      expect(
+        isCommitmentElapsed(
+          { ...base, stripe_current_period_start: null, stripe_current_period_end: "2026-07-15T00:00:00.000Z" },
+          now
+        )
+      ).toBe(false);
+      expect(
+        isCommitmentElapsed(
+          { ...base, stripe_current_period_start: "2026-06-15T00:00:00.000Z", stripe_current_period_end: null },
+          now
+        )
+      ).toBe(false);
+      expect(
+        isCommitmentElapsed(
+          { ...base, stripe_current_period_start: "junk", stripe_current_period_end: "2026-07-15T00:00:00.000Z" },
+          now
+        )
+      ).toBe(false);
     });
   });
 

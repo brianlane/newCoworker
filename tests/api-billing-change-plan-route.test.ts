@@ -207,8 +207,11 @@ describe("/api/billing/change-plan", () => {
           customer_profile_id: "prof_1",
           cancel_at_period_end: false,
           stripe_subscription_id: "stripe_sub_1",
-          // Term ended yesterday → month-to-month rollover phase.
+          // Term ended yesterday → month-to-month rollover phase (the live
+          // Stripe period is now a single month, not the prepaid term).
           renewal_at: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+          stripe_current_period_start: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+          stripe_current_period_end: new Date(Date.now() + 29 * 24 * 60 * 60 * 1000).toISOString(),
           ...overrides
         }
       });
@@ -262,6 +265,23 @@ describe("/api/billing/change-plan", () => {
         ok: true,
         vpsHost: "1.2.3.4",
         context: termContext({ stripe_subscription_id: null })
+      });
+      const res = await POST(makeRequest({ tier: "standard", billingPeriod: "biennial" }));
+      const body = await res.json();
+      expect(res.status).toBe(409);
+      expect(body.error.message).toBe("plan_unchanged");
+    });
+
+    it("does not treat a renewed full term (stale renewal_at, multi-month Stripe period) as re-contract eligible", async () => {
+      loadLifecycleContextMock.mockResolvedValue({
+        ok: true,
+        vpsHost: "1.2.3.4",
+        context: termContext({
+          stripe_current_period_start: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+          stripe_current_period_end: new Date(
+            Date.now() + 729 * 24 * 60 * 60 * 1000
+          ).toISOString()
+        })
       });
       const res = await POST(makeRequest({ tier: "standard", billingPeriod: "biennial" }));
       const body = await res.json();

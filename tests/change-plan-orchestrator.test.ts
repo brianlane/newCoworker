@@ -315,8 +315,10 @@ describe("runChangePlanFromCheckout", () => {
         status: "active",
         created_at: "2024-06-01T00:00:00.000Z",
         cancel_at_period_end: false,
-        // Commitment ended yesterday → rollover phase.
+        // Commitment ended yesterday → rollover phase (monthly Stripe period).
         renewal_at: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+        stripe_current_period_start: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+        stripe_current_period_end: new Date(Date.now() + 29 * 24 * 60 * 60 * 1000).toISOString(),
         ...overrides
       };
     }
@@ -356,6 +358,18 @@ describe("runChangePlanFromCheckout", () => {
         termOldSub({ stripe_subscription_id: null, hostinger_billing_subscription_id: null })
       );
       await runChangePlanFromCheckout(recontractSession(), "evt_recontract_nostripe");
+      expect(incrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
+    });
+
+    it("still increments when the old sub is inside a renewed full term (multi-month Stripe period)", async () => {
+      getSubscriptionMock.mockResolvedValue(
+        termOldSub({
+          stripe_current_period_end: new Date(
+            Date.now() + 729 * 24 * 60 * 60 * 1000
+          ).toISOString()
+        })
+      );
+      await runChangePlanFromCheckout(recontractSession(), "evt_recontract_renewed");
       expect(incrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
     });
   });
