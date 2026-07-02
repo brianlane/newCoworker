@@ -39,12 +39,35 @@ export type SmsSegmentInfo = {
   exceedsUcs2SendableLimit: boolean;
 };
 
-export function smsSegmentInfo(text: string): SmsSegmentInfo {
-  const length = text.length;
+export type SmsSegmentInfoOptions = {
+  /**
+   * Apply the same smart-punctuation → ASCII normalization the AiFlow
+   * worker's `gsmSafeSmsText` runs BEFORE its encoding check (curly quotes,
+   * en/em dashes, ellipsis, nbsp). With it, a long message whose only
+   * non-ASCII chars are smart punctuation is correctly reported as GSM —
+   * the worker will normalize it and nothing gets stripped. Leave off for
+   * verbatim sends, where those characters really do force UCS-2.
+   */
+  normalizeSmartPunctuation?: boolean;
+};
+
+/** Mirrors the normalization table in `_shared/ai_flows/compliance.ts`. */
+function normalizeSmartPunctuation(text: string): string {
+  return text
+    .replace(/[\u2018\u2019\u02BC]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[\u2013\u2014]/g, "-")
+    .replace(/\u2026/g, "...")
+    .replace(/\u00A0/g, " ");
+}
+
+export function smsSegmentInfo(text: string, opts: SmsSegmentInfoOptions = {}): SmsSegmentInfo {
+  const effective = opts.normalizeSmartPunctuation ? normalizeSmartPunctuation(text) : text;
+  const length = effective.length;
   // Same test the worker uses (`gsmSafeSmsText`): any non-ASCII char forces
   // UCS-2. Slightly conservative vs. the full GSM-7 alphabet (which includes
   // a few non-ASCII chars like é/ñ), which errs on the warning side.
-  const hasNonGsmChars = /[^\x00-\x7F]/.test(text);
+  const hasNonGsmChars = /[^\x00-\x7F]/.test(effective);
   const single = hasNonGsmChars ? UCS2_SINGLE_SEGMENT : GSM_SINGLE_SEGMENT;
   const multi = hasNonGsmChars ? UCS2_MULTI_SEGMENT : GSM_MULTI_SEGMENT;
   const segments = length === 0 ? 0 : length <= single ? 1 : Math.ceil(length / multi);

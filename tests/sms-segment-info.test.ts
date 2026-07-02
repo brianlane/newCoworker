@@ -58,4 +58,29 @@ describe("smsSegmentInfo", () => {
     expect(atCap.length).toBe(UCS2_MAX_SENDABLE_CHARS);
     expect(smsSegmentInfo(atCap).exceedsUcs2SendableLimit).toBe(false);
   });
+
+  describe("normalizeSmartPunctuation (aiflow mode)", () => {
+    it("treats smart punctuation as GSM, matching the worker's gsmSafeSmsText", () => {
+      // A long body whose only non-ASCII chars are smart punctuation: the
+      // worker normalizes it to ASCII before the cap check, so nothing is
+      // converted or stripped — the hint must not warn.
+      const long = "It\u2019s a \u201Cbig\u201D deal \u2014 really\u2026 " + "a".repeat(700);
+      const info = smsSegmentInfo(long, { normalizeSmartPunctuation: true });
+      expect(info.encoding).toBe("gsm");
+      expect(info.exceedsUcs2SendableLimit).toBe(false);
+      // Without normalization (verbatim mode) the same text is over-cap UCS-2.
+      expect(smsSegmentInfo(long).exceedsUcs2SendableLimit).toBe(true);
+    });
+
+    it("still flags emoji that survive normalization", () => {
+      const long = "\u{1F60A} " + "a".repeat(700);
+      const info = smsSegmentInfo(long, { normalizeSmartPunctuation: true });
+      expect(info.encoding).toBe("ucs2");
+      expect(info.exceedsUcs2SendableLimit).toBe(true);
+    });
+
+    it("measures length after normalization (ellipsis expands to three dots)", () => {
+      expect(smsSegmentInfo("\u2026", { normalizeSmartPunctuation: true }).length).toBe(3);
+    });
+  });
 });

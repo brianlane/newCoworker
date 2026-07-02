@@ -17,7 +17,11 @@ type Props = {
  * message is deliverable as typed, so composers stay clean in the common case.
  */
 export function SmsSegmentHint({ text, mode }: Props) {
-  const info = smsSegmentInfo(text);
+  // AiFlow sends run through the worker's gsmSafeSmsText, which normalizes
+  // smart punctuation to ASCII before the encoding check — so only emoji-like
+  // characters that survive normalization should trigger the aiflow warning.
+  // Verbatim sends hit Telnyx as typed: smart quotes really do force UCS-2.
+  const info = smsSegmentInfo(text, { normalizeSmartPunctuation: mode === "aiflow" });
   if (!info.exceedsUcs2SendableLimit) return null;
   return (
     <p className="text-xs text-spark-orange" role="alert">
