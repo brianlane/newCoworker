@@ -433,6 +433,9 @@ export async function runChangePlanFromCheckout(
       newProv = await orchestrateProvisioning({
         businessId,
         tier,
+        // Hardware pin survives tier changes: an operator-set vps_size keeps
+        // the business on that box size; null keeps the tier default.
+        vpsSize: business.vps_size ?? null,
         ownerEmail: business.owner_email
       });
     } catch (err) {
@@ -776,6 +779,7 @@ export async function runResubscribeFromCheckout(
     newProv = await orchestrateProvisioning({
       businessId,
       tier,
+      vpsSize: business.vps_size ?? null,
       ownerEmail: business.owner_email
     });
   } catch (err) {

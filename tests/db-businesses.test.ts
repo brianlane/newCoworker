@@ -13,6 +13,7 @@ import {
   updateBusinessOwnerEmailIfPending,
   updateBusinessStatus,
   updateBusinessTimezone,
+  updateBusinessVpsSize,
   updateBusinessWebsiteUrl,
   updateEnterpriseLimits
 } from "@/lib/db/businesses";
@@ -484,6 +485,26 @@ describe("db/businesses", () => {
 
     await expect(updateBusinessTimezone("uuid-biz-1", "UTC")).rejects.toThrow(
       "updateBusinessTimezone"
+    );
+  });
+
+  it("updateBusinessVpsSize writes the pin and supports clearing with null", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await updateBusinessVpsSize("uuid-biz-1", "kvm2");
+    expect(db.update).toHaveBeenCalledWith({ vps_size: "kvm2" });
+
+    await updateBusinessVpsSize("uuid-biz-1", null, db as never);
+    expect(db.update).toHaveBeenCalledWith({ vps_size: null });
+  });
+
+  it("updateBusinessVpsSize throws when Supabase reports an error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(updateBusinessVpsSize("uuid-biz-1", "kvm8")).rejects.toThrow(
+      "updateBusinessVpsSize"
     );
   });
 

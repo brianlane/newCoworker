@@ -250,7 +250,11 @@ describe("stripe webhook route", () => {
       tier: "starter",
       billingPeriod: "annual"
     });
-    expect(orchestrateProvisioning).toHaveBeenCalledWith({ businessId: "biz_1", tier: "starter" });
+    expect(orchestrateProvisioning).toHaveBeenCalledWith({
+      businessId: "biz_1",
+      tier: "starter",
+      vpsSize: null
+    });
   });
 
   it("skips the commitment schedule when a FRESH re-read shows auto-renew was just enabled (webhook race)", async () => {
@@ -2160,7 +2164,11 @@ describe("stripe webhook route", () => {
         error: "schedule api unavailable"
       })
     );
-    expect(orchestrateProvisioning).toHaveBeenCalledWith({ businessId: "biz_4", tier: "standard" });
+    expect(orchestrateProvisioning).toHaveBeenCalledWith({
+      businessId: "biz_4",
+      tier: "standard",
+      vpsSize: null
+    });
   });
 });
 

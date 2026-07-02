@@ -488,6 +488,23 @@ describe("runChangePlanFromCheckout", () => {
     });
   });
 
+  it("forwards the business's vps_size hardware pin into the new provisioning run", async () => {
+    getBusinessMock.mockResolvedValueOnce({
+      id: "biz-1",
+      owner_email: "owner@example.com",
+      hostinger_vps_id: "1001",
+      customer_profile_id: "prof-1",
+      status: "online",
+      // Operator pinned this business to KVM2 hardware — a tier change must
+      // keep the pin (entitlements move, hardware stays).
+      vps_size: "kvm2"
+    });
+    await runChangePlanFromCheckout(makeSession(), "evt_vps_size_pin");
+    expect(orchestrateProvisioningMock).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz-1", tier: "standard", vpsSize: "kvm2" })
+    );
+  });
+
   it("aborts if the business is missing and cancels the fresh Stripe sub", async () => {
     getBusinessMock.mockResolvedValueOnce(null);
     await runChangePlanFromCheckout(makeSession(), "evt_2");
@@ -1140,6 +1157,7 @@ describe("runResubscribeFromCheckout", () => {
     expect(orchestrateProvisioningMock).toHaveBeenCalledWith({
       businessId: "biz-1",
       tier: "standard",
+      vpsSize: null,
       ownerEmail: "owner@example.com"
     });
     expect(restoreBusinessDataMock).toHaveBeenCalledWith({
@@ -1160,6 +1178,47 @@ describe("runResubscribeFromCheckout", () => {
       })
     );
     expect(incrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
+  });
+
+  it("resubscribe forwards the business's vps_size hardware pin", async () => {
+    getBusinessMock.mockResolvedValueOnce({
+      id: "biz-1",
+      owner_email: "owner@example.com",
+      hostinger_vps_id: "1001",
+      customer_profile_id: "prof-1",
+      status: "online",
+      vps_size: "kvm2"
+    });
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-row-grace",
+      business_id: "biz-1",
+      stripe_subscription_id: "sub_old_canceled",
+      hostinger_billing_subscription_id: "billing_old_canceled",
+      customer_profile_id: "prof-1",
+      tier: "starter",
+      billing_period: "monthly",
+      status: "canceled",
+      grace_ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      wiped_at: null,
+      created_at: "2026-01-01T00:00:00.000Z"
+    });
+
+    await runResubscribeFromCheckout(
+      makeSession({
+        metadata: {
+          businessId: "biz-1",
+          tier: "standard",
+          billingPeriod: "annual",
+          lifecycleAction: "resubscribe",
+          customerProfileId: "prof-1"
+        }
+      }),
+      "evt_resub_vps_size_pin"
+    );
+
+    expect(orchestrateProvisioningMock).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz-1", tier: "standard", vpsSize: "kvm2" })
+    );
   });
 
   it("continues when resubscribe post-update bookkeeping fails", async () => {

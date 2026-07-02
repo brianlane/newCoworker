@@ -42,17 +42,28 @@ import {
 } from "./client";
 import { generateSshKeypair, type SshKeypair } from "./keypair";
 import { insertVpsSshKey, type VpsSshKeyRow } from "@/lib/db/vps-ssh-keys";
+import { resolveVpsSize, type VpsSize } from "@/lib/vps/size";
 
 /**
- * Price-item id for each tier.
+ * Price-item id for each hardware size.
  *
  * We hardcode the monthly-billing (`-1m`) SKUs; annual/biennial give a bigger
  * discount but lock capital longer than we want on a first-gen deploy. Ops
  * can override via env when this changes.
  */
+export const VPS_SIZE_PRICE_ITEM: Record<VpsSize, string> = {
+  kvm2: "hostingercom-vps-kvm2-usd-1m",
+  kvm8: "hostingercom-vps-kvm8-usd-1m"
+};
+
+/**
+ * Historical tier → price-item mapping. Kept for callers (preflight script,
+ * debug tooling) that reason in tier terms; new code should key off
+ * {@link VPS_SIZE_PRICE_ITEM} via `resolveVpsSize`.
+ */
 export const DEFAULT_TIER_PRICE_ITEM: Record<"starter" | "standard", string> = {
-  starter: "hostingercom-vps-kvm2-usd-1m",
-  standard: "hostingercom-vps-kvm8-usd-1m"
+  starter: VPS_SIZE_PRICE_ITEM.kvm2,
+  standard: VPS_SIZE_PRICE_ITEM.kvm8
 };
 
 /** Ubuntu 24.04 with Docker (verified via `GET /api/vps/v1/templates`). */
@@ -73,6 +84,12 @@ export const DEFAULT_US_DATA_CENTER_ID = 24;
 export type ProvisionVpsForBusinessInput = {
   businessId: string;
   tier: "starter" | "standard";
+  /**
+   * Hardware pin (`businesses.vps_size`). Omitted/null falls back to the
+   * tier default (starter→kvm2, standard→kvm8). Drives the Hostinger SKU
+   * only — entitlements stay on `tier`.
+   */
+  vpsSize?: VpsSize | null;
   /** Override the price-item id (e.g. annual billing). */
   itemId?: string;
   /** Override the template (default: Ubuntu 24.04 with Docker). */
@@ -183,7 +200,8 @@ export async function provisionVpsForBusiness(
   /* c8 ignore next -- production default; tests inject db.insertVpsSshKey */
   const dbInsert = deps.db?.insertVpsSshKey ?? insertVpsSshKey;
 
-  const itemId = input.itemId ?? DEFAULT_TIER_PRICE_ITEM[input.tier];
+  const vpsSize = resolveVpsSize(input.tier, input.vpsSize);
+  const itemId = input.itemId ?? VPS_SIZE_PRICE_ITEM[vpsSize];
   const templateId = input.templateId ?? DEFAULT_TEMPLATE_ID;
   const dataCenterId = input.dataCenterId ?? DEFAULT_US_DATA_CENTER_ID;
   const hostname = input.hostname ?? `nc-${truncateBusinessId(input.businessId)}`;
@@ -389,17 +407,24 @@ export function buildDefaultPostInstallScript(opts?: {
   repoUrl?: string;
   repoRef?: string;
   /**
-   * Tier passed through to the full bootstrap (`TIER=…` env). Drives ZRAM,
-   * Ollama tuning, and which Rowboat compose tier to render. Defaults to
-   * `standard` — the safe pick for KVM 8 hosts; starter (KVM 2) MUST pass
-   * `tier: "starter"` or ZRAM swap won't be configured and Ollama will
-   * crash-loop on a 3B model with the wrong parallelism settings.
+   * Entitlement tier passed through to the full bootstrap (`TIER=…` env).
+   * Drives entitlement-side deploy behavior (e.g. the aiflow-render gate in
+   * deploy-client.sh). Defaults to `standard`.
    */
   tier?: "starter" | "standard";
+  /**
+   * Hardware size passed through as `VPS_SIZE=…`. Drives ZRAM, Ollama
+   * tuning/model, and which Rowboat compose profile to render. Defaults to
+   * the tier's historical mapping (starter→kvm2, standard→kvm8). A KVM2
+   * host MUST get `kvm2` or ZRAM swap won't be configured and Ollama will
+   * crash-loop with the wrong parallelism settings.
+   */
+  vpsSize?: VpsSize | null;
 }): string {
   const repoUrl = opts?.repoUrl ?? "https://github.com/brianlane/newCoworker.git";
   const repoRef = opts?.repoRef ?? "main";
   const tier = opts?.tier ?? "standard";
+  const vpsSize = resolveVpsSize(tier, opts?.vpsSize);
 
   // Defense-in-depth: reject values that could break out of the bash string
   // even before single-quote escaping runs. `repoUrl` must be an http(s) URL;
@@ -411,6 +436,8 @@ export function buildDefaultPostInstallScript(opts?: {
   assertSafeRepoUrl(repoUrl);
   assertSafeRepoRef(repoRef);
   assertSafeTier(tier);
+  // vpsSize needs no assert: `resolveVpsSize` whitelists to 'kvm2'|'kvm8'
+  // (any other input — including hostile strings — falls to the tier default).
 
   return `#!/bin/bash
 # newCoworker VPS bootstrap (slim loader).
@@ -476,10 +503,12 @@ if [[ -f "$REPO_PATH/vps/scripts/deploy-client.sh" ]]; then
 fi
 
 # Hand off to the full bootstrap (system hardening, ZRAM, Docker, Ollama,
-# Rowboat compose, cloudflared). \`TIER\` is locked at script-generation
-# time so a future bug in the orchestrator can't accidentally swap a KVM 2
-# host into the standard-tier compose (which would OOM-kill it).
-TIER=${bashSingleQuote(tier)} bash "$REPO_PATH/vps/scripts/bootstrap.sh"
+# Rowboat compose, cloudflared). \`TIER\` (entitlements) and \`VPS_SIZE\`
+# (hardware: ZRAM, Ollama tuning, compose profile) are locked at
+# script-generation time so a future bug in the orchestrator can't
+# accidentally run a KVM 2 host with the KVM 8 hardware profile (which
+# would OOM-kill it).
+TIER=${bashSingleQuote(tier)} VPS_SIZE=${bashSingleQuote(vpsSize)} bash "$REPO_PATH/vps/scripts/bootstrap.sh"
 
 echo "[newcoworker] post_install complete: $(date -Is)"
 `;

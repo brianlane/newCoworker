@@ -37,10 +37,18 @@ import {
   cloudflareTunnelProvisionerFromEnv,
   type CloudflareTunnelProvisioner
 } from "@/lib/cloudflare/tunnel";
+import { resolveVpsSize, type VpsSize } from "@/lib/vps/size";
 
 type ProvisioningInput = {
   businessId: string;
   tier: "starter" | "standard" | "enterprise";
+  /**
+   * Hardware pin (`businesses.vps_size`). Callers pass the raw column value;
+   * null/undefined resolves to the tier default (starter→kvm2,
+   * standard→kvm8). Drives the Hostinger SKU + bootstrap hardware profile
+   * only — entitlements stay on `tier`.
+   */
+  vpsSize?: string | null;
   ownerEmail?: string;
   ownerPhone?: string;
 };
@@ -191,10 +199,11 @@ async function runRemoteBootstrapInternal(input: {
   username: string;
   privateKeyPem: string;
   tier: "starter" | "standard";
+  vpsSize: VpsSize;
   remoteExec: RemoteExecutor;
   sleep?: (ms: number) => Promise<void>;
 }): Promise<SshExecResult> {
-  const script = buildDefaultPostInstallScript({ tier: input.tier });
+  const script = buildDefaultPostInstallScript({ tier: input.tier, vpsSize: input.vpsSize });
   const b64 = Buffer.from(script, "utf8").toString("base64");
   const cmd = buildBootstrapSshCommand(b64);
   return runWithSshConnectRetry(
@@ -270,6 +279,7 @@ function isSshConnectError(err: unknown): boolean {
 export type VpsProvisioner = (input: {
   businessId: string;
   tier: "starter" | "standard";
+  vpsSize: VpsSize;
 }) => Promise<ProvisionVpsForBusinessResult>;
 
 /**
@@ -289,18 +299,19 @@ export type DidProvisioner = (input: {
 
 /* c8 ignore start -- production-only default factory; tests inject vpsProvisioner */
 function defaultVpsProvisioner(client: HostingerClient): VpsProvisioner {
-  return ({ businessId, tier }) =>
+  return ({ businessId, tier, vpsSize }) =>
     provisionVpsForBusiness(
       {
         businessId,
         tier,
+        vpsSize,
         // Attempt to attach the bootstrap as Hostinger's first-boot
         // post-install script. provisionVpsForBusiness gracefully degrades
         // on the 403 chicken-and-egg ("account doesn't yet own a VPS") so
         // the SSH-bootstrap phase below always runs the same content
         // afterward. Either path produces the same state because the
         // script is idempotent.
-        postInstallScript: buildDefaultPostInstallScript({ tier })
+        postInstallScript: buildDefaultPostInstallScript({ tier, vpsSize })
       },
       { client }
     );
@@ -364,8 +375,9 @@ export async function orchestrateProvisioning(
 ): Promise<ProvisioningResult> {
   const { businessId, ownerEmail, ownerPhone, tier } = input;
   const narrowTier = resolveStarterOrStandard(tier);
+  const vpsSize = resolveVpsSize(narrowTier, input.vpsSize);
 
-  logger.info("Starting provisioning", { businessId, tier: narrowTier });
+  logger.info("Starting provisioning", { businessId, tier: narrowTier, vpsSize });
 
   await recordProvisioningProgress({
     businessId,
@@ -376,7 +388,10 @@ export async function orchestrateProvisioning(
   });
 
   try {
-    return await runOrchestrator({ businessId, ownerEmail, ownerPhone, tier: narrowTier }, deps);
+    return await runOrchestrator(
+      { businessId, ownerEmail, ownerPhone, tier: narrowTier, vpsSize },
+      deps
+    );
   } catch (err) {
     // Top-level safety net. Several inner steps already record their own
     // `status: "error"` rows AND swallow the error (cloudflare, DID, deploy),
@@ -515,10 +530,10 @@ function formatProvisioningErrorMessage(detail: ProvisioningErrorDetail): string
 }
 
 async function runOrchestrator(
-  input: ProvisioningInput & { tier: "starter" | "standard" },
+  input: ProvisioningInput & { tier: "starter" | "standard"; vpsSize: VpsSize },
   deps?: Parameters<typeof orchestrateProvisioning>[1]
 ): Promise<ProvisioningResult> {
-  const { businessId, ownerEmail, ownerPhone, tier: narrowTier } = input;
+  const { businessId, ownerEmail, ownerPhone, tier: narrowTier, vpsSize } = input;
 
   const hostinger =
     deps?.hostinger ??
@@ -537,7 +552,7 @@ async function runOrchestrator(
   // Phase 1: purchase + boot the VPS via the real Hostinger API. This also
   // generates the per-VPS keypair, uploads the public half, and persists the
   // private half in `vps_ssh_keys` for later admin access.
-  const provisioned = await vpsProvisioner({ businessId, tier: narrowTier });
+  const provisioned = await vpsProvisioner({ businessId, tier: narrowTier, vpsSize });
   const vpsId = String(provisioned.virtualMachineId);
   logger.info("VPS provisioned", {
     businessId,
@@ -597,6 +612,7 @@ async function runOrchestrator(
     username: provisioned.sshUsername,
     privateKeyPem: provisioned.sshKey.private_key_pem,
     tier: narrowTier,
+    vpsSize,
     remoteExec,
     sleep: deps?.sleep
   });
@@ -698,10 +714,11 @@ async function runOrchestrator(
   let tunnelHostname = `${businessId}.${tunnelZone}`;
   let cloudflareTunnelToken = process.env.CLOUDFLARE_TUNNEL_TOKEN ?? "";
   let bridgeMediaWssOrigin = process.env.BRIDGE_MEDIA_WSS_ORIGIN ?? "";
-  // The AiFlow render sidecar (headless Chromium) is only deployed on
-  // render-capable tiers — never the starter/KVM2 box, which is already
-  // memory-constrained by Ollama + Rowboat. Gate the public render hostname to
-  // match where the container actually runs.
+  // The AiFlow render sidecar (headless Chromium) is an ENTITLEMENT gate:
+  // standard/enterprise get it, starter does not — regardless of hardware
+  // (the June 2026 KVM2 experiment validated render runs fine on a KVM2 box,
+  // so a standard tenant pinned to kvm2 still gets the sidecar). Gate the
+  // public render hostname to match where the container actually runs.
   const renderEnabled = narrowTier !== "starter";
   if (tunnelProvisioner) {
     try {
@@ -949,6 +966,10 @@ async function runOrchestrator(
   const envVars = [
     ["BUSINESS_ID", businessId],
     ["TIER", narrowTier],
+    // Hardware profile for deploy-client.sh (Ollama model selection). The
+    // aiflow-render gate stays keyed on TIER — standard/enterprise get the
+    // render sidecar regardless of box size.
+    ["VPS_SIZE", vpsSize],
     ["SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""],
     ["SUPABASE_SERVICE_KEY", process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""],
     ["ROWBOAT_GATEWAY_TOKEN", gatewayToken],
