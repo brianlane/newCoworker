@@ -7,11 +7,19 @@
  * reconstructed /dashboard/chat prompts to http://host.docker.internal:11434
  * /api/chat (native, so we get prefill vs decode timing breakdown).
  *
- * num_ctx=16384 to match production. Records prompt_eval (prefill) and eval
- * (decode) token counts + durations, total wall time, correctness, and
- * whether the turn would blow the worker's 240s Rowboat timeout.
+ * num_ctx defaults to 16384 to match KVM8 production. Records prompt_eval
+ * (prefill) and eval (decode) token counts + durations, total wall time,
+ * correctness, and whether the turn would blow the worker's 240s Rowboat
+ * timeout.
  *
- * Writes debug/.bench-results-local.json. Usage: tsx debug/bench-local.ts [businessId]
+ * Writes debug/.bench-results-local.json.
+ *
+ * Usage: tsx debug/bench-local.ts [businessId] [--model <tag>] [--num-ctx <n>]
+ *
+ * Defaults benchmark the standard-tier model (qwen3:4b-instruct @ 16384).
+ * For a starter/KVM2 box pass the tier's actual config so the numbers match
+ * what the fallback path really runs:
+ *   tsx debug/bench-local.ts <cloneId> --model llama3.2:3b --num-ctx 4096
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -19,7 +27,20 @@ import { loadEnv, makeHostingerClient, resolveVpsIp } from "./_shared.ts";
 import { buildPrompt, QUESTION, EXPECTED_ANSWERS } from "./bench-prompts.ts";
 
 loadEnv();
-const BUSINESS_ID = process.argv[2] ?? "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
+const positional = process.argv.slice(2).filter(
+  (a, i, all) => !a.startsWith("--") && all[i - 1] !== "--model" && all[i - 1] !== "--num-ctx"
+);
+const BUSINESS_ID = positional[0] ?? "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
+const flagValue = (flag: string): string | null => {
+  const i = process.argv.indexOf(flag);
+  return i > -1 ? (process.argv[i + 1] ?? null) : null;
+};
+const MODEL = flagValue("--model") ?? "qwen3:4b-instruct";
+const NUM_CTX = Number(flagValue("--num-ctx") ?? 16384);
+if (!Number.isInteger(NUM_CTX) || NUM_CTX <= 0) {
+  console.error("--num-ctx must be a positive integer");
+  process.exit(1);
+}
 
 // Cells: the base 2-message scenario (stateless + stateful) plus aged-thread
 // stateful points to show prefill blowing past the 240s worker timeout, and a
@@ -47,13 +68,14 @@ const remoteScript = `
 const fs = require('fs');
 const cells = JSON.parse(fs.readFileSync('/tmp/bench-cells.json','utf8'));
 const expected = ${expectedJson};
-const MODEL = 'qwen3:4b-instruct';
+const MODEL = ${JSON.stringify(MODEL)};
+const NUM_CTX = ${NUM_CTX};
 const URL = 'http://host.docker.internal:11434/api/chat';
 const norm = (s) => (s||'').replace(/[^0-9a-z]/gi,'').toLowerCase();
 async function call(messages){
   const t0 = Date.now();
   const res = await fetch(URL, { method:'POST', headers:{'content-type':'application/json'},
-    body: JSON.stringify({ model: MODEL, stream:false, options:{ temperature:0, num_ctx:16384 }, messages }) });
+    body: JSON.stringify({ model: MODEL, stream:false, options:{ temperature:0, num_ctx:NUM_CTX }, messages }) });
   const wallMs = Date.now()-t0;
   if(!res.ok){ const t = await res.text().catch(()=>''); return { ok:false, wallMs, error:'http_'+res.status+':'+t.slice(0,160) }; }
   const d = await res.json();
@@ -97,7 +119,7 @@ ${remoteScript}
 JS_EOF
 docker cp /tmp/bench-cells.json chat-worker:/tmp/bench-cells.json >/dev/null
 docker cp /tmp/bench-run.js chat-worker:/tmp/bench-run.js >/dev/null
-echo "== running qwen benchmark (this takes several minutes) =="
+echo "== running local-model benchmark (this takes several minutes) =="
 docker exec chat-worker node /tmp/bench-run.js
 `;
 
@@ -108,7 +130,7 @@ if (!key) throw new Error(`no active ssh key for business ${BUSINESS_ID}`);
 const client = makeHostingerClient();
 const ip = await resolveVpsIp(client, key);
 
-console.log(`== Local qwen benchmark on ${ip} ==`);
+console.log(`== Local ${MODEL} benchmark on ${ip} (num_ctx=${NUM_CTX}) ==`);
 console.log(`question: "${QUESTION}"  cells: ${cells.length}  total gens: ${CELLS.reduce((n, c) => n + c.reps, 0)}`);
 
 let buf = "";
@@ -142,19 +164,27 @@ for (const r of rows) {
   r.prefillTokPerSec = r.promptTokens && r.promptNs ? +(r.promptTokens / (r.promptNs / 1e9)).toFixed(2) : null;
   r.decodeTokPerSec = r.evalTokens && r.evalNs ? +(r.evalTokens / (r.evalNs / 1e9)).toFixed(2) : null;
   r.wouldTimeout = typeof r.wallMs === "number" ? r.wallMs > 240_000 : null;
-  r.model = "qwen3:4b-instruct (local CPU)";
+  r.model = `${MODEL} (local CPU)`;
 }
 
 const out = {
   generatedAt: new Date().toISOString(),
   businessId: BUSINESS_ID,
   vps: ip,
-  model: "qwen3:4b-instruct",
+  model: MODEL,
+  numCtx: NUM_CTX,
   question: QUESTION,
   workerRowboatTimeoutMs: 240_000,
   rows
 };
-const OUT = path.resolve(process.cwd(), "debug/.bench-results-local.json");
+// Keep the default (qwen/KVM8 baseline) file stable; a --model run writes a
+// model-suffixed file so it can't clobber the baseline it's compared against.
+const OUT = path.resolve(
+  process.cwd(),
+  flagValue("--model")
+    ? `debug/.bench-results-local-${MODEL.replace(/[^a-z0-9]+/gi, "-")}.json`
+    : "debug/.bench-results-local.json"
+);
 fs.writeFileSync(OUT, JSON.stringify(out, null, 2));
 console.log(`\n[bench-local] exit ${res.exitCode}; ${rows.length} rows -> ${OUT}`);
 for (const r of rows) {
