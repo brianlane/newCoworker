@@ -48,6 +48,7 @@ import {
   type RoutedAgent
 } from "../_shared/ai_flows/engine.ts";
 import { callRowboatChatOnce } from "../_shared/sms_rowboat.ts";
+import { resolveRowboatBearerForBusiness } from "../_shared/gateway_token.ts";
 import { planStep, type StepAction } from "../_shared/ai_flows/steps.ts";
 import {
   normalizeBrowseUrl,
@@ -3203,8 +3204,9 @@ async function pickNextAgent(
   const template =
     Deno.env.get("ROWBOAT_CHAT_URL_TEMPLATE") ??
     "https://{businessId}.newcoworker.com/api/v1/{projectId}/chat";
-  const bearer =
-    Deno.env.get("ROWBOAT_VPS_CHAT_BEARER") ?? Deno.env.get("ROWBOAT_GATEWAY_TOKEN") ?? "";
+  // Rowboat-facing bearer: a re-keyed VPS rejects the shared env token, so
+  // resolve the tenant's confirmed per-tenant token (env fallback inside).
+  const bearer = await resolveRowboatBearerForBusiness(supabase, run.business_id);
   const defaultProjectId = Deno.env.get("ROWBOAT_DEFAULT_PROJECT_ID") ?? "";
   const { data: cfgRow } = await supabase
     .from("business_configs")

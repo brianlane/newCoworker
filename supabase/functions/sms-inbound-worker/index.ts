@@ -23,6 +23,7 @@ import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 import { callSmsRowboatWithStatelessFallback } from "../_shared/sms_rowboat.ts";
+import { resolveRowboatBearerForBusiness } from "../_shared/gateway_token.ts";
 import { buildCustomerPreambleForEdge, type EdgeCustomerMemoryRow } from "../_shared/customer_memory_preamble.ts";
 import { currentDateTimeLine } from "../_shared/datetime_line.ts";
 import {
@@ -199,9 +200,19 @@ serve(async (req: Request) => {
   const template =
     Deno.env.get("ROWBOAT_CHAT_URL_TEMPLATE") ??
     "https://{businessId}.newcoworker.com/api/v1/{projectId}/chat";
-  const bearer =
-    Deno.env.get("ROWBOAT_VPS_CHAT_BEARER") ?? Deno.env.get("ROWBOAT_GATEWAY_TOKEN") ?? "";
   const defaultProjectId = Deno.env.get("ROWBOAT_DEFAULT_PROJECT_ID") ?? "";
+  // Per-tenant Rowboat bearer, resolved once per distinct business in this
+  // batch. A re-keyed VPS rejects the shared env token ("Invalid API key"),
+  // which used to dead-letter every customer SMS for that tenant.
+  const bearerCache = new Map<string, string>();
+  const bearerFor = async (businessId: string): Promise<string> => {
+    let b = bearerCache.get(businessId);
+    if (b === undefined) {
+      b = await resolveRowboatBearerForBusiness(supabase, businessId);
+      bearerCache.set(businessId, b);
+    }
+    return b;
+  };
 
   for (const job of list) {
     const envelope = job.payload as { data?: { payload?: Record<string, unknown> } };
@@ -481,6 +492,7 @@ serve(async (req: Request) => {
     const rawProjectId = cfg?.rowboat_project_id as string | null | undefined;
     const projectId =
       rawProjectId && String(rawProjectId).length > 0 ? String(rawProjectId) : defaultProjectId;
+    const bearer = await bearerFor(job.business_id);
 
     if (!projectId || !bearer) {
       await supabase.rpc("complete_sms_inbound_job", {
