@@ -210,14 +210,27 @@ if (oldVmId !== null) {
 
 // ---------------------------------------------------------------- 2. backup
 const { backupBusinessData, restoreBusinessData } = await import("../src/lib/hostinger/data-migration.ts");
+const { getActiveVpsSshKey } = await import("../src/lib/db/vps-ssh-keys.ts");
 if (!oldVmIp) {
   console.error(`[backup] ABORT: old VM has no resolvable IP — cannot take the durable backup.`);
   console.error(`         If the old box is truly gone and you accept template state, backup/restore`);
   console.error(`         must be skipped manually (edit this script's guard).`);
   process.exit(1);
 }
+// Pin the backup to the key registered for the OLD box specifically. The
+// default per-business "newest unrotated key" lookup breaks after any partial
+// earlier run that already inserted a key row for the NEW box (that newer key
+// would be tried against the old box → USERAUTH_FAILURE).
+const oldBoxKey = await getActiveVpsSshKey(String(oldVmId));
+if (!oldBoxKey) {
+  console.error(`[backup] ABORT: no active SSH key for the old VM ${oldVmId} in vps_ssh_keys.`);
+  process.exit(1);
+}
 console.log(`[backup] tarballing /opt/rowboat/{vault,memory} from ${oldVmIp}…`);
-const backup = await backupBusinessData({ businessId: BUSINESS_ID, vpsHost: oldVmIp });
+const backup = await backupBusinessData(
+  { businessId: BUSINESS_ID, vpsHost: oldVmIp },
+  { sshKeyLookup: async () => oldBoxKey }
+);
 console.log(`[backup] ok: ${backup.storagePath} (${backup.sizeBytes} bytes, sha256=${backup.sha256.slice(0, 12)}…)`);
 
 // ------------------------------------------------- adopt-mode vpsProvisioner
@@ -234,17 +247,43 @@ async function makeAdoptProvisioner(vmId: number): Promise<
   }) => Promise<import("../src/lib/hostinger/provision.ts").ProvisionVpsForBusinessResult>
 > {
   const { generateSshKeypair } = await import("../src/lib/hostinger/keypair.ts");
-  const { insertVpsSshKey } = await import("../src/lib/db/vps-ssh-keys.ts");
+  const { insertVpsSshKey, getActiveVpsSshKey: getKeyForVm } = await import("../src/lib/db/vps-ssh-keys.ts");
   const { buildDefaultPostInstallScript, DEFAULT_TEMPLATE_ID, DEFAULT_US_DATA_CENTER_ID } =
     await import("../src/lib/hostinger/provision.ts");
 
   return async (input) => {
-    const keypair = await generateSshKeypair(`newcoworker-${input.businessId}`);
-    const pubKey = await hostinger.createPublicKey(
-      `newcoworker-${input.businessId}-${Date.now().toString(36)}`,
-      keypair.publicKey.trim()
-    );
-    console.log(`  [adopt] public key uploaded id=${pubKey.id}`);
+    // A prior partial adopt run may have already minted + persisted a keypair
+    // for this VM (vps_ssh_keys enforces one active row per VPS, so a second
+    // insert would violate the unique index). Reuse it — its public half is
+    // already uploaded to Hostinger under hostinger_public_key_id.
+    const existingKey = await getKeyForVm(String(vmId));
+    let sshKeyRow: NonNullable<typeof existingKey> | null = null;
+    let publicKeyId: number;
+    let privateKeyPem: string;
+    if (existingKey?.hostinger_public_key_id && existingKey.private_key_pem) {
+      sshKeyRow = existingKey;
+      publicKeyId = existingKey.hostinger_public_key_id;
+      privateKeyPem = existingKey.private_key_pem;
+      console.log(`  [adopt] reusing existing key row for vm=${vmId} (hostinger key id=${publicKeyId})`);
+    } else {
+      const keypair = await generateSshKeypair(`newcoworker-${input.businessId}`);
+      const pubKey = await hostinger.createPublicKey(
+        `newcoworker-${input.businessId}-${Date.now().toString(36)}`,
+        keypair.publicKey.trim()
+      );
+      console.log(`  [adopt] public key uploaded id=${pubKey.id}`);
+      publicKeyId = pubKey.id;
+      privateKeyPem = keypair.privateKeyPem;
+      sshKeyRow = await insertVpsSshKey({
+        business_id: input.businessId,
+        hostinger_vps_id: String(vmId),
+        hostinger_public_key_id: pubKey.id,
+        public_key: keypair.publicKey,
+        private_key_pem: keypair.privateKeyPem,
+        fingerprint_sha256: keypair.fingerprintSha256,
+        ssh_username: "root"
+      });
+    }
     const script = await hostinger.createPostInstallScript(
       `newcoworker-${input.businessId}-${Date.now().toString(36)}`,
       buildDefaultPostInstallScript({ tier: input.tier, vpsSize: input.vpsSize })
@@ -256,7 +295,7 @@ async function makeAdoptProvisioner(vmId: number): Promise<
       template_id: DEFAULT_TEMPLATE_ID,
       // Standalone setup validates hostname as an FQDN (bare labels 422).
       hostname: `nc-${input.businessId.replace(/[^A-Za-z0-9-]/g, "").slice(0, 12)}.newcoworker.com`,
-      public_key_ids: [pubKey.id],
+      public_key_ids: [publicKeyId],
       post_install_script_id: script.id,
       install_monarx: false
     };
@@ -316,7 +355,7 @@ async function makeAdoptProvisioner(vmId: number): Promise<
           await sshExec({
             host,
             username: "root",
-            privateKeyPem: keypair.privateKeyPem,
+            privateKeyPem,
             command: "true"
           });
           return true;
@@ -327,14 +366,58 @@ async function makeAdoptProvisioner(vmId: number): Promise<
       return false;
     };
 
-    let publicIp = await recreateOnce();
-    if (!(await sshAuthOk(publicIp))) {
-      console.log(`  [adopt] key did not attach on first recreate — retrying recreate once`);
+    // On a recreate Hostinger runs the post-install script through its own
+    // runner, NOT cloud-init runcmd — so the orchestrator's `cloud-init
+    // status --wait` prefix reports done while the PIS bootstrap is still
+    // mid-apt. Wait for that in-flight bootstrap to finish (its slim loader
+    // holds a `tee -a /post_install.log` for its whole lifetime) before
+    // returning, or the orchestrator's SSH bootstrap races it on the apt lock.
+    const waitForPisQuiescence = async (host: string): Promise<void> => {
+      const deadline = Date.now() + 25 * 60 * 1000;
+      for (;;) {
+        try {
+          const res = await sshExec({
+            host,
+            username: "root",
+            privateKeyPem,
+            command:
+              // The [e] class stops pgrep -f from matching this probe's own
+              // command line (which contains the literal pattern).
+              "if pgrep -f 'te[e] -a /post_install.log' >/dev/null || pgrep -x apt-get >/dev/null || pgrep -x dpkg >/dev/null; then echo busy; else echo idle; fi"
+          });
+          if ((res.stdout ?? "").includes("idle")) return;
+          console.log(`  [adopt] waiting for the box's own post-install to finish…`);
+        } catch {
+          /* transient ssh blip — retry below */
+        }
+        if (Date.now() > deadline) {
+          console.log(`  [adopt] post-install quiescence wait timed out — proceeding anyway`);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 15_000));
+      }
+    };
+
+    // If a previous adopt attempt already attached our key, skip the
+    // destructive recreate — the box is set up, possibly still running its
+    // post-install; the orchestrator's idempotent SSH bootstrap follows.
+    const preState = await hostinger.getVirtualMachine(vmId);
+    const preIp = preState.ipv4?.[0]?.address ?? null;
+    let publicIp: string;
+    if (preState.state === "running" && preIp && (await sshAuthOk(preIp))) {
+      console.log(`  [adopt] key already attached from a previous attempt — skipping recreate`);
+      publicIp = preIp;
+    } else {
       publicIp = await recreateOnce();
       if (!(await sshAuthOk(publicIp))) {
-        throw new Error(`VM ${vmId}: SSH key still not attached after recreate retry`);
+        console.log(`  [adopt] key did not attach on first recreate — retrying recreate once`);
+        publicIp = await recreateOnce();
+        if (!(await sshAuthOk(publicIp))) {
+          throw new Error(`VM ${vmId}: SSH key still not attached after recreate retry`);
+        }
       }
     }
+    await waitForPisQuiescence(publicIp);
     console.log(`  [adopt] vps running ip=${publicIp}, ssh key verified`);
 
     try {
@@ -342,16 +425,6 @@ async function makeAdoptProvisioner(vmId: number): Promise<
     } catch (err) {
       console.log(`  [adopt] monarx install failed (continuing): ${err instanceof Error ? err.message : String(err)}`);
     }
-
-    const sshKey = await insertVpsSshKey({
-      business_id: input.businessId,
-      hostinger_vps_id: String(vmId),
-      hostinger_public_key_id: pubKey.id,
-      public_key: keypair.publicKey,
-      private_key_pem: keypair.privateKeyPem,
-      fingerprint_sha256: keypair.fingerprintSha256,
-      ssh_username: "root"
-    });
 
     let billingId: string | null = null;
     try {
@@ -365,8 +438,8 @@ async function makeAdoptProvisioner(vmId: number): Promise<
       virtualMachineId: vmId,
       publicIp,
       sshUsername: "root",
-      sshKey,
-      publicKeyId: pubKey.id,
+      sshKey: sshKeyRow,
+      publicKeyId,
       postInstallScriptId: script.id,
       hostingerBillingSubscriptionId: billingId
     };
