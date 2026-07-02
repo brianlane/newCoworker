@@ -101,7 +101,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
   vi.mocked(getTelnyxMessagingForBusiness).mockResolvedValue({} as never);
-  vi.mocked(sendTelnyxSms).mockResolvedValue("msg-1" as never);
+  vi.mocked(sendTelnyxSms).mockResolvedValue({ id: "msg-1", channel: "sms" } as never);
 });
 
 describe("POST /api/rowboat/tool-call auth", () => {

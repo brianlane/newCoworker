@@ -24,13 +24,14 @@ describe("telnyx messaging", () => {
       ok: true,
       json: () => Promise.resolve({ data: { id: "msg_abc" } })
     });
-    const id = await sendTelnyxSms(
+    const { id, channel } = await sendTelnyxSms(
       { apiKey: "KEY", messagingProfileId: "prof", fromE164: "+15550009999" },
       "+15550001111",
       "Hello",
       { fetchImpl: fetchMock as typeof fetch }
     );
     expect(id).toBe("msg_abc");
+    expect(channel).toBe("sms");
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.telnyx.com/v2/messages",
       expect.objectContaining({ method: "POST" })
@@ -44,7 +45,7 @@ describe("telnyx messaging", () => {
       ok: true,
       json: () => Promise.resolve({ data: { id: "msg_global_fetch" } })
     } as Response);
-    const id = await sendTelnyxSms(
+    const { id } = await sendTelnyxSms(
       { apiKey: "KEY", messagingProfileId: "prof" },
       "+15550001111",
       "Hello"

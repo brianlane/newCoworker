@@ -28,7 +28,8 @@ import {
   sharedEnvRowboatBearer
 } from "../_shared/gateway_token.ts";
 import { buildCustomerPreambleForEdge, type EdgeCustomerMemoryRow } from "../_shared/customer_memory_preamble.ts";
-import { telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
+import { inboundSmsBody, telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
+import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
 import {
   buildOwnerReplyPromptSms,
   resolveSmsReplyMode
@@ -131,12 +132,10 @@ type ThreadRow = {
   rowboat_state: unknown | null;
 };
 
+// Delegates to the shared reader so RCS payloads (nested `body.text` /
+// `body.suggestion_response.text`) resolve the same here as at the webhook.
 function inboundPayloadText(p: Record<string, unknown>): string {
-  const t = p["text"];
-  if (typeof t === "string") return t;
-  const body = p["body"];
-  if (typeof body === "string") return body;
-  return "";
+  return inboundSmsBody(p);
 }
 
 async function clearJobReplyCache(
@@ -1207,17 +1206,59 @@ serve(async (req: Request) => {
     };
     if (idem) headers["Idempotency-Key"] = idem;
 
+    // RCS-first for eligible tenants (Standard+, approved + enabled agent):
+    // verified-brand reply with Telnyx-side SMS fallback from the tenant's
+    // existing number. Resolution is fail-safe (any error → null → plain SMS)
+    // and requires a concrete from-number for the fallback leg.
+    const rcsAgentId = platformFrom
+      ? await resolveRcsAgentId(supabase, job.business_id, businessTier)
+      : null;
+    let replyChannel: "sms" | "rcs" = "sms";
+
     try {
-      const smsRes = await fetch("https://api.telnyx.com/v2/messages", {
-        method: "POST",
-        headers,
-        body: JSON.stringify(msgBody)
-      });
-      if (!smsRes.ok) {
-        throw new Error(`telnyx_sms_${smsRes.status}_${(await smsRes.text()).slice(0, 200)}`);
+      let mid = "";
+      let sentViaRcs = false;
+      if (rcsAgentId) {
+        const rcsRes = await fetch("https://api.telnyx.com/v2/messages/rcs", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            agent_id: rcsAgentId,
+            to: fromE164,
+            messaging_profile_id: messagingProfileId,
+            type: "RCS",
+            agent_message: { content_message: { text: reply.slice(0, 1600) } },
+            sms_fallback: { from: platformFrom, text: reply.slice(0, 1600) }
+          })
+        });
+        if (rcsRes.ok) {
+          const rcsJson = (await rcsRes.json()) as { data?: { id?: string } };
+          mid = rcsJson.data?.id ?? "";
+          sentViaRcs = true;
+          replyChannel = "rcs";
+        } else {
+          // RCS API rejection (agent revoked, destination not routable, …):
+          // fall through to plain SMS so the customer never loses a reply to
+          // channel plumbing. The idempotency key is safe to reuse — the
+          // rejected RCS request created no message.
+          console.warn(
+            `rcs reply rejected (${rcsRes.status}), falling back to sms:`,
+            (await rcsRes.text()).slice(0, 200)
+          );
+        }
       }
-      const smsJson = (await smsRes.json()) as { data?: { id?: string } };
-      const mid = smsJson.data?.id ?? "";
+      if (!sentViaRcs) {
+        const smsRes = await fetch("https://api.telnyx.com/v2/messages", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(msgBody)
+        });
+        if (!smsRes.ok) {
+          throw new Error(`telnyx_sms_${smsRes.status}_${(await smsRes.text()).slice(0, 200)}`);
+        }
+        const smsJson = (await smsRes.json()) as { data?: { id?: string } };
+        mid = smsJson.data?.id ?? "";
+      }
       // Slot was already metered during try_reserve_sms_outbound_slot, so call the
       // no-metering completion RPC to avoid double-counting the outbound.
       const { error: doneErr } = await supabase.rpc("complete_sms_inbound_job_done", {
@@ -1242,7 +1283,7 @@ serve(async (req: Request) => {
         level: "info",
         event: "sms_reply_sent",
         message: "Inbound SMS answered (Rowboat reply delivered via Telnyx)",
-        payload: { job_id: job.id, telnyx_message_id: mid || null }
+        payload: { job_id: job.id, telnyx_message_id: mid || null, channel: replyChannel }
       });
     } catch (e) {
       if (idem) {

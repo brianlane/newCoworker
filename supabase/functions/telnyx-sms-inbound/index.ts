@@ -14,8 +14,10 @@ import { telemetryRecord } from "../_shared/telemetry.ts";
 import {
   inboundSmsBody,
   isHelpKeyword,
+  isRcsInboundPayload,
   isStartKeyword,
   isStopKeyword,
+  rcsInboundAgentId,
   telnyxSendSms
 } from "../_shared/telnyx_sms_compliance.ts";
 import {
@@ -1057,10 +1059,16 @@ serve(async (req: Request) => {
     }
 
     const payload = (data?.payload ?? {}) as Record<string, unknown>;
-    const to = normalizeE164(telnyxMessagingPhoneString(payload, "to"));
+    const toDid = normalizeE164(telnyxMessagingPhoneString(payload, "to"));
     const from = normalizeE164(telnyxMessagingPhoneString(payload, "from"));
 
-    if (!to) {
+    // RCS inbound carries NO recipient phone number — `to[]` holds the RCS
+    // agent (`agent_id` + `agent_name`) instead, so the agent id is the only
+    // routing key. Resolved against business_channel_settings below.
+    const inboundChannel: "sms" | "rcs" = isRcsInboundPayload(payload) ? "rcs" : "sms";
+    const rcsAgent = inboundChannel === "rcs" ? rcsInboundAgentId(payload) : null;
+
+    if (!toDid && !rcsAgent) {
       return new Response(JSON.stringify({ ok: true, skip: "no_to" }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
@@ -1074,12 +1082,52 @@ serve(async (req: Request) => {
     // business + sender, so resolve the business here before the keyword branches. If
     // the DID isn't routed, we still auto-reply (carrier compliance applies per-DID),
     // just without DB persistence.
-    const { data: route } = await supabase
-      .from("telnyx_voice_routes")
-      .select("business_id")
-      .eq("to_e164", to)
-      .maybeSingle();
-    const businessId = (route?.business_id as string | undefined) ?? null;
+    let businessId: string | null = null;
+    let rcsTenantDid: string | null = null;
+    if (rcsAgent) {
+      const { data: channelRow } = await supabase
+        .from("business_channel_settings")
+        .select("business_id")
+        .eq("rcs_agent_id", rcsAgent)
+        .maybeSingle();
+      businessId = (channelRow?.business_id as string | undefined) ?? null;
+      // Resolve the tenant's own DID so every downstream sender fallback
+      // ("reply from the DID the message arrived on") keeps working on the
+      // RCS path — replies go out via normal per-tenant sender resolution.
+      if (businessId && !toDid) {
+        const { data: didRow } = await supabase
+          .from("business_telnyx_settings")
+          .select("telnyx_sms_from_e164")
+          .eq("business_id", businessId)
+          .maybeSingle();
+        rcsTenantDid = normalizeE164(
+          (didRow as { telnyx_sms_from_e164?: string | null } | null)?.telnyx_sms_from_e164 ?? ""
+        );
+      }
+    } else {
+      const { data: route } = await supabase
+        .from("telnyx_voice_routes")
+        .select("business_id")
+        .eq("to_e164", toDid)
+        .maybeSingle();
+      businessId = (route?.business_id as string | undefined) ?? null;
+    }
+
+    const to = toDid ?? rcsTenantDid;
+    if (!to) {
+      // RCS message whose agent didn't map to a tenant with a configured DID:
+      // without a reply sender nothing downstream can respond. Skip (200 so
+      // Telnyx doesn't retry) but leave a telemetry trail for operators.
+      await telemetryRecord(supabase, "sms_inbound_rcs_unrouted", {
+        event_id: eventId,
+        agent_id: rcsAgent,
+        routed_business: businessId
+      });
+      return new Response(JSON.stringify({ ok: true, skip: "rcs_unrouted" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
 
     // Compliance auto-reply retry semantics:
     //   - If the opt-out/opt-in persist RPC fails, or the outbound auto-reply fails,
@@ -1736,7 +1784,8 @@ serve(async (req: Request) => {
         customer_e164: from,
         staff_kind: kind,
         staff_name: member.name?.trim() || null,
-        outbound_idempotency_key: crypto.randomUUID()
+        outbound_idempotency_key: crypto.randomUUID(),
+        channel: inboundChannel
       });
       if (tmJobErr && (tmJobErr as { code?: string }).code !== "23505") {
         console.error("team member inbound persist", tmJobErr);
@@ -2151,7 +2200,8 @@ serve(async (req: Request) => {
             // to denormalize the sender. Stamp it here so the contact page still
             // surfaces these inbound texts.
             customer_e164: from,
-            outbound_idempotency_key: crypto.randomUUID()
+            outbound_idempotency_key: crypto.randomUUID(),
+            channel: inboundChannel
           });
           if (smJobErr && (smJobErr as { code?: string }).code !== "23505") {
             console.error("safe mode inbound persist", smJobErr);
@@ -2224,7 +2274,8 @@ serve(async (req: Request) => {
       // AiFlow suppresses the reply — the worker's suppression branch returns
       // before it would otherwise denormalize this.
       customer_e164: from,
-      outbound_idempotency_key: crypto.randomUUID()
+      outbound_idempotency_key: crypto.randomUUID(),
+      channel: inboundChannel
     });
 
     if (error) {

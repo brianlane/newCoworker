@@ -13,6 +13,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { ChatMarkdown } from "@/components/ui/ChatMarkdown";
 import { listMessagesForCustomer } from "@/lib/db/sms-history";
+import { resolveRcsAgentIdForBusiness } from "@/lib/telnyx/messaging";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { ContactReplyModeToggle } from "@/components/dashboard/ContactReplyModeToggle";
@@ -68,6 +69,10 @@ export default async function SmsThreadPage({
     limit: 100
   });
   if (messages.length === 0) notFound();
+  // RCS-first tenants get the softened emoji hint in the reply composer.
+  const rcsEnabled = Boolean(
+    await resolveRcsAgentIdForBusiness(db, business.id).catch(() => null)
+  );
   // Reply-mode toggle state: tolerate a missing profile (numbers with thread
   // history but no contact row default to 'auto'; the PATCH creates the row).
   const memory = await getCustomerMemory(business.id, customerE164).catch(() => null);
@@ -179,6 +184,14 @@ export default async function SmsThreadPage({
                     <span className="text-parchment/30 normal-case font-normal">
                       <LocalDateTime iso={m.timestamp} />
                     </span>
+                    {m.channel === "rcs" && (
+                      <span
+                        className="text-[10px] uppercase tracking-wide text-sky-300/90 bg-sky-300/10 rounded px-1.5 py-0.5"
+                        title="Delivered over RCS (rich messaging with SMS fallback)"
+                      >
+                        RCS
+                      </span>
+                    )}
                     {m.lastError ? (
                       <span className="text-[10px] uppercase tracking-wide text-amber-300/80">
                         delivery: {m.status}
@@ -200,7 +213,7 @@ export default async function SmsThreadPage({
       </Card>
 
       <Card padding="md">
-        <SmsThreadComposer businessId={business.id} toE164={customerE164} />
+        <SmsThreadComposer businessId={business.id} toE164={customerE164} rcsEnabled={rcsEnabled} />
       </Card>
 
       {/* Staff numbers are handled by the Staff texting settings, not the

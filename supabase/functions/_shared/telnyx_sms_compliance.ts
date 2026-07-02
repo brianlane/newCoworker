@@ -8,7 +8,41 @@ export function inboundSmsBody(payload: Record<string, unknown>): string {
   if (typeof t === "string") return t;
   const body = payload["body"];
   if (typeof body === "string") return body;
+  // RCS inbound (`payload.type === "RCS"`) nests content under a body OBJECT:
+  // `body.text` for typed messages, `body.suggestion_response.text` when the
+  // user tapped a suggested reply/action (the tapped label IS the message).
+  if (body && typeof body === "object" && !Array.isArray(body)) {
+    const b = body as Record<string, unknown>;
+    if (typeof b["text"] === "string") return b["text"];
+    const suggestion = b["suggestion_response"];
+    if (suggestion && typeof suggestion === "object") {
+      const st = (suggestion as Record<string, unknown>)["text"];
+      if (typeof st === "string") return st;
+    }
+  }
   return "";
+}
+
+/** True when a Telnyx `message.received` payload arrived on the RCS channel. */
+export function isRcsInboundPayload(payload: Record<string, unknown>): boolean {
+  return payload["type"] === "RCS";
+}
+
+/**
+ * The RCS agent id an inbound RCS message was addressed to (`to[].agent_id`).
+ * RCS inbound webhooks carry NO recipient phone number — the agent id is the
+ * only routing key, resolved against business_channel_settings.rcs_agent_id.
+ */
+export function rcsInboundAgentId(payload: Record<string, unknown>): string | null {
+  const to = payload["to"];
+  const list = Array.isArray(to) ? to : to && typeof to === "object" ? [to] : [];
+  for (const item of list) {
+    if (item && typeof item === "object") {
+      const agentId = (item as Record<string, unknown>)["agent_id"];
+      if (typeof agentId === "string" && agentId.length > 0) return agentId;
+    }
+  }
+  return null;
 }
 
 /** Single-word STOP variants (case-insensitive). */
@@ -55,7 +89,18 @@ export async function telnyxSendSms(params: {
    * resulting outbound message instead of sending it twice.
    */
   idempotencyKey?: string;
-}): Promise<{ ok: boolean; status: number; body: string }> {
+  /**
+   * Tenant's approved Telnyx RCS agent id (resolve via
+   * _shared/channel_settings.ts `resolveRcsAgentId`). When set — and the send
+   * is a single-recipient, no-media text with a concrete `fromE164` for the
+   * SMS fallback — the message goes out RCS-FIRST (`POST /v2/messages/rcs`,
+   * verified-brand sender, read receipts) with automatic SMS fallback to
+   * non-RCS devices. Group sends, MMS, and pool-sender sends stay on the
+   * plain SMS/MMS path. Callers that must stay plain SMS (carrier compliance
+   * auto-replies) simply never pass this.
+   */
+  rcsAgentId?: string | null;
+}): Promise<{ ok: boolean; status: number; body: string; channel: "sms" | "rcs" }> {
   const fetchImpl = params.fetchImpl ?? fetch;
   const headers: Record<string, string> = {
     Authorization: `Bearer ${params.apiKey}`,
@@ -64,21 +109,56 @@ export async function telnyxSendSms(params: {
   if (params.idempotencyKey) {
     headers["Idempotency-Key"] = params.idempotencyKey;
   }
+  const fromTrimmed = (params.fromE164 ?? "").trim();
+  const agentId = (params.rcsAgentId ?? "").trim();
+  const hasMedia = Boolean(params.mediaUrls && params.mediaUrls.length > 0);
+  const useRcs =
+    agentId.length > 0 && typeof params.toE164 === "string" && !hasMedia && fromTrimmed.length > 0;
+
+  if (useRcs) {
+    const rcsBody: Record<string, unknown> = {
+      agent_id: agentId,
+      to: params.toE164,
+      messaging_profile_id: params.messagingProfileId,
+      type: "RCS",
+      agent_message: { content_message: { text: params.text } },
+      // Plain-text fallback from the tenant's existing number for devices /
+      // carriers without RCS. Telnyx caps fallback text at 3072 chars.
+      sms_fallback: { from: fromTrimmed, text: params.text.slice(0, 3072) }
+    };
+    const res = await fetchImpl("https://api.telnyx.com/v2/messages/rcs", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(rcsBody)
+    });
+    const bodyText = await res.text();
+    if (res.ok) {
+      return { ok: true, status: res.status, body: bodyText, channel: "rcs" };
+    }
+    // RCS API rejection (agent revoked, destination not routable, …): fall
+    // through to plain SMS so channel plumbing never drops a customer message.
+    // The idempotency key is safe to reuse — the rejected request created no
+    // message. Warn so operators notice misconfigured agents.
+    console.warn(
+      `telnyxSendSms: RCS send rejected (${res.status}), falling back to SMS:`,
+      bodyText.slice(0, 200)
+    );
+  }
+
   const body: Record<string, unknown> = {
     to: params.toE164,
     text: params.text,
     messaging_profile_id: params.messagingProfileId
   };
-  const fromTrimmed = (params.fromE164 ?? "").trim();
   if (fromTrimmed) body.from = fromTrimmed;
-  if (params.mediaUrls && params.mediaUrls.length > 0) body.media_urls = params.mediaUrls;
+  if (hasMedia) body.media_urls = params.mediaUrls;
   const res = await fetchImpl("https://api.telnyx.com/v2/messages", {
     method: "POST",
     headers,
     body: JSON.stringify(body)
   });
   const bodyText = await res.text();
-  return { ok: res.ok, status: res.status, body: bodyText };
+  return { ok: res.ok, status: res.status, body: bodyText, channel: "sms" };
 }
 
 /**
