@@ -73,45 +73,70 @@ function DirectionBadge({ direction }: { direction: EmailLogRow["direction"] }) 
 /** Address → contact-profile link map (lowercase address keys), built server-side. */
 type EmailContacts = Record<string, { customerE164: string; displayName: string | null }>;
 
-function DetailRow({
-  label,
-  value,
-  contact
-}: {
-  label: string;
-  value: string;
-  /** When set, the value links through to this contact's profile page. */
-  contact?: { customerE164: string; displayName: string | null };
-}) {
+function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex gap-3 py-1.5 border-b border-parchment/5 last:border-0">
       <span className="w-20 shrink-0 text-[11px] uppercase tracking-wide text-parchment/40">
         {label}
       </span>
-      {contact ? (
-        <Link
-          href={`/dashboard/customers/${encodeURIComponent(contact.customerE164)}`}
-          className="text-sm text-parchment break-all underline decoration-parchment/30 underline-offset-2 hover:text-claw-green transition-colors"
-        >
-          {value}
-          {contact.displayName ? (
-            <span className="text-parchment/60"> · {contact.displayName}</span>
-          ) : null}
-        </Link>
-      ) : (
-        <span className="text-sm text-parchment break-all">{value}</span>
-      )}
+      <span className="text-sm text-parchment break-all">{value}</span>
     </div>
   );
 }
 
-/** Look an address (possibly `Name <addr>`) up in the contact-link map. */
-function contactFor(
-  emailContacts: EmailContacts,
-  value: string | null
-): { customerE164: string; displayName: string | null } | undefined {
-  const addr = extractEmailAddress(value);
-  return addr ? emailContacts[addr] : undefined;
+/**
+ * From/To/Cc row: splits comma-separated recipient lists and links each
+ * address that belongs to a known contact through to their profile page.
+ * (Splitting on comma can separate the name half of a quoted
+ * `"Last, First" <addr>` — that segment renders as plain text while the
+ * `<addr>` half still resolves and links.)
+ */
+function RecipientsRow({
+  label,
+  value,
+  emailContacts
+}: {
+  label: string;
+  value: string | null;
+  emailContacts: EmailContacts;
+}) {
+  const parts = (value ?? "")
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  return (
+    <div className="flex gap-3 py-1.5 border-b border-parchment/5 last:border-0">
+      <span className="w-20 shrink-0 text-[11px] uppercase tracking-wide text-parchment/40">
+        {label}
+      </span>
+      <span className="text-sm text-parchment break-all">
+        {parts.length === 0
+          ? "—"
+          : parts.map((part, i) => {
+              const addr = extractEmailAddress(part);
+              const contact = addr ? emailContacts[addr] : undefined;
+              return (
+                <span key={`${part}-${i}`}>
+                  {i > 0 ? ", " : ""}
+                  {contact ? (
+                    <Link
+                      href={`/dashboard/customers/${encodeURIComponent(contact.customerE164)}`}
+                      className="underline decoration-parchment/30 underline-offset-2 hover:text-claw-green transition-colors"
+                    >
+                      {part}
+                      {contact.displayName ? (
+                        <span className="text-parchment/60"> · {contact.displayName}</span>
+                      ) : null}
+                    </Link>
+                  ) : (
+                    part
+                  )}
+                </span>
+              );
+            })}
+      </span>
+    </div>
+  );
 }
 
 type Attachment = {
@@ -226,22 +251,10 @@ function ReadingPane({
       </h2>
 
       <div className="mb-4">
-        <DetailRow
-          label="From"
-          value={row.from_email ?? "—"}
-          contact={contactFor(emailContacts, row.from_email)}
-        />
-        <DetailRow
-          label="To"
-          value={row.to_email ?? "—"}
-          contact={contactFor(emailContacts, row.to_email)}
-        />
+        <RecipientsRow label="From" value={row.from_email} emailContacts={emailContacts} />
+        <RecipientsRow label="To" value={row.to_email} emailContacts={emailContacts} />
         {row.cc_email && (
-          <DetailRow
-            label="Cc"
-            value={row.cc_email}
-            contact={contactFor(emailContacts, row.cc_email)}
-          />
+          <RecipientsRow label="Cc" value={row.cc_email} emailContacts={emailContacts} />
         )}
         {row.bcc_email && <DetailRow label="Bcc" value={row.bcc_email} />}
         <div className="flex gap-3 py-1.5">

@@ -5,7 +5,7 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => defaultClientSpy())
 }));
 
-import { extractEmailAddress } from "@/lib/email/address";
+import { extractEmailAddress, extractEmailAddresses } from "@/lib/email/address";
 import { findContactsByEmails } from "@/lib/db/contact-emails";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
@@ -34,6 +34,26 @@ describe("extractEmailAddress", () => {
     expect(extractEmailAddress("   ")).toBeNull();
     expect(extractEmailAddress("not an email")).toBeNull();
     expect(extractEmailAddress("Name <not-an-email>")).toBeNull();
+  });
+});
+
+describe("extractEmailAddresses", () => {
+  it("splits comma-separated recipient lists, dedupes, and lowercases", () => {
+    expect(
+      extractEmailAddresses("a@x.com, Name <B@y.com> , A@X.COM, not-an-address")
+    ).toEqual(["a@x.com", "b@y.com"]);
+  });
+
+  it("still resolves the <addr> half of a quoted 'Last, First <addr>' string", () => {
+    expect(extractEmailAddresses('"Harwood, Ken" <ken@example.com>')).toEqual([
+      "ken@example.com"
+    ]);
+  });
+
+  it("returns an empty array for empty / missing values", () => {
+    expect(extractEmailAddresses(null)).toEqual([]);
+    expect(extractEmailAddresses(undefined)).toEqual([]);
+    expect(extractEmailAddresses("")).toEqual([]);
   });
 });
 
@@ -69,13 +89,13 @@ describe("findContactsByEmails", () => {
     { customer_e164: "+15551230005", display_name: "No email", email: null }
   ];
 
-  it("matches case-insensitively, handles 'Name <addr>' inputs, and skips unmatched addresses", async () => {
+  it("matches case-insensitively, handles 'Name <addr>' and comma-separated inputs, and skips unmatched addresses", async () => {
     const { client, fromCalls } = makeClient({ data: CONTACTS, error: null });
     const out = await findContactsByEmails(
       BIZ,
       [
         "Ken Harwood <sunlizard360@YAHOO.com>",
-        "SNYDERB8@comcast.net",
+        "SNYDERB8@comcast.net, other@nowhere.com",
         "stranger@nowhere.com",
         null,
         undefined,

@@ -14,3 +14,18 @@ export function extractEmailAddress(value: string | null | undefined): string | 
   const candidate = (angled ? angled[1] : raw).trim().toLowerCase();
   return candidate.includes("@") ? candidate : null;
 }
+
+/**
+ * Extract every address from a possibly comma-separated recipient list
+ * (`a@x.com, Name <b@y.com>`), deduplicated, lowercase, in order. Segments
+ * without an address (e.g. the name half of a quoted `"Last, First" <addr>`)
+ * are skipped — the `<addr>` half still resolves on its own.
+ */
+export function extractEmailAddresses(value: string | null | undefined): string[] {
+  const out: string[] = [];
+  for (const part of (value ?? "").split(",")) {
+    const addr = extractEmailAddress(part);
+    if (addr && !out.includes(addr)) out.push(addr);
+  }
+  return out;
+}

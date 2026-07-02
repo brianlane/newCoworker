@@ -10,7 +10,7 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { extractEmailAddress } from "@/lib/email/address";
+import { extractEmailAddresses } from "@/lib/email/address";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -25,7 +25,8 @@ const CONTACT_EMAIL_SCAN_LIMIT = 2000;
 /**
  * Map lowercase email address → contact link for every address that matches a
  * contact's stored email. Unmatched addresses are simply absent. Values in
- * `addresses` may be raw header strings (`Name <addr>` is handled).
+ * `addresses` may be raw header strings — `Name <addr>` and comma-separated
+ * recipient lists (Cc) are both handled.
  */
 export async function findContactsByEmails(
   businessId: string,
@@ -34,8 +35,7 @@ export async function findContactsByEmails(
 ): Promise<Map<string, EmailContactLink>> {
   const wanted = new Set<string>();
   for (const a of addresses) {
-    const addr = extractEmailAddress(a);
-    if (addr) wanted.add(addr);
+    for (const addr of extractEmailAddresses(a)) wanted.add(addr);
   }
   const out = new Map<string, EmailContactLink>();
   if (wanted.size === 0) return out;
