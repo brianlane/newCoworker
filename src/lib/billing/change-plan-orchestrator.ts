@@ -366,7 +366,8 @@ export async function runChangePlanFromCheckout(
     logger.info("changePlan: same-tier period switch; skipping VPS migration", {
       businessId,
       tier,
-      oldBillingPeriod: oldSub.billing_period ?? null,
+      // billing_period is already nullable on the row; log as-is.
+      oldBillingPeriod: oldSub.billing_period,
       newBillingPeriod: billingPeriod
     });
   }
