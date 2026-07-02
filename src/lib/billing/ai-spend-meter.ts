@@ -19,6 +19,7 @@ import { chatSpendBaseCapMicrosForTier } from "@/lib/db/chat-usage";
 import type { PlanTier } from "@/lib/plans/tier";
 import type { GeminiUsage } from "@/lib/gemini-generate-content";
 import { sendCapAlertOnce } from "../../../supabase/functions/_shared/cap_alerts";
+import { deriveMonthlyQuotaWindow } from "../../../supabase/functions/_shared/billing_period_window";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -172,7 +173,10 @@ export async function meterGeminiSpendForBusiness(args: MeterGeminiSpendArgs): P
       .maybeSingle();
     const subStart = (subRow as { stripe_current_period_start?: string | null } | null)
       ?.stripe_current_period_start;
-    if (subStart) periodStart = subStart;
+    // Month-window key within the Stripe period (see _shared/billing_period_window):
+    // must agree with the workers' resolveChatPeriodStart so all surfaces meter
+    // into the same monthly pool on prepaid multi-month plans.
+    if (subStart) periodStart = deriveMonthlyQuotaWindow(subStart, Date.now()).startIso;
 
     // Trip the fuse against the tenant's tier cap ($5 starter / $10 otherwise)
     // so this platform-side meter agrees with the chat-worker and SMS surfaces.

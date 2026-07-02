@@ -44,6 +44,13 @@ export type SubscriptionRow = {
   cancel_at_period_end: boolean;
   stripe_refund_id: string | null;
   refund_amount_cents: number | null;
+  /**
+   * Term contracts only (§20260713000000_contract_auto_renew). false = roll
+   * to month-to-month at the renewal price at term end (commitment schedule
+   * in place); true = the Stripe subscription renews for another full term at
+   * the contract price (schedule released). Toggled via /api/billing/auto-renew.
+   */
+  contract_auto_renew: boolean;
   created_at: string;
 };
 
@@ -253,6 +260,7 @@ export async function updateSubscription(
       | "billing_period"
       | "renewal_at"
       | "commitment_months"
+      | "contract_auto_renew"
     >
   >,
   client?: SupabaseClient
@@ -306,6 +314,77 @@ export function isCanceledInGrace(
   if (row.wiped_at !== null) return false;
   if (!row.grace_ends_at) return false;
   return new Date(row.grace_ends_at).getTime() > now.getTime();
+}
+
+/**
+ * True when a term (12/24-month) subscription has finished its commitment
+ * and is in the month-to-month rollover phase: the original term end
+ * (`renewal_at`, stamped at checkout as start + commitment months) has
+ * passed. This is when the billing page offers "Start a new contract" at the
+ * contract rate, and when /api/billing/change-plan allows a same-plan
+ * re-contract. Monthly plans have no commitment and never qualify.
+ */
+export function isCommitmentElapsed(
+  row: Pick<SubscriptionRow, "billing_period" | "renewal_at">,
+  now: Date = new Date()
+): boolean {
+  if (!row.billing_period || row.billing_period === "monthly") return false;
+  if (!row.renewal_at) return false;
+  const at = new Date(row.renewal_at).getTime();
+  return Number.isFinite(at) && at <= now.getTime();
+}
+
+/**
+ * True when `row` represents live (or plausibly-live) paid service that a
+ * fresh onboarding checkout must NOT shadow with a new `pending` row:
+ *
+ * - `active` — live service; the Billing page (change-plan / reactivate) is
+ *   the only legitimate way to alter it.
+ * - canceled-in-grace — the customer can still reactivate the existing
+ *   subscription with its data intact; a parallel new signup would fork it.
+ * - any non-canceled row that already has a `stripe_subscription_id` — a paid
+ *   checkout whose webhook processing may still be in flight.
+ *
+ * Deliberately NOT blocking: unpaid `pending` rows (abandoned checkouts must
+ * stay retryable) and fully-canceled/wiped rows (a past customer may sign up
+ * again from scratch).
+ */
+export function isCheckoutBlockingSubscription(
+  row: Pick<SubscriptionRow, "status" | "grace_ends_at" | "wiped_at" | "stripe_subscription_id">,
+  now: Date = new Date()
+): boolean {
+  if (row.status === "active") return true;
+  if (isCanceledInGrace(row, now)) return true;
+  return row.status !== "canceled" && row.stripe_subscription_id !== null;
+}
+
+/**
+ * Finds a subscription row across `businessIds` that must block a NEW
+ * onboarding checkout (see `isCheckoutBlockingSubscription`). Scans every
+ * row — not just the latest per business — because an abandoned `pending`
+ * row can sit on top of (and hide) an older `active` one, which is exactly
+ * the shadowing incident this guard exists to prevent.
+ *
+ * Throws on a query error: this is a security gate, and failing open on a
+ * transient DB blip would let a duplicate paid subscription through.
+ */
+export async function findCheckoutBlockingSubscription(
+  businessIds: string[],
+  now: Date = new Date(),
+  client?: SupabaseClient
+): Promise<SubscriptionRow | null> {
+  if (businessIds.length === 0) return null;
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("subscriptions")
+    .select()
+    .in("business_id", businessIds)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(`findCheckoutBlockingSubscription: ${error.message}`);
+  for (const row of (data ?? []) as SubscriptionRow[]) {
+    if (isCheckoutBlockingSubscription(row, now)) return row;
+  }
+  return null;
 }
 
 /**

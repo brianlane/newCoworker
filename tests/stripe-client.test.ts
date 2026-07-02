@@ -8,6 +8,7 @@ import {
   createSmsBonusCheckoutSession,
   createVoiceBonusCheckoutSession,
   ensureCommitmentSchedule,
+  releaseCommitmentSchedule,
   resolveIntroDiscountCouponId,
   resolvePriceId,
   resolveRenewalPriceId
@@ -20,6 +21,7 @@ const mockSubscriptionRetrieve = vi.fn();
 const mockScheduleCreate = vi.fn();
 const mockScheduleRetrieve = vi.fn();
 const mockScheduleUpdate = vi.fn();
+const mockScheduleRelease = vi.fn();
 
 vi.mock("stripe", () => {
   class MockStripe {
@@ -39,7 +41,8 @@ vi.mock("stripe", () => {
     subscriptionSchedules = {
       create: mockScheduleCreate,
       retrieve: mockScheduleRetrieve,
-      update: mockScheduleUpdate
+      update: mockScheduleUpdate,
+      release: mockScheduleRelease
     };
     webhooks = {
       constructEvent: mockConstructEvent
@@ -402,6 +405,40 @@ describe("stripe/client", () => {
   it("resolveRenewalPriceId throws when renewal env var is missing", () => {
     delete process.env.STRIPE_STARTER_12MO_RENEWAL_PRICE_ID;
     expect(() => resolveRenewalPriceId("starter", "annual")).toThrow("not configured");
+  });
+
+  describe("releaseCommitmentSchedule", () => {
+    it("releases the schedule attached to the subscription (string id)", async () => {
+      mockSubscriptionRetrieve.mockResolvedValueOnce({
+        schedule: "sub_sched_live",
+        items: { data: [] }
+      });
+      mockScheduleRelease.mockResolvedValueOnce({ id: "sub_sched_live" });
+
+      await expect(releaseCommitmentSchedule("sub_123")).resolves.toBe("sub_sched_live");
+      expect(mockScheduleRelease).toHaveBeenCalledWith("sub_sched_live");
+    });
+
+    it("releases the schedule when Stripe expands it to an object", async () => {
+      mockSubscriptionRetrieve.mockResolvedValueOnce({
+        schedule: { id: "sub_sched_obj" },
+        items: { data: [] }
+      });
+      mockScheduleRelease.mockResolvedValueOnce({ id: "sub_sched_obj" });
+
+      await expect(releaseCommitmentSchedule("sub_123")).resolves.toBe("sub_sched_obj");
+      expect(mockScheduleRelease).toHaveBeenCalledWith("sub_sched_obj");
+    });
+
+    it("is a no-op when the subscription has no schedule (idempotent)", async () => {
+      mockSubscriptionRetrieve.mockResolvedValueOnce({
+        schedule: null,
+        items: { data: [] }
+      });
+
+      await expect(releaseCommitmentSchedule("sub_123")).resolves.toBeNull();
+      expect(mockScheduleRelease).not.toHaveBeenCalled();
+    });
   });
 
   describe("createVoiceBonusCheckoutSession", () => {

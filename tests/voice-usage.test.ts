@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
@@ -89,6 +89,15 @@ function mockClient(
 describe("getVoiceBillingSnapshotForBusiness", () => {
   beforeEach(() => {
     vi.mocked(createSupabaseServiceClient).mockReset();
+    // Pin "now" inside the fixtures' first month-window (period start
+    // 2026-04-01) so the monthly quota key equals the raw period start,
+    // matching how a monthly subscription behaves.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-15T00:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("returns null when business missing", async () => {
@@ -224,6 +233,24 @@ describe("getVoiceBillingSnapshotForBusiness", () => {
       includedHeadroomSeconds: 400,
       bonusSecondsAvailable: 120
     });
+  });
+
+  it("keys the snapshot on the current month-window for a prepaid multi-month period", async () => {
+    // 12-month prepaid term started 2026-04-01; three months in, the snapshot
+    // must read/report the 2026-07-01 month-window, not the raw term start.
+    vi.setSystemTime(new Date("2026-07-20T00:00:00.000Z"));
+    const client = mockClient({
+      businesses: makeBusinessesResult({ tier: "starter", enterprise_limits: null }),
+      subscriptions: makeSubResult({ stripe_current_period_start: "2026-04-01T00:00:00.000Z" }),
+      voice_billing_period_usage: makeUsageResult({
+        tier_cap_seconds: 600,
+        committed_included_seconds: 0
+      }),
+      voice_reservations: makeResvResult([]),
+      voice_bonus_grants: makeBonusResult([])
+    });
+    const snap = await getVoiceBillingSnapshotForBusiness("b1", client);
+    expect(snap?.stripePeriodStart).toBe("2026-07-01T00:00:00.000Z");
   });
 
   it("coerces missing reserved_included_seconds to zero", async () => {

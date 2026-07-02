@@ -93,18 +93,23 @@ export default async function DashboardPage() {
         ).smsPerMonth
       : null;
 
-  // Pull verification status from `customer_profiles` (the single
-  // source of truth for "the human pressed the verification link in
-  // their inbox" — see `customer_profiles.email_verified_at` in
-  // migration 20260505000000). On a transient lookup error we treat
-  // the email as already verified to avoid spuriously rendering the
-  // banner during a Supabase blip on every dashboard load.
+  // Verification status. The auth user's `email_confirmed_at` is
+  // authoritative — a signed-in owner whose auth email is confirmed is
+  // verified, full stop. Only when auth hasn't confirmed it do we fall back
+  // to `customer_profiles.email_verified_at` ("the human pressed the
+  // verification link"). Checking the profile FIRST caused a false banner:
+  // a later checkout/change-plan can upsert a fresh profile row (with a
+  // null `email_verified_at`) for a long-verified account. On a transient
+  // lookup error we treat the email as already verified to avoid spuriously
+  // rendering the banner during a Supabase blip on every dashboard load.
   let emailVerified = true;
-  try {
-    const profile = await getCustomerProfileByEmail(user.email);
-    if (profile && !profile.email_verified_at) emailVerified = false;
-  } catch {
-    emailVerified = true;
+  if (!user.emailConfirmedAt) {
+    try {
+      const profile = await getCustomerProfileByEmail(user.email);
+      if (profile && !profile.email_verified_at) emailVerified = false;
+    } catch {
+      emailVerified = true;
+    }
   }
 
   const showProvisioningWidget =

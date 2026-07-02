@@ -19,6 +19,7 @@
 import { resolveEnterpriseVoiceReservation } from "./enterprise_limits.ts";
 import { VOICE_RES_LIMITS } from "./voice_reservation_limits.ts";
 import { telemetryRecord } from "./telemetry.ts";
+import { deriveMonthlyQuotaWindow } from "./billing_period_window.ts";
 import {
   cacheLooksValidForQuotaAfterJitFailure,
   STRIPE_PERIOD_ROLLOVER_GRACE_MS,
@@ -281,7 +282,16 @@ export async function reserveVoiceBudget(
     return { ok: false, reason: "no_period_bounds" };
   }
 
-  const periodStart = new Date(periodRow.stripe_current_period_start as string).toISOString();
+  // Quota key: the current MONTH-window within the Stripe period, not the raw
+  // period start. Prepaid 12/24-month plans have a term-long Stripe period but
+  // included minutes reset monthly; for monthly subs the window equals the
+  // period, so this is a no-op for existing tenants.
+  const periodStart = new Date(
+    deriveMonthlyQuotaWindow(
+      periodRow.stripe_current_period_start as string,
+      Date.now()
+    ).startIso
+  ).toISOString();
 
   const { data: reserveResult, error: resErr } = await supabase.rpc("voice_reserve_for_call", {
     p_business_id: businessId,
@@ -397,7 +407,11 @@ export async function checkVoiceBudgetAvailable(
     return { status: "indeterminate", reason: "period_stale" };
   }
 
-  const periodStart = new Date(periodStartRaw).toISOString();
+  // Same month-window quota key as reserveVoiceBudget — the two must agree or
+  // the pre-dial probe would read a different usage row than the reserve writes.
+  const periodStart = new Date(
+    deriveMonthlyQuotaWindow(periodStartRaw, Date.now()).startIso
+  ).toISOString();
   const { data: availData, error: availErr } = await supabase.rpc("voice_check_availability", {
     p_business_id: businessId,
     p_max_concurrent: concurrent,

@@ -20,6 +20,18 @@ This repository includes:
 
 See `src/lib/plans/tier.ts` for pricing logic.
 
+Billing model (Hostinger-consistent): **12/24-month plans are charged in full
+at checkout** (e.g. Standard 24mo = $2,376 today) because the tenant's VPS is
+prepaid for the whole contract — the Stripe prices use `interval=month` with
+`interval_count=12|24` (`scripts/oneshot/create-term-prices.ts`). Included
+usage (voice minutes, shared AI budget, SMS) still resets **monthly** via
+`deriveMonthlyQuotaWindow` (`supabase/functions/_shared/billing_period_window.ts`;
+inline copies in `vps/chat-worker/worker.mjs` and `vps/voice-bridge/src/index.ts`
+must stay in lockstep). After the term, service rolls month-to-month at the
+higher renewal rate (`*_RENEWAL_PRICE_ID` via `ensureCommitmentSchedule`)
+unless auto-renew is on or the owner starts a new contract at the contract
+rate.
+
 ## Architecture
 
 - Agent runtime: Rowboat

@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   createSubscription,
+  findCheckoutBlockingSubscription,
   getSubscription,
   getSubscriptionByStripeSubscriptionId,
+  isCheckoutBlockingSubscription,
+  isCommitmentElapsed,
   listSubscriptionsByBusinessIds,
   stripeSubscriptionPeriodCache,
   subscriptionPeriodCacheFromStripe,
@@ -361,5 +364,168 @@ describe("db/subscriptions", () => {
 
     const result = await listSubscriptionsByBusinessIds(["biz-uuid-1"]);
     expect(result.size).toBe(0);
+  });
+
+  describe("isCheckoutBlockingSubscription", () => {
+    const now = new Date("2026-07-01T00:00:00.000Z");
+    const base = { grace_ends_at: null, wiped_at: null, stripe_subscription_id: null };
+
+    it("blocks on an active subscription", () => {
+      expect(
+        isCheckoutBlockingSubscription({ ...base, status: "active" as const }, now)
+      ).toBe(true);
+    });
+
+    it("blocks a canceled subscription still in its data-retention grace window", () => {
+      expect(
+        isCheckoutBlockingSubscription(
+          {
+            status: "canceled" as const,
+            grace_ends_at: "2026-07-15T00:00:00.000Z",
+            wiped_at: null,
+            stripe_subscription_id: "sub_x"
+          },
+          now
+        )
+      ).toBe(true);
+    });
+
+    it("blocks a paid pending row (webhook mid-flight)", () => {
+      expect(
+        isCheckoutBlockingSubscription(
+          { ...base, status: "pending" as const, stripe_subscription_id: "sub_x" },
+          now
+        )
+      ).toBe(true);
+    });
+
+    it("allows an unpaid pending row (abandoned checkout stays retryable)", () => {
+      expect(
+        isCheckoutBlockingSubscription({ ...base, status: "pending" as const }, now)
+      ).toBe(false);
+    });
+
+    it("allows a fully-canceled subscription past grace (fresh signup ok)", () => {
+      expect(
+        isCheckoutBlockingSubscription(
+          {
+            status: "canceled" as const,
+            grace_ends_at: "2026-06-01T00:00:00.000Z",
+            wiped_at: "2026-06-02T00:00:00.000Z",
+            stripe_subscription_id: "sub_x"
+          },
+          now
+        )
+      ).toBe(false);
+    });
+  });
+
+  describe("isCommitmentElapsed", () => {
+    const now = new Date("2026-07-01T00:00:00.000Z");
+
+    it("is true for a term plan whose renewal_at has passed", () => {
+      expect(
+        isCommitmentElapsed(
+          { billing_period: "biennial", renewal_at: "2026-06-30T00:00:00.000Z" },
+          now
+        )
+      ).toBe(true);
+    });
+
+    it("is true exactly at the boundary", () => {
+      expect(
+        isCommitmentElapsed(
+          { billing_period: "annual", renewal_at: "2026-07-01T00:00:00.000Z" },
+          now
+        )
+      ).toBe(true);
+    });
+
+    it("is false while the commitment is still running", () => {
+      expect(
+        isCommitmentElapsed(
+          { billing_period: "biennial", renewal_at: "2027-01-01T00:00:00.000Z" },
+          now
+        )
+      ).toBe(false);
+    });
+
+    it("is false for monthly plans (no commitment)", () => {
+      expect(
+        isCommitmentElapsed(
+          { billing_period: "monthly", renewal_at: "2026-01-01T00:00:00.000Z" },
+          now
+        )
+      ).toBe(false);
+    });
+
+    it("is false when billing_period or renewal_at is missing/unparseable", () => {
+      expect(isCommitmentElapsed({ billing_period: null, renewal_at: "2026-01-01T00:00:00.000Z" }, now)).toBe(false);
+      expect(isCommitmentElapsed({ billing_period: "annual", renewal_at: null }, now)).toBe(false);
+      expect(isCommitmentElapsed({ billing_period: "annual", renewal_at: "not-a-date" }, now)).toBe(false);
+    });
+  });
+
+  describe("findCheckoutBlockingSubscription", () => {
+    it("returns null for empty input without touching the DB", async () => {
+      await expect(findCheckoutBlockingSubscription([])).resolves.toBeNull();
+      expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+    });
+
+    it("finds a blocking row even when a newer unpaid pending row shadows it", async () => {
+      // The Amy incident shape: latest row is the stray unpaid pending, the
+      // active row sits underneath. The guard must scan past the pending row.
+      const db = {
+        ...mockDb(),
+        in: vi.fn().mockReturnThis(),
+        order: vi.fn().mockResolvedValue({
+          data: [
+            { ...MOCK_SUB, id: "sub-pending", status: "pending", stripe_subscription_id: null },
+            { ...MOCK_SUB, id: "sub-active", status: "active" }
+          ],
+          error: null
+        })
+      };
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+      const result = await findCheckoutBlockingSubscription(["biz-uuid-1"]);
+      expect(result?.id).toBe("sub-active");
+    });
+
+    it("returns null when every row is non-blocking", async () => {
+      const db = {
+        ...mockDb(),
+        in: vi.fn().mockReturnThis(),
+        order: vi.fn().mockResolvedValue({
+          data: [
+            { ...MOCK_SUB, id: "sub-pending", status: "pending", stripe_subscription_id: null },
+            {
+              ...MOCK_SUB,
+              id: "sub-old",
+              status: "canceled",
+              grace_ends_at: "2020-01-01T00:00:00.000Z",
+              wiped_at: "2020-01-02T00:00:00.000Z"
+            }
+          ],
+          error: null
+        })
+      };
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+      await expect(findCheckoutBlockingSubscription(["biz-uuid-1"])).resolves.toBeNull();
+    });
+
+    it("throws on a query error (fail closed at the checkout gate)", async () => {
+      const db = {
+        ...mockDb(),
+        in: vi.fn().mockReturnThis(),
+        order: vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } })
+      };
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+      await expect(findCheckoutBlockingSubscription(["biz-uuid-1"])).rejects.toThrow(
+        "findCheckoutBlockingSubscription: boom"
+      );
+    });
   });
 });

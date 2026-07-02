@@ -79,6 +79,51 @@ const OWNER_CHAT_SPEND_CAP_MICROS_STARTER = (() => {
  * `envMaxMs` (never shorten a call over a DB blip), and the result is clamped to
  * a small floor so we never answer-then-immediately-hang-up.
  */
+// ---------------------------------------------------------------------------
+// Monthly quota windows within a (possibly multi-month) Stripe billing period.
+// 12/24-month plans are charged in full at checkout, so the Stripe period can
+// span the whole prepaid term while the shared AI budget still resets MONTHLY.
+// INLINE COPY of supabase/functions/_shared/billing_period_window.ts — keep in
+// lockstep (the bridge builds/deploys from its own directory).
+// ---------------------------------------------------------------------------
+function addUtcMonthsClamped(base: Date, months: number): Date {
+  const totalMonths = base.getUTCMonth() + months;
+  const year = base.getUTCFullYear() + Math.floor(totalMonths / 12);
+  const month = ((totalMonths % 12) + 12) % 12;
+  const daysInTarget = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const day = Math.min(base.getUTCDate(), daysInTarget);
+  return new Date(
+    Date.UTC(
+      year,
+      month,
+      day,
+      base.getUTCHours(),
+      base.getUTCMinutes(),
+      base.getUTCSeconds(),
+      base.getUTCMilliseconds()
+    )
+  );
+}
+
+// Window 0 echoes the input string verbatim so existing monthly tenants'
+// spend keys are bit-for-bit unchanged (period_start is an equality key).
+function deriveMonthlyQuotaWindowStart(periodStartIso: string, nowMs: number): string {
+  const start = new Date(periodStartIso);
+  if (!Number.isFinite(start.getTime())) return periodStartIso;
+
+  let n = 0;
+  if (nowMs > start.getTime()) {
+    const now = new Date(nowMs);
+    n =
+      (now.getUTCFullYear() - start.getUTCFullYear()) * 12 +
+      (now.getUTCMonth() - start.getUTCMonth());
+    if (n < 0) n = 0;
+    while (n > 0 && addUtcMonthsClamped(start, n).getTime() > nowMs) n--;
+    while (addUtcMonthsClamped(start, n + 1).getTime() <= nowMs) n++;
+  }
+  return n === 0 ? periodStartIso : addUtcMonthsClamped(start, n).toISOString();
+}
+
 async function computeBudgetDerivedSessionMaxMs(
   supabase: SupabaseClient,
   businessId: string,
@@ -115,7 +160,7 @@ async function computeBudgetDerivedSessionMaxMs(
       .maybeSingle();
     const subStart = (subRow as { stripe_current_period_start?: string | null } | null)
       ?.stripe_current_period_start;
-    if (subStart) periodStart = subStart;
+    if (subStart) periodStart = deriveMonthlyQuotaWindowStart(subStart, Date.now());
 
     let creditMicros = 0;
     const { data: creditRaw, error: creditErr } = await supabase.rpc("chat_active_credit_micros", {

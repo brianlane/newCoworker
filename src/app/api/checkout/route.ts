@@ -1,9 +1,9 @@
 import { authUserExistsByEmail, getAuthUser, verifySignupIdentity } from "@/lib/auth";
 import { createCheckoutSession, resolveIntroDiscountCouponId, resolvePriceId } from "@/lib/stripe/client";
-import { createSubscription } from "@/lib/db/subscriptions";
+import { createSubscription, findCheckoutBlockingSubscription } from "@/lib/db/subscriptions";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { verifyOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
-import { getBusiness, setBusinessCustomerProfile } from "@/lib/db/businesses";
+import { getBusiness, listBusinessIdsByOwnerEmail, setBusinessCustomerProfile } from "@/lib/db/businesses";
 import {
   LIFETIME_SUBSCRIPTION_CAP,
   upsertCustomerProfile,
@@ -96,6 +96,38 @@ export async function POST(request: Request) {
         customerEmail = body.ownerEmail;
       } else {
         return errorResponse("FORBIDDEN", "Authentication required");
+      }
+    }
+
+    // Re-onboarding hard stop: this route exists ONLY to start a brand-new
+    // subscription from the onboarding flow. If the posted business — or any
+    // business the signed-in user owns — already has live/paid service
+    // (active, canceled-in-grace, or a paid row mid-webhook), refuse before
+    // inserting the `pending` row. A stale onboarding draft once shadowed a
+    // live tenant's active subscription this way (the "Amy reset" incident);
+    // plan changes and reactivation belong to the Billing page routes, which
+    // operate on the existing subscription instead of minting a new one.
+    // `findCheckoutBlockingSubscription` throws on a read error (fail closed).
+    {
+      const guardBusinessIds = new Set<string>([body.businessId]);
+      if (user?.email) {
+        for (const id of await listBusinessIdsByOwnerEmail(user.email)) {
+          guardBusinessIds.add(id);
+        }
+      }
+      const blocking = await findCheckoutBlockingSubscription([...guardBusinessIds]);
+      if (blocking) {
+        logger.info("checkout blocked: business/owner already has a live subscription", {
+          businessId: body.businessId,
+          blockingSubscriptionId: blocking.id,
+          blockingBusinessId: blocking.business_id,
+          blockingStatus: blocking.status
+        });
+        return errorResponse(
+          "CONFLICT",
+          "This account already has an active subscription. Manage your plan from the Billing page instead of starting a new signup.",
+          409
+        );
       }
     }
 

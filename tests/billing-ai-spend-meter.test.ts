@@ -173,9 +173,15 @@ describe("meterGeminiSpendForBusiness", () => {
 
   beforeEach(() => {
     delete process.env.OWNER_CHAT_SPEND_CAP_MICROS;
+    // Pin "now" inside the fixtures' first month-window (period start
+    // 2026-05-29) so the monthly quota key echoes the raw period start,
+    // matching how a monthly subscription behaves.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-10T00:00:00.000Z"));
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     if (savedCap === undefined) delete process.env.OWNER_CHAT_SPEND_CAP_MICROS;
     else process.env.OWNER_CHAT_SPEND_CAP_MICROS = savedCap;
     if (savedSbUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -205,6 +211,31 @@ describe("meterGeminiSpendForBusiness", () => {
       p_period_start: "2026-05-29T21:33:49+00:00",
       p_cost_micros: Math.ceil(10_000 * 0.5 + 1_000 * 3.0),
       p_cap_micros: 15_000_000
+    });
+  });
+
+  it("meters into the current month-window on a prepaid multi-month period", async () => {
+    // Prepaid term started 2026-05-29; four months in, spend must key on the
+    // 2026-09-29 month-window rather than the raw term start.
+    vi.setSystemTime(new Date("2026-10-10T00:00:00.000Z"));
+    const db = stubDb({
+      subscriptionRow: { stripe_current_period_start: "2026-05-29T21:33:49+00:00" },
+      creditResult: { data: 0, error: null }
+    });
+
+    await meterGeminiSpendForBusiness({
+      businessId: "biz-1",
+      model: "gemini-3-flash-preview",
+      surface: "website_ingest",
+      usage: { promptTokens: 10_000, outputTokens: 1_000 },
+      client: db as never
+    });
+
+    expect(db.rpc).toHaveBeenCalledWith("owner_chat_record_spend", {
+      p_business_id: "biz-1",
+      p_period_start: "2026-09-29T21:33:49.000Z",
+      p_cost_micros: Math.ceil(10_000 * 0.5 + 1_000 * 3.0),
+      p_cap_micros: 10_000_000
     });
   });
 

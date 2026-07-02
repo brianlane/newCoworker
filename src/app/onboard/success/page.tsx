@@ -6,7 +6,7 @@ import Image from "next/image";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
-import { ONBOARD_STORAGE_KEY, type OnboardingData } from "@/lib/onboarding/storage";
+import { ONBOARD_STORAGE_KEY, clearOnboardingStorage, type OnboardingData } from "@/lib/onboarding/storage";
 import {
   clearStaleSupabaseAuthCookies,
   getSupabaseBrowserClient,
@@ -114,6 +114,13 @@ function OnboardSuccessContent() {
 
     void resolvePostPaymentState();
   }, [sessionId]);
+
+  useEffect(() => {
+    // Onboarding is over once the coworker is online — scrub the local
+    // draft so its resumable businessId can't be replayed into a fresh
+    // onboarding months later against this (now live) business.
+    if (status === "online") clearOnboardingStorage();
+  }, [status]);
 
   useEffect(() => {
     if (status !== "provisioning") return;
@@ -425,6 +432,7 @@ function OnboardSuccessContent() {
             <div className="text-center">
               <a
                 href="/dashboard"
+                onClick={clearOnboardingStorage}
                 className="inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
               >
                 Go to Dashboard →
@@ -455,6 +463,7 @@ function OnboardSuccessContent() {
             </p>
             <a
               href="/login"
+              onClick={clearOnboardingStorage}
               className="inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
             >
               Sign in

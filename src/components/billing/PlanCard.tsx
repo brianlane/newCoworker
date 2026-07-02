@@ -21,6 +21,11 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import type { BillingPeriod, PlanTier } from "@/lib/plans/tier";
+import {
+  formatCommitmentTotal,
+  getMonthlyRateDisplay,
+  getRenewalRateDisplay
+} from "@/lib/pricing";
 import { CancelSheet } from "./CancelSheet";
 import { ChangePlanSelector } from "./ChangePlanSelector";
 
@@ -44,6 +49,14 @@ export type PlanCardProps = {
   canChangePlan: boolean;
   changePlanBlockedReason?: string | null;
   stripeCustomerId: string | null;
+  /** subscriptions.contract_auto_renew — term plans only. */
+  contractAutoRenew: boolean;
+  /**
+   * True when a term plan's original commitment has passed and the sub is
+   * rolling month-to-month at the renewal rate; unlocks the
+   * "Start a new contract" CTA (server re-validates in change-plan).
+   */
+  commitmentElapsed: boolean;
 };
 
 function formatDate(iso: string | null | undefined): string {
@@ -100,7 +113,9 @@ export function PlanCard(props: PlanCardProps) {
     refundBlockedReason,
     canChangePlan,
     changePlanBlockedReason,
-    stripeCustomerId
+    stripeCustomerId,
+    contractAutoRenew,
+    commitmentElapsed
   } = props;
 
   const [showCancel, setShowCancel] = useState(false);
@@ -108,12 +123,30 @@ export function PlanCard(props: PlanCardProps) {
   const [undoError, setUndoError] = useState<string | null>(null);
   const [resubLoading, setResubLoading] = useState(false);
   const [resubError, setResubError] = useState<string | null>(null);
+  const [autoRenewLoading, setAutoRenewLoading] = useState(false);
+  const [autoRenewError, setAutoRenewError] = useState<string | null>(null);
+  const [recontractLoading, setRecontractLoading] = useState(false);
+  const [recontractError, setRecontractError] = useState<string | null>(null);
 
   const badge = statusBadge(status, periodEnd, graceEndsAt);
   const cancelable =
     status === "active" || status === "active_cancel_at_period_end";
   const alreadyPeriodEnd = status === "active_cancel_at_period_end";
   const inGrace = status === "canceled_in_grace";
+
+  const isTermPlan =
+    tier !== null &&
+    tier !== "enterprise" &&
+    (billingPeriod === "annual" || billingPeriod === "biennial");
+  // Toggle only matters while the commitment is still running; once it has
+  // elapsed the plan is already month-to-month and the re-contract CTA takes
+  // over.
+  const showAutoRenew = isTermPlan && status === "active" && !commitmentElapsed;
+  const showRecontract = isTermPlan && status === "active" && commitmentElapsed;
+  const termMonthsLabel = billingPeriod === "annual" ? "12 months" : "24 months";
+  const contractRate = isTermPlan ? getMonthlyRateDisplay(tier, billingPeriod!) : null;
+  const contractTotal = isTermPlan ? formatCommitmentTotal(tier, billingPeriod!) : null;
+  const rolloverRate = isTermPlan ? getRenewalRateDisplay(tier, billingPeriod!) : null;
 
   async function undoPeriodEnd() {
     setUndoLoading(true);
@@ -166,6 +199,60 @@ export function PlanCard(props: PlanCardProps) {
     } catch {
       setResubError("Network error");
       setResubLoading(false);
+    }
+  }
+
+  async function toggleAutoRenew() {
+    setAutoRenewLoading(true);
+    setAutoRenewError(null);
+    try {
+      const res = await fetch("/api/billing/auto-renew", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ autoRenew: !contractAutoRenew })
+      });
+      const json = (await res.json().catch(() => null)) as
+        | { ok: true; data: { autoRenew: boolean } }
+        | { ok: false; error: { message: string } }
+        | null;
+      if (!res.ok || !json || json.ok === false) {
+        setAutoRenewError(
+          json && json.ok === false ? json.error.message : "Could not update auto-renew"
+        );
+        setAutoRenewLoading(false);
+        return;
+      }
+      window.location.reload();
+    } catch {
+      setAutoRenewError("Network error");
+      setAutoRenewLoading(false);
+    }
+  }
+
+  async function startRecontract() {
+    setRecontractLoading(true);
+    setRecontractError(null);
+    try {
+      const res = await fetch("/api/billing/change-plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tier, billingPeriod })
+      });
+      const json = (await res.json().catch(() => null)) as
+        | { ok: true; data: { checkoutUrl: string } }
+        | { ok: false; error: { message: string } }
+        | null;
+      if (!res.ok || !json || json.ok === false) {
+        setRecontractError(
+          json && json.ok === false ? json.error.message : "Could not start new contract checkout"
+        );
+        setRecontractLoading(false);
+        return;
+      }
+      window.location.assign(json.data.checkoutUrl);
+    } catch {
+      setRecontractError("Network error");
+      setRecontractLoading(false);
     }
   }
 
@@ -240,6 +327,79 @@ export function PlanCard(props: PlanCardProps) {
         <p className="mt-2 text-xs text-spark-orange" role="alert">
           {resubError}
         </p>
+      )}
+
+      {showAutoRenew && (
+        <div className="mt-6 pt-6 border-t border-parchment/10 space-y-2">
+          <div className="flex items-center justify-between gap-4">
+            <h3 className="text-sm font-semibold text-parchment">Contract auto-renew</h3>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={contractAutoRenew}
+              disabled={autoRenewLoading}
+              onClick={toggleAutoRenew}
+              className={[
+                "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors",
+                contractAutoRenew ? "bg-claw-green" : "bg-parchment/20",
+                autoRenewLoading ? "opacity-50 cursor-wait" : ""
+              ].join(" ")}
+            >
+              <span
+                className={[
+                  "inline-block h-4 w-4 rounded-full bg-deep-ink transition-transform",
+                  contractAutoRenew ? "translate-x-[18px]" : "translate-x-0.5"
+                ].join(" ")}
+              />
+            </button>
+          </div>
+          <p className="text-xs text-parchment/50">
+            {contractAutoRenew ? (
+              <>
+                On {formatDate(renewalAt)} your plan renews for another {termMonthsLabel} at the
+                contract rate of <span className="font-mono">{contractRate}</span> —{" "}
+                <span className="font-mono">{contractTotal}</span> billed upfront.
+              </>
+            ) : (
+              <>
+                After {formatDate(renewalAt)} your plan rolls to month-to-month at{" "}
+                <span className="font-mono">{rolloverRate}</span>. Turn auto-renew on to lock in
+                another {termMonthsLabel} at <span className="font-mono">{contractRate}</span>{" "}
+                (<span className="font-mono">{contractTotal}</span> billed upfront).
+              </>
+            )}
+          </p>
+          {autoRenewError && (
+            <p className="text-xs text-spark-orange" role="alert">
+              {autoRenewError}
+            </p>
+          )}
+        </div>
+      )}
+
+      {showRecontract && (
+        <div className="mt-6 pt-6 border-t border-parchment/10 space-y-2">
+          <h3 className="text-sm font-semibold text-parchment">Start a new contract</h3>
+          <p className="text-xs text-parchment/50">
+            Your original {termMonthsLabel} term has ended, so you&apos;re billed month-to-month at{" "}
+            <span className="font-mono">{rolloverRate}</span>. Start a new {termMonthsLabel}{" "}
+            contract to get back to <span className="font-mono">{contractRate}</span> —{" "}
+            <span className="font-mono">{contractTotal}</span> billed today.
+          </p>
+          <Button
+            size="sm"
+            variant="primary"
+            loading={recontractLoading}
+            onClick={startRecontract}
+          >
+            Start a new {termMonthsLabel} contract
+          </Button>
+          {recontractError && (
+            <p className="text-xs text-spark-orange" role="alert">
+              {recontractError}
+            </p>
+          )}
+        </div>
       )}
 
       {tier && tier !== "enterprise" && billingPeriod && cancelable && (

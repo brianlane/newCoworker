@@ -10,6 +10,7 @@
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { PlanTier } from "@/lib/plans/tier";
+import { deriveMonthlyQuotaWindow } from "../../../supabase/functions/_shared/billing_period_window";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -74,7 +75,9 @@ export async function getChatSpendSnapshotForBusiness(
     .maybeSingle();
   const subStart = (subRow as { stripe_current_period_start?: string | null } | null)
     ?.stripe_current_period_start;
-  if (subStart) periodStart = subStart;
+  // Month-window key within the Stripe period (see _shared/billing_period_window):
+  // matches the workers' resolveChatPeriodStart so display and enforcement agree.
+  if (subStart) periodStart = deriveMonthlyQuotaWindow(subStart, Date.now()).startIso;
 
   let spendMicros = 0;
   const { data: spendRow } = await db

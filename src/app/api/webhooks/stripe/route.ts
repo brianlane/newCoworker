@@ -1125,7 +1125,10 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
 
   }
 
-  if (subscriptionId && billingPeriod && tier !== "enterprise") {
+  // Skip when the owner has since opted into auto-renew: a late webhook
+  // retry must not reinstate the month-to-month rollover schedule that
+  // /api/billing/auto-renew deliberately released.
+  if (subscriptionId && billingPeriod && tier !== "enterprise" && !existing.contract_auto_renew) {
     try {
       await ensureCommitmentSchedule({
         subscriptionId,

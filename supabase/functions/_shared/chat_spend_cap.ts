@@ -19,6 +19,8 @@
  * _shared/telemetry.ts's RpcSupabase).
  */
 
+import { deriveMonthlyQuotaWindow } from "./billing_period_window.ts";
+
 // Per-model Google list prices (USD per 1M tokens, standard tier). Unknown
 // models fall back to the priciest tier we deploy so the fuse never
 // undercounts. Mirrors src/lib/billing/ai-spend-meter.ts on the Next side.
@@ -140,9 +142,12 @@ export interface SpendSupabase {
 }
 
 /**
- * Billing-period key for chat spend: the subscription's current Stripe period
- * start, so the fuse resets each month. Falls back to the start of the current
- * UTC month when there's no subscription row. Never throws.
+ * Billing-period key for chat spend: the current MONTH-window within the
+ * subscription's Stripe period, so the fuse resets monthly even on prepaid
+ * 12/24-month plans (whose Stripe period spans the whole term). For monthly
+ * subs the window equals the period, so existing tenants' keys are unchanged.
+ * Falls back to the start of the current UTC month when there's no
+ * subscription row. Never throws.
  */
 export async function resolveChatPeriodStart(
   supabase: SpendSupabase,
@@ -157,7 +162,9 @@ export async function resolveChatPeriodStart(
       .limit(1)
       .maybeSingle();
     const row = data as { stripe_current_period_start?: string } | null;
-    if (row?.stripe_current_period_start) return row.stripe_current_period_start;
+    if (row?.stripe_current_period_start) {
+      return deriveMonthlyQuotaWindow(row.stripe_current_period_start, Date.now()).startIso;
+    }
   } catch {
     // fall through to month-start
   }
