@@ -224,7 +224,11 @@ describe("provisioning/orchestrate", () => {
 
     expect(result.vpsId).toBe("123");
     expect(result.tunnelUrl).toContain(".newcoworker.com");
-    expect(vpsProvisioner).toHaveBeenCalledWith({ businessId: "biz-uuid-1", tier: "starter" });
+    expect(vpsProvisioner).toHaveBeenCalledWith({
+      businessId: "biz-uuid-1",
+      tier: "starter",
+      vpsSize: "kvm2"
+    });
   });
 
   it("reuses an existing per-tenant token without re-persisting it", async () => {
@@ -327,24 +331,70 @@ describe("provisioning/orchestrate", () => {
     expect(issueGatewayToken).not.toHaveBeenCalled();
   });
 
-  it("starter tier forwards to provisioner with tier='starter'", async () => {
+  it("starter tier forwards to provisioner with tier='starter' and default kvm2 hardware", async () => {
     const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("s1"));
     const remoteExec = vi.fn().mockResolvedValue(okExec());
     await orchestrateProvisioning(
       { businessId: "biz-kvm2", tier: "starter" },
       { vpsProvisioner, remoteExec }
     );
-    expect(vpsProvisioner).toHaveBeenCalledWith({ businessId: "biz-kvm2", tier: "starter" });
+    expect(vpsProvisioner).toHaveBeenCalledWith({
+      businessId: "biz-kvm2",
+      tier: "starter",
+      vpsSize: "kvm2"
+    });
   });
 
-  it("standard tier forwards to provisioner with tier='standard'", async () => {
+  it("standard tier forwards to provisioner with tier='standard' and default kvm8 hardware", async () => {
     const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("s2"));
     const remoteExec = vi.fn().mockResolvedValue(okExec());
     await orchestrateProvisioning(
       { businessId: "biz-kvm8", tier: "standard" },
       { vpsProvisioner, remoteExec }
     );
-    expect(vpsProvisioner).toHaveBeenCalledWith({ businessId: "biz-kvm8", tier: "standard" });
+    expect(vpsProvisioner).toHaveBeenCalledWith({
+      businessId: "biz-kvm8",
+      tier: "standard",
+      vpsSize: "kvm8"
+    });
+  });
+
+  it("an explicit vps_size pin overrides the tier default (standard on kvm2) and lands in bootstrap + deploy env", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("s3"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-std-kvm2", tier: "standard", vpsSize: "kvm2" },
+      { vpsProvisioner, remoteExec }
+    );
+    expect(vpsProvisioner).toHaveBeenCalledWith({
+      businessId: "biz-std-kvm2",
+      tier: "standard",
+      vpsSize: "kvm2"
+    });
+    // Bootstrap (call 0) carries the pinned hardware profile: the slim
+    // loader is base64-embedded, so decode it before asserting.
+    const bootstrapCall = remoteExec.mock.calls[0][0] as { command: string };
+    const b64 = /printf '%s' '([^']+)'/.exec(bootstrapCall.command)?.[1] ?? "";
+    const decoded = Buffer.from(b64, "base64").toString("utf8");
+    expect(decoded).toContain("TIER='standard' VPS_SIZE='kvm2' bash");
+    // Deploy env carries the hardware profile for deploy-client.sh.
+    const cmd = deployCallArg(remoteExec).command;
+    expectDeployHasEnv(cmd, "VPS_SIZE", "kvm2");
+    expectDeployHasEnv(cmd, "TIER", "standard");
+  });
+
+  it("a corrupt vps_size value falls back to the tier default instead of failing", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("s4"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-corrupt", tier: "starter", vpsSize: "kvm999" },
+      { vpsProvisioner, remoteExec }
+    );
+    expect(vpsProvisioner).toHaveBeenCalledWith({
+      businessId: "biz-corrupt",
+      tier: "starter",
+      vpsSize: "kvm2"
+    });
   });
 
   it("calls updateBusinessStatus twice (offline then online)", async () => {

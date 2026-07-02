@@ -35,6 +35,7 @@ export async function POST(request: Request) {
     const result = await orchestrateProvisioning({
       businessId: body.businessId,
       tier: business.tier,
+      vpsSize: business.vps_size ?? null,
       ownerEmail: business.owner_email
     });
 

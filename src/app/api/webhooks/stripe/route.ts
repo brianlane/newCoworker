@@ -1172,7 +1172,7 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
   }
 
   const { orchestrateProvisioning } = await import("@/lib/provisioning/orchestrate");
-  orchestrateProvisioning({ businessId, tier })
+  orchestrateProvisioning({ businessId, tier, vpsSize: business?.vps_size ?? null })
     .then(async (result) => {
       // Persist the Hostinger billing-subscription id so the lifecycle
       // engine can later cancel Hostinger billing (DELETE

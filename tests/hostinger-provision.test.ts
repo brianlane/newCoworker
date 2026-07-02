@@ -5,7 +5,8 @@ import {
   resolvePriceItemId,
   DEFAULT_TEMPLATE_ID,
   DEFAULT_US_DATA_CENTER_ID,
-  DEFAULT_TIER_PRICE_ITEM
+  DEFAULT_TIER_PRICE_ITEM,
+  VPS_SIZE_PRICE_ITEM
 } from "@/lib/hostinger/provision";
 import type { HostingerClient } from "@/lib/hostinger/client";
 
@@ -319,6 +320,51 @@ describe("provisionVpsForBusiness", () => {
     expect(client.purchaseVirtualMachine.mock.calls[0][0].item_id).toBe(
       DEFAULT_TIER_PRICE_ITEM.standard
     );
+  });
+
+  it("buys the vps_size-pinned SKU when the pin differs from the tier default (standard on kvm2)", async () => {
+    const client = makeClientStub({
+      getVirtualMachine: vi.fn().mockResolvedValueOnce({
+        id: 42,
+        state: "running",
+        ipv4: [{ id: 1, address: "1.2.3.4" }]
+      })
+    });
+    const dbInsert = vi.fn().mockResolvedValue({
+      id: "row",
+      business_id: "biz-1",
+      hostinger_vps_id: "42",
+      hostinger_public_key_id: 9,
+      public_key: "",
+      private_key_pem: "",
+      fingerprint_sha256: "",
+      ssh_username: "root",
+      created_at: "",
+      rotated_at: null
+    });
+
+    await provisionVpsForBusiness(
+      {
+        businessId: "biz-1",
+        tier: "standard",
+        vpsSize: "kvm2",
+        pollIntervalMs: 1
+      },
+      {
+        client: client as unknown as HostingerClient,
+        generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
+        sleep: vi.fn(),
+        db: { insertVpsSshKey: dbInsert }
+      }
+    );
+
+    expect(client.purchaseVirtualMachine.mock.calls[0][0].item_id).toBe(
+      VPS_SIZE_PRICE_ITEM.kvm2
+    );
+    // The tier-keyed map is now derived from the size-keyed one; pin the
+    // linkage so a future edit can't silently fork the two.
+    expect(DEFAULT_TIER_PRICE_ITEM.starter).toBe(VPS_SIZE_PRICE_ITEM.kvm2);
+    expect(DEFAULT_TIER_PRICE_ITEM.standard).toBe(VPS_SIZE_PRICE_ITEM.kvm8);
   });
 
   it("attaches a Hostinger post-install script when content is provided (happy path)", async () => {
@@ -933,13 +979,13 @@ describe("buildDefaultPostInstallScript", () => {
     expect(s).toContain("https://github.com/brianlane/newCoworker.git");
     expect(s).toContain("REPO_REF='main'");
     // Default tier is "standard" (KVM 8 safe pick) — the bootstrap loader
-    // emits `TIER='standard' bash …`. Must be single-quoted so the value
-    // is delivered to bootstrap.sh exactly as-is even if the loader is
-    // later sourced from a context that mangles env propagation.
-    expect(s).toContain("TIER='standard'");
+    // emits `TIER='standard' VPS_SIZE='kvm8' bash …`. Must be single-quoted
+    // so the values are delivered to bootstrap.sh exactly as-is even if the
+    // loader is later sourced from a context that mangles env propagation.
+    expect(s).toContain("TIER='standard' VPS_SIZE='kvm8'");
   });
 
-  it("accepts custom repo URL, ref, and tier", () => {
+  it("accepts custom repo URL, ref, and tier (vpsSize follows the tier default)", () => {
     const s = buildDefaultPostInstallScript({
       repoUrl: "https://github.com/other/repo.git",
       repoRef: "release",
@@ -947,7 +993,17 @@ describe("buildDefaultPostInstallScript", () => {
     });
     expect(s).toContain("REPO_URL='https://github.com/other/repo.git'");
     expect(s).toContain("REPO_REF='release'");
-    expect(s).toContain("TIER='starter'");
+    expect(s).toContain("TIER='starter' VPS_SIZE='kvm2'");
+  });
+
+  it("emits an explicit vpsSize pin independently of tier (standard-on-kvm2)", () => {
+    const s = buildDefaultPostInstallScript({ tier: "standard", vpsSize: "kvm2" });
+    expect(s).toContain("TIER='standard' VPS_SIZE='kvm2'");
+  });
+
+  it("resolves a null vpsSize to the tier default", () => {
+    const s = buildDefaultPostInstallScript({ tier: "starter", vpsSize: null });
+    expect(s).toContain("TIER='starter' VPS_SIZE='kvm2'");
   });
 
   it("rejects empty or overly long repoRef values", () => {

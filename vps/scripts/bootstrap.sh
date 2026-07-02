@@ -1,11 +1,24 @@
 #!/usr/bin/env bash
 # bootstrap.sh — Full server hardening + Ollama + Rowboat + cloudflared
 # Run as root on a fresh Ubuntu 24.04 KVM VPS
-# Usage: TIER=starter ./bootstrap.sh   (or TIER=standard)
+# Usage: TIER=starter VPS_SIZE=kvm2 ./bootstrap.sh
+#
+# TIER (starter|standard) is the ENTITLEMENT axis — it no longer drives any
+# hardware decision here. VPS_SIZE (kvm2|kvm8) is the HARDWARE axis: ZRAM,
+# Ollama tuning + model pulls, and the Rowboat compose profile all key on it.
+# When VPS_SIZE is unset we fall back to the historical tier mapping
+# (starter→kvm2, standard→kvm8) so pre-decoupling callers keep working.
 
 set -euo pipefail
 
 TIER="${TIER:-standard}"
+if [[ -z "${VPS_SIZE:-}" ]]; then
+  if [[ "$TIER" == "starter" ]]; then VPS_SIZE="kvm2"; else VPS_SIZE="kvm8"; fi
+fi
+if [[ "$VPS_SIZE" != "kvm2" && "$VPS_SIZE" != "kvm8" ]]; then
+  echo "FATAL: VPS_SIZE must be kvm2 or kvm8 (got '$VPS_SIZE')" >&2
+  exit 1
+fi
 CLOUDFLARED_VERSION="2025.4.0"
 LOG_FILE="/var/log/newcoworker-bootstrap.log"
 
@@ -25,7 +38,7 @@ ROWBOAT_GIT_REF="${ROWBOAT_GIT_REF:-7a73f37118a4b71fbef932d30ef7a18a3dcb4bcc}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
 
-log "=== New Coworker VPS Bootstrap (TIER=${TIER}) ==="
+log "=== New Coworker VPS Bootstrap (TIER=${TIER}, VPS_SIZE=${VPS_SIZE}) ==="
 
 # ------------------------------------------------------------------
 # 1. System hardening
@@ -129,9 +142,9 @@ fi
 log "System hardening complete."
 
 # ------------------------------------------------------------------
-# 2. ZRAM (mandatory for KVM 2 / Starter tier)
+# 2. ZRAM (mandatory for KVM 2 hardware — any tier hosted on it)
 # ------------------------------------------------------------------
-if [[ "$TIER" == "starter" ]]; then
+if [[ "$VPS_SIZE" == "kvm2" ]]; then
   log "Configuring ZRAM (mandatory for KVM 2 8GB RAM)..."
   # Hostinger's Ubuntu-Docker template ships a minimal kernel package set:
   # the zram module lives in linux-modules-extra, which is NOT installed.
@@ -186,10 +199,10 @@ if ! command -v ollama &>/dev/null; then
   curl -fsSL https://ollama.ai/install.sh | sh
 fi
 
-# Tier-specific Ollama tuning
+# Hardware-specific Ollama tuning
 mkdir -p /etc/systemd/system/ollama.service.d
 
-if [[ "$TIER" == "starter" ]]; then
+if [[ "$VPS_SIZE" == "kvm2" ]]; then
   # KVM 2 (2 vCPU, 8GB RAM) — Resource-First config
   # Llama 3.2 3B (~2 GiB typical in Ollama); strict single-model enforcement
   # TurboQuant KV cache compression: reduces active memory per conversation ~75%
@@ -255,10 +268,10 @@ systemctl daemon-reload
 systemctl enable ollama
 systemctl start ollama
 
-# Tier-aware model pulls
-log "Pre-pulling AI models for TIER=${TIER} (background)..."
-if [[ "$TIER" == "starter" ]]; then
-  # KVM 2: single model — Llama 3.2 3B (standard tier KVM8 uses qwen3:4b-instruct)
+# Hardware-aware model pulls
+log "Pre-pulling AI models for VPS_SIZE=${VPS_SIZE} (background)..."
+if [[ "$VPS_SIZE" == "kvm2" ]]; then
+  # KVM 2: single model — Llama 3.2 3B (KVM8 hardware uses qwen3:4b-instruct)
   (
     sleep 10
     ollama pull llama3.2:3b || true
@@ -337,7 +350,7 @@ else
   log "WARN: llm-router source not found at ${LLM_ROUTER_SRC}; compose build will fail until repo is staged"
 fi
 
-# Tier-aware Rowboat docker-compose
+# Hardware-aware Rowboat docker-compose
 #
 # Build context note: upstream Rowboat keeps the server Dockerfile under
 # apps/rowboat/Dockerfile, NOT at the repo root. Pointing `context:` at the
@@ -347,7 +360,7 @@ fi
 # of bootstrap on a partial Rowboat failure), that error was silently
 # swallowed and chat was permanently broken. apps/rowboat is the correct
 # context for both `rowboat` and `jobs-worker`.
-if [[ "$TIER" == "starter" ]]; then
+if [[ "$VPS_SIZE" == "kvm2" ]]; then
   # KVM 2: slim stack — no qdrant, constrained mongo, no rag-worker
   cat > /opt/rowboat/docker-compose.yml <<'REOF'
 services:
@@ -557,4 +570,4 @@ cp /opt/rowboat/crontab /opt/newcoworker/scripts/ 2>/dev/null || true
   { cat; echo "*/2 * * * * /opt/newcoworker/scripts/heartbeat.sh >> /var/log/heartbeat.log 2>&1"; } | \
   crontab -
 
-log "=== Bootstrap complete. Tier=${TIER}. Reboot recommended. ==="
+log "=== Bootstrap complete. Tier=${TIER}, VPS size=${VPS_SIZE}. Reboot recommended. ==="

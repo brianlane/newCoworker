@@ -4,7 +4,13 @@
 #
 # Environment variables expected:
 #   BUSINESS_ID              — UUID from Supabase
-#   TIER                     — starter | standard
+#   TIER                     — starter | standard (ENTITLEMENTS: drives the
+#                               aiflow-render gate; hardware decisions key on
+#                               VPS_SIZE)
+#   VPS_SIZE                 — kvm2 | kvm8 (HARDWARE: drives the local Ollama
+#                               fallback model). Unset falls back to the
+#                               historical tier mapping (starter→kvm2,
+#                               standard→kvm8).
 #   SUPABASE_URL             — Supabase project URL
 #   SUPABASE_SERVICE_KEY     — Service role key (write config back)
 #   CLOUDFLARE_TUNNEL_TOKEN  — cloudflared tunnel token
@@ -57,6 +63,9 @@
 set -euo pipefail
 
 TIER="${TIER:-standard}"
+if [[ -z "${VPS_SIZE:-}" ]]; then
+  if [[ "$TIER" == "starter" ]]; then VPS_SIZE="kvm2"; else VPS_SIZE="kvm8"; fi
+fi
 LOG="/var/log/deploy-client-${BUSINESS_ID:-unknown}.log"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG"; }
@@ -79,7 +88,7 @@ report_progress() {
     -d "$json" || true
 }
 
-log "=== Deploying client: ${BUSINESS_ID} (TIER=${TIER}) ==="
+log "=== Deploying client: ${BUSINESS_ID} (TIER=${TIER}, VPS_SIZE=${VPS_SIZE}) ==="
 
 # ------------------------------------------------------------------
 # 1. Fetch business config from Supabase and write Rowboat vault
@@ -192,9 +201,11 @@ report_progress 42 "vault_seeded" "Vault and memory seeds written"
 # ------------------------------------------------------------------
 log "Writing Rowboat .env..."
 
-# Tier-aware model selection
-# Starter (KVM2): **`llama3.2:3b`**. Standard (KVM8 CPU): **`qwen3:4b-instruct`**. Dual fast/balanced tags are for GPU hosts only.
-if [[ "${TIER}" == "starter" ]]; then
+# Hardware-aware model selection (local Ollama FALLBACK only — the primary
+# chat/SMS path is Gemini via the llm-router; this model serves cap-tripped
+# and outage turns).
+# KVM2 (8GB): **`llama3.2:3b`**. KVM8 (32GB CPU): **`qwen3:4b-instruct`**. Dual fast/balanced tags are for GPU hosts only.
+if [[ "${VPS_SIZE}" == "kvm2" ]]; then
   OLLAMA_MODEL="llama3.2:3b"
 else
   OLLAMA_MODEL="qwen3:4b-instruct"
@@ -261,6 +272,7 @@ cat > /opt/rowboat/.env <<RENV_EOF
 ROWBOAT_GATEWAY_TOKEN=${ROWBOAT_GATEWAY_TOKEN}
 BUSINESS_ID=${BUSINESS_ID}
 TIER=${TIER}
+VPS_SIZE=${VPS_SIZE}
 
 # Upstream-required Rowboat keys.
 #
@@ -1445,10 +1457,11 @@ fi
 # ------------------------------------------------------------------
 # AiFlow render service (headless Chromium) — per-tenant sidecar.
 #
-# Gated to render-capable tiers: the starter/KVM2 box is already memory-bound
-# by Ollama + Rowboat, so Chromium must NOT run there (operator directive). On
-# starter we proactively tear any stale container down in case the tenant was
-# downgraded.
+# ENTITLEMENT gate (keys on TIER, not VPS_SIZE): standard/enterprise get the
+# sidecar, starter does not. This is a plan-feature decision — the June 2026
+# KVM2 experiment validated that render runs fine on KVM2 hardware, so a
+# standard tenant pinned to a kvm2 box still gets the sidecar. On starter we
+# proactively tear any stale container down in case the tenant was downgraded.
 #
 # Same sync model as voice-bridge / chat-worker: rsync the staged repo source,
 # rewrite .env every deploy (so AIFLOW_RENDER_TOKEN rotations land), and
@@ -1460,10 +1473,10 @@ AIFLOW_RENDER_DEST="/opt/aiflow-render"
 
 if [[ "${TIER}" == "starter" ]]; then
   if [[ -f "${AIFLOW_RENDER_DEST}/docker-compose.yml" ]]; then
-    log "TIER=starter: tearing down aiflow-render (not supported on KVM2)..."
+    log "TIER=starter: tearing down aiflow-render (not included in the starter plan)..."
     ( cd "${AIFLOW_RENDER_DEST}" && docker compose down --remove-orphans ) || true
   else
-    log "TIER=starter: skipping aiflow-render (headless Chromium not deployed on KVM2)"
+    log "TIER=starter: skipping aiflow-render (not included in the starter plan)"
   fi
 elif [[ -d "${AIFLOW_RENDER_SRC}" ]]; then
   log "Syncing aiflow-render source ${AIFLOW_RENDER_SRC} → ${AIFLOW_RENDER_DEST}..."

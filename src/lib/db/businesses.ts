@@ -48,6 +48,12 @@ export type BusinessRow = {
    * owner's browser at onboarding; editable in Settings.
    */
   timezone?: string | null;
+  /**
+   * Hardware pin (Hostinger box size), decoupled from `tier` (entitlements).
+   * Null = tier default (starter→kvm2, standard→kvm8). Resolved via
+   * `resolveVpsSize` in src/lib/vps/size.ts.
+   */
+  vps_size?: "kvm2" | "kvm8" | null;
 };
 
 /**
@@ -206,6 +212,21 @@ export async function setCustomerChannelsEnabled(
     .update({ customer_channels_enabled: enabled })
     .eq("id", id);
   if (error) throw new Error(`setCustomerChannelsEnabled: ${error.message}`);
+}
+
+/**
+ * Pin (or unpin, with null) the hardware size for a business. Takes effect on
+ * the NEXT provisioning run (plan change, resubscribe, or an explicit
+ * migration via debug/migrate-vps-size.ts) — it does not move a live VPS.
+ */
+export async function updateBusinessVpsSize(
+  id: string,
+  vpsSize: "kvm2" | "kvm8" | null,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("businesses").update({ vps_size: vpsSize }).eq("id", id);
+  if (error) throw new Error(`updateBusinessVpsSize: ${error.message}`);
 }
 
 export async function updateEnterpriseLimits(
