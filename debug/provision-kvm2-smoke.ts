@@ -233,7 +233,7 @@ async function adoptExistingVm(vmId: number): Promise<ProvisionResultLike> {
   });
 
   // Poll running + IPv4 (same happy path as production's waitForVpsReady,
-  // same 15-min budget; error/suspended are terminal).
+  // same 15-min budget; error/suspended/stopped are terminal).
   const deadline = Date.now() + 15 * 60 * 1000;
   let publicIp: string | null = null;
   for (;;) {
@@ -243,7 +243,7 @@ async function adoptExistingVm(vmId: number): Promise<ProvisionResultLike> {
       publicIp = ip;
       break;
     }
-    if (vm.state === "error" || vm.state === "suspended") {
+    if (vm.state === "error" || vm.state === "suspended" || vm.state === "stopped") {
       throw new Error(`VM ${vmId} entered terminal state=${vm.state} during setup`);
     }
     if (Date.now() > deadline) throw new Error(`VM ${vmId} not running after 15 min`);

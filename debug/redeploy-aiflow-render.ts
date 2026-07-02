@@ -81,7 +81,10 @@ fi
 // Render-only remote sequence. `set -euo pipefail` so a failed fetch/rsync/build
 // aborts instead of falsely reporting success. The `.env` exclusion is what
 // preserves the render bearer the worker authenticates with.
-const REDEPLOY_RENDER_REMOTE = `
+//
+// Built lazily (not at module load) so `--init-env`'s AIFLOW_RENDER_TOKEN
+// requirement doesn't abort a `--dry-run`, which never SSHes or seeds anything.
+const buildRemoteCommand = (): string => `
 set -euo pipefail
 REPO=/opt/newcoworker-repo
 DEST=/opt/aiflow-render
@@ -141,7 +144,7 @@ const res = await sshExec({
   host: ip,
   username: key.ssh_username || "root",
   privateKeyPem: key.private_key_pem,
-  command: REDEPLOY_RENDER_REMOTE,
+  command: buildRemoteCommand(),
   timeoutMs: 12 * 60 * 1000,
   onStdout: (c) => process.stdout.write(c),
   onStderr: (c) => process.stderr.write(c)
