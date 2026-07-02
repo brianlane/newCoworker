@@ -2337,24 +2337,32 @@ async function sendGroupSmsStep(
   };
 
   try {
-    const send = isGroup
-      ? await telnyxSendGroupMms({
-          apiKey: cfg.apiKey,
-          fromE164: own,
-          toE164: recipients,
-          text,
-          idempotencyKey: `aiflow:${run.id}:${index}`
-        })
-      : await telnyxSendSms({
-          apiKey: cfg.apiKey,
-          messagingProfileId: cfg.profile,
-          fromE164: cfg.from,
-          toE164: recipients[0],
-          text,
-          idempotencyKey: `aiflow:${run.id}:${index}`,
-          // Degenerate group-of-one is a customer-facing text: RCS-eligible.
-          rcsAgentId: await resolveRcsAgentId(supabase, run.business_id)
-        });
+    // Group MMS never goes over RCS; only the degenerate 1:1 send can, so the
+    // channel is captured on the non-group branch where the type carries it.
+    let send: { ok: boolean; status: number; body: string };
+    let sendChannel: "sms" | "rcs" = "sms";
+    if (isGroup) {
+      send = await telnyxSendGroupMms({
+        apiKey: cfg.apiKey,
+        fromE164: own,
+        toE164: recipients,
+        text,
+        idempotencyKey: `aiflow:${run.id}:${index}`
+      });
+    } else {
+      const single = await telnyxSendSms({
+        apiKey: cfg.apiKey,
+        messagingProfileId: cfg.profile,
+        fromE164: cfg.from,
+        toE164: recipients[0],
+        text,
+        idempotencyKey: `aiflow:${run.id}:${index}`,
+        // Degenerate group-of-one is a customer-facing text: RCS-eligible.
+        rcsAgentId: await resolveRcsAgentId(supabase, run.business_id)
+      });
+      send = single;
+      sendChannel = single.channel;
+    }
     if (!send.ok) {
       await release();
       throw new Error(`telnyx ${send.status}: ${send.body.slice(0, 200)}`);
@@ -2376,8 +2384,7 @@ async function sendGroupSmsStep(
         body: text,
         source: "ai_flow",
         telnyxMessageId: messageId,
-        // Group MMS never goes over RCS; only the degenerate 1:1 send can.
-        channel: "channel" in send ? send.channel : "sms"
+        channel: sendChannel
       });
       await recordLeadCustomerProfile(supabase, run, scope, to);
     }
