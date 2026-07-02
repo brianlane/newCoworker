@@ -194,8 +194,10 @@ export function ChangePlanSelector({
             {renewalRateLabel(selectedTier!, selectedPeriod!)
               ? `, renewing at ${renewalRateLabel(selectedTier!, selectedPeriod!)} after the first term`
               : ""}.
-            Your current plan will be canceled immediately with no proration or refund, and we&apos;ll
-            migrate your workspace data to a fresh VPS at the new tier.
+            Your current plan will be canceled immediately with no proration or refund.{" "}
+            {selectedTier === currentTier
+              ? "Since your tier isn't changing, your workspace stays exactly where it is — only your billing changes."
+              : "We'll migrate your workspace data to a fresh VPS at the new tier."}
           </p>
           <div className="flex items-center gap-3">
             <Button
