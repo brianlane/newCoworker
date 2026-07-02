@@ -13,6 +13,7 @@ function memory(overrides: Partial<CustomerMemoryRow> = {}): CustomerMemoryRow {
     customer_e164: "+15555550123",
     type: "customer",
     name_source: "auto",
+    sms_reply_mode: "auto",
     display_name: null,
     email: null,
     summary_md: null,

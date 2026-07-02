@@ -43,6 +43,7 @@ import {
   listSmsHistoryForCustomer,
   mergeCustomerMemories,
   recordInteractionAndIncrement,
+  setContactSmsReplyMode,
   updateCustomerOwnerFields,
   updateCustomerSummary
 } from "../src/lib/customer-memory/db";
@@ -67,6 +68,7 @@ function memory(overrides: Partial<CustomerMemoryRow> = {}): CustomerMemoryRow {
     customer_e164: CUSTOMER,
     type: "customer",
     name_source: "auto",
+    sms_reply_mode: "auto",
     display_name: null,
     email: null,
     summary_md: null,
@@ -830,6 +832,121 @@ describe("updateCustomerOwnerFields", () => {
     await expect(
       updateCustomerOwnerFields(BIZ, CUSTOMER, { displayName: "x" }, client)
     ).rejects.toThrow(/updateCustomerOwnerFields: rls/);
+  });
+
+  it("writes sms_reply_mode when re-modding a contact, omits it when absent", async () => {
+    const set = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { smsReplyMode: "suppress" }, set.client);
+    const patch = set.fromCalls[0]!.calls.find((c) => c.name === "update")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(patch).toHaveProperty("sms_reply_mode", "suppress");
+    expect(patch).not.toHaveProperty("display_name");
+
+    const skip = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { displayName: "Joe" }, skip.client);
+    const plain = skip.fromCalls[0]!.calls.find((c) => c.name === "update")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(plain).not.toHaveProperty("sms_reply_mode");
+  });
+});
+
+describe("setContactSmsReplyMode", () => {
+  // Like linkCustomerEmail, this makes up to three from() calls (alias-aware
+  // UPDATE, INSERT fallback, race-recovery UPDATE) — sequence the terminators.
+  function makeSeqClient(terminators: Array<{ data?: unknown; error?: unknown }>) {
+    const fromCalls: Array<{ table: string; calls: CallLog[] }> = [];
+    let i = 0;
+    const client = {
+      from(table: string) {
+        const terminator = terminators[i++] ?? { data: null, error: null };
+        const { builder, calls } = makeBuilder(terminator);
+        fromCalls.push({ table, calls });
+        return builder;
+      }
+    } as unknown as Parameters<typeof setContactSmsReplyMode>[3];
+    return { client, fromCalls };
+  }
+
+  it("updates the existing row alias-aware and stops when a row matched", async () => {
+    const { client, fromCalls } = makeSeqClient([{ data: [{ id: "row-1" }], error: null }]);
+    await setContactSmsReplyMode(BIZ, CUSTOMER, "forward_owner", client);
+    expect(fromCalls).toHaveLength(1);
+    const upd = fromCalls[0]!;
+    expect(upd.table).toBe("contacts");
+    expect(upd.calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      sms_reply_mode: "forward_owner"
+    });
+    expect(upd.calls.find((c) => c.name === "or")?.args[0]).toBe(
+      `customer_e164.eq.${CUSTOMER},alias_e164s.cs.{${CUSTOMER}}`
+    );
+  });
+
+  it("creates a minimal contact row when none exists (thread-history-only numbers)", async () => {
+    // PostgREST can hand back `null` instead of `[]` for a zero-row
+    // update+select — both must fall through to the insert.
+    const { client, fromCalls } = makeSeqClient([
+      { data: null, error: null },
+      { data: null, error: null }
+    ]);
+    await setContactSmsReplyMode(BIZ, CUSTOMER, "suppress", client);
+    expect(fromCalls).toHaveLength(2);
+    const ins = fromCalls[1]!.calls.find((c) => c.name === "insert")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(ins).toMatchObject({
+      business_id: BIZ,
+      customer_e164: CUSTOMER,
+      sms_reply_mode: "suppress"
+    });
+  });
+
+  it("on insert unique-violation, applies the mode to the racing row", async () => {
+    const { client, fromCalls } = makeSeqClient([
+      { data: [], error: null },
+      { data: null, error: { code: "23505", message: "duplicate key" } },
+      { data: null, error: null }
+    ]);
+    await setContactSmsReplyMode(BIZ, CUSTOMER, "suppress", client);
+    expect(fromCalls).toHaveLength(3);
+    expect(fromCalls[2]!.calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      sms_reply_mode: "suppress"
+    });
+  });
+
+  it("throws on update / non-unique insert / recovery errors", async () => {
+    const updErr = makeSeqClient([{ data: null, error: { message: "upd boom" } }]);
+    await expect(setContactSmsReplyMode(BIZ, CUSTOMER, "auto", updErr.client)).rejects.toThrow(
+      /setContactSmsReplyMode: upd boom/
+    );
+
+    const insErr = makeSeqClient([
+      { data: [], error: null },
+      { data: null, error: { code: "42501", message: "ins boom" } }
+    ]);
+    await expect(setContactSmsReplyMode(BIZ, CUSTOMER, "auto", insErr.client)).rejects.toThrow(
+      /setContactSmsReplyMode: ins boom/
+    );
+
+    const raceErr = makeSeqClient([
+      { data: [], error: null },
+      { data: null, error: { code: "23505", message: "dup" } },
+      { data: null, error: { message: "race boom" } }
+    ]);
+    await expect(setContactSmsReplyMode(BIZ, CUSTOMER, "auto", raceErr.client)).rejects.toThrow(
+      /setContactSmsReplyMode: race boom/
+    );
+  });
+
+  it("falls back to the default service client when none is provided", async () => {
+    const { client } = makeSeqClient([{ data: [{ id: "row-1" }], error: null }]);
+    defaultClientSpy.mockReturnValue(client);
+    await setContactSmsReplyMode(BIZ, CUSTOMER, "auto");
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
   });
 });
 

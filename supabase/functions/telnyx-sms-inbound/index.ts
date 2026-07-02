@@ -35,6 +35,11 @@ import type {
   AiFlowDefinition,
   CorrelationMessage
 } from "../_shared/ai_flows/types.ts";
+import {
+  buildOwnerReplyAck,
+  isPromptFresh,
+  isRelayableOwnerReply
+} from "../_shared/contact_reply_mode.ts";
 
 const MAX_BODY = 256 * 1024;
 
@@ -1636,7 +1641,14 @@ serve(async (req: Request) => {
       // phone — the same set `resolveContactNames` labels as "owner" on the
       // dashboard, so gate behavior and labeling can't disagree. The gate's
       // owner-forward is a no-op when sender === forward number.
-      if (!teamMember) {
+      //
+      // This check runs even when the roster matched: owner > employee, same
+      // precedence `resolveContactNames` applies. An owner whose cell is also
+      // on the ai_flow_team_members roster must still be classified "owner" —
+      // it drives the worker persona AND the forward_owner reply relay below
+      // (a roster-shadowed owner could otherwise never answer a "what would
+      // you like me to say?" prompt).
+      {
         const [fwdRes, prefsRes] = await Promise.all([
           supabase
             .from("business_telnyx_settings")
@@ -1664,7 +1676,11 @@ serve(async (req: Request) => {
           biz?.phone
         ].map((n) => normalizeE164(n ?? ""));
         if (ownerNumbers.some((n) => n && from === n)) {
-          teamMember = { name: biz?.owner_name?.trim() || "Owner" };
+          // Keep the roster name when it exists (it's usually more specific
+          // than the generic owner_name), but the KIND is owner.
+          teamMember = {
+            name: teamMember?.name?.trim() || biz?.owner_name?.trim() || "Owner"
+          };
           teamMemberKind = "owner";
         }
       }
@@ -1796,6 +1812,207 @@ serve(async (req: Request) => {
       });
     };
 
+    // Owner reply relay (contacts.sms_reply_mode = 'forward_owner'): when the
+    // worker forwarded a customer's text to the owner with "What would you
+    // like me to say?", the owner's next free-text reply back to the business
+    // number is sent to that customer VERBATIM. Runs only for the owner,
+    // only when a fresh unanswered prompt exists, and only for relayable
+    // bodies — digit replies were consumed by the approval/claim handlers
+    // above and compliance keywords earlier still, so a bare digit here is
+    // deliberately NOT relayed (it falls through to the staff assistant).
+    // Shared by the Safe Mode and normal paths (a prompt created before Safe
+    // Mode flipped on must still be answerable), so it outranks the staff
+    // gate on both. Returns null to fall through to normal handling.
+    const tryOwnerReplyRelay = async (): Promise<Response | null> => {
+      if (teamMemberKind !== "owner" || !from) return null;
+      const ownerReplyBody = inboundSmsBody(payload).trim();
+      if (!isRelayableOwnerReply(ownerReplyBody)) return null;
+      const { data: promptRow } = await supabase
+        .from("sms_owner_reply_prompts")
+        .select("id, customer_e164, created_at")
+        .eq("business_id", businessId)
+        .is("answered_at", null)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const prompt = promptRow as
+        | { id: string; customer_e164: string; created_at: string }
+        | null;
+      if (!prompt || !isPromptFresh(prompt.created_at, Date.now())) return null;
+      // Sender resolution mirrors the ack paths: per-tenant settings win,
+      // then the DID the owner texted, then the global from.
+      const { data: relayRow } = await supabase
+        .from("business_telnyx_settings")
+        .select("telnyx_messaging_profile_id, telnyx_sms_from_e164")
+        .eq("business_id", businessId)
+        .maybeSingle();
+      const relaySettings = relayRow as
+        | { telnyx_messaging_profile_id?: string | null; telnyx_sms_from_e164?: string | null }
+        | null;
+      const relayProfile =
+        (relaySettings?.telnyx_messaging_profile_id ?? "").trim() || messagingProfileId;
+      const relayFrom =
+        (relaySettings?.telnyx_sms_from_e164 ?? "").trim() || to || smsFromE164;
+      if (!telnyxApiKey || !relayProfile) return null;
+      // Friendly label for the acks ("Sent to Ken."); best-effort.
+      const { data: labelRow } = await supabase
+        .from("contacts")
+        .select("display_name")
+        .eq("business_id", businessId)
+        .eq("customer_e164", prompt.customer_e164)
+        .maybeSingle();
+      const customerLabel =
+        (labelRow as { display_name?: string | null } | null)?.display_name?.trim() ||
+        prompt.customer_e164;
+
+      // The relay IS a customer-facing outbound: reserve a monthly slot
+      // exactly like the worker's default reply (hard stop at the cap).
+      const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
+        "try_reserve_sms_outbound_slot",
+        { p_business_id: businessId }
+      );
+      const reserve = reserveRaw as { ok?: boolean; source?: string } | null;
+      if (reserveErr || !reserve?.ok) {
+        // Over cap (or reserve error): never silently drop — tell the
+        // owner why nothing went out. The prompt stays pending. This
+        // ack is owner traffic (exempt from the customer SMS pool).
+        await telnyxSendSms({
+          apiKey: telnyxApiKey,
+          messagingProfileId: relayProfile,
+          fromE164: relayFrom,
+          toE164: from,
+          text: `Couldn't send your reply to ${customerLabel} — monthly SMS limit reached.`,
+          idempotencyKey: `${eventId}:owner-relay-cap`
+        });
+        await persistOfferReplyJob({
+          supabase,
+          businessId,
+          eventId,
+          envelope,
+          from,
+          staffKind: "owner",
+          staffName: teamMember?.name ?? null,
+          ackSent: `Couldn't send your reply to ${customerLabel} — monthly SMS limit reached.`
+        });
+        await telemetryRecord(supabase, "sms_owner_reply_relay", {
+          business_id: businessId,
+          event_id: eventId,
+          prompt_id: prompt.id,
+          outcome: "cap_blocked"
+        });
+        return new Response(JSON.stringify({ ok: true, owner_relay: "cap_blocked" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      // Claim the prompt BEFORE sending (guarded on answered_at) so a
+      // concurrent delivery can never double-relay; a failed send
+      // releases the claim below and 503s for a Telnyx retry.
+      const { data: claimed } = await supabase
+        .from("sms_owner_reply_prompts")
+        .update({
+          answered_at: new Date().toISOString(),
+          reply_body: ownerReplyBody.slice(0, 1600),
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", prompt.id)
+        .is("answered_at", null)
+        .select("id");
+      if (!claimed || (claimed as unknown[]).length === 0) {
+        // Raced by another delivery — give the reserved slot back and
+        // fall through to the normal staff path.
+        await supabase.rpc("release_sms_outbound_slot", {
+          p_business_id: businessId,
+          p_refund_bonus: reserve.source === "bonus"
+        });
+        return null;
+      }
+      const send = await telnyxSendSms({
+        apiKey: telnyxApiKey,
+        messagingProfileId: relayProfile,
+        fromE164: relayFrom,
+        toE164: prompt.customer_e164,
+        text: ownerReplyBody.slice(0, 1600),
+        idempotencyKey: `${eventId}:owner-relay`
+      });
+      if (!send.ok) {
+        console.error("owner reply relay send", send.status, send.body.slice(0, 300));
+        // Release the claim + slot and let Telnyx redeliver; the
+        // idempotency keys make the retry safe end-to-end.
+        await supabase
+          .from("sms_owner_reply_prompts")
+          .update({ answered_at: null, reply_body: null, updated_at: new Date().toISOString() })
+          .eq("id", prompt.id);
+        await supabase.rpc("release_sms_outbound_slot", {
+          p_business_id: businessId,
+          p_refund_bonus: reserve.source === "bonus"
+        });
+        return new Response(
+          JSON.stringify({ ok: false, error: "owner_relay_send_failed" }),
+          { status: 503, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      let relayMessageId: string | null = null;
+      try {
+        const parsed = JSON.parse(send.body) as { data?: { id?: string } };
+        relayMessageId = parsed.data?.id ?? null;
+      } catch {
+        // Non-JSON success body — id stays null.
+      }
+      await supabase
+        .from("sms_owner_reply_prompts")
+        .update({
+          reply_telnyx_message_id: relayMessageId,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", prompt.id);
+      // Render in the customer's thread like every other manual send.
+      const { error: logErr } = await supabase.from("sms_outbound_log").insert({
+        business_id: businessId,
+        to_e164: prompt.customer_e164,
+        from_e164: relayFrom || null,
+        body: ownerReplyBody.slice(0, 1600),
+        source: "owner_manual",
+        run_id: null,
+        flow_id: null,
+        telnyx_message_id: relayMessageId
+      });
+      if (logErr) console.error("owner relay outbound log", logErr);
+      const ack = buildOwnerReplyAck(customerLabel);
+      const ackSend = await telnyxSendSms({
+        apiKey: telnyxApiKey,
+        messagingProfileId: relayProfile,
+        fromE164: relayFrom,
+        toE164: from,
+        text: ack,
+        idempotencyKey: `${eventId}:owner-relay-ack`
+      });
+      if (!ackSend.ok) {
+        console.error("owner relay ack", ackSend.status, ackSend.body.slice(0, 300));
+      }
+      await persistOfferReplyJob({
+        supabase,
+        businessId,
+        eventId,
+        envelope,
+        from,
+        staffKind: "owner",
+        staffName: teamMember?.name ?? null,
+        ackSent: ackSend.ok ? ack : null
+      });
+      await telemetryRecord(supabase, "sms_owner_reply_relay", {
+        business_id: businessId,
+        event_id: eventId,
+        prompt_id: prompt.id,
+        outcome: "sent"
+      });
+      return new Response(JSON.stringify({ ok: true, owner_relay: "sent" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    };
+
     if (biz?.is_paused || biz?.customer_channels_enabled === false) {
       const { data: settingsRow } = await supabase
         .from("business_telnyx_settings")
@@ -1832,6 +2049,15 @@ serve(async (req: Request) => {
       }
 
       if (gate.kind === "safe_mode_forward") {
+        // Owner reply relay outranks the Safe-Mode staff forward: a pending
+        // "what would you like me to say?" prompt (created before Safe Mode
+        // flipped on, or by the worker's Safe-Mode forward for a
+        // forward_owner contact) must still be answerable — otherwise the
+        // owner's reply would just be forwarded back to themselves.
+        {
+          const relayed = await tryOwnerReplyRelay();
+          if (relayed) return relayed;
+        }
         // Team-member gate outranks Safe Mode handling (only the kill switch
         // above outranks the gate): an employee's text must not enqueue
         // AiFlow lead runs or be answered/forwarded as a customer message.
@@ -1957,6 +2183,13 @@ serve(async (req: Request) => {
         });
         // Fallthrough — enqueue below.
       }
+    }
+
+    // Owner reply relay, normal path (the Safe Mode branch above runs the
+    // same relay before its staff gate).
+    {
+      const relayed = await tryOwnerReplyRelay();
+      if (relayed) return relayed;
     }
 
     // Team-member gate, normal path (the Safe Mode branch above applies the

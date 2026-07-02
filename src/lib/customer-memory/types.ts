@@ -38,6 +38,19 @@ export type ContactType = (typeof CONTACT_TYPES)[number];
 export const CONTACT_NAME_SOURCES = ["auto", "manual"] as const;
 export type ContactNameSource = (typeof CONTACT_NAME_SOURCES)[number];
 
+/**
+ * Per-contact default-reply behavior for inbound SMS (contacts.sms_reply_mode).
+ * `auto` = the Coworker replies (default). `suppress` = no default reply, but
+ * AiFlows, logging, interaction counters and manual sends are unaffected.
+ * `forward_owner` = no default reply; the text is forwarded to the owner's
+ * cell ("What would you like me to say?") and the owner's reply is relayed.
+ * Must stay in lockstep with supabase/functions/_shared/contact_reply_mode.ts
+ * and the contacts_sms_reply_mode_chk DB constraint (lockstep test in
+ * tests/contact-reply-mode.test.ts).
+ */
+export const SMS_REPLY_MODES = ["auto", "suppress", "forward_owner"] as const;
+export type SmsReplyMode = (typeof SMS_REPLY_MODES)[number];
+
 export type CustomerMemoryRow = {
   id: string;
   business_id: string;
@@ -46,6 +59,8 @@ export type CustomerMemoryRow = {
   type: ContactType;
   /** Provenance of display_name; NOT NULL in the DB (default 'auto'). */
   name_source: ContactNameSource;
+  /** Default-reply behavior for this contact's inbound SMS; NOT NULL (default 'auto'). */
+  sms_reply_mode: SmsReplyMode;
   display_name: string | null;
   /** Owner-set email linked to this customer, so email rolls up to the profile. */
   email: string | null;
