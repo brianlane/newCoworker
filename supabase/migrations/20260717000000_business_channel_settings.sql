@@ -57,3 +57,13 @@ alter table public.sms_inbound_jobs
 
 comment on column public.sms_inbound_jobs.channel is
   'Channel the inbound message arrived on: sms or rcs (payload.type=RCS from the Telnyx webhook).';
+
+-- The worker's reply can go out on a DIFFERENT channel than the inbound
+-- arrived on (e.g. RCS inbound answered over plain SMS after an RCS API
+-- rejection). Nullable: null = unknown/legacy, treated as sms by readers.
+alter table public.sms_inbound_jobs
+  add column if not exists reply_channel text
+  check (reply_channel in ('sms', 'rcs'));
+
+comment on column public.sms_inbound_jobs.reply_channel is
+  'Channel the worker reply was actually delivered on (sms/rcs). Null for legacy rows or jobs without a delivered reply.';

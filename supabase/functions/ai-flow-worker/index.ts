@@ -2376,7 +2376,8 @@ async function sendGroupSmsStep(
         body: text,
         source: "ai_flow",
         telnyxMessageId: messageId,
-        channel: send.channel
+        // Group MMS never goes over RCS; only the degenerate 1:1 send can.
+        channel: "channel" in send ? send.channel : "sms"
       });
       await recordLeadCustomerProfile(supabase, run, scope, to);
     }

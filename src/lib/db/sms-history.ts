@@ -49,6 +49,12 @@ export type SmsJobRow = {
   last_error: string | null;
   /** Channel the inbound arrived on ('sms' default; 'rcs' for RCS webhooks). */
   channel?: "sms" | "rcs" | null;
+  /**
+   * Channel the worker reply was DELIVERED on. Can differ from `channel`
+   * (RCS inbound answered over plain SMS after an RCS API rejection).
+   * Null on legacy rows and jobs without a delivered reply → treated as sms.
+   */
+  reply_channel?: "sms" | "rcs" | null;
   created_at: string;
   updated_at: string;
 };
@@ -69,7 +75,7 @@ export function outboundReplyFromRow(
 }
 
 const SMS_JOB_SELECT =
-  "id, business_id, payload, status, assistant_reply_text, rowboat_reply_cached, telnyx_outbound_message_id, last_error, channel, created_at, updated_at";
+  "id, business_id, payload, status, assistant_reply_text, rowboat_reply_cached, telnyx_outbound_message_id, last_error, channel, reply_channel, created_at, updated_at";
 
 export type OutboundLogSource = "ai_flow" | "agent_offer" | "owner_notify" | "owner_manual";
 
@@ -378,7 +384,10 @@ export async function listMessagesForCustomer(
         timestamp: row.updated_at || row.created_at,
         status: row.status,
         lastError: row.last_error,
-        channel: rowChannel
+        // The reply's own delivery channel, NOT the inbound channel — an
+        // RCS inbound can be answered over plain SMS (fallback), and the
+        // badge must reflect what actually went out.
+        channel: row.reply_channel === "rcs" ? "rcs" : "sms"
       });
     }
   }
