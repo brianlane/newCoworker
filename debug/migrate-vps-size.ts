@@ -524,7 +524,7 @@ try {
 
 // ------------------------------------------------- 6+7. old box + billing swap
 const stateFile = path.resolve(process.cwd(), `debug/.migrate-vps-size-${BUSINESS_ID}.json`);
-function writeAuditState(oldBillingHandling: string): void {
+const writeAuditState = (oldBillingHandling: string): void => {
   fs.writeFileSync(
     stateFile,
     JSON.stringify(
@@ -549,7 +549,7 @@ function writeAuditState(oldBillingHandling: string): void {
       2
     ) + "\n"
   );
-}
+};
 
 let newBillingId: string | null = newProv.hostingerBillingSubscriptionId;
 if (!newBillingId) {
