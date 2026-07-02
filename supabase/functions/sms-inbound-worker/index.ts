@@ -23,7 +23,10 @@ import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 import { callSmsRowboatWithStatelessFallback } from "../_shared/sms_rowboat.ts";
-import { resolveRowboatBearerForBusiness } from "../_shared/gateway_token.ts";
+import {
+  resolveRowboatBearerForBusiness,
+  sharedEnvRowboatBearer
+} from "../_shared/gateway_token.ts";
 import { buildCustomerPreambleForEdge, type EdgeCustomerMemoryRow } from "../_shared/customer_memory_preamble.ts";
 import { currentDateTimeLine } from "../_shared/datetime_line.ts";
 import {
@@ -204,13 +207,19 @@ serve(async (req: Request) => {
   // Per-tenant Rowboat bearer, resolved once per distinct business in this
   // batch. A re-keyed VPS rejects the shared env token ("Invalid API key"),
   // which used to dead-letter every customer SMS for that tenant.
+  //
+  // Only PER-TENANT tokens are cached: when the resolver returns the shared
+  // env fallback it may be fail-open after a transient token-table error, and
+  // caching that would keep presenting the (possibly rejected) shared secret
+  // to every remaining job for the business even after the lookup recovers.
+  // Fallback tenants just re-query per job — one cheap indexed read.
   const bearerCache = new Map<string, string>();
+  const envBearer = sharedEnvRowboatBearer();
   const bearerFor = async (businessId: string): Promise<string> => {
-    let b = bearerCache.get(businessId);
-    if (b === undefined) {
-      b = await resolveRowboatBearerForBusiness(supabase, businessId);
-      bearerCache.set(businessId, b);
-    }
+    const cached = bearerCache.get(businessId);
+    if (cached !== undefined) return cached;
+    const b = await resolveRowboatBearerForBusiness(supabase, businessId);
+    if (b.length > 0 && b !== envBearer) bearerCache.set(businessId, b);
     return b;
   };
 
