@@ -37,7 +37,11 @@ function argValue(flag: string): string | null {
 }
 
 const BUSINESS_ID = argValue("--business") ?? "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3"; // Amy
-const TELNYX_DAYS = Number(argValue("--telnyx-days") ?? "90");
+// A non-numeric/absurd --telnyx-days must fall back to the documented 90-day
+// default; NaN comparisons are all false, which would otherwise silently
+// select the narrowest last_7_days preset.
+const telnyxDaysRaw = Number(argValue("--telnyx-days") ?? "90");
+const TELNYX_DAYS = Number.isFinite(telnyxDaysRaw) && telnyxDaysRaw > 0 ? telnyxDaysRaw : 90;
 
 const { createSupabaseServiceClient } = await import("../src/lib/supabase/server.ts");
 const db = await createSupabaseServiceClient();
@@ -48,6 +52,31 @@ type NumMap = Record<string, number>;
 const bump = (m: NumMap, k: string, v: number): void => {
   m[k] = (m[k] ?? 0) + v;
 };
+
+/**
+ * Drain a Supabase query in 1000-row pages. PostgREST silently caps a single
+ * request at 1000 rows, which for a busy tenant would drop the NEWEST usage
+ * out of the rollups without any signal. `build` must apply a stable ORDER BY
+ * so `.range()` pagination is deterministic.
+ */
+async function fetchAllRows<T>(
+  label: string,
+  build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>
+): Promise<T[]> {
+  const pageSize = 1000;
+  const all: T[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await build(from, from + pageSize - 1);
+    if (error) {
+      console.error(`${label} page starting at ${from} failed: ${error.message}`);
+      process.exit(1);
+    }
+    const rows = data ?? [];
+    all.push(...rows);
+    if (rows.length < pageSize) break;
+  }
+  return all;
+}
 
 // ------------------------------------------------------------------ business
 const { data: biz, error: bizErr } = await db
@@ -108,16 +137,21 @@ for (const p of hostingerPrices.filter((x) => /KVM [28]/i.test(x.item))) {
 }
 
 // ------------------------------------------------------------- daily_usage
-const { data: usageRows } = await db
-  .from("daily_usage")
-  .select("usage_date, voice_minutes_used, sms_sent, calls_made, peak_concurrent_calls")
-  .eq("business_id", BUSINESS_ID)
-  .order("usage_date", { ascending: true });
+const usageRows = await fetchAllRows(
+  "daily_usage",
+  (from, to) =>
+    db
+      .from("daily_usage")
+      .select("usage_date, voice_minutes_used, sms_sent, calls_made, peak_concurrent_calls")
+      .eq("business_id", BUSINESS_ID)
+      .order("usage_date", { ascending: true })
+      .range(from, to)
+);
 const usageByMonth: Record<
   string,
   { voiceMinutes: number; smsSent: number; calls: number; peakConcurrent: number; days: number }
 > = {};
-for (const r of usageRows ?? []) {
+for (const r of usageRows) {
   const m = monthOf(r.usage_date);
   usageByMonth[m] ??= { voiceMinutes: 0, smsSent: 0, calls: 0, peakConcurrent: 0, days: 0 };
   usageByMonth[m].voiceMinutes += r.voice_minutes_used;
@@ -126,7 +160,7 @@ for (const r of usageRows ?? []) {
   usageByMonth[m].peakConcurrent = Math.max(usageByMonth[m].peakConcurrent, r.peak_concurrent_calls);
   usageByMonth[m].days += 1;
 }
-console.log(`\n-- daily_usage by month (${usageRows?.length ?? 0} day rows) --`);
+console.log(`\n-- daily_usage by month (${usageRows.length} day rows) --`);
 for (const [m, u] of Object.entries(usageByMonth)) {
   console.log(
     `  ${m}: voice=${u.voiceMinutes}min sms=${u.smsSent} calls=${u.calls} peakConcurrent=${u.peakConcurrent} (${u.days} active days)`
@@ -140,34 +174,51 @@ const { data: voicePeriods } = await db
   .eq("business_id", BUSINESS_ID)
   .order("period_start", { ascending: true });
 
-const { data: settlements } = await db
-  .from("voice_settlements")
-  .select("created_at, billable_seconds, telnyx_reported_duration_seconds")
-  .eq("business_id", BUSINESS_ID)
-  .order("created_at", { ascending: true });
+const settlements = await fetchAllRows(
+  "voice_settlements",
+  (from, to) =>
+    db
+      .from("voice_settlements")
+      .select("created_at, billable_seconds, telnyx_reported_duration_seconds")
+      .eq("business_id", BUSINESS_ID)
+      .order("created_at", { ascending: true })
+      .range(from, to)
+);
 const settledSecondsByMonth: NumMap = {};
-for (const s of settlements ?? []) {
+for (const s of settlements) {
   bump(settledSecondsByMonth, monthOf(s.created_at), s.billable_seconds ?? 0);
 }
-console.log(`\n-- voice settlements (${settlements?.length ?? 0} calls) --`);
+console.log(`\n-- voice settlements (${settlements.length} calls) --`);
 for (const [m, secs] of Object.entries(settledSecondsByMonth)) {
   console.log(`  ${m}: ${(secs / 60).toFixed(1)} billable minutes`);
 }
 
 // ------------------------------------------------------------------ SMS both ways
-const { data: smsOut } = await db
-  .from("sms_outbound_log")
-  .select("created_at, source")
-  .eq("business_id", BUSINESS_ID);
+const smsOut = await fetchAllRows(
+  "sms_outbound_log",
+  (from, to) =>
+    db
+      .from("sms_outbound_log")
+      .select("created_at, source")
+      .eq("business_id", BUSINESS_ID)
+      .order("created_at", { ascending: true })
+      .range(from, to)
+);
 const smsOutByMonth: NumMap = {};
-for (const r of smsOut ?? []) bump(smsOutByMonth, monthOf(r.created_at), 1);
+for (const r of smsOut) bump(smsOutByMonth, monthOf(r.created_at), 1);
 
-const { data: smsIn } = await db
-  .from("sms_inbound_jobs")
-  .select("created_at")
-  .eq("business_id", BUSINESS_ID);
+const smsIn = await fetchAllRows(
+  "sms_inbound_jobs",
+  (from, to) =>
+    db
+      .from("sms_inbound_jobs")
+      .select("created_at")
+      .eq("business_id", BUSINESS_ID)
+      .order("created_at", { ascending: true })
+      .range(from, to)
+);
 const smsInByMonth: NumMap = {};
-for (const r of smsIn ?? []) bump(smsInByMonth, monthOf(r.created_at), 1);
+for (const r of smsIn) bump(smsInByMonth, monthOf(r.created_at), 1);
 console.log(`\n-- SMS volume by month --`);
 for (const m of [...new Set([...Object.keys(smsOutByMonth), ...Object.keys(smsInByMonth)])].sort()) {
   console.log(`  ${m}: outbound(worker)=${smsOutByMonth[m] ?? 0} inbound=${smsInByMonth[m] ?? 0}`);
@@ -230,7 +281,11 @@ if (!telnyxKey) {
         `&filter[date_range]=${telnyxRange}&page[number]=${page}&page[size]=250`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${telnyxKey}` } });
       if (!res.ok) {
-        console.log(`  [telnyx:${recordType}] HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+        // Record the failure so the JSON output flags the aggregates as
+        // partial instead of silently reporting telnyx.error=null.
+        const failure = `${recordType} page ${page}: HTTP ${res.status} ${(await res.text()).slice(0, 300)} — aggregates are partial`;
+        console.log(`  [telnyx] ${failure}`);
+        telnyxError = telnyxError ? `${telnyxError}; ${failure}` : failure;
         break;
       }
       const body = (await res.json()) as {
