@@ -267,6 +267,20 @@ async function adoptExistingVm(vmId: number): Promise<ProvisionResultLike> {
   // See header quirk #2: recreate is what actually attaches the SSH key.
   console.log(`  [recreate_initiated] vm=${vmId} (attaches key + post-install)`);
   await hostinger.recreateVirtualMachine(vmId, setupPayload);
+  // The VM may still report the PRE-recreate `running` state for a few polls,
+  // so wait for it to LEAVE running (enter `recreating`) before waiting for it
+  // to come back — otherwise adopt can mark a mid-rebuild box as ready.
+  const leaveDeadline = Date.now() + 3 * 60 * 1000;
+  for (;;) {
+    const vm = await hostinger.getVirtualMachine(vmId);
+    if (vm.state !== "running") break;
+    if (Date.now() > leaveDeadline) {
+      console.log(`  [warn] vm never left running after recreate — continuing on the assumption the transition was missed`);
+      break;
+    }
+    console.log(`  [waiting:recreate-start] state=${vm.state}`);
+    await new Promise((r) => setTimeout(r, 5_000));
+  }
   const publicIp = await waitRunning("recreate");
   console.log(`  [vps_running] ip=${publicIp}`);
 
