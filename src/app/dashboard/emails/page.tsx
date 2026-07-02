@@ -13,6 +13,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { listEmailLog } from "@/lib/db/email-log";
 import { listSendFromOptions } from "@/lib/email/mailbox-options";
+import { findContactsByEmails, type EmailContactLink } from "@/lib/db/contact-emails";
 import { EmailsList } from "@/components/dashboard/EmailsList";
 
 export const dynamic = "force-dynamic";
@@ -60,6 +61,21 @@ export default async function DashboardEmailsPage() {
     listSendFromOptions(business.id).catch(() => [])
   ]);
 
+  // Link addresses to contact profiles (contacts.email match) so the reading
+  // pane's From/To/Cc lines navigate to the contact page. Best-effort — on
+  // failure the addresses just render unlinked.
+  const emailContacts: Record<string, EmailContactLink> = {};
+  try {
+    const resolved = await findContactsByEmails(
+      business.id,
+      rows.flatMap((r) => [r.from_email, r.to_email, r.cc_email]),
+      db
+    );
+    for (const [addr, link] of resolved) emailContacts[addr] = link;
+  } catch (e) {
+    console.error("emails page contact-link resolution", e);
+  }
+
   return (
     <div className="space-y-6 max-w-6xl">
       <div>
@@ -69,7 +85,12 @@ export default async function DashboardEmailsPage() {
         </p>
       </div>
 
-      <EmailsList rows={rows} businessId={business.id} fromOptions={fromOptions} />
+      <EmailsList
+        rows={rows}
+        businessId={business.id}
+        fromOptions={fromOptions}
+        emailContacts={emailContacts}
+      />
     </div>
   );
 }

@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Card } from "@/components/ui/Card";
+import { extractEmailAddress } from "@/lib/email/address";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { EmailComposer, type FromOption } from "@/components/dashboard/EmailComposer";
 import type { EmailLogRow, EmailLogSource } from "@/lib/db/email-log";
@@ -68,15 +70,48 @@ function DirectionBadge({ direction }: { direction: EmailLogRow["direction"] }) 
   );
 }
 
-function DetailRow({ label, value }: { label: string; value: string }) {
+/** Address → contact-profile link map (lowercase address keys), built server-side. */
+type EmailContacts = Record<string, { customerE164: string; displayName: string | null }>;
+
+function DetailRow({
+  label,
+  value,
+  contact
+}: {
+  label: string;
+  value: string;
+  /** When set, the value links through to this contact's profile page. */
+  contact?: { customerE164: string; displayName: string | null };
+}) {
   return (
     <div className="flex gap-3 py-1.5 border-b border-parchment/5 last:border-0">
       <span className="w-20 shrink-0 text-[11px] uppercase tracking-wide text-parchment/40">
         {label}
       </span>
-      <span className="text-sm text-parchment break-all">{value}</span>
+      {contact ? (
+        <Link
+          href={`/dashboard/customers/${encodeURIComponent(contact.customerE164)}`}
+          className="text-sm text-parchment break-all underline decoration-parchment/30 underline-offset-2 hover:text-claw-green transition-colors"
+        >
+          {value}
+          {contact.displayName ? (
+            <span className="text-parchment/60"> · {contact.displayName}</span>
+          ) : null}
+        </Link>
+      ) : (
+        <span className="text-sm text-parchment break-all">{value}</span>
+      )}
     </div>
   );
+}
+
+/** Look an address (possibly `Name <addr>`) up in the contact-link map. */
+function contactFor(
+  emailContacts: EmailContacts,
+  value: string | null
+): { customerE164: string; displayName: string | null } | undefined {
+  const addr = extractEmailAddress(value);
+  return addr ? emailContacts[addr] : undefined;
 }
 
 type Attachment = {
@@ -108,12 +143,14 @@ function ReadingPane({
   row,
   businessId,
   canReply,
+  emailContacts,
   onClose,
   onReply
 }: {
   row: EmailLogRow;
   businessId: string;
   canReply: boolean;
+  emailContacts: EmailContacts;
   onClose: () => void;
   onReply: () => void;
 }) {
@@ -189,9 +226,23 @@ function ReadingPane({
       </h2>
 
       <div className="mb-4">
-        <DetailRow label="From" value={row.from_email ?? "—"} />
-        <DetailRow label="To" value={row.to_email ?? "—"} />
-        {row.cc_email && <DetailRow label="Cc" value={row.cc_email} />}
+        <DetailRow
+          label="From"
+          value={row.from_email ?? "—"}
+          contact={contactFor(emailContacts, row.from_email)}
+        />
+        <DetailRow
+          label="To"
+          value={row.to_email ?? "—"}
+          contact={contactFor(emailContacts, row.to_email)}
+        />
+        {row.cc_email && (
+          <DetailRow
+            label="Cc"
+            value={row.cc_email}
+            contact={contactFor(emailContacts, row.cc_email)}
+          />
+        )}
         {row.bcc_email && <DetailRow label="Bcc" value={row.bcc_email} />}
         <div className="flex gap-3 py-1.5">
           <span className="w-20 shrink-0 text-[11px] uppercase tracking-wide text-parchment/40">
@@ -325,12 +376,15 @@ function replyFromId(row: EmailLogRow | undefined, fromOptions: FromOption[]): s
 export function EmailsList({
   rows,
   businessId,
-  fromOptions = []
+  fromOptions = [],
+  emailContacts = {}
 }: {
   rows: EmailLogRow[];
   businessId: string;
   /** Sender options for the composer's "From" picker (coworker mailbox first). */
   fromOptions?: FromOption[];
+  /** Lowercase address → contact profile link (built server-side). */
+  emailContacts?: EmailContacts;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [composer, setComposer] = useState<ComposerState | null>(null);
@@ -521,6 +575,7 @@ export function EmailsList({
             row={selected}
             businessId={businessId}
             canReply={!composer}
+            emailContacts={emailContacts}
             onClose={() => setSelectedId(null)}
             onReply={() =>
               setComposer({

@@ -97,9 +97,20 @@ export default async function SmsThreadPage({
         </Link>
         <h1 className="text-2xl font-bold text-parchment mt-2">SMS thread</h1>
         <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-parchment/60">
-          <span className="font-semibold text-parchment">
-            {contact?.name ?? customerE164}
-          </span>
+          {/* A known contact links through to their profile page; a bare
+              number with no contact row has no page to land on. */}
+          {memory ? (
+            <Link
+              href={`/dashboard/customers/${encodeURIComponent(memory.customer_e164)}`}
+              className="font-semibold text-parchment underline decoration-parchment/30 underline-offset-2 hover:text-claw-green transition-colors"
+            >
+              {contact?.name ?? customerE164}
+            </Link>
+          ) : (
+            <span className="font-semibold text-parchment">
+              {contact?.name ?? customerE164}
+            </span>
+          )}
           {contact?.kind === "employee" && (
             <span className="text-[10px] uppercase tracking-wide text-amber-300/80 bg-amber-300/10 rounded px-1.5 py-0.5">
               employee
