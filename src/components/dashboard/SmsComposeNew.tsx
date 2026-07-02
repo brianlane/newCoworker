@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
+import { SmsSegmentHint } from "./SmsSegmentHint";
 
 type Props = { businessId: string };
 
@@ -118,6 +119,7 @@ export function SmsComposeNew({ businessId }: Props) {
         disabled={busy}
         className="w-full resize-none rounded-lg border border-parchment/15 bg-deep-ink/60 px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:border-claw-green/60 focus:outline-none disabled:opacity-50"
       />
+      <SmsSegmentHint text={text} mode="verbatim" />
       {error && <p className="text-xs text-red-300">{error}</p>}
       <div className="flex justify-end">
         <button

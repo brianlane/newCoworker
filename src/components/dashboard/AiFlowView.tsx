@@ -10,6 +10,7 @@ import {
   CONDITION_LABELS,
   STEP_TYPE_LABELS
 } from "@/components/dashboard/aiflow-labels";
+import { SmsSegmentHint } from "@/components/dashboard/SmsSegmentHint";
 
 /** How the workflow starts. Mirrors CHANNEL_LABELS in AiFlowsManager. */
 const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
@@ -258,6 +259,7 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
             mono={!step.replyToGroup && !step.toAgentName}
           />
           <Row label="Message" value={step.body} />
+          <SmsSegmentHint text={step.body} mode="aiflow" />
           {step.quietHours && (
             <div className="rounded-md border border-parchment/10 bg-deep-ink/30 p-3 space-y-2">
               <div className="text-xs font-semibold text-parchment/60">Quiet hours</div>
