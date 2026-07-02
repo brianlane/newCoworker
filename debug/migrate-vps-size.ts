@@ -523,6 +523,34 @@ try {
 }
 
 // ------------------------------------------------- 6+7. old box + billing swap
+const stateFile = path.resolve(process.cwd(), `debug/.migrate-vps-size-${BUSINESS_ID}.json`);
+function writeAuditState(oldBillingHandling: string): void {
+  fs.writeFileSync(
+    stateFile,
+    JSON.stringify(
+      {
+        migratedAt: new Date().toISOString(),
+        businessId: BUSINESS_ID,
+        tier: biz.tier,
+        fromSize: currentSize,
+        toSize: TARGET_SIZE,
+        oldVmId,
+        oldVmIp,
+        oldBillingId,
+        oldBillingHandling,
+        newVmId,
+        newVmIp,
+        newBillingId,
+        tunnelUrl: newProv.tunnelUrl,
+        backupPath: backup.storagePath,
+        backupSha256: backup.sha256
+      },
+      null,
+      2
+    ) + "\n"
+  );
+}
+
 let newBillingId: string | null = newProv.hostingerBillingSubscriptionId;
 if (!newBillingId) {
   try {
@@ -532,21 +560,38 @@ if (!newBillingId) {
     /* warned below */
   }
 }
+// Fail closed on the billing swap: if the sub row still points at the OLD
+// box's subscription, a future cancel through the lifecycle engine tears down
+// the wrong resource and the NEW box renews untracked forever. In that state
+// the old box must stay running AND renewing until an operator fixes billing.
+let billingRepointed = !activeSub; // no active sub row → nothing to repoint
 if (activeSub) {
   if (newBillingId) {
     const { error } = await db
       .from("subscriptions")
       .update({ hostinger_billing_subscription_id: newBillingId })
       .eq("id", activeSub.id);
-    console.log(
-      error
-        ? `[billing] subscriptions row update FAILED: ${error.message}`
-        : `[billing] subscriptions.hostinger_billing_subscription_id → ${newBillingId}`
-    );
+    if (error) {
+      console.error(`[billing] subscriptions row update FAILED: ${error.message}`);
+    } else {
+      billingRepointed = true;
+      console.log(`[billing] subscriptions.hostinger_billing_subscription_id → ${newBillingId}`);
+    }
   } else {
-    console.log(`[billing] WARNING: new box's billing subscription id unknown — look it up`);
-    console.log(`[billing] (listBillingSubscriptions, resource_id=${newVmId}) and update the sub row.`);
+    console.error(`[billing] new box's billing subscription id unknown — look it up`);
+    console.error(`[billing] (listBillingSubscriptions, resource_id=${newVmId}) and update the sub row.`);
   }
+}
+
+if (!KEEP_OLD && !billingRepointed) {
+  writeAuditState("kept-billing-repoint-failed");
+  console.error(`[old-box] ABORT: the billing swap did not complete, so the old box is left`);
+  console.error(`[old-box] RUNNING and RENEWING (tearing it down now would leave the DB pointing`);
+  console.error(`[old-box] at a lapsing subscription while the new box renews untracked).`);
+  console.error(`[old-box] Fix subscriptions.hostinger_billing_subscription_id for sub ${activeSub?.id},`);
+  console.error(`[old-box] then finish teardown manually: stop VM ${oldVmId} and disable auto-renew`);
+  console.error(`[old-box] on billing subscription ${oldBillingId ?? "<unknown — find it in hPanel>"}.`);
+  process.exit(1);
 }
 
 if (KEEP_OLD) {
@@ -574,31 +619,7 @@ if (KEEP_OLD) {
 }
 
 // ---------------------------------------------------------------- audit state
-const stateFile = path.resolve(process.cwd(), `debug/.migrate-vps-size-${BUSINESS_ID}.json`);
-fs.writeFileSync(
-  stateFile,
-  JSON.stringify(
-    {
-      migratedAt: new Date().toISOString(),
-      businessId: BUSINESS_ID,
-      tier: biz.tier,
-      fromSize: currentSize,
-      toSize: TARGET_SIZE,
-      oldVmId,
-      oldVmIp,
-      oldBillingId,
-      oldBillingHandling: KEEP_OLD ? "kept" : "auto-renew-disabled",
-      newVmId,
-      newVmIp,
-      newBillingId,
-      tunnelUrl: newProv.tunnelUrl,
-      backupPath: backup.storagePath,
-      backupSha256: backup.sha256
-    },
-    null,
-    2
-  ) + "\n"
-);
+writeAuditState(KEEP_OLD ? "kept" : "auto-renew-disabled");
 
 console.log(`\nMigration complete: ${biz.name} is on ${TARGET_SIZE} (VM ${newVmId}, ${newVmIp ?? "ip?"}).`);
 console.log(`State written to ${stateFile}`);

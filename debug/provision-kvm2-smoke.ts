@@ -262,14 +262,26 @@ async function adoptExistingVm(vmId: number): Promise<ProvisionResultLike> {
   };
 
   // Poll running + IPv4 (same happy path as production's waitForVpsReady,
-  // same 15-min budget; error/suspended/stopped are terminal).
-  const waitRunning = async (phase: string): Promise<string> => {
+  // same 15-min budget; error/suspended/stopped are terminal). During the
+  // post-recreate wait `stopped` must be tolerated: on a re-adopt the API can
+  // keep reporting the stale pre-recreate `stopped` past the leave-loop's
+  // budget, and the rebuild also boots through a transient stopped — the
+  // 15-min deadline is the backstop there instead.
+  const waitRunning = async (
+    phase: string,
+    opts: { stoppedIsTerminal?: boolean } = {}
+  ): Promise<string> => {
+    const stoppedIsTerminal = opts.stoppedIsTerminal ?? true;
     const deadline = Date.now() + 15 * 60 * 1000;
     for (;;) {
       const vm = await hostinger.getVirtualMachine(vmId);
       const ip = vm.ipv4?.[0]?.address;
       if (vm.state === "running" && ip) return ip;
-      if (vm.state === "error" || vm.state === "suspended" || vm.state === "stopped") {
+      if (
+        vm.state === "error" ||
+        vm.state === "suspended" ||
+        (stoppedIsTerminal && vm.state === "stopped")
+      ) {
         throw new Error(`VM ${vmId} entered terminal state=${vm.state} during ${phase}`);
       }
       if (Date.now() > deadline) throw new Error(`VM ${vmId} not running 15 min into ${phase}`);
@@ -307,7 +319,7 @@ async function adoptExistingVm(vmId: number): Promise<ProvisionResultLike> {
     console.log(`  [waiting:recreate-start] state=${vm.state}`);
     await new Promise((r) => setTimeout(r, 5_000));
   }
-  const publicIp = await waitRunning("recreate");
+  const publicIp = await waitRunning("recreate", { stoppedIsTerminal: false });
   console.log(`  [vps_running] ip=${publicIp}`);
 
   try {
