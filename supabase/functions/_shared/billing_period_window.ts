@@ -75,14 +75,16 @@ export function deriveMonthlyQuotaWindow(periodStartIso: string, nowMs: number):
   let n = 0;
   if (nowMs > start.getTime()) {
     const now = new Date(nowMs);
+    // nowMs > start guarantees a non-negative UTC month diff. The estimate
+    // can only OVERSHOOT (around clamped month ends, e.g. a Jan 31 anchor
+    // with now = Mar 1 estimates n=2 but window[2] is Mar 31), never
+    // undershoot: window[n] shares now's calendar month, so window[n+1]
+    // is always in the next month and > now. Settle downward onto the
+    // invariant window[n] <= now < window[n+1].
     n =
       (now.getUTCFullYear() - start.getUTCFullYear()) * 12 +
       (now.getUTCMonth() - start.getUTCMonth());
-    if (n < 0) n = 0;
-    // The month-diff estimate can be off by one around clamped month ends;
-    // settle onto the invariant window[n] <= now < window[n+1].
     while (n > 0 && addUtcMonthsClamped(start, n).getTime() > nowMs) n--;
-    while (addUtcMonthsClamped(start, n + 1).getTime() <= nowMs) n++;
   }
 
   return {

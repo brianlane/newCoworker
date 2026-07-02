@@ -114,12 +114,12 @@ function deriveMonthlyQuotaWindowStart(periodStartIso: string, nowMs: number): s
   let n = 0;
   if (nowMs > start.getTime()) {
     const now = new Date(nowMs);
+    // The month-diff estimate can only overshoot around clamped month ends;
+    // settle downward onto the invariant window[n] <= now < window[n+1].
     n =
       (now.getUTCFullYear() - start.getUTCFullYear()) * 12 +
       (now.getUTCMonth() - start.getUTCMonth());
-    if (n < 0) n = 0;
     while (n > 0 && addUtcMonthsClamped(start, n).getTime() > nowMs) n--;
-    while (addUtcMonthsClamped(start, n + 1).getTime() <= nowMs) n++;
   }
   return n === 0 ? periodStartIso : addUtcMonthsClamped(start, n).toISOString();
 }

@@ -515,6 +515,17 @@ describe("db/subscriptions", () => {
       await expect(findCheckoutBlockingSubscription(["biz-uuid-1"])).resolves.toBeNull();
     });
 
+    it("returns null when the query returns no rows (data null)", async () => {
+      const db = {
+        ...mockDb(),
+        in: vi.fn().mockReturnThis(),
+        order: vi.fn().mockResolvedValue({ data: null, error: null })
+      };
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+      await expect(findCheckoutBlockingSubscription(["biz-uuid-1"])).resolves.toBeNull();
+    });
+
     it("throws on a query error (fail closed at the checkout gate)", async () => {
       const db = {
         ...mockDb(),
