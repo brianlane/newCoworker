@@ -503,8 +503,14 @@ export async function runChangePlanFromCheckout(
     customer_profile_id: customerProfileId,
     // Period-only switch keeps the existing box, so the new sub row inherits
     // the old Hostinger billing subscription (still paying for the same VM).
-    hostinger_billing_subscription_id:
-      newProv?.hostingerBillingSubscriptionId ?? oldSub.hostinger_billing_subscription_id ?? null,
+    // On a tier-change migration we must NOT fall back to the old billing id
+    // — step 7 is about to cancel it, and pinning it to the active row would
+    // leave the new VPS's real billing untracked while referencing dead
+    // billing. A null from provisioning stays null (operator-triaged via the
+    // existing lookup fallback inside provisionVpsForBusiness).
+    hostinger_billing_subscription_id: periodOnlySwitch
+      ? oldSub.hostinger_billing_subscription_id
+      : (newProv?.hostingerBillingSubscriptionId ?? null),
     ...periodCache
   });
 

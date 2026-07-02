@@ -464,6 +464,28 @@ describe("runChangePlanFromCheckout", () => {
         expect.any(String)
       );
     });
+
+    it("a tier-change migration with a null provisioning billing id never inherits the old (about-to-be-canceled) billing id", async () => {
+      // Regression (Bugbot): the fast-path inheritance must not leak into the
+      // migration path — step 7 cancels billing_old, so pinning it to the new
+      // active row would reference dead billing while the new VPS's real
+      // billing id goes untracked.
+      orchestrateProvisioningMock.mockResolvedValueOnce({
+        vpsId: "2002",
+        tunnelUrl: "https://biz-1.example.com",
+        hostingerBillingSubscriptionId: null
+      });
+
+      await runChangePlanFromCheckout(makeSession(), "evt_tier_change_null_billing");
+
+      expect(createSubscriptionMock).toHaveBeenCalledWith(
+        expect.objectContaining({ hostinger_billing_subscription_id: null })
+      );
+      expect(hostingerCancelBillingSubscriptionMock).toHaveBeenCalledWith(
+        "billing_old",
+        expect.any(String)
+      );
+    });
   });
 
   it("aborts if the business is missing and cancels the fresh Stripe sub", async () => {
