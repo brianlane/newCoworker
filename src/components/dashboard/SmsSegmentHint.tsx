@@ -1,0 +1,33 @@
+import { smsSegmentInfo, UCS2_MAX_SENDABLE_CHARS } from "@/lib/sms/segment-info";
+
+type Props = {
+  text: string;
+  /**
+   * Verbatim sends (dashboard composers) are handed to Telnyx as typed and
+   * FAIL outright past the cap; templated sends (AiFlow steps) are auto-fixed
+   * by the worker, which converts emoji to ASCII emoticons or strips them.
+   * The warning copy tells the user which fate awaits.
+   */
+  mode: "verbatim" | "aiflow";
+};
+
+/**
+ * Inline warning for SMS text that contains emoji (or any non-GSM character)
+ * and exceeds the 670-character UCS-2 sendable cap. Renders nothing while the
+ * message is deliverable as typed, so composers stay clean in the common case.
+ */
+export function SmsSegmentHint({ text, mode }: Props) {
+  const info = smsSegmentInfo(text);
+  if (!info.exceedsUcs2SendableLimit) return null;
+  return (
+    <p className="text-xs text-spark-orange" role="alert">
+      {mode === "verbatim"
+        ? `This message is ${info.length} characters and contains emoji or special characters, ` +
+          `which caps texts at ${UCS2_MAX_SENDABLE_CHARS} characters — it will fail to send. ` +
+          `Remove the emoji or shorten the message.`
+        : `This message is ${info.length} characters and contains emoji or special characters, ` +
+          `which caps texts at ${UCS2_MAX_SENDABLE_CHARS} characters. To keep it sendable, ` +
+          `emoji will be converted to text versions (like :-)) or removed when it goes out.`}
+    </p>
+  );
+}

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { SmsSegmentHint } from "./SmsSegmentHint";
 
 type Props = {
   businessId: string;
@@ -85,6 +86,7 @@ export function SmsThreadComposer({ businessId, toE164 }: Props) {
           {busy ? "Sending…" : "Send"}
         </button>
       </div>
+      <SmsSegmentHint text={text} mode="verbatim" />
       {error && <p className="text-xs text-red-300">{error}</p>}
     </div>
   );
