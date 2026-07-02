@@ -398,6 +398,35 @@ serve(async (req: Request) => {
               p_last_error: "safe_mode_forwarded"
             });
             await clearJobReplyCache(supabase, job.id);
+            // A forward_owner contact keeps their reply relay in Safe Mode:
+            // the Safe-Mode forward above already put the text on the owner's
+            // phone (no second "what would you like me to say?" SMS), so just
+            // record the routable prompt. Best-effort + idempotent on job id;
+            // the webhook's relay path runs in Safe Mode too.
+            if (!job.staff_kind) {
+              const { data: smContact } = await supabase
+                .from("contacts")
+                .select("sms_reply_mode")
+                .eq("business_id", job.business_id)
+                .or(`customer_e164.eq.${fromE164},alias_e164s.cs.{${fromE164}}`)
+                .maybeSingle();
+              const smMode = resolveSmsReplyMode(
+                (smContact as { sms_reply_mode?: unknown } | null)?.sms_reply_mode
+              );
+              if (smMode === "forward_owner") {
+                const { error: smPromptErr } = await supabase
+                  .from("sms_owner_reply_prompts")
+                  .insert({
+                    business_id: job.business_id,
+                    customer_e164: fromE164,
+                    inbound_job_id: job.id,
+                    inbound_text: userText.slice(0, 1000)
+                  });
+                if (smPromptErr && (smPromptErr as { code?: string }).code !== "23505") {
+                  console.error("safe mode forward_owner prompt insert", smPromptErr);
+                }
+              }
+            }
             await telemetryRecord(supabase, "sms_worker_safe_mode_forwarded", {
               job_id: job.id,
               business_id: job.business_id
