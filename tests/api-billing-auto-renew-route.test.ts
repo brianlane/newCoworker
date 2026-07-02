@@ -8,10 +8,14 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
 }));
 
-vi.mock("@/lib/db/subscriptions", () => ({
-  getSubscription: vi.fn(),
-  updateSubscription: vi.fn()
-}));
+vi.mock("@/lib/db/subscriptions", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/db/subscriptions")>();
+  return {
+    ...actual,
+    getSubscription: vi.fn(),
+    updateSubscription: vi.fn()
+  };
+});
 
 vi.mock("@/lib/stripe/client", () => ({
   ensureCommitmentSchedule: vi.fn(),
@@ -52,7 +56,11 @@ const ACTIVE_TERM_SUB = {
   tier: "standard",
   billing_period: "biennial",
   stripe_subscription_id: "sub_stripe_1",
-  contract_auto_renew: false
+  contract_auto_renew: false,
+  // Mid-commitment: term ends next year, Stripe period spans the term.
+  renewal_at: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+  stripe_current_period_start: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString(),
+  stripe_current_period_end: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
 };
 
 describe("api/billing/auto-renew route", () => {
@@ -122,6 +130,24 @@ describe("api/billing/auto-renew route", () => {
     const res = await POST(buildRequest({ autoRenew: true }));
     expect(res.status).toBe(409);
     expect(releaseCommitmentSchedule).not.toHaveBeenCalled();
+    expect(updateSubscription).not.toHaveBeenCalled();
+  });
+
+  it("409s when the commitment has already elapsed (rollover phase — start a new contract instead)", async () => {
+    vi.mocked(getSubscription).mockResolvedValue({
+      ...ACTIVE_TERM_SUB,
+      // Term ended yesterday; the live Stripe period is now a single month.
+      renewal_at: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      stripe_current_period_start: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      stripe_current_period_end: new Date(Date.now() + 29 * 24 * 60 * 60 * 1000).toISOString()
+    } as never);
+
+    const res = await POST(buildRequest({ autoRenew: true }));
+    const body = await res.json();
+    expect(res.status).toBe(409);
+    expect(body.error.message).toContain("start a new contract");
+    expect(releaseCommitmentSchedule).not.toHaveBeenCalled();
+    expect(ensureCommitmentSchedule).not.toHaveBeenCalled();
     expect(updateSubscription).not.toHaveBeenCalled();
   });
 

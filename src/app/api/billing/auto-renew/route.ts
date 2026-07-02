@@ -17,7 +17,7 @@ import { z } from "zod";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
-import { getSubscription, updateSubscription } from "@/lib/db/subscriptions";
+import { getSubscription, isCommitmentElapsed, updateSubscription } from "@/lib/db/subscriptions";
 import { ensureCommitmentSchedule, releaseCommitmentSchedule } from "@/lib/stripe/client";
 import { logger } from "@/lib/logger";
 
@@ -54,6 +54,17 @@ export async function POST(request: Request) {
       return errorResponse(
         "CONFLICT",
         "Auto-renew only applies to 12/24-month contracts",
+        409
+      );
+    }
+    // Once the commitment has elapsed the plan is already rolling
+    // month-to-month; there is no term left to auto-renew. Mirrors the UI
+    // (toggle hidden, "Start a new contract" CTA shown) so a direct POST
+    // can't release/recreate schedules on a rollover-phase subscription.
+    if (isCommitmentElapsed(sub)) {
+      return errorResponse(
+        "CONFLICT",
+        "The contract term has ended; start a new contract instead",
         409
       );
     }
