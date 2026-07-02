@@ -253,6 +253,89 @@ describe("stripe webhook route", () => {
     expect(orchestrateProvisioning).toHaveBeenCalledWith({ businessId: "biz_1", tier: "starter" });
   });
 
+  it("skips the commitment schedule when a FRESH re-read shows auto-renew was just enabled (webhook race)", async () => {
+    // The owner toggles auto-renew ON (schedule released, flag flipped)
+    // while this activation webhook is mid-flight. The handler must
+    // re-read the flag before creating the schedule instead of trusting
+    // the snapshot loaded at handler start.
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_autorenew_race",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          metadata: {
+            businessId: "biz_ar",
+            tier: "standard",
+            billingPeriod: "biennial"
+          },
+          customer: "cus_ar",
+          subscription: "sub_ar"
+        }
+      }
+    } as never);
+    // Stale snapshot: auto-renew OFF at handler start.
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "local_sub_ar",
+      status: "pending",
+      stripe_subscription_id: null,
+      contract_auto_renew: false
+    } as never);
+    // Fresh re-read right before the schedule call: auto-renew now ON.
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+      id: "local_sub_ar",
+      status: "active",
+      stripe_subscription_id: "sub_ar",
+      contract_auto_renew: true
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(ensureCommitmentSchedule).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the snapshot's auto-renew flag when the fresh re-read misses", async () => {
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_autorenew_fallback",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          metadata: {
+            businessId: "biz_arf",
+            tier: "standard",
+            billingPeriod: "biennial"
+          },
+          customer: "cus_arf",
+          subscription: "sub_arf"
+        }
+      }
+    } as never);
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "local_sub_arf",
+      status: "pending",
+      stripe_subscription_id: null,
+      contract_auto_renew: true
+    } as never);
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(null);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(ensureCommitmentSchedule).not.toHaveBeenCalled();
+  });
+
   it("mirrors Stripe's live cancel_at_period_end on activation when the portal toggle landed during the activation race", async () => {
     // Regression: `customer.subscription.created/updated` deliberately
     // skips rows with no `stripe_subscription_id` linkage (that

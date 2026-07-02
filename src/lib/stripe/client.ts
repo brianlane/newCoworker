@@ -107,6 +107,27 @@ export async function ensureCommitmentSchedule(params: {
   return schedule.id;
 }
 
+/**
+ * Release the commitment schedule so the Stripe subscription naturally renews
+ * for another FULL TERM at the contract price (auto-renew ON). Inverse of
+ * `ensureCommitmentSchedule`, which pins phase 2 to the monthly renewal price
+ * (auto-renew OFF / month-to-month rollover).
+ *
+ * Idempotent: no schedule (already released, or never created) is a no-op.
+ * Returns the released schedule id, or null when there was nothing to release.
+ */
+export async function releaseCommitmentSchedule(subscriptionId: string): Promise<string | null> {
+  const stripe = getStripe();
+  const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+  const scheduleId =
+    typeof subscription.schedule === "string"
+      ? subscription.schedule
+      : subscription.schedule?.id ?? null;
+  if (!scheduleId) return null;
+  await stripe.subscriptionSchedules.release(scheduleId);
+  return scheduleId;
+}
+
 export type VoiceBonusCheckoutParams = {
   priceId: string;
   businessId: string;

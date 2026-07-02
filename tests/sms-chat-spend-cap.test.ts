@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_CHAT_SPEND_CAP_MICROS,
   DEFAULT_GEMINI_PRICE_PER_1M,
@@ -201,10 +201,32 @@ describe("resolveSmsChatCap", () => {
   });
 
   it("under cap → overCap false with resolved period", async () => {
-    const stub = makeStub({ periodStart: "2026-06-01T00:00:00.000Z", spendMicros: 5_000_000 });
-    const d = await resolveSmsChatCap(stub, "biz", { capMicros: 10_000_000, enabled: true });
-    expect(d.overCap).toBe(false);
-    expect(d.periodStart).toBe("2026-06-01T00:00:00.000Z");
+    // Pin "now" inside the period's first month-window so the quota key echoes
+    // the subscription period start verbatim (monthly-sub compatibility).
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-15T00:00:00.000Z"));
+    try {
+      const stub = makeStub({ periodStart: "2026-06-01T00:00:00.000Z", spendMicros: 5_000_000 });
+      const d = await resolveSmsChatCap(stub, "biz", { capMicros: 10_000_000, enabled: true });
+      expect(d.overCap).toBe(false);
+      expect(d.periodStart).toBe("2026-06-01T00:00:00.000Z");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("prepaid multi-month period → key is the current month-window, not the raw start", async () => {
+    // A 12-month prepaid term that started 2026-06-01; two months in, spend must
+    // key (and thus reset) on the 2026-08-01 month-window.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-15T00:00:00.000Z"));
+    try {
+      const stub = makeStub({ periodStart: "2026-06-01T00:00:00.000Z", spendMicros: 5_000_000 });
+      const d = await resolveSmsChatCap(stub, "biz", { capMicros: 10_000_000, enabled: true });
+      expect(d.periodStart).toBe("2026-08-01T00:00:00.000Z");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("at/over cap → overCap true", async () => {

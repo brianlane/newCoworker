@@ -9,6 +9,15 @@ export type AuthUser = {
    * `null` if the auth user has no phone. Optional so tests can omit the field.
    */
   phone?: string | null;
+  /**
+   * `auth.users.email_confirmed_at` — set when Supabase Auth considers the
+   * email confirmed (including admin-created users with `email_confirm:
+   * true`). Authoritative "this mailbox is verified" signal; the dashboard
+   * banner consults it BEFORE `customer_profiles.email_verified_at`, whose
+   * row can postdate the auth confirmation (e.g. a profile upserted by a
+   * later checkout). Optional so tests can omit the field.
+   */
+  emailConfirmedAt?: string | null;
   isAdmin: boolean;
 };
 
@@ -44,6 +53,7 @@ export const getAuthUser = cache(async function getAuthUser(): Promise<AuthUser 
       userId: data.user.id,
       email: data.user.email ?? null,
       phone: phoneRaw.length > 0 ? phoneRaw : null,
+      emailConfirmedAt: data.user.email_confirmed_at ?? null,
       isAdmin
     };
   } catch {

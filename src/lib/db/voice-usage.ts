@@ -4,6 +4,7 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getTierLimits } from "@/lib/plans/limits";
 import type { PlanTier } from "@/lib/plans/tier";
+import { deriveMonthlyQuotaWindow } from "../../../supabase/functions/_shared/billing_period_window";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -45,7 +46,13 @@ export async function getVoiceBillingSnapshotForBusiness(
     .maybeSingle();
   if (subErr || !sub?.stripe_current_period_start) return null;
 
-  const periodStart = sub.stripe_current_period_start as string;
+  // Mirror the Edge reserve path's quota key: the current month-window within
+  // the Stripe period (prepaid 12/24-month plans have a term-long period but
+  // included minutes reset monthly). Normalized through Date to match
+  // voice_reserve.ts exactly.
+  const periodStart = new Date(
+    deriveMonthlyQuotaWindow(sub.stripe_current_period_start as string, Date.now()).startIso
+  ).toISOString();
 
   const { data: usageRow } = await db
     .from("voice_billing_period_usage")

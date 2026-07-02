@@ -56,6 +56,7 @@ import {
   getSubscription,
   getSubscriptionByStripeSubscriptionId,
   isCanceledInGrace,
+  isCommitmentElapsed,
   stripeSubscriptionPeriodCache,
   updateSubscription,
   updateSubscriptionIfNotWiped,
@@ -90,6 +91,13 @@ export type ChangePlanMetadata = {
   stripeSubscriptionId: string | null;
   /** Email the user paid with, used to merge customer_profiles. */
   sessionEmail: string | null;
+  /**
+   * Set by /api/billing/change-plan when the old sub's commitment had
+   * elapsed (month-to-month rollover phase) — a same-business re-contract.
+   * Requests a lifetime-cap exemption; re-verified against the old sub row
+   * before the increment is skipped.
+   */
+  recontract: boolean;
 };
 
 /**
@@ -138,7 +146,8 @@ export function parseChangePlanSessionMetadata(
     billingPeriod: billingPeriodRaw,
     stripeCustomerId: checkoutObjectId(session.customer),
     stripeSubscriptionId: checkoutObjectId(session.subscription),
-    sessionEmail: session.customer_details?.email ?? session.customer_email ?? null
+    sessionEmail: session.customer_details?.email ?? session.customer_email ?? null,
+    recontract: session.metadata?.recontract === "1"
   };
 }
 
@@ -185,7 +194,8 @@ export async function runChangePlanFromCheckout(
     billingPeriod,
     stripeCustomerId,
     stripeSubscriptionId,
-    sessionEmail
+    sessionEmail,
+    recontract
   } = meta;
 
   // Webhook re-delivery idempotency. Stripe re-delivers
@@ -288,7 +298,22 @@ export async function runChangePlanFromCheckout(
     }
   }
 
-  if (customerProfileId) {
+  // Same-business re-contract exemption: when the checkout route stamped
+  // `recontract` (old sub was a term plan whose commitment had elapsed),
+  // don't count the new contract against the lifetime abuse cap — a loyal
+  // customer re-committing every 1-2 years isn't churning refunds. The flag
+  // is re-verified against the old sub row (paid Stripe sub + elapsed
+  // commitment) so a stale/forged metadata value can't skip the counter.
+  const verifiedRecontract =
+    recontract && Boolean(oldSub.stripe_subscription_id) && isCommitmentElapsed(oldSub);
+  if (recontract && !verifiedRecontract) {
+    logger.warn("changePlan: recontract flag failed re-verification; counting lifetime", {
+      businessId,
+      previousSubscriptionId
+    });
+  }
+
+  if (customerProfileId && !verifiedRecontract) {
     try {
       await incrementLifetimeSubscriptionCount(customerProfileId);
     } catch (err) {

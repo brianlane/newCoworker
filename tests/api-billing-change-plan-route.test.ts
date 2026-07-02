@@ -53,9 +53,13 @@ vi.mock("@/lib/db/businesses", () => ({
   setBusinessCustomerProfile: setBusinessCustomerProfileMock
 }));
 
-vi.mock("@/lib/db/subscriptions", () => ({
-  updateSubscription: updateSubscriptionMock
-}));
+vi.mock("@/lib/db/subscriptions", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/db/subscriptions")>();
+  return {
+    ...actual,
+    updateSubscription: updateSubscriptionMock
+  };
+});
 
 vi.mock("@/lib/logger", () => ({
   logger: {
@@ -189,6 +193,108 @@ describe("/api/billing/change-plan", () => {
     const body = await res.json();
     expect(res.status).toBe(409);
     expect(body.error.message).toBe("plan_unchanged");
+  });
+
+  describe("same-plan re-contract after commitment elapses", () => {
+    function termContext(overrides: Record<string, unknown> = {}) {
+      return makeContext({
+        subscription: {
+          id: "sub_term",
+          business_id: "biz_1",
+          status: "active",
+          tier: "standard",
+          billing_period: "biennial",
+          customer_profile_id: "prof_1",
+          cancel_at_period_end: false,
+          stripe_subscription_id: "stripe_sub_1",
+          // Term ended yesterday → month-to-month rollover phase (the live
+          // Stripe period is now a single month, not the prepaid term).
+          renewal_at: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+          stripe_current_period_start: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+          stripe_current_period_end: new Date(Date.now() + 29 * 24 * 60 * 60 * 1000).toISOString(),
+          ...overrides
+        }
+      });
+    }
+
+    it("allows same tier+period once the commitment elapsed and stamps recontract metadata", async () => {
+      loadLifecycleContextMock.mockResolvedValue({
+        ok: true,
+        vpsHost: "1.2.3.4",
+        context: termContext()
+      });
+      const res = await POST(makeRequest({ tier: "standard", billingPeriod: "biennial" }));
+      expect(res.status).toBe(200);
+      expect(createCheckoutSessionMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            lifecycleAction: "changePlan",
+            recontract: "1"
+          })
+        })
+      );
+    });
+
+    it("exempts a re-contract from the lifetime subscription cap", async () => {
+      loadLifecycleContextMock.mockResolvedValue({
+        ok: true,
+        vpsHost: "1.2.3.4",
+        context: {
+          ...termContext(),
+          profile: { id: "prof_1", lifetime_subscription_count: 3 }
+        }
+      });
+      const res = await POST(makeRequest({ tier: "standard", billingPeriod: "biennial" }));
+      expect(res.status).toBe(200);
+    });
+
+    it("still rejects same plan while the commitment is running", async () => {
+      loadLifecycleContextMock.mockResolvedValue({
+        ok: true,
+        vpsHost: "1.2.3.4",
+        context: termContext({ renewal_at: "2099-01-01T00:00:00.000Z" })
+      });
+      const res = await POST(makeRequest({ tier: "standard", billingPeriod: "biennial" }));
+      const body = await res.json();
+      expect(res.status).toBe(409);
+      expect(body.error.message).toBe("plan_unchanged");
+    });
+
+    it("does not treat an elapsed sub without a Stripe subscription as re-contract eligible", async () => {
+      loadLifecycleContextMock.mockResolvedValue({
+        ok: true,
+        vpsHost: "1.2.3.4",
+        context: termContext({ stripe_subscription_id: null })
+      });
+      const res = await POST(makeRequest({ tier: "standard", billingPeriod: "biennial" }));
+      const body = await res.json();
+      expect(res.status).toBe(409);
+      expect(body.error.message).toBe("plan_unchanged");
+    });
+
+    it("does not treat a renewed full term (stale renewal_at, multi-month Stripe period) as re-contract eligible", async () => {
+      loadLifecycleContextMock.mockResolvedValue({
+        ok: true,
+        vpsHost: "1.2.3.4",
+        context: termContext({
+          stripe_current_period_start: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+          stripe_current_period_end: new Date(
+            Date.now() + 729 * 24 * 60 * 60 * 1000
+          ).toISOString()
+        })
+      });
+      const res = await POST(makeRequest({ tier: "standard", billingPeriod: "biennial" }));
+      const body = await res.json();
+      expect(res.status).toBe(409);
+      expect(body.error.message).toBe("plan_unchanged");
+    });
+
+    it("does not stamp recontract metadata on an ordinary plan change", async () => {
+      const res = await POST(makeRequest({ tier: "standard", billingPeriod: "annual" }));
+      expect(res.status).toBe(200);
+      const metadata = createCheckoutSessionMock.mock.calls[0][0].metadata;
+      expect(metadata.recontract).toBeUndefined();
+    });
   });
 
   it("creates a checkout session for a valid plan change", async () => {

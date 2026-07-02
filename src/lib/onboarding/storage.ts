@@ -7,6 +7,26 @@ import type {
 
 export const ONBOARD_STORAGE_KEY = "newcoworker_onboard";
 
+/** Questionnaire step/form autosave (see /onboard/questionnaire). */
+export const DRAFT_STORAGE_KEY = "newcoworker_onboard_draft";
+
+/**
+ * Remove every onboarding artifact from localStorage. Called at the
+ * onboarding → dashboard handoff on /onboard/success: a draft left behind
+ * carries a resumable `businessId`, and resuming it months later from a
+ * signed-in browser once re-onboarded ON TOP of a live business (overwrote
+ * its agent config and shadowed its active subscription). Client-side only.
+ */
+export function clearOnboardingStorage(): void {
+  try {
+    localStorage.removeItem(ONBOARD_STORAGE_KEY);
+    localStorage.removeItem(DRAFT_STORAGE_KEY);
+  } catch {
+    // Storage can be unavailable (private mode, disabled) — the server-side
+    // checkout guard is the hard stop; this cleanup is best-effort.
+  }
+}
+
 export type OnboardingAssistantChatDraftState = {
   messages: OnboardingChatMessage[];
   readyToFinalize: boolean;

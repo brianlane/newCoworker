@@ -1125,20 +1125,31 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
 
   }
 
+  // Skip when the owner has opted into auto-renew: a late webhook retry
+  // must not reinstate the month-to-month rollover schedule that
+  // /api/billing/auto-renew deliberately released. Re-read the flag FRESH
+  // here rather than trusting the `existing` snapshot loaded at handler
+  // start — an owner toggling auto-renew on while this webhook is mid-flight
+  // would otherwise have their released schedule silently recreated from
+  // the stale snapshot. Falls back to the snapshot if the re-read misses.
   if (subscriptionId && billingPeriod && tier !== "enterprise") {
-    try {
-      await ensureCommitmentSchedule({
-        subscriptionId,
-        tier,
-        billingPeriod
-      });
-    } catch (err) {
-      logger.error("Stripe commitment schedule setup failed", {
-        businessId,
-        subscriptionId,
-        billingPeriod,
-        error: err instanceof Error ? err.message : String(err)
-      });
+    const fresh = await getSubscriptionByStripeSubscriptionId(subscriptionId);
+    const autoRenew = fresh ? fresh.contract_auto_renew : existing.contract_auto_renew;
+    if (!autoRenew) {
+      try {
+        await ensureCommitmentSchedule({
+          subscriptionId,
+          tier,
+          billingPeriod
+        });
+      } catch (err) {
+        logger.error("Stripe commitment schedule setup failed", {
+          businessId,
+          subscriptionId,
+          billingPeriod,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
     }
   }
 

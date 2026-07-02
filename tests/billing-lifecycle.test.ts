@@ -29,6 +29,7 @@ function makeSub(overrides: Partial<SubscriptionRow> = {}): SubscriptionRow {
     vps_stopped_at: null,
     hostinger_billing_subscription_id: "hbs-1",
     cancel_at_period_end: false,
+    contract_auto_renew: false,
     stripe_refund_id: null,
     refund_amount_cents: null,
     created_at: "2026-04-01T00:00:00.000Z",

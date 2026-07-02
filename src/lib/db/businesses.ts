@@ -134,6 +134,26 @@ export async function getBusiness(id: string, client?: SupabaseClient): Promise<
   return data as BusinessRow;
 }
 
+/**
+ * Ids of every business owned by `ownerEmail` (newest first). Businesses are
+ * keyed by `owner_email` (no stable owner_user_id), so this is the canonical
+ * "businesses of the signed-in user" lookup. Throws on a query error — the
+ * checkout guard that calls this must fail closed, not open.
+ */
+export async function listBusinessIdsByOwnerEmail(
+  ownerEmail: string,
+  client?: SupabaseClient
+): Promise<string[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("businesses")
+    .select("id")
+    .eq("owner_email", ownerEmail)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(`listBusinessIdsByOwnerEmail: ${error.message}`);
+  return ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
+}
+
 export async function deleteBusiness(id: string, client?: SupabaseClient): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db.from("businesses").delete().eq("id", id);

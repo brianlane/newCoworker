@@ -13,11 +13,13 @@ vi.mock("@/lib/stripe/client", () => ({
 }));
 
 vi.mock("@/lib/db/subscriptions", () => ({
-  createSubscription: vi.fn()
+  createSubscription: vi.fn(),
+  findCheckoutBlockingSubscription: vi.fn()
 }));
 
 vi.mock("@/lib/db/businesses", () => ({
   getBusiness: vi.fn(),
+  listBusinessIdsByOwnerEmail: vi.fn(),
   setBusinessCustomerProfile: vi.fn()
 }));
 
@@ -35,8 +37,8 @@ vi.mock("@/lib/onboarding/token", () => ({
 import { POST } from "@/app/api/checkout/route";
 import { authUserExistsByEmail, getAuthUser, verifySignupIdentity } from "@/lib/auth";
 import { createCheckoutSession, resolveIntroDiscountCouponId, resolvePriceId } from "@/lib/stripe/client";
-import { createSubscription } from "@/lib/db/subscriptions";
-import { getBusiness, setBusinessCustomerProfile } from "@/lib/db/businesses";
+import { createSubscription, findCheckoutBlockingSubscription } from "@/lib/db/subscriptions";
+import { getBusiness, listBusinessIdsByOwnerEmail, setBusinessCustomerProfile } from "@/lib/db/businesses";
 import { upsertCustomerProfile, getCustomerProfileById } from "@/lib/db/customer-profiles";
 import { verifyOnboardingToken } from "@/lib/onboarding/token";
 
@@ -56,6 +58,8 @@ describe("api/checkout route", () => {
       owner_email: `pending+${businessId}@onboarding.local`
     } as never);
     vi.mocked(verifyOnboardingToken).mockReturnValue(false);
+    vi.mocked(findCheckoutBlockingSubscription).mockResolvedValue(null);
+    vi.mocked(listBusinessIdsByOwnerEmail).mockResolvedValue([]);
     // Default the strict email-uniqueness gate to "available" so the
     // existing onboarding-token tests below keep passing without
     // having to opt into the gate explicitly. Tests that exercise the
@@ -411,6 +415,99 @@ describe("api/checkout route", () => {
     expect(response.status).toBe(500);
     expect(createCheckoutSession).not.toHaveBeenCalled();
     expect(createSubscription).not.toHaveBeenCalled();
+  });
+
+  it("blocks checkout with 409 when the posted business already has a live subscription", async () => {
+    // The "Amy reset" guard: a stale onboarding draft resuming an existing
+    // businessId must not shadow that business's active subscription with a
+    // fresh pending row.
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    vi.mocked(verifySignupIdentity).mockResolvedValue(true);
+    vi.mocked(findCheckoutBlockingSubscription).mockResolvedValue({
+      id: "sub-live",
+      business_id: businessId,
+      status: "active"
+    } as never);
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "standard",
+        businessId,
+        billingPeriod: "biennial",
+        ownerEmail: "owner@example.com",
+        signupUserId
+      })
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error.code).toBe("CONFLICT");
+    expect(body.error.message).toMatch(/billing page/i);
+    expect(findCheckoutBlockingSubscription).toHaveBeenCalledWith([businessId]);
+    expect(createSubscription).not.toHaveBeenCalled();
+    expect(createCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it("checks every business owned by an authenticated user, not just the posted one", async () => {
+    const otherBusinessId = "44444444-4444-4444-8444-444444444444";
+    vi.mocked(getAuthUser).mockResolvedValue({
+      userId: signupUserId,
+      email: "owner@example.com",
+      isAdmin: false
+    } as never);
+    vi.mocked(listBusinessIdsByOwnerEmail).mockResolvedValue([otherBusinessId]);
+    vi.mocked(findCheckoutBlockingSubscription).mockResolvedValue({
+      id: "sub-live",
+      business_id: otherBusinessId,
+      status: "active"
+    } as never);
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "standard",
+        businessId,
+        billingPeriod: "biennial"
+      })
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(409);
+    expect(listBusinessIdsByOwnerEmail).toHaveBeenCalledWith("owner@example.com");
+    expect(findCheckoutBlockingSubscription).toHaveBeenCalledWith(
+      expect.arrayContaining([businessId, otherBusinessId])
+    );
+    expect(createSubscription).not.toHaveBeenCalled();
+  });
+
+  it("fails closed with 500 when the live-subscription guard read throws", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    vi.mocked(verifySignupIdentity).mockResolvedValue(true);
+    vi.mocked(findCheckoutBlockingSubscription).mockRejectedValue(new Error("db read timeout"));
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "standard",
+        businessId,
+        billingPeriod: "annual",
+        ownerEmail: "owner@example.com",
+        signupUserId
+      })
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(500);
+    expect(createSubscription).not.toHaveBeenCalled();
+    expect(createCheckoutSession).not.toHaveBeenCalled();
   });
 
   it("does NOT call the strict email-uniqueness lookup for authenticated users (existing-user happy path)", async () => {

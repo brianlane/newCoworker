@@ -22,7 +22,7 @@ import {
   upsertCustomerProfile
 } from "@/lib/db/customer-profiles";
 import { setBusinessCustomerProfile } from "@/lib/db/businesses";
-import { updateSubscription } from "@/lib/db/subscriptions";
+import { isCommitmentElapsed, updateSubscription } from "@/lib/db/subscriptions";
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
 import {
   createCheckoutSession,
@@ -69,6 +69,15 @@ export async function POST(request: Request) {
     if (subscription.status !== "active") {
       return errorResponse("CONFLICT", "subscription_not_active", 409);
     }
+
+    // Re-contract (Hostinger-consistent): once the paid commitment has
+    // elapsed and the plan is rolling month-to-month at the renewal rate,
+    // starting a NEW contract — even for the same tier/period — is a
+    // legitimate action at the contract rate. It relaxes the plan-unchanged
+    // guard below and exempts the lifetime abuse cap (a long-lived customer
+    // re-committing every 1-2 years must never be blocked as an abuser).
+    const recontractEligible =
+      Boolean(subscription.stripe_subscription_id) && isCommitmentElapsed(subscription);
     // Abuse cap: a change-plan burns a lifetime slot (fresh Stripe sub).
     //
     // Fail closed when no profile can be resolved — previously this branch
@@ -145,14 +154,18 @@ export async function POST(request: Request) {
       }
       changePlanLifetimeCount = refreshed.lifetime_subscription_count;
     }
-    if (changePlanLifetimeCount >= LIFETIME_SUBSCRIPTION_CAP) {
+    if (changePlanLifetimeCount >= LIFETIME_SUBSCRIPTION_CAP && !recontractEligible) {
       return errorResponse("CONFLICT", "lifetime_subscription_cap_reached", 409);
     }
     // No-op guard: same tier AND same period. Cheap to enforce here so the
-    // UI can stay dumb and we don't create a pointless duplicate sub.
+    // UI can stay dumb and we don't create a pointless duplicate sub. A
+    // same-plan RE-CONTRACT after the commitment elapsed is explicitly
+    // allowed — that's how a rolled-over customer gets back onto the
+    // contract rate.
     if (
       subscription.tier === payload.tier &&
-      subscription.billing_period === payload.billingPeriod
+      subscription.billing_period === payload.billingPeriod &&
+      !recontractEligible
     ) {
       return errorResponse("CONFLICT", "plan_unchanged", 409);
     }
@@ -176,6 +189,9 @@ export async function POST(request: Request) {
         userId: user.userId,
         lifecycleAction: "changePlan",
         previousSubscriptionId: subscription.id,
+        // The webhook orchestrator re-verifies this against the old sub row
+        // before skipping the lifetime-count increment.
+        ...(recontractEligible ? { recontract: "1" } : {}),
         ...(changePlanProfileId ? { customerProfileId: changePlanProfileId } : {})
       }
     });

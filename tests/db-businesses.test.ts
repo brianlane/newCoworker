@@ -5,6 +5,7 @@ import {
   getBusinessTimezone,
   isValidIanaTimezone,
   listBusinesses,
+  listBusinessIdsByOwnerEmail,
   setBusinessPaused,
   setCustomerChannelsEnabled,
   updateBusinessName,
@@ -95,6 +96,44 @@ describe("db/businesses", () => {
     await expect(
       createBusiness({ id: "x", name: "x", ownerEmail: "x@x.com", tier: "starter" })
     ).rejects.toThrow("createBusiness");
+  });
+
+  describe("listBusinessIdsByOwnerEmail", () => {
+    it("returns the ids of every business owned by the email, newest first", async () => {
+      const db = mockDb({
+        order: vi.fn().mockResolvedValue({
+          data: [{ id: "biz-new" }, { id: "biz-old" }],
+          error: null
+        })
+      });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+      const ids = await listBusinessIdsByOwnerEmail("owner@test.com");
+      expect(ids).toEqual(["biz-new", "biz-old"]);
+      expect(db.from).toHaveBeenCalledWith("businesses");
+      expect(db.eq).toHaveBeenCalledWith("owner_email", "owner@test.com");
+      expect(db.order).toHaveBeenCalledWith("created_at", { ascending: false });
+    });
+
+    it("returns an empty array when the owner has no businesses", async () => {
+      const db = mockDb({
+        order: vi.fn().mockResolvedValue({ data: null, error: null })
+      });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+      await expect(listBusinessIdsByOwnerEmail("nobody@test.com")).resolves.toEqual([]);
+    });
+
+    it("throws on a query error so the checkout guard fails closed", async () => {
+      const db = mockDb({
+        order: vi.fn().mockResolvedValue({ data: null, error: { message: "replica down" } })
+      });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+      await expect(listBusinessIdsByOwnerEmail("owner@test.com")).rejects.toThrow(
+        "listBusinessIdsByOwnerEmail: replica down"
+      );
+    });
   });
 
   it("getBusiness returns null on error", async () => {

@@ -371,9 +371,55 @@ async function callRowboat(messages, conversationId, state, opts = {}) {
   }
 }
 
-// Billing-period key for owner-chat spend: the subscription's current Stripe
-// period start, so the fuse resets each month. Falls back to the start of the
-// current UTC month when there's no subscription row. Never throws.
+// ---------------------------------------------------------------------------
+// Monthly quota windows within a (possibly multi-month) Stripe billing period.
+// 12/24-month plans are charged in full at checkout, so the Stripe period can
+// span the whole prepaid term while included usage still resets MONTHLY.
+// INLINE COPY of supabase/functions/_shared/billing_period_window.ts — keep in
+// lockstep (this worker builds/deploys from its own directory).
+// ---------------------------------------------------------------------------
+function addUtcMonthsClamped(base, months) {
+  const totalMonths = base.getUTCMonth() + months;
+  const year = base.getUTCFullYear() + Math.floor(totalMonths / 12);
+  const month = ((totalMonths % 12) + 12) % 12;
+  const daysInTarget = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const day = Math.min(base.getUTCDate(), daysInTarget);
+  return new Date(
+    Date.UTC(
+      year,
+      month,
+      day,
+      base.getUTCHours(),
+      base.getUTCMinutes(),
+      base.getUTCSeconds(),
+      base.getUTCMilliseconds()
+    )
+  );
+}
+
+// Window 0 echoes the input string verbatim so existing monthly tenants'
+// spend keys are bit-for-bit unchanged (period_start is an equality key).
+function deriveMonthlyQuotaWindowStart(periodStartIso, nowMs) {
+  const start = new Date(periodStartIso);
+  if (!Number.isFinite(start.getTime())) return periodStartIso;
+
+  let n = 0;
+  if (nowMs > start.getTime()) {
+    const now = new Date(nowMs);
+    // The month-diff estimate can only overshoot around clamped month ends;
+    // settle downward onto the invariant window[n] <= now < window[n+1].
+    n =
+      (now.getUTCFullYear() - start.getUTCFullYear()) * 12 +
+      (now.getUTCMonth() - start.getUTCMonth());
+    while (n > 0 && addUtcMonthsClamped(start, n).getTime() > nowMs) n--;
+  }
+  return n === 0 ? periodStartIso : addUtcMonthsClamped(start, n).toISOString();
+}
+
+// Billing-period key for owner-chat spend: the current month-window within the
+// subscription's Stripe period (multi-month prepaid terms still reset the fuse
+// monthly). Falls back to the start of the current UTC month when there's no
+// subscription row. Never throws.
 async function resolveOwnerChatPeriodStart() {
   try {
     const { data } = await sb
@@ -383,7 +429,9 @@ async function resolveOwnerChatPeriodStart() {
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (data?.stripe_current_period_start) return data.stripe_current_period_start;
+    if (data?.stripe_current_period_start) {
+      return deriveMonthlyQuotaWindowStart(data.stripe_current_period_start, Date.now());
+    }
   } catch {
     // fall through to month-start
   }

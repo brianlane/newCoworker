@@ -34,7 +34,16 @@ export function OrderSummaryCard({
   const firstCyclePrice = getMonthlyRateDisplay(tier, period);
   const renewalPrice = getRenewalRateDisplay(tier, period);
   const firstCycleDiscount = getFirstCycleDiscountDisplay(tier, period);
-  const monthlyLabel = preferFirstMonthLabel && hasIntroDiscount ? "First month" : "Monthly rate";
+  // 12/24-month plans are charged IN FULL at checkout (the VPS for the whole
+  // term is prepaid), so "due today" is the commitment total and the monthly
+  // figure is only the effective rate. Monthly plans keep first-cycle pricing.
+  const isTermPlan = period !== "monthly";
+  const totalDueToday = isTermPlan ? formatCommitmentTotal(tier, period) : firstCyclePrice;
+  const monthlyLabel = isTermPlan
+    ? "Effective monthly rate"
+    : preferFirstMonthLabel && hasIntroDiscount
+      ? "First month"
+      : "Monthly rate";
 
   return (
     <div className="bg-parchment/5 rounded-lg p-4 space-y-2">
@@ -71,13 +80,19 @@ export function OrderSummaryCard({
         <span>{renewalPrice}</span>
       </div>
       <div className="flex justify-between text-parchment/40 text-xs">
-        <span>Total due today</span>
-        <span>{firstCyclePrice}</span>
-      </div>
-      <div className="flex justify-between text-parchment/40 text-xs pt-1 border-t border-parchment/10">
         <span>Commitment total</span>
         <span>{formatCommitmentTotal(tier, period)}</span>
       </div>
+      <div className="flex justify-between text-parchment font-semibold pt-1 border-t border-parchment/10">
+        <span>Total due today</span>
+        <span>{totalDueToday}</span>
+      </div>
+      {isTermPlan && (
+        <p className="text-xs text-parchment/45">
+          The full {formatBillingPeriod(period)} term is billed today. After the term, service
+          continues month-to-month at {renewalPrice} unless you renew your contract.
+        </p>
+      )}
     </div>
   );
 }

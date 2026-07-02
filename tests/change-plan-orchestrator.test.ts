@@ -302,6 +302,78 @@ describe("runChangePlanFromCheckout", () => {
     );
   });
 
+  describe("re-contract lifetime-cap exemption", () => {
+    function termOldSub(overrides: Record<string, unknown> = {}) {
+      return {
+        id: "sub-row-old",
+        business_id: "biz-1",
+        stripe_subscription_id: "sub_old",
+        hostinger_billing_subscription_id: "billing_old",
+        customer_profile_id: "prof-1",
+        tier: "standard",
+        billing_period: "biennial",
+        status: "active",
+        created_at: "2024-06-01T00:00:00.000Z",
+        cancel_at_period_end: false,
+        // Commitment ended yesterday → rollover phase (monthly Stripe period).
+        renewal_at: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+        stripe_current_period_start: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+        stripe_current_period_end: new Date(Date.now() + 29 * 24 * 60 * 60 * 1000).toISOString(),
+        ...overrides
+      };
+    }
+
+    function recontractSession() {
+      return makeSession({
+        metadata: {
+          businessId: "biz-1",
+          previousSubscriptionId: "sub-row-old",
+          tier: "standard",
+          billingPeriod: "biennial",
+          lifecycleAction: "changePlan",
+          recontract: "1"
+        }
+      });
+    }
+
+    it("skips the lifetime increment for a verified re-contract", async () => {
+      getSubscriptionMock.mockResolvedValue(termOldSub());
+      await runChangePlanFromCheckout(recontractSession(), "evt_recontract");
+      expect(incrementLifetimeSubscriptionCountMock).not.toHaveBeenCalled();
+      // Everything else still runs (provision + old teardown).
+      expect(orchestrateProvisioningMock).toHaveBeenCalled();
+      expect(stripeCancelMock).toHaveBeenCalledWith("sub_old", { prorate: false });
+    });
+
+    it("still increments when the recontract flag fails re-verification (commitment not elapsed)", async () => {
+      getSubscriptionMock.mockResolvedValue(
+        termOldSub({ renewal_at: "2099-01-01T00:00:00.000Z" })
+      );
+      await runChangePlanFromCheckout(recontractSession(), "evt_recontract_bad");
+      expect(incrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
+    });
+
+    it("still increments when the old sub has no Stripe subscription id", async () => {
+      getSubscriptionMock.mockResolvedValue(
+        termOldSub({ stripe_subscription_id: null, hostinger_billing_subscription_id: null })
+      );
+      await runChangePlanFromCheckout(recontractSession(), "evt_recontract_nostripe");
+      expect(incrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
+    });
+
+    it("still increments when the old sub is inside a renewed full term (multi-month Stripe period)", async () => {
+      getSubscriptionMock.mockResolvedValue(
+        termOldSub({
+          stripe_current_period_end: new Date(
+            Date.now() + 729 * 24 * 60 * 60 * 1000
+          ).toISOString()
+        })
+      );
+      await runChangePlanFromCheckout(recontractSession(), "evt_recontract_renewed");
+      expect(incrementLifetimeSubscriptionCountMock).toHaveBeenCalledWith("prof-1");
+    });
+  });
+
   it("aborts if the business is missing and cancels the fresh Stripe sub", async () => {
     getBusinessMock.mockResolvedValueOnce(null);
     await runChangePlanFromCheckout(makeSession(), "evt_2");

@@ -18,7 +18,7 @@
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { getSubscription } from "@/lib/db/subscriptions";
+import { getSubscription, isCommitmentElapsed } from "@/lib/db/subscriptions";
 import { resolveActiveRenewalDate } from "@/lib/billing/renewal";
 import { getVoiceBillingSnapshotForBusiness } from "@/lib/db/voice-usage";
 import type { PlanTier } from "@/lib/plans/tier";
@@ -217,6 +217,15 @@ export default async function BillingPage(props: {
       ? "Plan changes are only available on an active subscription."
       : null;
 
+  // Term-contract extras: auto-renew toggle while the commitment is running,
+  // "start a new contract" CTA once it has elapsed (rolled to month-to-month).
+  // Server-side change-plan re-validates elapsed-ness before honoring a
+  // same-plan re-contract, so this is display-only eligibility.
+  const commitmentElapsed = subscription
+    ? Boolean(subscription.stripe_subscription_id) && isCommitmentElapsed(subscription, now)
+    : false;
+  const contractAutoRenew = Boolean(subscription?.contract_auto_renew);
+
   return (
     <div className="space-y-6 max-w-3xl">
       <div>
@@ -266,6 +275,8 @@ export default async function BillingPage(props: {
         canChangePlan={canChangePlan}
         changePlanBlockedReason={changePlanBlockedReason}
         stripeCustomerId={subscription?.stripe_customer_id ?? null}
+        contractAutoRenew={contractAutoRenew}
+        commitmentElapsed={commitmentElapsed}
       />
 
       {business?.tier && (
