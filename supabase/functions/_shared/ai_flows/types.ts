@@ -560,7 +560,10 @@ export type FlowStep =
        * ring_handoff, then the voice_ai_intake (if any). Step order = ring order.
        */
       type: "ring_handoff";
-      toE164: string;
+      /** Exactly one of toE164 / toRef (validated at author time). */
+      toE164?: string;
+      /** Dynamic dial target resolved live just before compile; see ContactRef. */
+      toRef?: ContactRef;
       ringSeconds?: number;
       when?: StepCondition;
     }
@@ -573,7 +576,10 @@ export type FlowStep =
        * last step and preceded by a ring_handoff.
        */
       type: "voice_ai_intake";
-      notifyE164: string;
+      /** Exactly one of notifyE164 / notifyRef (validated at author time). */
+      notifyE164?: string;
+      /** Dynamic summary recipient resolved live just before compile. */
+      notifyRef?: ContactRef;
       persona?: string;
       captureFields?: string[];
       when?: StepCondition;
@@ -586,7 +592,10 @@ export type FlowStep =
        * one step (no ring_handoff/voice_ai_intake).
        */
       type: "voice_transfer";
-      toE164: string;
+      /** Exactly one of toE164 / toRef (validated at author time). */
+      toE164?: string;
+      /** Dynamic transfer target resolved live just before compile. */
+      toRef?: ContactRef;
       whisper?: string;
       when?: StepCondition;
     }
@@ -599,8 +608,13 @@ export type FlowStep =
        * text to `notifyE164`. The single step of an outbound voice flow.
        */
       type: "outbound_call";
+      /** Default callee: at most one of toE164 / toRef (entry may override). */
       toE164?: string;
-      notifyE164: string;
+      toRef?: ContactRef;
+      /** Exactly one of notifyE164 / notifyRef (validated at author time). */
+      notifyE164?: string;
+      /** Dynamic summary recipient resolved live just before compile. */
+      notifyRef?: ContactRef;
       persona?: string;
       captureFields?: string[];
       when?: StepCondition;

@@ -51,6 +51,7 @@ import {
 import { callRowboatChatOnce } from "../_shared/sms_rowboat.ts";
 import { resolveRowboatBearerForBusiness } from "../_shared/gateway_token.ts";
 import { planStep, type StepAction } from "../_shared/ai_flows/steps.ts";
+import { resolveContactRef } from "../_shared/ai_flows/contact_ref.ts";
 import {
   normalizeBrowseUrl,
   parseActionResponse,
@@ -3057,47 +3058,6 @@ async function resolveAgentByName(
   const phone = match?.phone_e164?.trim();
   if (!match || !phone) return null;
   return { name: match.name, phone };
-}
-
-/**
- * Resolve a ContactRef to {name, phone} from its LIVE row, so a number stays
- * correct as rosters/contacts change (and a contact ref survives a merge — the
- * surviving row keeps the canonical customer_e164). Employees come from
- * ai_flow_team_members (active only); contacts from the unified contacts table
- * (keyed by customer_e164). Returns null when the row is gone / inactive / has
- * no usable phone; THROWS on a query error so the run retries rather than
- * silently mis-sending.
- */
-async function resolveContactRef(
-  supabase: Supabase,
-  businessId: string,
-  ref: { source: "employee" | "contact"; id: string }
-): Promise<RoutedAgent | null> {
-  if (ref.source === "employee") {
-    const { data, error } = await supabase
-      .from("ai_flow_team_members")
-      .select("name, phone_e164")
-      .eq("business_id", businessId)
-      .eq("id", ref.id)
-      .eq("active", true)
-      .maybeSingle();
-    if (error) throw new Error(`contact ref: roster query failed: ${error.message}`);
-    const row = data as { name?: string; phone_e164?: string } | null;
-    const phone = row?.phone_e164?.trim();
-    if (!row || !phone) return null;
-    return { name: (row.name ?? "").trim() || "teammate", phone };
-  }
-  const { data, error } = await supabase
-    .from("contacts")
-    .select("display_name, customer_e164")
-    .eq("business_id", businessId)
-    .eq("id", ref.id)
-    .maybeSingle();
-  if (error) throw new Error(`contact ref: contact query failed: ${error.message}`);
-  const row = data as { display_name?: string; customer_e164?: string } | null;
-  const phone = row?.customer_e164?.trim();
-  if (!row || !phone) return null;
-  return { name: (row.display_name ?? "").trim() || "contact", phone };
 }
 
 /** The lead's own phone (from vars.lead_phone) normalized to E.164, or null. */

@@ -593,7 +593,12 @@ const stepSchema = z.discriminatedUnion("type", [
   z.object({
     id: stepId,
     type: z.literal("ring_handoff"),
-    toE164: e164,
+    // Exactly one of toE164 / toRef supplies the number to ring (enforced in
+    // validateVoiceFlow — a discriminatedUnion member can't hold a refine).
+    toE164: e164.optional(),
+    // Dynamic dial target: a saved employee/contact whose CURRENT number is
+    // resolved just before the voice flow compiles (resolve-before-compile).
+    toRef: contactRefSchema.optional(),
     ringSeconds: z.number().int().min(5).max(120).optional(),
     when: whenSchema.optional()
   }),
@@ -604,7 +609,10 @@ const stepSchema = z.discriminatedUnion("type", [
   z.object({
     id: stepId,
     type: z.literal("voice_ai_intake"),
-    notifyE164: e164,
+    // Exactly one of notifyE164 / notifyRef (enforced in validateVoiceFlow).
+    notifyE164: e164.optional(),
+    // Dynamic summary recipient (saved employee/contact, resolved live).
+    notifyRef: contactRefSchema.optional(),
     persona: z.string().min(1).max(500).optional(),
     captureFields: z.array(z.string().min(1).max(60)).min(1).max(15).optional(),
     when: whenSchema.optional()
@@ -616,7 +624,10 @@ const stepSchema = z.discriminatedUnion("type", [
   z.object({
     id: stepId,
     type: z.literal("voice_transfer"),
-    toE164: e164,
+    // Exactly one of toE164 / toRef (enforced in validateVoiceFlow).
+    toE164: e164.optional(),
+    // Dynamic transfer target (saved employee/contact, resolved live).
+    toRef: contactRefSchema.optional(),
     whisper: z.string().min(1).max(300).optional(),
     when: whenSchema.optional()
   }),
@@ -630,8 +641,13 @@ const stepSchema = z.discriminatedUnion("type", [
   z.object({
     id: stepId,
     type: z.literal("outbound_call"),
+    // Default callee: at most one of toE164 / toRef (both optional — the
+    // "Place call" entry point may supply the callee per call).
     toE164: e164.optional(),
-    notifyE164: e164,
+    toRef: contactRefSchema.optional(),
+    // Exactly one of notifyE164 / notifyRef (enforced in validateVoiceFlow).
+    notifyE164: e164.optional(),
+    notifyRef: contactRefSchema.optional(),
     persona: z.string().min(1).max(500).optional(),
     captureFields: z.array(z.string().min(1).max(60)).min(1).max(15).optional(),
     when: whenSchema.optional()
@@ -751,6 +767,39 @@ export function validateVoiceFlow(def: AiFlowDefinition): string[] {
   }
   // If any non-voice step slipped in, the shape rules below would be misleading.
   if (nonVoice.length > 0) return issues;
+
+  // Per-step number sources: each dial/notify target is EITHER a hardcoded
+  // E.164 OR a dynamic contact reference (resolved live just before the call
+  // routes), never both and never neither — a step with no resolvable number
+  // would strand the caller. Checked before the shape rules (which have early
+  // returns) so every step gets a source check regardless of flow shape.
+  for (const s of steps) {
+    if (s.type === "ring_handoff" || s.type === "voice_transfer") {
+      const sources = [Boolean(s.toE164), Boolean(s.toRef)].filter(Boolean).length;
+      if (sources !== 1) {
+        issues.push(
+          sources === 0
+            ? `Step "${s.id}" has no number to ring — set toE164 or pick a saved contact (toRef).`
+            : `Step "${s.id}" sets both toE164 and toRef — use only one.`
+        );
+      }
+    }
+    if (s.type === "voice_ai_intake" || s.type === "outbound_call") {
+      const notifySources = [Boolean(s.notifyE164), Boolean(s.notifyRef)].filter(Boolean).length;
+      if (notifySources !== 1) {
+        issues.push(
+          notifySources === 0
+            ? `Step "${s.id}" has nowhere to send the call summary — set notifyE164 or pick a saved contact (notifyRef).`
+            : `Step "${s.id}" sets both notifyE164 and notifyRef — use only one.`
+        );
+      }
+      // outbound_call's default callee is optional (the "Place call" entry may
+      // supply it per call) but still at most ONE source.
+      if (s.type === "outbound_call" && s.toE164 && s.toRef) {
+        issues.push(`Step "${s.id}" sets both toE164 and toRef — use only one.`);
+      }
+    }
+  }
 
   const trigger = def.trigger as Extract<FlowTrigger, { channel: "voice" }>;
   const outboundCalls = steps.filter((s) => s.type === "outbound_call");
