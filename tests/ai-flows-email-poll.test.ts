@@ -286,6 +286,42 @@ describe("pollEmailTriggers", () => {
     );
   });
 
+  it("fails closed when a from_matches contact ref cannot be resolved", async () => {
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: {
+          internalDate: "1760000000000",
+          payload: {
+            headers: [
+              { name: "From", value: "Leads <leads@rx.com>" },
+              { name: "Subject", value: "New referral" }
+            ],
+            mimeType: "text/plain",
+            body: { data: b64url("Open https://rfrl.to/abc now") }
+          }
+        }
+      } as never);
+    // The db stub has no contacts/roster query support, so resolution throws
+    // and the ref condition must fail closed (no run enqueued) without
+    // breaking the poll.
+    const res = await pollEmailTriggers(
+      dbWith([
+        flowRow(
+          "f-ref",
+          emailTrigger([
+            {
+              type: "from_matches",
+              ref: { source: "contact", id: "22222222-2222-4222-8222-222222222222" }
+            }
+          ])
+        )
+      ])
+    );
+    expect(res).toEqual({ flows: 1, mailboxes: 1, messages: 1, enqueued: 0 });
+    expect(enqueueAiFlowRun).not.toHaveBeenCalled();
+  });
+
   it("treats a dedupe collision (null run) as already-enqueued, not a new run", async () => {
     vi.mocked(recordInboundTriggerEmail).mockClear();
     vi.mocked(nangoProxyForBusiness)

@@ -54,7 +54,10 @@ import {
 } from "../_shared/voice_handoff.ts";
 import { encodeWtClientState } from "../_shared/warm_transfer_notify.ts";
 import { compileVoiceFlow } from "../_shared/ai_flows/voice.ts";
-import { resolveVoiceContactRefs } from "../_shared/ai_flows/contact_ref.ts";
+import {
+  matchVoiceFlowByCaller,
+  resolveVoiceContactRefs
+} from "../_shared/ai_flows/contact_ref.ts";
 import type { AiFlowDefinition } from "../_shared/ai_flows/types.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 import {
@@ -633,19 +636,37 @@ serve(async (req: Request) => {
   // a fallback for any caller not yet migrated. A lookup/compile failure must
   // not strand the caller — log and fall through.
   if (fromE164Informational) {
-    const { data: flowRows, error: flowErr } = await supabase
-      .from("ai_flows")
-      .select("id, definition")
-      .eq("business_id", businessId)
-      .eq("enabled", true)
-      .eq("definition->trigger->>channel", "voice")
-      .eq("definition->trigger->>fromE164", fromE164Informational)
-      .order("created_at", { ascending: false })
-      .limit(1);
-    if (flowErr) {
-      console.error("ai_flows voice lookup", flowErr);
+    // Fetch the business's enabled voice flows and match in code: a literal
+    // trigger.fromE164 equal to the caller wins first, then a trigger.fromRef
+    // whose referenced saved contact/employee's LIVE numbers include the caller
+    // (a ref can't be matched in SQL — the number lives in another table).
+    // Paginate so every flow is considered — a fixed cap would silently skip
+    // matching flows for businesses with large flow counts.
+    const flowRows: { id?: string; definition?: unknown }[] = [];
+    const pageSize = 100;
+    for (let page = 0; ; page++) {
+      const { data, error: flowErr } = await supabase
+        .from("ai_flows")
+        .select("id, definition")
+        .eq("business_id", businessId)
+        .eq("enabled", true)
+        .eq("definition->trigger->>channel", "voice")
+        .order("created_at", { ascending: false })
+        .range(page * pageSize, page * pageSize + pageSize - 1);
+      if (flowErr) {
+        console.error("ai_flows voice lookup", flowErr);
+        break;
+      }
+      const rows = (data ?? []) as { id?: string; definition?: unknown }[];
+      flowRows.push(...rows);
+      if (rows.length < pageSize) break;
     }
-    const flowRow = (flowRows ?? [])[0] as { id?: string; definition?: unknown } | undefined;
+    const flowRow = await matchVoiceFlowByCaller(
+      supabase,
+      businessId,
+      flowRows,
+      fromE164Informational
+    );
     if (flowRow?.definition) {
       let plan: ReturnType<typeof compileVoiceFlow> = null;
       try {

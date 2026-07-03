@@ -188,6 +188,29 @@ describe("evaluateSmsTrigger", () => {
     const empty: TriggerContext = { nowMs: base, messages: [] };
     expect(evaluateSmsTrigger(trig, empty).matched).toBe(false);
   });
+
+  it("matches a from_matches contact ref against pre-resolved identity values", () => {
+    const ref = { source: "contact" as const, id: "22222222-2222-4222-8222-222222222222" };
+    const trig: SmsTrigger = { channel: "sms", conditions: [{ type: "from_matches", ref }] };
+    const refValues = new Map([["contact:22222222-2222-4222-8222-222222222222", ["+15559998888", "pat@x.com"]]]);
+    expect(
+      evaluateSmsTrigger(trig, ctx([{ text: "x", from: "+15559998888" }]), refValues).matched
+    ).toBe(true);
+    // A different sender does not match any candidate.
+    expect(
+      evaluateSmsTrigger(trig, ctx([{ text: "x", from: "+15550000000" }]), refValues).matched
+    ).toBe(false);
+    // No pre-resolved entry (deleted person / resolution failure) fails closed.
+    expect(evaluateSmsTrigger(trig, ctx([{ text: "x", from: "+15559998888" }])).matched).toBe(false);
+  });
+
+  it("fails a from_matches with neither value nor ref (malformed row)", () => {
+    const trig = {
+      channel: "sms",
+      conditions: [{ type: "from_matches" }]
+    } as unknown as SmsTrigger;
+    expect(evaluateSmsTrigger(trig, ctx([{ text: "x", from: "+15559998888" }])).matched).toBe(false);
+  });
 });
 
 describe("resolvePath", () => {

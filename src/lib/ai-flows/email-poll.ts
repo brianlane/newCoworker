@@ -33,6 +33,10 @@ import {
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { recordInboundTriggerEmail } from "@/lib/db/email-log";
 import type { TriggerCondition } from "@/lib/ai-flows/schema";
+import {
+  resolveFromMatchesRefValues,
+  type ContactRefSupabase
+} from "../../../supabase/functions/_shared/ai_flows/contact_ref";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -403,12 +407,41 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
         });
       }
       result.messages += messages.length;
+      // Pre-resolve each flow's from_matches saved-contact refs ONCE for this
+      // poll (not per message) to live identity values (phones + emails). A
+      // resolution failure fails CLOSED for that flow only.
+      const refValuesByFlow = new Map<string, Map<string, string[]> | undefined>();
+      for (const flow of group) {
+        try {
+          // Cast: the full supabase-js builder type recurses too deep for TS
+          // to check structurally against the resolver's minimal chain type.
+          refValuesByFlow.set(
+            flow.id,
+            await resolveFromMatchesRefValues(
+              db as unknown as ContactRefSupabase,
+              businessId,
+              flow.conditions
+            )
+          );
+        } catch (e) {
+          console.error("email from_matches ref resolution", e);
+          refValuesByFlow.set(flow.id, undefined);
+        }
+      }
       const seenRows: Array<{ flow_id: string; message_id: string }> = [];
       for (const msg of messages) {
         const scope = emailTriggerScope(msg);
         for (const flow of group) {
           seenRows.push({ flow_id: flow.id, message_id: msg.id });
-          if (!evaluateTriggerConditions(flow.conditions, scope.windowText, scope.from)) continue;
+          if (
+            !evaluateTriggerConditions(
+              flow.conditions,
+              scope.windowText,
+              scope.from,
+              refValuesByFlow.get(flow.id)
+            )
+          )
+            continue;
           const run = await enqueueAiFlowRun(
             {
               businessId,

@@ -38,11 +38,15 @@ function textContains(haystack: string, needle: string, caseInsensitive?: boolea
  * Evaluate an AND-ed condition list the way the SMS engine does: `contains`,
  * `regex` and `has_url` test the window text; `from_matches` tests the sender
  * (for email triggers, the sender address). Empty list matches everything.
+ * `refValues` carries pre-resolved identity values (phones/emails) for any
+ * `from_matches` contact refs, keyed `${source}:${id}` (see
+ * resolveFromMatchesRefValues) — a ref with no entry fails closed.
  */
 export function evaluateTriggerConditions(
   conditions: TriggerCondition[],
   windowText: string,
-  from: string
+  from: string,
+  refValues?: ReadonlyMap<string, string[]>
 ): boolean {
   return conditions.every((cond) => {
     switch (cond.type) {
@@ -52,8 +56,15 @@ export function evaluateTriggerConditions(
         return safeRegexTest(cond.value, windowText, cond.caseInsensitive);
       case "has_url":
         return firstUrlInText(windowText) !== null;
-      case "from_matches":
-        return textContains(from, cond.value, cond.caseInsensitive);
+      case "from_matches": {
+        if (cond.ref) {
+          const candidates = refValues?.get(`${cond.ref.source}:${cond.ref.id}`) ?? [];
+          return candidates.some((v) => textContains(from, v, cond.caseInsensitive));
+        }
+        return typeof cond.value === "string"
+          ? textContains(from, cond.value, cond.caseInsensitive)
+          : false;
+      }
     }
   });
 }

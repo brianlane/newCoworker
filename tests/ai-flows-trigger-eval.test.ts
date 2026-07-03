@@ -65,6 +65,23 @@ describe("evaluateTriggerConditions", () => {
       false
     );
   });
+  it("matches a from_matches contact ref against pre-resolved identity values", () => {
+    const ref = { source: "employee" as const, id: "11111111-1111-4111-8111-111111111111" };
+    const conditions = [{ type: "from_matches" as const, ref }];
+    const refValues = new Map([
+      ["employee:11111111-1111-4111-8111-111111111111", ["+16025551234", "dave@x.com"]]
+    ]);
+    expect(evaluateTriggerConditions(conditions, text, "dave@x.com", refValues)).toBe(true);
+    expect(evaluateTriggerConditions(conditions, text, "bob@x.y", refValues)).toBe(false);
+    // No pre-resolved entry (deleted person / resolution failure) fails closed.
+    expect(evaluateTriggerConditions(conditions, text, "dave@x.com")).toBe(false);
+  });
+  it("fails a from_matches with neither value nor ref (malformed row)", () => {
+    const conditions = [{ type: "from_matches" }] as unknown as Parameters<
+      typeof evaluateTriggerConditions
+    >[0];
+    expect(evaluateTriggerConditions(conditions, text, "dave@x.com")).toBe(false);
+  });
 });
 
 describe("htmlToText", () => {

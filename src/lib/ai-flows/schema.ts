@@ -121,6 +121,21 @@ const varName = z
   .string()
   .regex(VAR_NAME_PATTERN, "must start with a letter and use letters/digits/underscore");
 
+/**
+ * A dynamic contact reference: a saved person whose phone is resolved LIVE at
+ * run time (see ContactRef in _shared/ai_flows/types). `id` is a uuid row key in
+ * ai_flow_team_members (employee) or contacts (contact). `label` is an
+ * editor-only display hint captured when the ref was picked. Used as an
+ * alternative to a hardcoded number on every recipient/dial field; the
+ * "exactly one source" rules live in validateDefinitionSemantics (a
+ * discriminatedUnion member can't hold a refine).
+ */
+const contactRefSchema = z.object({
+  source: z.enum(["employee", "contact"]),
+  id: z.string().uuid(),
+  label: z.string().min(1).max(120).optional()
+});
+
 const conditionSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("contains"),
@@ -135,7 +150,11 @@ const conditionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("has_url") }),
   z.object({
     type: z.literal("from_matches"),
-    value: z.string().min(1).max(100),
+    // Exactly one of value / ref (enforced in validateDefinitionSemantics).
+    // With `ref`, the sender matches when it contains any of the referenced
+    // person's live identity values (phone + merge aliases + email).
+    value: z.string().min(1).max(100).optional(),
+    ref: contactRefSchema.optional(),
     caseInsensitive: z.boolean().optional()
   })
 ]);
@@ -152,21 +171,6 @@ const timezone = z.string().min(1).max(60);
 const e164 = z
   .string()
   .regex(/^\+[1-9]\d{6,15}$/, 'must be an E.164 number like "+14155551234"');
-
-/**
- * A dynamic contact reference: a saved person whose phone is resolved LIVE at
- * run time (see ContactRef in _shared/ai_flows/types). `id` is a uuid row key in
- * ai_flow_team_members (employee) or contacts (contact). `label` is an
- * editor-only display hint captured when the ref was picked. Used as an
- * alternative to a hardcoded number on every recipient/dial field; the
- * "exactly one source" rules live in validateDefinitionSemantics (a
- * discriminatedUnion member can't hold a refine).
- */
-const contactRefSchema = z.object({
-  source: z.enum(["employee", "contact"]),
-  id: z.string().uuid(),
-  label: z.string().min(1).max(120).optional()
-});
 
 const smsTriggerSchema = z.object({
   channel: z.literal("sms"),
@@ -241,9 +245,13 @@ const voiceTriggerSchema = z
   .object({
     channel: z.literal("voice"),
     // Inbound flows: a call FROM `fromE164` fires the flow (resolved by
-    // telnyx-voice-inbound). Required for inbound, omitted for outbound — enforced
-    // by direction in validateVoiceFlow.
+    // telnyx-voice-inbound). Inbound needs exactly one of fromE164 / fromRef,
+    // outbound neither — enforced by direction in validateVoiceFlow.
     fromE164: e164.optional(),
+    // Dynamic caller match: the flow fires when the caller is one of the
+    // referenced saved person's LIVE numbers (employee phone, or contact
+    // number + merge aliases), resolved by the voice webhook at call time.
+    fromRef: contactRefSchema.optional(),
     // "outbound" marks an owner-placed call flow whose single `outbound_call` step
     // is run on demand by the origination edge function (not by an inbound caller
     // and not by the batch worker). Omitted ⇒ inbound, preserving existing rows.
@@ -823,10 +831,12 @@ export function validateVoiceFlow(def: AiFlowDefinition): string[] {
     );
     return issues;
   }
-  if (!trigger.fromE164) {
+  if (!trigger.fromE164 && !trigger.fromRef) {
     issues.push(
-      "An inbound voice flow needs a caller number (fromE164) on its trigger."
+      "An inbound voice flow needs a caller — set fromE164 or pick a saved contact (fromRef) on its trigger."
     );
+  } else if (trigger.fromE164 && trigger.fromRef) {
+    issues.push("The trigger sets both fromE164 and fromRef — use only one.");
   }
 
   const transfers = steps.filter((s) => s.type === "voice_transfer");
@@ -878,6 +888,23 @@ export function validateVoiceFlow(def: AiFlowDefinition): string[] {
 export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
   const issues: string[] = [];
   const seenIds = new Set<string>();
+
+  // A from_matches trigger condition needs EXACTLY ONE sender source: a
+  // literal `value` or a saved-contact `ref` (the discriminatedUnion member
+  // can't hold a refine). Applies to every condition-bearing channel.
+  const trigConditions = (def.trigger as { conditions?: TriggerCondition[] }).conditions ?? [];
+  for (const c of trigConditions) {
+    if (c.type !== "from_matches") continue;
+    if (!c.value && !c.ref) {
+      issues.push(
+        'A "from matches" condition needs a sender — enter text or pick a saved contact.'
+      );
+    } else if (c.value && c.ref) {
+      issues.push(
+        'A "from matches" condition sets both a text value and a saved contact — use only one.'
+      );
+    }
+  }
 
   // Voice flows run on the real-time call path and have no vars/templates — they
   // get their own shape rules. We still enforce step-id uniqueness here so the
@@ -1239,7 +1266,7 @@ export function summarizeDefinition(def: AiFlowDefinition): string {
       trigPart =
         t.direction === "outbound"
           ? "When you place an outbound call"
-          : `When a call comes in from ${t.fromE164}`;
+          : `When a call comes in from ${t.fromE164 ?? t.fromRef?.label ?? "a saved contact"}`;
       break;
   }
   const stepTypes = def.steps.map((s) => s.type).join(" -> ");
