@@ -1063,6 +1063,66 @@ describe("handlePortingStatusChange", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
+  it("retries a lost compare-and-swap against the fresh row instead of discarding the event", async () => {
+    // Another writer moved submitted → exception while we processed
+    // "ported"; the event still applies to the fresh row, so the second
+    // attempt lands and the milestone alert fires exactly once.
+    const { db } = makeDb([
+      { data: portRow({ status: "submitted" }), error: null }, // read
+      { data: [], error: null }, // CAS 1 lost
+      { data: portRow({ status: "exception" }), error: null }, // re-read
+      { data: [portRow({ status: "ported" })], error: null } // CAS 2 wins
+    ]);
+    const result = await handlePortingStatusChange(
+      { id: "po-1", status: { value: "ported" } },
+      { client: db }
+    );
+    expect(result.ported).toBe(true);
+    expect(result.row?.status).toBe("ported");
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+
+    // The fresh row can also make the event stale (terminal) → drop it.
+    dispatchMock.mockClear();
+    const { db: db2 } = makeDb([
+      { data: portRow({ status: "submitted" }), error: null },
+      { data: [], error: null },
+      { data: portRow({ status: "cancelled" }), error: null } // re-read: terminal
+    ]);
+    const result2 = await handlePortingStatusChange(
+      { id: "po-1", status: { value: "foc-date-confirmed" } },
+      { client: db2 }
+    );
+    expect(result2).toMatchObject({ handled: true, ported: false });
+    expect(result2.row?.status).toBe("cancelled");
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "byon: dropped stale porting status event",
+      expect.objectContaining({ priorStatus: "cancelled" })
+    );
+  });
+
+  it("gives up (so Telnyx retries) after persistent write interference, and surfaces re-read errors", async () => {
+    const contested: Scripted[] = [{ data: portRow({ status: "submitted" }), error: null }];
+    for (let i = 0; i < 3; i++) {
+      contested.push({ data: [], error: null }); // CAS lost
+      contested.push({ data: portRow({ status: "in-process" }), error: null }); // re-read, still applies
+    }
+    const { db } = makeDb(contested);
+    await expect(
+      handlePortingStatusChange({ id: "po-1", status: { value: "ported" } }, { client: db })
+    ).rejects.toThrow(/gave up after 3 conflicting writes/);
+    expect(dispatchMock).not.toHaveBeenCalled();
+
+    const { db: db2 } = makeDb([
+      { data: portRow({ status: "submitted" }), error: null },
+      { data: [], error: null },
+      { data: null, error: { message: "reread exploded" } }
+    ]);
+    await expect(
+      handlePortingStatusChange({ id: "po-1", status: { value: "ported" } }, { client: db2 })
+    ).rejects.toThrow(/handlePortingStatusChange: reread exploded/);
+  });
+
   it("flags ported=true only on the transition into ported, using the module dispatcher", async () => {
     const { db } = makeDb([
       { data: portRow({ status: "foc-date-confirmed" }), error: null },

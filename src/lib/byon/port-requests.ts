@@ -595,94 +595,116 @@ export async function handlePortingStatusChange(
     return { handled: false, ported: false, row: null };
   }
 
-  const prior = existing as NumberPortRequestRow;
-  if (!shouldApplyStatusChange(prior, status, occurredAt)) {
-    logger.warn("byon: dropped stale porting status event", {
-      orderId,
-      priorStatus: prior.status,
-      status,
-      occurredAt
-    });
-    return { handled: true, ported: false, row: prior };
-  }
+  // Compare-and-swap loop: each attempt updates conditionally on the status
+  // it read. Concurrent writers (Telnyx retries, parallel workers, the
+  // post-confirm refresh) make the CAS match zero rows; we then RE-READ and
+  // re-evaluate against the fresh row instead of discarding the event — a
+  // legitimate transition retries, a duplicate of the winner's transition
+  // dedupes (one alert), and a now-stale event drops via the ordering guard.
+  const MAX_CAS_ATTEMPTS = 3;
+  let prior = existing as NumberPortRequestRow;
 
-  const focAt =
-    payload.activation_settings?.foc_datetime_actual ??
-    payload.activation_settings?.foc_datetime_requested ??
-    prior.foc_at;
+  for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt++) {
+    if (!shouldApplyStatusChange(prior, status, occurredAt)) {
+      logger.warn("byon: dropped stale porting status event", {
+        orderId,
+        priorStatus: prior.status,
+        status,
+        occurredAt
+      });
+      return { handled: true, ported: false, row: prior };
+    }
 
-  // A status TRANSITION owns the details outright (clearing stale exception
-  // codes when the port recovers). A redelivery of the same status only
-  // overwrites when it actually carries details — Telnyx retries can omit
-  // them, and wiping stored exception codes would strip the dashboard of
-  // its "here's how to fix it" hints.
-  const payloadDetails = payload.status?.details ?? null;
-  const statusDetail =
-    status !== prior.status
-      ? payloadDetails
-      : payloadDetails && payloadDetails.length > 0
+    const focAt =
+      payload.activation_settings?.foc_datetime_actual ??
+      payload.activation_settings?.foc_datetime_requested ??
+      prior.foc_at;
+
+    // A status TRANSITION owns the details outright (clearing stale exception
+    // codes when the port recovers). A redelivery of the same status only
+    // overwrites when it actually carries details — Telnyx retries can omit
+    // them, and wiping stored exception codes would strip the dashboard of
+    // its "here's how to fix it" hints.
+    const payloadDetails = payload.status?.details ?? null;
+    const statusDetail =
+      status !== prior.status
         ? payloadDetails
-        : prior.status_detail;
+        : payloadDetails && payloadDetails.length > 0
+          ? payloadDetails
+          : prior.status_detail;
 
-  // Compare-and-swap on the status we read: overlapping deliveries (Telnyx
-  // retries, parallel workers) each read the same prior row, but only the
-  // one whose update actually matches gets to notify and report the
-  // transition — the losers see zero rows and defer to the winner's write.
-  const { data: updatedRows, error: updateErr } = await db
-    .from("number_port_requests")
-    .update({
-      status,
-      status_detail: statusDetail,
-      foc_at: focAt,
-      support_key: payload.support_key ?? prior.support_key,
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", prior.id)
-    .eq("status", prior.status)
-    .select();
-  if (updateErr) throw new Error(`handlePortingStatusChange: ${updateErr.message}`);
-  const row = ((updatedRows ?? []) as NumberPortRequestRow[])[0] ?? null;
-  if (!row) {
+    const { data: updatedRows, error: updateErr } = await db
+      .from("number_port_requests")
+      .update({
+        status,
+        status_detail: statusDetail,
+        foc_at: focAt,
+        support_key: payload.support_key ?? prior.support_key,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", prior.id)
+      .eq("status", prior.status)
+      .select();
+    if (updateErr) throw new Error(`handlePortingStatusChange: ${updateErr.message}`);
+    const row = ((updatedRows ?? []) as NumberPortRequestRow[])[0] ?? null;
+
+    if (row) {
+      // Only alert on transitions into a milestone — Telnyx re-delivers
+      // webhooks, and repeats of the same status must not re-ping the owner.
+      if (status !== prior.status && NOTIFY_STATUSES.has(status)) {
+        const dispatch = deps.dispatch ?? dispatchUrgentNotification;
+        try {
+          await dispatch({
+            businessId: prior.business_id,
+            summary: statusSummary(status, prior.phone_e164),
+            kind: "byon_port",
+            payload: {
+              phone_e164: prior.phone_e164,
+              port_request_id: prior.id,
+              telnyx_order_id: orderId,
+              status,
+              status_detail: payload.status?.details ?? [],
+              foc_at: focAt
+            }
+          });
+        } catch (err) {
+          // Never fail the webhook (Telnyx would retry) because an alert didn't send.
+          logger.warn("byon: status notification failed", {
+            orderId,
+            status,
+            error: errMessage(err)
+          });
+        }
+      }
+      return { handled: true, ported: status === "ported" && prior.status !== "ported", row };
+    }
+
     logger.warn("byon: porting status update lost the write race", {
       orderId,
       priorStatus: prior.status,
-      status
+      status,
+      attempt
     });
-    const { data: current } = await db
+    const { data: current, error: rereadErr } = await db
       .from("number_port_requests")
       .select("*")
       .eq("id", prior.id)
       .maybeSingle();
-    return { handled: true, ported: false, row: (current as NumberPortRequestRow | null) ?? prior };
-  }
-
-  // Only alert on transitions into a milestone — Telnyx re-delivers webhooks,
-  // and repeats of the same status must not re-ping the owner.
-  if (status !== prior.status && NOTIFY_STATUSES.has(status)) {
-    const dispatch = deps.dispatch ?? dispatchUrgentNotification;
-    try {
-      await dispatch({
-        businessId: prior.business_id,
-        summary: statusSummary(status, prior.phone_e164),
-        kind: "byon_port",
-        payload: {
-          phone_e164: prior.phone_e164,
-          port_request_id: prior.id,
-          telnyx_order_id: orderId,
-          status,
-          status_detail: payload.status?.details ?? [],
-          foc_at: focAt
-        }
-      });
-    } catch (err) {
-      // Never fail the webhook (Telnyx would retry) because an alert didn't send.
-      logger.warn("byon: status notification failed", {
-        orderId,
-        status,
-        error: errMessage(err)
-      });
+    if (rereadErr) throw new Error(`handlePortingStatusChange: ${rereadErr.message}`);
+    if (!current) {
+      // Row vanished mid-race; nothing left to update.
+      return { handled: true, ported: false, row: prior };
+    }
+    prior = current as NumberPortRequestRow;
+    if (prior.status === status) {
+      // The concurrent writer applied this very transition — dedupe, they
+      // already sent the alert.
+      return { handled: true, ported: false, row: prior };
     }
   }
 
-  return { handled: true, ported: status === "ported" && prior.status !== "ported", row };
+  // Persistent interference: fail so Telnyx retries the delivery later.
+  throw new Error(
+    `handlePortingStatusChange: gave up after ${MAX_CAS_ATTEMPTS} conflicting writes for order ${orderId}`
+  );
 }
