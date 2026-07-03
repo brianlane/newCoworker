@@ -1198,6 +1198,38 @@ describe("handlePortingStatusChange", () => {
     );
   });
 
+  it("merges newer same-status fields after losing the CAS to a concurrent delivery", async () => {
+    // We carry fresh exception details; a parallel delivery wins the status
+    // CAS first but with no details. The retry lands in the same-status
+    // path and merges our details in — without re-alerting (already claimed).
+    const fresh = [{ code: "PASSCODE_PIN_INVALID", description: "bad pin" }];
+    const { db, log } = makeDb([
+      { data: portRow({ status: "submitted" }), error: null }, // read
+      { data: [], error: null }, // CAS 1 lost
+      {
+        data: portRow({ status: "exception", status_detail: null, notified_status: "exception" }),
+        error: null
+      }, // re-read: winner wrote the status, no details
+      {
+        data: [
+          portRow({ status: "exception", status_detail: fresh, notified_status: "exception" })
+        ],
+        error: null
+      } // CAS 2: same-status merge
+    ]);
+    const result = await handlePortingStatusChange(
+      { id: "po-1", status: { value: "exception", details: fresh } },
+      { client: db }
+    );
+    expect(result.handled).toBe(true);
+    expect(result.row?.status_detail).toEqual(fresh);
+    expect(log[3].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      status: "exception",
+      status_detail: fresh
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it("gives up (so Telnyx retries) after persistent write interference, and surfaces re-read errors", async () => {
     const contested: Scripted[] = [{ data: portRow({ status: "submitted" }), error: null }];
     for (let i = 0; i < 3; i++) {

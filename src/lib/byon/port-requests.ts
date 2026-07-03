@@ -798,18 +798,13 @@ export async function handlePortingStatusChange(
       // Row vanished mid-race; nothing left to update.
       return { handled: true, ported: false, row: prior };
     }
+    // Loop with the fresh row: the next attempt re-evaluates everything
+    // against it. A winner that applied this very transition lands in the
+    // same-status path — the no-op check dedupes if our payload carries
+    // nothing new, a same-status CAS merges newer details/FOC/support key if
+    // it does, and the milestone claim picks up an alert the winner crashed
+    // before sending.
     prior = current as NumberPortRequestRow;
-    if (prior.status === status) {
-      // The concurrent writer applied this very transition. If they also
-      // finished notifying, the claim below is a no-op; if they crashed
-      // first, this delivery picks the alert up.
-      const claim = await claimByonMilestone(db, prior, deps, orderId);
-      return {
-        handled: true,
-        ported: claim.claimed && prior.status === "ported",
-        row: claim.row
-      };
-    }
   }
 
   // Persistent interference: fail so Telnyx retries the delivery later.
