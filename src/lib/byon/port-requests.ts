@@ -632,6 +632,19 @@ export async function handlePortingStatusChange(
         : payloadDetails && payloadDetails.length > 0
           ? payloadDetails
           : prior.status_detail;
+    const supportKey = payload.support_key ?? prior.support_key ?? null;
+
+    // A same-status redelivery that carries nothing new must not write at
+    // all: bumping updated_at on a no-op would make a later legitimate
+    // backward recovery (ordered via occurred_at vs updated_at) look stale.
+    const noop =
+      status === prior.status &&
+      (focAt ?? null) === (prior.foc_at ?? null) &&
+      supportKey === (prior.support_key ?? null) &&
+      JSON.stringify(statusDetail ?? null) === JSON.stringify(prior.status_detail ?? null);
+    if (noop) {
+      return { handled: true, ported: false, row: prior };
+    }
 
     const { data: updatedRows, error: updateErr } = await db
       .from("number_port_requests")
@@ -639,7 +652,7 @@ export async function handlePortingStatusChange(
         status,
         status_detail: statusDetail,
         foc_at: focAt,
-        support_key: payload.support_key ?? prior.support_key,
+        support_key: supportKey,
         updated_at: new Date().toISOString()
       })
       .eq("id", prior.id)

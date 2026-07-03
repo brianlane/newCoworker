@@ -884,28 +884,29 @@ describe("handlePortingStatusChange", () => {
   it("keeps stored exception details on redeliveries that omit them, overwrites when they arrive", async () => {
     const stored = [{ code: "ACCOUNT_NUMBER_MISMATCH", description: "wrong account" }];
 
-    // Same-status redelivery WITHOUT details → keep what we have.
+    // Same-status redelivery WITHOUT details carries nothing new → no write
+    // at all (bumping updated_at would skew occurred_at ordering later).
     const { db, log } = makeDb([
-      { data: portRow({ status: "exception", status_detail: stored }), error: null },
-      { data: [portRow({ status: "exception", status_detail: stored })], error: null }
+      { data: portRow({ status: "exception", status_detail: stored }), error: null }
     ]);
-    await handlePortingStatusChange({ id: "po-1", status: { value: "exception" } }, { client: db });
-    expect(log[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
-      status_detail: stored
-    });
+    const result = await handlePortingStatusChange(
+      { id: "po-1", status: { value: "exception" } },
+      { client: db }
+    );
+    expect(result.handled).toBe(true);
+    expect(result.row?.status_detail).toEqual(stored);
+    expect(log).toHaveLength(1); // read only, no update
 
-    // Same-status redelivery with EMPTY details → still keep what we have.
+    // Same-status redelivery with EMPTY details → same no-op.
     const { db: db2, log: log2 } = makeDb([
-      { data: portRow({ status: "exception", status_detail: stored }), error: null },
-      { data: [portRow({ status: "exception", status_detail: stored })], error: null }
+      { data: portRow({ status: "exception", status_detail: stored }), error: null }
     ]);
-    await handlePortingStatusChange(
+    const result2 = await handlePortingStatusChange(
       { id: "po-1", status: { value: "exception", details: [] } },
       { client: db2 }
     );
-    expect(log2[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
-      status_detail: stored
-    });
+    expect(result2.row?.status_detail).toEqual(stored);
+    expect(log2).toHaveLength(1);
 
     // Same-status redelivery WITH new details → overwrite.
     const fresh = [{ code: "PASSCODE_PIN_INVALID", description: "bad pin" }];
@@ -1023,6 +1024,52 @@ describe("handlePortingStatusChange", () => {
     );
     expect(result6.row?.status).toBe("brand-new-status");
     expect(log6).toHaveLength(2);
+  });
+
+  it("still writes same-status redeliveries that carry a new FOC date or support key", async () => {
+    // Same status but a NEW FOC date → real information, write it.
+    const { db, log } = makeDb([
+      { data: portRow({ status: "foc-date-confirmed", foc_at: "2026-07-20T13:00:00Z" }), error: null },
+      { data: [portRow({ status: "foc-date-confirmed", foc_at: "2026-07-25T13:00:00Z" })], error: null }
+    ]);
+    await handlePortingStatusChange(
+      {
+        id: "po-1",
+        status: { value: "foc-date-confirmed" },
+        activation_settings: { foc_datetime_actual: "2026-07-25T13:00:00Z" }
+      },
+      { client: db }
+    );
+    expect(log[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      foc_at: "2026-07-25T13:00:00Z"
+    });
+
+    // Same status but a NEW support key (prior had none) → write it.
+    const { db: db2, log: log2 } = makeDb([
+      { data: portRow({ status: "submitted", support_key: null }), error: null },
+      { data: [portRow({ status: "submitted", support_key: "sr_new" })], error: null }
+    ]);
+    await handlePortingStatusChange(
+      { id: "po-1", status: { value: "submitted" }, support_key: "sr_new" },
+      { client: db2 }
+    );
+    expect(log2[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      support_key: "sr_new"
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+
+    // Neither the payload nor the row has a support key → stays null.
+    const { db: db3, log: log3 } = makeDb([
+      { data: portRow({ status: "submitted", support_key: null }), error: null },
+      { data: [portRow({ status: "foc-date-confirmed", support_key: null })], error: null }
+    ]);
+    await handlePortingStatusChange(
+      { id: "po-1", status: { value: "foc-date-confirmed" } },
+      { client: db3 }
+    );
+    expect(log3[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      support_key: null
+    });
   });
 
   it("yields to a concurrent delivery that wins the compare-and-swap, without notifying twice", async () => {
