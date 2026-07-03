@@ -511,15 +511,30 @@ export async function cancelByonPortRequest(
     nextStatus = order.status?.value ?? "cancel-pending";
   }
 
-  const { data: updated, error: updateErr } = await db
+  // Conditional on the status we checked: if a status webhook (e.g. ported)
+  // landed between the read and this write, don't regress the row — Telnyx's
+  // cancel webhooks will record the cancel outcome if there is one.
+  const { data: updatedRows, error: updateErr } = await db
     .from("number_port_requests")
     .update({ status: nextStatus, updated_at: new Date().toISOString() })
     .eq("id", requestId)
     .eq("business_id", businessId)
-    .select()
-    .single();
+    .eq("status", existing.status)
+    .select();
   if (updateErr) throw new Error(`cancelByonPortRequest: ${updateErr.message}`);
-  return updated as NumberPortRequestRow;
+  const updated = ((updatedRows ?? []) as NumberPortRequestRow[])[0] ?? null;
+  if (updated) return updated;
+
+  // Zero rows matched: a webhook changed the status mid-cancel. Return the
+  // row as the webhook left it.
+  const { data: current, error: currentErr } = await db
+    .from("number_port_requests")
+    .select("*")
+    .eq("id", requestId)
+    .eq("business_id", businessId)
+    .maybeSingle();
+  if (currentErr) throw new Error(`cancelByonPortRequest: ${currentErr.message}`);
+  return (current as NumberPortRequestRow | null) ?? existing;
 }
 
 // ---------------------------------------------------------------------------

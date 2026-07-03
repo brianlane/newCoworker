@@ -646,20 +646,57 @@ describe("cancelByonPortRequest", () => {
 
   it("cancels the Telnyx order and mirrors its returned status", async () => {
     const porting = makePorting();
-    const { db } = makeDb([
+    const { db, log } = makeDb([
       { data: portRow(), error: null },
-      { data: portRow({ status: "cancel-pending" }), error: null }
+      { data: [portRow({ status: "cancel-pending" })], error: null }
     ]);
     const updated = await cancelByonPortRequest(BIZ, "req-1", { client: db, porting });
     expect(porting.cancelPortingOrder).toHaveBeenCalledWith("po-1");
     expect(updated?.status).toBe("cancel-pending");
+    // Conditional on the status we read, so a webhook that landed mid-cancel
+    // can't be regressed.
+    expect(log[1].calls).toContainEqual({ name: "eq", args: ["status", "submitted"] });
+  });
+
+  it("returns the webhook's row when a status webhook wins the race against cancel", async () => {
+    const porting = makePorting();
+    const { db } = makeDb([
+      { data: portRow(), error: null }, // read: submitted
+      { data: [], error: null }, // conditional update matched 0 rows
+      { data: portRow({ status: "ported" }), error: null } // re-fetch
+    ]);
+    const updated = await cancelByonPortRequest(BIZ, "req-1", { client: db, porting });
+    expect(updated?.status).toBe("ported");
+
+    // Re-fetch empty → fall back to the row we originally read. (The update
+    // returning null instead of [] covers PostgREST's no-rows shape.)
+    const { db: db2 } = makeDb([
+      { data: portRow(), error: null },
+      { data: null, error: null },
+      { data: null, error: null }
+    ]);
+    const updated2 = await cancelByonPortRequest(BIZ, "req-1", {
+      client: db2,
+      porting: makePorting()
+    });
+    expect(updated2?.status).toBe("submitted");
+
+    // Re-fetch error → surfaces.
+    const { db: db3 } = makeDb([
+      { data: portRow(), error: null },
+      { data: [], error: null },
+      { data: null, error: { message: "refetch exploded" } }
+    ]);
+    await expect(
+      cancelByonPortRequest(BIZ, "req-1", { client: db3, porting: makePorting() })
+    ).rejects.toThrow(/cancelByonPortRequest: refetch exploded/);
   });
 
   it("falls back to cancel-pending when Telnyx omits a status, and to cancelled without an order id", async () => {
     const porting = makePorting({ cancelPortingOrder: vi.fn(async () => ({ id: "po-1" })) });
     const { db, log } = makeDb([
       { data: portRow(), error: null },
-      { data: portRow({ status: "cancel-pending" }), error: null }
+      { data: [portRow({ status: "cancel-pending" })], error: null }
     ]);
     await cancelByonPortRequest(BIZ, "req-1", { client: db, porting });
     const updateCall = log[1].calls.find((c) => c.name === "update");
@@ -669,7 +706,7 @@ describe("cancelByonPortRequest", () => {
     const porting2 = makePorting();
     const { db: db2, log: log2 } = makeDb([
       { data: portRow({ telnyx_order_id: null, status: "draft" }), error: null },
-      { data: portRow({ status: "cancelled" }), error: null }
+      { data: [portRow({ status: "cancelled" })], error: null }
     ]);
     const updated = await cancelByonPortRequest(BIZ, "req-1", { client: db2, porting: porting2 });
     expect(porting2.cancelPortingOrder).not.toHaveBeenCalled();
