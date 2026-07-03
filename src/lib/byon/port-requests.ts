@@ -68,6 +68,49 @@ const TERMINAL_STATUSES = new Set(["ported", "cancelled"]);
 /** Milestones worth an owner notification (vs. silent bookkeeping moves). */
 const NOTIFY_STATUSES = new Set(["exception", "foc-date-confirmed", "ported", "cancelled"]);
 
+/**
+ * Rough forward order of the Telnyx porting lifecycle, used to spot webhook
+ * redeliveries arriving out of order. Unknown statuses rank highest so a
+ * status Telnyx adds later is never mistaken for a stale event.
+ */
+const STATUS_ORDER: Record<string, number> = {
+  draft: 0,
+  "in-process": 1,
+  submitted: 2,
+  exception: 3,
+  "foc-date-confirmed": 4,
+  "cancel-pending": 5,
+  ported: 6,
+  cancelled: 6
+};
+
+/**
+ * Decide whether a status_changed event may be applied over the stored row.
+ *
+ * - Terminal rows (`ported`/`cancelled`) never change again.
+ * - Same-status redeliveries always apply (detail merge handles them).
+ * - Forward moves always apply.
+ * - Backward moves are legitimate (exception → in-process after a fix, FOC
+ *   rescheduled, …) but indistinguishable from a delayed retry by status
+ *   alone — so they only apply when the event's `occurred_at` is newer than
+ *   our last write. A retry of an old event carries its original timestamp
+ *   and is dropped instead of regressing the row.
+ */
+function shouldApplyStatusChange(
+  prior: NumberPortRequestRow,
+  status: string,
+  occurredAt: string | null
+): boolean {
+  if (status === prior.status) return true;
+  if (TERMINAL_STATUSES.has(prior.status)) return false;
+  const priorRank = STATUS_ORDER[prior.status] ?? Number.POSITIVE_INFINITY;
+  const nextRank = STATUS_ORDER[status] ?? Number.POSITIVE_INFINITY;
+  if (nextRank >= priorRank) return true;
+  const occurred = occurredAt ? Date.parse(occurredAt) : Number.NaN;
+  const lastWrite = prior.updated_at ? Date.parse(prior.updated_at) : Number.NaN;
+  return Number.isFinite(occurred) && Number.isFinite(lastWrite) && occurred > lastWrite;
+}
+
 function getPorting(deps: ByonDeps): PortingClientLike {
   if (deps.porting) return deps.porting;
   const apiKey = process.env.TELNYX_API_KEY?.trim();
@@ -351,7 +394,13 @@ export async function createByonPortRequest(
       });
     }
 
-    const { data: updatedRow, error: updateErr } = await db
+    // Refresh the tracking row from the confirm snapshot — but only while it
+    // still holds the status we inserted. Telnyx can deliver a
+    // status_changed webhook between confirm and this write; a newer webhook
+    // state (exception details, ported, …) must never be clobbered by the
+    // older confirm response, so the update is conditional on the status.
+    const insertedStatus = order.status?.value ?? "draft";
+    const { data: updatedRows, error: updateErr } = await db
       .from("number_port_requests")
       .update({
         status: finalOrder.status?.value ?? (confirmError ? "draft" : "submitted"),
@@ -366,8 +415,9 @@ export async function createByonPortRequest(
         updated_at: new Date().toISOString()
       })
       .eq("telnyx_order_id", order.id)
-      .select()
-      .single();
+      .eq("status", insertedStatus)
+      .select();
+    const updatedRow = ((updatedRows ?? []) as NumberPortRequestRow[])[0] ?? null;
     if (updateErr) {
       // The row exists and the webhook will heal its status; don't fail the
       // whole submit over a bookkeeping write.
@@ -376,13 +426,28 @@ export async function createByonPortRequest(
         orderId: order.id,
         error: updateErr.message
       });
-      const fallback = ((insertedRows ?? []) as NumberPortRequestRow[]).find(
-        (r) => r.telnyx_order_id === order.id
-      );
-      if (fallback) finalRows.push(fallback);
-    } else {
-      finalRows.push(updatedRow as NumberPortRequestRow);
     }
+    if (updatedRow) {
+      finalRows.push(updatedRow);
+      continue;
+    }
+    if (!updateErr) {
+      // Zero rows matched: a webhook already advanced the status. Return the
+      // row as the webhook left it.
+      const { data: current } = await db
+        .from("number_port_requests")
+        .select("*")
+        .eq("telnyx_order_id", order.id)
+        .maybeSingle();
+      if (current) {
+        finalRows.push(current as NumberPortRequestRow);
+        continue;
+      }
+    }
+    const fallback = ((insertedRows ?? []) as NumberPortRequestRow[]).find(
+      (r) => r.telnyx_order_id === order.id
+    );
+    if (fallback) finalRows.push(fallback);
   }
 
   return { rows: finalRows, submitted, submitError };
@@ -487,7 +552,9 @@ function statusSummary(status: string, phoneE164: string): string {
 
 export async function handlePortingStatusChange(
   payload: PortingWebhookOrderPayload,
-  deps: ByonDeps = {}
+  deps: ByonDeps = {},
+  /** `data.occurred_at` of the webhook event, used to order backward moves. */
+  occurredAt: string | null = null
 ): Promise<PortingStatusChangeResult> {
   const orderId = payload.id?.trim();
   const status = payload.status?.value?.trim();
@@ -506,6 +573,16 @@ export async function handlePortingStatusChange(
   }
 
   const prior = existing as NumberPortRequestRow;
+  if (!shouldApplyStatusChange(prior, status, occurredAt)) {
+    logger.warn("byon: dropped stale porting status event", {
+      orderId,
+      priorStatus: prior.status,
+      status,
+      occurredAt
+    });
+    return { handled: true, ported: false, row: prior };
+  }
+
   const focAt =
     payload.activation_settings?.foc_datetime_actual ??
     payload.activation_settings?.foc_datetime_requested ??

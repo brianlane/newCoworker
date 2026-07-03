@@ -303,7 +303,7 @@ describe("createByonPortRequest", () => {
     const porting = makePorting();
     const { db, log } = makeDb([
       { data: [portRow({ status: "draft" })], error: null }, // insert
-      { data: portRow({ status: "submitted" }), error: null } // post-confirm update
+      { data: [portRow({ status: "submitted" })], error: null } // post-confirm update
     ]);
     const result = await createByonPortRequest(
       BIZ,
@@ -386,6 +386,9 @@ describe("createByonPortRequest", () => {
       support_key: "sr_1"
     });
     expect(log[1].calls).toContainEqual({ name: "eq", args: ["telnyx_order_id", "po-1"] });
+    // Refresh is conditional on the status we inserted, so a webhook that
+    // already advanced the row can't be clobbered by the confirm snapshot.
+    expect(log[1].calls).toContainEqual({ name: "eq", args: ["status", "draft"] });
   });
 
   it("omits optional fields, defaults webhook URL to localhost and status to submitted", async () => {
@@ -396,7 +399,7 @@ describe("createByonPortRequest", () => {
     });
     const { db, log } = makeDb([
       { data: [portRow({ status: "draft" })], error: null },
-      { data: portRow({ status: "submitted" }), error: null }
+      { data: [portRow({ status: "submitted" })], error: null }
     ]);
     const result = await createByonPortRequest(BIZ, baseInput(), { porting, client: db });
 
@@ -432,7 +435,7 @@ describe("createByonPortRequest", () => {
     });
     const { db, log } = makeDb([
       { data: [portRow({ status: "draft" })], error: null },
-      { data: portRow({ status: "draft" }), error: null }
+      { data: [portRow({ status: "draft" })], error: null }
     ]);
     const result = await createByonPortRequest(BIZ, baseInput(), { porting, client: db });
     expect(result.submitted).toBe(false);
@@ -456,7 +459,7 @@ describe("createByonPortRequest", () => {
     });
     const { db, log } = makeDb([
       { data: [portRow({ status: "draft" })], error: null },
-      { data: portRow({ status: "draft" }), error: null }
+      { data: [portRow({ status: "draft" })], error: null }
     ]);
     const result = await createByonPortRequest(BIZ, baseInput(), { porting, client: db });
     expect(result.submitError).toBe("boom");
@@ -483,9 +486,9 @@ describe("createByonPortRequest", () => {
     });
     const { db } = makeDb([
       { data: [portRow(), portRow({ id: "req-2" }), portRow({ id: "req-3" })], error: null },
-      { data: portRow({ status: "submitted" }), error: null },
-      { data: portRow({ id: "req-2", status: "draft" }), error: null },
-      { data: portRow({ id: "req-3", status: "draft" }), error: null }
+      { data: [portRow({ status: "submitted" })], error: null },
+      { data: [portRow({ id: "req-2", status: "draft" })], error: null },
+      { data: [portRow({ id: "req-3", status: "draft" })], error: null }
     ]);
     const result = await createByonPortRequest(BIZ, baseInput(), { porting, client: db });
     // po-1 confirmed even though po-2/po-3 failed; flag reports the batch.
@@ -531,10 +534,42 @@ describe("createByonPortRequest", () => {
     expect(result2.rows).toEqual([]);
   });
 
+  it("returns the webhook's row when a status webhook wins the race against the confirm refresh", async () => {
+    const webhookRow = portRow({
+      status: "exception",
+      status_detail: [{ code: "ACCOUNT_NUMBER_MISMATCH", description: "wrong account" }]
+    });
+    const { db, log } = makeDb([
+      { data: [portRow({ status: "draft" })], error: null }, // insert
+      { data: [], error: null }, // conditional refresh matched 0 rows
+      { data: webhookRow, error: null } // re-fetch current state
+    ]);
+    const result = await createByonPortRequest(BIZ, baseInput(), {
+      porting: makePorting(),
+      client: db
+    });
+    // The webhook's exception state survives; the confirm snapshot did not clobber it.
+    expect(result.rows).toEqual([webhookRow]);
+    expect(log[2].calls).toContainEqual({ name: "eq", args: ["telnyx_order_id", "po-1"] });
+
+    // Re-fetch coming back empty too → fall back to the inserted row.
+    const { db: db2 } = makeDb([
+      { data: [portRow({ status: "draft" })], error: null },
+      { data: [], error: null },
+      { data: null, error: null }
+    ]);
+    const result2 = await createByonPortRequest(BIZ, baseInput(), {
+      porting: makePorting(),
+      client: db2
+    });
+    expect(result2.rows).toHaveLength(1);
+    expect(result2.rows[0].status).toBe("draft");
+  });
+
   it("uses the default service client when none is injected", async () => {
     const { db } = makeDb([
       { data: [portRow({ status: "draft" })], error: null },
-      { data: portRow({ status: "submitted" }), error: null }
+      { data: [portRow({ status: "submitted" })], error: null }
     ]);
     defaultClientSpy.mockReturnValue(db);
     const result = await createByonPortRequest(BIZ, baseInput(), { porting: makePorting() });
@@ -729,13 +764,16 @@ describe("handlePortingStatusChange", () => {
       { data: portRow({ foc_at: "2026-07-01T00:00:00Z", support_key: "sr_prior" }), error: null },
       { data: portRow(), error: null }
     ]);
+    // submitted → in-process is a backward move; a newer occurred_at proves
+    // it's a genuine event rather than a delayed retry.
     await handlePortingStatusChange(
       {
         id: "po-1",
         status: { value: "in-process" },
         activation_settings: { foc_datetime_requested: "2026-07-20T13:00:00Z" }
       },
-      { client: db2 }
+      { client: db2 },
+      "2026-06-02T00:00:00Z"
     );
     expect(log2[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
       foc_at: "2026-07-20T13:00:00Z",
@@ -746,7 +784,11 @@ describe("handlePortingStatusChange", () => {
       { data: portRow({ foc_at: "2026-07-01T00:00:00Z" }), error: null },
       { data: portRow(), error: null }
     ]);
-    await handlePortingStatusChange({ id: "po-1", status: { value: "in-process" } }, { client: db3 });
+    await handlePortingStatusChange(
+      { id: "po-1", status: { value: "in-process" } },
+      { client: db3 },
+      "2026-06-02T00:00:00Z"
+    );
     expect(log3[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
       foc_at: "2026-07-01T00:00:00Z"
     });
@@ -774,11 +816,11 @@ describe("handlePortingStatusChange", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
 
     const { db: db2 } = makeDb([
-      { data: portRow({ status: "submitted" }), error: null },
-      { data: portRow({ status: "in-process" }), error: null }
+      { data: portRow({ status: "in-process" }), error: null },
+      { data: portRow({ status: "submitted" }), error: null }
     ]);
     await handlePortingStatusChange(
-      { id: "po-1", status: { value: "in-process" } },
+      { id: "po-1", status: { value: "submitted" } },
       { client: db2 }
     );
     expect(dispatchMock).not.toHaveBeenCalled();
@@ -825,17 +867,107 @@ describe("handlePortingStatusChange", () => {
     });
 
     // Status TRANSITION without details → clears stale exception codes.
+    // (exception → in-process is backward, so it needs a newer occurred_at.)
     const { db: db4, log: log4 } = makeDb([
       { data: portRow({ status: "exception", status_detail: stored }), error: null },
       { data: portRow({ status: "in-process", status_detail: null }), error: null }
     ]);
     await handlePortingStatusChange(
       { id: "po-1", status: { value: "in-process" } },
-      { client: db4 }
+      { client: db4 },
+      "2026-06-02T00:00:00Z"
     );
     expect(log4[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
       status_detail: null
     });
+  });
+
+  it("drops stale events: terminal rows never regress, backward moves need a newer occurred_at", async () => {
+    // Delayed "submitted" retry arriving after the port finished → dropped.
+    const { db, log } = makeDb([{ data: portRow({ status: "ported" }), error: null }]);
+    const result = await handlePortingStatusChange(
+      { id: "po-1", status: { value: "submitted" } },
+      { client: db }
+    );
+    expect(result).toMatchObject({ handled: true, ported: false });
+    expect(result.row?.status).toBe("ported");
+    expect(log).toHaveLength(1); // lookup only, no update
+    expect(logger.warn).toHaveBeenCalledWith(
+      "byon: dropped stale porting status event",
+      expect.objectContaining({ priorStatus: "ported", status: "submitted" })
+    );
+    expect(dispatchMock).not.toHaveBeenCalled();
+
+    // Backward move without any occurred_at → indistinguishable from a retry → dropped.
+    const { db: db2, log: log2 } = makeDb([
+      { data: portRow({ status: "exception" }), error: null }
+    ]);
+    const result2 = await handlePortingStatusChange(
+      { id: "po-1", status: { value: "submitted" } },
+      { client: db2 }
+    );
+    expect(result2.row?.status).toBe("exception");
+    expect(log2).toHaveLength(1);
+
+    // Backward move whose occurred_at predates our last write → stale → dropped.
+    const { db: db3, log: log3 } = makeDb([
+      { data: portRow({ status: "exception", updated_at: "2026-06-01T00:00:00Z" }), error: null }
+    ]);
+    await handlePortingStatusChange(
+      { id: "po-1", status: { value: "submitted" } },
+      { client: db3 },
+      "2026-05-31T00:00:00Z"
+    );
+    expect(log3).toHaveLength(1);
+
+    // Backward move but the row has no usable updated_at → can't order → dropped.
+    const { db: db4, log: log4 } = makeDb([
+      { data: portRow({ status: "exception", updated_at: null }), error: null }
+    ]);
+    await handlePortingStatusChange(
+      { id: "po-1", status: { value: "submitted" } },
+      { client: db4 },
+      "2026-06-02T00:00:00Z"
+    );
+    expect(log4).toHaveLength(1);
+
+    // Genuine recovery: backward move with a NEWER occurred_at → applied.
+    const { db: db5, log: log5 } = makeDb([
+      { data: portRow({ status: "exception", updated_at: "2026-06-01T00:00:00Z" }), error: null },
+      { data: portRow({ status: "submitted" }), error: null }
+    ]);
+    const result5 = await handlePortingStatusChange(
+      { id: "po-1", status: { value: "submitted" } },
+      { client: db5 },
+      "2026-06-02T00:00:00Z"
+    );
+    expect(result5.row?.status).toBe("submitted");
+    expect(log5[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      status: "submitted"
+    });
+
+    // Unknown PRIOR status also ranks highest, so moving off it counts as
+    // backward and needs a newer occurred_at too.
+    const { db: db7, log: log7 } = makeDb([
+      { data: portRow({ status: "weird-status" }), error: null }
+    ]);
+    await handlePortingStatusChange(
+      { id: "po-1", status: { value: "submitted" } },
+      { client: db7 }
+    );
+    expect(log7).toHaveLength(1);
+
+    // Statuses Telnyx adds later rank highest and always apply.
+    const { db: db6, log: log6 } = makeDb([
+      { data: portRow({ status: "submitted" }), error: null },
+      { data: portRow({ status: "brand-new-status" }), error: null }
+    ]);
+    const result6 = await handlePortingStatusChange(
+      { id: "po-1", status: { value: "brand-new-status" } },
+      { client: db6 }
+    );
+    expect(result6.row?.status).toBe("brand-new-status");
+    expect(log6).toHaveLength(2);
   });
 
   it("flags ported=true only on the transition into ported, using the module dispatcher", async () => {
@@ -906,7 +1038,7 @@ describe("handlePortingStatusChange", () => {
 
   it("uses the default service client when none is injected", async () => {
     const { db } = makeDb([
-      { data: portRow({ status: "submitted" }), error: null },
+      { data: portRow({ status: "draft" }), error: null },
       { data: portRow({ status: "in-process" }), error: null }
     ]);
     defaultClientSpy.mockReturnValue(db);

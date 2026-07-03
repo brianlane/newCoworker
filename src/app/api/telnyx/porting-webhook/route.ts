@@ -25,6 +25,7 @@ export const dynamic = "force-dynamic";
 type TelnyxEvent = {
   data?: {
     event_type?: string;
+    occurred_at?: string;
     payload?: PortingWebhookOrderPayload;
   };
 };
@@ -56,13 +57,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false }, { status: 400 });
   }
 
-  const eventType = event.data?.event_type ?? "";
-  if (eventType !== "porting_order.status_changed") {
+  const data = event.data ?? {};
+  if ((data.event_type ?? "") !== "porting_order.status_changed") {
     return NextResponse.json({ ok: true, ignored: true });
   }
 
   try {
-    const result = await handlePortingStatusChange(event.data?.payload ?? {});
+    const result = await handlePortingStatusChange(data.payload ?? {}, {}, data.occurred_at ?? null);
     return NextResponse.json({ ok: true, handled: result.handled, ported: result.ported });
   } catch (err) {
     logger.error("porting-webhook: failed to process status change", {

@@ -34,6 +34,7 @@ function statusEvent(payload: Record<string, unknown> = {}) {
   return JSON.stringify({
     data: {
       event_type: "porting_order.status_changed",
+      occurred_at: "2026-06-02T00:00:00Z",
       payload: { id: "po-1", status: { value: "ported" }, ...payload }
     }
   });
@@ -56,7 +57,7 @@ describe("api/telnyx/porting-webhook route", () => {
   });
 
   it("500 when TELNYX_PUBLIC_KEY is not configured", async () => {
-    vi.stubEnv("TELNYX_PUBLIC_KEY", "");
+    vi.stubEnv("TELNYX_PUBLIC_KEY", undefined);
     const res = await POST(req(statusEvent()));
     expect(res.status).toBe(500);
     expect(logger.error).toHaveBeenCalledWith(
@@ -105,12 +106,15 @@ describe("api/telnyx/porting-webhook route", () => {
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body).toMatchObject({ ok: true, handled: true, ported: true });
+    // occurred_at is forwarded so the handler can order backward moves.
     expect(handlePortingStatusChange).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "po-1", status: { value: "ported" } })
+      expect.objectContaining({ id: "po-1", status: { value: "ported" } }),
+      {},
+      "2026-06-02T00:00:00Z"
     );
   });
 
-  it("defaults the payload to {} when the event has none", async () => {
+  it("defaults the payload to {} and occurred_at to null when the event has none", async () => {
     vi.mocked(handlePortingStatusChange).mockResolvedValue({
       handled: false,
       ported: false,
@@ -120,7 +124,7 @@ describe("api/telnyx/porting-webhook route", () => {
       req(JSON.stringify({ data: { event_type: "porting_order.status_changed" } }))
     );
     expect(res.status).toBe(200);
-    expect(handlePortingStatusChange).toHaveBeenCalledWith({});
+    expect(handlePortingStatusChange).toHaveBeenCalledWith({}, {}, null);
   });
 
   it("500 (so Telnyx retries) when processing fails, tolerating non-Error throws", async () => {
