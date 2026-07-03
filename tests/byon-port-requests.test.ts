@@ -1363,11 +1363,12 @@ describe("handlePortingStatusChange", () => {
     );
   });
 
-  it("covers cancelled summary and survives dispatch failures (Error and non-Error)", async () => {
-    const { db } = makeDb([
+  it("covers cancelled summary and releases the claim when dispatch fails (Error and non-Error)", async () => {
+    const { db, log } = makeDb([
       { data: portRow({ status: "submitted" }), error: null },
-      { data: [portRow({ status: "cancelled" })], error: null },
-      { data: [portRow({ status: "cancelled", notified_status: "cancelled" })], error: null }
+      { data: [portRow({ status: "cancelled" })], error: null }, // status CAS
+      { data: [portRow({ status: "cancelled", notified_status: "cancelled" })], error: null }, // claim
+      { data: null, error: null } // claim release after the dispatch throw
     ]);
     const throwingDispatch = vi.fn(async () => {
       throw new Error("smtp down");
@@ -1384,22 +1385,42 @@ describe("handlePortingStatusChange", () => {
       "byon: status notification failed",
       expect.objectContaining({ error: "smtp down" })
     );
+    // The claim is RELEASED so a later delivery re-attempts the alert.
+    expect(log[3].calls.find((c) => c.name === "update")?.args[0]).toEqual({
+      notified_status: null
+    });
+    expect(log[3].calls).toContainEqual({ name: "eq", args: ["notified_status", "cancelled"] });
+    expect(result.row?.notified_status).toBeNull();
 
-    const { db: db2 } = makeDb([
-      { data: portRow({ status: "submitted" }), error: null },
-      { data: [portRow({ status: "cancelled" })], error: null },
-      { data: [portRow({ status: "cancelled", notified_status: "cancelled" })], error: null }
+    // Non-Error throw + a prior milestone claim → release restores it, and a
+    // release failure is logged loudly.
+    const { db: db2, log: log2 } = makeDb([
+      {
+        data: portRow({ status: "cancelled", notified_status: "exception" }),
+        error: null
+      }, // read (no-op path: status already cancelled)
+      { data: [portRow({ status: "cancelled", notified_status: "cancelled" })], error: null }, // claim
+      { data: null, error: { message: "release exploded" } } // release fails
     ]);
     const throwingDispatch2 = vi.fn(async () => {
       throw "wat";
     });
-    await handlePortingStatusChange(
+    const result2 = await handlePortingStatusChange(
       { id: "po-1", status: { value: "cancelled" } },
       { client: db2, dispatch: throwingDispatch2 as never }
     );
     expect(logger.warn).toHaveBeenCalledWith(
       "byon: status notification failed",
       expect.objectContaining({ error: "wat" })
+    );
+    // Release restores the PRE-claim notified_status ("exception").
+    expect(log2[2].calls.find((c) => c.name === "update")?.args[0]).toEqual({
+      notified_status: "exception"
+    });
+    expect(result2.row?.notified_status).toBe("exception");
+    expect(logger.error).toHaveBeenCalledWith(
+      "byon: failed to release milestone claim after alert failure",
+      expect.objectContaining({ error: "release exploded" })
     );
   });
 

@@ -628,6 +628,11 @@ async function claimByonMilestone(
     return { claimed: false, row };
   }
 
+  // Claim-then-send: the claim prevents duplicate alerts across parallel
+  // deliveries, and dispatchUrgentNotification is itself designed to never
+  // throw (per-channel try/catch, always records a notifications history
+  // row, even for failed sends). If it still throws, RELEASE the claim so a
+  // later delivery retries the alert instead of it being lost forever.
   const dispatch = deps.dispatch ?? dispatchUrgentNotification;
   try {
     await dispatch({
@@ -650,6 +655,22 @@ async function claimByonMilestone(
       status: row.status,
       error: errMessage(err)
     });
+    const { error: releaseErr } = await db
+      .from("number_port_requests")
+      .update({ notified_status: row.notified_status ?? null })
+      .eq("id", row.id)
+      .eq("notified_status", row.status);
+    if (releaseErr) {
+      logger.error("byon: failed to release milestone claim after alert failure", {
+        orderId,
+        status: row.status,
+        error: releaseErr.message
+      });
+    }
+    return {
+      claimed: false,
+      row: { ...claimedRow, notified_status: row.notified_status ?? null }
+    };
   }
   return { claimed: true, row: claimedRow };
 }
