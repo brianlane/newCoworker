@@ -9,6 +9,10 @@ vi.mock("@/lib/byon/port-requests", async (importOriginal) => {
   return { ...actual, handlePortingStatusChange: vi.fn() };
 });
 
+vi.mock("@/lib/byon/activation", () => ({
+  activatePortedNumber: vi.fn()
+}));
+
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
@@ -16,6 +20,7 @@ vi.mock("@/lib/logger", () => ({
 import { POST } from "@/app/api/telnyx/porting-webhook/route";
 import { verifyTelnyxWebhookSignature } from "@/lib/telnyx/webhook-verify";
 import { handlePortingStatusChange } from "@/lib/byon/port-requests";
+import { activatePortedNumber } from "@/lib/byon/activation";
 import { logger } from "@/lib/logger";
 
 function req(body: string) {
@@ -112,6 +117,57 @@ describe("api/telnyx/porting-webhook route", () => {
       {},
       "2026-06-02T00:00:00Z"
     );
+    // ported:true but no row → nothing to activate.
+    expect(activatePortedNumber).not.toHaveBeenCalled();
+  });
+
+  it("activates the number exactly when the ported milestone is claimed with a row", async () => {
+    const row = {
+      id: "req-1",
+      business_id: "biz-1",
+      phone_e164: "+13125550001",
+      telnyx_order_id: "po-1",
+      status: "ported"
+    };
+    vi.mocked(handlePortingStatusChange).mockResolvedValue({
+      handled: true,
+      ported: true,
+      row: row as never
+    });
+    vi.mocked(activatePortedNumber).mockResolvedValue({
+      activated: true,
+      assign: null,
+      tendlc: { kind: "registered", campaignId: "c-1" },
+      error: null
+    });
+    const res = await POST(req(statusEvent()));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body).toMatchObject({ ok: true, ported: true, activated: true });
+    expect(activatePortedNumber).toHaveBeenCalledWith(row);
+
+    // A failed activation still 200s (activation alerts + is recovered via
+    // admin tooling; a 500 would make Telnyx redeliver into a no-op).
+    vi.mocked(activatePortedNumber).mockResolvedValue({
+      activated: false,
+      assign: null,
+      tendlc: null,
+      error: "boom"
+    });
+    const res2 = await POST(req(statusEvent()));
+    expect(res2.status).toBe(200);
+    expect((await res2.json()).activated).toBe(false);
+
+    // Non-ported outcomes never trigger activation.
+    vi.mocked(activatePortedNumber).mockClear();
+    vi.mocked(handlePortingStatusChange).mockResolvedValue({
+      handled: true,
+      ported: false,
+      row: row as never
+    });
+    const res3 = await POST(req(statusEvent()));
+    expect(res3.status).toBe(200);
+    expect(activatePortedNumber).not.toHaveBeenCalled();
   });
 
   it("defaults the payload to {} and occurred_at to null when the event has none", async () => {

@@ -8,6 +8,9 @@
  *   - Handles `porting_order.status_changed`: mirrors the new status onto
  *     the matching `number_port_requests` row and alerts the owner on
  *     milestones (exception / FOC confirmed / ported / cancelled).
+ *   - On the (exactly-once) `ported` milestone, activates the number:
+ *     voice routes + messaging settings + 10DLC attach (see
+ *     src/lib/byon/activation.ts).
  *   - Everything else is acknowledged and ignored — returning non-2xx makes
  *     Telnyx retry, which is only correct for genuine processing failures.
  */
@@ -18,6 +21,7 @@ import {
   handlePortingStatusChange,
   type PortingWebhookOrderPayload
 } from "@/lib/byon/port-requests";
+import { activatePortedNumber } from "@/lib/byon/activation";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
@@ -64,7 +68,24 @@ export async function POST(request: Request) {
 
   try {
     const result = await handlePortingStatusChange(data.payload ?? {}, {}, data.occurred_at ?? null);
-    return NextResponse.json({ ok: true, handled: result.handled, ported: result.ported });
+
+    // `ported` is reported exactly once (claimed via notified_status), so
+    // this is the single place the just-ported number gets wired into the
+    // tenant's voice routes + messaging + 10DLC. activatePortedNumber never
+    // throws — a failed activation alerts the owner and is recovered via
+    // the admin assign-did tooling, not by failing the webhook (Telnyx
+    // would redeliver into the already-claimed milestone and do nothing).
+    let activated: boolean | undefined;
+    if (result.ported && result.row) {
+      activated = (await activatePortedNumber(result.row)).activated;
+    }
+
+    return NextResponse.json({
+      ok: true,
+      handled: result.handled,
+      ported: result.ported,
+      ...(activated !== undefined ? { activated } : {})
+    });
   } catch (err) {
     logger.error("porting-webhook: failed to process status change", {
       errorMessage: err instanceof Error ? err.message : String(err)
