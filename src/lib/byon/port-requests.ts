@@ -1,0 +1,506 @@
+/**
+ * Bring-your-own-number (BYON) orchestration.
+ *
+ * Sits between the dashboard API routes and the raw Telnyx porting client:
+ *   - `runPortabilityCheck`     — wizard step 1 ("can my number move?")
+ *   - `createByonPortRequest`   — wizard submit: create order → upload LOA +
+ *                                 bill → attach details → confirm → persist
+ *                                 `number_port_requests` rows
+ *   - `listByonPortRequests`    — status card data
+ *   - `cancelByonPortRequest`   — abort a not-yet-ported order
+ *   - `handlePortingStatusChange` — webhook: mirror Telnyx status onto the
+ *                                 row and alert the owner on milestones
+ *
+ * Service-role only. Owner authorization is the API route's job
+ * (requireOwner before any call here) — same trust model as `src/lib/csv`.
+ */
+
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { normalizeContactNumber } from "@/lib/telnyx/format";
+import {
+  TelnyxPortingClient,
+  type PortingOrder,
+  type PortingExceptionDetail
+} from "@/lib/telnyx/porting";
+import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
+import { logger } from "@/lib/logger";
+
+type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
+
+/** Subset of TelnyxPortingClient this module drives (injectable for tests). */
+export type PortingClientLike = Pick<
+  TelnyxPortingClient,
+  | "checkPortability"
+  | "createPortingOrder"
+  | "updatePortingOrder"
+  | "confirmPortingOrder"
+  | "cancelPortingOrder"
+  | "uploadDocument"
+>;
+
+export type ByonDeps = {
+  client?: SupabaseClient;
+  porting?: PortingClientLike;
+  dispatch?: typeof dispatchUrgentNotification;
+};
+
+export type NumberPortRequestRow = {
+  id: string;
+  business_id: string;
+  phone_e164: string;
+  telnyx_order_id: string | null;
+  status: string;
+  status_detail: PortingExceptionDetail[] | null;
+  foc_at: string | null;
+  support_key: string | null;
+  loa_document_id: string | null;
+  invoice_document_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/** 5 MB of raw bytes ≈ 6.7 MB of base64 text. */
+const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024;
+
+/** Statuses where the port is finished and cancel no longer makes sense. */
+const TERMINAL_STATUSES = new Set(["ported", "cancelled"]);
+
+/** Milestones worth an owner notification (vs. silent bookkeeping moves). */
+const NOTIFY_STATUSES = new Set(["exception", "foc-date-confirmed", "ported", "cancelled"]);
+
+function getPorting(deps: ByonDeps): PortingClientLike {
+  if (deps.porting) return deps.porting;
+  const apiKey = process.env.TELNYX_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error("TELNYX_API_KEY missing — cannot talk to the Telnyx porting API");
+  }
+  return new TelnyxPortingClient({ apiKey, userAgent: "newcoworker-byon" });
+}
+
+async function resolveDb(client?: SupabaseClient): Promise<SupabaseClient> {
+  return client ?? (await createSupabaseServiceClient());
+}
+
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Wizard-facing validation error: message is safe to show the owner. */
+export class ByonValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ByonValidationError";
+  }
+}
+
+function requireE164(raw: string): string {
+  const normalized = normalizeContactNumber(raw);
+  if (!normalized.ok) throw new ByonValidationError(normalized.reason);
+  if (!normalized.value.startsWith("+")) {
+    throw new ByonValidationError("Short codes can't be ported — enter a full phone number.");
+  }
+  return normalized.value;
+}
+
+// ---------------------------------------------------------------------------
+// Portability check
+// ---------------------------------------------------------------------------
+
+export type PortabilityCheckSummary = {
+  phoneE164: string;
+  portable: boolean;
+  /** FastPort → 1–4 business days; standard → 3–7. */
+  fastPortable: boolean;
+  etaDays: string;
+  notPortableReason: string | null;
+  carrierName: string | null;
+};
+
+export async function runPortabilityCheck(
+  phoneRaw: string,
+  deps: ByonDeps = {}
+): Promise<PortabilityCheckSummary> {
+  const phoneE164 = requireE164(phoneRaw);
+  const porting = getPorting(deps);
+  const results = await porting.checkPortability([phoneE164]);
+  const result = results.find((r) => r.phone_number === phoneE164) ?? results[0];
+  if (!result) {
+    return {
+      phoneE164,
+      portable: false,
+      fastPortable: false,
+      etaDays: "",
+      notPortableReason: "Telnyx could not evaluate this number.",
+      carrierName: null
+    };
+  }
+  const portable = result.portable === true;
+  const fastPortable = portable && result.fast_portable === true;
+  return {
+    phoneE164,
+    portable,
+    fastPortable,
+    etaDays: portable ? (fastPortable ? "1-4 business days" : "3-7 business days") : "",
+    notPortableReason: portable ? null : (result.not_portable_reason ?? "Not portable"),
+    carrierName: result.carrier_name ?? null
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Create (wizard submit)
+// ---------------------------------------------------------------------------
+
+export type ByonDocumentInput = {
+  /** Raw file bytes, base64-encoded (no data: prefix). */
+  base64: string;
+  filename: string;
+};
+
+export type CreateByonPortRequestInput = {
+  phone: string;
+  carrier: {
+    /** Business name exactly as it appears on the losing carrier's account. */
+    entityName: string;
+    /** Person authorized to port (matches the LOA signature). */
+    authorizedName: string;
+    accountNumber: string;
+    pin?: string;
+    billingPhone?: string;
+  };
+  serviceAddress: {
+    street: string;
+    extended?: string;
+    city: string;
+    state: string;
+    zip: string;
+    /** Defaults to US. */
+    country?: string;
+  };
+  loa: ByonDocumentInput;
+  bill: ByonDocumentInput;
+  /** Optional ISO datetime for the requested FOC (activation) date. */
+  focDatetimeRequested?: string;
+};
+
+export type CreateByonPortRequestResult = {
+  rows: NumberPortRequestRow[];
+  /** False when Telnyx accepted the draft but rejected the confirm step. */
+  submitted: boolean;
+  /** Owner-facing explanation when submitted is false. */
+  submitError: string | null;
+};
+
+function validateDocument(doc: ByonDocumentInput, label: string): void {
+  if (!doc?.base64?.trim()) {
+    throw new ByonValidationError(`Upload the ${label} PDF first.`);
+  }
+  if (!doc.filename?.trim()) {
+    throw new ByonValidationError(`The ${label} upload is missing a filename.`);
+  }
+  // base64 inflates bytes by 4/3 — compare in encoded space to avoid decoding.
+  if (doc.base64.length > Math.ceil((MAX_DOCUMENT_BYTES * 4) / 3)) {
+    throw new ByonValidationError(`The ${label} file is too large (max 5 MB).`);
+  }
+}
+
+function requireField(value: string | undefined, message: string): string {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) throw new ByonValidationError(message);
+  return trimmed;
+}
+
+export async function createByonPortRequest(
+  businessId: string,
+  input: CreateByonPortRequestInput,
+  deps: ByonDeps = {}
+): Promise<CreateByonPortRequestResult> {
+  const phoneE164 = requireE164(input.phone);
+  const entityName = requireField(
+    input.carrier?.entityName,
+    "Enter the business name on your current carrier's account."
+  );
+  const authorizedName = requireField(
+    input.carrier?.authorizedName,
+    "Enter the name of the person authorized to port this number."
+  );
+  const accountNumber = requireField(
+    input.carrier?.accountNumber,
+    "Enter your current carrier account number."
+  );
+  const street = requireField(input.serviceAddress?.street, "Enter the service street address.");
+  const city = requireField(input.serviceAddress?.city, "Enter the service address city.");
+  const state = requireField(input.serviceAddress?.state, "Enter the service address state.");
+  const zip = requireField(input.serviceAddress?.zip, "Enter the service address ZIP code.");
+  validateDocument(input.loa, "signed LOA");
+  validateDocument(input.bill, "recent bill");
+
+  const porting = getPorting(deps);
+  const db = await resolveDb(deps.client);
+
+  const orders = await porting.createPortingOrder({
+    phoneNumbers: [phoneE164],
+    customerReference: `byon:${businessId}`
+  });
+  if (orders.length === 0) {
+    throw new Error("Telnyx did not return a porting order for this number.");
+  }
+
+  // Telnyx deletes unlinked documents after 30 minutes — upload right before
+  // the PATCH that links them.
+  const [loaDoc, billDoc] = await Promise.all([
+    porting.uploadDocument({
+      base64: input.loa.base64,
+      filename: input.loa.filename,
+      customerReference: `byon:${businessId}:loa`
+    }),
+    porting.uploadDocument({
+      base64: input.bill.base64,
+      filename: input.bill.filename,
+      customerReference: `byon:${businessId}:bill`
+    })
+  ]);
+
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+  const webhookUrl = `${appUrl}/api/telnyx/porting-webhook`;
+
+  let submitted = true;
+  let submitError: string | null = null;
+  const finalOrders: PortingOrder[] = [];
+
+  for (const order of orders) {
+    await porting.updatePortingOrder(order.id, {
+      documents: { loa: loaDoc.id, invoice: billDoc.id },
+      endUser: {
+        admin: {
+          entity_name: entityName,
+          auth_person_name: authorizedName,
+          account_number: accountNumber,
+          ...(input.carrier.pin?.trim() ? { pin_passcode: input.carrier.pin.trim() } : {}),
+          ...(input.carrier.billingPhone?.trim()
+            ? { billing_phone_number: requireE164(input.carrier.billingPhone) }
+            : {})
+        },
+        location: {
+          street_address: street,
+          ...(input.serviceAddress.extended?.trim()
+            ? { extended_address: input.serviceAddress.extended.trim() }
+            : {}),
+          locality: city,
+          administrative_area: state,
+          postal_code: zip,
+          country_code: (input.serviceAddress.country ?? "US").toUpperCase()
+        }
+      },
+      misc: { type: "full" },
+      ...(input.focDatetimeRequested ? { focDatetimeRequested: input.focDatetimeRequested } : {}),
+      webhookUrl
+    });
+
+    try {
+      finalOrders.push(await porting.confirmPortingOrder(order.id));
+    } catch (err) {
+      // Confirm can fail on carrier-side validation (e.g. requirements not
+      // met). Keep the draft + documents so the owner can fix and resubmit
+      // instead of losing everything they typed.
+      submitted = false;
+      submitError = errMessage(err);
+      logger.warn("byon: porting order confirm failed; kept as draft", {
+        businessId,
+        orderId: order.id,
+        error: submitError
+      });
+      finalOrders.push(order);
+    }
+  }
+
+  const nowIso = new Date().toISOString();
+  const inserts = finalOrders.map((order) => ({
+    business_id: businessId,
+    phone_e164: phoneE164,
+    telnyx_order_id: order.id,
+    status: order.status?.value ?? (submitted ? "submitted" : "draft"),
+    status_detail: order.status?.details ?? null,
+    foc_at:
+      order.activation_settings?.foc_datetime_actual ??
+      order.activation_settings?.foc_datetime_requested ??
+      null,
+    support_key: order.support_key ?? null,
+    loa_document_id: loaDoc.id,
+    invoice_document_id: billDoc.id,
+    created_at: nowIso,
+    updated_at: nowIso
+  }));
+
+  const { data, error } = await db.from("number_port_requests").insert(inserts).select();
+  if (error) throw new Error(`createByonPortRequest: ${error.message}`);
+  return { rows: (data ?? []) as NumberPortRequestRow[], submitted, submitError };
+}
+
+// ---------------------------------------------------------------------------
+// List / cancel
+// ---------------------------------------------------------------------------
+
+export async function listByonPortRequests(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<NumberPortRequestRow[]> {
+  const db = await resolveDb(client);
+  const { data, error } = await db
+    .from("number_port_requests")
+    .select("*")
+    .eq("business_id", businessId)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(`listByonPortRequests: ${error.message}`);
+  return (data ?? []) as NumberPortRequestRow[];
+}
+
+export async function cancelByonPortRequest(
+  businessId: string,
+  requestId: string,
+  deps: ByonDeps = {}
+): Promise<NumberPortRequestRow | null> {
+  const db = await resolveDb(deps.client);
+  const { data: row, error } = await db
+    .from("number_port_requests")
+    .select("*")
+    .eq("id", requestId)
+    .eq("business_id", businessId)
+    .maybeSingle();
+  if (error) throw new Error(`cancelByonPortRequest: ${error.message}`);
+  if (!row) return null;
+
+  const existing = row as NumberPortRequestRow;
+  if (TERMINAL_STATUSES.has(existing.status)) {
+    throw new ByonValidationError(
+      existing.status === "ported"
+        ? "This number already finished porting — it can't be cancelled."
+        : "This request is already cancelled."
+    );
+  }
+
+  let nextStatus = "cancelled";
+  if (existing.telnyx_order_id) {
+    const porting = getPorting(deps);
+    const order = await porting.cancelPortingOrder(existing.telnyx_order_id);
+    // In-flight ports go through cancel-pending before the carrier confirms.
+    nextStatus = order.status?.value ?? "cancel-pending";
+  }
+
+  const { data: updated, error: updateErr } = await db
+    .from("number_port_requests")
+    .update({ status: nextStatus, updated_at: new Date().toISOString() })
+    .eq("id", requestId)
+    .eq("business_id", businessId)
+    .select()
+    .single();
+  if (updateErr) throw new Error(`cancelByonPortRequest: ${updateErr.message}`);
+  return updated as NumberPortRequestRow;
+}
+
+// ---------------------------------------------------------------------------
+// Webhook: porting_order.status_changed
+// ---------------------------------------------------------------------------
+
+/** The `data.payload` of a porting_order.status_changed webhook. */
+export type PortingWebhookOrderPayload = {
+  id?: string;
+  status?: { value?: string; details?: PortingExceptionDetail[] };
+  activation_settings?: {
+    foc_datetime_actual?: string | null;
+    foc_datetime_requested?: string | null;
+  };
+  support_key?: string | null;
+};
+
+export type PortingStatusChangeResult = {
+  /** False when no number_port_requests row matches the order id. */
+  handled: boolean;
+  /** True exactly when this event moved the request into `ported`. */
+  ported: boolean;
+  row: NumberPortRequestRow | null;
+};
+
+function statusSummary(status: string, phoneE164: string): string {
+  switch (status) {
+    case "exception":
+      return `Action needed on your number port for ${phoneE164}`;
+    case "foc-date-confirmed":
+      return `Port date confirmed for ${phoneE164}`;
+    case "ported":
+      return `Your number ${phoneE164} finished porting`;
+    default:
+      return `Your number port for ${phoneE164} was cancelled`;
+  }
+}
+
+export async function handlePortingStatusChange(
+  payload: PortingWebhookOrderPayload,
+  deps: ByonDeps = {}
+): Promise<PortingStatusChangeResult> {
+  const orderId = payload.id?.trim();
+  const status = payload.status?.value?.trim();
+  if (!orderId || !status) return { handled: false, ported: false, row: null };
+
+  const db = await resolveDb(deps.client);
+  const { data: existing, error } = await db
+    .from("number_port_requests")
+    .select("*")
+    .eq("telnyx_order_id", orderId)
+    .maybeSingle();
+  if (error) throw new Error(`handlePortingStatusChange: ${error.message}`);
+  if (!existing) {
+    logger.warn("byon: porting webhook for unknown order", { orderId, status });
+    return { handled: false, ported: false, row: null };
+  }
+
+  const prior = existing as NumberPortRequestRow;
+  const focAt =
+    payload.activation_settings?.foc_datetime_actual ??
+    payload.activation_settings?.foc_datetime_requested ??
+    prior.foc_at;
+
+  const { data: updated, error: updateErr } = await db
+    .from("number_port_requests")
+    .update({
+      status,
+      status_detail: payload.status?.details ?? null,
+      foc_at: focAt,
+      support_key: payload.support_key ?? prior.support_key,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", prior.id)
+    .select()
+    .single();
+  if (updateErr) throw new Error(`handlePortingStatusChange: ${updateErr.message}`);
+  const row = updated as NumberPortRequestRow;
+
+  // Only alert on transitions into a milestone — Telnyx re-delivers webhooks,
+  // and repeats of the same status must not re-ping the owner.
+  if (status !== prior.status && NOTIFY_STATUSES.has(status)) {
+    const dispatch = deps.dispatch ?? dispatchUrgentNotification;
+    try {
+      await dispatch({
+        businessId: prior.business_id,
+        summary: statusSummary(status, prior.phone_e164),
+        kind: "byon_port",
+        payload: {
+          phone_e164: prior.phone_e164,
+          port_request_id: prior.id,
+          telnyx_order_id: orderId,
+          status,
+          status_detail: payload.status?.details ?? [],
+          foc_at: focAt
+        }
+      });
+    } catch (err) {
+      // Never fail the webhook (Telnyx would retry) because an alert didn't send.
+      logger.warn("byon: status notification failed", {
+        orderId,
+        status,
+        error: errMessage(err)
+      });
+    }
+  }
+
+  return { handled: true, ported: status === "ported" && prior.status !== "ported", row };
+}

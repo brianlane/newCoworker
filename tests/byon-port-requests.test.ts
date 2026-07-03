@@ -1,0 +1,760 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const defaultClientSpy = vi.fn();
+// Mock the default-client factory so calls WITHOUT the `client` dep exercise
+// the `client ?? (await createSupabaseServiceClient())` fallback.
+vi.mock("@/lib/supabase/server", () => ({
+  createSupabaseServiceClient: vi.fn(async () => defaultClientSpy())
+}));
+
+vi.mock("@/lib/notifications/dispatch", () => ({
+  dispatchUrgentNotification: vi.fn(async () => ({ results: [] }))
+}));
+
+vi.mock("@/lib/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+}));
+
+import {
+  ByonValidationError,
+  cancelByonPortRequest,
+  createByonPortRequest,
+  handlePortingStatusChange,
+  listByonPortRequests,
+  runPortabilityCheck,
+  type CreateByonPortRequestInput,
+  type PortingClientLike
+} from "@/lib/byon/port-requests";
+import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
+import { logger } from "@/lib/logger";
+
+/**
+ * Coverage for src/lib/byon/port-requests.ts. Same mocked-PostgREST approach
+ * as tests/csv-contacts.test.ts: a chainable builder that records calls and
+ * pops scripted `{ data, error }` results at each terminal await.
+ */
+
+const BIZ = "00000000-0000-0000-0000-000000000001";
+
+type CallLog = { name: string; args: unknown[] };
+type Scripted = { data?: unknown; error?: unknown };
+
+function makeDb(results: Scripted[]) {
+  const log: { table: string; calls: CallLog[] }[] = [];
+  let idx = 0;
+  const next = () => results[idx++] ?? { data: null, error: null };
+  const from = (table: string) => {
+    const calls: CallLog[] = [];
+    log.push({ table, calls });
+    const builder: Record<string, unknown> = {};
+    for (const m of ["select", "insert", "update", "eq", "order"]) {
+      builder[m] = (...args: unknown[]) => {
+        calls.push({ name: m, args });
+        return builder;
+      };
+    }
+    for (const terminal of ["maybeSingle", "single"]) {
+      builder[terminal] = async () => {
+        calls.push({ name: terminal, args: [] });
+        return next();
+      };
+    }
+    // Chains awaited without a terminal method resolve here.
+    builder["then"] = (resolve: (v: unknown) => unknown) =>
+      Promise.resolve(next()).then(resolve);
+    return builder;
+  };
+  return { db: { from } as never, log };
+}
+
+function makePorting(overrides: Partial<Record<keyof PortingClientLike, unknown>> = {}) {
+  return {
+    checkPortability: vi.fn(async () => [
+      { phone_number: "+13125550001", portable: true, fast_portable: true }
+    ]),
+    createPortingOrder: vi.fn(async () => [
+      { id: "po-1", status: { value: "draft", details: [] }, support_key: "sr_1" }
+    ]),
+    updatePortingOrder: vi.fn(async () => ({ id: "po-1" })),
+    confirmPortingOrder: vi.fn(async () => ({
+      id: "po-1",
+      status: { value: "submitted", details: [] },
+      support_key: "sr_1",
+      activation_settings: { foc_datetime_requested: "2026-07-20T13:00:00Z" }
+    })),
+    cancelPortingOrder: vi.fn(async () => ({ id: "po-1", status: { value: "cancel-pending" } })),
+    uploadDocument: vi.fn(async ({ filename }: { filename: string }) => ({
+      id: filename.startsWith("loa") ? "doc-loa" : "doc-bill"
+    })),
+    ...overrides
+  } as unknown as PortingClientLike;
+}
+
+function baseInput(overrides: Partial<CreateByonPortRequestInput> = {}): CreateByonPortRequestInput {
+  return {
+    phone: "+13125550001",
+    carrier: {
+      entityName: "Acme LLC",
+      authorizedName: "Jane Doe",
+      accountNumber: "ACC-42"
+    },
+    serviceAddress: {
+      street: "311 W Superior St",
+      city: "Chicago",
+      state: "IL",
+      zip: "60654"
+    },
+    loa: { base64: "JVBERi0xLjQ=", filename: "loa.pdf" },
+    bill: { base64: "JVBERi0xLjQ=", filename: "bill.pdf" },
+    ...overrides
+  };
+}
+
+function portRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "req-1",
+    business_id: BIZ,
+    phone_e164: "+13125550001",
+    telnyx_order_id: "po-1",
+    status: "submitted",
+    status_detail: null,
+    foc_at: null,
+    support_key: "sr_1",
+    loa_document_id: "doc-loa",
+    invoice_document_id: "doc-bill",
+    created_at: "2026-06-01T00:00:00Z",
+    updated_at: "2026-06-01T00:00:00Z",
+    ...overrides
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
+
+describe("runPortabilityCheck", () => {
+  it("rejects unparseable numbers and short codes with owner-facing errors", async () => {
+    await expect(runPortabilityCheck("hello", { porting: makePorting() })).rejects.toThrow(
+      ByonValidationError
+    );
+    await expect(runPortabilityCheck("12345", { porting: makePorting() })).rejects.toThrow(
+      /Short codes can't be ported/
+    );
+  });
+
+  it("returns fast-port ETA for portable + fast numbers", async () => {
+    const porting = makePorting();
+    const summary = await runPortabilityCheck("(312) 555-0001", { porting });
+    expect(summary).toEqual({
+      phoneE164: "+13125550001",
+      portable: true,
+      fastPortable: true,
+      etaDays: "1-4 business days",
+      notPortableReason: null,
+      carrierName: null
+    });
+    expect(porting.checkPortability).toHaveBeenCalledWith(["+13125550001"]);
+  });
+
+  it("returns the standard ETA when portable but not fast, keeping the carrier name", async () => {
+    const porting = makePorting({
+      checkPortability: vi.fn(async () => [
+        {
+          phone_number: "+13125550001",
+          portable: true,
+          fast_portable: false,
+          carrier_name: "Old Carrier"
+        }
+      ])
+    });
+    const summary = await runPortabilityCheck("+13125550001", { porting });
+    expect(summary.fastPortable).toBe(false);
+    expect(summary.etaDays).toBe("3-7 business days");
+    expect(summary.carrierName).toBe("Old Carrier");
+  });
+
+  it("reports the not-portable reason (with a fallback when Telnyx omits it)", async () => {
+    const porting = makePorting({
+      checkPortability: vi.fn(async () => [
+        {
+          phone_number: "+13125550001",
+          portable: false,
+          fast_portable: false,
+          not_portable_reason: "no_coverage"
+        }
+      ])
+    });
+    const summary = await runPortabilityCheck("+13125550001", { porting });
+    expect(summary.portable).toBe(false);
+    expect(summary.etaDays).toBe("");
+    expect(summary.notPortableReason).toBe("no_coverage");
+
+    const porting2 = makePorting({
+      checkPortability: vi.fn(async () => [
+        { phone_number: "+13125550001", portable: false, fast_portable: false }
+      ])
+    });
+    const summary2 = await runPortabilityCheck("+13125550001", { porting: porting2 });
+    expect(summary2.notPortableReason).toBe("Not portable");
+  });
+
+  it("falls back to the first result when phone_number doesn't echo back, and handles empty results", async () => {
+    const porting = makePorting({
+      checkPortability: vi.fn(async () => [
+        { phone_number: "13125550001", portable: true, fast_portable: false }
+      ])
+    });
+    const summary = await runPortabilityCheck("+13125550001", { porting });
+    expect(summary.portable).toBe(true);
+
+    const porting2 = makePorting({ checkPortability: vi.fn(async () => []) });
+    const summary2 = await runPortabilityCheck("+13125550001", { porting: porting2 });
+    expect(summary2.portable).toBe(false);
+    expect(summary2.notPortableReason).toBe("Telnyx could not evaluate this number.");
+  });
+
+  it("builds a real Telnyx client from TELNYX_API_KEY when no client is injected", async () => {
+    vi.stubEnv("TELNYX_API_KEY", "test-key");
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [{ phone_number: "+13125550001", portable: true, fast_portable: true }]
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    const summary = await runPortabilityCheck("+13125550001");
+    expect(summary.portable).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledOnce();
+  });
+
+  it("throws when TELNYX_API_KEY is missing and no client is injected", async () => {
+    vi.stubEnv("TELNYX_API_KEY", "");
+    await expect(runPortabilityCheck("+13125550001")).rejects.toThrow(/TELNYX_API_KEY missing/);
+  });
+});
+
+describe("createByonPortRequest", () => {
+  it("rejects each missing required field with a specific message", async () => {
+    const deps = { porting: makePorting(), client: makeDb([]).db };
+    const cases: [Partial<CreateByonPortRequestInput>, RegExp][] = [
+      // Absent field (undefined, not just blank) → covers the `value ?? ""` arm.
+      [{ carrier: {} as CreateByonPortRequestInput["carrier"] }, /business name/],
+      [{ carrier: { entityName: " ", authorizedName: "J", accountNumber: "A" } }, /business name/],
+      [{ carrier: { entityName: "E", authorizedName: "", accountNumber: "A" } }, /authorized to port/],
+      [{ carrier: { entityName: "E", authorizedName: "J", accountNumber: "" } }, /account number/],
+      [
+        { serviceAddress: { street: "", city: "C", state: "S", zip: "Z" } },
+        /street address/
+      ],
+      [{ serviceAddress: { street: "St", city: "", state: "S", zip: "Z" } }, /city/],
+      [{ serviceAddress: { street: "St", city: "C", state: "", zip: "Z" } }, /state/],
+      [{ serviceAddress: { street: "St", city: "C", state: "S", zip: "" } }, /ZIP/],
+      [{ loa: { base64: "", filename: "loa.pdf" } }, /Upload the signed LOA/],
+      [{ loa: { base64: "AAAA", filename: " " } }, /missing a filename/],
+      [{ bill: { base64: "", filename: "bill.pdf" } }, /Upload the recent bill/]
+    ];
+    for (const [override, msg] of cases) {
+      await expect(createByonPortRequest(BIZ, baseInput(override), deps)).rejects.toThrow(msg);
+    }
+  });
+
+  it("rejects documents over the 5 MB cap", async () => {
+    const huge = "A".repeat(Math.ceil((5 * 1024 * 1024 * 4) / 3) + 1);
+    await expect(
+      createByonPortRequest(BIZ, baseInput({ loa: { base64: huge, filename: "loa.pdf" } }), {
+        porting: makePorting(),
+        client: makeDb([]).db
+      })
+    ).rejects.toThrow(/too large/);
+  });
+
+  it("throws when Telnyx returns no orders", async () => {
+    const porting = makePorting({ createPortingOrder: vi.fn(async () => []) });
+    await expect(
+      createByonPortRequest(BIZ, baseInput(), { porting, client: makeDb([]).db })
+    ).rejects.toThrow(/did not return a porting order/);
+  });
+
+  it("creates, uploads docs, patches with full details, confirms, and persists the row", async () => {
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://app.example.com/");
+    const porting = makePorting();
+    const { db, log } = makeDb([{ data: [portRow()], error: null }]);
+    const result = await createByonPortRequest(
+      BIZ,
+      baseInput({
+        carrier: {
+          entityName: "Acme LLC",
+          authorizedName: "Jane Doe",
+          accountNumber: "ACC-42",
+          pin: " 1234 ",
+          billingPhone: "312-555-0001"
+        },
+        serviceAddress: {
+          street: "311 W Superior St",
+          extended: " Suite 400 ",
+          city: "Chicago",
+          state: "IL",
+          zip: "60654",
+          country: "us"
+        },
+        focDatetimeRequested: "2026-07-20T13:00:00Z"
+      }),
+      { porting, client: db }
+    );
+
+    expect(result.submitted).toBe(true);
+    expect(result.submitError).toBeNull();
+    expect(result.rows).toHaveLength(1);
+
+    expect(porting.createPortingOrder).toHaveBeenCalledWith({
+      phoneNumbers: ["+13125550001"],
+      customerReference: `byon:${BIZ}`
+    });
+    expect(porting.uploadDocument).toHaveBeenCalledTimes(2);
+    expect(porting.updatePortingOrder).toHaveBeenCalledWith("po-1", {
+      documents: { loa: "doc-loa", invoice: "doc-bill" },
+      endUser: {
+        admin: {
+          entity_name: "Acme LLC",
+          auth_person_name: "Jane Doe",
+          account_number: "ACC-42",
+          pin_passcode: "1234",
+          billing_phone_number: "+13125550001"
+        },
+        location: {
+          street_address: "311 W Superior St",
+          extended_address: "Suite 400",
+          locality: "Chicago",
+          administrative_area: "IL",
+          postal_code: "60654",
+          country_code: "US"
+        }
+      },
+      misc: { type: "full" },
+      focDatetimeRequested: "2026-07-20T13:00:00Z",
+      webhookUrl: "https://app.example.com/api/telnyx/porting-webhook"
+    });
+    expect(porting.confirmPortingOrder).toHaveBeenCalledWith("po-1");
+
+    const insertCall = log[0].calls.find((c) => c.name === "insert");
+    const inserted = (insertCall?.args[0] as Record<string, unknown>[])[0];
+    expect(inserted).toMatchObject({
+      business_id: BIZ,
+      phone_e164: "+13125550001",
+      telnyx_order_id: "po-1",
+      status: "submitted",
+      foc_at: "2026-07-20T13:00:00Z",
+      support_key: "sr_1",
+      loa_document_id: "doc-loa",
+      invoice_document_id: "doc-bill"
+    });
+  });
+
+  it("omits optional fields and defaults webhook URL to localhost", async () => {
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", undefined);
+    const porting = makePorting({
+      confirmPortingOrder: vi.fn(async () => ({ id: "po-1" }))
+    });
+    const { db, log } = makeDb([{ data: null, error: null }]);
+    const result = await createByonPortRequest(BIZ, baseInput(), { porting, client: db });
+
+    // Confirm succeeded but returned no status/settings → fallbacks kick in.
+    expect(result.rows).toEqual([]);
+    const patch = vi.mocked(porting.updatePortingOrder).mock.calls[0][1];
+    expect(patch.endUser?.admin).not.toHaveProperty("pin_passcode");
+    expect(patch.endUser?.admin).not.toHaveProperty("billing_phone_number");
+    expect(patch.endUser?.location).not.toHaveProperty("extended_address");
+    expect(patch.endUser?.location?.country_code).toBe("US");
+    expect(patch).not.toHaveProperty("focDatetimeRequested");
+    expect(patch.webhookUrl).toBe("http://localhost:3000/api/telnyx/porting-webhook");
+
+    const insertCall = log[0].calls.find((c) => c.name === "insert");
+    const inserted = (insertCall?.args[0] as Record<string, unknown>[])[0];
+    expect(inserted).toMatchObject({
+      status: "submitted",
+      status_detail: null,
+      foc_at: null,
+      support_key: null
+    });
+  });
+
+  it("keeps the draft when confirm fails and reports the submit error", async () => {
+    const porting = makePorting({
+      confirmPortingOrder: vi.fn(async () => {
+        throw new Error("requirements not met");
+      })
+    });
+    const { db, log } = makeDb([{ data: [portRow({ status: "draft" })], error: null }]);
+    const result = await createByonPortRequest(BIZ, baseInput(), { porting, client: db });
+    expect(result.submitted).toBe(false);
+    expect(result.submitError).toBe("requirements not met");
+    expect(logger.warn).toHaveBeenCalledWith(
+      "byon: porting order confirm failed; kept as draft",
+      expect.objectContaining({ orderId: "po-1" })
+    );
+    const insertCall = log[0].calls.find((c) => c.name === "insert");
+    const inserted = (insertCall?.args[0] as Record<string, unknown>[])[0];
+    // Draft order snapshot (with its own status) is what gets persisted.
+    expect(inserted).toMatchObject({ status: "draft" });
+  });
+
+  it("stringifies non-Error confirm failures and falls back to 'draft' when the order has no status", async () => {
+    const porting = makePorting({
+      createPortingOrder: vi.fn(async () => [{ id: "po-1" }]),
+      confirmPortingOrder: vi.fn(async () => {
+        throw "boom";
+      })
+    });
+    const { db, log } = makeDb([{ data: [], error: null }]);
+    const result = await createByonPortRequest(BIZ, baseInput(), { porting, client: db });
+    expect(result.submitError).toBe("boom");
+    const insertCall = log[0].calls.find((c) => c.name === "insert");
+    const inserted = (insertCall?.args[0] as Record<string, unknown>[])[0];
+    expect(inserted).toMatchObject({ status: "draft" });
+  });
+
+  it("throws when the insert fails", async () => {
+    const { db } = makeDb([{ data: null, error: { message: "insert exploded" } }]);
+    await expect(
+      createByonPortRequest(BIZ, baseInput(), { porting: makePorting(), client: db })
+    ).rejects.toThrow(/createByonPortRequest: insert exploded/);
+  });
+
+  it("uses the default service client when none is injected", async () => {
+    const { db } = makeDb([{ data: [portRow()], error: null }]);
+    defaultClientSpy.mockReturnValue(db);
+    const result = await createByonPortRequest(BIZ, baseInput(), { porting: makePorting() });
+    expect(result.rows).toHaveLength(1);
+    expect(defaultClientSpy).toHaveBeenCalledOnce();
+  });
+});
+
+describe("listByonPortRequests", () => {
+  it("lists a business's requests newest-first", async () => {
+    const { db, log } = makeDb([{ data: [portRow()], error: null }]);
+    const rows = await listByonPortRequests(BIZ, db);
+    expect(rows).toHaveLength(1);
+    expect(log[0].table).toBe("number_port_requests");
+    expect(log[0].calls).toContainEqual({ name: "eq", args: ["business_id", BIZ] });
+    expect(log[0].calls).toContainEqual({
+      name: "order",
+      args: ["created_at", { ascending: false }]
+    });
+  });
+
+  it("returns [] when data is null, throws on error, and defaults the client", async () => {
+    const { db } = makeDb([{ data: null, error: null }]);
+    defaultClientSpy.mockReturnValue(db);
+    expect(await listByonPortRequests(BIZ)).toEqual([]);
+
+    const { db: db2 } = makeDb([{ data: null, error: { message: "list exploded" } }]);
+    await expect(listByonPortRequests(BIZ, db2)).rejects.toThrow(
+      /listByonPortRequests: list exploded/
+    );
+  });
+});
+
+describe("cancelByonPortRequest", () => {
+  it("returns null when the row doesn't exist and throws on lookup errors", async () => {
+    const { db } = makeDb([{ data: null, error: null }]);
+    expect(await cancelByonPortRequest(BIZ, "req-404", { client: db })).toBeNull();
+
+    const { db: db2 } = makeDb([{ data: null, error: { message: "lookup exploded" } }]);
+    await expect(cancelByonPortRequest(BIZ, "req-1", { client: db2 })).rejects.toThrow(
+      /cancelByonPortRequest: lookup exploded/
+    );
+  });
+
+  it("refuses to cancel terminal requests with status-specific messages", async () => {
+    const { db } = makeDb([{ data: portRow({ status: "ported" }), error: null }]);
+    await expect(cancelByonPortRequest(BIZ, "req-1", { client: db })).rejects.toThrow(
+      /already finished porting/
+    );
+
+    const { db: db2 } = makeDb([{ data: portRow({ status: "cancelled" }), error: null }]);
+    await expect(cancelByonPortRequest(BIZ, "req-1", { client: db2 })).rejects.toThrow(
+      /already cancelled/
+    );
+  });
+
+  it("cancels the Telnyx order and mirrors its returned status", async () => {
+    const porting = makePorting();
+    const { db } = makeDb([
+      { data: portRow(), error: null },
+      { data: portRow({ status: "cancel-pending" }), error: null }
+    ]);
+    const updated = await cancelByonPortRequest(BIZ, "req-1", { client: db, porting });
+    expect(porting.cancelPortingOrder).toHaveBeenCalledWith("po-1");
+    expect(updated?.status).toBe("cancel-pending");
+  });
+
+  it("falls back to cancel-pending when Telnyx omits a status, and to cancelled without an order id", async () => {
+    const porting = makePorting({ cancelPortingOrder: vi.fn(async () => ({ id: "po-1" })) });
+    const { db, log } = makeDb([
+      { data: portRow(), error: null },
+      { data: portRow({ status: "cancel-pending" }), error: null }
+    ]);
+    await cancelByonPortRequest(BIZ, "req-1", { client: db, porting });
+    const updateCall = log[1].calls.find((c) => c.name === "update");
+    expect(updateCall?.args[0]).toMatchObject({ status: "cancel-pending" });
+
+    // Dead draft with no Telnyx order: no API call, straight to cancelled.
+    const porting2 = makePorting();
+    const { db: db2, log: log2 } = makeDb([
+      { data: portRow({ telnyx_order_id: null, status: "draft" }), error: null },
+      { data: portRow({ status: "cancelled" }), error: null }
+    ]);
+    const updated = await cancelByonPortRequest(BIZ, "req-1", { client: db2, porting: porting2 });
+    expect(porting2.cancelPortingOrder).not.toHaveBeenCalled();
+    expect(updated?.status).toBe("cancelled");
+    const updateCall2 = log2[1].calls.find((c) => c.name === "update");
+    expect(updateCall2?.args[0]).toMatchObject({ status: "cancelled" });
+  });
+
+  it("throws when the status update fails", async () => {
+    const { db } = makeDb([
+      { data: portRow({ telnyx_order_id: null }), error: null },
+      { data: null, error: { message: "update exploded" } }
+    ]);
+    await expect(cancelByonPortRequest(BIZ, "req-1", { client: db })).rejects.toThrow(
+      /cancelByonPortRequest: update exploded/
+    );
+  });
+});
+
+describe("handlePortingStatusChange", () => {
+  const dispatchMock = vi.mocked(dispatchUrgentNotification);
+
+  it("ignores payloads without an order id or status", async () => {
+    expect(await handlePortingStatusChange({}, { client: makeDb([]).db })).toEqual({
+      handled: false,
+      ported: false,
+      row: null
+    });
+    expect(
+      await handlePortingStatusChange({ id: "po-1" }, { client: makeDb([]).db })
+    ).toMatchObject({ handled: false });
+    expect(
+      await handlePortingStatusChange({ status: { value: "ported" } }, { client: makeDb([]).db })
+    ).toMatchObject({ handled: false });
+  });
+
+  it("warns and skips when no row matches the order, throws on lookup errors", async () => {
+    const { db } = makeDb([{ data: null, error: null }]);
+    const result = await handlePortingStatusChange(
+      { id: "po-unknown", status: { value: "ported" } },
+      { client: db }
+    );
+    expect(result.handled).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "byon: porting webhook for unknown order",
+      expect.objectContaining({ orderId: "po-unknown" })
+    );
+
+    const { db: db2 } = makeDb([{ data: null, error: { message: "lookup exploded" } }]);
+    await expect(
+      handlePortingStatusChange({ id: "po-1", status: { value: "ported" } }, { client: db2 })
+    ).rejects.toThrow(/handlePortingStatusChange: lookup exploded/);
+  });
+
+  it("mirrors the status onto the row and notifies on a milestone transition", async () => {
+    const details = [{ code: "ACCOUNT_NUMBER_MISMATCH", description: "wrong account" }];
+    const { db, log } = makeDb([
+      { data: portRow({ status: "submitted" }), error: null },
+      { data: portRow({ status: "exception", status_detail: details }), error: null }
+    ]);
+    const dispatch = vi.fn(async () => ({ results: [] }));
+    const result = await handlePortingStatusChange(
+      {
+        id: "po-1",
+        status: { value: "exception", details },
+        support_key: "sr_2"
+      },
+      { client: db, dispatch: dispatch as never }
+    );
+    expect(result.handled).toBe(true);
+    expect(result.ported).toBe(false);
+    expect(result.row?.status).toBe("exception");
+    const updateCall = log[1].calls.find((c) => c.name === "update");
+    expect(updateCall?.args[0]).toMatchObject({
+      status: "exception",
+      status_detail: details,
+      support_key: "sr_2"
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: BIZ,
+        kind: "byon_port",
+        summary: expect.stringContaining("Action needed"),
+        payload: expect.objectContaining({ status: "exception", status_detail: details })
+      })
+    );
+  });
+
+  it("prefers actual FOC over requested over the prior value", async () => {
+    const { db, log } = makeDb([
+      { data: portRow({ foc_at: "2026-07-01T00:00:00Z" }), error: null },
+      { data: portRow(), error: null }
+    ]);
+    await handlePortingStatusChange(
+      {
+        id: "po-1",
+        status: { value: "foc-date-confirmed" },
+        activation_settings: {
+          foc_datetime_actual: "2026-07-22T13:00:00Z",
+          foc_datetime_requested: "2026-07-20T13:00:00Z"
+        }
+      },
+      { client: db, dispatch: vi.fn(async () => ({ results: [] })) as never }
+    );
+    expect(log[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      foc_at: "2026-07-22T13:00:00Z"
+    });
+
+    const { db: db2, log: log2 } = makeDb([
+      { data: portRow({ foc_at: "2026-07-01T00:00:00Z", support_key: "sr_prior" }), error: null },
+      { data: portRow(), error: null }
+    ]);
+    await handlePortingStatusChange(
+      {
+        id: "po-1",
+        status: { value: "in-process" },
+        activation_settings: { foc_datetime_requested: "2026-07-20T13:00:00Z" }
+      },
+      { client: db2 }
+    );
+    expect(log2[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      foc_at: "2026-07-20T13:00:00Z",
+      support_key: "sr_prior"
+    });
+
+    const { db: db3, log: log3 } = makeDb([
+      { data: portRow({ foc_at: "2026-07-01T00:00:00Z" }), error: null },
+      { data: portRow(), error: null }
+    ]);
+    await handlePortingStatusChange({ id: "po-1", status: { value: "in-process" } }, { client: db3 });
+    expect(log3[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      foc_at: "2026-07-01T00:00:00Z"
+    });
+  });
+
+  it("throws when the row update fails", async () => {
+    const { db } = makeDb([
+      { data: portRow(), error: null },
+      { data: null, error: { message: "update exploded" } }
+    ]);
+    await expect(
+      handlePortingStatusChange({ id: "po-1", status: { value: "ported" } }, { client: db })
+    ).rejects.toThrow(/handlePortingStatusChange: update exploded/);
+  });
+
+  it("does not notify on repeats of the same status or non-milestone moves", async () => {
+    const { db } = makeDb([
+      { data: portRow({ status: "exception" }), error: null },
+      { data: portRow({ status: "exception" }), error: null }
+    ]);
+    await handlePortingStatusChange(
+      { id: "po-1", status: { value: "exception" } },
+      { client: db }
+    );
+    expect(dispatchMock).not.toHaveBeenCalled();
+
+    const { db: db2 } = makeDb([
+      { data: portRow({ status: "submitted" }), error: null },
+      { data: portRow({ status: "in-process" }), error: null }
+    ]);
+    await handlePortingStatusChange(
+      { id: "po-1", status: { value: "in-process" } },
+      { client: db2 }
+    );
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("flags ported=true only on the transition into ported, using the module dispatcher", async () => {
+    const { db } = makeDb([
+      { data: portRow({ status: "foc-date-confirmed" }), error: null },
+      { data: portRow({ status: "ported" }), error: null }
+    ]);
+    const result = await handlePortingStatusChange(
+      { id: "po-1", status: { value: "ported" } },
+      { client: db }
+    );
+    expect(result.ported).toBe(true);
+    expect(dispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: expect.stringContaining("finished porting") })
+    );
+
+    // Redelivery of ported → already terminal, no re-notify, ported=false.
+    const { db: db2 } = makeDb([
+      { data: portRow({ status: "ported" }), error: null },
+      { data: portRow({ status: "ported" }), error: null }
+    ]);
+    dispatchMock.mockClear();
+    const result2 = await handlePortingStatusChange(
+      { id: "po-1", status: { value: "ported" } },
+      { client: db2 }
+    );
+    expect(result2.ported).toBe(false);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("covers cancelled summary and survives dispatch failures (Error and non-Error)", async () => {
+    const { db } = makeDb([
+      { data: portRow({ status: "submitted" }), error: null },
+      { data: portRow({ status: "cancelled" }), error: null }
+    ]);
+    const throwingDispatch = vi.fn(async () => {
+      throw new Error("smtp down");
+    });
+    const result = await handlePortingStatusChange(
+      { id: "po-1", status: { value: "cancelled" } },
+      { client: db, dispatch: throwingDispatch as never }
+    );
+    expect(result.handled).toBe(true);
+    expect(throwingDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: expect.stringContaining("was cancelled") })
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      "byon: status notification failed",
+      expect.objectContaining({ error: "smtp down" })
+    );
+
+    const { db: db2 } = makeDb([
+      { data: portRow({ status: "submitted" }), error: null },
+      { data: portRow({ status: "cancelled" }), error: null }
+    ]);
+    const throwingDispatch2 = vi.fn(async () => {
+      throw "wat";
+    });
+    await handlePortingStatusChange(
+      { id: "po-1", status: { value: "cancelled" } },
+      { client: db2, dispatch: throwingDispatch2 as never }
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      "byon: status notification failed",
+      expect.objectContaining({ error: "wat" })
+    );
+  });
+
+  it("uses the default service client when none is injected", async () => {
+    const { db } = makeDb([
+      { data: portRow({ status: "submitted" }), error: null },
+      { data: portRow({ status: "in-process" }), error: null }
+    ]);
+    defaultClientSpy.mockReturnValue(db);
+    const result = await handlePortingStatusChange({
+      id: "po-1",
+      status: { value: "in-process" }
+    });
+    expect(result.handled).toBe(true);
+    expect(defaultClientSpy).toHaveBeenCalledOnce();
+  });
+});
