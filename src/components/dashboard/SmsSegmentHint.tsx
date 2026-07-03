@@ -1,4 +1,8 @@
-import { smsSegmentInfo, UCS2_MAX_SENDABLE_CHARS } from "@/lib/sms/segment-info";
+import {
+  smsSegmentInfo,
+  RCS_SMS_FALLBACK_MAX_CHARS,
+  UCS2_MAX_SENDABLE_CHARS
+} from "@/lib/sms/segment-info";
 
 type Props = {
   text: string;
@@ -31,11 +35,16 @@ export function SmsSegmentHint({ text, mode, channel = "sms" }: Props) {
   const info = smsSegmentInfo(text, { normalizeSmartPunctuation: mode === "aiflow" });
   if (!info.exceedsUcs2SendableLimit) return null;
   if (channel === "rcs") {
+    // RCS-first sends put the full text in the RCS leg; the sms_fallback leg
+    // is sliced to Telnyx's 3072-char cap (truncated, never rejected). Below
+    // that cap the fallback also goes out in full, so there is nothing to warn
+    // about.
+    if (info.length <= RCS_SMS_FALLBACK_MAX_CHARS) return null;
     return (
       <p className="text-xs text-spark-orange" role="alert">
-        {`This message is ${info.length} characters with emoji or special characters. ` +
-          `It will deliver in full over RCS, but recipients without RCS get an SMS fallback ` +
-          `capped at ${UCS2_MAX_SENDABLE_CHARS} characters — that copy may fail to send.`}
+        {`This message is ${info.length} characters. It will deliver in full over RCS, ` +
+          `but recipients without RCS get an SMS fallback truncated to the first ` +
+          `${RCS_SMS_FALLBACK_MAX_CHARS} characters.`}
       </p>
     );
   }

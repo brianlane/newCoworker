@@ -264,6 +264,12 @@ async function persistOfferReplyJob(args: {
   ackSent: string | null;
 }): Promise<void> {
   const ack = args.ackSent && args.ackSent.trim() ? args.ackSent : null;
+  // Derive the channel from the stored envelope (rather than threading it
+  // through every call site) so staff RCS replies get the right badge in the
+  // Texts thread instead of the column default of sms.
+  const envPayload =
+    ((args.envelope as { data?: { payload?: Record<string, unknown> } })?.data?.payload ??
+      {}) as Record<string, unknown>;
   const { error } = await args.supabase.from("sms_inbound_jobs").insert({
     business_id: args.businessId,
     telnyx_event_id: args.eventId,
@@ -274,7 +280,8 @@ async function persistOfferReplyJob(args: {
     staff_kind: args.staffKind,
     staff_name: args.staffName?.trim() || null,
     assistant_reply_text: ack,
-    outbound_idempotency_key: crypto.randomUUID()
+    outbound_idempotency_key: crypto.randomUUID(),
+    channel: isRcsInboundPayload(envPayload) ? "rcs" : "sms"
   });
   if (error && (error as { code?: string }).code !== "23505") {
     console.error("offer reply persist", error);

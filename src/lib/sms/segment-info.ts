@@ -17,6 +17,12 @@
 /** Longest UCS-2 message Telnyx will send (10 segments × 67 chars). */
 export const UCS2_MAX_SENDABLE_CHARS = 670;
 
+/**
+ * Telnyx caps the RCS `sms_fallback.text` leg at 3072 characters; our senders
+ * slice to this, so an over-long fallback is TRUNCATED (never rejected).
+ */
+export const RCS_SMS_FALLBACK_MAX_CHARS = 3072;
+
 const GSM_SINGLE_SEGMENT = 160;
 const GSM_MULTI_SEGMENT = 153;
 const UCS2_SINGLE_SEGMENT = 70;
