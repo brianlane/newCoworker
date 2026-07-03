@@ -135,7 +135,8 @@ describe("api/telnyx/porting-webhook route", () => {
       phone_e164: "+13125550001",
       telnyx_order_id: "po-1",
       status: "ported",
-      activated_at: null
+      activated_at: null,
+      activation_error: null
     };
     vi.mocked(handlePortingStatusChange).mockResolvedValue({
       handled: true,

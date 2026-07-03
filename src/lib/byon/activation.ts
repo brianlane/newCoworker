@@ -56,7 +56,13 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 export type PortedNumberRow = Pick<
   NumberPortRequestRow,
-  "id" | "business_id" | "phone_e164" | "telnyx_order_id" | "status" | "activated_at"
+  | "id"
+  | "business_id"
+  | "phone_e164"
+  | "telnyx_order_id"
+  | "status"
+  | "activated_at"
+  | "activation_error"
 >;
 
 export type ActivationDeps = {
@@ -102,6 +108,7 @@ export async function activatePortedNumber(
 
   const env = deps.env ?? process.env;
   const dispatch = deps.dispatch ?? dispatchUrgentNotification;
+  const resolveClient = async () => deps.client ?? (await createSupabaseServiceClient());
 
   const fail = async (error: string): Promise<ActivationResult> => {
     logger.error("byon: ported number activation failed", {
@@ -111,26 +118,55 @@ export async function activatePortedNumber(
       telnyxOrderId: row.telnyx_order_id,
       error
     });
-    try {
-      await dispatch({
-        businessId: row.business_id,
-        summary: `We're connecting your ported number ${formatDid(row.phone_e164)}`,
-        kind: "byon_activation",
-        payload: {
-          phone_e164: row.phone_e164,
-          port_request_id: row.id,
-          telnyx_order_id: row.telnyx_order_id,
-          activation_error: error
-        },
-        emailBody:
-          `Your number ${formatDid(row.phone_e164)} finished porting, and we're completing the final connection to your AI coworker. ` +
-          `No action is needed from you — our team has been notified and calls/texts will be live shortly.`
-      });
-    } catch (err) {
-      logger.warn("byon: activation-failure notification failed", {
-        portRequestId: row.id,
-        error: errMessage(err)
-      });
+
+    // Alert-once: Telnyx redeliveries re-run activation while activated_at
+    // is null, so a persistent failure would otherwise ping the owner on
+    // every retry. The delivery that swaps activation_error NULL → error
+    // (compare-and-swap) sends the single alert; later failures only log.
+    let alertClaimed = false;
+    if (row.activation_error === null) {
+      try {
+        const db = await resolveClient();
+        const { data, error: claimErr } = await db
+          .from("number_port_requests")
+          .update({ activation_error: error })
+          .eq("id", row.id)
+          .is("activation_error", null)
+          .select();
+        if (claimErr) throw new Error(claimErr.message);
+        alertClaimed = ((data ?? []) as unknown[]).length > 0;
+      } catch (err) {
+        // Can't tell whether an alert went out — stay quiet (the failure is
+        // in the logs and a later delivery can still claim the alert).
+        logger.warn("byon: failed to claim activation-failure alert", {
+          portRequestId: row.id,
+          error: errMessage(err)
+        });
+      }
+    }
+
+    if (alertClaimed) {
+      try {
+        await dispatch({
+          businessId: row.business_id,
+          summary: `We're connecting your ported number ${formatDid(row.phone_e164)}`,
+          kind: "byon_activation",
+          payload: {
+            phone_e164: row.phone_e164,
+            port_request_id: row.id,
+            telnyx_order_id: row.telnyx_order_id,
+            activation_error: error
+          },
+          emailBody:
+            `Your number ${formatDid(row.phone_e164)} finished porting, and we're completing the final connection to your AI coworker. ` +
+            `No action is needed from you — our team has been notified and calls/texts will be live shortly.`
+        });
+      } catch (err) {
+        logger.warn("byon: activation-failure notification failed", {
+          portRequestId: row.id,
+          error: errMessage(err)
+        });
+      }
     }
     return { attempted: true, activated: false, assign: null, tendlc: null, error };
   };
@@ -183,14 +219,15 @@ export async function activatePortedNumber(
     });
   }
 
-  // Stamp activated_at so future redeliveries skip the Telnyx calls. A
-  // failed stamp is non-fatal: the wiring is idempotent, so the worst case
-  // is one redundant re-run on the next redelivery.
+  // Stamp activated_at (and clear any recorded failure) so future
+  // redeliveries skip the Telnyx calls. A failed stamp is non-fatal: the
+  // wiring is idempotent, so the worst case is one redundant re-run on the
+  // next redelivery.
   try {
-    const db = deps.client ?? (await createSupabaseServiceClient());
+    const db = await resolveClient();
     const { error: stampErr } = await db
       .from("number_port_requests")
-      .update({ activated_at: new Date().toISOString() })
+      .update({ activated_at: new Date().toISOString(), activation_error: null })
       .eq("id", row.id)
       .is("activated_at", null);
     if (stampErr) {

@@ -49,31 +49,37 @@ const ROW: PortedNumberRow = {
   phone_e164: "+13125550001",
   telnyx_order_id: "po-1",
   status: "ported",
-  activated_at: null
+  activated_at: null,
+  activation_error: null
 };
 
-type StampCall = { name: string; args: unknown[] };
+type DbCall = { name: string; args: unknown[] };
+type DbResult = { data?: unknown; error: { message: string } | null };
 
-/** Minimal thenable builder for the activated_at stamp update. */
-function stampDb(result: { error: { message: string } | null } = { error: null }) {
-  const calls: StampCall[] = [];
-  const builder = {
-    update: (...args: unknown[]) => {
-      calls.push({ name: "update", args });
-      return builder;
-    },
-    eq: (...args: unknown[]) => {
-      calls.push({ name: "eq", args });
-      return builder;
-    },
-    is: (...args: unknown[]) => {
-      calls.push({ name: "is", args });
-      return builder;
-    },
-    then: (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve)
+/**
+ * Minimal thenable builder for the activation_error claim and activated_at
+ * stamp updates. Results are consumed per from() call; when exhausted, a
+ * "matched one row" default keeps unrelated tests simple.
+ */
+function actDb(results: DbResult[] = []) {
+  const calls: DbCall[][] = [];
+  let i = 0;
+  const from = (table: string) => {
+    const my: DbCall[] = [{ name: "from", args: [table] }];
+    calls.push(my);
+    const result = results[i++] ?? { data: [{}], error: null };
+    const builder: Record<string, unknown> = {
+      then: (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve)
+    };
+    for (const m of ["update", "eq", "is", "select"]) {
+      builder[m] = (...args: unknown[]) => {
+        my.push({ name: m, args });
+        return builder;
+      };
+    }
+    return builder;
   };
-  const db = { from: (table: string) => (calls.push({ name: "from", args: [table] }), builder) };
-  return { db: db as never, calls };
+  return { db: { from } as never, calls };
 }
 
 const ENV = {
@@ -94,7 +100,7 @@ describe("activatePortedNumber", () => {
     assignMock.mockResolvedValue(ASSIGN_RESULT);
     attachMock.mockResolvedValue({ kind: "registered", campaignId: "c-1" });
     dispatchMock.mockResolvedValue({ results: [] });
-    defaultClientMock.mockResolvedValue(stampDb().db);
+    defaultClientMock.mockResolvedValue(actDb().db);
   });
 
   it("skips rows that are not ported or already activated", async () => {
@@ -122,7 +128,7 @@ describe("activatePortedNumber", () => {
   });
 
   it("wires voice routes and 10DLC for the ported number using platform defaults", async () => {
-    const { db, calls } = stampDb();
+    const { db, calls } = actDb();
     const result = await activatePortedNumber(ROW, { env: ENV, client: db });
 
     expect(result).toEqual({
@@ -132,12 +138,15 @@ describe("activatePortedNumber", () => {
       tendlc: { kind: "registered", campaignId: "c-1" },
       error: null
     });
-    // activated_at stamped conditionally so redeliveries skip the wiring.
-    expect(calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
-      activated_at: expect.any(String)
+    // activated_at stamped conditionally (clearing any recorded failure) so
+    // redeliveries skip the wiring.
+    const stamp = calls[0];
+    expect(stamp.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      activated_at: expect.any(String),
+      activation_error: null
     });
-    expect(calls).toContainEqual({ name: "eq", args: ["id", "req-1"] });
-    expect(calls).toContainEqual({ name: "is", args: ["activated_at", null] });
+    expect(stamp).toContainEqual({ name: "eq", args: ["id", "req-1"] });
+    expect(stamp).toContainEqual({ name: "is", args: ["activated_at", null] });
     expect(assignMock).toHaveBeenCalledWith(
       {
         businessId: "biz-1",
@@ -258,6 +267,51 @@ describe("activatePortedNumber", () => {
     expect(result2.error).toBe("wat");
   });
 
+  it("alerts the owner exactly once across repeated activation failures", async () => {
+    assignMock.mockRejectedValue(new Error("telnyx down"));
+
+    // Row already carries a recorded failure → no claim attempt, no alert.
+    const { db: settledDb, calls: settledCalls } = actDb();
+    const result = await activatePortedNumber(
+      { ...ROW, activation_error: "telnyx down" },
+      { env: ENV, client: settledDb }
+    );
+    expect(result.activated).toBe(false);
+    expect(settledCalls).toHaveLength(0); // no DB write at all
+    expect(dispatchMock).not.toHaveBeenCalled();
+
+    // Fresh row but a parallel delivery won the claim CAS → no alert.
+    const { db: lostDb, calls: lostCalls } = actDb([{ data: [], error: null }]);
+    await activatePortedNumber(ROW, { env: ENV, client: lostDb });
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(lostCalls[0].find((c) => c.name === "update")?.args[0]).toEqual({
+      activation_error: "telnyx down"
+    });
+    expect(lostCalls[0]).toContainEqual({ name: "is", args: ["activation_error", null] });
+
+    // A null no-rows shape also means "someone else claimed".
+    await activatePortedNumber(ROW, {
+      env: ENV,
+      client: actDb([{ data: null, error: null }]).db
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+
+    // Claim write errors → warn and stay quiet (logs carry the failure).
+    await activatePortedNumber(ROW, {
+      env: ENV,
+      client: actDb([{ data: null, error: { message: "claim exploded" } }]).db
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "byon: failed to claim activation-failure alert",
+      expect.objectContaining({ error: "claim exploded" })
+    );
+
+    // Winning the claim sends the single alert.
+    await activatePortedNumber(ROW, { env: ENV, client: actDb([{ data: [{}], error: null }]).db });
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("treats 10DLC problems as non-fatal but logs rejected/error outcomes", async () => {
     attachMock.mockResolvedValue({ kind: "rejected", reason: "attach_failed: telnyx_422" });
     const result = await activatePortedNumber(ROW, { env: ENV });
@@ -277,7 +331,7 @@ describe("activatePortedNumber", () => {
 
   it("treats activated_at stamp failures as non-fatal (error result, thrown, or default client failing)", async () => {
     // Stamp update returns an error → warn, still activated.
-    const { db } = stampDb({ error: { message: "stamp exploded" } });
+    const { db } = actDb([{ error: { message: "stamp exploded" } }]);
     const result = await activatePortedNumber(ROW, { env: ENV, client: db });
     expect(result.activated).toBe(true);
     expect(logger.warn).toHaveBeenCalledWith(
