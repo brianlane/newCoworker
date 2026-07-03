@@ -93,22 +93,31 @@ describe("getChatSpendSnapshotForBusiness", () => {
   });
 
   it("uses the Stripe period start, spend row, and active credit", async () => {
-    const db = stubDb({
-      subscriptionRow: { stripe_current_period_start: "2026-06-03T00:00:00Z" },
-      spendRow: { spend_micros: "2500000" },
-      creditResult: { data: 5_000_000, error: null }
-    });
+    // Pin the clock inside the anchor's first monthly window: with real time
+    // this assertion is a time bomb — once "now" crosses the next window
+    // boundary, deriveMonthlyQuotaWindow rolls periodStart forward a month.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-15T12:00:00Z"));
+    try {
+      const db = stubDb({
+        subscriptionRow: { stripe_current_period_start: "2026-06-03T00:00:00Z" },
+        spendRow: { spend_micros: "2500000" },
+        creditResult: { data: 5_000_000, error: null }
+      });
 
-    const snap = await getChatSpendSnapshotForBusiness("biz-1", db as never);
+      const snap = await getChatSpendSnapshotForBusiness("biz-1", db as never);
 
-    expect(snap).toEqual({
-      periodStart: "2026-06-03T00:00:00Z",
-      spendMicros: 2_500_000,
-      baseCapMicros: 10_000_000,
-      creditMicros: 5_000_000,
-      effectiveCapMicros: 15_000_000
-    });
-    expect(db.rpc).toHaveBeenCalledWith("chat_active_credit_micros", { p_business_id: "biz-1" });
+      expect(snap).toEqual({
+        periodStart: "2026-06-03T00:00:00Z",
+        spendMicros: 2_500_000,
+        baseCapMicros: 10_000_000,
+        creditMicros: 5_000_000,
+        effectiveCapMicros: 15_000_000
+      });
+      expect(db.rpc).toHaveBeenCalledWith("chat_active_credit_micros", { p_business_id: "biz-1" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("falls back to the UTC month start and zeros when nothing exists", async () => {
