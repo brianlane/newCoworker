@@ -54,7 +54,10 @@ import {
 } from "../_shared/voice_handoff.ts";
 import { encodeWtClientState } from "../_shared/warm_transfer_notify.ts";
 import { compileVoiceFlow } from "../_shared/ai_flows/voice.ts";
-import { resolveVoiceContactRefs } from "../_shared/ai_flows/contact_ref.ts";
+import {
+  matchVoiceFlowByCaller,
+  resolveVoiceContactRefs
+} from "../_shared/ai_flows/contact_ref.ts";
 import type { AiFlowDefinition } from "../_shared/ai_flows/types.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 import {
@@ -633,19 +636,27 @@ serve(async (req: Request) => {
   // a fallback for any caller not yet migrated. A lookup/compile failure must
   // not strand the caller — log and fall through.
   if (fromE164Informational) {
+    // Fetch the business's enabled voice flows and match in code: a literal
+    // trigger.fromE164 equal to the caller wins first, then a trigger.fromRef
+    // whose referenced saved contact/employee's LIVE numbers include the caller
+    // (a ref can't be matched in SQL — the number lives in another table).
     const { data: flowRows, error: flowErr } = await supabase
       .from("ai_flows")
       .select("id, definition")
       .eq("business_id", businessId)
       .eq("enabled", true)
       .eq("definition->trigger->>channel", "voice")
-      .eq("definition->trigger->>fromE164", fromE164Informational)
       .order("created_at", { ascending: false })
-      .limit(1);
+      .limit(100);
     if (flowErr) {
       console.error("ai_flows voice lookup", flowErr);
     }
-    const flowRow = (flowRows ?? [])[0] as { id?: string; definition?: unknown } | undefined;
+    const flowRow = await matchVoiceFlowByCaller(
+      supabase,
+      businessId,
+      (flowRows ?? []) as { id?: string; definition?: unknown }[],
+      fromE164Informational
+    );
     if (flowRow?.definition) {
       let plan: ReturnType<typeof compileVoiceFlow> = null;
       try {

@@ -1,10 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  contactRefKey,
+  matchVoiceFlowByCaller,
   resolveContactRef,
+  resolveFromMatchesRefValues,
+  resolveRefIdentityValues,
   resolveVoiceContactRefs,
   type ContactRefSupabase
 } from "../supabase/functions/_shared/ai_flows/contact_ref";
-import type { AiFlowDefinition, ContactRef } from "../supabase/functions/_shared/ai_flows/types";
+import type {
+  AiFlowDefinition,
+  ContactRef,
+  TriggerCondition
+} from "../supabase/functions/_shared/ai_flows/types";
 
 const EMP_ID = "11111111-1111-4111-8111-111111111111";
 const CON_ID = "22222222-2222-4222-8222-222222222222";
@@ -272,5 +280,175 @@ describe("resolveVoiceContactRefs", () => {
     await expect(resolveVoiceContactRefs(db, "biz", def)).rejects.toThrow(
       "contact ref: roster query failed: down"
     );
+  });
+});
+
+describe("resolveRefIdentityValues", () => {
+  it("returns an employee's phone + email (trimmed, blanks dropped)", async () => {
+    const { db, calls } = stubDb({
+      ai_flow_team_members: { data: { phone_e164: " +16025551234 ", email: "dave@x.com" }, error: null }
+    });
+    expect(await resolveRefIdentityValues(db, "biz", { source: "employee", id: EMP_ID })).toEqual([
+      "+16025551234",
+      "dave@x.com"
+    ]);
+    expect(calls[0]).toEqual({
+      table: "ai_flow_team_members",
+      filters: { business_id: "biz", id: EMP_ID, active: true }
+    });
+    const noEmail = stubDb({
+      ai_flow_team_members: { data: { phone_e164: "+16025551234", email: null }, error: null }
+    });
+    expect(await resolveRefIdentityValues(noEmail.db, "biz", { source: "employee", id: EMP_ID })).toEqual([
+      "+16025551234"
+    ]);
+  });
+
+  it("returns [] for a missing employee and throws on a query error", async () => {
+    const missing = stubDb({ ai_flow_team_members: { data: null, error: null } });
+    expect(await resolveRefIdentityValues(missing.db, "biz", { source: "employee", id: EMP_ID })).toEqual([]);
+    const err = stubDb({ ai_flow_team_members: { data: null, error: { message: "boom" } } });
+    await expect(
+      resolveRefIdentityValues(err.db, "biz", { source: "employee", id: EMP_ID })
+    ).rejects.toThrow("contact ref: roster query failed: boom");
+  });
+
+  it("returns a contact's canonical number, merge aliases, and email", async () => {
+    const { db, calls } = stubDb({
+      contacts: {
+        data: {
+          customer_e164: "+16025550000",
+          alias_e164s: ["+16025550001", " ", 42],
+          email: "pat@x.com"
+        },
+        error: null
+      }
+    });
+    expect(await resolveRefIdentityValues(db, "biz", { source: "contact", id: CON_ID })).toEqual([
+      "+16025550000",
+      "+16025550001",
+      "pat@x.com"
+    ]);
+    expect(calls[0]).toEqual({ table: "contacts", filters: { business_id: "biz", id: CON_ID } });
+    const bareAliases = stubDb({
+      contacts: { data: { customer_e164: "+16025550000", alias_e164s: null, email: null }, error: null }
+    });
+    expect(
+      await resolveRefIdentityValues(bareAliases.db, "biz", { source: "contact", id: CON_ID })
+    ).toEqual(["+16025550000"]);
+  });
+
+  it("returns [] for a missing contact and throws on a query error", async () => {
+    const missing = stubDb({ contacts: { data: null, error: null } });
+    expect(await resolveRefIdentityValues(missing.db, "biz", { source: "contact", id: CON_ID })).toEqual([]);
+    const err = stubDb({ contacts: { data: null, error: { message: "nope" } } });
+    await expect(
+      resolveRefIdentityValues(err.db, "biz", { source: "contact", id: CON_ID })
+    ).rejects.toThrow("contact ref: contact query failed: nope");
+  });
+});
+
+describe("resolveFromMatchesRefValues", () => {
+  const empRef: ContactRef = { source: "employee", id: EMP_ID };
+
+  it("resolves each distinct from_matches ref once, keyed by contactRefKey", async () => {
+    const { db, calls } = stubDb({
+      ai_flow_team_members: { data: { phone_e164: "+16025551234", email: null }, error: null }
+    });
+    const conditions: TriggerCondition[] = [
+      { type: "contains", value: "lead" },
+      { type: "from_matches", ref: empRef },
+      { type: "from_matches", ref: empRef },
+      { type: "from_matches", value: "+1602" }
+    ];
+    const map = await resolveFromMatchesRefValues(db, "biz", conditions);
+    expect(map.get(contactRefKey(empRef))).toEqual(["+16025551234"]);
+    expect(map.size).toBe(1);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("returns an empty map for undefined conditions / no refs / malformed refs", async () => {
+    const { db, calls } = stubDb({});
+    expect((await resolveFromMatchesRefValues(db, "biz", undefined)).size).toBe(0);
+    const noRefs: TriggerCondition[] = [
+      { type: "has_url" },
+      { type: "from_matches", value: "x" },
+      { type: "from_matches", ref: { source: "owner", id: "x" } as unknown as ContactRef }
+    ];
+    expect((await resolveFromMatchesRefValues(db, "biz", noRefs)).size).toBe(0);
+    expect(calls).toEqual([]);
+  });
+});
+
+describe("matchVoiceFlowByCaller", () => {
+  const CALLER = "+14155551000";
+  const empRef: ContactRef = { source: "employee", id: EMP_ID };
+
+  const flow = (trigger: Record<string, unknown>, id: string) => ({
+    id,
+    definition: { version: 1, trigger, steps: [] }
+  });
+
+  it("prefers a literal fromE164 match (no queries) over ref flows", async () => {
+    const { db, calls } = stubDb({});
+    const flows = [
+      flow({ channel: "voice", fromRef: empRef }, "ref-flow"),
+      flow({ channel: "voice", fromE164: CALLER }, "literal-flow")
+    ];
+    const hit = await matchVoiceFlowByCaller(db, "biz", flows, CALLER);
+    expect(hit?.id).toBe("literal-flow");
+    expect(calls).toEqual([]);
+  });
+
+  it("matches a fromRef flow when the caller is one of the person's live numbers", async () => {
+    const { db, calls } = stubDb({
+      ai_flow_team_members: { data: { phone_e164: CALLER, email: "d@x.com" }, error: null }
+    });
+    const flows = [
+      flow({ channel: "voice", fromE164: "+19998887777" }, "other-literal"),
+      flow({ channel: "voice", fromRef: empRef }, "ref-flow")
+    ];
+    const hit = await matchVoiceFlowByCaller(db, "biz", flows, CALLER);
+    expect(hit?.id).toBe("ref-flow");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("memoizes a repeated fromRef across flows (one query even when nothing matches)", async () => {
+    const { db, calls } = stubDb({
+      ai_flow_team_members: { data: { phone_e164: "+17770001111", email: null }, error: null }
+    });
+    const flows = [
+      flow({ channel: "voice", fromRef: empRef }, "ref-1"),
+      flow({ channel: "voice", fromRef: empRef }, "ref-2")
+    ];
+    expect(await matchVoiceFlowByCaller(db, "biz", flows, CALLER)).toBeNull();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("skips outbound / non-voice / malformed definitions and unresolved refs", async () => {
+    const { db } = stubDb({ ai_flow_team_members: { data: null, error: null } });
+    const flows = [
+      flow({ channel: "voice", direction: "outbound", fromRef: empRef }, "outbound"),
+      flow({ channel: "sms", conditions: [] }, "sms"),
+      { id: "no-def", definition: undefined },
+      flow({ channel: "voice", fromRef: { source: "employee" } }, "malformed-ref"),
+      flow({ channel: "voice", fromRef: empRef }, "unresolved-ref"),
+      flow({ channel: "voice" }, "no-caller")
+    ];
+    expect(await matchVoiceFlowByCaller(db, "biz", flows, CALLER)).toBeNull();
+  });
+
+  it("a resolution error skips that flow only (logged, not thrown)", async () => {
+    const conRef: ContactRef = { source: "contact", id: CON_ID };
+    const { db } = stubDb({
+      ai_flow_team_members: { data: null, error: { message: "down" } },
+      contacts: { data: { customer_e164: CALLER, alias_e164s: [], email: null }, error: null }
+    });
+    const flows = [
+      flow({ channel: "voice", fromRef: { source: "employee", id: EMP_ID } }, "erroring"),
+      flow({ channel: "voice", fromRef: conRef }, "contact-flow")
+    ];
+    const hit = await matchVoiceFlowByCaller(db, "biz", flows, CALLER);
+    expect(hit?.id).toBe("contact-flow");
   });
 });

@@ -103,6 +103,35 @@ describe("processInboundTenantEmail", () => {
     expect(recordTenantMailboxInbound).not.toHaveBeenCalled();
   });
 
+  it("fails closed when a from_matches contact ref cannot be resolved", async () => {
+    resolveBusinessByAddress.mockResolvedValue("biz-1");
+    // The flows-only db stub has no contacts/roster query support, so ref
+    // resolution throws — the flow must fail closed (no run) without breaking
+    // the inbound path.
+    const db = flowsDb({
+      data: [
+        {
+          id: "flow-ref",
+          definition: {
+            trigger: {
+              channel: "tenant_email",
+              conditions: [
+                {
+                  type: "from_matches",
+                  ref: { source: "contact", id: "22222222-2222-4222-8222-222222222222" }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      error: null
+    });
+    const res = await processInboundTenantEmail(PAYLOAD, db as never);
+    expect(res).toEqual({ matched: true, businessId: "biz-1", enqueued: 0 });
+    expect(enqueueAiFlowRun).not.toHaveBeenCalled();
+  });
+
   it("logs inbound mail and enqueues each matching flow", async () => {
     resolveBusinessByAddress.mockResolvedValue("biz-1");
     const db = flowsDb({

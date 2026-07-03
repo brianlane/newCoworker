@@ -14,7 +14,7 @@
  *     before the pure compilers run (resolve-before-compile — the compilers
  *     stay dependency-free and unit-testable).
  */
-import type { AiFlowDefinition, ContactRef, FlowStep } from "./types.ts";
+import type { AiFlowDefinition, ContactRef, FlowStep, TriggerCondition } from "./types.ts";
 
 // Minimal structural client type so this module works with the esm.sh
 // supabase-js the Edge functions use without importing it here (same pattern
@@ -66,6 +66,122 @@ export async function resolveContactRef(
   const phone = row?.customer_e164?.trim();
   if (!row || !phone) return null;
   return { name: (row.display_name ?? "").trim() || "contact", phone };
+}
+
+/** Stable memo/map key for a ref. */
+export function contactRefKey(ref: Pick<ContactRef, "source" | "id">): string {
+  return `${ref.source}:${ref.id}`;
+}
+
+/**
+ * Every LIVE identity value of the referenced person, for sender/caller
+ * matching: an employee's phone + email; a contact's canonical number, its
+ * merge aliases (alias_e164s), and email. Empty array when the row is gone /
+ * inactive / has no usable values; THROWS on a query error.
+ */
+export async function resolveRefIdentityValues(
+  db: ContactRefSupabase,
+  businessId: string,
+  ref: Pick<ContactRef, "source" | "id">
+): Promise<string[]> {
+  if (ref.source === "employee") {
+    const { data, error } = await db
+      .from("ai_flow_team_members")
+      .select("phone_e164, email")
+      .eq("business_id", businessId)
+      .eq("id", ref.id)
+      .eq("active", true)
+      .maybeSingle();
+    if (error) throw new Error(`contact ref: roster query failed: ${error.message}`);
+    const row = data as { phone_e164?: string | null; email?: string | null } | null;
+    return [row?.phone_e164, row?.email]
+      .map((v) => (typeof v === "string" ? v.trim() : ""))
+      .filter((v) => v.length > 0);
+  }
+  const { data, error } = await db
+    .from("contacts")
+    .select("customer_e164, alias_e164s, email")
+    .eq("business_id", businessId)
+    .eq("id", ref.id)
+    .maybeSingle();
+  if (error) throw new Error(`contact ref: contact query failed: ${error.message}`);
+  const row = data as {
+    customer_e164?: string | null;
+    alias_e164s?: unknown;
+    email?: string | null;
+  } | null;
+  const aliases = Array.isArray(row?.alias_e164s) ? row.alias_e164s : [];
+  return [row?.customer_e164, ...aliases, row?.email]
+    .map((v) => (typeof v === "string" ? v.trim() : ""))
+    .filter((v) => v.length > 0);
+}
+
+/**
+ * Resolve every `from_matches` ref in a trigger's conditions to its live
+ * identity values, keyed by contactRefKey — the map the pure evaluators
+ * (engine.evaluateSmsTrigger / trigger-eval.evaluateTriggerConditions) take.
+ * Missing/unresolvable refs simply have no entry, so their condition fails
+ * closed (the flow does not fire for an unknown sender). Memoized per call;
+ * query errors propagate.
+ */
+export async function resolveFromMatchesRefValues(
+  db: ContactRefSupabase,
+  businessId: string,
+  conditions: TriggerCondition[] | undefined
+): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  for (const cond of conditions ?? []) {
+    if (cond.type !== "from_matches" || !isRef(cond.ref)) continue;
+    const key = contactRefKey(cond.ref);
+    if (out.has(key)) continue;
+    out.set(key, await resolveRefIdentityValues(db, businessId, cond.ref));
+  }
+  return out;
+}
+
+/**
+ * Pick the first flow whose inbound-voice trigger matches `callerE164`:
+ * a literal trigger.fromE164 equal to the caller wins first (no queries),
+ * then flows whose trigger.fromRef resolves to a live number set containing
+ * the caller (memoized). Outbound / non-voice / malformed definitions never
+ * match. Resolution errors on one flow are logged and skip THAT flow only.
+ */
+export async function matchVoiceFlowByCaller<T extends { definition?: unknown }>(
+  db: ContactRefSupabase,
+  businessId: string,
+  flows: T[],
+  callerE164: string
+): Promise<T | null> {
+  type VoiceDef = {
+    trigger?: { channel?: string; direction?: string; fromE164?: string; fromRef?: unknown };
+  };
+  const inbound = flows.filter((f) => {
+    const t = (f.definition as VoiceDef | undefined)?.trigger;
+    return t?.channel === "voice" && t.direction !== "outbound";
+  });
+  for (const f of inbound) {
+    const t = (f.definition as VoiceDef).trigger;
+    if (typeof t?.fromE164 === "string" && t.fromE164.trim() === callerE164) return f;
+  }
+  const memo = new Map<string, string[]>();
+  for (const f of inbound) {
+    const t = (f.definition as VoiceDef).trigger;
+    if (typeof t?.fromE164 === "string" && t.fromE164.trim()) continue; // literal already checked
+    if (!isRef(t?.fromRef)) continue;
+    const key = contactRefKey(t.fromRef);
+    let values = memo.get(key);
+    if (!values) {
+      try {
+        values = await resolveRefIdentityValues(db, businessId, t.fromRef);
+      } catch (e) {
+        console.error("matchVoiceFlowByCaller: ref resolution failed", e);
+        continue;
+      }
+      memo.set(key, values);
+    }
+    if (values.includes(callerE164)) return f;
+  }
+  return null;
 }
 
 /** True when the value looks like a usable ContactRef (defensive: raw JSONB). */

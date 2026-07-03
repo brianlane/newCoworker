@@ -1656,6 +1656,56 @@ describe("voice trigger + voice steps", () => {
       );
     });
 
+    it("accepts a voice trigger fromRef as the caller match, rejects both sources", () => {
+      const withRef = parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "voice", fromRef: conRef },
+        steps: [{ id: "r", type: "ring_handoff", toE164: "+16025245719" }]
+      });
+      expect(validateDefinitionSemantics(withRef)).toEqual([]);
+      expect(summarizeDefinition(withRef)).toContain("a saved contact");
+
+      const both = aiFlowDefinitionSchema.parse({
+        version: 1,
+        trigger: { channel: "voice", fromE164: "+14159851909", fromRef: conRef },
+        steps: [{ id: "r", type: "ring_handoff", toE164: "+16025245719" }]
+      });
+      expect(validateDefinitionSemantics(both)).toContain(
+        "The trigger sets both fromE164 and fromRef — use only one."
+      );
+    });
+
+    it("accepts a from_matches condition with a saved-contact ref (sms trigger)", () => {
+      const def = parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "sms", conditions: [{ type: "from_matches", ref: conRef }] },
+        steps: [{ id: "n", type: "notify_owner", message: "hi" }]
+      });
+      expect(validateDefinitionSemantics(def)).toEqual([]);
+    });
+
+    it("rejects a from_matches condition with neither / both sender sources", () => {
+      const neither = aiFlowDefinitionSchema.parse({
+        version: 1,
+        trigger: { channel: "sms", conditions: [{ type: "from_matches" }] },
+        steps: [{ id: "n", type: "notify_owner", message: "hi" }]
+      });
+      expect(validateDefinitionSemantics(neither)).toContain(
+        'A "from matches" condition needs a sender — enter text or pick a saved contact.'
+      );
+      const both = aiFlowDefinitionSchema.parse({
+        version: 1,
+        trigger: {
+          channel: "sms",
+          conditions: [{ type: "from_matches", value: "+1602", ref: conRef }]
+        },
+        steps: [{ id: "n", type: "notify_owner", message: "hi" }]
+      });
+      expect(validateDefinitionSemantics(both)).toContain(
+        'A "from matches" condition sets both a text value and a saved contact — use only one.'
+      );
+    });
+
     it("rejects an outbound_call with both callee sources, allows neither (entry supplies it)", () => {
       const both = aiFlowDefinitionSchema.parse({
         version: 1,
@@ -1824,7 +1874,7 @@ describe("voice trigger + voice steps", () => {
       steps: [{ id: "r", type: "ring_handoff", toE164: "+16025245719" }]
     });
     expect(validateDefinitionSemantics(parsed)).toContain(
-      "An inbound voice flow needs a caller number (fromE164) on its trigger."
+      "An inbound voice flow needs a caller — set fromE164 or pick a saved contact (fromRef) on its trigger."
     );
   });
 

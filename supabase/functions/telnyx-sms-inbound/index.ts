@@ -27,6 +27,7 @@ import {
 } from "../_shared/telnyx_edge_guard.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 import { evaluateSmsTrigger, isExecutableDefinition } from "../_shared/ai_flows/engine.ts";
+import { resolveFromMatchesRefValues } from "../_shared/ai_flows/contact_ref.ts";
 import { parseClaimWithTimeframe } from "../_shared/ai_flows/claim_timeframe.ts";
 import {
   APPROVAL_OPTION_DECISIONS,
@@ -129,7 +130,18 @@ async function evaluateAiFlows(
     // email flows are started elsewhere (Run-now route, worker cron sweep,
     // mailbox poller).
     if (def.trigger.channel !== "sms") continue;
-    const res = evaluateSmsTrigger(def.trigger, { messages, nowMs: current.nowMs });
+    // Pre-resolve any from_matches saved-contact refs to live identity values
+    // for the pure evaluator. A resolution failure fails CLOSED for this flow
+    // only (no entry ⇒ the ref condition can't match) — never breaks the
+    // inbound path or the other flows.
+    let refValues: Map<string, string[]> | undefined;
+    try {
+      refValues = await resolveFromMatchesRefValues(supabase, businessId, def.trigger.conditions);
+    } catch (e) {
+      console.error("ai_flows from_matches ref resolution", e);
+      refValues = undefined;
+    }
+    const res = evaluateSmsTrigger(def.trigger, { messages, nowMs: current.nowMs }, refValues);
     if (res.matched) {
       matched.push({ id: f.id, def, url: res.url, windowText: res.windowText });
     }

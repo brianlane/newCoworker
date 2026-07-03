@@ -83,7 +83,8 @@ export function messagesInWindow(ctx: TriggerContext, windowMinutes: number): Co
 function evaluateCondition(
   cond: TriggerCondition,
   windowText: string,
-  latestFrom: string
+  latestFrom: string,
+  refValues?: ReadonlyMap<string, string[]>
 ): boolean {
   switch (cond.type) {
     case "contains":
@@ -92,8 +93,18 @@ function evaluateCondition(
       return safeRegexTest(cond.value, windowText, cond.caseInsensitive);
     case "has_url":
       return firstUrlInText(windowText) !== null;
-    case "from_matches":
-      return textContains(latestFrom, cond.value, cond.caseInsensitive);
+    case "from_matches": {
+      // Dynamic sender: match against the referenced person's LIVE identity
+      // values (resolved by the caller via resolveFromMatchesRefValues). A ref
+      // with no entry / no values fails closed — an unknown sender never fires.
+      if (cond.ref) {
+        const candidates = refValues?.get(`${cond.ref.source}:${cond.ref.id}`) ?? [];
+        return candidates.some((v) => textContains(latestFrom, v, cond.caseInsensitive));
+      }
+      return typeof cond.value === "string"
+        ? textContains(latestFrom, cond.value, cond.caseInsensitive)
+        : false;
+    }
     /* c8 ignore next 2 -- exhaustive switch; unreachable for valid conditions */
     default:
       return false;
@@ -103,15 +114,23 @@ function evaluateCondition(
 /**
  * Evaluate an SMS trigger over the correlation window. Returns matched +
  * windowText + first URL. All conditions must pass (AND). An empty condition
- * list matches any inbound SMS.
+ * list matches any inbound SMS. `refValues` carries the pre-resolved identity
+ * values for any `from_matches` contact refs (see resolveFromMatchesRefValues);
+ * evaluation itself stays pure.
  */
-export function evaluateSmsTrigger(trigger: SmsTrigger, ctx: TriggerContext): TriggerResult {
+export function evaluateSmsTrigger(
+  trigger: SmsTrigger,
+  ctx: TriggerContext,
+  refValues?: ReadonlyMap<string, string[]>
+): TriggerResult {
   const windowMinutes = trigger.correlationWindowMinutes ?? DEFAULT_CORRELATION_WINDOW_MINUTES;
   const inWindow = messagesInWindow(ctx, windowMinutes);
   const windowText = inWindow.map((m) => m.text).join("\n");
   const latestFrom = inWindow.length > 0 ? inWindow[inWindow.length - 1].from : "";
   const url = firstUrlInText(windowText);
-  const matched = trigger.conditions.every((c) => evaluateCondition(c, windowText, latestFrom));
+  const matched = trigger.conditions.every((c) =>
+    evaluateCondition(c, windowText, latestFrom, refValues)
+  );
   return { matched, windowText, url };
 }
 

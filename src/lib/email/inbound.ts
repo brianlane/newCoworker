@@ -26,6 +26,10 @@ import {
   recordInteractionAndIncrement
 } from "@/lib/customer-memory/db";
 import type { TriggerCondition } from "@/lib/ai-flows/schema";
+import {
+  resolveFromMatchesRefValues,
+  type ContactRefSupabase
+} from "../../../supabase/functions/_shared/ai_flows/contact_ref";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -130,7 +134,23 @@ export async function processInboundTenantEmail(
   let firstFlowId: string | null = null;
   let firstRunId: string | null = null;
   for (const flow of flows) {
-    if (!evaluateTriggerConditions(flow.conditions, scope.windowText, scope.from)) continue;
+    // Pre-resolve any from_matches saved-contact refs to live identity values
+    // (phones + emails). A resolution failure fails CLOSED for this flow only.
+    let refValues: Map<string, string[]> | undefined;
+    try {
+      // Cast: the full supabase-js builder type recurses too deep for TS to
+      // check structurally against the resolver's minimal chain type.
+      refValues = await resolveFromMatchesRefValues(
+        db as unknown as ContactRefSupabase,
+        businessId,
+        flow.conditions
+      );
+    } catch (e) {
+      console.error("tenant_email from_matches ref resolution", e);
+      refValues = undefined;
+    }
+    if (!evaluateTriggerConditions(flow.conditions, scope.windowText, scope.from, refValues))
+      continue;
     const run = await enqueueAiFlowRun(
       { businessId, flowId: flow.id, trigger: scope, dedupeKey: `email:${payload.messageId}` },
       db

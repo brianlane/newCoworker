@@ -71,6 +71,9 @@ function conditionLabel(c: TriggerCondition): string {
     case "regex":
       return `${CONDITION_LABELS.regex}: /${c.value}/`;
     case "from_matches":
+      if (c.ref) {
+        return `${CONDITION_LABELS.from_matches}: ${c.ref.label ?? "a saved contact"} (live number)`;
+      }
       return `${CONDITION_LABELS.from_matches}: "${c.value}"`;
   }
 }
@@ -140,7 +143,11 @@ function TriggerView({ trigger }: { trigger: FlowTrigger }) {
         </>
       )}
       {trigger.channel === "voice" && trigger.direction !== "outbound" && (
-        <Row label="Caller number" value={trigger.fromE164 ?? ""} mono />
+        <Row
+          label="Caller number"
+          value={voiceTarget(trigger.fromE164, trigger.fromRef)}
+          mono={Boolean(trigger.fromE164)}
+        />
       )}
     </section>
   );

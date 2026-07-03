@@ -1148,7 +1148,7 @@ export function AiFlowsManager({
                 onChange={(ev) => {
                   const type = ev.target.value as TriggerCondition["type"];
                   const next: TriggerCondition =
-                    type === "has_url" ? { type } : { type, value: "value" in c ? c.value : "" };
+                    type === "has_url" ? { type } : { type, value: ("value" in c ? c.value : "") ?? "" };
                   setEditor({
                     ...editor,
                     conditions: editor.conditions.map((x, xi) => (xi === i ? next : x))
@@ -1164,7 +1164,7 @@ export function AiFlowsManager({
               {c.type !== "has_url" && (
                 <input
                   className={inputClass}
-                  value={c.value}
+                  value={c.value ?? ""}
                   onChange={(ev) =>
                     setEditor({
                       ...editor,

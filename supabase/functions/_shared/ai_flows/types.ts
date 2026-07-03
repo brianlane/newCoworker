@@ -19,7 +19,11 @@ export type TriggerCondition =
   | { type: "contains"; value: string; caseInsensitive?: boolean }
   | { type: "regex"; value: string; caseInsensitive?: boolean }
   | { type: "has_url" }
-  | { type: "from_matches"; value: string; caseInsensitive?: boolean };
+  // Exactly one of value / ref (validated at author time). With `ref`, the
+  // sender matches when it contains ANY of the referenced person's LIVE
+  // identity values (phone + aliases + email — resolved by the trigger hook
+  // via resolveFromMatchesRefValues just before evaluation).
+  | { type: "from_matches"; value?: string; ref?: ContactRef; caseInsensitive?: boolean };
 
 /**
  * Inbound-SMS trigger. Conditions are evaluated against a CORRELATION WINDOW:
@@ -105,9 +109,16 @@ export type VoiceTrigger = {
   channel: "voice";
   /**
    * E.164 caller id that fires inbound routing (e.g. a partner's transfer line).
-   * Present for inbound flows; omitted for outbound (direction === "outbound").
+   * Inbound flows need exactly one of fromE164 / fromRef; omitted for outbound
+   * (direction === "outbound").
    */
   fromE164?: string;
+  /**
+   * Dynamic caller match: the flow fires when the caller's number is one of the
+   * referenced person's LIVE numbers (employee phone, or contact number +
+   * merge aliases) — resolved by the voice webhook at call time.
+   */
+  fromRef?: ContactRef;
   /**
    * "outbound" marks an owner-placed call flow (a single outbound_call step) run
    * by the origination edge function. Omitted ⇒ inbound.
