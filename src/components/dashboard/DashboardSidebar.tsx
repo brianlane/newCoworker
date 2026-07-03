@@ -15,7 +15,8 @@ import {
   Users,
   UserCog,
   Workflow,
-  CreditCard
+  CreditCard,
+  ArrowDownUp
 } from "lucide-react";
 
 const ownerNavItems = [
@@ -36,6 +37,9 @@ const ownerNavItems = [
   // their schedules/preferred times, and time off (which supersedes routing).
   { label: "Employees", href: "/dashboard/employees", icon: UserCog },
   { label: "Memory", href: "/dashboard/memory", icon: Brain },
+  // CSV in/out for contacts + employees (modeled on BizBlasts /manage/csv):
+  // bring a directory over from another tool, or take a backup.
+  { label: "Import / Export", href: "/dashboard/import-export", icon: ArrowDownUp },
   { label: "Integrations", href: "/dashboard/integrations", icon: Plug },
   { label: "AiFlows", href: "/dashboard/aiflows", icon: Workflow },
   { label: "Billing", href: "/dashboard/billing", icon: CreditCard },
