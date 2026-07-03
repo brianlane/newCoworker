@@ -47,7 +47,7 @@ function makeDb(results: Scripted[]) {
     const calls: CallLog[] = [];
     log.push({ table, calls });
     const builder: Record<string, unknown> = {};
-    for (const m of ["select", "insert", "update", "eq", "order"]) {
+    for (const m of ["select", "insert", "update", "eq", "is", "order"]) {
       builder[m] = (...args: unknown[]) => {
         calls.push({ name: m, args });
         return builder;
@@ -122,6 +122,7 @@ function portRow(overrides: Record<string, unknown> = {}) {
     support_key: "sr_1",
     loa_document_id: "doc-loa",
     invoice_document_id: "doc-bill",
+    notified_status: null,
     created_at: "2026-06-01T00:00:00Z",
     updated_at: "2026-06-01T00:00:00Z",
     ...overrides
@@ -765,7 +766,12 @@ describe("handlePortingStatusChange", () => {
     const details = [{ code: "ACCOUNT_NUMBER_MISMATCH", description: "wrong account" }];
     const { db, log } = makeDb([
       { data: portRow({ status: "submitted" }), error: null },
-      { data: [portRow({ status: "exception", status_detail: details })], error: null }
+      { data: [portRow({ status: "exception", status_detail: details })], error: null },
+      // Milestone claim (notified_status CAS) wins.
+      {
+        data: [portRow({ status: "exception", status_detail: details, notified_status: "exception" })],
+        error: null
+      }
     ]);
     const dispatch = vi.fn(async () => ({ results: [] }));
     const result = await handlePortingStatusChange(
@@ -860,8 +866,9 @@ describe("handlePortingStatusChange", () => {
   });
 
   it("does not notify on repeats of the same status or non-milestone moves", async () => {
+    // notified_status shows the exception alert already went out.
     const { db } = makeDb([
-      { data: portRow({ status: "exception" }), error: null },
+      { data: portRow({ status: "exception", notified_status: "exception" }), error: null },
       { data: [portRow({ status: "exception" })], error: null }
     ]);
     await handlePortingStatusChange(
@@ -887,7 +894,10 @@ describe("handlePortingStatusChange", () => {
     // Same-status redelivery WITHOUT details carries nothing new → no write
     // at all (bumping updated_at would skew occurred_at ordering later).
     const { db, log } = makeDb([
-      { data: portRow({ status: "exception", status_detail: stored }), error: null }
+      {
+        data: portRow({ status: "exception", status_detail: stored, notified_status: "exception" }),
+        error: null
+      }
     ]);
     const result = await handlePortingStatusChange(
       { id: "po-1", status: { value: "exception" } },
@@ -899,7 +909,10 @@ describe("handlePortingStatusChange", () => {
 
     // Same-status redelivery with EMPTY details → same no-op.
     const { db: db2, log: log2 } = makeDb([
-      { data: portRow({ status: "exception", status_detail: stored }), error: null }
+      {
+        data: portRow({ status: "exception", status_detail: stored, notified_status: "exception" }),
+        error: null
+      }
     ]);
     const result2 = await handlePortingStatusChange(
       { id: "po-1", status: { value: "exception", details: [] } },
@@ -908,11 +921,20 @@ describe("handlePortingStatusChange", () => {
     expect(result2.row?.status_detail).toEqual(stored);
     expect(log2).toHaveLength(1);
 
-    // Same-status redelivery WITH new details → overwrite.
+    // Same-status redelivery WITH new details → overwrite. (Alert already
+    // claimed for this status, so no re-notification.)
     const fresh = [{ code: "PASSCODE_PIN_INVALID", description: "bad pin" }];
     const { db: db3, log: log3 } = makeDb([
-      { data: portRow({ status: "exception", status_detail: stored }), error: null },
-      { data: [portRow({ status: "exception", status_detail: fresh })], error: null }
+      {
+        data: portRow({ status: "exception", status_detail: stored, notified_status: "exception" }),
+        error: null
+      },
+      {
+        data: [
+          portRow({ status: "exception", status_detail: fresh, notified_status: "exception" })
+        ],
+        error: null
+      }
     ]);
     await handlePortingStatusChange(
       { id: "po-1", status: { value: "exception", details: fresh } },
@@ -1027,10 +1049,27 @@ describe("handlePortingStatusChange", () => {
   });
 
   it("still writes same-status redeliveries that carry a new FOC date or support key", async () => {
-    // Same status but a NEW FOC date → real information, write it.
+    // Same status but a NEW FOC date → real information, write it. (Alert
+    // for this status was already claimed, so no re-notification.)
     const { db, log } = makeDb([
-      { data: portRow({ status: "foc-date-confirmed", foc_at: "2026-07-20T13:00:00Z" }), error: null },
-      { data: [portRow({ status: "foc-date-confirmed", foc_at: "2026-07-25T13:00:00Z" })], error: null }
+      {
+        data: portRow({
+          status: "foc-date-confirmed",
+          foc_at: "2026-07-20T13:00:00Z",
+          notified_status: "foc-date-confirmed"
+        }),
+        error: null
+      },
+      {
+        data: [
+          portRow({
+            status: "foc-date-confirmed",
+            foc_at: "2026-07-25T13:00:00Z",
+            notified_status: "foc-date-confirmed"
+          })
+        ],
+        error: null
+      }
     ]);
     await handlePortingStatusChange(
       {
@@ -1061,7 +1100,16 @@ describe("handlePortingStatusChange", () => {
     // Neither the payload nor the row has a support key → stays null.
     const { db: db3, log: log3 } = makeDb([
       { data: portRow({ status: "submitted", support_key: null }), error: null },
-      { data: [portRow({ status: "foc-date-confirmed", support_key: null })], error: null }
+      {
+        data: [
+          portRow({
+            status: "foc-date-confirmed",
+            support_key: null,
+            notified_status: "foc-date-confirmed"
+          })
+        ],
+        error: null
+      }
     ]);
     await handlePortingStatusChange(
       { id: "po-1", status: { value: "foc-date-confirmed" } },
@@ -1075,7 +1123,8 @@ describe("handlePortingStatusChange", () => {
   it("yields to a concurrent delivery that wins the compare-and-swap, without notifying twice", async () => {
     // Our conditional update matches zero rows because a parallel worker
     // already applied this transition → return their row, notify nothing.
-    const winnerRow = portRow({ status: "ported" });
+    // The winner finished its work, including the alert claim.
+    const winnerRow = portRow({ status: "ported", notified_status: "ported" });
     const { db, log } = makeDb([
       { data: portRow({ status: "foc-date-confirmed" }), error: null }, // read
       { data: [], error: null }, // CAS matched 0 rows
@@ -1118,7 +1167,8 @@ describe("handlePortingStatusChange", () => {
       { data: portRow({ status: "submitted" }), error: null }, // read
       { data: [], error: null }, // CAS 1 lost
       { data: portRow({ status: "exception" }), error: null }, // re-read
-      { data: [portRow({ status: "ported" })], error: null } // CAS 2 wins
+      { data: [portRow({ status: "ported" })], error: null }, // CAS 2 wins
+      { data: [portRow({ status: "ported", notified_status: "ported" })], error: null } // claim
     ]);
     const result = await handlePortingStatusChange(
       { id: "po-1", status: { value: "ported" } },
@@ -1170,24 +1220,25 @@ describe("handlePortingStatusChange", () => {
     ).rejects.toThrow(/handlePortingStatusChange: reread exploded/);
   });
 
-  it("flags ported=true only on the transition into ported, using the module dispatcher", async () => {
+  it("flags ported=true only for the delivery that claims the milestone, using the module dispatcher", async () => {
     const { db } = makeDb([
       { data: portRow({ status: "foc-date-confirmed" }), error: null },
-      { data: [portRow({ status: "ported" })], error: null }
+      { data: [portRow({ status: "ported" })], error: null }, // status CAS
+      { data: [portRow({ status: "ported", notified_status: "ported" })], error: null } // claim
     ]);
     const result = await handlePortingStatusChange(
       { id: "po-1", status: { value: "ported" } },
       { client: db }
     );
     expect(result.ported).toBe(true);
+    expect(result.row?.notified_status).toBe("ported");
     expect(dispatchMock).toHaveBeenCalledWith(
       expect.objectContaining({ summary: expect.stringContaining("finished porting") })
     );
 
-    // Redelivery of ported → already terminal, no re-notify, ported=false.
+    // Redelivery of an already-alerted ported row → no re-notify, ported=false.
     const { db: db2 } = makeDb([
-      { data: portRow({ status: "ported" }), error: null },
-      { data: [portRow({ status: "ported" })], error: null }
+      { data: portRow({ status: "ported", notified_status: "ported" }), error: null }
     ]);
     dispatchMock.mockClear();
     const result2 = await handlePortingStatusChange(
@@ -1198,10 +1249,125 @@ describe("handlePortingStatusChange", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
+  it("recovers a missed milestone alert from a crashed delivery, exactly once", async () => {
+    // The delivery that wrote `ported` died before notifying: the row says
+    // ported but notified_status is still null. This retry carries nothing
+    // new (no-op write) yet claims the alert and reports the activation.
+    const { db, log } = makeDb([
+      { data: portRow({ status: "ported", notified_status: null }), error: null },
+      { data: [portRow({ status: "ported", notified_status: "ported" })], error: null } // claim
+    ]);
+    const result = await handlePortingStatusChange(
+      { id: "po-1", status: { value: "ported" } },
+      { client: db }
+    );
+    expect(result.ported).toBe(true);
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(log[1].calls.find((c) => c.name === "update")?.args[0]).toEqual({
+      notified_status: "ported"
+    });
+    expect(log[1].calls).toContainEqual({ name: "eq", args: ["status", "ported"] });
+    expect(log[1].calls).toContainEqual({ name: "is", args: ["notified_status", null] });
+
+    // A stale claim (notified_status from an earlier milestone) swaps via eq.
+    dispatchMock.mockClear();
+    const { db: db2, log: log2 } = makeDb([
+      { data: portRow({ status: "cancelled", notified_status: "exception" }), error: null },
+      {
+        data: [portRow({ status: "cancelled", notified_status: "cancelled" })],
+        error: null
+      }
+    ]);
+    const result2 = await handlePortingStatusChange(
+      { id: "po-1", status: { value: "cancelled" } },
+      { client: db2 }
+    );
+    expect(result2.ported).toBe(false); // cancelled, not ported
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(log2[1].calls).toContainEqual({ name: "eq", args: ["notified_status", "exception"] });
+
+    // FOC-confirmed milestone recovery uses its own summary copy.
+    dispatchMock.mockClear();
+    const { db: db5 } = makeDb([
+      { data: portRow({ status: "foc-date-confirmed", notified_status: null }), error: null },
+      {
+        data: [portRow({ status: "foc-date-confirmed", notified_status: "foc-date-confirmed" })],
+        error: null
+      }
+    ]);
+    await handlePortingStatusChange(
+      { id: "po-1", status: { value: "foc-date-confirmed" } },
+      { client: db5 }
+    );
+    expect(dispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: expect.stringContaining("Port date confirmed") })
+    );
+
+    // A parallel retry lost the claim CAS → no duplicate alert. (Both the
+    // empty-array and null no-rows shapes.)
+    dispatchMock.mockClear();
+    const { db: db3 } = makeDb([
+      { data: portRow({ status: "ported", notified_status: null }), error: null },
+      { data: [], error: null } // claim lost
+    ]);
+    const result3 = await handlePortingStatusChange(
+      { id: "po-1", status: { value: "ported" } },
+      { client: db3 }
+    );
+    expect(result3.ported).toBe(false);
+    expect(dispatchMock).not.toHaveBeenCalled();
+
+    const { db: db3b } = makeDb([
+      { data: portRow({ status: "ported", notified_status: null }), error: null },
+      { data: null, error: null }
+    ]);
+    const result3b = await handlePortingStatusChange(
+      { id: "po-1", status: { value: "ported" } },
+      { client: db3b }
+    );
+    expect(result3b.ported).toBe(false);
+    expect(dispatchMock).not.toHaveBeenCalled();
+
+    // Losing the STATUS CAS to a writer that crashed before claiming: the
+    // re-read shows our very transition unclaimed → this delivery claims it.
+    dispatchMock.mockClear();
+    const { db: db6 } = makeDb([
+      { data: portRow({ status: "foc-date-confirmed" }), error: null }, // read
+      { data: [], error: null }, // status CAS lost
+      { data: portRow({ status: "ported", notified_status: null }), error: null }, // re-read
+      { data: [portRow({ status: "ported", notified_status: "ported" })], error: null } // claim
+    ]);
+    const result6 = await handlePortingStatusChange(
+      { id: "po-1", status: { value: "ported" } },
+      { client: db6 }
+    );
+    expect(result6.ported).toBe(true);
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+
+    // Claim write errors are logged, never thrown (Telnyx should not retry
+    // a status that was persisted fine).
+    dispatchMock.mockClear();
+    const { db: db4 } = makeDb([
+      { data: portRow({ status: "ported", notified_status: null }), error: null },
+      { data: null, error: { message: "claim exploded" } }
+    ]);
+    const result4 = await handlePortingStatusChange(
+      { id: "po-1", status: { value: "ported" } },
+      { client: db4 }
+    );
+    expect(result4).toMatchObject({ handled: true, ported: false });
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "byon: failed to claim milestone alert",
+      expect.objectContaining({ error: "claim exploded" })
+    );
+  });
+
   it("covers cancelled summary and survives dispatch failures (Error and non-Error)", async () => {
     const { db } = makeDb([
       { data: portRow({ status: "submitted" }), error: null },
-      { data: [portRow({ status: "cancelled" })], error: null }
+      { data: [portRow({ status: "cancelled" })], error: null },
+      { data: [portRow({ status: "cancelled", notified_status: "cancelled" })], error: null }
     ]);
     const throwingDispatch = vi.fn(async () => {
       throw new Error("smtp down");
@@ -1221,7 +1387,8 @@ describe("handlePortingStatusChange", () => {
 
     const { db: db2 } = makeDb([
       { data: portRow({ status: "submitted" }), error: null },
-      { data: [portRow({ status: "cancelled" })], error: null }
+      { data: [portRow({ status: "cancelled" })], error: null },
+      { data: [portRow({ status: "cancelled", notified_status: "cancelled" })], error: null }
     ]);
     const throwingDispatch2 = vi.fn(async () => {
       throw "wat";

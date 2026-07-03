@@ -55,6 +55,8 @@ export type NumberPortRequestRow = {
   support_key: string | null;
   loa_document_id: string | null;
   invoice_document_id: string | null;
+  /** Last status the owner alert / ported signal was claimed for ('' = none). */
+  notified_status: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -555,7 +557,11 @@ export type PortingWebhookOrderPayload = {
 export type PortingStatusChangeResult = {
   /** False when no number_port_requests row matches the order id. */
   handled: boolean;
-  /** True exactly when this event moved the request into `ported`. */
+  /**
+   * True exactly when this delivery CLAIMED the `ported` milestone (via the
+   * notified_status compare-and-swap) — exactly once across retries, crashed
+   * deliveries, and parallel workers, so activation hooks can key off it.
+   */
   ported: boolean;
   row: NumberPortRequestRow | null;
 };
@@ -571,6 +577,81 @@ function statusSummary(status: string, phoneE164: string): string {
     default:
       return `Your number port for ${phoneE164} was cancelled`;
   }
+}
+
+/**
+ * Claim the milestone alert for the row's CURRENT status, exactly once.
+ *
+ * The status write and the owner alert are separate steps; a worker can die
+ * between them, and Telnyx's retry then looks like a benign redelivery. So
+ * alerting keys off durable state instead of in-memory transitions:
+ * `notified_status` records the last status an alert was claimed for, and a
+ * compare-and-swap on it lets exactly one delivery — original, retry, or
+ * parallel worker — send each milestone's alert (and, for `ported`, report
+ * the activation signal).
+ */
+async function claimByonMilestone(
+  db: SupabaseClient,
+  row: NumberPortRequestRow,
+  deps: ByonDeps,
+  orderId: string
+): Promise<{ claimed: boolean; row: NumberPortRequestRow }> {
+  if (!NOTIFY_STATUSES.has(row.status) || row.notified_status === row.status) {
+    return { claimed: false, row };
+  }
+
+  // Deliberately NOT bumping updated_at: it anchors the occurred_at ordering
+  // of backward status moves, and the claim doesn't change status state.
+  let query = db
+    .from("number_port_requests")
+    .update({ notified_status: row.status })
+    .eq("id", row.id)
+    .eq("status", row.status);
+  query =
+    row.notified_status == null
+      ? query.is("notified_status", null)
+      : query.eq("notified_status", row.notified_status);
+  const { data, error } = await query.select();
+  if (error) {
+    // Alert bookkeeping must not fail the webhook; the next delivery
+    // retries the claim.
+    logger.warn("byon: failed to claim milestone alert", {
+      orderId,
+      status: row.status,
+      error: error.message
+    });
+    return { claimed: false, row };
+  }
+  const claimedRow = ((data ?? []) as NumberPortRequestRow[])[0] ?? null;
+  if (!claimedRow) {
+    // Another delivery claimed (or the status moved again) — they alert.
+    return { claimed: false, row };
+  }
+
+  const dispatch = deps.dispatch ?? dispatchUrgentNotification;
+  try {
+    await dispatch({
+      businessId: row.business_id,
+      summary: statusSummary(row.status, row.phone_e164),
+      kind: "byon_port",
+      payload: {
+        phone_e164: row.phone_e164,
+        port_request_id: row.id,
+        telnyx_order_id: orderId,
+        status: row.status,
+        status_detail: row.status_detail ?? [],
+        foc_at: row.foc_at
+      }
+    });
+  } catch (err) {
+    // Never fail the webhook (Telnyx would retry) because an alert didn't send.
+    logger.warn("byon: status notification failed", {
+      orderId,
+      status: row.status,
+      error: errMessage(err)
+    });
+  }
+  return { claimed: true, row: claimedRow };
 }
 
 export async function handlePortingStatusChange(
@@ -643,7 +724,15 @@ export async function handlePortingStatusChange(
       supportKey === (prior.support_key ?? null) &&
       JSON.stringify(statusDetail ?? null) === JSON.stringify(prior.status_detail ?? null);
     if (noop) {
-      return { handled: true, ported: false, row: prior };
+      // Even with nothing to write, the milestone alert may still be
+      // unclaimed — e.g. the delivery that wrote this status crashed before
+      // notifying, and this retry is what recovers the alert.
+      const claim = await claimByonMilestone(db, prior, deps, orderId);
+      return {
+        handled: true,
+        ported: claim.claimed && prior.status === "ported",
+        row: claim.row
+      };
     }
 
     const { data: updatedRows, error: updateErr } = await db
@@ -662,34 +751,14 @@ export async function handlePortingStatusChange(
     const row = ((updatedRows ?? []) as NumberPortRequestRow[])[0] ?? null;
 
     if (row) {
-      // Only alert on transitions into a milestone — Telnyx re-delivers
-      // webhooks, and repeats of the same status must not re-ping the owner.
-      if (status !== prior.status && NOTIFY_STATUSES.has(status)) {
-        const dispatch = deps.dispatch ?? dispatchUrgentNotification;
-        try {
-          await dispatch({
-            businessId: prior.business_id,
-            summary: statusSummary(status, prior.phone_e164),
-            kind: "byon_port",
-            payload: {
-              phone_e164: prior.phone_e164,
-              port_request_id: prior.id,
-              telnyx_order_id: orderId,
-              status,
-              status_detail: payload.status?.details ?? [],
-              foc_at: focAt
-            }
-          });
-        } catch (err) {
-          // Never fail the webhook (Telnyx would retry) because an alert didn't send.
-          logger.warn("byon: status notification failed", {
-            orderId,
-            status,
-            error: errMessage(err)
-          });
-        }
-      }
-      return { handled: true, ported: status === "ported" && prior.status !== "ported", row };
+      // Alerting keys off durable state (notified_status), not this
+      // in-memory transition — see claimByonMilestone.
+      const claim = await claimByonMilestone(db, row, deps, orderId);
+      return {
+        handled: true,
+        ported: claim.claimed && row.status === "ported",
+        row: claim.row
+      };
     }
 
     logger.warn("byon: porting status update lost the write race", {
@@ -710,9 +779,15 @@ export async function handlePortingStatusChange(
     }
     prior = current as NumberPortRequestRow;
     if (prior.status === status) {
-      // The concurrent writer applied this very transition — dedupe, they
-      // already sent the alert.
-      return { handled: true, ported: false, row: prior };
+      // The concurrent writer applied this very transition. If they also
+      // finished notifying, the claim below is a no-op; if they crashed
+      // first, this delivery picks the alert up.
+      const claim = await claimByonMilestone(db, prior, deps, orderId);
+      return {
+        handled: true,
+        ported: claim.claimed && prior.status === "ported",
+        row: claim.row
+      };
     }
   }
 
