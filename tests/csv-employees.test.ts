@@ -338,6 +338,31 @@ describe("importEmployeesCsv", () => {
     ]);
   });
 
+  it("applies the row as an update after an insert unique-violation race", async () => {
+    const { db, log } = makeDb([
+      { data: null, error: null }, // first lookup: nothing yet
+      { data: null, error: { code: "23505", message: "duplicate key" } }, // insert races
+      { data: { id: "raced-m" }, error: null }, // re-lookup finds the winner
+      { data: null, error: null } // update applies the row's fields
+    ]);
+    const summary = await importEmployeesCsv(BIZ, "name,phone\nAlex,+16025551234", db);
+    expect(summary).toMatchObject({ created: 0, updated: 1, skipped: 0 });
+    expect(summary.errors).toEqual([]);
+    const update = log[3].calls.find((c) => c.name === "update");
+    expect(update?.args[0]).toMatchObject({ name: "Alex" });
+  });
+
+  it("reports the row when the racing member vanishes before the retry", async () => {
+    const { db } = makeDb([
+      { data: null, error: null },
+      { data: null, error: { code: "23505", message: "duplicate key" } },
+      { data: null, error: null } // re-lookup: gone again
+    ]);
+    const summary = await importEmployeesCsv(BIZ, "name,phone\nAlex,+16025551234", db);
+    expect(summary).toMatchObject({ created: 0, updated: 0, skipped: 1 });
+    expect(summary.errors[0].message).toMatch(/concurrent change kept \+16025551234/);
+  });
+
   it("labels a non-Error throw as unexpected", async () => {
     const { db } = makeDb([
       () => {

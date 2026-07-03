@@ -18,6 +18,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
 import type { TeamMemberRow } from "@/lib/db/employees";
 import { formatScheduleText, parseScheduleText } from "@/lib/employees/schedule-text";
+import { PG_UNIQUE_VIOLATION } from "@/lib/customer-memory/db";
 import { parseCsv, serializeCsv } from "./csv";
 import { MAX_IMPORT_ROWS, type CsvImportSummary } from "./contacts";
 
@@ -187,28 +188,32 @@ export async function importEmployeesCsv(
     }
 
     try {
-      const { data: existing, error: selErr } = await db
-        .from("ai_flow_team_members")
-        .select("id")
-        .eq("business_id", businessId)
-        .eq("phone_e164", phone)
-        .maybeSingle();
-      if (selErr) throw new Error(selErr.message);
-
-      if (existing) {
-        // Blank cells mean "keep" — only provided values are written.
-        const patch: Record<string, unknown> = {
-          name,
-          ...(email ? { email } : {}),
-          ...(active !== null ? { active } : {}),
-          ...(scheduleText ? { weekly_schedule: schedule.value } : {}),
-          ...(preferredText ? { preferred_windows: preferred.value } : {})
-        };
+      // Blank cells mean "keep" — only provided values are written.
+      const patch: Record<string, unknown> = {
+        name,
+        ...(email ? { email } : {}),
+        ...(active !== null ? { active } : {}),
+        ...(scheduleText ? { weekly_schedule: schedule.value } : {}),
+        ...(preferredText ? { preferred_windows: preferred.value } : {})
+      };
+      const applyUpdate = async (): Promise<boolean> => {
+        const { data: existing, error: selErr } = await db
+          .from("ai_flow_team_members")
+          .select("id")
+          .eq("business_id", businessId)
+          .eq("phone_e164", phone)
+          .maybeSingle();
+        if (selErr) throw new Error(selErr.message);
+        if (!existing) return false;
         const { error: updErr } = await db
           .from("ai_flow_team_members")
           .update(patch)
           .eq("id", existing.id);
         if (updErr) throw new Error(updErr.message);
+        return true;
+      };
+
+      if (await applyUpdate()) {
         summary.updated += 1;
       } else {
         const { error: insErr } = await db.from("ai_flow_team_members").insert({
@@ -220,8 +225,19 @@ export async function importEmployeesCsv(
           weekly_schedule: schedule.value,
           preferred_windows: preferred.value
         });
-        if (insErr) throw new Error(insErr.message);
-        summary.created += 1;
+        if (insErr) {
+          if (insErr.code !== PG_UNIQUE_VIOLATION) throw new Error(insErr.message);
+          // Raced by a concurrent create (second import tab, UI add) between
+          // the lookup and the insert — apply the row as an update instead of
+          // dropping it, mirroring the contacts importer.
+          if (await applyUpdate()) {
+            summary.updated += 1;
+          } else {
+            throw new Error(`A concurrent change kept ${phone} from being saved — re-import this row.`);
+          }
+        } else {
+          summary.created += 1;
+        }
       }
     } catch (e) {
       summary.errors.push({
