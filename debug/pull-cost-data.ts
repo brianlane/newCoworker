@@ -265,14 +265,30 @@ interface TelnyxAgg {
 const telnyx: Record<string, TelnyxAgg> = {};
 const telnyxKey = process.env.TELNYX_API_KEY ?? "";
 const telnyxRange = TELNYX_DAYS > 30 ? "last_90_days" : TELNYX_DAYS > 7 ? "last_30_days" : "last_7_days";
-// The tenant's Telnyx DID (what appears as cli/cld on MDRs) — falls back to
-// businesses.phone if no telnyx settings row.
+// The tenant's Telnyx DIDs (what appears as cli/cld on MDRs): the messaging
+// from-number plus every routed voice DID. businesses.phone is deliberately
+// NOT used — that's the owner's onboarding cell, not a Telnyx number, and
+// matching on it would attribute unrelated MDRs to this tenant.
 const { data: telnyxSettings } = await db
   .from("business_telnyx_settings")
   .select("telnyx_sms_from_e164")
   .eq("business_id", BUSINESS_ID)
   .maybeSingle();
-const bizPhone = (telnyxSettings?.telnyx_sms_from_e164 ?? biz.phone ?? "").replace(/[^+\d]/g, "");
+const { data: voiceRoutes } = await db
+  .from("telnyx_voice_routes")
+  .select("to_e164")
+  .eq("business_id", BUSINESS_ID);
+const tenantDidSuffixes = [
+  ...new Set(
+    [telnyxSettings?.telnyx_sms_from_e164, ...(voiceRoutes ?? []).map((r) => r.to_e164)]
+      .map((n) => (n ?? "").replace(/[^+\d]/g, ""))
+      .filter((n) => n.length >= 10)
+      .map((n) => n.slice(-10))
+  )
+];
+if (tenantDidSuffixes.length === 0) {
+  console.log(`  [telnyx] WARNING: no Telnyx DIDs found for this business — tenant slices will be empty`);
+}
 let telnyxError: string | null = null;
 if (!telnyxKey) {
   telnyxError = "TELNYX_API_KEY not set — skipped";
@@ -308,7 +324,7 @@ if (!telnyxKey) {
         const month = when ? monthOf(when) : "unknown";
         const cli = str(r.cli).replace(/[^+\d]/g, "");
         const cld = str(r.cld).replace(/[^+\d]/g, "");
-        const isTenant = bizPhone !== "" && (cli.endsWith(bizPhone.slice(-10)) || cld.endsWith(bizPhone.slice(-10)));
+        const isTenant = tenantDidSuffixes.some((s) => cli.endsWith(s) || cld.endsWith(s));
         const add = (map: Record<string, TelnyxBucket>, key: string): void => {
           const b = (map[key] ??= newBucket());
           b.count += num(r.count) || 1;
@@ -339,7 +355,7 @@ if (telnyxError) console.log(`  WARNING: ${telnyxError}`);
 for (const [type, agg] of Object.entries(telnyx)) {
   for (const [scope, map] of [
     ["account", agg.account],
-    [`tenant ${bizPhone || "?"}`, agg.tenant]
+    [`tenant …${tenantDidSuffixes.join(",…") || "?"}`, agg.tenant]
   ] as const) {
     for (const [key, b] of Object.entries(map).sort()) {
       const unit = type === "messaging" ? `${b.count} msgs` : `${(b.billedSeconds / 60).toFixed(1)} min (${b.count} legs)`;
@@ -362,7 +378,7 @@ const out = {
   smsOutboundByMonth: smsOutByMonth,
   smsInboundByMonth: smsInByMonth,
   geminiSpendRows: spendRows ?? [],
-  telnyx: { range: telnyxRange, error: telnyxError, byRecordType: telnyx }
+  telnyx: { range: telnyxRange, error: telnyxError, tenantDidSuffixes, byRecordType: telnyx }
 };
 const outFile = path.resolve(process.cwd(), `debug/.cost-data-${BUSINESS_ID}.json`);
 fs.writeFileSync(outFile, JSON.stringify(out, null, 2) + "\n");
