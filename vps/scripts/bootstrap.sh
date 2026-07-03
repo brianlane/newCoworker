@@ -155,10 +155,18 @@ if [[ "$VPS_SIZE" == "kvm2" ]]; then
     apt-get "${APT_LOCK_OPTS[@]}" install -y -qq "linux-modules-extra-$(uname -r)"
     modprobe zram
   fi
-  echo lz4 > /sys/block/zram0/comp_algorithm
-  echo 4G > /sys/block/zram0/disksize
-  mkswap /dev/zram0
-  swapon /dev/zram0
+  # Idempotency: a prior bootstrap run (e.g. Hostinger post-install followed
+  # by the orchestrator's SSH re-run) leaves zram0 initialized and swapping;
+  # writing comp_algorithm to an initialized device fails EBUSY and would
+  # kill the whole re-run under `set -euo pipefail`.
+  if swapon --show=NAME --noheadings 2>/dev/null | grep -q '^/dev/zram0$'; then
+    log "ZRAM swap already active on /dev/zram0 — skipping device init."
+  else
+    echo lz4 > /sys/block/zram0/comp_algorithm
+    echo 4G > /sys/block/zram0/disksize
+    mkswap /dev/zram0
+    swapon /dev/zram0
+  fi
 
   # Persist ZRAM across reboots
   cat > /etc/systemd/system/zram-setup.service <<'ZRAM_EOF'
@@ -516,7 +524,10 @@ log "Rowboat stack deployed."
 log "Installing cloudflared..."
 CF_URL="https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64.deb"
 wget -q "$CF_URL" -O /tmp/cloudflared.deb
-dpkg -i /tmp/cloudflared.deb
+# apt-get (with the lock-timeout opts), NOT raw `dpkg -i`: dpkg does not honor
+# DPkg::Lock::Timeout, so a re-run racing unattended-upgrades for the dpkg
+# lock exits 2 and kills the bootstrap under `set -euo pipefail`.
+apt-get "${APT_LOCK_OPTS[@]}" install -y /tmp/cloudflared.deb
 rm /tmp/cloudflared.deb
 
 log "cloudflared installed (tunnel credentials required via deploy-client.sh)."

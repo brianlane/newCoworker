@@ -17,6 +17,8 @@ export type TenantVpsTarget = {
   businessId: string;
   hostingerVpsId: string;
   tier: string;
+  /** Raw businesses.vps_size pin (kvm2|kvm8|null). Resolve via resolveVpsSize. */
+  vpsSize: string | null;
 };
 
 export type TenantVpsRedeployResult = TenantVpsTarget & {
@@ -62,17 +64,25 @@ export async function listTenantVpsTargets(businessId: string | null): Promise<T
   const supabase = await createSupabaseServiceClient();
   let q = supabase
     .from("businesses")
-    .select("id, hostinger_vps_id, tier")
+    .select("id, hostinger_vps_id, tier, vps_size")
     .not("hostinger_vps_id", "is", null);
   if (businessId) q = q.eq("id", businessId);
   const { data, error } = await q;
   if (error) throw new Error(`listTenantVpsTargets: ${error.message}`);
-  return ((data ?? []) as Array<{ id: string; hostinger_vps_id: string | null; tier: string | null }>)
+  return (
+    (data ?? []) as Array<{
+      id: string;
+      hostinger_vps_id: string | null;
+      tier: string | null;
+      vps_size: string | null;
+    }>
+  )
     .filter((r) => typeof r.hostinger_vps_id === "string" && r.hostinger_vps_id.length > 0)
     .map((r) => ({
       businessId: r.id,
       hostingerVpsId: r.hostinger_vps_id as string,
-      tier: typeof r.tier === "string" && r.tier.length > 0 ? r.tier : "standard"
+      tier: typeof r.tier === "string" && r.tier.length > 0 ? r.tier : "standard",
+      vpsSize: r.vps_size ?? null
     }));
 }
 

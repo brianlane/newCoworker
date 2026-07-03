@@ -61,6 +61,7 @@ import {
 } from "@/lib/db/vps-gateway-tokens";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { quoteShellEnvValue } from "@/lib/provisioning/orchestrate";
+import { resolveVpsSize } from "@/lib/vps/size";
 import { sshExec } from "@/lib/hostinger/ssh";
 import {
   assertSafeGitRef,
@@ -85,6 +86,7 @@ import {
 function buildDeployEnvPrefix(
   businessId: string,
   deployTier: "starter" | "standard",
+  deployVpsSize: "kvm2" | "kvm8",
   bridgeMediaWssOrigin: string,
   gatewayToken: string,
   repoRef: string
@@ -99,6 +101,10 @@ function buildDeployEnvPrefix(
   const pairs: Array<[string, string]> = [
     ["BUSINESS_ID", businessId],
     ["TIER", deployTier],
+    // Hardware profile (Ollama fallback model selection). Without this a
+    // redeploy of a standard-tenant-on-kvm2 box would fall back to the tier
+    // default and pull the KVM8 model onto 8GB hardware.
+    ["VPS_SIZE", deployVpsSize],
     // deploy-client.sh re-pins /opt/newcoworker-repo to NEWCOWORKER_REPO_REF
     // (default "main") before it rsyncs+builds chat-worker / voice-bridge /
     // aiflow-render. Pass the requested ref through so `--ref` actually controls
@@ -214,8 +220,16 @@ async function redeployOne(
   const gatewayToken =
     existing ?? (await issueGatewayToken(target.businessId, { label: "vps-redeploy" }));
   const tier = deployTierFromBusinessTier(target.tier);
+  const vpsSize = resolveVpsSize(tier, target.vpsSize);
   const bridgeOrigin = await resolveBridgeMediaWssOrigin(target.businessId);
-  const envPrefix = buildDeployEnvPrefix(target.businessId, tier, bridgeOrigin, gatewayToken, ref);
+  const envPrefix = buildDeployEnvPrefix(
+    target.businessId,
+    tier,
+    vpsSize,
+    bridgeOrigin,
+    gatewayToken,
+    ref
+  );
   const command = buildRedeployCommand(ref, envPrefix);
   try {
     const result = await sshExec({
