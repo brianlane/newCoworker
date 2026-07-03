@@ -640,21 +640,31 @@ serve(async (req: Request) => {
     // trigger.fromE164 equal to the caller wins first, then a trigger.fromRef
     // whose referenced saved contact/employee's LIVE numbers include the caller
     // (a ref can't be matched in SQL — the number lives in another table).
-    const { data: flowRows, error: flowErr } = await supabase
-      .from("ai_flows")
-      .select("id, definition")
-      .eq("business_id", businessId)
-      .eq("enabled", true)
-      .eq("definition->trigger->>channel", "voice")
-      .order("created_at", { ascending: false })
-      .limit(100);
-    if (flowErr) {
-      console.error("ai_flows voice lookup", flowErr);
+    // Paginate so every flow is considered — a fixed cap would silently skip
+    // matching flows for businesses with large flow counts.
+    const flowRows: { id?: string; definition?: unknown }[] = [];
+    const pageSize = 100;
+    for (let page = 0; ; page++) {
+      const { data, error: flowErr } = await supabase
+        .from("ai_flows")
+        .select("id, definition")
+        .eq("business_id", businessId)
+        .eq("enabled", true)
+        .eq("definition->trigger->>channel", "voice")
+        .order("created_at", { ascending: false })
+        .range(page * pageSize, page * pageSize + pageSize - 1);
+      if (flowErr) {
+        console.error("ai_flows voice lookup", flowErr);
+        break;
+      }
+      const rows = (data ?? []) as { id?: string; definition?: unknown }[];
+      flowRows.push(...rows);
+      if (rows.length < pageSize) break;
     }
     const flowRow = await matchVoiceFlowByCaller(
       supabase,
       businessId,
-      (flowRows ?? []) as { id?: string; definition?: unknown }[],
+      flowRows,
       fromE164Informational
     );
     if (flowRow?.definition) {
