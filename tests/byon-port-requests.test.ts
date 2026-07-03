@@ -765,7 +765,7 @@ describe("handlePortingStatusChange", () => {
     const details = [{ code: "ACCOUNT_NUMBER_MISMATCH", description: "wrong account" }];
     const { db, log } = makeDb([
       { data: portRow({ status: "submitted" }), error: null },
-      { data: portRow({ status: "exception", status_detail: details }), error: null }
+      { data: [portRow({ status: "exception", status_detail: details })], error: null }
     ]);
     const dispatch = vi.fn(async () => ({ results: [] }));
     const result = await handlePortingStatusChange(
@@ -798,7 +798,7 @@ describe("handlePortingStatusChange", () => {
   it("prefers actual FOC over requested over the prior value", async () => {
     const { db, log } = makeDb([
       { data: portRow({ foc_at: "2026-07-01T00:00:00Z" }), error: null },
-      { data: portRow(), error: null }
+      { data: [portRow()], error: null }
     ]);
     await handlePortingStatusChange(
       {
@@ -817,7 +817,7 @@ describe("handlePortingStatusChange", () => {
 
     const { db: db2, log: log2 } = makeDb([
       { data: portRow({ foc_at: "2026-07-01T00:00:00Z", support_key: "sr_prior" }), error: null },
-      { data: portRow(), error: null }
+      { data: [portRow()], error: null }
     ]);
     // submitted → in-process is a backward move; a newer occurred_at proves
     // it's a genuine event rather than a delayed retry.
@@ -837,7 +837,7 @@ describe("handlePortingStatusChange", () => {
 
     const { db: db3, log: log3 } = makeDb([
       { data: portRow({ foc_at: "2026-07-01T00:00:00Z" }), error: null },
-      { data: portRow(), error: null }
+      { data: [portRow()], error: null }
     ]);
     await handlePortingStatusChange(
       { id: "po-1", status: { value: "in-process" } },
@@ -862,7 +862,7 @@ describe("handlePortingStatusChange", () => {
   it("does not notify on repeats of the same status or non-milestone moves", async () => {
     const { db } = makeDb([
       { data: portRow({ status: "exception" }), error: null },
-      { data: portRow({ status: "exception" }), error: null }
+      { data: [portRow({ status: "exception" })], error: null }
     ]);
     await handlePortingStatusChange(
       { id: "po-1", status: { value: "exception" } },
@@ -872,7 +872,7 @@ describe("handlePortingStatusChange", () => {
 
     const { db: db2 } = makeDb([
       { data: portRow({ status: "in-process" }), error: null },
-      { data: portRow({ status: "submitted" }), error: null }
+      { data: [portRow({ status: "submitted" })], error: null }
     ]);
     await handlePortingStatusChange(
       { id: "po-1", status: { value: "submitted" } },
@@ -887,7 +887,7 @@ describe("handlePortingStatusChange", () => {
     // Same-status redelivery WITHOUT details → keep what we have.
     const { db, log } = makeDb([
       { data: portRow({ status: "exception", status_detail: stored }), error: null },
-      { data: portRow({ status: "exception", status_detail: stored }), error: null }
+      { data: [portRow({ status: "exception", status_detail: stored })], error: null }
     ]);
     await handlePortingStatusChange({ id: "po-1", status: { value: "exception" } }, { client: db });
     expect(log[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
@@ -897,7 +897,7 @@ describe("handlePortingStatusChange", () => {
     // Same-status redelivery with EMPTY details → still keep what we have.
     const { db: db2, log: log2 } = makeDb([
       { data: portRow({ status: "exception", status_detail: stored }), error: null },
-      { data: portRow({ status: "exception", status_detail: stored }), error: null }
+      { data: [portRow({ status: "exception", status_detail: stored })], error: null }
     ]);
     await handlePortingStatusChange(
       { id: "po-1", status: { value: "exception", details: [] } },
@@ -911,7 +911,7 @@ describe("handlePortingStatusChange", () => {
     const fresh = [{ code: "PASSCODE_PIN_INVALID", description: "bad pin" }];
     const { db: db3, log: log3 } = makeDb([
       { data: portRow({ status: "exception", status_detail: stored }), error: null },
-      { data: portRow({ status: "exception", status_detail: fresh }), error: null }
+      { data: [portRow({ status: "exception", status_detail: fresh })], error: null }
     ]);
     await handlePortingStatusChange(
       { id: "po-1", status: { value: "exception", details: fresh } },
@@ -925,7 +925,7 @@ describe("handlePortingStatusChange", () => {
     // (exception → in-process is backward, so it needs a newer occurred_at.)
     const { db: db4, log: log4 } = makeDb([
       { data: portRow({ status: "exception", status_detail: stored }), error: null },
-      { data: portRow({ status: "in-process", status_detail: null }), error: null }
+      { data: [portRow({ status: "in-process", status_detail: null })], error: null }
     ]);
     await handlePortingStatusChange(
       { id: "po-1", status: { value: "in-process" } },
@@ -989,7 +989,7 @@ describe("handlePortingStatusChange", () => {
     // Genuine recovery: backward move with a NEWER occurred_at → applied.
     const { db: db5, log: log5 } = makeDb([
       { data: portRow({ status: "exception", updated_at: "2026-06-01T00:00:00Z" }), error: null },
-      { data: portRow({ status: "submitted" }), error: null }
+      { data: [portRow({ status: "submitted" })], error: null }
     ]);
     const result5 = await handlePortingStatusChange(
       { id: "po-1", status: { value: "submitted" } },
@@ -1015,7 +1015,7 @@ describe("handlePortingStatusChange", () => {
     // Statuses Telnyx adds later rank highest and always apply.
     const { db: db6, log: log6 } = makeDb([
       { data: portRow({ status: "submitted" }), error: null },
-      { data: portRow({ status: "brand-new-status" }), error: null }
+      { data: [portRow({ status: "brand-new-status" })], error: null }
     ]);
     const result6 = await handlePortingStatusChange(
       { id: "po-1", status: { value: "brand-new-status" } },
@@ -1025,10 +1025,48 @@ describe("handlePortingStatusChange", () => {
     expect(log6).toHaveLength(2);
   });
 
+  it("yields to a concurrent delivery that wins the compare-and-swap, without notifying twice", async () => {
+    // Our conditional update matches zero rows because a parallel worker
+    // already applied this transition → return their row, notify nothing.
+    const winnerRow = portRow({ status: "ported" });
+    const { db, log } = makeDb([
+      { data: portRow({ status: "foc-date-confirmed" }), error: null }, // read
+      { data: [], error: null }, // CAS matched 0 rows
+      { data: winnerRow, error: null } // re-fetch
+    ]);
+    const result = await handlePortingStatusChange(
+      { id: "po-1", status: { value: "ported" } },
+      { client: db }
+    );
+    expect(result).toMatchObject({ handled: true, ported: false });
+    expect(result.row).toEqual(winnerRow);
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "byon: porting status update lost the write race",
+      expect.objectContaining({ orderId: "po-1", status: "ported" })
+    );
+    expect(log[1].calls).toContainEqual({ name: "eq", args: ["status", "foc-date-confirmed"] });
+
+    // CAS returning null data + re-fetch coming back empty → fall back to
+    // the row we originally read.
+    const { db: db2 } = makeDb([
+      { data: portRow({ status: "foc-date-confirmed" }), error: null },
+      { data: null, error: null },
+      { data: null, error: null }
+    ]);
+    const result2 = await handlePortingStatusChange(
+      { id: "po-1", status: { value: "ported" } },
+      { client: db2 }
+    );
+    expect(result2.ported).toBe(false);
+    expect(result2.row?.status).toBe("foc-date-confirmed");
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it("flags ported=true only on the transition into ported, using the module dispatcher", async () => {
     const { db } = makeDb([
       { data: portRow({ status: "foc-date-confirmed" }), error: null },
-      { data: portRow({ status: "ported" }), error: null }
+      { data: [portRow({ status: "ported" })], error: null }
     ]);
     const result = await handlePortingStatusChange(
       { id: "po-1", status: { value: "ported" } },
@@ -1042,7 +1080,7 @@ describe("handlePortingStatusChange", () => {
     // Redelivery of ported → already terminal, no re-notify, ported=false.
     const { db: db2 } = makeDb([
       { data: portRow({ status: "ported" }), error: null },
-      { data: portRow({ status: "ported" }), error: null }
+      { data: [portRow({ status: "ported" })], error: null }
     ]);
     dispatchMock.mockClear();
     const result2 = await handlePortingStatusChange(
@@ -1056,7 +1094,7 @@ describe("handlePortingStatusChange", () => {
   it("covers cancelled summary and survives dispatch failures (Error and non-Error)", async () => {
     const { db } = makeDb([
       { data: portRow({ status: "submitted" }), error: null },
-      { data: portRow({ status: "cancelled" }), error: null }
+      { data: [portRow({ status: "cancelled" })], error: null }
     ]);
     const throwingDispatch = vi.fn(async () => {
       throw new Error("smtp down");
@@ -1076,7 +1114,7 @@ describe("handlePortingStatusChange", () => {
 
     const { db: db2 } = makeDb([
       { data: portRow({ status: "submitted" }), error: null },
-      { data: portRow({ status: "cancelled" }), error: null }
+      { data: [portRow({ status: "cancelled" })], error: null }
     ]);
     const throwingDispatch2 = vi.fn(async () => {
       throw "wat";
@@ -1094,7 +1132,7 @@ describe("handlePortingStatusChange", () => {
   it("uses the default service client when none is injected", async () => {
     const { db } = makeDb([
       { data: portRow({ status: "draft" }), error: null },
-      { data: portRow({ status: "in-process" }), error: null }
+      { data: [portRow({ status: "in-process" })], error: null }
     ]);
     defaultClientSpy.mockReturnValue(db);
     const result = await handlePortingStatusChange({

@@ -624,7 +624,11 @@ export async function handlePortingStatusChange(
         ? payloadDetails
         : prior.status_detail;
 
-  const { data: updated, error: updateErr } = await db
+  // Compare-and-swap on the status we read: overlapping deliveries (Telnyx
+  // retries, parallel workers) each read the same prior row, but only the
+  // one whose update actually matches gets to notify and report the
+  // transition — the losers see zero rows and defer to the winner's write.
+  const { data: updatedRows, error: updateErr } = await db
     .from("number_port_requests")
     .update({
       status,
@@ -634,10 +638,23 @@ export async function handlePortingStatusChange(
       updated_at: new Date().toISOString()
     })
     .eq("id", prior.id)
-    .select()
-    .single();
+    .eq("status", prior.status)
+    .select();
   if (updateErr) throw new Error(`handlePortingStatusChange: ${updateErr.message}`);
-  const row = updated as NumberPortRequestRow;
+  const row = ((updatedRows ?? []) as NumberPortRequestRow[])[0] ?? null;
+  if (!row) {
+    logger.warn("byon: porting status update lost the write race", {
+      orderId,
+      priorStatus: prior.status,
+      status
+    });
+    const { data: current } = await db
+      .from("number_port_requests")
+      .select("*")
+      .eq("id", prior.id)
+      .maybeSingle();
+    return { handled: true, ported: false, row: (current as NumberPortRequestRow | null) ?? prior };
+  }
 
   // Only alert on transitions into a milestone — Telnyx re-delivers webhooks,
   // and repeats of the same status must not re-ping the owner.
