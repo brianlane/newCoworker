@@ -1110,6 +1110,14 @@ serve(async (req: Request) => {
         rcsTenantDid = normalizeE164(
           (didRow as { telnyx_sms_from_e164?: string | null } | null)?.telnyx_sms_from_e164 ?? ""
         );
+        // Tenant resolved via the RCS agent but no per-tenant from-number:
+        // the inbound worker and compliance replies both fall back to the
+        // platform sender, so dropping the message here would silently lose
+        // routable RCS inbounds (including STOP/HELP/START). Use the platform
+        // from-number as the synthetic DID instead.
+        if (!rcsTenantDid) {
+          rcsTenantDid = normalizeE164(smsFromE164);
+        }
       }
     } else {
       const { data: route } = await supabase
@@ -1122,8 +1130,9 @@ serve(async (req: Request) => {
 
     const to = toDid ?? rcsTenantDid;
     if (!to) {
-      // RCS message whose agent didn't map to a tenant with a configured DID:
-      // without a reply sender nothing downstream can respond. Skip (200 so
+      // RCS message whose agent didn't map to a tenant at all, or mapped but
+      // NO reply sender exists anywhere (no tenant DID and no platform
+      // TELNYX_SMS_FROM_E164): nothing downstream could respond. Skip (200 so
       // Telnyx doesn't retry) but leave a telemetry trail for operators.
       await telemetryRecord(supabase, "sms_inbound_rcs_unrouted", {
         event_id: eventId,
