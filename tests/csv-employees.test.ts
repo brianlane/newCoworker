@@ -133,6 +133,22 @@ describe("exportEmployeesCsv", () => {
     expect(parsed.rows).toHaveLength(0);
   });
 
+  it("paginates past a full first page", async () => {
+    const fullPage = Array.from({ length: 1000 }, (_, i) =>
+      memberRow({ id: `m-${i}`, phone_e164: `+1602555${String(i).padStart(4, "0")}` })
+    );
+    const { db, log } = makeDb([
+      { data: fullPage, error: null },
+      { data: [memberRow({ id: "m-last", phone_e164: "+16029990000" })], error: null }
+    ]);
+    const parsed = parseCsv(await exportEmployeesCsv(BIZ, db));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.rows).toHaveLength(1001);
+    expect(log[0].calls.find((c) => c.name === "range")?.args).toEqual([0, 999]);
+    expect(log[1].calls.find((c) => c.name === "range")?.args).toEqual([1000, 1999]);
+  });
+
   it("throws on a query error", async () => {
     const { db } = makeDb([{ data: null, error: { message: "boom" } }]);
     await expect(exportEmployeesCsv(BIZ, db)).rejects.toThrow("exportEmployeesCsv: boom");

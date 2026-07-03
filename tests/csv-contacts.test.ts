@@ -335,14 +335,29 @@ describe("importContactsCsv", () => {
     expect(summary.errors[3].message).toMatch(/^sms_reply_mode:/);
   });
 
-  it("counts an insert unique-violation race as skipped, not an error", async () => {
+  it("applies the row as an update after an insert unique-violation race", async () => {
+    const { db, log } = makeDb([
+      { data: null, error: null }, // first lookup: nothing yet
+      { data: null, error: { code: "23505", message: "duplicate key" } }, // insert races
+      { data: { id: "raced-row" }, error: null }, // re-lookup finds the winner
+      { data: null, error: null } // update applies the row's fields
+    ]);
+    const summary = await importContactsCsv(BIZ, "phone,name\n+16025551234,Jane", db);
+    expect(summary).toMatchObject({ created: 0, updated: 1, skipped: 0 });
+    expect(summary.errors).toEqual([]);
+    const update = log[3].calls.find((c) => c.name === "update");
+    expect(update?.args[0]).toMatchObject({ display_name: "Jane", name_source: "manual" });
+  });
+
+  it("reports the row when the racing profile vanishes before the retry", async () => {
     const { db } = makeDb([
-      { data: null, error: null },
-      { data: null, error: { code: "23505", message: "duplicate key" } }
+      { data: null, error: null }, // first lookup: nothing
+      { data: null, error: { code: "23505", message: "duplicate key" } }, // insert races
+      { data: null, error: null } // re-lookup: gone again (concurrent delete/merge)
     ]);
     const summary = await importContactsCsv(BIZ, "phone\n+16025551234", db);
-    expect(summary).toMatchObject({ created: 0, skipped: 1 });
-    expect(summary.errors).toEqual([]);
+    expect(summary).toMatchObject({ created: 0, updated: 0, skipped: 1 });
+    expect(summary.errors[0].message).toMatch(/concurrent change kept \+16025551234/);
   });
 
   it("reports lookup, update, and insert errors per row and keeps going", async () => {

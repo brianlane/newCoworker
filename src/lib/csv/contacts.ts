@@ -211,28 +211,32 @@ export async function importContactsCsv(
     }
 
     try {
-      // Alias-aware lookup so a merged-away number updates the surviving
-      // profile instead of recreating the one the owner just merged.
-      const { data: existing, error: selErr } = await db
-        .from("contacts")
-        .select("id")
-        .eq("business_id", businessId)
-        .or(`customer_e164.eq.${phone},alias_e164s.cs.{${phone}}`)
-        .maybeSingle();
-      if (selErr) throw new Error(selErr.message);
-
-      if (existing) {
-        // Only write cells the file actually provided — blank means keep.
-        const patch: Record<string, unknown> = {
-          updated_at: new Date().toISOString(),
-          ...(name ? { display_name: name, name_source: "manual" } : {}),
-          ...(email ? { email } : {}),
-          ...(type ? { type: type as ContactType } : {}),
-          ...(replyMode ? { sms_reply_mode: replyMode as SmsReplyMode } : {}),
-          ...(pinned ? { pinned_md: pinned } : {})
-        };
+      // Only write cells the file actually provided — blank means keep.
+      const patch: Record<string, unknown> = {
+        updated_at: new Date().toISOString(),
+        ...(name ? { display_name: name, name_source: "manual" } : {}),
+        ...(email ? { email } : {}),
+        ...(type ? { type: type as ContactType } : {}),
+        ...(replyMode ? { sms_reply_mode: replyMode as SmsReplyMode } : {}),
+        ...(pinned ? { pinned_md: pinned } : {})
+      };
+      // Alias-aware update-by-phone so a merged-away number updates the
+      // surviving profile instead of recreating the one the owner just merged.
+      const applyUpdate = async (): Promise<boolean> => {
+        const { data: existing, error: selErr } = await db
+          .from("contacts")
+          .select("id")
+          .eq("business_id", businessId)
+          .or(`customer_e164.eq.${phone},alias_e164s.cs.{${phone}}`)
+          .maybeSingle();
+        if (selErr) throw new Error(selErr.message);
+        if (!existing) return false;
         const { error: updErr } = await db.from("contacts").update(patch).eq("id", existing.id);
         if (updErr) throw new Error(updErr.message);
+        return true;
+      };
+
+      if (await applyUpdate()) {
         summary.updated += 1;
       } else {
         const { error: insErr } = await db.from("contacts").insert({
@@ -246,15 +250,20 @@ export async function importContactsCsv(
           pinned_md: pinned || null
         });
         if (insErr) {
-          // Raced by a concurrent auto-create (inbound SMS/call): count it as
-          // a skip rather than failing the row — the profile exists now.
-          if (insErr.code === PG_UNIQUE_VIOLATION) {
-            summary.skipped += 1;
-            continue;
+          if (insErr.code !== PG_UNIQUE_VIOLATION) throw new Error(insErr.message);
+          // Raced by a concurrent auto-create (inbound SMS/call) between the
+          // lookup and the insert: the profile exists now, so apply the row's
+          // fields as an update rather than dropping them.
+          if (await applyUpdate()) {
+            summary.updated += 1;
+          } else {
+            // The racing row vanished again (e.g. concurrent delete/merge) —
+            // report it instead of silently losing the row's data.
+            throw new Error(`A concurrent change kept ${phone} from being saved — re-import this row.`);
           }
-          throw new Error(insErr.message);
+        } else {
+          summary.created += 1;
         }
-        summary.created += 1;
       }
     } catch (e) {
       summary.errors.push({

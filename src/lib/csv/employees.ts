@@ -39,19 +39,27 @@ const MEMBER_COLUMNS =
 
 const E164_RE = /^\+[1-9]\d{6,14}$/;
 
-/** Full roster as CSV text. */
+const EXPORT_PAGE_SIZE = 1000;
+
+/** Full roster as CSV text (paginated read so PostgREST's row cap can't truncate). */
 export async function exportEmployeesCsv(
   businessId: string,
   client?: SupabaseClient
 ): Promise<string> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { data, error } = await db
-    .from("ai_flow_team_members")
-    .select(MEMBER_COLUMNS)
-    .eq("business_id", businessId)
-    .order("created_at", { ascending: true });
-  if (error) throw new Error(`exportEmployeesCsv: ${error.message}`);
-  const rows = (data ?? []) as unknown as TeamMemberRow[];
+  const rows: TeamMemberRow[] = [];
+  for (let page = 0; ; page++) {
+    const { data, error } = await db
+      .from("ai_flow_team_members")
+      .select(MEMBER_COLUMNS)
+      .eq("business_id", businessId)
+      .order("created_at", { ascending: true })
+      .range(page * EXPORT_PAGE_SIZE, page * EXPORT_PAGE_SIZE + EXPORT_PAGE_SIZE - 1);
+    if (error) throw new Error(`exportEmployeesCsv: ${error.message}`);
+    const batch = (data ?? []) as unknown as TeamMemberRow[];
+    rows.push(...batch);
+    if (batch.length < EXPORT_PAGE_SIZE) break;
+  }
   return serializeCsv([
     [...EMPLOYEES_EXPORT_HEADERS],
     ...rows.map((r) => [
