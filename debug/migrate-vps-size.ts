@@ -323,16 +323,19 @@ async function makeAdoptProvisioner(vmId: number): Promise<
     }
 
     const recreateOnce = async (): Promise<string> => {
-      console.log(`  [adopt] recreate initiated on vm=${vmId} (attaches key + post-install)`);
+      // The VM can report its PRE-recreate state (`running`, or `stopped` when
+      // re-adopting a torn-down box) for a few polls after the recreate call;
+      // wait for it to LEAVE that state before waiting for it to come back,
+      // otherwise a stale running+IP gets treated as ready mid-rebuild.
+      const preRecreateState = (await hostinger.getVirtualMachine(vmId)).state;
+      console.log(`  [adopt] recreate initiated on vm=${vmId} state=${preRecreateState} (attaches key + post-install)`);
       await hostinger.recreateVirtualMachine(vmId, setupPayload);
-      // The VM can report the pre-recreate `running` for a few polls; wait for
-      // it to leave running before waiting for it to come back.
       const leaveDeadline = Date.now() + 3 * 60 * 1000;
       for (;;) {
         const vm = await hostinger.getVirtualMachine(vmId);
-        if (vm.state !== "running") break;
+        if (vm.state !== preRecreateState) break;
         if (Date.now() > leaveDeadline) {
-          console.log(`  [adopt] vm never left running after recreate — assuming the transition was missed`);
+          console.log(`  [adopt] vm never left state=${preRecreateState} after recreate — assuming the transition was missed`);
           break;
         }
         await new Promise((r) => setTimeout(r, 5_000));
