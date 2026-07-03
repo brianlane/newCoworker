@@ -477,6 +477,10 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
   }
   // send_sms / route_to_team: a picked ref supersedes the text alternatives so
   // the "exactly one recipient/agent" rules pass even with stale hidden state.
+  // Group reply is its own recipient source and supersedes everything.
+  if (step.type === "send_sms" && step.replyToGroup) {
+    return { ...step, to: undefined, toAgentName: undefined, toRef: undefined };
+  }
   if (step.type === "send_sms" && step.toRef) {
     return { ...step, to: undefined, toAgentName: undefined };
   }
@@ -2030,12 +2034,12 @@ function StepFields({
             checked={Boolean(step.replyToGroup)}
             onChange={(ev) =>
               // Group reply is its own recipient source — clear any prior
-              // `to`/`toAgentName` so the "exactly one recipient" rule passes on
-              // save (those fields are hidden while group reply is on).
+              // `to`/`toAgentName`/`toRef` so the "exactly one recipient" rule
+              // passes on save (those fields are hidden while group reply is on).
               patchStep(
                 index,
                 ev.target.checked
-                  ? { replyToGroup: true, to: undefined, toAgentName: undefined }
+                  ? { replyToGroup: true, to: undefined, toAgentName: undefined, toRef: undefined }
                   : { replyToGroup: undefined }
               )
             }
