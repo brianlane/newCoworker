@@ -318,7 +318,12 @@ export function ByonNumberPorting({ businessId, initialRequests }: Props) {
                   id="byon-phone"
                   type="tel"
                   value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
+                  onChange={(e) => {
+                    setPhone(e.target.value);
+                    // A stale check would let the wizard submit the OLD
+                    // number (later steps use check.phoneE164): re-verify.
+                    setCheck(null);
+                  }}
                   placeholder="(312) 555-0001"
                   className={inputClass + " max-w-xs"}
                 />
