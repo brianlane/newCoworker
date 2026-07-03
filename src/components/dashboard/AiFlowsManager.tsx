@@ -1302,9 +1302,9 @@ export function AiFlowsManager({
                     setEditor({
                       ...editor,
                       conditions: editor.conditions.map((x, xi) =>
-                        xi === i
-                          ? ({ type: "from_matches", ref, value: undefined } as TriggerCondition)
-                          : x
+                        // Spread so options like caseInsensitive survive the
+                        // switch to a saved-person sender.
+                        xi === i ? ({ ...x, ref, value: undefined } as TriggerCondition) : x
                       )
                     })
                   }
