@@ -1579,6 +1579,109 @@ describe("voice trigger + voice steps", () => {
     ).toThrow(AiFlowValidationError);
   });
 
+  describe("dynamic contact refs (toRef/notifyRef)", () => {
+    const empRef = { source: "employee", id: "11111111-1111-4111-8111-111111111111", label: "Dave" };
+    const conRef = { source: "contact", id: "22222222-2222-4222-8222-222222222222" };
+
+    it("accepts refs as the sole number source on every voice step", () => {
+      const inbound = parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "voice", fromE164: "+14159851909" },
+        steps: [
+          { id: "r", type: "ring_handoff", toRef: empRef },
+          { id: "ai", type: "voice_ai_intake", notifyRef: empRef }
+        ]
+      });
+      expect(validateDefinitionSemantics(inbound)).toEqual([]);
+
+      const transfer = parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "voice", fromE164: "+14159851909" },
+        steps: [{ id: "t", type: "voice_transfer", toRef: conRef }]
+      });
+      expect(validateDefinitionSemantics(transfer)).toEqual([]);
+
+      const outbound = parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "voice", direction: "outbound" },
+        steps: [{ id: "c", type: "outbound_call", toRef: conRef, notifyRef: empRef }]
+      });
+      expect(validateDefinitionSemantics(outbound)).toEqual([]);
+    });
+
+    it("rejects a ring_handoff with neither toE164 nor toRef", () => {
+      const def = aiFlowDefinitionSchema.parse({
+        version: 1,
+        trigger: { channel: "voice", fromE164: "+14159851909" },
+        steps: [{ id: "r", type: "ring_handoff" }]
+      });
+      expect(validateDefinitionSemantics(def)).toContain(
+        'Step "r" has no number to ring — set toE164 or pick a saved contact (toRef).'
+      );
+    });
+
+    it("rejects a voice_transfer that sets both toE164 and toRef", () => {
+      const def = aiFlowDefinitionSchema.parse({
+        version: 1,
+        trigger: { channel: "voice", fromE164: "+14159851909" },
+        steps: [{ id: "t", type: "voice_transfer", toE164: "+16026951142", toRef: empRef }]
+      });
+      expect(validateDefinitionSemantics(def)).toContain(
+        'Step "t" sets both toE164 and toRef — use only one.'
+      );
+    });
+
+    it("rejects a voice_ai_intake with no notify source (and both sources)", () => {
+      const neither = aiFlowDefinitionSchema.parse({
+        version: 1,
+        trigger: { channel: "voice", fromE164: "+14159851909" },
+        steps: [
+          { id: "r", type: "ring_handoff", toE164: "+16025245719" },
+          { id: "ai", type: "voice_ai_intake" }
+        ]
+      });
+      expect(validateDefinitionSemantics(neither)).toContain(
+        'Step "ai" has nowhere to send the call summary — set notifyE164 or pick a saved contact (notifyRef).'
+      );
+      const both = aiFlowDefinitionSchema.parse({
+        version: 1,
+        trigger: { channel: "voice", fromE164: "+14159851909" },
+        steps: [
+          { id: "r", type: "ring_handoff", toE164: "+16025245719" },
+          { id: "ai", type: "voice_ai_intake", notifyE164: "+16026951142", notifyRef: empRef }
+        ]
+      });
+      expect(validateDefinitionSemantics(both)).toContain(
+        'Step "ai" sets both notifyE164 and notifyRef — use only one.'
+      );
+    });
+
+    it("rejects an outbound_call with both callee sources, allows neither (entry supplies it)", () => {
+      const both = aiFlowDefinitionSchema.parse({
+        version: 1,
+        trigger: { channel: "voice", direction: "outbound" },
+        steps: [
+          {
+            id: "c",
+            type: "outbound_call",
+            toE164: "+19178628675",
+            toRef: conRef,
+            notifyE164: "+16026951142"
+          }
+        ]
+      });
+      expect(validateDefinitionSemantics(both)).toContain(
+        'Step "c" sets both toE164 and toRef — use only one.'
+      );
+      const neither = parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "voice", direction: "outbound" },
+        steps: [{ id: "c", type: "outbound_call", notifyE164: "+16026951142" }]
+      });
+      expect(validateDefinitionSemantics(neither)).toEqual([]);
+    });
+  });
+
   it("rejects a non-voice step under a voice trigger", () => {
     expect(() =>
       parseAiFlowDefinition({

@@ -50,6 +50,7 @@ import {
   resolveOutboundCallPlan
 } from "../_shared/voice_outbound.ts";
 import type { AiFlowDefinition } from "../_shared/ai_flows/types.ts";
+import { resolveVoiceContactRefs } from "../_shared/ai_flows/contact_ref.ts";
 
 const MAX_BODY = 16 * 1024;
 
@@ -132,9 +133,16 @@ serve(async (req: Request) => {
   if (!flow) return json(404, { ok: false, error: "flow_not_found", dialed: false });
   if (flow.enabled !== true) return json(409, { ok: false, error: "flow_disabled", dialed: false });
 
-  const plan = (() => {
+  const plan = await (async () => {
     try {
-      return resolveOutboundCallPlan(flow.definition as AiFlowDefinition);
+      // Resolve dynamic contact refs (toRef/notifyRef → live numbers) BEFORE
+      // the pure plan reader runs (resolve-before-compile).
+      const resolvedDef = await resolveVoiceContactRefs(
+        supabase,
+        businessId,
+        flow.definition as AiFlowDefinition
+      );
+      return resolveOutboundCallPlan(resolvedDef);
     } catch (e) {
       console.error("originate: resolveOutboundCallPlan", e);
       return null;

@@ -54,6 +54,7 @@ import {
 } from "../_shared/voice_handoff.ts";
 import { encodeWtClientState } from "../_shared/warm_transfer_notify.ts";
 import { compileVoiceFlow } from "../_shared/ai_flows/voice.ts";
+import { resolveVoiceContactRefs } from "../_shared/ai_flows/contact_ref.ts";
 import type { AiFlowDefinition } from "../_shared/ai_flows/types.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 import {
@@ -648,7 +649,15 @@ serve(async (req: Request) => {
     if (flowRow?.definition) {
       let plan: ReturnType<typeof compileVoiceFlow> = null;
       try {
-        plan = compileVoiceFlow(flowRow.definition as AiFlowDefinition, toE164);
+        // Resolve dynamic contact refs (toRef/notifyRef → live numbers) BEFORE
+        // the pure compiler runs; a resolution/compile failure must not strand
+        // the caller — log and fall through to the legacy tables.
+        const resolvedDef = await resolveVoiceContactRefs(
+          supabase,
+          businessId,
+          flowRow.definition as AiFlowDefinition
+        );
+        plan = compileVoiceFlow(resolvedDef, toE164);
       } catch (e) {
         console.error("compileVoiceFlow", e);
       }

@@ -43,6 +43,16 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
   );
 }
 
+/**
+ * Display text for a voice number source: the hardcoded E.164 when set,
+ * otherwise the saved-contact reference's label (the person's name captured
+ * when picked — the live number is resolved at call time).
+ */
+function voiceTarget(e164: string | undefined, ref: { label?: string } | undefined): string {
+  if (e164) return e164;
+  return ref?.label ? `${ref.label} (saved contact — live number)` : "(saved contact — live number)";
+}
+
 /** A small pill used for conditions / flags. */
 function Chip({ children }: { children: React.ReactNode }) {
   return (
@@ -403,14 +413,18 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
     case "ring_handoff":
       return (
         <>
-          <Row label="Ring" value={step.toE164} mono />
+          <Row label="Ring" value={voiceTarget(step.toE164, step.toRef)} mono={Boolean(step.toE164)} />
           <Row label="Ring for" value={`${step.ringSeconds ?? 20} seconds`} />
         </>
       );
     case "voice_ai_intake":
       return (
         <>
-          <Row label="Texts summary to" value={step.notifyE164} mono />
+          <Row
+            label="Texts summary to"
+            value={voiceTarget(step.notifyE164, step.notifyRef)}
+            mono={Boolean(step.notifyE164)}
+          />
           {step.persona && <Row label="AI persona" value={step.persona} />}
           {step.captureFields && step.captureFields.length > 0 && (
             <div className="space-y-1">
@@ -427,15 +441,29 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
     case "voice_transfer":
       return (
         <>
-          <Row label="Connect caller to" value={step.toE164} mono />
+          <Row
+            label="Connect caller to"
+            value={voiceTarget(step.toE164, step.toRef)}
+            mono={Boolean(step.toE164)}
+          />
           {step.whisper && <Row label="Says first" value={step.whisper} />}
         </>
       );
     case "outbound_call":
       return (
         <>
-          {step.toE164 && <Row label="Default number to call" value={step.toE164} mono />}
-          <Row label="Texts summary to" value={step.notifyE164} mono />
+          {(step.toE164 || step.toRef) && (
+            <Row
+              label="Default number to call"
+              value={voiceTarget(step.toE164, step.toRef)}
+              mono={Boolean(step.toE164)}
+            />
+          )}
+          <Row
+            label="Texts summary to"
+            value={voiceTarget(step.notifyE164, step.notifyRef)}
+            mono={Boolean(step.notifyE164)}
+          />
           {step.persona && <Row label="AI persona" value={step.persona} />}
           {step.captureFields && step.captureFields.length > 0 && (
             <div className="space-y-1">

@@ -2395,8 +2395,8 @@ function StepFields({
       <div className="space-y-2">
         <Field
           label="Ring this number (E.164, e.g. +16025551234)"
-          value={step.toE164}
-          onChange={(v) => patchStep(index, { toE164: v.trim() })}
+          value={step.toE164 ?? ""}
+          onChange={(v) => patchStep(index, { toE164: v.trim() ? v.trim() : undefined })}
         />
         <Field
           label="Ring for (seconds before moving on)"
@@ -2418,8 +2418,8 @@ function StepFields({
       <div className="space-y-2">
         <Field
           label="Text the summary to (E.164, e.g. +16025551234)"
-          value={step.notifyE164}
-          onChange={(v) => patchStep(index, { notifyE164: v.trim() })}
+          value={step.notifyE164 ?? ""}
+          onChange={(v) => patchStep(index, { notifyE164: v.trim() ? v.trim() : undefined })}
           help="After the AI talks to the caller, it texts this number a summary and transcript."
         />
         <Field
@@ -2468,8 +2468,8 @@ function StepFields({
       <div className="space-y-2">
         <Field
           label="Connect the caller to (E.164, e.g. +16025551234)"
-          value={step.toE164}
-          onChange={(v) => patchStep(index, { toE164: v.trim() })}
+          value={step.toE164 ?? ""}
+          onChange={(v) => patchStep(index, { toE164: v.trim() ? v.trim() : undefined })}
         />
         <Field
           label="Say this to the caller first (optional)"
@@ -2492,8 +2492,8 @@ function StepFields({
         />
         <Field
           label="Text the summary to (E.164, e.g. +16025551234)"
-          value={step.notifyE164}
-          onChange={(v) => patchStep(index, { notifyE164: v.trim() })}
+          value={step.notifyE164 ?? ""}
+          onChange={(v) => patchStep(index, { notifyE164: v.trim() ? v.trim() : undefined })}
           help="After the AI talks to the callee, it texts this number a summary and transcript."
         />
         <Field
