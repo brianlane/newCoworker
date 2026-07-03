@@ -427,8 +427,15 @@ describe("createByonPortRequest", () => {
     });
   });
 
-  it("keeps the draft with a SUBMIT_FAILED detail when confirm fails", async () => {
+  it("keeps the draft with a SUBMIT_FAILED detail when confirm fails, mirroring the PATCH response", async () => {
     const porting = makePorting({
+      // Telnyx stored the PATCH (requested FOC, support key) before confirm
+      // blew up — the refresh must mirror the PATCH, not the create snapshot.
+      updatePortingOrder: vi.fn(async () => ({
+        id: "po-1",
+        activation_settings: { foc_datetime_requested: "2026-07-20T13:00:00Z" },
+        support_key: "sr_patched"
+      })),
       confirmPortingOrder: vi.fn(async () => {
         throw new Error("requirements not met");
       })
@@ -446,7 +453,9 @@ describe("createByonPortRequest", () => {
     );
     expect(log[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
       status: "draft",
-      status_detail: [{ code: "SUBMIT_FAILED", description: "requirements not met" }]
+      status_detail: [{ code: "SUBMIT_FAILED", description: "requirements not met" }],
+      foc_at: "2026-07-20T13:00:00Z",
+      support_key: "sr_patched"
     });
   });
 
@@ -508,7 +517,7 @@ describe("createByonPortRequest", () => {
     expect(porting.confirmPortingOrder).not.toHaveBeenCalled();
   });
 
-  it("falls back to the inserted row when the post-submit refresh fails, and to nothing when the insert returned no rows", async () => {
+  it("falls back to the inserted row (overlaid with the confirm state) when the refresh fails, and to nothing when the insert returned no rows", async () => {
     const porting = makePorting();
     const { db } = makeDb([
       { data: [portRow({ status: "draft" })], error: null },
@@ -516,7 +525,15 @@ describe("createByonPortRequest", () => {
     ]);
     const result = await createByonPortRequest(BIZ, baseInput(), { porting, client: db });
     expect(result.rows).toHaveLength(1);
-    expect(result.rows[0].status).toBe("draft");
+    // Telnyx accepted the submit even though the bookkeeping write failed —
+    // the returned row reflects the confirmed state, not the stale draft,
+    // so it agrees with `submitted: true`.
+    expect(result.submitted).toBe(true);
+    expect(result.rows[0]).toMatchObject({
+      status: "submitted",
+      foc_at: "2026-07-20T13:00:00Z",
+      support_key: "sr_1"
+    });
     expect(logger.warn).toHaveBeenCalledWith(
       "byon: failed to refresh port request row after submit",
       expect.objectContaining({ error: "refresh exploded" })
@@ -552,7 +569,8 @@ describe("createByonPortRequest", () => {
     expect(result.rows).toEqual([webhookRow]);
     expect(log[2].calls).toContainEqual({ name: "eq", args: ["telnyx_order_id", "po-1"] });
 
-    // Re-fetch coming back empty too → fall back to the inserted row.
+    // Re-fetch coming back empty too → fall back to the inserted row
+    // overlaid with what Telnyx confirmed.
     const { db: db2 } = makeDb([
       { data: [portRow({ status: "draft" })], error: null },
       { data: [], error: null },
@@ -563,7 +581,7 @@ describe("createByonPortRequest", () => {
       client: db2
     });
     expect(result2.rows).toHaveLength(1);
-    expect(result2.rows[0].status).toBe("draft");
+    expect(result2.rows[0].status).toBe("submitted");
   });
 
   it("uses the default service client when none is injected", async () => {

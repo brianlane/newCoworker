@@ -353,7 +353,10 @@ export async function createByonPortRequest(
     let finalOrder: PortingOrder = order;
     let confirmError: string | null = null;
     try {
-      await porting.updatePortingOrder(order.id, {
+      // Keep the PATCH response: if confirm then fails, Telnyx has still
+      // stored the patched fields (requested FOC, support key), and the
+      // refresh below should mirror them rather than the create snapshot.
+      finalOrder = await porting.updatePortingOrder(order.id, {
         documents: { loa: loaDoc.id, invoice: billDoc.id },
         endUser: {
           admin: {
@@ -400,20 +403,21 @@ export async function createByonPortRequest(
     // state (exception details, ported, …) must never be clobbered by the
     // older confirm response, so the update is conditional on the status.
     const insertedStatus = order.status?.value ?? "draft";
+    const refresh = {
+      status: finalOrder.status?.value ?? (confirmError ? "draft" : "submitted"),
+      status_detail: confirmError
+        ? [{ code: "SUBMIT_FAILED", description: confirmError }]
+        : (finalOrder.status?.details ?? null),
+      foc_at:
+        finalOrder.activation_settings?.foc_datetime_actual ??
+        finalOrder.activation_settings?.foc_datetime_requested ??
+        null,
+      support_key: finalOrder.support_key ?? null,
+      updated_at: new Date().toISOString()
+    };
     const { data: updatedRows, error: updateErr } = await db
       .from("number_port_requests")
-      .update({
-        status: finalOrder.status?.value ?? (confirmError ? "draft" : "submitted"),
-        status_detail: confirmError
-          ? [{ code: "SUBMIT_FAILED", description: confirmError }]
-          : (finalOrder.status?.details ?? null),
-        foc_at:
-          finalOrder.activation_settings?.foc_datetime_actual ??
-          finalOrder.activation_settings?.foc_datetime_requested ??
-          null,
-        support_key: finalOrder.support_key ?? null,
-        updated_at: new Date().toISOString()
-      })
+      .update(refresh)
       .eq("telnyx_order_id", order.id)
       .eq("status", insertedStatus)
       .select();
@@ -447,7 +451,11 @@ export async function createByonPortRequest(
     const fallback = ((insertedRows ?? []) as NumberPortRequestRow[]).find(
       (r) => r.telnyx_order_id === order.id
     );
-    if (fallback) finalRows.push(fallback);
+    // The refresh write failed but Telnyx already accepted the submit —
+    // return the state we KNOW is true (the confirm snapshot) rather than
+    // the stale inserted draft, so `submitted: true` and `rows` agree. The
+    // webhook heals the DB row itself.
+    if (fallback) finalRows.push({ ...fallback, ...refresh });
   }
 
   return { rows: finalRows, submitted, submitError };
