@@ -27,6 +27,7 @@ import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
 import { telnyxSendSms, telnyxSendGroupMms } from "../_shared/telnyx_sms_compliance.ts";
+import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
 import {
   buildExtractionPrompt,
   buildNowScope,
@@ -768,6 +769,8 @@ async function logOutboundSms(
     body: string;
     source: "ai_flow" | "agent_offer" | "owner_notify";
     telnyxMessageId?: string | null;
+    /** Delivery channel ('sms' default keeps owner/offer sends untagged-as-sms). */
+    channel?: "sms" | "rcs";
   }
 ): Promise<void> {
   const { error } = await supabase.from("sms_outbound_log").insert({
@@ -778,7 +781,8 @@ async function logOutboundSms(
     source: args.source,
     run_id: run.id,
     flow_id: run.flow_id,
-    telnyx_message_id: args.telnyxMessageId ?? null
+    telnyx_message_id: args.telnyxMessageId ?? null,
+    channel: args.channel ?? "sms"
   });
   if (error) console.error("sms_outbound_log insert", error);
 }
@@ -2223,7 +2227,14 @@ async function sendSmsStep(
       fromE164: cfg.from,
       toE164,
       text,
-      idempotencyKey: `aiflow:${run.id}:${index}`
+      idempotencyKey: `aiflow:${run.id}:${index}`,
+      // Lead-facing texts go RCS-first for eligible tenants (Standard+,
+      // approved agent) with Telnyx-side SMS fallback. Internal teammate
+      // texts stay plain SMS — the branded business agent shouldn't be the
+      // sender identity for roster notifications.
+      rcsAgentId: internalAgentSend
+        ? null
+        : await resolveRcsAgentId(supabase, run.business_id)
     });
     if (!send.ok) {
       await release();
@@ -2241,7 +2252,8 @@ async function sendSmsStep(
       from: cfg.from || null,
       body: text,
       source: "ai_flow",
-      telnyxMessageId: messageId
+      telnyxMessageId: messageId,
+      channel: send.channel
     });
     // An agent recipient is a teammate, not a lead — don't file them as a lead
     // customer profile. A contact ref is still a lead-side recipient.
@@ -2325,22 +2337,32 @@ async function sendGroupSmsStep(
   };
 
   try {
-    const send = isGroup
-      ? await telnyxSendGroupMms({
-          apiKey: cfg.apiKey,
-          fromE164: own,
-          toE164: recipients,
-          text,
-          idempotencyKey: `aiflow:${run.id}:${index}`
-        })
-      : await telnyxSendSms({
-          apiKey: cfg.apiKey,
-          messagingProfileId: cfg.profile,
-          fromE164: cfg.from,
-          toE164: recipients[0],
-          text,
-          idempotencyKey: `aiflow:${run.id}:${index}`
-        });
+    // Group MMS never goes over RCS; only the degenerate 1:1 send can, so the
+    // channel is captured on the non-group branch where the type carries it.
+    let send: { ok: boolean; status: number; body: string };
+    let sendChannel: "sms" | "rcs" = "sms";
+    if (isGroup) {
+      send = await telnyxSendGroupMms({
+        apiKey: cfg.apiKey,
+        fromE164: own,
+        toE164: recipients,
+        text,
+        idempotencyKey: `aiflow:${run.id}:${index}`
+      });
+    } else {
+      const single = await telnyxSendSms({
+        apiKey: cfg.apiKey,
+        messagingProfileId: cfg.profile,
+        fromE164: cfg.from,
+        toE164: recipients[0],
+        text,
+        idempotencyKey: `aiflow:${run.id}:${index}`,
+        // Degenerate group-of-one is a customer-facing text: RCS-eligible.
+        rcsAgentId: await resolveRcsAgentId(supabase, run.business_id)
+      });
+      send = single;
+      sendChannel = single.channel;
+    }
     if (!send.ok) {
       await release();
       throw new Error(`telnyx ${send.status}: ${send.body.slice(0, 200)}`);
@@ -2361,7 +2383,8 @@ async function sendGroupSmsStep(
         from: cfg.from || null,
         body: text,
         source: "ai_flow",
-        telnyxMessageId: messageId
+        telnyxMessageId: messageId,
+        channel: sendChannel
       });
       await recordLeadCustomerProfile(supabase, run, scope, to);
     }

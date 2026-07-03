@@ -28,7 +28,8 @@ import {
   sharedEnvRowboatBearer
 } from "../_shared/gateway_token.ts";
 import { buildCustomerPreambleForEdge, type EdgeCustomerMemoryRow } from "../_shared/customer_memory_preamble.ts";
-import { telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
+import { inboundSmsBody, telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
+import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
 import {
   buildOwnerReplyPromptSms,
   resolveSmsReplyMode
@@ -131,12 +132,10 @@ type ThreadRow = {
   rowboat_state: unknown | null;
 };
 
+// Delegates to the shared reader so RCS payloads (nested `body.text` /
+// `body.suggestion_response.text`) resolve the same here as at the webhook.
 function inboundPayloadText(p: Record<string, unknown>): string {
-  const t = p["text"];
-  if (typeof t === "string") return t;
-  const body = p["body"];
-  if (typeof body === "string") return body;
-  return "";
+  return inboundSmsBody(p);
 }
 
 async function clearJobReplyCache(
@@ -163,13 +162,18 @@ async function clearJobReplyCache(
 async function finalizeDeliveredReply(
   supabase: SupabaseClient<any, any, any>,
   jobId: string,
-  replyText: string
+  replyText: string,
+  replyChannel: "sms" | "rcs"
 ): Promise<void> {
   await supabase
     .from("sms_inbound_jobs")
     .update({
       rowboat_reply_cached: null,
       assistant_reply_text: replyText,
+      // The reply can leave on a different channel than the inbound arrived
+      // on (RCS inbound answered over SMS after an RCS rejection) — the
+      // thread UI badges the outbound bubble off this, not `channel`.
+      reply_channel: replyChannel,
       updated_at: new Date().toISOString()
     })
     .eq("id", jobId);
@@ -1207,17 +1211,74 @@ serve(async (req: Request) => {
     };
     if (idem) headers["Idempotency-Key"] = idem;
 
+    // RCS-first for eligible tenants (Standard+, approved + enabled agent):
+    // verified-brand reply with Telnyx-side SMS fallback from the tenant's
+    // existing number. Resolution is fail-safe (any error → null → plain SMS)
+    // and requires a concrete from-number for the fallback leg.
+    const rcsAgentId = platformFrom
+      ? await resolveRcsAgentId(supabase, job.business_id, businessTier)
+      : null;
+    let replyChannel: "sms" | "rcs" = "sms";
+    // Hoisted so the catch-side reconciliation can reuse a message id from a
+    // send that SUCCEEDED before a later step (e.g. the completion RPC) threw.
+    // This is the only recovery path for RCS sends: tag-based recovery below
+    // searches /v2/messages by the ncw_idem tag, which RCS requests don't carry.
+    let mid = "";
+
     try {
-      const smsRes = await fetch("https://api.telnyx.com/v2/messages", {
-        method: "POST",
-        headers,
-        body: JSON.stringify(msgBody)
-      });
-      if (!smsRes.ok) {
-        throw new Error(`telnyx_sms_${smsRes.status}_${(await smsRes.text()).slice(0, 200)}`);
+      let sentViaRcs = false;
+      if (rcsAgentId) {
+        const rcsRes = await fetch("https://api.telnyx.com/v2/messages/rcs", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            agent_id: rcsAgentId,
+            to: fromE164,
+            messaging_profile_id: messagingProfileId,
+            type: "RCS",
+            // Full body over RCS (no 160/1600 segmenting); only the plain-text
+            // fallback leg is capped — Telnyx limits fallback text to 3072,
+            // matching sendTelnyxRcsWithFallback in telnyx_sms_compliance.ts.
+            agent_message: { content_message: { text: reply } },
+            sms_fallback: { from: platformFrom, text: reply.slice(0, 3072) }
+          })
+        });
+        if (rcsRes.ok) {
+          const rcsJson = (await rcsRes.json()) as { data?: { id?: string } };
+          const rcsMid = rcsJson.data?.id ?? "";
+          if (rcsMid) {
+            mid = rcsMid;
+            sentViaRcs = true;
+            replyChannel = "rcs";
+          } else {
+            // 2xx without a message id means Telnyx did not durably create the
+            // message — without an id the send can't be reconciled or tracked,
+            // so treat it like a rejection and deliver over plain SMS.
+            console.warn("rcs reply accepted but returned no message id, falling back to sms");
+          }
+        } else {
+          // RCS API rejection (agent revoked, destination not routable, …):
+          // fall through to plain SMS so the customer never loses a reply to
+          // channel plumbing. The idempotency key is safe to reuse — the
+          // rejected RCS request created no message.
+          console.warn(
+            `rcs reply rejected (${rcsRes.status}), falling back to sms:`,
+            (await rcsRes.text()).slice(0, 200)
+          );
+        }
       }
-      const smsJson = (await smsRes.json()) as { data?: { id?: string } };
-      const mid = smsJson.data?.id ?? "";
+      if (!sentViaRcs) {
+        const smsRes = await fetch("https://api.telnyx.com/v2/messages", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(msgBody)
+        });
+        if (!smsRes.ok) {
+          throw new Error(`telnyx_sms_${smsRes.status}_${(await smsRes.text()).slice(0, 200)}`);
+        }
+        const smsJson = (await smsRes.json()) as { data?: { id?: string } };
+        mid = smsJson.data?.id ?? "";
+      }
       // Slot was already metered during try_reserve_sms_outbound_slot, so call the
       // no-metering completion RPC to avoid double-counting the outbound.
       const { error: doneErr } = await supabase.rpc("complete_sms_inbound_job_done", {
@@ -1231,7 +1292,7 @@ serve(async (req: Request) => {
       }
       // Delivered: persist the durable reply for dashboard history and clear
       // the transient retry buffer in one update.
-      await finalizeDeliveredReply(supabase, job.id, reply);
+      await finalizeDeliveredReply(supabase, job.id, reply, replyChannel);
       await telemetryRecord(supabase, "sms_inbound_worker_sent", {
         job_id: job.id,
         business_id: job.business_id
@@ -1242,40 +1303,42 @@ serve(async (req: Request) => {
         level: "info",
         event: "sms_reply_sent",
         message: "Inbound SMS answered (Rowboat reply delivered via Telnyx)",
-        payload: { job_id: job.id, telnyx_message_id: mid || null }
+        payload: { job_id: job.id, telnyx_message_id: mid || null, channel: replyChannel }
       });
     } catch (e) {
-      if (idem) {
-        const recovered = await telnyxTryRecoverOutboundMessageId(apiKey, idem);
-        if (recovered) {
-          await telemetryRecord(supabase, "sms_outbound_reconciled_after_error", {
-            job_id: job.id,
-            business_id: job.business_id
+      // Prefer the in-scope message id (covers RCS + SMS sends that succeeded
+      // before a later step threw); fall back to tag-based recovery, which can
+      // only find plain-SMS sends carrying the ncw_idem tag.
+      const recovered = mid || (idem ? await telnyxTryRecoverOutboundMessageId(apiKey, idem) : null);
+      if (recovered) {
+        await telemetryRecord(supabase, "sms_outbound_reconciled_after_error", {
+          job_id: job.id,
+          business_id: job.business_id
+        });
+        const { error: recErr } = await supabase.rpc("complete_sms_inbound_job_done", {
+          p_job_id: job.id,
+          p_business_id: job.business_id,
+          p_telnyx_outbound_message_id: recovered,
+          p_rowboat_conversation_id: convId ?? null
+        });
+        if (!recErr) {
+          // Reconciled: the outbound DID go out, so keep the metered slot
+          // and persist the durable reply for dashboard history. replyChannel
+          // is already correct: "rcs" only when the RCS send itself succeeded.
+          await finalizeDeliveredReply(supabase, job.id, reply, replyChannel);
+          await systemLog(supabase, {
+            businessId: job.business_id,
+            source: "sms_worker",
+            level: "info",
+            event: "sms_reply_sent",
+            message:
+              "Inbound SMS answered (Telnyx send reconciled via idempotency key)",
+            payload: { job_id: job.id, telnyx_message_id: recovered, reconciled: true }
           });
-          const { error: recErr } = await supabase.rpc("complete_sms_inbound_job_done", {
-            p_job_id: job.id,
-            p_business_id: job.business_id,
-            p_telnyx_outbound_message_id: recovered,
-            p_rowboat_conversation_id: convId ?? null
-          });
-          if (!recErr) {
-            // Reconciled: the outbound DID go out, so keep the metered slot
-            // and persist the durable reply for dashboard history.
-            await finalizeDeliveredReply(supabase, job.id, reply);
-            await systemLog(supabase, {
-              businessId: job.business_id,
-              source: "sms_worker",
-              level: "info",
-              event: "sms_reply_sent",
-              message:
-                "Inbound SMS answered (Telnyx send reconciled via idempotency key)",
-              payload: { job_id: job.id, telnyx_message_id: recovered, reconciled: true }
-            });
-            processed += 1;
-            continue;
-          }
-          console.error("complete_sms_inbound_job_done after reconcile", recErr);
+          processed += 1;
+          continue;
         }
+        console.error("complete_sms_inbound_job_done after reconcile", recErr);
       }
       // Release the pre-incremented slot so a failed (and non-reconciled) send does not
       // consume monthly quota. Done BEFORE status update so a retry can re-reserve cleanly.

@@ -8,6 +8,8 @@ type Props = {
   businessId: string;
   /** The thread's customer number / short code — the send destination. */
   toE164: string;
+  /** True when this tenant's sends go RCS-first (softens the emoji hint). */
+  rcsEnabled?: boolean;
 };
 
 /**
@@ -16,7 +18,7 @@ type Props = {
  * /api/dashboard/messages/send, then refreshes the server-rendered thread so
  * the new outbound message appears inline.
  */
-export function SmsThreadComposer({ businessId, toE164 }: Props) {
+export function SmsThreadComposer({ businessId, toE164, rcsEnabled = false }: Props) {
   const router = useRouter();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -86,7 +88,7 @@ export function SmsThreadComposer({ businessId, toE164 }: Props) {
           {busy ? "Sending…" : "Send"}
         </button>
       </div>
-      <SmsSegmentHint text={text} mode="verbatim" />
+      <SmsSegmentHint text={text} mode="verbatim" channel={rcsEnabled ? "rcs" : "sms"} />
       {error && <p className="text-xs text-red-300">{error}</p>}
     </div>
   );

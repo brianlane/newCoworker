@@ -169,6 +169,45 @@ describe("inboundTextFromPayload", () => {
       inboundTextFromPayload({ data: { payload: undefined } } as never)
     ).toBe("");
   });
+
+  it("reads RCS nested body.text and tapped-suggestion labels", () => {
+    expect(
+      inboundTextFromPayload({
+        data: { payload: { type: "RCS", body: { text: "hello rcs" } } }
+      } as never)
+    ).toBe("hello rcs");
+    expect(
+      inboundTextFromPayload({
+        data: {
+          payload: {
+            type: "RCS",
+            body: { suggestion_response: { text: "Yes, confirm", postback_data: "c1" } }
+          }
+        }
+      } as never)
+    ).toBe("Yes, confirm");
+  });
+
+  it("returns empty for RCS bodies without text (file/location) and odd shapes", () => {
+    expect(
+      inboundTextFromPayload({
+        data: { payload: { type: "RCS", body: { user_file: { payload: {} } } } }
+      } as never)
+    ).toBe("");
+    expect(
+      inboundTextFromPayload({
+        data: { payload: { type: "RCS", body: { suggestion_response: { postback_data: "x" } } } }
+      } as never)
+    ).toBe("");
+    expect(
+      inboundTextFromPayload({
+        data: { payload: { type: "RCS", body: { suggestion_response: "nope" } } }
+      } as never)
+    ).toBe("");
+    expect(
+      inboundTextFromPayload({ data: { payload: { type: "RCS", body: [] } } } as never)
+    ).toBe("");
+  });
 });
 
 describe("listConversationsForBusiness", () => {
@@ -643,6 +682,77 @@ describe("listMessagesForCustomer", () => {
       "inbound:anyone home?",
       "outbound:yes"
     ]);
+  });
+
+  it("tags messages with the channel from the job row / outbound log row", async () => {
+    const c = chain();
+    c.limit.mockResolvedValue({
+      data: [
+        {
+          id: "j-rcs",
+          business_id: "biz",
+          payload: envelope({ from: { phone_number: "+15551111111" }, text: "hi" }),
+          status: "done",
+          assistant_reply_text: "hello back",
+          rowboat_reply_cached: null,
+          telnyx_outbound_message_id: "out-1",
+          last_error: null,
+          channel: "rcs",
+          reply_channel: "rcs",
+          created_at: "2026-05-05T00:00:00Z",
+          updated_at: "2026-05-05T00:00:01Z"
+        },
+        {
+          id: "j-rcs-sms-fallback",
+          business_id: "biz",
+          payload: envelope({ from: { phone_number: "+15551111111" }, text: "hi again" }),
+          status: "done",
+          assistant_reply_text: "fallback reply",
+          rowboat_reply_cached: null,
+          telnyx_outbound_message_id: "out-2",
+          last_error: null,
+          // RCS inbound whose reply went out over plain SMS (RCS rejected):
+          // the outbound bubble must badge sms, not inherit the inbound rcs.
+          channel: "rcs",
+          reply_channel: "sms",
+          created_at: "2026-05-05T00:30:00Z",
+          updated_at: "2026-05-05T00:30:01Z"
+        },
+        {
+          id: "j-sms",
+          business_id: "biz",
+          payload: envelope({ from: { phone_number: "+15551111111" }, text: "legacy" }),
+          status: "done",
+          assistant_reply_text: null,
+          rowboat_reply_cached: null,
+          telnyx_outbound_message_id: null,
+          last_error: null,
+          // No channel/reply_channel column values (legacy row) → sms.
+          created_at: "2026-05-04T00:00:00Z",
+          updated_at: "2026-05-04T00:00:01Z"
+        }
+      ],
+      error: null
+    });
+    const oc = chain();
+    oc.limit.mockResolvedValue({
+      data: [
+        { ...outboundLogRow({ id: "ob-rcs", created_at: "2026-05-05T01:00:00Z" }), channel: "rcs" },
+        outboundLogRow({ id: "ob-sms", created_at: "2026-05-05T02:00:00Z" })
+      ],
+      error: null
+    });
+    const result = await listMessagesForCustomer("biz", "+15551111111", {}, makeDb(c, oc) as never);
+    const byId = new Map(result.map((m) => [m.id, m.channel]));
+    expect(byId.get("j-rcs:inbound")).toBe("rcs");
+    expect(byId.get("j-rcs:outbound")).toBe("rcs");
+    // Inbound badge follows the inbound channel; the outbound badge follows
+    // the reply's OWN delivery channel (SMS fallback after RCS rejection).
+    expect(byId.get("j-rcs-sms-fallback:inbound")).toBe("rcs");
+    expect(byId.get("j-rcs-sms-fallback:outbound")).toBe("sms");
+    expect(byId.get("j-sms:inbound")).toBe("sms");
+    expect(byId.get("ob-rcs:flow-outbound")).toBe("rcs");
+    expect(byId.get("ob-sms:flow-outbound")).toBe("sms");
   });
 
   it("surfaces a delivered reply from assistant_reply_text even after the retry cache was cleared", async () => {

@@ -47,6 +47,14 @@ export type SmsJobRow = {
   rowboat_reply_cached: string | null;
   telnyx_outbound_message_id: string | null;
   last_error: string | null;
+  /** Channel the inbound arrived on ('sms' default; 'rcs' for RCS webhooks). */
+  channel?: "sms" | "rcs" | null;
+  /**
+   * Channel the worker reply was DELIVERED on. Can differ from `channel`
+   * (RCS inbound answered over plain SMS after an RCS API rejection).
+   * Null on legacy rows and jobs without a delivered reply → treated as sms.
+   */
+  reply_channel?: "sms" | "rcs" | null;
   created_at: string;
   updated_at: string;
 };
@@ -67,7 +75,7 @@ export function outboundReplyFromRow(
 }
 
 const SMS_JOB_SELECT =
-  "id, business_id, payload, status, assistant_reply_text, rowboat_reply_cached, telnyx_outbound_message_id, last_error, created_at, updated_at";
+  "id, business_id, payload, status, assistant_reply_text, rowboat_reply_cached, telnyx_outbound_message_id, last_error, channel, reply_channel, created_at, updated_at";
 
 export type OutboundLogSource = "ai_flow" | "agent_offer" | "owner_notify" | "owner_manual";
 
@@ -81,11 +89,13 @@ export type OutboundLogRow = {
   run_id: string | null;
   flow_id: string | null;
   telnyx_message_id: string | null;
+  /** Channel the send was attempted on ('sms' default; 'rcs' = RCS-first). */
+  channel?: "sms" | "rcs" | null;
   created_at: string;
 };
 
 const OUTBOUND_LOG_SELECT =
-  "id, business_id, to_e164, from_e164, body, source, run_id, flow_id, telnyx_message_id, created_at";
+  "id, business_id, to_e164, from_e164, body, source, run_id, flow_id, telnyx_message_id, channel, created_at";
 
 export type SmsMessageDirection = "inbound" | "outbound";
 
@@ -101,6 +111,8 @@ export type SmsMessage = {
   lastError: string | null;
   /** Set for worker-initiated sends from `sms_outbound_log` (AiFlow etc.). */
   source?: OutboundLogSource;
+  /** Delivery channel; 'rcs' renders a channel badge in the thread UI. */
+  channel?: "sms" | "rcs";
 };
 
 export type SmsConversation = {
@@ -134,6 +146,17 @@ export function inboundTextFromPayload(
   if (typeof text === "string") return text;
   const body = inner["body"];
   if (typeof body === "string") return body;
+  // RCS inbound nests content under a body OBJECT: `body.text` for typed
+  // messages, `body.suggestion_response.text` for tapped suggested replies.
+  if (body && typeof body === "object" && !Array.isArray(body)) {
+    const b = body as Record<string, unknown>;
+    if (typeof b["text"] === "string") return b["text"];
+    const suggestion = b["suggestion_response"];
+    if (suggestion && typeof suggestion === "object") {
+      const st = (suggestion as Record<string, unknown>)["text"];
+      if (typeof st === "string") return st;
+    }
+  }
   return "";
 }
 
@@ -336,6 +359,7 @@ export async function listMessagesForCustomer(
     const cust = customerE164FromPayload(row.payload);
     if (cust !== customerE164) continue;
     const inboundText = inboundTextFromPayload(row.payload);
+    const rowChannel = row.channel === "rcs" ? "rcs" : "sms";
     if (inboundText) {
       messages.push({
         id: `${row.id}:inbound`,
@@ -344,7 +368,8 @@ export async function listMessagesForCustomer(
         content: inboundText,
         timestamp: row.created_at,
         status: row.status,
-        lastError: null
+        lastError: null,
+        channel: rowChannel
       });
     }
     const outboundText = outboundReplyFromRow(row);
@@ -358,7 +383,11 @@ export async function listMessagesForCustomer(
         // to created_at on legacy rows that pre-date the updated_at stamp.
         timestamp: row.updated_at || row.created_at,
         status: row.status,
-        lastError: row.last_error
+        lastError: row.last_error,
+        // The reply's own delivery channel, NOT the inbound channel — an
+        // RCS inbound can be answered over plain SMS (fallback), and the
+        // badge must reflect what actually went out.
+        channel: row.reply_channel === "rcs" ? "rcs" : "sms"
       });
     }
   }
@@ -371,7 +400,8 @@ export async function listMessagesForCustomer(
       timestamp: row.created_at,
       status: "done",
       lastError: null,
-      source: row.source
+      source: row.source,
+      channel: row.channel === "rcs" ? "rcs" : "sms"
     });
   }
   // Worker sends interleave with the conversation in time, so re-sort the

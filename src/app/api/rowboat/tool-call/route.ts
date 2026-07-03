@@ -245,9 +245,12 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
       if (!parsed.success) {
         return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
       }
-      const config = await getTelnyxMessagingForBusiness(businessId);
+      // Assistant → customer message: eligible tenants go RCS-first w/ SMS fallback.
+      const config = await getTelnyxMessagingForBusiness(businessId, undefined, {
+        resolveRcs: true
+      });
       try {
-        const messageId = await sendTelnyxSms(config, parsed.data.toE164, parsed.data.body, {
+        const { id: messageId } = await sendTelnyxSms(config, parsed.data.toE164, parsed.data.body, {
           meterBusinessId: businessId
         });
         return { ok: true, data: { messageId, toE164: parsed.data.toE164 } };

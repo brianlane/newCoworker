@@ -48,7 +48,7 @@ describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
       ok: true,
       json: () => Promise.resolve({ data: { id: "m1" } })
     });
-    const id = await sendTelnyxSms(
+    const { id } = await sendTelnyxSms(
       { apiKey: "k", messagingProfileId: "p" },
       "+15550001111",
       "Hi",
@@ -330,7 +330,7 @@ describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
       ok: true,
       json: () => Promise.resolve({ data: { id: "mFailOpen" } })
     });
-    const id = await sendTelnyxSms(
+    const { id } = await sendTelnyxSms(
       { apiKey: "k", messagingProfileId: "p" },
       "+15550001111",
       "Hi",

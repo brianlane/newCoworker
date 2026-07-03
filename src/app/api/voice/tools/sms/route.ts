@@ -56,9 +56,12 @@ export async function POST(request: Request) {
   }
 
   try {
-    const config = await getTelnyxMessagingForBusiness(envelope.businessId);
+    // Customer-facing follow-up: eligible tenants send RCS-first w/ SMS fallback.
+    const config = await getTelnyxMessagingForBusiness(envelope.businessId, undefined, {
+      resolveRcs: true
+    });
     try {
-      const messageId = await sendTelnyxSms(config, toPhone, args.body, {
+      const { id: messageId } = await sendTelnyxSms(config, toPhone, args.body, {
         meterBusinessId: envelope.businessId
       });
       return voiceToolResponse({ ok: true, data: { messageId, toE164: toPhone } });

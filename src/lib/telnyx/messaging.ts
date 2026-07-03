@@ -5,7 +5,19 @@ export type TelnyxMessagingConfig = {
   apiKey: string;
   messagingProfileId: string;
   fromE164?: string;
+  /**
+   * Tenant's approved Telnyx RCS agent id. Set only by
+   * `getTelnyxMessagingForBusiness(..., { resolveRcs: true })` when the tenant
+   * is RCS-eligible (standard/enterprise tier + rcs_enabled + agent approved).
+   * When present, `sendTelnyxSms` goes RCS-first with automatic SMS fallback.
+   */
+  rcsAgentId?: string | null;
 };
+
+/** Tiers entitled to the RCS channel (mirror of _shared/channel_settings.ts). */
+export function rcsTierAllowed(tier: string | null | undefined): boolean {
+  return tier === "standard" || tier === "enterprise";
+}
 
 export function readTelnyxMessagingConfig(
   env: Record<string, string | undefined> = process.env
@@ -24,10 +36,18 @@ export function readTelnyxMessagingConfig(
 
 /**
  * Merge platform Telnyx credentials with per-business messaging profile / from-number when set (§1).
+ *
+ * Pass `opts.resolveRcs: true` for CUSTOMER-FACING sends (dashboard composer,
+ * assistant tool-calls, voice follow-up SMS) to also resolve the tenant's RCS
+ * channel eligibility. Platform-operational sends (owner alerts, provisioning
+ * notifications) omit it and stay plain SMS. The RCS gate is a three-way AND —
+ * tier allows ∧ rcs_enabled ∧ agent id set — and any lookup error resolves to
+ * no-RCS (fail-safe: SMS always works).
  */
 export async function getTelnyxMessagingForBusiness(
   businessId: string | null | undefined,
-  client?: Awaited<ReturnType<typeof createSupabaseServiceClient>>
+  client?: Awaited<ReturnType<typeof createSupabaseServiceClient>>,
+  opts?: { resolveRcs?: boolean }
 ): Promise<TelnyxMessagingConfig> {
   const base = readTelnyxMessagingConfig();
   if (!businessId) return base;
@@ -37,14 +57,64 @@ export async function getTelnyxMessagingForBusiness(
     .select("telnyx_messaging_profile_id, telnyx_sms_from_e164")
     .eq("business_id", businessId)
     .maybeSingle();
-  if (!data) return base;
-  const profile = data.telnyx_messaging_profile_id as string | null | undefined;
-  const from = data.telnyx_sms_from_e164 as string | null | undefined;
-  return {
+  const profile = data?.telnyx_messaging_profile_id as string | null | undefined;
+  const from = data?.telnyx_sms_from_e164 as string | null | undefined;
+  const config: TelnyxMessagingConfig = {
     apiKey: base.apiKey,
     messagingProfileId: profile && profile.length > 0 ? profile : base.messagingProfileId,
     fromE164: from && from.length > 0 ? from : base.fromE164
   };
+  if (opts?.resolveRcs) {
+    config.rcsAgentId = await resolveRcsAgentIdForBusiness(db, businessId);
+  }
+  return config;
+}
+
+/**
+ * Resolve the tenant's RCS agent id, or null when sends must stay plain SMS.
+ * Node-side mirror of supabase/functions/_shared/channel_settings.ts.
+ */
+export async function resolveRcsAgentIdForBusiness(
+  db: Awaited<ReturnType<typeof createSupabaseServiceClient>>,
+  businessId: string
+): Promise<string | null> {
+  const { data: biz, error: bizErr } = await db
+    .from("businesses")
+    .select("tier")
+    .eq("id", businessId)
+    .maybeSingle();
+  if (bizErr || !rcsTierAllowed((biz as { tier?: string | null } | null)?.tier)) return null;
+
+  const { data, error } = await db
+    .from("business_channel_settings")
+    .select("rcs_agent_id, rcs_enabled")
+    .eq("business_id", businessId)
+    .maybeSingle();
+  if (error) return null;
+  const row = data as { rcs_agent_id?: string | null; rcs_enabled?: boolean } | null;
+  if (!row?.rcs_enabled) return null;
+  const agentId = (row.rcs_agent_id ?? "").trim();
+  return agentId.length > 0 ? agentId : null;
+}
+
+/**
+ * Whether composer sends for this business will actually go RCS-first.
+ * Mirrors the exact precondition in `sendTelnyxSms` — an approved agent id
+ * AND a concrete from-number for the SMS fallback — so UI hints (channel
+ * badge, segment warnings) never claim RCS while sends fall through to plain
+ * SMS. Any config/lookup error resolves to false (plain-SMS hints are the
+ * safe default).
+ */
+export async function rcsChannelActiveForBusiness(
+  db: Awaited<ReturnType<typeof createSupabaseServiceClient>>,
+  businessId: string
+): Promise<boolean> {
+  try {
+    const cfg = await getTelnyxMessagingForBusiness(businessId, db, { resolveRcs: true });
+    return Boolean((cfg.rcsAgentId ?? "").trim() && cfg.fromE164);
+  } catch {
+    return false;
+  }
 }
 
 export type SendTelnyxSmsOptions = {
@@ -68,6 +138,17 @@ export type SendTelnyxSmsOptions = {
 
 type TelnyxMessageResponse = { data?: { id?: string } };
 
+export type SendTelnyxSmsResult = {
+  /** Telnyx message id. */
+  id: string;
+  /**
+   * Channel the accepted send went out on: "rcs" = RCS-first with Telnyx-side
+   * SMS fallback; "sms" = plain SMS (including when an RCS API rejection made
+   * us re-send plain). Persist this on message logs so threads can badge it.
+   */
+  channel: "sms" | "rcs";
+};
+
 type ReserveSlotResult = { ok?: boolean; reason?: string; source?: string };
 
 const DEFAULT_THROTTLE_MAX_PER_SECOND = 10;
@@ -83,15 +164,26 @@ export function reserveSlotFailureMessage(result: ReserveSlotResult | null): str
 }
 
 /**
- * Send SMS via Telnyx Messaging API v2.
- * @returns Telnyx message id
+ * Send a customer message via Telnyx Messaging API v2.
+ *
+ * When `config.rcsAgentId` is set (tenant is RCS-eligible) AND the config has
+ * a concrete from-number for the SMS fallback, the message goes out RCS-first
+ * (`POST /v2/messages/rcs`: verified-brand sender, read receipts on
+ * Android/iOS 18+) with Telnyx-side automatic SMS fallback to non-RCS
+ * handsets. If the RCS endpoint itself rejects the request (agent revoked,
+ * destination not RCS-routable, etc.) we re-send as plain SMS in the same
+ * call so the customer never loses a message to channel plumbing. Metering
+ * (`try_reserve_sms_outbound_slot`) is identical on both channels — one
+ * monthly pool regardless of channel, per the plan.
+ *
+ * @returns Telnyx message id + the channel that accepted the send
  */
 export async function sendTelnyxSms(
   config: TelnyxMessagingConfig,
   toE164: string,
   text: string,
   options?: SendTelnyxSmsOptions
-): Promise<string> {
+): Promise<SendTelnyxSmsResult> {
   const fetchImpl = options?.fetchImpl ?? fetch;
   let meterClient: Awaited<ReturnType<typeof createSupabaseServiceClient>> | undefined;
   let reservedSlot = false;
@@ -169,6 +261,51 @@ export async function sendTelnyxSms(
   };
 
   try {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${config.apiKey}`,
+      "Content-Type": "application/json"
+    };
+    if (options?.idempotencyKey) {
+      headers["Idempotency-Key"] = options.idempotencyKey;
+    }
+
+    const rcsAgentId = (config.rcsAgentId ?? "").trim();
+    if (rcsAgentId && config.fromE164) {
+      const rcsRes = await fetchImpl("https://api.telnyx.com/v2/messages/rcs", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          agent_id: rcsAgentId,
+          to: toE164,
+          messaging_profile_id: config.messagingProfileId,
+          type: "RCS",
+          agent_message: { content_message: { text } },
+          // Telnyx delivers this as plain SMS from the tenant's existing
+          // number when the handset/carrier has no RCS (3072-char cap).
+          sms_fallback: { from: config.fromE164, text: text.slice(0, 3072) }
+        })
+      });
+      if (rcsRes.ok) {
+        const json = (await rcsRes.json()) as TelnyxMessageResponse;
+        const id = json.data?.id;
+        if (id) {
+          return { id, channel: "rcs" };
+        }
+        // 2xx without a message id: Telnyx did not durably create the message
+        // (nothing to track or reconcile). Treat it like a rejection and
+        // deliver over plain SMS — same behavior as the inbound worker.
+        console.warn("sendTelnyxSms: RCS 2xx with no message id, falling back to SMS");
+      } else {
+        // RCS API rejection (agent revoked, destination not routable, …): fall
+        // through to plain SMS so channel plumbing never drops a customer
+        // message. Warn so operators see misconfigured agents.
+        const errText = await rcsRes.text();
+        console.warn(
+          `sendTelnyxSms: RCS send rejected (${rcsRes.status}), falling back to SMS: ${errText.slice(0, 300)}`
+        );
+      }
+    }
+
     const body: Record<string, string> = {
       to: toE164,
       text,
@@ -176,14 +313,6 @@ export async function sendTelnyxSms(
     };
     if (config.fromE164) {
       body.from = config.fromE164;
-    }
-
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${config.apiKey}`,
-      "Content-Type": "application/json"
-    };
-    if (options?.idempotencyKey) {
-      headers["Idempotency-Key"] = options.idempotencyKey;
     }
 
     const res = await fetchImpl("https://api.telnyx.com/v2/messages", {
@@ -203,7 +332,7 @@ export async function sendTelnyxSms(
       throw new Error("Telnyx SMS: missing message id in response");
     }
 
-    return id;
+    return { id, channel: "sms" };
   } catch (err) {
     await releaseIfNeeded();
     throw err;

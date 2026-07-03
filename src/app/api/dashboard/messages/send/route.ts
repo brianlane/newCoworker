@@ -70,13 +70,16 @@ export async function POST(request: Request) {
     }
 
     const db = await createSupabaseServiceClient();
-    const config = await getTelnyxMessagingForBusiness(businessId, db);
+    // resolveRcs: owner-composed messages are customer-facing, so RCS-eligible
+    // tenants (Standard+, agent approved) send RCS-first with SMS fallback.
+    const config = await getTelnyxMessagingForBusiness(businessId, db, { resolveRcs: true });
 
     let telnyxMessageId: string;
+    let channel: "sms" | "rcs";
     try {
-      telnyxMessageId = await sendTelnyxSms(config, toE164, text, {
+      ({ id: telnyxMessageId, channel } = await sendTelnyxSms(config, toE164, text, {
         meterBusinessId: businessId
-      });
+      }));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const isQuota = /Monthly SMS limit|SMS quota blocked|throttled/i.test(message);
@@ -106,7 +109,8 @@ export async function POST(request: Request) {
         source: "owner_manual",
         run_id: null,
         flow_id: null,
-        telnyx_message_id: telnyxMessageId
+        telnyx_message_id: telnyxMessageId,
+        channel
       })
       .select("id")
       .single();

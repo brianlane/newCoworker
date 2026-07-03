@@ -5,14 +5,18 @@ import { useRouter } from "next/navigation";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
 import { SmsSegmentHint } from "./SmsSegmentHint";
 
-type Props = { businessId: string };
+type Props = {
+  businessId: string;
+  /** True when this tenant's sends go RCS-first (softens the emoji hint). */
+  rcsEnabled?: boolean;
+};
 
 /**
  * "New message" composer on the Text history index. Sends a brand-new SMS to
  * an arbitrary number via /api/dashboard/messages/send, then routes the owner
  * into the resulting thread (which now has at least one logged message).
  */
-export function SmsComposeNew({ businessId }: Props) {
+export function SmsComposeNew({ businessId, rcsEnabled = false }: Props) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [to, setTo] = useState("");
@@ -119,7 +123,7 @@ export function SmsComposeNew({ businessId }: Props) {
         disabled={busy}
         className="w-full resize-none rounded-lg border border-parchment/15 bg-deep-ink/60 px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:border-claw-green/60 focus:outline-none disabled:opacity-50"
       />
-      <SmsSegmentHint text={text} mode="verbatim" />
+      <SmsSegmentHint text={text} mode="verbatim" channel={rcsEnabled ? "rcs" : "sms"} />
       {error && <p className="text-xs text-red-300">{error}</p>}
       <div className="flex justify-end">
         <button
