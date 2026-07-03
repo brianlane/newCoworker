@@ -55,6 +55,13 @@ describe("api/telnyx/porting-webhook route", () => {
       ported: true,
       row: null
     });
+    vi.mocked(activatePortedNumber).mockResolvedValue({
+      attempted: false,
+      activated: false,
+      assign: null,
+      tendlc: null,
+      error: null
+    });
   });
 
   afterEach(() => {
@@ -121,13 +128,14 @@ describe("api/telnyx/porting-webhook route", () => {
     expect(activatePortedNumber).not.toHaveBeenCalled();
   });
 
-  it("activates the number exactly when the ported milestone is claimed with a row", async () => {
+  it("attempts activation on every delivery with a row, reporting the outcome when attempted", async () => {
     const row = {
       id: "req-1",
       business_id: "biz-1",
       phone_e164: "+13125550001",
       telnyx_order_id: "po-1",
-      status: "ported"
+      status: "ported",
+      activated_at: null
     };
     vi.mocked(handlePortingStatusChange).mockResolvedValue({
       handled: true,
@@ -135,6 +143,7 @@ describe("api/telnyx/porting-webhook route", () => {
       row: row as never
     });
     vi.mocked(activatePortedNumber).mockResolvedValue({
+      attempted: true,
       activated: true,
       assign: null,
       tendlc: { kind: "registered", campaignId: "c-1" },
@@ -146,9 +155,10 @@ describe("api/telnyx/porting-webhook route", () => {
     expect(body).toMatchObject({ ok: true, ported: true, activated: true });
     expect(activatePortedNumber).toHaveBeenCalledWith(row);
 
-    // A failed activation still 200s (activation alerts + is recovered via
-    // admin tooling; a 500 would make Telnyx redeliver into a no-op).
+    // A failed activation still 200s: activated_at stays null so the next
+    // redelivery retries; a 500 would just hammer the same failure.
     vi.mocked(activatePortedNumber).mockResolvedValue({
+      attempted: true,
       activated: false,
       assign: null,
       tendlc: null,
@@ -158,16 +168,25 @@ describe("api/telnyx/porting-webhook route", () => {
     expect(res2.status).toBe(200);
     expect((await res2.json()).activated).toBe(false);
 
-    // Non-ported outcomes never trigger activation.
+    // Redeliveries that don't claim the milestone still reach activation
+    // (crash recovery) — but a no-op attempt is not reported as `activated`.
     vi.mocked(activatePortedNumber).mockClear();
+    vi.mocked(activatePortedNumber).mockResolvedValue({
+      attempted: false,
+      activated: false,
+      assign: null,
+      tendlc: null,
+      error: null
+    });
     vi.mocked(handlePortingStatusChange).mockResolvedValue({
       handled: true,
       ported: false,
-      row: row as never
+      row: { ...row, activated_at: "2026-07-01T00:00:00Z" } as never
     });
     const res3 = await POST(req(statusEvent()));
     expect(res3.status).toBe(200);
-    expect(activatePortedNumber).not.toHaveBeenCalled();
+    expect(activatePortedNumber).toHaveBeenCalledTimes(1);
+    expect(await res3.json()).not.toHaveProperty("activated");
   });
 
   it("defaults the payload to {} and occurred_at to null when the event has none", async () => {

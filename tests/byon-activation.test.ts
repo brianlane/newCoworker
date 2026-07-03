@@ -22,6 +22,10 @@ vi.mock("@/lib/telnyx/numbers", () => ({
   })
 }));
 
+vi.mock("@/lib/supabase/server", () => ({
+  createSupabaseServiceClient: vi.fn()
+}));
+
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
@@ -30,19 +34,47 @@ import { activatePortedNumber, type PortedNumberRow } from "@/lib/byon/activatio
 import { assignExistingDidToBusiness } from "@/lib/telnyx/assign-did";
 import { attachBusinessDidToCampaign } from "@/lib/provisioning/tendlc-attach";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { TelnyxNumbersClient } from "@/lib/telnyx/numbers";
 import { logger } from "@/lib/logger";
 
 const assignMock = vi.mocked(assignExistingDidToBusiness);
 const attachMock = vi.mocked(attachBusinessDidToCampaign);
 const dispatchMock = vi.mocked(dispatchUrgentNotification);
+const defaultClientMock = vi.mocked(createSupabaseServiceClient);
 
 const ROW: PortedNumberRow = {
   id: "req-1",
   business_id: "biz-1",
   phone_e164: "+13125550001",
-  telnyx_order_id: "po-1"
+  telnyx_order_id: "po-1",
+  status: "ported",
+  activated_at: null
 };
+
+type StampCall = { name: string; args: unknown[] };
+
+/** Minimal thenable builder for the activated_at stamp update. */
+function stampDb(result: { error: { message: string } | null } = { error: null }) {
+  const calls: StampCall[] = [];
+  const builder = {
+    update: (...args: unknown[]) => {
+      calls.push({ name: "update", args });
+      return builder;
+    },
+    eq: (...args: unknown[]) => {
+      calls.push({ name: "eq", args });
+      return builder;
+    },
+    is: (...args: unknown[]) => {
+      calls.push({ name: "is", args });
+      return builder;
+    },
+    then: (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve)
+  };
+  const db = { from: (table: string) => (calls.push({ name: "from", args: [table] }), builder) };
+  return { db: db as never, calls };
+}
 
 const ENV = {
   TELNYX_API_KEY: "key",
@@ -62,17 +94,50 @@ describe("activatePortedNumber", () => {
     assignMock.mockResolvedValue(ASSIGN_RESULT);
     attachMock.mockResolvedValue({ kind: "registered", campaignId: "c-1" });
     dispatchMock.mockResolvedValue({ results: [] });
+    defaultClientMock.mockResolvedValue(stampDb().db);
+  });
+
+  it("skips rows that are not ported or already activated", async () => {
+    const notPorted = await activatePortedNumber(
+      { ...ROW, status: "foc-date-confirmed" },
+      { env: ENV }
+    );
+    expect(notPorted).toEqual({
+      attempted: false,
+      activated: false,
+      assign: null,
+      tendlc: null,
+      error: null
+    });
+
+    const settled = await activatePortedNumber(
+      { ...ROW, activated_at: "2026-07-01T00:00:00Z" },
+      { env: ENV }
+    );
+    expect(settled.attempted).toBe(false);
+
+    expect(assignMock).not.toHaveBeenCalled();
+    expect(attachMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("wires voice routes and 10DLC for the ported number using platform defaults", async () => {
-    const result = await activatePortedNumber(ROW, { env: ENV });
+    const { db, calls } = stampDb();
+    const result = await activatePortedNumber(ROW, { env: ENV, client: db });
 
     expect(result).toEqual({
+      attempted: true,
       activated: true,
       assign: ASSIGN_RESULT,
       tendlc: { kind: "registered", campaignId: "c-1" },
       error: null
     });
+    // activated_at stamped conditionally so redeliveries skip the wiring.
+    expect(calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      activated_at: expect.any(String)
+    });
+    expect(calls).toContainEqual({ name: "eq", args: ["id", "req-1"] });
+    expect(calls).toContainEqual({ name: "is", args: ["activated_at", null] });
     expect(assignMock).toHaveBeenCalledWith(
       {
         businessId: "biz-1",
@@ -139,6 +204,7 @@ describe("activatePortedNumber", () => {
   it("fails loudly (alerting the owner) when TELNYX_API_KEY is missing", async () => {
     const result = await activatePortedNumber(ROW, { env: { ...ENV, TELNYX_API_KEY: "  " } });
     expect(result).toEqual({
+      attempted: true,
       activated: false,
       assign: null,
       tendlc: null,
@@ -174,6 +240,7 @@ describe("activatePortedNumber", () => {
     dispatchMock.mockRejectedValue(new Error("smtp down"));
     const result = await activatePortedNumber(ROW, { env: ENV });
     expect(result).toEqual({
+      attempted: true,
       activated: false,
       assign: null,
       tendlc: null,
@@ -206,5 +273,25 @@ describe("activatePortedNumber", () => {
     const result2 = await activatePortedNumber(ROW, { env: ENV });
     expect(result2.activated).toBe(true);
     expect(result2.tendlc).toEqual({ kind: "error", reason: "network sneeze" });
+  });
+
+  it("treats activated_at stamp failures as non-fatal (error result, thrown, or default client failing)", async () => {
+    // Stamp update returns an error → warn, still activated.
+    const { db } = stampDb({ error: { message: "stamp exploded" } });
+    const result = await activatePortedNumber(ROW, { env: ENV, client: db });
+    expect(result.activated).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "byon: failed to stamp activated_at",
+      expect.objectContaining({ error: "stamp exploded" })
+    );
+
+    // Default service client construction throwing → warn, still activated.
+    defaultClientMock.mockRejectedValue(new Error("no service role key"));
+    const result2 = await activatePortedNumber(ROW, { env: ENV });
+    expect(result2.activated).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "byon: failed to stamp activated_at",
+      expect.objectContaining({ error: "no service role key" })
+    );
   });
 });

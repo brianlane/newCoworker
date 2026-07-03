@@ -8,9 +8,10 @@
  *   - Handles `porting_order.status_changed`: mirrors the new status onto
  *     the matching `number_port_requests` row and alerts the owner on
  *     milestones (exception / FOC confirmed / ported / cancelled).
- *   - On the (exactly-once) `ported` milestone, activates the number:
+ *   - Whenever the row shows ported-but-not-activated, activates the number:
  *     voice routes + messaging settings + 10DLC attach (see
- *     src/lib/byon/activation.ts).
+ *     src/lib/byon/activation.ts) — keyed off durable row state so crashed
+ *     activations are retried by later redeliveries.
  *   - Everything else is acknowledged and ignored — returning non-2xx makes
  *     Telnyx retry, which is only correct for genuine processing failures.
  */
@@ -69,15 +70,17 @@ export async function POST(request: Request) {
   try {
     const result = await handlePortingStatusChange(data.payload ?? {}, {}, data.occurred_at ?? null);
 
-    // `ported` is reported exactly once (claimed via notified_status), so
-    // this is the single place the just-ported number gets wired into the
-    // tenant's voice routes + messaging + 10DLC. activatePortedNumber never
-    // throws — a failed activation alerts the owner and is recovered via
-    // the admin assign-did tooling, not by failing the webhook (Telnyx
-    // would redeliver into the already-claimed milestone and do nothing).
+    // Activation keys off durable row state, not this delivery's transition:
+    // EVERY delivery whose row shows ported-but-not-activated attempts the
+    // (idempotent) wiring, so a worker that claimed the ported alert and then
+    // died before wiring is recovered by the next Telnyx redelivery.
+    // activatePortedNumber never throws — failures alert the owner, leave
+    // activated_at null for the next retry, and remain recoverable via the
+    // admin assign-did tooling.
     let activated: boolean | undefined;
-    if (result.ported && result.row) {
-      activated = (await activatePortedNumber(result.row)).activated;
+    if (result.row) {
+      const activation = await activatePortedNumber(result.row);
+      if (activation.attempted) activated = activation.activated;
     }
 
     return NextResponse.json({

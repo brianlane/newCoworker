@@ -17,12 +17,20 @@
  *      normal (the periodic retry worker finishes the job); only hard
  *      rejections are surfaced.
  *
- * Failure semantics: activation runs inside the porting webhook AFTER the
- * `ported` milestone was claimed, and Telnyx will not redeliver a webhook we
- * 200'd — so this function NEVER throws. A failed activation logs loudly,
- * alerts the owner ("we're connecting your number, no action needed yet"),
- * and leaves recovery to the admin assign-did tooling which performs the
- * same wiring idempotently.
+ * Trigger semantics: activation keys off durable row state — any webhook
+ * delivery whose row shows `status = 'ported'` with `activated_at IS NULL`
+ * attempts it, NOT just the delivery that claimed the ported alert. A worker
+ * dying between the alert claim and the wiring therefore doesn't strand the
+ * number: the next redelivery (a no-op for status purposes) retries the
+ * activation. The wiring itself is idempotent (upserts + a 409-tolerant
+ * 10DLC attach), so a rare concurrent double-run is harmless; `activated_at`
+ * is stamped after success so settled rows skip the Telnyx calls entirely.
+ *
+ * Failure semantics: this function NEVER throws (a webhook 500 would make
+ * Telnyx redeliver into a mostly-settled row). A failed activation logs
+ * loudly, alerts the owner ("we're connecting your number, no action needed
+ * yet"), leaves `activated_at` null so any later delivery retries, and can
+ * always be finished manually via the idempotent admin assign-did tooling.
  */
 
 import { TelnyxNumbersClient } from "@/lib/telnyx/numbers";
@@ -39,13 +47,16 @@ import {
   type AttachOutcome
 } from "@/lib/provisioning/tendlc-attach";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { formatDid } from "@/lib/telnyx/format";
 import { logger } from "@/lib/logger";
 import type { NumberPortRequestRow } from "@/lib/byon/port-requests";
 
+type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
+
 export type PortedNumberRow = Pick<
   NumberPortRequestRow,
-  "id" | "business_id" | "phone_e164" | "telnyx_order_id"
+  "id" | "business_id" | "phone_e164" | "telnyx_order_id" | "status" | "activated_at"
 >;
 
 export type ActivationDeps = {
@@ -57,11 +68,15 @@ export type ActivationDeps = {
   dispatch?: typeof dispatchUrgentNotification;
   /** Inject for tests; defaults to a real client built from TELNYX_API_KEY. */
   numbersClient?: TelnyxNumbersClient;
+  /** Inject for tests; defaults to the service-role Supabase client. */
+  client?: SupabaseClient;
   /** Inject for tests; defaults to process.env. */
   env?: Record<string, string | undefined>;
 };
 
 export type ActivationResult = {
+  /** False when the row didn't need activation (not ported / already done). */
+  attempted: boolean;
   /** True when the voice/SMS wiring (step 1) completed. */
   activated: boolean;
   assign: AssignDidResult | null;
@@ -78,6 +93,13 @@ export async function activatePortedNumber(
   row: PortedNumberRow,
   deps: ActivationDeps = {}
 ): Promise<ActivationResult> {
+  // Durable-state trigger: only ported rows that were never activated need
+  // work. This makes the caller trivially safe to invoke on EVERY webhook
+  // delivery (including redeliveries after a crashed activation).
+  if (row.status !== "ported" || row.activated_at !== null) {
+    return { attempted: false, activated: false, assign: null, tendlc: null, error: null };
+  }
+
   const env = deps.env ?? process.env;
   const dispatch = deps.dispatch ?? dispatchUrgentNotification;
 
@@ -110,7 +132,7 @@ export async function activatePortedNumber(
         error: errMessage(err)
       });
     }
-    return { activated: false, assign: null, tendlc: null, error };
+    return { attempted: true, activated: false, assign: null, tendlc: null, error };
   };
 
   const apiKey = env.TELNYX_API_KEY?.trim();
@@ -161,11 +183,34 @@ export async function activatePortedNumber(
     });
   }
 
+  // Stamp activated_at so future redeliveries skip the Telnyx calls. A
+  // failed stamp is non-fatal: the wiring is idempotent, so the worst case
+  // is one redundant re-run on the next redelivery.
+  try {
+    const db = deps.client ?? (await createSupabaseServiceClient());
+    const { error: stampErr } = await db
+      .from("number_port_requests")
+      .update({ activated_at: new Date().toISOString() })
+      .eq("id", row.id)
+      .is("activated_at", null);
+    if (stampErr) {
+      logger.warn("byon: failed to stamp activated_at", {
+        portRequestId: row.id,
+        error: stampErr.message
+      });
+    }
+  } catch (err) {
+    logger.warn("byon: failed to stamp activated_at", {
+      portRequestId: row.id,
+      error: errMessage(err)
+    });
+  }
+
   logger.info("byon: ported number activated", {
     portRequestId: row.id,
     businessId: row.business_id,
     phoneE164: row.phone_e164,
     tendlc: tendlc.kind
   });
-  return { activated: true, assign, tendlc, error: null };
+  return { attempted: true, activated: true, assign, tendlc, error: null };
 }

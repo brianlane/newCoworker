@@ -123,6 +123,7 @@ function portRow(overrides: Record<string, unknown> = {}) {
     loa_document_id: "doc-loa",
     invoice_document_id: "doc-bill",
     notified_status: null,
+    activated_at: null,
     created_at: "2026-06-01T00:00:00Z",
     updated_at: "2026-06-01T00:00:00Z",
     ...overrides
