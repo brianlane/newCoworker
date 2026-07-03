@@ -269,11 +269,13 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
             value={
               step.replyToGroup
                 ? "Everyone in the group text (except your number)"
-                : step.toAgentName
-                  ? `${step.toAgentName} (team member)`
-                  : (step.to ?? "")
+                : step.toRef
+                  ? `${step.toRef.label ?? "Saved contact"} (saved contact — live number)`
+                  : step.toAgentName
+                    ? `${step.toAgentName} (team member)`
+                    : (step.to ?? "")
             }
-            mono={!step.replyToGroup && !step.toAgentName}
+            mono={!step.replyToGroup && !step.toAgentName && !step.toRef}
           />
           <Row label="Message" value={step.body} />
           <SmsSegmentHint text={step.body} mode="aiflow" />
@@ -336,6 +338,12 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           <Row label="Employee offer SMS" value={step.offerTemplate} />
           <Row label="Minutes to respond" value={String(step.responseMinutes ?? 10)} />
           {step.agentName && <Row label="Pinned to" value={step.agentName} />}
+          {step.agentRef && (
+            <Row
+              label="Pinned to"
+              value={`${step.agentRef.label ?? "Saved employee"} (live number)`}
+            />
+          )}
           <Row label="Owner fallback SMS" value={step.ownerFallbackTemplate} />
           {step.claimedNotifyTemplate && (
             <Row label="Owner notice when claimed" value={step.claimedNotifyTemplate} />

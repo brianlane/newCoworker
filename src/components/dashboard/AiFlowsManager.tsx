@@ -26,6 +26,11 @@ import {
   BROWSE_ACTION_LABELS
 } from "@/components/dashboard/aiflow-labels";
 import { getAiFlowExampleCopy, type AiFlowExampleCopy } from "@/lib/ai-flows/examples";
+import {
+  ContactRefPicker,
+  type PickerPerson,
+  type PickerRef
+} from "@/components/dashboard/ContactRefPicker";
 import { SortControl, type SortOption } from "@/components/dashboard/SortControl";
 import { sortRows } from "@/lib/dashboard/sort";
 import { usePersistentSort } from "@/components/dashboard/usePersistentSort";
@@ -95,6 +100,8 @@ type EditorState = {
   emailConnectionId: string;
   /** Voice trigger: the E.164 caller id that fires inbound routing. */
   voiceFromE164: string;
+  /** Voice trigger: a saved person whose live number matches the caller instead. */
+  voiceFromRef: PickerRef | null;
   /** Voice trigger direction: "inbound" matches a caller; "outbound" places a call. */
   voiceDirection: "inbound" | "outbound";
   /** Outbound voice only: auto-dial on the schedule fields above (else manual). */
@@ -127,6 +134,7 @@ function emptyEditor(): EditorState {
     scheduleEvery: 60,
     emailConnectionId: "",
     voiceFromE164: "",
+    voiceFromRef: null,
     voiceDirection: "inbound",
     voiceOutboundScheduled: false,
     steps: []
@@ -146,6 +154,7 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
   | "scheduleEvery"
   | "emailConnectionId"
   | "voiceFromE164"
+  | "voiceFromRef"
   | "voiceDirection"
   | "voiceOutboundScheduled"
 > {
@@ -160,6 +169,7 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
     scheduleEvery: 60,
     emailConnectionId: "",
     voiceFromE164: "",
+    voiceFromRef: null as PickerRef | null,
     voiceDirection: "inbound" as const,
     voiceOutboundScheduled: false
   };
@@ -209,6 +219,7 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
         ...base,
         ...sched,
         voiceFromE164: trigger.fromE164 ?? "",
+        voiceFromRef: trigger.fromRef ?? null,
         voiceDirection: trigger.direction === "outbound" ? "outbound" : "inbound",
         voiceOutboundScheduled: scheduled
       };
@@ -360,13 +371,26 @@ function varsProducedBefore(steps: FlowStep[], index: number): string[] {
   return out;
 }
 
+/**
+ * Save-time condition cleanup: a from_matches with a picked ref must not also
+ * carry stale text (exactly-one rule), and an empty text value is dropped so
+ * the semantic "needs a sender" message shows instead of a zod min(1) error.
+ */
+function sanitizeConditions(conditions: TriggerCondition[]): TriggerCondition[] {
+  return conditions.map((c) =>
+    c.type === "from_matches"
+      ? { ...c, value: c.ref ? undefined : c.value?.trim() || undefined }
+      : c
+  );
+}
+
 function editorTrigger(s: EditorState): FlowTrigger {
   switch (s.channel) {
     case "sms":
       return {
         channel: "sms",
         correlationWindowMinutes: s.correlationWindowMinutes,
-        conditions: s.conditions
+        conditions: sanitizeConditions(s.conditions)
       };
     case "manual":
       return { channel: "manual" };
@@ -380,12 +404,20 @@ function editorTrigger(s: EditorState): FlowTrigger {
             ...(s.scheduleDays.length > 0 ? { daysOfWeek: [...s.scheduleDays].sort() } : {})
           };
     case "email":
-      return { channel: "email", connectionId: s.emailConnectionId, conditions: s.conditions };
+      return {
+        channel: "email",
+        connectionId: s.emailConnectionId,
+        conditions: sanitizeConditions(s.conditions)
+      };
     case "tenant_email":
-      return { channel: "tenant_email", conditions: s.conditions };
+      return { channel: "tenant_email", conditions: sanitizeConditions(s.conditions) };
     case "voice":
       if (s.voiceDirection !== "outbound") {
-        return { channel: "voice", fromE164: s.voiceFromE164.trim() };
+        // Exactly one caller source: a saved-person ref (live number) or a
+        // hardcoded E.164.
+        return s.voiceFromRef
+          ? { channel: "voice", fromRef: s.voiceFromRef }
+          : { channel: "voice", fromE164: s.voiceFromE164.trim() };
       }
       if (!s.voiceOutboundScheduled) {
         return { channel: "voice", direction: "outbound" };
@@ -411,23 +443,49 @@ function editorTrigger(s: EditorState): FlowTrigger {
  * save time, so the persisted definition is always valid.
  */
 function sanitizeStepForSave(step: FlowStep): FlowStep {
-  // voice_ai_intake: drop blank capture-detail rows (the editor leaves an empty
-  // input when you click "+ detail"); an empty string fails the schema's
-  // min(1)-per-item rule, and an empty array fails min(1)-when-present.
+  // ring_handoff / voice_transfer: the number source is EITHER a saved-contact
+  // ref (live number) or a hardcoded E.164 — a chosen ref supersedes any stale
+  // text, and a blank text field is dropped so the semantic "no number to
+  // ring" message shows instead of a regex error.
+  if (step.type === "ring_handoff" || step.type === "voice_transfer") {
+    const toE164 = step.toRef ? undefined : step.toE164?.trim() || undefined;
+    return { ...step, toE164 };
+  }
+  // voice_ai_intake: same ref-wins rule for the notify number, plus drop blank
+  // capture-detail rows (the editor leaves an empty input when you click
+  // "+ detail"); an empty string fails the schema's min(1)-per-item rule, and
+  // an empty array fails min(1)-when-present.
   if (step.type === "voice_ai_intake") {
     const captureFields = (step.captureFields ?? []).map((f) => f.trim()).filter(Boolean);
-    return { ...step, captureFields: captureFields.length > 0 ? captureFields : undefined };
-  }
-  // outbound_call: same blank-row cleanup, plus drop an empty default toE164 (it
-  // is optional and the entry point supplies the callee when omitted).
-  if (step.type === "outbound_call") {
-    const captureFields = (step.captureFields ?? []).map((f) => f.trim()).filter(Boolean);
-    const toE164 = step.toE164?.trim();
     return {
       ...step,
-      ...(toE164 ? { toE164 } : { toE164: undefined }),
+      notifyE164: step.notifyRef ? undefined : step.notifyE164?.trim() || undefined,
       captureFields: captureFields.length > 0 ? captureFields : undefined
     };
+  }
+  // outbound_call: same blank-row + ref-wins cleanup on BOTH numbers; an empty
+  // default toE164 is simply dropped (the entry point supplies the callee).
+  if (step.type === "outbound_call") {
+    const captureFields = (step.captureFields ?? []).map((f) => f.trim()).filter(Boolean);
+    const toE164 = step.toRef ? undefined : step.toE164?.trim() || undefined;
+    return {
+      ...step,
+      toE164,
+      notifyE164: step.notifyRef ? undefined : step.notifyE164?.trim() || undefined,
+      captureFields: captureFields.length > 0 ? captureFields : undefined
+    };
+  }
+  // send_sms / route_to_team: a picked ref supersedes the text alternatives so
+  // the "exactly one recipient/agent" rules pass even with stale hidden state.
+  // Group reply is its own recipient source and supersedes everything.
+  if (step.type === "send_sms" && step.replyToGroup) {
+    return { ...step, to: undefined, toAgentName: undefined, toRef: undefined };
+  }
+  if (step.type === "send_sms" && step.toRef) {
+    return { ...step, to: undefined, toAgentName: undefined };
+  }
+  if (step.type === "route_to_team" && step.agentRef) {
+    return { ...step, agentName: undefined };
   }
   if (step.type !== "browse_action") return step;
   if (step.forEachLink) {
@@ -497,6 +555,10 @@ export function AiFlowsManager({
   const [aiBusy, setAiBusy] = useState(false);
   const [emailConns, setEmailConns] = useState<EmailConnectionOption[]>([]);
   const [employees, setEmployees] = useState<EmployeeEmailOption[]>([]);
+  // Saved-person options for the dynamic-number pickers (live-resolved refs).
+  const [rosterPeople, setRosterPeople] = useState<PickerPerson[]>([]);
+  const [contactPeople, setContactPeople] = useState<PickerPerson[]>([]);
+  const pickerPeople = [...rosterPeople, ...contactPeople];
   // Run-now panel: which flow's panel is open, its input, and the last outcome.
   const [runFor, setRunFor] = useState<string | null>(null);
   const [runInput, setRunInput] = useState("");
@@ -576,8 +638,9 @@ export function AiFlowsManager({
     };
   }, [businessId]);
 
-  // Team roster (ai_flow_team_members) for the cc/bcc "Add employee" picker.
-  // Best-effort: on any failure the picker simply hides and owners type emails.
+  // Team roster (ai_flow_team_members) for the cc/bcc "Add employee" picker
+  // and the dynamic-number "saved contact" pickers. Best-effort: on any
+  // failure the pickers simply hide and owners type values by hand.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -588,7 +651,14 @@ export function AiFlowsManager({
         );
         const json = (await res.json()) as {
           ok: boolean;
-          data?: { members?: Array<{ name?: string; email?: string | null }> };
+          data?: {
+            members?: Array<{
+              id?: string;
+              name?: string;
+              email?: string | null;
+              phone_e164?: string;
+            }>;
+          };
         };
         if (cancelled || !json.ok || !json.data?.members) return;
         setEmployees(
@@ -598,8 +668,59 @@ export function AiFlowsManager({
             )
             .map((m) => ({ name: typeof m.name === "string" ? m.name : m.email, email: m.email }))
         );
+        setRosterPeople(
+          json.data.members
+            .filter(
+              (m): m is { id: string; name?: string; phone_e164: string } =>
+                typeof m.id === "string" && typeof m.phone_e164 === "string" && m.phone_e164.length > 0
+            )
+            .map((m) => ({
+              source: "employee" as const,
+              id: m.id,
+              name: typeof m.name === "string" && m.name ? m.name : m.phone_e164,
+              phone: m.phone_e164
+            }))
+        );
       } catch {
         /* picker stays empty; owners can still type cc/bcc addresses */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [businessId]);
+
+  // Contact directory (contacts table) for the saved-contact number pickers.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/dashboard/customers?businessId=${encodeURIComponent(businessId)}&limit=200`,
+          { cache: "no-store" }
+        );
+        const json = (await res.json()) as {
+          ok: boolean;
+          data?: {
+            customers?: Array<{ id?: string; customerE164?: string; displayName?: string | null }>;
+          };
+        };
+        if (cancelled || !json.ok || !json.data?.customers) return;
+        setContactPeople(
+          json.data.customers
+            .filter(
+              (c): c is { id: string; customerE164: string; displayName?: string | null } =>
+                typeof c.id === "string" && typeof c.customerE164 === "string" && c.customerE164.length > 0
+            )
+            .map((c) => ({
+              source: "contact" as const,
+              id: c.id,
+              name: c.displayName?.trim() || c.customerE164,
+              phone: c.customerE164
+            }))
+        );
+      } catch {
+        /* picker stays empty; owners can still type numbers by hand */
       }
     })();
     return () => {
@@ -1005,17 +1126,16 @@ export function AiFlowsManager({
               </div>
               {editor.voiceDirection === "inbound" ? (
                 <>
-                  <div>
-                    <label className={labelClass}>Caller number (E.164, e.g. +14155551234)</label>
-                    <input
-                      className={inputClass}
-                      value={editor.voiceFromE164}
-                      onChange={(ev) =>
-                        setEditor({ ...editor, voiceFromE164: ev.target.value.trim() })
-                      }
-                      placeholder="+14155551234"
-                    />
-                  </div>
+                  <ContactRefPicker
+                    label="Caller number (E.164, e.g. +14155551234)"
+                    placeholder="+14155551234"
+                    textValue={editor.voiceFromE164}
+                    refValue={editor.voiceFromRef ?? undefined}
+                    people={pickerPeople}
+                    onChangeText={(v) => setEditor({ ...editor, voiceFromE164: v.trim() })}
+                    onChangeRef={(ref) => setEditor({ ...editor, voiceFromRef: ref ?? null })}
+                    help="Calls from this person fire the flow."
+                  />
                   <p className="text-[11px] text-parchment/40">
                     When a call comes in from this number, the steps below route it in real time — ring
                     people in order, then optionally hand off to your AI, or connect straight to one
@@ -1161,20 +1281,50 @@ export function AiFlowsManager({
                   </option>
                 ))}
               </select>
-              {c.type !== "has_url" && (
-                <input
-                  className={inputClass}
-                  value={c.value ?? ""}
-                  onChange={(ev) =>
+              {c.type === "from_matches" ? (
+                // Sender can be typed text OR a saved person whose live
+                // identity (phone + email) is matched at event time.
+                <ContactRefPicker
+                  label=""
+                  placeholder="text / sender"
+                  textValue={c.value ?? ""}
+                  refValue={c.ref}
+                  people={pickerPeople}
+                  onChangeText={(v) =>
                     setEditor({
                       ...editor,
                       conditions: editor.conditions.map((x, xi) =>
-                        xi === i ? ({ ...x, value: ev.target.value } as TriggerCondition) : x
+                        xi === i ? ({ ...x, value: v, ref: undefined } as TriggerCondition) : x
                       )
                     })
                   }
-                  placeholder="text / pattern / sender"
+                  onChangeRef={(ref) =>
+                    setEditor({
+                      ...editor,
+                      conditions: editor.conditions.map((x, xi) =>
+                        // Spread so options like caseInsensitive survive the
+                        // switch to a saved-person sender.
+                        xi === i ? ({ ...x, ref, value: undefined } as TriggerCondition) : x
+                      )
+                    })
+                  }
                 />
+              ) : (
+                c.type !== "has_url" && (
+                  <input
+                    className={inputClass}
+                    value={c.value ?? ""}
+                    onChange={(ev) =>
+                      setEditor({
+                        ...editor,
+                        conditions: editor.conditions.map((x, xi) =>
+                          xi === i ? ({ ...x, value: ev.target.value } as TriggerCondition) : x
+                        )
+                      })
+                    }
+                    placeholder="text / pattern / sender"
+                  />
+                )
               )}
               <button
                 onClick={() =>
@@ -1256,6 +1406,7 @@ export function AiFlowsManager({
                 patchStep={patchStep}
                 emailConns={emailConns}
                 employees={employees}
+                people={pickerPeople}
                 examples={examples}
               />
               {/* Voice steps have no `when` guard (they run on the real-time call
@@ -1601,6 +1752,7 @@ function StepFields({
   patchStep,
   emailConns,
   employees,
+  people,
   examples
 }: {
   step: FlowStep;
@@ -1608,6 +1760,8 @@ function StepFields({
   patchStep: (index: number, patch: Record<string, unknown>) => void;
   emailConns: EmailConnectionOption[];
   employees: EmployeeEmailOption[];
+  /** Saved employees + contacts for the dynamic-number pickers. */
+  people: PickerPerson[];
   examples: AiFlowExampleCopy;
 }) {
   if (step.type === "extract_url") {
@@ -1880,39 +2034,70 @@ function StepFields({
             checked={Boolean(step.replyToGroup)}
             onChange={(ev) =>
               // Group reply is its own recipient source — clear any prior
-              // `to`/`toAgentName` so the "exactly one recipient" rule passes on
-              // save (those fields are hidden while group reply is on).
+              // `to`/`toAgentName`/`toRef` so the "exactly one recipient" rule
+              // passes on save (those fields are hidden while group reply is on).
               patchStep(
                 index,
                 ev.target.checked
-                  ? { replyToGroup: true, to: undefined, toAgentName: undefined }
+                  ? { replyToGroup: true, to: undefined, toAgentName: undefined, toRef: undefined }
                   : { replyToGroup: undefined }
               )
             }
           />
           Reply into the group text (everyone on the thread except your number)
         </label>
-        {!step.replyToGroup && (
-          <>
-            {/* Recipient is phone OR team-member, never both. Hide the other
-                control once one is chosen — but if BOTH are somehow set (invalid
-                imported/legacy data) keep both visible so it can be corrected. */}
-            {(!step.toAgentName || Boolean(step.to)) && (
-              <Field
-                label="Recipient (phone or {{vars.x}})"
-                value={step.to ?? ""}
-                onChange={(v) => patchStep(index, { to: v.trim() ? v : undefined })}
-              />
-            )}
-            {(!step.to || Boolean(step.toAgentName)) && (
-              <Field
-                label="Or send to a team member by name (resolves their phone; body can use {{agent.name}})"
-                value={step.toAgentName ?? ""}
-                onChange={(v) => patchStep(index, { toAgentName: v.trim() ? v : undefined })}
-              />
-            )}
-          </>
-        )}
+        {!step.replyToGroup &&
+          (step.toRef ? (
+            // Saved-contact recipient: the person's LIVE number is resolved at
+            // send time (renumbers/merges propagate automatically).
+            <ContactRefPicker
+              label="Recipient (saved contact — live number)"
+              textValue=""
+              refValue={step.toRef}
+              people={people}
+              onChangeText={() => patchStep(index, { toRef: undefined })}
+              onChangeRef={(ref) =>
+                patchStep(index, { toRef: ref, to: undefined, toAgentName: undefined })
+              }
+            />
+          ) : (
+            <>
+              {/* Recipient is phone OR team-member OR saved contact, never
+                  more than one. Hide the other controls once one is chosen —
+                  but if BOTH text fields are somehow set (invalid imported/
+                  legacy data) keep both visible so it can be corrected. */}
+              {(!step.toAgentName || Boolean(step.to)) && (
+                <Field
+                  label="Recipient (phone or {{vars.x}})"
+                  value={step.to ?? ""}
+                  onChange={(v) => patchStep(index, { to: v.trim() ? v : undefined })}
+                />
+              )}
+              {(!step.to || Boolean(step.toAgentName)) && (
+                <Field
+                  label="Or send to a team member by name (resolves their phone; body can use {{agent.name}})"
+                  value={step.toAgentName ?? ""}
+                  onChange={(v) => patchStep(index, { toAgentName: v.trim() ? v : undefined })}
+                />
+              )}
+              {!step.to && !step.toAgentName && people.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const first = people[0];
+                    patchStep(index, {
+                      toRef: { source: first.source, id: first.id, label: first.name },
+                      to: undefined,
+                      toAgentName: undefined
+                    });
+                  }}
+                  className="text-[11px] text-signal-teal hover:underline"
+                >
+                  Or pick a saved contact (live number)
+                </button>
+              )}
+            </>
+          ))}
         <Field label="Message" value={step.body} onChange={(v) => patchStep(index, { body: v })} textarea />
         <div className="rounded-md border border-parchment/10 bg-deep-ink/30 px-3 py-2 space-y-2">
           <label className="flex items-center gap-2 text-xs text-parchment/70">
@@ -2066,10 +2251,16 @@ function StepFields({
             patchStep(index, { responseMinutes: Number.isFinite(n) && n > 0 ? Math.round(n) : 10 });
           }}
         />
-        <Field
-          label={`Pin to one team member by name (optional — e.g. ${examples.pinExample})`}
-          value={step.agentName ?? ""}
-          onChange={(v) => patchStep(index, { agentName: v.trim() ? v : undefined })}
+        <ContactRefPicker
+          label={`Pin to one team member (optional — e.g. ${examples.pinExample})`}
+          placeholder={examples.pinExample}
+          textValue={step.agentName ?? ""}
+          refValue={step.agentRef}
+          people={people}
+          employeesOnly
+          onChangeText={(v) => patchStep(index, { agentName: v.trim() ? v : undefined })}
+          onChangeRef={(ref) => patchStep(index, { agentRef: ref, agentName: undefined })}
+          help="Picked employees resolve to their current number at send time."
         />
         <Field
           label="Owner fallback SMS (when no agent claims)"
@@ -2393,10 +2584,14 @@ function StepFields({
   if (step.type === "ring_handoff") {
     return (
       <div className="space-y-2">
-        <Field
+        <ContactRefPicker
           label="Ring this number (E.164, e.g. +16025551234)"
-          value={step.toE164 ?? ""}
-          onChange={(v) => patchStep(index, { toE164: v.trim() ? v.trim() : undefined })}
+          placeholder="+16025551234"
+          textValue={step.toE164 ?? ""}
+          refValue={step.toRef}
+          people={people}
+          onChangeText={(v) => patchStep(index, { toE164: v.trim() ? v.trim() : undefined })}
+          onChangeRef={(ref) => patchStep(index, { toRef: ref, toE164: undefined })}
         />
         <Field
           label="Ring for (seconds before moving on)"
@@ -2416,10 +2611,14 @@ function StepFields({
     const fields = step.captureFields ?? [];
     return (
       <div className="space-y-2">
-        <Field
+        <ContactRefPicker
           label="Text the summary to (E.164, e.g. +16025551234)"
-          value={step.notifyE164 ?? ""}
-          onChange={(v) => patchStep(index, { notifyE164: v.trim() ? v.trim() : undefined })}
+          placeholder="+16025551234"
+          textValue={step.notifyE164 ?? ""}
+          refValue={step.notifyRef}
+          people={people}
+          onChangeText={(v) => patchStep(index, { notifyE164: v.trim() ? v.trim() : undefined })}
+          onChangeRef={(ref) => patchStep(index, { notifyRef: ref, notifyE164: undefined })}
           help="After the AI talks to the caller, it texts this number a summary and transcript."
         />
         <Field
@@ -2466,10 +2665,14 @@ function StepFields({
   if (step.type === "voice_transfer") {
     return (
       <div className="space-y-2">
-        <Field
+        <ContactRefPicker
           label="Connect the caller to (E.164, e.g. +16025551234)"
-          value={step.toE164 ?? ""}
-          onChange={(v) => patchStep(index, { toE164: v.trim() ? v.trim() : undefined })}
+          placeholder="+16025551234"
+          textValue={step.toE164 ?? ""}
+          refValue={step.toRef}
+          people={people}
+          onChangeText={(v) => patchStep(index, { toE164: v.trim() ? v.trim() : undefined })}
+          onChangeRef={(ref) => patchStep(index, { toRef: ref, toE164: undefined })}
         />
         <Field
           label="Say this to the caller first (optional)"
@@ -2484,16 +2687,24 @@ function StepFields({
     const fields = step.captureFields ?? [];
     return (
       <div className="space-y-2">
-        <Field
+        <ContactRefPicker
           label="Default number to call (E.164, e.g. +16025551234)"
-          value={step.toE164 ?? ""}
-          onChange={(v) => patchStep(index, { toE164: v.trim() ? v.trim() : undefined })}
+          placeholder="+16025551234"
+          textValue={step.toE164 ?? ""}
+          refValue={step.toRef}
+          people={people}
+          onChangeText={(v) => patchStep(index, { toE164: v.trim() ? v.trim() : undefined })}
+          onChangeRef={(ref) => patchStep(index, { toRef: ref, toE164: undefined })}
           help="Pre-fills the callee when you press Place call. You can override it for a one-off call."
         />
-        <Field
+        <ContactRefPicker
           label="Text the summary to (E.164, e.g. +16025551234)"
-          value={step.notifyE164 ?? ""}
-          onChange={(v) => patchStep(index, { notifyE164: v.trim() ? v.trim() : undefined })}
+          placeholder="+16025551234"
+          textValue={step.notifyE164 ?? ""}
+          refValue={step.notifyRef}
+          people={people}
+          onChangeText={(v) => patchStep(index, { notifyE164: v.trim() ? v.trim() : undefined })}
+          onChangeRef={(ref) => patchStep(index, { notifyRef: ref, notifyE164: undefined })}
           help="After the AI talks to the callee, it texts this number a summary and transcript."
         />
         <Field

@@ -61,6 +61,8 @@ const createSchema = z.object({
 });
 
 export type CustomerListItem = {
+  /** contacts row id — the stable key AiFlow contact refs point at. */
+  id: string;
   customerE164: string;
   type: CustomerMemoryRow["type"];
   displayName: string | null;
@@ -73,6 +75,7 @@ export type CustomerListItem = {
 
 function summarize(row: CustomerMemoryRow): CustomerListItem {
   return {
+    id: row.id,
     customerE164: row.customer_e164,
     type: row.type,
     displayName: row.display_name,
