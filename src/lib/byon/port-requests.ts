@@ -183,10 +183,16 @@ export type CreateByonPortRequestInput = {
 };
 
 export type CreateByonPortRequestResult = {
+  /**
+   * One row per Telnyx porting order (a single submit can split into
+   * several). Each row's `status` reflects its own outcome — `submitted`
+   * when confirmed, `draft` with a SUBMIT_FAILED detail when the carrier
+   * side rejected that order.
+   */
   rows: NumberPortRequestRow[];
-  /** False when Telnyx accepted the draft but rejected the confirm step. */
+  /** True only when EVERY order confirmed; check rows for partial results. */
   submitted: boolean;
-  /** Owner-facing explanation when submitted is false. */
+  /** First failure's owner-facing explanation when submitted is false. */
   submitError: string | null;
 };
 
@@ -263,77 +269,120 @@ export async function createByonPortRequest(
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
   const webhookUrl = `${appUrl}/api/telnyx/porting-webhook`;
 
+  // Persist tracking rows BEFORE anything is submitted to the carrier. If
+  // the insert fails, the Telnyx orders are still unconfirmed drafts (safe
+  // to abandon); the reverse ordering could confirm a port that no webhook
+  // row can ever match.
+  const nowIso = new Date().toISOString();
+  const { data: insertedRows, error: insertErr } = await db
+    .from("number_port_requests")
+    .insert(
+      orders.map((order) => ({
+        business_id: businessId,
+        phone_e164: phoneE164,
+        telnyx_order_id: order.id,
+        status: order.status?.value ?? "draft",
+        status_detail: order.status?.details ?? null,
+        foc_at: null,
+        support_key: order.support_key ?? null,
+        loa_document_id: loaDoc.id,
+        invoice_document_id: billDoc.id,
+        created_at: nowIso,
+        updated_at: nowIso
+      }))
+    )
+    .select();
+  if (insertErr) throw new Error(`createByonPortRequest: ${insertErr.message}`);
+
+  // One phone number normally yields one order, but Telnyx can split — treat
+  // each order independently so one carrier-side rejection doesn't strand
+  // the others. `submitted` means "every order confirmed".
   let submitted = true;
   let submitError: string | null = null;
-  const finalOrders: PortingOrder[] = [];
+  const finalRows: NumberPortRequestRow[] = [];
 
   for (const order of orders) {
-    await porting.updatePortingOrder(order.id, {
-      documents: { loa: loaDoc.id, invoice: billDoc.id },
-      endUser: {
-        admin: {
-          entity_name: entityName,
-          auth_person_name: authorizedName,
-          account_number: accountNumber,
-          ...(input.carrier.pin?.trim() ? { pin_passcode: input.carrier.pin.trim() } : {}),
-          ...(input.carrier.billingPhone?.trim()
-            ? { billing_phone_number: requireE164(input.carrier.billingPhone) }
-            : {})
-        },
-        location: {
-          street_address: street,
-          ...(input.serviceAddress.extended?.trim()
-            ? { extended_address: input.serviceAddress.extended.trim() }
-            : {}),
-          locality: city,
-          administrative_area: state,
-          postal_code: zip,
-          country_code: (input.serviceAddress.country ?? "US").toUpperCase()
-        }
-      },
-      misc: { type: "full" },
-      ...(input.focDatetimeRequested ? { focDatetimeRequested: input.focDatetimeRequested } : {}),
-      webhookUrl
-    });
-
+    let finalOrder: PortingOrder = order;
+    let confirmError: string | null = null;
     try {
-      finalOrders.push(await porting.confirmPortingOrder(order.id));
+      await porting.updatePortingOrder(order.id, {
+        documents: { loa: loaDoc.id, invoice: billDoc.id },
+        endUser: {
+          admin: {
+            entity_name: entityName,
+            auth_person_name: authorizedName,
+            account_number: accountNumber,
+            ...(input.carrier.pin?.trim() ? { pin_passcode: input.carrier.pin.trim() } : {}),
+            ...(input.carrier.billingPhone?.trim()
+              ? { billing_phone_number: requireE164(input.carrier.billingPhone) }
+              : {})
+          },
+          location: {
+            street_address: street,
+            ...(input.serviceAddress.extended?.trim()
+              ? { extended_address: input.serviceAddress.extended.trim() }
+              : {}),
+            locality: city,
+            administrative_area: state,
+            postal_code: zip,
+            country_code: (input.serviceAddress.country ?? "US").toUpperCase()
+          }
+        },
+        misc: { type: "full" },
+        ...(input.focDatetimeRequested ? { focDatetimeRequested: input.focDatetimeRequested } : {}),
+        webhookUrl
+      });
+      finalOrder = await porting.confirmPortingOrder(order.id);
     } catch (err) {
-      // Confirm can fail on carrier-side validation (e.g. requirements not
-      // met). Keep the draft + documents so the owner can fix and resubmit
-      // instead of losing everything they typed.
+      // Update/confirm can fail on carrier-side validation (e.g. requirements
+      // not met). Keep the draft + documents so the owner can fix and
+      // resubmit instead of losing everything they typed — and keep going so
+      // sibling orders in a split still submit.
       submitted = false;
-      submitError = errMessage(err);
-      logger.warn("byon: porting order confirm failed; kept as draft", {
+      confirmError = errMessage(err);
+      submitError = submitError ?? confirmError;
+      logger.warn("byon: porting order submit failed; kept as draft", {
         businessId,
         orderId: order.id,
-        error: submitError
+        error: confirmError
       });
-      finalOrders.push(order);
+    }
+
+    const { data: updatedRow, error: updateErr } = await db
+      .from("number_port_requests")
+      .update({
+        status: finalOrder.status?.value ?? (confirmError ? "draft" : "submitted"),
+        status_detail: confirmError
+          ? [{ code: "SUBMIT_FAILED", description: confirmError }]
+          : (finalOrder.status?.details ?? null),
+        foc_at:
+          finalOrder.activation_settings?.foc_datetime_actual ??
+          finalOrder.activation_settings?.foc_datetime_requested ??
+          null,
+        support_key: finalOrder.support_key ?? null,
+        updated_at: new Date().toISOString()
+      })
+      .eq("telnyx_order_id", order.id)
+      .select()
+      .single();
+    if (updateErr) {
+      // The row exists and the webhook will heal its status; don't fail the
+      // whole submit over a bookkeeping write.
+      logger.warn("byon: failed to refresh port request row after submit", {
+        businessId,
+        orderId: order.id,
+        error: updateErr.message
+      });
+      const fallback = ((insertedRows ?? []) as NumberPortRequestRow[]).find(
+        (r) => r.telnyx_order_id === order.id
+      );
+      if (fallback) finalRows.push(fallback);
+    } else {
+      finalRows.push(updatedRow as NumberPortRequestRow);
     }
   }
 
-  const nowIso = new Date().toISOString();
-  const inserts = finalOrders.map((order) => ({
-    business_id: businessId,
-    phone_e164: phoneE164,
-    telnyx_order_id: order.id,
-    status: order.status?.value ?? (submitted ? "submitted" : "draft"),
-    status_detail: order.status?.details ?? null,
-    foc_at:
-      order.activation_settings?.foc_datetime_actual ??
-      order.activation_settings?.foc_datetime_requested ??
-      null,
-    support_key: order.support_key ?? null,
-    loa_document_id: loaDoc.id,
-    invoice_document_id: billDoc.id,
-    created_at: nowIso,
-    updated_at: nowIso
-  }));
-
-  const { data, error } = await db.from("number_port_requests").insert(inserts).select();
-  if (error) throw new Error(`createByonPortRequest: ${error.message}`);
-  return { rows: (data ?? []) as NumberPortRequestRow[], submitted, submitError };
+  return { rows: finalRows, submitted, submitError };
 }
 
 // ---------------------------------------------------------------------------
@@ -459,11 +508,24 @@ export async function handlePortingStatusChange(
     payload.activation_settings?.foc_datetime_requested ??
     prior.foc_at;
 
+  // A status TRANSITION owns the details outright (clearing stale exception
+  // codes when the port recovers). A redelivery of the same status only
+  // overwrites when it actually carries details — Telnyx retries can omit
+  // them, and wiping stored exception codes would strip the dashboard of
+  // its "here's how to fix it" hints.
+  const payloadDetails = payload.status?.details ?? null;
+  const statusDetail =
+    status !== prior.status
+      ? payloadDetails
+      : payloadDetails && payloadDetails.length > 0
+        ? payloadDetails
+        : prior.status_detail;
+
   const { data: updated, error: updateErr } = await db
     .from("number_port_requests")
     .update({
       status,
-      status_detail: payload.status?.details ?? null,
+      status_detail: statusDetail,
       foc_at: focAt,
       support_key: payload.support_key ?? prior.support_key,
       updated_at: new Date().toISOString()

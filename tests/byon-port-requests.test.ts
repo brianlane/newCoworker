@@ -283,10 +283,13 @@ describe("createByonPortRequest", () => {
     ).rejects.toThrow(/did not return a porting order/);
   });
 
-  it("creates, uploads docs, patches with full details, confirms, and persists the row", async () => {
+  it("persists draft rows first, patches with full details, confirms, and refreshes the row", async () => {
     vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://app.example.com/");
     const porting = makePorting();
-    const { db, log } = makeDb([{ data: [portRow()], error: null }]);
+    const { db, log } = makeDb([
+      { data: [portRow({ status: "draft" })], error: null }, // insert
+      { data: portRow({ status: "submitted" }), error: null } // post-confirm update
+    ]);
     const result = await createByonPortRequest(
       BIZ,
       baseInput({
@@ -313,6 +316,7 @@ describe("createByonPortRequest", () => {
     expect(result.submitted).toBe(true);
     expect(result.submitError).toBeNull();
     expect(result.rows).toHaveLength(1);
+    expect(result.rows[0].status).toBe("submitted");
 
     expect(porting.createPortingOrder).toHaveBeenCalledWith({
       phoneNumbers: ["+13125550001"],
@@ -344,30 +348,44 @@ describe("createByonPortRequest", () => {
     });
     expect(porting.confirmPortingOrder).toHaveBeenCalledWith("po-1");
 
-    const insertCall = log[0].calls.find((c) => c.name === "insert");
-    const inserted = (insertCall?.args[0] as Record<string, unknown>[])[0];
+    // Tracking row exists BEFORE confirm, in the order's draft state.
+    const inserted = (log[0].calls.find((c) => c.name === "insert")?.args[0] as Record<
+      string,
+      unknown
+    >[])[0];
     expect(inserted).toMatchObject({
       business_id: BIZ,
       phone_e164: "+13125550001",
       telnyx_order_id: "po-1",
-      status: "submitted",
-      foc_at: "2026-07-20T13:00:00Z",
+      status: "draft",
+      foc_at: null,
       support_key: "sr_1",
       loa_document_id: "doc-loa",
       invoice_document_id: "doc-bill"
     });
+    // Post-confirm refresh mirrors the confirmed order snapshot.
+    expect(log[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      status: "submitted",
+      status_detail: [],
+      foc_at: "2026-07-20T13:00:00Z",
+      support_key: "sr_1"
+    });
+    expect(log[1].calls).toContainEqual({ name: "eq", args: ["telnyx_order_id", "po-1"] });
   });
 
-  it("omits optional fields and defaults webhook URL to localhost", async () => {
+  it("omits optional fields, defaults webhook URL to localhost and status to submitted", async () => {
     vi.stubEnv("NEXT_PUBLIC_APP_URL", undefined);
     const porting = makePorting({
+      createPortingOrder: vi.fn(async () => [{ id: "po-1" }]),
       confirmPortingOrder: vi.fn(async () => ({ id: "po-1" }))
     });
-    const { db, log } = makeDb([{ data: null, error: null }]);
+    const { db, log } = makeDb([
+      { data: [portRow({ status: "draft" })], error: null },
+      { data: portRow({ status: "submitted" }), error: null }
+    ]);
     const result = await createByonPortRequest(BIZ, baseInput(), { porting, client: db });
 
-    // Confirm succeeded but returned no status/settings → fallbacks kick in.
-    expect(result.rows).toEqual([]);
+    expect(result.submitted).toBe(true);
     const patch = vi.mocked(porting.updatePortingOrder).mock.calls[0][1];
     expect(patch.endUser?.admin).not.toHaveProperty("pin_passcode");
     expect(patch.endUser?.admin).not.toHaveProperty("billing_phone_number");
@@ -376,9 +394,14 @@ describe("createByonPortRequest", () => {
     expect(patch).not.toHaveProperty("focDatetimeRequested");
     expect(patch.webhookUrl).toBe("http://localhost:3000/api/telnyx/porting-webhook");
 
-    const insertCall = log[0].calls.find((c) => c.name === "insert");
-    const inserted = (insertCall?.args[0] as Record<string, unknown>[])[0];
-    expect(inserted).toMatchObject({
+    // Order carried no status/support_key → insert falls back to draft/null.
+    const inserted = (log[0].calls.find((c) => c.name === "insert")?.args[0] as Record<
+      string,
+      unknown
+    >[])[0];
+    expect(inserted).toMatchObject({ status: "draft", status_detail: null, support_key: null });
+    // Confirm succeeded but returned no status → refresh defaults to submitted.
+    expect(log[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
       status: "submitted",
       status_detail: null,
       foc_at: null,
@@ -386,50 +409,118 @@ describe("createByonPortRequest", () => {
     });
   });
 
-  it("keeps the draft when confirm fails and reports the submit error", async () => {
+  it("keeps the draft with a SUBMIT_FAILED detail when confirm fails", async () => {
     const porting = makePorting({
       confirmPortingOrder: vi.fn(async () => {
         throw new Error("requirements not met");
       })
     });
-    const { db, log } = makeDb([{ data: [portRow({ status: "draft" })], error: null }]);
+    const { db, log } = makeDb([
+      { data: [portRow({ status: "draft" })], error: null },
+      { data: portRow({ status: "draft" }), error: null }
+    ]);
     const result = await createByonPortRequest(BIZ, baseInput(), { porting, client: db });
     expect(result.submitted).toBe(false);
     expect(result.submitError).toBe("requirements not met");
     expect(logger.warn).toHaveBeenCalledWith(
-      "byon: porting order confirm failed; kept as draft",
+      "byon: porting order submit failed; kept as draft",
       expect.objectContaining({ orderId: "po-1" })
     );
-    const insertCall = log[0].calls.find((c) => c.name === "insert");
-    const inserted = (insertCall?.args[0] as Record<string, unknown>[])[0];
-    // Draft order snapshot (with its own status) is what gets persisted.
-    expect(inserted).toMatchObject({ status: "draft" });
+    expect(log[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      status: "draft",
+      status_detail: [{ code: "SUBMIT_FAILED", description: "requirements not met" }]
+    });
   });
 
-  it("stringifies non-Error confirm failures and falls back to 'draft' when the order has no status", async () => {
+  it("also catches updatePortingOrder failures and stringifies non-Error throws", async () => {
     const porting = makePorting({
       createPortingOrder: vi.fn(async () => [{ id: "po-1" }]),
-      confirmPortingOrder: vi.fn(async () => {
+      updatePortingOrder: vi.fn(async () => {
         throw "boom";
       })
     });
-    const { db, log } = makeDb([{ data: [], error: null }]);
+    const { db, log } = makeDb([
+      { data: [portRow({ status: "draft" })], error: null },
+      { data: portRow({ status: "draft" }), error: null }
+    ]);
     const result = await createByonPortRequest(BIZ, baseInput(), { porting, client: db });
     expect(result.submitError).toBe("boom");
-    const insertCall = log[0].calls.find((c) => c.name === "insert");
-    const inserted = (insertCall?.args[0] as Record<string, unknown>[])[0];
-    expect(inserted).toMatchObject({ status: "draft" });
+    expect(porting.confirmPortingOrder).not.toHaveBeenCalled();
+    // Order had no status of its own → falls back to draft.
+    expect(log[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      status: "draft",
+      status_detail: [{ code: "SUBMIT_FAILED", description: "boom" }]
+    });
   });
 
-  it("throws when the insert fails", async () => {
+  it("submits split orders independently and keeps the first failure as submitError", async () => {
+    const porting = makePorting({
+      createPortingOrder: vi.fn(async () => [
+        { id: "po-1", status: { value: "draft" } },
+        { id: "po-2", status: { value: "draft" } },
+        { id: "po-3", status: { value: "draft" } }
+      ]),
+      confirmPortingOrder: vi.fn(async (orderId: string) => {
+        if (orderId === "po-2") throw new Error("first failure");
+        if (orderId === "po-3") throw new Error("second failure");
+        return { id: orderId, status: { value: "submitted" } };
+      })
+    });
+    const { db } = makeDb([
+      { data: [portRow(), portRow({ id: "req-2" }), portRow({ id: "req-3" })], error: null },
+      { data: portRow({ status: "submitted" }), error: null },
+      { data: portRow({ id: "req-2", status: "draft" }), error: null },
+      { data: portRow({ id: "req-3", status: "draft" }), error: null }
+    ]);
+    const result = await createByonPortRequest(BIZ, baseInput(), { porting, client: db });
+    // po-1 confirmed even though po-2/po-3 failed; flag reports the batch.
+    expect(porting.confirmPortingOrder).toHaveBeenCalledTimes(3);
+    expect(result.rows).toHaveLength(3);
+    expect(result.rows[0].status).toBe("submitted");
+    expect(result.submitted).toBe(false);
+    expect(result.submitError).toBe("first failure");
+  });
+
+  it("throws when the tracking insert fails (before anything is confirmed)", async () => {
+    const porting = makePorting();
     const { db } = makeDb([{ data: null, error: { message: "insert exploded" } }]);
     await expect(
-      createByonPortRequest(BIZ, baseInput(), { porting: makePorting(), client: db })
+      createByonPortRequest(BIZ, baseInput(), { porting, client: db })
     ).rejects.toThrow(/createByonPortRequest: insert exploded/);
+    expect(porting.confirmPortingOrder).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the inserted row when the post-submit refresh fails, and to nothing when the insert returned no rows", async () => {
+    const porting = makePorting();
+    const { db } = makeDb([
+      { data: [portRow({ status: "draft" })], error: null },
+      { data: null, error: { message: "refresh exploded" } }
+    ]);
+    const result = await createByonPortRequest(BIZ, baseInput(), { porting, client: db });
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0].status).toBe("draft");
+    expect(logger.warn).toHaveBeenCalledWith(
+      "byon: failed to refresh port request row after submit",
+      expect.objectContaining({ error: "refresh exploded" })
+    );
+
+    // PostgREST returning no rows from insert (data: null) + refresh failure.
+    const { db: db2 } = makeDb([
+      { data: null, error: null },
+      { data: null, error: { message: "refresh exploded" } }
+    ]);
+    const result2 = await createByonPortRequest(BIZ, baseInput(), {
+      porting: makePorting(),
+      client: db2
+    });
+    expect(result2.rows).toEqual([]);
   });
 
   it("uses the default service client when none is injected", async () => {
-    const { db } = makeDb([{ data: [portRow()], error: null }]);
+    const { db } = makeDb([
+      { data: [portRow({ status: "draft" })], error: null },
+      { data: portRow({ status: "submitted" }), error: null }
+    ]);
     defaultClientSpy.mockReturnValue(db);
     const result = await createByonPortRequest(BIZ, baseInput(), { porting: makePorting() });
     expect(result.rows).toHaveLength(1);
@@ -676,6 +767,60 @@ describe("handlePortingStatusChange", () => {
       { client: db2 }
     );
     expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps stored exception details on redeliveries that omit them, overwrites when they arrive", async () => {
+    const stored = [{ code: "ACCOUNT_NUMBER_MISMATCH", description: "wrong account" }];
+
+    // Same-status redelivery WITHOUT details → keep what we have.
+    const { db, log } = makeDb([
+      { data: portRow({ status: "exception", status_detail: stored }), error: null },
+      { data: portRow({ status: "exception", status_detail: stored }), error: null }
+    ]);
+    await handlePortingStatusChange({ id: "po-1", status: { value: "exception" } }, { client: db });
+    expect(log[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      status_detail: stored
+    });
+
+    // Same-status redelivery with EMPTY details → still keep what we have.
+    const { db: db2, log: log2 } = makeDb([
+      { data: portRow({ status: "exception", status_detail: stored }), error: null },
+      { data: portRow({ status: "exception", status_detail: stored }), error: null }
+    ]);
+    await handlePortingStatusChange(
+      { id: "po-1", status: { value: "exception", details: [] } },
+      { client: db2 }
+    );
+    expect(log2[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      status_detail: stored
+    });
+
+    // Same-status redelivery WITH new details → overwrite.
+    const fresh = [{ code: "PASSCODE_PIN_INVALID", description: "bad pin" }];
+    const { db: db3, log: log3 } = makeDb([
+      { data: portRow({ status: "exception", status_detail: stored }), error: null },
+      { data: portRow({ status: "exception", status_detail: fresh }), error: null }
+    ]);
+    await handlePortingStatusChange(
+      { id: "po-1", status: { value: "exception", details: fresh } },
+      { client: db3 }
+    );
+    expect(log3[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      status_detail: fresh
+    });
+
+    // Status TRANSITION without details → clears stale exception codes.
+    const { db: db4, log: log4 } = makeDb([
+      { data: portRow({ status: "exception", status_detail: stored }), error: null },
+      { data: portRow({ status: "in-process", status_detail: null }), error: null }
+    ]);
+    await handlePortingStatusChange(
+      { id: "po-1", status: { value: "in-process" } },
+      { client: db4 }
+    );
+    expect(log4[1].calls.find((c) => c.name === "update")?.args[0]).toMatchObject({
+      status_detail: null
+    });
   });
 
   it("flags ported=true only on the transition into ported, using the module dispatcher", async () => {
