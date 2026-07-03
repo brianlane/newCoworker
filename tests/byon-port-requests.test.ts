@@ -282,14 +282,26 @@ describe("createByonPortRequest", () => {
     expect(deps.porting.uploadDocument).not.toHaveBeenCalled();
   });
 
-  it("rejects documents over the 5 MB cap", async () => {
-    const huge = "A".repeat(Math.ceil((5 * 1024 * 1024 * 4) / 3) + 1);
+  it("rejects documents over the 5 MB cap but accepts one exactly at it", async () => {
+    // Exact base64 length of a 5 MB file: 4·ceil(n/3) per RFC 4648.
+    const exactCap = 4 * Math.ceil((5 * 1024 * 1024) / 3);
+    const huge = "A".repeat(exactCap + 4); // one base64 block over → > 5 MB raw
     await expect(
       createByonPortRequest(BIZ, baseInput({ loa: { base64: huge, filename: "loa.pdf" } }), {
         porting: makePorting(),
         client: makeDb([]).db
       })
     ).rejects.toThrow(/too large/);
+
+    // A file of exactly 5 MB passes the size gate (whatever happens later on
+    // the empty scripted DB, it is not the size rejection).
+    const atCap = "A".repeat(exactCap);
+    const outcome = await createByonPortRequest(
+      BIZ,
+      baseInput({ loa: { base64: atCap, filename: "loa.pdf" } }),
+      { porting: makePorting(), client: makeDb([]).db }
+    ).catch((e: unknown) => e);
+    expect(String(outcome)).not.toMatch(/too large/);
   });
 
   it("throws when Telnyx returns no orders", async () => {

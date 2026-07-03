@@ -218,7 +218,16 @@ export function ByonNumberPorting({ businessId, initialRequests }: Props) {
         setNotice(
           "Port request submitted. We'll text and email you as your carrier processes it — most ports finish within a week."
         );
+        // Reset the wizard for a potential next number.
+        setStep(1);
+        setPhone("");
+        setCheck(null);
+        setLoaFile(null);
+        setBillFile(null);
       } else {
+        // Saved but not submitted: keep every wizard field so the owner can
+        // fix the issue and retry instead of starting over (which would
+        // create yet another draft order for the same number).
         setNotice(null);
         setError(
           json.data?.submitError
@@ -226,12 +235,6 @@ export function ByonNumberPorting({ businessId, initialRequests }: Props) {
             : "Your request was saved but couldn't be submitted yet."
         );
       }
-      // Reset the wizard for a potential next number.
-      setStep(1);
-      setPhone("");
-      setCheck(null);
-      setLoaFile(null);
-      setBillFile(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
