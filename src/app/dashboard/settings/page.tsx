@@ -139,6 +139,20 @@ export default async function SettingsPage() {
       )}
 
       <Card>
+        <h2 className="text-sm font-semibold text-parchment mb-4">Phone number</h2>
+        <p className="text-xs text-parchment/40">
+          Already have a business number your customers know? Transfer it to your AI coworker —
+          most ports finish within a week.
+        </p>
+        <a
+          href="/dashboard/settings/number"
+          className="mt-4 inline-block text-sm text-claw-green hover:underline"
+        >
+          Bring your own number →
+        </a>
+      </Card>
+
+      <Card>
         <h2 className="text-sm font-semibold text-parchment mb-4">Notifications</h2>
         <p className="text-xs text-parchment/40">
           Choose how your coworker reaches you when something urgent happens, and review
