@@ -259,11 +259,26 @@ describe("createByonPortRequest", () => {
       [{ serviceAddress: { street: "St", city: "C", state: "S", zip: "" } }, /ZIP/],
       [{ loa: { base64: "", filename: "loa.pdf" } }, /Upload the signed LOA/],
       [{ loa: { base64: "AAAA", filename: " " } }, /missing a filename/],
-      [{ bill: { base64: "", filename: "bill.pdf" } }, /Upload the recent bill/]
+      [{ bill: { base64: "", filename: "bill.pdf" } }, /Upload the recent bill/],
+      // Optional billing phone must fail up front (before any Telnyx call).
+      [
+        {
+          carrier: {
+            entityName: "E",
+            authorizedName: "J",
+            accountNumber: "A",
+            billingPhone: "not-a-number"
+          }
+        },
+        /valid phone number|10-digit/
+      ]
     ];
     for (const [override, msg] of cases) {
       await expect(createByonPortRequest(BIZ, baseInput(override), deps)).rejects.toThrow(msg);
     }
+    // None of the validation failures may have touched Telnyx.
+    expect(deps.porting.createPortingOrder).not.toHaveBeenCalled();
+    expect(deps.porting.uploadDocument).not.toHaveBeenCalled();
   });
 
   it("rejects documents over the 5 MB cap", async () => {

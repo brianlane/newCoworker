@@ -237,6 +237,11 @@ export async function createByonPortRequest(
   const city = requireField(input.serviceAddress?.city, "Enter the service address city.");
   const state = requireField(input.serviceAddress?.state, "Enter the service address state.");
   const zip = requireField(input.serviceAddress?.zip, "Enter the service address ZIP code.");
+  // Validate optional inputs UP FRONT too — a bad billing phone must fail as
+  // a 400 before any Telnyx order/document exists, not mid-submit.
+  const billingPhoneE164 = input.carrier?.billingPhone?.trim()
+    ? requireE164(input.carrier.billingPhone)
+    : null;
   validateDocument(input.loa, "signed LOA");
   validateDocument(input.bill, "recent bill");
 
@@ -313,9 +318,7 @@ export async function createByonPortRequest(
             auth_person_name: authorizedName,
             account_number: accountNumber,
             ...(input.carrier.pin?.trim() ? { pin_passcode: input.carrier.pin.trim() } : {}),
-            ...(input.carrier.billingPhone?.trim()
-              ? { billing_phone_number: requireE164(input.carrier.billingPhone) }
-              : {})
+            ...(billingPhoneE164 ? { billing_phone_number: billingPhoneE164 } : {})
           },
           location: {
             street_address: street,

@@ -127,6 +127,12 @@ export async function proxy(request: NextRequest) {
     // header, so CSRF would 403 all inbound mail. Same rationale as the exemptions
     // above.
     pathname !== "/api/email/inbound" &&
+    // /api/telnyx/porting-webhook is Telnyx's porting_order.status_changed
+    // delivery, authenticated solely by its Ed25519 signature
+    // (verifyTelnyxWebhookSignature) — Telnyx sends no Origin header, so
+    // CSRF would 403 every status update. Same rationale as the exemptions
+    // above.
+    pathname !== "/api/telnyx/porting-webhook" &&
     ["POST", "PUT", "DELETE", "PATCH"].includes(method)
   ) {
     const origin = request.headers.get("origin");
