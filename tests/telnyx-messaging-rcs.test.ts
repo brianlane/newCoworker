@@ -16,6 +16,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   getTelnyxMessagingForBusiness,
+  rcsChannelActiveForBusiness,
   resolveRcsAgentIdForBusiness,
   rcsTierAllowed,
   sendTelnyxSms
@@ -161,6 +162,50 @@ describe("getTelnyxMessagingForBusiness resolveRcs", () => {
     // Missing settings row still falls back to platform env.
     expect(resolved.messagingProfileId).toBe("platform_prof");
     expect(resolved.fromE164).toBe("+10000000001");
+  });
+});
+
+describe("rcsChannelActiveForBusiness", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv("TELNYX_API_KEY", "platform_key");
+    vi.stubEnv("TELNYX_MESSAGING_PROFILE_ID", "platform_prof");
+    // No platform-level from-number unless a test opts in.
+    vi.stubEnv("TELNYX_SMS_FROM_E164", "");
+  });
+
+  const eligibleRows = {
+    businesses: { data: { tier: "standard" }, error: null } as Row,
+    business_channel_settings: {
+      data: { rcs_agent_id: "agent_9", rcs_enabled: true },
+      error: null
+    } as Row
+  };
+
+  it("is true only when BOTH the agent id and a from-number exist (the send precondition)", async () => {
+    const withFrom = makeDb({
+      ...eligibleRows,
+      business_telnyx_settings: {
+        data: { telnyx_messaging_profile_id: null, telnyx_sms_from_e164: "+10000000003" },
+        error: null
+      }
+    });
+    expect(await rcsChannelActiveForBusiness(withFrom, "biz-1")).toBe(true);
+
+    // Agent approved but no tenant from-number and no platform fallback:
+    // sendTelnyxSms would go plain SMS, so the hint must not claim RCS.
+    expect(await rcsChannelActiveForBusiness(makeDb(eligibleRows), "biz-1")).toBe(false);
+  });
+
+  it("is false for a tenant without an RCS agent even when a from-number exists", async () => {
+    vi.stubEnv("TELNYX_SMS_FROM_E164", "+10000000001");
+    const db = makeDb({ businesses: { data: { tier: "starter" }, error: null } });
+    expect(await rcsChannelActiveForBusiness(db, "biz-1")).toBe(false);
+  });
+
+  it("fails safe to false when the messaging config itself is unavailable", async () => {
+    vi.stubEnv("TELNYX_API_KEY", "");
+    expect(await rcsChannelActiveForBusiness(makeDb(eligibleRows), "biz-1")).toBe(false);
   });
 });
 
