@@ -248,8 +248,11 @@ function validateDocument(doc: ByonDocumentInput, label: string): void {
   if (!doc.filename?.trim()) {
     throw new ByonValidationError(`The ${label} upload is missing a filename.`);
   }
-  // base64 inflates bytes by 4/3 — compare in encoded space to avoid decoding.
-  if (doc.base64.length > Math.ceil((MAX_DOCUMENT_BYTES * 4) / 3)) {
+  // base64 inflates bytes to 4·ceil(n/3) — compare in encoded space to avoid
+  // decoding. Computed as the exact encoded length of a MAX-byte file so a
+  // file at the advertised 5 MB limit (which passes the client's raw-size
+  // check) is accepted here too.
+  if (doc.base64.length > 4 * Math.ceil(MAX_DOCUMENT_BYTES / 3)) {
     throw new ByonValidationError(`The ${label} file is too large (max 5 MB).`);
   }
 }
