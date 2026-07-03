@@ -133,16 +133,31 @@ export async function telnyxSendSms(params: {
     });
     const bodyText = await res.text();
     if (res.ok) {
-      return { ok: true, status: res.status, body: bodyText, channel: "rcs" };
+      // A 2xx without data.id means Telnyx did not durably create the message
+      // (nothing to track, reconcile, or deliver). Treat it like a rejection
+      // and deliver over plain SMS — same behavior as the Node helper and the
+      // inbound worker.
+      let rcsMessageId = "";
+      try {
+        const json = JSON.parse(bodyText) as { data?: { id?: string } };
+        rcsMessageId = json.data?.id ?? "";
+      } catch {
+        /* unparseable body → treat as missing id */
+      }
+      if (rcsMessageId) {
+        return { ok: true, status: res.status, body: bodyText, channel: "rcs" };
+      }
+      console.warn("telnyxSendSms: RCS 2xx with no message id, falling back to SMS");
+    } else {
+      // RCS API rejection (agent revoked, destination not routable, …): fall
+      // through to plain SMS so channel plumbing never drops a customer message.
+      // The idempotency key is safe to reuse — the rejected request created no
+      // message. Warn so operators notice misconfigured agents.
+      console.warn(
+        `telnyxSendSms: RCS send rejected (${res.status}), falling back to SMS:`,
+        bodyText.slice(0, 200)
+      );
     }
-    // RCS API rejection (agent revoked, destination not routable, …): fall
-    // through to plain SMS so channel plumbing never drops a customer message.
-    // The idempotency key is safe to reuse — the rejected request created no
-    // message. Warn so operators notice misconfigured agents.
-    console.warn(
-      `telnyxSendSms: RCS send rejected (${res.status}), falling back to SMS:`,
-      bodyText.slice(0, 200)
-    );
   }
 
   const body: Record<string, unknown> = {
