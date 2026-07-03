@@ -13,7 +13,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { ChatMarkdown } from "@/components/ui/ChatMarkdown";
 import { listMessagesForCustomer } from "@/lib/db/sms-history";
-import { resolveRcsAgentIdForBusiness } from "@/lib/telnyx/messaging";
+import { rcsChannelActiveForBusiness } from "@/lib/telnyx/messaging";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { ContactReplyModeToggle } from "@/components/dashboard/ContactReplyModeToggle";
@@ -69,10 +69,10 @@ export default async function SmsThreadPage({
     limit: 100
   });
   if (messages.length === 0) notFound();
-  // RCS-first tenants get the softened emoji hint in the reply composer.
-  const rcsEnabled = Boolean(
-    await resolveRcsAgentIdForBusiness(db, business.id).catch(() => null)
-  );
+  // RCS-first tenants (approved agent + concrete from-number, the same
+  // precondition sendTelnyxSms checks) get the softened emoji hint in the
+  // reply composer.
+  const rcsEnabled = await rcsChannelActiveForBusiness(db, business.id);
   // Reply-mode toggle state: tolerate a missing profile (numbers with thread
   // history but no contact row default to 'auto'; the PATCH creates the row).
   const memory = await getCustomerMemory(business.id, customerE164).catch(() => null);

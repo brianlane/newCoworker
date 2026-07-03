@@ -16,7 +16,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { listConversationsForBusiness } from "@/lib/db/sms-history";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
-import { resolveRcsAgentIdForBusiness } from "@/lib/telnyx/messaging";
+import { rcsChannelActiveForBusiness } from "@/lib/telnyx/messaging";
 import { MessagesList, type MessageListRow } from "@/components/dashboard/MessagesList";
 import { SmsComposeNew } from "@/components/dashboard/SmsComposeNew";
 
@@ -65,10 +65,11 @@ export default async function DashboardMessagesPage() {
     business.id,
     conversations.map((c) => c.customerE164)
   ).catch(() => new Map<string, ContactName>());
-  // RCS-first tenants (Standard+, approved agent) get a softened emoji hint
-  // in the composer — the rich message delivers as typed, only the SMS
-  // fallback copy is capped.
-  const rcsEnabled = Boolean(await resolveRcsAgentIdForBusiness(db, business.id).catch(() => null));
+  // RCS-first tenants (Standard+, approved agent, concrete from-number for
+  // the SMS fallback — the same precondition sendTelnyxSms checks) get a
+  // softened emoji hint in the composer: the rich message delivers as typed,
+  // only the SMS fallback copy is capped.
+  const rcsEnabled = await rcsChannelActiveForBusiness(db, business.id);
 
   const rows: MessageListRow[] = conversations.map((c) => {
     const contact = contactNames.get(c.customerE164);

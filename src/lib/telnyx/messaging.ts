@@ -97,6 +97,26 @@ export async function resolveRcsAgentIdForBusiness(
   return agentId.length > 0 ? agentId : null;
 }
 
+/**
+ * Whether composer sends for this business will actually go RCS-first.
+ * Mirrors the exact precondition in `sendTelnyxSms` — an approved agent id
+ * AND a concrete from-number for the SMS fallback — so UI hints (channel
+ * badge, segment warnings) never claim RCS while sends fall through to plain
+ * SMS. Any config/lookup error resolves to false (plain-SMS hints are the
+ * safe default).
+ */
+export async function rcsChannelActiveForBusiness(
+  db: Awaited<ReturnType<typeof createSupabaseServiceClient>>,
+  businessId: string
+): Promise<boolean> {
+  try {
+    const cfg = await getTelnyxMessagingForBusiness(businessId, db, { resolveRcs: true });
+    return Boolean((cfg.rcsAgentId ?? "").trim() && cfg.fromE164);
+  } catch {
+    return false;
+  }
+}
+
 export type SendTelnyxSmsOptions = {
   fetchImpl?: typeof fetch;
   /** Telnyx supports Idempotency-Key for at-most-once sends (§10). */
