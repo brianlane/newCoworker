@@ -38,31 +38,23 @@ create table if not exists public.number_port_requests (
 create index if not exists number_port_requests_business_idx
   on public.number_port_requests (business_id, created_at desc);
 
--- Webhook hot path: resolve the row from the Telnyx order id.
-create index if not exists number_port_requests_order_idx
+-- Webhook hot path: resolve the row from the Telnyx order id. UNIQUE — the
+-- table holds exactly one row per Telnyx porting order, and the webhook
+-- handler updates by this key.
+create unique index if not exists number_port_requests_order_idx
   on public.number_port_requests (telnyx_order_id)
   where telnyx_order_id is not null;
 
 alter table public.number_port_requests enable row level security;
 
+-- Owners get READ ONLY. Every write happens server-side with the service
+-- role (create/cancel via the BYON API routes after requireOwner; status
+-- moves via the Telnyx webhook). A direct-PostgREST owner write could forge
+-- `status`/`foc_at` and trick the activation wiring, so no insert/update/
+-- delete policies exist on purpose.
 drop policy if exists "Owner reads own number_port_requests" on public.number_port_requests;
 create policy "Owner reads own number_port_requests"
   on public.number_port_requests for select
-  using (business_id in (select id from public.businesses where owner_email = auth.email()));
-
-drop policy if exists "Owner inserts own number_port_requests" on public.number_port_requests;
-create policy "Owner inserts own number_port_requests"
-  on public.number_port_requests for insert
-  with check (business_id in (select id from public.businesses where owner_email = auth.email()));
-
-drop policy if exists "Owner updates own number_port_requests" on public.number_port_requests;
-create policy "Owner updates own number_port_requests"
-  on public.number_port_requests for update
-  using (business_id in (select id from public.businesses where owner_email = auth.email()));
-
-drop policy if exists "Owner deletes own number_port_requests" on public.number_port_requests;
-create policy "Owner deletes own number_port_requests"
-  on public.number_port_requests for delete
   using (business_id in (select id from public.businesses where owner_email = auth.email()));
 
 comment on table public.number_port_requests is
