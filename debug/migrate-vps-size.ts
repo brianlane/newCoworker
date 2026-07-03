@@ -597,34 +597,51 @@ if (!KEEP_OLD && !billingRepointed) {
   process.exit(1);
 }
 
+// What actually happened to the old subscription — the audit file must not
+// claim "auto-renew-disabled" when the disable call failed or was impossible,
+// or the operator reads it as safe while the old box keeps renewing.
+let oldBillingHandling: string;
 if (KEEP_OLD) {
+  oldBillingHandling = "kept";
   console.log(`[old-box] kept per --keep-old — REMEMBER it keeps billing until you tear it down.`);
-} else if (oldVmId !== null) {
-  try {
-    await hostinger.stopVirtualMachine(oldVmId);
-    console.log(`[old-box] VM ${oldVmId} stop requested`);
-  } catch (err) {
-    console.log(`[old-box] stop failed (may already be stopped): ${err instanceof Error ? err.message : String(err)}`);
+} else {
+  if (oldVmId !== null) {
+    try {
+      await hostinger.stopVirtualMachine(oldVmId);
+      console.log(`[old-box] VM ${oldVmId} stop requested`);
+    } catch (err) {
+      console.log(`[old-box] stop failed (may already be stopped): ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
-  if (oldBillingId) {
+  if (oldVmId !== null && oldBillingId) {
     try {
       await hostinger.disableBillingAutoRenewal(oldBillingId);
+      oldBillingHandling = "auto-renew-disabled";
       console.log(`[old-box] billing ${oldBillingId} auto-renewal disabled (lapses at period end;`);
       console.log(`[old-box] the immediate-cancel endpoint was removed by Hostinger 2026-01-12)`);
     } catch (err) {
+      oldBillingHandling = "auto-renew-disable-FAILED";
       console.log(`[old-box] auto-renew disable FAILED: ${err instanceof Error ? err.message : String(err)}`);
       console.log(`[old-box] Disable it manually in hPanel or you keep paying for the old box.`);
     }
-  } else {
+  } else if (oldVmId !== null) {
+    oldBillingHandling = "billing-id-unknown-still-renewing";
     console.log(`[old-box] WARNING: no billing subscription id for the old box — disable its`);
     console.log(`[old-box] auto-renewal manually or you keep paying for it.`);
+  } else {
+    oldBillingHandling = "no-old-vm";
   }
 }
 
 // ---------------------------------------------------------------- audit state
-writeAuditState(KEEP_OLD ? "kept" : "auto-renew-disabled");
+writeAuditState(oldBillingHandling);
 
-console.log(`\nMigration complete: ${biz.name} is on ${TARGET_SIZE} (VM ${newVmId}, ${newVmIp ?? "ip?"}).`);
+if (oldBillingHandling === "auto-renew-disable-FAILED" || oldBillingHandling === "billing-id-unknown-still-renewing") {
+  console.log(`\nMigration complete WITH FOLLOW-UP: ${biz.name} is on ${TARGET_SIZE} (VM ${newVmId}, ${newVmIp ?? "ip?"}),`);
+  console.log(`but the OLD subscription is still renewing — disable it in hPanel (see [old-box] above).`);
+} else {
+  console.log(`\nMigration complete: ${biz.name} is on ${TARGET_SIZE} (VM ${newVmId}, ${newVmIp ?? "ip?"}).`);
+}
 console.log(`State written to ${stateFile}`);
 console.log(`Post-checks:`);
 console.log(`  npx tsx debug/vps-exec.ts ${BUSINESS_ID} "docker ps --format '{{.Names}} {{.Status}}'"`);
