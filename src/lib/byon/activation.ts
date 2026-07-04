@@ -204,6 +204,22 @@ export async function activatePortedNumber(
           portRequestId: row.id,
           error: errMessage(err)
         });
+        // Release the claim so a later delivery re-attempts the alert —
+        // otherwise a dispatch failure here would mute the owner forever.
+        try {
+          const db = await resolveClient();
+          const { error: releaseErr } = await db
+            .from("number_port_requests")
+            .update({ activation_error: null })
+            .eq("id", row.id)
+            .eq("activation_error", error);
+          if (releaseErr) throw new Error(releaseErr.message);
+        } catch (releaseErr) {
+          logger.error("byon: failed to release activation-failure alert claim", {
+            portRequestId: row.id,
+            error: errMessage(releaseErr)
+          });
+        }
       }
     }
     return { attempted: true, activated: false, assign: null, tendlc: null, error };

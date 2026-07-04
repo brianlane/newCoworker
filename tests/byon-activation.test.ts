@@ -283,10 +283,14 @@ describe("activatePortedNumber", () => {
     expect(assignMock).not.toHaveBeenCalled();
   });
 
-  it("fails when the assign flow throws, tolerating dispatch failures and non-Error throws", async () => {
+  it("fails when the assign flow throws, releasing the alert claim when dispatch also fails", async () => {
     assignMock.mockRejectedValue(new Error("telnyx PATCH exploded"));
     dispatchMock.mockRejectedValue(new Error("smtp down"));
-    const result = await activatePortedNumber(ROW, { env: ENV });
+    const { db, calls } = actDb([
+      { data: [{}], error: null }, // claim won → dispatch (throws)
+      { data: [{}], error: null } // release after the dispatch failure
+    ]);
+    const result = await activatePortedNumber(ROW, { env: ENV, client: db });
     expect(result).toEqual({
       attempted: true,
       activated: false,
@@ -298,6 +302,25 @@ describe("activatePortedNumber", () => {
     expect(logger.warn).toHaveBeenCalledWith(
       "byon: activation-failure notification failed",
       expect.objectContaining({ error: "smtp down" })
+    );
+    // The claim is RELEASED so a later delivery re-attempts the alert.
+    expect(calls[1].find((c) => c.name === "update")?.args[0]).toEqual({
+      activation_error: null
+    });
+    expect(calls[1]).toContainEqual({
+      name: "eq",
+      args: ["activation_error", "telnyx PATCH exploded"]
+    });
+
+    // Release failures are logged loudly, never thrown.
+    const { db: db2 } = actDb([
+      { data: [{}], error: null }, // claim won
+      { data: null, error: { message: "release exploded" } }
+    ]);
+    await activatePortedNumber(ROW, { env: ENV, client: db2 });
+    expect(logger.error).toHaveBeenCalledWith(
+      "byon: failed to release activation-failure alert claim",
+      expect.objectContaining({ error: "release exploded" })
     );
 
     assignMock.mockRejectedValue("wat");
