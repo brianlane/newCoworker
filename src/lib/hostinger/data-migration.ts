@@ -10,10 +10,10 @@
  *     over.
  *
  * Why SSH tar and not Hostinger snapshots as the durable artefact?
- * Hostinger snapshots are attached to the VM and destroyed when the VM is
- * destroyed via `cancelBillingSubscription` (see plan blocker B1). To
- * survive cancellation we need an off-VPS artefact, and Supabase Storage
- * is the cheapest durable option already in our stack.
+ * Hostinger snapshots are attached to the VM and destroyed with it (manual
+ * hPanel deletion or billing lapse — see plan blocker B1). To survive
+ * cancellation we need an off-VPS artefact, and Supabase Storage is the
+ * cheapest durable option already in our stack.
  *
  * Durable directories (must match `vps/scripts/deploy-client.sh`):
  *   * /opt/rowboat/vault   — soul.md, identity.md, memory.md, website.md

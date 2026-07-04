@@ -493,7 +493,7 @@ describe("api/admin/force-refund route", () => {
   describe("split-phase execution survives Vercel timeout (maxDuration + after)", () => {
     // Regression: this route previously awaited `executeLifecyclePlan`
     // synchronously, which performs Stripe refund + cancel, SSH backup
-    // of durable data, Hostinger snapshot/stop/billing-cancel, DB
+    // of durable data, Hostinger snapshot/stop/auto-renew-disable, DB
     // updates, and emails — minutes-long work end-to-end. With no
     // `maxDuration` export the route fell back to the platform default
     // and was torn down mid-teardown on larger tenants, leaving Stripe
@@ -513,7 +513,7 @@ describe("api/admin/force-refund route", () => {
         hostingerOps: [
           { type: "create_snapshot", virtualMachineId: 42 },
           { type: "stop_virtual_machine", virtualMachineId: 42 },
-          { type: "cancel_billing_subscription", virtualMachineId: 42 }
+          { type: "disable_billing_auto_renewal", virtualMachineId: 42 }
         ],
         dbUpdates: [
           {

@@ -415,11 +415,11 @@ export class HostingerClient {
   // existing snapshot overwrites it. We rely on that behaviour in the
   // lifecycle engine (cancel-grace always calls `createSnapshot` fresh).
   //
-  // Snapshots are stored against the VM, so if the VM is destroyed (via
-  // `cancelBillingSubscription`) the snapshot goes with it. This is why the
-  // SSH-tarball backup in `data-migration.ts` is the durable artefact for
-  // grace and change-plan flows; the Hostinger snapshot is a fast path for
-  // the "cancel billing immediately but VM still exists briefly" window.
+  // Snapshots are stored against the VM, so if the VM is destroyed (manual
+  // hPanel deletion or billing lapse) the snapshot goes with it. This is why
+  // the SSH-tarball backup in `data-migration.ts` is the durable artefact
+  // for grace and change-plan flows; the Hostinger snapshot is a fast path
+  // while the box is still alive.
 
   async createSnapshot(virtualMachineId: number): Promise<Action> {
     return this.request<Action>(
@@ -453,8 +453,12 @@ export class HostingerClient {
   //
   // A VPS purchase creates TWO resources: a virtual machine AND a billing
   // subscription. `stopVirtualMachine` powers off the VM but keeps the
-  // subscription billing. To stop paying Hostinger we must explicitly DELETE
-  // the billing subscription. See the lifecycle plan, blocker B1 (option A).
+  // subscription billing. Hostinger REMOVED the public cancel-subscription
+  // endpoint (DELETE /api/billing/v1/subscriptions/{id} → 404, verified
+  // Jul 2026), so the strongest automated stop-payment is
+  // `disableBillingAutoRenewal`; the VM lapses at the end of the paid
+  // period, and early deletion is a manual hPanel action (the lifecycle
+  // engine emails ops the deletion request).
 
   async listBillingSubscriptions(): Promise<BillingSubscription[]> {
     const res = await this.request<BillingSubscription[] | Paginated<BillingSubscription>>(
@@ -462,28 +466,6 @@ export class HostingerClient {
       "/api/billing/v1/subscriptions"
     );
     return normalizeList<BillingSubscription>(res);
-  }
-
-  /**
-   * Cancel a Hostinger billing subscription. The Hostinger PHP/Python SDKs
-   * describe the body as `billingV1SubscriptionCancelRequest` (cancel
-   * options). We always pass the "immediate cancel" flags so the VM is
-   * powered off and removed as soon as the request succeeds — we've already
-   * taken the SSH-tarball backup by this point.
-   */
-  async cancelBillingSubscription(
-    subscriptionId: string,
-    reason: string = "newcoworker-lifecycle-cancel"
-  ): Promise<unknown> {
-    return this.request<unknown>(
-      "DELETE",
-      `/api/billing/v1/subscriptions/${encodeURIComponent(subscriptionId)}`,
-      {
-        reason_code: "other",
-        reason_description: reason,
-        cancel_option: "immediately"
-      }
-    );
   }
 
   async disableBillingAutoRenewal(subscriptionId: string): Promise<unknown> {

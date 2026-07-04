@@ -358,7 +358,7 @@ describe("api/admin/delete-client route (adminForceCancel)", () => {
         hostingerOps: [
           { type: "create_snapshot", virtualMachineId: 42 },
           { type: "stop_virtual_machine", virtualMachineId: 42 },
-          { type: "cancel_billing_subscription", virtualMachineId: 42 }
+          { type: "disable_billing_auto_renewal", virtualMachineId: 42 }
         ],
         dbUpdates: [
           {

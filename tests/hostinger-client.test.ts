@@ -379,20 +379,6 @@ describe("HostingerClient (real API)", () => {
     expect(calls(fetchMock)[0][0]).toBe("https://dev.hostinger/api/billing/v1/subscriptions");
   });
 
-  it("cancelBillingSubscription DELETEs with cancel_option=immediately body", async () => {
-    const fetchMock = vi.fn(async () => ok({ deleted: true }));
-    const client = makeClient(fetchMock);
-    await client.cancelBillingSubscription("sub-abc", "user-cancel-test");
-    const [url, init] = calls(fetchMock)[0];
-    expect(url).toBe("https://dev.hostinger/api/billing/v1/subscriptions/sub-abc");
-    expect((init as RequestInit).method).toBe("DELETE");
-    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
-      reason_code: "other",
-      reason_description: "user-cancel-test",
-      cancel_option: "immediately"
-    });
-  });
-
   it("disableBillingAutoRenewal and enableBillingAutoRenewal hit the renewal endpoints", async () => {
     const fetchMock = vi.fn(async () => ok({ ok: true }));
     const client = makeClient(fetchMock);

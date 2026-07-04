@@ -44,7 +44,7 @@ const PER_INVOCATION_ROW_CEILING = Number.MAX_SAFE_INTEGER;
 
 // Vercel Pro allows up to 300s. Each grace-expired row's plan is mostly
 // fast DB writes plus a handful of idempotent Hostinger API calls
-// (`stop_vm`, `cancel_billing_subscription`, `delete_snapshot`). A
+// (`stop_vm`, `disable_billing_auto_renewal`, `delete_snapshot`). A
 // pathological backlog could still push past the platform default, so we
 // pin the ceiling to 300s as a safety net — anything over that gets
 // re-driven on the next cron tick because each row is idempotent. Mirrors

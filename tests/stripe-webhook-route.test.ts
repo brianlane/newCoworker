@@ -1233,7 +1233,7 @@ describe("stripe webhook route", () => {
       expect.objectContaining({
         stripeOps: [],
         hostingerOps: expect.arrayContaining([
-          { type: "cancel_billing_subscription", hostingerBillingSubscriptionId: "hbs-1" }
+          { type: "disable_billing_auto_renewal", hostingerBillingSubscriptionId: "hbs-1" }
         ])
       }),
       expect.objectContaining({ businessId: "biz_period_end", vpsHost: "1.2.3.4" })
@@ -1243,7 +1243,7 @@ describe("stripe webhook route", () => {
     expect(mockExecuteLifecyclePlanSlowPhase).toHaveBeenCalledWith(
       expect.objectContaining({
         hostingerOps: expect.arrayContaining([
-          { type: "cancel_billing_subscription", hostingerBillingSubscriptionId: "hbs-1" }
+          { type: "disable_billing_auto_renewal", hostingerBillingSubscriptionId: "hbs-1" }
         ])
       }),
       expect.any(Object)
@@ -1333,7 +1333,7 @@ describe("stripe webhook route", () => {
     expect(mockExecuteLifecyclePlanFastPhase).toHaveBeenCalledWith(
       expect.objectContaining({
         hostingerOps: expect.arrayContaining([
-          { type: "cancel_billing_subscription", hostingerBillingSubscriptionId: "hbs-pe-updated" }
+          { type: "disable_billing_auto_renewal", hostingerBillingSubscriptionId: "hbs-pe-updated" }
         ])
       }),
       expect.objectContaining({

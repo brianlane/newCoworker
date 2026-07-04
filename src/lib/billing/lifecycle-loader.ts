@@ -45,7 +45,7 @@ export async function loadLifecycleContextForBusiness(
 
   // We don't persist the public IP anywhere, so look it up from Hostinger
   // once per lifecycle invocation. If the VM is already gone (e.g. grace-
-  // sweep runs after cancelBillingSubscription has destroyed it), the
+  // sweep runs after a manual hPanel deletion or billing lapse), the
   // client returns 404 → we leave vpsHost null and the executor skips the
   // SSH backup op. That's correct for post-destroy wipes; for active-sub
   // cancels we should always have a VM to reach.
@@ -72,6 +72,7 @@ export async function loadLifecycleContextForBusiness(
   const context: LifecycleContext = {
     subscription,
     ownerEmail: business.owner_email,
+    ownerName: business.owner_name ?? null,
     businessTimezone: business.timezone ?? null,
     ownerAuthUserId: opts.ownerAuthUserId,
     profile,

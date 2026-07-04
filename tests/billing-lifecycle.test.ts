@@ -68,7 +68,7 @@ function makeCtx(overrides: Partial<LifecycleContext> = {}): LifecycleContext {
 }
 
 describe("planLifecycleAction: cancelWithRefund", () => {
-  it("produces refund + cancel + snapshot + backup + stop + hostinger cancel + grace update", () => {
+  it("produces refund + cancel + snapshot + backup + stop + auto-renew disable + grace update", () => {
     const ctx = makeCtx();
     const res = planLifecycleAction({ type: "cancelWithRefund" }, ctx);
     if (!res.ok) throw new Error(`expected ok, got ${res.reason}`);
@@ -84,7 +84,7 @@ describe("planLifecycleAction: cancelWithRefund", () => {
     expect(plan.hostingerOps).toEqual([
       { type: "create_snapshot", virtualMachineId: 42 },
       { type: "stop_vm", virtualMachineId: 42 },
-      { type: "cancel_billing_subscription", hostingerBillingSubscriptionId: "hbs-1" }
+      { type: "disable_billing_auto_renewal", hostingerBillingSubscriptionId: "hbs-1" }
     ]);
 
     const subUpdate = plan.dbUpdates.find(
@@ -103,8 +103,59 @@ describe("planLifecycleAction: cancelWithRefund", () => {
 
     expect(plan.emailsToSend.map((e) => e.type)).toEqual([
       "send_cancel_confirmation",
-      "send_refund_issued"
+      "send_refund_issued",
+      "send_ops_vps_deletion_request"
     ]);
+  });
+
+  it("asks ops for the manual hPanel deletion with owner + refund context", () => {
+    const res = planLifecycleAction(
+      { type: "cancelWithRefund" },
+      makeCtx({ ownerName: "Jane Doe" })
+    );
+    if (!res.ok) throw new Error(`expected ok, got ${res.reason}`);
+    const opsOp = res.plan.emailsToSend.find((e) => e.type === "send_ops_vps_deletion_request");
+    expect(opsOp).toEqual({
+      type: "send_ops_vps_deletion_request",
+      businessId: "biz-1",
+      virtualMachineId: 42,
+      hostingerBillingSubscriptionId: "hbs-1",
+      ownerName: "Jane Doe",
+      ownerEmail: "owner@example.com",
+      tier: "starter",
+      signupDate: "2026-04-01T00:00:00.000Z",
+      // This plan's own refund op may still be skipped at execution time
+      // (zero-amount invoice), so the planner only reports refunds already
+      // recorded on the row; the executor ORs in the live outcome.
+      refundIssued: false,
+      cancelReason: "user_refund",
+      vmState: "VM stopped, auto-renew disabled"
+    });
+  });
+
+  it("reports refundIssued in the ops email when the row already carries a Stripe refund", () => {
+    const res = planLifecycleAction(
+      { type: "cancelWithRefund" },
+      makeCtx({ subscription: makeSub({ stripe_refund_id: "re_prior" }) })
+    );
+    if (!res.ok) throw new Error(`expected ok, got ${res.reason}`);
+    const opsOp = res.plan.emailsToSend.find((e) => e.type === "send_ops_vps_deletion_request");
+    expect(opsOp).toEqual(expect.objectContaining({ refundIssued: true }));
+  });
+
+  it("skips the ops deletion email when neither VM nor billing id is known", () => {
+    const res = planLifecycleAction(
+      { type: "cancelWithRefund" },
+      makeCtx({
+        virtualMachineId: null,
+        vpsHost: null,
+        subscription: makeSub({ hostinger_billing_subscription_id: null })
+      })
+    );
+    if (!res.ok) throw new Error(`expected ok, got ${res.reason}`);
+    expect(
+      res.plan.emailsToSend.some((e) => e.type === "send_ops_vps_deletion_request")
+    ).toBe(false);
   });
 
   it("passes the business timezone to the cancel confirmation email op", () => {
@@ -117,7 +168,7 @@ describe("planLifecycleAction: cancelWithRefund", () => {
     expect(cancelOp).toEqual(expect.objectContaining({ timeZone: "America/Phoenix" }));
   });
 
-  it("still snapshots/stops/cancels Hostinger when IP lookup fails", () => {
+  it("still snapshots/stops/disables Hostinger renewal when IP lookup fails", () => {
     const res = planLifecycleAction(
       { type: "cancelWithRefund" },
       makeCtx({ vpsHost: null })
@@ -127,7 +178,7 @@ describe("planLifecycleAction: cancelWithRefund", () => {
     expect(res.plan.hostingerOps).toEqual([
       { type: "create_snapshot", virtualMachineId: 42 },
       { type: "stop_vm", virtualMachineId: 42 },
-      { type: "cancel_billing_subscription", hostingerBillingSubscriptionId: "hbs-1" }
+      { type: "disable_billing_auto_renewal", hostingerBillingSubscriptionId: "hbs-1" }
     ]);
   });
 
@@ -223,12 +274,21 @@ describe("planLifecycleAction: cancelWithRefund", () => {
     const res = planLifecycleAction({ type: "cancelWithRefund" }, ctx);
     if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
     expect(res.plan.hostingerOps).toEqual([
-      { type: "cancel_billing_subscription", hostingerBillingSubscriptionId: "hbs-1" }
+      { type: "disable_billing_auto_renewal", hostingerBillingSubscriptionId: "hbs-1" }
     ]);
     expect(res.plan.sshOps).toEqual([]);
+    // Ops email still goes out (billing sub still needs the manual delete)
+    // and reports the missing VM.
+    const opsOp = res.plan.emailsToSend.find((e) => e.type === "send_ops_vps_deletion_request");
+    expect(opsOp).toEqual(
+      expect.objectContaining({
+        virtualMachineId: null,
+        vmState: "no VM recorded, auto-renew disabled"
+      })
+    );
   });
 
-  it("omits Hostinger billing cancellation when no billing subscription id is known", () => {
+  it("omits the auto-renew disable when no billing subscription id is known", () => {
     const ctx = makeCtx({
       subscription: makeSub({ hostinger_billing_subscription_id: null })
     });
@@ -238,6 +298,14 @@ describe("planLifecycleAction: cancelWithRefund", () => {
       { type: "create_snapshot", virtualMachineId: 42 },
       { type: "stop_vm", virtualMachineId: 42 }
     ]);
+    // Ops email still requested for the orphaned VM.
+    const opsOp = res.plan.emailsToSend.find((e) => e.type === "send_ops_vps_deletion_request");
+    expect(opsOp).toEqual(
+      expect.objectContaining({
+        hostingerBillingSubscriptionId: null,
+        vmState: "VM stopped, no Hostinger billing id"
+      })
+    );
   });
 });
 
@@ -350,7 +418,7 @@ describe("planLifecycleAction: autoCancelOnPaymentFailure", () => {
     expect(res.plan.hostingerOps).toEqual([
       { type: "create_snapshot", virtualMachineId: 42 },
       { type: "stop_vm", virtualMachineId: 42 },
-      { type: "cancel_billing_subscription", hostingerBillingSubscriptionId: "hbs-1" }
+      { type: "disable_billing_auto_renewal", hostingerBillingSubscriptionId: "hbs-1" }
     ]);
     const subUpdate = res.plan.dbUpdates[0] as {
       type: "update_subscription";
@@ -358,7 +426,13 @@ describe("planLifecycleAction: autoCancelOnPaymentFailure", () => {
     };
     expect(subUpdate.patch.cancel_reason).toBe("payment_failed");
     expect(res.plan.dbUpdates.find((op) => op.type === "mark_refund_used")).toBeUndefined();
-    expect(res.plan.emailsToSend.map((e) => e.type)).toEqual(["send_cancel_confirmation"]);
+    expect(res.plan.emailsToSend.map((e) => e.type)).toEqual([
+      "send_cancel_confirmation",
+      "send_ops_vps_deletion_request"
+    ]);
+    expect(
+      res.plan.emailsToSend.find((e) => e.type === "send_ops_vps_deletion_request")
+    ).toEqual(expect.objectContaining({ refundIssued: false, cancelReason: "payment_failed" }));
   });
 
   it("rejects on non-active subs", () => {
@@ -467,7 +541,7 @@ describe("planLifecycleAction: periodEndReached", () => {
     expect(res.plan.hostingerOps).toEqual([
       { type: "create_snapshot", virtualMachineId: 42 },
       { type: "stop_vm", virtualMachineId: 42 },
-      { type: "cancel_billing_subscription", hostingerBillingSubscriptionId: "hbs-1" }
+      { type: "disable_billing_auto_renewal", hostingerBillingSubscriptionId: "hbs-1" }
     ]);
     const subUpdate = res.plan.dbUpdates.find(
       (op) => op.type === "update_subscription"
@@ -512,7 +586,8 @@ describe("planLifecycleAction: graceExpiredWipe", () => {
     const base = {
       status: "canceled" as const,
       grace_ends_at: "2026-04-01T00:00:00.000Z",
-      wiped_at: null
+      wiped_at: null,
+      cancel_reason: "payment_failed" as const
     };
     const res = planLifecycleAction(
       { type: "graceExpiredWipe" },
@@ -525,11 +600,11 @@ describe("planLifecycleAction: graceExpiredWipe", () => {
     // cancel-with-refund / autoCancel (e.g. manual Stripe Dashboard
     // cancel, autoCancel fire-and-forget dispatch failing), the VM is
     // still running and Hostinger is still billing at grace-end. The
-    // sweep must stop the VM and cancel Hostinger billing here;
+    // sweep must stop the VM and disable Hostinger auto-renewal here;
     // otherwise the tenant's VPS keeps charging indefinitely.
     expect(res.plan.hostingerOps).toEqual([
       { type: "stop_vm", virtualMachineId: 42 },
-      { type: "cancel_billing_subscription", hostingerBillingSubscriptionId: "hbs-1" },
+      { type: "disable_billing_auto_renewal", hostingerBillingSubscriptionId: "hbs-1" },
       { type: "delete_snapshot", virtualMachineId: 42 }
     ]);
     const updatedSub = res.plan.dbUpdates.find(
@@ -538,6 +613,37 @@ describe("planLifecycleAction: graceExpiredWipe", () => {
     expect(updatedSub.patch.wiped_at).toBeTruthy();
     expect(res.plan.dbUpdates.some((op) => op.type === "mark_business_wiped")).toBe(true);
     expect(res.plan.dbUpdates.some((op) => op.type === "delete_auth_user")).toBe(true);
+    // Wipe re-requests the manual hPanel deletion.
+    const opsOp = res.plan.emailsToSend.find((e) => e.type === "send_ops_vps_deletion_request");
+    expect(opsOp).toEqual(
+      expect.objectContaining({
+        virtualMachineId: 42,
+        hostingerBillingSubscriptionId: "hbs-1",
+        refundIssued: false,
+        cancelReason: "payment_failed",
+        vmState: "grace expired — VM stopped, snapshot deleted, auto-renew disabled"
+      })
+    );
+  });
+
+  it("reports refundIssued when an earlier cancel-with-refund stamped stripe_refund_id", () => {
+    const res = planLifecycleAction(
+      { type: "graceExpiredWipe" },
+      makeCtx({
+        subscription: makeSub({
+          status: "canceled",
+          grace_ends_at: "2026-04-01T00:00:00.000Z",
+          wiped_at: null,
+          cancel_reason: "user_refund",
+          stripe_refund_id: "re_123"
+        })
+      })
+    );
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    const opsOp = res.plan.emailsToSend.find((e) => e.type === "send_ops_vps_deletion_request");
+    expect(opsOp).toEqual(
+      expect.objectContaining({ refundIssued: true, cancelReason: "user_refund" })
+    );
   });
 
   it("rejects when grace hasn't passed yet", () => {
@@ -590,7 +696,7 @@ describe("planLifecycleAction: graceExpiredWipe", () => {
     expect(res.plan.dbUpdates.some((op) => op.type === "delete_auth_user")).toBe(false);
   });
 
-  it("emits stop_vm + cancel_billing_subscription backstop when cancel path skipped VPS teardown", () => {
+  it("emits stop_vm + disable_billing_auto_renewal backstop when cancel path skipped VPS teardown", () => {
     // Regression test for the screenshot-reported bug:
     // `customer.subscription.deleted` fallback stamps `grace_ends_at` but
     // does not stop the VM or cancel Hostinger billing. If the normal
@@ -615,12 +721,11 @@ describe("planLifecycleAction: graceExpiredWipe", () => {
     if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
     const opTypes = res.plan.hostingerOps.map((op) => op.type);
     expect(opTypes).toContain("stop_vm");
-    expect(opTypes).toContain("cancel_billing_subscription");
-    // Order matters: stop the VM first so the Hostinger billing cancel
-    // (which also destroys the VM) doesn't race with a still-running
-    // instance generating work.
+    expect(opTypes).toContain("disable_billing_auto_renewal");
+    // Order matters: stop the VM first so we never disable renewal on a
+    // still-running instance generating work.
     expect(opTypes.indexOf("stop_vm")).toBeLessThan(
-      opTypes.indexOf("cancel_billing_subscription")
+      opTypes.indexOf("disable_billing_auto_renewal")
     );
   });
 
@@ -663,7 +768,7 @@ describe("planLifecycleAction: graceExpiredWipe", () => {
     expect(wipedAtIdx).toBeLessThan(deleteBackupIdx);
   });
 
-  it("omits stop_vm + cancel_billing_subscription when VM id and billing id are missing", () => {
+  it("omits stop_vm + disable_billing_auto_renewal when VM id and billing id are missing", () => {
     const res = planLifecycleAction(
       { type: "graceExpiredWipe" },
       makeCtx({

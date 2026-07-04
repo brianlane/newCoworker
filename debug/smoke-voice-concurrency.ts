@@ -42,7 +42,7 @@ function arg(name: string): string | undefined {
 }
 
 const businessId = arg("business") ?? DEFAULT_BUSINESS;
-const calls = Math.max(1, Math.min(10, Number(arg("calls") ?? "3")));
+const calls = Math.max(1, Math.min(40, Number(arg("calls") ?? "3")));
 const durationS = Math.max(15, Math.min(600, Number(arg("duration-s") ?? "75")));
 
 const SUPABASE_URL = process.env.SUPABASE_URL ?? "";

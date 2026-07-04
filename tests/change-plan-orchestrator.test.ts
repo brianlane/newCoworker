@@ -58,12 +58,12 @@ const {
   hostingerGetVmMock,
   hostingerCreateSnapshotMock,
   hostingerStopVirtualMachineMock,
-  hostingerCancelBillingSubscriptionMock
+  hostingerDisableAutoRenewalMock
 } = vi.hoisted(() => ({
   hostingerGetVmMock: vi.fn(),
   hostingerCreateSnapshotMock: vi.fn(),
   hostingerStopVirtualMachineMock: vi.fn(),
-  hostingerCancelBillingSubscriptionMock: vi.fn()
+  hostingerDisableAutoRenewalMock: vi.fn()
 }));
 
 vi.mock("@/lib/hostinger/client", () => {
@@ -77,8 +77,8 @@ vi.mock("@/lib/hostinger/client", () => {
     stopVirtualMachine(id: number) {
       return hostingerStopVirtualMachineMock(id);
     }
-    cancelBillingSubscription(id: string, reason?: string) {
-      return hostingerCancelBillingSubscriptionMock(id, reason);
+    disableBillingAutoRenewal(id: string) {
+      return hostingerDisableAutoRenewalMock(id);
     }
   }
   return {
@@ -140,6 +140,14 @@ vi.mock("@/lib/logger", () => ({
     error: vi.fn(),
     debug: vi.fn()
   }
+}));
+
+const { sendOpsVpsDeletionEmailMock } = vi.hoisted(() => ({
+  sendOpsVpsDeletionEmailMock: vi.fn().mockResolvedValue(undefined)
+}));
+
+vi.mock("@/lib/email/ops-notify", () => ({
+  sendOpsVpsDeletionEmail: sendOpsVpsDeletionEmailMock
 }));
 
 import {
@@ -210,7 +218,7 @@ beforeEach(() => {
   }));
   hostingerCreateSnapshotMock.mockResolvedValue({ id: 1, state: "success" });
   hostingerStopVirtualMachineMock.mockResolvedValue({ id: 2, state: "success" });
-  hostingerCancelBillingSubscriptionMock.mockResolvedValue({ ok: true });
+  hostingerDisableAutoRenewalMock.mockResolvedValue({ ok: true });
 
   backupBusinessDataMock.mockResolvedValue({
     storageBucket: "business-backups",
@@ -286,10 +294,16 @@ describe("runChangePlanFromCheckout", () => {
     expect(hostingerCreateSnapshotMock).toHaveBeenCalledWith(1001);
     expect(hostingerStopVirtualMachineMock).toHaveBeenCalledWith(1001);
 
-    // Old Hostinger billing canceled.
-    expect(hostingerCancelBillingSubscriptionMock).toHaveBeenCalledWith(
-      "billing_old",
-      expect.any(String)
+    // Old Hostinger billing auto-renew disabled + manual deletion requested.
+    expect(hostingerDisableAutoRenewalMock).toHaveBeenCalledWith("billing_old");
+    expect(sendOpsVpsDeletionEmailMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: "biz-1",
+        virtualMachineId: 1001,
+        hostingerBillingSubscriptionId: "billing_old",
+        cancelReason: "upgrade_switch",
+        refundIssued: false
+      })
     );
 
     // Old subscription row marked canceled with upgrade_switch reason.
@@ -403,7 +417,7 @@ describe("runChangePlanFromCheckout", () => {
       // CRITICAL: the old Hostinger billing sub is the LIVE box — it must
       // never be stopped or canceled on a period-only switch.
       expect(hostingerStopVirtualMachineMock).not.toHaveBeenCalled();
-      expect(hostingerCancelBillingSubscriptionMock).not.toHaveBeenCalled();
+      expect(hostingerDisableAutoRenewalMock).not.toHaveBeenCalled();
 
       // The new sub row inherits the existing box's Hostinger billing id.
       expect(createSubscriptionMock).toHaveBeenCalledWith(
@@ -452,16 +466,44 @@ describe("runChangePlanFromCheckout", () => {
       expect(createSubscriptionMock).toHaveBeenCalledWith(
         expect.objectContaining({ hostinger_billing_subscription_id: null })
       );
-      expect(hostingerCancelBillingSubscriptionMock).not.toHaveBeenCalled();
+      expect(hostingerDisableAutoRenewalMock).not.toHaveBeenCalled();
     });
 
     it("tier changes still take the full migration path", async () => {
       // Default fixture: old starter/monthly → session standard/annual.
       await runChangePlanFromCheckout(makeSession(), "evt_tier_change_full_path");
       expect(orchestrateProvisioningMock).toHaveBeenCalled();
-      expect(hostingerCancelBillingSubscriptionMock).toHaveBeenCalledWith(
-        "billing_old",
-        expect.any(String)
+      expect(hostingerDisableAutoRenewalMock).toHaveBeenCalledWith("billing_old");
+    });
+
+    it("tier change with no old billing id still stops the VM and emails the ops deletion request", async () => {
+      // Regression (Bugbot): a missing billing id (e.g. provisioning-time
+      // lookup failed) must not suppress the ops email — the orphaned box
+      // would otherwise keep running with nobody asked to delete it.
+      getSubscriptionMock.mockResolvedValue({
+        id: "sub-row-old",
+        business_id: "biz-1",
+        stripe_subscription_id: "sub_old",
+        hostinger_billing_subscription_id: null,
+        customer_profile_id: "prof-1",
+        tier: "starter",
+        billing_period: "monthly",
+        status: "active",
+        created_at: "2026-01-01T00:00:00.000Z",
+        cancel_at_period_end: false
+      });
+
+      await runChangePlanFromCheckout(makeSession(), "evt_tier_change_vm_only");
+
+      expect(hostingerStopVirtualMachineMock).toHaveBeenCalledWith(1001);
+      expect(hostingerDisableAutoRenewalMock).not.toHaveBeenCalled();
+      expect(sendOpsVpsDeletionEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          businessId: "biz-1",
+          virtualMachineId: 1001,
+          hostingerBillingSubscriptionId: null,
+          cancelReason: "upgrade_switch"
+        })
       );
     });
 
@@ -481,10 +523,7 @@ describe("runChangePlanFromCheckout", () => {
       expect(createSubscriptionMock).toHaveBeenCalledWith(
         expect.objectContaining({ hostinger_billing_subscription_id: null })
       );
-      expect(hostingerCancelBillingSubscriptionMock).toHaveBeenCalledWith(
-        "billing_old",
-        expect.any(String)
-      );
+      expect(hostingerDisableAutoRenewalMock).toHaveBeenCalledWith("billing_old");
     });
   });
 
@@ -719,7 +758,7 @@ describe("runChangePlanFromCheckout", () => {
 
     await runChangePlanFromCheckout(makeSession(), "evt_no_old_hostinger_billing");
 
-    expect(hostingerCancelBillingSubscriptionMock).not.toHaveBeenCalled();
+    expect(hostingerDisableAutoRenewalMock).not.toHaveBeenCalled();
     expect(updateSubscriptionMock).toHaveBeenCalledWith(
       "sub-row-old",
       expect.objectContaining({ status: "canceled" })
@@ -755,7 +794,7 @@ describe("runChangePlanFromCheckout", () => {
     expect(orchestrateProvisioningMock).toHaveBeenCalled();
     expect(restoreBusinessDataMock).not.toHaveBeenCalled();
     expect(stripeCancelMock).toHaveBeenCalled();
-    expect(hostingerCancelBillingSubscriptionMock).toHaveBeenCalled();
+    expect(hostingerDisableAutoRenewalMock).toHaveBeenCalled();
     expect(updateSubscriptionMock).toHaveBeenCalledWith(
       "sub-row-old",
       expect.objectContaining({ status: "canceled", cancel_reason: "upgrade_switch" })
@@ -764,7 +803,7 @@ describe("runChangePlanFromCheckout", () => {
 
   it("does not unwind new provisioning if teardown of old sub fails", async () => {
     stripeCancelMock.mockRejectedValueOnce(new Error("stripe down"));
-    hostingerCancelBillingSubscriptionMock.mockRejectedValueOnce(new Error("hostinger down"));
+    hostingerDisableAutoRenewalMock.mockRejectedValueOnce(new Error("hostinger down"));
 
     await runChangePlanFromCheckout(makeSession(), "evt_6");
 
@@ -785,7 +824,7 @@ describe("runChangePlanFromCheckout", () => {
         items: { data: [{ current_period_start: 1700000000, current_period_end: 1702678400 }] }
       };
     });
-    hostingerCancelBillingSubscriptionMock.mockRejectedValueOnce("hostinger string failure");
+    hostingerDisableAutoRenewalMock.mockRejectedValueOnce("hostinger string failure");
 
     await runChangePlanFromCheckout(makeSession(), "evt_missing_old");
 
@@ -887,10 +926,7 @@ describe("runChangePlanFromCheckout", () => {
     await runChangePlanFromCheckout(makeSession(), "evt_change_best_effort_failures");
 
     expect(createSubscriptionMock).toHaveBeenCalled();
-    expect(hostingerCancelBillingSubscriptionMock).toHaveBeenCalledWith(
-      "billing_old",
-      expect.any(String)
-    );
+    expect(hostingerDisableAutoRenewalMock).toHaveBeenCalledWith("billing_old");
     expect(updateSubscriptionMock).toHaveBeenCalledWith(
       "sub-row-old",
       expect.objectContaining({ status: "canceled" })
@@ -925,7 +961,7 @@ describe("runChangePlanFromCheckout", () => {
     expect(createSubscriptionMock).not.toHaveBeenCalled();
     expect(stripeCancelMock).toHaveBeenCalledWith("sub_new", { prorate: false });
     expect(stripeCancelMock).not.toHaveBeenCalledWith("sub_old", expect.anything());
-    expect(hostingerCancelBillingSubscriptionMock).not.toHaveBeenCalled();
+    expect(hostingerDisableAutoRenewalMock).not.toHaveBeenCalled();
     expect(updateSubscriptionMock).not.toHaveBeenCalled();
     // Lifetime-count rollback: the counter was bumped before provisioning
     // (atomic cap enforcement); when provisioning throws we must
@@ -941,7 +977,7 @@ describe("runChangePlanFromCheckout", () => {
 
     expect(createSubscriptionMock).not.toHaveBeenCalled();
     expect(stripeCancelMock).not.toHaveBeenCalled();
-    expect(hostingerCancelBillingSubscriptionMock).not.toHaveBeenCalled();
+    expect(hostingerDisableAutoRenewalMock).not.toHaveBeenCalled();
     expect(updateSubscriptionMock).not.toHaveBeenCalled();
   });
 
@@ -1079,7 +1115,7 @@ describe("runChangePlanFromCheckout", () => {
     expect(createSubscriptionMock).not.toHaveBeenCalled();
     expect(updateSubscriptionMock).not.toHaveBeenCalled();
     expect(incrementLifetimeSubscriptionCountMock).not.toHaveBeenCalled();
-    expect(hostingerCancelBillingSubscriptionMock).not.toHaveBeenCalled();
+    expect(hostingerDisableAutoRenewalMock).not.toHaveBeenCalled();
   });
 
   it("does NOT short-circuit on a same-stripe-id row owned by a different business (defense against id-collision spoofing)", async () => {

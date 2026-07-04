@@ -18,7 +18,7 @@
  *      failure would leave us with a dead VM + live Stripe sub.
  *   2. SSH backup (before any Hostinger destruction). If backup fails we
  *      abort the run; keep the VM alive so the user can retry.
- *   3. Hostinger ops: snapshot → stop VM → cancel billing.
+ *   3. Hostinger ops: snapshot → stop VM → disable billing auto-renew.
  *   4. DB updates: applied last so the row only reflects reality if all
  *      the above succeeded. Partial-failure states get logged and the
  *      incident should be triaged manually.
@@ -62,6 +62,10 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { buildCancelConfirmationEmail } from "@/lib/email/templates/cancel-confirmation";
 import { buildRefundIssuedEmail } from "@/lib/email/templates/refund-issued";
+import {
+  buildOpsVpsDeletionEmail,
+  opsNotificationEmail
+} from "@/lib/email/templates/ops-vps-deletion";
 import type {
   DbUpdateOp,
   EmailOp,
@@ -333,19 +337,23 @@ async function runHostingerOp(op: HostingerOp, client: HostingerClient): Promise
       return;
     case "stop_vm":
       // Tolerate 404: the grace-expired-wipe backstop re-emits `stop_vm`
-      // even when the normal cancel path already tore the VM down via
-      // `cancel_billing_subscription` (which immediately destroys the
-      // VM). A 404 there is benign — the goal state is achieved.
+      // even when the VM was already deleted manually in hPanel (the ops
+      // deletion-request flow). A 404 there is benign — the goal state is
+      // achieved.
       await safeHostinger(
         () => client.stopVirtualMachine(op.virtualMachineId),
         "stop_vm",
         /* tolerate404 */ true
       );
       return;
-    case "cancel_billing_subscription":
+    case "disable_billing_auto_renewal":
+      // Hostinger's public cancel-subscription endpoint is gone (404), so
+      // disabling auto-renewal is the strongest automated stop-payment we
+      // have; the ops deletion-request email covers the manual remainder.
+      // Tolerate 404 for subscriptions already deleted in hPanel.
       await safeHostinger(
-        () => client.cancelBillingSubscription(op.hostingerBillingSubscriptionId),
-        "cancel_billing_subscription",
+        () => client.disableBillingAutoRenewal(op.hostingerBillingSubscriptionId),
+        "disable_billing_auto_renewal",
         true
       );
       return;
@@ -487,6 +495,32 @@ async function runEmailOp(
         siteUrl
       });
       await send(apiKey, op.toEmail, subject, { text, html });
+      return;
+    }
+    case "send_ops_vps_deletion_request": {
+      const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+      const toEmail = opsNotificationEmail();
+      const { subject, text, html } = buildOpsVpsDeletionEmail({
+        businessId: op.businessId,
+        virtualMachineId: op.virtualMachineId,
+        hostingerBillingSubscriptionId: op.hostingerBillingSubscriptionId,
+        ownerName: op.ownerName,
+        ownerEmail: op.ownerEmail,
+        tier: op.tier,
+        signupDate: op.signupDate,
+        refundIssued: result.refund !== undefined || op.refundIssued,
+        cancelReason: op.cancelReason,
+        vmState: op.vmState,
+        siteUrl
+      });
+      await send(apiKey, toEmail, subject, { text, html });
+      // Ops audit trail: manual hPanel deletion was requested for this box.
+      logger.info("ops VPS deletion request emailed", {
+        businessId: op.businessId,
+        virtualMachineId: op.virtualMachineId,
+        hostingerBillingSubscriptionId: op.hostingerBillingSubscriptionId,
+        toEmail
+      });
       return;
     }
   }

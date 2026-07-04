@@ -76,6 +76,7 @@ import {
   upsertCustomerProfile
 } from "@/lib/db/customer-profiles";
 import { logger } from "@/lib/logger";
+import { sendOpsVpsDeletionEmail } from "@/lib/email/ops-notify";
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -547,38 +548,60 @@ export async function runChangePlanFromCheckout(
     await cancelStripeSubscriptionSafely(oldSub.stripe_subscription_id, businessId);
   }
 
-  // ── Step 7: cancel OLD Hostinger billing subscription so we stop paying
-  // as soon as the new VM is live. This is what also destroys the old VM.
+  // ── Step 7: stop the OLD box and disable its Hostinger auto-renewal.
+  // Hostinger removed the public cancel-subscription API (DELETE 404s), so
+  // the old VM can only be deleted manually in hPanel — we email ops the
+  // deletion request and let auto-renew-off cap the spend in the meantime.
   // NEVER runs on the period-only fast path — that box (and its Hostinger
   // billing) is still the customer's live workspace.
-  if (!periodOnlySwitch && oldSub.hostinger_billing_subscription_id) {
-    try {
-      if (oldVmId !== null) {
-        try {
-          await hostinger.stopVirtualMachine(oldVmId);
-        } catch (err) {
-          logger.warn("changePlan: old VPS stop failed before billing cancel (continuing)", {
-            businessId,
-            oldVmId,
-            error: errorMessage(err)
-          });
-        }
+  // Runs when we know about the billing subscription OR just the VM: a
+  // missing billing id (e.g. provisioning-time lookup failed) must not
+  // suppress the ops email, or the orphaned box never gets deleted.
+  if (!periodOnlySwitch && (oldSub.hostinger_billing_subscription_id || oldVmId !== null)) {
+    if (oldVmId !== null) {
+      try {
+        await hostinger.stopVirtualMachine(oldVmId);
+      } catch (err) {
+        logger.warn("changePlan: old VPS stop failed before auto-renew disable (continuing)", {
+          businessId,
+          oldVmId,
+          error: errorMessage(err)
+        });
       }
-      await hostinger.cancelBillingSubscription(
-        oldSub.hostinger_billing_subscription_id,
-        "newcoworker-upgrade-switch"
-      );
-      logger.info("changePlan: old Hostinger billing canceled", {
-        businessId,
-        billingSubscriptionId: oldSub.hostinger_billing_subscription_id
-      });
-    } catch (err) {
-      logger.warn("changePlan: old Hostinger billing cancel failed (continuing)", {
-        businessId,
-        billingSubscriptionId: oldSub.hostinger_billing_subscription_id,
-        error: errorMessage(err)
-      });
     }
+    if (oldSub.hostinger_billing_subscription_id) {
+      try {
+        await hostinger.disableBillingAutoRenewal(oldSub.hostinger_billing_subscription_id);
+        logger.info("changePlan: old Hostinger billing auto-renew disabled", {
+          businessId,
+          billingSubscriptionId: oldSub.hostinger_billing_subscription_id
+        });
+      } catch (err) {
+        logger.warn("changePlan: old Hostinger auto-renew disable failed (continuing)", {
+          businessId,
+          billingSubscriptionId: oldSub.hostinger_billing_subscription_id,
+          error: errorMessage(err)
+        });
+      }
+    }
+    await sendOpsVpsDeletionEmail({
+      businessId,
+      virtualMachineId: oldVmId,
+      hostingerBillingSubscriptionId: oldSub.hostinger_billing_subscription_id,
+      ownerName: business.owner_name ?? null,
+      ownerEmail: business.owner_email,
+      tier: oldSub.tier,
+      signupDate: oldSub.created_at,
+      refundIssued: false,
+      cancelReason: "upgrade_switch",
+      vmState: [
+        oldVmId !== null ? "old plan's VM stopped" : "no VM recorded",
+        oldSub.hostinger_billing_subscription_id
+          ? "auto-renew disabled"
+          : "no Hostinger billing id — renewal may still be active, check hPanel",
+        "tenant migrated to a new VPS"
+      ].join("; ")
+    });
   }
 
   // ── Step 8: mark the OLD subscription row canceled. No grace window —

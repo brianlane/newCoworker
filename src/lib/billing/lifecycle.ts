@@ -66,7 +66,14 @@ export type HostingerOp =
   | { type: "delete_snapshot"; virtualMachineId: number }
   | { type: "stop_vm"; virtualMachineId: number }
   | {
-      type: "cancel_billing_subscription";
+      /**
+       * Hostinger removed the public cancel-subscription endpoint (DELETE
+       * /api/billing/v1/subscriptions/{id} now 404s — verified Jul 2026), so
+       * the closest automated stop-payment we have is disabling auto-renewal.
+       * The VM keeps running until the paid period lapses; actual deletion is
+       * manual via hPanel, requested through `send_ops_vps_deletion_request`.
+       */
+      type: "disable_billing_auto_renewal";
       /** Hostinger billing subscription id (NOT the VM id). */
       hostingerBillingSubscriptionId: string;
     };
@@ -132,6 +139,28 @@ export type EmailOp =
       toEmail: string;
       businessId: string;
       amountCents: number;
+    }
+  | {
+      /**
+       * Ops notification to team@newcoworker.com: Hostinger VPS deletion is
+       * manual-only (the public cancel API is gone), so every cancel/refund
+       * that should tear a box down emails the operator with the hPanel
+       * deletion request. See fleet_economics_and_tier_relaunch plan §Phase A.
+       */
+      type: "send_ops_vps_deletion_request";
+      businessId: string;
+      /** Numeric Hostinger VM id; null when the sub never had a VM recorded. */
+      virtualMachineId: number | null;
+      hostingerBillingSubscriptionId: string | null;
+      ownerName: string | null;
+      ownerEmail: string;
+      tier: string;
+      /** ISO date the subscription row was created (signup). */
+      signupDate: string;
+      refundIssued: boolean;
+      cancelReason: CancelReason;
+      /** Human-readable VM state at plan time, e.g. "stopped, auto-renew disabled". */
+      vmState: string;
     };
 
 export type LifecyclePlan = {
@@ -167,6 +196,8 @@ export type LifecycleContext = {
   subscription: SubscriptionRow;
   /** Owner email on the business — used as the send-to address for all emails. */
   ownerEmail: string;
+  /** Owner display name from the business row, for the ops deletion email. */
+  ownerName?: string | null;
   /**
    * IANA timezone of the business, for rendering dates in emails (which have
    * no "viewer" timezone). Null/omitted → emails fall back to the runtime
@@ -488,17 +519,18 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
   // Dashboard, or an `autoCancelOnPaymentFailure` dispatch that failed
   // before the fire-and-forget ran), the VM is still running and
   // Hostinger billing is still charging at grace-end. The sweep is our
-  // only backstop — emit `stop_vm` + `cancel_billing_subscription` here
-  // so VPS compute and Hostinger billing both terminate at grace-end
+  // only backstop — emit `stop_vm` + `disable_billing_auto_renewal` here
+  // so VPS compute stops and Hostinger billing lapses at its period end
   // regardless of which cancel path got us here. Both ops are idempotent
   // via 404-tolerance in the executor, so re-running against an already
-  // torn-down VPS is benign.
+  // torn-down VPS is benign. Actual VM deletion is manual (hPanel), so we
+  // also re-send the ops deletion request below.
   if (ctx.virtualMachineId !== null) {
     plan.hostingerOps.push({ type: "stop_vm", virtualMachineId: ctx.virtualMachineId });
   }
   if (sub.hostinger_billing_subscription_id) {
     plan.hostingerOps.push({
-      type: "cancel_billing_subscription",
+      type: "disable_billing_auto_renewal",
       hostingerBillingSubscriptionId: sub.hostinger_billing_subscription_id
     });
   }
@@ -541,6 +573,29 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
     plan.dbUpdates.push({ type: "delete_auth_user", supabaseUserId: ctx.ownerAuthUserId });
   }
   plan.dbUpdates.push({ type: "mark_business_wiped", businessId: sub.business_id });
+
+  // Re-request the manual hPanel deletion at wipe time: either the original
+  // cancel-path email was already actioned (this one 404s harmlessly when the
+  // operator checks) or the box is still alive and this is the last automated
+  // reminder before we stop tracking the subscription.
+  if (ctx.virtualMachineId !== null || sub.hostinger_billing_subscription_id) {
+    plan.emailsToSend.push({
+      type: "send_ops_vps_deletion_request",
+      businessId: sub.business_id,
+      virtualMachineId: ctx.virtualMachineId,
+      hostingerBillingSubscriptionId: sub.hostinger_billing_subscription_id,
+      ownerName: ctx.ownerName ?? null,
+      ownerEmail: ctx.ownerEmail,
+      tier: sub.tier,
+      signupDate: sub.created_at,
+      // A cancel-with-refund earlier in this subscription's life stamps
+      // stripe_refund_id; reflect that so the wipe-time reminder email
+      // doesn't misreport "no Stripe refund" to the operator.
+      refundIssued: sub.stripe_refund_id !== null,
+      cancelReason: sub.cancel_reason ?? "user_period_end",
+      vmState: "grace expired — VM stopped, snapshot deleted, auto-renew disabled"
+    });
+  }
 
   return { ok: true, plan };
 }
@@ -597,7 +652,8 @@ function buildCancelPlan(args: {
   }
 
   // VPS side: always take a Hostinger snapshot + SSH backup BEFORE we stop
-  // the VM (so the archive is consistent) and then cancel Hostinger billing.
+  // the VM (so the archive is consistent), then disable Hostinger auto-renew
+  // (the closest automated stop-payment now that the cancel API is gone).
   if (ctx.vpsHost !== null) {
     plan.sshOps.push({
       type: "backup_durable_data",
@@ -611,7 +667,7 @@ function buildCancelPlan(args: {
   }
   if (sub.hostinger_billing_subscription_id) {
     plan.hostingerOps.push({
-      type: "cancel_billing_subscription",
+      type: "disable_billing_auto_renewal",
       hostingerBillingSubscriptionId: sub.hostinger_billing_subscription_id
     });
   }
@@ -678,6 +734,32 @@ function buildCancelPlan(args: {
       toEmail: ctx.ownerEmail,
       businessId: sub.business_id,
       amountCents: ctx.lastInvoiceAmountCents ?? 0
+    });
+  }
+  // Hostinger deletion is manual-only (panel): every cancel that tears a box
+  // down asks ops to finish the job in hPanel.
+  if (ctx.virtualMachineId !== null || sub.hostinger_billing_subscription_id) {
+    plan.emailsToSend.push({
+      type: "send_ops_vps_deletion_request",
+      businessId: sub.business_id,
+      virtualMachineId: ctx.virtualMachineId,
+      hostingerBillingSubscriptionId: sub.hostinger_billing_subscription_id,
+      ownerName: ctx.ownerName ?? null,
+      ownerEmail: ctx.ownerEmail,
+      tier: sub.tier,
+      signupDate: sub.created_at,
+      // Whether a Stripe refund actually lands is only known at execution
+      // time (refund_latest_charge skips zero-amount invoices), so report
+      // only refunds already recorded on the row; the executor ORs in the
+      // outcome of this plan's own refund op.
+      refundIssued: sub.stripe_refund_id !== null,
+      cancelReason,
+      vmState: [
+        ctx.virtualMachineId !== null ? "VM stopped" : "no VM recorded",
+        sub.hostinger_billing_subscription_id
+          ? "auto-renew disabled"
+          : "no Hostinger billing id"
+      ].join(", ")
     });
   }
 
