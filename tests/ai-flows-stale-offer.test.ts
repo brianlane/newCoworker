@@ -89,7 +89,7 @@ describe("classifyStaleOfferReply", () => {
     expect(r?.kind).toBe("claimed_by_other");
   });
 
-  it("returns null for a digit that isn't an offer digit for the matched run", () => {
+  it("returns null for a digit no candidate recognizes as an offer digit", () => {
     const base = row({ routing: { tried: [GABBY], claimed_by: DAVE } });
     expect(classify([base], "7")).toBeNull();
     // ...but the flow's stamped timeframe/late digits ARE offer digits.
@@ -97,6 +97,25 @@ describe("classifyStaleOfferReply", () => {
     expect(classify([withTf], "3")?.kind).toBe("claimed_by_other");
     const withLate = row({ routing: { tried: [GABBY], claimed_by: DAVE, late_digit: "4" } });
     expect(classify([withLate], "4")?.kind).toBe("claimed_by_other");
+  });
+
+  it("keeps scanning past a newer run that doesn't recognize the digit", () => {
+    // Newest offer only understands 1/2, but an older run stamped late_digit
+    // "4" — a "4" reply must reach that older run's ack, not fall to chat.
+    const r = classifyStaleOfferReply({
+      candidates: [
+        row({ id: "newer-1-2-only", routing: { tried: [GABBY] } }),
+        row({
+          id: "older-late-4",
+          routing: { tried: [GABBY], claimed_by: DAVE, claimed_name: "Dave Lane", late_digit: "4" }
+        })
+      ],
+      from: GABBY,
+      digit: "4",
+      nowMs: NOW,
+      windowMs: DAY_MS
+    });
+    expect(r).toEqual({ runId: "older-late-4", kind: "claimed_by_other", claimedName: "Dave Lane" });
   });
 
   it("accepts a bare pass digit (2) the same way as a claim digit", () => {

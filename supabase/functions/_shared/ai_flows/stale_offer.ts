@@ -47,14 +47,16 @@ function str(v: unknown): string {
 /**
  * Find the most recent routed run (newest-first candidates, same set the
  * late-claim path scans) that this SENDER was ever offered, and classify what
- * their stale digit reply refers to. Returns null when the reply should fall
- * through to the normal inbound path instead of being consumed:
+ * their stale digit reply refers to. A run only matches when the digit is an
+ * offer digit for THAT run ("1"/"2" always are; a flow's stamped
+ * tf_digit/late_digit also count) — otherwise the scan continues to older
+ * candidates. Returns null when the reply should fall through to the normal
+ * inbound path instead of being consumed:
  *   - the sender never appeared in a recent offer (a stray digit from staff),
- *   - the digit isn't an offer digit for the matched run ("1"/"2" always are;
- *     a flow's stamped tf_digit/late_digit also count), or
- *   - the matched run is still LIVE and offered to the sender (the live-claim
- *     path upstream owns that reply; if it declined to consume it, the digit
- *     meant something else).
+ *   - no candidate run recognizes the digit as one of its offer digits, or
+ *   - the first matching run is still LIVE and offered to the sender (the
+ *     live-claim path upstream owns that reply; if it declined to consume it,
+ *     the digit meant something else).
  */
 export function classifyStaleOfferReply(args: {
   candidates: readonly StaleOfferCandidate[];
@@ -78,10 +80,13 @@ export function classifyStaleOfferReply(args: {
     if (!everOffered) continue;
 
     // Only digits that plausibly reference an offer are consumed: the
-    // advertised claim/pass digits plus this flow's stamped extras. Anything
-    // else (e.g. a bare "7") isn't an offer reply — let it fall through.
+    // advertised claim/pass digits plus this flow's stamped extras. A
+    // non-matching digit may still reference an OLDER run whose flow stamped
+    // that digit (e.g. a late-claim "4" after a newer 1/2-only offer), so keep
+    // scanning rather than bailing; a digit no candidate recognizes (e.g. a
+    // bare "7") falls through to the normal path.
     const offerDigits = new Set(["1", "2", str(routing.tf_digit), str(routing.late_digit)]);
-    if (!offerDigits.has(digit)) return null;
+    if (!offerDigits.has(digit)) continue;
 
     // A LIVE offer to this sender is the upstream live-claim path's job; when
     // that path didn't consume the digit, don't tell the sender the window
