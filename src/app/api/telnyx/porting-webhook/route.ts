@@ -8,6 +8,10 @@
  *   - Handles `porting_order.status_changed`: mirrors the new status onto
  *     the matching `number_port_requests` row and alerts the owner on
  *     milestones (exception / FOC confirmed / ported / cancelled).
+ *   - Whenever the row shows ported-but-not-activated, activates the number:
+ *     voice routes + messaging settings + 10DLC attach (see
+ *     src/lib/byon/activation.ts) — keyed off durable row state so crashed
+ *     activations are retried by later redeliveries.
  *   - Everything else is acknowledged and ignored — returning non-2xx makes
  *     Telnyx retry, which is only correct for genuine processing failures.
  */
@@ -18,6 +22,7 @@ import {
   handlePortingStatusChange,
   type PortingWebhookOrderPayload
 } from "@/lib/byon/port-requests";
+import { activatePortedNumber } from "@/lib/byon/activation";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
@@ -64,7 +69,26 @@ export async function POST(request: Request) {
 
   try {
     const result = await handlePortingStatusChange(data.payload ?? {}, {}, data.occurred_at ?? null);
-    return NextResponse.json({ ok: true, handled: result.handled, ported: result.ported });
+
+    // Activation keys off durable row state, not this delivery's transition:
+    // EVERY delivery whose row shows ported-but-not-activated attempts the
+    // (idempotent) wiring, so a worker that claimed the ported alert and then
+    // died before wiring is recovered by the next Telnyx redelivery.
+    // activatePortedNumber never throws — failures alert the owner, leave
+    // activated_at null for the next retry, and remain recoverable via the
+    // admin assign-did tooling.
+    let activated: boolean | undefined;
+    if (result.row) {
+      const activation = await activatePortedNumber(result.row);
+      if (activation.attempted) activated = activation.activated;
+    }
+
+    return NextResponse.json({
+      ok: true,
+      handled: result.handled,
+      ported: result.ported,
+      ...(activated !== undefined ? { activated } : {})
+    });
   } catch (err) {
     logger.error("porting-webhook: failed to process status change", {
       errorMessage: err instanceof Error ? err.message : String(err)

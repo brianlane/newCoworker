@@ -57,6 +57,10 @@ export type NumberPortRequestRow = {
   invoice_document_id: string | null;
   /** Last status the owner alert / ported signal was claimed for ('' = none). */
   notified_status: string | null;
+  /** When the ported number was wired into platform routing; null until then. */
+  activated_at: string | null;
+  /** First activation failure (alert-once claim); cleared on success. */
+  activation_error: string | null;
   created_at: string;
   updated_at: string;
 };
