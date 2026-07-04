@@ -23,6 +23,7 @@ import {
   createByonPortRequest,
   listByonPortRequests
 } from "@/lib/byon/port-requests";
+import { assertByonAllowedForBusiness } from "@/lib/byon/tier-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -95,6 +96,9 @@ export async function POST(request: Request) {
     if (!limiter.success) {
       return errorResponse("CONFLICT", "Too many port submissions, slow down.", 429);
     }
+
+    // BYON is Standard-only: enforce before any Telnyx resources are created.
+    await assertByonAllowedForBusiness(businessId);
 
     const parsed = createSchema.parse(await request.json());
     const result = await createByonPortRequest(businessId, parsed);

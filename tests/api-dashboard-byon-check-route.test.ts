@@ -15,9 +15,15 @@ vi.mock("@/lib/rate-limit", () => ({
   rateLimit: vi.fn(() => ({ success: true, limit: 10, remaining: 9, reset: 0 }))
 }));
 
+vi.mock("@/lib/byon/tier-gate", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/byon/tier-gate")>();
+  return { ...actual, assertByonAllowedForBusiness: vi.fn() };
+});
+
 import { POST } from "@/app/api/dashboard/byon/check/route";
 import { getAuthUser, requireOwner } from "@/lib/auth";
 import { ByonValidationError, runPortabilityCheck } from "@/lib/byon/port-requests";
+import { assertByonAllowedForBusiness, BYON_UPGRADE_MESSAGE } from "@/lib/byon/tier-gate";
 import { rateLimit } from "@/lib/rate-limit";
 
 const OWNER = { userId: "u-1", email: "owner@example.com", isAdmin: false };
@@ -37,6 +43,7 @@ describe("api/dashboard/byon/check route", () => {
     vi.mocked(getAuthUser).mockResolvedValue(OWNER as never);
     vi.mocked(requireOwner).mockResolvedValue(undefined as never);
     vi.mocked(rateLimit).mockReturnValue({ success: true, limit: 10, remaining: 9, reset: 0 } as never);
+    vi.mocked(assertByonAllowedForBusiness).mockResolvedValue(undefined);
   });
 
   it("401 when not signed in", async () => {
@@ -79,6 +86,17 @@ describe("api/dashboard/byon/check route", () => {
     expect(body.data.check.etaDays).toBe("1-4 business days");
     expect(requireOwner).toHaveBeenCalledWith(BIZ);
     expect(runPortabilityCheck).toHaveBeenCalledWith("312-555-0001");
+  });
+
+  it("400 with the upgrade prompt for starter-tier businesses", async () => {
+    vi.mocked(assertByonAllowedForBusiness).mockRejectedValueOnce(
+      new ByonValidationError(BYON_UPGRADE_MESSAGE)
+    );
+    const res = await POST(req({ businessId: BIZ, phone: "+13125550001" }));
+    const body = await res.json();
+    expect(res.status).toBe(400);
+    expect(body.error.message).toBe(BYON_UPGRADE_MESSAGE);
+    expect(runPortabilityCheck).not.toHaveBeenCalled();
   });
 
   it("maps ByonValidationError to a 400 with the message", async () => {

@@ -13,7 +13,10 @@ export const VOICE_RES_LIMITS = {
   },
   standard: {
     voiceIncludedSecondsPerStripePeriod: 15_000,
-    maxConcurrentCalls: 3
+    // Tier relaunch (Jul 2026): KVM2 load-tested to 20 simultaneous Gemini
+    // Live calls with CPU >90% idle; the fleet-wide Gemini TPM pool supports
+    // ~45. "Up to 10 concurrent calls" is the advertised Standard cap.
+    maxConcurrentCalls: 10
   },
   enterprise: {
     voiceIncludedSecondsPerStripePeriod: 150_000,

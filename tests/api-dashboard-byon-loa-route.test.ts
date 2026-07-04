@@ -13,9 +13,16 @@ vi.mock("@/lib/rate-limit", () => ({
   rateLimit: vi.fn(() => ({ success: true }))
 }));
 
+vi.mock("@/lib/byon/tier-gate", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/byon/tier-gate")>();
+  return { ...actual, assertByonAllowedForBusiness: vi.fn() };
+});
+
 import { POST } from "@/app/api/dashboard/byon/loa/route";
 import { getAuthUser, requireOwner } from "@/lib/auth";
 import { generateLoaPdf } from "@/lib/byon/loa-pdf";
+import { ByonValidationError } from "@/lib/byon/port-requests";
+import { assertByonAllowedForBusiness, BYON_UPGRADE_MESSAGE } from "@/lib/byon/tier-gate";
 import { rateLimit } from "@/lib/rate-limit";
 
 const OWNER = { userId: "u-1", email: "owner@example.com", isAdmin: false };
@@ -45,6 +52,7 @@ describe("api/dashboard/byon/loa route", () => {
     vi.mocked(getAuthUser).mockResolvedValue(OWNER as never);
     vi.mocked(requireOwner).mockResolvedValue(undefined as never);
     vi.mocked(rateLimit).mockReturnValue({ success: true } as never);
+    vi.mocked(assertByonAllowedForBusiness).mockResolvedValue(undefined);
   });
 
   it("401 when not signed in, 400 on invalid body, 429 when limited", async () => {
@@ -63,6 +71,17 @@ describe("api/dashboard/byon/loa route", () => {
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error.message).toContain("full phone number");
+  });
+
+  it("400 with the upgrade prompt for starter-tier businesses", async () => {
+    vi.mocked(assertByonAllowedForBusiness).mockRejectedValueOnce(
+      new ByonValidationError(BYON_UPGRADE_MESSAGE)
+    );
+    const res = await POST(req(validBody()));
+    const body = await res.json();
+    expect(res.status).toBe(400);
+    expect(body.error.message).toBe(BYON_UPGRADE_MESSAGE);
+    expect(generateLoaPdf).not.toHaveBeenCalled();
   });
 
   it("returns the prefilled PDF as a download (admin bypasses requireOwner)", async () => {

@@ -123,7 +123,7 @@ describe("pricing", () => {
 
   describe("getRenewalRateDisplay", () => {
     it("returns renewal rate for starter biennial", () => {
-      expect(getRenewalRateDisplay("starter", "biennial")).toBe("$16.99/mo");
+      expect(getRenewalRateDisplay("starter", "biennial")).toBe("$19.99/mo");
     });
 
     it("returns renewal rate for starter annual", () => {

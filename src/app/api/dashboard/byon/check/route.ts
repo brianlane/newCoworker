@@ -13,6 +13,7 @@ import { getAuthUser, requireOwner } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { ByonValidationError, runPortabilityCheck } from "@/lib/byon/port-requests";
+import { assertByonAllowedForBusiness } from "@/lib/byon/tier-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +36,10 @@ export async function POST(request: Request) {
     if (!limiter.success) {
       return errorResponse("CONFLICT", "Too many checks, slow down.", 429);
     }
+
+    // BYON is Standard-only: fail the wizard's first step with the upgrade
+    // prompt instead of letting starters fill everything in and then bounce.
+    await assertByonAllowedForBusiness(parsed.businessId);
 
     const check = await runPortabilityCheck(parsed.phone);
     return successResponse({ check });

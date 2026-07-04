@@ -20,6 +20,14 @@ vi.mock("@/lib/rate-limit", () => ({
   rateLimit: vi.fn(() => ({ success: true, limit: 30, remaining: 29, reset: 0 }))
 }));
 
+vi.mock("@/lib/byon/tier-gate", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/byon/tier-gate")>();
+  return {
+    ...actual,
+    assertByonAllowedForBusiness: vi.fn()
+  };
+});
+
 import { DELETE, GET, POST } from "@/app/api/dashboard/byon/route";
 import { getAuthUser, requireOwner } from "@/lib/auth";
 import {
@@ -28,6 +36,7 @@ import {
   createByonPortRequest,
   listByonPortRequests
 } from "@/lib/byon/port-requests";
+import { assertByonAllowedForBusiness, BYON_UPGRADE_MESSAGE } from "@/lib/byon/tier-gate";
 import { rateLimit } from "@/lib/rate-limit";
 
 const OWNER = { userId: "u-1", email: "owner@example.com", isAdmin: false };
@@ -62,6 +71,7 @@ describe("api/dashboard/byon route", () => {
     vi.mocked(getAuthUser).mockResolvedValue(OWNER as never);
     vi.mocked(requireOwner).mockResolvedValue(undefined as never);
     vi.mocked(rateLimit).mockReturnValue({ success: true } as never);
+    vi.mocked(assertByonAllowedForBusiness).mockResolvedValue(undefined);
   });
 
   it("GET 401 when not signed in", async () => {
@@ -100,6 +110,17 @@ describe("api/dashboard/byon route", () => {
 
     const bad = { ...validCreateBody(), loa: { base64: "", filename: "loa.pdf" } };
     expect((await POST(jsonReq("POST", `?businessId=${BIZ}`, bad))).status).toBe(400);
+  });
+
+  it("POST 400 with the upgrade prompt for starter-tier businesses", async () => {
+    vi.mocked(assertByonAllowedForBusiness).mockRejectedValueOnce(
+      new ByonValidationError(BYON_UPGRADE_MESSAGE)
+    );
+    const res = await POST(jsonReq("POST", `?businessId=${BIZ}`, validCreateBody()));
+    const body = await res.json();
+    expect(res.status).toBe(400);
+    expect(body.error.message).toBe(BYON_UPGRADE_MESSAGE);
+    expect(createByonPortRequest).not.toHaveBeenCalled();
   });
 
   it("POST creates the port request and returns 201 (admin bypasses requireOwner)", async () => {
