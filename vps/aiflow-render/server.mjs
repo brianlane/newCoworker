@@ -529,6 +529,37 @@ async function settlePage(page) {
   }
 }
 
+/**
+ * Read the page's visible text for extraction, with image ALT text inlined at
+ * each image's position. Some lead pages render a key value ONLY as a logo
+ * image (e.g. ReferralExchange's "Web Source" row shows
+ * `<img alt="realestateagents">` with no text sibling), which
+ * `document.body.innerText` drops entirely — so the worker's Gemini extraction
+ * could never see it. A text node is inserted after each alt-bearing image,
+ * innerText is read, then the markers are removed — all inside ONE evaluate
+ * call, so no screenshot or page.content() capture can observe the mutation.
+ * Best-effort: returns "" instead of throwing, like the reads it replaces.
+ */
+async function readPageText(page) {
+  try {
+    return await page.evaluate(() => {
+      const marks = [];
+      for (const img of Array.from(document.images)) {
+        const alt = (img.getAttribute("alt") || "").trim();
+        if (!alt) continue;
+        const mark = document.createTextNode(` ${alt} `);
+        img.after(mark);
+        marks.push(mark);
+      }
+      const text = document.body?.innerText ?? "";
+      for (const mark of marks) mark.remove();
+      return text;
+    });
+  } catch {
+    return "";
+  }
+}
+
 /** Capture a height-capped full-width JPEG of the page as base64, or null. */
 async function captureScreenshot(page) {
   try {
@@ -722,7 +753,7 @@ async function respondWithActions(
   await settlePage(page);
   try {
     html = await page.content();
-    text = await page.evaluate(() => document.body?.innerText ?? "");
+    text = await readPageText(page);
   } catch {
     text = "";
     html = "";
@@ -808,7 +839,7 @@ app.post("/render", async (req, res) => {
           forEachMatch
         );
       const html = await page.content();
-      const text = await page.evaluate(() => document.body?.innerText ?? "");
+      const text = await readPageText(page);
       const screenshotBase64 =
         wantScreenshot || wantDebug ? await captureScreenshot(page) : null;
       return res.json({
@@ -899,7 +930,7 @@ app.post("/render", async (req, res) => {
       );
 
     const html = await page.content();
-    const text = await page.evaluate(() => document.body?.innerText ?? "");
+    const text = await readPageText(page);
     const screenshotBase64 =
       wantScreenshot || wantDebug ? await captureScreenshot(page) : null;
     return res.json({
