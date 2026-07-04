@@ -588,7 +588,10 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
       ownerEmail: ctx.ownerEmail,
       tier: sub.tier,
       signupDate: sub.created_at,
-      refundIssued: false,
+      // A cancel-with-refund earlier in this subscription's life stamps
+      // stripe_refund_id; reflect that so the wipe-time reminder email
+      // doesn't misreport "no Stripe refund" to the operator.
+      refundIssued: sub.stripe_refund_id !== null,
       cancelReason: sub.cancel_reason ?? "user_period_end",
       vmState: "grace expired — VM stopped, snapshot deleted, auto-renew disabled"
     });

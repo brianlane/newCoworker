@@ -613,6 +613,26 @@ describe("planLifecycleAction: graceExpiredWipe", () => {
     );
   });
 
+  it("reports refundIssued when an earlier cancel-with-refund stamped stripe_refund_id", () => {
+    const res = planLifecycleAction(
+      { type: "graceExpiredWipe" },
+      makeCtx({
+        subscription: makeSub({
+          status: "canceled",
+          grace_ends_at: "2026-04-01T00:00:00.000Z",
+          wiped_at: null,
+          cancel_reason: "user_refund",
+          stripe_refund_id: "re_123"
+        })
+      })
+    );
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    const opsOp = res.plan.emailsToSend.find((e) => e.type === "send_ops_vps_deletion_request");
+    expect(opsOp).toEqual(
+      expect.objectContaining({ refundIssued: true, cancelReason: "user_refund" })
+    );
+  });
+
   it("rejects when grace hasn't passed yet", () => {
     const res = planLifecycleAction(
       { type: "graceExpiredWipe" },

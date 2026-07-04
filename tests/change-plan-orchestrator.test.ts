@@ -476,6 +476,37 @@ describe("runChangePlanFromCheckout", () => {
       expect(hostingerDisableAutoRenewalMock).toHaveBeenCalledWith("billing_old");
     });
 
+    it("tier change with no old billing id still stops the VM and emails the ops deletion request", async () => {
+      // Regression (Bugbot): a missing billing id (e.g. provisioning-time
+      // lookup failed) must not suppress the ops email — the orphaned box
+      // would otherwise keep running with nobody asked to delete it.
+      getSubscriptionMock.mockResolvedValue({
+        id: "sub-row-old",
+        business_id: "biz-1",
+        stripe_subscription_id: "sub_old",
+        hostinger_billing_subscription_id: null,
+        customer_profile_id: "prof-1",
+        tier: "starter",
+        billing_period: "monthly",
+        status: "active",
+        created_at: "2026-01-01T00:00:00.000Z",
+        cancel_at_period_end: false
+      });
+
+      await runChangePlanFromCheckout(makeSession(), "evt_tier_change_vm_only");
+
+      expect(hostingerStopVirtualMachineMock).toHaveBeenCalledWith(1001);
+      expect(hostingerDisableAutoRenewalMock).not.toHaveBeenCalled();
+      expect(sendOpsVpsDeletionEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          businessId: "biz-1",
+          virtualMachineId: 1001,
+          hostingerBillingSubscriptionId: null,
+          cancelReason: "upgrade_switch"
+        })
+      );
+    });
+
     it("a tier-change migration with a null provisioning billing id never inherits the old (about-to-be-canceled) billing id", async () => {
       // Regression (Bugbot): the fast-path inheritance must not leak into the
       // migration path — step 7 cancels billing_old, so pinning it to the new

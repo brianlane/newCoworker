@@ -554,30 +554,35 @@ export async function runChangePlanFromCheckout(
   // deletion request and let auto-renew-off cap the spend in the meantime.
   // NEVER runs on the period-only fast path — that box (and its Hostinger
   // billing) is still the customer's live workspace.
-  if (!periodOnlySwitch && oldSub.hostinger_billing_subscription_id) {
-    try {
-      if (oldVmId !== null) {
-        try {
-          await hostinger.stopVirtualMachine(oldVmId);
-        } catch (err) {
-          logger.warn("changePlan: old VPS stop failed before auto-renew disable (continuing)", {
-            businessId,
-            oldVmId,
-            error: errorMessage(err)
-          });
-        }
+  // Runs when we know about the billing subscription OR just the VM: a
+  // missing billing id (e.g. provisioning-time lookup failed) must not
+  // suppress the ops email, or the orphaned box never gets deleted.
+  if (!periodOnlySwitch && (oldSub.hostinger_billing_subscription_id || oldVmId !== null)) {
+    if (oldVmId !== null) {
+      try {
+        await hostinger.stopVirtualMachine(oldVmId);
+      } catch (err) {
+        logger.warn("changePlan: old VPS stop failed before auto-renew disable (continuing)", {
+          businessId,
+          oldVmId,
+          error: errorMessage(err)
+        });
       }
-      await hostinger.disableBillingAutoRenewal(oldSub.hostinger_billing_subscription_id);
-      logger.info("changePlan: old Hostinger billing auto-renew disabled", {
-        businessId,
-        billingSubscriptionId: oldSub.hostinger_billing_subscription_id
-      });
-    } catch (err) {
-      logger.warn("changePlan: old Hostinger auto-renew disable failed (continuing)", {
-        businessId,
-        billingSubscriptionId: oldSub.hostinger_billing_subscription_id,
-        error: errorMessage(err)
-      });
+    }
+    if (oldSub.hostinger_billing_subscription_id) {
+      try {
+        await hostinger.disableBillingAutoRenewal(oldSub.hostinger_billing_subscription_id);
+        logger.info("changePlan: old Hostinger billing auto-renew disabled", {
+          businessId,
+          billingSubscriptionId: oldSub.hostinger_billing_subscription_id
+        });
+      } catch (err) {
+        logger.warn("changePlan: old Hostinger auto-renew disable failed (continuing)", {
+          businessId,
+          billingSubscriptionId: oldSub.hostinger_billing_subscription_id,
+          error: errorMessage(err)
+        });
+      }
     }
     await sendOpsVpsDeletionEmail({
       businessId,
