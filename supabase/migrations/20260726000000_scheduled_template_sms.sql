@@ -109,6 +109,21 @@ grant execute on function public.claim_due_scheduled_sms(integer) to service_rol
 -- ---------------------------------------------------------------------------
 -- Outbound log source
 -- ---------------------------------------------------------------------------
+-- Durable dispatch marker: the sweep writes the log row keyed by the
+-- scheduled_sms id right after Telnyx accepts. If marking the queue row
+-- 'sent' then fails and the 10-minute stale reclaim re-runs the row, the
+-- dispatcher finds this log row first and short-circuits — no second metered
+-- slot, no duplicate thread entry (the unique index makes retries idempotent).
+alter table public.sms_outbound_log
+  add column if not exists scheduled_sms_id uuid;
+
+create unique index if not exists sms_outbound_log_scheduled_idx
+  on public.sms_outbound_log (scheduled_sms_id)
+  where scheduled_sms_id is not null;
+
+comment on column public.sms_outbound_log.scheduled_sms_id is
+  'Set on owner_scheduled sends: the scheduled_sms row this dispatch fulfilled (idempotency marker for stale-claim retries).';
+
 alter table public.sms_outbound_log
   drop constraint if exists sms_outbound_log_source_check;
 

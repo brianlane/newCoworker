@@ -215,6 +215,12 @@ describe("DELETE /api/dashboard/messages/templates/:id", () => {
     expect(res.status).toBe(400);
   });
 
+  it("gates on tier", async () => {
+    vi.mocked(smsToolsAllowedForBusiness).mockResolvedValue(false);
+    mockDb({ sms_templates: { data: { id: TPL }, error: null } });
+    expect((await DELETE_ONE(idReq("DELETE", body), idParams)).status).toBe(403);
+  });
+
   it("deletes the template", async () => {
     mockDb({ sms_templates: { data: { id: TPL }, error: null } });
     const res = await DELETE_ONE(idReq("DELETE", body), idParams);

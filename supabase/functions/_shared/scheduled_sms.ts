@@ -117,6 +117,28 @@ async function dispatchOne(
     return { id: row.id, status: "failed", detail };
   };
   try {
+    // Stale-claim retry guard: the outbound-log row (unique on
+    // scheduled_sms_id) is the durable "Telnyx accepted this" marker, written
+    // before the queue row flips to 'sent'. If a previous attempt delivered
+    // but the sent-mark failed, short-circuit here — never reserve a second
+    // metered slot or double-post the thread entry.
+    const { data: priorLog } = await supabase
+      .from("sms_outbound_log")
+      .select("telnyx_message_id")
+      .eq("scheduled_sms_id", row.id)
+      .maybeSingle();
+    if (priorLog) {
+      const priorMid =
+        (priorLog as { telnyx_message_id?: string | null }).telnyx_message_id ?? null;
+      await markRow(supabase, row.id, {
+        status: "sent",
+        sent_at: new Date().toISOString(),
+        telnyx_message_id: priorMid,
+        error: null
+      });
+      return { id: row.id, status: "sent" };
+    }
+
     const { data: bizData, error: bizErr } = await supabase
       .from("businesses")
       .select("tier")
@@ -217,8 +239,12 @@ async function dispatchOne(
       messageId = null;
     }
 
-    // Best-effort thread visibility — a failed log insert must not mark the
-    // (already delivered) send as failed.
+    // The log row doubles as the idempotency marker (see the stale-claim
+    // guard above); its unique scheduled_sms_id index makes a racing retry's
+    // duplicate insert a no-op. A failed insert must not mark the (already
+    // delivered) send as failed — worst case the narrow marker gap means one
+    // extra reserved slot on reclaim, with Telnyx's idempotency key still
+    // preventing a duplicate text.
     const { error: logErr } = await supabase.from("sms_outbound_log").insert({
       business_id: row.business_id,
       to_e164: row.to_e164,
@@ -228,7 +254,8 @@ async function dispatchOne(
       run_id: null,
       flow_id: null,
       telnyx_message_id: messageId,
-      channel: send.channel
+      channel: send.channel,
+      scheduled_sms_id: row.id
     });
     if (logErr) console.error("scheduled_sms outbound log failed", row.id, logErr.message);
 

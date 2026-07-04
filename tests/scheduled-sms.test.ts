@@ -20,6 +20,7 @@ function makeSupabase(overrides: {
   business?: DbResult;
   telnyxSettings?: DbResult;
   channelSettings?: DbResult;
+  priorLog?: DbResult;
   rpc?: (fn: string, args: Record<string, unknown>) => DbResult;
   updateResult?: DbResult;
   updateThrows?: unknown;
@@ -62,6 +63,9 @@ function makeSupabase(overrides: {
           }
           if (table === "business_channel_settings") {
             return overrides.channelSettings ?? { data: null, error: null };
+          }
+          if (table === "sms_outbound_log") {
+            return overrides.priorLog ?? { data: null, error: null };
           }
           return { data: null, error: null };
         })
@@ -162,12 +166,37 @@ describe("scheduled SMS dispatch", () => {
       run_id: null,
       flow_id: null,
       telnyx_message_id: "msg_42",
-      channel: "sms"
+      channel: "sms",
+      scheduled_sms_id: "sched-1"
     });
     expect(update).toHaveBeenCalledWith(
       expect.objectContaining({ status: "sent", telnyx_message_id: "msg_42", error: null })
     );
     expect(updateEq).toHaveBeenCalledWith("id", "sched-1");
+  });
+
+  it("short-circuits a reclaimed row whose send already reached Telnyx", async () => {
+    const { supabase, rpc, update } = makeSupabase({
+      priorLog: { data: { telnyx_message_id: "msg_prior" }, error: null }
+    });
+    const fetchFn = okFetch();
+
+    const result = await processDueScheduledSms(supabase, { ...baseOpts, fetchFn });
+    expect(result.outcomes[0]).toEqual({ id: "sched-1", status: "sent" });
+    // No second metered slot, no second Telnyx call — just re-mark sent.
+    expect(rpc).not.toHaveBeenCalledWith("try_reserve_sms_outbound_slot", expect.anything());
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "sent", telnyx_message_id: "msg_prior" })
+    );
+
+    // Prior log without a message id still short-circuits (null id re-marked).
+    const noMid = makeSupabase({ priorLog: { data: {}, error: null } });
+    const result2 = await processDueScheduledSms(noMid.supabase, { ...baseOpts, fetchFn: okFetch() });
+    expect(result2.outcomes[0]).toEqual({ id: "sched-1", status: "sent" });
+    expect(noMid.update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "sent", telnyx_message_id: null })
+    );
   });
 
   it("honors a custom batch size and falls back to env messaging config", async () => {

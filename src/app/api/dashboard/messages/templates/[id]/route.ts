@@ -95,6 +95,10 @@ export async function DELETE(request: Request, context: RouteContext) {
     if (!user.isAdmin) await requireOwner(businessId);
 
     const db = await createSupabaseServiceClient();
+    if (!(await smsToolsAllowedForBusiness(businessId, db))) {
+      return errorResponse("FORBIDDEN", SMS_TOOLS_UPGRADE_MESSAGE);
+    }
+
     const { data, error } = await db
       .from("sms_templates")
       .delete()
