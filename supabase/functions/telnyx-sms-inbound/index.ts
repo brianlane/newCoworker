@@ -30,6 +30,11 @@ import { evaluateSmsTrigger, isExecutableDefinition } from "../_shared/ai_flows/
 import { resolveFromMatchesRefValues } from "../_shared/ai_flows/contact_ref.ts";
 import { parseClaimWithTimeframe } from "../_shared/ai_flows/claim_timeframe.ts";
 import {
+  classifyStaleOfferReply,
+  staleOfferAckText,
+  type StaleOfferCandidate
+} from "../_shared/ai_flows/stale_offer.ts";
+import {
   APPROVAL_OPTION_DECISIONS,
   approvalOptionForReply,
   parseStoredApprovalOptions
@@ -1631,6 +1636,67 @@ serve(async (req: Request) => {
               );
             }
           }
+        }
+
+        // Stale offer reply: the digit matched no LIVE offer (and no owner
+        // approval), but this teammate WAS offered a lead recently — e.g. a
+        // "1" sent after the claim window lapsed and the offer escalated.
+        // Consume it with a deterministic "here's what happened to that lead"
+        // ack instead of letting it fall through to the chat AI, which has no
+        // offer context and improvises a baffling reply. This never claims —
+        // the explicit late-claim digit and "86" keep that role.
+        const { data: staleRows } = await supabase
+          .from("ai_flow_runs")
+          .select("id, status, context, awaiting_agent_e164, updated_at")
+          .eq("business_id", businessId)
+          .in("status", ["done", "awaiting_agent", "queued", "awaiting_approval"])
+          .not("context->routing", "is", null)
+          .order("updated_at", { ascending: false })
+          .limit(25);
+        const stale = classifyStaleOfferReply({
+          candidates: (staleRows as StaleOfferCandidate[] | null) ?? [],
+          from,
+          digit: replyBody,
+          nowMs: Date.now(),
+          windowMs: LATE_CLAIM_WINDOW_MS
+        });
+        if (stale) {
+          const ackText = staleOfferAckText(stale);
+          let ackSent: string | null = null;
+          if (canAck) {
+            const send = await telnyxSendSms({
+              apiKey: telnyxApiKey,
+              messagingProfileId: ackProfile,
+              fromE164: ackFrom,
+              toE164: from,
+              text: ackText,
+              idempotencyKey: `${eventId}:stale-offer-ack`
+            });
+            if (!send.ok) {
+              console.error("stale offer ack reply", send.status, send.body.slice(0, 300));
+            } else {
+              ackSent = ackText;
+            }
+          }
+          await persistOfferReplyJob({
+            supabase,
+            businessId,
+            eventId,
+            envelope,
+            from,
+            staffKind: "team",
+            ackSent
+          });
+          await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
+            business_id: businessId,
+            run_id: stale.runId,
+            event_id: eventId,
+            decision: `stale_${stale.kind}`
+          });
+          return new Response(JSON.stringify({ ok: true, agent_offer: "stale_reply" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          });
         }
       }
     }

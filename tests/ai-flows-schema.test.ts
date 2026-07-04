@@ -119,6 +119,21 @@ describe("parseAiFlowDefinition", () => {
     expect(() => parseAiFlowDefinition(bad)).toThrow(AiFlowValidationError);
   });
 
+  it("accepts an optional browse_extract skipWhenText terminal-state marker", () => {
+    const withSkip = JSON.parse(JSON.stringify(validInput));
+    withSkip.steps[1].skipWhenText = "already been claimed";
+    const def = parseAiFlowDefinition(withSkip);
+    const browse = def.steps[1];
+    expect(browse.type === "browse_extract" && browse.skipWhenText).toBe("already been claimed");
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects an empty browse_extract skipWhenText", () => {
+    const bad = JSON.parse(JSON.stringify(validInput));
+    bad.steps[1].skipWhenText = "";
+    expect(() => parseAiFlowDefinition(bad)).toThrow(AiFlowValidationError);
+  });
+
   it("accepts an extract_text step whose fields feed a later step (no URL needed)", () => {
     const def = parseAiFlowDefinition({
       version: 1,

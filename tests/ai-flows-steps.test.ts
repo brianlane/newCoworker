@@ -72,6 +72,34 @@ describe("planStep: browse_extract", () => {
     const r = planStep(withShot, { vars: { lead_url: "https://rfrl.to/x" } });
     expect(r.ok && r.action.kind === "browse" && r.action.screenshot).toBe(true);
   });
+  it("carries a trimmed skipWhenText marker into the browse action", () => {
+    const withSkip: FlowStep = {
+      id: "b",
+      type: "browse_extract",
+      urlVar: "lead_url",
+      fields: [{ name: "seller_phone" }],
+      skipWhenText: "  already been claimed  "
+    };
+    const r = planStep(withSkip, { vars: { lead_url: "https://rfrl.to/x" } });
+    expect(r.ok && r.action.kind === "browse" && r.action.skipWhenText).toBe(
+      "already been claimed"
+    );
+  });
+  it("omits skipWhenText when unset", () => {
+    const r = planStep(step, { vars: { lead_url: "https://rfrl.to/x" } });
+    expect(r.ok && r.action.kind === "browse" && "skipWhenText" in r.action).toBe(false);
+  });
+  it("omits skipWhenText when blank after trim", () => {
+    const blank: FlowStep = {
+      id: "b",
+      type: "browse_extract",
+      urlVar: "lead_url",
+      fields: [{ name: "seller_phone" }],
+      skipWhenText: "   "
+    };
+    const r = planStep(blank, { vars: { lead_url: "https://rfrl.to/x" } });
+    expect(r.ok && r.action.kind === "browse" && "skipWhenText" in r.action).toBe(false);
+  });
   it("carries an auth config into the browse action", () => {
     const authed: FlowStep = {
       id: "b",

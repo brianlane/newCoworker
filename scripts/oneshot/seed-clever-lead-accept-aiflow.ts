@@ -54,8 +54,9 @@
  *   AIFLOW_CLEVER_MATCH_TEXT          (default "Clever referral")
  *   AIFLOW_CLEVER_ACCEPT_ACTIONS_JSON (default: click "Next" while present)
  *   AIFLOW_CLEVER_SKIP_WHEN_TEXT      (default "already been claimed" — when the
- *                                      accept page shows this, end the run as a
- *                                      graceful skip instead of a failure)
+ *                                      accept OR re-read page shows this, end
+ *                                      the run as a graceful skip instead of a
+ *                                      failure)
  *   AIFLOW_CLEVER_QT_EMAIL_TO         (default "amy@amylaidlaw.com")
  *   AIFLOW_CLEVER_AGENT_NAME          (default "Dave Lane")
  */
@@ -151,6 +152,14 @@ function buildDefinition(opts: {
         type: "browse_extract",
         urlVar: "lead_url",
         auth: { integrationLabel: opts.integrationLabel },
+        // Backstop for a lead another agent claimed: the re-read page then shows
+        // the "already been claimed" banner INSTEAD of the contact card, so
+        // there is nothing to extract — end the run as a graceful skip rather
+        // than extracting empty fields and failing on upsert_customer. (The
+        // accept step's own skipWhenText handles the click-time case; this one
+        // catches an accept that "succeeded" without actually claiming, e.g.
+        // a page layout whose prose defeated the click matcher.)
+        skipWhenText: opts.skipWhenText,
         fields: [
           { name: "lead_name", description: "The seller's full name from the contact card" },
           {
