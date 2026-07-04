@@ -405,6 +405,13 @@ const stepSchema = z.discriminatedUnion("type", [
       extractLinks: z.array(extractLinkSchema).min(1).max(10).optional(),
       auth: browseAuthSchema.optional(),
       screenshot: z.boolean().optional(),
+      // Terminal-state guard (mirrors browse_action.skipWhenText): when the
+      // fetched page contains this marker text (case-insensitive) there is
+      // nothing to read (e.g. a lead another agent already claimed shows a
+      // banner instead of the contact card), so the run ENDS gracefully — the
+      // step is recorded "skipped" and the run finishes as done — instead of
+      // extracting empty fields and failing downstream.
+      skipWhenText: z.string().min(1).max(200).optional(),
       when: whenSchema.optional()
     })
     .refine((s) => (s.fields?.length ?? 0) > 0 || (s.extractLinks?.length ?? 0) > 0, {

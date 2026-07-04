@@ -302,6 +302,16 @@ export type FlowStep =
        * Requires the render service — a static fetch cannot screenshot.
        */
       screenshot?: boolean;
+      /**
+       * Terminal-state guard (mirrors browse_action.skipWhenText): when the
+       * fetched page contains this marker text (case-insensitive substring of
+       * the page text/source), there is nothing to read — e.g. a lead another
+       * agent already claimed shows an "already been claimed" banner instead of
+       * the contact card. The run then ENDS gracefully — the step is recorded
+       * "skipped" and the run finishes as done — instead of extracting empty
+       * fields and failing a downstream step.
+       */
+      skipWhenText?: string;
       when?: StepCondition;
     }
   | {

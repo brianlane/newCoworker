@@ -1,0 +1,176 @@
+import { describe, expect, it } from "vitest";
+import {
+  classifyStaleOfferReply,
+  staleOfferAckText,
+  type StaleOfferCandidate
+} from "../supabase/functions/_shared/ai_flows/stale_offer";
+
+const GABBY = "+14807202013";
+const NEXT_AGENT = "+14807039575";
+const DAVE = "+16025245719";
+
+const NOW = Date.parse("2026-07-02T20:26:22Z");
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function row(over: Partial<StaleOfferCandidate> & { routing?: Record<string, unknown> }): StaleOfferCandidate {
+  const { routing, ...rest } = over;
+  return {
+    id: "run-1",
+    status: "done",
+    context: routing === undefined ? { routing: {} } : { routing },
+    awaiting_agent_e164: null,
+    updated_at: new Date(NOW - 5 * 60 * 1000).toISOString(),
+    ...rest
+  };
+}
+
+function classify(candidates: StaleOfferCandidate[], digit = "1", from = GABBY) {
+  return classifyStaleOfferReply({ candidates, from, digit, nowMs: NOW, windowMs: DAY_MS });
+}
+
+describe("classifyStaleOfferReply", () => {
+  it("returns moved_on when the offer escalated past the sender and nobody claimed yet", () => {
+    // Gabby's exact Jul 2 case: window lapsed, offer moved to the next agent,
+    // her late "1" used to fall into the customer-chat AI.
+    const r = classify([
+      row({
+        status: "awaiting_agent",
+        routing: { offered: NEXT_AGENT, tried: [GABBY], step_index: 11 }
+      })
+    ]);
+    expect(r).toEqual({ runId: "run-1", kind: "moved_on", claimedName: "" });
+  });
+
+  it("returns claimed_by_other with the claimer's name once someone else claimed", () => {
+    const r = classify([
+      row({
+        routing: { tried: [GABBY, NEXT_AGENT], claimed_by: DAVE, claimed_name: "Dave Lane" }
+      })
+    ]);
+    expect(r).toEqual({ runId: "run-1", kind: "claimed_by_other", claimedName: "Dave Lane" });
+  });
+
+  it("returns claimed_by_sender for a duplicate claim digit", () => {
+    const r = classify([
+      row({ routing: { tried: [GABBY], claimed_by: GABBY, claimed_name: "Gabrielle Mota" } })
+    ]);
+    expect(r).toEqual({ runId: "run-1", kind: "claimed_by_sender", claimedName: "" });
+  });
+
+  it("matches via awaiting_agent_e164 and via routing.offered history", () => {
+    const viaAwaiting = classify([
+      row({ awaiting_agent_e164: GABBY, routing: { claimed_by: DAVE, claimed_name: "Dave" } })
+    ]);
+    expect(viaAwaiting?.kind).toBe("claimed_by_other");
+    const viaOffered = classify([
+      row({ routing: { offered: GABBY, claimed_by: DAVE, claimed_name: "Dave" } })
+    ]);
+    expect(viaOffered?.kind).toBe("claimed_by_other");
+  });
+
+  it("returns null when the sender never appeared in a recent offer", () => {
+    const r = classify([
+      row({ routing: { offered: NEXT_AGENT, tried: [NEXT_AGENT], claimed_by: DAVE } })
+    ]);
+    expect(r).toBeNull();
+  });
+
+  it("returns null for a LIVE offer to the sender (the live-claim path owns it)", () => {
+    for (const status of ["awaiting_agent", "queued"]) {
+      const r = classify([row({ status, routing: { offered: GABBY, tried: [] } })], "1");
+      expect(r).toBeNull();
+    }
+  });
+
+  it("consumes a done run's digit even when offered === sender (offer finished, not live)", () => {
+    const r = classify([
+      row({ status: "done", routing: { offered: GABBY, claimed_by: DAVE, claimed_name: "Dave" } })
+    ]);
+    expect(r?.kind).toBe("claimed_by_other");
+  });
+
+  it("returns null for a digit no candidate recognizes as an offer digit", () => {
+    const base = row({ routing: { tried: [GABBY], claimed_by: DAVE } });
+    expect(classify([base], "7")).toBeNull();
+    // ...but the flow's stamped timeframe/late digits ARE offer digits.
+    const withTf = row({ routing: { tried: [GABBY], claimed_by: DAVE, tf_digit: "3" } });
+    expect(classify([withTf], "3")?.kind).toBe("claimed_by_other");
+    const withLate = row({ routing: { tried: [GABBY], claimed_by: DAVE, late_digit: "4" } });
+    expect(classify([withLate], "4")?.kind).toBe("claimed_by_other");
+  });
+
+  it("keeps scanning past a newer run that doesn't recognize the digit", () => {
+    // Newest offer only understands 1/2, but an older run stamped late_digit
+    // "4" — a "4" reply must reach that older run's ack, not fall to chat.
+    const r = classifyStaleOfferReply({
+      candidates: [
+        row({ id: "newer-1-2-only", routing: { tried: [GABBY] } }),
+        row({
+          id: "older-late-4",
+          routing: { tried: [GABBY], claimed_by: DAVE, claimed_name: "Dave Lane", late_digit: "4" }
+        })
+      ],
+      from: GABBY,
+      digit: "4",
+      nowMs: NOW,
+      windowMs: DAY_MS
+    });
+    expect(r).toEqual({ runId: "older-late-4", kind: "claimed_by_other", claimedName: "Dave Lane" });
+  });
+
+  it("accepts a bare pass digit (2) the same way as a claim digit", () => {
+    const r = classify(
+      [row({ routing: { tried: [GABBY], claimed_by: DAVE, claimed_name: "Dave Lane" } })],
+      "2"
+    );
+    expect(r?.kind).toBe("claimed_by_other");
+  });
+
+  it("ignores runs older than the window", () => {
+    const r = classify([
+      row({
+        routing: { tried: [GABBY], claimed_by: DAVE },
+        updated_at: new Date(NOW - DAY_MS - 60 * 1000).toISOString()
+      })
+    ]);
+    expect(r).toBeNull();
+  });
+
+  it("ignores rows without a routing object and picks the first (newest) match", () => {
+    const r = classifyStaleOfferReply({
+      candidates: [
+        row({ id: "no-routing", context: {} }),
+        row({ id: "newest-match", routing: { tried: [GABBY], claimed_by: DAVE, claimed_name: "Dave" } }),
+        row({ id: "older-match", routing: { tried: [GABBY] } })
+      ],
+      from: GABBY,
+      digit: "1",
+      nowMs: NOW,
+      windowMs: DAY_MS
+    });
+    expect(r?.runId).toBe("newest-match");
+  });
+});
+
+describe("staleOfferAckText", () => {
+  it("names the claimer when known and falls back when not", () => {
+    expect(
+      staleOfferAckText({ runId: "r", kind: "claimed_by_other", claimedName: "Dave Lane" })
+    ).toContain("Dave Lane picked it up");
+    expect(
+      staleOfferAckText({ runId: "r", kind: "claimed_by_other", claimedName: "" })
+    ).toContain("another teammate picked it up");
+  });
+
+  it("tells a duplicate claimer the lead is already theirs (and how to release)", () => {
+    const t = staleOfferAckText({ runId: "r", kind: "claimed_by_sender", claimedName: "" });
+    expect(t).toContain("already got this lead");
+    expect(t).toContain("86");
+  });
+
+  it("explains a moved-on lead without blaming the sender", () => {
+    const t = staleOfferAckText({ runId: "r", kind: "moved_on", claimedName: "" });
+    expect(t).toContain("claim window has passed");
+    expect(t).toContain("next one");
+  });
+});

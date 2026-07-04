@@ -354,42 +354,45 @@ function parseActions(raw) {
  * stop the matcher from latching onto descriptive body copy that merely contains
  * the word — e.g. a "click Accept" action hitting the subtitle "…then accept or
  * reject." or a "Next" wizard loop hitting the sentence "…on the next screen…".
+ * (That Accept case is real: an already-claimed Clever Offers page has no Accept
+ * button but its description says "…then accept or reject", and a loose
+ * substring match happily "clicked" that sentence, so the step succeeded and the
+ * worker's skipWhenText already-claimed guard never ran.)
+ *
+ * Substring matches therefore ONLY ever resolve to a real INTERACTIVE control —
+ * by substring accessible name or substring text scoped to interactive elements
+ * — so labels with trailing glyphs ("Next →", "Accept ✓") still match while
+ * prose (<p>/<span>) never does. Returns null when no control matches; callers
+ * fail the action (single click) or treat it as "step done" (while-present).
  *
  * Two modes:
- *   - `allowSubstring: true`  (single `click_text`): role/exact-text first, then
- *     a loose substring match anywhere, preserving legacy single-click behavior.
- *   - `allowSubstring: false` (`click_text_while_present`): only ever resolves to
- *     a real INTERACTIVE control — by exact name, exact text, substring name, or
- *     substring text scoped to interactive elements — so wizard buttons like
- *     "Next →" / "Next Page" still match while prose (<p>/<span>) never does.
- *     Returns null when no control matches (caller treats that as "step done").
+ *   - `allowExactTextAnywhere: true` (single `click_text`): an element whose
+ *     ENTIRE text is exactly the target may match even when it isn't a semantic
+ *     control (legacy: clickable divs whose handlers aren't visible in the DOM).
+ *   - `allowExactTextAnywhere: false` (`click_text_while_present`): exact-text
+ *     matches must also land on an interactive element.
  *
  * Returns a Locator (callers .click()/.waitFor() it) or null.
  */
-async function resolveClickTarget(page, target, { allowSubstring = true } = {}) {
+async function resolveClickTarget(page, target, { allowExactTextAnywhere = true } = {}) {
   // 1) A real control whose ACCESSIBLE NAME is exactly the target.
   const byRoleExact = page
     .getByRole("button", { name: target, exact: true })
     .or(page.getByRole("link", { name: target, exact: true }));
   if ((await byRoleExact.count()) > 0) return byRoleExact.first();
 
-  const byExactText = page.getByText(target, { exact: true });
-  if (allowSubstring) {
-    // 2) Single-click path: any exact-text element, then loose substring (labels
-    //    may carry trailing glyphs / icons).
-    if ((await byExactText.count()) > 0) return byExactText.first();
-    return page.getByText(target, { exact: false }).first();
-  }
-
-  // Controls-only path: text matches must land on an actual interactive element,
-  // so a static node reading "Next" can't drive the loop and prose is ignored.
+  // Interactive controls: text matches must land on one of these (except the
+  // legacy exact-text-anywhere case), so a static node reading "Next" can't
+  // drive a loop and prose containing the word can't be "clicked".
   const interactive = page.locator(
     'button, a, [role="button"], [role="link"], [role="menuitem"], [role="tab"], input[type="button"], input[type="submit"], [onclick]',
   );
 
-  // 2) Exact visible text, but only on an interactive element.
-  const byExactControl = byExactText.and(interactive);
-  if ((await byExactControl.count()) > 0) return byExactControl.first();
+  // 2) Exact visible text: anywhere for a single click, controls-only for the
+  //    while-present loop.
+  const byExactText = page.getByText(target, { exact: true });
+  const byExactAllowed = allowExactTextAnywhere ? byExactText : byExactText.and(interactive);
+  if ((await byExactAllowed.count()) > 0) return byExactAllowed.first();
 
   // 3) Control whose label CONTAINS the target (e.g. "Next →", "Next Page"):
   //    substring accessible name, or any interactive element whose text contains
@@ -416,9 +419,12 @@ async function performActions(page, actions) {
   for (const a of actions) {
     try {
       if (a.kind === "click_text") {
-        // Prefer a real button/link (or exact-text element); substring fallback
-        // kept so labels with trailing glyphs still resolve.
-        const loc = await resolveClickTarget(page, a.target, { allowSubstring: true });
+        // Prefer a real button/link (or exact-text element); substring matches
+        // resolve ONLY to interactive controls so body copy that merely
+        // contains the word (e.g. "…then accept or reject.") can never be
+        // "clicked" into a phantom success.
+        const loc = await resolveClickTarget(page, a.target, { allowExactTextAnywhere: true });
+        if (!loc) throw new Error("no matching control on the page");
         await loc.click({ timeout: ACTION_TIMEOUT_MS });
       } else if (a.kind === "click_text_while_present") {
         // Wizard-style "Next" loop: click the control as long as it is visible,
@@ -427,7 +433,7 @@ async function performActions(page, actions) {
         // word (e.g. "…on the next screen…"). Zero matches is SUCCESS — the page
         // is already past the step.
         const isPresent = async () => {
-          const loc = await resolveClickTarget(page, a.target, { allowSubstring: false });
+          const loc = await resolveClickTarget(page, a.target, { allowExactTextAnywhere: false });
           if (!loc) return false;
           try {
             await loc.waitFor({ state: "visible", timeout: WHILE_PRESENT_PROBE_MS });
@@ -438,7 +444,7 @@ async function performActions(page, actions) {
         };
         let clicks = 0;
         while (clicks < MAX_WHILE_PRESENT_CLICKS && (await isPresent())) {
-          const loc = await resolveClickTarget(page, a.target, { allowSubstring: false });
+          const loc = await resolveClickTarget(page, a.target, { allowExactTextAnywhere: false });
           if (!loc) break;
           await loc.click({ timeout: ACTION_TIMEOUT_MS });
           await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});

@@ -65,6 +65,13 @@ export type StepAction =
       extractLinks?: ExtractLink[];
       auth?: BrowseAuth;
       screenshot?: boolean;
+      /**
+       * Terminal-state marker: when the fetched page contains this
+       * (case-insensitive) text, the worker ends the run gracefully (step
+       * "skipped", run "done") instead of extracting from a page that has
+       * nothing to read — see FlowStep (browse_extract).skipWhenText.
+       */
+      skipWhenText?: string;
     }
   | { kind: "extract_text"; text: string; fields: ExtractField[] }
   | {
@@ -265,7 +272,10 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
             ? { extractLinks: step.extractLinks }
             : {}),
           auth: step.auth,
-          screenshot: step.screenshot
+          screenshot: step.screenshot,
+          ...(step.skipWhenText && step.skipWhenText.trim()
+            ? { skipWhenText: step.skipWhenText.trim() }
+            : {})
         }
       };
     }

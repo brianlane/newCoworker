@@ -1037,6 +1037,40 @@ async function browseStep(
     throw e;
   }
   const pageText = page.text || htmlToText(page.html);
+
+  // Terminal-state guard (mirrors browse_action.skipWhenText): when the fetched
+  // page carries the configured marker (e.g. Clever's "already been claimed"
+  // banner) there is nothing to read — the contact card isn't on the page — so
+  // end the run gracefully BEFORE spending Gemini extraction on a page that can
+  // only yield empty fields (which would fail a downstream upsert_customer).
+  // Checked against both the visible text and the raw HTML.
+  if (action.skipWhenText) {
+    const marker = action.skipWhenText.toLowerCase();
+    if (pageText.toLowerCase().includes(marker) || page.html.toLowerCase().includes(marker)) {
+      // Persist the page we already fetched so the investigate view shows WHY
+      // the run ended (best-effort; a storage failure must not fail the skip).
+      const shotPath = await storeScreenshotBestEffort(supabase, run, index, page.screenshotBase64);
+      const srcPath = await storeSourceBestEffort(supabase, run, index, page.html);
+      const diag: Record<string, unknown> = {};
+      if (shotPath) diag.screenshot_path = shotPath;
+      if (srcPath) diag.source_path = srcPath;
+      await systemLog(supabase, {
+        businessId: run.business_id,
+        source: "aiflow",
+        level: "info",
+        event: "ai_flow_browse_skipped_terminal",
+        message: `browse skipped: page already in terminal state ("${action.skipWhenText}")`,
+        payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
+      });
+      return {
+        kind: "ok",
+        skipped: true,
+        endRun: true,
+        result: { skipped: "already_done", marker: action.skipWhenText, ...diag }
+      };
+    }
+  }
+
   let extracted: Record<string, string> = {};
   // Only run the (AI-budgeted) field extraction when the step actually asks for
   // fields — a links-only browse_extract skips Gemini entirely.
