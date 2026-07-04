@@ -17,8 +17,13 @@ import { Card } from "@/components/ui/Card";
 import { listConversationsForBusiness } from "@/lib/db/sms-history";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { rcsChannelActiveForBusiness } from "@/lib/telnyx/messaging";
+import { smsToolsAllowedForTier } from "@/lib/plans/sms-tools";
 import { MessagesList, type MessageListRow } from "@/components/dashboard/MessagesList";
-import { SmsComposeNew } from "@/components/dashboard/SmsComposeNew";
+import {
+  SmsComposeNew,
+  type SmsTemplateOption
+} from "@/components/dashboard/SmsComposeNew";
+import { SmsToolsPanel, type ScheduledSmsItem } from "@/components/dashboard/SmsToolsPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +35,7 @@ export default async function DashboardMessagesPage() {
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
-    .select("id, name")
+    .select("id, name, tier")
     .eq("owner_email", user.email)
     .order("created_at", { ascending: false });
 
@@ -71,6 +76,46 @@ export default async function DashboardMessagesPage() {
   // only the SMS fallback copy is capped.
   const rcsEnabled = await rcsChannelActiveForBusiness(db, business.id);
 
+  // Scheduled + template SMS (Standard+ perk): fetch the composer picker data
+  // and the tools panel contents only for entitled tenants — Starter renders
+  // the plain composer with neither.
+  const smsToolsEnabled = smsToolsAllowedForTier(
+    (business as { tier?: string | null }).tier
+  );
+  let templates: SmsTemplateOption[] = [];
+  let scheduled: ScheduledSmsItem[] = [];
+  if (smsToolsEnabled) {
+    const [{ data: templateRows }, { data: scheduledRows }] = await Promise.all([
+      db
+        .from("sms_templates")
+        .select("id, name, body")
+        .eq("business_id", business.id)
+        .order("name", { ascending: true }),
+      db
+        .from("scheduled_sms")
+        .select("id, to_e164, body, send_at, status, error")
+        .eq("business_id", business.id)
+        .order("send_at", { ascending: false })
+        .limit(25)
+    ]);
+    templates = (templateRows ?? []) as SmsTemplateOption[];
+    scheduled = ((scheduledRows ?? []) as Array<{
+      id: string;
+      to_e164: string;
+      body: string;
+      send_at: string;
+      status: string;
+      error: string | null;
+    }>).map((s) => ({
+      id: s.id,
+      toE164: s.to_e164,
+      body: s.body,
+      sendAt: s.send_at,
+      status: s.status,
+      error: s.error
+    }));
+  }
+
   const rows: MessageListRow[] = conversations.map((c) => {
     const contact = contactNames.get(c.customerE164);
     return {
@@ -97,7 +142,12 @@ export default async function DashboardMessagesPage() {
             SMS conversations handled by your AI coworker
           </p>
         </div>
-        <SmsComposeNew businessId={business.id} rcsEnabled={rcsEnabled} />
+        <SmsComposeNew
+          businessId={business.id}
+          rcsEnabled={rcsEnabled}
+          templates={templates}
+          schedulingEnabled={smsToolsEnabled}
+        />
       </div>
 
       {conversations.length === 0 ? (
@@ -111,6 +161,10 @@ export default async function DashboardMessagesPage() {
         </Card>
       ) : (
         <MessagesList rows={rows} />
+      )}
+
+      {smsToolsEnabled && (
+        <SmsToolsPanel businessId={business.id} templates={templates} scheduled={scheduled} />
       )}
     </div>
   );

@@ -141,6 +141,7 @@ export default function OnboardPage() {
         "Bring your own phone number (port-in)",
         "Send texts during calls",
         "Auto-text callers when a call can't be answered",
+        "Scheduled texts & saved message templates",
         "Warm handoff call transfers",
         "$10/mo AI budget for agentic tasks, before free model fallback",
         "Configuration and training updates",
