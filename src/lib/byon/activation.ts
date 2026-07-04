@@ -123,6 +123,9 @@ export async function activatePortedNumber(
     // is null, so a persistent failure would otherwise ping the owner on
     // every retry. The delivery that swaps activation_error NULL → error
     // (compare-and-swap) sends the single alert; later failures only log.
+    // The claim also requires activated_at to STILL be null, so a slow
+    // parallel failure can't record an error (or alert) after another
+    // delivery already activated the number and cleared the field.
     let alertClaimed = false;
     if (row.activation_error === null) {
       try {
@@ -132,6 +135,7 @@ export async function activatePortedNumber(
           .update({ activation_error: error })
           .eq("id", row.id)
           .is("activation_error", null)
+          .is("activated_at", null)
           .select();
         if (claimErr) throw new Error(claimErr.message);
         alertClaimed = ((data ?? []) as unknown[]).length > 0;

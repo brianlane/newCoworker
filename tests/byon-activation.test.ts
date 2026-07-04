@@ -280,7 +280,8 @@ describe("activatePortedNumber", () => {
     expect(settledCalls).toHaveLength(0); // no DB write at all
     expect(dispatchMock).not.toHaveBeenCalled();
 
-    // Fresh row but a parallel delivery won the claim CAS → no alert.
+    // Fresh row but a parallel delivery won the claim CAS (or already
+    // activated the number, clearing the field) → no alert.
     const { db: lostDb, calls: lostCalls } = actDb([{ data: [], error: null }]);
     await activatePortedNumber(ROW, { env: ENV, client: lostDb });
     expect(dispatchMock).not.toHaveBeenCalled();
@@ -288,6 +289,9 @@ describe("activatePortedNumber", () => {
       activation_error: "telnyx down"
     });
     expect(lostCalls[0]).toContainEqual({ name: "is", args: ["activation_error", null] });
+    // The claim must ALSO require activated_at null: a late failure racing a
+    // successful activation must not record an error over live routing.
+    expect(lostCalls[0]).toContainEqual({ name: "is", args: ["activated_at", null] });
 
     // A null no-rows shape also means "someone else claimed".
     await activatePortedNumber(ROW, {
