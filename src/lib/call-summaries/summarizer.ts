@@ -16,9 +16,16 @@
  *   - success            → summary/sentiment set, summarized_at set (terminal)
  *   - empty transcript   → summarized_at set, summary stays NULL (terminal —
  *                          nothing will ever appear in an empty call)
- *   - transient failure  → summary_attempts += 1, summary_error set; row
- *                          retries until the sweep's attempt cap
+ *   - transient failure  → summary_error set; the row already consumed one
+ *                          summary_attempts at claim time, so it retries
+ *                          until the sweep's attempt cap
  *   - tier/not-found/... → skipped without touching the row
+ *
+ * Concurrency: before spending AI budget we take an optimistic claim — a
+ * conditional UPDATE that increments summary_attempts only if the row still
+ * has the attempts count we read and no summarized_at. Overlapping sweep
+ * dispatches (or a stale retry racing a slow first run) lose the claim and
+ * skip, so one transcript can never meter two Gemini calls concurrently.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -45,6 +52,13 @@ export const CALL_SUMMARY_MAX_CHARS = 600;
  */
 export const CALL_SUMMARY_MAX_TRANSCRIPT_CHARS = 24_000;
 
+/**
+ * Abort the Gemini call after this long so one dispatch always fits inside
+ * the summarize endpoint's 30s maxDuration (and, transitively, the sweep's
+ * cron-timeout budget). The row stays retryable — the next pass tries again.
+ */
+export const CALL_SUMMARY_GEMINI_TIMEOUT_MS = 25_000;
+
 export const CALL_SENTIMENTS = ["positive", "neutral", "negative", "mixed"] as const;
 export type CallSentiment = (typeof CALL_SENTIMENTS)[number];
 
@@ -60,6 +74,7 @@ export type CallSummaryFailureReason =
   | "not_found"
   | "not_completed"
   | "already_summarized"
+  | "claimed_elsewhere"
   | "tier"
   | "empty_transcript"
   | "no_api_key"
@@ -150,14 +165,12 @@ export async function summarizeCallTranscript(
     return { ok: false, reason: "tier" };
   }
 
-  // Transient-failure bookkeeping shared by every retryable exit below.
-  const recordAttempt = async (detail: string): Promise<void> => {
+  // Transient-failure bookkeeping shared by every retryable exit below the
+  // claim (which already incremented summary_attempts).
+  const recordFailure = async (detail: string): Promise<void> => {
     const { error } = await db
       .from("voice_call_transcripts")
-      .update({
-        summary_attempts: row.summary_attempts + 1,
-        summary_error: detail.slice(0, 500)
-      })
+      .update({ summary_error: detail.slice(0, 500) })
       .eq("id", transcriptId);
     if (error) {
       logger.warn("call-summary: attempt bookkeeping failed", {
@@ -190,9 +203,26 @@ export async function summarizeCallTranscript(
     return { ok: false, reason: "empty_transcript" };
   }
 
+  // Optimistic claim: increment summary_attempts only if the row is still
+  // unsummarized AND still at the attempts count we read. A concurrent
+  // dispatch (overlapping sweeps, stale retry racing a slow first run) loses
+  // this compare-and-swap, gets zero rows back, and skips — one transcript
+  // can never meter two Gemini calls at once.
+  const { data: claimRows, error: claimErr } = await db
+    .from("voice_call_transcripts")
+    .update({ summary_attempts: row.summary_attempts + 1 })
+    .eq("id", transcriptId)
+    .is("summarized_at", null)
+    .eq("summary_attempts", row.summary_attempts)
+    .select("id");
+  if (claimErr) return { ok: false, reason: "db_failed", detail: claimErr.message };
+  if (!Array.isArray(claimRows) || claimRows.length === 0) {
+    return { ok: false, reason: "claimed_elsewhere" };
+  }
+
   const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
   if (!apiKey) {
-    await recordAttempt("no_api_key");
+    await recordFailure("no_api_key");
     return { ok: false, reason: "no_api_key" };
   }
   const configured = process.env.GEMINI_CALL_SUMMARY_MODEL?.trim();
@@ -202,6 +232,10 @@ export async function summarizeCallTranscript(
 
   let text: string;
   let usage: Awaited<ReturnType<typeof geminiGenerateTextDetailed>>["usage"] = null;
+  // Deadline keeps one dispatch inside the summarize endpoint's 30s
+  // maxDuration (and therefore the sweep's cron-timeout math).
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CALL_SUMMARY_GEMINI_TIMEOUT_MS);
   try {
     const res = await generate({
       apiKey,
@@ -211,7 +245,8 @@ export async function summarizeCallTranscript(
       temperature: 0.2,
       maxOutputTokens: 800,
       responseMimeType: "application/json",
-      thinkingLevel: "low"
+      thinkingLevel: "low",
+      signal: controller.signal
     });
     text = res.text;
     usage = res.usage;
@@ -230,8 +265,10 @@ export async function summarizeCallTranscript(
       });
     }
     const detail = err instanceof Error ? err.message : String(err);
-    await recordAttempt(detail);
+    await recordFailure(detail);
     return { ok: false, reason: "gemini_failed", detail };
+  } finally {
+    clearTimeout(timer);
   }
 
   await meter({
@@ -246,7 +283,7 @@ export async function summarizeCallTranscript(
 
   const parsed = parseCallSummaryJson(text);
   if (!parsed) {
-    await recordAttempt("bad_json");
+    await recordFailure("bad_json");
     return { ok: false, reason: "bad_json" };
   }
 
@@ -262,7 +299,7 @@ export async function summarizeCallTranscript(
   if (writeErr) {
     // The Gemini call already happened; leave the row retryable so the sweep
     // re-runs it (double-metering one cheap flash call beats a silent hole).
-    await recordAttempt(`persist:${writeErr.message}`);
+    await recordFailure(`persist:${writeErr.message}`);
     return { ok: false, reason: "db_failed", detail: writeErr.message };
   }
 

@@ -3,23 +3,23 @@ import {
   CALL_SUMMARY_BATCH_LIMIT,
   CALL_SUMMARY_BATCH_PER_BUSINESS,
   CALL_SUMMARY_MAX_ATTEMPTS,
+  CALL_SUMMARY_TIERS,
   CALL_SUMMARY_WINDOW_HOURS,
-  callSummarySweepTierAllowed,
   processCallSummarySweep,
   type CallSummarySweepSupabase
 } from "../supabase/functions/_shared/call_summary_sweep";
 
 type DbResult = { data: unknown; error: { message: string } | null };
 
-function makeSupabase(overrides: { scan?: DbResult; tiers?: DbResult } = {}) {
+function makeSupabase(overrides: { scan?: DbResult } = {}) {
   const limit = vi.fn(async () => overrides.scan ?? { data: [], error: null });
   const order = vi.fn(() => ({ limit }));
-  const gte = vi.fn(() => ({ order }));
+  const inFn = vi.fn(() => ({ order }));
+  const gte = vi.fn(() => ({ in: inFn }));
   const lt = vi.fn(() => ({ gte }));
   const is = vi.fn(() => ({ lt }));
   const eq = vi.fn(() => ({ is }));
-  const inFn = vi.fn(async () => overrides.tiers ?? { data: [], error: null });
-  const select = vi.fn(() => ({ eq, in: inFn }));
+  const select = vi.fn(() => ({ eq }));
   const from = vi.fn(() => ({ select }));
   return {
     supabase: { from } as unknown as CallSummarySweepSupabase,
@@ -29,9 +29,9 @@ function makeSupabase(overrides: { scan?: DbResult; tiers?: DbResult } = {}) {
     is,
     lt,
     gte,
+    inFn,
     order,
-    limit,
-    inFn
+    limit
   };
 }
 
@@ -53,14 +53,6 @@ describe("call summary sweep", () => {
     vi.unstubAllGlobals();
   });
 
-  it("callSummarySweepTierAllowed gates on standard/enterprise", () => {
-    expect(callSummarySweepTierAllowed("standard")).toBe(true);
-    expect(callSummarySweepTierAllowed("enterprise")).toBe(true);
-    expect(callSummarySweepTierAllowed("starter")).toBe(false);
-    expect(callSummarySweepTierAllowed(null)).toBe(false);
-    expect(callSummarySweepTierAllowed(undefined)).toBe(false);
-  });
-
   it("throws when the scan query errors", async () => {
     const { supabase } = makeSupabase({ scan: { data: null, error: { message: "db down" } } });
     await expect(
@@ -68,13 +60,21 @@ describe("call summary sweep", () => {
     ).rejects.toThrow("call_summary_scan: db down");
   });
 
-  it("scans with the eligibility filters and the widened batch net", async () => {
+  it("scans with every eligibility filter (tier included) and the widened net", async () => {
     const m = makeSupabase();
     const result = await processCallSummarySweep(m.supabase, {
       ...baseOpts,
       fetchFn: okFetch()
     });
-    expect(result).toEqual({ scanned: 0, dispatched: 0, succeeded: 0, failed: 0, failures: [] });
+    expect(result).toEqual({
+      scanned: 0,
+      dispatched: 0,
+      succeeded: 0,
+      failed: 0,
+      deferred: 0,
+      failures: []
+    });
+    expect(m.select).toHaveBeenCalledWith("id, business_id, businesses!inner(tier)");
     expect(m.eq).toHaveBeenCalledWith("status", "completed");
     expect(m.is).toHaveBeenCalledWith("summarized_at", null);
     expect(m.lt).toHaveBeenCalledWith("summary_attempts", CALL_SUMMARY_MAX_ATTEMPTS);
@@ -82,10 +82,9 @@ describe("call summary sweep", () => {
       "ended_at",
       new Date(baseOpts.nowMs - CALL_SUMMARY_WINDOW_HOURS * 3_600_000).toISOString()
     );
+    expect(m.inFn).toHaveBeenCalledWith("businesses.tier", CALL_SUMMARY_TIERS);
     expect(m.order).toHaveBeenCalledWith("ended_at", { ascending: false });
-    expect(m.limit).toHaveBeenCalledWith(CALL_SUMMARY_BATCH_LIMIT * 4);
-    // Empty scan short-circuits before the tier lookup.
-    expect(m.inFn).not.toHaveBeenCalled();
+    expect(m.limit).toHaveBeenCalledWith(CALL_SUMMARY_BATCH_LIMIT * 2);
   });
 
   it("treats a non-array scan payload as empty", async () => {
@@ -94,60 +93,34 @@ describe("call summary sweep", () => {
     expect(result.scanned).toBe(0);
   });
 
-  it("throws when the tier lookup errors", async () => {
+  it("dispatches scanned rows to the summarize endpoint", async () => {
     const { supabase } = makeSupabase({
-      scan: { data: [{ id: "t1", business_id: "biz-1" }], error: null },
-      tiers: { data: null, error: { message: "tiers down" } }
-    });
-    await expect(
-      processCallSummarySweep(supabase, { ...baseOpts, fetchFn: okFetch() })
-    ).rejects.toThrow("call_summary_tiers: tiers down");
-  });
-
-  it("dispatches entitled rows and skips starter/unknown tiers (non-array tiers tolerated)", async () => {
-    const { supabase, inFn } = makeSupabase({
       scan: {
         data: [
-          { id: "t1", business_id: "biz-std" },
-          { id: "t2", business_id: "biz-starter" },
-          { id: "t3", business_id: "biz-unknown" },
-          { id: "t4", business_id: "biz-ent" }
-        ],
-        error: null
-      },
-      tiers: {
-        data: [
-          { id: "biz-std", tier: "standard" },
-          { id: "biz-starter", tier: "starter" },
-          { id: "biz-ent", tier: "enterprise" }
+          { id: "t1", business_id: "biz-1" },
+          { id: "t2", business_id: "biz-2" }
         ],
         error: null
       }
     });
     const fetchFn = okFetch();
     const result = await processCallSummarySweep(supabase, { ...baseOpts, fetchFn });
-    expect(inFn).toHaveBeenCalledWith("id", ["biz-std", "biz-starter", "biz-unknown", "biz-ent"]);
-    expect(result).toEqual({ scanned: 4, dispatched: 2, succeeded: 2, failed: 0, failures: [] });
-    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({
+      scanned: 2,
+      dispatched: 2,
+      succeeded: 2,
+      failed: 0,
+      deferred: 0,
+      failures: []
+    });
     expect(fetchFn).toHaveBeenCalledWith("https://app.example.com/api/internal/summarize-call", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: "Bearer cron-secret"
       },
-      body: JSON.stringify({ businessId: "biz-std", transcriptId: "t1", source: "cron_sweep" })
+      body: JSON.stringify({ businessId: "biz-1", transcriptId: "t1", source: "cron_sweep" })
     });
-  });
-
-  it("tolerates a non-array tier payload (everything filtered out)", async () => {
-    const { supabase } = makeSupabase({
-      scan: { data: [{ id: "t1", business_id: "biz-1" }], error: null },
-      tiers: { data: null, error: null }
-    });
-    const fetchFn = okFetch();
-    const result = await processCallSummarySweep(supabase, { ...baseOpts, fetchFn });
-    expect(result.dispatched).toBe(0);
-    expect(fetchFn).not.toHaveBeenCalled();
   });
 
   it("caps dispatches per business and stops at the batch limit", async () => {
@@ -159,16 +132,7 @@ describe("call summary sweep", () => {
       id: `other-${i}`,
       business_id: `biz-${i}`
     }));
-    const { supabase } = makeSupabase({
-      scan: { data: [...busy, ...others], error: null },
-      tiers: {
-        data: [
-          { id: "biz-busy", tier: "standard" },
-          ...others.map((o) => ({ id: o.business_id, tier: "standard" }))
-        ],
-        error: null
-      }
-    });
+    const { supabase } = makeSupabase({ scan: { data: [...busy, ...others], error: null } });
     const fetchFn = okFetch();
     const result = await processCallSummarySweep(supabase, {
       ...baseOpts,
@@ -186,10 +150,29 @@ describe("call summary sweep", () => {
     );
   });
 
+  it("defers everything when the time budget is already exhausted", async () => {
+    const { supabase } = makeSupabase({
+      scan: {
+        data: [
+          { id: "t1", business_id: "biz-1" },
+          { id: "t2", business_id: "biz-2" }
+        ],
+        error: null
+      }
+    });
+    const fetchFn = okFetch();
+    const result = await processCallSummarySweep(supabase, {
+      ...baseOpts,
+      fetchFn,
+      timeBudgetMs: 0
+    });
+    expect(result).toMatchObject({ scanned: 2, dispatched: 0, deferred: 2 });
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
   it("counts non-OK dispatches as failures with the response text", async () => {
     const { supabase } = makeSupabase({
-      scan: { data: [{ id: "t1", business_id: "biz-1" }], error: null },
-      tiers: { data: [{ id: "biz-1", tier: "standard" }], error: null }
+      scan: { data: [{ id: "t1", business_id: "biz-1" }], error: null }
     });
     const fetchFn = vi.fn().mockResolvedValue({
       ok: false,
@@ -203,8 +186,7 @@ describe("call summary sweep", () => {
 
   it("falls back to an empty reason body when the failure text() rejects", async () => {
     const { supabase } = makeSupabase({
-      scan: { data: [{ id: "t1", business_id: "biz-1" }], error: null },
-      tiers: { data: [{ id: "biz-1", tier: "standard" }], error: null }
+      scan: { data: [{ id: "t1", business_id: "biz-1" }], error: null }
     });
     const fetchFn = vi.fn().mockResolvedValue({
       ok: false,
@@ -221,13 +203,6 @@ describe("call summary sweep", () => {
         data: [
           { id: "t1", business_id: "biz-1" },
           { id: "t2", business_id: "biz-2" }
-        ],
-        error: null
-      },
-      tiers: {
-        data: [
-          { id: "biz-1", tier: "standard" },
-          { id: "biz-2", tier: "enterprise" }
         ],
         error: null
       }
@@ -249,20 +224,16 @@ describe("call summary sweep", () => {
       id: `t${i}`,
       business_id: `biz-${i}`
     }));
-    const { supabase } = makeSupabase({
-      scan: { data: rows, error: null },
-      tiers: { data: rows.map((r) => ({ id: r.business_id, tier: "standard" })), error: null }
-    });
+    const { supabase } = makeSupabase({ scan: { data: rows, error: null } });
     const fetchFn = vi.fn().mockRejectedValue(new Error("down")) as unknown as typeof fetch;
     const result = await processCallSummarySweep(supabase, { ...baseOpts, fetchFn });
     expect(result.failed).toBe(12);
     expect(result.failures).toHaveLength(10);
   });
 
-  it("defaults to global fetch, the default batch limit, and Date.now()", async () => {
+  it("defaults to global fetch, the default batch limit/budget, and Date.now()", async () => {
     const { supabase, limit } = makeSupabase({
-      scan: { data: [{ id: "t1", business_id: "biz-1" }], error: null },
-      tiers: { data: [{ id: "biz-1", tier: "standard" }], error: null }
+      scan: { data: [{ id: "t1", business_id: "biz-1" }], error: null }
     });
     const globalFetch = vi
       .fn()
@@ -277,6 +248,6 @@ describe("call summary sweep", () => {
       "https://app.example.com/api/internal/summarize-call",
       expect.anything()
     );
-    expect(limit).toHaveBeenCalledWith(CALL_SUMMARY_BATCH_LIMIT * 4);
+    expect(limit).toHaveBeenCalledWith(CALL_SUMMARY_BATCH_LIMIT * 2);
   });
 });

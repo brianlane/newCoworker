@@ -16,6 +16,7 @@ vi.mock("@/lib/logger", () => ({
 
 import {
   CALL_SUMMARY_DEFAULT_MODEL,
+  CALL_SUMMARY_GEMINI_TIMEOUT_MS,
   CALL_SUMMARY_MAX_CHARS,
   CALL_SUMMARY_MAX_TRANSCRIPT_CHARS,
   clampTranscriptText,
@@ -52,6 +53,7 @@ function makeDb(overrides: {
   row?: DbResult;
   biz?: DbResult;
   turns?: DbResult;
+  claim?: DbResult;
   onUpdate?: (values: Record<string, unknown>) => DbResult;
 }) {
   const updates: Array<Record<string, unknown>> = [];
@@ -68,11 +70,31 @@ function makeDb(overrides: {
         order: async () => overrides.turns ?? { data: TURNS, error: null }
       }))
     })),
+    // `.update().eq()` is awaited directly by the plain marks (empty
+    // transcript, failure bookkeeping, final persist) AND continues into
+    // `.is().eq().select()` for the optimistic claim — the returned object is
+    // both thenable and chainable, like the real PostgrestFilterBuilder.
     update: vi.fn((values: Record<string, unknown>) => ({
-      eq: vi.fn(async () => {
-        updates.push(values);
-        return overrides.onUpdate?.(values) ?? { data: null, error: null };
-      })
+      eq: vi.fn(() => ({
+        is: vi.fn(() => ({
+          eq: vi.fn(() => ({
+            select: vi.fn(async () => {
+              updates.push(values);
+              return overrides.claim ?? { data: [{ id: TID }], error: null };
+            })
+          }))
+        })),
+        then: (
+          resolve: (v: DbResult) => unknown,
+          reject: (e: unknown) => unknown
+        ) => {
+          updates.push(values);
+          return Promise.resolve(overrides.onUpdate?.(values) ?? { data: null, error: null }).then(
+            resolve,
+            reject
+          );
+        }
+      }))
     }))
   }));
   return { db: { from } as never, from, updates };
@@ -268,7 +290,36 @@ describe("summarizeCallTranscript", () => {
     expect(result).toEqual({ ok: false, reason: "db_failed", detail: "mark down" });
   });
 
-  it("records an attempt when no Gemini API key is configured", async () => {
+  it("fails on a claim error and skips when the claim is lost", async () => {
+    const claimErr = makeDb({ claim: { data: null, error: { message: "claim down" } } });
+    expect(
+      await summarizeCallTranscript(BIZ, TID, {
+        client: claimErr.db,
+        generate: generateOk(),
+        meter: meterMock
+      })
+    ).toEqual({ ok: false, reason: "db_failed", detail: "claim down" });
+
+    // Zero rows back = another dispatch won the compare-and-swap.
+    const lost = makeDb({ claim: { data: [], error: null } });
+    const generate = generateOk();
+    expect(
+      await summarizeCallTranscript(BIZ, TID, { client: lost.db, generate, meter: meterMock })
+    ).toEqual({ ok: false, reason: "claimed_elsewhere" });
+    expect(generate).not.toHaveBeenCalled();
+
+    // Non-array payload is treated the same way.
+    const nonArray = makeDb({ claim: { data: null, error: null } });
+    expect(
+      await summarizeCallTranscript(BIZ, TID, {
+        client: nonArray.db,
+        generate: generateOk(),
+        meter: meterMock
+      })
+    ).toEqual({ ok: false, reason: "claimed_elsewhere" });
+  });
+
+  it("records the failure when no Gemini API key is configured", async () => {
     vi.stubEnv("GOOGLE_API_KEY", undefined);
     vi.stubEnv("GEMINI_API_KEY", undefined);
     const { db, updates } = makeDb({});
@@ -278,7 +329,9 @@ describe("summarizeCallTranscript", () => {
       meter: meterMock
     });
     expect(result).toEqual({ ok: false, reason: "no_api_key" });
-    expect(updates[0]).toEqual({ summary_attempts: 1, summary_error: "no_api_key" });
+    // Claim consumed the attempt; the failure mark only sets the error.
+    expect(updates[0]).toEqual({ summary_attempts: 1 });
+    expect(updates[1]).toEqual({ summary_error: "no_api_key" });
   });
 
   it("warns (but does not throw) when attempt bookkeeping fails", async () => {
@@ -330,10 +383,8 @@ describe("summarizeCallTranscript", () => {
       meter: meterMock
     });
     expect(result).toEqual({ ok: false, reason: "gemini_failed", detail: "gemini_http_500:boom" });
-    expect(err.updates[0]).toEqual({
-      summary_attempts: 1,
-      summary_error: "gemini_http_500:boom"
-    });
+    expect(err.updates[0]).toEqual({ summary_attempts: 1 });
+    expect(err.updates[1]).toEqual({ summary_error: "gemini_http_500:boom" });
     expect(meterMock).not.toHaveBeenCalled();
 
     const nonError = makeDb({});
@@ -343,6 +394,29 @@ describe("summarizeCallTranscript", () => {
       meter: meterMock
     });
     expect(result2).toEqual({ ok: false, reason: "gemini_failed", detail: "string blowup" });
+  });
+
+  it("aborts the Gemini call at the deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const { db } = makeDb({});
+      const generate = vi.fn(
+        async (params: { signal?: AbortSignal }) => {
+          expect(params.signal?.aborted).toBe(false);
+          vi.advanceTimersByTime(CALL_SUMMARY_GEMINI_TIMEOUT_MS + 1);
+          expect(params.signal?.aborted).toBe(true);
+          throw new Error("gemini_aborted");
+        }
+      ) as never;
+      const result = await summarizeCallTranscript(BIZ, TID, {
+        client: db,
+        generate,
+        meter: meterMock
+      });
+      expect(result).toEqual({ ok: false, reason: "gemini_failed", detail: "gemini_aborted" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("meters billed-but-empty Gemini replies before recording the failure", async () => {
@@ -362,7 +436,7 @@ describe("summarizeCallTranscript", () => {
         outputChars: 0
       })
     );
-    expect(updates[0]).toMatchObject({ summary_attempts: 1 });
+    expect(updates[1]).toEqual({ summary_error: "gemini_empty" });
   });
 
   it("records a retryable bad_json failure after metering", async () => {
@@ -374,7 +448,7 @@ describe("summarizeCallTranscript", () => {
     });
     expect(result).toEqual({ ok: false, reason: "bad_json" });
     expect(meterMock).toHaveBeenCalledTimes(1);
-    expect(updates[0]).toEqual({ summary_attempts: 1, summary_error: "bad_json" });
+    expect(updates[1]).toEqual({ summary_error: "bad_json" });
   });
 
   it("keeps the row retryable when the final persist fails", async () => {
@@ -390,10 +464,7 @@ describe("summarizeCallTranscript", () => {
       meter: meterMock
     });
     expect(result).toEqual({ ok: false, reason: "db_failed", detail: "persist down" });
-    expect(updates[1]).toEqual({
-      summary_attempts: 1,
-      summary_error: "persist:persist down"
-    });
+    expect(updates[2]).toEqual({ summary_error: "persist:persist down" });
   });
 
   it("persists summary + sentiment and meters the spend on success", async () => {
@@ -414,6 +485,7 @@ describe("summarizeCallTranscript", () => {
       expect.objectContaining({
         responseMimeType: "application/json",
         thinkingLevel: "low",
+        signal: expect.any(AbortSignal),
         userText: expect.stringContaining("Caller: Hi, do you do same-day plumbing repairs?")
       })
     );
@@ -426,12 +498,13 @@ describe("summarizeCallTranscript", () => {
         outputChars: GOOD_JSON.length
       })
     );
-    expect(updates[0]).toMatchObject({
+    expect(updates[0]).toEqual({ summary_attempts: 1 });
+    expect(updates[1]).toMatchObject({
       summary: "Caller asked about same-day plumbing repairs and booked an afternoon slot.",
       sentiment: "positive",
       summary_error: null
     });
-    expect(updates[0].summarized_at).toEqual(expect.any(String));
+    expect(updates[1].summarized_at).toEqual(expect.any(String));
   });
 
   it("uses the default client / generate / meter dependencies", async () => {

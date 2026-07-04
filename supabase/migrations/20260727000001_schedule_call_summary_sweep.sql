@@ -24,6 +24,10 @@ begin
 end
 $unschedule$;
 
+-- 120s timeout: the sweep dispatches sequentially under an 85s wall-clock
+-- budget, and one in-flight dispatch can hold up to the summarize endpoint's
+-- 30s maxDuration past that budget (~115s worst case). Leftover rows are
+-- deferred to the next 5-minute pass, so the run always fits.
 select cron.schedule(
   'edge-call-summary-sweep',
   '*/5 * * * *',
@@ -35,7 +39,7 @@ select cron.schedule(
       'Authorization', 'Bearer ' || public._cron_vault_read('internal_cron_secret')
     ),
     body := '{}'::jsonb,
-    timeout_milliseconds := 50000
+    timeout_milliseconds := 120000
   );
   $$
 );

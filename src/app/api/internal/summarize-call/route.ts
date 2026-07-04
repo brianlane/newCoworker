@@ -21,10 +21,11 @@ import { errorResponse, successResponse } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
 import { summarizeCallTranscript } from "@/lib/call-summaries/summarizer";
 
-// One flash JSON call plus a few DB reads; well under this, but leave headroom
-// for a cold model. Cron dispatch is sequential so a slow call only stretches
-// the sweep, never blocks live traffic.
-export const maxDuration = 60;
+// The summarizer aborts its Gemini call at 25s (CALL_SUMMARY_GEMINI_TIMEOUT_MS),
+// so 30s covers the model call plus the handful of DB reads/writes. Keeping
+// this tight is what lets the sweep's wall-clock budget guarantee a run fits
+// inside the pg_net cron timeout.
+export const maxDuration = 30;
 export const runtime = "nodejs";
 
 const bodySchema = z.object({
@@ -71,6 +72,7 @@ export async function POST(request: Request): Promise<Response> {
     const isExpectedSkip =
       result.reason === "tier" ||
       result.reason === "already_summarized" ||
+      result.reason === "claimed_elsewhere" ||
       result.reason === "not_completed" ||
       result.reason === "empty_transcript";
     const log = isExpectedSkip ? logger.info : logger.warn;
