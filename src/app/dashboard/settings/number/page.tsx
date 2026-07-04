@@ -49,49 +49,28 @@ export default async function NumberSettingsPage() {
     );
   }
 
-  // BYON is a Standard-tier perk. Starters see the upgrade prompt (any
-  // pre-upgrade port requests stay visible through the API if they exist,
-  // but the wizard itself is gated server-side too).
-  if (!byonAllowedForTier(business.tier)) {
-    return (
-      <div className="space-y-6 max-w-3xl">
-        <div>
-          <h1 className="text-2xl font-bold text-parchment">Phone Number</h1>
-          <p className="text-sm text-parchment/50 mt-1">Bring your existing business number</p>
-        </div>
-        <Card>
-          <div className="text-center py-8 space-y-3">
-            <p className="text-parchment/80 font-semibold">
-              Bring-your-own-number is a Standard plan perk
-            </p>
-            <p className="text-parchment/60 text-sm max-w-md mx-auto">
-              Upgrade to Standard to port the business number your customers already know — it
-              transfers to your AI coworker in about a week.
-            </p>
-            <a
-              href="/dashboard/billing"
-              className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
-            >
-              Upgrade to Standard →
-            </a>
-          </div>
-        </Card>
-      </div>
-    );
-  }
-
   const requests = await listByonPortRequests(business.id, db);
+
+  // BYON is a Standard-tier perk: Starters get the upgrade prompt instead of
+  // the wizard (creation is also gated server-side), but any in-flight port
+  // requests keep their status card and cancel action.
+  const wizardEnabled = byonAllowedForTier(business.tier);
 
   return (
     <div className="space-y-6 max-w-3xl">
       <div>
         <h1 className="text-2xl font-bold text-parchment">Phone Number</h1>
         <p className="text-sm text-parchment/50 mt-1">
-          Bring the business number your customers already know — it transfers to your AI coworker
-          in about a week
+          {wizardEnabled
+            ? "Bring the business number your customers already know — it transfers to your AI coworker in about a week"
+            : "Bring your existing business number"}
         </p>
       </div>
-      <ByonNumberPorting businessId={business.id} initialRequests={requests} />
+      <ByonNumberPorting
+        businessId={business.id}
+        initialRequests={requests}
+        wizardEnabled={wizardEnabled}
+      />
     </div>
   );
 }
