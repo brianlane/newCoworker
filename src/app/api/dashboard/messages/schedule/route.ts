@@ -64,15 +64,31 @@ export async function GET(request: Request) {
     if (!user.isAdmin) await requireOwner(businessId);
 
     const db = await createSupabaseServiceClient();
-    const { data, error } = await db
-      .from("scheduled_sms")
-      .select("id, to_e164, body, send_at, status, error, created_at, sent_at")
-      .eq("business_id", businessId)
-      .order("send_at", { ascending: false })
-      .limit(50);
-    if (error) return errorResponse("DB_ERROR", error.message);
+    // Pending soonest-first so a deep queue never hides what dispatches next
+    // (a descending-only cap would drop the soonest rows), plus a short tail
+    // of recent dispatched/canceled rows for context.
+    const [pendingRes, historyRes] = await Promise.all([
+      db
+        .from("scheduled_sms")
+        .select("id, to_e164, body, send_at, status, error, created_at, sent_at")
+        .eq("business_id", businessId)
+        .eq("status", "pending")
+        .order("send_at", { ascending: true })
+        .limit(50),
+      db
+        .from("scheduled_sms")
+        .select("id, to_e164, body, send_at, status, error, created_at, sent_at")
+        .eq("business_id", businessId)
+        .neq("status", "pending")
+        .order("send_at", { ascending: false })
+        .limit(10)
+    ]);
+    if (pendingRes.error) return errorResponse("DB_ERROR", pendingRes.error.message);
+    if (historyRes.error) return errorResponse("DB_ERROR", historyRes.error.message);
 
-    return successResponse({ scheduled: data ?? [] });
+    return successResponse({
+      scheduled: [...(pendingRes.data ?? []), ...(historyRes.data ?? [])]
+    });
   } catch (err) {
     return handleRouteError(err);
   }

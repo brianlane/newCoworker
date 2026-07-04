@@ -41,10 +41,12 @@ serve(async (req: Request) => {
       headers: { "Content-Type": "application/json" }
     });
   } catch (err) {
+    // Details stay in the function logs; the response body is generic so a
+    // (hypothetical) unauthorized caller can't harvest internals (CodeQL).
     console.error("scheduled-sms-sweep", err);
-    return new Response(
-      JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ ok: false, error: "sweep_failed" }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
   }
 });

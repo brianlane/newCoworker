@@ -85,21 +85,33 @@ export default async function DashboardMessagesPage() {
   let templates: SmsTemplateOption[] = [];
   let scheduled: ScheduledSmsItem[] = [];
   if (smsToolsEnabled) {
-    const [{ data: templateRows }, { data: scheduledRows }] = await Promise.all([
-      db
-        .from("sms_templates")
-        .select("id, name, body")
-        .eq("business_id", business.id)
-        .order("name", { ascending: true }),
-      db
-        .from("scheduled_sms")
-        .select("id, to_e164, body, send_at, status, error")
-        .eq("business_id", business.id)
-        .order("send_at", { ascending: false })
-        .limit(25)
-    ]);
+    // Pending rows soonest-first (so an owner with a deep queue always sees —
+    // and can cancel — what dispatches next), plus a short tail of recent
+    // dispatched/canceled rows for context.
+    const [{ data: templateRows }, { data: pendingRows }, { data: historyRows }] =
+      await Promise.all([
+        db
+          .from("sms_templates")
+          .select("id, name, body")
+          .eq("business_id", business.id)
+          .order("name", { ascending: true }),
+        db
+          .from("scheduled_sms")
+          .select("id, to_e164, body, send_at, status, error")
+          .eq("business_id", business.id)
+          .eq("status", "pending")
+          .order("send_at", { ascending: true })
+          .limit(50),
+        db
+          .from("scheduled_sms")
+          .select("id, to_e164, body, send_at, status, error")
+          .eq("business_id", business.id)
+          .neq("status", "pending")
+          .order("send_at", { ascending: false })
+          .limit(5)
+      ]);
     templates = (templateRows ?? []) as SmsTemplateOption[];
-    scheduled = ((scheduledRows ?? []) as Array<{
+    scheduled = ([...(pendingRows ?? []), ...(historyRows ?? [])] as Array<{
       id: string;
       to_e164: string;
       body: string;

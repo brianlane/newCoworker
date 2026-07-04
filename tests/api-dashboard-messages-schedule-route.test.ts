@@ -33,7 +33,7 @@ type ChainResult = { data: unknown; error: { message: string; code?: string } | 
 
 function makeChain(result: ChainResult) {
   const chain: Record<string, unknown> = {};
-  for (const m of ["select", "insert", "update", "delete", "eq", "order", "limit"]) {
+  for (const m of ["select", "insert", "update", "delete", "eq", "neq", "order", "limit"]) {
     chain[m] = vi.fn().mockReturnValue(chain);
   }
   chain.single = vi.fn().mockResolvedValue(result);
@@ -42,10 +42,19 @@ function makeChain(result: ChainResult) {
   return chain;
 }
 
-function mockDb(results: Record<string, ChainResult>) {
-  const from = vi.fn((table: string) =>
-    makeChain(results[table] ?? { data: null, error: null })
-  );
+/** Per-table result; pass an array to serve successive from() calls in order
+ * (the GET route issues two scheduled_sms queries: pending, then history). */
+function mockDb(results: Record<string, ChainResult | ChainResult[]>) {
+  const served: Record<string, number> = {};
+  const from = vi.fn((table: string) => {
+    const conf = results[table];
+    if (Array.isArray(conf)) {
+      const idx = Math.min(served[table] ?? 0, conf.length - 1);
+      served[table] = (served[table] ?? 0) + 1;
+      return makeChain(conf[idx]);
+    }
+    return makeChain(conf ?? { data: null, error: null });
+  });
   vi.mocked(createSupabaseServiceClient).mockResolvedValue({
     from
   } as unknown as Awaited<ReturnType<typeof createSupabaseServiceClient>>);
@@ -87,19 +96,27 @@ describe("GET /api/dashboard/messages/schedule", () => {
     expect((await GET(new Request("http://localhost/x?businessId=nah"))).status).toBe(400);
   });
 
-  it("lists scheduled sends (null data tolerated, admins skip requireOwner)", async () => {
+  it("lists pending soonest-first followed by recent history", async () => {
     mockDb({
-      scheduled_sms: {
-        data: [{ id: SCHED, to_e164: "+15551234567", body: "hi", status: "pending" }],
-        error: null
-      }
+      scheduled_sms: [
+        {
+          data: [{ id: SCHED, to_e164: "+15551234567", body: "hi", status: "pending" }],
+          error: null
+        },
+        {
+          data: [{ id: "past-1", to_e164: "+15551234567", body: "bye", status: "sent" }],
+          error: null
+        }
+      ]
     });
     const res = await GET(new Request(`http://localhost/x?businessId=${BIZ}`));
     expect(res.status).toBe(200);
-    expect((await res.json()).data.scheduled).toHaveLength(1);
+    const scheduled = (await res.json()).data.scheduled;
+    expect(scheduled.map((s: { id: string }) => s.id)).toEqual([SCHED, "past-1"]);
     expect(requireOwner).toHaveBeenCalledWith(BIZ);
+  });
 
-    vi.mocked(requireOwner).mockClear();
+  it("tolerates null data and admins skip requireOwner", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({ ...OWNER, isAdmin: true });
     mockDb({ scheduled_sms: { data: null, error: null } });
     const adminRes = await GET(new Request(`http://localhost/x?businessId=${BIZ}`));
@@ -107,8 +124,21 @@ describe("GET /api/dashboard/messages/schedule", () => {
     expect(requireOwner).not.toHaveBeenCalled();
   });
 
-  it("maps DB errors to 500", async () => {
-    mockDb({ scheduled_sms: { data: null, error: { message: "db down" } } });
+  it("maps DB errors on either query to 500", async () => {
+    mockDb({
+      scheduled_sms: [
+        { data: null, error: { message: "db down" } },
+        { data: null, error: null }
+      ]
+    });
+    expect((await GET(new Request(`http://localhost/x?businessId=${BIZ}`))).status).toBe(500);
+
+    mockDb({
+      scheduled_sms: [
+        { data: [], error: null },
+        { data: null, error: { message: "db down" } }
+      ]
+    });
     expect((await GET(new Request(`http://localhost/x?businessId=${BIZ}`))).status).toBe(500);
   });
 });
