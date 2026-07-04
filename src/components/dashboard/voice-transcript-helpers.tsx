@@ -9,6 +9,7 @@
 
 import { Badge } from "@/components/ui/Badge";
 import type {
+  VoiceCallSentiment,
   VoiceTranscriptDirection,
   VoiceTranscriptStatus
 } from "@/lib/db/voice-transcripts";
@@ -81,6 +82,30 @@ export function StatusBadge({ status }: { status: VoiceTranscriptStatus }) {
     default:
       return <Badge variant="success">Completed</Badge>;
   }
+}
+
+/**
+ * Caller-mood pill for AI call summaries (Standard+ perk). Neutral stays
+ * muted so the list doesn't turn into a wall of pills; only the moods worth
+ * a second look (negative/mixed → attention, positive → win) get color.
+ */
+export function SentimentBadge({ sentiment }: { sentiment: VoiceCallSentiment }) {
+  const styles: Record<VoiceCallSentiment, string> = {
+    positive: "bg-claw-green/15 text-claw-green",
+    negative: "bg-red-400/15 text-red-300",
+    mixed: "bg-amber-300/15 text-amber-300",
+    neutral: "bg-parchment/10 text-parchment/50"
+  };
+  return (
+    <span
+      className={[
+        "text-[10px] uppercase tracking-wide font-semibold rounded px-1.5 py-0.5",
+        styles[sentiment]
+      ].join(" ")}
+    >
+      {sentiment}
+    </span>
+  );
 }
 
 export function callerLabel(callerE164: string | null): string {

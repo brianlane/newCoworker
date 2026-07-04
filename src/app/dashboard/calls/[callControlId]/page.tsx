@@ -17,6 +17,7 @@ import {
 } from "@/lib/db/voice-transcripts";
 import {
   CallDirectionBadge,
+  SentimentBadge,
   StatusBadge,
   callerLabel,
   formatDuration
@@ -135,6 +136,18 @@ export default async function CallTranscriptPage({
           <StatusBadge status={transcript.status} />
         </div>
       </div>
+
+      {transcript.summary && (
+        <Card padding="md">
+          <div className="flex items-center gap-2 mb-2">
+            <h2 className="text-xs uppercase tracking-wide font-semibold text-parchment/60">
+              AI summary
+            </h2>
+            {transcript.sentiment && <SentimentBadge sentiment={transcript.sentiment} />}
+          </div>
+          <p className="text-sm text-parchment/80 leading-relaxed">{transcript.summary}</p>
+        </Card>
+      )}
 
       {turns.length === 0 ? (
         <Card>

@@ -16,6 +16,8 @@ export type VoiceTranscriptDirection = "inbound" | "outbound";
 
 export type VoiceTranscriptTurnRole = "caller" | "assistant";
 
+export type VoiceCallSentiment = "positive" | "neutral" | "negative" | "mixed";
+
 export type VoiceCallTranscriptRow = {
   id: string;
   business_id: string;
@@ -30,6 +32,10 @@ export type VoiceCallTranscriptRow = {
   ended_at: string | null;
   created_at: string;
   updated_at: string;
+  /** AI digest (Standard+ perk); NULL until the call-summary sweep runs. */
+  summary: string | null;
+  sentiment: VoiceCallSentiment | null;
+  summarized_at: string | null;
 };
 
 export type VoiceCallTranscriptTurnRow = {

@@ -79,7 +79,12 @@ export default async function DashboardCallsPage() {
       status: row.status,
       direction: row.direction,
       startedAt: row.started_at,
-      endedAt: row.ended_at
+      endedAt: row.ended_at,
+      // AI digest (Standard+ perk). Rendered whenever present — after a
+      // downgrade existing summaries stay readable; the sweep just stops
+      // generating new ones.
+      summary: row.summary ?? null,
+      sentiment: row.sentiment ?? null
     };
   });
 

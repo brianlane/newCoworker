@@ -41,7 +41,10 @@ const TRANSCRIPT = {
   started_at: "2026-04-23T00:00:00Z",
   ended_at: "2026-04-23T00:03:00Z",
   created_at: "2026-04-23T00:00:00Z",
-  updated_at: "2026-04-23T00:03:00Z"
+  updated_at: "2026-04-23T00:03:00Z",
+  summary: null,
+  sentiment: null,
+  summarized_at: null
 };
 
 function urlFor(cci: string, businessId: string | null = BIZ): string {
