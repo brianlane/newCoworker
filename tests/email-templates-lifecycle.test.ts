@@ -2,6 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { buildCancelConfirmationEmail } from "@/lib/email/templates/cancel-confirmation";
 import { buildEmailVerificationMessage } from "@/lib/email/templates/email-verification";
 import { buildRefundIssuedEmail } from "@/lib/email/templates/refund-issued";
+import {
+  buildOpsVpsDeletionEmail,
+  opsNotificationEmail,
+  vpsHostname
+} from "@/lib/email/templates/ops-vps-deletion";
 
 const mailCtx = {
   recipientEmail: "owner@example.com",
@@ -139,6 +144,76 @@ describe("refund-issued email", () => {
   it("clamps negative amounts to 0 so the email never shows a weird value", () => {
     const { text } = buildRefundIssuedEmail({ amountCents: -50, ...mailCtx });
     expect(text).toMatch(/\$0\.00/);
+  });
+});
+
+describe("ops-vps-deletion email", () => {
+  const baseInput = {
+    businessId: "biz-1",
+    virtualMachineId: 1800985,
+    hostingerBillingSubscriptionId: "hbs-1",
+    ownerName: "Jane Doe",
+    ownerEmail: "jane@example.com",
+    tier: "standard",
+    signupDate: "2026-06-01T12:34:56.000Z",
+    refundIssued: false,
+    cancelReason: "user_refund",
+    vmState: "VM stopped, auto-renew disabled",
+    siteUrl: "https://www.newcoworker.com"
+  };
+
+  it("renders the srv hostname, panel link, owner, tier, and signup date", () => {
+    const { subject, text, html } = buildOpsVpsDeletionEmail(baseInput);
+    expect(subject).toBe("[ops] Delete srv1800985.hstgr.cloud in hPanel — Jane Doe (standard)");
+    expect(text).toContain(
+      "Please delete srv1800985.hstgr.cloud at https://hpanel.hostinger.com/paid-invoices for user Jane Doe, standard tier."
+    );
+    expect(text).toContain("Owner email: jane@example.com");
+    expect(text).toContain("Signup date: 2026-06-01");
+    expect(text).toContain("Cancel reason: user_refund");
+    expect(text).toContain("Stripe refund issued: no");
+    expect(text).toContain("VM state: VM stopped, auto-renew disabled");
+    expect(text).toContain("Hostinger billing subscription: hbs-1");
+    expect(html).toContain("Manual Hostinger deletion needed");
+    expect(html).toContain("Open Hostinger invoices");
+  });
+
+  it("reports refunds and unknown billing subscriptions", () => {
+    const { text } = buildOpsVpsDeletionEmail({
+      ...baseInput,
+      refundIssued: true,
+      hostingerBillingSubscriptionId: null
+    });
+    expect(text).toContain("Stripe refund issued: yes");
+    expect(text).toContain("Hostinger billing subscription: unknown");
+  });
+
+  it("falls back to the owner email when the name is missing or blank", () => {
+    const noName = buildOpsVpsDeletionEmail({ ...baseInput, ownerName: null });
+    expect(noName.subject).toContain("jane@example.com");
+    const blankName = buildOpsVpsDeletionEmail({ ...baseInput, ownerName: "   " });
+    expect(blankName.text).toContain("for user jane@example.com");
+  });
+
+  it("handles a missing VM id by pointing ops at the billing subscription", () => {
+    const { subject, text } = buildOpsVpsDeletionEmail({ ...baseInput, virtualMachineId: null });
+    expect(subject).toContain("[ops] Delete VPS in hPanel");
+    expect(text).toContain("(no VM id recorded — check the billing subscription below)");
+  });
+
+  it("vpsHostname maps ids to srv hostnames and null to null", () => {
+    expect(vpsHostname(42)).toBe("srv42.hstgr.cloud");
+    expect(vpsHostname(null)).toBeNull();
+  });
+
+  it("opsNotificationEmail defaults to team@ and honors the env override", () => {
+    const prev = process.env.OPS_NOTIFICATION_EMAIL;
+    delete process.env.OPS_NOTIFICATION_EMAIL;
+    expect(opsNotificationEmail()).toBe("team@newcoworker.com");
+    process.env.OPS_NOTIFICATION_EMAIL = "ops@example.com";
+    expect(opsNotificationEmail()).toBe("ops@example.com");
+    if (prev === undefined) delete process.env.OPS_NOTIFICATION_EMAIL;
+    else process.env.OPS_NOTIFICATION_EMAIL = prev;
   });
 });
 

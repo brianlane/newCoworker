@@ -1,24 +1,28 @@
 /**
- * cancel-vps-billing.ts — stop a VPS and cancel its Hostinger BILLING
- * SUBSCRIPTION, the same teardown production uses (see
- * src/lib/billing/change-plan-orchestrator.ts steps 1+7 and
- * src/lib/hostinger/client.ts `cancelBillingSubscription`).
+ * cancel-vps-billing.ts — stop a VPS and disable its Hostinger billing
+ * subscription's auto-renewal, the same teardown production uses (see
+ * src/lib/billing/change-plan-orchestrator.ts steps 1+7 and the lifecycle
+ * executor's `disable_billing_auto_renewal` op).
  *
  * Why this is two resources: a Hostinger VPS purchase creates a virtual
  * machine AND a billing subscription. Stopping the VM does NOT stop the
- * charges — you must DELETE /api/billing/v1/subscriptions/{id} with
- * `cancel_option: "immediately"`, which both ends billing and destroys the
- * VM (snapshots die with it). Production order of operations:
- *   1. (optional) POST /virtual-machines/{id}/snapshot  — fast restore point
- *   2. POST /virtual-machines/{id}/stop                 — best-effort poweroff
- *   3. DELETE /api/billing/v1/subscriptions/{id}        — stop paying + destroy
+ * charges. Hostinger REMOVED the public cancel-subscription API (DELETE
+ * /api/billing/v1/subscriptions/{id} now 404s — verified Jul 2026), so the
+ * strongest automated stop-payment is disabling auto-renewal; the VM then
+ * lapses at the end of the paid period. Actually deleting the VM early is a
+ * manual hPanel action (https://hpanel.hostinger.com/paid-invoices).
+ * Production order of operations:
+ *   1. (optional) POST /virtual-machines/{id}/snapshot      — fast restore point
+ *   2. POST /virtual-machines/{id}/stop                     — best-effort poweroff
+ *   3. DELETE /billing/v1/subscriptions/{id}/auto-renewal/disable — stop renewal
+ *   4. ops email → manual hPanel deletion
  *
  * Targets one of:
  *   --state                 read debug/.kvm2-smoke.json (the KVM2 experiment box)
  *   --vm <virtualMachineId> resolve the subscription via GET /billing/v1/subscriptions
- *   --subscription <id>     cancel that subscription id directly
+ *   --subscription <id>     disable renewal on that subscription id directly
  *
- * Dry-run by default; --apply to actually cancel. With --state it also marks
+ * Dry-run by default; --apply to actually disable. With --state it also marks
  * the clone business row offline and deletes the state file afterwards.
  *
  * Usage:
@@ -90,11 +94,12 @@ if (vmId !== null) {
     console.log(`vm ${vmId}: lookup failed (${e instanceof Error ? e.message : e}) — may already be destroyed`);
   }
 }
-console.log(`billing subscription to cancel: ${subscriptionId}`);
+console.log(`billing subscription to stop renewing: ${subscriptionId}`);
 
 if (!APPLY) {
-  console.log(`\n[dry-run] Would stop the VM (best-effort) and DELETE the billing subscription`);
-  console.log(`[dry-run] with cancel_option=immediately (this DESTROYS the VM). --apply to proceed.`);
+  console.log(`\n[dry-run] Would stop the VM (best-effort) and disable the billing subscription's`);
+  console.log(`[dry-run] auto-renewal (VM lapses at period end; early deletion is manual in hPanel).`);
+  console.log(`[dry-run] --apply to proceed.`);
   process.exit(0);
 }
 
@@ -107,8 +112,9 @@ if (vmId !== null) {
   }
 }
 
-await hostinger.cancelBillingSubscription(subscriptionId!, "newcoworker-kvm2-smoke-teardown");
-console.log(`billing subscription ${subscriptionId} canceled (immediate).`);
+await hostinger.disableBillingAutoRenewal(subscriptionId!);
+console.log(`billing subscription ${subscriptionId}: auto-renewal disabled (lapses at period end).`);
+console.log(`To delete the VM early, do it manually at https://hpanel.hostinger.com/paid-invoices`);
 
 // Best-effort cleanup of the Hostinger account resources the provision created.
 if (state?.publicKeyId) {

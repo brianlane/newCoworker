@@ -370,7 +370,7 @@ describe("executeLifecyclePlan refund handling", () => {
       createSnapshot: vi.fn().mockResolvedValue({}),
       deleteSnapshot: vi.fn().mockRejectedValue(notFound),
       stopVirtualMachine: vi.fn().mockResolvedValue({}),
-      cancelBillingSubscription: vi.fn().mockResolvedValue({})
+      disableBillingAutoRenewal: vi.fn().mockResolvedValue({})
     };
 
     await executeLifecyclePlan(
@@ -390,7 +390,7 @@ describe("executeLifecyclePlan refund handling", () => {
           { type: "create_snapshot", virtualMachineId: 1 },
           { type: "delete_snapshot", virtualMachineId: 1 },
           { type: "stop_vm", virtualMachineId: 1 },
-          { type: "cancel_billing_subscription", hostingerBillingSubscriptionId: "hbs_1" }
+          { type: "disable_billing_auto_renewal", hostingerBillingSubscriptionId: "hbs_1" }
         ],
         dbUpdates: [
           { type: "update_subscription", subscriptionId: "sub_row", patch: { status: "canceled" } },
@@ -431,7 +431,7 @@ describe("executeLifecyclePlan refund handling", () => {
     expect(backupBusinessDataMock).toHaveBeenCalledWith({ businessId: "biz_1", vpsHost: "1.2.3.4" });
     expect(hostinger.createSnapshot).toHaveBeenCalledWith(1);
     expect(hostinger.stopVirtualMachine).toHaveBeenCalledWith(1);
-    expect(hostinger.cancelBillingSubscription).toHaveBeenCalledWith("hbs_1");
+    expect(hostinger.disableBillingAutoRenewal).toHaveBeenCalledWith("hbs_1");
     expect(updateBusinessStatusMock).toHaveBeenCalledWith("biz_1", "wiped");
     expect(deleteBusinessBackupMock).toHaveBeenCalledWith("biz_1");
     expect(sendOwnerEmailMock).toHaveBeenCalledWith(
@@ -443,6 +443,70 @@ describe("executeLifecyclePlan refund handling", () => {
         html: expect.stringContaining("Your cancellation is scheduled")
       })
     );
+  });
+
+  it("dispatches the ops VPS deletion request to the ops inbox", async () => {
+    const opsPlan: LifecyclePlan = {
+      stripeOps: [],
+      sshOps: [],
+      hostingerOps: [],
+      dbUpdates: [],
+      emailsToSend: [
+        {
+          type: "send_ops_vps_deletion_request",
+          businessId: "biz_ops",
+          virtualMachineId: 1800985,
+          hostingerBillingSubscriptionId: "hbs_ops",
+          ownerName: "Jane Doe",
+          ownerEmail: "jane@example.com",
+          tier: "standard",
+          signupDate: "2026-06-01T00:00:00.000Z",
+          refundIssued: false,
+          cancelReason: "user_refund",
+          vmState: "VM stopped, auto-renew disabled"
+        }
+      ]
+    };
+
+    await executeLifecyclePlan(opsPlan, { businessId: "biz_ops", vpsHost: null }, {
+      sendEmail: sendOwnerEmailMock
+    });
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.stringContaining("srv1800985.hstgr.cloud"),
+      expect.objectContaining({
+        text: expect.stringContaining("hpanel.hostinger.com/paid-invoices"),
+        html: expect.stringContaining("Manual Hostinger deletion needed")
+      })
+    );
+    const [, , , body] = sendOwnerEmailMock.mock.calls[0];
+    expect((body as { text: string }).text).toContain("Stripe refund issued: no");
+
+    // With a Stripe refund recorded in the same run, the email reports it
+    // even though the planner stamped refundIssued=false.
+    sendOwnerEmailMock.mockClear();
+    await executeLifecyclePlanSlowPhase(opsPlan, {
+      refund: { stripeRefundId: "re_1", stripeChargeId: "ch_1", amountCents: 100 }
+    }, { sendEmail: sendOwnerEmailMock });
+    const [, , , slowBody] = sendOwnerEmailMock.mock.calls[0];
+    expect((slowBody as { text: string }).text).toContain("Stripe refund issued: yes");
+
+    // Ops inbox override + localhost site-URL fallback.
+    process.env.OPS_NOTIFICATION_EMAIL = "ops-staging@example.com";
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    sendOwnerEmailMock.mockClear();
+    await executeLifecyclePlan(opsPlan, { businessId: "biz_ops", vpsHost: null }, {
+      sendEmail: sendOwnerEmailMock
+    });
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "ops-staging@example.com",
+      expect.any(String),
+      expect.objectContaining({ html: expect.stringContaining("http://localhost:3000") })
+    );
+    delete process.env.OPS_NOTIFICATION_EMAIL;
+    process.env.NEXT_PUBLIC_APP_URL = "https://www.example.com";
   });
 
   it("covers alternate refund charge shapes and error paths", async () => {
@@ -813,7 +877,7 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
       hostingerOps: [
         { type: "create_snapshot", virtualMachineId: 9 },
         { type: "stop_vm", virtualMachineId: 9 },
-        { type: "cancel_billing_subscription", hostingerBillingSubscriptionId: "hbs_9" }
+        { type: "disable_billing_auto_renewal", hostingerBillingSubscriptionId: "hbs_9" }
       ],
       dbUpdates: [
         {
@@ -845,7 +909,7 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
     const hostinger = {
       createSnapshot: vi.fn().mockResolvedValue({}),
       stopVirtualMachine: vi.fn().mockResolvedValue({}),
-      cancelBillingSubscription: vi.fn().mockResolvedValue({})
+      disableBillingAutoRenewal: vi.fn().mockResolvedValue({})
     };
 
     const fastResult = await executeLifecyclePlanFastPhase(
@@ -887,7 +951,7 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
     });
     expect(hostinger.createSnapshot).toHaveBeenCalledWith(9);
     expect(hostinger.stopVirtualMachine).toHaveBeenCalledWith(9);
-    expect(hostinger.cancelBillingSubscription).toHaveBeenCalledWith("hbs_9");
+    expect(hostinger.disableBillingAutoRenewal).toHaveBeenCalledWith("hbs_9");
     expect(sendOwnerEmailMock).toHaveBeenCalledWith(
       "resend_test",
       "owner@example.com",
@@ -913,7 +977,7 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
       createSnapshot: vi.fn().mockRejectedValue("hostinger 500"),
       deleteSnapshot: vi.fn(),
       stopVirtualMachine: vi.fn(),
-      cancelBillingSubscription: vi.fn()
+      disableBillingAutoRenewal: vi.fn()
     };
 
     await executeLifecyclePlanSlowPhase(
@@ -952,7 +1016,7 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
       createSnapshot: vi.fn().mockRejectedValue(new Error("hostinger error-branch")),
       deleteSnapshot: vi.fn(),
       stopVirtualMachine: vi.fn(),
-      cancelBillingSubscription: vi.fn()
+      disableBillingAutoRenewal: vi.fn()
     };
     await executeLifecyclePlanSlowPhase(
       {

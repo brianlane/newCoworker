@@ -9,6 +9,8 @@ export type BusinessRow = {
   id: string;
   name: string;
   owner_email: string;
+  /** Owner display name captured at onboarding; null on legacy rows. */
+  owner_name?: string | null;
   tier: "starter" | "standard" | "enterprise";
   /**
    * `wiped` is a terminal state set by the subscription-grace-sweep after a
