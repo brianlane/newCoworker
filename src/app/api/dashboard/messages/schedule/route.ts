@@ -41,7 +41,13 @@ const createSchema = z.object({
     }
     return result.value;
   }),
-  text: z.string().trim().min(1, "Message can't be empty").max(1600),
+  // Persisted UNTRIMMED to match the immediate-send route: bodies are labeled
+  // "sent verbatim" in the composer, so scheduling must not alter whitespace
+  // that an immediate send of the same content would keep.
+  text: z
+    .string()
+    .max(1600)
+    .refine((v) => v.trim().length > 0, "Message can't be empty"),
   sendAt: z.string().transform((val, ctx) => {
     const ms = Date.parse(val);
     if (!Number.isFinite(ms)) {

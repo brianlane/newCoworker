@@ -17,6 +17,12 @@ type Props = {
   businessId: string;
   templates: SmsTemplateOption[];
   scheduled: ScheduledSmsItem[];
+  /**
+   * False after a tier downgrade: pending scheduled sends (queued while
+   * entitled) stay visible and cancelable, but the templates card and any
+   * new-tool affordances are hidden.
+   */
+  toolsEnabled?: boolean;
 };
 
 /**
@@ -24,7 +30,7 @@ type Props = {
  * rendered under the Text history list. Server component passes the initial
  * data; mutations go through the dashboard API routes and refresh the page.
  */
-export function SmsToolsPanel({ businessId, templates, scheduled }: Props) {
+export function SmsToolsPanel({ businessId, templates, scheduled, toolsEnabled = true }: Props) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -117,6 +123,12 @@ export function SmsToolsPanel({ businessId, templates, scheduled }: Props) {
     <div className="grid gap-4 md:grid-cols-2">
       <div className="rounded-xl border border-parchment/15 bg-deep-ink/40 p-4 space-y-3">
         <h2 className="text-sm font-semibold text-parchment">Scheduled texts</h2>
+        {!toolsEnabled && upcoming.length > 0 && (
+          <p className="text-xs text-amber-300/80">
+            Scheduling is a Standard plan perk. These were queued on your previous
+            plan and won&apos;t send — cancel them or upgrade to keep scheduling.
+          </p>
+        )}
         {upcoming.length === 0 ? (
           <p className="text-xs text-parchment/40">
             Nothing queued. Use “Send later” in the composer to schedule a text.
@@ -170,6 +182,7 @@ export function SmsToolsPanel({ businessId, templates, scheduled }: Props) {
         )}
       </div>
 
+      {toolsEnabled && (
       <div className="rounded-xl border border-parchment/15 bg-deep-ink/40 p-4 space-y-3">
         <h2 className="text-sm font-semibold text-parchment">Saved templates</h2>
         {templates.length === 0 ? (
@@ -230,6 +243,7 @@ export function SmsToolsPanel({ businessId, templates, scheduled }: Props) {
           </div>
         </div>
       </div>
+      )}
       {error && <p className="text-xs text-red-300 md:col-span-2">{error}</p>}
     </div>
   );

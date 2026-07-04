@@ -77,24 +77,28 @@ export default async function DashboardMessagesPage() {
   const rcsEnabled = await rcsChannelActiveForBusiness(db, business.id);
 
   // Scheduled + template SMS (Standard+ perk): fetch the composer picker data
-  // and the tools panel contents only for entitled tenants — Starter renders
-  // the plain composer with neither.
+  // and the tools panel contents for entitled tenants. Pending scheduled rows
+  // are ALWAYS fetched — after a tier downgrade an owner must still see and
+  // cancel what they queued while on Standard (the sweep would fail those
+  // rows at dispatch time, but silently hiding them here would be worse).
   const smsToolsEnabled = smsToolsAllowedForTier(
     (business as { tier?: string | null }).tier
   );
   let templates: SmsTemplateOption[] = [];
   let scheduled: ScheduledSmsItem[] = [];
-  if (smsToolsEnabled) {
+  {
     // Pending rows soonest-first (so an owner with a deep queue always sees —
     // and can cancel — what dispatches next), plus a short tail of recent
-    // dispatched/canceled rows for context.
+    // dispatched/canceled rows for context (entitled tenants only).
     const [{ data: templateRows }, { data: pendingRows }, { data: historyRows }] =
       await Promise.all([
-        db
-          .from("sms_templates")
-          .select("id, name, body")
-          .eq("business_id", business.id)
-          .order("name", { ascending: true }),
+        smsToolsEnabled
+          ? db
+              .from("sms_templates")
+              .select("id, name, body")
+              .eq("business_id", business.id)
+              .order("name", { ascending: true })
+          : Promise.resolve({ data: [] }),
         db
           .from("scheduled_sms")
           .select("id, to_e164, body, send_at, status, error")
@@ -102,13 +106,15 @@ export default async function DashboardMessagesPage() {
           .eq("status", "pending")
           .order("send_at", { ascending: true })
           .limit(50),
-        db
-          .from("scheduled_sms")
-          .select("id, to_e164, body, send_at, status, error")
-          .eq("business_id", business.id)
-          .neq("status", "pending")
-          .order("send_at", { ascending: false })
-          .limit(5)
+        smsToolsEnabled
+          ? db
+              .from("scheduled_sms")
+              .select("id, to_e164, body, send_at, status, error")
+              .eq("business_id", business.id)
+              .neq("status", "pending")
+              .order("send_at", { ascending: false })
+              .limit(5)
+          : Promise.resolve({ data: [] })
       ]);
     templates = (templateRows ?? []) as SmsTemplateOption[];
     scheduled = ([...(pendingRows ?? []), ...(historyRows ?? [])] as Array<{
@@ -175,8 +181,13 @@ export default async function DashboardMessagesPage() {
         <MessagesList rows={rows} />
       )}
 
-      {smsToolsEnabled && (
-        <SmsToolsPanel businessId={business.id} templates={templates} scheduled={scheduled} />
+      {(smsToolsEnabled || scheduled.length > 0) && (
+        <SmsToolsPanel
+          businessId={business.id}
+          templates={templates}
+          scheduled={scheduled}
+          toolsEnabled={smsToolsEnabled}
+        />
       )}
     </div>
   );
