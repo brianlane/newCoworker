@@ -1,6 +1,9 @@
-import type { BillingPeriod, PlanTier } from "@/lib/plans/tier";
+import { getPeriodPricing, type BillingPeriod, type PlanTier } from "@/lib/plans/tier";
+import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
 import {
+  calculateCommitmentTotal,
   formatCommitmentTotal,
+  formatPriceCents,
   getFirstCycleDiscountDisplay,
   getMonthlyRateDisplay,
   getRenewalRateDisplay,
@@ -37,8 +40,14 @@ export function OrderSummaryCard({
   // 12/24-month plans are charged IN FULL at checkout (the VPS for the whole
   // term is prepaid), so "due today" is the commitment total and the monthly
   // figure is only the effective rate. Monthly plans keep first-cycle pricing.
+  // Every new signup additionally pays the one-time 10DLC carrier
+  // registration fee (non-refundable pass-through, Phase C3) on the first
+  // invoice, so it is part of "due today".
   const isTermPlan = period !== "monthly";
-  const totalDueToday = isTermPlan ? formatCommitmentTotal(tier, period) : firstCyclePrice;
+  const planDueTodayCents = isTermPlan
+    ? calculateCommitmentTotal(tier, period)
+    : getPeriodPricing(tier, period).monthlyCents;
+  const totalDueToday = formatPriceCents(planDueTodayCents + CARRIER_REGISTRATION_FEE_CENTS);
   const monthlyLabel = isTermPlan
     ? "Effective monthly rate"
     : preferFirstMonthLabel && hasIntroDiscount
@@ -83,10 +92,18 @@ export function OrderSummaryCard({
         <span>Commitment total</span>
         <span>{formatCommitmentTotal(tier, period)}</span>
       </div>
+      <div className="flex justify-between text-parchment/70">
+        <span>Carrier registration (10DLC, one-time)</span>
+        <span>{formatPriceCents(CARRIER_REGISTRATION_FEE_CENTS)}</span>
+      </div>
       <div className="flex justify-between text-parchment font-semibold pt-1 border-t border-parchment/10">
         <span>Total due today</span>
         <span>{totalDueToday}</span>
       </div>
+      <p className="text-xs text-parchment/45">
+        The carrier registration fee covers your business&apos;s one-time SMS carrier
+        (10DLC) registration and is non-refundable.
+      </p>
       {isTermPlan && (
         <p className="text-xs text-parchment/45">
           The full {formatBillingPeriod(period)} term is billed today. After the term, service

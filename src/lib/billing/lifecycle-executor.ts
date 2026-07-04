@@ -76,6 +76,7 @@ import type {
   SshOp,
   StripeOp
 } from "@/lib/billing/lifecycle";
+import { CARRIER_REGISTRATION_FEE_NAME } from "@/lib/plans/carrier-fee";
 
 export type ExecutorDeps = {
   stripe?: Stripe;
@@ -301,9 +302,32 @@ async function runStripeOp(op: StripeOp, stripe: Stripe, result: ExecutorResult)
         });
         return;
       }
+      // The one-time 10DLC carrier-registration pass-through (Phase C3) is
+      // non-refundable — the TCR/carrier fees behind it are non-refundable
+      // to us and the checkout discloses it. Carve its line(s) out of the
+      // 30-day money-back amount.
+      const carrierFeeCents = (invoice.lines?.data ?? [])
+        .filter((line) => (line.description ?? "").includes(CARRIER_REGISTRATION_FEE_NAME))
+        .reduce((sum, line) => sum + (line.amount ?? 0), 0);
+      const refundCents = Math.min(Math.max(amountPaidCents - carrierFeeCents, 0), amountPaidCents);
+      if (carrierFeeCents > 0) {
+        logger.info("refund_latest_charge: carving out non-refundable carrier registration fee", {
+          stripeSubscriptionId: op.stripeSubscriptionId,
+          invoiceId: latestInvoiceId,
+          carrierFeeCents,
+          refundCents
+        });
+      }
+      if (refundCents <= 0) {
+        logger.info("refund_latest_charge: nothing refundable after carrier-fee carve-out", {
+          stripeSubscriptionId: op.stripeSubscriptionId,
+          invoiceId: latestInvoiceId
+        });
+        return;
+      }
       const refund = await stripe.refunds.create({
         charge: chargeId,
-        amount: amountPaidCents,
+        amount: refundCents,
         reason: "requested_by_customer",
         metadata: {
           newcoworker_reason: op.reason,
@@ -313,7 +337,7 @@ async function runStripeOp(op: StripeOp, stripe: Stripe, result: ExecutorResult)
       result.refund = {
         stripeRefundId: refund.id,
         stripeChargeId: chargeId,
-        amountCents: amountPaidCents
+        amountCents: refundCents
       };
       return;
     }
@@ -528,13 +552,17 @@ async function runEmailOp(
       return;
     }
     case "send_refund_issued": {
-      const amountCents = result.refund?.amountCents ?? op.amountCents;
-      if (!result.refund && amountCents <= 0) {
+      // Only announce a refund that this plan's refund op actually created.
+      // The op can no-op (zero-amount invoice, or the whole payment was the
+      // non-refundable carrier fee), in which case emailing "your refund is
+      // on its way" with the planner's estimate would be a lie.
+      if (!result.refund) {
         logger.info("refund email skipped: no Stripe refund was created", {
           businessId: op.businessId
         });
         return;
       }
+      const amountCents = result.refund.amountCents;
       const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
       const { subject, text, html } = buildRefundIssuedEmail({
         amountCents,

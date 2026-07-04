@@ -176,6 +176,49 @@ describe("stripe/client", () => {
       cancelUrl: "https://example.com/cancel"
     });
     expect(result.id).toBeDefined();
+    expect(mockSessionCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        line_items: [{ price: "price_mock", quantity: 1 }]
+      })
+    );
+  });
+
+  it("createCheckoutSession adds a one-time carrier fee line item when oneTimeCarrierFeeCents is set", async () => {
+    await createCheckoutSession({
+      priceId: "price_mock_starter",
+      successUrl: "https://example.com/ok",
+      cancelUrl: "https://example.com/cancel",
+      oneTimeCarrierFeeCents: 1950
+    });
+    expect(mockSessionCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        line_items: [
+          { price: "price_mock_starter", quantity: 1 },
+          {
+            price_data: {
+              currency: "usd",
+              product_data: { name: "Carrier registration (10DLC)" },
+              unit_amount: 1950
+            },
+            quantity: 1
+          }
+        ]
+      })
+    );
+  });
+
+  it("createCheckoutSession omits the carrier fee line item when oneTimeCarrierFeeCents is zero", async () => {
+    await createCheckoutSession({
+      priceId: "price_mock_starter",
+      successUrl: "https://example.com/ok",
+      cancelUrl: "https://example.com/cancel",
+      oneTimeCarrierFeeCents: 0
+    });
+    expect(mockSessionCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        line_items: [{ price: "price_mock_starter", quantity: 1 }]
+      })
+    );
   });
 
   it("resolvePriceId defaults to biennial when no period given", () => {

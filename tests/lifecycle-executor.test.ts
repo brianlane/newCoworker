@@ -322,6 +322,83 @@ describe("executeLifecyclePlan refund handling", () => {
     expect(html).toContain("https://refund-trailing.example.com/dashboard/billing");
   });
 
+  it("carves the non-refundable carrier registration fee out of the refund", async () => {
+    const stripe = {
+      subscriptions: { retrieve: vi.fn().mockResolvedValue({ latest_invoice: "in_fee" }) },
+      invoices: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: "in_fee",
+          amount_paid: 4450,
+          lines: {
+            data: [
+              { description: "1 × Starter (at $25.00 / month)", amount: 2500 },
+              { description: "Carrier registration (10DLC)", amount: 1950 },
+              // Defensive branches: Stripe types allow null description/amount.
+              { description: null, amount: 100 },
+              { description: "Carrier registration (10DLC) adjustment", amount: null }
+            ]
+          },
+          payments: { data: [{ payment: { payment_intent: "pi_fee" } }] }
+        })
+      },
+      paymentIntents: {
+        retrieve: vi.fn().mockResolvedValue({ id: "pi_fee", latest_charge: "ch_fee" })
+      },
+      refunds: { create: vi.fn().mockResolvedValue({ id: "re_fee" }) }
+    };
+
+    await executeLifecyclePlan(
+      refundPlan(4450),
+      { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
+      { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
+    );
+
+    // 4450 paid − 1950 fee = 2500 refunded (the null-amount fee line adds 0).
+    expect(stripe.refunds.create).toHaveBeenCalledWith(
+      expect.objectContaining({ charge: "ch_fee", amount: 2500 })
+    );
+    expect(recordSubscriptionRefundMock).toHaveBeenCalledWith(
+      expect.objectContaining({ amountCents: 2500 })
+    );
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "owner@example.com",
+      expect.stringMatching(/refund/i),
+      expect.objectContaining({ text: expect.stringContaining("$25.00") })
+    );
+  });
+
+  it("skips the refund entirely when only the carrier fee was paid", async () => {
+    const stripe = {
+      subscriptions: { retrieve: vi.fn().mockResolvedValue({ latest_invoice: "in_fee_only" }) },
+      invoices: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: "in_fee_only",
+          amount_paid: 1950,
+          lines: {
+            data: [{ description: "Carrier registration (10DLC)", amount: 1950 }]
+          },
+          payments: { data: [{ payment: { payment_intent: "pi_fee_only" } }] }
+        })
+      },
+      paymentIntents: {
+        retrieve: vi.fn().mockResolvedValue({ id: "pi_fee_only", latest_charge: "ch_fee_only" })
+      },
+      refunds: { create: vi.fn() }
+    };
+
+    await executeLifecyclePlan(
+      refundPlan(1950),
+      { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
+      { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
+    );
+
+    expect(stripe.refunds.create).not.toHaveBeenCalled();
+    expect(markRefundUsedMock).not.toHaveBeenCalled();
+    expect(recordSubscriptionRefundMock).not.toHaveBeenCalled();
+    expect(sendOwnerEmailMock).not.toHaveBeenCalled();
+  });
+
   it("does not burn refund eligibility or send refund email when Stripe has no paid amount", async () => {
     const stripe = {
       subscriptions: { retrieve: vi.fn().mockResolvedValue({ latest_invoice: "in_zero" }) },
