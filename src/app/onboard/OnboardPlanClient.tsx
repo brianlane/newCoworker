@@ -142,6 +142,7 @@ export default function OnboardPage() {
         "Send texts during calls",
         "Auto-text callers when a call can't be answered",
         "Scheduled texts & saved message templates",
+        "AI call summaries & caller sentiment on your dashboard",
         "Warm handoff call transfers",
         "$10/mo AI budget for agentic tasks, before free model fallback",
         "Configuration and training updates",

@@ -6,10 +6,12 @@ import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import {
   CallDirectionBadge,
+  SentimentBadge,
   StatusBadge,
   formatDuration
 } from "@/components/dashboard/voice-transcript-helpers";
 import type {
+  VoiceCallSentiment,
   VoiceTranscriptDirection,
   VoiceTranscriptStatus
 } from "@/lib/db/voice-transcripts";
@@ -34,6 +36,9 @@ export type CallListRow = {
   direction: VoiceTranscriptDirection;
   startedAt: string;
   endedAt: string | null;
+  /** AI digest + caller mood (Standard+ perk); null while unsummarized. */
+  summary: string | null;
+  sentiment: VoiceCallSentiment | null;
 };
 
 const CALL_SORT_OPTIONS: SortOption[] = [
@@ -58,7 +63,7 @@ export function CallsList({ rows }: { rows: CallListRow[] }) {
   );
   const [query, setQuery] = useState("");
 
-  const filtered = rows.filter((r) => matchesQuery(query, [r.label, r.e164]));
+  const filtered = rows.filter((r) => matchesQuery(query, [r.label, r.e164, r.summary]));
   const sorted = sortRows(filtered, (r) => sortValue(r, sort.field), sort.dir);
 
   return (
@@ -115,7 +120,18 @@ export function CallsList({ rows }: { rows: CallListRow[] }) {
                     <p className="text-xs text-parchment/50 mt-0.5">
                       <LocalDateTime iso={row.startedAt} /> ·{" "}
                       {formatDuration(row.startedAt, row.endedAt)}
+                      {row.sentiment && (
+                        <>
+                          {" "}
+                          <SentimentBadge sentiment={row.sentiment} />
+                        </>
+                      )}
                     </p>
+                    {row.summary && (
+                      <p className="text-xs text-parchment/60 mt-1 line-clamp-2">
+                        {row.summary}
+                      </p>
+                    )}
                   </div>
                   <span className="text-parchment/40 text-sm shrink-0">View →</span>
                 </Link>
