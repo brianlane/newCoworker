@@ -22,7 +22,14 @@ import {
   markFirstPaidIfUnset,
   upsertCustomerProfile
 } from "@/lib/db/customer-profiles";
-import { setBusinessCustomerProfile } from "@/lib/db/businesses";
+import { getBusiness, recordWhiteGlovePurchase, setBusinessCustomerProfile } from "@/lib/db/businesses";
+import {
+  getWhiteGloveBookingUrl,
+  getWhiteGlovePackage,
+  prioritySupportUntil
+} from "@/lib/plans/white-glove";
+import { buildWhiteGloveConfirmationEmail } from "@/lib/email/templates/white-glove-confirmation";
+import { sendOwnerEmail } from "@/lib/email/client";
 import {
   cancelStripeSubscriptionSafely,
   runChangePlanFromCheckout,
@@ -803,6 +810,10 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
     await applyChatCreditGrantFromCheckout(session, eventId);
     return;
   }
+  if (session.mode === "payment" && session.metadata?.checkoutKind === "white_glove_package") {
+    await applyWhiteGlovePurchaseFromCheckout(session, eventId);
+    return;
+  }
 
   // `changePlan` is a full-price fresh-checkout that goes through the
   // normal `mode: subscription` path but must NOT run the default
@@ -1438,6 +1449,106 @@ async function applyChatCreditGrantFromCheckout(session: Stripe.Checkout.Session
     rpcName: "apply_chat_credit_grant_from_checkout",
     rpcAmountParam: "p_credit_micros"
   });
+}
+
+/**
+ * Records a white-glove package purchase (Phase C5): stamps the package +
+ * priority call/video support window (purchase + 30d) on the business row
+ * and sends the booking confirmation email. Idempotent under webhook
+ * retries — the row update re-writes the same values (session `created` is
+ * fixed) and a duplicate confirmation email is a tolerable worst case.
+ */
+async function applyWhiteGlovePurchaseFromCheckout(
+  session: Stripe.Checkout.Session,
+  eventId: string
+) {
+  const businessId = session.metadata?.businessId?.trim();
+  if (!businessId) {
+    logger.warn("white_glove_package checkout missing businessId", {
+      eventId,
+      sessionId: session.id
+    });
+    return;
+  }
+  const pkg = getWhiteGlovePackage(session.metadata?.whiteGlovePackage ?? "");
+  if (!pkg) {
+    logger.warn("white_glove_package checkout has unknown package id", {
+      eventId,
+      sessionId: session.id,
+      businessId,
+      rawPackage: session.metadata?.whiteGlovePackage ?? null
+    });
+    return;
+  }
+
+  const business = await getBusiness(businessId);
+  if (!business) {
+    logger.warn("white_glove_package checkout for unknown business", {
+      eventId,
+      sessionId: session.id,
+      businessId
+    });
+    return;
+  }
+  // Never downgrade: a stray/retried `setup` completion after a `buildout`
+  // purchase must not overwrite the larger package already on the row.
+  if (business.white_glove_package === "buildout" && pkg.id === "setup") {
+    logger.warn("white_glove_package checkout ignored: buildout already owned", {
+      eventId,
+      sessionId: session.id,
+      businessId
+    });
+    return;
+  }
+
+  const createdSec =
+    typeof session.created === "number" && Number.isFinite(session.created)
+      ? session.created
+      : Math.floor(Date.now() / 1000);
+  const purchasedAt = new Date(createdSec * 1000);
+  const supportUntil = prioritySupportUntil(purchasedAt);
+
+  await recordWhiteGlovePurchase(businessId, {
+    packageId: pkg.id,
+    purchasedAt,
+    prioritySupportUntil: supportUntil
+  });
+  logger.info("White-glove purchase recorded", {
+    eventId,
+    sessionId: session.id,
+    businessId,
+    packageId: pkg.id,
+    prioritySupportUntil: supportUntil.toISOString()
+  });
+
+  // Confirmation email is best-effort: the purchase is already recorded, so
+  // a Resend hiccup must not fail the webhook (Stripe would retry and we'd
+  // re-run the whole handler for nothing).
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    logger.warn("white_glove_package: RESEND_API_KEY unset; skipping confirmation email", {
+      eventId,
+      businessId
+    });
+    return;
+  }
+  try {
+    const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    const { subject, text, html } = buildWhiteGloveConfirmationEmail({
+      packageName: pkg.name,
+      recipientEmail: business.owner_email,
+      prioritySupportUntil: supportUntil,
+      bookingUrl: getWhiteGloveBookingUrl(),
+      siteUrl
+    });
+    await sendOwnerEmail(apiKey, business.owner_email, subject, { text, html });
+  } catch (err) {
+    logger.error("white_glove_package confirmation email failed", {
+      eventId,
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
 }
 
 /** A la carte voice seconds: Checkout Session payment mode + metadata (see .env.example). §4.1 */

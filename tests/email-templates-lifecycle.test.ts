@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildCancelConfirmationEmail } from "@/lib/email/templates/cancel-confirmation";
 import { buildEmailVerificationMessage } from "@/lib/email/templates/email-verification";
 import { buildRefundIssuedEmail } from "@/lib/email/templates/refund-issued";
+import { buildWhiteGloveConfirmationEmail } from "@/lib/email/templates/white-glove-confirmation";
 import {
   buildOpsVpsDeletionEmail,
   opsNotificationEmail,
@@ -144,6 +145,36 @@ describe("refund-issued email", () => {
   it("clamps negative amounts to 0 so the email never shows a weird value", () => {
     const { text } = buildRefundIssuedEmail({ amountCents: -50, ...mailCtx });
     expect(text).toMatch(/\$0\.00/);
+  });
+});
+
+describe("white-glove confirmation email", () => {
+  it("includes the booking link and priority window end date when configured", () => {
+    const { subject, text, html } = buildWhiteGloveConfirmationEmail({
+      packageName: "White-glove buildout",
+      prioritySupportUntil: new Date("2026-08-03T12:00:00.000Z"),
+      bookingUrl: "https://cal.example.com/newcoworker",
+      ...mailCtx
+    });
+    expect(subject).toBe("Your White-glove buildout is confirmed");
+    expect(text).toContain("https://cal.example.com/newcoworker");
+    expect(text).toContain("August 3, 2026");
+    expect(html).toContain("Book your session");
+    expect(html).toContain("https://cal.example.com/newcoworker");
+  });
+
+  it("falls back to reply-to-schedule copy without a booking url", () => {
+    const { text, html } = buildWhiteGloveConfirmationEmail({
+      packageName: "White-glove setup",
+      prioritySupportUntil: new Date("2026-08-03T12:00:00.000Z"),
+      bookingUrl: null,
+      recipientEmail: "owner@example.com",
+      siteUrl: "https://www.newcoworker.com/"
+    });
+    expect(text).toContain("Reply to this email");
+    expect(html).toContain("Open dashboard");
+    expect(html).toContain("https://www.newcoworker.com/dashboard");
+    expect(html).not.toContain("https://www.newcoworker.com//");
   });
 });
 

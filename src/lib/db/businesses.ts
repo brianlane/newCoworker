@@ -56,6 +56,17 @@ export type BusinessRow = {
    * `resolveVpsSize` in src/lib/vps/size.ts.
    */
   vps_size?: "kvm2" | "kvm8" | null;
+  /**
+   * Highest white-glove onboarding package purchased (Phase C5). Recorded by
+   * the Stripe webhook; catalog in src/lib/plans/white-glove.ts.
+   */
+  white_glove_package?: "setup" | "buildout" | null;
+  white_glove_purchased_at?: string | null;
+  /**
+   * Priority call/video support window end (white-glove purchase + 30d).
+   * Null or past = email-only support. Gate via `hasPrioritySupport`.
+   */
+  priority_support_until?: string | null;
 };
 
 /**
@@ -229,6 +240,32 @@ export async function updateBusinessVpsSize(
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db.from("businesses").update({ vps_size: vpsSize }).eq("id", id);
   if (error) throw new Error(`updateBusinessVpsSize: ${error.message}`);
+}
+
+/**
+ * Records a completed white-glove package checkout on the business row and
+ * opens the priority call/video support window. Idempotent by construction:
+ * webhook retries re-write the same values (session `created` is fixed).
+ */
+export async function recordWhiteGlovePurchase(
+  id: string,
+  data: {
+    packageId: "setup" | "buildout";
+    purchasedAt: Date;
+    prioritySupportUntil: Date;
+  },
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("businesses")
+    .update({
+      white_glove_package: data.packageId,
+      white_glove_purchased_at: data.purchasedAt.toISOString(),
+      priority_support_until: data.prioritySupportUntil.toISOString()
+    })
+    .eq("id", id);
+  if (error) throw new Error(`recordWhiteGlovePurchase: ${error.message}`);
 }
 
 export async function updateEnterpriseLimits(

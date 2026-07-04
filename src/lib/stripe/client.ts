@@ -272,6 +272,64 @@ export async function createChatCreditCheckoutSession(
   });
 }
 
+export type WhiteGloveCheckoutParams = {
+  packageId: string;
+  packageName: string;
+  amountCents: number;
+  businessId: string;
+  successUrl: string;
+  cancelUrl: string;
+  customerEmail?: string;
+  customerId?: string;
+  userId: string;
+};
+
+/**
+ * One-time Checkout Session for a white-glove onboarding package (Phase C5).
+ * Inline `price_data` — the catalog in src/lib/plans/white-glove.ts is the
+ * pricing source of truth, so no per-environment Stripe product setup is
+ * needed. Metadata shape is what the Stripe webhook expects
+ * (`checkoutKind: "white_glove_package"`), mirrored onto the payment intent
+ * so refunds/disputes trace back to the purchase.
+ */
+export async function createWhiteGloveCheckoutSession(
+  params: WhiteGloveCheckoutParams
+): Promise<{ id: string; url: string }> {
+  if (!Number.isInteger(params.amountCents) || params.amountCents <= 0) {
+    throw new Error("amountCents must be a positive integer");
+  }
+  const stripe = getStripe();
+  const metadata: Record<string, string> = {
+    checkoutKind: "white_glove_package",
+    businessId: params.businessId,
+    whiteGlovePackage: params.packageId,
+    userId: params.userId
+  };
+  const session = await stripe.checkout.sessions.create({
+    mode: "payment",
+    line_items: [
+      {
+        price_data: {
+          currency: "usd",
+          product_data: { name: params.packageName },
+          unit_amount: params.amountCents
+        },
+        quantity: 1
+      }
+    ],
+    success_url: params.successUrl,
+    cancel_url: params.cancelUrl,
+    customer: params.customerId,
+    customer_email: params.customerId ? undefined : params.customerEmail,
+    customer_creation: params.customerId ? undefined : "always",
+    billing_address_collection: "auto",
+    metadata,
+    payment_intent_data: { metadata }
+  });
+  if (!session.url) throw new Error("Stripe checkout session URL is null");
+  return { id: session.id, url: session.url };
+}
+
 export async function createCustomerPortalSession(params: {
   customerId: string;
   returnUrl: string;

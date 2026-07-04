@@ -44,10 +44,21 @@ import { Card } from "@/components/ui/Card";
 import { VoiceBonusPacks } from "@/components/dashboard/VoiceBonusPacks";
 import { UsagePacks } from "@/components/dashboard/UsagePacks";
 import { PlanCard } from "@/components/billing/PlanCard";
+import {
+  getWhiteGloveBookingUrl,
+  getWhiteGlovePackage,
+  hasPrioritySupport,
+  listWhiteGlovePackages
+} from "@/lib/plans/white-glove";
 
 export const dynamic = "force-dynamic";
 
-type SearchParams = { bonus?: string; planChanged?: string; reactivated?: string };
+type SearchParams = {
+  bonus?: string;
+  planChanged?: string;
+  reactivated?: string;
+  whiteGlove?: string;
+};
 
 function formatMinutes(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return "0 min";
@@ -66,7 +77,9 @@ export default async function BillingPage(props: {
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
-    .select("id, tier, enterprise_limits, name, customer_profile_id")
+    .select(
+      "id, tier, enterprise_limits, name, customer_profile_id, white_glove_package, white_glove_purchased_at, priority_support_until"
+    )
     .eq("owner_email", user.email)
     .order("created_at", { ascending: false })
     .limit(1);
@@ -166,6 +179,30 @@ export default async function BillingPage(props: {
           text: "Reactivation submitted. We're restoring your workspace onto a fresh VPS — this can take a few minutes."
         }
       : null;
+  const whiteGloveBanner =
+    searchParams.whiteGlove === "success"
+      ? {
+          kind: "ok" as const,
+          text: "Thanks! Your white-glove onboarding is confirmed — check your email for the booking link."
+        }
+      : searchParams.whiteGlove === "cancelled"
+        ? { kind: "warn" as const, text: "Checkout cancelled. No charge was made." }
+        : null;
+
+  // ---- White-glove onboarding (Phase C5) --------------------------------
+  const ownedWhiteGlove = getWhiteGlovePackage(
+    (business as { white_glove_package?: string | null } | null)?.white_glove_package ?? ""
+  );
+  const prioritySupportUntilIso =
+    (business as { priority_support_until?: string | null } | null)?.priority_support_until ?? null;
+  const priorityOpen = hasPrioritySupport(prioritySupportUntilIso);
+  const bookingUrl = getWhiteGloveBookingUrl();
+  // Offer only packages the business doesn't already own (buildout supersedes
+  // setup, so owning buildout hides both offers; owning setup leaves the
+  // buildout upgrade visible).
+  const whiteGloveOffers = listWhiteGlovePackages().filter(
+    (p) => ownedWhiteGlove === null || (ownedWhiteGlove.id === "setup" && p.id === "buildout")
+  );
 
   // ---- Derive PlanCard props from subscription + profile ---------------
   const now = new Date();
@@ -242,6 +279,26 @@ export default async function BillingPage(props: {
       {reactivatedBanner && (
         <Card className="border-claw-green/40 bg-claw-green/10">
           <p className="text-sm text-claw-green">{reactivatedBanner.text}</p>
+        </Card>
+      )}
+
+      {whiteGloveBanner && (
+        <Card
+          className={
+            whiteGloveBanner.kind === "ok"
+              ? "border-claw-green/40 bg-claw-green/10"
+              : "border-spark-orange/40 bg-spark-orange/10"
+          }
+        >
+          <p
+            className={
+              whiteGloveBanner.kind === "ok"
+                ? "text-sm text-claw-green"
+                : "text-sm text-spark-orange"
+            }
+          >
+            {whiteGloveBanner.text}
+          </p>
         </Card>
       )}
 
@@ -415,6 +472,54 @@ export default async function BillingPage(props: {
         canPurchase={canPurchase}
         disabledReason={disabledReason}
       />
+
+      <Card>
+        <h2 className="text-sm font-semibold text-parchment uppercase tracking-wider">Support</h2>
+        {ownedWhiteGlove ? (
+          <div className="mt-2 space-y-1">
+            <p className="text-xs text-parchment/70">
+              {ownedWhiteGlove.name} purchased.{" "}
+              {priorityOpen && prioritySupportUntilIso
+                ? `Priority call & video support is open until ${new Date(prioritySupportUntilIso).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}.`
+                : "Your priority call & video window has ended — support continues by email."}
+            </p>
+            {priorityOpen && bookingUrl && (
+              <p className="text-xs text-parchment/50">
+                Book a session anytime:{" "}
+                <a
+                  href={bookingUrl}
+                  className="text-claw-green underline"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  scheduling link
+                </a>
+              </p>
+            )}
+          </div>
+        ) : (
+          <p className="mt-2 text-xs text-parchment/50">
+            Your plan includes email support. Add white-glove onboarding below for live call
+            &amp; video support with a specialist.
+          </p>
+        )}
+      </Card>
+
+      {whiteGloveOffers.length > 0 && (
+        <UsagePacks
+          title="White-glove onboarding"
+          description="One-time, hands-on onboarding with a specialist. Either package opens a 30-day priority call & video support line."
+          checkoutPath="/api/billing/white-glove/checkout"
+          packs={whiteGloveOffers.map((p) => ({
+            id: p.id,
+            label: p.name,
+            priceUsd: p.priceUsd,
+            subline: p.description
+          }))}
+          canPurchase={canPurchase}
+          disabledReason={disabledReason}
+        />
+      )}
     </div>
   );
 }
