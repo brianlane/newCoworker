@@ -136,12 +136,17 @@ export async function releaseVpsToPool(
 
   const { data: existing, error: readErr } = await db
     .from("vps_inventory")
-    .select("vm_id")
+    .select("vm_id, state")
     .eq("vm_id", input.vmId)
     .maybeSingle();
   if (readErr) throw new Error(`releaseVpsToPool: ${readErr.message}`);
 
   if (existing) {
+    // A retired row means the box is gone upstream (lapsed, panel-deleted,
+    // failed adopt). A later lifecycle release for the same vm_id (e.g. the
+    // grace-expired wipe re-running after the cancel already pooled and a
+    // failed adopt retired it) must not resurrect it into the adopt pool.
+    if ((existing as { state: string }).state === "retired") return;
     const { error } = await db
       .from("vps_inventory")
       .update({
@@ -152,7 +157,9 @@ export async function releaseVpsToPool(
         notes: input.notes ?? null,
         updated_at: nowIso
       })
-      .eq("vm_id", input.vmId);
+      .eq("vm_id", input.vmId)
+      // Guard against a retire racing between our read and this write.
+      .neq("state", "retired");
     if (error) throw new Error(`releaseVpsToPool: ${error.message}`);
     return;
   }

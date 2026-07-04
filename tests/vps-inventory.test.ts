@@ -33,6 +33,7 @@ type MockQB = {
   insert: ReturnType<typeof vi.fn>;
   upsert: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
+  neq: ReturnType<typeof vi.fn>;
   order: ReturnType<typeof vi.fn>;
   limit: ReturnType<typeof vi.fn>;
   maybeSingle: ReturnType<typeof vi.fn>;
@@ -45,6 +46,7 @@ function makeChain(): MockQB {
     insert: vi.fn(),
     upsert: vi.fn(),
     eq: vi.fn(() => qb),
+    neq: vi.fn(),
     order: vi.fn(() => qb),
     limit: vi.fn(),
     maybeSingle: vi.fn()
@@ -209,14 +211,12 @@ describe("vps_inventory DB layer", () => {
   describe("releaseVpsToPool", () => {
     it("updates an already-tracked box to available WITHOUT touching its recorded plan", async () => {
       const chain = makeChain();
-      chain.maybeSingle.mockResolvedValueOnce({ data: { vm_id: 42 }, error: null });
-      // eq #1 filters the existence read (returns the chain); eq #2 is the
-      // terminal call of .update(...).eq(...) and resolves the write.
-      let eqCalls = 0;
-      chain.eq.mockImplementation(() => {
-        eqCalls += 1;
-        return eqCalls >= 2 ? Promise.resolve({ error: null }) : chain;
+      chain.maybeSingle.mockResolvedValueOnce({
+        data: { vm_id: 42, state: "assigned" },
+        error: null
       });
+      // The write chain is .update(...).eq(...).neq(...) — neq is terminal.
+      chain.neq.mockResolvedValueOnce({ error: null });
       const db = makeDb(chain);
       await releaseVpsToPool(
         { vmId: 42, plan: "kvm2", hostingerBillingSubscriptionId: "sub-9", notes: "canceled" },
@@ -231,6 +231,20 @@ describe("vps_inventory DB layer", () => {
       // The recorded plan (captured at purchase/adopt) is ground truth —
       // a cancel-time caller's inferred label must never clobber it.
       expect(updateArg.plan).toBeUndefined();
+      // Race guard: the conditional write skips rows retired in between.
+      expect(chain.neq).toHaveBeenCalledWith("state", "retired");
+      expect(chain.insert).not.toHaveBeenCalled();
+    });
+
+    it("never resurrects a retired row — a box gone upstream stays gone", async () => {
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValueOnce({
+        data: { vm_id: 42, state: "retired" },
+        error: null
+      });
+      const db = makeDb(chain);
+      await releaseVpsToPool({ vmId: 42, plan: "kvm2" }, db as never);
+      expect(chain.update).not.toHaveBeenCalled();
       expect(chain.insert).not.toHaveBeenCalled();
     });
 
@@ -269,12 +283,11 @@ describe("vps_inventory DB layer", () => {
 
     it("throws when the update errors", async () => {
       const chain = makeChain();
-      chain.maybeSingle.mockResolvedValueOnce({ data: { vm_id: 7 }, error: null });
-      let eqCalls = 0;
-      chain.eq.mockImplementation(() => {
-        eqCalls += 1;
-        return eqCalls >= 2 ? Promise.resolve({ error: { message: "update boom" } }) : chain;
+      chain.maybeSingle.mockResolvedValueOnce({
+        data: { vm_id: 7, state: "assigned" },
+        error: null
       });
+      chain.neq.mockResolvedValueOnce({ error: { message: "update boom" } });
       const db = makeDb(chain);
       await expect(releaseVpsToPool({ vmId: 7, plan: "kvm2" }, db as never)).rejects.toThrow(
         /releaseVpsToPool: update boom/
