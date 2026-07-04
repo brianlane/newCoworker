@@ -34,6 +34,9 @@ export interface AutotextSupabase {
     update(values: Record<string, unknown>): {
       eq(column: string, value: string): PromiseLike<Row>;
     };
+    delete(): {
+      eq(column: string, value: string): PromiseLike<Row>;
+    };
   };
   rpc(fn: string, args: Record<string, unknown>): PromiseLike<Row>;
 }
@@ -132,6 +135,13 @@ export async function sendMissedCallAutotext(
     const ledgerId = typeof claimRaw === "string" && claimRaw.length > 0 ? claimRaw : null;
     if (!ledgerId) return { status: "skipped", reason: "deduped" };
 
+    // If we bail before a send is actually attempted (missing config, SMS cap,
+    // reserve error), give the dedup claim back so a later missed call in the
+    // window can still trigger the text once the blocker clears.
+    const releaseLedger = async () => {
+      await supabase.from("missed_call_autotexts").delete().eq("id", ledgerId);
+    };
+
     const { data: tsetData } = await supabase
       .from("business_telnyx_settings")
       .select("telnyx_messaging_profile_id, telnyx_sms_from_e164")
@@ -149,6 +159,7 @@ export async function sendMissedCallAutotext(
         ? String(tset?.telnyx_sms_from_e164)
         : opts.defaultFromE164;
     if (!opts.telnyxApiKey || !messagingProfileId || !fromE164 || fromE164 === caller) {
+      await releaseLedger();
       return { status: "skipped", reason: "no_messaging" };
     }
 
@@ -158,26 +169,44 @@ export async function sendMissedCallAutotext(
       "try_reserve_sms_outbound_slot",
       { p_business_id: opts.businessId }
     );
-    if (reserveErr) return { status: "failed", reason: `sms_reserve:${reserveErr.message}` };
+    if (reserveErr) {
+      await releaseLedger();
+      return { status: "failed", reason: `sms_reserve:${reserveErr.message}` };
+    }
     const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string } | null;
     if (!reserve?.ok) {
+      await releaseLedger();
       return { status: "skipped", reason: `sms_cap:${reserve?.reason ?? "monthly_sms_limit"}` };
     }
 
-    const doFetch = opts.fetchFn ?? fetch;
-    const res = await doFetch("https://api.telnyx.com/v2/messages", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${opts.telnyxApiKey}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        to: caller,
-        from: fromE164,
-        text: buildMissedCallAutotextMessage(biz?.name ?? null),
-        messaging_profile_id: messagingProfileId
-      })
-    });
+    let res: { ok: boolean; status: number; json(): Promise<unknown> };
+    try {
+      const doFetch = opts.fetchFn ?? fetch;
+      res = await doFetch("https://api.telnyx.com/v2/messages", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${opts.telnyxApiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          to: caller,
+          from: fromE164,
+          text: buildMissedCallAutotextMessage(biz?.name ?? null),
+          messaging_profile_id: messagingProfileId
+        })
+      });
+    } catch (fetchErr) {
+      // Network-level failure: nothing left Telnyx, so give the metered slot
+      // back before surfacing the error.
+      await supabase.rpc("release_sms_outbound_slot", {
+        p_business_id: opts.businessId,
+        p_refund_bonus: reserve.source === "bonus"
+      });
+      return {
+        status: "failed",
+        reason: fetchErr instanceof Error ? fetchErr.message : String(fetchErr)
+      };
+    }
     if (!res.ok) {
       // Give the metered slot back — the send never left Telnyx. The dedup
       // ledger row intentionally stays: retrying a rejected send on the next

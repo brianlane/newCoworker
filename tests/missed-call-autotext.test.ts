@@ -17,6 +17,8 @@ function makeSupabase(overrides: {
 }) {
   const updateEq = vi.fn().mockResolvedValue({ data: null, error: null });
   const update = vi.fn().mockReturnValue({ eq: updateEq });
+  const deleteEq = vi.fn().mockResolvedValue({ data: null, error: null });
+  const deleteFn = vi.fn().mockReturnValue({ eq: deleteEq });
   const rpc = vi.fn(async (fn: string, args: Record<string, unknown>) => {
     if (overrides.rpc) return overrides.rpc(fn, args);
     if (fn === "sms_is_opted_out") return { data: false, error: null };
@@ -51,9 +53,18 @@ function makeSupabase(overrides: {
         })
       })
     }),
-    update
+    update,
+    delete: deleteFn
   }));
-  return { supabase: { from, rpc } as unknown as AutotextSupabase, from, rpc, update, updateEq };
+  return {
+    supabase: { from, rpc } as unknown as AutotextSupabase,
+    from,
+    rpc,
+    update,
+    updateEq,
+    deleteFn,
+    deleteEq
+  };
 }
 
 function okFetch(mid = "msg_1") {
@@ -273,6 +284,7 @@ describe("missed-call auto-text helper", () => {
     expect(
       await sendMissedCallAutotext(noKey.supabase, { ...baseOpts, telnyxApiKey: "" })
     ).toEqual({ status: "skipped", reason: "no_messaging" });
+    expect(noKey.deleteEq).toHaveBeenCalledWith("id", "ledger-1");
 
     const noProfile = makeSupabase({
       telnyxSettings: { data: null, error: null }
@@ -284,6 +296,7 @@ describe("missed-call auto-text helper", () => {
         defaultFromE164: ""
       })
     ).toEqual({ status: "skipped", reason: "no_messaging" });
+    expect(noProfile.deleteEq).toHaveBeenCalledWith("id", "ledger-1");
 
     const selfCall = makeSupabase({
       telnyxSettings: {
@@ -295,10 +308,11 @@ describe("missed-call auto-text helper", () => {
       status: "skipped",
       reason: "no_messaging"
     });
+    expect(selfCall.deleteEq).toHaveBeenCalledWith("id", "ledger-1");
   });
 
   it("skips when the monthly SMS cap refuses the slot", async () => {
-    const { supabase } = makeSupabase({
+    const { supabase, deleteEq } = makeSupabase({
       rpc: (fn) => {
         if (fn === "sms_is_opted_out") return { data: false, error: null };
         if (fn === "try_mark_missed_call_autotext") return { data: "ledger-1", error: null };
@@ -310,10 +324,11 @@ describe("missed-call auto-text helper", () => {
     });
     const outcome = await sendMissedCallAutotext(supabase, baseOpts);
     expect(outcome).toEqual({ status: "skipped", reason: "sms_cap:monthly_sms_limit" });
+    expect(deleteEq).toHaveBeenCalledWith("id", "ledger-1");
   });
 
   it("reports a generic cap reason when the reserve RPC returns an empty payload", async () => {
-    const { supabase } = makeSupabase({
+    const { supabase, deleteEq } = makeSupabase({
       rpc: (fn) => {
         if (fn === "sms_is_opted_out") return { data: false, error: null };
         if (fn === "try_mark_missed_call_autotext") return { data: "ledger-1", error: null };
@@ -323,10 +338,11 @@ describe("missed-call auto-text helper", () => {
     });
     const outcome = await sendMissedCallAutotext(supabase, baseOpts);
     expect(outcome).toEqual({ status: "skipped", reason: "sms_cap:monthly_sms_limit" });
+    expect(deleteEq).toHaveBeenCalledWith("id", "ledger-1");
   });
 
   it("fails when the reserve RPC errors", async () => {
-    const { supabase } = makeSupabase({
+    const { supabase, deleteEq } = makeSupabase({
       rpc: (fn) => {
         if (fn === "sms_is_opted_out") return { data: false, error: null };
         if (fn === "try_mark_missed_call_autotext") return { data: "ledger-1", error: null };
@@ -338,6 +354,7 @@ describe("missed-call auto-text helper", () => {
     });
     const outcome = await sendMissedCallAutotext(supabase, baseOpts);
     expect(outcome).toEqual({ status: "failed", reason: "sms_reserve:rpc down" });
+    expect(deleteEq).toHaveBeenCalledWith("id", "ledger-1");
   });
 
   it("releases the metered slot (refunding bonus texts) when Telnyx rejects the send", async () => {
@@ -361,6 +378,38 @@ describe("missed-call auto-text helper", () => {
     const outcome = await sendMissedCallAutotext(supabase, { ...baseOpts, fetchFn });
     expect(outcome).toEqual({ status: "failed", reason: "telnyx_422" });
     expect(releaseCalls).toEqual([{ p_business_id: "biz-1", p_refund_bonus: true }]);
+  });
+
+  it("releases the metered slot but keeps the dedup row when fetch itself throws", async () => {
+    const releaseCalls: Array<Record<string, unknown>> = [];
+    const { supabase, deleteFn } = makeSupabase({
+      rpc: (fn, args) => {
+        if (fn === "sms_is_opted_out") return { data: false, error: null };
+        if (fn === "try_mark_missed_call_autotext") return { data: "ledger-1", error: null };
+        if (fn === "try_reserve_sms_outbound_slot") {
+          return { data: { ok: true, source: "included" }, error: null };
+        }
+        if (fn === "release_sms_outbound_slot") {
+          releaseCalls.push(args);
+          return { data: null, error: null };
+        }
+        return { data: null, error: null };
+      }
+    });
+    const fetchFn = vi.fn().mockRejectedValue(new Error("network down")) as unknown as typeof fetch;
+
+    const outcome = await sendMissedCallAutotext(supabase, { ...baseOpts, fetchFn });
+    expect(outcome).toEqual({ status: "failed", reason: "network down" });
+    expect(releaseCalls).toEqual([{ p_business_id: "biz-1", p_refund_bonus: false }]);
+    expect(deleteFn).not.toHaveBeenCalled();
+  });
+
+  it("stringifies non-Error fetch throws while releasing the slot", async () => {
+    const { supabase } = makeSupabase({});
+    const fetchFn = vi.fn().mockRejectedValue("socket reset") as unknown as typeof fetch;
+
+    const outcome = await sendMissedCallAutotext(supabase, { ...baseOpts, fetchFn });
+    expect(outcome).toEqual({ status: "failed", reason: "socket reset" });
   });
 
   it("returns failed on unexpected throws instead of propagating", async () => {
