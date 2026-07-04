@@ -61,6 +61,10 @@ import {
 import type { AiFlowDefinition } from "../_shared/ai_flows/types.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 import {
+  sendMissedCallAutotext,
+  type MissedCallReason
+} from "../_shared/missed_call_autotext.ts";
+import {
   readTelnyxWebhookRateLimits,
   telnyxWebhookClientIp,
   telnyxWebhookRateAllow
@@ -922,6 +926,49 @@ serve(async (req: Request) => {
 
   if (!reserve.ok) {
     const reason = reserve.reason;
+    // Missed-call auto-text (Standard/Enterprise perk): a refused caller gets
+    // one follow-up SMS from the business's number so the conversation can
+    // continue over text. Fully fail-safe inside the helper (tier gate,
+    // per-tenant kill switch, opt-out, 1h dedup, monthly SMS cap).
+    const missedCallFollowUp = async (missedReason: MissedCallReason) => {
+      const outcome = await sendMissedCallAutotext(supabase, {
+        businessId,
+        callerE164: fromE164Informational,
+        reason: missedReason,
+        telnyxApiKey: apiKey,
+        defaultMessagingProfileId: Deno.env.get("TELNYX_MESSAGING_PROFILE_ID") ?? "",
+        defaultFromE164: Deno.env.get("TELNYX_SMS_FROM_E164") ?? ""
+      });
+      await telemetryRecord(supabase, "voice_missed_call_autotext", {
+        business_id: businessId,
+        call_control_id: callControlId,
+        reason: missedReason,
+        outcome: outcome.status,
+        detail: outcome.reason ?? null
+      });
+      if (outcome.status === "sent") {
+        await systemLog(supabase, {
+          businessId,
+          source: "voice",
+          level: "info",
+          event: "voice_missed_call_autotext_sent",
+          message: `Missed-call auto-text sent to ${fromE164Informational} (${missedReason})`,
+          payload: {
+            call_control_id: callControlId,
+            telnyx_message_id: outcome.telnyxMessageId ?? null
+          }
+        });
+      } else if (outcome.status === "failed") {
+        await systemLog(supabase, {
+          businessId,
+          source: "voice",
+          level: "warn",
+          event: "voice_missed_call_autotext_failed",
+          message: `Missed-call auto-text failed: ${outcome.reason ?? "unknown"}`,
+          payload: { call_control_id: callControlId, reason: missedReason }
+        });
+      }
+    };
     if (reason === "concurrent_limit") {
       await answerThenSpeak(apiKey, callControlId, VOICE_MSG_CONCURRENT_LIMIT);
       await telemetryRecord(supabase, "voice_concurrent_limit_spoken", {
@@ -936,6 +983,7 @@ serve(async (req: Request) => {
         message: `Inbound call refused: ${reason}`,
         payload: { call_control_id: callControlId, reason }
       });
+      await missedCallFollowUp("concurrent_limit");
     } else if (reason === "quota_exhausted") {
       await answerThenSpeak(apiKey, callControlId, VOICE_MSG_QUOTA_EXHAUSTED);
       await systemLog(supabase, {
@@ -946,6 +994,7 @@ serve(async (req: Request) => {
         message: `Inbound call refused: ${reason}`,
         payload: { call_control_id: callControlId, reason }
       });
+      await missedCallFollowUp("quota_exhausted");
     } else {
       // System fault (business/subscription/period/RPC) → generic error message.
       if (reason === "jit_stripe_fail_block") {
