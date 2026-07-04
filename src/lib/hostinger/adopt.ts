@@ -41,6 +41,7 @@ import {
   getActiveVpsSshKey,
   insertVpsSshKey,
   reassignVpsSshKeyBusiness,
+  rotateVpsSshKey,
   type VpsSshKeyRow
 } from "@/lib/db/vps-ssh-keys";
 import {
@@ -75,6 +76,7 @@ export type AdoptVpsDeps = {
     insertVpsSshKey?: typeof insertVpsSshKey;
     getActiveVpsSshKey?: typeof getActiveVpsSshKey;
     reassignVpsSshKeyBusiness?: typeof reassignVpsSshKeyBusiness;
+    rotateVpsSshKey?: typeof rotateVpsSshKey;
   };
   /**
    * SSH auth probe: true when the key authenticates on the host. Production
@@ -137,10 +139,11 @@ export async function adoptVpsForBusiness(
     /* c8 ignore next -- production default; tests inject a fake probe */
     pisQuiescentProbe = defaultPisQuiescentProbe
   } = deps;
-  /* c8 ignore next 3 -- production defaults; tests inject db overrides */
+  /* c8 ignore next 4 -- production defaults; tests inject db overrides */
   const dbInsert = deps.db?.insertVpsSshKey ?? insertVpsSshKey;
   const dbGetKey = deps.db?.getActiveVpsSshKey ?? getActiveVpsSshKey;
   const dbReassign = deps.db?.reassignVpsSshKeyBusiness ?? reassignVpsSshKeyBusiness;
+  const dbRotate = deps.db?.rotateVpsSshKey ?? rotateVpsSshKey;
 
   const vmId = input.virtualMachineId;
   const vpsSize = resolveVpsSize(input.tier, input.vpsSize);
@@ -169,6 +172,14 @@ export async function adoptVpsForBusiness(
       publicKeyId
     });
   } else {
+    // An active row that exists but is unusable (missing public-key id or
+    // private key) must be rotated out first: the one-active-row-per-VPS
+    // partial unique index would reject the replacement insert, aborting
+    // the adopt and pushing the signup onto the purchase path for a box we
+    // could have repaired in place.
+    if (existingKey) {
+      await dbRotate(existingKey.id);
+    }
     const keypair = await generateKeypair(`newcoworker-${input.businessId}`);
     const pubKey = await client.createPublicKey(
       `newcoworker-${input.businessId}-${Date.now().toString(36)}`,

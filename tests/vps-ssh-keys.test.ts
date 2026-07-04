@@ -10,7 +10,8 @@ import {
   getActiveVpsSshKey,
   getActiveVpsSshKeyForBusiness,
   listActiveVpsSshKeys,
-  reassignVpsSshKeyBusiness
+  reassignVpsSshKeyBusiness,
+  rotateVpsSshKey
 } from "@/lib/db/vps-ssh-keys";
 import { generateKeyPair as nodeGenKeyPair } from "node:crypto";
 import { promisify } from "node:util";
@@ -259,6 +260,36 @@ describe("vps_ssh_keys DB layer", () => {
       chain.single.mockResolvedValue({ data: sample, error: null });
       defaultClientSpy.mockReturnValueOnce(makeDb(chain));
       await expect(reassignVpsSshKeyBusiness("row-uuid", "biz-new")).resolves.toEqual(sample);
+      expect(defaultClientSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe("rotateVpsSshKey", () => {
+    it("stamps rotated_at on the row", async () => {
+      const chain = makeChain();
+      chain.eq.mockResolvedValueOnce({ error: null });
+      const db = makeDb(chain);
+      await rotateVpsSshKey("row-uuid", db as never);
+      expect(db.from).toHaveBeenCalledWith("vps_ssh_keys");
+      const updateArg = chain.update.mock.calls[0][0];
+      expect(typeof updateArg.rotated_at).toBe("string");
+      expect(chain.eq).toHaveBeenCalledWith("id", "row-uuid");
+    });
+
+    it("throws on Supabase error", async () => {
+      const chain = makeChain();
+      chain.eq.mockResolvedValueOnce({ error: { message: "rotate boom" } });
+      const db = makeDb(chain);
+      await expect(rotateVpsSshKey("row-uuid", db as never)).rejects.toThrow(
+        /rotateVpsSshKey: rotate boom/
+      );
+    });
+
+    it("uses the default service client when none is provided", async () => {
+      const chain = makeChain();
+      chain.eq.mockResolvedValueOnce({ error: null });
+      defaultClientSpy.mockReturnValueOnce(makeDb(chain));
+      await rotateVpsSshKey("row-uuid");
       expect(defaultClientSpy).toHaveBeenCalled();
     });
   });

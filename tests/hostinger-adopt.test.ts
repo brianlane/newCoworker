@@ -5,10 +5,12 @@ import { describe, expect, it, vi } from "vitest";
 const moduleGetActiveVpsSshKey = vi.fn();
 const moduleInsertVpsSshKey = vi.fn();
 const moduleReassignVpsSshKeyBusiness = vi.fn();
+const moduleRotateVpsSshKey = vi.fn();
 vi.mock("@/lib/db/vps-ssh-keys", () => ({
   getActiveVpsSshKey: (...args: unknown[]) => moduleGetActiveVpsSshKey(...args),
   insertVpsSshKey: (...args: unknown[]) => moduleInsertVpsSshKey(...args),
-  reassignVpsSshKeyBusiness: (...args: unknown[]) => moduleReassignVpsSshKeyBusiness(...args)
+  reassignVpsSshKeyBusiness: (...args: unknown[]) => moduleReassignVpsSshKeyBusiness(...args),
+  rotateVpsSshKey: (...args: unknown[]) => moduleRotateVpsSshKey(...args)
 }));
 
 import { adoptVpsForBusiness, type AdoptVpsDeps } from "@/lib/hostinger/adopt";
@@ -169,19 +171,42 @@ describe("adoptVpsForBusiness", () => {
     expect(res.hostingerBillingSubscriptionId).toBeNull();
   });
 
-  it("mints a fresh keypair when the existing row is missing its private key", async () => {
+  it("rotates out an existing row missing its private key before minting a replacement", async () => {
+    // Without the rotation the one-active-row-per-VPS partial unique index
+    // would reject the replacement insert and abort the whole adopt.
+    const rotate = vi.fn();
     const client = makeClient();
     const deps = makeDeps(client, {
       db: {
         insertVpsSshKey: vi.fn().mockResolvedValue({ ...keyRow, private_key_pem: "FRESH-PEM" }),
-        getActiveVpsSshKey: vi.fn().mockResolvedValue({ ...keyRow, private_key_pem: "" })
+        getActiveVpsSshKey: vi.fn().mockResolvedValue({ ...keyRow, private_key_pem: "" }),
+        rotateVpsSshKey: rotate
       }
     });
     await adoptVpsForBusiness(
       { businessId: "biz-1", tier: "standard", virtualMachineId: 1800985 },
       deps
     );
+    expect(rotate).toHaveBeenCalledWith("row-1");
     expect(deps.generateKeypair).toHaveBeenCalled();
+    expect(deps.db!.insertVpsSshKey).toHaveBeenCalled();
+  });
+
+  it("does not rotate anything when no active key row exists at all", async () => {
+    const rotate = vi.fn();
+    const client = makeClient();
+    const deps = makeDeps(client, {
+      db: {
+        insertVpsSshKey: vi.fn().mockResolvedValue({ ...keyRow, private_key_pem: "FRESH-PEM" }),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(null),
+        rotateVpsSshKey: rotate
+      }
+    });
+    await adoptVpsForBusiness(
+      { businessId: "biz-1", tier: "standard", virtualMachineId: 1800985 },
+      deps
+    );
+    expect(rotate).not.toHaveBeenCalled();
     expect(deps.db!.insertVpsSshKey).toHaveBeenCalled();
   });
 
