@@ -2,9 +2,15 @@ import { listBusinesses } from "@/lib/db/businesses";
 import { listSubscriptionsByBusinessIds } from "@/lib/db/subscriptions";
 import { getRecentAlertsAll, getRecentLogsAll } from "@/lib/db/logs";
 import { listSystemLogErrorsAll } from "@/lib/db/system-logs";
+import { listVpsInventory } from "@/lib/db/vps-inventory";
 import { getPeriodPricing } from "@/lib/plans/tier";
 import type { BillingPeriod } from "@/lib/plans/tier";
-import { formatAdminLabel, getLogBadgeVariant, getMonthLabel } from "@/lib/admin/dashboard";
+import {
+  formatAdminLabel,
+  getLogBadgeVariant,
+  getMonthLabel,
+  getVpsInventoryBadgeVariant
+} from "@/lib/admin/dashboard";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
@@ -27,11 +33,12 @@ function timeAgo(dateStr: string): string {
 }
 
 export default async function AdminDashboardPage() {
-  const [businesses, alerts, recentLogs, systemErrors] = await Promise.all([
+  const [businesses, alerts, recentLogs, systemErrors, vpsInventory] = await Promise.all([
     listBusinesses(),
     getRecentAlertsAll(10),
     getRecentLogsAll(8),
-    listSystemLogErrorsAll(15)
+    listSystemLogErrorsAll(15),
+    listVpsInventory()
   ]);
 
   const subscriptionMap = await listSubscriptionsByBusinessIds(businesses.map((b) => b.id));
@@ -246,6 +253,55 @@ export default async function AdminDashboardPage() {
                 </div>
                 {log.message && (
                   <p className="text-xs text-parchment/50 truncate">{log.message}</p>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
+      {/* ── VPS inventory / reuse pool (fleet economics Phase B) ── */}
+      <Card>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
+            VPS Inventory — Reuse Pool
+          </h2>
+          {vpsInventory.filter((v) => v.state === "available").length > 0 && (
+            <Badge variant="success">
+              {vpsInventory.filter((v) => v.state === "available").length} available
+            </Badge>
+          )}
+        </div>
+        {vpsInventory.length === 0 ? (
+          <p className="text-sm text-parchment/40 text-center py-4">
+            No boxes tracked — every provision purchases new.
+          </p>
+        ) : (
+          <ul className="divide-y divide-parchment/8">
+            {vpsInventory.map((vm) => (
+              <li key={vm.vm_id} className="py-2.5 space-y-0.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-parchment font-medium font-mono">
+                    {vm.hostname ?? `srv${vm.vm_id}.hstgr.cloud`}
+                  </span>
+                  <Badge variant="neutral" className="text-[10px] uppercase">
+                    {vm.plan}
+                  </Badge>
+                  <Badge variant={getVpsInventoryBadgeVariant(vm.state)}>{vm.state}</Badge>
+                  {vm.assigned_business_id && (
+                    <a
+                      href={`/admin/${vm.assigned_business_id}`}
+                      className="text-xs text-parchment/60 hover:text-signal-teal font-mono"
+                    >
+                      {vm.assigned_business_id.slice(0, 8)}…
+                    </a>
+                  )}
+                  <span className="text-xs text-parchment/30 ml-auto shrink-0">
+                    acquired {timeAgo(vm.acquired_at)}
+                  </span>
+                </div>
+                {vm.notes && (
+                  <p className="text-xs text-parchment/50 truncate">{vm.notes}</p>
                 )}
               </li>
             ))}

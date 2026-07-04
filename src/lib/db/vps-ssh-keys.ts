@@ -22,13 +22,12 @@
  *  - Lifecycle data-migration reads for backup/restore.
  *  - Admin endpoint reads for break-glass console access.
  *
- * Rotation (stamping `rotated_at` on a predecessor row after a replacement is
- * provisioned) is a planned workflow but is NOT yet wired up. A previous
- * `markVpsSshKeyRotated` helper lived here but was removed because it had no
- * callers — shipping unused exports created a false impression that the
- * rotation path existed. When rotation is implemented, reintroduce a helper
- * alongside the orchestrator call that actually invokes it (and update the
- * partial unique index reasoning in the migration).
+ * Rotation: {@link rotateVpsSshKey} stamps `rotated_at` on a row so a
+ * replacement can be inserted without violating the one-active-row-per-VPS
+ * partial unique index. Its only caller today is the VPS-adoption path,
+ * which rotates out an existing-but-unusable row (missing public-key id or
+ * private key) before minting a fresh keypair. A broader operator-driven
+ * rotation workflow remains future work.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -124,6 +123,49 @@ export async function insertVpsSshKey(
 
   if (error) throw new Error(`insertVpsSshKey: ${error.message}`);
   return data as VpsSshKeyRow;
+}
+
+/**
+ * Point an existing key row at a new owning business.
+ *
+ * Used by the VPS-adoption path (fleet economics Phase B): when a pooled VM
+ * is adopted for a new tenant, its active `vps_ssh_keys` row (minted for the
+ * PREVIOUS tenant or an earlier partial adopt) is reused as-is — the keypair
+ * still authenticates — but the row must follow the box to the new business,
+ * or every business-scoped lookup (`getActiveVpsSshKeyForBusiness`: backups,
+ * restores, admin console) would miss it or hit the old tenant.
+ */
+export async function reassignVpsSshKeyBusiness(
+  id: string,
+  businessId: string,
+  client?: SupabaseClient
+): Promise<VpsSshKeyRow> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("vps_ssh_keys")
+    .update({ business_id: businessId })
+    .eq("id", id)
+    .select()
+    .single();
+
+  if (error) throw new Error(`reassignVpsSshKeyBusiness: ${error.message}`);
+  return migrateRow(data as VpsSshKeyRow) as VpsSshKeyRow;
+}
+
+/**
+ * Retire a key row by stamping `rotated_at`. Required before inserting a
+ * replacement row for the same VPS: the `vps_ssh_keys_one_active_per_vps`
+ * partial unique index allows only one active (rotated_at IS NULL) row per
+ * box, so an insert without this rotation fails outright.
+ */
+export async function rotateVpsSshKey(id: string, client?: SupabaseClient): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("vps_ssh_keys")
+    .update({ rotated_at: new Date().toISOString() })
+    .eq("id", id);
+
+  if (error) throw new Error(`rotateVpsSshKey: ${error.message}`);
 }
 
 /**

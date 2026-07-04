@@ -4,6 +4,13 @@ import {
   buildDefaultPostInstallScript,
   type ProvisionVpsForBusinessResult
 } from "@/lib/hostinger/provision";
+import { adoptVpsForBusiness } from "@/lib/hostinger/adopt";
+import {
+  claimAvailableVps,
+  recordVpsAssigned,
+  releaseVpsToPool,
+  retireVps
+} from "@/lib/db/vps-inventory";
 import { sshExec, type SshExecResult } from "@/lib/hostinger/ssh";
 import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
 import { TelnyxNumbersClient } from "@/lib/telnyx/numbers";
@@ -283,6 +290,29 @@ export type VpsProvisioner = (input: {
 }) => Promise<ProvisionVpsForBusinessResult>;
 
 /**
+ * Adopter for a pooled (already-owned) VPS — the no-purchase path. Same
+ * output shape as {@link VpsProvisioner} so downstream phases are identical.
+ */
+export type VpsAdopter = (input: {
+  businessId: string;
+  tier: "starter" | "standard";
+  vpsSize: VpsSize;
+  virtualMachineId: number;
+}) => Promise<ProvisionVpsForBusinessResult>;
+
+/**
+ * The `vps_inventory` reuse pool (fleet economics Phase B). Injectable so
+ * tests can drive adopt-first without a database; `null` force-disables the
+ * pool lookup entirely.
+ */
+export type VpsPool = {
+  claim: typeof claimAvailableVps;
+  record: typeof recordVpsAssigned;
+  release: typeof releaseVpsToPool;
+  retire: typeof retireVps;
+};
+
+/**
  * Provisioner for the per-tenant DID purchase + assignment step. Split out so
  * tests can stub the Telnyx order-and-assign flow without touching the live
  * Telnyx API.
@@ -296,6 +326,13 @@ export type DidProvisioner = (input: {
   platformDefaults: PlatformTelnyxDefaults;
   search: { countryCode?: string; areaCode?: string; administrativeArea?: string };
 }) => Promise<{ toE164: string }>;
+
+/* c8 ignore start -- production-only default factory; tests inject vpsAdopter */
+function defaultVpsAdopter(client: HostingerClient): VpsAdopter {
+  return ({ businessId, tier, vpsSize, virtualMachineId }) =>
+    adoptVpsForBusiness({ businessId, tier, vpsSize, virtualMachineId }, { client });
+}
+/* c8 ignore stop */
 
 /* c8 ignore start -- production-only default factory; tests inject vpsProvisioner */
 function defaultVpsProvisioner(client: HostingerClient): VpsProvisioner {
@@ -345,6 +382,16 @@ export async function orchestrateProvisioning(
      * directly to bypass both Hostinger + DB.
      */
     vpsProvisioner?: VpsProvisioner;
+    /**
+     * Adopter for pooled VMs. Defaults to {@link adoptVpsForBusiness} on the
+     * Hostinger client. Only invoked when the pool yields a claim.
+     */
+    vpsAdopter?: VpsAdopter;
+    /**
+     * VPS reuse pool. Defaults to the real `vps_inventory` helpers; pass
+     * `null` to force the purchase path (tests, break-glass).
+     */
+    vpsPool?: VpsPool | null;
     /** Remote command executor (SSH). Defaults to {@link sshExec}. */
     remoteExec?: RemoteExecutor;
     /** Override env value quoting (defaults to {@link quoteShellEnvValue}). */
@@ -529,6 +576,118 @@ function formatProvisioningErrorMessage(detail: ProvisioningErrorDetail): string
   return `Provisioning failed: ${detail.message}`;
 }
 
+/**
+ * Phase 1 of the orchestrator: land on a running VPS.
+ *
+ * Adopt-first: claim an available `vps_inventory` box of the right size and
+ * run the no-purchase adopt path; fall back to purchase when the pool is
+ * empty, the claim fails, or the adopt fails. Bookkeeping rules:
+ *
+ *   * adopt success → upsert the row with the fresh billing id / hostname;
+ *   * adopt failure → retire the row (a box that fails the proven adopt
+ *     sequence is not safe to hand to the next signup either) and purchase;
+ *   * purchase → record the new box as assigned inventory.
+ *
+ * Pool reads/writes are all best-effort: `vps_inventory` is an economics
+ * optimization, so a pool outage degrades to "buy a box like before" rather
+ * than blocking the signup.
+ */
+async function acquireVps(args: {
+  businessId: string;
+  tier: "starter" | "standard";
+  vpsSize: VpsSize;
+  vpsPool: VpsPool | null;
+  vpsAdopter: VpsAdopter;
+  vpsProvisioner: VpsProvisioner;
+}): Promise<ProvisionVpsForBusinessResult> {
+  const { businessId, tier, vpsSize, vpsPool, vpsAdopter, vpsProvisioner } = args;
+
+  if (vpsPool) {
+    let claimed: Awaited<ReturnType<VpsPool["claim"]>> = null;
+    try {
+      claimed = await vpsPool.claim(vpsSize, businessId);
+    } catch (err) {
+      logger.warn("vps pool claim failed — falling back to purchase", {
+        businessId,
+        vpsSize,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+    if (claimed) {
+      logger.info("vps pool hit — adopting owned box instead of purchasing", {
+        businessId,
+        virtualMachineId: claimed.vm_id,
+        vpsSize
+      });
+      try {
+        const adopted = await vpsAdopter({
+          businessId,
+          tier,
+          vpsSize,
+          virtualMachineId: claimed.vm_id
+        });
+        try {
+          await vpsPool.record({
+            vmId: claimed.vm_id,
+            plan: vpsSize,
+            businessId,
+            hostingerBillingSubscriptionId: adopted.hostingerBillingSubscriptionId,
+            notes: `adopted from pool for ${businessId}`
+          });
+        } catch (err) {
+          logger.warn("vps pool bookkeeping failed after adopt (continuing)", {
+            businessId,
+            virtualMachineId: claimed.vm_id,
+            error: err instanceof Error ? err.message : String(err)
+          });
+        }
+        return adopted;
+      } catch (err) {
+        // A box that failed the proven adopt sequence (setup 4xx, key never
+        // attaching, terminal VM state, 404 = already lapsed/deleted) is not
+        // safe to hand to the next signup either — retire it for the audit
+        // trail and buy fresh.
+        logger.warn("vps adopt failed — retiring pooled box and purchasing", {
+          businessId,
+          virtualMachineId: claimed.vm_id,
+          error: err instanceof Error ? err.message : String(err)
+        });
+        try {
+          await vpsPool.retire(
+            claimed.vm_id,
+            `adopt failed for ${businessId}: ${err instanceof Error ? err.message : String(err)}`
+          );
+        } catch (retireErr) {
+          logger.warn("vps pool retire failed (continuing to purchase)", {
+            virtualMachineId: claimed.vm_id,
+            error: retireErr instanceof Error ? retireErr.message : String(retireErr)
+          });
+        }
+      }
+    }
+  }
+
+  const purchased = await vpsProvisioner({ businessId, tier, vpsSize });
+  if (vpsPool) {
+    try {
+      await vpsPool.record({
+        vmId: purchased.virtualMachineId,
+        plan: vpsSize,
+        businessId,
+        hostingerBillingSubscriptionId: purchased.hostingerBillingSubscriptionId,
+        notes: `purchased for ${businessId}`
+      });
+    } catch (err) {
+      logger.warn("vps pool bookkeeping failed after purchase (continuing)", {
+        businessId,
+        virtualMachineId: purchased.virtualMachineId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+  return purchased;
+}
+
 async function runOrchestrator(
   input: ProvisioningInput & { tier: "starter" | "standard"; vpsSize: VpsSize },
   deps?: Parameters<typeof orchestrateProvisioning>[1]
@@ -546,13 +705,30 @@ async function runOrchestrator(
 
   /* c8 ignore next -- defaultVpsProvisioner is the production path; tests inject vpsProvisioner */
   const vpsProvisioner = deps?.vpsProvisioner ?? defaultVpsProvisioner(hostinger);
+  /* c8 ignore next -- defaultVpsAdopter is the production path; tests inject vpsAdopter */
+  const vpsAdopter = deps?.vpsAdopter ?? defaultVpsAdopter(hostinger);
+  const vpsPool: VpsPool | null =
+    deps?.vpsPool === undefined
+      ? /* c8 ignore next -- production default pool; tests inject vpsPool */
+        { claim: claimAvailableVps, record: recordVpsAssigned, release: releaseVpsToPool, retire: retireVps }
+      : deps.vpsPool;
   /* c8 ignore next -- defaultRemoteExecutor is the production path; tests inject remoteExec */
   const remoteExec = deps?.remoteExec ?? defaultRemoteExecutor;
 
-  // Phase 1: purchase + boot the VPS via the real Hostinger API. This also
-  // generates the per-VPS keypair, uploads the public half, and persists the
-  // private half in `vps_ssh_keys` for later admin access.
-  const provisioned = await vpsProvisioner({ businessId, tier: narrowTier, vpsSize });
+  // Phase 1: get a VPS. Adopt-first (fleet economics Phase B): Hostinger
+  // boxes are non-refundable for us until ≈Dec 30 2026, so a pooled
+  // matching-size VM is reused via the no-purchase setup/recreate path
+  // before we buy a new one. Every pool interaction is best-effort — a
+  // broken pool must never block a signup, so failures log + fall through
+  // to the purchase path.
+  const provisioned = await acquireVps({
+    businessId,
+    tier: narrowTier,
+    vpsSize,
+    vpsPool,
+    vpsAdopter,
+    vpsProvisioner
+  });
   const vpsId = String(provisioned.virtualMachineId);
   logger.info("VPS provisioned", {
     businessId,

@@ -77,6 +77,7 @@ import {
 } from "@/lib/db/customer-profiles";
 import { logger } from "@/lib/logger";
 import { sendOpsVpsDeletionEmail } from "@/lib/email/ops-notify";
+import { releaseVpsToPool } from "@/lib/db/vps-inventory";
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -580,6 +581,31 @@ export async function runChangePlanFromCheckout(
         logger.warn("changePlan: old Hostinger auto-renew disable failed (continuing)", {
           businessId,
           billingSubscriptionId: oldSub.hostinger_billing_subscription_id,
+          error: errorMessage(err)
+        });
+      }
+    }
+    // Fleet economics Phase B: the replaced box stays owned (Hostinger
+    // refunds are locked out until ≈Dec 30 2026) — return it to the reuse
+    // pool so the next matching-size signup adopts it instead of buying.
+    // Best-effort: pool bookkeeping never fails a plan change.
+    if (oldVmId !== null) {
+      try {
+        await releaseVpsToPool({
+          vmId: oldVmId,
+          // Label by the OLD subscription's tier default. The vps_size pin
+          // describes the box being provisioned NOW, not the one being
+          // released. For boxes already tracked in vps_inventory (recorded
+          // at purchase/adopt time) releaseVpsToPool keeps the recorded
+          // plan anyway; this label only seeds pre-inventory boxes.
+          plan: oldSub.tier === "starter" ? "kvm2" : "kvm8",
+          hostingerBillingSubscriptionId: oldSub.hostinger_billing_subscription_id,
+          notes: `returned by upgrade_switch of business ${businessId}; auto-renew off — lapses at period end unless adopted`
+        });
+      } catch (err) {
+        logger.warn("changePlan: pool return of old VPS failed (continuing)", {
+          businessId,
+          oldVmId,
           error: errorMessage(err)
         });
       }

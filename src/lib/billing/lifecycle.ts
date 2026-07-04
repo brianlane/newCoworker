@@ -120,6 +120,22 @@ export type DbUpdateOp =
   | {
       type: "delete_backup_artifact";
       businessId: string;
+    }
+  | {
+      /**
+       * Return the tenant's box to the `vps_inventory` reuse pool (fleet
+       * economics Phase B). Hostinger boxes are non-refundable for us until
+       * ≈Dec 30 2026, so a canceled tenant's VM stays owned — pooling it
+       * lets the next matching-size signup adopt it instead of purchasing.
+       * Best-effort in the executor: a pool write failure never fails the
+       * cancel.
+       */
+      type: "return_vps_to_pool";
+      virtualMachineId: number;
+      /** Hardware SKU for the adopt-first match (kvm2/kvm8). */
+      plan: string;
+      hostingerBillingSubscriptionId: string | null;
+      notes: string;
     };
 
 export type EmailOp =
@@ -210,6 +226,12 @@ export type LifecycleContext = {
   profile: CustomerProfileRow | null;
   /** Numeric Hostinger VM id for snapshot/stop ops. Null → snapshot/stop ops omitted. */
   virtualMachineId: number | null;
+  /**
+   * Raw `businesses.vps_size` hardware pin (kvm2/kvm8 or null → tier
+   * default). Drives the `return_vps_to_pool` op's size label so the
+   * adopt-first match reuses the box for a same-size signup.
+   */
+  vpsSize?: string | null;
   /** Public IPv4 for the SSH backup/restore. Null → SSH ops omitted. */
   vpsHost: string | null;
   /** Most recent Stripe invoice amount we're likely to refund, for the refund-issued email. */
@@ -536,6 +558,15 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
   }
   if (ctx.virtualMachineId !== null) {
     plan.hostingerOps.push({ type: "delete_snapshot", virtualMachineId: ctx.virtualMachineId });
+    // Pool the box (idempotent upsert — the cancel path usually already
+    // did this; wipes reached via the manual-Stripe-cancel backstop haven't).
+    plan.dbUpdates.push({
+      type: "return_vps_to_pool",
+      virtualMachineId: ctx.virtualMachineId,
+      plan: pooledPlanFor(sub.tier, ctx.vpsSize),
+      hostingerBillingSubscriptionId: sub.hostinger_billing_subscription_id,
+      notes: `returned by grace-expired wipe of business ${sub.business_id}; auto-renew off — lapses at period end unless adopted`
+    });
   }
   // Stamp `wiped_at` BEFORE deleting the durable backup artifact. Order
   // matters here because both `runResubscribeFromCheckout` (in
@@ -598,6 +629,17 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
   }
 
   return { ok: true, plan };
+}
+
+/**
+ * Hardware SKU label for the `return_vps_to_pool` op. Prefers the explicit
+ * `businesses.vps_size` pin; falls back to the historical tier default
+ * (starter→kvm2, everything else→kvm8) so a corrupt/missing pin can never
+ * mislabel inventory as an un-adoptable size.
+ */
+function pooledPlanFor(tier: string, vpsSize: string | null | undefined): string {
+  if (vpsSize === "kvm2" || vpsSize === "kvm8") return vpsSize;
+  return tier === "starter" ? "kvm2" : "kvm8";
 }
 
 // ───────────────────────────────────────────────────────────────────────
@@ -700,6 +742,21 @@ function buildCancelPlan(args: {
       stripe_current_period_end: null
     }
   });
+  // Fleet economics Phase B: the box stays owned (Hostinger refunds are
+  // locked out until ≈Dec 30 2026), so return it to the reuse pool for the
+  // next matching-size signup to adopt. The executor treats this write as
+  // best-effort; the ops deletion email below still goes out so the
+  // operator knows the box exists and can delete it in hPanel instead if
+  // the pool doesn't need it.
+  if (ctx.virtualMachineId !== null) {
+    plan.dbUpdates.push({
+      type: "return_vps_to_pool",
+      virtualMachineId: ctx.virtualMachineId,
+      plan: pooledPlanFor(sub.tier, ctx.vpsSize),
+      hostingerBillingSubscriptionId: sub.hostinger_billing_subscription_id,
+      notes: `returned by ${cancelReason} cancel of business ${sub.business_id}; auto-renew off — lapses at period end unless adopted`
+    });
+  }
   if (includeRefund && profileId) {
     plan.dbUpdates.push({
       type: "mark_refund_used",
