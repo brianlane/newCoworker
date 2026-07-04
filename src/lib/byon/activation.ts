@@ -95,20 +95,54 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+const SKIPPED: ActivationResult = {
+  attempted: false,
+  activated: false,
+  assign: null,
+  tendlc: null,
+  error: null
+};
+
+function needsActivation(row: PortedNumberRow): boolean {
+  return row.status === "ported" && row.activated_at === null;
+}
+
 export async function activatePortedNumber(
-  row: PortedNumberRow,
+  snapshot: PortedNumberRow,
   deps: ActivationDeps = {}
 ): Promise<ActivationResult> {
+  const resolveClient = async () => deps.client ?? (await createSupabaseServiceClient());
+
   // Durable-state trigger: only ported rows that were never activated need
   // work. This makes the caller trivially safe to invoke on EVERY webhook
-  // delivery (including redeliveries after a crashed activation).
-  if (row.status !== "ported" || row.activated_at !== null) {
-    return { attempted: false, activated: false, assign: null, tendlc: null, error: null };
+  // delivery (including redeliveries after a crashed activation). The
+  // caller's snapshot can LAG the database (e.g. handlePortingStatusChange
+  // drops a stale event and returns the pre-ported row it read while a
+  // parallel delivery was moving it to ported), so before skipping we
+  // re-check durable state — never the other way around: a snapshot that
+  // qualifies was just read by the status handler.
+  let row = snapshot;
+  if (!needsActivation(row)) {
+    try {
+      const db = await resolveClient();
+      const { data, error } = await db
+        .from("number_port_requests")
+        .select("*")
+        .eq("id", snapshot.id)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      row = (data as PortedNumberRow | null) ?? snapshot;
+    } catch (err) {
+      logger.warn("byon: could not refresh port request before activation", {
+        portRequestId: snapshot.id,
+        error: errMessage(err)
+      });
+    }
+    if (!needsActivation(row)) return SKIPPED;
   }
 
   const env = deps.env ?? process.env;
   const dispatch = deps.dispatch ?? dispatchUrgentNotification;
-  const resolveClient = async () => deps.client ?? (await createSupabaseServiceClient());
 
   const fail = async (error: string): Promise<ActivationResult> => {
     logger.error("byon: ported number activation failed", {

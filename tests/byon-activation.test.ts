@@ -71,7 +71,7 @@ function actDb(results: DbResult[] = []) {
     const builder: Record<string, unknown> = {
       then: (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve)
     };
-    for (const m of ["update", "eq", "is", "select"]) {
+    for (const m of ["update", "select", "eq", "is", "maybeSingle"]) {
       builder[m] = (...args: unknown[]) => {
         my.push({ name: m, args });
         return builder;
@@ -103,10 +103,14 @@ describe("activatePortedNumber", () => {
     defaultClientMock.mockResolvedValue(actDb().db);
   });
 
-  it("skips rows that are not ported or already activated", async () => {
+  it("skips rows that are not ported or already activated, verifying against the DB first", async () => {
+    // Snapshot not ported → re-read confirms it → skip.
+    const { db, calls } = actDb([
+      { data: { ...ROW, status: "foc-date-confirmed" }, error: null }
+    ]);
     const notPorted = await activatePortedNumber(
       { ...ROW, status: "foc-date-confirmed" },
-      { env: ENV }
+      { env: ENV, client: db }
     );
     expect(notPorted).toEqual({
       attempted: false,
@@ -115,16 +119,51 @@ describe("activatePortedNumber", () => {
       tendlc: null,
       error: null
     });
+    expect(calls[0]).toContainEqual({ name: "eq", args: ["id", "req-1"] });
 
-    const settled = await activatePortedNumber(
-      { ...ROW, activated_at: "2026-07-01T00:00:00Z" },
-      { env: ENV }
-    );
+    // Snapshot already activated → re-read agrees → skip.
+    const settledRow = { ...ROW, activated_at: "2026-07-01T00:00:00Z" };
+    const settled = await activatePortedNumber(settledRow, {
+      env: ENV,
+      client: actDb([{ data: settledRow, error: null }]).db
+    });
     expect(settled.attempted).toBe(false);
+
+    // Re-read failing (or the row vanishing) falls back to the snapshot.
+    const errored = await activatePortedNumber(
+      { ...ROW, status: "in-process" },
+      { env: ENV, client: actDb([{ data: null, error: { message: "read exploded" } }]).db }
+    );
+    expect(errored.attempted).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "byon: could not refresh port request before activation",
+      expect.objectContaining({ error: "read exploded" })
+    );
+    const vanished = await activatePortedNumber(
+      { ...ROW, status: "in-process" },
+      { env: ENV, client: actDb([{ data: null, error: null }]).db }
+    );
+    expect(vanished.attempted).toBe(false);
 
     expect(assignMock).not.toHaveBeenCalled();
     expect(attachMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("activates when the DB shows ported despite a lagging snapshot (stale-drop recovery)", async () => {
+    // handlePortingStatusChange dropped a stale event and returned the
+    // pre-ported row it read, but a parallel delivery has since moved the
+    // DB row to ported without activating it.
+    const { db } = actDb([
+      { data: ROW, error: null } // re-read: ported, not activated
+    ]);
+    const result = await activatePortedNumber(
+      { ...ROW, status: "foc-date-confirmed" },
+      { env: ENV, client: db }
+    );
+    expect(result.attempted).toBe(true);
+    expect(result.activated).toBe(true);
+    expect(assignMock).toHaveBeenCalled();
   });
 
   it("wires voice routes and 10DLC for the ported number using platform defaults", async () => {
