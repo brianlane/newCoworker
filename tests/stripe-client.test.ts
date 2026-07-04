@@ -7,6 +7,7 @@ import {
   createCustomerPortalSession,
   createSmsBonusCheckoutSession,
   createVoiceBonusCheckoutSession,
+  createWhiteGloveCheckoutSession,
   ensureCommitmentSchedule,
   releaseCommitmentSchedule,
   resolveIntroDiscountCouponId,
@@ -705,6 +706,80 @@ describe("stripe/client", () => {
         ).rejects.toThrow("creditMicros must be a positive integer");
       }
       expect(mockSessionCreate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("createWhiteGloveCheckoutSession", () => {
+    const baseParams = {
+      packageId: "setup",
+      packageName: "White-glove setup",
+      amountCents: 75_000,
+      businessId: "biz-1",
+      successUrl: "https://example.com/ok",
+      cancelUrl: "https://example.com/cancel",
+      userId: "user-1"
+    };
+
+    it("creates a payment-mode session with inline price_data and white_glove metadata", async () => {
+      const result = await createWhiteGloveCheckoutSession({
+        ...baseParams,
+        customerEmail: "owner@example.com"
+      });
+
+      expect(result.url).toContain("stripe.com");
+      const call = mockSessionCreate.mock.calls[0]?.[0];
+      expect(call).toMatchObject({
+        mode: "payment",
+        line_items: [
+          {
+            price_data: {
+              currency: "usd",
+              product_data: { name: "White-glove setup" },
+              unit_amount: 75_000
+            },
+            quantity: 1
+          }
+        ],
+        customer_email: "owner@example.com",
+        customer_creation: "always",
+        metadata: {
+          checkoutKind: "white_glove_package",
+          businessId: "biz-1",
+          whiteGlovePackage: "setup",
+          userId: "user-1"
+        },
+        payment_intent_data: {
+          metadata: expect.objectContaining({ checkoutKind: "white_glove_package" })
+        }
+      });
+    });
+
+    it("pins the existing Stripe customer instead of creating a new one", async () => {
+      await createWhiteGloveCheckoutSession({
+        ...baseParams,
+        customerEmail: "owner@example.com",
+        customerId: "cus_123"
+      });
+      const call = mockSessionCreate.mock.calls[0]?.[0];
+      expect(call.customer).toBe("cus_123");
+      expect(call.customer_email).toBeUndefined();
+      expect(call.customer_creation).toBeUndefined();
+    });
+
+    it("rejects non-positive or non-integer amountCents", async () => {
+      for (const amountCents of [0, -100, 10.5]) {
+        await expect(
+          createWhiteGloveCheckoutSession({ ...baseParams, amountCents })
+        ).rejects.toThrow("amountCents must be a positive integer");
+      }
+      expect(mockSessionCreate).not.toHaveBeenCalled();
+    });
+
+    it("throws when the session url is null", async () => {
+      mockSessionCreate.mockResolvedValueOnce({ id: "cs_wg_null", url: null });
+      await expect(createWhiteGloveCheckoutSession(baseParams)).rejects.toThrow(
+        "Stripe checkout session URL is null"
+      );
     });
   });
 });

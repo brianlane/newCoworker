@@ -6,6 +6,7 @@ import {
   isValidIanaTimezone,
   listBusinesses,
   listBusinessIdsByOwnerEmail,
+  recordWhiteGlovePurchase,
   setBusinessPaused,
   setCustomerChannelsEnabled,
   updateBusinessName,
@@ -268,6 +269,38 @@ describe("db/businesses", () => {
     await expect(updateEnterpriseLimits("uuid-biz-1", { maxConcurrentCalls: 5 })).rejects.toThrow(
       "updateEnterpriseLimits"
     );
+  });
+
+  it("recordWhiteGlovePurchase stamps package + priority window on the row", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await recordWhiteGlovePurchase("uuid-biz-1", {
+      packageId: "buildout",
+      purchasedAt: new Date("2026-07-04T12:00:00.000Z"),
+      prioritySupportUntil: new Date("2026-08-03T12:00:00.000Z")
+    });
+
+    expect(db.from).toHaveBeenCalledWith("businesses");
+    expect(db.update).toHaveBeenCalledWith({
+      white_glove_package: "buildout",
+      white_glove_purchased_at: "2026-07-04T12:00:00.000Z",
+      priority_support_until: "2026-08-03T12:00:00.000Z"
+    });
+    expect(db.eq).toHaveBeenCalledWith("id", "uuid-biz-1");
+  });
+
+  it("recordWhiteGlovePurchase throws on error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(
+      recordWhiteGlovePurchase("uuid-biz-1", {
+        packageId: "setup",
+        purchasedAt: new Date("2026-07-04T12:00:00.000Z"),
+        prioritySupportUntil: new Date("2026-08-03T12:00:00.000Z")
+      })
+    ).rejects.toThrow("recordWhiteGlovePurchase");
   });
 
   it("updateBusinessOwnerEmail updates owner email", async () => {

@@ -15,6 +15,7 @@ import { getPeriodPricing, getCommitmentMonths, PlanTier, calculateSavingsPercen
 import { TIER_LIMITS } from "@/lib/plans/limits";
 import { concurrentCallsLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
+import { listWhiteGlovePackages } from "@/lib/plans/white-glove";
 
 const CARRIER_FEE_SETUP_LINE = `One-time ${formatPriceCents(CARRIER_REGISTRATION_FEE_CENTS)} carrier registration · 30-day money-back guarantee`;
 
@@ -142,7 +143,7 @@ export default function OnboardPage() {
         "Warm handoff call transfers",
         "$10/mo AI budget for agentic tasks, before free model fallback",
         "Configuration and training updates",
-        "Priority support & maintenance",
+        "Priority email support & maintenance",
         "Full browser skills"
       ],
       cta: "Choose Standard",
@@ -343,6 +344,42 @@ export default function OnboardPage() {
               </div>
             </Card>
           ))}
+        </div>
+
+        {/* White-glove onboarding add-on (Phase C5). Purchased after signup
+            from Billing; shown here so buyers factor it into plan choice. */}
+        <div className="rounded-2xl border border-parchment/15 bg-parchment/4 px-5 py-5">
+          <h2 className="text-lg font-bold text-parchment">
+            Want us to set everything up for you?
+          </h2>
+          <p className="mt-1 text-sm text-parchment/60">
+            Add white-glove onboarding after signup (from your Billing page) and a specialist
+            handles it live with you — plans without it include email support.
+          </p>
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+            {listWhiteGlovePackages().map((pkg) => (
+              <div
+                key={pkg.id}
+                className="rounded-xl border border-parchment/15 bg-deep-ink/40 p-4"
+              >
+                <div className="flex items-baseline justify-between gap-2">
+                  <p className="text-sm font-semibold text-parchment">{pkg.name}</p>
+                  <p className="text-lg font-bold text-claw-green">
+                    {formatPriceCents(pkg.priceCents)}
+                  </p>
+                </div>
+                <p className="mt-1 text-xs text-parchment/55">{pkg.description}</p>
+                <ul className="mt-3 space-y-1.5">
+                  {pkg.features.map((f) => (
+                    <li key={f} className="flex items-start gap-2 text-xs text-parchment/65">
+                      <span className="text-claw-green mt-0.5">✓</span>
+                      {f}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
