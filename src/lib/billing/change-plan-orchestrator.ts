@@ -594,7 +594,13 @@ export async function runChangePlanFromCheckout(
       signupDate: oldSub.created_at,
       refundIssued: false,
       cancelReason: "upgrade_switch",
-      vmState: "old plan's VM stopped, auto-renew disabled; tenant migrated to a new VPS"
+      vmState: [
+        oldVmId !== null ? "old plan's VM stopped" : "no VM recorded",
+        oldSub.hostinger_billing_subscription_id
+          ? "auto-renew disabled"
+          : "no Hostinger billing id — renewal may still be active, check hPanel",
+        "tenant migrated to a new VPS"
+      ].join("; ")
     });
   }
 

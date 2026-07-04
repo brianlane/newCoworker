@@ -748,7 +748,11 @@ function buildCancelPlan(args: {
       ownerEmail: ctx.ownerEmail,
       tier: sub.tier,
       signupDate: sub.created_at,
-      refundIssued: includeRefund,
+      // Whether a Stripe refund actually lands is only known at execution
+      // time (refund_latest_charge skips zero-amount invoices), so report
+      // only refunds already recorded on the row; the executor ORs in the
+      // outcome of this plan's own refund op.
+      refundIssued: sub.stripe_refund_id !== null,
       cancelReason,
       vmState: [
         ctx.virtualMachineId !== null ? "VM stopped" : "no VM recorded",

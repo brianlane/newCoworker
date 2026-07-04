@@ -124,10 +124,23 @@ describe("planLifecycleAction: cancelWithRefund", () => {
       ownerEmail: "owner@example.com",
       tier: "starter",
       signupDate: "2026-04-01T00:00:00.000Z",
-      refundIssued: true,
+      // This plan's own refund op may still be skipped at execution time
+      // (zero-amount invoice), so the planner only reports refunds already
+      // recorded on the row; the executor ORs in the live outcome.
+      refundIssued: false,
       cancelReason: "user_refund",
       vmState: "VM stopped, auto-renew disabled"
     });
+  });
+
+  it("reports refundIssued in the ops email when the row already carries a Stripe refund", () => {
+    const res = planLifecycleAction(
+      { type: "cancelWithRefund" },
+      makeCtx({ subscription: makeSub({ stripe_refund_id: "re_prior" }) })
+    );
+    if (!res.ok) throw new Error(`expected ok, got ${res.reason}`);
+    const opsOp = res.plan.emailsToSend.find((e) => e.type === "send_ops_vps_deletion_request");
+    expect(opsOp).toEqual(expect.objectContaining({ refundIssued: true }));
   });
 
   it("skips the ops deletion email when neither VM nor billing id is known", () => {
