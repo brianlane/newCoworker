@@ -156,20 +156,27 @@ export async function adoptVpsForBusiness(
   const existingKey = await dbGetKey(String(vmId));
   let sshKeyRow: VpsSshKeyRow;
   let publicKeyId: number;
+  // True only when the active key row was minted by a PRIOR ADOPT ATTEMPT
+  // FOR THIS SAME BUSINESS — the one case where a running box with our key
+  // attached is known to be a freshly recreated image (safe to skip the
+  // destructive recreate below). A key row inherited from a previous tenant
+  // must never unlock that fast path: the disk still holds their data.
+  let sameBusinessRetry = false;
   if (existingKey?.hostinger_public_key_id && existingKey.private_key_pem) {
     // The keypair follows the BOX, but the row must follow the TENANT:
     // business-scoped lookups (backup/restore, admin console) resolve keys
     // via business_id, so a row left pointing at the previous tenant would
     // strand the new one (or leak SSH access under the old tenant's id).
-    sshKeyRow =
-      existingKey.business_id === input.businessId
-        ? existingKey
-        : await dbReassign(existingKey.id, input.businessId);
+    sameBusinessRetry = existingKey.business_id === input.businessId;
+    sshKeyRow = sameBusinessRetry
+      ? existingKey
+      : await dbReassign(existingKey.id, input.businessId);
     publicKeyId = existingKey.hostinger_public_key_id;
     logger.info("adoptVps: reusing existing key row", {
       businessId: input.businessId,
       virtualMachineId: vmId,
-      publicKeyId
+      publicKeyId,
+      sameBusinessRetry
     });
   } else {
     // An active row that exists but is unusable (missing public-key id or
@@ -268,14 +275,18 @@ export async function adoptVpsForBusiness(
     return waitRunning("recreate");
   };
 
-  // 4. Skip the destructive recreate when a previous adopt attempt already
-  //    attached our key (the box is set up; the orchestrator's idempotent
-  //    SSH bootstrap follows). Otherwise recreate, probe, retry once.
+  // 4. Skip the destructive recreate ONLY when a previous adopt attempt FOR
+  //    THIS SAME BUSINESS already attached our key (the box is a freshly
+  //    recreated image; the orchestrator's idempotent SSH bootstrap
+  //    follows). A key inherited from a previous tenant authenticating is
+  //    NOT sufficient — skipping recreate there would hand the new tenant
+  //    the previous tenant's live filesystem. Otherwise recreate (which
+  //    wipes the disk), probe, retry once.
   const preState = await client.getVirtualMachine(vmId);
   const preIp = preState.ipv4?.[0]?.address ?? null;
   let publicIp: string;
-  if (preState.state === "running" && preIp && (await sshAuthOk(preIp))) {
-    logger.info("adoptVps: key already attached — skipping recreate", {
+  if (sameBusinessRetry && preState.state === "running" && preIp && (await sshAuthOk(preIp))) {
+    logger.info("adoptVps: key from this business's prior attempt already attached — skipping recreate", {
       virtualMachineId: vmId
     });
     publicIp = preIp;

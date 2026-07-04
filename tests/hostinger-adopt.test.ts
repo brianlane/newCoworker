@@ -123,13 +123,24 @@ describe("adoptVpsForBusiness", () => {
     expect(deps.db!.getActiveVpsSshKey).toHaveBeenCalledWith("1800985");
   });
 
-  it("reassigns the reused key row when it still points at the previous tenant", async () => {
-    // Business-scoped lookups (backup/restore, admin console) resolve keys
-    // via business_id — a row left on the old tenant would strand the new
-    // one. The adopt must move the row to the adopting business.
+  it("reassigns a previous tenant's key row AND still recreates — inherited keys never skip the wipe", async () => {
+    // Two guarantees in one path: (a) business-scoped lookups (backup/
+    // restore, admin console) resolve keys via business_id, so the row must
+    // move to the adopting business; (b) the previous tenant's key
+    // authenticating is NOT proof of a fresh image — the disk still holds
+    // their data, so the destructive recreate must run regardless.
     const prevTenantRow = { ...keyRow, business_id: "biz-previous" };
     const reassignedRow = { ...keyRow, business_id: "biz-new" };
-    const client = makeClient();
+    const client = makeClient({
+      getVirtualMachine: vi
+        .fn()
+        // initial-state check: running (no setup needed)
+        .mockResolvedValueOnce(runningVm)
+        // recreateOnce: pre-recreate state read, leave loop, waitRunning
+        .mockResolvedValueOnce(runningVm)
+        .mockResolvedValueOnce({ state: "recreating", ipv4: [] })
+        .mockResolvedValue(runningVm)
+    });
     const reassign = vi.fn().mockResolvedValue(reassignedRow);
     const deps = makeDeps(client, {
       db: {
@@ -145,6 +156,76 @@ describe("adoptVpsForBusiness", () => {
     expect(reassign).toHaveBeenCalledWith("row-1", "biz-new");
     expect(res.sshKey).toEqual(reassignedRow);
     expect(deps.db!.insertVpsSshKey).not.toHaveBeenCalled();
+    // The old tenant's data is wiped even though their key authenticated.
+    expect(client.recreateVirtualMachine).toHaveBeenCalledTimes(1);
+  });
+
+  it("recreates a stopped box even on a same-business retry", async () => {
+    const client = makeClient({
+      getVirtualMachine: vi
+        .fn()
+        // initial-state check + preState: stopped
+        .mockResolvedValueOnce({ state: "stopped", ipv4: [] })
+        .mockResolvedValueOnce({ state: "stopped", ipv4: [] })
+        // recreateOnce: pre-state read (stopped), then running
+        .mockResolvedValueOnce({ state: "stopped", ipv4: [] })
+        .mockResolvedValue(runningVm)
+    });
+    const deps = makeDeps(client, {
+      db: {
+        insertVpsSshKey: vi.fn(),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(keyRow)
+      }
+    });
+    await adoptVpsForBusiness(
+      { businessId: "biz-1", tier: "standard", virtualMachineId: 1800985 },
+      deps
+    );
+    expect(client.recreateVirtualMachine).toHaveBeenCalledTimes(1);
+  });
+
+  it("recreates when a same-business box is running but has no IP yet", async () => {
+    const client = makeClient({
+      getVirtualMachine: vi
+        .fn()
+        // initial-state check + preState: running, IP not surfaced yet
+        .mockResolvedValueOnce({ state: "running", ipv4: [] })
+        .mockResolvedValueOnce({ state: "running", ipv4: [] })
+        // recreateOnce: pre-state read, leave loop, waitRunning
+        .mockResolvedValueOnce({ state: "running", ipv4: [] })
+        .mockResolvedValueOnce({ state: "recreating", ipv4: [] })
+        .mockResolvedValue(runningVm)
+    });
+    const deps = makeDeps(client, {
+      db: {
+        insertVpsSshKey: vi.fn(),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(keyRow)
+      }
+    });
+    await adoptVpsForBusiness(
+      { businessId: "biz-1", tier: "standard", virtualMachineId: 1800985 },
+      deps
+    );
+    expect(client.recreateVirtualMachine).toHaveBeenCalledTimes(1);
+  });
+
+  it("freshly minted keys always recreate even when the box is already running", async () => {
+    // Mint path (no reusable row): the box may be running with SOME key,
+    // but not ours from a same-business retry — recreate must run.
+    const client = makeClient({
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValueOnce(runningVm)
+        .mockResolvedValueOnce(runningVm)
+        .mockResolvedValueOnce({ state: "recreating", ipv4: [] })
+        .mockResolvedValue(runningVm)
+    });
+    const deps = makeDeps(client);
+    await adoptVpsForBusiness(
+      { businessId: "biz-1", tier: "standard", virtualMachineId: 1800985 },
+      deps
+    );
+    expect(client.recreateVirtualMachine).toHaveBeenCalledTimes(1);
   });
 
   it("mints + uploads + persists a fresh keypair when no active key row exists", async () => {
@@ -228,6 +309,12 @@ describe("adoptVpsForBusiness", () => {
         .mockResolvedValue(runningVm)
     });
     const deps = makeDeps(client, {
+      // Same-business row from a prior partial adopt (box never left
+      // `initial`): unlocks the pre-recreate auth probe, which then fails.
+      db: {
+        insertVpsSshKey: vi.fn(),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(keyRow)
+      },
       sshAuthProbe: vi
         .fn()
         // pre-recreate check: 3 probes, all fail → recreate
