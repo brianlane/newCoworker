@@ -786,6 +786,106 @@ describe("planLifecycleAction: graceExpiredWipe", () => {
   });
 });
 
+describe("planLifecycleAction: return_vps_to_pool (fleet economics Phase B)", () => {
+  function poolOp(plan: { ok: true; plan: { dbUpdates: unknown[] } } | { ok: false; reason: string }) {
+    if (!plan.ok) throw new Error(`unexpected reject ${plan.reason}`);
+    return plan.plan.dbUpdates.find(
+      (op) => (op as { type: string }).type === "return_vps_to_pool"
+    ) as
+      | {
+          type: "return_vps_to_pool";
+          virtualMachineId: number;
+          plan: string;
+          hostingerBillingSubscriptionId: string | null;
+          notes: string;
+        }
+      | undefined;
+  }
+
+  it("cancel-with-refund returns the box to the pool using the vps_size pin", () => {
+    const res = planLifecycleAction(
+      { type: "cancelWithRefund" },
+      makeCtx({ vpsSize: "kvm8" })
+    );
+    const op = poolOp(res);
+    expect(op).toEqual({
+      type: "return_vps_to_pool",
+      virtualMachineId: 42,
+      plan: "kvm8",
+      hostingerBillingSubscriptionId: "hbs-1",
+      notes: expect.stringContaining("returned by user_refund cancel of business biz-1")
+    });
+  });
+
+  it("prefers an explicit kvm2 pin over the tier default", () => {
+    const res = planLifecycleAction(
+      { type: "cancelWithRefund" },
+      makeCtx({ vpsSize: "kvm2", subscription: makeSub({ tier: "standard" }) })
+    );
+    expect(poolOp(res)?.plan).toBe("kvm2");
+  });
+
+  it("falls back to the starter tier default (kvm2) when no pin is set", () => {
+    const res = planLifecycleAction({ type: "cancelWithRefund" }, makeCtx());
+    expect(poolOp(res)?.plan).toBe("kvm2");
+  });
+
+  it("falls back to kvm8 for non-starter tiers when the pin is corrupt", () => {
+    const res = planLifecycleAction(
+      { type: "cancelWithRefund" },
+      makeCtx({ vpsSize: "kvm999", subscription: makeSub({ tier: "standard" }) })
+    );
+    expect(poolOp(res)?.plan).toBe("kvm8");
+  });
+
+  it("omits the pool op when the business has no VM", () => {
+    const res = planLifecycleAction(
+      { type: "cancelWithRefund" },
+      makeCtx({ virtualMachineId: null, vpsHost: null })
+    );
+    expect(poolOp(res)).toBeUndefined();
+  });
+
+  it("grace-expired wipe also pools the box (manual-Stripe-cancel backstop)", () => {
+    const res = planLifecycleAction(
+      { type: "graceExpiredWipe" },
+      makeCtx({
+        vpsSize: "kvm2",
+        subscription: makeSub({
+          status: "canceled",
+          grace_ends_at: "2026-04-01T00:00:00.000Z",
+          wiped_at: null,
+          cancel_reason: "payment_failed"
+        })
+      })
+    );
+    const op = poolOp(res);
+    expect(op).toEqual(
+      expect.objectContaining({
+        virtualMachineId: 42,
+        plan: "kvm2",
+        notes: expect.stringContaining("returned by grace-expired wipe of business biz-1")
+      })
+    );
+  });
+
+  it("grace-expired wipe omits the pool op when there is no VM", () => {
+    const res = planLifecycleAction(
+      { type: "graceExpiredWipe" },
+      makeCtx({
+        virtualMachineId: null,
+        vpsHost: null,
+        subscription: makeSub({
+          status: "canceled",
+          grace_ends_at: "2026-04-01T00:00:00.000Z",
+          wiped_at: null
+        })
+      })
+    );
+    expect(poolOp(res)).toBeUndefined();
+  });
+});
+
 describe("planLifecycleAction: undo/reactivate edge cases", () => {
   it("rejects undo when subscription is not active", () => {
     const res = planLifecycleAction(

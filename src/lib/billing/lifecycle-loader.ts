@@ -77,6 +77,7 @@ export async function loadLifecycleContextForBusiness(
     ownerAuthUserId: opts.ownerAuthUserId,
     profile,
     virtualMachineId,
+    vpsSize: business.vps_size ?? null,
     vpsHost
   };
   return { ok: true, context, vpsHost };

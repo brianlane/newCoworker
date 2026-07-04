@@ -58,6 +58,8 @@ import { updateSubscription } from "@/lib/db/subscriptions";
 import { markRefundUsed } from "@/lib/db/customer-profiles";
 import { recordSubscriptionRefund } from "@/lib/db/subscription-refunds";
 import { updateBusinessStatus } from "@/lib/db/businesses";
+import { releaseVpsToPool } from "@/lib/db/vps-inventory";
+import type { VpsSize } from "@/lib/vps/size";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { buildCancelConfirmationEmail } from "@/lib/email/templates/cancel-confirmation";
@@ -449,6 +451,28 @@ async function runDbOp(
       } catch (err) {
         logger.warn("delete_backup_artifact failed", {
           businessId: op.businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+      return;
+    case "return_vps_to_pool":
+      // Best-effort: vps_inventory is an economics optimization (adopt-first
+      // reuse of owned boxes), never a correctness dependency — a pool write
+      // failure must not fail the cancel/wipe.
+      try {
+        await releaseVpsToPool({
+          vmId: op.virtualMachineId,
+          plan: op.plan as VpsSize,
+          hostingerBillingSubscriptionId: op.hostingerBillingSubscriptionId,
+          notes: op.notes
+        });
+        logger.info("VPS returned to reuse pool", {
+          virtualMachineId: op.virtualMachineId,
+          plan: op.plan
+        });
+      } catch (err) {
+        logger.warn("return_vps_to_pool failed", {
+          virtualMachineId: op.virtualMachineId,
           error: err instanceof Error ? err.message : String(err)
         });
       }

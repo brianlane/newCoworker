@@ -150,6 +150,14 @@ vi.mock("@/lib/email/ops-notify", () => ({
   sendOpsVpsDeletionEmail: sendOpsVpsDeletionEmailMock
 }));
 
+const { releaseVpsToPoolMock } = vi.hoisted(() => ({
+  releaseVpsToPoolMock: vi.fn().mockResolvedValue(undefined)
+}));
+
+vi.mock("@/lib/db/vps-inventory", () => ({
+  releaseVpsToPool: releaseVpsToPoolMock
+}));
+
 import {
   runChangePlanFromCheckout,
   runResubscribeFromCheckout
@@ -314,6 +322,120 @@ describe("runChangePlanFromCheckout", () => {
         cancel_reason: "upgrade_switch"
       })
     );
+
+    // Fleet economics Phase B: the replaced box goes back to the reuse
+    // pool. No vps_size pin on the business + starter old tier → kvm2.
+    expect(releaseVpsToPoolMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        vmId: 1001,
+        plan: "kvm2",
+        hostingerBillingSubscriptionId: "billing_old"
+      })
+    );
+  });
+
+  describe("old-VPS pool return (fleet economics Phase B)", () => {
+    it("uses the business's explicit kvm8 vps_size pin", async () => {
+      getBusinessMock.mockResolvedValue({
+        id: "biz-1",
+        owner_email: "owner@example.com",
+        hostinger_vps_id: "1001",
+        customer_profile_id: "prof-1",
+        status: "online",
+        vps_size: "kvm8"
+      });
+      await runChangePlanFromCheckout(makeSession(), "evt_pool_1");
+      expect(releaseVpsToPoolMock).toHaveBeenCalledWith(
+        expect.objectContaining({ vmId: 1001, plan: "kvm8" })
+      );
+    });
+
+    it("uses the business's explicit kvm2 vps_size pin", async () => {
+      getBusinessMock.mockResolvedValue({
+        id: "biz-1",
+        owner_email: "owner@example.com",
+        hostinger_vps_id: "1001",
+        customer_profile_id: "prof-1",
+        status: "online",
+        vps_size: "kvm2"
+      });
+      getSubscriptionMock.mockResolvedValue({
+        id: "sub-row-old",
+        business_id: "biz-1",
+        stripe_subscription_id: "sub_old",
+        hostinger_billing_subscription_id: "billing_old",
+        customer_profile_id: "prof-1",
+        tier: "standard",
+        billing_period: "monthly",
+        status: "active",
+        created_at: "2026-01-01T00:00:00.000Z",
+        cancel_at_period_end: false
+      });
+      await runChangePlanFromCheckout(
+        makeSession({
+          metadata: {
+            businessId: "biz-1",
+            previousSubscriptionId: "sub-row-old",
+            tier: "starter",
+            billingPeriod: "monthly",
+            lifecycleAction: "changePlan"
+          }
+        }),
+        "evt_pool_2"
+      );
+      expect(releaseVpsToPoolMock).toHaveBeenCalledWith(
+        expect.objectContaining({ vmId: 1001, plan: "kvm2" })
+      );
+    });
+
+    it("falls back to kvm8 for a non-starter old tier with a corrupt pin", async () => {
+      getBusinessMock.mockResolvedValue({
+        id: "biz-1",
+        owner_email: "owner@example.com",
+        hostinger_vps_id: "1001",
+        customer_profile_id: "prof-1",
+        status: "online",
+        vps_size: "kvm999"
+      });
+      getSubscriptionMock.mockResolvedValue({
+        id: "sub-row-old",
+        business_id: "biz-1",
+        stripe_subscription_id: "sub_old",
+        hostinger_billing_subscription_id: "billing_old",
+        customer_profile_id: "prof-1",
+        tier: "standard",
+        billing_period: "monthly",
+        status: "active",
+        created_at: "2026-01-01T00:00:00.000Z",
+        cancel_at_period_end: false
+      });
+      await runChangePlanFromCheckout(
+        makeSession({
+          metadata: {
+            businessId: "biz-1",
+            previousSubscriptionId: "sub-row-old",
+            tier: "starter",
+            billingPeriod: "monthly",
+            lifecycleAction: "changePlan"
+          }
+        }),
+        "evt_pool_3"
+      );
+      expect(releaseVpsToPoolMock).toHaveBeenCalledWith(
+        expect.objectContaining({ vmId: 1001, plan: "kvm8" })
+      );
+    });
+
+    it("continues the plan change when the pool return fails", async () => {
+      releaseVpsToPoolMock.mockRejectedValueOnce(new Error("pool down"));
+      await runChangePlanFromCheckout(makeSession(), "evt_pool_4");
+      // Best-effort: the ops deletion email and old-sub cancel still ran.
+      expect(sendOpsVpsDeletionEmailMock).toHaveBeenCalled();
+      expect(updateSubscriptionMock).toHaveBeenCalledWith(
+        "sub-row-old",
+        expect.objectContaining({ status: "canceled", cancel_reason: "upgrade_switch" })
+      );
+    });
   });
 
   describe("re-contract lifetime-cap exemption", () => {

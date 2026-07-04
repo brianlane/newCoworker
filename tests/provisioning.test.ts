@@ -68,6 +68,17 @@ vi.mock("@/lib/email/tenant-mailbox", () => ({
   })
 }));
 
+// The orchestrator's default VpsPool is wired to these accessors (fleet
+// economics Phase B). Tests that don't inject `vpsPool` fall through to the
+// default, which must never reach a real database: claim finds nothing (→
+// purchase path, the pre-pool behavior) and the bookkeeping writes no-op.
+vi.mock("@/lib/db/vps-inventory", () => ({
+  claimAvailableVps: vi.fn().mockResolvedValue(null),
+  recordVpsAssigned: vi.fn().mockResolvedValue(undefined),
+  releaseVpsToPool: vi.fn().mockResolvedValue(undefined),
+  retireVps: vi.fn().mockResolvedValue(undefined)
+}));
+
 vi.mock("@/lib/db/telnyx-routes", () => ({
   getTelnyxVoiceRouteForBusiness: vi.fn().mockResolvedValue(null),
   // tendlc-attach.ts persists per-business 10DLC status via this helper —
@@ -1704,6 +1715,252 @@ describe("provisioning/orchestrate", () => {
       const done = calls.find((p) => p.phase === "vps_bootstrapped");
       expect(start?.message).toMatch(/Bootstrapping VPS over SSH.*PIS not eligible/);
       expect(done?.message).toMatch(/SSH-only fallback path/);
+    });
+  });
+
+  describe("adopt-first VPS acquisition (vps_inventory pool)", () => {
+    function makePool(overrides: Record<string, unknown> = {}) {
+      return {
+        claim: vi.fn().mockResolvedValue(null),
+        record: vi.fn().mockResolvedValue(undefined),
+        release: vi.fn().mockResolvedValue(undefined),
+        retire: vi.fn().mockResolvedValue(undefined),
+        ...overrides
+      };
+    }
+
+    const claimedRow = {
+      vm_id: 1800985,
+      hostname: "srv1800985.hstgr.cloud",
+      plan: "kvm2",
+      state: "assigned",
+      hostinger_billing_subscription_id: null,
+      assigned_business_id: "biz-pool-1",
+      acquired_at: "2026-07-01T00:00:00Z",
+      assigned_at: "2026-07-04T00:00:00Z",
+      notes: null,
+      updated_at: "2026-07-04T00:00:00Z"
+    };
+
+    it("adopts a pooled box instead of purchasing and records the assignment", async () => {
+      const pool = makePool({ claim: vi.fn().mockResolvedValue(claimedRow) });
+      const adopted = {
+        ...makeVpsStub("1800985"),
+        hostingerBillingSubscriptionId: "hsub-adopted"
+      };
+      const vpsAdopter = vi.fn().mockResolvedValue(adopted);
+      const vpsProvisioner = vi.fn();
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-pool-1", tier: "starter" },
+        { vpsProvisioner, vpsAdopter, vpsPool: pool, remoteExec }
+      );
+
+      expect(result.vpsId).toBe("1800985");
+      expect(pool.claim).toHaveBeenCalledWith("kvm2", "biz-pool-1");
+      expect(vpsAdopter).toHaveBeenCalledWith({
+        businessId: "biz-pool-1",
+        tier: "starter",
+        vpsSize: "kvm2",
+        virtualMachineId: 1800985
+      });
+      expect(vpsProvisioner).not.toHaveBeenCalled();
+      expect(pool.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          vmId: 1800985,
+          plan: "kvm2",
+          businessId: "biz-pool-1",
+          hostingerBillingSubscriptionId: "hsub-adopted"
+        })
+      );
+      expect(pool.retire).not.toHaveBeenCalled();
+    });
+
+    it("purchases when the pool is empty and records the new box as assigned", async () => {
+      const pool = makePool();
+      const vpsAdopter = vi.fn();
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      await orchestrateProvisioning(
+        { businessId: "biz-pool-2", tier: "standard" },
+        { vpsProvisioner, vpsAdopter, vpsPool: pool, remoteExec }
+      );
+
+      expect(vpsAdopter).not.toHaveBeenCalled();
+      expect(vpsProvisioner).toHaveBeenCalledWith({
+        businessId: "biz-pool-2",
+        tier: "standard",
+        vpsSize: "kvm8"
+      });
+      expect(pool.record).toHaveBeenCalledWith(
+        expect.objectContaining({ vmId: 123, plan: "kvm8", businessId: "biz-pool-2" })
+      );
+    });
+
+    it("falls back to purchase when the pool claim itself throws", async () => {
+      const pool = makePool({ claim: vi.fn().mockRejectedValue(new Error("pool db down")) });
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-pool-3", tier: "starter" },
+        { vpsProvisioner, vpsAdopter: vi.fn(), vpsPool: pool, remoteExec }
+      );
+
+      expect(result.vpsId).toBe("123");
+      expect(vpsProvisioner).toHaveBeenCalled();
+    });
+
+    it("stringifies a non-Error pool claim failure and still purchases", async () => {
+      const pool = makePool({ claim: vi.fn().mockRejectedValue("claim string boom") });
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-pool-3b", tier: "starter" },
+        { vpsProvisioner, vpsAdopter: vi.fn(), vpsPool: pool, remoteExec }
+      );
+      expect(result.vpsId).toBe("123");
+    });
+
+    it("retires the claimed box and purchases when the adopt fails", async () => {
+      const pool = makePool({ claim: vi.fn().mockResolvedValue(claimedRow) });
+      const vpsAdopter = vi.fn().mockRejectedValue(new Error("recreate 422"));
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-pool-4", tier: "starter" },
+        { vpsProvisioner, vpsAdopter, vpsPool: pool, remoteExec }
+      );
+
+      expect(result.vpsId).toBe("123");
+      expect(pool.retire).toHaveBeenCalledWith(
+        1800985,
+        expect.stringContaining("adopt failed for biz-pool-4: recreate 422")
+      );
+      // The replacement purchase is still recorded as inventory.
+      expect(pool.record).toHaveBeenCalledWith(
+        expect.objectContaining({ vmId: 123, businessId: "biz-pool-4" })
+      );
+    });
+
+    it("stringifies a non-Error adopt failure in the retire reason", async () => {
+      const pool = makePool({ claim: vi.fn().mockResolvedValue(claimedRow) });
+      const vpsAdopter = vi.fn().mockRejectedValue("adopt string boom");
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      await orchestrateProvisioning(
+        { businessId: "biz-pool-4b", tier: "starter" },
+        { vpsProvisioner, vpsAdopter, vpsPool: pool, remoteExec }
+      );
+      expect(pool.retire).toHaveBeenCalledWith(
+        1800985,
+        expect.stringContaining("adopt string boom")
+      );
+    });
+
+    it("continues to purchase when the retire after a failed adopt also fails", async () => {
+      const pool = makePool({
+        claim: vi.fn().mockResolvedValue(claimedRow),
+        retire: vi.fn().mockRejectedValue(new Error("retire boom"))
+      });
+      const vpsAdopter = vi.fn().mockRejectedValue(new Error("adopt boom"));
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-pool-5", tier: "starter" },
+        { vpsProvisioner, vpsAdopter, vpsPool: pool, remoteExec }
+      );
+      expect(result.vpsId).toBe("123");
+    });
+
+    it("stringifies a non-Error retire failure and still purchases", async () => {
+      const pool = makePool({
+        claim: vi.fn().mockResolvedValue(claimedRow),
+        retire: vi.fn().mockRejectedValue("retire string boom")
+      });
+      const vpsAdopter = vi.fn().mockRejectedValue(new Error("adopt boom"));
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-pool-5b", tier: "starter" },
+        { vpsProvisioner, vpsAdopter, vpsPool: pool, remoteExec }
+      );
+      expect(result.vpsId).toBe("123");
+    });
+
+    it("continues when post-adopt inventory bookkeeping fails", async () => {
+      const pool = makePool({
+        claim: vi.fn().mockResolvedValue(claimedRow),
+        record: vi.fn().mockRejectedValue(new Error("record boom"))
+      });
+      const vpsAdopter = vi.fn().mockResolvedValue(makeVpsStub("1800985"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-pool-6", tier: "starter" },
+        { vpsProvisioner: vi.fn(), vpsAdopter, vpsPool: pool, remoteExec }
+      );
+      expect(result.vpsId).toBe("1800985");
+    });
+
+    it("stringifies a non-Error post-adopt bookkeeping failure", async () => {
+      const pool = makePool({
+        claim: vi.fn().mockResolvedValue(claimedRow),
+        record: vi.fn().mockRejectedValue("record string boom")
+      });
+      const vpsAdopter = vi.fn().mockResolvedValue(makeVpsStub("1800985"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-pool-6b", tier: "starter" },
+        { vpsProvisioner: vi.fn(), vpsAdopter, vpsPool: pool, remoteExec }
+      );
+      expect(result.vpsId).toBe("1800985");
+    });
+
+    it("continues when post-purchase inventory bookkeeping fails", async () => {
+      const pool = makePool({ record: vi.fn().mockRejectedValue(new Error("record boom")) });
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-pool-7", tier: "starter" },
+        { vpsProvisioner, vpsAdopter: vi.fn(), vpsPool: pool, remoteExec }
+      );
+      expect(result.vpsId).toBe("123");
+    });
+
+    it("stringifies a non-Error post-purchase bookkeeping failure", async () => {
+      const pool = makePool({ record: vi.fn().mockRejectedValue("record string boom") });
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-pool-7b", tier: "starter" },
+        { vpsProvisioner, vpsAdopter: vi.fn(), vpsPool: pool, remoteExec }
+      );
+      expect(result.vpsId).toBe("123");
+    });
+
+    it("skips the pool entirely when vpsPool is null (break-glass)", async () => {
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+      const vpsAdopter = vi.fn();
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-pool-8", tier: "starter" },
+        { vpsProvisioner, vpsAdopter, vpsPool: null, remoteExec }
+      );
+
+      expect(result.vpsId).toBe("123");
+      expect(vpsAdopter).not.toHaveBeenCalled();
     });
   });
 
