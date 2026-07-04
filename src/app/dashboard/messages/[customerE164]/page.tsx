@@ -179,7 +179,9 @@ export default async function SmsThreadPage({
                               ? "AiFlow · notification"
                               : m.source === "owner_manual"
                                 ? "You"
-                                : "Assistant"}
+                                : m.source === "owner_scheduled"
+                                  ? "You · scheduled"
+                                  : "Assistant"}
                     </span>
                     <span className="text-parchment/30 normal-case font-normal">
                       <LocalDateTime iso={m.timestamp} />
