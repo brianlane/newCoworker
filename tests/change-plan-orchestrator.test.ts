@@ -335,22 +335,10 @@ describe("runChangePlanFromCheckout", () => {
   });
 
   describe("old-VPS pool return (fleet economics Phase B)", () => {
-    it("uses the business's explicit kvm8 vps_size pin", async () => {
-      getBusinessMock.mockResolvedValue({
-        id: "biz-1",
-        owner_email: "owner@example.com",
-        hostinger_vps_id: "1001",
-        customer_profile_id: "prof-1",
-        status: "online",
-        vps_size: "kvm8"
-      });
-      await runChangePlanFromCheckout(makeSession(), "evt_pool_1");
-      expect(releaseVpsToPoolMock).toHaveBeenCalledWith(
-        expect.objectContaining({ vmId: 1001, plan: "kvm8" })
-      );
-    });
-
-    it("uses the business's explicit kvm2 vps_size pin", async () => {
+    it("labels a non-starter old box kvm8 (old tier default, not the new pin)", async () => {
+      // The vps_size pin describes the box being provisioned NOW; the
+      // released box is the OLD hardware. Even with a kvm2 pin driving the
+      // new provision, a standard→starter downgrade releases a kvm8 box.
       getBusinessMock.mockResolvedValue({
         id: "biz-1",
         owner_email: "owner@example.com",
@@ -381,45 +369,7 @@ describe("runChangePlanFromCheckout", () => {
             lifecycleAction: "changePlan"
           }
         }),
-        "evt_pool_2"
-      );
-      expect(releaseVpsToPoolMock).toHaveBeenCalledWith(
-        expect.objectContaining({ vmId: 1001, plan: "kvm2" })
-      );
-    });
-
-    it("falls back to kvm8 for a non-starter old tier with a corrupt pin", async () => {
-      getBusinessMock.mockResolvedValue({
-        id: "biz-1",
-        owner_email: "owner@example.com",
-        hostinger_vps_id: "1001",
-        customer_profile_id: "prof-1",
-        status: "online",
-        vps_size: "kvm999"
-      });
-      getSubscriptionMock.mockResolvedValue({
-        id: "sub-row-old",
-        business_id: "biz-1",
-        stripe_subscription_id: "sub_old",
-        hostinger_billing_subscription_id: "billing_old",
-        customer_profile_id: "prof-1",
-        tier: "standard",
-        billing_period: "monthly",
-        status: "active",
-        created_at: "2026-01-01T00:00:00.000Z",
-        cancel_at_period_end: false
-      });
-      await runChangePlanFromCheckout(
-        makeSession({
-          metadata: {
-            businessId: "biz-1",
-            previousSubscriptionId: "sub-row-old",
-            tier: "starter",
-            billingPeriod: "monthly",
-            lifecycleAction: "changePlan"
-          }
-        }),
-        "evt_pool_3"
+        "evt_pool_1"
       );
       expect(releaseVpsToPoolMock).toHaveBeenCalledWith(
         expect.objectContaining({ vmId: 1001, plan: "kvm8" })

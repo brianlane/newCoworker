@@ -593,12 +593,12 @@ export async function runChangePlanFromCheckout(
       try {
         await releaseVpsToPool({
           vmId: oldVmId,
-          plan:
-            business.vps_size === "kvm2" || business.vps_size === "kvm8"
-              ? business.vps_size
-              : oldSub.tier === "starter"
-                ? "kvm2"
-                : "kvm8",
+          // Label by the OLD subscription's tier default. The vps_size pin
+          // describes the box being provisioned NOW, not the one being
+          // released. For boxes already tracked in vps_inventory (recorded
+          // at purchase/adopt time) releaseVpsToPool keeps the recorded
+          // plan anyway; this label only seeds pre-inventory boxes.
+          plan: oldSub.tier === "starter" ? "kvm2" : "kvm8",
           hostingerBillingSubscriptionId: oldSub.hostinger_billing_subscription_id,
           notes: `returned by upgrade_switch of business ${businessId}; auto-renew off — lapses at period end unless adopted`
         });

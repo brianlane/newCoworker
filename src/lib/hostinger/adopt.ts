@@ -40,6 +40,7 @@ import { sshExec } from "./ssh";
 import {
   getActiveVpsSshKey,
   insertVpsSshKey,
+  reassignVpsSshKeyBusiness,
   type VpsSshKeyRow
 } from "@/lib/db/vps-ssh-keys";
 import {
@@ -73,6 +74,7 @@ export type AdoptVpsDeps = {
   db?: {
     insertVpsSshKey?: typeof insertVpsSshKey;
     getActiveVpsSshKey?: typeof getActiveVpsSshKey;
+    reassignVpsSshKeyBusiness?: typeof reassignVpsSshKeyBusiness;
   };
   /**
    * SSH auth probe: true when the key authenticates on the host. Production
@@ -135,9 +137,10 @@ export async function adoptVpsForBusiness(
     /* c8 ignore next -- production default; tests inject a fake probe */
     pisQuiescentProbe = defaultPisQuiescentProbe
   } = deps;
-  /* c8 ignore next 2 -- production defaults; tests inject db overrides */
+  /* c8 ignore next 3 -- production defaults; tests inject db overrides */
   const dbInsert = deps.db?.insertVpsSshKey ?? insertVpsSshKey;
   const dbGetKey = deps.db?.getActiveVpsSshKey ?? getActiveVpsSshKey;
+  const dbReassign = deps.db?.reassignVpsSshKeyBusiness ?? reassignVpsSshKeyBusiness;
 
   const vmId = input.virtualMachineId;
   const vpsSize = resolveVpsSize(input.tier, input.vpsSize);
@@ -151,7 +154,14 @@ export async function adoptVpsForBusiness(
   let sshKeyRow: VpsSshKeyRow;
   let publicKeyId: number;
   if (existingKey?.hostinger_public_key_id && existingKey.private_key_pem) {
-    sshKeyRow = existingKey;
+    // The keypair follows the BOX, but the row must follow the TENANT:
+    // business-scoped lookups (backup/restore, admin console) resolve keys
+    // via business_id, so a row left pointing at the previous tenant would
+    // strand the new one (or leak SSH access under the old tenant's id).
+    sshKeyRow =
+      existingKey.business_id === input.businessId
+        ? existingKey
+        : await dbReassign(existingKey.id, input.businessId);
     publicKeyId = existingKey.hostinger_public_key_id;
     logger.info("adoptVps: reusing existing key row", {
       businessId: input.businessId,

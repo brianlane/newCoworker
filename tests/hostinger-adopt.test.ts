@@ -4,9 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 // import must not hit a real database.
 const moduleGetActiveVpsSshKey = vi.fn();
 const moduleInsertVpsSshKey = vi.fn();
+const moduleReassignVpsSshKeyBusiness = vi.fn();
 vi.mock("@/lib/db/vps-ssh-keys", () => ({
   getActiveVpsSshKey: (...args: unknown[]) => moduleGetActiveVpsSshKey(...args),
-  insertVpsSshKey: (...args: unknown[]) => moduleInsertVpsSshKey(...args)
+  insertVpsSshKey: (...args: unknown[]) => moduleInsertVpsSshKey(...args),
+  reassignVpsSshKeyBusiness: (...args: unknown[]) => moduleReassignVpsSshKeyBusiness(...args)
 }));
 
 import { adoptVpsForBusiness, type AdoptVpsDeps } from "@/lib/hostinger/adopt";
@@ -86,10 +88,12 @@ describe("adoptVpsForBusiness", () => {
         .fn()
         .mockResolvedValue([{ id: "hsub-1", resource_id: "1800985" }])
     });
+    const reassign = vi.fn();
     const deps = makeDeps(client, {
       db: {
         insertVpsSshKey: vi.fn(),
-        getActiveVpsSshKey: vi.fn().mockResolvedValue(keyRow)
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(keyRow),
+        reassignVpsSshKeyBusiness: reassign
       }
     });
     const res = await adoptVpsForBusiness(
@@ -105,14 +109,40 @@ describe("adoptVpsForBusiness", () => {
       postInstallScriptId: 555,
       hostingerBillingSubscriptionId: "hsub-1"
     });
-    // Reuse path: no fresh key minted, no upload, no insert.
+    // Reuse path: no fresh key minted, no upload, no insert. The row
+    // already belongs to biz-1, so no reassign either.
     expect(deps.generateKeypair).not.toHaveBeenCalled();
     expect(client.createPublicKey).not.toHaveBeenCalled();
     expect(deps.db!.insertVpsSshKey).not.toHaveBeenCalled();
+    expect(reassign).not.toHaveBeenCalled();
     // Already running with our key attached: no setup, no recreate.
     expect(client.setupVirtualMachine).not.toHaveBeenCalled();
     expect(client.recreateVirtualMachine).not.toHaveBeenCalled();
     expect(deps.db!.getActiveVpsSshKey).toHaveBeenCalledWith("1800985");
+  });
+
+  it("reassigns the reused key row when it still points at the previous tenant", async () => {
+    // Business-scoped lookups (backup/restore, admin console) resolve keys
+    // via business_id — a row left on the old tenant would strand the new
+    // one. The adopt must move the row to the adopting business.
+    const prevTenantRow = { ...keyRow, business_id: "biz-previous" };
+    const reassignedRow = { ...keyRow, business_id: "biz-new" };
+    const client = makeClient();
+    const reassign = vi.fn().mockResolvedValue(reassignedRow);
+    const deps = makeDeps(client, {
+      db: {
+        insertVpsSshKey: vi.fn(),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(prevTenantRow),
+        reassignVpsSshKeyBusiness: reassign
+      }
+    });
+    const res = await adoptVpsForBusiness(
+      { businessId: "biz-new", tier: "standard", virtualMachineId: 1800985 },
+      deps
+    );
+    expect(reassign).toHaveBeenCalledWith("row-1", "biz-new");
+    expect(res.sshKey).toEqual(reassignedRow);
+    expect(deps.db!.insertVpsSshKey).not.toHaveBeenCalled();
   });
 
   it("mints + uploads + persists a fresh keypair when no active key row exists", async () => {

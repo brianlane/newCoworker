@@ -115,7 +115,11 @@ export async function recordVpsAssigned(
  * (auto-renew off — it lapses at its paid period end unless adopted first),
  * so the next matching-size provision can reuse it instead of purchasing.
  *
- * Upsert: boxes provisioned before this table existed have no row yet.
+ * Existing rows keep their recorded `plan`: the SKU captured at
+ * purchase/adopt time is ground truth, while a cancel-time caller can only
+ * infer it (tier default / pin), which can mislabel the box and break the
+ * adopt-first size match. `input.plan` only seeds boxes provisioned before
+ * this table existed (no row yet).
  */
 export async function releaseVpsToPool(
   input: {
@@ -128,20 +132,42 @@ export async function releaseVpsToPool(
   client?: SupabaseClient
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db.from("vps_inventory").upsert(
-    {
-      vm_id: input.vmId,
-      plan: input.plan,
-      state: "available",
-      assigned_business_id: null,
-      assigned_at: null,
-      hostname: input.hostname ?? `srv${input.vmId}.hstgr.cloud`,
-      hostinger_billing_subscription_id: input.hostingerBillingSubscriptionId ?? null,
-      notes: input.notes ?? null,
-      updated_at: new Date().toISOString()
-    },
-    { onConflict: "vm_id" }
-  );
+  const nowIso = new Date().toISOString();
+
+  const { data: existing, error: readErr } = await db
+    .from("vps_inventory")
+    .select("vm_id")
+    .eq("vm_id", input.vmId)
+    .maybeSingle();
+  if (readErr) throw new Error(`releaseVpsToPool: ${readErr.message}`);
+
+  if (existing) {
+    const { error } = await db
+      .from("vps_inventory")
+      .update({
+        state: "available",
+        assigned_business_id: null,
+        assigned_at: null,
+        hostinger_billing_subscription_id: input.hostingerBillingSubscriptionId ?? null,
+        notes: input.notes ?? null,
+        updated_at: nowIso
+      })
+      .eq("vm_id", input.vmId);
+    if (error) throw new Error(`releaseVpsToPool: ${error.message}`);
+    return;
+  }
+
+  const { error } = await db.from("vps_inventory").insert({
+    vm_id: input.vmId,
+    plan: input.plan,
+    state: "available",
+    assigned_business_id: null,
+    assigned_at: null,
+    hostname: input.hostname ?? `srv${input.vmId}.hstgr.cloud`,
+    hostinger_billing_subscription_id: input.hostingerBillingSubscriptionId ?? null,
+    notes: input.notes ?? null,
+    updated_at: nowIso
+  });
   if (error) throw new Error(`releaseVpsToPool: ${error.message}`);
 }
 

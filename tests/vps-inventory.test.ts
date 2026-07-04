@@ -30,6 +30,7 @@ const sampleRow: VpsInventoryRow = {
 type MockQB = {
   select: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
+  insert: ReturnType<typeof vi.fn>;
   upsert: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
   order: ReturnType<typeof vi.fn>;
@@ -41,6 +42,7 @@ function makeChain(): MockQB {
   const qb: MockQB = {
     select: vi.fn(() => qb),
     update: vi.fn(() => qb),
+    insert: vi.fn(),
     upsert: vi.fn(),
     eq: vi.fn(() => qb),
     order: vi.fn(() => qb),
@@ -205,55 +207,94 @@ describe("vps_inventory DB layer", () => {
   });
 
   describe("releaseVpsToPool", () => {
-    it("upserts the box back to available with the business cleared", async () => {
+    it("updates an already-tracked box to available WITHOUT touching its recorded plan", async () => {
       const chain = makeChain();
-      chain.upsert.mockResolvedValue({ error: null });
+      chain.maybeSingle.mockResolvedValueOnce({ data: { vm_id: 42 }, error: null });
+      // eq #1 filters the existence read (returns the chain); eq #2 is the
+      // terminal call of .update(...).eq(...) and resolves the write.
+      let eqCalls = 0;
+      chain.eq.mockImplementation(() => {
+        eqCalls += 1;
+        return eqCalls >= 2 ? Promise.resolve({ error: null }) : chain;
+      });
       const db = makeDb(chain);
       await releaseVpsToPool(
         { vmId: 42, plan: "kvm2", hostingerBillingSubscriptionId: "sub-9", notes: "canceled" },
         db as never
       );
-      const [payload, opts] = chain.upsert.mock.calls[0];
-      expect(payload.state).toBe("available");
-      expect(payload.assigned_business_id).toBeNull();
-      expect(payload.assigned_at).toBeNull();
-      expect(payload.hostname).toBe("srv42.hstgr.cloud");
-      expect(payload.hostinger_billing_subscription_id).toBe("sub-9");
-      expect(payload.notes).toBe("canceled");
-      expect(opts).toEqual({ onConflict: "vm_id" });
+      const updateArg = chain.update.mock.calls[0][0];
+      expect(updateArg.state).toBe("available");
+      expect(updateArg.assigned_business_id).toBeNull();
+      expect(updateArg.assigned_at).toBeNull();
+      expect(updateArg.hostinger_billing_subscription_id).toBe("sub-9");
+      expect(updateArg.notes).toBe("canceled");
+      // The recorded plan (captured at purchase/adopt) is ground truth —
+      // a cancel-time caller's inferred label must never clobber it.
+      expect(updateArg.plan).toBeUndefined();
+      expect(chain.insert).not.toHaveBeenCalled();
     });
 
-    it("defaults hostname, billing id and notes when omitted", async () => {
+    it("inserts a pre-inventory box with the caller's plan label and defaults", async () => {
       const chain = makeChain();
-      chain.upsert.mockResolvedValue({ error: null });
+      chain.maybeSingle.mockResolvedValueOnce({ data: null, error: null });
+      chain.insert.mockResolvedValueOnce({ error: null });
       const db = makeDb(chain);
       await releaseVpsToPool({ vmId: 7, plan: "kvm8" }, db as never);
-      const payload = chain.upsert.mock.calls[0][0];
+      const payload = chain.insert.mock.calls[0][0];
+      expect(payload.vm_id).toBe(7);
+      expect(payload.plan).toBe("kvm8");
+      expect(payload.state).toBe("available");
       expect(payload.hostname).toBe("srv7.hstgr.cloud");
       expect(payload.hostinger_billing_subscription_id).toBeNull();
       expect(payload.notes).toBeNull();
     });
 
-    it("passes an explicit hostname through", async () => {
+    it("passes an explicit hostname through on insert", async () => {
       const chain = makeChain();
-      chain.upsert.mockResolvedValue({ error: null });
+      chain.maybeSingle.mockResolvedValueOnce({ data: null, error: null });
+      chain.insert.mockResolvedValueOnce({ error: null });
       const db = makeDb(chain);
       await releaseVpsToPool({ vmId: 7, plan: "kvm8", hostname: "my.host" }, db as never);
-      expect(chain.upsert.mock.calls[0][0].hostname).toBe("my.host");
+      expect(chain.insert.mock.calls[0][0].hostname).toBe("my.host");
     });
 
-    it("throws on Supabase error", async () => {
+    it("throws when the existence read errors", async () => {
       const chain = makeChain();
-      chain.upsert.mockResolvedValue({ error: { message: "release boom" } });
+      chain.maybeSingle.mockResolvedValueOnce({ data: null, error: { message: "read boom" } });
       const db = makeDb(chain);
       await expect(releaseVpsToPool({ vmId: 7, plan: "kvm2" }, db as never)).rejects.toThrow(
-        /releaseVpsToPool: release boom/
+        /releaseVpsToPool: read boom/
+      );
+    });
+
+    it("throws when the update errors", async () => {
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValueOnce({ data: { vm_id: 7 }, error: null });
+      let eqCalls = 0;
+      chain.eq.mockImplementation(() => {
+        eqCalls += 1;
+        return eqCalls >= 2 ? Promise.resolve({ error: { message: "update boom" } }) : chain;
+      });
+      const db = makeDb(chain);
+      await expect(releaseVpsToPool({ vmId: 7, plan: "kvm2" }, db as never)).rejects.toThrow(
+        /releaseVpsToPool: update boom/
+      );
+    });
+
+    it("throws when the insert errors", async () => {
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValueOnce({ data: null, error: null });
+      chain.insert.mockResolvedValueOnce({ error: { message: "insert boom" } });
+      const db = makeDb(chain);
+      await expect(releaseVpsToPool({ vmId: 7, plan: "kvm2" }, db as never)).rejects.toThrow(
+        /releaseVpsToPool: insert boom/
       );
     });
 
     it("uses the default service client when none is provided", async () => {
       const chain = makeChain();
-      chain.upsert.mockResolvedValue({ error: null });
+      chain.maybeSingle.mockResolvedValueOnce({ data: null, error: null });
+      chain.insert.mockResolvedValueOnce({ error: null });
       defaultClientSpy.mockReturnValueOnce(makeDb(chain));
       await releaseVpsToPool({ vmId: 7, plan: "kvm2" });
       expect(defaultClientSpy).toHaveBeenCalled();

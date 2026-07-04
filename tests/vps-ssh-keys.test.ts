@@ -9,7 +9,8 @@ import {
   insertVpsSshKey,
   getActiveVpsSshKey,
   getActiveVpsSshKeyForBusiness,
-  listActiveVpsSshKeys
+  listActiveVpsSshKeys,
+  reassignVpsSshKeyBusiness
 } from "@/lib/db/vps-ssh-keys";
 import { generateKeyPair as nodeGenKeyPair } from "node:crypto";
 import { promisify } from "node:util";
@@ -19,6 +20,7 @@ const generateKeyPair = promisify(nodeGenKeyPair);
 
 type MockQB = {
   insert: ReturnType<typeof vi.fn>;
+  update: ReturnType<typeof vi.fn>;
   select: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
   is: ReturnType<typeof vi.fn>;
@@ -31,6 +33,7 @@ type MockQB = {
 function makeChain() {
   const qb: MockQB = {
     insert: vi.fn(() => qb),
+    update: vi.fn(() => qb),
     select: vi.fn(() => qb),
     eq: vi.fn(() => qb),
     is: vi.fn(() => qb),
@@ -214,6 +217,48 @@ describe("vps_ssh_keys DB layer", () => {
       chain.order.mockResolvedValue({ data: [sample], error: null });
       defaultClientSpy.mockReturnValueOnce(makeDb(chain));
       await expect(listActiveVpsSshKeys()).resolves.toEqual([sample]);
+      expect(defaultClientSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe("reassignVpsSshKeyBusiness (VPS adoption)", () => {
+    it("updates business_id on the row and returns the updated row", async () => {
+      const moved = { ...sample, business_id: "biz-new" };
+      const chain = makeChain();
+      chain.single.mockResolvedValue({ data: moved, error: null });
+      const db = makeDb(chain);
+      const row = await reassignVpsSshKeyBusiness("row-uuid", "biz-new", db as never);
+      expect(row).toEqual(moved);
+      expect(db.from).toHaveBeenCalledWith("vps_ssh_keys");
+      expect(chain.update).toHaveBeenCalledWith({ business_id: "biz-new" });
+      expect(chain.eq).toHaveBeenCalledWith("id", "row-uuid");
+    });
+
+    it("runs the PKCS#8 → OpenSSH migration on the returned row", async () => {
+      const { privateKey } = await generateKeyPair("ed25519");
+      const pkcs8 = privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+      const legacyMoved = { ...sample, business_id: "biz-new", private_key_pem: pkcs8 };
+      const chain = makeChain();
+      chain.single.mockResolvedValue({ data: legacyMoved, error: null });
+      const db = makeDb(chain);
+      const row = await reassignVpsSshKeyBusiness("row-uuid", "biz-new", db as never);
+      expect(row.private_key_pem).toContain("BEGIN OPENSSH PRIVATE KEY");
+    });
+
+    it("throws on Supabase error", async () => {
+      const chain = makeChain();
+      chain.single.mockResolvedValue({ data: null, error: { message: "reassign boom" } });
+      const db = makeDb(chain);
+      await expect(reassignVpsSshKeyBusiness("row-uuid", "biz-new", db as never)).rejects.toThrow(
+        /reassignVpsSshKeyBusiness: reassign boom/
+      );
+    });
+
+    it("uses the default service client when none is provided", async () => {
+      const chain = makeChain();
+      chain.single.mockResolvedValue({ data: sample, error: null });
+      defaultClientSpy.mockReturnValueOnce(makeDb(chain));
+      await expect(reassignVpsSshKeyBusiness("row-uuid", "biz-new")).resolves.toEqual(sample);
       expect(defaultClientSpy).toHaveBeenCalled();
     });
   });

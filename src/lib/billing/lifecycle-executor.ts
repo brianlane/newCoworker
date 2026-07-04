@@ -172,6 +172,11 @@ export async function executeLifecyclePlanFastPhase(
     await runStripeOp(op, stripe, result);
   }
   for (const op of plan.dbUpdates) {
+    // Pool returns are deferred to the slow phase: marking the box
+    // `available` before the SSH backup and stop_vm have run would let a
+    // concurrent signup claim + recreate a VM whose tenant data hasn't
+    // been backed up yet.
+    if (op.type === "return_vps_to_pool") continue;
     await runDbOp(op, extra, result);
   }
   return result;
@@ -217,6 +222,13 @@ export async function executeLifecyclePlanSlowPhase(
         error: err instanceof Error ? err.message : String(err)
       });
     }
+  }
+  // Pool returns run here — AFTER backup + stop_vm — because a box marked
+  // `available` is immediately claimable by a concurrent signup, whose
+  // adopt path recreates (wipes) the VM. The fast phase skipped these ops.
+  for (const op of plan.dbUpdates) {
+    if (op.type !== "return_vps_to_pool") continue;
+    await runPoolReturnOp(op);
   }
   for (const op of plan.emailsToSend) {
     try {
@@ -456,27 +468,38 @@ async function runDbOp(
       }
       return;
     case "return_vps_to_pool":
-      // Best-effort: vps_inventory is an economics optimization (adopt-first
-      // reuse of owned boxes), never a correctness dependency — a pool write
-      // failure must not fail the cancel/wipe.
-      try {
-        await releaseVpsToPool({
-          vmId: op.virtualMachineId,
-          plan: op.plan as VpsSize,
-          hostingerBillingSubscriptionId: op.hostingerBillingSubscriptionId,
-          notes: op.notes
-        });
-        logger.info("VPS returned to reuse pool", {
-          virtualMachineId: op.virtualMachineId,
-          plan: op.plan
-        });
-      } catch (err) {
-        logger.warn("return_vps_to_pool failed", {
-          virtualMachineId: op.virtualMachineId,
-          error: err instanceof Error ? err.message : String(err)
-        });
-      }
+      await runPoolReturnOp(op);
       return;
+  }
+}
+
+/**
+ * Best-effort pool return: vps_inventory is an economics optimization
+ * (adopt-first reuse of owned boxes), never a correctness dependency — a
+ * pool write failure must not fail the cancel/wipe. Split out of
+ * {@link runDbOp} because the split-phase executor runs this op from the
+ * SLOW phase (after backup + stop_vm), where no {@link ExecutorExtra} is
+ * available.
+ */
+async function runPoolReturnOp(
+  op: Extract<DbUpdateOp, { type: "return_vps_to_pool" }>
+): Promise<void> {
+  try {
+    await releaseVpsToPool({
+      vmId: op.virtualMachineId,
+      plan: op.plan as VpsSize,
+      hostingerBillingSubscriptionId: op.hostingerBillingSubscriptionId,
+      notes: op.notes
+    });
+    logger.info("VPS returned to reuse pool", {
+      virtualMachineId: op.virtualMachineId,
+      plan: op.plan
+    });
+  } catch (err) {
+    logger.warn("return_vps_to_pool failed", {
+      virtualMachineId: op.virtualMachineId,
+      error: err instanceof Error ? err.message : String(err)
+    });
   }
 }
 

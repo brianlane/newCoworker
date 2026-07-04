@@ -127,6 +127,33 @@ export async function insertVpsSshKey(
 }
 
 /**
+ * Point an existing key row at a new owning business.
+ *
+ * Used by the VPS-adoption path (fleet economics Phase B): when a pooled VM
+ * is adopted for a new tenant, its active `vps_ssh_keys` row (minted for the
+ * PREVIOUS tenant or an earlier partial adopt) is reused as-is — the keypair
+ * still authenticates — but the row must follow the box to the new business,
+ * or every business-scoped lookup (`getActiveVpsSshKeyForBusiness`: backups,
+ * restores, admin console) would miss it or hit the old tenant.
+ */
+export async function reassignVpsSshKeyBusiness(
+  id: string,
+  businessId: string,
+  client?: SupabaseClient
+): Promise<VpsSshKeyRow> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("vps_ssh_keys")
+    .update({ business_id: businessId })
+    .eq("id", id)
+    .select()
+    .single();
+
+  if (error) throw new Error(`reassignVpsSshKeyBusiness: ${error.message}`);
+  return migrateRow(data as VpsSshKeyRow) as VpsSshKeyRow;
+}
+
+/**
  * Load the currently-active (unrotated) keypair for a VPS. Returns null when
  * no key exists — callers must branch because we never want to return a stale
  * (rotated) key as "active".

@@ -1102,5 +1102,60 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
         executeLifecyclePlan(poolPlan(), { businessId: "biz_1", vpsHost: null }, stubDeps)
       ).resolves.toEqual({});
     });
+
+    it("fast phase DEFERS the pool return — the box must not be claimable before backup + stop", async () => {
+      // A box marked `available` is immediately claimable by a concurrent
+      // signup, whose adopt path RECREATES (wipes) the VM. The fast phase
+      // runs before the SSH backup and stop_vm, so it must skip this op.
+      await executeLifecyclePlanFastPhase(
+        poolPlan(),
+        { businessId: "biz_1", vpsHost: null },
+        stubDeps
+      );
+      expect(releaseVpsToPoolMock).not.toHaveBeenCalled();
+    });
+
+    it("slow phase runs the pool return after backup + Hostinger teardown", async () => {
+      const callOrder: string[] = [];
+      backupBusinessDataMock.mockImplementation(async () => {
+        callOrder.push("backup");
+        return {};
+      });
+      const hostinger = {
+        stopVirtualMachine: vi.fn(async () => {
+          callOrder.push("stop_vm");
+          return {};
+        })
+      };
+      releaseVpsToPoolMock.mockImplementation(async () => {
+        callOrder.push("pool_return");
+      });
+
+      const plan = poolPlan();
+      plan.sshOps = [
+        { type: "backup_durable_data", businessId: "biz_1", vpsHost: "1.2.3.4" }
+      ];
+      plan.hostingerOps = [{ type: "stop_vm", virtualMachineId: 1800985 }];
+
+      await executeLifecyclePlanSlowPhase(plan, {}, {
+        hostinger: hostinger as never,
+        sendEmail: vi.fn()
+      });
+
+      expect(callOrder).toEqual(["backup", "stop_vm", "pool_return"]);
+      expect(releaseVpsToPoolMock).toHaveBeenCalledWith(
+        expect.objectContaining({ vmId: 1800985, plan: "kvm2" })
+      );
+    });
+
+    it("slow phase swallows pool return failures like every other slow op", async () => {
+      releaseVpsToPoolMock.mockRejectedValueOnce(new Error("pool down"));
+      await expect(
+        executeLifecyclePlanSlowPhase(poolPlan(), {}, {
+          hostinger: {} as never,
+          sendEmail: vi.fn()
+        })
+      ).resolves.toBeUndefined();
+    });
   });
 });
