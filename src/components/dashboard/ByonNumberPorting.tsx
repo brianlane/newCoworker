@@ -28,6 +28,13 @@ import { Download, FileCheck2, PhoneForwarded, Upload } from "lucide-react";
 type Props = {
   businessId: string;
   initialRequests: NumberPortRequestRow[];
+  /**
+   * BYON is a Standard-tier perk. When false (Starter), the wizard is
+   * replaced with an upgrade prompt but existing requests keep their
+   * status card and cancel action (ports started before a downgrade, or
+   * before the gate shipped, must stay visible).
+   */
+  wizardEnabled?: boolean;
 };
 
 type CheckResult = {
@@ -72,7 +79,7 @@ const secondaryBtn =
   "inline-flex items-center gap-1.5 rounded-lg border border-parchment/20 text-parchment/70 " +
   "px-3 py-2 text-xs hover:bg-parchment/5 transition-colors disabled:opacity-40";
 
-export function ByonNumberPorting({ businessId, initialRequests }: Props) {
+export function ByonNumberPorting({ businessId, initialRequests, wizardEnabled = true }: Props) {
   const [requests, setRequests] = useState<NumberPortRequestRow[]>(initialRequests);
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [busy, setBusy] = useState<string | null>(null);
@@ -276,6 +283,27 @@ export function ByonNumberPorting({ businessId, initialRequests }: Props) {
         </p>
       )}
 
+      {!wizardEnabled && (
+        <Card>
+          <div className="text-center py-8 space-y-3">
+            <p className="text-parchment/80 font-semibold">
+              Bring-your-own-number is a Standard plan perk
+            </p>
+            <p className="text-parchment/60 text-sm max-w-md mx-auto">
+              Upgrade to Standard to port the business number your customers already know — it
+              transfers to your AI coworker in about a week.
+            </p>
+            <a
+              href="/dashboard/billing"
+              className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
+            >
+              Upgrade to Standard →
+            </a>
+          </div>
+        </Card>
+      )}
+
+      {wizardEnabled && (
       <Card>
         <div className="flex items-center gap-2 mb-1">
           <PhoneForwarded className="h-4 w-4 text-signal-teal" />
@@ -527,6 +555,7 @@ export function ByonNumberPorting({ businessId, initialRequests }: Props) {
           </div>
         )}
       </Card>
+      )}
 
       {requests.length > 0 && (
         <Card>

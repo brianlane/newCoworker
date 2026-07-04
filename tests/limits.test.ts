@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as limitsModule from "@/lib/plans/limits";
 
 const { TIER_LIMITS, getTierLimits } = limitsModule;
-import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
+import { concurrentCallsLine, smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 
 describe("tier limits", () => {
   describe("starter limits", () => {
@@ -15,7 +15,7 @@ describe("tier limits", () => {
     });
 
     it("starter has strict monthly SMS cap (UTC month)", () => {
-      expect(TIER_LIMITS.starter.smsPerMonth).toBe(750);
+      expect(TIER_LIMITS.starter.smsPerMonth).toBe(500);
     });
 
     it("starter has 1 concurrent call max", () => {
@@ -44,8 +44,8 @@ describe("tier limits", () => {
       expect(TIER_LIMITS.standard.smsPerMonth).toBe(3000);
     });
 
-    it("standard has 3 concurrent calls max", () => {
-      expect(TIER_LIMITS.standard.maxConcurrentCalls).toBe(3);
+    it("standard has 10 concurrent calls max (tier relaunch)", () => {
+      expect(TIER_LIMITS.standard.maxConcurrentCalls).toBe(10);
     });
 
     it("standard SMS is not throttled", () => {
@@ -90,11 +90,17 @@ describe("tier limits", () => {
 
     it("voice and SMS lines match tier defaults", () => {
       expect(voiceMinutesLine("starter")).toBe("10 voice minutes");
-      expect(smsMonthlyLine("starter")).toBe("750 SMS / month");
+      expect(smsMonthlyLine("starter")).toBe("500 SMS / month");
       expect(voiceMinutesLine("standard")).toBe("250 voice minutes");
       expect(smsMonthlyLine("standard")).toBe("3000 SMS / month");
       expect(voiceMinutesLine("enterprise")).toBe("2,500 voice minutes");
       expect(smsMonthlyLine("enterprise")).toBe("Unlimited SMS / month");
+    });
+
+    it("concurrentCallsLine pluralizes and handles non-finite caps", () => {
+      expect(concurrentCallsLine(1)).toBe("1 concurrent call");
+      expect(concurrentCallsLine(10)).toBe("Up to 10 concurrent calls");
+      expect(concurrentCallsLine(Number.POSITIVE_INFINITY)).toBe("Custom concurrent calls");
     });
 
     it("respects enterprise overrides in copy helpers", () => {

@@ -13,7 +13,7 @@ import {
 } from "@/lib/pricing";
 import { getPeriodPricing, getCommitmentMonths, PlanTier, calculateSavingsPercentage } from "@/lib/plans/tier";
 import { TIER_LIMITS } from "@/lib/plans/limits";
-import { voiceMinutesLine } from "@/lib/plans/usage-copy";
+import { concurrentCallsLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 
 type PeriodOption = {
   id: BillingPeriod;
@@ -105,7 +105,7 @@ export default function OnboardPage() {
         "Emails and appointment booking",
         voiceMinutesLine("starter"),
         `${TIER_LIMITS.starter.smsPerMonth} SMS`,
-        "1 concurrent call"
+        concurrentCallsLine(TIER_LIMITS.starter.maxConcurrentCalls)
         ],
       cta: "Choose Starter",
       highlight: false,
@@ -133,7 +133,8 @@ export default function OnboardPage() {
         "Everything in Starter, plus:",
         voiceMinutesLine("standard"),
         `${TIER_LIMITS.standard.smsPerMonth} SMS`,
-        "3 concurrent calls",
+        concurrentCallsLine(TIER_LIMITS.standard.maxConcurrentCalls),
+        "Bring your own phone number (port-in)",
         "Send texts during calls",
         "Warm handoff call transfers",
         "$10/mo AI budget for agentic tasks, before free model fallback",

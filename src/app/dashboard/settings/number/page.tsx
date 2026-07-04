@@ -10,6 +10,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { ByonNumberPorting } from "@/components/dashboard/ByonNumberPorting";
 import { listByonPortRequests } from "@/lib/byon/port-requests";
+import { byonAllowedForTier } from "@/lib/byon/tier-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -20,11 +21,11 @@ export default async function NumberSettingsPage() {
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
-    .select("id, name")
+    .select("id, name, tier")
     .eq("owner_email", user.email)
     .order("created_at", { ascending: false });
 
-  const business = businesses?.[0] ?? null;
+  const business = (businesses?.[0] ?? null) as { id: string; name: string; tier: string } | null;
 
   if (!business) {
     return (
@@ -50,16 +51,26 @@ export default async function NumberSettingsPage() {
 
   const requests = await listByonPortRequests(business.id, db);
 
+  // BYON is a Standard-tier perk: Starters get the upgrade prompt instead of
+  // the wizard (creation is also gated server-side), but any in-flight port
+  // requests keep their status card and cancel action.
+  const wizardEnabled = byonAllowedForTier(business.tier);
+
   return (
     <div className="space-y-6 max-w-3xl">
       <div>
         <h1 className="text-2xl font-bold text-parchment">Phone Number</h1>
         <p className="text-sm text-parchment/50 mt-1">
-          Bring the business number your customers already know — it transfers to your AI coworker
-          in about a week
+          {wizardEnabled
+            ? "Bring the business number your customers already know — it transfers to your AI coworker in about a week"
+            : "Bring your existing business number"}
         </p>
       </div>
-      <ByonNumberPorting businessId={business.id} initialRequests={requests} />
+      <ByonNumberPorting
+        businessId={business.id}
+        initialRequests={requests}
+        wizardEnabled={wizardEnabled}
+      />
     </div>
   );
 }

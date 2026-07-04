@@ -15,6 +15,8 @@ import { getAuthUser, requireOwner } from "@/lib/auth";
 import { errorResponse, handleRouteError } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { generateLoaPdf } from "@/lib/byon/loa-pdf";
+import { ByonValidationError } from "@/lib/byon/port-requests";
+import { assertByonAllowedForBusiness } from "@/lib/byon/tier-gate";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
 
 export const dynamic = "force-dynamic";
@@ -52,6 +54,9 @@ export async function POST(request: Request) {
       return errorResponse("CONFLICT", "Too many downloads, slow down.", 429);
     }
 
+    // BYON is Standard-only.
+    await assertByonAllowedForBusiness(parsed.businessId);
+
     const normalized = normalizeContactNumber(parsed.phone);
     if (!normalized.ok || !normalized.value.startsWith("+")) {
       return errorResponse("VALIDATION_ERROR", "Enter the full phone number you want to port.");
@@ -74,6 +79,9 @@ export async function POST(request: Request) {
       }
     });
   } catch (err) {
+    if (err instanceof ByonValidationError) {
+      return errorResponse("VALIDATION_ERROR", err.message);
+    }
     return handleRouteError(err);
   }
 }

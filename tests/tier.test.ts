@@ -35,8 +35,8 @@ describe("tier pricing", () => {
       expect(getPeriodPricing("starter", "biennial").monthlyCents).toBe(999);
     });
 
-    it("starter biennial renewal is $16.99/mo (1699 cents)", () => {
-      expect(getPeriodPricing("starter", "biennial").renewalMonthlyCents).toBe(1699);
+    it("starter biennial renewal is $19.99/mo (1999 cents, tier relaunch)", () => {
+      expect(getPeriodPricing("starter", "biennial").renewalMonthlyCents).toBe(1999);
     });
 
     it("starter annual is $10.99/mo (1099 cents)", () => {

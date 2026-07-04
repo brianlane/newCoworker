@@ -35,3 +35,11 @@ export function smsMonthlyLine(tier: PlanTier, enterpriseLimitsOverride?: unknow
   if (L.smsPerMonth === Infinity) return "Unlimited SMS / month";
   return `${L.smsPerMonth} SMS / month`;
 }
+
+/** Marketing / UI line for the concurrent-call cap. */
+export function concurrentCallsLine(maxConcurrentCalls: number): string {
+  if (!Number.isFinite(maxConcurrentCalls)) return "Custom concurrent calls";
+  return maxConcurrentCalls === 1
+    ? "1 concurrent call"
+    : `Up to ${maxConcurrentCalls} concurrent calls`;
+}
