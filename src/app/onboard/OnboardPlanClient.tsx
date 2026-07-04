@@ -14,6 +14,9 @@ import {
 import { getPeriodPricing, getCommitmentMonths, PlanTier, calculateSavingsPercentage } from "@/lib/plans/tier";
 import { TIER_LIMITS } from "@/lib/plans/limits";
 import { concurrentCallsLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
+import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
+
+const CARRIER_FEE_SETUP_LINE = `One-time ${formatPriceCents(CARRIER_REGISTRATION_FEE_CENTS)} carrier registration · 30-day money-back guarantee`;
 
 type PeriodOption = {
   id: BillingPeriod;
@@ -93,7 +96,7 @@ export default function OnboardPage() {
         period === "monthly" && starterPrice.hasIntroDiscount
           ? `First month discount saves ${starterPrice.firstCycleDiscount}`
           : undefined,
-      setup: "No setup fee · 30-day money-back guarantee",
+      setup: CARRIER_FEE_SETUP_LINE,
       features: [
         "AI voice coworker",
         "Phone number and email address dedicated to your coworker",
@@ -128,7 +131,7 @@ export default function OnboardPage() {
         period === "monthly" && standardPrice.hasIntroDiscount
           ? `First month discount saves ${standardPrice.firstCycleDiscount}`
           : undefined,
-      setup: "No setup fee · 30-day money-back guarantee",
+      setup: CARRIER_FEE_SETUP_LINE,
       features: [
         "Everything in Starter, plus:",
         voiceMinutesLine("standard"),

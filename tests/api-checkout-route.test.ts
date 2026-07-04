@@ -148,6 +148,8 @@ describe("api/checkout route", () => {
       expect.objectContaining({
         cancelUrl: "http://localhost:3000/onboard/questionnaire?tier=standard&period=biennial",
         customerEmail: "owner@example.com",
+        // Every NEW signup pays the one-time 10DLC carrier registration fee.
+        oneTimeCarrierFeeCents: 1950,
         metadata: expect.objectContaining({
           userId: signupUserId,
           businessId,

@@ -13,6 +13,7 @@ import { logger } from "@/lib/logger";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import { getCommitmentMonths } from "@/lib/plans/tier";
+import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
 
 const schema = z.object({
   tier: z.enum(["starter", "standard"]),
@@ -272,6 +273,10 @@ export async function POST(request: Request) {
       cancelUrl: `${appUrl}/onboard/questionnaire?tier=${encodeURIComponent(body.tier)}&period=${encodeURIComponent(body.billingPeriod)}`,
       customerEmail,
       discountCouponId,
+      // New signups register a fresh 10DLC campaign — pass the carrier fee
+      // through as a one-time line item. Plan changes and reactivations
+      // (separate routes) keep the existing campaign and never re-charge it.
+      oneTimeCarrierFeeCents: CARRIER_REGISTRATION_FEE_CENTS,
       metadata: {
         businessId: body.businessId,
         tier: body.tier,

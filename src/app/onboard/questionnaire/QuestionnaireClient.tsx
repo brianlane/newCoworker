@@ -1095,6 +1095,7 @@ function QuestionnaireForm() {
 
                   <p className="text-xs text-parchment/40 text-center">
                     30-day money-back guarantee · Cancel within 30 days for a full refund
+                    (excluding the one-time carrier registration fee)
                   </p>
 
                   <div className="rounded-lg border border-parchment/10 bg-parchment/5 px-3 py-2 text-xs text-parchment/65">

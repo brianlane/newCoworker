@@ -1,5 +1,6 @@
 import Stripe from "stripe";
 import type { BillingPeriod } from "@/lib/plans/tier";
+import { CARRIER_REGISTRATION_FEE_NAME } from "@/lib/plans/carrier-fee";
 
 export function getStripe(secretKey?: string): Stripe {
   const key = secretKey ?? process.env.STRIPE_SECRET_KEY;
@@ -25,6 +26,14 @@ export type CheckoutParams = {
   customerEmail?: string;
   metadata?: Record<string, string>;
   discountCouponId?: string;
+  /**
+   * One-time 10DLC carrier-registration pass-through (Phase C3), added as an
+   * inline `price_data` line so no per-environment Stripe product setup is
+   * needed. Set by the NEW-SIGNUP checkout only — plan changes and
+   * reactivations reuse the tenant's existing campaign and must not re-charge
+   * it. Billed once on the first invoice; the 30-day refund carves it out.
+   */
+  oneTimeCarrierFeeCents?: number;
 };
 
 export async function createCheckoutSession(params: CheckoutParams): Promise<{
@@ -32,9 +41,22 @@ export async function createCheckoutSession(params: CheckoutParams): Promise<{
   url: string;
 }> {
   const stripe = getStripe();
+  const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
+    { price: params.priceId, quantity: 1 }
+  ];
+  if ((params.oneTimeCarrierFeeCents ?? 0) > 0) {
+    lineItems.push({
+      price_data: {
+        currency: "usd",
+        product_data: { name: CARRIER_REGISTRATION_FEE_NAME },
+        unit_amount: params.oneTimeCarrierFeeCents
+      },
+      quantity: 1
+    });
+  }
   const session = await stripe.checkout.sessions.create({
     mode: "subscription",
-    line_items: [{ price: params.priceId, quantity: 1 }],
+    line_items: lineItems,
     success_url: params.successUrl,
     cancel_url: params.cancelUrl,
     customer_email: params.customerEmail,

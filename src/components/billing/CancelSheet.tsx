@@ -117,9 +117,10 @@ export function CancelSheet({
           <div className="rounded-lg border border-claw-green/30 bg-claw-green/5 p-4 space-y-2">
             <p className="text-sm font-semibold text-parchment">Cancel now and refund</p>
             <p className="text-xs text-parchment/60">
-              We refund your last charge, shut down your VPS immediately, and keep your
-              data for 30 days so you can reactivate without losing anything. This is your
-              one-time lifetime refund — it can only be used once.
+              We refund your last charge (excluding the one-time carrier registration fee),
+              shut down your VPS immediately, and keep your data for 30 days so you can
+              reactivate without losing anything. This is your one-time lifetime refund —
+              it can only be used once.
             </p>
             <Button
               size="sm"
