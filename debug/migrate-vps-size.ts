@@ -301,11 +301,19 @@ async function makeAdoptProvisioner(vmId: number): Promise<
         ssh_username: "root"
       });
     }
+    // Embed the public key in the PIS: Hostinger's setup/recreate/attach
+    // endpoints silently drop public_key_ids on some VMs (VM 1798267, KVM2
+    // experiment; VM 1806097, KVM1 Phase E smoke) — the PIS-embedded
+    // authorized_keys write is the only deterministic attach.
     const script = await hostinger.createPostInstallScript(
       `newcoworker-${input.businessId}-${Date.now().toString(36)}`,
-      buildDefaultPostInstallScript({ tier: input.tier, vpsSize: input.vpsSize })
+      buildDefaultPostInstallScript({
+        tier: input.tier,
+        vpsSize: input.vpsSize,
+        authorizedSshPublicKey: sshKeyRow.public_key
+      })
     );
-    console.log(`  [adopt] post-install script registered id=${script.id}`);
+    console.log(`  [adopt] post-install script registered id=${script.id} (key embedded)`);
 
     const setupPayload = {
       data_center_id: DEFAULT_US_DATA_CENTER_ID,

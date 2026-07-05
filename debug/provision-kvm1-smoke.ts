@@ -27,6 +27,14 @@
  *   npx tsx debug/provision-kvm1-smoke.ts --apply     # ⚠️ PURCHASES the VPS
  *   npx tsx debug/provision-kvm1-smoke.ts --source <businessId> --apply
  *
+ * Adopt mode (NO purchase): Hostinger's order API sometimes charges the card
+ * and STILL fails the request (observed Jul 5 2026: a 422 on hostname AND a
+ * 402 "card payment could not be completed" each left a PAID KVM1 stuck in
+ * `initial`). Adopt such a box instead of buying another — same
+ * setup→recreate flow provision-kvm2-smoke.ts validated:
+ *   npx tsx debug/provision-kvm1-smoke.ts --adopt-vm <vmId>          # dry run
+ *   npx tsx debug/provision-kvm1-smoke.ts --adopt-vm <vmId> --apply
+ *
  * After it completes, deploy the clone (no Cloudflare tunnel — probes go
  * over SSH so the experiment never publishes hostnames):
  *   set -a && source .env && set +a
@@ -50,6 +58,12 @@ const SOURCE_BUSINESS_ID =
   sourceArgIdx > -1
     ? process.argv[sourceArgIdx + 1]
     : "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3"; // Amy
+const adoptArgIdx = process.argv.indexOf("--adopt-vm");
+const ADOPT_VM_ID = adoptArgIdx > -1 ? Number(process.argv[adoptArgIdx + 1]) : null;
+if (adoptArgIdx > -1 && (!Number.isInteger(ADOPT_VM_ID) || ADOPT_VM_ID! <= 0)) {
+  console.error("--adopt-vm requires a numeric Hostinger virtual machine id");
+  process.exit(1);
+}
 
 const STATE_FILE = path.resolve(process.cwd(), "debug/.kvm1-smoke.json");
 const KVM1_ITEM_ID = "hostingercom-vps-kvm1-usd-1m";
@@ -106,10 +120,21 @@ if (fs.existsSync(STATE_FILE)) {
   process.exit(1);
 }
 
+if (ADOPT_VM_ID !== null) {
+  const vm = await hostinger.getVirtualMachine(ADOPT_VM_ID);
+  console.log(`adopt target    : vm=${vm.id} state=${vm.state} ip=${vm.ipv4?.[0]?.address ?? "none"}`);
+}
+
 if (!APPLY) {
-  console.log(`\n[dry-run] Would purchase ONE ${KVM1_ITEM_ID} VPS, bootstrap TIER=starter`);
-  console.log(`[dry-run] VPS_SIZE=kvm2 (ZRAM on), clone the source config onto a scratch`);
-  console.log(`[dry-run] tenant row, then disable Ollama over SSH (Gemini-only shape).`);
+  if (ADOPT_VM_ID !== null) {
+    console.log(`\n[dry-run] Would ADOPT existing VM ${ADOPT_VM_ID} (no purchase): setup→recreate`);
+    console.log(`[dry-run] with TIER=starter VPS_SIZE=kvm2 post-install, persist the SSH key,`);
+    console.log(`[dry-run] and clone the source config onto a scratch tenant row.`);
+  } else {
+    console.log(`\n[dry-run] Would purchase ONE ${KVM1_ITEM_ID} VPS, bootstrap TIER=starter`);
+    console.log(`[dry-run] VPS_SIZE=kvm2 (ZRAM on), clone the source config onto a scratch`);
+    console.log(`[dry-run] tenant row, then disable Ollama over SSH (Gemini-only shape).`);
+  }
   console.log(`[dry-run] Re-run with --apply to act.`);
   process.exit(0);
 }
@@ -156,21 +181,35 @@ if (insCfgErr) {
   process.exit(1);
 }
 
-// ---------------------------------------------------------------- purchase
-console.log(`purchasing ${KVM1_ITEM_ID} (this can take several minutes)…`);
-const result = await provisionVpsForBusiness(
-  {
-    businessId: cloneId,
-    tier: "starter",
-    vpsSize: "kvm2",
-    itemId: KVM1_ITEM_ID,
-    postInstallScript: buildDefaultPostInstallScript({ tier: "starter", vpsSize: "kvm2" })
-  },
-  {
-    client: hostinger,
-    onProgress: (phase, detail) => console.log(`  [${phase}] ${JSON.stringify(detail)}`)
-  }
-);
+// ------------------------------------------------------- purchase OR adopt
+let result: Awaited<ReturnType<typeof provisionVpsForBusiness>>;
+if (ADOPT_VM_ID !== null) {
+  // Same proven setup→recreate sequence production pool-adopts use —
+  // adoptVpsForBusiness reuses/mints the key row, registers the TIER=starter
+  // VPS_SIZE=kvm2 post-install, recreates until the key attaches, and waits
+  // for the box's own post-install run to go quiescent.
+  const { adoptVpsForBusiness } = await import("../src/lib/hostinger/adopt.ts");
+  console.log(`adopting existing VM ${ADOPT_VM_ID} (no purchase)…`);
+  result = await adoptVpsForBusiness(
+    { businessId: cloneId, tier: "starter", vpsSize: "kvm2", virtualMachineId: ADOPT_VM_ID },
+    { client: hostinger }
+  );
+} else {
+  console.log(`purchasing ${KVM1_ITEM_ID} (this can take several minutes)…`);
+  result = await provisionVpsForBusiness(
+    {
+      businessId: cloneId,
+      tier: "starter",
+      vpsSize: "kvm2",
+      itemId: KVM1_ITEM_ID,
+      postInstallScript: buildDefaultPostInstallScript({ tier: "starter", vpsSize: "kvm2" })
+    },
+    {
+      client: hostinger,
+      onProgress: (phase, detail) => console.log(`  [${phase}] ${JSON.stringify(detail)}`)
+    }
+  );
+}
 
 await db
   .from("businesses")
@@ -184,6 +223,7 @@ await db
 const state = {
   createdAt: new Date().toISOString(),
   experiment: "kvm1-starter-phase-e",
+  adoptedExistingVm: ADOPT_VM_ID !== null,
   sourceBusinessId: SOURCE_BUSINESS_ID,
   cloneBusinessId: cloneId,
   virtualMachineId: result.virtualMachineId,

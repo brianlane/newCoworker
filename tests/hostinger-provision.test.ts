@@ -1052,6 +1052,50 @@ describe("buildDefaultPostInstallScript", () => {
     ).toThrow(/disallowed characters/);
   });
 
+  it("embeds an authorized_keys write when authorizedSshPublicKey is passed (Hostinger drops public_key_ids)", () => {
+    // Hostinger's standalone setup/recreate/attach endpoints all silently
+    // drop `public_key_ids` on some VMs (VM 1798267 KVM2 experiment,
+    // VM 1806097 KVM1 Phase E smoke — recreate reported success twice, key
+    // never landed). The PIS-embedded write is the deterministic attach path
+    // the adopt flow depends on.
+    const pub = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxxHX3XEbCUn0ZjOJKqqPWw test-comment";
+    const s = buildDefaultPostInstallScript({ authorizedSshPublicKey: pub });
+    expect(s).toContain("mkdir -p /root/.ssh && chmod 700 /root/.ssh");
+    expect(s).toContain(`echo '${pub}' >> /root/.ssh/authorized_keys`);
+    expect(s).toContain("chmod 600 /root/.ssh/authorized_keys");
+    // The write must land BEFORE the first apt invocation so SSH access
+    // never depends on the (slow, failure-prone) package phase.
+    expect(s.indexOf("/root/.ssh/authorized_keys")).toBeLessThan(s.indexOf("apt-get"));
+    // Idempotence: re-running the script must not duplicate the key line.
+    expect(s).toContain(`grep -qF '${pub}' /root/.ssh/authorized_keys`);
+  });
+
+  it("omits the authorized_keys block by default and for empty values", () => {
+    expect(buildDefaultPostInstallScript()).not.toContain("authorized_keys");
+    expect(
+      buildDefaultPostInstallScript({ authorizedSshPublicKey: null })
+    ).not.toContain("authorized_keys");
+    expect(
+      buildDefaultPostInstallScript({ authorizedSshPublicKey: "   " })
+    ).not.toContain("authorized_keys");
+  });
+
+  it("rejects authorizedSshPublicKey values that are not single-line OpenSSH public keys", () => {
+    expect(() =>
+      buildDefaultPostInstallScript({
+        authorizedSshPublicKey: "ssh-ed25519 AAAA\nssh-ed25519 BBBB"
+      })
+    ).toThrow(/single line/);
+    expect(() =>
+      buildDefaultPostInstallScript({
+        authorizedSshPublicKey: "-----BEGIN OPENSSH PRIVATE KEY----- xxxx"
+      })
+    ).toThrow(/not a valid OpenSSH public key/);
+    expect(() =>
+      buildDefaultPostInstallScript({ authorizedSshPublicKey: "garbage" })
+    ).toThrow(/not a valid OpenSSH public key/);
+  });
+
   it("rejects unknown tier values (only starter|standard allowed)", () => {
     expect(() =>
       // @ts-expect-error -- intentionally invalid input, runtime guard catches.
