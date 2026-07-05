@@ -143,7 +143,8 @@ describe("provisionVpsForBusiness", () => {
     expect(purchaseArg.setup.post_install_script_id).toBeUndefined();
     expect(client.createPostInstallScript).not.toHaveBeenCalled();
     expect(purchaseArg.setup.install_monarx).toBe(false);
-    expect(purchaseArg.setup.hostname).toMatch(/^nc-/);
+    // FQDN required: Hostinger 422s bare labels since Jul 2026 (VPS:2004).
+    expect(purchaseArg.setup.hostname).toMatch(/^nc-[A-Za-z0-9-]+\.newcoworker\.com$/);
   });
 
   it("uses Hostinger billing subscription lookup when purchase response omits subscription_id", async () => {
@@ -931,7 +932,7 @@ describe("provisionVpsForBusiness", () => {
     expect(res.virtualMachineId).toBe(66);
   });
 
-  it("defaults hostname to 'nc-unknown' when businessId has no valid chars", async () => {
+  it("defaults hostname to 'nc-unknown.newcoworker.com' when businessId has no valid chars", async () => {
     const client = makeClientStub({
       getVirtualMachine: vi.fn().mockResolvedValueOnce({
         id: 1,
@@ -964,7 +965,9 @@ describe("provisionVpsForBusiness", () => {
         db: { insertVpsSshKey: dbInsert }
       }
     );
-    expect(client.purchaseVirtualMachine.mock.calls[0][0].setup.hostname).toBe("nc-unknown");
+    expect(client.purchaseVirtualMachine.mock.calls[0][0].setup.hostname).toBe(
+      "nc-unknown.newcoworker.com"
+    );
   });
 });
 
