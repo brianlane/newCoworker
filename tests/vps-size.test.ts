@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   DEFAULT_TIER_VPS_SIZE,
   resolveVpsSize,
+  resolveDeployedVpsSize,
   vpsSizeHasLocalModel
 } from "@/lib/vps/size";
 
@@ -24,6 +25,18 @@ describe("vps/size", () => {
     expect(resolveVpsSize("standard", undefined)).toBe("kvm8");
     expect(resolveVpsSize("starter", "kvm999")).toBe("kvm1");
     expect(resolveVpsSize("starter", "")).toBe("kvm1");
+  });
+
+  it("resolveDeployedVpsSize: unpinned starter is legacy KVM2 hardware, pins win", () => {
+    // Existing boxes: a null pin predates pin persistence, i.e. the box was
+    // provisioned when starter⇒kvm2 — never stamp the new kvm1 profile on it.
+    expect(resolveDeployedVpsSize("starter", null)).toBe("kvm2");
+    expect(resolveDeployedVpsSize("starter", undefined)).toBe("kvm2");
+    expect(resolveDeployedVpsSize("starter", "corrupt")).toBe("kvm2");
+    expect(resolveDeployedVpsSize("standard", null)).toBe("kvm8");
+    expect(resolveDeployedVpsSize("starter", "kvm1")).toBe("kvm1");
+    expect(resolveDeployedVpsSize("standard", "kvm2")).toBe("kvm2");
+    expect(resolveDeployedVpsSize("standard", "kvm8")).toBe("kvm8");
   });
 
   it("only kvm1 lacks a local model (over-cap turns must refuse there)", () => {

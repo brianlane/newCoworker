@@ -61,7 +61,7 @@ import {
 } from "@/lib/db/vps-gateway-tokens";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { quoteShellEnvValue } from "@/lib/provisioning/orchestrate";
-import { resolveVpsSize } from "@/lib/vps/size";
+import { resolveDeployedVpsSize } from "@/lib/vps/size";
 import { sshExec } from "@/lib/hostinger/ssh";
 import {
   assertSafeGitRef,
@@ -220,7 +220,9 @@ async function redeployOne(
   const gatewayToken =
     existing ?? (await issueGatewayToken(target.businessId, { label: "vps-redeploy" }));
   const tier = deployTierFromBusinessTier(target.tier);
-  const vpsSize = resolveVpsSize(tier, target.vpsSize);
+  // Deployed-box resolver: an unpinned starter is a legacy KVM2 box, not the
+  // new kvm1 default — the redeploy profile must match the actual hardware.
+  const vpsSize = resolveDeployedVpsSize(tier, target.vpsSize);
   const bridgeOrigin = await resolveBridgeMediaWssOrigin(target.businessId);
   const envPrefix = buildDeployEnvPrefix(
     target.businessId,

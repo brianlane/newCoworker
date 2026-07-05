@@ -48,6 +48,26 @@ export function resolveVpsSize(
 }
 
 /**
+ * Hardware size of an ALREADY-PROVISIONED box (fleet redeploys, migrations —
+ * anything that pushes a deploy profile onto existing hardware).
+ *
+ * Differs from {@link resolveVpsSize} only in the null-pin fallback: a
+ * business with no `vps_size` pin predates pin persistence (the
+ * orchestrator now pins every new provision), which means it was
+ * provisioned when starter⇒KVM2 — so its box IS a kvm2 and carries the
+ * local Ollama model. Resolving it to the new kvm1 default would stamp a
+ * no-Ollama deploy profile onto Ollama hardware and contradict
+ * `tenantHasLocalModel` (which also treats null as legacy kvm2/kvm8).
+ */
+export function resolveDeployedVpsSize(
+  tier: "starter" | "standard",
+  override?: string | null
+): VpsSize {
+  if (override === "kvm1" || override === "kvm2" || override === "kvm8") return override;
+  return tier === "starter" ? "kvm2" : "kvm8";
+}
+
+/**
  * Whether this hardware size carries a local Ollama model that chat/SMS can
  * degrade to once the shared AI spend cap trips. KVM1 (1 vCPU / 4GB) does
  * not: bootstrap skips the Ollama install entirely, so over-cap turns must

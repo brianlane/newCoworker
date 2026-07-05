@@ -78,7 +78,7 @@ if (adoptRaw !== null && (!Number.isInteger(ADOPT_VM_ID) || ADOPT_VM_ID! <= 0)) 
   process.exit(1);
 }
 
-const { resolveVpsSize } = await import("../src/lib/vps/size.ts");
+const { resolveDeployedVpsSize } = await import("../src/lib/vps/size.ts");
 const { VPS_SIZE_PRICE_ITEM } = await import("../src/lib/hostinger/provision.ts");
 const { createSupabaseServiceClient } = await import("../src/lib/supabase/server.ts");
 
@@ -109,7 +109,9 @@ const { data: subRows } = await db
   .limit(1);
 const activeSub = subRows?.[0] ?? null;
 
-const currentSize = resolveVpsSize(biz.tier, biz.vps_size);
+// Deployed-box resolver: an unpinned starter is legacy KVM2 hardware, not
+// the new-provision kvm1 default.
+const currentSize = resolveDeployedVpsSize(biz.tier, biz.vps_size);
 const targetItem = VPS_SIZE_PRICE_ITEM[TARGET_SIZE as "kvm1" | "kvm2" | "kvm8"];
 
 const oldVmIdRaw = biz.hostinger_vps_id;
