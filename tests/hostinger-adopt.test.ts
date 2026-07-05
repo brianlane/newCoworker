@@ -543,6 +543,99 @@ describe("adoptVpsForBusiness", () => {
     expect(res.hostingerBillingSubscriptionId).toBeNull();
   });
 
+  it("resolves the billing id from the VM detail's subscription_id without touching the list", async () => {
+    // Hostinger's subscriptions LIST stopped returning resource_id
+    // (Jul 2026) — the VM detail endpoint is the reliable mapping.
+    const client = makeClient({
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValue({ ...runningVm, subscription_id: "hsub-vm-detail" })
+    });
+    const deps = makeDeps(client, {
+      db: {
+        insertVpsSshKey: vi.fn(),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(keyRow)
+      }
+    });
+    const res = await adoptVpsForBusiness(
+      { businessId: "biz-1", tier: "standard", virtualMachineId: 1800985 },
+      deps
+    );
+    expect(res.hostingerBillingSubscriptionId).toBe("hsub-vm-detail");
+    expect(client.listBillingSubscriptions).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the subscriptions list when the VM detail's subscription_id is empty", async () => {
+    const client = makeClient({
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValue({ ...runningVm, subscription_id: "" }),
+      listBillingSubscriptions: vi
+        .fn()
+        .mockResolvedValue([{ id: "hsub-list", resource_id: "1800985" }])
+    });
+    const deps = makeDeps(client, {
+      db: {
+        insertVpsSshKey: vi.fn(),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(keyRow)
+      }
+    });
+    const res = await adoptVpsForBusiness(
+      { businessId: "biz-1", tier: "standard", virtualMachineId: 1800985 },
+      deps
+    );
+    expect(res.hostingerBillingSubscriptionId).toBe("hsub-list");
+  });
+
+  it("falls back to the subscriptions list when the VM detail read for billing throws", async () => {
+    // The billing-time getVirtualMachine is the LAST detail read in the
+    // skip-recreate flow: initial-state check, pre-recreate state check,
+    // then billing. Fail only that final read.
+    const client = makeClient({
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValueOnce(runningVm)
+        .mockResolvedValueOnce(runningVm)
+        .mockRejectedValueOnce(new Error("vm detail down")),
+      listBillingSubscriptions: vi
+        .fn()
+        .mockResolvedValue([{ id: "hsub-list-2", resource_id: "1800985" }])
+    });
+    const deps = makeDeps(client, {
+      db: {
+        insertVpsSshKey: vi.fn(),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(keyRow)
+      }
+    });
+    const res = await adoptVpsForBusiness(
+      { businessId: "biz-1", tier: "standard", virtualMachineId: 1800985 },
+      deps
+    );
+    expect(res.hostingerBillingSubscriptionId).toBe("hsub-list-2");
+  });
+
+  it("stringifies a non-Error throwable from the billing-time VM detail read", async () => {
+    const client = makeClient({
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValueOnce(runningVm)
+        .mockResolvedValueOnce(runningVm)
+        .mockRejectedValueOnce("vm detail string failure"),
+      listBillingSubscriptions: vi.fn().mockResolvedValue([])
+    });
+    const deps = makeDeps(client, {
+      db: {
+        insertVpsSshKey: vi.fn(),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(keyRow)
+      }
+    });
+    const res = await adoptVpsForBusiness(
+      { businessId: "biz-1", tier: "standard", virtualMachineId: 1800985 },
+      deps
+    );
+    expect(res.hostingerBillingSubscriptionId).toBeNull();
+  });
+
   it("sanitizes the business id when building the recreate hostname", async () => {
     const client = makeClient({
       getVirtualMachine: vi

@@ -120,6 +120,11 @@ if (oldVmId !== null) {
   try {
     const vm = await hostinger.getVirtualMachine(oldVmId);
     oldVmIp = vm.ipv4?.[0]?.address ?? null;
+    // The VM detail's subscription_id is the reliable billing mapping — the
+    // subscriptions LIST stopped returning resource_id (verified Jul 2026).
+    if (!oldBillingId && typeof vm.subscription_id === "string" && vm.subscription_id.length > 0) {
+      oldBillingId = vm.subscription_id;
+    }
     console.log(`old VM          : ${oldVmId} state=${vm.state} ip=${oldVmIp ?? "none"}`);
   } catch (err) {
     console.log(`old VM          : ${oldVmId} (lookup failed: ${err instanceof Error ? err.message : String(err)})`);
@@ -247,7 +252,8 @@ async function makeAdoptProvisioner(vmId: number): Promise<
   }) => Promise<import("../src/lib/hostinger/provision.ts").ProvisionVpsForBusinessResult>
 > {
   const { generateSshKeypair } = await import("../src/lib/hostinger/keypair.ts");
-  const { insertVpsSshKey, getActiveVpsSshKey: getKeyForVm } = await import("../src/lib/db/vps-ssh-keys.ts");
+  const { insertVpsSshKey, getActiveVpsSshKey: getKeyForVm, reassignVpsSshKeyBusiness } =
+    await import("../src/lib/db/vps-ssh-keys.ts");
   const { buildDefaultPostInstallScript, DEFAULT_TEMPLATE_ID, DEFAULT_US_DATA_CENTER_ID } =
     await import("../src/lib/hostinger/provision.ts");
 
@@ -261,10 +267,21 @@ async function makeAdoptProvisioner(vmId: number): Promise<
     let publicKeyId: number;
     let privateKeyPem: string;
     if (existingKey?.hostinger_public_key_id && existingKey.private_key_pem) {
-      sshKeyRow = existingKey;
+      // The keypair follows the BOX, but the row must follow the TENANT:
+      // step 5's restore resolves keys via getActiveVpsSshKeyForBusiness, so
+      // a row still pointing at the previous owner (e.g. a smoke-clone
+      // business) would make the restore try the OLD box's key against the
+      // new box → USERAUTH_FAILURE. Mirror adoptVpsForBusiness's reassign.
+      sshKeyRow =
+        existingKey.business_id === input.businessId
+          ? existingKey
+          : await reassignVpsSshKeyBusiness(existingKey.id, input.businessId);
       publicKeyId = existingKey.hostinger_public_key_id;
       privateKeyPem = existingKey.private_key_pem;
-      console.log(`  [adopt] reusing existing key row for vm=${vmId} (hostinger key id=${publicKeyId})`);
+      console.log(
+        `  [adopt] reusing existing key row for vm=${vmId} (hostinger key id=${publicKeyId}` +
+          (existingKey.business_id === input.businessId ? ")" : `, reassigned from ${existingKey.business_id})`)
+      );
     } else {
       const keypair = await generateSshKeypair(`newcoworker-${input.businessId}`);
       const pubKey = await hostinger.createPublicKey(
@@ -431,10 +448,23 @@ async function makeAdoptProvisioner(vmId: number): Promise<
 
     let billingId: string | null = null;
     try {
-      const subs = await hostinger.listBillingSubscriptions();
-      billingId = subs.find((s) => s.resource_id === String(vmId))?.id ?? null;
+      // VM detail subscription_id first — the subscriptions LIST stopped
+      // returning resource_id (verified Jul 2026), so the find() below only
+      // helps on older API surfaces.
+      const vm = await hostinger.getVirtualMachine(vmId);
+      if (typeof vm.subscription_id === "string" && vm.subscription_id.length > 0) {
+        billingId = vm.subscription_id;
+      }
     } catch {
-      /* the billing-swap step below warns when this stays null */
+      /* fall through to the list lookup */
+    }
+    if (!billingId) {
+      try {
+        const subs = await hostinger.listBillingSubscriptions();
+        billingId = subs.find((s) => s.resource_id === String(vmId))?.id ?? null;
+      } catch {
+        /* the billing-swap step below warns when this stays null */
+      }
     }
 
     return {
@@ -472,7 +502,13 @@ try {
       vpsSize: TARGET_SIZE,
       ...(NOTIFY_OWNER && biz.owner_email ? { ownerEmail: biz.owner_email } : {})
     },
-    ADOPT_VM_ID !== null ? { vpsProvisioner: await makeAdoptProvisioner(ADOPT_VM_ID) } : undefined
+    // --adopt-vm names a SPECIFIC box, so the vps_inventory adopt-first pool
+    // must be bypassed (vpsPool: null): the orchestrator checks the pool
+    // BEFORE the injected vpsProvisioner, and a pool hit would silently land
+    // the tenant on whatever box the pool coughs up instead of the named one.
+    ADOPT_VM_ID !== null
+      ? { vpsProvisioner: await makeAdoptProvisioner(ADOPT_VM_ID), vpsPool: null }
+      : undefined
   );
 } catch (err) {
   console.error(`[provision] FAILED: ${err instanceof Error ? err.message : String(err)}`);
@@ -555,6 +591,16 @@ const writeAuditState = (oldBillingHandling: string): void => {
 };
 
 let newBillingId: string | null = newProv.hostingerBillingSubscriptionId;
+if (!newBillingId) {
+  try {
+    const vm = await hostinger.getVirtualMachine(newVmId);
+    if (typeof vm.subscription_id === "string" && vm.subscription_id.length > 0) {
+      newBillingId = vm.subscription_id;
+    }
+  } catch {
+    /* fall through to the list lookup */
+  }
+}
 if (!newBillingId) {
   try {
     const subs = await hostinger.listBillingSubscriptions();

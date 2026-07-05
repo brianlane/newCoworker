@@ -327,15 +327,32 @@ export async function adoptVpsForBusiness(
     });
   }
 
+  // The VM detail endpoint's `subscription_id` is the reliable mapping —
+  // Hostinger's subscriptions LIST stopped returning `resource_id` (verified
+  // against the live API Jul 2026), so the historical find-by-resource_id is
+  // kept only as a fallback for older API surfaces that still populate it.
   let hostingerBillingSubscriptionId: string | null = null;
   try {
-    const subs = await client.listBillingSubscriptions();
-    hostingerBillingSubscriptionId = subs.find((s) => s.resource_id === String(vmId))?.id ?? null;
+    const vm = await client.getVirtualMachine(vmId);
+    if (typeof vm.subscription_id === "string" && vm.subscription_id.length > 0) {
+      hostingerBillingSubscriptionId = vm.subscription_id;
+    }
   } catch (err) {
-    logger.warn("adoptVps: billing subscription lookup failed", {
+    logger.warn("adoptVps: VM detail lookup for billing subscription failed", {
       virtualMachineId: vmId,
       error: err instanceof Error ? err.message : String(err)
     });
+  }
+  if (!hostingerBillingSubscriptionId) {
+    try {
+      const subs = await client.listBillingSubscriptions();
+      hostingerBillingSubscriptionId = subs.find((s) => s.resource_id === String(vmId))?.id ?? null;
+    } catch (err) {
+      logger.warn("adoptVps: billing subscription lookup failed", {
+        virtualMachineId: vmId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
   }
 
   return {
