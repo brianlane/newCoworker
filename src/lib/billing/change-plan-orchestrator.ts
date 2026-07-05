@@ -597,7 +597,9 @@ export async function runChangePlanFromCheckout(
           // describes the box being provisioned NOW, not the one being
           // released. For boxes already tracked in vps_inventory (recorded
           // at purchase/adopt time) releaseVpsToPool keeps the recorded
-          // plan anyway; this label only seeds pre-inventory boxes.
+          // plan anyway; this label only seeds pre-inventory boxes — which
+          // for starter are all kvm2 hardware (kvm1-era boxes are always
+          // inventory-tracked), so the historical mapping stays correct.
           plan: oldSub.tier === "starter" ? "kvm2" : "kvm8",
           hostingerBillingSubscriptionId: oldSub.hostinger_billing_subscription_id,
           notes: `returned by upgrade_switch of business ${businessId}; auto-renew off — lapses at period end unless adopted`

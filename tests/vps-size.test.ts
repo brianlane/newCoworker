@@ -1,23 +1,34 @@
 import { describe, it, expect } from "vitest";
-import { DEFAULT_TIER_VPS_SIZE, resolveVpsSize } from "@/lib/vps/size";
+import {
+  DEFAULT_TIER_VPS_SIZE,
+  resolveVpsSize,
+  vpsSizeHasLocalModel
+} from "@/lib/vps/size";
 
 describe("vps/size", () => {
-  it("keeps the historical tier defaults (starter→kvm2, standard→kvm8)", () => {
-    expect(DEFAULT_TIER_VPS_SIZE.starter).toBe("kvm2");
+  it("maps the tier defaults (starter→kvm1, standard→kvm8)", () => {
+    expect(DEFAULT_TIER_VPS_SIZE.starter).toBe("kvm1");
     expect(DEFAULT_TIER_VPS_SIZE.standard).toBe("kvm8");
-    expect(resolveVpsSize("starter")).toBe("kvm2");
+    expect(resolveVpsSize("starter")).toBe("kvm1");
     expect(resolveVpsSize("standard")).toBe("kvm8");
   });
 
   it("honors an explicit pin over the tier default", () => {
     expect(resolveVpsSize("standard", "kvm2")).toBe("kvm2");
     expect(resolveVpsSize("starter", "kvm8")).toBe("kvm8");
+    expect(resolveVpsSize("standard", "kvm1")).toBe("kvm1");
   });
 
   it("falls back to the tier default on null, undefined, and corrupt values", () => {
     expect(resolveVpsSize("standard", null)).toBe("kvm8");
     expect(resolveVpsSize("standard", undefined)).toBe("kvm8");
-    expect(resolveVpsSize("starter", "kvm999")).toBe("kvm2");
-    expect(resolveVpsSize("starter", "")).toBe("kvm2");
+    expect(resolveVpsSize("starter", "kvm999")).toBe("kvm1");
+    expect(resolveVpsSize("starter", "")).toBe("kvm1");
+  });
+
+  it("only kvm1 lacks a local model (over-cap turns must refuse there)", () => {
+    expect(vpsSizeHasLocalModel("kvm1")).toBe(false);
+    expect(vpsSizeHasLocalModel("kvm2")).toBe(true);
+    expect(vpsSizeHasLocalModel("kvm8")).toBe(true);
   });
 });

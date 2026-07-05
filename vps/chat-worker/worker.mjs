@@ -863,6 +863,50 @@ async function processJob(job) {
     // one place (this worker + the RPC). Fails open to the Gemini agent on a
     // read error (quality over fuse on a transient DB blip).
     const { overCap } = await resolveOwnerChatCap();
+
+    // No-local-model hosts (kvm1: deploy-client.sh writes
+    // CHAT_WORKER_OWNER_LOCAL_AGENT="") have nothing to downgrade to when
+    // the fuse trips. Silently staying on Gemini would defeat the fuse
+    // (unbounded spend), so REFUSE the turn with an honest reply. The reply
+    // is stored like any assistant message and the job completes normally;
+    // the owner can buy a Gemini credit pack (billing page) or wait for the
+    // period reset — both paths un-trip the fuse automatically.
+    if (overCap && !OWNER_CHAT_LOCAL_AGENT) {
+      log("warn", "owner_turn_refused_over_cap", { jobId: job.id });
+      const refusal =
+        "Your coworker's monthly AI budget is used up, so replies are paused. " +
+        "They resume automatically when your billing period resets — or add a " +
+        "Gemini credit pack from the Billing page to keep chatting now.";
+      const { data: refusalMsg, error: refusalInsertErr } = await sb
+        .from("dashboard_chat_messages")
+        .insert({ thread_id: job.thread_id, role: "assistant", content: refusal })
+        .select("id")
+        .single();
+      if (refusalInsertErr) {
+        throw new Error(`message_insert_failed:${refusalInsertErr.message}`);
+      }
+      const { error: refusalThreadErr } = await sb
+        .from("dashboard_chat_threads")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("id", job.thread_id);
+      if (refusalThreadErr) {
+        log("warn", "thread_update_failed", { error: refusalThreadErr.message });
+      }
+      const { error: refusalJobErr } = await sb
+        .from("dashboard_chat_jobs")
+        .update({
+          status: "done",
+          assistant_message_id: refusalMsg.id,
+          completed_at: new Date().toISOString()
+        })
+        .eq("id", job.id);
+      if (refusalJobErr) {
+        log("error", "job_update_failed", { jobId: job.id, error: refusalJobErr.message });
+      }
+      log("info", "process_done", { jobId: job.id, ms: Date.now() - t0, refused: true });
+      return;
+    }
+
     const jobStartAgent =
       overCap && OWNER_CHAT_LOCAL_AGENT ? OWNER_CHAT_LOCAL_AGENT : OWNER_START_AGENT;
     const jobStartAgentOpts = jobStartAgent ? { startAgent: jobStartAgent } : {};

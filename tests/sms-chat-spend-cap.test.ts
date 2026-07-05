@@ -10,6 +10,7 @@ import {
   readActiveChatCreditMicros,
   readChatSpendMicros,
   resolveSmsChatCap,
+  tenantHasLocalModel,
   type SpendSupabase
 } from "../supabase/functions/_shared/chat_spend_cap";
 import { callRowboatChatOnce } from "../supabase/functions/_shared/sms_rowboat";
@@ -73,25 +74,52 @@ describe("pickSmsTurn", () => {
   it("under cap: Gemini agent, stateful, metered", () => {
     expect(
       pickSmsTurn({ overCap: false, geminiAgent: "Coworker", localAgent: "CoworkerLocal" })
-    ).toEqual({ startAgent: "Coworker", stateless: false, meter: true });
+    ).toEqual({ startAgent: "Coworker", stateless: false, meter: true, refuse: false });
   });
 
   it("over cap: local agent, stateless, NOT metered", () => {
     expect(
       pickSmsTurn({ overCap: true, geminiAgent: "Coworker", localAgent: "CoworkerLocal" })
-    ).toEqual({ startAgent: "CoworkerLocal", stateless: true, meter: false });
+    ).toEqual({ startAgent: "CoworkerLocal", stateless: true, meter: false, refuse: false });
   });
 
-  it("over cap with no local agent configured: stays on Gemini (fail open)", () => {
-    expect(
-      pickSmsTurn({ overCap: true, geminiAgent: "Coworker", localAgent: "" })
-    ).toEqual({ startAgent: "Coworker", stateless: false, meter: true });
+  it("over cap with no local agent (kvm1): REFUSES instead of running Gemini", () => {
+    // Staying on Gemini here would silently defeat the fuse — unbounded
+    // spend on hardware that has nothing to degrade to.
+    expect(pickSmsTurn({ overCap: true, geminiAgent: "Coworker", localAgent: "" })).toEqual({
+      startAgent: null,
+      stateless: false,
+      meter: false,
+      refuse: true
+    });
+    expect(pickSmsTurn({ overCap: true, geminiAgent: "Coworker", localAgent: null })).toEqual({
+      startAgent: null,
+      stateless: false,
+      meter: false,
+      refuse: true
+    });
   });
 
   it("empty gemini agent → startAgent null (omit, use workflow default)", () => {
     expect(
       pickSmsTurn({ overCap: false, geminiAgent: "", localAgent: "CoworkerLocal" })
-    ).toEqual({ startAgent: null, stateless: false, meter: true });
+    ).toEqual({ startAgent: null, stateless: false, meter: true, refuse: false });
+  });
+});
+
+describe("tenantHasLocalModel", () => {
+  it("explicit pin wins: kvm1 has no local model, kvm2/kvm8 do", () => {
+    expect(tenantHasLocalModel("standard", "kvm1")).toBe(false);
+    expect(tenantHasLocalModel("starter", "kvm2")).toBe(true);
+    expect(tenantHasLocalModel("starter", "kvm8")).toBe(true);
+  });
+
+  it("null/corrupt pin falls back to the tier default (starter→kvm1, standard→kvm8)", () => {
+    expect(tenantHasLocalModel("starter", null)).toBe(false);
+    expect(tenantHasLocalModel("starter", "kvm999")).toBe(false);
+    expect(tenantHasLocalModel("standard", null)).toBe(true);
+    expect(tenantHasLocalModel("enterprise", undefined)).toBe(true);
+    expect(tenantHasLocalModel(null, null)).toBe(true);
   });
 });
 

@@ -825,7 +825,10 @@ describe("planLifecycleAction: return_vps_to_pool (fleet economics Phase B)", ()
     expect(poolOp(res)?.plan).toBe("kvm2");
   });
 
-  it("falls back to the starter tier default (kvm2) when no pin is set", () => {
+  it("labels an unpinned starter box kvm2 (historical pre-inventory hardware, NOT the new kvm1 default)", () => {
+    // Every kvm1-era box gets a vps_inventory row (with its real plan) at
+    // purchase/adopt time, so this fallback only ever fires for
+    // pre-inventory starter boxes — which are all kvm2 hardware.
     const res = planLifecycleAction({ type: "cancelWithRefund" }, makeCtx());
     expect(poolOp(res)?.plan).toBe("kvm2");
   });

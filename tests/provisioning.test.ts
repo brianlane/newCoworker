@@ -238,7 +238,7 @@ describe("provisioning/orchestrate", () => {
     expect(vpsProvisioner).toHaveBeenCalledWith({
       businessId: "biz-uuid-1",
       tier: "starter",
-      vpsSize: "kvm2"
+      vpsSize: "kvm1"
     });
   });
 
@@ -342,17 +342,17 @@ describe("provisioning/orchestrate", () => {
     expect(issueGatewayToken).not.toHaveBeenCalled();
   });
 
-  it("starter tier forwards to provisioner with tier='starter' and default kvm2 hardware", async () => {
+  it("starter tier forwards to provisioner with tier='starter' and default kvm1 hardware", async () => {
     const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("s1"));
     const remoteExec = vi.fn().mockResolvedValue(okExec());
     await orchestrateProvisioning(
-      { businessId: "biz-kvm2", tier: "starter" },
+      { businessId: "biz-kvm1", tier: "starter" },
       { vpsProvisioner, remoteExec }
     );
     expect(vpsProvisioner).toHaveBeenCalledWith({
-      businessId: "biz-kvm2",
+      businessId: "biz-kvm1",
       tier: "starter",
-      vpsSize: "kvm2"
+      vpsSize: "kvm1"
     });
   });
 
@@ -404,7 +404,7 @@ describe("provisioning/orchestrate", () => {
     expect(vpsProvisioner).toHaveBeenCalledWith({
       businessId: "biz-corrupt",
       tier: "starter",
-      vpsSize: "kvm2"
+      vpsSize: "kvm1"
     });
   });
 
@@ -1732,7 +1732,7 @@ describe("provisioning/orchestrate", () => {
     const claimedRow = {
       vm_id: 1800985,
       hostname: "srv1800985.hstgr.cloud",
-      plan: "kvm2",
+      plan: "kvm1",
       state: "assigned",
       hostinger_billing_subscription_id: null,
       assigned_business_id: "biz-pool-1",
@@ -1758,18 +1758,18 @@ describe("provisioning/orchestrate", () => {
       );
 
       expect(result.vpsId).toBe("1800985");
-      expect(pool.claim).toHaveBeenCalledWith("kvm2", "biz-pool-1");
+      expect(pool.claim).toHaveBeenCalledWith("kvm1", "biz-pool-1");
       expect(vpsAdopter).toHaveBeenCalledWith({
         businessId: "biz-pool-1",
         tier: "starter",
-        vpsSize: "kvm2",
+        vpsSize: "kvm1",
         virtualMachineId: 1800985
       });
       expect(vpsProvisioner).not.toHaveBeenCalled();
       expect(pool.record).toHaveBeenCalledWith(
         expect.objectContaining({
           vmId: 1800985,
-          plan: "kvm2",
+          plan: "kvm1",
           businessId: "biz-pool-1",
           hostingerBillingSubscriptionId: "hsub-adopted"
         })

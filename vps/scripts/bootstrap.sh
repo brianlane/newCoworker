@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
 # bootstrap.sh — Full server hardening + Ollama + Rowboat + cloudflared
 # Run as root on a fresh Ubuntu 24.04 KVM VPS
-# Usage: TIER=starter VPS_SIZE=kvm2 ./bootstrap.sh
+# Usage: TIER=starter VPS_SIZE=kvm1 ./bootstrap.sh
 #
 # TIER (starter|standard) is the ENTITLEMENT axis — it no longer drives any
-# hardware decision here. VPS_SIZE (kvm2|kvm8) is the HARDWARE axis: ZRAM,
-# Ollama tuning + model pulls, and the Rowboat compose profile all key on it.
-# When VPS_SIZE is unset we fall back to the historical tier mapping
-# (starter→kvm2, standard→kvm8) so pre-decoupling callers keep working.
+# hardware decision here. VPS_SIZE (kvm1|kvm2|kvm8) is the HARDWARE axis:
+# ZRAM, Ollama tuning + model pulls, and the Rowboat compose profile all key
+# on it. When VPS_SIZE is unset we fall back to the tier default mapping
+# (starter→kvm1, standard→kvm8 — keep in lockstep with
+# src/lib/vps/size.ts DEFAULT_TIER_VPS_SIZE).
+#
+# kvm1 (1 vCPU / 4GB, starter default since Jul 2026): ZRAM on, NO Ollama —
+# AI is Gemini-only with the shared budget fuse; a fuse trip means no AI
+# until the period resets (accepted trade-off, fleet economics Phase E).
 
 set -euo pipefail
 
 TIER="${TIER:-standard}"
 if [[ -z "${VPS_SIZE:-}" ]]; then
-  if [[ "$TIER" == "starter" ]]; then VPS_SIZE="kvm2"; else VPS_SIZE="kvm8"; fi
+  if [[ "$TIER" == "starter" ]]; then VPS_SIZE="kvm1"; else VPS_SIZE="kvm8"; fi
 fi
-if [[ "$VPS_SIZE" != "kvm2" && "$VPS_SIZE" != "kvm8" ]]; then
-  echo "FATAL: VPS_SIZE must be kvm2 or kvm8 (got '$VPS_SIZE')" >&2
+if [[ "$VPS_SIZE" != "kvm1" && "$VPS_SIZE" != "kvm2" && "$VPS_SIZE" != "kvm8" ]]; then
+  echo "FATAL: VPS_SIZE must be kvm1, kvm2, or kvm8 (got '$VPS_SIZE')" >&2
   exit 1
 fi
 CLOUDFLARED_VERSION="2025.4.0"
@@ -142,10 +147,10 @@ fi
 log "System hardening complete."
 
 # ------------------------------------------------------------------
-# 2. ZRAM (mandatory for KVM 2 hardware — any tier hosted on it)
+# 2. ZRAM (mandatory for the small boxes — KVM 1 4GB and KVM 2 8GB)
 # ------------------------------------------------------------------
-if [[ "$VPS_SIZE" == "kvm2" ]]; then
-  log "Configuring ZRAM (mandatory for KVM 2 8GB RAM)..."
+if [[ "$VPS_SIZE" == "kvm1" || "$VPS_SIZE" == "kvm2" ]]; then
+  log "Configuring ZRAM (mandatory for ${VPS_SIZE} low-RAM hardware)..."
   # Hostinger's Ubuntu-Docker template ships a minimal kernel package set:
   # the zram module lives in linux-modules-extra, which is NOT installed.
   # Without this, `modprobe zram` FATALs and (under `set -euo pipefail`)
@@ -171,7 +176,7 @@ if [[ "$VPS_SIZE" == "kvm2" ]]; then
   # Persist ZRAM across reboots
   cat > /etc/systemd/system/zram-setup.service <<'ZRAM_EOF'
 [Unit]
-Description=ZRAM compressed swap for KVM 2
+Description=ZRAM compressed swap for low-RAM KVM hardware
 After=multi-user.target
 
 [Service]
@@ -200,8 +205,16 @@ usermod -aG docker ubuntu 2>/dev/null || true
 log "Docker installed."
 
 # ------------------------------------------------------------------
-# 4. Ollama (tier-aware configuration)
+# 4. Ollama (hardware-aware configuration; SKIPPED entirely on KVM 1)
 # ------------------------------------------------------------------
+# KVM 1 (1 vCPU / 4GB) ships NO local model: AI is Gemini-only via the
+# llm-router, and the shared budget fuse REFUSES over-cap turns instead of
+# degrading to a local agent. Skipping the install saves ~2GB of model on
+# the 50GB disk and all of Ollama's resident memory.
+if [[ "$VPS_SIZE" == "kvm1" ]]; then
+  log "KVM 1: skipping Ollama install (Gemini-only AI, no local fallback)."
+else
+
 log "Installing Ollama..."
 if ! command -v ollama &>/dev/null; then
   curl -fsSL https://ollama.ai/install.sh | sh
@@ -296,6 +309,8 @@ else
   ) &
 fi
 
+fi # end of the KVM1 Ollama skip opened at section 4
+
 # ------------------------------------------------------------------
 # 5. LLM path: Rowboat → Ollama only (no Bifrost). Remove legacy Bifrost container if present.
 # ------------------------------------------------------------------
@@ -368,8 +383,11 @@ fi
 # of bootstrap on a partial Rowboat failure), that error was silently
 # swallowed and chat was permanently broken. apps/rowboat is the correct
 # context for both `rowboat` and `jobs-worker`.
-if [[ "$VPS_SIZE" == "kvm2" ]]; then
-  # KVM 2: slim stack — no qdrant, constrained mongo, no rag-worker
+if [[ "$VPS_SIZE" == "kvm1" || "$VPS_SIZE" == "kvm2" ]]; then
+  # KVM 1 / KVM 2: slim stack — no qdrant, constrained mongo, no rag-worker.
+  # On KVM 1 the llm-router's OLLAMA_URL points at nothing (no host Ollama);
+  # that's fine — no seeded agent routes a local tag there, gemini-* traffic
+  # goes straight to Google.
   cat > /opt/rowboat/docker-compose.yml <<'REOF'
 services:
   rowboat:

@@ -52,10 +52,10 @@ export type BusinessRow = {
   timezone?: string | null;
   /**
    * Hardware pin (Hostinger box size), decoupled from `tier` (entitlements).
-   * Null = tier default (starter→kvm2, standard→kvm8). Resolved via
+   * Null = tier default (starter→kvm1, standard→kvm8). Resolved via
    * `resolveVpsSize` in src/lib/vps/size.ts.
    */
-  vps_size?: "kvm2" | "kvm8" | null;
+  vps_size?: "kvm1" | "kvm2" | "kvm8" | null;
   /**
    * Highest white-glove onboarding package purchased (Phase C5). Recorded by
    * the Stripe webhook; catalog in src/lib/plans/white-glove.ts.
@@ -234,7 +234,7 @@ export async function setCustomerChannelsEnabled(
  */
 export async function updateBusinessVpsSize(
   id: string,
-  vpsSize: "kvm2" | "kvm8" | null,
+  vpsSize: "kvm1" | "kvm2" | "kvm8" | null,
   client?: SupabaseClient
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
