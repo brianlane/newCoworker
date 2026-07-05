@@ -1115,6 +1115,15 @@ describe("buildDefaultPostInstallScript", () => {
     // re-introduce the race.
     expect(s.match(/apt-get -y -o DPkg::Lock::Timeout=300 update/)).not.toBeNull();
     expect(s.match(/apt-get -y -o DPkg::Lock::Timeout=300 install/)).not.toBeNull();
+    // DPkg::Lock::Timeout does NOT cover apt-get update's lists lock on the
+    // template's apt (verified empirically Jul 2026 during Amy's cutover:
+    // update bailed instantly while Hostinger's maintenance `apt` held
+    // /var/lib/apt/lists/lock). Both apt invocations must therefore be
+    // preceded by the explicit wait_for_apt lock-drain.
+    expect(s).toContain("wait_for_apt() {");
+    expect(s).toContain("fuser /var/lib/apt/lists/lock /var/lib/dpkg/lock-frontend");
+    expect(s.match(/wait_for_apt\napt-get -y -o DPkg::Lock::Timeout=300 update/)).not.toBeNull();
+    expect(s.match(/wait_for_apt\napt-get -y -o DPkg::Lock::Timeout=300 install/)).not.toBeNull();
   });
 });
 

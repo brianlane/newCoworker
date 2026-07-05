@@ -473,9 +473,27 @@ echo "[newcoworker] post_install start: $(date -Is)"
 # (cloud-init's apt module, unattended-upgrades, etc.) holds the lock,
 # instead of bailing immediately under \`set -euo pipefail\`. Safe under
 # both paths.
+#
+# DPkg::Lock::Timeout does NOT cover \`apt-get update\`'s
+# /var/lib/apt/lists/lock on the apt shipped with our template (verified
+# empirically Jul 2026: update bailed instantly while Hostinger's own
+# maintenance \`apt\` held the lists lock). Explicitly wait for both apt
+# lock files to free before invoking apt at all.
+wait_for_apt() {
+  local deadline=$((SECONDS + 300))
+  while fuser /var/lib/apt/lists/lock /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+    if (( SECONDS >= deadline )); then
+      echo "[newcoworker] apt lock still held after 300s — proceeding (apt will retry via DPkg::Lock::Timeout)"
+      break
+    fi
+    sleep 5
+  done
+}
 
 export DEBIAN_FRONTEND=noninteractive
+wait_for_apt
 apt-get -y -o DPkg::Lock::Timeout=300 update
+wait_for_apt
 apt-get -y -o DPkg::Lock::Timeout=300 install --no-install-recommends git curl ca-certificates
 
 # Stage the newCoworker repo. Values are emitted in single quotes so bash

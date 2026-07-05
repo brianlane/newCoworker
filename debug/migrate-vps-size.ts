@@ -402,8 +402,9 @@ async function makeAdoptProvisioner(vmId: number): Promise<
             privateKeyPem,
             command:
               // The [e] class stops pgrep -f from matching this probe's own
-              // command line (which contains the literal pattern).
-              "if pgrep -f 'te[e] -a /post_install.log' >/dev/null || pgrep -x apt-get >/dev/null || pgrep -x dpkg >/dev/null; then echo busy; else echo idle; fi"
+              // command line (which contains the literal pattern). Bare
+              // `apt` is matched too — Hostinger's own maintenance runs it.
+              "if pgrep -f 'te[e] -a /post_install.log' >/dev/null || pgrep -x apt >/dev/null || pgrep -x apt-get >/dev/null || pgrep -x dpkg >/dev/null; then echo busy; else echo idle; fi"
           });
           if ((res.stdout ?? "").includes("idle")) return;
           console.log(`  [adopt] waiting for the box's own post-install to finish…`);
