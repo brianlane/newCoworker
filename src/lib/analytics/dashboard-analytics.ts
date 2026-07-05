@@ -50,6 +50,18 @@ function utcYmd(d: Date): string {
 }
 
 /**
+ * Start of the trailing window: midnight UTC of the day (days - 1) ago, so a
+ * 30-day window covers 30 inclusive UTC calendar days ending today. Every
+ * card on the analytics page uses this same boundary — the volume series,
+ * the answer rate, and the peak-hours histogram must describe the same
+ * interval or the page contradicts itself.
+ */
+export function analyticsWindowStart(now: Date, days: number): Date {
+  const start = new Date(now.getTime() - (days - 1) * 86_400_000);
+  return new Date(`${utcYmd(start)}T00:00:00.000Z`);
+}
+
+/**
  * Per-day call/SMS/voice-minute series for the trailing window, zero-filled
  * (a day with no usage still gets a point so charts don't skip bars).
  */
@@ -60,7 +72,7 @@ export async function getDailyUsageSeries(
   const db = opts.client ?? (await createSupabaseServiceClient());
   const days = opts.days ?? ANALYTICS_WINDOW_DAYS;
   const now = opts.now ?? new Date();
-  const start = new Date(now.getTime() - (days - 1) * 86_400_000);
+  const start = analyticsWindowStart(now, days);
   const startYmd = utcYmd(start);
 
   const { data, error } = await db
@@ -158,7 +170,7 @@ export async function getInboundCallStats(
   const db = opts.client ?? (await createSupabaseServiceClient());
   const days = opts.days ?? ANALYTICS_WINDOW_DAYS;
   const now = opts.now ?? new Date();
-  const cutoffIso = new Date(now.getTime() - days * 86_400_000).toISOString();
+  const cutoffIso = analyticsWindowStart(now, days).toISOString();
 
   const { data, error } = await db
     .from("voice_call_transcripts")
@@ -213,7 +225,7 @@ export async function getAnswerRateStats(
   const db = opts.client ?? (await createSupabaseServiceClient());
   const days = opts.days ?? ANALYTICS_WINDOW_DAYS;
   const now = opts.now ?? new Date();
-  const cutoffIso = new Date(now.getTime() - days * 86_400_000).toISOString();
+  const cutoffIso = analyticsWindowStart(now, days).toISOString();
 
   const [{ count: answeredCount, error: answeredErr }, { count: missedCount, error: missedErr }] =
     await Promise.all([

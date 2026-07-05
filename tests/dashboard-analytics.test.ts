@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   ANALYTICS_CALL_SCAN_LIMIT,
   ANALYTICS_WINDOW_DAYS,
+  analyticsWindowStart,
   getAnswerRateStats,
   getDailyUsageSeries,
   getInboundCallStats,
@@ -47,6 +48,13 @@ const NOW = new Date("2026-07-04T12:00:00Z");
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe("analyticsWindowStart", () => {
+  it("returns midnight UTC of the day (days - 1) ago so every card shares one boundary", () => {
+    expect(analyticsWindowStart(NOW, 3).toISOString()).toBe("2026-07-02T00:00:00.000Z");
+    expect(analyticsWindowStart(NOW, 1).toISOString()).toBe("2026-07-04T00:00:00.000Z");
+  });
 });
 
 describe("getDailyUsageSeries", () => {
@@ -132,8 +140,16 @@ describe("getInboundCallStats", () => {
     expect(stats.hourBuckets.reduce((a, b) => a + b, 0)).toBe(4);
     expect(stats.sentiment).toEqual({ positive: 1, neutral: 0, negative: 1, mixed: 0 });
     expect(stats.sentimentTotal).toBe(2);
-    const chain = chains.voice_call_transcripts as { limit: ReturnType<typeof vi.fn> };
+    const chain = chains.voice_call_transcripts as {
+      limit: ReturnType<typeof vi.fn>;
+      gte: ReturnType<typeof vi.fn>;
+    };
     expect(chain.limit).toHaveBeenCalledWith(ANALYTICS_CALL_SCAN_LIMIT);
+    // Same day-aligned boundary as the volume series (30 inclusive UTC days).
+    expect(chain.gte).toHaveBeenCalledWith(
+      "started_at",
+      analyticsWindowStart(NOW, ANALYTICS_WINDOW_DAYS).toISOString()
+    );
   });
 
   it("applies the business timezone to the histogram", async () => {
@@ -178,12 +194,18 @@ describe("getInboundCallStats", () => {
 
 describe("getAnswerRateStats", () => {
   it("computes answered vs missed and the rate", async () => {
-    const { client } = makeClient({
+    const { client, chains } = makeClient({
       voice_call_transcripts: { count: 9, error: null },
       system_logs: { count: 1, error: null }
     });
     const stats = await getAnswerRateStats("biz-1", { client, now: NOW });
     expect(stats).toEqual({ answered: 9, missed: 1, rate: 0.9 });
+    // Both counts share the day-aligned window boundary of the volume series.
+    const expectedCutoff = analyticsWindowStart(NOW, ANALYTICS_WINDOW_DAYS).toISOString();
+    const transcripts = chains.voice_call_transcripts as { gte: ReturnType<typeof vi.fn> };
+    const logs = chains.system_logs as { gte: ReturnType<typeof vi.fn> };
+    expect(transcripts.gte).toHaveBeenCalledWith("started_at", expectedCutoff);
+    expect(logs.gte).toHaveBeenCalledWith("created_at", expectedCutoff);
   });
 
   it("returns a null rate when there were no calls at all", async () => {
