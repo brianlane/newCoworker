@@ -3,6 +3,7 @@ import { getAuthUser } from "@/lib/auth";
 import { resolveViewAsContext } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
+  defaultNotificationPreferencesRow,
   getNotificationPreferences,
   getOrCreateNotificationPreferences,
   mergeNotificationContactsForDisplay
@@ -44,13 +45,16 @@ export default async function NotificationsPage() {
   const businessId = businessRow?.id ?? null;
 
   // View-as stays strictly read-only: it must not create the tenant's default
-  // preference row as a page-load side effect, so it uses the read-only lookup
-  // (a tenant who never opened this page just shows the empty state). Real
+  // preference row as a page-load side effect. When the tenant has never
+  // visited this page (no row yet), render the same in-memory defaults the
+  // owner's first visit would insert, so the admin still previews the real
+  // page instead of a bogus "provision your coworker" empty state. Real
   // owners keep the create-on-first-visit behavior.
   const prefs =
     businessId && businessRow
       ? viewAsCtx.viewAs
-        ? await getNotificationPreferences(businessId)
+        ? ((await getNotificationPreferences(businessId)) ??
+          defaultNotificationPreferencesRow(businessId))
         : await getOrCreateNotificationPreferences(businessId, {
             contactSeeds: {
               userEmail: seedUserEmail,

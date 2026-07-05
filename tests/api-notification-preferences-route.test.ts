@@ -6,16 +6,25 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 vi.mock("@/lib/db/notification-preferences", () => ({
+  defaultNotificationPreferencesRow: vi.fn(),
+  getNotificationPreferences: vi.fn(),
   getOrCreateNotificationPreferences: vi.fn(),
   updateNotificationPreferences: vi.fn()
 }));
 
+vi.mock("@/lib/admin/view-as", () => ({
+  isViewAsActive: vi.fn()
+}));
+
 import { GET, POST } from "@/app/api/notifications/preferences/route";
 import {
+  defaultNotificationPreferencesRow,
+  getNotificationPreferences,
   getOrCreateNotificationPreferences,
   updateNotificationPreferences
 } from "@/lib/db/notification-preferences";
 import { getAuthUser, requireOwner } from "@/lib/auth";
+import { isViewAsActive } from "@/lib/admin/view-as";
 
 const OWNER = {
   userId: "user-1",
@@ -43,6 +52,7 @@ describe("api/notifications/preferences route", () => {
     vi.mocked(requireOwner).mockResolvedValue(OWNER as never);
     vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue(PREFS as never);
     vi.mocked(updateNotificationPreferences).mockResolvedValue(PREFS as never);
+    vi.mocked(isViewAsActive).mockResolvedValue(false);
   });
 
   it("gets preferences", async () => {
@@ -56,6 +66,48 @@ describe("api/notifications/preferences route", () => {
     expect(response.status).toBe(200);
     expect(body.ok).toBe(true);
     expect(requireOwner).toHaveBeenCalledWith(PREFS.business_id);
+  });
+
+  it("GET during view-as never inserts: read-only lookup, defaults when no row", async () => {
+    vi.mocked(isViewAsActive).mockResolvedValue(true);
+    vi.mocked(getNotificationPreferences).mockResolvedValue(PREFS as never);
+
+    let response = await GET(
+      new Request(
+        `http://localhost/api/notifications/preferences?businessId=${PREFS.business_id}`
+      )
+    );
+    expect(response.status).toBe(200);
+    expect(getOrCreateNotificationPreferences).not.toHaveBeenCalled();
+    expect(defaultNotificationPreferencesRow).not.toHaveBeenCalled();
+
+    // Tenant never opened the page (no row): serve in-memory defaults.
+    vi.mocked(getNotificationPreferences).mockResolvedValue(null as never);
+    vi.mocked(defaultNotificationPreferencesRow).mockReturnValue(PREFS as never);
+    response = await GET(
+      new Request(
+        `http://localhost/api/notifications/preferences?businessId=${PREFS.business_id}`
+      )
+    );
+    expect(response.status).toBe(200);
+    expect(defaultNotificationPreferencesRow).toHaveBeenCalledWith(PREFS.business_id);
+    expect(getOrCreateNotificationPreferences).not.toHaveBeenCalled();
+  });
+
+  it("POST during view-as is refused (403) and never mutates tenant prefs", async () => {
+    vi.mocked(isViewAsActive).mockResolvedValue(true);
+    const response = await POST(
+      new Request("http://localhost/api/notifications/preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId: PREFS.business_id, sms_urgent: false })
+      })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
+    expect(updateNotificationPreferences).not.toHaveBeenCalled();
   });
 
   it("returns 400 for invalid POST payloads", async () => {

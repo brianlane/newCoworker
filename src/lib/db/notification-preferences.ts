@@ -117,6 +117,20 @@ const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> =
   unsubscribed_at: null
 };
 
+/**
+ * In-memory equivalent of the row {@link getOrCreateNotificationPreferences}
+ * would insert (defaults, no contact seeds). For read-only rendering paths —
+ * admin view-as previews a tenant who never opened the notifications page —
+ * where creating the real row as a page-load side effect is not acceptable.
+ */
+export function defaultNotificationPreferencesRow(businessId: string): NotificationPreferencesRow {
+  return {
+    business_id: businessId,
+    ...defaults,
+    updated_at: new Date().toISOString()
+  };
+}
+
 export function isUniqueViolation(error: { code?: string; message?: string } | null): boolean {
   if (!error) return false;
   return (

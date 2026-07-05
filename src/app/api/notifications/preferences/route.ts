@@ -1,5 +1,8 @@
 import { getAuthUser, requireOwner } from "@/lib/auth";
+import { isViewAsActive } from "@/lib/admin/view-as";
 import {
+  defaultNotificationPreferencesRow,
+  getNotificationPreferences,
   getOrCreateNotificationPreferences,
   updateNotificationPreferences
 } from "@/lib/db/notification-preferences";
@@ -42,7 +45,14 @@ export async function GET(request: Request) {
 
     await requireOwner(parsed.data);
 
-    const prefs = await getOrCreateNotificationPreferences(parsed.data);
+    // requireOwner passes admins through, so during view-as this GET reaches
+    // the tenant's data. Keep impersonation read-only: never let the
+    // create-if-missing path insert a row on behalf of the tenant — serve
+    // the same in-memory defaults the page renders instead.
+    const prefs = (await isViewAsActive(user))
+      ? ((await getNotificationPreferences(parsed.data)) ??
+        defaultNotificationPreferencesRow(parsed.data))
+      : await getOrCreateNotificationPreferences(parsed.data);
     return successResponse(prefs);
   } catch (err) {
     return handleRouteError(err);
@@ -54,6 +64,16 @@ export async function POST(request: Request) {
     const user = await getAuthUser();
     if (!user?.email) {
       return errorResponse("UNAUTHORIZED", "Authentication required");
+    }
+
+    // requireOwner passes admins through, so without this guard an admin in
+    // view-as could hit Save and mutate the impersonated tenant's real prefs.
+    if (await isViewAsActive(user)) {
+      return errorResponse(
+        "FORBIDDEN",
+        "View-as is read-only — exit view-as to make changes",
+        403
+      );
     }
 
     const body = patchSchema.parse(await request.json());
