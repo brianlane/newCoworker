@@ -169,6 +169,7 @@ export default async function DashboardAnalyticsPage() {
         <PeakHoursCard
           hourBuckets={callStats.hourBuckets}
           callCount={callStats.callCount}
+          clipped={callStats.clipped}
           timeZoneLabel={timeZone ?? "UTC"}
         />
       )}

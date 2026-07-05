@@ -126,10 +126,13 @@ export function AnswerRateCard({
 export function PeakHoursCard({
   hourBuckets,
   callCount,
+  clipped,
   timeZoneLabel
 }: {
   hourBuckets: number[];
   callCount: number;
+  /** Scan hit its row cap — the histogram covers the most recent attempts only. */
+  clipped: boolean;
   timeZoneLabel: string;
 }) {
   const max = Math.max(...hourBuckets, 0);
@@ -161,6 +164,7 @@ export function PeakHoursCard({
             <span>11pm</span>
           </div>
           <p className="text-xs text-parchment/40 mt-2">
+            {clipped ? "Most recent " : ""}
             {callCount.toLocaleString()} inbound call attempts (answered + turned away) ·{" "}
             {timeZoneLabel}
           </p>

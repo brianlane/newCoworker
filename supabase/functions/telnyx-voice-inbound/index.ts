@@ -766,11 +766,16 @@ serve(async (req: Request) => {
   // the ledger (reserve refusals + safe-mode-no-minutes via
   // missedCallFollowUp, and the AI-budget refusal directly). Never throws;
   // once-per-day dedup + tier gate live inside the helper.
-  const checkMissedCallSpike = async () => {
+  //
+  // `refusedAt` is captured when the refusal happened, NOT when this check
+  // runs — the auto-text work in between can cross UTC midnight, and the
+  // spike day-key/count must describe the day the ledger row was written.
+  const checkMissedCallSpike = async (refusedAt: Date) => {
     const spike = await maybeSendMissedCallSpikeAlert(supabase, {
       businessId,
       notifyUrl: `${Deno.env.get("SUPABASE_URL") ?? ""}/functions/v1/notifications`,
-      bearer: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+      bearer: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+      now: refusedAt
     });
     if (spike.status === "sent") {
       await telemetryRecord(supabase, "voice_missed_call_spike_alert", {
@@ -786,6 +791,7 @@ serve(async (req: Request) => {
   // per-tenant kill switch, opt-out, 1h dedup, monthly SMS cap). Shared by
   // the reserve-refusal branches below AND the safe-mode no-minutes branch.
   const missedCallFollowUp = async (missedReason: MissedCallReason) => {
+    const refusedAt = new Date();
     const outcome = await sendMissedCallAutotext(supabase, {
       businessId,
       callerE164: fromE164Informational,
@@ -823,7 +829,7 @@ serve(async (req: Request) => {
         payload: { call_control_id: callControlId, reason: missedReason }
       });
     }
-    await checkMissedCallSpike();
+    await checkMissedCallSpike(refusedAt);
   };
 
   // Kill switch + Safe Mode gate (§CustomerChannelGate).
@@ -1244,7 +1250,7 @@ serve(async (req: Request) => {
       // This refusal wrote the voice_call_blocked ledger but doesn't run the
       // missed-call auto-text (sendMissedAiCallSms above covers the caller),
       // so trigger the spike check directly.
-      await checkMissedCallSpike();
+      await checkMissedCallSpike(new Date());
       return jsonOk("ai_budget_exhausted");
     }
   }

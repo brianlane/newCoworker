@@ -148,6 +148,13 @@ export type InboundCallStats = {
   hourBuckets: number[];
   /** Inbound attempts in the histogram: answered + turned away (≤ 2 × scan limit). */
   callCount: number;
+  /**
+   * True when either scan hit ANALYTICS_CALL_SCAN_LIMIT — the histogram then
+   * describes the most recent attempts rather than the whole window, and the
+   * UI must say so (the answer-rate card uses exact, uncapped counts, so the
+   * two cards' totals can legitimately differ at that volume).
+   */
+  clipped: boolean;
   /** Sentiment mix across summarized calls in the window (perk3 output). */
   sentiment: Record<VoiceCallSentiment, number>;
   sentimentTotal: number;
@@ -225,6 +232,8 @@ export async function getInboundCallStats(
   return {
     hourBuckets,
     callCount: rows.length + blocked.length,
+    clipped:
+      rows.length >= ANALYTICS_CALL_SCAN_LIMIT || blocked.length >= ANALYTICS_CALL_SCAN_LIMIT,
     sentiment,
     sentimentTotal
   };

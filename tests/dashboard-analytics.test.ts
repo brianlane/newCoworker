@@ -147,6 +147,7 @@ describe("getInboundCallStats", () => {
     expect(stats.hourBuckets.reduce((a, b) => a + b, 0)).toBe(6);
     expect(stats.sentiment).toEqual({ positive: 1, neutral: 0, negative: 1, mixed: 0 });
     expect(stats.sentimentTotal).toBe(2);
+    expect(stats.clipped).toBe(false);
     const expectedCutoff = analyticsWindowStart(NOW, ANALYTICS_WINDOW_DAYS).toISOString();
     const transcripts = chains.voice_call_transcripts as {
       limit: ReturnType<typeof vi.fn>;
@@ -176,6 +177,19 @@ describe("getInboundCallStats", () => {
       timeZone: "America/Phoenix"
     });
     expect(stats.hourBuckets[12]).toBe(1);
+  });
+
+  it("flags the result as clipped when a scan hits the row cap", async () => {
+    const full = Array.from({ length: ANALYTICS_CALL_SCAN_LIMIT }, (_, i) => ({
+      created_at: new Date(NOW.getTime() - i * 60_000).toISOString()
+    }));
+    const { client } = makeClient({
+      voice_call_transcripts: { data: [], error: null },
+      system_logs: { data: full, error: null }
+    });
+    const stats = await getInboundCallStats("biz-1", { client, now: NOW });
+    expect(stats.clipped).toBe(true);
+    expect(stats.callCount).toBe(ANALYTICS_CALL_SCAN_LIMIT);
   });
 
   it("handles null data payloads from both scans", async () => {
