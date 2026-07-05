@@ -443,22 +443,20 @@ describe("provisioning/orchestrate", () => {
     expect(updateBusinessVpsSize).toHaveBeenCalledWith("biz-uuid-2", "kvm2");
   });
 
-  it("does not abort provisioning when the vps_size pin write fails", async () => {
+  it("fails the provision when the vps_size pin write fails (no silent unpinned kvm1)", async () => {
+    // An unpinned kvm1 box would be treated as legacy kvm2/kvm8 hardware:
+    // over-cap SMS would route to a local model that doesn't exist and fleet
+    // redeploys would push an Ollama profile onto it. Surfacing the error (and
+    // letting the provision retry) beats completing with a wrong-hardware pin.
     const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
     const remoteExec = vi.fn().mockResolvedValue(okExec());
     vi.mocked(updateBusinessVpsSize).mockRejectedValueOnce(new Error("db blip"));
-    const result = await orchestrateProvisioning(
-      { businessId: "biz-uuid-1", tier: "starter" },
-      { vpsProvisioner, remoteExec }
-    );
-    expect(result.vpsId).toBe("42");
-    vi.mocked(updateBusinessVpsSize).mockRejectedValueOnce("string blip");
     await expect(
       orchestrateProvisioning(
         { businessId: "biz-uuid-1", tier: "starter" },
         { vpsProvisioner, remoteExec }
       )
-    ).resolves.toBeTruthy();
+    ).rejects.toThrow("db blip");
   });
 
   it("calls upsertBusinessConfig with no legacy Inworld columns", async () => {

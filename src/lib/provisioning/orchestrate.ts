@@ -826,17 +826,13 @@ async function runOrchestrator(
   // consumers (e.g. the SMS worker's over-cap local-model check) key off the
   // explicit `businesses.vps_size` and treat null as "legacy kvm2/kvm8 with
   // Ollama", so every box provisioned from here on must carry its actual
-  // size. Best-effort: a write failure only degrades the over-cap corner
-  // case (never block a signup on it), and the next reprovision re-pins.
-  try {
-    await updateBusinessVpsSize(businessId, vpsSize);
-  } catch (err) {
-    logger.warn("Failed to persist vps_size pin (continuing)", {
-      businessId,
-      vpsSize,
-      error: err instanceof Error ? err.message : String(err)
-    });
-  }
+  // size. The write is FATAL on failure, exactly like the updateBusinessStatus
+  // call above (same table, same client): a kvm1 box silently left unpinned
+  // would be treated as legacy hardware — over-cap SMS would route to an
+  // Ollama that doesn't exist and fleet redeploys would push a kvm2 profile
+  // onto it — which is worse than surfacing the error and letting the
+  // provision retry.
+  await updateBusinessVpsSize(businessId, vpsSize);
 
   const existingConfig = await getBusinessConfig(businessId);
   const businessRow = await getBusiness(businessId);
