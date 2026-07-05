@@ -7,6 +7,8 @@ import { isCanceledInGrace } from "@/lib/db/subscriptions";
 import type { CancelReason, SubscriptionRow } from "@/lib/db/subscriptions";
 import { GraceBanner } from "@/components/billing/GraceBanner";
 import { reconcilePendingEmailChange } from "@/lib/account/email-change";
+import { resolveViewAsContext } from "@/lib/admin/view-as";
+import { ViewAsBanner } from "@/components/admin/ViewAsBanner";
 
 // `cover` lets the h-dvh shell paint edge-to-edge under the notch / home
 // indicator; the shell's safe-area padding (globals.css) keeps content clear.
@@ -25,11 +27,15 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard");
 
+  // Admin view-as: when active, every owner_email lookup below (and in the
+  // pages) resolves against the impersonated tenant instead of the admin.
+  const { ownerEmail, viewAs } = await resolveViewAsContext(user);
+
   let grace:
     | { graceEndsAt: string; reason: Parameters<typeof GraceBanner>[0]["reason"] }
     | null = null;
   let businessId: string | null = null;
-  if (user.email) {
+  if (ownerEmail) {
     // Single-round-trip grace lookup. Next.js layouts re-execute on every
     // navigation under `/dashboard`, so we previously paid 2 sequential
     // DB round-trips per page render (businesses lookup + subscriptions
@@ -44,12 +50,16 @@ export default async function DashboardLayout({ children }: { children: React.Re
     // device, or via a plain password sign-in that never hit /api/auth/callback),
     // mirror the new email onto their business BEFORE the owner_email lookup
     // below — otherwise that lookup would miss and the dashboard would render as
-    // if they had no business. No-op (one cheap PK read) when nothing is pending.
-    await reconcilePendingEmailChange(user.userId, user.email, db);
+    // if they had no business. No-op (one cheap PK read) when nothing is
+    // pending. Skipped during view-as: the admin's pending email change (if
+    // any) must not be reconciled onto the impersonated tenant's business.
+    if (!viewAs && user.email) {
+      await reconcilePendingEmailChange(user.userId, user.email, db);
+    }
     const { data: businesses } = await db
       .from("businesses")
       .select("id, subscriptions(status, grace_ends_at, wiped_at, cancel_reason, created_at)")
-      .eq("owner_email", user.email)
+      .eq("owner_email", ownerEmail)
       .order("created_at", { ascending: false })
       .limit(1);
     const business = businesses?.[0] ?? null;
@@ -71,8 +81,15 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   return (
     <div className="flex h-dvh bg-deep-ink">
-      <DashboardSidebar userEmail={user.email} businessId={businessId} />
+      <DashboardSidebar userEmail={viewAs ? ownerEmail : user.email} businessId={businessId} />
       <main data-app-main className="flex-1 overflow-y-auto p-4 pt-16 lg:p-6">
+        {viewAs && (
+          <ViewAsBanner
+            businessId={viewAs.businessId}
+            businessName={viewAs.name}
+            tier={viewAs.tier}
+          />
+        )}
         {grace && (
           <div className="mb-6">
             <GraceBanner graceEndsAt={grace.graceEndsAt} reason={grace.reason} />

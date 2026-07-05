@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
+import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getRecentActivity, type ActivityItem } from "@/lib/db/activity";
 import { ACTIVITY_BADGE } from "@/components/dashboard/activity-badge";
@@ -37,13 +38,16 @@ export default async function DashboardPage() {
   if (!user) redirect("/login?redirectTo=/dashboard");
   if (!user.email) redirect("/login?redirectTo=/dashboard");
 
+  // Admin view-as swaps in the impersonated tenant's owner email.
+  const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
+
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
     .select(
       "id, name, owner_email, status, tier, enterprise_limits, is_paused, customer_channels_enabled, created_at"
     )
-    .eq("owner_email", user.email)
+    .eq("owner_email", ownerEmail)
     .order("created_at", { ascending: false });
 
   const business = businesses?.[0] ?? null;
@@ -68,7 +72,7 @@ export default async function DashboardPage() {
       voiceSnapshot,
       smsUsedThisMonth
     ] = await Promise.all([
-      getRecentActivity(business.id, 10),
+      getRecentActivity(business.id, 10, undefined, business.tier),
       getLatestProvisioningStatus(business.id),
       getTelnyxVoiceRouteForBusiness(business.id),
       getBusinessTelnyxSettings(business.id),

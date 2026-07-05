@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
+import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   getOrCreateNotificationPreferences,
@@ -23,11 +24,14 @@ export default async function NotificationsPage() {
   if (!user) redirect("/login?redirectTo=/dashboard/notifications");
   if (!user.email) redirect("/login");
 
+  // Admin view-as swaps in the impersonated tenant's owner email.
+  const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
+
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
     .select("id, owner_email, phone")
-    .eq("owner_email", user.email)
+    .eq("owner_email", ownerEmail)
     .limit(1);
 
   const businessRow = businesses?.[0] ?? null;

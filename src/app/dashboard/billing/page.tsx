@@ -17,6 +17,7 @@
 
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
+import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getSubscription, isCommitmentElapsed } from "@/lib/db/subscriptions";
 import { resolveActiveRenewalDate } from "@/lib/billing/renewal";
@@ -74,13 +75,16 @@ export default async function BillingPage(props: {
   if (!user) redirect("/login?redirectTo=/dashboard/billing");
   if (!user.email) redirect("/login?redirectTo=/dashboard/billing");
 
+  // Admin view-as swaps in the impersonated tenant's owner email.
+  const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
+
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
     .select(
       "id, tier, enterprise_limits, name, customer_profile_id, white_glove_package, white_glove_purchased_at, priority_support_until"
     )
-    .eq("owner_email", user.email)
+    .eq("owner_email", ownerEmail)
     .order("created_at", { ascending: false })
     .limit(1);
 

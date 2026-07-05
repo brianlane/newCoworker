@@ -5,8 +5,12 @@ import {
   collectActivityItems,
   getRecentActivity,
   getAllRecentActivity,
+  activityWindowDays,
   DEFAULT_ACTIVITY_LIMIT,
   ACTIVITY_FEED_MAX,
+  ACTIVITY_WINDOW_DAYS,
+  ACTIVITY_WINDOW_DAYS_STARTER,
+  ACTIVITY_WINDOW_DAYS_STANDARD,
   type ActivityFeedInput
 } from "@/lib/db/activity";
 
@@ -27,6 +31,7 @@ function emptyInput(overrides: Partial<ActivityFeedInput> = {}): ActivityFeedInp
     smsInbound: [],
     smsReplies: [],
     smsOutbound: [],
+    emails: [],
     chat: [],
     flows: [],
     customers: [],
@@ -179,6 +184,43 @@ describe("buildActivityFeed", () => {
     );
     expect(item.label).toBe("Text to Owner");
     expect(item.href).toBe("/dashboard/messages/%2B15550003333");
+  });
+
+  it("maps inbound and outbound emails with subject, falling back on missing fields", () => {
+    const items = buildActivityFeed(
+      emptyInput({
+        emails: [
+          {
+            direction: "inbound",
+            from_email: "lead@example.com",
+            to_email: "amy@mail.newcoworker.com",
+            subject: "Need a quote",
+            created_at: "2026-01-04T12:00:00Z"
+          },
+          {
+            direction: "outbound",
+            from_email: "amy@mail.newcoworker.com",
+            to_email: "lead@example.com",
+            subject: null,
+            created_at: "2026-01-04T11:00:00Z"
+          },
+          {
+            direction: "outbound",
+            from_email: null,
+            to_email: null,
+            subject: "  ",
+            created_at: "2026-01-04T10:00:00Z"
+          }
+        ]
+      })
+    );
+    expect(items.map((i) => i.label)).toEqual([
+      "Email from lead@example.com — “Need a quote”",
+      "Email to lead@example.com",
+      "Email to unknown address"
+    ]);
+    expect(items[0]).toMatchObject({ kind: "email_inbound", href: "/dashboard/emails" });
+    expect(items[1].kind).toBe("email_outbound");
   });
 
   it("maps dashboard chat turns", () => {
@@ -439,11 +481,23 @@ const ALL_EMPTY = {
   voice_call_transcripts: { data: [], error: null },
   sms_inbound_jobs: { data: [], error: null },
   sms_outbound_log: { data: [], error: null },
+  email_log: { data: [], error: null },
   dashboard_chat_jobs: { data: [], error: null },
   ai_flow_runs: { data: [], error: null },
   contacts: { data: [], error: null },
   coworker_logs: { data: [], error: null }
 };
+
+describe("activityWindowDays", () => {
+  it("gives starter 7 days, standard/enterprise 90, and unknown tiers the legacy 30", () => {
+    expect(activityWindowDays("starter")).toBe(ACTIVITY_WINDOW_DAYS_STARTER);
+    expect(activityWindowDays("standard")).toBe(ACTIVITY_WINDOW_DAYS_STANDARD);
+    expect(activityWindowDays("enterprise")).toBe(ACTIVITY_WINDOW_DAYS_STANDARD);
+    expect(activityWindowDays(null)).toBe(ACTIVITY_WINDOW_DAYS);
+    expect(activityWindowDays(undefined)).toBe(ACTIVITY_WINDOW_DAYS);
+    expect(activityWindowDays("weird")).toBe(ACTIVITY_WINDOW_DAYS);
+  });
+});
 
 describe("getRecentActivity", () => {
   beforeEach(() => {
@@ -477,7 +531,30 @@ describe("getRecentActivity", () => {
     expect(items.map((i) => i.kind)).toEqual(["alert", "call", "chat"]);
     expect(db.from).toHaveBeenCalledWith("voice_call_transcripts");
     expect(db.from).toHaveBeenCalledWith("ai_flow_runs");
+    expect(db.from).toHaveBeenCalledWith("email_log");
     expect(db.from).toHaveBeenCalledWith("coworker_logs");
+  });
+
+  it("surfaces email_log rows as email activity", async () => {
+    const db = mockDbByTable({
+      ...ALL_EMPTY,
+      email_log: {
+        data: [
+          {
+            direction: "inbound",
+            from_email: "lead@example.com",
+            to_email: "biz@mail.newcoworker.com",
+            subject: "Quote?",
+            created_at: "2026-02-01T10:00:00Z"
+          }
+        ],
+        error: null
+      }
+    });
+
+    const items = await getRecentActivity("biz-1", 10, db as never);
+    expect(items.map((i) => i.kind)).toEqual(["email_inbound"]);
+    expect(items[0].label).toBe("Email from lead@example.com — “Quote?”");
   });
 
   it("bounds every source to the recency window and filters to urgent alerts", async () => {

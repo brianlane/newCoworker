@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getAuthUser } from "@/lib/auth";
+import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { listAiFlowRuns, listAiFlows } from "@/lib/ai-flows/db";
 import { resolveContactNames } from "@/lib/db/contact-names";
@@ -24,11 +25,14 @@ export default async function AiFlowRunsPage({ searchParams }: Props) {
   if (!user) redirect("/login?redirectTo=/dashboard/aiflows/runs");
   if (!user.email) redirect("/login");
 
+  // Admin view-as swaps in the impersonated tenant's owner email.
+  const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
+
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
     .select("id")
-    .eq("owner_email", user.email)
+    .eq("owner_email", ownerEmail)
     .order("created_at", { ascending: false })
     .limit(1);
   const businessId = businesses?.[0]?.id ?? null;

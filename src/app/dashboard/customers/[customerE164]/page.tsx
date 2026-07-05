@@ -11,6 +11,7 @@
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { getAuthUser, requireOwner } from "@/lib/auth";
+import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
@@ -48,11 +49,14 @@ export default async function CustomerDetailPage({ params }: Props) {
     notFound();
   }
 
+  // Admin view-as swaps in the impersonated tenant's owner email.
+  const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
+
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
     .select("id, name")
-    .eq("owner_email", user.email)
+    .eq("owner_email", ownerEmail)
     .order("created_at", { ascending: false });
 
   const business = businesses?.[0];

@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
+import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getBusinessConfig } from "@/lib/db/configs";
 import { Card } from "@/components/ui/Card";
@@ -12,11 +13,14 @@ export default async function MemoryPage() {
   if (!user) redirect("/login");
   if (!user.email) redirect("/login");
 
+  // Admin view-as swaps in the impersonated tenant's owner email.
+  const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
+
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
     .select("id, tier, website_url, name, business_type")
-    .eq("owner_email", user.email)
+    .eq("owner_email", ownerEmail)
     .limit(1);
 
   const business = businesses?.[0];

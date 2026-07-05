@@ -1,4 +1,5 @@
 import { getAuthUser } from "@/lib/auth";
+import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { redirect } from "next/navigation";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -25,11 +26,14 @@ export default async function SettingsPage() {
   if (!user) redirect("/login");
   if (!user.email) redirect("/login");
 
+  // Admin view-as swaps in the impersonated tenant's owner email.
+  const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
+
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
     .select("id, name, tier, enterprise_limits, timezone")
-    .eq("owner_email", user.email)
+    .eq("owner_email", ownerEmail)
     .order("created_at", { ascending: false })
     .limit(1);
 
