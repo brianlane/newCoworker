@@ -83,6 +83,17 @@ describe("resolveViewAsContext", () => {
     });
   });
 
+  it("defaults a null name/tier on the impersonated business", async () => {
+    cookieGet.mockReturnValue({ value: BIZ_ID });
+    maybeSingle.mockResolvedValue({
+      data: { id: BIZ_ID, name: null, tier: null, owner_email: "amy@x.com" }
+    });
+    expect(await resolveViewAsContext(admin)).toEqual({
+      ownerEmail: "amy@x.com",
+      viewAs: { businessId: BIZ_ID, name: "", tier: "starter" }
+    });
+  });
+
   it("falls back to the admin's own email when the business no longer exists", async () => {
     cookieGet.mockReturnValue({ value: BIZ_ID });
     maybeSingle.mockResolvedValue({ data: null });
