@@ -421,7 +421,7 @@ describe("provisioning/orchestrate", () => {
     expect(updateBusinessStatus).toHaveBeenNthCalledWith(2, "biz-uuid-1", "online", "42");
   });
 
-  it("persists the resolved vps_size pin after acquiring the box", async () => {
+  it("persists the resolved vps_size pin only after hostinger_vps_id points at the new box", async () => {
     const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
     const remoteExec = vi.fn().mockResolvedValue(okExec());
     await orchestrateProvisioning(
@@ -429,6 +429,11 @@ describe("provisioning/orchestrate", () => {
       { vpsProvisioner, remoteExec }
     );
     expect(updateBusinessVpsSize).toHaveBeenCalledWith("biz-uuid-1", "kvm1");
+    // Pin write must come AFTER updateBusinessStatus("offline", newVpsId) —
+    // never while hostinger_vps_id still references the previous box.
+    const statusOrder = vi.mocked(updateBusinessStatus).mock.invocationCallOrder[0];
+    const pinOrder = vi.mocked(updateBusinessVpsSize).mock.invocationCallOrder[0];
+    expect(pinOrder).toBeGreaterThan(statusOrder);
 
     vi.mocked(updateBusinessVpsSize).mockClear();
     await orchestrateProvisioning(

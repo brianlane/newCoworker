@@ -736,22 +736,6 @@ async function runOrchestrator(
     publicIp: provisioned.publicIp
   });
 
-  // Persist the RESOLVED hardware pin. Runtime consumers (e.g. the SMS
-  // worker's over-cap local-model check) key off the explicit
-  // `businesses.vps_size` and treat null as "legacy kvm2/kvm8 with Ollama",
-  // so every box provisioned from here on must carry its actual size.
-  // Best-effort: a write failure only degrades the over-cap corner case
-  // (never block a signup on it), and the next reprovision re-pins.
-  try {
-    await updateBusinessVpsSize(businessId, vpsSize);
-  } catch (err) {
-    logger.warn("Failed to persist vps_size pin (continuing)", {
-      businessId,
-      vpsSize,
-      error: err instanceof Error ? err.message : String(err)
-    });
-  }
-
   await recordProvisioningProgress({
     businessId,
     phase: "vps_provisioned",
@@ -833,6 +817,26 @@ async function runOrchestrator(
   });
 
   await updateBusinessStatus(businessId, "offline", vpsId);
+
+  // Persist the RESOLVED hardware pin — only now, AFTER updateBusinessStatus
+  // pointed hostinger_vps_id at the new box, so the pin and the referenced VM
+  // never disagree (a pin written at acquire time would describe the NEW box
+  // while hostinger_vps_id still referenced the old one, letting a fleet
+  // redeploy push a kvm1 no-Ollama profile onto live kvm2 hardware). Runtime
+  // consumers (e.g. the SMS worker's over-cap local-model check) key off the
+  // explicit `businesses.vps_size` and treat null as "legacy kvm2/kvm8 with
+  // Ollama", so every box provisioned from here on must carry its actual
+  // size. Best-effort: a write failure only degrades the over-cap corner
+  // case (never block a signup on it), and the next reprovision re-pins.
+  try {
+    await updateBusinessVpsSize(businessId, vpsSize);
+  } catch (err) {
+    logger.warn("Failed to persist vps_size pin (continuing)", {
+      businessId,
+      vpsSize,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
 
   const existingConfig = await getBusinessConfig(businessId);
   const businessRow = await getBusiness(businessId);
