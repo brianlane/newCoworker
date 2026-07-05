@@ -1,9 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
+const defaultClientSpy = vi.fn();
 vi.mock("@/lib/supabase/server", () => ({
-  createSupabaseServiceClient: vi.fn(async () => {
-    throw new Error("tests must inject a client");
-  })
+  createSupabaseServiceClient: vi.fn(async () => defaultClientSpy())
 }));
 
 import {
@@ -133,6 +132,9 @@ describe("api_keys DB layer", () => {
       revokeApiKey("biz-1", "nope", makeDb(chain({ data: [], error: null })) as never)
     ).resolves.toBe(false);
     await expect(
+      revokeApiKey("biz-1", "nope", makeDb(chain({ data: null, error: null })) as never)
+    ).resolves.toBe(false);
+    await expect(
       revokeApiKey("b", "k", makeDb(chain({ data: null, error: { message: "db" } })) as never)
     ).rejects.toThrow(/db/);
   });
@@ -162,5 +164,30 @@ describe("api_keys DB layer", () => {
       expect.objectContaining({ last_used_at: expect.any(String) })
     );
     expect(c.eq).toHaveBeenCalledWith("id", "key-1");
+  });
+
+  it("every helper falls back to the default service client when none is injected", async () => {
+    const insertChain = chain();
+    insertChain.single.mockResolvedValue({ data: ROW, error: null });
+    const findChain = chain();
+    findChain.maybeSingle.mockResolvedValue({ data: null, error: null });
+
+    const dbs = [
+      makeDb(insertChain),
+      makeDb(chain({ data: [], error: null })),
+      makeDb(chain({ count: 1, error: null })),
+      makeDb(chain({ data: [], error: null })),
+      makeDb(findChain),
+      makeDb(chain({ error: null }))
+    ];
+    dbs.forEach((db) => defaultClientSpy.mockReturnValueOnce(db));
+
+    await insertApiKey({ businessId: "b", name: "n", keyPrefix: "p", keyHash: "h" });
+    await listApiKeys("b");
+    await countActiveApiKeys("b");
+    await revokeApiKey("b", "k");
+    await findActiveApiKeyByHash("h");
+    await touchApiKeyLastUsed("k");
+    expect(defaultClientSpy).toHaveBeenCalledTimes(6);
   });
 });

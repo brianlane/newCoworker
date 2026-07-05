@@ -58,4 +58,11 @@ describe("authenticatePublicApiRequest", () => {
     const auth = await authenticatePublicApiRequest(req(`Bearer ${VALID_KEY}`));
     expect(auth).toEqual({ businessId: "biz-1", apiKeyId: "key-1" });
   });
+
+  it("tolerates a non-Error stamp rejection too (String(err) branch)", async () => {
+    vi.mocked(findActiveApiKeyByHash).mockResolvedValue(KEY_ROW);
+    vi.mocked(touchApiKeyLastUsed).mockRejectedValue("plain string failure");
+    const auth = await authenticatePublicApiRequest(req(`Bearer ${VALID_KEY}`));
+    expect(auth).toEqual({ businessId: "biz-1", apiKeyId: "key-1" });
+  });
 });

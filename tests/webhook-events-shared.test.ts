@@ -125,5 +125,12 @@ describe("buildWebhookPayload", () => {
     });
     expect(payload.business_id).toBe("");
     expect(payload.data.channel).toBe("sms");
+
+    const outbound = buildWebhookPayload("sms.outbound", {
+      id: "row-6",
+      created_at: "2026-07-01T00:05:00Z"
+    });
+    expect(outbound.data.channel).toBe("sms");
+    expect(outbound.data.to).toBeNull();
   });
 });

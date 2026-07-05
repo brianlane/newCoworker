@@ -98,9 +98,9 @@ describe("dispatchRows", () => {
 });
 
 type TickDbOptions = {
-  subs?: unknown[];
+  subs?: unknown[] | null;
   subsError?: { message: string } | null;
-  rows?: unknown[];
+  rows?: unknown[] | null;
   rowsError?: { message: string } | null;
   updateError?: { message: string } | null;
 };
@@ -117,7 +117,10 @@ function makeTickDb(opts: TickDbOptions) {
         return {
           select: vi.fn(() => ({
             eq: vi.fn(() =>
-              Promise.resolve({ data: opts.subs ?? [], error: opts.subsError ?? null })
+              Promise.resolve({
+                data: opts.subs === undefined ? [] : opts.subs,
+                error: opts.subsError ?? null
+              })
             )
           })),
           update: vi.fn((patch: Record<string, unknown>) => {
@@ -129,7 +132,10 @@ function makeTickDb(opts: TickDbOptions) {
         };
       }
       // Source table query chain.
-      const result = Promise.resolve({ data: opts.rows ?? [], error: opts.rowsError ?? null });
+      const result = Promise.resolve({
+        data: opts.rows === undefined ? [] : opts.rows,
+        error: opts.rowsError ?? null
+      });
       const limited = Object.assign(
         {
           filter: vi.fn(() => result)
@@ -196,6 +202,17 @@ describe("runWebhookDispatchTick", () => {
     expect(updates[0]).toEqual({ active: false });
   });
 
+  it("increments the failure counter without deactivating below the cap", async () => {
+    const { db, updates } = makeTickDb({
+      subs: [SUB],
+      rows: [row("a", "2026-07-01T00:01:00Z")]
+    });
+    const summary = await runWebhookDispatchTick(db, fetchReturning(500));
+    expect(summary.failures).toBe(1);
+    expect(summary.deactivated).toBe(0);
+    expect(updates[0]).toEqual({ consecutive_failures: 1 });
+  });
+
   it("increments the failure counter and deactivates at the cap", async () => {
     const nearCap = makeTickDb({
       subs: [{ ...SUB, consecutive_failures: MAX_CONSECUTIVE_FAILURES - 1 }],
@@ -219,5 +236,84 @@ describe("runWebhookDispatchTick", () => {
     const summary = await runWebhookDispatchTick(db, fetchReturning(), log);
     expect(summary.failures).toBe(2);
     expect(log).toHaveBeenCalledTimes(2);
+  });
+
+  it("counts a failed subscription-row update as a contained failure", async () => {
+    const { db } = makeTickDb({
+      subs: [SUB],
+      rows: [row("a", "2026-07-01T00:01:00Z")],
+      updateError: { message: "update lost" }
+    });
+    // Also exercises the default no-op logger (no third argument).
+    const summary = await runWebhookDispatchTick(db, fetchReturning(200));
+    expect(summary.delivered).toBe(1);
+    expect(summary.failures).toBe(1);
+  });
+
+  it("treats null data from both queries as empty result sets", async () => {
+    const { db } = makeTickDb({ subs: null, rows: null });
+    expect(await runWebhookDispatchTick(db, fetchReturning())).toEqual({
+      subscriptions: 0,
+      delivered: 0,
+      deactivated: 0,
+      failures: 0
+    });
+
+    const nullRows = makeTickDb({ subs: [SUB], rows: null });
+    const summary = await runWebhookDispatchTick(nullRows.db, fetchReturning());
+    expect(summary.subscriptions).toBe(1);
+    expect(summary.delivered).toBe(0);
+  });
+
+  it("routes filtered events (call.completed) through the .filter branch", async () => {
+    const transcriptRow: WebhookSourceRow = {
+      id: "call-1",
+      created_at: "2026-07-01T00:06:00Z",
+      business_id: "biz-1",
+      caller_e164: "+16025551234",
+      direction: "inbound",
+      status: "completed",
+      started_at: "2026-07-01T00:04:00Z",
+      ended_at: "2026-07-01T00:05:50Z",
+      summary: "ok",
+      sentiment: "positive"
+    };
+    const { db, updates } = makeTickDb({
+      subs: [{ ...SUB, event: "call.completed" }],
+      rows: [transcriptRow]
+    });
+    const summary = await runWebhookDispatchTick(db, fetchReturning(200));
+    expect(summary.delivered).toBe(1);
+    expect(updates[0]).toEqual({
+      last_cursor: "2026-07-01T00:06:00Z",
+      consecutive_failures: 0
+    });
+  });
+
+  it("logs a non-Error subscription failure via String(err)", async () => {
+    const log = vi.fn();
+    const db = {
+      from: vi.fn((table: string) => {
+        if (table === "webhook_subscriptions") {
+          return {
+            select: vi.fn(() => ({
+              eq: vi.fn(() => Promise.resolve({ data: [SUB], error: null }))
+            }))
+          };
+        }
+        // Non-Error throw from the source query chain.
+        return {
+          select: vi.fn(() => {
+            throw "string blowup";
+          })
+        };
+      })
+    } as unknown as SupabaseLike;
+    const summary = await runWebhookDispatchTick(db, fetchReturning(), log);
+    expect(summary.failures).toBe(1);
+    expect(log).toHaveBeenCalledWith(
+      "webhook dispatch: subscription tick failed",
+      expect.objectContaining({ error: "string blowup" })
+    );
   });
 });

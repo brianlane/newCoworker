@@ -1,9 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
+const defaultClientSpy = vi.fn();
 vi.mock("@/lib/supabase/server", () => ({
-  createSupabaseServiceClient: vi.fn(async () => {
-    throw new Error("tests must inject a client");
-  })
+  createSupabaseServiceClient: vi.fn(async () => defaultClientSpy())
 }));
 
 import {
@@ -127,11 +126,37 @@ describe("webhook_subscriptions DB layer", () => {
       deleteWebhookSubscription("biz-1", "gone", makeDb(chain({ data: [], error: null })) as never)
     ).resolves.toBe(false);
     await expect(
+      deleteWebhookSubscription("biz-1", "gone", makeDb(chain({ data: null, error: null })) as never)
+    ).resolves.toBe(false);
+    await expect(
       deleteWebhookSubscription(
         "b",
         "h",
         makeDb(chain({ data: null, error: { message: "db" } })) as never
       )
     ).rejects.toThrow(/db/);
+  });
+
+  it("every helper falls back to the default service client when none is injected", async () => {
+    const createChain = chain();
+    createChain.single.mockResolvedValue({ data: SUB, error: null });
+
+    const dbs = [
+      makeDb(createChain),
+      makeDb(chain({ data: [], error: null })),
+      makeDb(chain({ count: 0, error: null })),
+      makeDb(chain({ data: [], error: null }))
+    ];
+    dbs.forEach((db) => defaultClientSpy.mockReturnValueOnce(db));
+
+    await createWebhookSubscription({
+      businessId: "b",
+      event: "sms.inbound",
+      targetUrl: "https://x.example/h"
+    });
+    await listWebhookSubscriptions("b");
+    await countActiveWebhookSubscriptions("b");
+    await deleteWebhookSubscription("b", "h");
+    expect(defaultClientSpy).toHaveBeenCalledTimes(4);
   });
 });
