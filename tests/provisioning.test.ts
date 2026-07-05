@@ -26,6 +26,7 @@ import type { SshExecResult } from "@/lib/hostinger/ssh";
 
 vi.mock("@/lib/db/businesses", () => ({
   updateBusinessStatus: vi.fn().mockResolvedValue(undefined),
+  updateBusinessVpsSize: vi.fn().mockResolvedValue(undefined),
   getBusiness: vi.fn().mockResolvedValue({ business_type: "real_estate" })
 }));
 
@@ -88,7 +89,7 @@ vi.mock("@/lib/db/telnyx-routes", () => ({
   setBusinessMessagingCampaignStatus: vi.fn().mockResolvedValue(undefined)
 }));
 
-import { updateBusinessStatus, getBusiness } from "@/lib/db/businesses";
+import { updateBusinessStatus, updateBusinessVpsSize, getBusiness } from "@/lib/db/businesses";
 import {
   getActiveGatewayTokenForBusiness,
   issueGatewayToken,
@@ -418,6 +419,41 @@ describe("provisioning/orchestrate", () => {
     expect(updateBusinessStatus).toHaveBeenCalledTimes(2);
     expect(updateBusinessStatus).toHaveBeenNthCalledWith(1, "biz-uuid-1", "offline", "42");
     expect(updateBusinessStatus).toHaveBeenNthCalledWith(2, "biz-uuid-1", "online", "42");
+  });
+
+  it("persists the resolved vps_size pin after acquiring the box", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "starter" },
+      { vpsProvisioner, remoteExec }
+    );
+    expect(updateBusinessVpsSize).toHaveBeenCalledWith("biz-uuid-1", "kvm1");
+
+    vi.mocked(updateBusinessVpsSize).mockClear();
+    await orchestrateProvisioning(
+      { businessId: "biz-uuid-2", tier: "standard", vpsSize: "kvm2" },
+      { vpsProvisioner, remoteExec }
+    );
+    expect(updateBusinessVpsSize).toHaveBeenCalledWith("biz-uuid-2", "kvm2");
+  });
+
+  it("does not abort provisioning when the vps_size pin write fails", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    vi.mocked(updateBusinessVpsSize).mockRejectedValueOnce(new Error("db blip"));
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "starter" },
+      { vpsProvisioner, remoteExec }
+    );
+    expect(result.vpsId).toBe("42");
+    vi.mocked(updateBusinessVpsSize).mockRejectedValueOnce("string blip");
+    await expect(
+      orchestrateProvisioning(
+        { businessId: "biz-uuid-1", tier: "starter" },
+        { vpsProvisioner, remoteExec }
+      )
+    ).resolves.toBeTruthy();
   });
 
   it("calls upsertBusinessConfig with no legacy Inworld columns", async () => {

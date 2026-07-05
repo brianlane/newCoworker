@@ -865,8 +865,10 @@ serve(async (req: Request) => {
           overCap: cap.overCap,
           geminiAgent: SMS_CHAT_GEMINI_AGENT,
           // kvm1 hardware has no local Ollama model, so there is no
-          // CoworkerLocal to degrade to — over-cap turns must refuse.
-          localAgent: tenantHasLocalModel(businessTier, businessVpsSize)
+          // CoworkerLocal to degrade to — over-cap turns must refuse. Keyed
+          // on the explicit vps_size pin only: a null pin = legacy kvm2/kvm8
+          // box that does have the local model.
+          localAgent: tenantHasLocalModel(businessVpsSize)
             ? SMS_CHAT_LOCAL_AGENT
             : null
         });

@@ -108,18 +108,18 @@ describe("pickSmsTurn", () => {
 });
 
 describe("tenantHasLocalModel", () => {
-  it("explicit pin wins: kvm1 has no local model, kvm2/kvm8 do", () => {
-    expect(tenantHasLocalModel("standard", "kvm1")).toBe(false);
-    expect(tenantHasLocalModel("starter", "kvm2")).toBe(true);
-    expect(tenantHasLocalModel("starter", "kvm8")).toBe(true);
+  it("only an explicit kvm1 pin means no local model", () => {
+    expect(tenantHasLocalModel("kvm1")).toBe(false);
+    expect(tenantHasLocalModel("kvm2")).toBe(true);
+    expect(tenantHasLocalModel("kvm8")).toBe(true);
   });
 
-  it("null/corrupt pin falls back to the tier default (starter→kvm1, standard→kvm8)", () => {
-    expect(tenantHasLocalModel("starter", null)).toBe(false);
-    expect(tenantHasLocalModel("starter", "kvm999")).toBe(false);
-    expect(tenantHasLocalModel("standard", null)).toBe(true);
-    expect(tenantHasLocalModel("enterprise", undefined)).toBe(true);
-    expect(tenantHasLocalModel(null, null)).toBe(true);
+  it("null/undefined/corrupt pin = legacy kvm2/kvm8 hardware, which has the model", () => {
+    // Pre-pin-persistence tenants were all provisioned on kvm2/kvm8 with
+    // Ollama; the refuse path must never fire for them.
+    expect(tenantHasLocalModel(null)).toBe(true);
+    expect(tenantHasLocalModel(undefined)).toBe(true);
+    expect(tenantHasLocalModel("kvm999")).toBe(true);
   });
 });
 

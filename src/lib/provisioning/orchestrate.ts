@@ -28,7 +28,7 @@ import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
 import { buildProvisioningLiveEmail } from "@/lib/email/templates/provisioning-live";
-import { updateBusinessStatus, getBusiness } from "@/lib/db/businesses";
+import { updateBusinessStatus, updateBusinessVpsSize, getBusiness } from "@/lib/db/businesses";
 import {
   getActiveGatewayTokenForBusiness,
   issueGatewayToken,
@@ -735,6 +735,22 @@ async function runOrchestrator(
     vpsId,
     publicIp: provisioned.publicIp
   });
+
+  // Persist the RESOLVED hardware pin. Runtime consumers (e.g. the SMS
+  // worker's over-cap local-model check) key off the explicit
+  // `businesses.vps_size` and treat null as "legacy kvm2/kvm8 with Ollama",
+  // so every box provisioned from here on must carry its actual size.
+  // Best-effort: a write failure only degrades the over-cap corner case
+  // (never block a signup on it), and the next reprovision re-pins.
+  try {
+    await updateBusinessVpsSize(businessId, vpsSize);
+  } catch (err) {
+    logger.warn("Failed to persist vps_size pin (continuing)", {
+      businessId,
+      vpsSize,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
 
   await recordProvisioningProgress({
     businessId,

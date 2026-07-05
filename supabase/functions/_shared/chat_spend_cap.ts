@@ -124,22 +124,19 @@ export function pickSmsTurn(opts: {
 
 /**
  * Whether this tenant's VPS hardware carries a local Ollama model the SMS
- * path can degrade to over cap. Mirrors src/lib/vps/size.ts
- * (`resolveVpsSize` + `vpsSizeHasLocalModel`): an explicit `vps_size` pin
- * wins; null falls back to the tier default (starter→kvm1, standard→kvm8).
- * Only kvm1 has no local model.
+ * path can degrade to over cap (mirrors `vpsSizeHasLocalModel` in
+ * src/lib/vps/size.ts: only kvm1 ships without Ollama).
+ *
+ * Deliberately keyed on the EXPLICIT `businesses.vps_size` pin only — a null
+ * pin means the tenant predates pin persistence and was provisioned on
+ * legacy kvm2/kvm8 hardware that DOES have the local model, so the refuse
+ * path must not fire for them. Every kvm1 box is provisioned after the
+ * orchestrator started persisting the resolved size (see
+ * src/lib/provisioning/orchestrate.ts), so kvm1 tenants always carry the
+ * explicit pin.
  */
-export function tenantHasLocalModel(
-  tier: string | null | undefined,
-  vpsSize: string | null | undefined
-): boolean {
-  const size =
-    vpsSize === "kvm1" || vpsSize === "kvm2" || vpsSize === "kvm8"
-      ? vpsSize
-      : tier === "starter"
-        ? "kvm1"
-        : "kvm8";
-  return size !== "kvm1";
+export function tenantHasLocalModel(vpsSize: string | null | undefined): boolean {
+  return vpsSize !== "kvm1";
 }
 
 /** Start of the current UTC month, ISO — fallback period key when no subscription. */
