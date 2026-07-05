@@ -4,10 +4,13 @@ import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
 import { listCustomIntegrations } from "@/lib/db/custom-integrations";
+import { listApiKeys } from "@/lib/db/api-keys";
+import { listWebhookSubscriptions } from "@/lib/db/webhook-subscriptions";
 import { Card } from "@/components/ui/Card";
 import { IntegrationCard } from "@/components/dashboard/IntegrationCard";
 import { NangoEmailIntegrationActions } from "@/components/dashboard/NangoEmailIntegrationActions";
 import { CustomIntegrationsCard } from "@/components/dashboard/CustomIntegrationsCard";
+import { ZapierApiKeysCard } from "@/components/dashboard/ZapierApiKeysCard";
 import { Inbox } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -38,6 +41,8 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
   const workspaceConnected = workspaceConnections.length > 0;
   const customIntegrations =
     businessId ? await listCustomIntegrations(businessId) : [];
+  const apiKeys = businessId ? await listApiKeys(businessId) : [];
+  const activeHooks = businessId ? await listWebhookSubscriptions(businessId) : [];
 
   return (
     <div className="space-y-8 max-w-4xl">
@@ -110,6 +115,30 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
               <CustomIntegrationsCard
                 businessId={businessId}
                 initialIntegrations={customIntegrations}
+              />
+            </div>
+          </section>
+
+          <section className="space-y-4">
+            <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
+              Zapier &amp; API
+            </h2>
+            <div className="grid grid-cols-1 gap-4 max-w-xl">
+              <ZapierApiKeysCard
+                businessId={businessId}
+                initialKeys={apiKeys.map((k) => ({
+                  id: k.id,
+                  name: k.name,
+                  key_prefix: k.key_prefix,
+                  created_at: k.created_at,
+                  last_used_at: k.last_used_at
+                }))}
+                activeHooks={activeHooks.map((h) => ({
+                  id: h.id,
+                  event: h.event,
+                  target_url: h.target_url,
+                  created_at: h.created_at
+                }))}
               />
             </div>
           </section>
