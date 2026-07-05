@@ -69,12 +69,26 @@ export async function resolveViewAsContext(user: AuthUser): Promise<ViewAsContex
     .maybeSingle();
   if (!data?.owner_email) return { ownerEmail: user.email, viewAs: null };
 
+  // Dashboard pages resolve "the" business as the NEWEST row under
+  // owner_email, so view-as is effectively "view as this OWNER". When the
+  // owner has multiple businesses, mirror the pages' newest-row pick here so
+  // the banner names the business the pages will actually render — not the
+  // (possibly older) row the admin clicked.
+  const { data: newest } = await db
+    .from("businesses")
+    .select("id, name, tier")
+    .eq("owner_email", data.owner_email as string)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const effective = (newest ?? data) as { id: string; name: string | null; tier: string | null };
+
   return {
     ownerEmail: data.owner_email as string,
     viewAs: {
-      businessId: data.id as string,
-      name: (data.name as string) ?? "",
-      tier: (data.tier as string) ?? "starter"
+      businessId: effective.id,
+      name: effective.name ?? "",
+      tier: effective.tier ?? "starter"
     }
   };
 }
@@ -91,7 +105,13 @@ export async function resolveDashboardOwnerEmail(user: AuthUser): Promise<string
  * tenant but the write would target whatever business the ADMIN's own email
  * resolves to — a wrong-tenant mutation. Exit view-as (or use the admin
  * panel's explicit businessId routes) to make changes.
+ *
+ * Keyed off the same resolution the dashboard uses: a cookie pointing at a
+ * deleted business does NOT count as active (the dashboard already fell back
+ * to the admin's own identity and hides the exit banner, so blocking writes
+ * there would leave the admin 403'd with no visible way out).
  */
 export async function isViewAsActive(user: AuthUser | null): Promise<boolean> {
-  return (await getViewAsBusinessId(user)) !== null;
+  if (!user) return false;
+  return (await resolveViewAsContext(user)).viewAs !== null;
 }

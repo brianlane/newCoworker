@@ -6,12 +6,20 @@ vi.mock("next/headers", () => ({
   cookies: (...args: unknown[]) => cookiesImpl(...(args as []))
 }));
 
+// One shared maybeSingle drives BOTH queries resolveViewAsContext makes: the
+// by-id cookie lookup (from().select().eq().maybeSingle()) first, then the
+// newest-row-for-owner lookup (…eq().order().limit().maybeSingle()).
 const maybeSingle = vi.fn();
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn().mockImplementation(async () => ({
     from: vi.fn().mockReturnValue({
       select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({ maybeSingle })
+        eq: vi.fn().mockReturnValue({
+          maybeSingle,
+          order: vi.fn().mockReturnValue({
+            limit: vi.fn().mockReturnValue({ maybeSingle })
+          })
+        })
       })
     })
   }))
@@ -84,6 +92,38 @@ describe("resolveViewAsContext", () => {
     });
   });
 
+  it("banner follows the NEWEST business when the owner has several (pages resolve newest)", async () => {
+    cookieGet.mockReturnValue({ value: BIZ_ID });
+    maybeSingle
+      .mockResolvedValueOnce({
+        data: { id: BIZ_ID, name: "Old Biz", tier: "starter", owner_email: "multi@x.com" }
+      })
+      .mockResolvedValueOnce({
+        data: { id: "9d1f00c0-8023-4cf5-bde9-db07fc5f0027", name: "New Biz", tier: "standard" }
+      });
+    expect(await resolveViewAsContext(admin)).toEqual({
+      ownerEmail: "multi@x.com",
+      viewAs: {
+        businessId: "9d1f00c0-8023-4cf5-bde9-db07fc5f0027",
+        name: "New Biz",
+        tier: "standard"
+      }
+    });
+  });
+
+  it("keeps the cookie's business when the newest-row lookup returns nothing", async () => {
+    cookieGet.mockReturnValue({ value: BIZ_ID });
+    maybeSingle
+      .mockResolvedValueOnce({
+        data: { id: BIZ_ID, name: "Solo Biz", tier: "starter", owner_email: "solo@x.com" }
+      })
+      .mockResolvedValueOnce({ data: null });
+    expect(await resolveViewAsContext(admin)).toEqual({
+      ownerEmail: "solo@x.com",
+      viewAs: { businessId: BIZ_ID, name: "Solo Biz", tier: "starter" }
+    });
+  });
+
   it("defaults a null name/tier on the impersonated business", async () => {
     cookieGet.mockReturnValue({ value: BIZ_ID });
     maybeSingle.mockResolvedValue({
@@ -106,12 +146,23 @@ describe("resolveViewAsContext", () => {
 });
 
 describe("isViewAsActive", () => {
-  it("is true only for an admin with a valid view-as cookie", async () => {
+  it("is true only for an admin whose cookie resolves to a live business", async () => {
     cookieGet.mockReturnValue({ value: BIZ_ID });
+    maybeSingle.mockResolvedValue({
+      data: { id: BIZ_ID, name: "B", tier: "starter", owner_email: "b@x.com" }
+    });
     expect(await isViewAsActive(admin)).toBe(true);
     expect(await isViewAsActive(owner)).toBe(false);
     expect(await isViewAsActive(null)).toBe(false);
     cookieGet.mockReturnValue(undefined);
+    expect(await isViewAsActive(admin)).toBe(false);
+  });
+
+  it("goes inactive when the cookie points at a deleted business (no 403 lock-out)", async () => {
+    // The dashboard already fell back to the admin's own identity and hides
+    // the exit banner in this state — blocking writes would strand the admin.
+    cookieGet.mockReturnValue({ value: BIZ_ID });
+    maybeSingle.mockResolvedValue({ data: null });
     expect(await isViewAsActive(admin)).toBe(false);
   });
 });
