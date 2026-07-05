@@ -16,6 +16,10 @@ import {
   buildOpsPlanChangeEmail,
   type OpsPlanChangeInput
 } from "@/lib/email/templates/ops-plan-change";
+import {
+  buildOpsDidReleaseFailedEmail,
+  type OpsDidReleaseFailedInput
+} from "@/lib/email/templates/ops-did-release-failed";
 
 /** Fire-and-forget ops deletion request; never throws. */
 export async function sendOpsVpsDeletionEmail(
@@ -78,6 +82,42 @@ export async function sendOpsPlanChangeEmail(
   } catch (err) {
     logger.warn("ops plan-change email failed", {
       businessId: input.businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
+/**
+ * Fire-and-forget "DID release failed" ops alert; never throws. Sent by the
+ * lifecycle executor when a terminal teardown can't release the tenant's
+ * Telnyx number — the wipe stamp removes the business from every retry
+ * sweep, so without this alert the number would silently rent forever.
+ */
+export async function sendOpsDidReleaseFailedEmail(
+  input: Omit<OpsDidReleaseFailedInput, "siteUrl">
+): Promise<void> {
+  try {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      logger.warn("ops DID-release-failed email skipped: RESEND_API_KEY missing", {
+        businessId: input.businessId,
+        e164: input.e164
+      });
+      return;
+    }
+    const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    const toEmail = opsNotificationEmail();
+    const { subject, text, html } = buildOpsDidReleaseFailedEmail({ ...input, siteUrl });
+    await sendOwnerEmail(apiKey, toEmail, subject, { text, html });
+    logger.info("ops DID-release-failed alert emailed", {
+      businessId: input.businessId,
+      e164: input.e164,
+      toEmail
+    });
+  } catch (err) {
+    logger.warn("ops DID-release-failed email failed", {
+      businessId: input.businessId,
+      e164: input.e164,
       error: err instanceof Error ? err.message : String(err)
     });
   }

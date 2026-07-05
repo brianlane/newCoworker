@@ -20,7 +20,8 @@ const {
   createSupabaseServiceClientMock,
   releaseVpsToPoolMock,
   deleteTelnyxVoiceRouteMock,
-  upsertBusinessTelnyxSettingsMock
+  upsertBusinessTelnyxSettingsMock,
+  sendOpsDidReleaseFailedEmailMock
 } = vi.hoisted(() => ({
   updateSubscriptionMock: vi.fn(),
   markRefundUsedMock: vi.fn(),
@@ -32,7 +33,12 @@ const {
   createSupabaseServiceClientMock: vi.fn(),
   releaseVpsToPoolMock: vi.fn(),
   deleteTelnyxVoiceRouteMock: vi.fn(),
-  upsertBusinessTelnyxSettingsMock: vi.fn()
+  upsertBusinessTelnyxSettingsMock: vi.fn(),
+  sendOpsDidReleaseFailedEmailMock: vi.fn()
+}));
+
+vi.mock("@/lib/email/ops-notify", () => ({
+  sendOpsDidReleaseFailedEmail: sendOpsDidReleaseFailedEmailMock
 }));
 
 vi.mock("@/lib/db/telnyx-routes", () => ({
@@ -1285,6 +1291,7 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
     beforeEach(() => {
       deleteTelnyxVoiceRouteMock.mockResolvedValue(undefined);
       upsertBusinessTelnyxSettingsMock.mockResolvedValue({});
+      sendOpsDidReleaseFailedEmailMock.mockResolvedValue(undefined);
     });
 
     it("releases at Telnyx, then removes the route row and clears the SMS from-number", async () => {
@@ -1300,6 +1307,8 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
         businessId: "biz_1",
         telnyxSmsFromE164: null
       });
+      // Clean release: no manual-action alert.
+      expect(sendOpsDidReleaseFailedEmailMock).not.toHaveBeenCalled();
     });
 
     it("tolerates a 404 (number already released) and still cleans up routing rows", async () => {
@@ -1328,7 +1337,15 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
       ).resolves.toBeTruthy();
       expect(deleteTelnyxVoiceRouteMock).not.toHaveBeenCalled();
       expect(upsertBusinessTelnyxSettingsMock).not.toHaveBeenCalled();
+      // Nothing retries after the wipe stamp, so ops must be paged to
+      // release the number manually (Bugbot: wipe stamp blocks DID retry).
+      expect(sendOpsDidReleaseFailedEmailMock).toHaveBeenCalledWith({
+        businessId: "biz_1",
+        e164: "+16025550100",
+        reason: expect.stringContaining("server error")
+      });
     });
+
 
     it("swallows routing-cleanup failures — a wipe must not fail over a $1 number", async () => {
       const del = vi.fn().mockResolvedValue({ id: "pn_1" });
@@ -1352,7 +1369,7 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
       ).resolves.toBeTruthy();
     });
 
-    it("skips the op (loudly) when no Telnyx client is available", async () => {
+    it("skips the op (loudly) when no Telnyx client is available and pages ops", async () => {
       const prevKey = process.env.TELNYX_API_KEY;
       delete process.env.TELNYX_API_KEY;
       try {
@@ -1362,6 +1379,11 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
           { stripe: {} as never, sendEmail: vi.fn() }
         );
         expect(deleteTelnyxVoiceRouteMock).not.toHaveBeenCalled();
+        expect(sendOpsDidReleaseFailedEmailMock).toHaveBeenCalledWith({
+          businessId: "biz_1",
+          e164: "+16025550100",
+          reason: expect.stringContaining("TELNYX_API_KEY missing")
+        });
       } finally {
         if (prevKey !== undefined) process.env.TELNYX_API_KEY = prevKey;
       }

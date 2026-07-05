@@ -62,6 +62,7 @@ import { releaseVpsToPool } from "@/lib/db/vps-inventory";
 import type { VpsSize } from "@/lib/vps/size";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { sendOwnerEmail } from "@/lib/email/client";
+import { sendOpsDidReleaseFailedEmail } from "@/lib/email/ops-notify";
 import { buildCancelConfirmationEmail } from "@/lib/email/templates/cancel-confirmation";
 import { buildRefundIssuedEmail } from "@/lib/email/templates/refund-issued";
 import {
@@ -545,6 +546,13 @@ async function runTelnyxOp(
       businessId: op.businessId,
       e164: op.e164
     });
+    // The wipe stamp that follows removes this business from every retry
+    // sweep, so a skipped release would silently rent forever — page ops.
+    await sendOpsDidReleaseFailedEmail({
+      businessId: op.businessId,
+      e164: op.e164,
+      reason: "TELNYX_API_KEY missing — release never attempted"
+    });
     return;
   }
   try {
@@ -572,10 +580,19 @@ async function runTelnyxOp(
       telnyxSmsFromE164: null
     });
   } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
     logger.error("release_did failed (continuing teardown)", {
       businessId: op.businessId,
       e164: op.e164,
-      error: err instanceof Error ? err.message : String(err)
+      error: reason
+    });
+    // Teardown continues (blocking the wipe on a Telnyx outage would break
+    // the retention promise), but nothing retries after the wipe stamp —
+    // alert ops so the number gets released manually instead of leaking.
+    await sendOpsDidReleaseFailedEmail({
+      businessId: op.businessId,
+      e164: op.e164,
+      reason
     });
   }
 }
