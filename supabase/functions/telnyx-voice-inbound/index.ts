@@ -64,6 +64,7 @@ import {
   sendMissedCallAutotext,
   type MissedCallReason
 } from "../_shared/missed_call_autotext.ts";
+import { maybeSendMissedCallSpikeAlert } from "../_shared/missed_call_spike.ts";
 import {
   readTelnyxWebhookRateLimits,
   telnyxWebhookClientIp,
@@ -758,12 +759,39 @@ serve(async (req: Request) => {
     }
   }
 
+  // Missed-call spike alert (Standard/Enterprise perk): once the tenant's
+  // refused-call count (`voice_call_blocked` system_logs rows) crosses the
+  // daily threshold, tell the owner — callers hearing "line busy" is
+  // otherwise invisible churn. Called from EVERY refusal path that writes
+  // the ledger (reserve refusals + safe-mode-no-minutes via
+  // missedCallFollowUp, and the AI-budget refusal directly). Never throws;
+  // once-per-day dedup + tier gate live inside the helper.
+  //
+  // `refusedAt` is captured when the refusal happened, NOT when this check
+  // runs — the auto-text work in between can cross UTC midnight, and the
+  // spike day-key/count must describe the day the ledger row was written.
+  const checkMissedCallSpike = async (refusedAt: Date) => {
+    const spike = await maybeSendMissedCallSpikeAlert(supabase, {
+      businessId,
+      notifyUrl: `${Deno.env.get("SUPABASE_URL") ?? ""}/functions/v1/notifications`,
+      bearer: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+      now: refusedAt
+    });
+    if (spike.status === "sent") {
+      await telemetryRecord(supabase, "voice_missed_call_spike_alert", {
+        business_id: businessId,
+        missed_calls_today: spike.count
+      });
+    }
+  };
+
   // Missed-call auto-text (Standard/Enterprise perk): a refused caller gets
   // one follow-up SMS from the business's number so the conversation can
   // continue over text. Fully fail-safe inside the helper (tier gate,
   // per-tenant kill switch, opt-out, 1h dedup, monthly SMS cap). Shared by
   // the reserve-refusal branches below AND the safe-mode no-minutes branch.
   const missedCallFollowUp = async (missedReason: MissedCallReason) => {
+    const refusedAt = new Date();
     const outcome = await sendMissedCallAutotext(supabase, {
       businessId,
       callerE164: fromE164Informational,
@@ -801,6 +829,7 @@ serve(async (req: Request) => {
         payload: { call_control_id: callControlId, reason: missedReason }
       });
     }
+    await checkMissedCallSpike(refusedAt);
   };
 
   // Kill switch + Safe Mode gate (§CustomerChannelGate).
@@ -868,6 +897,23 @@ serve(async (req: Request) => {
           event: "voice_safe_mode_forward_skipped",
           message: "Safe-mode forward skipped: voice minutes exhausted",
           payload: { call_control_id: callControlId, reason: "quota_exhausted" }
+        });
+        // Also write the refusal ledger row: `voice_call_blocked` is what the
+        // analytics answer-rate card AND the missed-call spike counter read —
+        // a caller turned away here is just as missed as one refused by the
+        // reserve path below. The safe-mode-specific event above stays for
+        // ops diagnostics.
+        await systemLog(supabase, {
+          businessId,
+          source: "voice",
+          level: "warn",
+          event: "voice_call_blocked",
+          message: "Inbound call refused: quota_exhausted (safe-mode forward skipped)",
+          payload: {
+            call_control_id: callControlId,
+            reason: "quota_exhausted",
+            context: "safe_mode_forward"
+          }
         });
         await missedCallFollowUp("quota_exhausted");
         return jsonOk("safe_mode_forward_no_minutes");
@@ -1201,6 +1247,10 @@ serve(async (req: Request) => {
         message: "Inbound call refused: ai_budget_exhausted",
         payload: { call_control_id: callControlId, reason: "ai_budget_exhausted" }
       });
+      // This refusal wrote the voice_call_blocked ledger but doesn't run the
+      // missed-call auto-text (sendMissedAiCallSms above covers the caller),
+      // so trigger the spike check directly.
+      await checkMissedCallSpike(new Date());
       return jsonOk("ai_budget_exhausted");
     }
   }

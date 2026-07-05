@@ -209,14 +209,17 @@ serve(async (req: Request) => {
   }
 
   // Usage-cap alerts carry owner-actionable copy instead of the generic
-  // "URGENT <task_type>" headline — silence (blocked texts / degraded chat)
-  // must never be the only signal a cap was hit.
+  // "URGENT <task_type>" headline — silence (blocked texts / degraded chat /
+  // refused callers) must never be the only signal a cap was hit.
+  const missedToday = Number(record.log_payload?.missed_calls_today ?? 0);
   const summary =
     record.task_type === "sms_cap_reached"
       ? "Monthly SMS limit reached — outbound texting is paused. Buy an SMS pack from Billing to resume."
       : record.task_type === "chat_spend_cap_reached"
         ? "AI chat budget reached — replies switched to the slower local model. Buy a Gemini pack from Billing to restore."
-        : `URGENT ${record.task_type}`;
+        : record.task_type === "missed_call_spike"
+          ? `${missedToday || "Several"} callers were turned away today (line busy or out of voice minutes). Check Analytics on your dashboard — a plan upgrade or minutes top-up stops the misses.`
+          : `URGENT ${record.task_type}`;
   const kind = "urgent_alert";
   // Strip trailing slash so dashboardUrl never ends up as
   // `https://example.com//dashboard` if the env var was set with one.
