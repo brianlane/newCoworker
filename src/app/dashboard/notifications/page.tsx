@@ -3,6 +3,7 @@ import { getAuthUser } from "@/lib/auth";
 import { resolveViewAsContext } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
+  getNotificationPreferences,
   getOrCreateNotificationPreferences,
   mergeNotificationContactsForDisplay
 } from "@/lib/db/notification-preferences";
@@ -42,16 +43,22 @@ export default async function NotificationsPage() {
   const businessRow = businesses?.[0] ?? null;
   const businessId = businessRow?.id ?? null;
 
+  // View-as stays strictly read-only: it must not create the tenant's default
+  // preference row as a page-load side effect, so it uses the read-only lookup
+  // (a tenant who never opened this page just shows the empty state). Real
+  // owners keep the create-on-first-visit behavior.
   const prefs =
     businessId && businessRow
-      ? await getOrCreateNotificationPreferences(businessId, {
-          contactSeeds: {
-            userEmail: seedUserEmail,
-            authPhone: seedAuthPhone,
-            ownerEmail: businessRow.owner_email ?? null,
-            businessPhone: businessRow.phone ?? null
-          }
-        })
+      ? viewAsCtx.viewAs
+        ? await getNotificationPreferences(businessId)
+        : await getOrCreateNotificationPreferences(businessId, {
+            contactSeeds: {
+              userEmail: seedUserEmail,
+              authPhone: seedAuthPhone,
+              ownerEmail: businessRow.owner_email ?? null,
+              businessPhone: businessRow.phone ?? null
+            }
+          })
       : null;
   // Display-only autofill: prefill the alert phone/email inputs from the
   // owner's account + business contact info when the stored prefs are still
