@@ -20,7 +20,8 @@ vi.mock("@/lib/supabase/server", () => ({
 import {
   getViewAsBusinessId,
   resolveViewAsContext,
-  resolveDashboardOwnerEmail
+  resolveDashboardOwnerEmail,
+  isViewAsActive
 } from "@/lib/admin/view-as";
 import type { AuthUser } from "@/lib/auth";
 
@@ -101,6 +102,17 @@ describe("resolveViewAsContext", () => {
       ownerEmail: "admin@x.com",
       viewAs: null
     });
+  });
+});
+
+describe("isViewAsActive", () => {
+  it("is true only for an admin with a valid view-as cookie", async () => {
+    cookieGet.mockReturnValue({ value: BIZ_ID });
+    expect(await isViewAsActive(admin)).toBe(true);
+    expect(await isViewAsActive(owner)).toBe(false);
+    expect(await isViewAsActive(null)).toBe(false);
+    cookieGet.mockReturnValue(undefined);
+    expect(await isViewAsActive(admin)).toBe(false);
   });
 });
 

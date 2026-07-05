@@ -44,6 +44,9 @@ export function ViewAsBanner({
           <span className="ml-1.5 text-parchment/50 uppercase text-xs tracking-wider">
             {tier}
           </span>
+          <span className="ml-2 text-parchment/40 text-xs">
+            read-only — account &amp; billing actions are disabled
+          </span>
         </span>
       </div>
       <div className="flex shrink-0 items-center gap-2">

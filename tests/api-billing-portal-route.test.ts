@@ -4,6 +4,10 @@ vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn()
 }));
 
+vi.mock("@/lib/admin/view-as", () => ({
+  isViewAsActive: vi.fn().mockResolvedValue(false)
+}));
+
 vi.mock("@/lib/stripe/client", () => ({
   createCustomerPortalSession: vi.fn()
 }));
@@ -18,6 +22,7 @@ vi.mock("@/lib/db/subscriptions", () => ({
 
 import { POST } from "@/app/api/billing/portal/route";
 import { getAuthUser } from "@/lib/auth";
+import { isViewAsActive } from "@/lib/admin/view-as";
 import { createCustomerPortalSession } from "@/lib/stripe/client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getSubscription } from "@/lib/db/subscriptions";
@@ -43,6 +48,13 @@ describe("api/billing/portal route", () => {
         error: null
       })
     } as never);
+  });
+
+  it("refuses with 403 while admin view-as is active (view-as is read-only)", async () => {
+    vi.mocked(isViewAsActive).mockResolvedValueOnce(true);
+    const response = await POST();
+    expect(response.status).toBe(403);
+    expect(createCustomerPortalSession).not.toHaveBeenCalled();
   });
 
   it("redirects authenticated users to Stripe billing portal", async () => {

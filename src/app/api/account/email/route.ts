@@ -16,6 +16,7 @@
  */
 import { z } from "zod";
 import { getAuthUser } from "@/lib/auth";
+import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServerClient, createSupabaseServiceClient } from "@/lib/supabase/server";
 
@@ -26,6 +27,12 @@ const schema = z.object({
 export async function POST(request: Request) {
   try {
     const user = await getAuthUser();
+    // View-as is read-only: this route resolves the business from the
+    // SIGNED-IN user's email, so an impersonating admin's write would land
+    // on the wrong business. Refuse instead (see isViewAsActive).
+    if (await isViewAsActive(user)) {
+      return errorResponse("FORBIDDEN", "View-as is read-only — exit view-as to make changes", 403);
+    }
     if (!user?.email) return errorResponse("UNAUTHORIZED", "Authentication required");
 
     const { email: newEmail } = schema.parse(await request.json());

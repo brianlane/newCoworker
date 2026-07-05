@@ -35,8 +35,11 @@ export async function POST(request: Request) {
       sameSite: "lax",
       secure: process.env.NODE_ENV === "production",
       path: "/",
-      // Session-scoped on purpose: closing the browser exits view-as. Cap at
-      // 4h anyway so a forgotten kiosk session can't impersonate forever.
+      // Persistent cookie with a hard 4h cap (NOT session-scoped — a
+      // persistent maxAge survives browser close, which is fine: the cookie
+      // is only ever honored for the admin, view-as is read-only for
+      // account/billing mutations, and it expires on its own). Exit via the
+      // banner clears it immediately.
       maxAge: 4 * 60 * 60
     });
 

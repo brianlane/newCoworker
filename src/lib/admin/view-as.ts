@@ -83,3 +83,15 @@ export async function resolveViewAsContext(user: AuthUser): Promise<ViewAsContex
 export async function resolveDashboardOwnerEmail(user: AuthUser): Promise<string | null> {
   return (await resolveViewAsContext(user)).ownerEmail;
 }
+
+/**
+ * View-as is READ-ONLY: mutation routes that resolve "the" business from the
+ * signed-in user's email (account settings, billing actions, Stripe flows)
+ * must refuse while the admin is impersonating. Otherwise the UI shows the
+ * tenant but the write would target whatever business the ADMIN's own email
+ * resolves to — a wrong-tenant mutation. Exit view-as (or use the admin
+ * panel's explicit businessId routes) to make changes.
+ */
+export async function isViewAsActive(user: AuthUser | null): Promise<boolean> {
+  return (await getViewAsBusinessId(user)) !== null;
+}
