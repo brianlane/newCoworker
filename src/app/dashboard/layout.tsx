@@ -31,6 +31,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
   // pages) resolves against the impersonated tenant instead of the admin.
   const { ownerEmail, viewAs } = await resolveViewAsContext(user);
 
+  // Orphan view-as cookie (impersonated business deleted, or a garbled
+  // value): the proxy only gates the admin→/dashboard redirect on the
+  // cookie's PRESENCE, so without this the admin would land here
+  // unimpersonated — no banner, no exit. Send them back to the admin panel;
+  // the leftover cookie is inert (isViewAsActive keys off the same resolution)
+  // and is overwritten by the next "View as tenant" or expires on its own.
+  if (user.isAdmin && !viewAs) redirect("/admin/dashboard");
+
   let grace:
     | { graceEndsAt: string; reason: Parameters<typeof GraceBanner>[0]["reason"] }
     | null = null;
