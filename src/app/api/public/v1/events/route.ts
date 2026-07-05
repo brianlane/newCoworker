@@ -47,11 +47,19 @@ export async function GET(request: Request) {
       .from(source.table)
       .select(source.select)
       .eq("business_id", auth.businessId)
-      .order("created_at", { ascending: false })
+      // Newest-first by the same column the dispatcher cursors on (ended_at
+      // for call.completed), so samples mirror delivery order.
+      .order(source.cursorColumn, { ascending: false })
       .limit(limit);
     if (source.filter) {
       const [column, operator, value] = source.filter;
       query = query.filter(column, operator, value);
+    }
+    if (source.readyOr) {
+      // Same readiness gate as the dispatcher — without it, samples could
+      // include finished calls still awaiting their summary, which would
+      // never be POSTed in that shape and would mislead Zap field mapping.
+      query = query.or(source.readyOr(Date.now()));
     }
 
     const { data, error } = await query;

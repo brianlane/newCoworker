@@ -124,6 +124,18 @@ describe("buildWebhookPayload", () => {
     });
     expect(payload.data.summary).toBe("Booked Saturday");
     expect(payload.data.caller).toBe("+16025551234");
+    // occurred_at follows the cursor column: when the call ENDED, not when
+    // the transcript row was created at call start.
+    expect(payload.occurred_at).toBe("2026-07-01T00:01:50Z");
+  });
+
+  it("falls back to created_at for occurred_at when the cursor column is absent", () => {
+    const payload = buildWebhookPayload("call.completed", {
+      id: "row-3b",
+      created_at: "2026-07-01T00:02:00Z",
+      business_id: "biz-1"
+    });
+    expect(payload.occurred_at).toBe("2026-07-01T00:02:00Z");
   });
 
   it("shapes email.inbound and nulls missing fields", () => {

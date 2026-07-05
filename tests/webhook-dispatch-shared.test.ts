@@ -390,17 +390,21 @@ describe("runWebhookDispatchTick", () => {
 
   it("contains per-subscription errors so one broken source doesn't block the rest", async () => {
     const log = vi.fn();
-    const { db } = makeTickDb({
+    const { db, updates } = makeTickDb({
       subs: [SUB, { ...SUB, id: "hook-2" }],
       rowsError: { message: "source table gone" }
     });
     const summary = await runWebhookDispatchTick(db, fetchReturning(), log);
     expect(summary.failures).toBe(2);
     expect(log).toHaveBeenCalledTimes(2);
+    // The claimed lease is released (best-effort) so both hooks are
+    // claimable next tick instead of stalling out the lease window.
+    // Nothing was dispatched, so no cursor rides along.
+    expect(outcomePatches(updates)).toEqual([{ locked_until: null }, { locked_until: null }]);
   });
 
-  it("counts a failed subscription-row update as a contained failure", async () => {
-    const { db } = makeTickDb({
+  it("counts a failed subscription-row update as a contained failure and salvages the cursor", async () => {
+    const { db, updates } = makeTickDb({
       subs: [SUB],
       rows: [row("a", "2026-07-01T00:01:00Z")],
       updateError: { message: "update lost" }
@@ -409,6 +413,90 @@ describe("runWebhookDispatchTick", () => {
     const summary = await runWebhookDispatchTick(db, fetchReturning(200));
     expect(summary.delivered).toBe(1);
     expect(summary.failures).toBe(1);
+    // The rows were already POSTed, so the cleanup write retries persisting
+    // the advanced cursor — otherwise the next tick would replay them.
+    expect(outcomePatches(updates)).toEqual([
+      {
+        locked_until: null,
+        last_cursor: "2026-07-01T00:01:00Z",
+        last_cursor_id: "a",
+        consecutive_failures: 0
+      },
+      {
+        locked_until: null,
+        last_cursor: "2026-07-01T00:01:00Z",
+        last_cursor_id: "a"
+      }
+    ]);
+  });
+
+  it("logs when the lease cleanup write reports an error (updateError hits both writes)", async () => {
+    const log = vi.fn();
+    const { db } = makeTickDb({
+      subs: [SUB],
+      rows: [row("a", "2026-07-01T00:01:00Z")],
+      updateError: { message: "update lost" }
+    });
+    await runWebhookDispatchTick(db, fetchReturning(200), log);
+    expect(log).toHaveBeenCalledWith(
+      "webhook dispatch: subscription tick failed",
+      expect.objectContaining({ error: "subscription update failed: update lost" })
+    );
+    expect(log).toHaveBeenCalledWith(
+      "webhook dispatch: lease cleanup failed (lease will expire)",
+      expect.objectContaining({ subscriptionId: "hook-1", error: "update lost" })
+    );
+  });
+
+  it("logs when the lease cleanup write throws (Error and non-Error)", async () => {
+    const log = vi.fn();
+    let updateCalls = 0;
+    const db = {
+      from: vi.fn((table: string) => {
+        if (table === "webhook_subscriptions") {
+          return {
+            select: vi.fn(() => ({
+              eq: vi.fn(() =>
+                Promise.resolve({ data: [SUB, { ...SUB, id: "hook-2" }], error: null })
+              )
+            })),
+            update: vi.fn(() => ({
+              eq: vi.fn(() => {
+                updateCalls += 1;
+                // Odd calls are the lease-claim chain; even calls are the
+                // cleanup writes, which throw alternating Error/non-Error.
+                if (updateCalls % 2 === 1) {
+                  return {
+                    or: vi.fn(() => ({
+                      select: vi.fn(() =>
+                        Promise.resolve({ data: [{ id: "hook-1" }], error: null })
+                      )
+                    }))
+                  };
+                }
+                if (updateCalls === 2) throw new Error("cleanup blew up");
+                throw "cleanup string blowup";
+              })
+            }))
+          };
+        }
+        return {
+          select: vi.fn(() => {
+            throw new Error("source down");
+          })
+        };
+      })
+    } as unknown as SupabaseLike;
+    const summary = await runWebhookDispatchTick(db, fetchReturning(), log);
+    expect(summary.failures).toBe(2);
+    expect(log).toHaveBeenCalledWith(
+      "webhook dispatch: lease cleanup failed (lease will expire)",
+      expect.objectContaining({ error: "cleanup blew up" })
+    );
+    expect(log).toHaveBeenCalledWith(
+      "webhook dispatch: lease cleanup failed (lease will expire)",
+      expect.objectContaining({ error: "cleanup string blowup" })
+    );
   });
 
   it("treats null data from both queries as empty result sets", async () => {
@@ -453,13 +541,18 @@ describe("runWebhookDispatchTick", () => {
       last_cursor_id: "call-1",
       consecutive_failures: 0
     });
-    expect(orCalls[0]).toContain("ended_at.eq.2026-07-01T00:00:00Z");
     expect(filterCalls[0]).toEqual(["ended_at", "not.is", "null"]);
-    // Readiness gate: summarized OR grace elapsed.
+    // ONE combined or param: the readiness gate (summarized OR grace elapsed)
+    // is nested inside each tuple-cursor branch. A second .or() call would
+    // replace the cursor filter in PostgREST rather than AND with it.
     const graceCutoff = new Date(
       nowMs - CALL_SUMMARY_GRACE_MINUTES * 60_000
     ).toISOString();
-    expect(orCalls[1]).toBe(`summarized_at.not.is.null,ended_at.lt.${graceCutoff}`);
+    const ready = `or(summarized_at.not.is.null,ended_at.lt.${graceCutoff})`;
+    expect(orCalls).toEqual([
+      `and(ended_at.eq.2026-07-01T00:00:00Z,id.gt.${NIL_UUID},${ready}),` +
+        `and(ended_at.gt.2026-07-01T00:00:00Z,${ready})`
+    ]);
   });
 
   it("logs a non-Error subscription failure via String(err)", async () => {

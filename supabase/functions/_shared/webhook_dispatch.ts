@@ -115,7 +115,6 @@ type QueryResult = PromiseLike<{ data: unknown; error: { message: string } | nul
 
 type SourceQuery = QueryResult & {
   filter(col: string, op: string, val: unknown): SourceQuery;
-  or(filters: string): SourceQuery;
 };
 
 export type SupabaseLike = {
@@ -190,6 +189,10 @@ export async function runWebhookDispatchTick(
   summary.subscriptions = subs.length;
 
   for (const sub of subs) {
+    // Tracked across the try so the catch can undo a claimed lease and
+    // salvage a delivered-but-unpersisted cursor (see the catch block).
+    let leaseClaimed = false;
+    let outcome: DispatchResult | null = null;
     try {
       // Claim the dispatch lease (CAS on locked_until). Row-level locking
       // serializes concurrent updates, so exactly one overlapping tick's
@@ -207,25 +210,32 @@ export async function runWebhookDispatchTick(
       if (((claimRaw as { id: string }[] | null) ?? []).length === 0) {
         continue; // another tick holds the lease
       }
+      leaseClaimed = true;
 
       const source = WEBHOOK_EVENT_SOURCES[sub.event];
       const col = source.cursorColumn;
       const cursorId = sub.last_cursor_id || NIL_UUID;
+      // Tuple cursor: strictly-later timestamp, OR same timestamp with a
+      // later id — never skips a row that shares the cursor's timestamp.
+      // The readiness condition (when present) is NESTED inside each branch
+      // rather than added as a second .or(): PostgREST treats `or` as a
+      // single query param, so a second .or() would REPLACE the cursor
+      // filter instead of ANDing with it (Bugbot: "Second or drops cursor
+      // filter"). One combined expression keeps both.
+      const ready = source.readyOr ? `,or(${source.readyOr(nowMs)})` : "";
+      const cursorOr = ready
+        ? `and(${col}.eq.${sub.last_cursor},id.gt.${cursorId}${ready}),and(${col}.gt.${sub.last_cursor}${ready})`
+        : `and(${col}.eq.${sub.last_cursor},id.gt.${cursorId}),${col}.gt.${sub.last_cursor}`;
       let query = db
         .from(source.table)
         .select(source.select)
         .eq("business_id", sub.business_id)
-        // Tuple cursor: strictly-later timestamp, OR same timestamp with a
-        // later id — never skips a row that shares the cursor's timestamp.
-        .or(`and(${col}.eq.${sub.last_cursor},id.gt.${cursorId}),${col}.gt.${sub.last_cursor}`)
+        .or(cursorOr)
         .order(col, { ascending: true })
         .order("id", { ascending: true })
         .limit(MAX_ROWS_PER_TICK);
       if (source.filter) {
         query = query.filter(source.filter[0], source.filter[1], source.filter[2]);
-      }
-      if (source.readyOr) {
-        query = query.or(source.readyOr(nowMs));
       }
       const { data: rowsRaw, error: rowsErr } = await query;
       if (rowsErr) {
@@ -239,19 +249,19 @@ export async function runWebhookDispatchTick(
         continue;
       }
 
-      const result = await dispatchRows(sub, rows, col, fetchImpl);
-      summary.delivered += result.delivered;
+      outcome = await dispatchRows(sub, rows, col, fetchImpl);
+      summary.delivered += outcome.delivered;
 
       // Release the lease with the same write that persists the outcome.
       const patch: Record<string, unknown> = { locked_until: null };
-      if (result.newCursor) {
-        patch.last_cursor = result.newCursor.ts;
-        patch.last_cursor_id = result.newCursor.id;
+      if (outcome.newCursor) {
+        patch.last_cursor = outcome.newCursor.ts;
+        patch.last_cursor_id = outcome.newCursor.id;
       }
-      if (result.gone) {
+      if (outcome.gone) {
         patch.active = false;
         summary.deactivated += 1;
-      } else if (result.failed) {
+      } else if (outcome.failed) {
         const failures = sub.consecutive_failures + 1;
         patch.consecutive_failures = failures;
         summary.failures += 1;
@@ -277,6 +287,36 @@ export async function runWebhookDispatchTick(
         event: sub.event,
         error: err instanceof Error ? err.message : String(err)
       });
+      if (leaseClaimed) {
+        // Best-effort cleanup: release the lease so the hook isn't dead for
+        // the full lease window, and — critically — persist any cursor we
+        // DID advance. Rows were already POSTed, so losing the cursor here
+        // would replay them to the consumer next tick (Bugbot: "Persist
+        // failure duplicates webhooks"). If this write also fails, the
+        // lease expires on its own and consumers dedupe on payload `id`.
+        try {
+          const fallback: Record<string, unknown> = { locked_until: null };
+          if (outcome?.newCursor) {
+            fallback.last_cursor = outcome.newCursor.ts;
+            fallback.last_cursor_id = outcome.newCursor.id;
+          }
+          const { error: cleanupErr } = await db
+            .from("webhook_subscriptions")
+            .update(fallback)
+            .eq("id", sub.id);
+          if (cleanupErr) {
+            log("webhook dispatch: lease cleanup failed (lease will expire)", {
+              subscriptionId: sub.id,
+              error: cleanupErr.message
+            });
+          }
+        } catch (cleanupErr) {
+          log("webhook dispatch: lease cleanup failed (lease will expire)", {
+            subscriptionId: sub.id,
+            error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)
+          });
+        }
+      }
     }
   }
 

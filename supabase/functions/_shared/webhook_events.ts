@@ -103,8 +103,9 @@ export const WEBHOOK_EVENT_SOURCES: Record<WebhookEventType, WebhookEventSource>
 };
 
 /**
- * The dispatcher orders + cursors on `created_at` for every source, so a
- * generic row just needs id/created_at plus whatever the mapper reads.
+ * The dispatcher orders + cursors on each source's `cursorColumn`
+ * (created_at for most, ended_at for call.completed); a generic row just
+ * needs id/created_at plus whatever the mapper reads.
  */
 export type WebhookSourceRow = {
   id: string;
@@ -151,7 +152,12 @@ export function buildWebhookPayload(
     event,
     business_id: str(row, "business_id") ?? "",
     id: row.id,
-    occurred_at: row.created_at
+    // occurred_at follows the event's cursor column: created_at for most
+    // sources, but ended_at for call.completed — transcript rows are created
+    // at call START, and consumers read occurred_at as "when the call
+    // finished" (Bugbot: "Call completed wrong timestamp").
+    occurred_at:
+      str(row, WEBHOOK_EVENT_SOURCES[event].cursorColumn) ?? row.created_at
   };
   switch (event) {
     case "sms.inbound":
