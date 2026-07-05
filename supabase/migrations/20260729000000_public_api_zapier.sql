@@ -51,6 +51,11 @@ create table public.webhook_subscriptions (
   last_cursor timestamptz not null default now(),
   last_cursor_id uuid not null default '00000000-0000-0000-0000-000000000000',
   consecutive_failures integer not null default 0,
+  -- Dispatch lease: a tick claims the subscription by setting this into the
+  -- future and releases it (null) with the cursor update. An overlapping
+  -- cron run finds the lease held and skips, so the same rows are never
+  -- POSTed twice; a crashed tick's lease simply expires.
+  locked_until timestamptz,
   api_key_id uuid references public.api_keys(id) on delete set null,
   created_at timestamptz not null default now()
 );

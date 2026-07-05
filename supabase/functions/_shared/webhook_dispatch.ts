@@ -38,6 +38,15 @@ export const MAX_ROWS_PER_TICK = 25;
 /** Initial last_cursor_id — sorts before every real uuid. */
 export const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 
+/**
+ * Dispatch lease duration. A tick claims a subscription by CAS-ing
+ * `locked_until` into the future, so an overlapping cron run (slow previous
+ * tick, double fire) skips it instead of double-POSTing the same rows. Twice
+ * the cron cadence: covers the 50s http timeout with room, while a crashed
+ * tick's lease expires after one skipped minute.
+ */
+export const DISPATCH_LEASE_MS = 120_000;
+
 export type DispatchSubscription = {
   id: string;
   business_id: string;
@@ -129,7 +138,14 @@ export type SupabaseLike = {
       };
     };
     update(patch: Record<string, unknown>): {
-      eq(col: string, val: unknown): PromiseLike<{ error: { message: string } | null }>;
+      eq(
+        col: string,
+        val: unknown
+      ): PromiseLike<{ error: { message: string } | null }> & {
+        or(filters: string): {
+          select(columns: string): QueryResult;
+        };
+      };
     };
   };
 };
@@ -175,6 +191,23 @@ export async function runWebhookDispatchTick(
 
   for (const sub of subs) {
     try {
+      // Claim the dispatch lease (CAS on locked_until). Row-level locking
+      // serializes concurrent updates, so exactly one overlapping tick's
+      // WHERE still matches — the loser sees zero rows and skips, which is
+      // what prevents double-POSTing the same events.
+      const { data: claimRaw, error: claimErr } = await db
+        .from("webhook_subscriptions")
+        .update({ locked_until: new Date(nowMs + DISPATCH_LEASE_MS).toISOString() })
+        .eq("id", sub.id)
+        .or(`locked_until.is.null,locked_until.lt.${new Date(nowMs).toISOString()}`)
+        .select("id");
+      if (claimErr) {
+        throw new Error(`lease claim failed: ${claimErr.message}`);
+      }
+      if (((claimRaw as { id: string }[] | null) ?? []).length === 0) {
+        continue; // another tick holds the lease
+      }
+
       const source = WEBHOOK_EVENT_SOURCES[sub.event];
       const col = source.cursorColumn;
       const cursorId = sub.last_cursor_id || NIL_UUID;
@@ -199,12 +232,18 @@ export async function runWebhookDispatchTick(
         throw new Error(`source query failed: ${rowsErr.message}`);
       }
       const rows = (rowsRaw as WebhookSourceRow[] | null) ?? [];
-      if (rows.length === 0) continue;
+      if (rows.length === 0) {
+        // Nothing to deliver — release the lease immediately so the next
+        // tick isn't blocked for the full lease duration.
+        await db.from("webhook_subscriptions").update({ locked_until: null }).eq("id", sub.id);
+        continue;
+      }
 
       const result = await dispatchRows(sub, rows, col, fetchImpl);
       summary.delivered += result.delivered;
 
-      const patch: Record<string, unknown> = {};
+      // Release the lease with the same write that persists the outcome.
+      const patch: Record<string, unknown> = { locked_until: null };
       if (result.newCursor) {
         patch.last_cursor = result.newCursor.ts;
         patch.last_cursor_id = result.newCursor.id;

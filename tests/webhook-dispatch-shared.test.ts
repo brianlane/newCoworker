@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  DISPATCH_LEASE_MS,
   MAX_CONSECUTIVE_FAILURES,
   NIL_UUID,
   dispatchRows,
@@ -133,18 +134,24 @@ type TickDbOptions = {
   rows?: unknown[] | null;
   rowsError?: { message: string } | null;
   updateError?: { message: string } | null;
+  /** Lease-claim outcomes per attempt: false = denied ([]), null = null data. */
+  claims?: (boolean | null)[];
+  claimError?: { message: string } | null;
 };
 
 /**
  * Structural fake matching SupabaseLike: records update patches and source
- * query calls (or/filter/order args) so tests can assert on cursor
- * bookkeeping and query construction.
+ * query calls (or/filter/order args) so tests can assert on cursor and
+ * lease bookkeeping and query construction. Lease claims are the updates
+ * whose patch sets a non-null `locked_until`; they resolve through
+ * `.eq().or().select()` and succeed unless `claims` says otherwise.
  */
 function makeTickDb(opts: TickDbOptions) {
   const updates: Record<string, unknown>[] = [];
   const orCalls: string[] = [];
   const filterCalls: unknown[][] = [];
   const orderCalls: unknown[][] = [];
+  let claimAttempt = 0;
 
   const db = {
     from: vi.fn((table: string) => {
@@ -160,8 +167,29 @@ function makeTickDb(opts: TickDbOptions) {
           })),
           update: vi.fn((patch: Record<string, unknown>) => {
             updates.push(patch);
+            const cursorResult = Promise.resolve({ error: opts.updateError ?? null });
             return {
-              eq: vi.fn(() => Promise.resolve({ error: opts.updateError ?? null }))
+              eq: vi.fn(() =>
+                Object.assign(
+                  {
+                    or: vi.fn(() => ({
+                      select: vi.fn(() => {
+                        const granted =
+                          opts.claims === undefined || opts.claims[claimAttempt] === undefined
+                            ? true
+                            : opts.claims[claimAttempt];
+                        claimAttempt += 1;
+                        return Promise.resolve({
+                          data:
+                            granted === null ? null : granted ? [{ id: "hook-1" }] : [],
+                          error: opts.claimError ?? null
+                        });
+                      })
+                    }))
+                  },
+                  { then: cursorResult.then.bind(cursorResult) }
+                )
+              )
             };
           })
         };
@@ -207,6 +235,16 @@ function makeTickDb(opts: TickDbOptions) {
   return { db: db as unknown as SupabaseLike, updates, orCalls, filterCalls, orderCalls };
 }
 
+/** Lease-claim patches (locked_until set into the future). */
+function claimPatches(updates: Record<string, unknown>[]) {
+  return updates.filter((u) => typeof u.locked_until === "string");
+}
+
+/** Outcome patches (cursor/failure/active writes, lease released). */
+function outcomePatches(updates: Record<string, unknown>[]) {
+  return updates.filter((u) => typeof u.locked_until !== "string");
+}
+
 describe("runWebhookDispatchTick", () => {
   it("throws when the subscriptions query fails", async () => {
     const { db } = makeTickDb({ subsError: { message: "db down" } });
@@ -226,7 +264,49 @@ describe("runWebhookDispatchTick", () => {
     const summary = await runWebhookDispatchTick(noRows.db, fetchReturning());
     expect(summary.subscriptions).toBe(1);
     expect(summary.delivered).toBe(0);
-    expect(noRows.updates).toHaveLength(0);
+    // One lease claim, then an immediate lease release — no cursor write.
+    expect(claimPatches(noRows.updates)).toHaveLength(1);
+    expect(outcomePatches(noRows.updates)).toEqual([{ locked_until: null }]);
+  });
+
+  it("claims a lease before dispatching and skips subscriptions another tick holds", async () => {
+    const nowMs = Date.parse("2026-07-01T01:00:00Z");
+    const denied = makeTickDb({
+      subs: [SUB],
+      rows: [row("a", "2026-07-01T00:01:00Z")],
+      claims: [false]
+    });
+    const summary = await runWebhookDispatchTick(denied.db, fetchReturning(200), undefined, nowMs);
+    // Lease held elsewhere: nothing delivered, no cursor/failure writes.
+    expect(summary.delivered).toBe(0);
+    expect(summary.failures).toBe(0);
+    expect(outcomePatches(denied.updates)).toHaveLength(0);
+    // The claim CAS sets locked_until = now + lease.
+    expect(claimPatches(denied.updates)).toEqual([
+      { locked_until: new Date(nowMs + DISPATCH_LEASE_MS).toISOString() }
+    ]);
+  });
+
+  it("treats null claim data as a denied lease", async () => {
+    const { db, updates } = makeTickDb({
+      subs: [SUB],
+      rows: [row("a", "2026-07-01T00:01:00Z")],
+      claims: [null]
+    });
+    const summary = await runWebhookDispatchTick(db, fetchReturning(200));
+    expect(summary.delivered).toBe(0);
+    expect(outcomePatches(updates)).toHaveLength(0);
+  });
+
+  it("treats a lease-claim error as a contained failure", async () => {
+    const { db } = makeTickDb({
+      subs: [SUB],
+      rows: [row("a", "2026-07-01T00:01:00Z")],
+      claimError: { message: "claim db down" }
+    });
+    const summary = await runWebhookDispatchTick(db, fetchReturning(200));
+    expect(summary.delivered).toBe(0);
+    expect(summary.failures).toBe(1);
   });
 
   it("queries with the tuple cursor (same-timestamp id tiebreak) and (cursor, id) ordering", async () => {
@@ -259,8 +339,9 @@ describe("runWebhookDispatchTick", () => {
     });
     const summary = await runWebhookDispatchTick(db, fetchReturning(200));
     expect(summary.delivered).toBe(1);
-    expect(updates).toEqual([
+    expect(outcomePatches(updates)).toEqual([
       {
+        locked_until: null,
         last_cursor: "2026-07-01T00:01:00Z",
         last_cursor_id: "a",
         consecutive_failures: 0
@@ -275,7 +356,7 @@ describe("runWebhookDispatchTick", () => {
     });
     const summary = await runWebhookDispatchTick(db, fetchReturning(410));
     expect(summary.deactivated).toBe(1);
-    expect(updates[0]).toEqual({ active: false });
+    expect(outcomePatches(updates)[0]).toEqual({ locked_until: null, active: false });
   });
 
   it("increments the failure counter without deactivating below the cap", async () => {
@@ -286,7 +367,10 @@ describe("runWebhookDispatchTick", () => {
     const summary = await runWebhookDispatchTick(db, fetchReturning(500));
     expect(summary.failures).toBe(1);
     expect(summary.deactivated).toBe(0);
-    expect(updates[0]).toEqual({ consecutive_failures: 1 });
+    expect(outcomePatches(updates)[0]).toEqual({
+      locked_until: null,
+      consecutive_failures: 1
+    });
   });
 
   it("increments the failure counter and deactivates at the cap", async () => {
@@ -297,7 +381,8 @@ describe("runWebhookDispatchTick", () => {
     const summary = await runWebhookDispatchTick(nearCap.db, fetchReturning(500));
     expect(summary.failures).toBe(1);
     expect(summary.deactivated).toBe(1);
-    expect(nearCap.updates[0]).toEqual({
+    expect(outcomePatches(nearCap.updates)[0]).toEqual({
+      locked_until: null,
       consecutive_failures: MAX_CONSECUTIVE_FAILURES,
       active: false
     });
@@ -362,7 +447,8 @@ describe("runWebhookDispatchTick", () => {
     const summary = await runWebhookDispatchTick(db, fetchReturning(200), undefined, nowMs);
     expect(summary.delivered).toBe(1);
     // Cursor tuple uses ended_at + id.
-    expect(updates[0]).toEqual({
+    expect(outcomePatches(updates)[0]).toEqual({
+      locked_until: null,
       last_cursor: "2026-07-01T00:05:50Z",
       last_cursor_id: "call-1",
       consecutive_failures: 0
@@ -384,6 +470,15 @@ describe("runWebhookDispatchTick", () => {
           return {
             select: vi.fn(() => ({
               eq: vi.fn(() => Promise.resolve({ data: [SUB], error: null }))
+            })),
+            update: vi.fn(() => ({
+              eq: vi.fn(() => ({
+                or: vi.fn(() => ({
+                  select: vi.fn(() =>
+                    Promise.resolve({ data: [{ id: SUB.id }], error: null })
+                  )
+                }))
+              }))
             }))
           };
         }
