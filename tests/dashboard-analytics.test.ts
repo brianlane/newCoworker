@@ -38,7 +38,7 @@ function makeChain(result: QueryResult) {
 function makeClient(resultsByTable: Record<string, QueryResult>) {
   const chains: Record<string, ReturnType<typeof makeChain>> = {};
   const from = vi.fn((table: string) => {
-    chains[table] = makeChain(resultsByTable[table]);
+    chains[table] = makeChain(resultsByTable[table] ?? { data: [], count: 0, error: null });
     return chains[table];
   });
   return { client: { from } as never, from, chains };
@@ -118,7 +118,7 @@ describe("hourInTimeZone", () => {
 });
 
 describe("getInboundCallStats", () => {
-  it("builds the hour histogram and sentiment mix in one scan", async () => {
+  it("builds the hour histogram (answered + turned away) and sentiment mix", async () => {
     const { client, chains } = makeClient({
       voice_call_transcripts: {
         data: [
@@ -129,27 +129,38 @@ describe("getInboundCallStats", () => {
           { started_at: "2026-07-03T17:30:00Z", sentiment: "confused" }
         ],
         error: null
+      },
+      // Turned-away attempts land in the histogram too — a rush of refusals
+      // is the peak-hours signal that matters most.
+      system_logs: {
+        data: [{ created_at: "2026-07-04T09:50:00Z" }, { created_at: "2026-07-02T08:00:00Z" }],
+        error: null
       }
     });
 
     const stats = await getInboundCallStats("biz-1", { client, now: NOW });
 
-    expect(stats.callCount).toBe(4);
-    expect(stats.hourBuckets[9]).toBe(2);
+    expect(stats.callCount).toBe(6);
+    expect(stats.hourBuckets[9]).toBe(3);
     expect(stats.hourBuckets[17]).toBe(2);
-    expect(stats.hourBuckets.reduce((a, b) => a + b, 0)).toBe(4);
+    expect(stats.hourBuckets[8]).toBe(1);
+    expect(stats.hourBuckets.reduce((a, b) => a + b, 0)).toBe(6);
     expect(stats.sentiment).toEqual({ positive: 1, neutral: 0, negative: 1, mixed: 0 });
     expect(stats.sentimentTotal).toBe(2);
-    const chain = chains.voice_call_transcripts as {
+    const expectedCutoff = analyticsWindowStart(NOW, ANALYTICS_WINDOW_DAYS).toISOString();
+    const transcripts = chains.voice_call_transcripts as {
       limit: ReturnType<typeof vi.fn>;
       gte: ReturnType<typeof vi.fn>;
     };
-    expect(chain.limit).toHaveBeenCalledWith(ANALYTICS_CALL_SCAN_LIMIT);
+    const logs = chains.system_logs as {
+      limit: ReturnType<typeof vi.fn>;
+      gte: ReturnType<typeof vi.fn>;
+    };
+    expect(transcripts.limit).toHaveBeenCalledWith(ANALYTICS_CALL_SCAN_LIMIT);
+    expect(logs.limit).toHaveBeenCalledWith(ANALYTICS_CALL_SCAN_LIMIT);
     // Same day-aligned boundary as the volume series (30 inclusive UTC days).
-    expect(chain.gte).toHaveBeenCalledWith(
-      "started_at",
-      analyticsWindowStart(NOW, ANALYTICS_WINDOW_DAYS).toISOString()
-    );
+    expect(transcripts.gte).toHaveBeenCalledWith("started_at", expectedCutoff);
+    expect(logs.gte).toHaveBeenCalledWith("created_at", expectedCutoff);
   });
 
   it("applies the business timezone to the histogram", async () => {
@@ -167,19 +178,32 @@ describe("getInboundCallStats", () => {
     expect(stats.hourBuckets[12]).toBe(1);
   });
 
-  it("handles a null data payload", async () => {
-    const { client } = makeClient({ voice_call_transcripts: { data: null, error: null } });
+  it("handles null data payloads from both scans", async () => {
+    const { client } = makeClient({
+      voice_call_transcripts: { data: null, error: null },
+      system_logs: { data: null, error: null }
+    });
     const stats = await getInboundCallStats("biz-1", { client, now: NOW });
     expect(stats.callCount).toBe(0);
     expect(stats.sentimentTotal).toBe(0);
   });
 
-  it("throws on query error", async () => {
+  it("throws on transcript scan error", async () => {
     const { client } = makeClient({
       voice_call_transcripts: { data: null, error: { message: "scan down" } }
     });
     await expect(getInboundCallStats("biz-1", { client, now: NOW })).rejects.toThrow(
       "getInboundCallStats: scan down"
+    );
+  });
+
+  it("throws on blocked-call scan error", async () => {
+    const { client } = makeClient({
+      voice_call_transcripts: { data: [], error: null },
+      system_logs: { data: null, error: { message: "logs down" } }
+    });
+    await expect(getInboundCallStats("biz-1", { client, now: NOW })).rejects.toThrow(
+      "getInboundCallStats blocked: logs down"
     );
   });
 

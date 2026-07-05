@@ -144,9 +144,9 @@ export const CALL_SENTIMENT_KEYS: VoiceCallSentiment[] = [
 ];
 
 export type InboundCallStats = {
-  /** Calls started per hour-of-day (24 buckets) in the given timezone. */
+  /** Inbound call attempts per hour-of-day (24 buckets) in the given timezone. */
   hourBuckets: number[];
-  /** Inbound calls scanned for the histogram (≤ ANALYTICS_CALL_SCAN_LIMIT). */
+  /** Inbound attempts in the histogram: answered + turned away (≤ 2 × scan limit). */
   callCount: number;
   /** Sentiment mix across summarized calls in the window (perk3 output). */
   sentiment: Record<VoiceCallSentiment, number>;
@@ -154,8 +154,14 @@ export type InboundCallStats = {
 };
 
 /**
- * One scan of the window's inbound transcripts feeds two cards: the
- * peak-hours histogram and the caller-sentiment mix.
+ * One scan of the window's inbound activity feeds two cards: the peak-hours
+ * histogram and the caller-sentiment mix.
+ *
+ * The histogram counts every inbound ATTEMPT — answered calls (transcript
+ * rows) plus turned-away calls (`voice_call_blocked` system_logs rows) —
+ * because "when do people call" is exactly the question refused calls answer
+ * loudest: a tenant whose morning rush is mostly refusals would otherwise see
+ * an empty histogram next to an answer-rate card reporting the misses.
  */
 export async function getInboundCallStats(
   businessId: string,
@@ -172,17 +178,32 @@ export async function getInboundCallStats(
   const now = opts.now ?? new Date();
   const cutoffIso = analyticsWindowStart(now, days).toISOString();
 
-  const { data, error } = await db
-    .from("voice_call_transcripts")
-    .select("started_at, sentiment")
-    .eq("business_id", businessId)
-    .eq("direction", "inbound")
-    .gte("started_at", cutoffIso)
-    .order("started_at", { ascending: false })
-    .limit(ANALYTICS_CALL_SCAN_LIMIT);
-  if (error) throw new Error(`getInboundCallStats: ${error.message}`);
+  const [answeredRes, blockedRes] = await Promise.all([
+    db
+      .from("voice_call_transcripts")
+      .select("started_at, sentiment")
+      .eq("business_id", businessId)
+      .eq("direction", "inbound")
+      .gte("started_at", cutoffIso)
+      .order("started_at", { ascending: false })
+      .limit(ANALYTICS_CALL_SCAN_LIMIT),
+    db
+      .from("system_logs")
+      .select("created_at")
+      .eq("business_id", businessId)
+      .eq("event", "voice_call_blocked")
+      .gte("created_at", cutoffIso)
+      .order("created_at", { ascending: false })
+      .limit(ANALYTICS_CALL_SCAN_LIMIT)
+  ]);
+  if (answeredRes.error) throw new Error(`getInboundCallStats: ${answeredRes.error.message}`);
+  if (blockedRes.error) {
+    throw new Error(`getInboundCallStats blocked: ${blockedRes.error.message}`);
+  }
 
-  const rows = (data as Array<{ started_at: string; sentiment: string | null }> | null) ?? [];
+  const rows =
+    (answeredRes.data as Array<{ started_at: string; sentiment: string | null }> | null) ?? [];
+  const blocked = (blockedRes.data as Array<{ created_at: string }> | null) ?? [];
   const hourBuckets = new Array<number>(24).fill(0);
   const sentiment: Record<VoiceCallSentiment, number> = {
     positive: 0,
@@ -198,7 +219,15 @@ export async function getInboundCallStats(
       sentimentTotal += 1;
     }
   }
-  return { hourBuckets, callCount: rows.length, sentiment, sentimentTotal };
+  for (const row of blocked) {
+    hourBuckets[hourInTimeZone(row.created_at, opts.timeZone)] += 1;
+  }
+  return {
+    hourBuckets,
+    callCount: rows.length + blocked.length,
+    sentiment,
+    sentimentTotal
+  };
 }
 
 export type AnswerRateStats = {

@@ -161,7 +161,8 @@ export function PeakHoursCard({
             <span>11pm</span>
           </div>
           <p className="text-xs text-parchment/40 mt-2">
-            {callCount.toLocaleString()} inbound calls · {timeZoneLabel}
+            {callCount.toLocaleString()} inbound call attempts (answered + turned away) ·{" "}
+            {timeZoneLabel}
           </p>
         </>
       )}
