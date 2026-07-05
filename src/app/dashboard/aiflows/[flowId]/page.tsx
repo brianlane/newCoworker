@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getAuthUser } from "@/lib/auth";
+import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getAiFlow, listAiFlowRuns } from "@/lib/ai-flows/db";
 import { summarizeDefinition } from "@/lib/ai-flows/schema";
@@ -19,11 +20,14 @@ export default async function AiFlowViewPage({ params }: Props) {
   if (!user) redirect(`/login?redirectTo=/dashboard/aiflows/${flowId}`);
   if (!user.email) redirect("/login");
 
+  // Admin view-as swaps in the impersonated tenant's owner email.
+  const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
+
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
     .select("id")
-    .eq("owner_email", user.email)
+    .eq("owner_email", ownerEmail)
     .order("created_at", { ascending: false })
     .limit(1);
   const businessId = businesses?.[0]?.id ?? null;

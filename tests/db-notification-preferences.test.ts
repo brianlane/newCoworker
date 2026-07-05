@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
+  defaultNotificationPreferencesRow,
   getNotificationPreferences,
   getOrCreateNotificationPreferences,
   initialNotificationPreferenceContactsFromSeeds,
@@ -32,6 +33,25 @@ const PREFS = {
 
 describe("db/notification-preferences", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("defaultNotificationPreferencesRow mirrors the first-insert defaults without writing", () => {
+    const row = defaultNotificationPreferencesRow("biz-1");
+    expect(row.business_id).toBe("biz-1");
+    expect(row.sms_urgent).toBe(true);
+    expect(row.email_digest).toBe(true);
+    expect(row.email_digest_weekly).toBe(true);
+    expect(row.email_urgent).toBe(true);
+    expect(row.dashboard_alerts).toBe(true);
+    expect(row.sms_warm_transfer).toBe(true);
+    expect(row.phone_number).toBeNull();
+    expect(row.alert_email).toBeNull();
+    expect(row.digest_email_daily).toBeNull();
+    expect(row.digest_email_weekly).toBeNull();
+    expect(row.unsubscribed_at).toBeNull();
+    expect(row.updated_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    // Pure in-memory helper: must never touch the DB.
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
 
   it("isUniqueViolation handles null and unique-constraint messages", () => {
     expect(isUniqueViolation(null)).toBe(false);

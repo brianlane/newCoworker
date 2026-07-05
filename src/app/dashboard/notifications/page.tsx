@@ -1,7 +1,10 @@
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
+import { resolveViewAsContext } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
+  defaultNotificationPreferencesRow,
+  getNotificationPreferences,
   getOrCreateNotificationPreferences,
   mergeNotificationContactsForDisplay
 } from "@/lib/db/notification-preferences";
@@ -23,26 +26,43 @@ export default async function NotificationsPage() {
   if (!user) redirect("/login?redirectTo=/dashboard/notifications");
   if (!user.email) redirect("/login");
 
+  // Admin view-as swaps in the impersonated tenant's owner email. While
+  // impersonating, the signed-in admin's own email/phone must NOT leak into
+  // the tenant's contact seeds or the display autofill below.
+  const viewAsCtx = await resolveViewAsContext(user);
+  const ownerEmail = viewAsCtx.ownerEmail ?? user.email;
+  const seedUserEmail = viewAsCtx.viewAs ? ownerEmail : user.email;
+  const seedAuthPhone = viewAsCtx.viewAs ? null : (user.phone ?? null);
+
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
     .select("id, owner_email, phone")
-    .eq("owner_email", user.email)
+    .eq("owner_email", ownerEmail)
     .limit(1);
 
   const businessRow = businesses?.[0] ?? null;
   const businessId = businessRow?.id ?? null;
 
+  // View-as stays strictly read-only: it must not create the tenant's default
+  // preference row as a page-load side effect. When the tenant has never
+  // visited this page (no row yet), render the same in-memory defaults the
+  // owner's first visit would insert, so the admin still previews the real
+  // page instead of a bogus "provision your coworker" empty state. Real
+  // owners keep the create-on-first-visit behavior.
   const prefs =
     businessId && businessRow
-      ? await getOrCreateNotificationPreferences(businessId, {
-          contactSeeds: {
-            userEmail: user.email,
-            authPhone: user.phone ?? null,
-            ownerEmail: businessRow.owner_email ?? null,
-            businessPhone: businessRow.phone ?? null
-          }
-        })
+      ? viewAsCtx.viewAs
+        ? ((await getNotificationPreferences(businessId)) ??
+          defaultNotificationPreferencesRow(businessId))
+        : await getOrCreateNotificationPreferences(businessId, {
+            contactSeeds: {
+              userEmail: seedUserEmail,
+              authPhone: seedAuthPhone,
+              ownerEmail: businessRow.owner_email ?? null,
+              businessPhone: businessRow.phone ?? null
+            }
+          })
       : null;
   // Display-only autofill: prefill the alert phone/email inputs from the
   // owner's account + business contact info when the stored prefs are still
@@ -52,8 +72,8 @@ export default async function NotificationsPage() {
       ? {
           ...prefs,
           ...mergeNotificationContactsForDisplay(prefs, {
-            userEmail: user.email,
-            authPhone: user.phone ?? null,
+            userEmail: seedUserEmail,
+            authPhone: seedAuthPhone,
             ownerEmail: businessRow.owner_email ?? null,
             businessPhone: businessRow.phone ?? null
           })

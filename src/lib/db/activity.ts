@@ -25,6 +25,8 @@ export type ActivityKind =
   | "call"
   | "sms_inbound"
   | "sms_outbound"
+  | "email_inbound"
+  | "email_outbound"
   | "chat"
   | "aiflow"
   | "customer"
@@ -72,6 +74,16 @@ export type ActivityChatRow = {
   created_at: string;
 };
 
+/** One `email_log` row: coworker email activity (AiFlow sends, assistant
+ * sends, trigger emails, tenant mailbox traffic). */
+export type ActivityEmailRow = {
+  direction: "outbound" | "inbound";
+  to_email: string | null;
+  from_email: string | null;
+  subject: string | null;
+  created_at: string;
+};
+
 export type ActivityFlowRow = {
   /** The run id — deep-links the feed item straight to this run's detail. */
   id: string;
@@ -99,6 +111,7 @@ export type ActivityFeedInput = {
   smsInbound: ActivitySmsInboundRow[];
   smsReplies: ActivitySmsReplyRow[];
   smsOutbound: ActivitySmsOutboundRow[];
+  emails: ActivityEmailRow[];
   chat: ActivityChatRow[];
   flows: ActivityFlowRow[];
   customers: ActivityCustomerRow[];
@@ -190,6 +203,19 @@ export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
       kind: "sms_outbound",
       label: `Text to ${named(r.to_e164)}`,
       href: `/dashboard/messages/${encodeURIComponent(r.to_e164)}`,
+      at: r.created_at
+    });
+  });
+
+  input.emails.forEach((r, i) => {
+    const inbound = r.direction === "inbound";
+    const who = (inbound ? r.from_email : r.to_email) ?? "unknown address";
+    const subject = r.subject?.trim() ? ` — “${r.subject.trim()}”` : "";
+    items.push({
+      id: `email:${i}:${r.created_at}`,
+      kind: inbound ? "email_inbound" : "email_outbound",
+      label: `${inbound ? "Email from" : "Email to"} ${who}${subject}`,
+      href: "/dashboard/emails",
       at: r.created_at
     });
   });
@@ -299,12 +325,28 @@ export const DEFAULT_ACTIVITY_LIMIT = 10;
 export const ACTIVITY_FEED_MAX = 200;
 
 /**
- * How far back the feed looks. Bounding the window keeps "Recent Activity"
- * actually recent — without it, a long-idle business would surface months-old
- * rows (e.g. a stale `customer_memories` row mislabeled "New customer").
- * Mirrors the digest's windowed aggregation.
+ * How far back the feed looks, by tier. Bounding the window keeps "Recent
+ * Activity" actually recent — without it, a long-idle business would surface
+ * months-old rows (e.g. a stale `customer_memories` row mislabeled "New
+ * customer").
+ *
+ * Tier relaunch decision (Jul 2026): activity history depth is a Standard/
+ * Enterprise perk. Starter keeps the week-at-a-glance view (7 days); Standard
+ * and Enterprise get a full quarter (90 days). This is a VIEW window only —
+ * nothing is deleted, so an upgrade instantly reveals the older history.
  */
+export const ACTIVITY_WINDOW_DAYS_STARTER = 7;
+export const ACTIVITY_WINDOW_DAYS_STANDARD = 90;
+
+/** Legacy default window, kept for callers that don't pass a tier. */
 export const ACTIVITY_WINDOW_DAYS = 30;
+
+/** Resolve the feed window for a tier (unknown/null tiers get the legacy 30). */
+export function activityWindowDays(tier: string | null | undefined): number {
+  if (tier === "starter") return ACTIVITY_WINDOW_DAYS_STARTER;
+  if (tier === "standard" || tier === "enterprise") return ACTIVITY_WINDOW_DAYS_STANDARD;
+  return ACTIVITY_WINDOW_DAYS;
+}
 
 /**
  * Fetch every activity source for a business, bounded to the last
@@ -317,11 +359,12 @@ export const ACTIVITY_WINDOW_DAYS = 30;
 async function fetchActivityFeedInput(
   businessId: string,
   limit: number,
-  db: SupabaseClient
+  db: SupabaseClient,
+  windowDays: number = ACTIVITY_WINDOW_DAYS
 ): Promise<ActivityFeedInput> {
-  const since = new Date(Date.now() - ACTIVITY_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
 
-  const [callsRes, smsInRes, smsReplyRes, smsOutRes, chatRes, flowsRes, custRes, alertRes] =
+  const [callsRes, smsInRes, smsReplyRes, smsOutRes, emailRes, chatRes, flowsRes, custRes, alertRes] =
     await Promise.all([
       db
         .from("voice_call_transcripts")
@@ -350,6 +393,15 @@ async function fetchActivityFeedInput(
       db
         .from("sms_outbound_log")
         .select("to_e164, created_at")
+        .eq("business_id", businessId)
+        .gte("created_at", since)
+        .order("created_at", { ascending: false })
+        .limit(limit),
+      // Coworker email activity (AiFlow/assistant sends, trigger emails,
+      // tenant-mailbox traffic) — the email counterpart of the SMS sources.
+      db
+        .from("email_log")
+        .select("direction, to_email, from_email, subject, created_at")
         .eq("business_id", businessId)
         .gte("created_at", since)
         .order("created_at", { ascending: false })
@@ -419,6 +471,7 @@ async function fetchActivityFeedInput(
     smsInbound,
     smsReplies,
     smsOutbound,
+    emails: rowsOf<ActivityEmailRow>(emailRes),
     chat: rowsOf<ActivityChatRow>(chatRes),
     flows: rowsOf<ActivityFlowRow>(flowsRes),
     customers,
@@ -438,10 +491,13 @@ async function fetchActivityFeedInput(
 export async function getRecentActivity(
   businessId: string,
   limit: number = DEFAULT_ACTIVITY_LIMIT,
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  tier?: string | null
 ): Promise<ActivityItem[]> {
   const db = client ?? (await createSupabaseServiceClient());
-  return buildActivityFeed(await fetchActivityFeedInput(businessId, limit, db));
+  return buildActivityFeed(
+    await fetchActivityFeedInput(businessId, limit, db, activityWindowDays(tier))
+  );
 }
 
 /**
@@ -452,8 +508,11 @@ export async function getRecentActivity(
 export async function getAllRecentActivity(
   businessId: string,
   limit: number = ACTIVITY_FEED_MAX,
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  tier?: string | null
 ): Promise<ActivityItem[]> {
   const db = client ?? (await createSupabaseServiceClient());
-  return buildFullActivityFeed(await fetchActivityFeedInput(businessId, limit, db));
+  return buildFullActivityFeed(
+    await fetchActivityFeedInput(businessId, limit, db, activityWindowDays(tier))
+  );
 }

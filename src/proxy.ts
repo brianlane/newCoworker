@@ -273,14 +273,18 @@ export async function proxy(request: NextRequest) {
     }
   }
 
-  // Redirect admin users away from owner dashboard
+  // Redirect admin users away from owner dashboard — UNLESS a view-as
+  // session is active (cookie set by POST /api/admin/view-as). The cookie's
+  // mere presence only opens this routing gate; the dashboard pages
+  // themselves re-validate it against isAdmin + a live business row
+  // (src/lib/admin/view-as.ts), so a forged value can't impersonate.
   if (isProtectedRoute(pathname) && user) {
     const adminEmail = process.env.ADMIN_EMAIL;
     const isAdmin =
       user.email && adminEmail
         ? user.email.toLowerCase() === adminEmail.toLowerCase()
         : false;
-    if (isAdmin) {
+    if (isAdmin && !request.cookies.get("admin_view_as")?.value) {
       const redirectUrl = request.nextUrl.clone();
       redirectUrl.pathname = "/admin/dashboard";
       return redirectWithCookies(response, redirectUrl);

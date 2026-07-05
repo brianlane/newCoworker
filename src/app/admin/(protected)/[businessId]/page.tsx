@@ -19,6 +19,7 @@ import { SoulEditor } from "@/components/dashboard/SoulEditor";
 import { SkipPaymentButton } from "@/components/admin/SkipPaymentButton";
 import { DeleteClientButton } from "@/components/admin/DeleteClientButton";
 import { ForceRefundButton } from "@/components/admin/ForceRefundButton";
+import { ViewAsButton } from "@/components/admin/ViewAsButton";
 import { AssignDidPanel } from "@/components/admin/AssignDidPanel";
 import { KillSwitch } from "@/components/dashboard/KillSwitch";
 import { SafeModeToggle } from "@/components/dashboard/SafeModeToggle";
@@ -86,6 +87,7 @@ export default async function BusinessDetailPage({
           </Badge>
         </div>
         <div className="flex flex-col gap-2 items-end">
+          <ViewAsButton businessId={businessId} />
           <DeleteClientButton businessId={businessId} businessName={business.name} />
           {subscription && subscription.status === "active" && (
             <ForceRefundButton businessId={businessId} businessName={business.name} />

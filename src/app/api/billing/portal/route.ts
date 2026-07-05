@@ -1,4 +1,5 @@
 import { getAuthUser } from "@/lib/auth";
+import { isViewAsActive } from "@/lib/admin/view-as";
 import { createCustomerPortalSession } from "@/lib/stripe/client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getSubscription } from "@/lib/db/subscriptions";
@@ -7,6 +8,12 @@ import { errorResponse, handleRouteError } from "@/lib/api-response";
 export async function POST() {
   try {
     const user = await getAuthUser();
+    // View-as is read-only: this route resolves the business from the
+    // SIGNED-IN user's email, so an impersonating admin's write would land
+    // on the wrong business. Refuse instead (see isViewAsActive).
+    if (await isViewAsActive(user)) {
+      return errorResponse("FORBIDDEN", "View-as is read-only — exit view-as to make changes", 403);
+    }
     if (!user?.email) {
       return errorResponse("FORBIDDEN", "Authentication required", 403);
     }

@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
+import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
 import { listCustomIntegrations } from "@/lib/db/custom-integrations";
@@ -20,11 +21,14 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
 
   const q = await searchParams;
 
+  // Admin view-as swaps in the impersonated tenant's owner email.
+  const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
+
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
     .select("id")
-    .eq("owner_email", user.email)
+    .eq("owner_email", ownerEmail)
     .limit(1);
 
   const businessId = businesses?.[0]?.id ?? null;

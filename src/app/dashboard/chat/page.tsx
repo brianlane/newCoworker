@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
+import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { DashboardChat } from "@/components/dashboard/DashboardChat";
@@ -11,11 +12,14 @@ export default async function DashboardChatPage() {
   if (!user) redirect("/login?redirectTo=/dashboard/chat");
   if (!user.email) redirect("/login?redirectTo=/dashboard/chat");
 
+  // Admin view-as swaps in the impersonated tenant's owner email.
+  const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
+
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
     .select("id, name, status")
-    .eq("owner_email", user.email)
+    .eq("owner_email", ownerEmail)
     .order("created_at", { ascending: false });
 
   const business = businesses?.[0] ?? null;

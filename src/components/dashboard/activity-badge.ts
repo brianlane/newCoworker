@@ -13,6 +13,8 @@ export const ACTIVITY_BADGE: Record<
   call: { label: "Call", variant: "online" },
   sms_inbound: { label: "Text in", variant: "pending" },
   sms_outbound: { label: "Text out", variant: "neutral" },
+  email_inbound: { label: "Email in", variant: "pending" },
+  email_outbound: { label: "Email out", variant: "neutral" },
   chat: { label: "Chat", variant: "neutral" },
   aiflow: { label: "AiFlow", variant: "success" },
   customer: { label: "Customer", variant: "pending" },

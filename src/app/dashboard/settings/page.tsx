@@ -1,4 +1,5 @@
 import { getAuthUser } from "@/lib/auth";
+import { resolveViewAsContext } from "@/lib/admin/view-as";
 import { redirect } from "next/navigation";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -15,6 +16,7 @@ import { resolveAgentTools } from "@/lib/db/agent-tool-settings";
 import {
   PERSONALIZE_TIERS,
   ensureTenantMailbox,
+  getTenantMailbox,
   tenantEmailDomain
 } from "@/lib/email/tenant-mailbox";
 
@@ -25,19 +27,30 @@ export default async function SettingsPage() {
   if (!user) redirect("/login");
   if (!user.email) redirect("/login");
 
+  // Admin view-as swaps in the impersonated tenant's owner email.
+  const { ownerEmail: resolvedEmail, viewAs } = await resolveViewAsContext(user);
+  const ownerEmail = resolvedEmail ?? user.email;
+
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
     .select("id, name, tier, enterprise_limits, timezone")
-    .eq("owner_email", user.email)
+    .eq("owner_email", ownerEmail)
     .order("created_at", { ascending: false })
     .limit(1);
 
   const business = businesses?.[0] ?? null;
   const subscription = business ? await getSubscription(business.id) : null;
   const agents = business ? await resolveAgentTools(business.id) : null;
-  // Self-heals if provisioning hadn't reserved a mailbox yet (legacy tenants).
-  const mailbox = business ? await ensureTenantMailbox(business.id) : null;
+  // Self-heals if provisioning hadn't reserved a mailbox yet (legacy
+  // tenants). View-as stays strictly read-only: it must not provision
+  // mailbox rows for the tenant as a page-load side effect, so it uses the
+  // read-only lookup instead (a missing mailbox just renders no card).
+  const mailbox = business
+    ? viewAs
+      ? await getTenantMailbox(business.id)
+      : await ensureTenantMailbox(business.id)
+    : null;
   // Same rolling next-charge date the Billing page shows (Stripe's
   // current_period_end, cached and webhook-advanced; see resolveActiveRenewalDate).
   const nextBillingAt =
