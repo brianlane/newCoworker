@@ -12,6 +12,10 @@ import {
   opsNotificationEmail,
   type OpsVpsDeletionInput
 } from "@/lib/email/templates/ops-vps-deletion";
+import {
+  buildOpsPlanChangeEmail,
+  type OpsPlanChangeInput
+} from "@/lib/email/templates/ops-plan-change";
 
 /** Fire-and-forget ops deletion request; never throws. */
 export async function sendOpsVpsDeletionEmail(
@@ -38,6 +42,41 @@ export async function sendOpsVpsDeletionEmail(
     });
   } catch (err) {
     logger.warn("ops VPS deletion email failed", {
+      businessId: input.businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
+/**
+ * Fire-and-forget "hardware escalation started" ops notification; never
+ * throws. Sent by the change-plan orchestrator the moment a paid tier
+ * change begins its VPS migration, so the operator sees the escalation
+ * when it STARTS (the deletion-request email only marks the end).
+ */
+export async function sendOpsPlanChangeEmail(
+  input: Omit<OpsPlanChangeInput, "siteUrl">
+): Promise<void> {
+  try {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      logger.warn("ops plan-change email skipped: RESEND_API_KEY missing", {
+        businessId: input.businessId
+      });
+      return;
+    }
+    const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    const toEmail = opsNotificationEmail();
+    const { subject, text, html } = buildOpsPlanChangeEmail({ ...input, siteUrl });
+    await sendOwnerEmail(apiKey, toEmail, subject, { text, html });
+    logger.info("ops plan-change (hardware escalation) start emailed", {
+      businessId: input.businessId,
+      fromTier: input.fromTier,
+      toTier: input.toTier,
+      toEmail
+    });
+  } catch (err) {
+    logger.warn("ops plan-change email failed", {
       businessId: input.businessId,
       error: err instanceof Error ? err.message : String(err)
     });

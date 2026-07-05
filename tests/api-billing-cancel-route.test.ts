@@ -98,6 +98,7 @@ function makeContext() {
 function refundPlan(): LifecyclePlan {
   return {
     stripeOps: [],
+    telnyxOps: [],
     sshOps: [],
     hostingerOps: [],
     dbUpdates: [
@@ -114,6 +115,7 @@ function refundPlan(): LifecyclePlan {
 function periodEndPlan(): LifecyclePlan {
   return {
     stripeOps: [],
+    telnyxOps: [],
     sshOps: [],
     hostingerOps: [],
     dbUpdates: [
@@ -274,7 +276,7 @@ describe("/api/billing/cancel", () => {
   it("refund path falls back to graceEndsAt: null when the plan has no update_subscription op", async () => {
     planLifecycleActionMock.mockReturnValueOnce({
       ok: true,
-      plan: { stripeOps: [], sshOps: [], hostingerOps: [], dbUpdates: [], emailsToSend: [] }
+      plan: { stripeOps: [], sshOps: [], hostingerOps: [], telnyxOps: [], dbUpdates: [], emailsToSend: [] }
     });
     const res = await POST(req({ mode: "refund" }));
     const body = await res.json();

@@ -7,6 +7,7 @@ import {
 } from "@/lib/billing/lifecycle-executor";
 import type { LifecyclePlan } from "@/lib/billing/lifecycle";
 import { HostingerApiError } from "@/lib/hostinger/client";
+import { TelnyxApiError, type TelnyxNumbersClient } from "@/lib/telnyx/numbers";
 
 const {
   updateSubscriptionMock,
@@ -17,7 +18,9 @@ const {
   backupBusinessDataMock,
   deleteBusinessBackupMock,
   createSupabaseServiceClientMock,
-  releaseVpsToPoolMock
+  releaseVpsToPoolMock,
+  deleteTelnyxVoiceRouteMock,
+  upsertBusinessTelnyxSettingsMock
 } = vi.hoisted(() => ({
   updateSubscriptionMock: vi.fn(),
   markRefundUsedMock: vi.fn(),
@@ -27,7 +30,14 @@ const {
   backupBusinessDataMock: vi.fn(),
   deleteBusinessBackupMock: vi.fn(),
   createSupabaseServiceClientMock: vi.fn(),
-  releaseVpsToPoolMock: vi.fn()
+  releaseVpsToPoolMock: vi.fn(),
+  deleteTelnyxVoiceRouteMock: vi.fn(),
+  upsertBusinessTelnyxSettingsMock: vi.fn()
+}));
+
+vi.mock("@/lib/db/telnyx-routes", () => ({
+  deleteTelnyxVoiceRoute: deleteTelnyxVoiceRouteMock,
+  upsertBusinessTelnyxSettings: upsertBusinessTelnyxSettingsMock
 }));
 
 vi.mock("@/lib/db/subscriptions", () => ({
@@ -87,6 +97,7 @@ function refundPlan(amountCents = 2500): LifecyclePlan {
     ],
     hostingerOps: [],
     sshOps: [],
+    telnyxOps: [],
     dbUpdates: [
       { type: "mark_refund_used", profileId: "prof_1", at: "2026-04-15T00:00:00.000Z" },
       {
@@ -180,6 +191,7 @@ describe("executeLifecyclePlan refund handling", () => {
     await executeLifecyclePlan(
       {
         stripeOps: [],
+        telnyxOps: [],
         hostingerOps: [],
         sshOps: [],
         dbUpdates: [],
@@ -210,6 +222,7 @@ describe("executeLifecyclePlan refund handling", () => {
     await executeLifecyclePlan(
       {
         stripeOps: [],
+        telnyxOps: [],
         hostingerOps: [],
         sshOps: [],
         dbUpdates: [],
@@ -238,6 +251,7 @@ describe("executeLifecyclePlan refund handling", () => {
     await executeLifecyclePlan(
       {
         stripeOps: [],
+        telnyxOps: [],
         hostingerOps: [],
         sshOps: [],
         dbUpdates: [],
@@ -465,6 +479,7 @@ describe("executeLifecyclePlan refund handling", () => {
           { type: "cancel_subscription", stripeSubscriptionId: "sub_2", releaseSchedule: true },
           { type: "cancel_subscription", stripeSubscriptionId: "sub_missing", releaseSchedule: true }
         ],
+        telnyxOps: [],
         sshOps: [
           { type: "backup_durable_data", businessId: "biz_1", vpsHost: "1.2.3.4" },
           { type: "restore_durable_data", businessId: "biz_1", vpsHost: "1.2.3.5" }
@@ -531,6 +546,7 @@ describe("executeLifecyclePlan refund handling", () => {
   it("dispatches the ops VPS deletion request to the ops inbox", async () => {
     const opsPlan: LifecyclePlan = {
       stripeOps: [],
+      telnyxOps: [],
       sshOps: [],
       hostingerOps: [],
       dbUpdates: [],
@@ -720,6 +736,7 @@ describe("executeLifecyclePlan refund handling", () => {
     await executeLifecyclePlan(
       {
         stripeOps: [],
+        telnyxOps: [],
         hostingerOps: [],
         sshOps: [],
         dbUpdates: [{ type: "delete_auth_user", supabaseUserId: "missing-user" }],
@@ -736,6 +753,7 @@ describe("executeLifecyclePlan refund handling", () => {
       executeLifecyclePlan(
         {
           stripeOps: [],
+          telnyxOps: [],
           hostingerOps: [],
           sshOps: [],
           dbUpdates: [{ type: "delete_auth_user", supabaseUserId: "bad-user" }],
@@ -753,6 +771,7 @@ describe("executeLifecyclePlan refund handling", () => {
       executeLifecyclePlan(
         {
           stripeOps: [],
+          telnyxOps: [],
           hostingerOps: [],
           sshOps: [],
           dbUpdates: [{ type: "delete_auth_user", supabaseUserId: "string-error-user" }],
@@ -767,6 +786,7 @@ describe("executeLifecyclePlan refund handling", () => {
     await executeLifecyclePlan(
       {
         stripeOps: [],
+        telnyxOps: [],
         hostingerOps: [],
         sshOps: [],
         dbUpdates: [],
@@ -790,6 +810,7 @@ describe("executeLifecyclePlan refund handling", () => {
     await executeLifecyclePlan(
       {
         stripeOps: [],
+        telnyxOps: [],
         hostingerOps: [],
         sshOps: [],
         dbUpdates: [],
@@ -812,6 +833,7 @@ describe("executeLifecyclePlan refund handling", () => {
     await executeLifecyclePlan(
       {
         stripeOps: [],
+        telnyxOps: [],
         hostingerOps: [],
         sshOps: [],
         dbUpdates: [],
@@ -840,6 +862,7 @@ describe("executeLifecyclePlan refund handling", () => {
       executeLifecyclePlan(
         {
           stripeOps: [],
+          telnyxOps: [],
           hostingerOps: [{ type: "create_snapshot", virtualMachineId: 1 }],
           sshOps: [],
           dbUpdates: [],
@@ -854,6 +877,7 @@ describe("executeLifecyclePlan refund handling", () => {
     await executeLifecyclePlan(
       {
         stripeOps: [],
+        telnyxOps: [],
         hostingerOps: [],
         sshOps: [],
         dbUpdates: [{ type: "delete_backup_artifact", businessId: "biz_1" }],
@@ -867,6 +891,7 @@ describe("executeLifecyclePlan refund handling", () => {
     await executeLifecyclePlan(
       {
         stripeOps: [],
+        telnyxOps: [],
         hostingerOps: [],
         sshOps: [],
         dbUpdates: [{ type: "delete_backup_artifact", businessId: "biz_1" }],
@@ -881,6 +906,7 @@ describe("executeLifecyclePlan refund handling", () => {
     await executeLifecyclePlan(
       {
         stripeOps: [],
+        telnyxOps: [],
         hostingerOps: [],
         sshOps: [],
         dbUpdates: [
@@ -944,6 +970,7 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
     };
 
     const plan: LifecyclePlan = {
+      telnyxOps: [],
       stripeOps: [
         {
           type: "refund_latest_charge",
@@ -1066,6 +1093,7 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
     await executeLifecyclePlanSlowPhase(
       {
         stripeOps: [],
+        telnyxOps: [],
         sshOps: [{ type: "backup_durable_data", businessId: "biz_slow", vpsHost: "1.2.3.4" }],
         hostingerOps: [{ type: "create_snapshot", virtualMachineId: 7 }],
         dbUpdates: [],
@@ -1104,6 +1132,7 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
     await executeLifecyclePlanSlowPhase(
       {
         stripeOps: [],
+        telnyxOps: [],
         sshOps: [{ type: "backup_durable_data", businessId: "biz_slow2", vpsHost: "1.2.3.4" }],
         hostingerOps: [{ type: "create_snapshot", virtualMachineId: 11 }],
         dbUpdates: [],
@@ -1133,6 +1162,7 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
     function poolPlan(): LifecyclePlan {
       return {
         stripeOps: [],
+        telnyxOps: [],
         hostingerOps: [],
         sshOps: [],
         dbUpdates: [
@@ -1233,6 +1263,128 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
           sendEmail: vi.fn()
         })
       ).resolves.toBeUndefined();
+    });
+  });
+
+  describe("release_did (terminal DID teardown)", () => {
+    function didPlan(): LifecyclePlan {
+      return {
+        stripeOps: [],
+        hostingerOps: [],
+        sshOps: [],
+        telnyxOps: [{ type: "release_did", e164: "+16025550100", businessId: "biz_1" }],
+        dbUpdates: [],
+        emailsToSend: []
+      };
+    }
+
+    function fakeTelnyx(deleteImpl: ReturnType<typeof vi.fn>): TelnyxNumbersClient {
+      return { deletePhoneNumber: deleteImpl } as unknown as TelnyxNumbersClient;
+    }
+
+    beforeEach(() => {
+      deleteTelnyxVoiceRouteMock.mockResolvedValue(undefined);
+      upsertBusinessTelnyxSettingsMock.mockResolvedValue({});
+    });
+
+    it("releases at Telnyx, then removes the route row and clears the SMS from-number", async () => {
+      const del = vi.fn().mockResolvedValue({ id: "pn_1" });
+      await executeLifecyclePlan(
+        didPlan(),
+        { businessId: "biz_1", vpsHost: null },
+        { stripe: {} as never, sendEmail: vi.fn(), telnyxNumbers: fakeTelnyx(del) }
+      );
+      expect(del).toHaveBeenCalledWith("+16025550100");
+      expect(deleteTelnyxVoiceRouteMock).toHaveBeenCalledWith("+16025550100");
+      expect(upsertBusinessTelnyxSettingsMock).toHaveBeenCalledWith({
+        businessId: "biz_1",
+        telnyxSmsFromE164: null
+      });
+    });
+
+    it("tolerates a 404 (number already released) and still cleans up routing rows", async () => {
+      const del = vi
+        .fn()
+        .mockRejectedValue(new TelnyxApiError("/phone_numbers/x", 404, "not found"));
+      await executeLifecyclePlan(
+        didPlan(),
+        { businessId: "biz_1", vpsHost: null },
+        { stripe: {} as never, sendEmail: vi.fn(), telnyxNumbers: fakeTelnyx(del) }
+      );
+      expect(deleteTelnyxVoiceRouteMock).toHaveBeenCalledWith("+16025550100");
+      expect(upsertBusinessTelnyxSettingsMock).toHaveBeenCalled();
+    });
+
+    it("on a non-404 Telnyx failure keeps the route row (so the retry can find the DID) and never throws", async () => {
+      const del = vi
+        .fn()
+        .mockRejectedValue(new TelnyxApiError("/phone_numbers/x", 500, "server error"));
+      await expect(
+        executeLifecyclePlan(
+          didPlan(),
+          { businessId: "biz_1", vpsHost: null },
+          { stripe: {} as never, sendEmail: vi.fn(), telnyxNumbers: fakeTelnyx(del) }
+        )
+      ).resolves.toBeTruthy();
+      expect(deleteTelnyxVoiceRouteMock).not.toHaveBeenCalled();
+      expect(upsertBusinessTelnyxSettingsMock).not.toHaveBeenCalled();
+    });
+
+    it("swallows routing-cleanup failures — a wipe must not fail over a $1 number", async () => {
+      const del = vi.fn().mockResolvedValue({ id: "pn_1" });
+      deleteTelnyxVoiceRouteMock.mockRejectedValueOnce(new Error("db down"));
+      await expect(
+        executeLifecyclePlan(
+          didPlan(),
+          { businessId: "biz_1", vpsHost: null },
+          { stripe: {} as never, sendEmail: vi.fn(), telnyxNumbers: fakeTelnyx(del) }
+        )
+      ).resolves.toBeTruthy();
+
+      // Non-Error rejection shape takes the String(err) branch.
+      deleteTelnyxVoiceRouteMock.mockRejectedValueOnce("string blip");
+      await expect(
+        executeLifecyclePlan(
+          didPlan(),
+          { businessId: "biz_1", vpsHost: null },
+          { stripe: {} as never, sendEmail: vi.fn(), telnyxNumbers: fakeTelnyx(del) }
+        )
+      ).resolves.toBeTruthy();
+    });
+
+    it("skips the op (loudly) when no Telnyx client is available", async () => {
+      const prevKey = process.env.TELNYX_API_KEY;
+      delete process.env.TELNYX_API_KEY;
+      try {
+        await executeLifecyclePlan(
+          didPlan(),
+          { businessId: "biz_1", vpsHost: null },
+          { stripe: {} as never, sendEmail: vi.fn() }
+        );
+        expect(deleteTelnyxVoiceRouteMock).not.toHaveBeenCalled();
+      } finally {
+        if (prevKey !== undefined) process.env.TELNYX_API_KEY = prevKey;
+      }
+    });
+
+    it("fast phase skips telnyxOps; slow phase runs them", async () => {
+      const del = vi.fn().mockResolvedValue({ id: "pn_1" });
+      const plan = didPlan();
+
+      await executeLifecyclePlanFastPhase(
+        plan,
+        { businessId: "biz_1", vpsHost: null },
+        { stripe: {} as never, telnyxNumbers: fakeTelnyx(del) }
+      );
+      expect(del).not.toHaveBeenCalled();
+
+      await executeLifecyclePlanSlowPhase(plan, {}, {
+        hostinger: {} as never,
+        sendEmail: vi.fn(),
+        telnyxNumbers: fakeTelnyx(del)
+      });
+      expect(del).toHaveBeenCalledWith("+16025550100");
+      expect(deleteTelnyxVoiceRouteMock).toHaveBeenCalledWith("+16025550100");
     });
   });
 });

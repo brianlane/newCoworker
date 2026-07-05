@@ -68,13 +68,22 @@ import {
   buildOpsVpsDeletionEmail,
   opsNotificationEmail
 } from "@/lib/email/templates/ops-vps-deletion";
+import {
+  TelnyxNumbersClient,
+  TelnyxApiError
+} from "@/lib/telnyx/numbers";
+import {
+  deleteTelnyxVoiceRoute,
+  upsertBusinessTelnyxSettings
+} from "@/lib/db/telnyx-routes";
 import type {
   DbUpdateOp,
   EmailOp,
   HostingerOp,
   LifecyclePlan,
   SshOp,
-  StripeOp
+  StripeOp,
+  TelnyxOp
 } from "@/lib/billing/lifecycle";
 import { CARRIER_REGISTRATION_FEE_NAME } from "@/lib/plans/carrier-fee";
 
@@ -82,7 +91,19 @@ export type ExecutorDeps = {
   stripe?: Stripe;
   hostinger?: HostingerClient;
   sendEmail?: typeof sendOwnerEmail;
+  /** Injected in tests; production default reads TELNYX_API_KEY. */
+  telnyxNumbers?: TelnyxNumbersClient;
 };
+
+/* c8 ignore start -- env-var construction: tests inject `deps.telnyxNumbers`.
+   Returns null (op skipped, loud log) when the key is unset so a missing env
+   var degrades a best-effort cleanup instead of crashing the teardown. */
+function defaultTelnyxNumbersClient(): TelnyxNumbersClient | null {
+  const apiKey = process.env.TELNYX_API_KEY;
+  if (!apiKey) return null;
+  return new TelnyxNumbersClient({ apiKey });
+}
+/* c8 ignore stop */
 
 export type ExecutorExtra = {
   /** Forwarded from the lifecycle caller — we need it to locate the latest charge for refunds. */
@@ -119,6 +140,9 @@ export async function executeLifecyclePlan(
   }
   for (const op of plan.hostingerOps) {
     await runHostingerOp(op, hostinger);
+  }
+  for (const op of plan.telnyxOps) {
+    await runTelnyxOp(op, deps.telnyxNumbers);
   }
   for (const op of plan.dbUpdates) {
     await runDbOp(op, extra, result);
@@ -223,6 +247,13 @@ export async function executeLifecyclePlanSlowPhase(
         error: err instanceof Error ? err.message : String(err)
       });
     }
+  }
+  // DID releases run in the slow phase (fast phase skips telnyxOps
+  // entirely): they're best-effort network calls the user's HTTP response
+  // must never block on, and — like pool returns — they belong after the
+  // backup so a mid-teardown crash retried by the grace sweep re-runs them.
+  for (const op of plan.telnyxOps) {
+    await runTelnyxOp(op, deps.telnyxNumbers);
   }
   // Pool returns run here — AFTER backup + stop_vm — because a box marked
   // `available` is immediately claimable by a concurrent signup, whose
@@ -494,6 +525,58 @@ async function runDbOp(
     case "return_vps_to_pool":
       await runPoolReturnOp(op);
       return;
+  }
+}
+
+/**
+ * Best-effort DID release: stop the number's monthly rental at Telnyx, then
+ * clean up the routing rows. Never throws — a wipe must not fail because a
+ * $1.10/mo number couldn't be released (it's operator-recoverable in the
+ * Telnyx portal, and the grace-sweep's idempotent retry re-attempts it).
+ * A 404 from Telnyx means the number is already gone — the goal state.
+ */
+async function runTelnyxOp(
+  op: TelnyxOp,
+  injectedClient?: TelnyxNumbersClient
+): Promise<void> {
+  const client = injectedClient ?? defaultTelnyxNumbersClient();
+  if (!client) {
+    logger.warn("release_did skipped: TELNYX_API_KEY missing", {
+      businessId: op.businessId,
+      e164: op.e164
+    });
+    return;
+  }
+  try {
+    try {
+      await client.deletePhoneNumber(op.e164);
+      logger.info("release_did: DID released at Telnyx", {
+        businessId: op.businessId,
+        e164: op.e164
+      });
+    } catch (err) {
+      if (err instanceof TelnyxApiError && err.status === 404) {
+        logger.info("release_did: DID already gone at Telnyx (404)", {
+          businessId: op.businessId,
+          e164: op.e164
+        });
+      } else {
+        throw err;
+      }
+    }
+    // Routing cleanup only after the release (or confirmed-gone) so a
+    // Telnyx failure leaves the route intact for the retry to find the DID.
+    await deleteTelnyxVoiceRoute(op.e164);
+    await upsertBusinessTelnyxSettings({
+      businessId: op.businessId,
+      telnyxSmsFromE164: null
+    });
+  } catch (err) {
+    logger.error("release_did failed (continuing teardown)", {
+      businessId: op.businessId,
+      e164: op.e164,
+      error: err instanceof Error ? err.message : String(err)
+    });
   }
 }
 

@@ -4,12 +4,18 @@ const {
   getBusinessMock,
   getSubscriptionMock,
   getCustomerProfileByIdMock,
-  getVirtualMachineMock
+  getVirtualMachineMock,
+  getTelnyxVoiceRouteForBusinessMock
 } = vi.hoisted(() => ({
   getBusinessMock: vi.fn(),
   getSubscriptionMock: vi.fn(),
   getCustomerProfileByIdMock: vi.fn(),
-  getVirtualMachineMock: vi.fn()
+  getVirtualMachineMock: vi.fn(),
+  getTelnyxVoiceRouteForBusinessMock: vi.fn()
+}));
+
+vi.mock("@/lib/db/telnyx-routes", () => ({
+  getTelnyxVoiceRouteForBusiness: getTelnyxVoiceRouteForBusinessMock
 }));
 
 vi.mock("@/lib/db/businesses", () => ({
@@ -67,9 +73,13 @@ describe("loadLifecycleContextForBusiness", () => {
     });
     getCustomerProfileByIdMock.mockResolvedValue({ id: "prof-sub" });
     getVirtualMachineMock.mockResolvedValue({ id: 42, ipv4: [{ address: "1.2.3.4" }] });
+    getTelnyxVoiceRouteForBusinessMock.mockResolvedValue({
+      to_e164: "+16025550100",
+      business_id: "biz-1"
+    });
   });
 
-  it("loads subscription, profile, VM id and public IP", async () => {
+  it("loads subscription, profile, VM id, public IP, and the tenant DID", async () => {
     const res = await loadLifecycleContextForBusiness("biz-1", { ownerAuthUserId: "auth-1" });
     expect(res).toEqual({
       ok: true,
@@ -81,10 +91,39 @@ describe("loadLifecycleContextForBusiness", () => {
         ownerAuthUserId: "auth-1",
         profile: { id: "prof-sub" },
         virtualMachineId: 42,
-        vpsHost: "1.2.3.4"
+        vpsHost: "1.2.3.4",
+        didE164: "+16025550100"
       })
     });
     expect(getCustomerProfileByIdMock).toHaveBeenCalledWith("prof-sub");
+  });
+
+  it("leaves didE164 null when no route exists or the lookup fails", async () => {
+    getTelnyxVoiceRouteForBusinessMock.mockResolvedValueOnce(null);
+    const noRoute = await loadLifecycleContextForBusiness("biz-1");
+    expect(noRoute).toEqual({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: expect.objectContaining({ didE164: null })
+    });
+
+    // A DID-lookup failure must never block the cancel path: the release op
+    // is best-effort cleanup, retried by the grace sweep.
+    getTelnyxVoiceRouteForBusinessMock.mockRejectedValueOnce(new Error("supabase down"));
+    const failed = await loadLifecycleContextForBusiness("biz-1");
+    expect(failed).toEqual({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: expect.objectContaining({ didE164: null })
+    });
+
+    getTelnyxVoiceRouteForBusinessMock.mockRejectedValueOnce("string failure");
+    const failedNonError = await loadLifecycleContextForBusiness("biz-1");
+    expect(failedNonError).toEqual({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: expect.objectContaining({ didE164: null })
+    });
   });
 
   it("returns typed failures for missing business/subscription", async () => {

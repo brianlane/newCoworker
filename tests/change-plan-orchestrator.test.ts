@@ -142,12 +142,14 @@ vi.mock("@/lib/logger", () => ({
   }
 }));
 
-const { sendOpsVpsDeletionEmailMock } = vi.hoisted(() => ({
-  sendOpsVpsDeletionEmailMock: vi.fn().mockResolvedValue(undefined)
+const { sendOpsVpsDeletionEmailMock, sendOpsPlanChangeEmailMock } = vi.hoisted(() => ({
+  sendOpsVpsDeletionEmailMock: vi.fn().mockResolvedValue(undefined),
+  sendOpsPlanChangeEmailMock: vi.fn().mockResolvedValue(undefined)
 }));
 
 vi.mock("@/lib/email/ops-notify", () => ({
-  sendOpsVpsDeletionEmail: sendOpsVpsDeletionEmailMock
+  sendOpsVpsDeletionEmail: sendOpsVpsDeletionEmailMock,
+  sendOpsPlanChangeEmail: sendOpsPlanChangeEmailMock
 }));
 
 const { releaseVpsToPoolMock } = vi.hoisted(() => ({
@@ -311,6 +313,21 @@ describe("runChangePlanFromCheckout", () => {
         hostingerBillingSubscriptionId: "billing_old",
         cancelReason: "upgrade_switch",
         refundIssued: false
+      })
+    );
+
+    // Hardware escalation start was announced to ops before the migration:
+    // old box resolves by DEPLOYED sizing (no pin + starter → kvm2 legacy
+    // default), target by forward-looking tier default (standard → kvm8).
+    expect(sendOpsPlanChangeEmailMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: "biz-1",
+        fromTier: "starter",
+        toTier: "standard",
+        billingPeriod: "annual",
+        oldVirtualMachineId: 1001,
+        fromHardware: "kvm2",
+        toHardware: "kvm8"
       })
     );
 
@@ -520,6 +537,8 @@ describe("runChangePlanFromCheckout", () => {
       // never be stopped or canceled on a period-only switch.
       expect(hostingerStopVirtualMachineMock).not.toHaveBeenCalled();
       expect(hostingerDisableAutoRenewalMock).not.toHaveBeenCalled();
+      // No hardware moves on a period-only switch → no escalation email.
+      expect(sendOpsPlanChangeEmailMock).not.toHaveBeenCalled();
 
       // The new sub row inherits the existing box's Hostinger billing id.
       expect(createSubscriptionMock).toHaveBeenCalledWith(

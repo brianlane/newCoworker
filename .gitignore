@@ -44,6 +44,7 @@ debug/.bench-*.json
 # Operational state written by debug/ scripts (teardown records, cost pulls,
 # scratch probes) — local-only, may reference live infra.
 debug/.kvm2-smoke.json
+debug/.kvm1-smoke.json
 debug/.migrate-vps-size-*.json
 debug/.cost-data-*.json
 debug/.tmp-*

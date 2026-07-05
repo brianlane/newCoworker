@@ -8,6 +8,7 @@ import {
   opsNotificationEmail,
   vpsHostname
 } from "@/lib/email/templates/ops-vps-deletion";
+import { buildOpsPlanChangeEmail } from "@/lib/email/templates/ops-plan-change";
 
 const mailCtx = {
   recipientEmail: "owner@example.com",
@@ -245,6 +246,48 @@ describe("ops-vps-deletion email", () => {
     expect(opsNotificationEmail()).toBe("ops@example.com");
     if (prev === undefined) delete process.env.OPS_NOTIFICATION_EMAIL;
     else process.env.OPS_NOTIFICATION_EMAIL = prev;
+  });
+});
+
+describe("ops-plan-change (hardware escalation started) email", () => {
+  const baseInput = {
+    businessId: "biz-1",
+    ownerName: "Jane Doe",
+    ownerEmail: "jane@example.com",
+    fromTier: "starter",
+    toTier: "standard",
+    billingPeriod: "monthly",
+    oldVirtualMachineId: 1800985,
+    fromHardware: "kvm2",
+    toHardware: "kvm8",
+    siteUrl: "https://www.newcoworker.com"
+  };
+
+  it("renders the tier + hardware transition, old box, and admin link", () => {
+    const { subject, text, html } = buildOpsPlanChangeEmail(baseInput);
+    expect(subject).toBe(
+      "[ops] Hardware escalation started — Jane Doe: starter/kvm2 → standard/kvm8"
+    );
+    expect(text).toContain("Tier: starter → standard (monthly)");
+    expect(text).toContain("Hardware: kvm2 → kvm8");
+    expect(text).toContain("Old box: srv1800985.hstgr.cloud");
+    expect(text).toContain("Owner email: jane@example.com");
+    expect(text).toContain("Business id: biz-1");
+    expect(text).toContain("deletion-request email arrives when the old box");
+    expect(html).toContain("Hardware escalation started");
+    expect(html).toContain("https://www.newcoworker.com/admin/biz-1");
+  });
+
+  it("falls back to the owner email when the name is missing or blank", () => {
+    const noName = buildOpsPlanChangeEmail({ ...baseInput, ownerName: null });
+    expect(noName.subject).toContain("jane@example.com");
+    const blankName = buildOpsPlanChangeEmail({ ...baseInput, ownerName: "   " });
+    expect(blankName.subject).toContain("jane@example.com");
+  });
+
+  it("handles a missing old VM id", () => {
+    const { text } = buildOpsPlanChangeEmail({ ...baseInput, oldVirtualMachineId: null });
+    expect(text).toContain("Old box: no VM recorded");
   });
 });
 

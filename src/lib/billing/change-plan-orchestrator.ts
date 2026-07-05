@@ -53,7 +53,12 @@ import {
   restoreBusinessData
 } from "@/lib/hostinger/data-migration";
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
-import { vpsSizeFromHostingerPlan, type VpsSize } from "@/lib/vps/size";
+import {
+  resolveDeployedVpsSize,
+  resolveVpsSize,
+  vpsSizeFromHostingerPlan,
+  type VpsSize
+} from "@/lib/vps/size";
 import {
   ensureCommitmentSchedule,
   getStripe
@@ -77,7 +82,7 @@ import {
   upsertCustomerProfile
 } from "@/lib/db/customer-profiles";
 import { logger } from "@/lib/logger";
-import { sendOpsVpsDeletionEmail } from "@/lib/email/ops-notify";
+import { sendOpsVpsDeletionEmail, sendOpsPlanChangeEmail } from "@/lib/email/ops-notify";
 import { releaseVpsToPool } from "@/lib/db/vps-inventory";
 
 function errorMessage(err: unknown): string {
@@ -381,6 +386,31 @@ export async function runChangePlanFromCheckout(
   const oldVpsIdRaw = business.hostinger_vps_id;
   const oldVmId =
     oldVpsIdRaw && /^\d+$/.test(oldVpsIdRaw) ? Number.parseInt(oldVpsIdRaw, 10) : null;
+
+  // Ops visibility: a tier change is about to run minutes of unattended
+  // hardware migration (snapshot → backup → new-VM purchase → restore →
+  // old-box teardown). Tell the operator it STARTED — the existing
+  // deletion-request email only marks the end, so without this a stuck
+  // migration was invisible until a customer complained. Fire-and-forget
+  // (sendOpsPlanChangeEmail never throws); period-only switches touch no
+  // hardware and stay quiet.
+  if (!periodOnlySwitch) {
+    const oldTierForSize = oldSub.tier === "starter" ? "starter" : "standard";
+    await sendOpsPlanChangeEmail({
+      businessId,
+      ownerName: business.owner_name ?? null,
+      ownerEmail: business.owner_email,
+      fromTier: oldSub.tier,
+      toTier: tier,
+      billingPeriod,
+      oldVirtualMachineId: oldVmId,
+      // Old box: deployed-size resolution (null pin on a legacy box = the
+      // historical default it was actually provisioned on). New box: the
+      // forward-looking default for the target tier under the same pin.
+      fromHardware: resolveDeployedVpsSize(oldTierForSize, business.vps_size ?? null),
+      toHardware: resolveVpsSize(tier, business.vps_size ?? null)
+    });
+  }
 
   let newProv: Awaited<ReturnType<typeof orchestrateProvisioning>> | null = null;
   if (!periodOnlySwitch) {

@@ -223,6 +223,37 @@ describe("TelnyxNumbersClient", () => {
     expect(body).not.toHaveProperty("customer_reference");
   });
 
+  it("deletePhoneNumber DELETEs the encoded number, validates id, surfaces API errors", async () => {
+    let capturedUrl = "";
+    let capturedMethod = "";
+    const fetchImpl = mockFetch((url, init) => {
+      capturedUrl = url;
+      capturedMethod = String(init.method);
+      return jsonResponse({ data: { id: "pn_1", phone_number: "+16025550100" } });
+    });
+    const client = new TelnyxNumbersClient({ apiKey: "k", fetchImpl });
+    const out = await client.deletePhoneNumber("+16025550100");
+    expect(out.id).toBe("pn_1");
+    expect(capturedMethod).toBe("DELETE");
+    expect(capturedUrl).toBe(`${DEFAULT_TELNYX_API_BASE_URL}/phone_numbers/%2B16025550100`);
+
+    await expect(client.deletePhoneNumber("")).rejects.toThrow(
+      /phoneNumberIdOrE164 is required/
+    );
+    await expect(client.deletePhoneNumber("   ")).rejects.toThrow(
+      /phoneNumberIdOrE164 is required/
+    );
+
+    const failing = new TelnyxNumbersClient({
+      apiKey: "k",
+      fetchImpl: mockFetch(() => new Response("not found", { status: 404 }))
+    });
+    await expect(failing.deletePhoneNumber("+16025550100")).rejects.toMatchObject({
+      name: "TelnyxApiError",
+      status: 404
+    });
+  });
+
   it("waitForNumberOrder polls until success or timeout", async () => {
     let calls = 0;
     const fetchImpl = mockFetch(() => {

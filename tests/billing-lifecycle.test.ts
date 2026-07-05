@@ -525,6 +525,60 @@ describe("planLifecycleAction: adminForceCancel", () => {
     ) as { type: "update_subscription"; patch: Record<string, unknown> };
     expect(subUpdate.patch.vps_stopped_at).toBe("2026-04-01T00:00:00.000Z");
   });
+
+  it("releases the DID (terminal path) when the context carries one; omits when absent", () => {
+    const withDid = planLifecycleAction(
+      { type: "adminForceCancel" },
+      makeCtx({ didE164: "+16025550100" })
+    );
+    if (!withDid.ok) throw new Error(`unexpected reject ${withDid.reason}`);
+    expect(withDid.plan.telnyxOps).toEqual([
+      { type: "release_did", e164: "+16025550100", businessId: "biz-1" }
+    ]);
+
+    const withoutDid = planLifecycleAction({ type: "adminForceCancel" }, makeCtx());
+    if (!withoutDid.ok) throw new Error(`unexpected reject ${withoutDid.reason}`);
+    expect(withoutDid.plan.telnyxOps).toEqual([]);
+  });
+});
+
+describe("DID retention through non-terminal cancels", () => {
+  it("never releases the DID on grace-window cancels — a reactivating tenant keeps their number", () => {
+    // Every non-terminal action must leave the number rented so the tenant's
+    // business line survives the 30-day grace window.
+    const didCtx = { didE164: "+16025550100" };
+    const refund = planLifecycleAction({ type: "cancelWithRefund" }, makeCtx(didCtx));
+    if (!refund.ok) throw new Error(`unexpected reject ${refund.reason}`);
+    expect(refund.plan.telnyxOps).toEqual([]);
+
+    const periodEnd = planLifecycleAction({ type: "cancelAtPeriodEnd" }, makeCtx(didCtx));
+    if (!periodEnd.ok) throw new Error(`unexpected reject ${periodEnd.reason}`);
+    expect(periodEnd.plan.telnyxOps).toEqual([]);
+
+    const paymentFailed = planLifecycleAction(
+      { type: "autoCancelOnPaymentFailure" },
+      makeCtx(didCtx)
+    );
+    if (!paymentFailed.ok) throw new Error(`unexpected reject ${paymentFailed.reason}`);
+    expect(paymentFailed.plan.telnyxOps).toEqual([]);
+
+    const undo = planLifecycleAction(
+      { type: "undoCancelAtPeriodEnd" },
+      makeCtx({ ...didCtx, subscription: makeSub({ cancel_at_period_end: true }) })
+    );
+    if (!undo.ok) throw new Error(`unexpected reject ${undo.reason}`);
+    expect(undo.plan.telnyxOps).toEqual([]);
+
+    const reached = planLifecycleAction(
+      { type: "periodEndReached" },
+      makeCtx({
+        ...didCtx,
+        subscription: makeSub({ cancel_at_period_end: true, cancel_reason: "user_period_end" })
+      })
+    );
+    if (!reached.ok) throw new Error(`unexpected reject ${reached.reason}`);
+    expect(reached.plan.telnyxOps).toEqual([]);
+  });
 });
 
 describe("planLifecycleAction: periodEndReached", () => {
@@ -644,6 +698,30 @@ describe("planLifecycleAction: graceExpiredWipe", () => {
     expect(opsOp).toEqual(
       expect.objectContaining({ refundIssued: true, cancelReason: "user_refund" })
     );
+  });
+
+  it("releases the DID at wipe time (grace over, nobody can reactivate); omits when absent", () => {
+    const wipeSub = makeSub({
+      status: "canceled",
+      grace_ends_at: "2026-04-01T00:00:00.000Z",
+      wiped_at: null,
+      cancel_reason: "payment_failed"
+    });
+    const withDid = planLifecycleAction(
+      { type: "graceExpiredWipe" },
+      makeCtx({ subscription: wipeSub, didE164: "+16025550100" })
+    );
+    if (!withDid.ok) throw new Error(`unexpected reject ${withDid.reason}`);
+    expect(withDid.plan.telnyxOps).toEqual([
+      { type: "release_did", e164: "+16025550100", businessId: "biz-1" }
+    ]);
+
+    const withoutDid = planLifecycleAction(
+      { type: "graceExpiredWipe" },
+      makeCtx({ subscription: wipeSub })
+    );
+    if (!withoutDid.ok) throw new Error(`unexpected reject ${withoutDid.reason}`);
+    expect(withoutDid.plan.telnyxOps).toEqual([]);
   });
 
   it("rejects when grace hasn't passed yet", () => {
