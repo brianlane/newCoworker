@@ -133,6 +133,12 @@ export async function proxy(request: NextRequest) {
     // CSRF would 403 every status update. Same rationale as the exemptions
     // above.
     pathname !== "/api/telnyx/porting-webhook" &&
+    // /api/public/v1/* is the public REST API (Zapier et al.) authenticated
+    // solely by an `Authorization: Bearer nck_…` API key hashed against
+    // api_keys (authenticatePublicApiRequest) — never by a session cookie.
+    // External clients send no Origin header, so CSRF would 403 every call.
+    // Same rationale as the exemptions above.
+    !pathname.startsWith("/api/public/") &&
     ["POST", "PUT", "DELETE", "PATCH"].includes(method)
   ) {
     const origin = request.headers.get("origin");
