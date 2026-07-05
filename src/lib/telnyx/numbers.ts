@@ -208,6 +208,26 @@ export class TelnyxNumbersClient {
   }
 
   /**
+   * Release (delete) a phone number from the Telnyx account, stopping its
+   * monthly rental. Destructive and NOT undoable — once released the number
+   * returns to Telnyx's pool and may be sold to anyone. Callers should gate
+   * this behind terminal teardown paths only (grace-expired wipe / admin
+   * force-cancel), never a cancel that can still reactivate.
+   *
+   * Docs: https://developers.telnyx.com/api/numbers/delete-phone-number
+   */
+  async deletePhoneNumber(phoneNumberIdOrE164: string): Promise<PhoneNumberDetails> {
+    if (!phoneNumberIdOrE164 || phoneNumberIdOrE164.trim().length === 0) {
+      throw new Error("TelnyxNumbersClient.deletePhoneNumber: phoneNumberIdOrE164 is required");
+    }
+    const json = await this.request<{ data: PhoneNumberDetails }>(
+      "DELETE",
+      `/phone_numbers/${encodeURIComponent(phoneNumberIdOrE164)}`
+    );
+    return json.data;
+  }
+
+  /**
    * Poll `getNumberOrder` until `status === "success"` or timeout.
    * Returns the final order snapshot; does NOT throw on failure — caller
    * should inspect `.status`.
@@ -227,7 +247,11 @@ export class TelnyxNumbersClient {
     return latest;
   }
 
-  private async request<T>(method: "GET" | "POST" | "PATCH", path: string, body?: unknown): Promise<T> {
+  private async request<T>(
+    method: "GET" | "POST" | "PATCH" | "DELETE",
+    path: string,
+    body?: unknown
+  ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const ac = new AbortController();
     /* c8 ignore next -- abort callback fires only on real network timeout; tests don't stall */

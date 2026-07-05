@@ -97,6 +97,21 @@ export async function getTelnyxVoiceRouteForBusiness(
   return (data as TelnyxVoiceRouteRow | null) ?? null;
 }
 
+/**
+ * Remove a DID's routing row after the number is released at Telnyx
+ * (terminal teardown). Inbound voice/SMS for a released number can never
+ * reach us again, and leaving the row would misroute the number to the
+ * wiped business if Telnyx ever resells it to another of our tenants.
+ */
+export async function deleteTelnyxVoiceRoute(
+  toE164: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("telnyx_voice_routes").delete().eq("to_e164", toE164);
+  if (error) throw new Error(`deleteTelnyxVoiceRoute: ${error.message}`);
+}
+
 export type UpsertTelnyxVoiceRouteInput = {
   toE164: string;
   businessId: string;

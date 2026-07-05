@@ -138,6 +138,21 @@ export type DbUpdateOp =
       notes: string;
     };
 
+export type TelnyxOp = {
+  /**
+   * Release the tenant's DID back to Telnyx, stopping its ~$1.10/mo rental.
+   * Emitted ONLY by terminal paths (grace-expired wipe, admin force-cancel):
+   * a cancel that still has a live grace window keeps the number so a
+   * reactivating tenant gets their business line back. The executor runs
+   * this in the slow phase, best-effort with 404 tolerance (number already
+   * released), and also removes the `telnyx_voice_routes` row + clears the
+   * SMS from-number so no routing artifacts survive the wipe.
+   */
+  type: "release_did";
+  e164: string;
+  businessId: string;
+};
+
 export type EmailOp =
   | {
       type: "send_cancel_confirmation";
@@ -183,6 +198,7 @@ export type LifecyclePlan = {
   stripeOps: StripeOp[];
   hostingerOps: HostingerOp[];
   sshOps: SshOp[];
+  telnyxOps: TelnyxOp[];
   dbUpdates: DbUpdateOp[];
   emailsToSend: EmailOp[];
 };
@@ -234,6 +250,11 @@ export type LifecycleContext = {
   vpsSize?: string | null;
   /** Public IPv4 for the SSH backup/restore. Null → SSH ops omitted. */
   vpsHost: string | null;
+  /**
+   * The tenant's DID (from `telnyx_voice_routes`), so terminal wipes can
+   * release it at Telnyx. Null/omitted → no DID recorded, release op omitted.
+   */
+  didE164?: string | null;
   /** Most recent Stripe invoice amount we're likely to refund, for the refund-issued email. */
   lastInvoiceAmountCents?: number | null;
   /** Now, injected so tests can freeze it. */
@@ -347,6 +368,7 @@ function planCancelAtPeriodEnd(ctx: LifecycleContext): LifecyclePlanResult {
       ],
       hostingerOps: [],
       sshOps: [],
+      telnyxOps: [],
       dbUpdates: [
         {
           type: "update_subscription",
@@ -400,6 +422,7 @@ function planUndoCancelAtPeriodEnd(ctx: LifecycleContext): LifecyclePlanResult {
       ],
       hostingerOps: [],
       sshOps: [],
+      telnyxOps: [],
       dbUpdates: [
         {
           type: "update_subscription",
@@ -507,6 +530,16 @@ function planAdminForceCancel(ctx: LifecycleContext): LifecyclePlanResult {
     businessId: sub.business_id
   });
 
+  // Force-cancel is terminal (no grace, no reactivation), so the tenant's
+  // DID is released immediately — otherwise it rents at Telnyx forever.
+  if (ctx.didE164) {
+    plan.telnyxOps.push({
+      type: "release_did",
+      e164: ctx.didE164,
+      businessId: sub.business_id
+    });
+  }
+
   return { ok: true, plan };
 }
 
@@ -532,6 +565,7 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
     stripeOps: [],
     hostingerOps: [],
     sshOps: [],
+    telnyxOps: [],
     dbUpdates: [],
     emailsToSend: []
   };
@@ -604,6 +638,19 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
     plan.dbUpdates.push({ type: "delete_auth_user", supabaseUserId: ctx.ownerAuthUserId });
   }
   plan.dbUpdates.push({ type: "mark_business_wiped", businessId: sub.business_id });
+
+  // The grace window is over — nobody can reactivate this subscription, so
+  // release the DID at Telnyx now. Numbers deliberately survive the whole
+  // grace period (a reactivating tenant keeps their business line, worth
+  // the ~$1.10/mo hold) and are only let go at this terminal wipe.
+  // Idempotent: the executor tolerates 404 (already released).
+  if (ctx.didE164) {
+    plan.telnyxOps.push({
+      type: "release_did",
+      e164: ctx.didE164,
+      businessId: sub.business_id
+    });
+  }
 
   // Re-request the manual hPanel deletion at wipe time: either the original
   // cancel-path email was already actioned (this one 404s harmlessly when the
@@ -678,6 +725,7 @@ function buildCancelPlan(args: {
     stripeOps: [],
     hostingerOps: [],
     sshOps: [],
+    telnyxOps: [],
     dbUpdates: [],
     emailsToSend: []
   };

@@ -14,6 +14,7 @@
 import { getSubscription } from "@/lib/db/subscriptions";
 import { getBusiness } from "@/lib/db/businesses";
 import { getCustomerProfileById } from "@/lib/db/customer-profiles";
+import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
 import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "@/lib/hostinger/client";
 import { logger } from "@/lib/logger";
 import type { LifecycleContext } from "@/lib/billing/lifecycle";
@@ -69,6 +70,19 @@ export async function loadLifecycleContextForBusiness(
     }
   }
 
+  // The tenant's DID, so terminal wipes can release it at Telnyx. Best-effort:
+  // a lookup failure only skips the release op (the grace-sweep retries the
+  // whole plan on its next tick anyway), never blocks the cancel itself.
+  let didE164: string | null = null;
+  try {
+    didE164 = (await getTelnyxVoiceRouteForBusiness(businessId))?.to_e164 ?? null;
+  } catch (err) {
+    logger.warn("loadLifecycleContextForBusiness: DID route lookup failed; continuing without didE164", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+
   const context: LifecycleContext = {
     subscription,
     ownerEmail: business.owner_email,
@@ -78,7 +92,8 @@ export async function loadLifecycleContextForBusiness(
     profile,
     virtualMachineId,
     vpsSize: business.vps_size ?? null,
-    vpsHost
+    vpsHost,
+    didE164
   };
   return { ok: true, context, vpsHost };
 }

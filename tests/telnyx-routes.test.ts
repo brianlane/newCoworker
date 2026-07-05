@@ -8,6 +8,7 @@ vi.mock("@/lib/supabase/server", () => ({
 import {
   E164_REGEX,
   getTelnyxVoiceRouteForBusiness,
+  deleteTelnyxVoiceRoute,
   upsertTelnyxVoiceRoute,
   getBusinessTelnyxSettings,
   setForwardToE164,
@@ -106,6 +107,29 @@ describe("telnyx-routes DB layer", () => {
     const c2 = chain();
     c2.maybeSingle.mockResolvedValue({ data: null, error: { message: "db" } });
     await expect(getTelnyxVoiceRouteForBusiness("biz", makeDb(c2) as never)).rejects.toThrow(/db/);
+  });
+
+  it("deleteTelnyxVoiceRoute deletes by to_e164 and throws on error", async () => {
+    const c = chain();
+    c.eq.mockReturnValueOnce(Promise.resolve({ error: null }) as never);
+    const db = makeDb(c);
+    await deleteTelnyxVoiceRoute("+15551234567", db as never);
+    expect(db.from).toHaveBeenCalledWith("telnyx_voice_routes");
+    expect(c.delete).toHaveBeenCalled();
+    expect(c.eq).toHaveBeenCalledWith("to_e164", "+15551234567");
+
+    const c2 = chain();
+    c2.eq.mockReturnValueOnce(Promise.resolve({ error: { message: "delete failed" } }) as never);
+    await expect(deleteTelnyxVoiceRoute("+15551234567", makeDb(c2) as never)).rejects.toThrow(
+      /deleteTelnyxVoiceRoute: delete failed/
+    );
+
+    // Default-client path (no injected client).
+    const c3 = chain();
+    c3.eq.mockReturnValueOnce(Promise.resolve({ error: null }) as never);
+    defaultClientSpy.mockReturnValueOnce(makeDb(c3));
+    await deleteTelnyxVoiceRoute("+15551234567");
+    expect(c3.delete).toHaveBeenCalled();
   });
 
   it("upsertTelnyxVoiceRoute sends onConflict to_e164 and defaults media_path", async () => {
