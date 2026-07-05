@@ -71,12 +71,24 @@ if (vmId === null && !subscriptionId) {
 
 const hostinger = makeHostingerClient();
 
-// Resolve the billing subscription from the VM id when not supplied.
+// Resolve the billing subscription from the VM id when not supplied. The VM
+// detail's subscription_id is the reliable mapping — the subscriptions LIST
+// stopped returning resource_id (verified Jul 2026).
+if (!subscriptionId && vmId !== null) {
+  try {
+    const vm = await hostinger.getVirtualMachine(vmId);
+    if (typeof vm.subscription_id === "string" && vm.subscription_id.length > 0) {
+      subscriptionId = vm.subscription_id;
+    }
+  } catch {
+    /* fall through to the list lookup */
+  }
+}
 if (!subscriptionId && vmId !== null) {
   const subs = await hostinger.listBillingSubscriptions();
   const match = subs.find((s) => s.resource_id === String(vmId));
   if (!match) {
-    console.error(`no billing subscription found with resource_id=${vmId}.`);
+    console.error(`no billing subscription found for vm=${vmId}.`);
     console.error(`subscriptions on the account:`);
     for (const s of subs) {
       console.error(`  ${s.id}  status=${s.status} resource=${s.resource_id} item=${s.item_id} next=${s.next_billing_at}`);
