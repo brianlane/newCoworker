@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
-import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
+import { resolveViewAsContext } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   getOrCreateNotificationPreferences,
@@ -24,8 +24,13 @@ export default async function NotificationsPage() {
   if (!user) redirect("/login?redirectTo=/dashboard/notifications");
   if (!user.email) redirect("/login");
 
-  // Admin view-as swaps in the impersonated tenant's owner email.
-  const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
+  // Admin view-as swaps in the impersonated tenant's owner email. While
+  // impersonating, the signed-in admin's own email/phone must NOT leak into
+  // the tenant's contact seeds or the display autofill below.
+  const viewAsCtx = await resolveViewAsContext(user);
+  const ownerEmail = viewAsCtx.ownerEmail ?? user.email;
+  const seedUserEmail = viewAsCtx.viewAs ? ownerEmail : user.email;
+  const seedAuthPhone = viewAsCtx.viewAs ? null : (user.phone ?? null);
 
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
@@ -41,8 +46,8 @@ export default async function NotificationsPage() {
     businessId && businessRow
       ? await getOrCreateNotificationPreferences(businessId, {
           contactSeeds: {
-            userEmail: user.email,
-            authPhone: user.phone ?? null,
+            userEmail: seedUserEmail,
+            authPhone: seedAuthPhone,
             ownerEmail: businessRow.owner_email ?? null,
             businessPhone: businessRow.phone ?? null
           }
@@ -56,8 +61,8 @@ export default async function NotificationsPage() {
       ? {
           ...prefs,
           ...mergeNotificationContactsForDisplay(prefs, {
-            userEmail: user.email,
-            authPhone: user.phone ?? null,
+            userEmail: seedUserEmail,
+            authPhone: seedAuthPhone,
             ownerEmail: businessRow.owner_email ?? null,
             businessPhone: businessRow.phone ?? null
           })

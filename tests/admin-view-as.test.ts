@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const cookieGet = vi.fn();
+const cookiesImpl = vi.fn(async () => ({ get: cookieGet }));
 vi.mock("next/headers", () => ({
-  cookies: vi.fn().mockImplementation(async () => ({ get: cookieGet }))
+  cookies: (...args: unknown[]) => cookiesImpl(...(args as []))
 }));
 
 const maybeSingle = vi.fn();
@@ -31,6 +32,8 @@ const owner: AuthUser = { userId: "u-own", email: "owner@x.com", isAdmin: false 
 beforeEach(() => {
   cookieGet.mockReset();
   maybeSingle.mockReset();
+  cookiesImpl.mockReset();
+  cookiesImpl.mockImplementation(async () => ({ get: cookieGet }));
 });
 
 describe("getViewAsBusinessId", () => {
@@ -49,6 +52,13 @@ describe("getViewAsBusinessId", () => {
     cookieGet.mockReturnValue({ value: "'; drop table businesses; --" });
     expect(await getViewAsBusinessId(admin)).toBeNull();
     cookieGet.mockReturnValue(undefined);
+    expect(await getViewAsBusinessId(admin)).toBeNull();
+  });
+
+  it("returns null when cookies() throws (outside a request scope)", async () => {
+    cookiesImpl.mockImplementation(async () => {
+      throw new Error("cookies was called outside a request scope");
+    });
     expect(await getViewAsBusinessId(admin)).toBeNull();
   });
 });

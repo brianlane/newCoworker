@@ -18,15 +18,20 @@ export function ViewAsBanner({
   tier: string;
 }) {
   const [exiting, setExiting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const exit = async () => {
     setExiting(true);
+    setError(null);
     try {
-      await fetch("/api/admin/view-as", { method: "DELETE" });
-    } finally {
-      // Even if the DELETE failed, navigate back — the admin section never
-      // honors the cookie, and it expires on its own.
+      // Navigate only after the cookie is actually cleared — otherwise the
+      // next /dashboard visit would silently still be impersonating.
+      const res = await fetch("/api/admin/view-as", { method: "DELETE" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       window.location.href = `/admin/${businessId}`;
+    } catch {
+      setError("Couldn't exit view-as — try again.");
+      setExiting(false);
     }
   };
 
@@ -41,14 +46,17 @@ export function ViewAsBanner({
           </span>
         </span>
       </div>
-      <button
-        onClick={exit}
-        disabled={exiting}
-        className="flex shrink-0 items-center gap-1 rounded-md border border-spark-orange/40 px-2.5 py-1 text-xs font-medium text-spark-orange hover:bg-spark-orange/20 disabled:opacity-50 transition-colors"
-      >
-        <X className="h-3 w-3" />
-        {exiting ? "Exiting…" : "Exit view-as"}
-      </button>
+      <div className="flex shrink-0 items-center gap-2">
+        {error && <span className="text-xs text-red-400">{error}</span>}
+        <button
+          onClick={exit}
+          disabled={exiting}
+          className="flex shrink-0 items-center gap-1 rounded-md border border-spark-orange/40 px-2.5 py-1 text-xs font-medium text-spark-orange hover:bg-spark-orange/20 disabled:opacity-50 transition-colors"
+        >
+          <X className="h-3 w-3" />
+          {exiting ? "Exiting…" : "Exit view-as"}
+        </button>
+      </div>
     </div>
   );
 }
