@@ -109,9 +109,12 @@ async function defaultPisQuiescentProbe(host: string, privateKeyPem: string): Pr
       username: "root",
       privateKeyPem,
       // The [e] class stops pgrep -f from matching this probe's own command
-      // line (which contains the literal pattern).
+      // line (which contains the literal pattern). Bare `apt` is matched
+      // too: Hostinger's own maintenance runs `apt` (not `apt-get`), and a
+      // July 2026 Amy-cutover bootstrap failed on its lists lock after the
+      // probe reported idle.
       command:
-        "if pgrep -f 'te[e] -a /post_install.log' >/dev/null || pgrep -x apt-get >/dev/null || pgrep -x dpkg >/dev/null; then echo busy; else echo idle; fi"
+        "if pgrep -f 'te[e] -a /post_install.log' >/dev/null || pgrep -x apt >/dev/null || pgrep -x apt-get >/dev/null || pgrep -x dpkg >/dev/null; then echo busy; else echo idle; fi"
     });
     return (res.stdout ?? "").includes("idle");
   } catch {
