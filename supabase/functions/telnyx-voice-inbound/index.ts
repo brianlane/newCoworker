@@ -64,6 +64,7 @@ import {
   sendMissedCallAutotext,
   type MissedCallReason
 } from "../_shared/missed_call_autotext.ts";
+import { maybeSendMissedCallSpikeAlert } from "../_shared/missed_call_spike.ts";
 import {
   readTelnyxWebhookRateLimits,
   telnyxWebhookClientIp,
@@ -799,6 +800,21 @@ serve(async (req: Request) => {
         event: "voice_missed_call_autotext_failed",
         message: `Missed-call auto-text failed: ${outcome.reason ?? "unknown"}`,
         payload: { call_control_id: callControlId, reason: missedReason }
+      });
+    }
+    // Missed-call spike alert (Standard/Enterprise perk): once the tenant's
+    // refused-call count crosses the daily threshold, tell the owner —
+    // callers hearing "line busy" is otherwise invisible churn. Never throws;
+    // once-per-day dedup + tier gate live inside the helper.
+    const spike = await maybeSendMissedCallSpikeAlert(supabase, {
+      businessId,
+      notifyUrl: `${Deno.env.get("SUPABASE_URL") ?? ""}/functions/v1/notifications`,
+      bearer: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+    });
+    if (spike.status === "sent") {
+      await telemetryRecord(supabase, "voice_missed_call_spike_alert", {
+        business_id: businessId,
+        missed_calls_today: spike.count
       });
     }
   };

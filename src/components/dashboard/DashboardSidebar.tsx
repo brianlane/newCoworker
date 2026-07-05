@@ -16,11 +16,15 @@ import {
   UserCog,
   Workflow,
   CreditCard,
-  ArrowDownUp
+  ArrowDownUp,
+  BarChart3
 } from "lucide-react";
 
 const ownerNavItems = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+  // Standard/Enterprise perk — the page itself renders an upgrade card for
+  // Starter tenants, so the link stays visible as an upsell.
+  { label: "Analytics", href: "/dashboard/analytics", icon: BarChart3 },
   { label: "Chat", href: "/dashboard/chat", icon: MessageSquare },
   { label: "Calls", href: "/dashboard/calls", icon: Phone },
   { label: "Texts", href: "/dashboard/messages", icon: MessageCircle },

@@ -28,6 +28,7 @@ describe("capAlertTaskType", () => {
   it("maps cap kinds to the notification task types", () => {
     expect(capAlertTaskType("sms_monthly")).toBe("sms_cap_reached");
     expect(capAlertTaskType("chat_spend")).toBe("chat_spend_cap_reached");
+    expect(capAlertTaskType("missed_call_spike")).toBe("missed_call_spike");
   });
 });
 
