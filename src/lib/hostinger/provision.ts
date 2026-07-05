@@ -425,11 +425,25 @@ export function buildDefaultPostInstallScript(opts?: {
    * crash-loop with the wrong parallelism settings.
    */
   vpsSize?: VpsSize | null;
+  /**
+   * When set, the script writes this OpenSSH public key into
+   * `/root/.ssh/authorized_keys` before anything else. This is the
+   * DETERMINISTIC key-attach path for adopt/recreate flows: Hostinger's
+   * standalone setup, recreate, and attach endpoints all silently drop
+   * `public_key_ids` on some VMs (observed on VM 1798267 during the KVM2
+   * experiment and VM 1806097 during the KVM1 Phase E smoke, Jul 2026 —
+   * recreate reported success twice, key never landed). Embedding the key
+   * in the post-install script sidesteps the flaky attach entirely; the
+   * purchase-embedded setup path still honors `public_key_ids` so this is
+   * belt-and-suspenders there.
+   */
+  authorizedSshPublicKey?: string | null;
 }): string {
   const repoUrl = opts?.repoUrl ?? "https://github.com/brianlane/newCoworker.git";
   const repoRef = opts?.repoRef ?? "main";
   const tier = opts?.tier ?? "standard";
   const vpsSize = resolveVpsSize(tier, opts?.vpsSize);
+  const authorizedKey = opts?.authorizedSshPublicKey?.trim() || null;
 
   // Defense-in-depth: reject values that could break out of the bash string
   // even before single-quote escaping runs. `repoUrl` must be an http(s) URL;
@@ -441,6 +455,9 @@ export function buildDefaultPostInstallScript(opts?: {
   assertSafeRepoUrl(repoUrl);
   assertSafeRepoRef(repoRef);
   assertSafeTier(tier);
+  if (authorizedKey !== null) {
+    assertSafeAuthorizedKey(authorizedKey);
+  }
   // vpsSize needs no assert: `resolveVpsSize` whitelists to 'kvm2'|'kvm8'
   // (any other input — including hostile strings — falls to the tier default).
 
@@ -457,7 +474,19 @@ export function buildDefaultPostInstallScript(opts?: {
 set -euo pipefail
 exec > >(tee -a /post_install.log) 2>&1
 echo "[newcoworker] post_install start: $(date -Is)"
-
+${
+  authorizedKey !== null
+    ? `
+# Deterministic key attach: Hostinger's setup/recreate/attach endpoints all
+# silently drop public_key_ids on some VMs — write the key ourselves, first
+# thing, so SSH access never depends on their flaky attach.
+mkdir -p /root/.ssh && chmod 700 /root/.ssh
+grep -qF ${bashSingleQuote(authorizedKey)} /root/.ssh/authorized_keys 2>/dev/null || \\
+  echo ${bashSingleQuote(authorizedKey)} >> /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
+`
+    : ""
+}
 # Race protection for the dual-path bootstrap (Hostinger PIS + orchestrator
 # SSH fallback). When PIS attaches successfully, Hostinger's cloud-init
 # executes THIS script via its \`runcmd\` module during first-boot. We
@@ -568,6 +597,23 @@ function assertSafeRepoUrl(url: string): void {
   if (/[\s`$\\"';&|<>]/.test(url)) {
     throw new Error(
       `buildDefaultPostInstallScript: repoUrl contains disallowed characters`
+    );
+  }
+}
+
+function assertSafeAuthorizedKey(key: string): void {
+  // Single-line OpenSSH public key: `<type> <base64> [comment]`. The value is
+  // emitted through bashSingleQuote so shell injection is already neutralised;
+  // this validator exists to catch garbage (multi-line PEM blocks, private
+  // keys) before it lands in authorized_keys and silently breaks SSH.
+  if (/[\r\n]/.test(key)) {
+    throw new Error(
+      "buildDefaultPostInstallScript: authorizedSshPublicKey must be a single line"
+    );
+  }
+  if (!/^(ssh-(ed25519|rsa|dss)|ecdsa-sha2-nistp(256|384|521)|sk-(ssh-ed25519|ecdsa-sha2-nistp256)@openssh\.com) [A-Za-z0-9+/=]+( [^\s][^\r\n]*)?$/.test(key)) {
+    throw new Error(
+      "buildDefaultPostInstallScript: authorizedSshPublicKey is not a valid OpenSSH public key"
     );
   }
 }

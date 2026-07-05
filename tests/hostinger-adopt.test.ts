@@ -123,6 +123,29 @@ describe("adoptVpsForBusiness", () => {
     expect(deps.db!.getActiveVpsSshKey).toHaveBeenCalledWith("1800985");
   });
 
+  it("embeds the public key in the registered post-install script (deterministic attach)", async () => {
+    // Hostinger's setup/recreate/attach endpoints silently drop
+    // public_key_ids on some VMs (VM 1798267 KVM2 experiment, VM 1806097
+    // KVM1 Phase E smoke) — the PIS-embedded authorized_keys write is the
+    // only attach path that always works, so the adopt flow must pass the
+    // key row's public half into the script builder.
+    const client = makeClient();
+    const deps = makeDeps(client, {
+      db: {
+        insertVpsSshKey: vi.fn(),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(keyRow),
+        reassignVpsSshKeyBusiness: vi.fn()
+      }
+    });
+    await adoptVpsForBusiness(
+      { businessId: "biz-1", tier: "standard", vpsSize: "kvm2", virtualMachineId: 1800985 },
+      deps
+    );
+    expect(client.createPostInstallScript).toHaveBeenCalledTimes(1);
+    const scriptContent = client.createPostInstallScript.mock.calls[0][1] as string;
+    expect(scriptContent).toContain(`echo '${keyRow.public_key}' >> /root/.ssh/authorized_keys`);
+  });
+
   it("reassigns a previous tenant's key row AND still recreates — inherited keys never skip the wipe", async () => {
     // Two guarantees in one path: (a) business-scoped lookups (backup/
     // restore, admin console) resolve keys via business_id, so the row must

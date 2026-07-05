@@ -13,15 +13,20 @@
  *   1. Reuse the VM's existing `vps_ssh_keys` row when one is active (a
  *      prior partial adopt already uploaded the public half — the table
  *      enforces one active row per VPS), otherwise mint + upload + persist.
- *   2. Register the bootstrap as a post-install script. No 403 fallback:
- *      an account that owns an adoptable VPS is past the "no VPS yet"
- *      chicken-and-egg that gates this endpoint for new accounts.
+ *   2. Register the bootstrap as a post-install script WITH THE PUBLIC KEY
+ *      EMBEDDED (authorized_keys write, first thing): Hostinger's setup,
+ *      recreate, AND attach endpoints all silently drop `public_key_ids` on
+ *      some VMs (VM 1798267 in the KVM2 experiment; VM 1806097 in the KVM1
+ *      Phase E smoke — two recreates reported success, key never landed).
+ *      The PIS-embedded write is the only deterministic attach. No 403
+ *      fallback on PIS registration: an account that owns an adoptable VPS
+ *      is past the "no VPS yet" chicken-and-egg that gates this endpoint
+ *      for new accounts.
  *   3. `setup` only if the box is stuck in `initial` (never set up).
  *   4. `recreate` with the same payload — standalone setup 422s on
  *      bare-label hostnames and IGNORES `public_key_ids`; recreate is what
- *      actually lands the key. A recreate issued right after setup settles
- *      sometimes still misses the key, so we PROBE ssh auth and re-run the
- *      recreate once before failing.
+ *      runs the PIS (and with it the embedded key write). We still PROBE
+ *      ssh auth and re-run the recreate once before failing.
  *   5. Wait for the box's own post-install run to go quiescent (Hostinger
  *      runs the PIS through its own runner, not cloud-init, so the
  *      orchestrator's `cloud-init status --wait` can't see it) — otherwise
@@ -209,9 +214,16 @@ export async function adoptVpsForBusiness(
   const privateKeyPem = sshKeyRow.private_key_pem;
 
   // 2. Bootstrap as a post-install script (no 403 fallback — see header).
+  //    The public key is EMBEDDED in the script because Hostinger's
+  //    setup/recreate/attach endpoints drop `public_key_ids` on some VMs;
+  //    the PIS write is the deterministic attach path (see header #2).
   const script = await client.createPostInstallScript(
     `newcoworker-${input.businessId}-${Date.now().toString(36)}`,
-    buildDefaultPostInstallScript({ tier: input.tier, vpsSize })
+    buildDefaultPostInstallScript({
+      tier: input.tier,
+      vpsSize,
+      authorizedSshPublicKey: sshKeyRow.public_key
+    })
   );
 
   const setupPayload: VpsSetupRequest = {
