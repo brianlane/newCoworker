@@ -48,8 +48,9 @@ const WEB_SOURCE_FIELD = {
   name: "web_source",
   description:
     "The lead's original web source website, shown in the 'Web Source' row of the lead " +
-    "details (often a site logo, e.g. realestateagents). Answer with just the site name, " +
-    "e.g. RealEstateAgents.com. If no web source is shown, answer exactly: ReferralExchange"
+    "details (often a site logo). Answer as a full website domain, e.g. RealEstateAgents.com " +
+    "— a bare name like 'realestateagents' means realestateagents.com. If none is shown, " +
+    "answer exactly: ReferralExchange.com"
 };
 
 /**
