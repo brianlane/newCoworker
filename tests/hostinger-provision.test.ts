@@ -364,7 +364,7 @@ describe("provisionVpsForBusiness", () => {
     );
     // The tier-keyed map is now derived from the size-keyed one; pin the
     // linkage so a future edit can't silently fork the two.
-    expect(DEFAULT_TIER_PRICE_ITEM.starter).toBe(VPS_SIZE_PRICE_ITEM.kvm2);
+    expect(DEFAULT_TIER_PRICE_ITEM.starter).toBe(VPS_SIZE_PRICE_ITEM.kvm1);
     expect(DEFAULT_TIER_PRICE_ITEM.standard).toBe(VPS_SIZE_PRICE_ITEM.kvm8);
   });
 
@@ -996,7 +996,7 @@ describe("buildDefaultPostInstallScript", () => {
     });
     expect(s).toContain("REPO_URL='https://github.com/other/repo.git'");
     expect(s).toContain("REPO_REF='release'");
-    expect(s).toContain("TIER='starter' VPS_SIZE='kvm2'");
+    expect(s).toContain("TIER='starter' VPS_SIZE='kvm1'");
   });
 
   it("emits an explicit vpsSize pin independently of tier (standard-on-kvm2)", () => {
@@ -1006,7 +1006,7 @@ describe("buildDefaultPostInstallScript", () => {
 
   it("resolves a null vpsSize to the tier default", () => {
     const s = buildDefaultPostInstallScript({ tier: "starter", vpsSize: null });
-    expect(s).toContain("TIER='starter' VPS_SIZE='kvm2'");
+    expect(s).toContain("TIER='starter' VPS_SIZE='kvm1'");
   });
 
   it("rejects empty or overly long repoRef values", () => {

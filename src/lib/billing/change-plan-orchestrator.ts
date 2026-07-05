@@ -53,6 +53,7 @@ import {
   restoreBusinessData
 } from "@/lib/hostinger/data-migration";
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
+import { vpsSizeFromHostingerPlan, type VpsSize } from "@/lib/vps/size";
 import {
   ensureCommitmentSchedule,
   getStripe
@@ -590,15 +591,27 @@ export async function runChangePlanFromCheckout(
     // pool so the next matching-size signup adopts it instead of buying.
     // Best-effort: pool bookkeeping never fails a plan change.
     if (oldVmId !== null) {
+      // Seed label for boxes with no vps_inventory row (releaseVpsToPool
+      // keeps the recorded plan for tracked ones). The business's vps_size
+      // pin is useless here — Step 3 already re-pinned it to the NEW box —
+      // so ask Hostinger for the released box's ACTUAL plan; that also
+      // covers a kvm1 box whose purchase-time inventory record failed,
+      // which the historical tier-default fallback would mislabel kvm2.
+      let releasedPlan: VpsSize = oldSub.tier === "starter" ? "kvm2" : "kvm8";
+      try {
+        const oldVm = await hostinger.getVirtualMachine(oldVmId);
+        releasedPlan = vpsSizeFromHostingerPlan(oldVm.plan) ?? releasedPlan;
+      } catch (err) {
+        logger.warn("changePlan: released-box plan lookup failed (using tier default)", {
+          businessId,
+          oldVmId,
+          error: errorMessage(err)
+        });
+      }
       try {
         await releaseVpsToPool({
           vmId: oldVmId,
-          // Label by the OLD subscription's tier default. The vps_size pin
-          // describes the box being provisioned NOW, not the one being
-          // released. For boxes already tracked in vps_inventory (recorded
-          // at purchase/adopt time) releaseVpsToPool keeps the recorded
-          // plan anyway; this label only seeds pre-inventory boxes.
-          plan: oldSub.tier === "starter" ? "kvm2" : "kvm8",
+          plan: releasedPlan,
           hostingerBillingSubscriptionId: oldSub.hostinger_billing_subscription_id,
           notes: `returned by upgrade_switch of business ${businessId}; auto-renew off — lapses at period end unless adopted`
         });

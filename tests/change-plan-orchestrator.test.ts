@@ -376,6 +376,36 @@ describe("runChangePlanFromCheckout", () => {
       );
     });
 
+    it("labels an untracked released box by its ACTUAL Hostinger plan (kvm1)", async () => {
+      // A kvm1 box whose purchase-time inventory record failed must not be
+      // seeded into the pool as kvm2 — the teardown asks Hostinger for the
+      // released box's real plan.
+      hostingerGetVmMock.mockImplementation(async (id: number) => ({
+        id,
+        plan: id === 1001 ? "KVM 1" : "KVM 8",
+        ipv4: [{ address: id === 1001 ? "10.0.0.1" : "10.0.0.2" }]
+      }));
+      await runChangePlanFromCheckout(makeSession(), "evt_pool_plan");
+      expect(releaseVpsToPoolMock).toHaveBeenCalledWith(
+        expect.objectContaining({ vmId: 1001, plan: "kvm1" })
+      );
+    });
+
+    it("falls back to the old tier default when the teardown plan lookup fails", async () => {
+      // IP resolves (backup/restore) run BEFORE the teardown; only the
+      // post-stop plan lookup throws here.
+      hostingerGetVmMock.mockImplementation(async (id: number) => {
+        if (hostingerStopVirtualMachineMock.mock.calls.length > 0 && id === 1001) {
+          throw new Error("hostinger 500");
+        }
+        return { id, ipv4: [{ address: id === 1001 ? "10.0.0.1" : "10.0.0.2" }] };
+      });
+      await runChangePlanFromCheckout(makeSession(), "evt_pool_planfail");
+      expect(releaseVpsToPoolMock).toHaveBeenCalledWith(
+        expect.objectContaining({ vmId: 1001, plan: "kvm2" })
+      );
+    });
+
     it("continues the plan change when the pool return fails", async () => {
       releaseVpsToPoolMock.mockRejectedValueOnce(new Error("pool down"));
       await runChangePlanFromCheckout(makeSession(), "evt_pool_4");

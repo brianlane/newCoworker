@@ -28,7 +28,7 @@ import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
 import { buildProvisioningLiveEmail } from "@/lib/email/templates/provisioning-live";
-import { updateBusinessStatus, getBusiness } from "@/lib/db/businesses";
+import { updateBusinessStatus, updateBusinessVpsSize, getBusiness } from "@/lib/db/businesses";
 import {
   getActiveGatewayTokenForBusiness,
   issueGatewayToken,
@@ -817,6 +817,22 @@ async function runOrchestrator(
   });
 
   await updateBusinessStatus(businessId, "offline", vpsId);
+
+  // Persist the RESOLVED hardware pin — only now, AFTER updateBusinessStatus
+  // pointed hostinger_vps_id at the new box, so the pin and the referenced VM
+  // never disagree (a pin written at acquire time would describe the NEW box
+  // while hostinger_vps_id still referenced the old one, letting a fleet
+  // redeploy push a kvm1 no-Ollama profile onto live kvm2 hardware). Runtime
+  // consumers (e.g. the SMS worker's over-cap local-model check) key off the
+  // explicit `businesses.vps_size` and treat null as "legacy kvm2/kvm8 with
+  // Ollama", so every box provisioned from here on must carry its actual
+  // size. The write is FATAL on failure, exactly like the updateBusinessStatus
+  // call above (same table, same client): a kvm1 box silently left unpinned
+  // would be treated as legacy hardware — over-cap SMS would route to an
+  // Ollama that doesn't exist and fleet redeploys would push a kvm2 profile
+  // onto it — which is worse than surfacing the error and letting the
+  // provision retry.
+  await updateBusinessVpsSize(businessId, vpsSize);
 
   const existingConfig = await getBusinessConfig(businessId);
   const businessRow = await getBusiness(businessId);

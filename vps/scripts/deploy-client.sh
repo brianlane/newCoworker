@@ -7,10 +7,12 @@
 #   TIER                     — starter | standard (ENTITLEMENTS: drives the
 #                               aiflow-render gate; hardware decisions key on
 #                               VPS_SIZE)
-#   VPS_SIZE                 — kvm2 | kvm8 (HARDWARE: drives the local Ollama
-#                               fallback model). Unset falls back to the
-#                               historical tier mapping (starter→kvm2,
-#                               standard→kvm8).
+#   VPS_SIZE                 — kvm1 | kvm2 | kvm8 (HARDWARE: drives the local
+#                               Ollama fallback model — kvm1 has NONE: AI is
+#                               Gemini-only and over-cap turns refuse). Unset
+#                               falls back to the tier default (starter→kvm1,
+#                               standard→kvm8; lockstep with
+#                               src/lib/vps/size.ts).
 #   SUPABASE_URL             — Supabase project URL
 #   SUPABASE_SERVICE_KEY     — Service role key (write config back)
 #   CLOUDFLARE_TUNNEL_TOKEN  — cloudflared tunnel token
@@ -64,8 +66,12 @@ set -euo pipefail
 
 TIER="${TIER:-standard}"
 if [[ -z "${VPS_SIZE:-}" ]]; then
-  if [[ "$TIER" == "starter" ]]; then VPS_SIZE="kvm2"; else VPS_SIZE="kvm8"; fi
+  if [[ "$TIER" == "starter" ]]; then VPS_SIZE="kvm1"; else VPS_SIZE="kvm8"; fi
 fi
+# kvm1 carries no local Ollama model (bootstrap skips the install). Every
+# local-fallback decision below keys on this flag instead of re-testing the
+# size string.
+if [[ "$VPS_SIZE" == "kvm1" ]]; then HAS_LOCAL_MODEL="false"; else HAS_LOCAL_MODEL="true"; fi
 LOG="/var/log/deploy-client-${BUSINESS_ID:-unknown}.log"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG"; }
@@ -204,8 +210,12 @@ log "Writing Rowboat .env..."
 # Hardware-aware model selection (local Ollama FALLBACK only — the primary
 # chat/SMS path is Gemini via the llm-router; this model serves cap-tripped
 # and outage turns).
+# KVM1 (4GB): NO local model — Ollama is never installed; over-cap turns
+# refuse instead of degrading (fleet economics Phase E decision).
 # KVM2 (8GB): **`llama3.2:3b`**. KVM8 (32GB CPU): **`qwen3:4b-instruct`**. Dual fast/balanced tags are for GPU hosts only.
-if [[ "${VPS_SIZE}" == "kvm2" ]]; then
+if [[ "${HAS_LOCAL_MODEL}" == "false" ]]; then
+  OLLAMA_MODEL=""
+elif [[ "${VPS_SIZE}" == "kvm2" ]]; then
   OLLAMA_MODEL="llama3.2:3b"
 else
   OLLAMA_MODEL="qwen3:4b-instruct"
@@ -238,9 +248,16 @@ OWNER_CHAT_MODEL=${OWNER_CHAT_MODEL:-${OWNER_CHAT_MODEL_DEFAULT}}
 # no key. Seeding Gemini on a keyless host would break owner dashboard chat on
 # every turn (worse than the slow-but-working local model), so degrade to the
 # local Ollama tag instead. Tenants with a key keep Gemini.
+# On kvm1 there IS no local tag to degrade to — a keyless kvm1 host has no
+# working AI at all, so fail the deploy loudly instead of shipping a tenant
+# whose every chat/SMS turn 503s.
 case "${OWNER_CHAT_MODEL}" in
   gemini-*)
     if [[ -z "${GOOGLE_API_KEY:-}" ]]; then
+      if [[ "${HAS_LOCAL_MODEL}" == "false" ]]; then
+        log "FATAL: OWNER_CHAT_MODEL=${OWNER_CHAT_MODEL} requires GOOGLE_API_KEY and this ${VPS_SIZE} host has no local model to fall back to."
+        exit 1
+      fi
       log "WARNING: OWNER_CHAT_MODEL=${OWNER_CHAT_MODEL} requires GOOGLE_API_KEY but none is set; falling back to local ${OLLAMA_MODEL} for OwnerCoworker."
       OWNER_CHAT_MODEL="${OLLAMA_MODEL}"
     fi
@@ -261,6 +278,10 @@ SMS_CHAT_MODEL=${SMS_CHAT_MODEL:-${SMS_CHAT_MODEL_DEFAULT}}
 case "${SMS_CHAT_MODEL}" in
   gemini-*)
     if [[ -z "${GOOGLE_API_KEY:-}" ]]; then
+      if [[ "${HAS_LOCAL_MODEL}" == "false" ]]; then
+        log "FATAL: SMS_CHAT_MODEL=${SMS_CHAT_MODEL} requires GOOGLE_API_KEY and this ${VPS_SIZE} host has no local model to fall back to."
+        exit 1
+      fi
       log "WARNING: SMS_CHAT_MODEL=${SMS_CHAT_MODEL} requires GOOGLE_API_KEY but none is set; falling back to local ${OLLAMA_MODEL} for the SMS Coworker agent."
       SMS_CHAT_MODEL="${OLLAMA_MODEL}"
     fi
@@ -319,10 +340,13 @@ QDRANT_API_KEY=
 # docker-compose network) which forwards to Ollama for dispatcher (SMS)
 # and Gemini for voice_task (voice). The llm-router service uses its
 # compose DNS alias; no host.docker.internal hop needed from Rowboat.
+# On a no-local-model host (kvm1) OLLAMA_MODEL is empty; every seeded agent
+# carries an explicit model, so the provider defaults only exist to satisfy
+# Rowboat's boot-time validator — point them at the Gemini SMS model there.
 PROVIDER_BASE_URL=http://llm-router:${LLM_ROUTER_PORT}/v1
 PROVIDER_API_KEY=router
-PROVIDER_DEFAULT_MODEL=${OLLAMA_MODEL}
-PROVIDER_COPILOT_MODEL=${OLLAMA_MODEL}
+PROVIDER_DEFAULT_MODEL=${OLLAMA_MODEL:-${SMS_CHAT_MODEL}}
+PROVIDER_COPILOT_MODEL=${OLLAMA_MODEL:-${SMS_CHAT_MODEL}}
 
 # Gemini model used by the voice_task agent via the llm-router.
 #
@@ -378,7 +402,17 @@ report_progress 55 "env_written" "Rowboat .env written"
 # pair `OLLAMA_KEEP_ALIVE=-1` (set in bootstrap's service override) with
 # a scheduled single-token generate that stands down while the owner is
 # actively chatting — implementation in vps/scripts/keep-warm.sh.
+#
+# No-local-model hosts (kvm1) have no Ollama to keep warm — skip, and tear
+# down any timer left behind by an earlier same-box life as kvm2.
 # ------------------------------------------------------------------
+if [[ "${HAS_LOCAL_MODEL}" == "false" ]]; then
+  log "KVM 1: skipping ollama-keep-warm.timer (no local model)."
+  systemctl disable --now ollama-keep-warm.timer 2>/dev/null || true
+  rm -f /etc/systemd/system/ollama-keep-warm.service /etc/systemd/system/ollama-keep-warm.timer
+  systemctl daemon-reload 2>/dev/null || true
+else
+
 log "Installing ollama-keep-warm.timer..."
 
 # Script lives alongside the staged repo so rsync from bootstrap picks it
@@ -438,6 +472,8 @@ TIMER
 else
   log "WARN: skipping ollama-keep-warm.timer install (script missing)"
 fi
+
+fi # end HAS_LOCAL_MODEL keep-warm gate
 
 # ------------------------------------------------------------------
 # 3. Apply Rowboat stack.
@@ -544,15 +580,21 @@ else
   log "WARN: APP_BASE_URL unset — Rowboat workflow tools stay mocked (no tool webhook)"
 fi
 
+# On a no-local-model host (kvm1) the Local twin agents are seeded DISABLED
+# and pinned to the Gemini model (their $model arg must be non-empty for
+# Rowboat's validator, but they are never routed to: the platform/edge/worker
+# cap logic refuses over-cap turns on kvm1 instead of downgrading).
 WORKFLOW_JSON=$(jq -nc \
   --arg name "${BUSINESS_NAME:-AI Coworker}" \
   --arg instructions "${ROWBOAT_INSTRUCTIONS}" \
-  --arg model "${OLLAMA_MODEL}" \
+  --arg model "${OLLAMA_MODEL:-${SMS_CHAT_MODEL}}" \
   --arg ownerModel "${OWNER_CHAT_MODEL}" \
   --arg smsModel "${SMS_CHAT_MODEL}" \
+  --arg hasLocal "${HAS_LOCAL_MODEL}" \
   --arg webhookUrl "${ROWBOAT_TOOL_WEBHOOK_URL}" \
   --arg now "${SEED_NOW}" '
 ($webhookUrl != "") as $toolsAreReal |
+($hasLocal != "true") as $localAgentsDisabled |
 {
   agents: [
     {
@@ -600,7 +642,7 @@ WORKFLOW_JSON=$(jq -nc \
       # switch only takes effect statelessly). Free but slower (CPU prefill), so
       # a runaway burst degrades to local instead of billing unbounded Gemini.
       description: "Inbound-SMS spend-cap fallback: identical to Coworker but on the local model.",
-      disabled: false,
+      disabled: $localAgentsDisabled,
       instructions: $instructions,
       outputVisibility: "user_facing",
       controlType: "retain",
@@ -656,7 +698,7 @@ WORKFLOW_JSON=$(jq -nc \
       # honors the per-job startAgent. Slower (CPU prefill) but free, so a
       # runaway loop degrades to local instead of billing unbounded Gemini.
       description: "Owner dashboard chat spend-cap fallback: identical to OwnerCoworker but on the local model.",
-      disabled: false,
+      disabled: $localAgentsDisabled,
       instructions: $instructions,
       outputVisibility: "user_facing",
       controlType: "retain",
@@ -1399,11 +1441,28 @@ if [[ -f "${CHAT_WORKER_DEST}/docker-compose.yml" ]]; then
     case "${memory_capture_model_lc}" in
       gemini-*|gemini_*|gemini.*)
         if [[ -z "${GOOGLE_API_KEY:-}" ]]; then
-          log "WARNING: MEMORY_CAPTURE_MODEL=${MEMORY_CAPTURE_MODEL} requires GOOGLE_API_KEY but none is set; falling back to local ${OLLAMA_MODEL} for owner-rule capture."
-          MEMORY_CAPTURE_MODEL="${OLLAMA_MODEL}"
+          if [[ "${HAS_LOCAL_MODEL}" == "false" ]]; then
+            # kvm1 has no local tag to degrade capture to; capture is a
+            # best-effort background step, so disable it rather than fail.
+            log "WARNING: MEMORY_CAPTURE_MODEL=${MEMORY_CAPTURE_MODEL} requires GOOGLE_API_KEY and this host has no local model — disabling owner-rule capture."
+            MEMORY_CAPTURE_ENABLED="false"
+          else
+            log "WARNING: MEMORY_CAPTURE_MODEL=${MEMORY_CAPTURE_MODEL} requires GOOGLE_API_KEY but none is set; falling back to local ${OLLAMA_MODEL} for owner-rule capture."
+            MEMORY_CAPTURE_MODEL="${OLLAMA_MODEL}"
+          fi
         fi
         ;;
     esac
+
+    # Over-cap owner-chat routing target. On hosts WITH a local model this is
+    # the OwnerCoworkerLocal twin (seeded above); on kvm1 it is EMPTY, which
+    # tells the worker to REFUSE over-cap turns with an honest "budget used
+    # up" reply instead of routing to an agent that cannot run.
+    if [[ "${HAS_LOCAL_MODEL}" == "true" ]]; then
+      CHAT_WORKER_OWNER_LOCAL_AGENT_VALUE="${CHAT_WORKER_OWNER_LOCAL_AGENT-OwnerCoworkerLocal}"
+    else
+      CHAT_WORKER_OWNER_LOCAL_AGENT_VALUE=""
+    fi
 
     cat > "${CHAT_WORKER_DEST}/.env" <<CWENV_EOF
 SUPABASE_URL=${SUPABASE_URL}
@@ -1422,6 +1481,9 @@ WORKER_VERCEL_BEARER=${INTERNAL_CRON_SECRET:-${WORKER_VERCEL_BEARER:-}}
 # an empty value preserved (that's the escape hatch), so only an *unset*
 # variable falls back to OwnerCoworker.
 CHAT_WORKER_OWNER_START_AGENT=${CHAT_WORKER_OWNER_START_AGENT-OwnerCoworker}
+# Over-cap fallback agent. Empty on no-local-model hosts (kvm1): the worker
+# then refuses over-cap turns instead of downgrading to a local agent.
+CHAT_WORKER_OWNER_LOCAL_AGENT=${CHAT_WORKER_OWNER_LOCAL_AGENT_VALUE}
 # Owner-rule memory capture. After each owner turn the worker runs a background
 # extraction over the owner message and, when it states a durable business rule,
 # POSTs to WORKER_VERCEL_BASE_URL/api/voice/tools/owner-append-business-memory

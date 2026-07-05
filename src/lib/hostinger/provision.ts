@@ -52,6 +52,7 @@ import { resolveVpsSize, type VpsSize } from "@/lib/vps/size";
  * can override via env when this changes.
  */
 export const VPS_SIZE_PRICE_ITEM: Record<VpsSize, string> = {
+  kvm1: "hostingercom-vps-kvm1-usd-1m",
   kvm2: "hostingercom-vps-kvm2-usd-1m",
   kvm8: "hostingercom-vps-kvm8-usd-1m"
 };
@@ -62,7 +63,7 @@ export const VPS_SIZE_PRICE_ITEM: Record<VpsSize, string> = {
  * {@link VPS_SIZE_PRICE_ITEM} via `resolveVpsSize`.
  */
 export const DEFAULT_TIER_PRICE_ITEM: Record<"starter" | "standard", string> = {
-  starter: VPS_SIZE_PRICE_ITEM.kvm2,
+  starter: VPS_SIZE_PRICE_ITEM.kvm1,
   standard: VPS_SIZE_PRICE_ITEM.kvm8
 };
 

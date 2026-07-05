@@ -79,6 +79,14 @@ export type SmsTurnPlan = {
   stateless: boolean;
   /** Whether this turn should be metered (Gemini turns yes, local $0 turns no). */
   meter: boolean;
+  /**
+   * True when the turn must NOT run at all: the tenant is over cap AND has no
+   * local fallback agent (kvm1 hardware ships no Ollama). Running Gemini
+   * anyway would defeat the fuse (unbounded spend), so the caller completes
+   * the job without an AI reply. The fuse-tripped owner alert has already
+   * fired from the spend meter, so the owner knows why replies stopped.
+   */
+  refuse: boolean;
 };
 
 /**
@@ -95,6 +103,10 @@ export type SmsTurnPlan = {
  * degraded (relies on the customer preamble for context). This is a rare safety
  * state, and we deliberately do NOT persist the local turn's conversationId so
  * the thread resumes on Gemini once the period resets.
+ *
+ * Over cap with NO local agent (kvm1 hardware — see `tenantHasLocalModel`):
+ * refuse the turn entirely. Continuing on Gemini would silently disable the
+ * fuse; degrading is impossible because the local model was never installed.
  */
 export function pickSmsTurn(opts: {
   overCap: boolean;
@@ -102,9 +114,29 @@ export function pickSmsTurn(opts: {
   localAgent: string | null;
 }): SmsTurnPlan {
   if (opts.overCap && opts.localAgent) {
-    return { startAgent: opts.localAgent, stateless: true, meter: false };
+    return { startAgent: opts.localAgent, stateless: true, meter: false, refuse: false };
   }
-  return { startAgent: opts.geminiAgent || null, stateless: false, meter: true };
+  if (opts.overCap) {
+    return { startAgent: null, stateless: false, meter: false, refuse: true };
+  }
+  return { startAgent: opts.geminiAgent || null, stateless: false, meter: true, refuse: false };
+}
+
+/**
+ * Whether this tenant's VPS hardware carries a local Ollama model the SMS
+ * path can degrade to over cap (mirrors `vpsSizeHasLocalModel` in
+ * src/lib/vps/size.ts: only kvm1 ships without Ollama).
+ *
+ * Deliberately keyed on the EXPLICIT `businesses.vps_size` pin only — a null
+ * pin means the tenant predates pin persistence and was provisioned on
+ * legacy kvm2/kvm8 hardware that DOES have the local model, so the refuse
+ * path must not fire for them. Every kvm1 box is provisioned after the
+ * orchestrator started persisting the resolved size (see
+ * src/lib/provisioning/orchestrate.ts), so kvm1 tenants always carry the
+ * explicit pin.
+ */
+export function tenantHasLocalModel(vpsSize: string | null | undefined): boolean {
+  return vpsSize !== "kvm1";
 }
 
 /** Start of the current UTC month, ISO — fallback period key when no subscription. */

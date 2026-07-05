@@ -38,7 +38,8 @@ import { currentDateTimeLine } from "../_shared/datetime_line.ts";
 import {
   pickSmsTurn,
   capMicrosForTier,
-  resolveSmsChatCap
+  resolveSmsChatCap,
+  tenantHasLocalModel
 } from "../_shared/chat_spend_cap.ts";
 import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
 
@@ -259,10 +260,14 @@ serve(async (req: Request) => {
     let businessTimezone: string | null = null;
     // Tier drives the shared AI spend cap ($5 starter / $10 otherwise).
     let businessTier: string | null = null;
+    // vps_size decides the over-cap behavior: hardware with a local model
+    // (kvm2/kvm8) degrades to the CoworkerLocal twin; kvm1 has none, so
+    // over-cap turns are refused (see pickSmsTurn / tenantHasLocalModel).
+    let businessVpsSize: string | null = null;
     {
       const { data: bizRow } = await supabase
         .from("businesses")
-        .select("is_paused, customer_channels_enabled, timezone, tier")
+        .select("is_paused, customer_channels_enabled, timezone, tier, vps_size")
         .eq("id", job.business_id)
         .maybeSingle();
       const biz = bizRow as
@@ -271,10 +276,12 @@ serve(async (req: Request) => {
             customer_channels_enabled?: boolean;
             timezone?: string | null;
             tier?: string | null;
+            vps_size?: string | null;
           }
         | null;
       businessTimezone = typeof biz?.timezone === "string" ? biz.timezone : null;
       businessTier = typeof biz?.tier === "string" ? biz.tier : null;
+      businessVpsSize = typeof biz?.vps_size === "string" ? biz.vps_size : null;
 
       if (biz?.is_paused || biz?.customer_channels_enabled === false) {
         // Staff jobs were already handled at inbound time (audit row + optional
@@ -857,8 +864,63 @@ serve(async (req: Request) => {
         const turnPlan = pickSmsTurn({
           overCap: cap.overCap,
           geminiAgent: SMS_CHAT_GEMINI_AGENT,
-          localAgent: SMS_CHAT_LOCAL_AGENT
+          // kvm1 hardware has no local Ollama model, so there is no
+          // CoworkerLocal to degrade to — over-cap turns must refuse. Keyed
+          // on the explicit vps_size pin only: a null pin = legacy kvm2/kvm8
+          // box that does have the local model.
+          localAgent: tenantHasLocalModel(businessVpsSize)
+            ? SMS_CHAT_LOCAL_AGENT
+            : null
         });
+
+        if (turnPlan.refuse) {
+          // Over cap with no local fallback: complete the job WITHOUT an AI
+          // reply. Silence toward the customer is deliberate — a canned
+          // non-AI text would still spend an SMS segment while promising a
+          // follow-up nobody is around to give. The owner already got the
+          // fuse-tripped alert from the spend meter; log per-message so the
+          // volume of suppressed texts is visible in the tenant's logs.
+          await supabase.rpc("complete_sms_inbound_job", {
+            p_job_id: job.id,
+            p_status: "done",
+            p_telnyx_outbound_message_id: null,
+            p_rowboat_conversation_id: existingConv,
+            p_last_error: "suppressed_over_ai_budget_no_local"
+          });
+          await clearJobReplyCache(supabase, job.id);
+          const { error: refuseStampErr } = await supabase
+            .from("sms_inbound_jobs")
+            .update({ customer_e164: fromE164 })
+            .eq("id", job.id)
+            .is("customer_e164", null);
+          if (refuseStampErr) {
+            console.error("over-cap refuse customer_e164 stamp", refuseStampErr);
+          }
+          const { error: refuseMemErr } = await supabase.rpc("record_customer_interaction", {
+            p_business_id: job.business_id,
+            p_customer_e164: fromE164,
+            p_channel: "sms",
+            p_display_name: null
+          });
+          if (refuseMemErr) {
+            console.error("record_customer_interaction (over-cap refuse)", refuseMemErr);
+          }
+          await telemetryRecord(supabase, "sms_chat_spend_over_cap_refused", {
+            job_id: job.id,
+            business_id: job.business_id
+          });
+          await systemLog(supabase, {
+            businessId: job.business_id,
+            source: "sms_worker",
+            level: "warn",
+            event: "sms_reply_suppressed_over_ai_budget",
+            message:
+              "Inbound SMS got no AI reply: monthly AI budget used up and this plan's hardware has no local fallback model",
+            payload: { job_id: job.id }
+          });
+          processed += 1;
+          continue;
+        }
 
         const parsed = await callSmsRowboatWithStatelessFallback({
           chatUrl,

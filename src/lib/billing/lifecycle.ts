@@ -633,12 +633,18 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
 
 /**
  * Hardware SKU label for the `return_vps_to_pool` op. Prefers the explicit
- * `businesses.vps_size` pin; falls back to the historical tier default
+ * `businesses.vps_size` pin; falls back to the HISTORICAL tier default
  * (starter→kvm2, everything else→kvm8) so a corrupt/missing pin can never
  * mislabel inventory as an un-adoptable size.
+ *
+ * The fallback deliberately stays kvm2 for starter even though the tier
+ * default is now kvm1: every kvm1-era box is recorded in vps_inventory at
+ * purchase/adopt time (releaseVpsToPool keeps the recorded plan), so this
+ * label only ever seeds PRE-inventory starter boxes — which are all kvm2
+ * hardware.
  */
 function pooledPlanFor(tier: string, vpsSize: string | null | undefined): string {
-  if (vpsSize === "kvm2" || vpsSize === "kvm8") return vpsSize;
+  if (vpsSize === "kvm1" || vpsSize === "kvm2" || vpsSize === "kvm8") return vpsSize;
   return tier === "starter" ? "kvm2" : "kvm8";
 }
 

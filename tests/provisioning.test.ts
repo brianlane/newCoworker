@@ -26,6 +26,7 @@ import type { SshExecResult } from "@/lib/hostinger/ssh";
 
 vi.mock("@/lib/db/businesses", () => ({
   updateBusinessStatus: vi.fn().mockResolvedValue(undefined),
+  updateBusinessVpsSize: vi.fn().mockResolvedValue(undefined),
   getBusiness: vi.fn().mockResolvedValue({ business_type: "real_estate" })
 }));
 
@@ -88,7 +89,7 @@ vi.mock("@/lib/db/telnyx-routes", () => ({
   setBusinessMessagingCampaignStatus: vi.fn().mockResolvedValue(undefined)
 }));
 
-import { updateBusinessStatus, getBusiness } from "@/lib/db/businesses";
+import { updateBusinessStatus, updateBusinessVpsSize, getBusiness } from "@/lib/db/businesses";
 import {
   getActiveGatewayTokenForBusiness,
   issueGatewayToken,
@@ -238,7 +239,7 @@ describe("provisioning/orchestrate", () => {
     expect(vpsProvisioner).toHaveBeenCalledWith({
       businessId: "biz-uuid-1",
       tier: "starter",
-      vpsSize: "kvm2"
+      vpsSize: "kvm1"
     });
   });
 
@@ -342,17 +343,17 @@ describe("provisioning/orchestrate", () => {
     expect(issueGatewayToken).not.toHaveBeenCalled();
   });
 
-  it("starter tier forwards to provisioner with tier='starter' and default kvm2 hardware", async () => {
+  it("starter tier forwards to provisioner with tier='starter' and default kvm1 hardware", async () => {
     const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("s1"));
     const remoteExec = vi.fn().mockResolvedValue(okExec());
     await orchestrateProvisioning(
-      { businessId: "biz-kvm2", tier: "starter" },
+      { businessId: "biz-kvm1", tier: "starter" },
       { vpsProvisioner, remoteExec }
     );
     expect(vpsProvisioner).toHaveBeenCalledWith({
-      businessId: "biz-kvm2",
+      businessId: "biz-kvm1",
       tier: "starter",
-      vpsSize: "kvm2"
+      vpsSize: "kvm1"
     });
   });
 
@@ -404,7 +405,7 @@ describe("provisioning/orchestrate", () => {
     expect(vpsProvisioner).toHaveBeenCalledWith({
       businessId: "biz-corrupt",
       tier: "starter",
-      vpsSize: "kvm2"
+      vpsSize: "kvm1"
     });
   });
 
@@ -418,6 +419,44 @@ describe("provisioning/orchestrate", () => {
     expect(updateBusinessStatus).toHaveBeenCalledTimes(2);
     expect(updateBusinessStatus).toHaveBeenNthCalledWith(1, "biz-uuid-1", "offline", "42");
     expect(updateBusinessStatus).toHaveBeenNthCalledWith(2, "biz-uuid-1", "online", "42");
+  });
+
+  it("persists the resolved vps_size pin only after hostinger_vps_id points at the new box", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "starter" },
+      { vpsProvisioner, remoteExec }
+    );
+    expect(updateBusinessVpsSize).toHaveBeenCalledWith("biz-uuid-1", "kvm1");
+    // Pin write must come AFTER updateBusinessStatus("offline", newVpsId) —
+    // never while hostinger_vps_id still references the previous box.
+    const statusOrder = vi.mocked(updateBusinessStatus).mock.invocationCallOrder[0];
+    const pinOrder = vi.mocked(updateBusinessVpsSize).mock.invocationCallOrder[0];
+    expect(pinOrder).toBeGreaterThan(statusOrder);
+
+    vi.mocked(updateBusinessVpsSize).mockClear();
+    await orchestrateProvisioning(
+      { businessId: "biz-uuid-2", tier: "standard", vpsSize: "kvm2" },
+      { vpsProvisioner, remoteExec }
+    );
+    expect(updateBusinessVpsSize).toHaveBeenCalledWith("biz-uuid-2", "kvm2");
+  });
+
+  it("fails the provision when the vps_size pin write fails (no silent unpinned kvm1)", async () => {
+    // An unpinned kvm1 box would be treated as legacy kvm2/kvm8 hardware:
+    // over-cap SMS would route to a local model that doesn't exist and fleet
+    // redeploys would push an Ollama profile onto it. Surfacing the error (and
+    // letting the provision retry) beats completing with a wrong-hardware pin.
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    vi.mocked(updateBusinessVpsSize).mockRejectedValueOnce(new Error("db blip"));
+    await expect(
+      orchestrateProvisioning(
+        { businessId: "biz-uuid-1", tier: "starter" },
+        { vpsProvisioner, remoteExec }
+      )
+    ).rejects.toThrow("db blip");
   });
 
   it("calls upsertBusinessConfig with no legacy Inworld columns", async () => {
@@ -1732,7 +1771,7 @@ describe("provisioning/orchestrate", () => {
     const claimedRow = {
       vm_id: 1800985,
       hostname: "srv1800985.hstgr.cloud",
-      plan: "kvm2",
+      plan: "kvm1",
       state: "assigned",
       hostinger_billing_subscription_id: null,
       assigned_business_id: "biz-pool-1",
@@ -1758,18 +1797,18 @@ describe("provisioning/orchestrate", () => {
       );
 
       expect(result.vpsId).toBe("1800985");
-      expect(pool.claim).toHaveBeenCalledWith("kvm2", "biz-pool-1");
+      expect(pool.claim).toHaveBeenCalledWith("kvm1", "biz-pool-1");
       expect(vpsAdopter).toHaveBeenCalledWith({
         businessId: "biz-pool-1",
         tier: "starter",
-        vpsSize: "kvm2",
+        vpsSize: "kvm1",
         virtualMachineId: 1800985
       });
       expect(vpsProvisioner).not.toHaveBeenCalled();
       expect(pool.record).toHaveBeenCalledWith(
         expect.objectContaining({
           vmId: 1800985,
-          plan: "kvm2",
+          plan: "kvm1",
           businessId: "biz-pool-1",
           hostingerBillingSubscriptionId: "hsub-adopted"
         })
