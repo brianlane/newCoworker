@@ -132,6 +132,22 @@ describe("POST /api/dashboard/api-keys", () => {
     expect(insertApiKey).not.toHaveBeenCalled();
   });
 
+  it("409s when the DB cap trigger rejects a racing insert", async () => {
+    // Pre-check passed (count below cap) but the api_keys_cap trigger fired —
+    // a concurrent mint won the race.
+    vi.mocked(insertApiKey).mockRejectedValue(
+      new Error("insertApiKey: API key limit reached (10) for business biz-1")
+    );
+    const res = await POST(postReq({ businessId: BIZ, name: "Zapier" }));
+    expect(res.status).toBe(409);
+  });
+
+  it("rethrows non-cap insert failures as 500", async () => {
+    vi.mocked(insertApiKey).mockRejectedValue(new Error("insertApiKey: connection reset"));
+    const res = await POST(postReq({ businessId: BIZ, name: "Zapier" }));
+    expect(res.status).toBe(500);
+  });
+
   it("401s unauthenticated and 400s on bad bodies", async () => {
     vi.mocked(getAuthUser).mockResolvedValue(null);
     expect((await POST(postReq({ businessId: BIZ }))).status).toBe(401);

@@ -70,6 +70,60 @@ alter table public.webhook_subscriptions enable row level security;
 comment on table public.webhook_subscriptions is
   'Zapier-style REST hooks: the webhook-dispatcher Edge cron POSTs new events (cursor-based) to target_url.';
 
+-- Per-business cap backstops. The API layer pre-checks the counts for a
+-- friendly 409, but count-then-insert is racy: two concurrent mints can both
+-- observe count = cap-1 and each insert. These BEFORE INSERT triggers take a
+-- per-business advisory xact lock (serializing concurrent inserts for one
+-- tenant only) and re-check the cap inside the transaction, so the limits
+-- hold no matter how requests interleave. Keep the caps in sync with
+-- MAX_ACTIVE_API_KEYS_PER_BUSINESS / MAX_HOOKS_PER_BUSINESS in src/lib/db.
+
+create or replace function public.enforce_api_key_cap()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform pg_advisory_xact_lock(hashtext('api_keys_cap:' || new.business_id::text));
+  if (
+    select count(*) from public.api_keys
+    where business_id = new.business_id and revoked_at is null
+  ) >= 10 then
+    raise exception 'API key limit reached (10) for business %', new.business_id
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger api_keys_cap
+  before insert on public.api_keys
+  for each row execute function public.enforce_api_key_cap();
+
+create or replace function public.enforce_webhook_subscription_cap()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform pg_advisory_xact_lock(hashtext('webhook_subs_cap:' || new.business_id::text));
+  if (
+    select count(*) from public.webhook_subscriptions
+    where business_id = new.business_id and active = true
+  ) >= 25 then
+    raise exception 'Webhook limit reached (25) for business %', new.business_id
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger webhook_subscriptions_cap
+  before insert on public.webhook_subscriptions
+  for each row execute function public.enforce_webhook_subscription_cap();
+
 -- The public API''s send-SMS action logs with its own source label so owner
 -- dashboards and audits can tell an API/Zapier send from a human one.
 alter table public.sms_outbound_log

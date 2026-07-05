@@ -74,6 +74,8 @@ export async function POST(request: Request) {
     const json = (await request.json().catch(() => null)) as unknown;
     const { event, target_url } = createSchema.parse(json);
 
+    // Friendly pre-check; the webhook_subscriptions_cap DB trigger is the
+    // racy-proof backstop (two concurrent POSTs can both pass this read).
     const active = await countActiveWebhookSubscriptions(auth.businessId);
     if (active >= MAX_HOOKS_PER_BUSINESS) {
       return errorResponse(
@@ -82,12 +84,23 @@ export async function POST(request: Request) {
       );
     }
 
-    const sub = await createWebhookSubscription({
-      businessId: auth.businessId,
-      event,
-      targetUrl: target_url,
-      apiKeyId: auth.apiKeyId
-    });
+    let sub;
+    try {
+      sub = await createWebhookSubscription({
+        businessId: auth.businessId,
+        event,
+        targetUrl: target_url,
+        apiKeyId: auth.apiKeyId
+      });
+    } catch (err) {
+      if (err instanceof Error && /limit reached/i.test(err.message)) {
+        return errorResponse(
+          "CONFLICT",
+          `Webhook limit reached (${MAX_HOOKS_PER_BUSINESS}); delete unused hooks first.`
+        );
+      }
+      throw err;
+    }
 
     return successResponse(serialize(sub), 201);
   } catch (err) {

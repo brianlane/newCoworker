@@ -47,6 +47,15 @@ export const NIL_UUID = "00000000-0000-0000-0000-000000000000";
  */
 export const DISPATCH_LEASE_MS = 120_000;
 
+/**
+ * Per-POST delivery timeout. Subscriptions are processed sequentially, so
+ * without this a single hung target_url would hold the whole cron tick until
+ * the Edge runtime budget expires and starve every later subscription. A
+ * timeout aborts as a delivery failure, which stops that subscription's
+ * batch (cursor doesn't advance past it) and moves on to the next hook.
+ */
+export const DELIVERY_TIMEOUT_MS = 10_000;
+
 export type DispatchSubscription = {
   id: string;
   business_id: string;
@@ -85,10 +94,12 @@ export async function dispatchRows(
       res = await fetchImpl(subscription.target_url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS)
       });
     } catch {
-      // Network-level failure: stop the batch, retry from here next tick.
+      // Network-level failure or timeout: stop the batch, retry from here
+      // next tick.
       return { delivered, newCursor, gone: false, failed: true };
     }
     if (res.status === 410) {

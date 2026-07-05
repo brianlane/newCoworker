@@ -129,6 +129,28 @@ describe("POST /api/public/v1/hooks", () => {
     expect(res.status).toBe(409);
     expect(createWebhookSubscription).not.toHaveBeenCalled();
   });
+
+  it("409s when the DB cap trigger rejects a racing insert", async () => {
+    // Pre-check passed but the webhook_subscriptions_cap trigger fired — a
+    // concurrent subscribe won the race.
+    vi.mocked(createWebhookSubscription).mockRejectedValue(
+      new Error("createWebhookSubscription: Webhook limit reached (25) for business biz-1")
+    );
+    const res = await POST(
+      postReq({ event: "sms.inbound", target_url: "https://hooks.zapier.com/abc" })
+    );
+    expect(res.status).toBe(409);
+  });
+
+  it("rethrows non-cap insert failures as 500", async () => {
+    vi.mocked(createWebhookSubscription).mockRejectedValue(
+      new Error("createWebhookSubscription: connection reset")
+    );
+    const res = await POST(
+      postReq({ event: "sms.inbound", target_url: "https://hooks.zapier.com/abc" })
+    );
+    expect(res.status).toBe(500);
+  });
 });
 
 describe("DELETE /api/public/v1/hooks/:id", () => {

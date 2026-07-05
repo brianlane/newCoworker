@@ -60,9 +60,13 @@ describe("dispatchRows", () => {
     });
     const call = vi.mocked(fetchImpl).mock.calls[0];
     expect(call[0]).toBe(SUB.target_url);
-    const body = JSON.parse((call[1] as RequestInit).body as string);
+    const init = call[1] as RequestInit;
+    const body = JSON.parse(init.body as string);
     expect(body.event).toBe("sms.inbound");
     expect(body.data.text).toBe("msg a");
+    // Every POST carries a timeout signal so one hung target can't hold the
+    // whole sequential cron tick hostage.
+    expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("cursors on the configured column (ended_at for call.completed)", async () => {

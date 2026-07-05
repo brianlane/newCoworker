@@ -61,6 +61,8 @@ export async function POST(request: Request) {
     const { businessId, name } = createSchema.parse(json);
     if (!user.isAdmin) await requireOwner(businessId);
 
+    // Friendly pre-check; the api_keys_cap DB trigger is the racy-proof
+    // backstop (two concurrent mints can both pass this read).
     const active = await countActiveApiKeys(businessId);
     if (active >= MAX_ACTIVE_API_KEYS_PER_BUSINESS) {
       return errorResponse(
@@ -70,12 +72,23 @@ export async function POST(request: Request) {
     }
 
     const minted = mintApiKey();
-    const row = await insertApiKey({
-      businessId,
-      name,
-      keyPrefix: minted.prefix,
-      keyHash: minted.hash
-    });
+    let row;
+    try {
+      row = await insertApiKey({
+        businessId,
+        name,
+        keyPrefix: minted.prefix,
+        keyHash: minted.hash
+      });
+    } catch (err) {
+      if (err instanceof Error && /limit reached/i.test(err.message)) {
+        return errorResponse(
+          "CONFLICT",
+          `Key limit reached (${MAX_ACTIVE_API_KEYS_PER_BUSINESS}); revoke an unused key first.`
+        );
+      }
+      throw err;
+    }
 
     // `plaintext` is shown once in the UI and never again — not persisted.
     return successResponse(
