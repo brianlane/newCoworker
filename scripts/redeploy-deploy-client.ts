@@ -86,7 +86,7 @@ import {
 function buildDeployEnvPrefix(
   businessId: string,
   deployTier: "starter" | "standard",
-  deployVpsSize: "kvm2" | "kvm8",
+  deployVpsSize: "kvm1" | "kvm2" | "kvm8",
   bridgeMediaWssOrigin: string,
   gatewayToken: string,
   repoRef: string
