@@ -407,81 +407,120 @@ async function resolveClickTarget(page, target, { allowExactTextAnywhere = true 
   return null;
 }
 
+// Bound on how many STACKED blocking modals one dismissal pass will close
+// (Clever stacks an announcement modal under a scroll-gated agreement modal).
+const MAX_OVERLAY_DISMISS_ROUNDS = Number(process.env.AIFLOW_MAX_OVERLAY_DISMISS_ROUNDS ?? 3);
+
+/**
+ * Interception recovery for ACTION mode: portals (e.g. Clever, July 2026) began
+ * stacking full-viewport announcement / scroll-gated agreement modals over lead
+ * pages, so every authored click times out — Playwright refuses to click an
+ * element another layer covers ("Provide Update" under a "Clever Offers
+ * Program" agreement modal + a "Service Areas" announcement modal).
+ *
+ * Find the topmost fixed, full-viewport element currently covering the
+ * viewport center (the layer intercepting our pointer events) and click ONE
+ * dismissal control inside it, repeating for stacked modals up to
+ * MAX_OVERLAY_DISMISS_ROUNDS. Only SAFELISTED controls are ever clicked:
+ *   - close-style: "Close" / "Dismiss" / "Got it" / "Not now" / "Skip" / "×"
+ *     (by accessible name or exact text), else
+ *   - agreement-style: "Agree and close" / "I understand" / "Acknowledge" /
+ *     "Scroll to continue". When it's disabled behind a scroll gate, the
+ *     modal's inner scrollers are scrolled to the bottom first and the button
+ *     re-picked (Clever's "Scroll to continue" re-renders into an enabled
+ *     "Agree and close").
+ * Candidates must be <button>/[role="button"] INSIDE the overlay — never
+ * anchors (navigation) and never consequential labels like "Accept"/"Submit"/
+ * "OK" — so a wizard dialog the actions opened on purpose can never be
+ * advanced, only genuinely dismissable layers closed. EXTRACT mode never calls
+ * this (reads don't need pointer events). Returns how many layers were
+ * dismissed; 0 means "nothing here looked like a blocking modal".
+ */
+async function dismissBlockingOverlays(page) {
+  let dismissed = 0;
+  for (let round = 0; round < MAX_OVERLAY_DISMISS_ROUNDS; round++) {
+    let clicked = "";
+    try {
+      clicked = await page.evaluate(async () => {
+        const isVisible = (el) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden";
+        };
+        // The layer intercepting clicks is the LAST (topmost in DOM order)
+        // fixed full-viewport element that owns the hit-test result at the
+        // viewport center. pointer-events:none layers never win elementFromPoint,
+        // so a non-intercepting banner can't be picked.
+        const at = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+        if (!at) return "";
+        let overlay = null;
+        for (const el of document.querySelectorAll("body *")) {
+          if (!isVisible(el) || getComputedStyle(el).position !== "fixed") continue;
+          const r = el.getBoundingClientRect();
+          if (r.width < innerWidth * 0.85 || r.height < innerHeight * 0.85) continue;
+          if (el === at || el.contains(at)) overlay = el;
+        }
+        if (!overlay) return "";
+        const name = (el) => (el.getAttribute("aria-label") || el.textContent || "").trim();
+        const buttons = () =>
+          [...overlay.querySelectorAll('button, [role="button"]')].filter(isVisible);
+        const CLOSE_RE = /^(close|dismiss|got it|no thanks|not now|maybe later|skip|x|×)$/i;
+        const AGREE_RE =
+          /^(agree (and|&) (close|continue)|i understand|acknowledge|scroll to continue)$/i;
+        const pick = () =>
+          buttons().find((b) => CLOSE_RE.test(name(b))) ??
+          buttons().find((b) => AGREE_RE.test(name(b)));
+        let btn = pick();
+        if (!btn) return "";
+        if (btn.disabled) {
+          // Scroll-gated agreement: the button enables (and may re-render with
+          // a new label) only once the modal body has been scrolled to the
+          // bottom. Scroll every scrollable descendant, give the framework a
+          // beat to re-render, then re-pick.
+          for (const el of overlay.querySelectorAll("*")) {
+            if (el.scrollHeight > el.clientHeight + 5) el.scrollTop = el.scrollHeight;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 600));
+          btn = pick();
+          if (!btn || btn.disabled) return "";
+        }
+        const desc = name(btn) || "(unlabeled close)";
+        btn.click();
+        return desc;
+      });
+    } catch {
+      break; // page navigated/closed mid-probe — nothing left to dismiss
+    }
+    if (!clicked) break;
+    dismissed++;
+    console.log(`[render] dismissed blocking overlay via "${clicked}"`);
+    // Let the modal unmount (or the next stacked one surface) before re-probing.
+    await page.waitForTimeout(500);
+    await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
+  }
+  return dismissed;
+}
+
 /**
  * Run the ordered click/fill sequence. Stops at the FIRST failing action and
  * reports how far it got, so the worker can surface exactly which action broke
  * (a changed page is a permanent error, not a retry). After every action we
  * wait for network idle (best-effort) so a click that opens a dialog / posts a
  * form settles before the next action targets the new DOM.
+ *
+ * A failed action gets ONE retry when dismissBlockingOverlays actually closed
+ * a full-viewport modal — the failure was then very likely interception, not a
+ * changed page. When nothing was dismissed the original error is reported
+ * unchanged, so genuine page-drift failures stay loud and permanent.
  */
 async function performActions(page, actions) {
   let completed = 0;
   for (const a of actions) {
     try {
-      if (a.kind === "click_text") {
-        // Prefer a real button/link (or exact-text element); substring matches
-        // resolve ONLY to interactive controls so body copy that merely
-        // contains the word (e.g. "…then accept or reject.") can never be
-        // "clicked" into a phantom success.
-        const loc = await resolveClickTarget(page, a.target, { allowExactTextAnywhere: true });
-        if (!loc) throw new Error("no matching control on the page");
-        await loc.click({ timeout: ACTION_TIMEOUT_MS });
-      } else if (a.kind === "click_text_while_present") {
-        // Wizard-style "Next" loop: click the control as long as it is visible,
-        // bounded by MAX_WHILE_PRESENT_CLICKS. Resolves ONLY to real controls
-        // (no substring fallback) so it can't latch onto prose that contains the
-        // word (e.g. "…on the next screen…"). Zero matches is SUCCESS — the page
-        // is already past the step.
-        const isPresent = async () => {
-          const loc = await resolveClickTarget(page, a.target, { allowExactTextAnywhere: false });
-          if (!loc) return false;
-          try {
-            await loc.waitFor({ state: "visible", timeout: WHILE_PRESENT_PROBE_MS });
-            return true;
-          } catch {
-            return false;
-          }
-        };
-        let clicks = 0;
-        while (clicks < MAX_WHILE_PRESENT_CLICKS && (await isPresent())) {
-          const loc = await resolveClickTarget(page, a.target, { allowExactTextAnywhere: false });
-          if (!loc) break;
-          await loc.click({ timeout: ACTION_TIMEOUT_MS });
-          await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
-          clicks++;
-        }
-        // Hitting the cap WHILE the target is still on the page means the wizard
-        // never finished — fail the action so the worker doesn't extract from a
-        // half-completed page (a changed/looping page is a permanent error).
-        if (clicks >= MAX_WHILE_PRESENT_CLICKS && (await isPresent())) {
-          throw new Error(`still present after ${MAX_WHILE_PRESENT_CLICKS} clicks`);
-        }
-      } else if (a.kind === "click_selector") {
-        await page.locator(a.target).first().click({ timeout: ACTION_TIMEOUT_MS });
-      } else if (a.kind === "click_role") {
-        // target = ARIA role, value = accessible name (e.g. a calendar day cell
-        // "Choose Thursday, June 18th, 2026"). Name match is case-insensitive
-        // substring so authors don't have to reproduce the exact label.
-        await page
-          .getByRole(a.target, { name: a.value, exact: false })
-          .first()
-          .click({ timeout: ACTION_TIMEOUT_MS });
-      } else if (a.kind === "select_option") {
-        // target = CSS selector for the <select>, value = option value OR label.
-        await page
-          .locator(a.target)
-          .first()
-          .selectOption({ label: a.value }, { timeout: ACTION_TIMEOUT_MS })
-          .catch(() =>
-            page.locator(a.target).first().selectOption(a.value, { timeout: ACTION_TIMEOUT_MS })
-          );
-      } else if (a.kind === "fill_selector") {
-        await page.locator(a.target).first().fill(a.value, { timeout: ACTION_TIMEOUT_MS });
-      } else {
-        await page
-          .getByPlaceholder(a.target, { exact: false })
-          .first()
-          .fill(a.value, { timeout: ACTION_TIMEOUT_MS });
+      try {
+        await runAction(page, a);
+      } catch (firstErr) {
+        if ((await dismissBlockingOverlays(page)) === 0) throw firstErr;
+        await runAction(page, a);
       }
       await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
       completed++;
@@ -493,6 +532,75 @@ async function performActions(page, actions) {
     }
   }
   return { completed };
+}
+
+/** Execute ONE parsed action (see performActions for retry/error semantics). */
+async function runAction(page, a) {
+  if (a.kind === "click_text") {
+    // Prefer a real button/link (or exact-text element); substring matches
+    // resolve ONLY to interactive controls so body copy that merely
+    // contains the word (e.g. "…then accept or reject.") can never be
+    // "clicked" into a phantom success.
+    const loc = await resolveClickTarget(page, a.target, { allowExactTextAnywhere: true });
+    if (!loc) throw new Error("no matching control on the page");
+    await loc.click({ timeout: ACTION_TIMEOUT_MS });
+  } else if (a.kind === "click_text_while_present") {
+    // Wizard-style "Next" loop: click the control as long as it is visible,
+    // bounded by MAX_WHILE_PRESENT_CLICKS. Resolves ONLY to real controls
+    // (no substring fallback) so it can't latch onto prose that contains the
+    // word (e.g. "…on the next screen…"). Zero matches is SUCCESS — the page
+    // is already past the step.
+    const isPresent = async () => {
+      const loc = await resolveClickTarget(page, a.target, { allowExactTextAnywhere: false });
+      if (!loc) return false;
+      try {
+        await loc.waitFor({ state: "visible", timeout: WHILE_PRESENT_PROBE_MS });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    let clicks = 0;
+    while (clicks < MAX_WHILE_PRESENT_CLICKS && (await isPresent())) {
+      const loc = await resolveClickTarget(page, a.target, { allowExactTextAnywhere: false });
+      if (!loc) break;
+      await loc.click({ timeout: ACTION_TIMEOUT_MS });
+      await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
+      clicks++;
+    }
+    // Hitting the cap WHILE the target is still on the page means the wizard
+    // never finished — fail the action so the worker doesn't extract from a
+    // half-completed page (a changed/looping page is a permanent error).
+    if (clicks >= MAX_WHILE_PRESENT_CLICKS && (await isPresent())) {
+      throw new Error(`still present after ${MAX_WHILE_PRESENT_CLICKS} clicks`);
+    }
+  } else if (a.kind === "click_selector") {
+    await page.locator(a.target).first().click({ timeout: ACTION_TIMEOUT_MS });
+  } else if (a.kind === "click_role") {
+    // target = ARIA role, value = accessible name (e.g. a calendar day cell
+    // "Choose Thursday, June 18th, 2026"). Name match is case-insensitive
+    // substring so authors don't have to reproduce the exact label.
+    await page
+      .getByRole(a.target, { name: a.value, exact: false })
+      .first()
+      .click({ timeout: ACTION_TIMEOUT_MS });
+  } else if (a.kind === "select_option") {
+    // target = CSS selector for the <select>, value = option value OR label.
+    await page
+      .locator(a.target)
+      .first()
+      .selectOption({ label: a.value }, { timeout: ACTION_TIMEOUT_MS })
+      .catch(() =>
+        page.locator(a.target).first().selectOption(a.value, { timeout: ACTION_TIMEOUT_MS })
+      );
+  } else if (a.kind === "fill_selector") {
+    await page.locator(a.target).first().fill(a.value, { timeout: ACTION_TIMEOUT_MS });
+  } else {
+    await page
+      .getByPlaceholder(a.target, { exact: false })
+      .first()
+      .fill(a.value, { timeout: ACTION_TIMEOUT_MS });
+  }
 }
 
 // How long settlePage waits for a JS-rendered (SPA) page to actually paint
