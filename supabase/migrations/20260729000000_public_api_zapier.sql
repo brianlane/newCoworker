@@ -131,7 +131,7 @@ alter table public.sms_outbound_log
 
 alter table public.sms_outbound_log
   add constraint sms_outbound_log_source_check
-  check (source in ('ai_flow', 'agent_offer', 'owner_notify', 'owner_manual', 'api'));
+  check (source in ('ai_flow', 'agent_offer', 'owner_notify', 'owner_manual', 'owner_scheduled', 'api'));
 
 comment on column public.sms_outbound_log.source is
-  'ai_flow | agent_offer | owner_notify | owner_manual (dashboard compose) | api (public API / Zapier)';
+  'ai_flow | agent_offer | owner_notify | owner_manual (dashboard compose) | owner_scheduled (scheduled sweep) | api (public API / Zapier)';
