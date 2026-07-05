@@ -36,6 +36,7 @@ const SUB = {
   target_url: "https://hooks.zapier.com/abc",
   active: true,
   last_cursor: "2026-07-01T00:00:00Z",
+  last_cursor_id: "00000000-0000-0000-0000-000000000000",
   consecutive_failures: 0,
   api_key_id: "key-1",
   created_at: "2026-07-01T00:00:00Z"

@@ -1,8 +1,16 @@
 /**
  * Pure delivery engine for the webhook-dispatcher Edge cron. Given a
  * subscription, the undelivered source rows (already fetched, ascending by
- * created_at), and a fetch impl, POST each payload to the target and report
- * how far the cursor may advance.
+ * cursor column then id), and a fetch impl, POST each payload to the target
+ * and report how far the cursor may advance.
+ *
+ * Cursor model: a (timestamp, id) TUPLE per subscription. Timestamp alone
+ * would drop rows — two events sharing a created_at would leave the second
+ * forever behind a `>` cursor once the first advances it (Bugbot: "Duplicate
+ * timestamp skips events"). The tick queries
+ *   (cursorCol = ts AND id > cursorId) OR cursorCol > ts
+ * ordered by (cursorCol, id), which walks the tuple order exactly. Postgres
+ * compares uuids bytewise, matching PostgREST's `order=id.asc`.
  *
  * Semantics (Zapier REST-hook conventions):
  *   * Deliveries are in-order; the FIRST failure stops the batch so the
@@ -27,19 +35,25 @@ export const MAX_CONSECUTIVE_FAILURES = 120;
 /** Per-tick row cap so one chatty tenant can't starve the batch. */
 export const MAX_ROWS_PER_TICK = 25;
 
+/** Initial last_cursor_id — sorts before every real uuid. */
+export const NIL_UUID = "00000000-0000-0000-0000-000000000000";
+
 export type DispatchSubscription = {
   id: string;
   business_id: string;
   event: WebhookEventType;
   target_url: string;
   last_cursor: string;
+  last_cursor_id: string;
   consecutive_failures: number;
 };
 
+export type CursorTuple = { ts: string; id: string };
+
 export type DispatchResult = {
   delivered: number;
-  /** New cursor value (last delivered row's created_at); null → no advance. */
-  newCursor: string | null;
+  /** New cursor tuple (last delivered row); null → no advance. */
+  newCursor: CursorTuple | null;
   /** True when the target answered 410 Gone → deactivate the subscription. */
   gone: boolean;
   /** True when the tick had at least one delivery failure (non-410). */
@@ -49,10 +63,11 @@ export type DispatchResult = {
 export async function dispatchRows(
   subscription: DispatchSubscription,
   rows: WebhookSourceRow[],
+  cursorColumn: string,
   fetchImpl: typeof fetch
 ): Promise<DispatchResult> {
   let delivered = 0;
-  let newCursor: string | null = null;
+  let newCursor: CursorTuple | null = null;
 
   for (const row of rows) {
     const payload = buildWebhookPayload(subscription.event, row);
@@ -76,7 +91,7 @@ export async function dispatchRows(
       return { delivered, newCursor, gone: false, failed: true };
     }
     delivered += 1;
-    newCursor = row.created_at;
+    newCursor = { ts: String(row[cursorColumn]), id: row.id };
   }
 
   return { delivered, newCursor, gone: false, failed: false };
@@ -89,17 +104,25 @@ export async function dispatchRows(
  */
 type QueryResult = PromiseLike<{ data: unknown; error: { message: string } | null }>;
 
+type SourceQuery = QueryResult & {
+  filter(col: string, op: string, val: unknown): SourceQuery;
+  or(filters: string): SourceQuery;
+};
+
 export type SupabaseLike = {
   from(table: string): {
     select(columns: string): {
       eq(col: string, val: unknown): QueryResult & {
-        gt(col: string, val: unknown): {
+        or(filters: string): {
           order(
             col: string,
             opts: { ascending: boolean }
           ): {
-            limit(n: number): QueryResult & {
-              filter(col: string, op: string, val: unknown): QueryResult;
+            order(
+              col: string,
+              opts: { ascending: boolean }
+            ): {
+              limit(n: number): SourceQuery;
             };
           };
         };
@@ -119,8 +142,8 @@ export type DispatchTickSummary = {
 };
 
 /**
- * One cron tick: for every ACTIVE subscription, fetch rows newer than its
- * cursor from the event's source table, deliver them in order, and persist
+ * One cron tick: for every ACTIVE subscription, fetch rows past its cursor
+ * tuple from the event's source table, deliver them in order, and persist
  * the cursor/failure/active updates. All per-subscription errors are
  * contained — one broken subscription (or source query) never blocks the
  * rest of the batch.
@@ -128,7 +151,8 @@ export type DispatchTickSummary = {
 export async function runWebhookDispatchTick(
   db: SupabaseLike,
   fetchImpl: typeof fetch,
-  log: (msg: string, extra?: Record<string, unknown>) => void = () => {}
+  log: (msg: string, extra?: Record<string, unknown>) => void = () => {},
+  nowMs: number = Date.now()
 ): Promise<DispatchTickSummary> {
   const summary: DispatchTickSummary = {
     subscriptions: 0,
@@ -139,7 +163,9 @@ export async function runWebhookDispatchTick(
 
   const { data: subsRaw, error: subsErr } = await db
     .from("webhook_subscriptions")
-    .select("id, business_id, event, target_url, last_cursor, consecutive_failures")
+    .select(
+      "id, business_id, event, target_url, last_cursor, last_cursor_id, consecutive_failures"
+    )
     .eq("active", true);
   if (subsErr) {
     throw new Error(`webhook dispatch: subscriptions query failed: ${subsErr.message}`);
@@ -150,27 +176,39 @@ export async function runWebhookDispatchTick(
   for (const sub of subs) {
     try {
       const source = WEBHOOK_EVENT_SOURCES[sub.event];
-      const baseQuery = db
+      const col = source.cursorColumn;
+      const cursorId = sub.last_cursor_id || NIL_UUID;
+      let query = db
         .from(source.table)
         .select(source.select)
         .eq("business_id", sub.business_id)
-        .gt("created_at", sub.last_cursor)
-        .order("created_at", { ascending: true })
+        // Tuple cursor: strictly-later timestamp, OR same timestamp with a
+        // later id — never skips a row that shares the cursor's timestamp.
+        .or(`and(${col}.eq.${sub.last_cursor},id.gt.${cursorId}),${col}.gt.${sub.last_cursor}`)
+        .order(col, { ascending: true })
+        .order("id", { ascending: true })
         .limit(MAX_ROWS_PER_TICK);
-      const { data: rowsRaw, error: rowsErr } = source.filter
-        ? await baseQuery.filter(source.filter[0], source.filter[1], source.filter[2])
-        : await baseQuery;
+      if (source.filter) {
+        query = query.filter(source.filter[0], source.filter[1], source.filter[2]);
+      }
+      if (source.readyOr) {
+        query = query.or(source.readyOr(nowMs));
+      }
+      const { data: rowsRaw, error: rowsErr } = await query;
       if (rowsErr) {
         throw new Error(`source query failed: ${rowsErr.message}`);
       }
       const rows = (rowsRaw as WebhookSourceRow[] | null) ?? [];
       if (rows.length === 0) continue;
 
-      const result = await dispatchRows(sub, rows, fetchImpl);
+      const result = await dispatchRows(sub, rows, col, fetchImpl);
       summary.delivered += result.delivered;
 
       const patch: Record<string, unknown> = {};
-      if (result.newCursor) patch.last_cursor = result.newCursor;
+      if (result.newCursor) {
+        patch.last_cursor = result.newCursor.ts;
+        patch.last_cursor_id = result.newCursor.id;
+      }
       if (result.gone) {
         patch.active = false;
         summary.deactivated += 1;

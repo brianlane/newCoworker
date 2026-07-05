@@ -16,6 +16,8 @@ export type WebhookSubscriptionRow = {
   target_url: string;
   active: boolean;
   last_cursor: string;
+  /** Tiebreak id for rows sharing last_cursor's timestamp (nil uuid = none). */
+  last_cursor_id: string;
   consecutive_failures: number;
   api_key_id: string | null;
   created_at: string;

@@ -43,10 +43,13 @@ create table public.webhook_subscriptions (
   event text not null check (event in ('sms.inbound', 'sms.outbound', 'call.completed', 'email.inbound')),
   target_url text not null,
   active boolean not null default true,
-  -- Delivery cursor: rows in the event's source table with created_at
-  -- strictly greater than this have not been delivered yet. Seeded to the
+  -- Delivery cursor: a (timestamp, id) TUPLE over the event's cursor column
+  -- (created_at, or ended_at for call.completed). Rows strictly after the
+  -- tuple have not been delivered yet; the id tiebreak means two events
+  -- sharing a timestamp can never shadow each other. Seeded to the
   -- subscription creation time so a new hook never replays history.
   last_cursor timestamptz not null default now(),
+  last_cursor_id uuid not null default '00000000-0000-0000-0000-000000000000',
   consecutive_failures integer not null default 0,
   api_key_id uuid references public.api_keys(id) on delete set null,
   created_at timestamptz not null default now()

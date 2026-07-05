@@ -27,40 +27,78 @@ export function isWebhookEventType(value: unknown): value is WebhookEventType {
   );
 }
 
+/**
+ * call.completed readiness grace: summaries are written asynchronously by
+ * the 5-minute call-summary sweep (Standard+ only), so the dispatcher holds
+ * a finished call back until its digest lands OR this many minutes pass
+ * (covering starter tenants, which never get one, and sweep misses).
+ */
+export const CALL_SUMMARY_GRACE_MINUTES = 10;
+
 export type WebhookEventSource = {
   /** Source table polled by the dispatcher. */
   table: string;
   /** Columns to select (bounded — payload jsonb only where needed). */
   select: string;
   /**
+   * Column the delivery cursor tracks. Usually `created_at`, but
+   * call.completed cursors on `ended_at`: transcript rows are INSERTED at
+   * call start, so a call already in progress when the hook subscribes
+   * would otherwise finish "behind" the cursor and never fire.
+   */
+  cursorColumn: string;
+  /**
    * Optional extra PostgREST filter as [column, operator, value], applied on
    * top of the business + cursor filters (e.g. only inbound emails).
    */
   filter: [string, string, string] | null;
+  /**
+   * Optional readiness condition (PostgREST `.or()` syntax) computed at tick
+   * time — a row is only delivered once it matches. Used to hold
+   * call.completed rows until the async summary lands (or the grace lapses).
+   */
+  readyOr: ((nowMs: number) => string) | null;
 };
 
 export const WEBHOOK_EVENT_SOURCES: Record<WebhookEventType, WebhookEventSource> = {
   "sms.inbound": {
     table: "sms_inbound_jobs",
     select: "id, business_id, customer_e164, payload, channel, created_at",
-    filter: null
+    cursorColumn: "created_at",
+    filter: null,
+    readyOr: null
   },
   "sms.outbound": {
     table: "sms_outbound_log",
     select: "id, business_id, to_e164, from_e164, body, source, channel, created_at",
-    filter: null
+    cursorColumn: "created_at",
+    filter: null,
+    readyOr: null
   },
   "call.completed": {
     table: "voice_call_transcripts",
     select:
       "id, business_id, caller_e164, direction, status, started_at, ended_at, summary, sentiment, created_at",
-    // Only calls that actually finished; in-flight rows would fire twice.
-    filter: ["ended_at", "not.is", "null"]
+    // Cursor on ended_at (not created_at): rows exist from call START, and a
+    // gt(ended_at) filter also implicitly excludes in-flight rows (null
+    // fails every comparison). The explicit filter stays for clarity.
+    cursorColumn: "ended_at",
+    filter: ["ended_at", "not.is", "null"],
+    // Deliver once the AI digest exists, or CALL_SUMMARY_GRACE_MINUTES after
+    // the call ended for rows that will never get one (starter tier).
+    readyOr: (nowMs: number) => {
+      const graceCutoff = new Date(
+        nowMs - CALL_SUMMARY_GRACE_MINUTES * 60_000
+      ).toISOString();
+      return `summarized_at.not.is.null,ended_at.lt.${graceCutoff}`;
+    }
   },
   "email.inbound": {
     table: "email_log",
     select: "id, business_id, from_email, to_email, subject, body_preview, created_at",
-    filter: ["direction", "eq", "inbound"]
+    cursorColumn: "created_at",
+    filter: ["direction", "eq", "inbound"],
+    readyOr: null
   }
 };
 

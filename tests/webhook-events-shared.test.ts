@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CALL_SUMMARY_GRACE_MINUTES,
   WEBHOOK_EVENT_SOURCES,
   WEBHOOK_EVENT_TYPES,
   buildWebhookPayload,
@@ -21,7 +22,30 @@ describe("isWebhookEventType", () => {
     for (const t of WEBHOOK_EVENT_TYPES) {
       expect(WEBHOOK_EVENT_SOURCES[t].table).toBeTruthy();
       expect(WEBHOOK_EVENT_SOURCES[t].select).toContain("created_at");
+      // The cursor column must be selected or the dispatcher can't advance.
+      expect(WEBHOOK_EVENT_SOURCES[t].select).toContain(
+        WEBHOOK_EVENT_SOURCES[t].cursorColumn
+      );
     }
+  });
+
+  it("call.completed cursors on ended_at so in-flight calls can't slip behind the cursor", () => {
+    expect(WEBHOOK_EVENT_SOURCES["call.completed"].cursorColumn).toBe("ended_at");
+    expect(WEBHOOK_EVENT_SOURCES["sms.inbound"].cursorColumn).toBe("created_at");
+    expect(WEBHOOK_EVENT_SOURCES["sms.outbound"].cursorColumn).toBe("created_at");
+    expect(WEBHOOK_EVENT_SOURCES["email.inbound"].cursorColumn).toBe("created_at");
+  });
+
+  it("call.completed readiness: summarized OR past the grace window; others have none", () => {
+    const nowMs = Date.parse("2026-07-01T12:00:00Z");
+    const readyOr = WEBHOOK_EVENT_SOURCES["call.completed"].readyOr;
+    expect(readyOr).not.toBeNull();
+    const cutoff = new Date(nowMs - CALL_SUMMARY_GRACE_MINUTES * 60_000).toISOString();
+    expect(readyOr!(nowMs)).toBe(`summarized_at.not.is.null,ended_at.lt.${cutoff}`);
+
+    expect(WEBHOOK_EVENT_SOURCES["sms.inbound"].readyOr).toBeNull();
+    expect(WEBHOOK_EVENT_SOURCES["sms.outbound"].readyOr).toBeNull();
+    expect(WEBHOOK_EVENT_SOURCES["email.inbound"].readyOr).toBeNull();
   });
 });
 
