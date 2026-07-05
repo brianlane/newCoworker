@@ -3,6 +3,7 @@ import {
   DEFAULT_TIER_VPS_SIZE,
   resolveVpsSize,
   resolveDeployedVpsSize,
+  vpsSizeFromHostingerPlan,
   vpsSizeHasLocalModel
 } from "@/lib/vps/size";
 
@@ -37,6 +38,18 @@ describe("vps/size", () => {
     expect(resolveDeployedVpsSize("starter", "kvm1")).toBe("kvm1");
     expect(resolveDeployedVpsSize("standard", "kvm2")).toBe("kvm2");
     expect(resolveDeployedVpsSize("standard", "kvm8")).toBe("kvm8");
+  });
+
+  it("parses Hostinger plan labels into sizes, null on anything else", () => {
+    expect(vpsSizeFromHostingerPlan("KVM 1")).toBe("kvm1");
+    expect(vpsSizeFromHostingerPlan("KVM 2")).toBe("kvm2");
+    expect(vpsSizeFromHostingerPlan("KVM 8")).toBe("kvm8");
+    expect(vpsSizeFromHostingerPlan("kvm2")).toBe("kvm2");
+    expect(vpsSizeFromHostingerPlan("KVM 4")).toBeNull();
+    expect(vpsSizeFromHostingerPlan("KVM 12")).toBeNull();
+    expect(vpsSizeFromHostingerPlan("Cloud Startup")).toBeNull();
+    expect(vpsSizeFromHostingerPlan(null)).toBeNull();
+    expect(vpsSizeFromHostingerPlan(undefined)).toBeNull();
   });
 
   it("only kvm1 lacks a local model (over-cap turns must refuse there)", () => {

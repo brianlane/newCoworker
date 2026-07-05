@@ -68,6 +68,17 @@ export function resolveDeployedVpsSize(
 }
 
 /**
+ * Parse a Hostinger VM detail's `plan` label ("KVM 2", "KVM 8"…) into a
+ * {@link VpsSize}. Null for anything unrecognized (unknown SKU, missing
+ * field), so callers can fall back to their own default. Used to label a
+ * released box by its ACTUAL hardware when it was never inventory-tracked.
+ */
+export function vpsSizeFromHostingerPlan(plan: string | null | undefined): VpsSize | null {
+  const m = /kvm\s*([128])\b/i.exec(plan ?? "");
+  return m ? (`kvm${m[1]}` as VpsSize) : null;
+}
+
+/**
  * Whether this hardware size carries a local Ollama model that chat/SMS can
  * degrade to once the shared AI spend cap trips. KVM1 (1 vCPU / 4GB) does
  * not: bootstrap skips the Ollama install entirely, so over-cap turns must
