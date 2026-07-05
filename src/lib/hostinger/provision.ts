@@ -204,7 +204,12 @@ export async function provisionVpsForBusiness(
   const itemId = input.itemId ?? VPS_SIZE_PRICE_ITEM[vpsSize];
   const templateId = input.templateId ?? DEFAULT_TEMPLATE_ID;
   const dataCenterId = input.dataCenterId ?? DEFAULT_US_DATA_CENTER_ID;
-  const hostname = input.hostname ?? `nc-${truncateBusinessId(input.businessId)}`;
+  // FQDN required: Hostinger's purchase-embedded setup historically accepted
+  // bare labels (`nc-<uuid12>`), but as of Jul 2026 it 422s with
+  // "[VPS:2004] Wrong hostname FQDN format" exactly like the standalone
+  // setup endpoint always did (see adopt.ts). Same `nc-<uuid12>.<domain>`
+  // shape the adopt path uses.
+  const hostname = input.hostname ?? `nc-${truncateBusinessId(input.businessId)}.newcoworker.com`;
   const pollInterval = input.pollIntervalMs ?? 10_000;
   const readyTimeout = input.readyTimeoutMs ?? 15 * 60 * 1000;
 
