@@ -59,6 +59,27 @@ describe("addPassOptionCopy", () => {
     expect(JSON.stringify(def)).toBe(once);
   });
 
+  it("clears a legacy claimTimeframeOption of 2 that would make the engine read '2' as a claim", () => {
+    const def = routeDef(
+      "New HomeLight referral.\nReply 1 to confirm you're taking it by {{offer.deadline}}.",
+      { claimTimeframeOption: 2 }
+    );
+    expect(addPassOptionCopy(def)).toBe(true);
+    const step = def.steps[0] as Record<string, unknown>;
+    expect(step.claimTimeframeOption).toBeUndefined();
+    expect((step.offerTemplate as string)).toContain("2 to pass");
+    expect(() => parseAiFlowDefinition(def)).not.toThrow();
+  });
+
+  it("keeps a claimTimeframeOption that is not 2 (no pass-digit conflict)", () => {
+    const def = routeDef(
+      "Reply 1 to claim or 2 to pass by {{offer.deadline}}.\nReply 3 with a timeframe.",
+      { claimTimeframeOption: 3 }
+    );
+    expect(addPassOptionCopy(def)).toBe(true);
+    expect((def.steps[0] as Record<string, unknown>).claimTimeframeOption).toBe(3);
+  });
+
   it("leaves an offer without a pass option untouched", () => {
     const def = routeDef("Take this lead by {{offer.deadline}} — reply 1 to claim.");
     const before = JSON.stringify(def);

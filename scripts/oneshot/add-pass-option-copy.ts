@@ -94,6 +94,17 @@ export function addPassOptionCopy(def: Definition): boolean {
       step.offerTemplate = next;
       changed = true;
     }
+
+    // A legacy claimTimeframeOption of 2 stamps routing.tf_digit="2" on new
+    // offers, making the engine read a bare "2" (and "2, <text>") as a CLAIM —
+    // directly contradicting the pass copy above. Clear it whenever the offer
+    // advertises "2 to pass". (simplify-claim-options.ts already stripped these
+    // fields from live flows; this keeps the two scripts safe in any order.)
+    const tf = step.claimTimeframeOption;
+    if (next.includes("2 to pass") && (tf === 2 || tf === "2")) {
+      delete step.claimTimeframeOption;
+      changed = true;
+    }
   }
   return changed;
 }
