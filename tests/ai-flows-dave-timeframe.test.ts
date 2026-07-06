@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  highestOptionDigit,
-  timeframeOptionLine,
-  addTimeframeOption,
-  retroClaimOptionLine,
-  addRetroClaimOption,
   stripLegacy86Line,
   addHomeLightEmailFallback,
   migrateEmailMatchToPrice
@@ -41,26 +36,6 @@ describe("parseClaimWithTimeframe", () => {
   });
 });
 
-describe("highestOptionDigit", () => {
-  it("returns the highest single-digit option shown", () => {
-    expect(highestOptionDigit("Reply 1 to claim or 2 to pass.")).toBe(2);
-    expect(highestOptionDigit("Reply 1 to confirm.")).toBe(1);
-  });
-  it("ignores the 86 (reject) keyword when numbering", () => {
-    expect(highestOptionDigit("Reply 1 or 2, or 86 to bail.")).toBe(2);
-  });
-  it("defaults to 1 when no option digits are present", () => {
-    expect(highestOptionDigit("Take this lead by the deadline.")).toBe(1);
-  });
-});
-
-describe("timeframeOptionLine", () => {
-  it("renders the appended option with the given number", () => {
-    expect(timeframeOptionLine(3)).toContain("Reply 3 with a timeframe to claim");
-    expect(timeframeOptionLine(3)).toContain('"3, 20 min"');
-  });
-});
-
 function daveRouteDef(offer: string) {
   return {
     version: 1 as const,
@@ -77,83 +52,6 @@ function daveRouteDef(offer: string) {
     ]
   };
 }
-
-describe("addTimeframeOption", () => {
-  it("appends a timeframe option one greater than the last to a Dave-pinned route", () => {
-    const def = daveRouteDef("New lead. Reply 1 to claim or 2 to pass by {{offer.deadline}}.");
-    expect(addTimeframeOption(def, "Dave Lane")).toBe(true);
-    const step = def.steps[0] as { offerTemplate: string; claimTimeframeOption?: number };
-    expect(step.offerTemplate).toContain("Reply 3 with a timeframe to claim");
-    // Stamps the digit so the engine treats "3, <eta>"/bare "3" as the accept
-    // option (and never as a pass).
-    expect(step.claimTimeframeOption).toBe(3);
-    // Patched definition stays valid against the canonical schema.
-    expect(() => parseAiFlowDefinition(def)).not.toThrow();
-  });
-
-  it("is idempotent (no double-append on a second run)", () => {
-    const def = daveRouteDef("Reply 1 to confirm by {{offer.deadline}}.");
-    expect(addTimeframeOption(def, "Dave Lane")).toBe(true);
-    const once = (def.steps[0] as { offerTemplate: string }).offerTemplate;
-    expect(addTimeframeOption(def, "Dave Lane")).toBe(false);
-    expect((def.steps[0] as { offerTemplate: string }).offerTemplate).toBe(once);
-  });
-
-  it("skips route steps pinned to a different agent or round-robin (no agentName)", () => {
-    const other = daveRouteDef("Reply 1 to claim or 2 to pass.");
-    (other.steps[0] as { agentName?: string }).agentName = "Someone Else";
-    expect(addTimeframeOption(other, "Dave Lane")).toBe(false);
-
-    const roundRobin = daveRouteDef("Reply 1 to claim or 2 to pass.");
-    delete (roundRobin.steps[0] as { agentName?: string }).agentName;
-    expect(addTimeframeOption(roundRobin, "Dave Lane")).toBe(false);
-  });
-});
-
-describe("retroClaimOptionLine", () => {
-  it("renders the appended retro option advertising only the comma/ETA form", () => {
-    const line = retroClaimOptionLine(4);
-    expect(line).toContain('Reply "4, <ETA>" to claim it after its window');
-    expect(line).toContain("ETA of when you can please triple tap this lead?");
-    expect(line).toContain('"4, tomorrow am"');
-    // Never suggests a bare "Reply 4" that wouldn't re-open a lapsed lead.
-    expect(line).not.toContain("Reply 4 to claim");
-  });
-});
-
-describe("addRetroClaimOption", () => {
-  it("appends the retro option at the next digit after the timeframe option and stamps lateClaimOption", () => {
-    const def = daveRouteDef("New lead. Reply 1 to claim or 2 to pass by {{offer.deadline}}.");
-    // Live timeframe option lands on 3; the retro option must follow on 4.
-    expect(addTimeframeOption(def, "Dave Lane")).toBe(true);
-    expect(addRetroClaimOption(def, "Dave Lane")).toBe(true);
-    const step = def.steps[0] as {
-      offerTemplate: string;
-      claimTimeframeOption?: number;
-      lateClaimOption?: number;
-    };
-    expect(step.claimTimeframeOption).toBe(3);
-    expect(step.lateClaimOption).toBe(4);
-    expect(step.offerTemplate).toContain('Reply "4, <ETA>" to claim it after its window');
-    // The two option digits differ, so the patched definition stays valid.
-    expect(() => parseAiFlowDefinition(def)).not.toThrow();
-  });
-
-  it("is idempotent (no double-append on a second run)", () => {
-    const def = daveRouteDef("Reply 1 to confirm by {{offer.deadline}}.");
-    addTimeframeOption(def, "Dave Lane");
-    expect(addRetroClaimOption(def, "Dave Lane")).toBe(true);
-    const once = (def.steps[0] as { offerTemplate: string }).offerTemplate;
-    expect(addRetroClaimOption(def, "Dave Lane")).toBe(false);
-    expect((def.steps[0] as { offerTemplate: string }).offerTemplate).toBe(once);
-  });
-
-  it("skips a different agent or round-robin route step", () => {
-    const other = daveRouteDef("Reply 1 to claim or 2 to pass.");
-    (other.steps[0] as { agentName?: string }).agentName = "Someone Else";
-    expect(addRetroClaimOption(other, "Dave Lane")).toBe(false);
-  });
-});
 
 describe("stripLegacy86Line", () => {
   it("removes the legacy 'Reply 86 ... retroactively' line and keeps the rest", () => {
