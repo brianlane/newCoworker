@@ -7,12 +7,13 @@ import { Menu, X } from "lucide-react";
 
 export type NavLink = { href: string; label: string };
 
-/**
- * Public marketing nav links. Pages ship incrementally — only list routes
- * that exist in production so the nav never points at a 404.
- */
 export const MARKETING_NAV_LINKS: NavLink[] = [
-  { href: "/pricing", label: "Pricing" }
+  { href: "/features", label: "Features" },
+  { href: "/pricing", label: "Pricing" },
+  { href: "/integrations", label: "Integrations" },
+  { href: "/industries", label: "Industries" },
+  { href: "/faq", label: "FAQ" },
+  { href: "/about", label: "About" }
 ];
 
 export function MarketingNav() {

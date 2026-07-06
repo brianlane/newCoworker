@@ -3,18 +3,19 @@ import Link from "next/link";
 
 type FooterLink = { href: string; label: string; external?: boolean };
 
-/**
- * Footer columns. Like the nav, only routes that exist in production are
- * listed — new marketing pages add themselves here as they ship.
- */
 const PRODUCT_LINKS: FooterLink[] = [
+  { href: "/features", label: "Features" },
   { href: "/pricing", label: "Pricing" },
+  { href: "/integrations", label: "Integrations" },
+  { href: "/industries", label: "Industries" },
   { href: "/onboard", label: "Get Started" },
   { href: "/login", label: "Sign in" }
 ];
 
 const COMPANY_LINKS: FooterLink[] = [
-  { href: `mailto:${process.env.CONTACT_EMAIL ?? "team@newcoworker.com"}`, label: "Contact", external: true }
+  { href: "/about", label: "About" },
+  { href: "/contact", label: "Contact" },
+  { href: "/faq", label: "FAQ" }
 ];
 
 const LEGAL_LINKS: FooterLink[] = [
