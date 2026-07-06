@@ -742,13 +742,15 @@ async function handleHandoffLifecycle(
     // hangup means the human answered and the call completed — don't advance.
     const cause = String(payload["hangup_cause"] ?? "").toLowerCase();
     if (cause === "normal_clearing") {
-      // `.select()` tells us whether THIS event flipped ringing→done. If it did
-      // (call.bridged was dropped but the human answered), send the success SMS
-      // that the bridged branch would have. The shared hl:success key makes it a
-      // no-op if call.bridged already notified.
+      // `.select()` tells us whether THIS event flipped ringing→bridged. If it
+      // did (call.bridged was dropped but the human answered), send the success
+      // SMS that the bridged branch would have. The shared hl:success key makes
+      // it a no-op if call.bridged already notified. `bridged` (not `done`) so
+      // the A-leg terminal below records this call as ANSWERED — any non-ringing
+      // status equally stops chain advancement, so semantics don't change.
       const { data: doneRows } = await supabase
         .from("voice_handoff_sessions")
-        .update({ status: "done" })
+        .update({ status: "bridged" })
         .eq("call_control_id", parsed.aLegCallId)
         .eq("status", "ringing")
         .select("business_id, from_e164, context");
