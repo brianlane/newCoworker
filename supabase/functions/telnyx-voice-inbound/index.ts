@@ -929,10 +929,22 @@ serve(async (req: Request) => {
       if (Number.isFinite(delayMs) && delayMs > 0) {
         await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
       }
+      // Tag the transfer's B leg like every other single-leg transfer
+      // (caller-rule + receptionist transfer_to_owner) so telnyx-voice-call-end
+      // records the forwarded call in Call history (completed/missed) and runs
+      // the missed-forwarded follow-ups (caller auto-text, blocked ledger,
+      // spike). Without this tag a safe-mode forward is invisible in the log.
       const transferRes = await telnyxTransferCall(
         apiKey,
         callControlId,
-        gate.forwardToE164
+        gate.forwardToE164,
+        {
+          clientState: encodeWtClientState({
+            businessId,
+            callerE164: fromE164Informational ?? "",
+            recipientE164: gate.forwardToE164
+          })
+        }
       );
       if (!transferRes.ok) {
         const errText = await transferRes.text();
