@@ -337,7 +337,7 @@ describe("summarizeCustomerMemory — empty/whitespace Rowboat reply", () => {
 });
 
 describe("summarizeCustomerMemory — input rendering shape", () => {
-  it("includes existing summary_md as 'carry forward' when set, even with no new source material", async () => {
+  it("includes existing summary_md as 'carry forward' when set", async () => {
     const callRowboatChat = vi.fn(async () => ({
       reply: "refined",
       conversationId: undefined,
@@ -352,7 +352,9 @@ describe("summarizeCustomerMemory — input rendering shape", () => {
         })) as never,
       getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,
       callRowboatChat: callRowboatChat as never,
-      listSmsHistoryForCustomer: (async () => []) as never,
+      listSmsHistoryForCustomer: (async () => [
+        { jobId: "j1", inboundText: "any update?", assistantReply: null, receivedAt: "2026-05-06T00:00:00Z" }
+      ]) as never,
       listVoiceTurnsForCustomer: vi.fn(async () => []),
       updateCustomerSummary: vi.fn(async () => {}) as never,
       rowboatBearer: "tok"
@@ -745,6 +747,14 @@ describe("summarizeCustomerMemory — joinSmsHistory branch coverage", () => {
           assistantReply: "Hi Liz, re your inquiry...",
           receivedAt: "2026-05-05T08:00:00Z",
           source: "ai_flow" as const
+        },
+        // The lead's reply — without at least one customer-authored item the
+        // summarizer now skips entirely (no_customer_content gate).
+        {
+          jobId: "j2",
+          inboundText: "Yes, still interested",
+          assistantReply: null,
+          receivedAt: "2026-05-05T08:05:00Z"
         }
       ]) as never,
       listVoiceTurnsForCustomer: vi.fn(async () => []),
@@ -849,7 +859,10 @@ describe("summarizeCustomerMemory — per-contact email feed (scoped, never busi
       listSmsHistoryForCustomer: (async () => []) as never,
       listVoiceTurnsForCustomer: vi.fn(async () => []),
       listEmailLogForAddress: (async () => [
-        emailRow({ direction: "outbound", subject: null, body_preview: null })
+        emailRow({ direction: "outbound", subject: null, body_preview: null }),
+        // An inbound email so the customer-content gate passes; the outbound
+        // row above is the one whose rendering this test pins.
+        emailRow({ id: "e2", body_preview: "checking in", subject: "re" })
       ]) as never,
       updateCustomerSummary: vi.fn(async () => {}) as never,
       rowboatBearer: "tok"
@@ -884,6 +897,141 @@ describe("summarizeCustomerMemory — per-contact email feed (scoped, never busi
       rowboatBearer: "tok"
     });
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("summarizeCustomerMemory — no_customer_content gate", () => {
+  // Regression: a 2-second call whose only transcript turn was the AI's own
+  // greeting produced a summarizer run with zero customer-authored material.
+  // The model fabricated an entire identity ("Brenda ... interested in buying
+  // a home") and wrote it into the profile. AI-only material ⇒ skip.
+  const baseDeps = (overrides: Record<string, unknown> = {}) => ({
+    getCustomerMemory: (async () => memory({ interaction_count: 2 })) as never,
+    getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,
+    callRowboatChat: vi.fn() as never,
+    listSmsHistoryForCustomer: (async () => []) as never,
+    listVoiceTurnsForCustomer: vi.fn(async () => []),
+    updateCustomerSummary: vi.fn() as never,
+    touchLastSummarizedAt: vi.fn(async () => {}) as never,
+    rowboatBearer: "tok",
+    ...overrides
+  });
+
+  it("skips when the only voice turn is the AI's own greeting (never invent a customer)", async () => {
+    const callRowboatChat = vi.fn();
+    const touch = vi.fn(async () => {});
+    const result = await summarizeCustomerMemory(BIZ, CUSTOMER, baseDeps({
+      callRowboatChat: callRowboatChat as never,
+      touchLastSummarizedAt: touch as never,
+      listVoiceTurnsForCustomer: vi.fn(async () => [
+        {
+          callStartedAt: "2026-06-23T14:16:45Z",
+          role: "assistant" as const,
+          content: "Hi, thanks for calling — how can I help?"
+        }
+      ])
+    }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("no_customer_content");
+    expect(callRowboatChat).not.toHaveBeenCalled();
+    // The stamp rotates the contact out of the nightly sweep queue.
+    expect(touch).toHaveBeenCalledWith(BIZ, CUSTOMER);
+  });
+
+  it("skips when the only SMS material is AiFlow outbound sends with no reply", async () => {
+    const result = await summarizeCustomerMemory(BIZ, CUSTOMER, baseDeps({
+      listSmsHistoryForCustomer: (async () => [
+        {
+          jobId: "o1",
+          inboundText: "",
+          assistantReply: "Hi, re your inquiry...",
+          receivedAt: "2026-07-05T18:00:00Z",
+          source: "ai_flow" as const
+        }
+      ]) as never
+    }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("no_customer_content");
+  });
+
+  it("skips a carry-forward-only run (prior summary, no new customer material)", async () => {
+    const result = await summarizeCustomerMemory(BIZ, CUSTOMER, baseDeps({
+      getCustomerMemory: (async () =>
+        memory({ interaction_count: 2, summary_md: "prior digest" })) as never
+    }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("no_customer_content");
+  });
+
+  it("proceeds when a caller-authored voice turn exists", async () => {
+    const result = await summarizeCustomerMemory(BIZ, CUSTOMER, baseDeps({
+      callRowboatChat: (async () => ({
+        reply: "digest",
+        conversationId: undefined,
+        state: undefined,
+        hasStateKey: false
+      })) as never,
+      listVoiceTurnsForCustomer: vi.fn(async () => [
+        {
+          callStartedAt: "2026-06-23T14:16:45Z",
+          role: "caller" as const,
+          content: "Hi, I'm looking to sell my house"
+        }
+      ]),
+      updateCustomerSummary: vi.fn(async () => {}) as never
+    }));
+    expect(result.ok).toBe(true);
+  });
+
+  it("a failed sweep-queue stamp never masks the skip (best-effort touch)", async () => {
+    const result = await summarizeCustomerMemory(BIZ, CUSTOMER, baseDeps({
+      getCustomerMemory: (async () =>
+        memory({ interaction_count: 2, summary_md: "prior" })) as never,
+      touchLastSummarizedAt: vi.fn(async () => {
+        throw new Error("db down");
+      }) as never
+    }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("no_customer_content");
+  });
+
+  it("summarizeCustomerMemoryAndLog treats no_customer_content as an expected skip (no throw)", async () => {
+    await expect(
+      summarizeCustomerMemoryAndLog(BIZ, CUSTOMER, baseDeps({
+        getCustomerMemory: (async () =>
+          memory({ interaction_count: 2, summary_md: "prior" })) as never
+      }))
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe("summarizer system instruction — tool prohibition", () => {
+  it("forbids tool calls in summarizer mode (the SMS agent's live customer tools must not fire)", async () => {
+    // The nightly summarizer runs through the tenant's SMS agent, which has
+    // customer_set_display_name / customer_append_pinned_note tools wired.
+    // Observed in production: the agent called them mid-"summary" and wrote
+    // hallucinated names/notes onto contacts. The instruction is our lever.
+    const callRowboatChat = vi.fn(async () => ({
+      reply: "ok",
+      conversationId: undefined,
+      state: undefined,
+      hasStateKey: false
+    }));
+    await summarizeCustomerMemory(BIZ, CUSTOMER, {
+      getCustomerMemory: (async () => memory({ interaction_count: 1 })) as never,
+      getBusinessConfig: (async () => ({ rowboat_project_id: "p" })) as never,
+      callRowboatChat: callRowboatChat as never,
+      listSmsHistoryForCustomer: (async () => [
+        { jobId: "j1", inboundText: "hi", assistantReply: null, receivedAt: "2026-05-05T00:00:00Z" }
+      ]) as never,
+      listVoiceTurnsForCustomer: vi.fn(async () => []),
+      updateCustomerSummary: vi.fn(async () => {}) as never,
+      rowboatBearer: "tok"
+    });
+    const args = (callRowboatChat.mock.calls[0] as unknown as [
+      Parameters<typeof import("../src/lib/rowboat/chat").callRowboatChat>[0]
+    ])[0];
+    expect(args.messages[0]?.content).toContain("Do NOT call any tools");
   });
 });
 

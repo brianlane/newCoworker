@@ -362,6 +362,30 @@ export async function updateCustomerSummary(
   if (error) throw new Error(`updateCustomerSummary: ${error.message}`);
 }
 
+/**
+ * Stamp last_summarized_at WITHOUT writing a summary or resetting the
+ * interaction counter. Used when the summarizer looked and decided there is
+ * nothing to summarize (e.g. no customer-authored content yet) — the stamp
+ * rotates the contact to the back of the nightly sweep's oldest-first queue
+ * so permanent skips can't starve other contacts of their sweep slot.
+ */
+export async function touchLastSummarizedAt(
+  businessId: string,
+  customerE164: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("contacts")
+    .update({
+      last_summarized_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    })
+    .eq("business_id", businessId)
+    .eq("customer_e164", customerE164);
+  if (error) throw new Error(`touchLastSummarizedAt: ${error.message}`);
+}
+
 export type CustomerOwnerEdit = {
   displayName?: string | null;
   pinnedMd?: string | null;
@@ -573,5 +597,19 @@ function extractInboundText(payload: Record<string, unknown>): string {
   if (typeof t === "string") return t;
   const b = inner["body"];
   if (typeof b === "string") return b;
+  // RCS inbound nests content under a body OBJECT: `body.text` for typed
+  // messages, `body.suggestion_response.text` for tapped suggested replies.
+  // Mirrors inboundTextFromPayload in src/lib/db/sms-history.ts — without
+  // this, an RCS-only customer read as "no customer content" and the
+  // summarizer skipped (and the summary prompt dropped their messages).
+  if (b && typeof b === "object" && !Array.isArray(b)) {
+    const body = b as Record<string, unknown>;
+    if (typeof body["text"] === "string") return body["text"];
+    const suggestion = body["suggestion_response"];
+    if (suggestion && typeof suggestion === "object") {
+      const st = (suggestion as Record<string, unknown>)["text"];
+      if (typeof st === "string") return st;
+    }
+  }
   return "";
 }

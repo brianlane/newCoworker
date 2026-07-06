@@ -41,6 +41,7 @@ import {
 import {
   getCustomerMemory,
   listSmsHistoryForCustomer,
+  touchLastSummarizedAt,
   updateCustomerSummary,
   type SmsHistoryEntry
 } from "./db";
@@ -88,7 +89,9 @@ Cover, in order:
 3. Stylistic preferences for replies (formal/casual, channel preference, do-not-call windows, etc.).
 4. Open commitments or follow-ups still pending on either side.
 
-Do NOT invent details. If the available context is sparse, output the shortest faithful summary possible. Never speculate about the customer's identity or motives beyond what the source material directly supports.`;
+Do NOT invent details. If the available context is sparse, output the shortest faithful summary possible. Never speculate about the customer's identity or motives beyond what the source material directly supports.
+
+Do NOT call any tools in this mode — never set a display name, pin a note, send a message, or take any other action. Your ONLY output is the summary text.`;
 
 export type SummarizeFailureReason =
   | "memory_not_found"
@@ -97,6 +100,7 @@ export type SummarizeFailureReason =
   | "below_threshold"
   | "debounced"
   | "no_inputs"
+  | "no_customer_content"
   | "rowboat_failed"
   | "empty_summary"
   | "db_failed";
@@ -132,6 +136,7 @@ export type SummarizeDeps = {
    */
   listEmailLogForAddress?: typeof defaultListEmailLogForAddress;
   updateCustomerSummary?: typeof updateCustomerSummary;
+  touchLastSummarizedAt?: typeof touchLastSummarizedAt;
   getBusinessConfig?: typeof getBusinessConfig;
   /** Pulled from process.env at call time by default; overridable for tests. */
   rowboatBearer?: string;
@@ -318,6 +323,27 @@ export async function summarizeCustomerMemory(
     return { ok: false, reason: "no_inputs" };
   }
 
+  // Require at least one CUSTOMER-authored item before summarizing. When the
+  // only material is the AI's own output (a 2-second call that never got past
+  // the greeting, an AiFlow intro text with no reply), there are no customer
+  // facts to digest and the model has been observed fabricating an entire
+  // identity instead — inventing a name, "interests", and pinned notes for a
+  // caller who never said a word. No customer content ⇒ nothing to summarize.
+  const hasCustomerContent =
+    voiceTurns.some((t) => t.role === "caller" && t.content.trim().length > 0) ||
+    smsHistory.some((e) => e.inboundText.trim().length > 0) ||
+    emailHistory.some((e) => e.direction === "inbound");
+  if (!hasCustomerContent) {
+    // Stamp last_summarized_at (without touching the summary or counter) so
+    // the nightly sweep's oldest-first queue rotates past this contact
+    // instead of re-selecting it for one of the per-business slots every
+    // night. Best-effort: a failed stamp just means one wasted slot.
+    /* c8 ignore next */
+    const _touch = deps.touchLastSummarizedAt ?? touchLastSummarizedAt;
+    await _touch(businessId, customerE164).catch(() => undefined);
+    return { ok: false, reason: "no_customer_content" };
+  }
+
   const inputs: string[] = [];
   if (memory.summary_md?.trim()) {
     inputs.push("Existing rolling summary (carry forward; refine where the new evidence below contradicts it):");
@@ -439,9 +465,13 @@ export async function summarizeCustomerMemoryAndLog(
       summaryChars: result.summary.length
     });
   } else {
-    // info-level for the gating skips (below_threshold / debounced)
-    // since those are expected behavior not faults; warn for the rest.
-    const isExpectedSkip = result.reason === "below_threshold" || result.reason === "debounced";
+    // info-level for the gating skips (below_threshold / debounced /
+    // no_customer_content) since those are expected behavior not faults;
+    // warn for the rest.
+    const isExpectedSkip =
+      result.reason === "below_threshold" ||
+      result.reason === "debounced" ||
+      result.reason === "no_customer_content";
     const log = isExpectedSkip ? logger.info : logger.warn;
     log.call(logger, "customer-memory summarizer skipped/failed", {
       businessId,
