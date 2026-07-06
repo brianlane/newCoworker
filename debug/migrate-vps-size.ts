@@ -67,8 +67,11 @@ function argValue(flag: string): string | null {
 
 const BUSINESS_ID = argValue("--business");
 const TARGET_SIZE = argValue("--size");
-if (!BUSINESS_ID || (TARGET_SIZE !== "kvm1" && TARGET_SIZE !== "kvm2" && TARGET_SIZE !== "kvm8")) {
-  console.error("usage: migrate-vps-size.ts --business <uuid> --size kvm1|kvm2|kvm8 [--apply] [--notify-owner] [--keep-old] [--adopt-vm <vmId>]");
+if (
+  !BUSINESS_ID ||
+  (TARGET_SIZE !== "kvm1" && TARGET_SIZE !== "kvm2" && TARGET_SIZE !== "kvm4" && TARGET_SIZE !== "kvm8")
+) {
+  console.error("usage: migrate-vps-size.ts --business <uuid> --size kvm1|kvm2|kvm4|kvm8 [--apply] [--notify-owner] [--keep-old] [--adopt-vm <vmId>]");
   process.exit(1);
 }
 const adoptRaw = argValue("--adopt-vm");
@@ -112,7 +115,7 @@ const activeSub = subRows?.[0] ?? null;
 // Deployed-box resolver: an unpinned starter is legacy KVM2 hardware, not
 // the new-provision kvm1 default.
 const currentSize = resolveDeployedVpsSize(biz.tier, biz.vps_size);
-const targetItem = VPS_SIZE_PRICE_ITEM[TARGET_SIZE as "kvm1" | "kvm2" | "kvm8"];
+const targetItem = VPS_SIZE_PRICE_ITEM[TARGET_SIZE as "kvm1" | "kvm2" | "kvm4" | "kvm8"];
 
 const oldVmIdRaw = biz.hostinger_vps_id;
 const oldVmId = oldVmIdRaw && /^\d+$/.test(oldVmIdRaw) ? Number.parseInt(oldVmIdRaw, 10) : null;
@@ -250,7 +253,7 @@ async function makeAdoptProvisioner(vmId: number): Promise<
   (input: {
     businessId: string;
     tier: "starter" | "standard";
-    vpsSize: "kvm1" | "kvm2" | "kvm8";
+    vpsSize: "kvm1" | "kvm2" | "kvm4" | "kvm8";
   }) => Promise<import("../src/lib/hostinger/provision.ts").ProvisionVpsForBusinessResult>
 > {
   const { generateSshKeypair } = await import("../src/lib/hostinger/keypair.ts");
@@ -538,7 +541,7 @@ console.log(`[provision] new VM ${newProv.vpsId}, tunnel ${newProv.tunnelUrl}`);
 // with the old profile, which is recoverable, unlike the old ordering where a
 // redeploy pushed the target profile onto the LIVE old box.
 const { updateBusinessVpsSize } = await import("../src/lib/db/businesses.ts");
-await updateBusinessVpsSize(BUSINESS_ID, TARGET_SIZE as "kvm1" | "kvm2" | "kvm8");
+await updateBusinessVpsSize(BUSINESS_ID, TARGET_SIZE as "kvm1" | "kvm2" | "kvm4" | "kvm8");
 console.log(`[pin] businesses.vps_size = ${TARGET_SIZE}`);
 
 // ---------------------------------------------------------------- 5. restore

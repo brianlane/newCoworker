@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   DEFAULT_TIER_VPS_SIZE,
+  VPS_SIZES,
+  isVpsSize,
   resolveVpsSize,
   resolveDeployedVpsSize,
   vpsSizeFromHostingerPlan,
@@ -19,6 +21,8 @@ describe("vps/size", () => {
     expect(resolveVpsSize("standard", "kvm2")).toBe("kvm2");
     expect(resolveVpsSize("starter", "kvm8")).toBe("kvm8");
     expect(resolveVpsSize("standard", "kvm1")).toBe("kvm1");
+    expect(resolveVpsSize("starter", "kvm4")).toBe("kvm4");
+    expect(resolveVpsSize("standard", "kvm4")).toBe("kvm4");
   });
 
   it("falls back to the tier default on null, undefined, and corrupt values", () => {
@@ -37,24 +41,36 @@ describe("vps/size", () => {
     expect(resolveDeployedVpsSize("standard", null)).toBe("kvm8");
     expect(resolveDeployedVpsSize("starter", "kvm1")).toBe("kvm1");
     expect(resolveDeployedVpsSize("standard", "kvm2")).toBe("kvm2");
+    expect(resolveDeployedVpsSize("standard", "kvm4")).toBe("kvm4");
     expect(resolveDeployedVpsSize("standard", "kvm8")).toBe("kvm8");
   });
 
   it("parses Hostinger plan labels into sizes, null on anything else", () => {
     expect(vpsSizeFromHostingerPlan("KVM 1")).toBe("kvm1");
     expect(vpsSizeFromHostingerPlan("KVM 2")).toBe("kvm2");
+    expect(vpsSizeFromHostingerPlan("KVM 4")).toBe("kvm4");
     expect(vpsSizeFromHostingerPlan("KVM 8")).toBe("kvm8");
     expect(vpsSizeFromHostingerPlan("kvm2")).toBe("kvm2");
-    expect(vpsSizeFromHostingerPlan("KVM 4")).toBeNull();
     expect(vpsSizeFromHostingerPlan("KVM 12")).toBeNull();
+    expect(vpsSizeFromHostingerPlan("KVM 16")).toBeNull();
     expect(vpsSizeFromHostingerPlan("Cloud Startup")).toBeNull();
     expect(vpsSizeFromHostingerPlan(null)).toBeNull();
     expect(vpsSizeFromHostingerPlan(undefined)).toBeNull();
   });
 
+  it("isVpsSize narrows valid sizes and rejects everything else", () => {
+    for (const s of VPS_SIZES) expect(isVpsSize(s)).toBe(true);
+    expect(VPS_SIZES).toEqual(["kvm1", "kvm2", "kvm4", "kvm8"]);
+    expect(isVpsSize("kvm3")).toBe(false);
+    expect(isVpsSize(null)).toBe(false);
+    expect(isVpsSize(undefined)).toBe(false);
+    expect(isVpsSize(4)).toBe(false);
+  });
+
   it("only kvm1 lacks a local model (over-cap turns must refuse there)", () => {
     expect(vpsSizeHasLocalModel("kvm1")).toBe(false);
     expect(vpsSizeHasLocalModel("kvm2")).toBe(true);
+    expect(vpsSizeHasLocalModel("kvm4")).toBe(true);
     expect(vpsSizeHasLocalModel("kvm8")).toBe(true);
   });
 });

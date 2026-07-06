@@ -28,6 +28,8 @@ import { parseEnterpriseLimitsOverride } from "@/lib/plans/enterprise-limits";
 import { EnterpriseLimitsEditor } from "@/components/admin/EnterpriseLimitsEditor";
 import { SystemLogViewer } from "@/components/admin/SystemLogViewer";
 import { AiFlowRunsCard } from "@/components/admin/AiFlowRunsCard";
+import { HardwareSizePanel } from "@/components/admin/HardwareSizePanel";
+import { resolveDeployedVpsSize } from "@/lib/vps/size";
 
 export const dynamic = "force-dynamic";
 
@@ -183,12 +185,28 @@ export default async function BusinessDetailPage({
         <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-3">
           Infrastructure
         </h2>
-        <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+        <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm mb-4">
           <div>
             <dt className="text-parchment/40 text-xs">VPS ID</dt>
             <dd className="text-parchment font-mono">{business.hostinger_vps_id ?? "—"}</dd>
           </div>
+          <div>
+            <dt className="text-parchment/40 text-xs">Hardware size</dt>
+            <dd className="text-parchment font-mono">
+              {business.tier === "enterprise"
+                ? (business.vps_size ?? "custom")
+                : resolveDeployedVpsSize(business.tier, business.vps_size)}
+            </dd>
+          </div>
         </dl>
+        {(business.tier === "starter" || business.tier === "standard") &&
+          business.hostinger_vps_id && (
+            <HardwareSizePanel
+              businessId={businessId}
+              currentSize={resolveDeployedVpsSize(business.tier, business.vps_size)}
+              pinned={business.vps_size != null}
+            />
+          )}
       </Card>
 
       {/* Voice / SMS DID */}

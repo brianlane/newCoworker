@@ -20,6 +20,10 @@ import {
   buildOpsDidReleaseFailedEmail,
   type OpsDidReleaseFailedInput
 } from "@/lib/email/templates/ops-did-release-failed";
+import {
+  buildOpsHardwareMigrationEmail,
+  type OpsHardwareMigrationInput
+} from "@/lib/email/templates/ops-hardware-migration";
 
 /** Fire-and-forget ops deletion request; never throws. */
 export async function sendOpsVpsDeletionEmail(
@@ -82,6 +86,44 @@ export async function sendOpsPlanChangeEmail(
   } catch (err) {
     logger.warn("ops plan-change email failed", {
       businessId: input.businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
+/**
+ * Fire-and-forget admin-initiated hardware-migration progress email
+ * (started / completed / failed); never throws. The migrate-size endpoint
+ * answers 202 and runs unattended, so these are the operator's only
+ * progress signal.
+ */
+export async function sendOpsHardwareMigrationEmail(
+  input: Omit<OpsHardwareMigrationInput, "siteUrl">
+): Promise<void> {
+  try {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      logger.warn("ops hardware-migration email skipped: RESEND_API_KEY missing", {
+        businessId: input.businessId,
+        phase: input.phase
+      });
+      return;
+    }
+    const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    const toEmail = opsNotificationEmail();
+    const { subject, text, html } = buildOpsHardwareMigrationEmail({ ...input, siteUrl });
+    await sendOwnerEmail(apiKey, toEmail, subject, { text, html });
+    logger.info("ops hardware-migration email sent", {
+      businessId: input.businessId,
+      phase: input.phase,
+      fromSize: input.fromSize,
+      toSize: input.toSize,
+      toEmail
+    });
+  } catch (err) {
+    logger.warn("ops hardware-migration email failed", {
+      businessId: input.businessId,
+      phase: input.phase,
       error: err instanceof Error ? err.message : String(err)
     });
   }
