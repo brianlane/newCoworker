@@ -81,7 +81,7 @@ export default async function IndustryPage({ params }: { params: Promise<Params>
       )}
 
       <CtaBanner
-        title={`Put a coworker to work in your ${industry.name.toLowerCase()} business`}
+        title={`Put a coworker to work in your ${industry.ctaNoun ?? `${industry.name.toLowerCase()} business`}`}
         subtitle="Live in minutes, with a 30-day money-back guarantee."
         ctaLabel="Choose your plan"
         ctaHref="/onboard"

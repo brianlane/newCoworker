@@ -40,6 +40,12 @@ export type Industry = {
   /** "A day with your coworker" walkthrough steps. */
   dayInTheLife: { time: string; event: string }[];
   complianceNote?: string;
+  /**
+   * Noun phrase for "your <noun>" CTA copy. Defaults to
+   * "<name lowercased> business" — override where that reads badly
+   * (e.g. "Small Business" would render "small business business").
+   */
+  ctaNoun?: string;
 };
 
 export const INDUSTRIES: Industry[] = [
@@ -265,6 +271,7 @@ export const INDUSTRIES: Industry[] = [
     slug: "small-business",
     name: "Small Business",
     Icon: Building2,
+    ctaNoun: "small business",
     teaser:
       "Whatever you run, if customers call and text it, your coworker answers it, books it, and follows it up — for less than an answering service.",
     headline: "A full front office for less than an answering service",
