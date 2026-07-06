@@ -318,7 +318,8 @@ describe("runChangePlanFromCheckout", () => {
 
     // Hardware escalation start was announced to ops before the migration:
     // old box resolves by DEPLOYED sizing (no pin + starter → kvm2 legacy
-    // default), target by forward-looking tier default (standard → kvm8).
+    // default), target by forward-looking tier default (standard → kvm2 since
+    // the Jul 2026 flip).
     expect(sendOpsPlanChangeEmailMock).toHaveBeenCalledWith(
       expect.objectContaining({
         businessId: "biz-1",
@@ -327,7 +328,7 @@ describe("runChangePlanFromCheckout", () => {
         billingPeriod: "annual",
         oldVirtualMachineId: 1001,
         fromHardware: "kvm2",
-        toHardware: "kvm8"
+        toHardware: "kvm2"
       })
     );
 
