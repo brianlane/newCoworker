@@ -102,8 +102,8 @@ export function vpsSizeFromHostingerPlan(plan: string | null | undefined): VpsSi
  * degrade to once the shared AI spend cap trips. KVM1 (1 vCPU / 4GB) does
  * not: bootstrap skips the Ollama install entirely, so over-cap turns must
  * REFUSE (clear "budget used up" behavior) instead of routing to a local
- * agent that doesn't exist. kvm4 (4 vCPU / 16GB) and kvm8 both carry the
- * qwen3:4b-instruct fallback; kvm2 carries llama3.2:3b.
+ * agent that doesn't exist. kvm2 and kvm4 (4 vCPU / 16GB) carry the
+ * llama3.2:3b fallback; only kvm8 carries qwen3:4b-instruct.
  */
 export function vpsSizeHasLocalModel(size: VpsSize): boolean {
   return size !== "kvm1";
