@@ -102,6 +102,14 @@ export function nextSizeUp(size: AdvisorVpsSize): AdvisorVpsSize | null {
   return null;
 }
 
+/**
+ * Fixed rolling window (days) for every signal. Extrapolations divide by
+ * this constant — NOT by the number of `daily_usage` rows — because rows
+ * only exist on days with activity: a 2-day burst divided by 2 rows would
+ * masquerade as a sustained month-long pace.
+ */
+export const ADVISOR_WINDOW_DAYS = 7;
+
 /** ISO date (UTC) of the Monday of `now`'s week — once-per-week dedupe key. */
 export function weeklyPeriodKey(now: Date = new Date()): string {
   const utc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
@@ -143,8 +151,7 @@ export function evaluateEscalationSignals(input: EvaluateInput): BusinessAdvice 
   }
 
   const windowMinutes = input.usageRows.reduce((sum, r) => sum + r.voice_minutes_used, 0);
-  const windowDays = Math.max(input.usageRows.length, 1);
-  const projectedMonthlyMinutes = Math.round((windowMinutes / windowDays) * 30);
+  const projectedMonthlyMinutes = Math.round((windowMinutes / ADVISOR_WINDOW_DAYS) * 30);
   const includedMinutes = Math.round(input.limits.voiceIncludedSecondsPerStripePeriod / 60);
   if (includedMinutes > 0 && projectedMonthlyMinutes >= includedMinutes * t.voiceUtilization) {
     signals.push({ kind: "voice_volume", projectedMonthlyMinutes, includedMinutes });

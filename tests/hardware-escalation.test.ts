@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ADVISOR_WINDOW_DAYS,
   DEFAULT_THRESHOLDS,
   ON_BOX_ERROR_SOURCES,
   advisorDeployedSize,
@@ -136,6 +137,16 @@ describe("evaluateEscalationSignals", () => {
     ]);
   });
 
+  it("does not mistake a single-day voice burst for a sustained pace", () => {
+    // 4 minutes on one active day: dividing by the FIXED 7-day window gives
+    // ~17 projected min/month (< 80% of 25) — dividing by the 1 row present
+    // would have projected 120 and false-flagged the tenant.
+    const advice = evaluateEscalationSignals(
+      evaluateInput({ usageRows: [usageRow({ voice_minutes_used: 4 })] })
+    );
+    expect(advice).toBeNull();
+  });
+
   it("skips voice_volume when the tier includes no voice", () => {
     const advice = evaluateEscalationSignals(
       evaluateInput({
@@ -266,5 +277,11 @@ describe("buildEscalationAdviceEmail", () => {
 describe("ON_BOX_ERROR_SOURCES", () => {
   it("covers the on-box services", () => {
     expect(ON_BOX_ERROR_SOURCES).toEqual(["rowboat", "ollama", "voice"]);
+  });
+});
+
+describe("ADVISOR_WINDOW_DAYS", () => {
+  it("is the 7-day rolling window every signal divides by", () => {
+    expect(ADVISOR_WINDOW_DAYS).toBe(7);
   });
 });

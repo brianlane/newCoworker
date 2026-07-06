@@ -30,6 +30,7 @@ import {
   SMS_MONTHLY_CAP_STANDARD
 } from "../_shared/sms_monthly_limits.ts";
 import {
+  ADVISOR_WINDOW_DAYS,
   DEFAULT_THRESHOLDS,
   ON_BOX_ERROR_SOURCES,
   buildEscalationAdviceEmail,
@@ -40,7 +41,7 @@ import {
   type DailyUsageRow
 } from "../_shared/hardware_escalation.ts";
 
-const WINDOW_DAYS = 7;
+const WINDOW_DAYS = ADVISOR_WINDOW_DAYS;
 
 function isoDaysAgo(days: number, now: Date): string {
   return new Date(now.getTime() - days * 86_400_000).toISOString();
@@ -215,20 +216,27 @@ serve(async (req: Request) => {
       await unmarkAll();
     } else {
       const { subject, text } = buildEscalationAdviceEmail(toEmail, siteUrl);
-      const res = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${resendKey}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ from, to: [opsEmail], subject, text })
-      });
-      if (!res.ok) {
-        const body = await res.text();
-        console.error("Resend escalation digest failed", res.status, body.slice(0, 500));
+      // try/catch, not just !res.ok: a thrown fetch (network/DNS) must also
+      // roll back the weekly claims or the digest silently skips a week.
+      try {
+        const res = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${resendKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ from, to: [opsEmail], subject, text })
+        });
+        if (!res.ok) {
+          const body = await res.text();
+          console.error("Resend escalation digest failed", res.status, body.slice(0, 500));
+          await unmarkAll();
+        } else {
+          emailed = toEmail.length;
+        }
+      } catch (err) {
+        console.error("Resend escalation digest threw", err);
         await unmarkAll();
-      } else {
-        emailed = toEmail.length;
       }
     }
   }
